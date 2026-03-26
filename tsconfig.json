@@ -2,6 +2,10 @@
   "extends": "@system-ui-js/development-base/tsconfig.json",
   "compilerOptions": {
     "baseUrl": ".",
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@hamster-note/reader": ["./src/index.ts"],
+      "@hamster-note/reader/*": ["./src/*"]
+    }
   }
 }

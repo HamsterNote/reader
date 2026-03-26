@@ -41,8 +41,15 @@
     "ses_2df9c0d6cffecD35lnsXb3sS63",
     "ses_2df96f970ffeP6yE34BE13alT9",
     "ses_2df959a96ffeGQjZKgtgJUul4J",
-    "ses_2df91ad3affe9DX5K9sPwQ536p"
+    "ses_2df91ad3affe9DX5K9sPwQ536p",
+    "ses_2d72ccf85fferQEOjWb76Whytf",
+    "ses_2d6a34a54ffeRwrO5oXCPz5quI",
+    "ses_2d6a0ced5ffexnyt7WCn4jP5fo",
+    "ses_2d6a12380ffe01de1l7IukhGAo",
+    "ses_2d6a0fb32ffey8yqvaL49r5ud6",
+    "ses_2d67365d2ffeDbXKnN1XvnZxMt"
   ],
   "plan_name": "reader-frontend-package",
-  "agent": "atlas"
+  "agent": "atlas",
+  "task_sessions": {}
 }
