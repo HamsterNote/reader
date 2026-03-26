@@ -1,0 +1,88 @@
+{
+  "name": "@hamster-note/reader",
+  "version": "0.1.0",
+  "description": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./style.css": "./dist/style.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HamsterNote/reader.git"
+  },
+  "homepage": "https://github.com/HamsterNote/reader#readme",
+  "bugs": {
+    "url": "https://github.com/HamsterNote/reader/issues"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build:lib": "yarn build:lib:js && yarn build:lib:types && yarn build:lib:styles",
+    "build:lib:js": "vite build --config vite.lib.config.ts",
+    "build:lib:types": "tsc --project tsconfig.build.json",
+    "build:lib:styles": "sass src/styles/index.scss dist/style.css --no-source-map",
+    "build:demo": "vite build",
+    "build:all": "yarn build:lib && yarn build:demo",
+    "build": "yarn build:all",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "preview": "vite preview",
+    "prepublishOnly": "yarn build:lib",
+    "pack:check": "node scripts/check-pack.mjs"
+  },
+  "dependencies": {
+    "@hamster-note/types": "^0.5.5"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@system-ui-js/development-base": "^0.1.2",
+    "@testing-library/dom": "^10.0.0",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-sonarjs": "^3.0.5",
+    "globals": "^15.14.0",
+    "jsdom": "^27.0.0",
+    "prettier": "^3.7.4",
+    "prettier-config-standard": "^7.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sass": "^1.0.0",
+    "typescript": "^5.0.2",
+    "typescript-eslint": "^8.50.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}

@@ -1,0 +1,120 @@
+name: Publish to npm (version branches)
+
+on:
+  push:
+    branches:
+      - 'version/[0-9]+.[0-9]+.[0-9]+'
+      - 'version/[0-9]+.[0-9]+.[0-9]+-**'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and Publish
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify branch and prepare env
+        shell: bash
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          echo "Detected branch: $BRANCH"
+
+          VERSION="${BRANCH#version/}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+
+          if [[ "$PKG_VERSION" =~ -dev ]]; then
+            PUBLISH_TAG=dev
+            echo "Version type: Dev Pre-release"
+          elif [[ "$PKG_VERSION" =~ -beta ]]; then
+            PUBLISH_TAG=beta
+            echo "Version type: Beta Pre-release"
+          else
+            PUBLISH_TAG=latest
+            echo "Version type: Release"
+          fi
+
+          echo "PUBLISH_TAG=$PUBLISH_TAG" >> "$GITHUB_ENV"
+          echo "Branch version: $VERSION"
+          echo "Package version: $PKG_VERSION"
+          echo "Publish tag: $PUBLISH_TAG"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: yarn
+
+      - name: Install dependencies
+        run: |
+          corepack enable
+          yarn --version
+          yarn install --frozen-lockfile
+
+      - name: Check if version already published
+        id: version
+        shell: bash
+        run: |
+          PKG_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).name)")
+          VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+          echo "Package: $PKG_NAME"
+          echo "Version: $VERSION"
+          if npm view "$PKG_NAME@$VERSION" version > /dev/null 2>&1; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Version $VERSION already exists on npm, skip publishing."
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "Version $VERSION not found on npm, will publish."
+          fi
+
+      - name: Verify npm authentication
+        if: steps.version.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "NPM_TOKEN is empty or unavailable in this workflow."
+            exit 1
+          fi
+
+          echo "Registry: $(npm config get registry)"
+          npm whoami
+
+      - name: Build project
+        if: steps.version.outputs.should_publish == 'true'
+        run: |
+          yarn build:all
+
+      - name: Check publish package boundary
+        if: steps.version.outputs.should_publish == 'true'
+        run: |
+          yarn pack:check
+
+      - name: Publish to npm
+        if: steps.version.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: |
+          npm publish --tag "$PUBLISH_TAG" --access public
+
+      - name: Ensure pre-release dist-tag
+        if: (env.PUBLISH_TAG == 'dev' || env.PUBLISH_TAG == 'beta') && steps.version.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: |
+          PKG_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).name)")
+          VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+          echo "Ensure dist-tag: ${PUBLISH_TAG} -> $VERSION"
+          npm dist-tag add "$PKG_NAME@$VERSION" "$PUBLISH_TAG" || true
+          npm dist-tag ls "$PKG_NAME"

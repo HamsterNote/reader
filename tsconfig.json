@@ -1,0 +1,7 @@
+{
+  "extends": "@system-ui-js/development-base/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "jsx": "react-jsx"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+demo-dist/
+coverage/
+.nyc_output/
+*.lcov
+*.tsbuildinfo
+
+.DS_Store
+*.log
+
+.idea/
+.vscode/
