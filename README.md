@@ -30,6 +30,23 @@ export function App() {
 }
 ```
 
+## API Notes
+
+Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
+
+```tsx
+<Reader
+  document={document}
+  ocr
+  onTextSelectionChange={(text, detail) => {
+    console.log('selection changed', text, detail.selectedText)
+  }}
+  onTextSelectionEnd={(text, detail) => {
+    console.log('selection ended', text, detail.selectedText)
+  }}
+/>
+```
+
 ## Peer Dependencies
 
 - `react@^19.0.0`
