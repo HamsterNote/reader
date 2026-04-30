@@ -3,6 +3,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "jsx": "react-jsx",
+    "typeRoots": ["./src/types", "./node_modules/@types"],
     "paths": {
       "@hamster-note/reader": ["./src/index.ts"],
       "@hamster-note/reader/*": ["./src/*"]
