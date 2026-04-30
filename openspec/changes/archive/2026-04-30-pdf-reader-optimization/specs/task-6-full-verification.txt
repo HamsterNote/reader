@@ -1,0 +1,79 @@
+yarn run v1.22.22
+(node:921839) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ eslint .
+Done in 1.95s.
+yarn run v1.22.22
+(node:921896) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.json --noEmit
+Done in 1.39s.
+yarn run v1.22.22
+(node:921916) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vitest run
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/smoke.test.tsx (1 test) 141ms
+ ✓ test/demo.test.tsx (4 tests) 111ms
+ ✓ test/intermediate-document-viewer.test.tsx (6 tests) 184ms
+ ✓ test/reader.test.tsx (13 tests) 249ms
+
+ Test Files  4 passed (4)
+      Tests  24 passed (24)
+   Start at  11:11:26
+   Duration  1.34s (transform 539ms, setup 470ms, collect 822ms, tests 685ms, environment 1.67s, prepare 260ms)
+
+Done in 1.73s.
+yarn run v1.22.22
+(node:922322) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ yarn build:lib && yarn build:demo
+(node:922341) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ yarn build:lib:js && yarn build:lib:types && yarn build:lib:styles
+(node:922353) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vite build --config vite.lib.config.ts
+vite v7.3.1 building client environment for production...
+transforming...
+✓ 13 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.js  26.03 kB │ gzip: 7.59 kB
+✓ built in 138ms
+(node:922391) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.build.json
+(node:922410) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ sass src/styles/index.scss dist/style.css --no-source-map
+(node:922430) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vite build
+vite v7.3.1 building client environment for production...
+transforming...
+
+new URL("./standard_fonts/", import.meta.url) doesn't exist at build time, it will remain unchanged to be resolved at runtime. If this is intended, you can use the /* @vite-ignore */ comment to suppress this warning.
+✓ 38 modules transformed.
+rendering chunks...
+computing gzip size...
+demo-dist/index.html                              0.44 kB │ gzip:   0.28 kB
+demo-dist/assets/pdf.worker.min-LyOxJPrg.mjs  1,072.84 kB
+demo-dist/assets/index-vsL6s55-.css               2.99 kB │ gzip:   1.01 kB
+demo-dist/assets/pdf-B75MOh95.js                415.93 kB │ gzip: 123.51 kB
+demo-dist/assets/index-BVtCo23w.js            1,379.48 kB │ gzip: 579.98 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 3.45s
+Done in 6.21s.
+yarn run v1.22.22
+(node:921837) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ node scripts/check-pack.mjs
+Pack check passed with 11 files.
+Done in 0.65s.

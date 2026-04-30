@@ -1,0 +1,28 @@
+# Task 1: Typecheck Evidence
+
+## Command: yarn typecheck
+## Result: PASSED (exit code 0)
+
+```
+$ tsc --project tsconfig.json --noEmit
+Done in 1.33s.
+```
+
+## Type Issues Resolved:
+1. Removed `rotate` property usage (not in IntermediateText type)
+   - Changed from `text.rotate` to using skew only
+2. Fixed `x`, `y`, `width`, `height` properties on IntermediateText
+   - IntermediateText uses `polygon: [number, number][]` for positioning
+   - Added `getTextBoundingBox()` helper to compute bbox from polygon
+   - Updated JSX to use computed bbox instead of missing properties
+3. Added `@types/node@25.6.0` for `node:url` module resolution in vite.config.ts
+
+## TypeScript Configuration:
+- Extends: @system-ui-js/development-base/tsconfig.json
+- JSX: react-jsx
+- Paths alias for @hamster-note/reader -> ./src/index.ts
+
+## Final Dependencies:
+- @hamster-note/pdf-parser@0.5.0 (direct dependency)
+- @hamster-note/types@0.7.0 (updated from 0.5.5 to match parser requirements)
+- @types/node@25.6.0 (devDependency added for Node.js types)
