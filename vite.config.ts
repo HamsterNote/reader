@@ -12,6 +12,25 @@ const pdfParserStandardFontsPath = fileURLToPath(
   )
 )
 const pdfParserStandardFontsRoute = '/pdfjs-standard-fonts/'
+const onnxRuntimeWebDistPath = fileURLToPath(
+  new URL('./node_modules/onnxruntime-web/dist/', import.meta.url)
+)
+const onnxRuntimeWebAssetsRoute = '/ort-wasm/'
+
+const getOnnxRuntimeWebAssetContentType = (fileName: string) => {
+  if (fileName.endsWith('.wasm')) {
+    return 'application/wasm'
+  }
+
+  if (fileName.endsWith('.mjs')) {
+    return 'text/javascript'
+  }
+
+  return 'application/octet-stream'
+}
+
+const isOnnxRuntimeWebAsset = (fileName: string) =>
+  /^ort-wasm.*\.(?:mjs|wasm)$/.test(fileName)
 
 function pdfParserStandardFontsPlugin(): Plugin {
   return {
@@ -86,8 +105,88 @@ function pdfParserStandardFontsPlugin(): Plugin {
   }
 }
 
-export default defineConfig({
-  plugins: [pdfParserStandardFontsPlugin(), react()],
+function onnxRuntimeWebAssetsPlugin(): Plugin {
+  return {
+    name: 'onnxruntime-web-assets',
+    enforce: 'pre',
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const requestUrl = request.url
+
+        if (!requestUrl?.startsWith(onnxRuntimeWebAssetsRoute)) {
+          next()
+          return
+        }
+
+        const assetFileName = decodeURIComponent(
+          requestUrl.slice(onnxRuntimeWebAssetsRoute.length).split('?')[0]
+        )
+
+        if (
+          !isOnnxRuntimeWebAsset(assetFileName) ||
+          assetFileName.includes('/') ||
+          assetFileName.includes('\\')
+        ) {
+          response.statusCode = 404
+          response.end()
+          return
+        }
+
+        response.setHeader(
+          'Content-Type',
+          getOnnxRuntimeWebAssetContentType(assetFileName)
+        )
+        createReadStream(join(onnxRuntimeWebDistPath, assetFileName))
+          .on('error', () => {
+            response.statusCode = 404
+            response.end()
+          })
+          .pipe(response)
+      })
+    },
+    generateBundle() {
+      for (const fileName of readdirSync(onnxRuntimeWebDistPath)) {
+        const filePath = join(onnxRuntimeWebDistPath, fileName)
+
+        if (!statSync(filePath).isFile() || !isOnnxRuntimeWebAsset(fileName)) {
+          continue
+        }
+
+        this.emitFile({
+          type: 'asset',
+          fileName: `ort-wasm/${fileName}`,
+          source: readFileSync(filePath)
+        })
+      }
+    },
+    transform(code, id) {
+      if (!id.includes('/@hamster-note/image-parser/dist/index.js')) {
+        return null
+      }
+
+      const updatedCode = code.replace(
+        'simd: false\n\t}',
+        'simd: false,\n\t\twasmPaths: new URL((import.meta.env.BASE_URL || "/") + "ort-wasm/", window.location.origin).href\n\t}'
+      )
+
+      if (updatedCode === code) {
+        return null
+      }
+
+      return {
+        code: updatedCode,
+        map: null
+      }
+    }
+  }
+}
+
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    pdfParserStandardFontsPlugin(),
+    onnxRuntimeWebAssetsPlugin(),
+    react()
+  ],
   server: {
     port: 5577,
     host: '0.0.0.0'
@@ -105,13 +204,25 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('./src/index.ts', import.meta.url))
       },
       {
-        find: /^@hamster-note\/image-parser$/,
-        replacement: fileURLToPath(new URL('./test/mocks/image-parser.ts', import.meta.url))
-      }
+        find: /^clipper-lib$/,
+        replacement: fileURLToPath(
+          new URL('./src/vendor/clipper-lib.ts', import.meta.url)
+        )
+      },
+      ...(mode === 'test'
+        ? [
+            {
+              find: /^@hamster-note\/image-parser$/,
+              replacement: fileURLToPath(
+                new URL('./test/mocks/image-parser.ts', import.meta.url)
+              )
+            }
+          ]
+        : [])
     ]
   },
   optimizeDeps: {
-    exclude: ['@hamster-note/pdf-parser']
+    exclude: ['@hamster-note/pdf-parser', '@hamster-note/image-parser']
   },
   build: {
     outDir: 'demo-dist'
@@ -125,4 +236,4 @@ export default defineConfig({
       provider: 'v8'
     }
   }
-})
+}))

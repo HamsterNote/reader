@@ -1,3 +1,5 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import type {
   IntermediateDocument,
   IntermediatePage,
@@ -5,8 +7,6 @@ import type {
 } from '@hamster-note/types'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import * as fs from 'fs'
-import * as path from 'path'
 
 import { IntermediateDocumentViewer } from '../src/index'
 import { intersectionObserverMock } from './setup'
@@ -15,6 +15,7 @@ Reflect.set(globalThis, 'vi', vi)
 
 type MockPage = {
   getTexts: ReturnType<typeof vi.fn<() => Promise<IntermediateText[]>>>
+  getThumbnail?: ReturnType<typeof vi.fn<() => Promise<string | undefined>>>
   thumbnail?: string
   image?: string
 }
@@ -183,6 +184,30 @@ describe('IntermediateDocumentViewer', () => {
       )
     })
     expect(screen.queryByText('Loading page 1…')).not.toBeInTheDocument()
+  })
+
+  it('renders the converted page background from getThumbnail', async () => {
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) {
+      throw new Error('Expected mock page 1 to exist')
+    }
+
+    page.getThumbnail = vi.fn(async () => 'data:image/png;base64,converted')
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await waitFor(() => {
+      const baseImage = screen
+        .getByTestId('intermediate-page-1')
+        .querySelector('.hamster-reader__intermediate-page-base-image')
+
+      expect(page.getThumbnail).toHaveBeenCalledTimes(1)
+      expect(baseImage).toHaveAttribute(
+        'src',
+        'data:image/png;base64,converted'
+      )
+    })
   })
 
   it('shows a page error instead of loading forever when text loading fails', async () => {
@@ -880,7 +905,11 @@ describe('IntermediateDocumentViewer', () => {
         /&__intermediate-text\s*\{([^}]*)\}/
       )
       expect(textBlockMatch).toBeTruthy()
-      expect(textBlockMatch![1]).not.toContain('pointer-events')
+      if (!textBlockMatch) {
+        throw new Error('Expected intermediate text SCSS block to exist')
+      }
+
+      expect(textBlockMatch[1]).not.toContain('pointer-events')
     })
   })
 

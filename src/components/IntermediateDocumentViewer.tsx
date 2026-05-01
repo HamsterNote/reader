@@ -142,9 +142,41 @@ const getOcrCacheKey = (
   imageSource: string
 ) => `${docId}::${pageNumber}::${imageSource}`
 
-const getBaseImageFromPage = (page: unknown) => {
-  const pageWithImage = page as { thumbnail?: string; image?: string }
-  return pageWithImage.thumbnail || pageWithImage.image
+type PageWithBaseImage = {
+  thumbnail?: unknown
+  image?: unknown
+  getThumbnail?: () => Promise<unknown> | unknown
+}
+
+const getStringBaseImage = (imageSource: unknown) => {
+  return typeof imageSource === 'string' && imageSource.trim()
+    ? imageSource
+    : undefined
+}
+
+const getBaseImageFromPage = async (page: unknown) => {
+  if (!page || typeof page !== 'object') {
+    return undefined
+  }
+
+  const pageWithImage = page as PageWithBaseImage
+  const directBaseImage =
+    getStringBaseImage(pageWithImage.thumbnail) ??
+    getStringBaseImage(pageWithImage.image)
+
+  if (directBaseImage) {
+    return directBaseImage
+  }
+
+  if (typeof pageWithImage.getThumbnail !== 'function') {
+    return undefined
+  }
+
+  try {
+    return getStringBaseImage(await pageWithImage.getThumbnail())
+  } catch {
+    return undefined
+  }
 }
 
 const getImageParserInput = async (imageSource: string) => {
@@ -450,8 +482,7 @@ export function IntermediateDocumentViewer({
       loadingPagesRef.current.add(pageNumber)
       pagePromise
         .then((page) => {
-          const baseImage = getBaseImageFromPage(page)
-          return Promise.all([Promise.resolve(baseImage), page.getTexts()])
+          return Promise.all([getBaseImageFromPage(page), page.getTexts()])
         })
         .then(([baseImage, texts]) => {
           if (
