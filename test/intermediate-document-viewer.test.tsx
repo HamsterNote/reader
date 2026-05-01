@@ -6,7 +6,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { act, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { IntermediateDocumentViewer } from '../src/index'
 import { intersectionObserverMock } from './setup'
@@ -606,6 +606,74 @@ describe('IntermediateDocumentViewer', () => {
       return span
     }
 
+    const rectSpies: ReturnType<typeof vi.spyOn>[] = []
+
+    afterEach(() => {
+      rectSpies.forEach((spy) => spy.mockRestore())
+      rectSpies.length = 0
+    })
+
+    const mockElementRect = (
+      element: HTMLElement,
+      rect: { left: number; top: number; width: number; height: number }
+    ) => {
+      const spy = vi.spyOn(element, 'getBoundingClientRect').mockReturnValue({
+        left: rect.left,
+        top: rect.top,
+        right: rect.left + rect.width,
+        bottom: rect.top + rect.height,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        toJSON: () => rect
+      } as DOMRect)
+      rectSpies.push(spy)
+      return spy
+    }
+
+    const mockElementFromPoint = (el: Element | null) => {
+      if (!('elementFromPoint' in globalThis.document)) {
+        Object.defineProperty(globalThis.document, 'elementFromPoint', {
+          value: vi.fn(() => el),
+          writable: true,
+          configurable: true
+        })
+      }
+      const spy = vi
+        .spyOn(globalThis.document, 'elementFromPoint')
+        .mockReturnValue(el) as unknown as ReturnType<typeof vi.spyOn>
+      rectSpies.push(spy)
+      return spy
+    }
+
+    const makeFourTextDocument = () => {
+      const texts = [
+        { id: 'text-a', content: 'A' },
+        { id: 'text-b', content: 'B' },
+        { id: 'text-c', content: 'C' },
+        { id: 'text-d', content: 'D' }
+      ]
+
+      const pages = new Map<number, MockPage>()
+      pages.set(1, {
+        getTexts: vi.fn(async () => texts.map((t) => makeText(t.id, t.content)))
+      })
+
+      const document = {
+        id: 'doc-four-texts',
+        title: 'Four Text Document',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 400, y: 400 })),
+        getPageByPageNumber: vi.fn((pageNumber: number) =>
+          Promise.resolve(pages.get(pageNumber))
+        )
+      } as unknown as IntermediateDocument
+
+      return { document, texts }
+    }
+
     it('does not fire onTextSelectionChange when selection is collapsed', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       const onTextSelectionChange = vi.fn()
@@ -910,6 +978,419 @@ describe('IntermediateDocumentViewer', () => {
       }
 
       expect(textBlockMatch[1]).not.toContain('pointer-events')
+    })
+
+    it('normalizes blank-space drag endpoint to nearest text', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('A')).toBeInTheDocument()
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textB = screen.getByText('B')
+      const textC = screen.getByText('C')
+      const textD = screen.getByText('D')
+
+      mockElementRect(textB, { left: 10, top: 50, width: 20, height: 16 })
+      mockElementRect(textC, { left: 10, top: 90, width: 20, height: 16 })
+      mockElementRect(textD, { left: 10, top: 130, width: 20, height: 16 })
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousedown', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 58,
+          button: 0
+        })
+      )
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 100,
+          clientY: 138,
+          buttons: 1
+        })
+      )
+
+      const blankNode = document.createTextNode('')
+      viewerRoot.appendChild(blankNode)
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: blankNode,
+        toString: () => '',
+        containsNode: () => false
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+      mockElementFromPoint(screen.getByTestId('intermediate-page-1'))
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalled()
+      const [, detail] = onTextSelectionChange.mock.calls[0]
+      expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+        'text-b',
+        'text-c',
+        'text-d'
+      ])
+      expect(detail.selectedText).toBe('BCD')
+
+      viewerRoot.removeChild(blankNode)
+    })
+
+    it('fires onTextSelectionEnd with normalized range on blank-space mouseup', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionEnd = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('A')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textB = screen.getByText('B')
+      const textD = screen.getByText('D')
+
+      mockElementRect(textB, { left: 10, top: 50, width: 20, height: 16 })
+      mockElementRect(textD, { left: 10, top: 130, width: 20, height: 16 })
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousedown', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 58,
+          button: 0
+        })
+      )
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 100,
+          clientY: 138,
+          buttons: 1
+        })
+      )
+
+      const blankNode = document.createTextNode('')
+      viewerRoot.appendChild(blankNode)
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: blankNode,
+        toString: () => '',
+        containsNode: () => false
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+      mockElementFromPoint(screen.getByTestId('intermediate-page-1'))
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mouseup', {
+          bubbles: true,
+          clientX: 100,
+          clientY: 138,
+          button: 0
+        })
+      )
+
+      expect(onTextSelectionEnd).toHaveBeenCalled()
+      const [, detail] = onTextSelectionEnd.mock.calls[0]
+      expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+        'text-b',
+        'text-c',
+        'text-d'
+      ])
+
+      viewerRoot.removeChild(blankNode)
+    })
+
+    it('preserves valid text-to-text selection without normalization', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const textB = screen.getByText('B')
+      const textC = screen.getByText('C')
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: textC,
+        toString: () => 'BC',
+        containsNode: (node: Node) => node === textB || node === textC
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+      const [, detail] = onTextSelectionChange.mock.calls[0]
+      expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+        'text-b',
+        'text-c'
+      ])
+      expect(detail.selectedText).toBe('BC')
+    })
+
+    it('chooses first text when pointer is in blank space above all text', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('A')).toBeInTheDocument()
+        expect(screen.getByText('B')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textB = screen.getByText('B')
+      const textA = screen.getByText('A')
+
+      mockElementRect(textA, { left: 10, top: 10, width: 20, height: 16 })
+      mockElementRect(textB, { left: 10, top: 50, width: 20, height: 16 })
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousedown', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 58,
+          button: 0
+        })
+      )
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 5,
+          buttons: 1
+        })
+      )
+
+      const blankNode = document.createTextNode('')
+      viewerRoot.appendChild(blankNode)
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: blankNode,
+        toString: () => '',
+        containsNode: () => false
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+      mockElementFromPoint(screen.getByTestId('intermediate-page-1'))
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalled()
+      const [, detail] = onTextSelectionChange.mock.calls[0]
+      expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+        'text-a',
+        'text-b'
+      ])
+
+      viewerRoot.removeChild(blankNode)
+    })
+
+    it('chooses last text when pointer is in blank space below all text', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textB = screen.getByText('B')
+      const textD = screen.getByText('D')
+
+      mockElementRect(textB, { left: 10, top: 50, width: 20, height: 16 })
+      mockElementRect(textD, { left: 10, top: 130, width: 20, height: 16 })
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousedown', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 58,
+          button: 0
+        })
+      )
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 200,
+          buttons: 1
+        })
+      )
+
+      const blankNode = document.createTextNode('')
+      viewerRoot.appendChild(blankNode)
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: blankNode,
+        toString: () => '',
+        containsNode: () => false
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+      mockElementFromPoint(screen.getByTestId('intermediate-page-1'))
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalled()
+      const [, detail] = onTextSelectionChange.mock.calls[0]
+      expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+        'text-b',
+        'text-c',
+        'text-d'
+      ])
+
+      viewerRoot.removeChild(blankNode)
+    })
+
+    it('tie-breaks equal distances by choosing earlier DOM order', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textB = screen.getByText('B')
+      const textC = screen.getByText('C')
+
+      mockElementRect(textB, { left: 10, top: 50, width: 20, height: 16 })
+      mockElementRect(textC, { left: 10, top: 90, width: 20, height: 16 })
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousedown', {
+          bubbles: true,
+          clientX: 20,
+          clientY: 58,
+          button: 0
+        })
+      )
+
+      viewerRoot.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 100,
+          clientY: 78,
+          buttons: 1
+        })
+      )
+
+      const blankNode = document.createTextNode('')
+      viewerRoot.appendChild(blankNode)
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: blankNode,
+        toString: () => '',
+        containsNode: () => false
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+      mockElementFromPoint(screen.getByTestId('intermediate-page-1'))
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalled()
+      const [, detail] = onTextSelectionChange.mock.calls[0]
+      expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+        'text-b'
+      ])
+
+      viewerRoot.removeChild(blankNode)
+    })
+
+    it('does not normalize when there is no active mouse selection', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textB = screen.getByText('B')
+
+      const blankNode = document.createTextNode('')
+      viewerRoot.appendChild(blankNode)
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textB,
+        focusNode: blankNode,
+        toString: () => '',
+        containsNode: () => false
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).not.toHaveBeenCalled()
+
+      viewerRoot.removeChild(blankNode)
     })
   })
 

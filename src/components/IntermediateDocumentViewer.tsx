@@ -190,6 +190,108 @@ const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
     id: `ocr-${pageNumber}-${text.id}`
   }))
 
+export const getClosestTextElement = (
+  node: Node | null
+): HTMLElement | null => {
+  const element = node instanceof Element ? node : node?.parentElement
+  return element?.closest('[data-text-id]') ?? null
+}
+
+const clampToRange = (value: number, min: number, max: number): number => {
+  if (value < min) return min - value
+  if (value > max) return value - max
+  return 0
+}
+
+const getPointToRectDistanceSquared = (
+  point: { x: number; y: number },
+  rect: { left: number; top: number; right: number; bottom: number }
+): number => {
+  const dx = clampToRange(point.x, rect.left, rect.right)
+  const dy = clampToRange(point.y, rect.top, rect.bottom)
+  return dx * dx + dy * dy
+}
+
+export const getPageElementForPoint = (
+  clientX: number,
+  clientY: number,
+  viewerRoot: HTMLElement | null,
+  pageRefs: Map<number, HTMLDivElement>
+): { pageElement: HTMLElement; pageNumber: number } | null => {
+  if (!viewerRoot) return null
+
+  const hitElement = document
+    .elementFromPoint(clientX, clientY)
+    ?.closest('[data-page-number]')
+
+  if (hitElement && viewerRoot.contains(hitElement)) {
+    const pageNumber = Number((hitElement as HTMLElement).dataset.pageNumber)
+    return { pageElement: hitElement as HTMLElement, pageNumber }
+  }
+
+  let nearestElement: HTMLElement | null = null
+  let minDistance = Infinity
+
+  for (const element of pageRefs.values()) {
+    const rect = element.getBoundingClientRect()
+    const distance = getPointToRectDistanceSquared(
+      { x: clientX, y: clientY },
+      rect
+    )
+    if (distance < minDistance) {
+      minDistance = distance
+      nearestElement = element
+    }
+  }
+
+  if (!nearestElement) return null
+
+  return {
+    pageElement: nearestElement,
+    pageNumber: Number(nearestElement.dataset.pageNumber)
+  }
+}
+
+export const getNearestTextElementForPoint = (
+  clientX: number,
+  clientY: number,
+  pageNumber: number,
+  viewerRoot: HTMLElement | null,
+  textElementsRef: Map<string, { text: IntermediateText; pageNumber: number }>
+): HTMLElement | null => {
+  if (!viewerRoot) return null
+
+  let nearestElement: HTMLElement | null = null
+  let minDistance = Infinity
+
+  for (const [id, entry] of textElementsRef.entries()) {
+    if (entry.pageNumber !== pageNumber) continue
+
+    const element = viewerRoot.querySelector(`[data-text-id="${id}"]`)
+    if (!element) continue
+
+    const rect = element.getBoundingClientRect()
+    const distance = getPointToRectDistanceSquared(
+      { x: clientX, y: clientY },
+      rect
+    )
+
+    if (distance < minDistance) {
+      minDistance = distance
+      nearestElement = element as HTMLElement
+    } else if (distance === minDistance && nearestElement) {
+      if (
+        (element as HTMLElement).compareDocumentPosition(nearestElement) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+      ) {
+        nearestElement = element as HTMLElement
+      }
+    }
+  }
+
+  return nearestElement
+}
+
 export function IntermediateDocumentViewer({
   document,
   serializedDocument,
@@ -226,6 +328,11 @@ export function IntermediateDocumentViewer({
   const textElementsRef = useRef<
     Map<string, { text: IntermediateText; pageNumber: number }>
   >(new Map())
+  const activeMouseSelectionRef = useRef<{
+    active: boolean
+    clientX: number
+    clientY: number
+  }>({ active: false, clientX: 0, clientY: 0 })
   const [loadablePages, setLoadablePages] = useState(() => new Set<number>())
   const [visiblePages, setVisiblePages] = useState(() => new Set<number>())
   const [textsByPageNumber, setTextsByPageNumber] = useState(
@@ -314,6 +421,85 @@ export function IntermediateDocumentViewer({
     []
   )
 
+  const buildNormalizedSelection = useCallback(
+    (
+      selection: Selection,
+      viewerRoot: HTMLElement
+    ): ReaderTextSelectionDetail | null => {
+      if (!activeMouseSelectionRef.current.active) return null
+
+      const startElement =
+        getClosestTextElement(selection.anchorNode) ??
+        getClosestTextElement(selection.focusNode)
+      if (!startElement) return null
+
+      const startId = startElement.getAttribute('data-text-id')
+      if (!startId) return null
+
+      const startEntry = textElementsRef.current.get(startId)
+      if (!startEntry) return null
+
+      const pageInfo = getPageElementForPoint(
+        activeMouseSelectionRef.current.clientX,
+        activeMouseSelectionRef.current.clientY,
+        viewerRoot,
+        pageRefs.current
+      )
+      if (!pageInfo) return null
+
+      const endElement = getNearestTextElementForPoint(
+        activeMouseSelectionRef.current.clientX,
+        activeMouseSelectionRef.current.clientY,
+        pageInfo.pageNumber,
+        viewerRoot,
+        textElementsRef.current
+      )
+      if (!endElement) return null
+
+      const endId = endElement.getAttribute('data-text-id')
+      if (!endId) return null
+
+      const endEntry = textElementsRef.current.get(endId)
+      if (!endEntry) return null
+
+      const pageNumber = startEntry.pageNumber
+
+      const allTextElements = Array.from(
+        viewerRoot.querySelectorAll('[data-text-id]')
+      )
+
+      const startIndex = allTextElements.findIndex(
+        (el) => el.getAttribute('data-text-id') === startId
+      )
+      const endIndex = allTextElements.findIndex(
+        (el) => el.getAttribute('data-text-id') === endId
+      )
+      if (startIndex === -1 || endIndex === -1) return null
+
+      const minIndex = Math.min(startIndex, endIndex)
+      const maxIndex = Math.max(startIndex, endIndex)
+      const sortedElements = allTextElements.slice(minIndex, maxIndex + 1)
+
+      const texts = sortedElements.flatMap((el) => {
+        const id = el.getAttribute('data-text-id')
+        if (!id) return []
+        const entry = textElementsRef.current.get(id)
+        return entry ? [entry.text] : []
+      })
+
+      if (texts.length === 0) return null
+
+      return {
+        text: texts[0],
+        texts,
+        selectedText: texts.map((t) => t.content ?? '').join(''),
+        pageNumber,
+        selection
+      }
+    },
+    []
+  )
+
   const getSelectionDetail = useCallback(
     (selection: Selection): ReaderTextSelectionDetail | null => {
       if (!selection || selection.isCollapsed) return null
@@ -333,7 +519,9 @@ export function IntermediateDocumentViewer({
         }
       })
 
-      if (selectedElements.length === 0) return null
+      if (selectedElements.length === 0) {
+        return buildNormalizedSelection(selection, viewerRoot)
+      }
 
       selectedElements.sort((a, b) => {
         const range = globalThis.document.createRange()
@@ -651,6 +839,40 @@ export function IntermediateDocumentViewer({
   }, [onTextSelectionChange, getSelectionDetail])
 
   useEffect(() => {
+    const root = viewerRootRef.current
+    if (!root) return
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return // Only primary button
+      const target = event.target as Node
+      if (!root.contains(target)) return
+      activeMouseSelectionRef.current = {
+        active: true,
+        clientX: event.clientX,
+        clientY: event.clientY
+      }
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!activeMouseSelectionRef.current.active) return
+      if (!(event.buttons & 1)) {
+        activeMouseSelectionRef.current.active = false
+        return
+      }
+      activeMouseSelectionRef.current.clientX = event.clientX
+      activeMouseSelectionRef.current.clientY = event.clientY
+    }
+
+    root.addEventListener('mousedown', handleMouseDown)
+    root.addEventListener('mousemove', handleMouseMove)
+
+    return () => {
+      root.removeEventListener('mousedown', handleMouseDown)
+      root.removeEventListener('mousemove', handleMouseMove)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!onTextSelectionEnd) return
 
     const root = viewerRootRef.current
@@ -662,12 +884,21 @@ export function IntermediateDocumentViewer({
       }
     }
 
-    root.addEventListener('mouseup', emitSelectionEnd)
+    const handleMouseUp = (event: MouseEvent) => {
+      if (activeMouseSelectionRef.current.active) {
+        activeMouseSelectionRef.current.clientX = event.clientX
+        activeMouseSelectionRef.current.clientY = event.clientY
+      }
+      emitSelectionEnd()
+      activeMouseSelectionRef.current.active = false
+    }
+
+    root.addEventListener('mouseup', handleMouseUp)
     root.addEventListener('touchend', emitSelectionEnd)
     root.addEventListener('keyup', handleKeyUp)
 
     return () => {
-      root.removeEventListener('mouseup', emitSelectionEnd)
+      root.removeEventListener('mouseup', handleMouseUp)
       root.removeEventListener('touchend', emitSelectionEnd)
       root.removeEventListener('keyup', handleKeyUp)
     }
