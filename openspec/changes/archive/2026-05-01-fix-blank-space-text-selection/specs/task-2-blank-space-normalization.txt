@@ -1,0 +1,22 @@
+=== TASK 2 EVIDENCE ===
+Date: 2026年 05月 01日 星期五 12:46:34 CST
+
+=== TYPE CHECK ===
+yarn run v1.22.22
+$ tsc --project tsconfig.json --noEmit
+Done in 2.06s.
+
+=== TEST RUN ===
+yarn run v1.22.22
+$ vitest run test/intermediate-document-viewer.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/intermediate-document-viewer.test.tsx (33 tests) 531ms
+
+ Test Files  1 passed (1)
+      Tests  33 passed (33)
+   Start at  12:46:37
+   Duration  1.52s (transform 129ms, setup 132ms, collect 118ms, tests 531ms, environment 431ms, prepare 60ms)
+
+Done in 1.97s.

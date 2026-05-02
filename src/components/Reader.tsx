@@ -1,11 +1,47 @@
+import type {
+  IntermediateDocument,
+  IntermediateDocumentSerialized,
+  IntermediateText
+} from '@hamster-note/types'
 import { useCallback, useRef, useState } from 'react'
-import type { IntermediateDocumentSerialized } from '@hamster-note/types'
+
+import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
+import type { ReaderTextSelectionDetail } from './IntermediateDocumentViewer'
 
 export type ReaderProps = {
-  document?: IntermediateDocumentSerialized | null
+  document?: IntermediateDocument | IntermediateDocumentSerialized | null
   className?: string
   emptyText?: string
   onFileUpload?: (file: File) => void
+  overscanPages?: number
+  ocr?: boolean | { enabled?: boolean }
+  onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  onTextSelectionChange?: (
+    text: IntermediateText,
+    detail: ReaderTextSelectionDetail
+  ) => void
+  onTextSelectionEnd?: (
+    text: IntermediateText,
+    detail: ReaderTextSelectionDetail
+  ) => void
+}
+
+const documentHasPages = (
+  document:
+    | IntermediateDocument
+    | IntermediateDocumentSerialized
+    | null
+    | undefined
+) => {
+  if (!document) {
+    return false
+  }
+
+  if (Array.isArray((document as IntermediateDocumentSerialized).pages)) {
+    return (document as IntermediateDocumentSerialized).pages.length > 0
+  }
+
+  return (document as IntermediateDocument).pageCount > 0
 }
 
 interface UploadedFile {
@@ -18,7 +54,12 @@ export function Reader({
   document,
   className,
   emptyText = 'No document',
-  onFileUpload
+  onFileUpload,
+  overscanPages,
+  ocr,
+  onOcrError,
+  onTextSelectionChange,
+  onTextSelectionEnd
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -88,8 +129,25 @@ export function Reader({
     : 'hamster-reader'
 
   const showUploadZone = !document && !uploadedFile
-  const showDocumentContent = document?.title ?? emptyText
   const showFileInfo = !document && uploadedFile
+  const hasDocumentPages = documentHasPages(document)
+  const showDocumentContent = document?.title ?? emptyText
+
+  const renderDocumentContent = () => {
+    if (hasDocumentPages) {
+      return (
+        <IntermediateDocumentViewer
+          document={document}
+          overscan={overscanPages}
+          ocr={ocr}
+          onOcrError={onOcrError}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+    }
+    return showUploadZone ? emptyText : showDocumentContent
+  }
 
   return (
     <div className={rootClassName} data-testid='reader-root'>
@@ -137,7 +195,7 @@ export function Reader({
 
       {showDocumentContent && !showFileInfo && (
         <div className='hamster-reader__content' data-testid='reader-content'>
-          {showUploadZone ? emptyText : showDocumentContent}
+          {renderDocumentContent()}
         </div>
       )}
 
