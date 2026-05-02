@@ -79,6 +79,9 @@ export function App() {
               console.log('[Reader demo] text selection end', text, detail)
             }}
           />
+          <p style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
+            Rendered via @hamster-note/html-parser
+          </p>
         </section>
       )}
       <section style={{ marginBottom: '24px' }}>

@@ -1,17 +1,25 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { HtmlParser } from '@hamster-note/html-parser'
 import type {
   IntermediateDocument,
+  IntermediateDocumentSerialized,
   IntermediatePage,
   IntermediateText
 } from '@hamster-note/types'
 import { act, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { IntermediateDocumentViewer } from '../src/index'
 import { intersectionObserverMock } from './setup'
 
 Reflect.set(globalThis, 'vi', vi)
+
+vi.mock('@hamster-note/html-parser', () => ({
+  HtmlParser: {
+    decodeToHtml: vi.fn()
+  }
+}))
 
 type MockPage = {
   getTexts: ReturnType<typeof vi.fn<() => Promise<IntermediateText[]>>>
@@ -77,6 +85,10 @@ function makeDocument({
 }
 
 describe('IntermediateDocumentViewer', () => {
+  beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+  })
+
   it('is exported from the public entrypoint', () => {
     expect(IntermediateDocumentViewer).toBeTypeOf('function')
   })
@@ -122,6 +134,108 @@ describe('IntermediateDocumentViewer', () => {
     expect(
       screen.getByTestId('intermediate-document-viewer')
     ).toBeEmptyDOMElement()
+  })
+
+  it('renders html-parser output for runtime documents', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const mockHtml =
+      '<div class="hamster-note-document"><div class="page">HTML Parser Output</div></div>'
+
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('html-parser-output')).toContainHTML(
+      'HTML Parser Output'
+    )
+  })
+
+  it('renders html-parser output for serialized documents', async () => {
+    const serializedDocument = {
+      id: 'serialized-doc',
+      title: 'Serialized',
+      pages: [
+        {
+          pageNumber: 1,
+          size: { x: 100, y: 150 },
+          texts: [
+            {
+              id: 'text-1',
+              content: 'Serialized text',
+              fontSize: 12,
+              fontFamily: 'Arial',
+              fontWeight: 400,
+              italic: false,
+              color: '#111111',
+              polygon: [
+                [10, 20],
+                [50, 20],
+                [50, 36],
+                [10, 36]
+              ],
+              lineHeight: 16,
+              ascent: 10,
+              descent: 2,
+              dir: 'ltr',
+              skew: 0,
+              isEOL: false
+            }
+          ]
+        }
+      ]
+    } as unknown as IntermediateDocumentSerialized
+    const mockHtml =
+      '<div class="hamster-note-document"><div class="page">Serialized HTML</div></div>'
+
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+
+    render(
+      <IntermediateDocumentViewer serializedDocument={serializedDocument} />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('html-parser-output')).toContainHTML(
+      'Serialized HTML'
+    )
+  })
+
+  it('falls back to direct renderer when html-parser fails', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+
+    vi.mocked(HtmlParser.decodeToHtml).mockRejectedValueOnce(
+      new Error('Parser failed')
+    )
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
+  })
+
+  it('falls back to direct renderer when html-parser returns empty string', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce('')
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
   })
 
   it('loads the first page immediately and later pages after intersection with overscan', async () => {
@@ -609,7 +723,9 @@ describe('IntermediateDocumentViewer', () => {
     const rectSpies: ReturnType<typeof vi.spyOn>[] = []
 
     afterEach(() => {
-      rectSpies.forEach((spy) => spy.mockRestore())
+      rectSpies.forEach((spy) => {
+        spy.mockRestore()
+      })
       rectSpies.length = 0
     })
 

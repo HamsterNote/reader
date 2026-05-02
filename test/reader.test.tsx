@@ -1,14 +1,20 @@
-import { waitFor } from '@testing-library/react'
+import { HtmlParser } from '@hamster-note/html-parser'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Reader } from '../src/index'
 import { intersectionObserverMock } from './setup'
+
+vi.mock('@hamster-note/html-parser', () => ({
+  HtmlParser: {
+    decodeToHtml: vi.fn()
+  }
+}))
 
 function makePage(number: number) {
   return {
@@ -102,6 +108,10 @@ function createMockFile(
 }
 
 describe('Reader public API', () => {
+  beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+  })
+
   it('renders the provided document title on the public entry', () => {
     render(<Reader document={makeDocument()} />)
 
@@ -146,6 +156,30 @@ describe('Reader public API', () => {
     expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
       width: '100px',
       height: '150px'
+    })
+  })
+
+  it('renders document content through html-parser-backed viewer path', async () => {
+    const mockHtml =
+      '<div class="hamster-note-document"><div class="page">Reader HTML</div></div>'
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+
+    const document = {
+      id: 'doc-1',
+      title: 'Test Document',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
+      getPageByPageNumber: () =>
+        Promise.resolve({
+          getTexts: () => Promise.resolve([{ id: 't1', content: 'text' }])
+        })
+    } as unknown as IntermediateDocument
+
+    render(<Reader document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
   })
 

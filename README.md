@@ -30,9 +30,15 @@ export function App() {
 }
 ```
 
+### How It Works
+
+`Reader` accepts an intermediate document and internally renders it through `@hamster-note/html-parser`, converting the structured document data into HTML for display. Producers such as `@hamster-note/pdf-parser` can continue feeding the same intermediate-document contract. No consumer-side changes are required.
+
 ## API Notes
 
 Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
+
+> **Note**: When `Reader` successfully renders through the html-parser path, text-selection and OCR overlays rely on the html-parser output markup and may behave differently than on the legacy direct-render fallback path. If you need full text-selection or OCR fidelity, the component automatically falls back to the direct renderer when html-parser decoding fails.
 
 ```tsx
 <Reader

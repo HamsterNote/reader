@@ -450,6 +450,14 @@
   resolved "https://registry.yarnpkg.com/@hamster-note/document-parser/-/document-parser-0.3.1.tgz#48da7a4f7031b98452de6c0e49a8358726f8295e"
   integrity sha512-1+5A7EYgvvsqN6BJncaHtKOhXOPNn99D9dl4/u82BkjQi6BtBK7DXHXi2rjT3jNeCVPOSg7fWslpS17jOPY0XA==
 
+"@hamster-note/html-parser@^0.5.1":
+  version "0.5.1"
+  resolved "https://registry.yarnpkg.com/@hamster-note/html-parser/-/html-parser-0.5.1.tgz#b2503b40e11e60207fddbdf914a893d3c956e853"
+  integrity sha512-uFgdPnL/iUHZu7vgrkl/MSbeNFAUksYme/PCrc6PLQ2Y1XA9eAsS9LJGbfbyF+8AeQJBQe9uj5355OhgLOMCag==
+  dependencies:
+    "@hamster-note/document-parser" "^0.3.0"
+    "@hamster-note/types" "^0.5.1"
+
 "@hamster-note/image-parser@^0.1.0":
   version "0.1.0"
   resolved "https://registry.yarnpkg.com/@hamster-note/image-parser/-/image-parser-0.1.0.tgz#ae94eb5b25bae3d47a4bbfaace2159520fec5001"

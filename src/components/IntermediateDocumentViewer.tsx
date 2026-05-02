@@ -1,3 +1,4 @@
+import { HtmlParser } from '@hamster-note/html-parser'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized,
@@ -47,6 +48,7 @@ type RenderableIntermediateText = IntermediateText &
   }>
 
 type PageLoadStatus = 'loaded' | 'error'
+type HtmlParserDocumentInput = Parameters<typeof HtmlParser.decodeToHtml>[0]
 
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
@@ -114,12 +116,8 @@ const getPolygonTextGeometry = (
   const p1 = polygon[1]
   const p2 = polygon[2]
 
-  const width = Math.sqrt(
-    Math.pow(p1[0] - p0[0], 2) + Math.pow(p1[1] - p0[1], 2)
-  )
-  const height = Math.sqrt(
-    Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2)
-  )
+  const width = Math.sqrt((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2)
+  const height = Math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
 
   if (width === 0 || height === 0) {
     return null
@@ -401,6 +399,8 @@ export function IntermediateDocumentViewer({
   const [baseImagesByPageNumber, setBaseImagesByPageNumber] = useState(
     () => new Map<number, string>()
   )
+  const [htmlContent, setHtmlContent] = useState<string | null>(null)
+  const [htmlParserError, setHtmlParserError] = useState(false)
 
   useEffect(() => {
     isMountedRef.current = true
@@ -422,6 +422,43 @@ export function IntermediateDocumentViewer({
     setOcrTextsByPageNumber(new Map())
     setPageStatuses(new Map())
     setBaseImagesByPageNumber(new Map())
+    setHtmlContent(null)
+    setHtmlParserError(false)
+  }, [runtimeDocument])
+
+  // Primary render path: convert the runtime document to HTML via @hamster-note/html-parser.
+  // On success we render the HTML fragment directly. Because html-parser output does not
+  // expose the same `data-text-id` span tree that powers text-selection and OCR overlays,
+  // those features are only fully available on the fallback (direct-render) path.
+  // The fallback automatically activates when decodeToHtml throws or returns empty.
+  useEffect(() => {
+    if (!runtimeDocument) {
+      setHtmlContent(null)
+      setHtmlParserError(false)
+      return
+    }
+
+    let cancelled = false
+
+    HtmlParser.decodeToHtml(
+      runtimeDocument as unknown as HtmlParserDocumentInput
+    )
+      .then((html) => {
+        if (!cancelled) {
+          setHtmlContent(html)
+          setHtmlParserError(false)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHtmlContent(null)
+          setHtmlParserError(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [runtimeDocument])
 
   const markLoadableWithOverscan = useCallback(
@@ -617,7 +654,7 @@ export function IntermediateDocumentViewer({
         selection
       }
     },
-    []
+    [buildNormalizedSelection]
   )
 
   const markVisiblePage = useCallback(
@@ -974,129 +1011,148 @@ export function IntermediateDocumentViewer({
       className={rootClassName}
       data-testid='intermediate-document-viewer'
     >
-      {pageNumbers.map((pageNumber) => {
-        const pageSize = normalizePageSize(
-          runtimeDocument.getPageSizeByPageNumber(pageNumber)
-        )
-        const texts = textsByPageNumber.get(pageNumber) ?? []
-        const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
-        const allTexts = [...texts, ...ocrTexts]
-        const pageStatus = pageStatuses.get(pageNumber)
-        const isPageLoading =
-          loadablePages.has(pageNumber) &&
-          pageStatus !== 'loaded' &&
-          pageStatus !== 'error'
-        const pageClassName = isPageLoading
-          ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
-          : 'hamster-reader__intermediate-page'
+      {htmlContent && !htmlParserError ? (
+        <div
+          className='hamster-reader__html-parser-output'
+          data-testid='html-parser-output'
+          // The HTML comes from the trusted @hamster-note/html-parser package,
+          // which converts IntermediateDocument data into HTML fragments.
+          // Text selection hooks do not rely on this path because it may lack data-text-id attributes.
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
+          dangerouslySetInnerHTML={{ __html: htmlContent }}
+        />
+      ) : (
+        pageNumbers.map((pageNumber) => {
+          const pageSize = normalizePageSize(
+            runtimeDocument.getPageSizeByPageNumber(pageNumber)
+          )
+          const texts = textsByPageNumber.get(pageNumber) ?? []
+          const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
+          const allTexts = [...texts, ...ocrTexts]
+          const pageStatus = pageStatuses.get(pageNumber)
+          const isPageLoading =
+            loadablePages.has(pageNumber) &&
+            pageStatus !== 'loaded' &&
+            pageStatus !== 'error'
+          const pageClassName = isPageLoading
+            ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
+            : 'hamster-reader__intermediate-page'
 
-        const baseImageSource = baseImagesByPageNumber.get(pageNumber)
+          const baseImageSource = baseImagesByPageNumber.get(pageNumber)
 
-        return (
-          <div
-            key={pageNumber}
-            ref={setPageRef(pageNumber)}
-            className={pageClassName}
-            data-testid={`intermediate-page-${pageNumber}`}
-            data-page-number={pageNumber}
-            data-page-size-unavailable={
-              pageSize.pageSizeUnavailable ? 'true' : undefined
-            }
-            style={{
-              position: 'relative',
-              width: `${pageSize.width}px`,
-              height: `${pageSize.height}px`,
-              overflow: 'hidden'
-            }}
-          >
-            {baseImageSource && (
-              <img
-                className='hamster-reader__intermediate-page-base-image'
-                src={baseImageSource}
-                alt=''
-                aria-hidden='true'
-              />
-            )}
-            {isPageLoading && (
-              <div className='hamster-reader__intermediate-page-status'>
-                Loading page {pageNumber}…
-              </div>
-            )}
-            {pageStatus === 'error' && (
-              <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
-                Failed to load page {pageNumber}
-              </div>
-            )}
-            {allTexts.map((textData) => {
-              const text = textData as RenderableIntermediateText
-              const polygonGeometry = getPolygonTextGeometry(text.polygon)
-
-              const usePolygonGeometry = polygonGeometry !== null
-              let bbox: { x: number; y: number; width: number; height: number }
-
-              if (usePolygonGeometry) {
-                bbox = {
-                  x: polygonGeometry.x,
-                  y: polygonGeometry.y,
-                  width: polygonGeometry.width,
-                  height: polygonGeometry.height
-                }
-              } else if (text.polygon) {
-                bbox = getTextBoundingBox(text.polygon)
-              } else {
-                bbox = {
-                  x: text.x ?? 0,
-                  y: text.y ?? 0,
-                  width: text.width ?? 0,
-                  height: text.height ?? 0
-                }
+          return (
+            <div
+              key={pageNumber}
+              ref={setPageRef(pageNumber)}
+              className={pageClassName}
+              data-testid={`intermediate-page-${pageNumber}`}
+              data-page-number={pageNumber}
+              data-page-size-unavailable={
+                pageSize.pageSizeUnavailable ? 'true' : undefined
               }
+              style={{
+                position: 'relative',
+                width: `${pageSize.width}px`,
+                height: `${pageSize.height}px`,
+                overflow: 'hidden'
+              }}
+            >
+              {baseImageSource && (
+                <img
+                  className='hamster-reader__intermediate-page-base-image'
+                  src={baseImageSource}
+                  alt=''
+                  aria-hidden='true'
+                />
+              )}
+              {isPageLoading && (
+                <div className='hamster-reader__intermediate-page-status'>
+                  Loading page {pageNumber}…
+                </div>
+              )}
+              {pageStatus === 'error' && (
+                <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
+                  Failed to load page {pageNumber}
+                </div>
+              )}
+              {allTexts.map((textData) => {
+                const text = textData as RenderableIntermediateText
+                const polygonGeometry = getPolygonTextGeometry(text.polygon)
 
-              const polygonRotation = usePolygonGeometry
-                ? polygonGeometry.rotation
-                : 0
+                const usePolygonGeometry = polygonGeometry !== null
+                let bbox: {
+                  x: number
+                  y: number
+                  width: number
+                  height: number
+                }
 
-              const textTransform = getTextTransform(text, usePolygonGeometry)
-              const transform = [
-                polygonRotation ? `rotate(${polygonRotation}deg)` : '',
-                textTransform
-              ]
-                .filter(Boolean)
-                .join(' ')
+                if (usePolygonGeometry) {
+                  bbox = {
+                    x: polygonGeometry.x,
+                    y: polygonGeometry.y,
+                    width: polygonGeometry.width,
+                    height: polygonGeometry.height
+                  }
+                } else if (text.polygon) {
+                  bbox = getTextBoundingBox(text.polygon)
+                } else {
+                  bbox = {
+                    x: text.x ?? 0,
+                    y: text.y ?? 0,
+                    width: text.width ?? 0,
+                    height: text.height ?? 0
+                  }
+                }
 
-              return (
-                <span
-                  key={text.id}
-                  ref={setTextRef(text, pageNumber)}
-                  className='hamster-reader__intermediate-text'
-                  data-text-id={text.id}
-                  data-page-number={pageNumber}
-                  style={{
-                    position: 'absolute',
-                    left: `${bbox.x}px`,
-                    top: `${bbox.y}px`,
-                    width: bbox.width ? `${bbox.width}px` : undefined,
-                    height: bbox.height ? `${bbox.height}px` : undefined,
-                    fontSize: text.fontSize ? `${text.fontSize}px` : undefined,
-                    fontFamily: text.fontFamily || undefined,
-                    fontWeight: text.fontWeight || undefined,
-                    fontStyle: text.italic ? 'italic' : undefined,
-                    color: text.color || undefined,
-                    lineHeight: text.lineHeight
-                      ? `${text.lineHeight}px`
-                      : undefined,
-                    transform,
-                    transformOrigin: 'left top',
-                    whiteSpace: 'pre'
-                  }}
-                >
-                  {text.content}
-                </span>
-              )
-            })}
-          </div>
-        )
-      })}
+                const polygonRotation = usePolygonGeometry
+                  ? polygonGeometry.rotation
+                  : 0
+
+                const textTransform = getTextTransform(text, usePolygonGeometry)
+                const transform = [
+                  polygonRotation ? `rotate(${polygonRotation}deg)` : '',
+                  textTransform
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+
+                return (
+                  <span
+                    key={text.id}
+                    ref={setTextRef(text, pageNumber)}
+                    className='hamster-reader__intermediate-text'
+                    data-text-id={text.id}
+                    data-page-number={pageNumber}
+                    style={{
+                      position: 'absolute',
+                      left: `${bbox.x}px`,
+                      top: `${bbox.y}px`,
+                      width: bbox.width ? `${bbox.width}px` : undefined,
+                      height: bbox.height ? `${bbox.height}px` : undefined,
+                      fontSize: text.fontSize
+                        ? `${text.fontSize}px`
+                        : undefined,
+                      fontFamily: text.fontFamily || undefined,
+                      fontWeight: text.fontWeight || undefined,
+                      fontStyle: text.italic ? 'italic' : undefined,
+                      color: text.color || undefined,
+                      lineHeight: text.lineHeight
+                        ? `${text.lineHeight}px`
+                        : undefined,
+                      transform,
+                      transformOrigin: 'left top',
+                      whiteSpace: 'pre'
+                    }}
+                  >
+                    {text.content}
+                  </span>
+                )
+              })}
+            </div>
+          )
+        })
+      )}
     </div>
   )
 }
