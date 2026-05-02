@@ -1394,6 +1394,166 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
+  describe('polygon geometry rendering', () => {
+    const makePolygonText = (
+      id: string,
+      content: string,
+      polygon: [number, number][],
+      extra: Partial<IntermediateText> = {}
+    ): IntermediateText => {
+      return {
+        id,
+        content,
+        fontSize: 12,
+        fontFamily: 'Arial',
+        fontWeight: 400,
+        italic: false,
+        color: '#111111',
+        polygon,
+        lineHeight: 16,
+        ascent: 10,
+        descent: 2,
+        dir: 'ltr',
+        skew: 0,
+        isEOL: false,
+        ...extra
+      } as IntermediateText
+    }
+
+    const makePolygonDocument = (
+      texts: IntermediateText[],
+      pageSize = { x: 200, y: 200 }
+    ) => {
+      const pages = new Map<number, MockPage>()
+      pages.set(1, {
+        getTexts: vi.fn(async () => texts)
+      })
+
+      const document = {
+        id: 'doc-polygon',
+        title: 'Polygon Document',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => pageSize),
+        getPageByPageNumber: vi.fn((pageNumber: number) =>
+          Promise.resolve(pages.get(pageNumber))
+        )
+      } as unknown as IntermediateDocument
+
+      return { document }
+    }
+
+    it('renders valid 4-point horizontal polygon with correct geometry', async () => {
+      const polygon: [number, number][] = [
+        [10, 20],
+        [50, 20],
+        [50, 36],
+        [10, 36]
+      ]
+      const text = makePolygonText('polygon-text', 'Horizontal text', polygon)
+      const { document } = makePolygonDocument([text])
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Horizontal text')).toBeInTheDocument()
+      })
+
+      const textSpan = screen.getByText('Horizontal text')
+      expect(textSpan).toHaveStyle({
+        left: '10px',
+        top: '20px',
+        width: '40px',
+        height: '16px'
+      })
+    })
+
+    it('renders malformed 2-point polygon with bbox fallback', async () => {
+      const polygon: [number, number][] = [
+        [10, 20],
+        [50, 20]
+      ]
+      const text = makePolygonText('malformed-text', 'Fallback text', polygon)
+      const { document } = makePolygonDocument([text])
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Fallback text')).toBeInTheDocument()
+      })
+
+      const textSpan = screen.getByText('Fallback text')
+      expect(textSpan).toHaveStyle({
+        left: '0px',
+        top: '0px'
+      })
+      expect(textSpan.style.transform).toBe('')
+    })
+
+    it('renders vertical polygon with 90-degree rotation', async () => {
+      const polygon: [number, number][] = [
+        [0, 0],
+        [0, 40],
+        [16, 40],
+        [16, 0]
+      ]
+      const text = makePolygonText('rotated-text', 'Rotated text', polygon)
+      const { document } = makePolygonDocument([text])
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Rotated text')).toBeInTheDocument()
+      })
+
+      const textSpan = screen.getByText('Rotated text')
+      expect(textSpan).toHaveStyle({
+        left: '0px',
+        top: '0px',
+        width: '40px',
+        height: '16px'
+      })
+      expect(textSpan.style.transform).toContain('rotate(90deg)')
+    })
+
+    it('renders text without polygon using x/y/width/height fallback', async () => {
+      const text = {
+        id: 'nofallback-text',
+        content: 'No polygon text',
+        fontSize: 12,
+        fontFamily: 'Arial',
+        fontWeight: 400,
+        italic: false,
+        color: '#111111',
+        lineHeight: 16,
+        ascent: 10,
+        descent: 2,
+        dir: 'ltr',
+        skew: 0,
+        isEOL: false,
+        x: 30,
+        y: 40,
+        width: 80,
+        height: 24
+      } as unknown as IntermediateText
+      const { document } = makePolygonDocument([text])
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('No polygon text')).toBeInTheDocument()
+      })
+
+      const textSpan = screen.getByText('No polygon text')
+      expect(textSpan).toHaveStyle({
+        left: '30px',
+        top: '40px',
+        width: '80px',
+        height: '24px'
+      })
+    })
+  })
+
   describe('base image rendering', () => {
     it('renders base image for pages with thumbnail data', async () => {
       const { document } = makeDocument({ pageCount: 1 })

@@ -85,10 +85,64 @@ const getTextBoundingBox = (polygon: [number, number][]) => {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }
 
-const getTextTransform = (text: RenderableIntermediateText) => {
+const getPolygonTextGeometry = (
+  polygon: [number, number][] | undefined
+): {
+  x: number
+  y: number
+  width: number
+  height: number
+  rotation: number
+} | null => {
+  if (
+    !polygon ||
+    polygon.length !== 4 ||
+    !polygon.every(
+      (p) =>
+        Array.isArray(p) &&
+        p.length === 2 &&
+        typeof p[0] === 'number' &&
+        typeof p[1] === 'number' &&
+        Number.isFinite(p[0]) &&
+        Number.isFinite(p[1])
+    )
+  ) {
+    return null
+  }
+
+  const p0 = polygon[0]
+  const p1 = polygon[1]
+  const p2 = polygon[2]
+
+  const width = Math.sqrt(
+    Math.pow(p1[0] - p0[0], 2) + Math.pow(p1[1] - p0[1], 2)
+  )
+  const height = Math.sqrt(
+    Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2)
+  )
+
+  if (width === 0 || height === 0) {
+    return null
+  }
+
+  const rotation = (Math.atan2(p1[1] - p0[1], p1[0] - p0[0]) * 180) / Math.PI
+
+  return {
+    x: p0[0],
+    y: p0[1],
+    width,
+    height,
+    rotation
+  }
+}
+
+const getTextTransform = (
+  text: RenderableIntermediateText,
+  skipRotate?: boolean
+) => {
   const transforms: string[] = []
 
-  if (text.rotate) {
+  if (!skipRotate && text.rotate) {
     transforms.push(`rotate(${text.rotate}deg)`)
   }
 
@@ -975,14 +1029,40 @@ export function IntermediateDocumentViewer({
             )}
             {allTexts.map((textData) => {
               const text = textData as RenderableIntermediateText
-              const bbox = text.polygon
-                ? getTextBoundingBox(text.polygon)
-                : {
-                    x: text.x ?? 0,
-                    y: text.y ?? 0,
-                    width: text.width ?? 0,
-                    height: text.height ?? 0
-                  }
+              const polygonGeometry = getPolygonTextGeometry(text.polygon)
+
+              const usePolygonGeometry = polygonGeometry !== null
+              let bbox: { x: number; y: number; width: number; height: number }
+
+              if (usePolygonGeometry) {
+                bbox = {
+                  x: polygonGeometry.x,
+                  y: polygonGeometry.y,
+                  width: polygonGeometry.width,
+                  height: polygonGeometry.height
+                }
+              } else if (text.polygon) {
+                bbox = getTextBoundingBox(text.polygon)
+              } else {
+                bbox = {
+                  x: text.x ?? 0,
+                  y: text.y ?? 0,
+                  width: text.width ?? 0,
+                  height: text.height ?? 0
+                }
+              }
+
+              const polygonRotation = usePolygonGeometry
+                ? polygonGeometry.rotation
+                : 0
+
+              const textTransform = getTextTransform(text, usePolygonGeometry)
+              const transform = [
+                polygonRotation ? `rotate(${polygonRotation}deg)` : '',
+                textTransform
+              ]
+                .filter(Boolean)
+                .join(' ')
 
               return (
                 <span
@@ -1005,7 +1085,7 @@ export function IntermediateDocumentViewer({
                     lineHeight: text.lineHeight
                       ? `${text.lineHeight}px`
                       : undefined,
-                    transform: getTextTransform(text),
+                    transform,
                     transformOrigin: 'left top',
                     whiteSpace: 'pre'
                   }}
