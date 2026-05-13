@@ -149,6 +149,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'HTML Parser Output'
     )
@@ -201,6 +202,12 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'serialized-doc',
+        pageCount: 1
+      })
+    )
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'Serialized HTML'
     )
@@ -220,6 +227,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByText('Page 1 text')).toBeInTheDocument()
     })
 
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
     expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
   })
 

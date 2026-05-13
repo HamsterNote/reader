@@ -101,37 +101,46 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('success.pdf'))
+    const uploadedFile = makeFile('success.pdf')
+    upload(uploadedFile)
 
     expect(screen.getByText('Parsing...')).toBeInTheDocument()
     expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
     expect(screen.getByText('Success Document')).toBeInTheDocument()
     expect(screen.getByText('Name: success.pdf')).toBeInTheDocument()
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
+    expect(PdfParser.encode).toHaveBeenCalledTimes(1)
+    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile)
   })
 
   it('shows a parse error when the parser returns undefined', async () => {
     vi.mocked(PdfParser.encode).mockResolvedValue(undefined)
 
     render(<App />)
-    upload(makeFile('undefined.pdf'))
+    const uploadedFile = makeFile('undefined.pdf')
+    upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(
       screen.getByText('Failed to parse PDF: received undefined result')
     ).toBeInTheDocument()
     expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(PdfParser.encode).toHaveBeenCalledTimes(1)
+    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile)
   })
 
   it('shows a parse error when the parser throws', async () => {
     vi.mocked(PdfParser.encode).mockRejectedValue(new Error('bad pdf'))
 
     render(<App />)
-    upload(makeFile('broken.pdf'))
+    const uploadedFile = makeFile('broken.pdf')
+    upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse PDF: bad pdf')).toBeInTheDocument()
     expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(PdfParser.encode).toHaveBeenCalledTimes(1)
+    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile)
   })
 
   it('renders parsed document Reader without errors when OCR and selection props are provided', async () => {

@@ -181,6 +181,36 @@ describe('Reader public API', () => {
     await waitFor(() => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
+
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
+    expect(screen.getByTestId('html-parser-output')).toContainHTML('Reader HTML')
+  })
+
+  it('falls back when html-parser decode fails', async () => {
+    vi.mocked(HtmlParser.decodeToHtml).mockRejectedValueOnce(
+      new Error('decode failed')
+    )
+
+    const document = {
+      id: 'doc-1',
+      title: 'Test Document',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
+      getPageByPageNumber: () =>
+        Promise.resolve({
+          getTexts: () => Promise.resolve([{ id: 't1', content: 'Reader fallback' }])
+        })
+    } as unknown as IntermediateDocument
+
+    render(<Reader document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Reader fallback')).toBeInTheDocument()
+    })
+
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
+    expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
   })
 
   it('shows the document title fallback when pages are empty', () => {

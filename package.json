@@ -43,9 +43,9 @@
     "pack:check": "node scripts/check-pack.mjs"
   },
   "dependencies": {
-    "@hamster-note/html-parser": "^0.5.1",
+    "@hamster-note/html-parser": "^0.6.0",
     "@hamster-note/image-parser": "^0.1.0",
-    "@hamster-note/pdf-parser": "^0.5.1",
+    "@hamster-note/pdf-parser": "^0.6.0",
     "@hamster-note/types": "^0.7.0"
   },
   "peerDependencies": {
