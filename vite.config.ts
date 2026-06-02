@@ -222,7 +222,11 @@ export default defineConfig(({ mode }) => ({
     ]
   },
   optimizeDeps: {
-    include: ['@paddleocr/paddleocr-js'],
+    include: [
+      '@paddleocr/paddleocr-js',
+      '@hamster-note/document-parser',
+      '@hamster-note/types'
+    ],
     exclude: ['@hamster-note/pdf-parser', '@hamster-note/image-parser']
   },
   build: {

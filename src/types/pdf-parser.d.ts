@@ -5,6 +5,7 @@ declare module '@hamster-note/pdf-parser' {
 
   export interface EncodeOptions {
     filename?: string
+    pages?: number[]
   }
 
   export interface DecodeOptions {

@@ -63,7 +63,7 @@ function makeDocument(
 }
 
 type MockPage = {
-  getTexts: ReturnType<typeof vi.fn<() => Promise<unknown[]>>>
+  getContent: ReturnType<typeof vi.fn<() => Promise<unknown[]>>>
   thumbnail?: string
   image?: string
 }
@@ -77,7 +77,7 @@ function makeLazyDocument(pageCount: number = 1): {
 
   pageNumbers.forEach((pageNumber) => {
     pages.set(pageNumber, {
-      getTexts: vi.fn(async () => [
+      getContent: vi.fn(async () => [
         makeText(`text-${pageNumber}`, `Page ${pageNumber} text`)
       ])
     })
@@ -172,7 +172,7 @@ describe('Reader public API', () => {
       getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
       getPageByPageNumber: () =>
         Promise.resolve({
-          getTexts: () => Promise.resolve([{ id: 't1', content: 'text' }])
+          getContent: () => Promise.resolve([{ id: 't1', content: 'text' }])
         })
     } as unknown as IntermediateDocument
 
@@ -182,8 +182,10 @@ describe('Reader public API', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
-    expect(screen.getByTestId('html-parser-output')).toContainHTML('Reader HTML')
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
+    expect(screen.getByTestId('html-parser-output')).toContainHTML(
+      'Reader HTML'
+    )
   })
 
   it('falls back when html-parser decode fails', async () => {
@@ -199,7 +201,10 @@ describe('Reader public API', () => {
       getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
       getPageByPageNumber: () =>
         Promise.resolve({
-          getTexts: () => Promise.resolve([{ id: 't1', content: 'Reader fallback' }])
+          getContent: () =>
+            Promise.resolve([
+              { id: 't1', content: 'Reader fallback', fontSize: 12 }
+            ])
         })
     } as unknown as IntermediateDocument
 
@@ -209,7 +214,7 @@ describe('Reader public API', () => {
       expect(screen.getByText('Reader fallback')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
     expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
   })
 
@@ -444,7 +449,7 @@ describe('Reader prop forwarding', () => {
 
     const { document } = makeLazyDocument(1)
     const pageWithThumbnail = {
-      getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+      getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
       thumbnail: 'data:image/png;base64,abc123'
     }
     vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -464,5 +469,30 @@ describe('Reader prop forwarding', () => {
     await waitFor(() => {
       expect(encodeSpy).toHaveBeenCalledTimes(1)
     })
+  })
+
+  it('forwards pageRange to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(5)
+
+    render(<Reader document={document} pageRange={{ start: 2, end: 4 }} />)
+
+    // Pages outside range should not exist
+    expect(screen.queryByTestId('intermediate-page-1')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('intermediate-page-5')).not.toBeInTheDocument()
+
+    // Pages within range should exist
+    expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-page-4')).toBeInTheDocument()
+  })
+
+  it('renders all pages when pageRange is not provided', () => {
+    const { document } = makeLazyDocument(3)
+
+    render(<Reader document={document} />)
+
+    expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
   })
 })

@@ -22,7 +22,7 @@ vi.mock('@hamster-note/html-parser', () => ({
 }))
 
 type MockPage = {
-  getTexts: ReturnType<typeof vi.fn<() => Promise<IntermediateText[]>>>
+  getContent: ReturnType<typeof vi.fn<() => Promise<IntermediateText[]>>>
   getThumbnail?: ReturnType<typeof vi.fn<() => Promise<string | undefined>>>
   thumbnail?: string
   image?: string
@@ -64,7 +64,7 @@ function makeDocument({
 
   pageNumbers.forEach((pageNumber) => {
     pages.set(pageNumber, {
-      getTexts: vi.fn(async () => [
+      getContent: vi.fn(async () => [
         makeText(`text-${pageNumber}`, `Page ${pageNumber} text`)
       ])
     })
@@ -149,68 +149,81 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'HTML Parser Output'
     )
   })
 
   it('renders html-parser output for serialized documents', async () => {
-    const serializedDocument = {
-      id: 'serialized-doc',
-      title: 'Serialized',
-      pages: [
-        {
-          pageNumber: 1,
-          size: { x: 100, y: 150 },
-          texts: [
-            {
-              id: 'text-1',
-              content: 'Serialized text',
-              fontSize: 12,
-              fontFamily: 'Arial',
-              fontWeight: 400,
-              italic: false,
-              color: '#111111',
-              polygon: [
-                [10, 20],
-                [50, 20],
-                [50, 36],
-                [10, 36]
-              ],
-              lineHeight: 16,
-              ascent: 10,
-              descent: 2,
-              dir: 'ltr',
-              skew: 0,
-              isEOL: false
-            }
-          ]
-        }
-      ]
-    } as unknown as IntermediateDocumentSerialized
-    const mockHtml =
-      '<div class="hamster-note-document"><div class="page">Serialized HTML</div></div>'
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {})
 
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
-
-    render(
-      <IntermediateDocumentViewer serializedDocument={serializedDocument} />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
-    })
-
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(
-      expect.objectContaining({
+    try {
+      const serializedDocument = {
         id: 'serialized-doc',
-        pageCount: 1
+        title: 'Serialized',
+        pages: [
+          {
+            id: 'serialized-page-1',
+            width: 100,
+            height: 150,
+            number: 1,
+            thumbnail: undefined,
+            texts: [
+              {
+                id: 'text-1',
+                content: 'Serialized text',
+                fontSize: 12,
+                fontFamily: 'Arial',
+                fontWeight: 400,
+                italic: false,
+                color: '#111111',
+                polygon: [
+                  [10, 20],
+                  [50, 20],
+                  [50, 36],
+                  [10, 36]
+                ],
+                lineHeight: 16,
+                ascent: 10,
+                descent: 2,
+                dir: 'ltr',
+                skew: 0,
+                isEOL: false
+              }
+            ]
+          }
+        ]
+      } as unknown as IntermediateDocumentSerialized
+      const mockHtml =
+        '<div class="hamster-note-document"><div class="page">Serialized HTML</div></div>'
+
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+
+      render(
+        <IntermediateDocumentViewer serializedDocument={serializedDocument} />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
       })
-    )
-    expect(screen.getByTestId('html-parser-output')).toContainHTML(
-      'Serialized HTML'
-    )
+
+      expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'serialized-doc',
+          pageCount: 1
+        }),
+        undefined
+      )
+      expect(screen.getByTestId('html-parser-output')).toContainHTML(
+        'Serialized HTML'
+      )
+      expect(consoleErrorSpy).not.toHaveBeenCalled()
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
   })
 
   it('falls back to direct renderer when html-parser fails', async () => {
@@ -227,7 +240,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByText('Page 1 text')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document)
+    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
     expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
   })
 
@@ -252,21 +265,21 @@ describe('IntermediateDocumentViewer', () => {
     render(<IntermediateDocumentViewer document={document} overscan={1} />)
 
     await waitFor(() => {
-      expect(pages.get(1)?.getTexts).toHaveBeenCalledTimes(1)
-      expect(pages.get(2)?.getTexts).toHaveBeenCalledTimes(1)
+      expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+      expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
     })
-    expect(pages.get(3)?.getTexts).not.toHaveBeenCalled()
-    expect(pages.get(4)?.getTexts).not.toHaveBeenCalled()
-    expect(pages.get(5)?.getTexts).not.toHaveBeenCalled()
+    expect(pages.get(3)?.getContent).not.toHaveBeenCalled()
+    expect(pages.get(4)?.getContent).not.toHaveBeenCalled()
+    expect(pages.get(5)?.getContent).not.toHaveBeenCalled()
 
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-3'))
 
     await waitFor(() => {
-      expect(pages.get(3)?.getTexts).toHaveBeenCalledTimes(1)
-      expect(pages.get(4)?.getTexts).toHaveBeenCalledTimes(1)
+      expect(pages.get(3)?.getContent).toHaveBeenCalledTimes(1)
+      expect(pages.get(4)?.getContent).toHaveBeenCalledTimes(1)
     })
 
-    expect(pages.get(5)?.getTexts).not.toHaveBeenCalled()
+    expect(pages.get(5)?.getContent).not.toHaveBeenCalled()
     expect(await screen.findByText('Page 3 text')).toBeInTheDocument()
   })
 
@@ -278,26 +291,26 @@ describe('IntermediateDocumentViewer', () => {
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-1'))
 
     await waitFor(() => {
-      expect(pages.get(1)?.getTexts).toHaveBeenCalledTimes(1)
-      expect(pages.get(2)?.getTexts).toHaveBeenCalledTimes(1)
+      expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+      expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
     })
 
     const loadedPageCount = Array.from(pages.values()).filter(
-      (page) => page.getTexts.mock.calls.length > 0
+      (page) => page.getContent.mock.calls.length > 0
     ).length
 
     expect(loadedPageCount).toBeLessThanOrEqual(2)
-    expect(pages.get(100)?.getTexts).not.toHaveBeenCalled()
+    expect(pages.get(100)?.getContent).not.toHaveBeenCalled()
   })
 
   it('stops showing the loading state when a loaded page has no text', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
-    pages.get(1)?.getTexts.mockResolvedValueOnce([])
+    pages.get(1)?.getContent.mockResolvedValueOnce([])
 
     render(<IntermediateDocumentViewer document={document} />)
 
     await waitFor(() => {
-      expect(pages.get(1)?.getTexts).toHaveBeenCalledTimes(1)
+      expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
     })
 
     await waitFor(() => {
@@ -334,7 +347,9 @@ describe('IntermediateDocumentViewer', () => {
 
   it('shows a page error instead of loading forever when text loading fails', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
-    pages.get(1)?.getTexts.mockRejectedValueOnce(new Error('text load failed'))
+    pages
+      .get(1)
+      ?.getContent.mockRejectedValueOnce(new Error('text load failed'))
 
     render(<IntermediateDocumentViewer document={document} />)
 
@@ -358,14 +373,14 @@ describe('IntermediateDocumentViewer', () => {
     )
   })
 
-  it('ignores stale getTexts callbacks after document changes', async () => {
+  it('ignores stale getContent callbacks after document changes', async () => {
     let resolveTexts: (texts: IntermediateText[]) => void = (_texts) =>
       undefined
     const deferredTexts = new Promise<IntermediateText[]>((resolve) => {
       resolveTexts = resolve
     })
     const pageA = {
-      getTexts: vi.fn(() => deferredTexts)
+      getContent: vi.fn(() => deferredTexts)
     }
     const documentA = {
       id: 'doc-a',
@@ -377,7 +392,7 @@ describe('IntermediateDocumentViewer', () => {
     } as unknown as IntermediateDocument
 
     const pageB = {
-      getTexts: vi.fn(async () => [makeText('text-b', 'Page B text')])
+      getContent: vi.fn(async () => [makeText('text-b', 'Page B text')])
     }
     const documentB = {
       id: 'doc-b',
@@ -395,7 +410,7 @@ describe('IntermediateDocumentViewer', () => {
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-1'))
 
     await waitFor(() => {
-      expect(pageA.getTexts).toHaveBeenCalledTimes(1)
+      expect(pageA.getContent).toHaveBeenCalledTimes(1)
     })
 
     rerender(<IntermediateDocumentViewer document={documentB} />)
@@ -403,7 +418,7 @@ describe('IntermediateDocumentViewer', () => {
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-1'))
 
     await waitFor(() => {
-      expect(pageB.getTexts).toHaveBeenCalledTimes(1)
+      expect(pageB.getContent).toHaveBeenCalledTimes(1)
     })
 
     resolveTexts([makeText('text-a', 'Stale A text')])
@@ -437,7 +452,7 @@ describe('IntermediateDocumentViewer', () => {
 
       const { document } = makeDocument({ pageCount: 1 })
       const pageWithThumbnail = {
-        getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+        getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
         thumbnail: 'data:image/png;base64,abc123'
       }
       vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -470,7 +485,7 @@ describe('IntermediateDocumentViewer', () => {
       vi.mocked(document.getPageByPageNumber).mockImplementation(
         async (pageNumber: number) =>
           ({
-            getTexts: vi.fn(async () => [
+            getContent: vi.fn(async () => [
               makeText(`text-${pageNumber}`, `Page ${pageNumber} text`)
             ]),
             thumbnail: 'data:image/png;base64,abc123'
@@ -497,7 +512,7 @@ describe('IntermediateDocumentViewer', () => {
     it('renders OCR text with prefixed ids', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       const pageWithThumbnail = {
-        getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+        getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
         thumbnail: 'data:image/png;base64,abc123'
       }
       vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -529,7 +544,7 @@ describe('IntermediateDocumentViewer', () => {
 
       const { document } = makeDocument({ pageCount: 1 })
       const pageWithThumbnail = {
-        getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+        getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
         thumbnail: 'data:image/png;base64,abc123'
       }
       vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -569,7 +584,7 @@ describe('IntermediateDocumentViewer', () => {
 
       const { document } = makeDocument({ pageCount: 1 })
       const pageWithThumbnail = {
-        getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+        getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
         thumbnail: 'data:image/png;base64,abc123'
       }
       vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -615,7 +630,7 @@ describe('IntermediateDocumentViewer', () => {
       )
 
       const pageA = {
-        getTexts: vi.fn(async () => [makeText('text-a', 'Page A text')]),
+        getContent: vi.fn(async () => [makeText('text-a', 'Page A text')]),
         thumbnail: 'data:image/png;base64,docA'
       }
       const documentA = {
@@ -628,7 +643,7 @@ describe('IntermediateDocumentViewer', () => {
       } as unknown as IntermediateDocument
 
       const pageB = {
-        getTexts: vi.fn(async () => [makeText('text-b', 'Page B text')]),
+        getContent: vi.fn(async () => [makeText('text-b', 'Page B text')]),
         thumbnail: 'data:image/png;base64,docB'
       }
       const documentB = {
@@ -682,7 +697,8 @@ describe('IntermediateDocumentViewer', () => {
           }
         ],
         getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
-        getPageByPageNumber: () => Promise.resolve({ getTexts: async () => [] })
+        getPageByPageNumber: () =>
+          Promise.resolve({ getContent: async () => [] })
       } as unknown as IntermediateDocument
 
       resolveOcr(mockOcrDoc)
@@ -781,7 +797,9 @@ describe('IntermediateDocumentViewer', () => {
 
       const pages = new Map<number, MockPage>()
       pages.set(1, {
-        getTexts: vi.fn(async () => texts.map((t) => makeText(t.id, t.content)))
+        getContent: vi.fn(async () =>
+          texts.map((t) => makeText(t.id, t.content))
+        )
       })
 
       const document = {
@@ -1550,7 +1568,7 @@ describe('IntermediateDocumentViewer', () => {
     ) => {
       const pages = new Map<number, MockPage>()
       pages.set(1, {
-        getTexts: vi.fn(async () => texts)
+        getContent: vi.fn(async () => texts)
       })
 
       const document = {
@@ -1682,7 +1700,7 @@ describe('IntermediateDocumentViewer', () => {
     it('renders base image for pages with thumbnail data', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       const pageWithThumbnail = {
-        getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+        getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
         thumbnail: 'data:image/png;base64,abc123'
       }
       vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -1717,7 +1735,7 @@ describe('IntermediateDocumentViewer', () => {
     it('renders base image before text spans in DOM order', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       const pageWithThumbnail = {
-        getTexts: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
+        getContent: vi.fn(async () => [makeText('text-1', 'Page 1 text')]),
         thumbnail: 'data:image/png;base64,abc123'
       }
       vi.mocked(document.getPageByPageNumber).mockResolvedValue(
@@ -1737,6 +1755,177 @@ describe('IntermediateDocumentViewer', () => {
         expect(textIndex).toBeGreaterThanOrEqual(0)
         expect(imgIndex).toBeLessThan(textIndex)
       })
+    })
+  })
+
+  describe('pageRange filtering', () => {
+    it('renders only pages within the specified range', () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 2, end: 4 }}
+        />
+      )
+
+      // Pages outside range should not exist
+      expect(
+        screen.queryByTestId('intermediate-page-1')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-5')
+      ).not.toBeInTheDocument()
+
+      // Pages within range should exist
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-4')).toBeInTheDocument()
+    })
+
+    it('renders all pages when pageRange is not provided', () => {
+      const { document } = makeDocument({ pageCount: 3 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+    })
+
+    it('renders empty viewer when range has no matching pages', () => {
+      const { document } = makeDocument({ pageCount: 3 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 10, end: 20 }}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).toBeEmptyDOMElement()
+    })
+
+    it('renders empty viewer when start is greater than end', () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 4, end: 2 }}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).toBeEmptyDOMElement()
+    })
+
+    it('loads content only for pages within range', async () => {
+      const { document, pages } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 2, end: 3 }}
+        />
+      )
+
+      // Trigger IntersectionObserver for visible pages
+      act(() => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-2'),
+          true
+        )
+      })
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+      })
+
+      // Pages outside range should not have getContent called
+      const page1 = pages.get(1)!
+      const page4 = pages.get(4)!
+      const page5 = pages.get(5)!
+      expect(page1.getContent).not.toHaveBeenCalled()
+      expect(page4.getContent).not.toHaveBeenCalled()
+      expect(page5.getContent).not.toHaveBeenCalled()
+
+      // Pages within range should have getContent called
+      const page2 = pages.get(2)!
+      expect(page2.getContent).toHaveBeenCalled()
+    })
+
+    it('handles single page range', () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 3, end: 3 }}
+        />
+      )
+
+      expect(
+        screen.queryByTestId('intermediate-page-1')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-2')
+      ).not.toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-4')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-5')
+      ).not.toBeInTheDocument()
+    })
+
+    it('normalizes fractional page numbers by truncating', () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 1.7, end: 3.9 }}
+        />
+      )
+
+      // 1.7 truncates to 1, 3.9 truncates to 3
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-4')
+      ).not.toBeInTheDocument()
+    })
+
+    it('renders empty viewer for non-finite page range values', () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: Infinity, end: 3 }}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).toBeEmptyDOMElement()
+
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 1, end: NaN }}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).toBeEmptyDOMElement()
     })
   })
 })

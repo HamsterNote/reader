@@ -1,6 +1,7 @@
-import { HtmlParser } from '@hamster-note/html-parser'
+import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
 import {
   IntermediateDocument,
+  type IntermediateContent,
   type IntermediateDocumentSerialized,
   type IntermediateText
 } from '@hamster-note/types'
@@ -14,11 +15,28 @@ export type ReaderTextSelectionDetail = {
   selection: Selection
 }
 
+export type ReaderPageRange = {
+  start: number
+  end: number
+}
+
+/** 背景质量级别：low（低）、medium（中）、high（高） */
+export type BackgroundQuality = 'low' | 'medium' | 'high'
+
+/** 将背景质量级别映射为 html-parser 的 backgroundQuality 数值（0-1） */
+const BACKGROUND_QUALITY_MAP: Record<BackgroundQuality, number> = {
+  low: 0.1,
+  medium: 0.3,
+  high: 0.8
+}
+
 export type IntermediateDocumentViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   serializedDocument?: IntermediateDocumentSerialized | null
   className?: string
   overscan?: number
+  pageRange?: ReaderPageRange
+  backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
   onTextSelectionChange?: (
@@ -60,6 +78,10 @@ const isRuntimeDocument = (
 ): document is IntermediateDocument =>
   typeof (document as IntermediateDocument).getPageByPageNumber === 'function'
 
+const isIntermediateText = (
+  content: IntermediateContent
+): content is IntermediateText => 'content' in content && 'fontSize' in content
+
 const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
   const pageSizeUnavailable =
     !(typeof size?.x === 'number' && size.x > 0) ||
@@ -78,8 +100,11 @@ const getTextBoundingBox = (polygon: [number, number][]) => {
   if (!polygon || polygon.length < 4) {
     return { x: 0, y: 0, width: 0, height: 0 }
   }
-  const xs = polygon.map((point) => point[0])
-  const ys = polygon.map((point) => point[1])
+  const xs = polygon.map((point) => point?.[0]).filter(Number.isFinite)
+  const ys = polygon.map((point) => point?.[1]).filter(Number.isFinite)
+  if (xs.length === 0 || ys.length === 0) {
+    return { x: 0, y: 0, width: 0, height: 0 }
+  }
   const minX = Math.min(...xs)
   const maxX = Math.max(...xs)
   const minY = Math.min(...ys)
@@ -149,6 +174,78 @@ const getTextTransform = (
   }
 
   return transforms.length > 0 ? transforms.join(' ') : undefined
+}
+
+const getTextBbox = (text: RenderableIntermediateText) => {
+  const polygonGeometry = getPolygonTextGeometry(text.polygon)
+  const usePolygonGeometry = polygonGeometry !== null
+
+  if (usePolygonGeometry) {
+    return {
+      x: polygonGeometry.x,
+      y: polygonGeometry.y,
+      width: polygonGeometry.width,
+      height: polygonGeometry.height,
+      rotation: polygonGeometry.rotation
+    }
+  }
+
+  if (text.polygon) {
+    return {
+      ...getTextBoundingBox(text.polygon),
+      rotation: 0
+    }
+  }
+
+  return {
+    x: text.x ?? 0,
+    y: text.y ?? 0,
+    width: text.width ?? 0,
+    height: text.height ?? 0,
+    rotation: 0
+  }
+}
+
+const buildTextSpanStyle = (
+  text: RenderableIntermediateText,
+  bbox: ReturnType<typeof getTextBbox>
+) => {
+  const textTransform = getTextTransform(text, !!bbox.rotation)
+  const transform = [
+    bbox.rotation ? `rotate(${bbox.rotation}deg)` : '',
+    textTransform
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return {
+    position: 'absolute' as const,
+    left: Number.isFinite(bbox.x) ? `${bbox.x}px` : '0px',
+    top: Number.isFinite(bbox.y) ? `${bbox.y}px` : '0px',
+    width:
+      Number.isFinite(bbox.width) && bbox.width > 0
+        ? `${bbox.width}px`
+        : undefined,
+    height:
+      Number.isFinite(bbox.height) && bbox.height > 0
+        ? `${bbox.height}px`
+        : undefined,
+    fontSize:
+      Number.isFinite(text.fontSize) && text.fontSize > 0
+        ? `${text.fontSize}px`
+        : undefined,
+    fontFamily: text.fontFamily || undefined,
+    fontWeight: text.fontWeight || undefined,
+    fontStyle: text.italic ? 'italic' : undefined,
+    color: text.color || undefined,
+    lineHeight:
+      Number.isFinite(text.lineHeight) && text.lineHeight > 0
+        ? `${text.lineHeight}px`
+        : undefined,
+    transform,
+    transformOrigin: 'left top' as const,
+    whiteSpace: 'pre' as const
+  }
 }
 
 const createSetTextsHandler = (
@@ -349,6 +446,8 @@ export function IntermediateDocumentViewer({
   serializedDocument,
   className,
   overscan = 1,
+  pageRange,
+  backgroundQuality,
   ocr,
   onOcrError,
   onTextSelectionChange,
@@ -366,10 +465,24 @@ export function IntermediateDocumentViewer({
       : IntermediateDocument.parse(inputDocument)
   }, [document, serializedDocument])
 
-  const pageNumbers = useMemo(
-    () => runtimeDocument?.pageNumbers ?? [],
-    [runtimeDocument]
-  )
+  const pageNumbers = useMemo(() => {
+    const allPageNumbers = runtimeDocument?.pageNumbers ?? []
+
+    if (!pageRange) {
+      return allPageNumbers
+    }
+
+    const start = Math.trunc(pageRange.start)
+    const end = Math.trunc(pageRange.end)
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+      return []
+    }
+
+    return allPageNumbers.filter(
+      (pageNumber) => pageNumber >= start && pageNumber <= end
+    )
+  }, [runtimeDocument, pageRange])
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
@@ -440,8 +553,13 @@ export function IntermediateDocumentViewer({
 
     let cancelled = false
 
+    const decodeOptions: DecodeOptions | undefined = backgroundQuality
+      ? { background: { backgroundQuality: BACKGROUND_QUALITY_MAP[backgroundQuality] } }
+      : undefined
+
     HtmlParser.decodeToHtml(
-      runtimeDocument as unknown as HtmlParserDocumentInput
+      runtimeDocument as unknown as HtmlParserDocumentInput,
+      decodeOptions
     )
       .then((html) => {
         if (!cancelled) {
@@ -459,7 +577,7 @@ export function IntermediateDocumentViewer({
     return () => {
       cancelled = true
     }
-  }, [runtimeDocument])
+  }, [runtimeDocument, backgroundQuality])
 
   const markLoadableWithOverscan = useCallback(
     (pageNumber: number) => {
@@ -761,9 +879,9 @@ export function IntermediateDocumentViewer({
       loadingPagesRef.current.add(pageNumber)
       pagePromise
         .then((page) => {
-          return Promise.all([getBaseImageFromPage(page), page.getTexts()])
+          return Promise.all([getBaseImageFromPage(page), page.getContent()])
         })
-        .then(([baseImage, texts]) => {
+        .then(([baseImage, content]) => {
           if (
             !isMountedRef.current ||
             activeDocumentRef.current !== runtimeDocument
@@ -771,6 +889,7 @@ export function IntermediateDocumentViewer({
             return
           }
 
+          const texts = content.filter(isIntermediateText)
           setBaseImagesByPageNumber(
             createSetBaseImageHandler(pageNumber, baseImage)
           )
@@ -855,7 +974,11 @@ export function IntermediateDocumentViewer({
           const ocrDocument = await ImageParser.encode(input)
           const ocrPages = await ocrDocument.pages
           const ocrPage = ocrPages[0]
-          const ocrTexts = prefixOcrTextIds(ocrPage?.texts ?? [], pageNumber)
+          const ocrContent = ocrPage?.content ?? []
+          const ocrTexts = prefixOcrTextIds(
+            ocrContent.filter(isIntermediateText),
+            pageNumber
+          )
 
           if (
             !isMountedRef.current ||
@@ -1077,45 +1200,8 @@ export function IntermediateDocumentViewer({
               )}
               {allTexts.map((textData) => {
                 const text = textData as RenderableIntermediateText
-                const polygonGeometry = getPolygonTextGeometry(text.polygon)
-
-                const usePolygonGeometry = polygonGeometry !== null
-                let bbox: {
-                  x: number
-                  y: number
-                  width: number
-                  height: number
-                }
-
-                if (usePolygonGeometry) {
-                  bbox = {
-                    x: polygonGeometry.x,
-                    y: polygonGeometry.y,
-                    width: polygonGeometry.width,
-                    height: polygonGeometry.height
-                  }
-                } else if (text.polygon) {
-                  bbox = getTextBoundingBox(text.polygon)
-                } else {
-                  bbox = {
-                    x: text.x ?? 0,
-                    y: text.y ?? 0,
-                    width: text.width ?? 0,
-                    height: text.height ?? 0
-                  }
-                }
-
-                const polygonRotation = usePolygonGeometry
-                  ? polygonGeometry.rotation
-                  : 0
-
-                const textTransform = getTextTransform(text, usePolygonGeometry)
-                const transform = [
-                  polygonRotation ? `rotate(${polygonRotation}deg)` : '',
-                  textTransform
-                ]
-                  .filter(Boolean)
-                  .join(' ')
+                const bbox = getTextBbox(text)
+                const style = buildTextSpanStyle(text, bbox)
 
                 return (
                   <span
@@ -1124,26 +1210,7 @@ export function IntermediateDocumentViewer({
                     className='hamster-reader__intermediate-text'
                     data-text-id={text.id}
                     data-page-number={pageNumber}
-                    style={{
-                      position: 'absolute',
-                      left: `${bbox.x}px`,
-                      top: `${bbox.y}px`,
-                      width: bbox.width ? `${bbox.width}px` : undefined,
-                      height: bbox.height ? `${bbox.height}px` : undefined,
-                      fontSize: text.fontSize
-                        ? `${text.fontSize}px`
-                        : undefined,
-                      fontFamily: text.fontFamily || undefined,
-                      fontWeight: text.fontWeight || undefined,
-                      fontStyle: text.italic ? 'italic' : undefined,
-                      color: text.color || undefined,
-                      lineHeight: text.lineHeight
-                        ? `${text.lineHeight}px`
-                        : undefined,
-                      transform,
-                      transformOrigin: 'left top',
-                      whiteSpace: 'pre'
-                    }}
+                    style={style}
                   >
                     {text.content}
                   </span>

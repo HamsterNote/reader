@@ -169,6 +169,16 @@
     scroll-behavior: smooth;
   }
 
+  &__html-parser-output {
+    width: 100%;
+    box-sizing: border-box;
+
+    .hamster-note-document {
+      contain: layout style;
+      width: 100%;
+    }
+  }
+
   // Intermediate page shell
   &__intermediate-page {
     position: relative;

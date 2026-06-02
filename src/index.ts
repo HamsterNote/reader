@@ -1,6 +1,8 @@
 export {
   IntermediateDocumentViewer,
   type IntermediateDocumentViewerProps,
+  type BackgroundQuality,
+  type ReaderPageRange,
   type ReaderTextSelectionDetail
 } from './components/IntermediateDocumentViewer'
 export { Reader, type ReaderProps } from './components/Reader'

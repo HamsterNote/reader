@@ -110,7 +110,7 @@ describe('demo parser flow', () => {
     expect(screen.getByText('Name: success.pdf')).toBeInTheDocument()
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
-    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile)
+    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
 
   it('shows a parse error when the parser returns undefined', async () => {
@@ -126,7 +126,7 @@ describe('demo parser flow', () => {
     ).toBeInTheDocument()
     expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
-    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile)
+    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
 
   it('shows a parse error when the parser throws', async () => {
@@ -140,7 +140,7 @@ describe('demo parser flow', () => {
     expect(screen.getByText('Failed to parse PDF: bad pdf')).toBeInTheDocument()
     expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
-    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile)
+    expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
 
   it('renders parsed document Reader without errors when OCR and selection props are provided', async () => {

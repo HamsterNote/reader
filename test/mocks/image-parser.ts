@@ -17,7 +17,7 @@ export const ImageParser = {
             number: 1,
             width: 100,
             height: 150,
-            texts: [
+            content: [
               {
                 id: 'ocr-text-1',
                 content: 'OCR text',
@@ -45,7 +45,7 @@ export const ImageParser = {
         getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
         getPageByPageNumber: (_pageNumber: number) =>
           Promise.resolve({
-            getTexts: async () => []
+            getContent: async () => []
           })
       } as unknown as IntermediateDocument
     }

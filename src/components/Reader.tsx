@@ -6,7 +6,11 @@ import type {
 import { useCallback, useRef, useState } from 'react'
 
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
-import type { ReaderTextSelectionDetail } from './IntermediateDocumentViewer'
+import type {
+  BackgroundQuality,
+  ReaderPageRange,
+  ReaderTextSelectionDetail
+} from './IntermediateDocumentViewer'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -14,6 +18,8 @@ export type ReaderProps = {
   emptyText?: string
   onFileUpload?: (file: File) => void
   overscanPages?: number
+  pageRange?: ReaderPageRange
+  backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
   onTextSelectionChange?: (
@@ -56,6 +62,8 @@ export function Reader({
   emptyText = 'No document',
   onFileUpload,
   overscanPages,
+  pageRange,
+  backgroundQuality,
   ocr,
   onOcrError,
   onTextSelectionChange,
@@ -139,6 +147,8 @@ export function Reader({
         <IntermediateDocumentViewer
           document={document}
           overscan={overscanPages}
+          pageRange={pageRange}
+          backgroundQuality={backgroundQuality}
           ocr={ocr}
           onOcrError={onOcrError}
           onTextSelectionChange={onTextSelectionChange}
