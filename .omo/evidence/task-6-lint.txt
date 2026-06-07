@@ -1,0 +1,23 @@
+yarn run v1.22.22
+(node:1166531) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ eslint .
+
+/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/demo/App.tsx
+  127:32  error  Replace `·color:·'#2563eb',·opacity:·0.28,·enabled:·true` with `⏎··············color:·'#2563eb',⏎··············opacity:·0.28,⏎··············enabled:·true⏎···········`  prettier/prettier
+
+/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx
+   650:48  error  Refactor this function to reduce its Cognitive Complexity from 17 to the 15 allowed                                           sonarjs/cognitive-complexity
+  1555:42  error  Replace `·active:·false,·clientX:·0,·clientY:·0` with `⏎········active:·false,⏎········clientX:·0,⏎········clientY:·0⏎·····`  prettier/prettier
+  1571:42  error  Replace `·active:·false,·clientX:·0,·clientY:·0` with `⏎········active:·false,⏎········clientX:·0,⏎········clientY:·0⏎·····`  prettier/prettier
+  1797:5   error  Non-interactive elements should not be assigned mouse or keyboard event listeners                                             jsx-a11y/no-noninteractive-element-interactions
+  1868:51  error  Replace `.get(pageNumber)` with `⏎························.get(pageNumber)⏎························`                          prettier/prettier
+
+/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx
+  3065:0  error  Parsing error: Declaration or statement expected
+
+✖ 7 problems (7 errors, 0 warnings)
+  4 errors and 0 warnings potentially fixable with the `--fix` option.
+
+error Command failed with exit code 1.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.

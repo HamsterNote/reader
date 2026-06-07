@@ -1,0 +1,8 @@
+yarn run v1.22.22
+(node:1166530) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.json --noEmit
+test/intermediate-document-viewer.test.tsx(3065,1): error TS1128: Declaration or statement expected.
+test/intermediate-document-viewer.test.tsx(3065,2): error TS1128: Declaration or statement expected.
+error Command failed with exit code 2.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.

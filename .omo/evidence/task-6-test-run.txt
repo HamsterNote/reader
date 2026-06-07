@@ -1,0 +1,86 @@
+yarn run v1.22.22
+(node:1165910) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vitest run
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/smoke.test.tsx (1 test) 170ms
+stdout | test/demo.test.tsx > demo parser flow > renders the parsed document and uploaded file details on success
+Parsed Document: IntermediateDocument {
+  id: [32m'success-document'[39m,
+  title: [32m'Success Document'[39m,
+  outline: [90mundefined[39m,
+  pagesMap: IntermediatePageMap {
+    entryById: Map(0) {},
+    entryByPageNumber: Map(0) {}
+  }
+}
+
+stdout | test/demo.test.tsx > demo parser flow > renders parsed document Reader without errors when OCR and selection props are provided
+Parsed Document: IntermediateDocument {
+  id: [32m'ocr-document'[39m,
+  title: [32m'OCR Document'[39m,
+  outline: [90mundefined[39m,
+  pagesMap: IntermediatePageMap {
+    entryById: Map(0) {},
+    entryByPageNumber: Map(0) {}
+  }
+}
+
+stdout | test/demo.test.tsx > demo parser flow > passes explicit selectionOverlay options to the parsed-document Reader
+Parsed Document: IntermediateDocument {
+  id: [32m'overlay-document'[39m,
+  title: [32m'Overlay Document'[39m,
+  outline: [90mundefined[39m,
+  pagesMap: IntermediatePageMap {
+    entryById: Map(0) {},
+    entryByPageNumber: Map(0) {}
+  }
+}
+
+stdout | test/demo.test.tsx > demo parser flow > ignores stale parser results after a replacement upload
+Parsed Document: IntermediateDocument {
+  id: [32m'fresh-document'[39m,
+  title: [32m'Fresh Document'[39m,
+  outline: [90mundefined[39m,
+  pagesMap: IntermediatePageMap {
+    entryById: Map(0) {},
+    entryByPageNumber: Map(0) {}
+  }
+}
+
+ ✓ test/demo.test.tsx (7 tests) 139ms
+ ✓ test/reader.test.tsx (24 tests) 267ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/intermediate-document-viewer.test.tsx [ test/intermediate-document-viewer.test.tsx ]
+Error: Transform failed with 1 error:
+/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx:3065:0: ERROR: Unexpected "}"
+  Plugin: vite:esbuild
+  File: /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx:3065:0
+  
+  Unexpected "}"
+  3063 |      })
+  3064 |    })
+  3065 |  })
+       |  ^
+  3066 |  
+  
+ ❯ failureErrorWithLog node_modules/esbuild/lib/main.js:1748:15
+ ❯ node_modules/esbuild/lib/main.js:1017:50
+ ❯ responseCallbacks.<computed> node_modules/esbuild/lib/main.js:884:9
+ ❯ handleIncomingPacket node_modules/esbuild/lib/main.js:939:12
+ ❯ Socket.readFromStdout node_modules/esbuild/lib/main.js:862:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 3 passed (4)
+      Tests  32 passed (32)
+   Start at  21:45:08
+   Duration  1.50s (transform 466ms, setup 504ms, collect 763ms, tests 576ms, environment 1.74s, prepare 278ms)
+
+error Command failed with exit code 1.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.

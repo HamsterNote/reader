@@ -330,9 +330,9 @@ const getRootOverlayRect = (
     (viewerRoot.querySelector(
       `[data-page-number="${rect.pageNumber}"]`
     ) as HTMLElement | null) ??
-    (viewerRoot.querySelectorAll('.hamster-note-page').item(
-      rect.pageNumber - 1
-    ) as HTMLElement | null)
+    (viewerRoot
+      .querySelectorAll('.hamster-note-page')
+      .item(rect.pageNumber - 1) as HTMLElement | null)
   if (!pageElement) return rect
 
   const pageRect = pageElement.getBoundingClientRect()

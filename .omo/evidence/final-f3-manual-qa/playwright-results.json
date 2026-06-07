@@ -1,0 +1,88 @@
+{
+  "url": "http://127.0.0.1:5578",
+  "screenshots": [
+    "01-demo-loaded.png",
+    "02-loaded-document.png",
+    "03-selection-polygon-overlay.png",
+    "04-end-handle-missing.png",
+    "05-touch-pointer-handle-drag.png",
+    "06-outside-click-clears-selection.png",
+    "07-blank-margin-drag.png",
+    "08-selection-overlay-toggle-check.png"
+  ],
+  "checks": [
+    {
+      "name": "Dev server loads demo and parses sample document",
+      "status": "pass"
+    },
+    {
+      "name": "Find selectable rendered text",
+      "status": "pass",
+      "textRects": 6
+    },
+    {
+      "name": "Mouse multi-line selection creates selected text",
+      "status": "fail",
+      "selectedLength": 0
+    },
+    {
+      "name": "SVG polygon overlay rendered instead of div blocks",
+      "status": "fail",
+      "selectedText": "",
+      "pathCount": 0,
+      "svgCount": 0,
+      "blockCount": 0,
+      "handleCount": 0,
+      "pathD": ""
+    },
+    {
+      "name": "Overlay visually represented as a single merged polygon path",
+      "status": "fail",
+      "pathDLength": 0
+    },
+    {
+      "name": "Default Android teardrop handles appear at start and end",
+      "status": "fail",
+      "handleCount": 0
+    },
+    {
+      "name": "End handle drag rebuilds range and overlay follows",
+      "status": "fail",
+      "reason": "End handle not found"
+    },
+    {
+      "name": "Touch pointer simulation dispatches handle drag without breaking overlay",
+      "status": "fail",
+      "dispatched": false,
+      "reason": "End handle not found"
+    },
+    {
+      "name": "Click outside selection clears overlay and handles",
+      "status": "pass",
+      "selectedText": "",
+      "pathCount": 0,
+      "handleCount": 0
+    },
+    {
+      "name": "Blank page-margin drag leaves no residual overlay or handles",
+      "status": "pass",
+      "selectedText": "",
+      "pathCount": 0,
+      "handleCount": 0
+    },
+    {
+      "name": "Demo exposes selectionOverlay-off toggle and native selection fallback",
+      "status": "fail",
+      "candidates": [],
+      "reason": "No selectionOverlay toggle exists in rendered demo"
+    },
+    {
+      "name": "No console or page errors during QA",
+      "status": "pass",
+      "consoleErrors": [],
+      "pageErrors": []
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": []
+}

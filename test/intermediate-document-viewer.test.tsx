@@ -3008,13 +3008,17 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
+    // expectPathCoversRect calls expect() internally for each corner
+    // eslint-disable-next-line sonarjs/assertions-in-tests
     it('draws html-parser overlay with viewer-root-relative coordinates', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
         '<div class="hamster-note-document"><div class="hamster-note-page">Parsed page text</div></div>'
       )
 
-      render(<IntermediateDocumentViewer document={document} selectionOverlay />)
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
 
       const viewerRoot = screen.getByTestId('intermediate-document-viewer')
       const page = await screen.findByText('Parsed page text')

@@ -1,0 +1,15 @@
+yarn run v1.22.22
+(node:1164922) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vitest run test/intermediate-document-viewer.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/intermediate-document-viewer.test.tsx (73 tests) 694ms
+
+ Test Files  1 passed (1)
+      Tests  73 passed (73)
+   Start at  21:44:52
+   Duration  1.71s (transform 235ms, setup 127ms, collect 231ms, tests 694ms, environment 387ms, prepare 75ms)
+
+Done in 2.10s.

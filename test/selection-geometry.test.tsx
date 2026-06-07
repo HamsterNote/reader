@@ -3,14 +3,14 @@ import type { ReaderSelectionOverlayRect } from '../src/components/IntermediateD
 import {
   polygonsToSvgPath,
   rectsToUnionPolygons,
-  type ReaderSelectionOverlayPolygon,
+  type ReaderSelectionOverlayPolygon
 } from '../src/components/selectionGeometry'
 
 describe('rectsToUnionPolygons', () => {
   it('两个相交矩形 → 返回 1 个多边形，外环顶点数 > 4', () => {
     const rects: ReaderSelectionOverlayRect[] = [
       { x: 0, y: 0, width: 50, height: 50, pageNumber: 1 },
-      { x: 25, y: 25, width: 50, height: 50, pageNumber: 1 },
+      { x: 25, y: 25, width: 50, height: 50, pageNumber: 1 }
     ]
     const polygons = rectsToUnionPolygons(rects)
     expect(polygons).toHaveLength(1)
@@ -21,7 +21,7 @@ describe('rectsToUnionPolygons', () => {
   it('两个分离矩形 → 返回 2 个多边形', () => {
     const rects: ReaderSelectionOverlayRect[] = [
       { x: 0, y: 0, width: 10, height: 10, pageNumber: 1 },
-      { x: 100, y: 100, width: 10, height: 10, pageNumber: 1 },
+      { x: 100, y: 100, width: 10, height: 10, pageNumber: 1 }
     ]
     const polygons = rectsToUnionPolygons(rects)
     expect(polygons).toHaveLength(2)
@@ -36,7 +36,7 @@ describe('rectsToUnionPolygons', () => {
       { x: 0, y: 0, width: 100, height: 10, pageNumber: 1 },
       { x: 0, y: 90, width: 100, height: 10, pageNumber: 1 },
       { x: 0, y: 10, width: 10, height: 80, pageNumber: 1 },
-      { x: 90, y: 10, width: 10, height: 80, pageNumber: 1 },
+      { x: 90, y: 10, width: 10, height: 80, pageNumber: 1 }
     ]
     const polygons = rectsToUnionPolygons(rects)
     expect(polygons.length).toBeGreaterThanOrEqual(1)
@@ -55,9 +55,9 @@ describe('polygonsToSvgPath', () => {
           { x: 0, y: 0 },
           { x: 100, y: 0 },
           { x: 100, y: 100 },
-          { x: 0, y: 100 },
-        ],
-      ],
+          { x: 0, y: 100 }
+        ]
+      ]
     }
     const path = polygonsToSvgPath([polygon])
     expect(path.startsWith('M')).toBe(true)
@@ -73,16 +73,16 @@ describe('polygonsToSvgPath', () => {
             { x: 0, y: 0 },
             { x: 10, y: 0 },
             { x: 10, y: 10 },
-            { x: 0, y: 10 },
+            { x: 0, y: 10 }
           ],
           [
             { x: 2, y: 2 },
             { x: 8, y: 2 },
             { x: 8, y: 8 },
-            { x: 2, y: 8 },
-          ],
-        ],
-      },
+            { x: 2, y: 8 }
+          ]
+        ]
+      }
     ]
     const path = polygonsToSvgPath(polygons)
     expect(path).toContain('M 0 0')
