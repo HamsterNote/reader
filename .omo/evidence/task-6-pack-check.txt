@@ -1,6 +1,0 @@
-yarn run v1.22.22
-(node:1166777) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
-(Use `node --trace-deprecation ...` to show where the warning was created)
-$ node scripts/check-pack.mjs
-Pack check passed with 15 files.
-Done in 0.71s.
