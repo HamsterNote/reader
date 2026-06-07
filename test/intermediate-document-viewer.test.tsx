@@ -608,6 +608,48 @@ describe('IntermediateDocumentViewer', () => {
       elementFromPointSpy.mockRestore()
       document.body.removeChild(viewerRoot)
     })
+
+    it('getSelectionOverlayRects resolves text-span page markers back to the page container', () => {
+      const pageViewport = { left: 100, top: 200, width: 400, height: 150 }
+      const page = createMockPageElement(1, pageViewport)
+      const textSpan = document.createElement('span')
+      textSpan.setAttribute('data-text-id', 'text-1')
+      textSpan.setAttribute('data-page-number', '1')
+      page.appendChild(textSpan)
+
+      const pageRefs = new Map<number, HTMLDivElement>([
+        [1, page as HTMLDivElement]
+      ])
+
+      if (!('elementFromPoint' in document)) {
+        Object.defineProperty(document, 'elementFromPoint', {
+          value: vi.fn(),
+          writable: true,
+          configurable: true
+        })
+      }
+      const elementFromPointSpy = vi
+        .spyOn(document, 'elementFromPoint')
+        .mockReturnValue(textSpan)
+
+      const range = makeMockRange([
+        { left: 120, top: 230, width: 60, height: 16 }
+      ])
+      const selection = makeMockSelectionFromRange(range)
+
+      const viewerRoot = document.createElement('div')
+      document.body.appendChild(viewerRoot)
+      viewerRoot.appendChild(page)
+
+      const result = getSelectionOverlayRects(selection, viewerRoot, pageRefs)
+
+      expect(result).toEqual([
+        { x: 20, y: 30, width: 60, height: 16, pageNumber: 1 }
+      ])
+
+      elementFromPointSpy.mockRestore()
+      document.body.removeChild(viewerRoot)
+    })
   })
 
   it('shows a page error instead of loading forever when text loading fails', async () => {

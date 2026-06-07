@@ -325,14 +325,11 @@ const getRootOverlayRect = (
   viewerRoot: HTMLElement,
   pageRefs: Map<number, HTMLDivElement>
 ): ReaderSelectionOverlayRect => {
-  const pageElement =
-    pageRefs.get(rect.pageNumber) ??
-    (viewerRoot.querySelector(
-      `[data-page-number="${rect.pageNumber}"]`
-    ) as HTMLElement | null) ??
-    (viewerRoot
-      .querySelectorAll('.hamster-note-page')
-      .item(rect.pageNumber - 1) as HTMLElement | null)
+  const pageElement = getPageElementByPageNumber(
+    rect.pageNumber,
+    viewerRoot,
+    pageRefs
+  )
   if (!pageElement) return rect
 
   const pageRect = pageElement.getBoundingClientRect()
@@ -560,6 +557,40 @@ const getPointToRectDistanceSquared = (
   return dx * dx + dy * dy
 }
 
+const getNumberFromDataPageNumber = (element: HTMLElement): number | null => {
+  const pageNumber = Number(element.dataset.pageNumber)
+  return Number.isFinite(pageNumber) ? pageNumber : null
+}
+
+const getHtmlParserPageElementByPageNumber = (
+  pageNumber: number,
+  viewerRoot: HTMLElement
+): HTMLElement | null => {
+  const pageElements = Array.from(
+    viewerRoot.querySelectorAll('.hamster-note-page')
+  ) as HTMLElement[]
+
+  return (
+    pageElements.find((element) => {
+      const elementPageNumber = getNumberFromDataPageNumber(element)
+      return elementPageNumber === pageNumber
+    }) ??
+    pageElements[pageNumber - 1] ??
+    null
+  )
+}
+
+const getPageElementByPageNumber = (
+  pageNumber: number,
+  viewerRoot: HTMLElement,
+  pageRefs: Map<number, HTMLDivElement>
+): HTMLElement | null => {
+  return (
+    pageRefs.get(pageNumber) ??
+    getHtmlParserPageElementByPageNumber(pageNumber, viewerRoot)
+  )
+}
+
 export const getPageElementForPoint = (
   clientX: number,
   clientY: number,
@@ -569,15 +600,18 @@ export const getPageElementForPoint = (
   if (!viewerRoot) return null
 
   const pointElement = document.elementFromPoint(clientX, clientY)
-  const hitElement = pointElement?.closest('[data-page-number]')
-
-  if (hitElement && viewerRoot.contains(hitElement)) {
-    const pageNumber = Number((hitElement as HTMLElement).dataset.pageNumber)
-    return { pageElement: hitElement as HTMLElement, pageNumber }
-  }
-
   const htmlParserPageElement = pointElement?.closest('.hamster-note-page')
   if (htmlParserPageElement && viewerRoot.contains(htmlParserPageElement)) {
+    const explicitPageNumber = getNumberFromDataPageNumber(
+      htmlParserPageElement as HTMLElement
+    )
+    if (explicitPageNumber !== null) {
+      return {
+        pageElement: htmlParserPageElement as HTMLElement,
+        pageNumber: explicitPageNumber
+      }
+    }
+
     const pageElements = Array.from(
       viewerRoot.querySelectorAll('.hamster-note-page')
     )
@@ -586,6 +620,22 @@ export const getPageElementForPoint = (
       return {
         pageElement: htmlParserPageElement as HTMLElement,
         pageNumber: pageIndex + 1
+      }
+    }
+  }
+
+  const hitElement = pointElement?.closest('[data-page-number]')
+
+  if (hitElement && viewerRoot.contains(hitElement)) {
+    const pageNumber = getNumberFromDataPageNumber(hitElement as HTMLElement)
+    if (pageNumber !== null) {
+      const pageElement = getPageElementByPageNumber(
+        pageNumber,
+        viewerRoot,
+        pageRefs
+      )
+      if (pageElement && viewerRoot.contains(pageElement)) {
+        return { pageElement, pageNumber }
       }
     }
   }

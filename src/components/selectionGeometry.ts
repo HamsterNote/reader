@@ -1,3 +1,6 @@
+import ClipperLib from '../vendor/clipper-lib'
+import type { ReaderSelectionOverlayRect } from './IntermediateDocumentViewer'
+
 /**
  * ReaderSelectionOverlayPolygon 表示单页上的多边形覆盖区域。
  * - pageNumber: 页码
@@ -8,9 +11,6 @@ export type ReaderSelectionOverlayPolygon = {
   pageNumber: number
   rings: { x: number; y: number }[][]
 }
-
-import type { ReaderSelectionOverlayRect } from './IntermediateDocumentViewer'
-import ClipperLib from '../vendor/clipper-lib'
 
 /** 最小化 ClipperLib 类型声明，仅覆盖本文件使用的 API */
 interface IntPoint {
