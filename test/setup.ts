@@ -74,3 +74,16 @@ afterEach(() => {
   cleanup()
   intersectionObserverMock.reset()
 })
+
+// Mock pointer capture API for JSDOM
+if (typeof HTMLElement !== 'undefined') {
+  if (!HTMLElement.prototype.setPointerCapture) {
+    HTMLElement.prototype.setPointerCapture = () => {}
+  }
+  if (!HTMLElement.prototype.releasePointerCapture) {
+    HTMLElement.prototype.releasePointerCapture = () => {}
+  }
+  if (!HTMLElement.prototype.hasPointerCapture) {
+    HTMLElement.prototype.hasPointerCapture = () => false
+  }
+}

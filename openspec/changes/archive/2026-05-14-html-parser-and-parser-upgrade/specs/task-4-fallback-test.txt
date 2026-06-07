@@ -1,0 +1,1 @@
+Fallback coverage verified in the same passing test run via html-parser rejection and empty-string cases.

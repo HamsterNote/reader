@@ -1,6 +1,6 @@
 import { PdfParser } from '@hamster-note/pdf-parser'
-import { Reader } from '@hamster-note/reader'
 import type { BackgroundQuality, ReaderPageRange } from '@hamster-note/reader'
+import { Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import type {
   IntermediateDocument,
@@ -18,7 +18,8 @@ export function App() {
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
-  const [backgroundQuality, setBackgroundQuality] = useState<BackgroundQuality>('medium')
+  const [backgroundQuality, setBackgroundQuality] =
+    useState<BackgroundQuality>('medium')
   const requestIdRef = useRef(0)
 
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
@@ -59,7 +60,6 @@ export function App() {
         setParseError('Failed to parse PDF: received undefined result')
         setDocument(null)
       } else {
-        console.log('Parsed Document:', result)
         setDocument(result)
       }
     } catch (err) {
@@ -121,17 +121,20 @@ export function App() {
           <Reader
             document={document}
             pageRange={buildPageRange()}
+            renderMode='direct'
             backgroundQuality={backgroundQuality}
             ocr
-            onTextSelectionChange={(text, detail) => {
-              console.log('[Reader demo] text selection change', text, detail)
+            selectionOverlay={{
+              color: '#2563eb',
+              opacity: 0.28,
+              enabled: true
             }}
-            onTextSelectionEnd={(text, detail) => {
-              console.log('[Reader demo] text selection end', text, detail)
-            }}
+            onTextSelectionChange={() => {}}
+            onTextSelectionEnd={() => {}}
           />
           <p style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
-            Rendered via @hamster-note/html-parser
+            Rendered with the direct text layer to demonstrate the custom
+            selection overlay
           </p>
         </section>
       )}

@@ -1,0 +1,199 @@
+# Task 2: API Audit - @hamster-note/pdf-parser 0.6.0 / @hamster-note/html-parser 0.6.0
+## Date: 2026-05-13
+## Branch: feature-pdf-reader
+
+================================================================================
+## 1. INSTALLED PACKAGE VERSIONS
+================================================================================
+
+@hamster-note/pdf-parser : 0.6.0
+  - types field: "dist/index.d.ts" (MISSING - no .d.ts file exists at that path)
+  - main: "dist/index.js"
+  - exports: ".", "./node", "./cli/generate", "./package.json"
+
+@hamster-note/html-parser : 0.6.0
+  - types field: "dist/index.d.ts" (EXISTS)
+  - main: "dist/index.js"
+  - exports: "." (with types entry)
+
+================================================================================
+## 2. PDF-PARSER 0.6.0 - EXPORT ANALYSIS
+================================================================================
+
+### 2a. Actual exports from index.js (runtime):
+  - PdfParser (named export, aliased as `t` in bundled output)
+  - GenerationError (named export)
+  - createCoverageBaseline, createCoverageComparison, createCoverageSummary
+  - createGenerationReport, createGenerationRun, createMockDataSample
+  - createMockRule, createMockRuleCase, createMockRuleSet, createRuleConstraints
+  - createSeededRandom, createTestCase, filterRuleCases, filterRuleSetScenarios
+  - generateMockData, normalizeSeed, resetFactoryCounters, toGenerationError
+  - validateRuleSet, filterRuleSetScenarios
+
+### 2b. Runtime signature of PdfParser.encode:
+  - From bundle analysis: `PdfParser.encode(fileOrBuffer: File | ArrayBuffer): Promise<IntermediateDocument | undefined>`
+
+### 2c. Declaration file status:
+  - **NO .d.ts FILE EXISTS** for pdf-parser 0.6.0
+  - package.json "types" points to "dist/index.d.ts" but file is not present
+  - This is a packaging bug / missing declaration file in the 0.6.0 release
+
+================================================================================
+## 3. HTML-PARSER 0.6.0 - EXPORT ANALYSIS
+================================================================================
+
+### 3a. Installed declaration file: node_modules/@hamster-note/html-parser/dist/index.d.ts
+
+### 3b. Key exports relevant to reader integration:
+
+Class: HtmlParser (extends DocumentParser)
+  - static encode(fileOrBuffer: ParserInput): Promise<HtmlDocument>
+  - static decode(intermediateDocument: IntermediateDocument): Promise<File | ArrayBuffer>
+  - static decodeToHtml(intermediateDocument: IntermediateDocument): Promise<string>
+    - Signature: decodeToHtml(intermediateDocument: IntermediateDocument): Promise<string>
+    - Parameter: IntermediateDocument (from @hamster-note/types)
+    - Returns: Promise<string> (HTML string)
+
+  - Instance methods (from DocumentParser base):
+    - encode(input: ParserInput): Promise<IntermediateDocument>
+    - decode(intermediateDocument: IntermediateDocument): Promise<ParserInput>
+
+Other exports from html-parser:
+  - setIframeHostDocument(documentOverride: IframeHostDocument | null): void
+  - HtmlPage class, HtmlDocument class
+  - Mock/mock related exports (NOT relevant to reader)
+  - Various mock utility types and functions
+
+### 3c. HtmlParser.decodeToHtml signature:
+  Declaration (index.d.ts line 373):
+    static decodeToHtml(intermediateDocument: IntermediateDocument): Promise<string>
+
+================================================================================
+## 4. LOCAL TYPE SHIM - src/types/pdf-parser.d.ts
+================================================================================
+
+Ambient module declaration for '@hamster-note/pdf-parser':
+
+  declare module '@hamster-note/pdf-parser' {
+    import type { IntermediateDocument } from '@hamster-note/types'
+
+    export const PdfParser: {
+      encode(
+        fileOrBuffer: File | ArrayBuffer
+      ): Promise<IntermediateDocument | undefined>
+    }
+  }
+
+**OBSERVATION**: This shim declares only `PdfParser.encode` with one parameter.
+The installed 0.6.0 package exports `PdfParser` (same shape at runtime) but
+provides NO declaration file (.d.ts) of its own.
+
+================================================================================
+## 5. DELTA: LOCAL SHIM vs. INSTALLED 0.6.0
+================================================================================
+
+### pdf-parser delta:
+
+| Aspect                  | Local Shim                        | Installed 0.6.0                    | Delta         |
+|------------------------|-----------------------------------|------------------------------------|---------------|
+| Declaration file       | Yes (ambient module in src/types) | NO (dist/index.d.ts MISSING)        | PACKAGING BUG |
+| PdfParser.encode shape | (file: File | ArrayBuffer) => Promise | Same at runtime          | Compatible   |
+| Return type            | IntermediateDocument | undefined    | Same                         | Compatible   |
+
+**Conclusion**: The local shim is the SOLE source of type information for
+pdf-parser in this repo. No updates needed for 0.6.0 since no .d.ts exists
+in the package (the shim correctly covers the runtime behavior).
+
+### html-parser delta:
+
+The reader does NOT use a local shim for html-parser. It imports directly from
+'@hamster-note/html-parser' and relies on the installed package's own declarations.
+
+No local shim exists, so no delta to report. The installed declarations at
+node_modules/@hamster-note/html-parser/dist/index.d.ts are authoritative.
+
+================================================================================
+## 6. CALL SITE COMPATIBILITY CHECK
+================================================================================
+
+### 6a. demo/App.tsx:27 - PdfParser.encode(file)
+
+Code:
+  const result = await PdfParser.encode(file)
+
+Argument: `file` (type File, from useState<File | null>)
+
+Local shim parameter type: fileOrBuffer: File | ArrayBuffer
+
+Installed 0.6.0 runtime accepts: File | ArrayBuffer
+
+**VERDICT: YES - Positional argument `file` (File) is fully compatible.
+No change needed. The single positional parameter of type File aligns with
+the pdf-parser 0.6.0 encode() which accepts File | ArrayBuffer.**
+
+### 6b. src/components/IntermediateDocumentViewer.tsx:443 - HtmlParser.decodeToHtml(...)
+
+Code (line 443-444):
+  HtmlParser.decodeToHtml(
+    runtimeDocument as unknown as HtmlParserDocumentInput
+  )
+
+Type of HtmlParserDocumentInput (line 51):
+  type HtmlParserDocumentInput = Parameters<typeof HtmlParser.decodeToHtml>[0]
+
+This is the parameter type of HtmlParser.decodeToHtml itself, so it's a
+self-referential type alias pointing to IntermediateDocument.
+
+Installed html-parser 0.6.0 declaration (index.d.ts line 373):
+  static decodeToHtml(intermediateDocument: IntermediateDocument): Promise<string>
+
+Signature: decodeToHtml(intermediateDocument: IntermediateDocument): Promise<string>
+- Parameter: IntermediateDocument
+- Returns: Promise<string>
+
+The call passes `runtimeDocument` which is typed as `IntermediateDocument`
+(from @hamster-note/types). The cast `as unknown as HtmlParserDocumentInput` is
+just a type assertion; at runtime it passes the object directly.
+
+**VERDICT: YES - HtmlParser.decodeToHtml(...) remains unchanged in 0.6.0.
+The single IntermediateDocument parameter is compatible. No signature change.
+The call at line 443 remains valid.**
+
+================================================================================
+## 7. SUMMARY OF FINDINGS
+================================================================================
+
+| Check                                                      | Result |
+|-----------------------------------------------------------|--------|
+| pdf-parser 0.6.0 has declaration file                     | NO (packaging issue) |
+| Local shim covers pdf-parser usage                         | YES   |
+| pdf-parser encode() signature changed vs. shim             | NO    |
+| demo/App.tsx:27 PdfParser.encode(file) compatible         | YES   |
+| html-parser 0.6.0 declaration file present                 | YES   |
+| html-parser decodeToHtml() signature unchanged            | YES   |
+| IntermediateDocumentViewer.tsx:443 decodeToHtml compatible | YES   |
+
+### Required action for src/types/pdf-parser.d.ts:
+NO CHANGE REQUIRED - the local shim accurately reflects the 0.6.0 runtime API.
+
+### Warning:
+The @hamster-note/pdf-parser 0.6.0 package is missing its declaration file
+(dist/index.d.ts). The local ambient module declaration at
+src/types/pdf-parser.d.ts is the SOLE type information source. If the package
+is ever fixed to include declarations, the local shim may become redundant.
+
+================================================================================
+## 8. EVIDENCE OF VERSIONS
+================================================================================
+
+pdf-parser package.json version: 0.6.0
+html-parser package.json version: 0.6.0
+
+installed pdf-parser exports (index.js last lines):
+  export { GenerationError, PdfParser, createCoverageBaseline, ... }
+
+installed html-parser exports (index.d.ts line 382):
+  export { ..., HtmlParser, ... }
+
+================================================================================
+END OF AUDIT REPORT

@@ -157,6 +157,7 @@
 
   // Intermediate document viewer
   &__intermediate-document-viewer {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -240,6 +241,95 @@
     white-space: pre;
     box-sizing: border-box;
     z-index: 1;
+  }
+
+  // Selection overlay container
+  &__selection-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  // Selection handle container
+  &__selection-handle {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    pointer-events: auto;
+    cursor: grab;
+    z-index: 3;
+    touch-action: none;
+
+    &:active {
+      cursor: grabbing;
+    }
+
+    &--start {
+      transform: translate(-50%, 0);
+    }
+
+    &--end {
+      transform: translate(-50%, -100%);
+    }
+  }
+
+  // SVG selection overlay
+  &__selection-overlay-svg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+  }
+
+  // SVG path for merged polygon selection overlay
+  &__selection-overlay-path {
+    fill: var(--hamster-reader-selection-color, #3b82f6);
+    fill-opacity: var(--hamster-reader-selection-opacity, 0.3);
+    fill-rule: evenodd;
+    pointer-events: none;
+    stroke: none;
+  }
+
+  // Default android-style teardrop selection handle
+  &__selection-handle--default {
+    position: absolute;
+    width: 18px;
+    height: 24px;
+    pointer-events: auto;
+    cursor: grab;
+    touch-action: none;
+    transform: translate(-50%, -100%);
+    z-index: 3;
+
+    // Teardrop shape using border-radius
+    background-color: var(--hamster-reader-selection-color, #3b82f6);
+    border-radius: 50% 50% 50% 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+
+    &:active {
+      cursor: grabbing;
+    }
+
+    &--start {
+      transform: translate(-50%, 0);
+      border-radius: 50% 50% 0 50%;
+    }
+
+    &--end {
+      transform: translate(-50%, -100%);
+      border-radius: 50% 50% 50% 0;
+    }
+  }
+}
+
+// Suppress native selection highlight when custom overlay is active on the
+// direct-render path. The html-parser path does not expose the same page/text
+// refs for drawing our overlay, so it must keep the browser's native selection
+// visible.
+.hamster-reader__intermediate-document-viewer--custom-selection {
+  .hamster-reader__intermediate-text::selection,
+  .hamster-reader__intermediate-text *::selection {
+    background-color: transparent;
   }
 }
 

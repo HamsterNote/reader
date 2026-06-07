@@ -1,0 +1,8 @@
+Task 2 runtime render evidence
+
+- `IntermediateDocumentViewer` imports `HtmlParser` and calls `HtmlParser.decodeToHtml(runtimeDocument)` through an internal typed adapter cast.
+- Successful parser output is stored in `htmlContent` and rendered inside `.hamster-reader__html-parser-output` with `data-testid='html-parser-output'`.
+- Runtime and serialized document inputs both flow through `runtimeDocument`, so both use the html-parser primary path after normalization.
+- Null-document behavior remains the existing empty `intermediate-document-viewer` root.
+- Verification: `yarn typecheck` passed.
+- Verification: `yarn test:run test/intermediate-document-viewer.test.tsx` passed with 43 tests.

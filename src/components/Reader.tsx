@@ -3,14 +3,17 @@ import type {
   IntermediateDocumentSerialized,
   IntermediateText
 } from '@hamster-note/types'
-import { useCallback, useRef, useState } from 'react'
+import { type ReactElement, useCallback, useRef, useState } from 'react'
 
-import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import type {
   BackgroundQuality,
   ReaderPageRange,
+  ReaderRenderMode,
+  ReaderSelectionHandleRenderProps,
+  ReaderSelectionOverlayOptions,
   ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
+import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -19,6 +22,7 @@ export type ReaderProps = {
   onFileUpload?: (file: File) => void
   overscanPages?: number
   pageRange?: ReaderPageRange
+  renderMode?: ReaderRenderMode
   backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -30,6 +34,9 @@ export type ReaderProps = {
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
   ) => void
+  selectionOverlay?: boolean | ReaderSelectionOverlayOptions
+  // 允许传入 null 显式禁用手柄渲染（透传给底层 IntermediateDocumentViewer）
+  selectionHandleElement?: ReactElement<ReaderSelectionHandleRenderProps> | null
 }
 
 const documentHasPages = (
@@ -63,11 +70,14 @@ export function Reader({
   onFileUpload,
   overscanPages,
   pageRange,
+  renderMode,
   backgroundQuality,
   ocr,
   onOcrError,
   onTextSelectionChange,
-  onTextSelectionEnd
+  onTextSelectionEnd,
+  selectionOverlay,
+  selectionHandleElement
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -148,11 +158,14 @@ export function Reader({
           document={document}
           overscan={overscanPages}
           pageRange={pageRange}
+          renderMode={renderMode}
           backgroundQuality={backgroundQuality}
           ocr={ocr}
           onOcrError={onOcrError}
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
+          selectionOverlay={selectionOverlay}
+          selectionHandleElement={selectionHandleElement}
         />
       )
     }

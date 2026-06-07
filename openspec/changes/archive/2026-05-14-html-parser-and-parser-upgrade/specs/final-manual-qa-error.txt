@@ -1,0 +1,25 @@
+## Final Manual QA Error
+
+Verdict: REJECT
+
+Required commands all passed:
+- `yarn typecheck`
+- `yarn vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx test/demo.test.tsx`
+- `yarn build`
+
+Browser smoke check was required because the scope includes demo UI/parser flow and the production demo build emitted browser-compatibility warnings. The demo preview server started at `http://127.0.0.1:4173/`, but Playwright could not initialize Chrome:
+
+```text
+Error: async initializeServer: Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome
+Run "npx playwright install chrome"
+```
+
+Attempted recovery with `npx playwright install chrome`, but it failed:
+
+```text
+sudo: A terminal is required to authenticate
+Failed to install browsers
+Error: Failed to install chrome
+```
+
+QA rejects because the required browser-assisted smoke check could not be completed.

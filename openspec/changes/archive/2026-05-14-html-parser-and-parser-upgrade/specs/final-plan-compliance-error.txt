@@ -1,0 +1,32 @@
+# Final Plan Compliance Error Report
+
+Verdict: REJECT
+Date: 2026-05-13
+
+## Blocking Finding
+
+Task 4 acceptance is not satisfied.
+
+Plan requirement:
+
+- Update `src/types/pdf-parser.d.ts` to match the installed/upstream `@hamster-note/pdf-parser@0.6.0` consumer-facing API.
+- Keep current positional calls valid.
+- Add optional `options` and `onProgress` parameters.
+- Add the new exported option/progress types found in Task 2.
+- Do not leave the shim looser or narrower than the known 0.6.0 surface.
+
+Observed final shim:
+
+- Declares `PdfParser.encode(fileOrBuffer: File | ArrayBuffer): Promise<IntermediateDocument | undefined>`.
+- Declares `PdfParser.decode(intermediateDocument: IntermediateDocument): Promise<ParserInput>`.
+- Declares `GenerationError`.
+- Does not declare optional encode/decode `options` or `onProgress` parameters.
+- Does not declare progress-related option/progress types.
+
+## Impact
+
+The implementation cannot be approved because the local type shim does not meet the plan's explicit Task 4 acceptance criteria, even though typecheck currently passes and the runtime/test/build evidence is otherwise green.
+
+## Required Remediation
+
+Re-audit the upstream `@hamster-note/pdf-parser@0.6.0` source/declarations or release surface referenced by the plan, then update `src/types/pdf-parser.d.ts` with the exact optional options/progress parameters and exported progress-related types required by Task 4. After that, rerun the Task 4, Task 6, and final verification evidence.

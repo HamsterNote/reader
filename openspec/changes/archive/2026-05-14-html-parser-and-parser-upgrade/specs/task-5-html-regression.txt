@@ -1,0 +1,14 @@
+yarn run v1.22.22
+$ /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/.bin/vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/reader.test.tsx (22 tests) 270ms
+ ✓ test/intermediate-document-viewer.test.tsx (47 tests) 592ms
+
+ Test Files  2 passed (2)
+      Tests  69 passed (69)
+   Start at  12:33:54
+   Duration  1.62s (transform 283ms, setup 246ms, collect 382ms, tests 862ms, environment 827ms, prepare 149ms)
+
+Done in 2.03s.

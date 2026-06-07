@@ -18,15 +18,19 @@ const mockCallbacks: {
   onTextSelectionChange?: (text: unknown, detail: unknown) => void
   onTextSelectionEnd?: (text: unknown, detail: unknown) => void
 } = {}
+const mockReaderProps: unknown[] = []
 
 vi.mock('@hamster-note/reader', () => ({
   Reader: (props: {
     document?: IntermediateDocument | IntermediateDocumentSerialized | null
     emptyText?: string
     onFileUpload?: (file: File) => void
+    renderMode?: string
+    selectionOverlay?: unknown
     onTextSelectionChange?: (text: unknown, detail: unknown) => void
     onTextSelectionEnd?: (text: unknown, detail: unknown) => void
   }) => {
+    mockReaderProps.push(props)
     if (props.onTextSelectionChange)
       mockCallbacks.onTextSelectionChange = props.onTextSelectionChange
     if (props.onTextSelectionEnd)
@@ -93,6 +97,7 @@ function createDeferred<T>() {
 describe('demo parser flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockReaderProps.length = 0
   })
 
   it('renders the parsed document and uploaded file details on success', async () => {
@@ -154,14 +159,45 @@ describe('demo parser flow', () => {
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
   })
 
-  it('logs selection events when callbacks are invoked', async () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  it('renders parsed document with direct render mode for custom selection demo', async () => {
     vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Selection Document')
+      makeRuntimeDocument('Custom Selection Document')
     )
 
     render(<App />)
-    upload(makeFile('selection.pdf'))
+    upload(makeFile('custom-selection.pdf'))
+
+    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /Rendered with the direct text layer to demonstrate the custom selection overlay/
+      )
+    ).toBeInTheDocument()
+
+    const parsedReaderProps = mockReaderProps.find(
+      (props): props is { renderMode?: string; selectionOverlay?: unknown } =>
+        typeof props === 'object' &&
+        props !== null &&
+        'renderMode' in props &&
+        'selectionOverlay' in props
+    )
+
+    expect(parsedReaderProps?.renderMode).toBe('direct')
+    expect(parsedReaderProps?.selectionOverlay).toMatchObject({
+      color: '#2563eb',
+      opacity: 0.28,
+      enabled: true
+    })
+  })
+
+  it('logs selection events when callbacks are invoked', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Callback Document')
+    )
+
+    render(<App />)
+    upload(makeFile('callback.pdf'))
 
     expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
 
@@ -177,16 +213,7 @@ describe('demo parser flow', () => {
     mockCallbacks.onTextSelectionChange?.(mockText, mockDetail)
     mockCallbacks.onTextSelectionEnd?.(mockText, mockDetail)
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[Reader demo] text selection change',
-      mockText,
-      mockDetail
-    )
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '[Reader demo] text selection end',
-      mockText,
-      mockDetail
-    )
+    expect(consoleSpy).not.toHaveBeenCalled()
 
     consoleSpy.mockRestore()
   })

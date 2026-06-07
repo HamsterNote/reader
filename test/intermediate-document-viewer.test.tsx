@@ -10,6 +10,10 @@ import type {
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  getSelectionOverlayRects,
+  mergeSelectionRects
+} from '../src/components/IntermediateDocumentViewer'
 import { IntermediateDocumentViewer } from '../src/index'
 import { intersectionObserverMock } from './setup'
 
@@ -23,8 +27,10 @@ vi.mock('@hamster-note/html-parser', () => ({
 
 type MockPage = {
   getContent: ReturnType<typeof vi.fn<() => Promise<IntermediateText[]>>>
-  getThumbnail?: ReturnType<typeof vi.fn<() => Promise<string | undefined>>>
-  thumbnail?: string
+  getThumbnail?: ReturnType<
+    typeof vi.fn<() => Promise<string | { src: string } | undefined>>
+  >
+  thumbnail?: string | { src: string }
   image?: string
 }
 
@@ -82,6 +88,96 @@ function makeDocument({
   } as unknown as IntermediateDocument
 
   return { document, pages }
+}
+
+type RectInput = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+const makeDomRect = (rect: RectInput) =>
+  ({
+    left: rect.left,
+    top: rect.top,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+    toJSON: () => rect
+  }) as DOMRect
+
+const mockElementRect = (element: HTMLElement, rect: RectInput) =>
+  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(makeDomRect(rect))
+
+const mockElementFromPoint = (element: Element | null) => {
+  if (!('elementFromPoint' in globalThis.document)) {
+    Object.defineProperty(globalThis.document, 'elementFromPoint', {
+      value: vi.fn(() => element),
+      writable: true,
+      configurable: true
+    })
+  }
+
+  return vi
+    .spyOn(globalThis.document, 'elementFromPoint')
+    .mockReturnValue(element)
+}
+
+const makeSelectionWithRects = (getRects: () => DOMRect[]) => {
+  const range = {
+    getClientRects: vi.fn(() => getRects())
+  } as unknown as Range
+
+  return {
+    isCollapsed: false,
+    getRangeAt: vi.fn(() => range)
+  } as unknown as Selection
+}
+
+const getOverlayBlocks = (page: HTMLElement) =>
+  Array.from(
+    page.querySelectorAll('.hamster-reader__selection-overlay-path')
+  ) as SVGPathElement[]
+
+// 解析 SVG path 的 d 属性，提取所有 M/L 坐标点。
+// 用于在测试中断言覆盖层覆盖到了某个矩形的四角，
+// 取代旧的 `toHaveStyle({ left, top, width, height })` 写法。
+const parsePathPoints = (path: SVGPathElement | undefined) => {
+  if (!path) return [] as { x: number; y: number }[]
+  const d = path.getAttribute('d') ?? ''
+  const points: { x: number; y: number }[] = []
+  const re = /[ML]\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/g
+  let match: RegExpExecArray | null
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration
+  while ((match = re.exec(d))) {
+    points.push({ x: Number(match[1]), y: Number(match[2]) })
+  }
+  return points
+}
+
+const expectPathCoversRect = (
+  path: SVGPathElement | undefined,
+  rect: { left: number; top: number; width: number; height: number }
+) => {
+  const points = parsePathPoints(path)
+  const corners = [
+    { x: rect.left, y: rect.top },
+    { x: rect.left + rect.width, y: rect.top },
+    { x: rect.left + rect.width, y: rect.top + rect.height },
+    { x: rect.left, y: rect.top + rect.height }
+  ]
+  for (const corner of corners) {
+    const found = points.some(
+      (p) => Math.abs(p.x - corner.x) < 0.5 && Math.abs(p.y - corner.y) < 0.5
+    )
+    expect(found, `path should cover corner (${corner.x}, ${corner.y})`).toBe(
+      true
+    )
+  }
 }
 
 describe('IntermediateDocumentViewer', () => {
@@ -342,6 +438,175 @@ describe('IntermediateDocumentViewer', () => {
         'src',
         'data:image/png;base64,converted'
       )
+    })
+  })
+
+  it('renders parser thumbnail objects as the page background', async () => {
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) {
+      throw new Error('Expected mock page 1 to exist')
+    }
+
+    page.getThumbnail = vi.fn(async () => ({
+      src: 'data:image/png;base64,parser-object'
+    }))
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await waitFor(() => {
+      const baseImage = screen
+        .getByTestId('intermediate-page-1')
+        .querySelector('.hamster-reader__intermediate-page-base-image')
+
+      expect(page.getThumbnail).toHaveBeenCalledTimes(1)
+      expect(baseImage).toHaveAttribute(
+        'src',
+        'data:image/png;base64,parser-object'
+      )
+    })
+  })
+
+  describe('selection overlay geometry', () => {
+    const createMockPageElement = (
+      pageNumber: number,
+      rect: { left: number; top: number; width: number; height: number }
+    ) => {
+      const el = document.createElement('div')
+      el.setAttribute('data-page-number', String(pageNumber))
+      vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+        left: rect.left,
+        top: rect.top,
+        right: rect.left + rect.width,
+        bottom: rect.top + rect.height,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        toJSON: () => rect
+      } as DOMRect)
+      return el
+    }
+
+    const makeMockRange = (
+      clientRects: Array<{
+        left: number
+        top: number
+        width: number
+        height: number
+      }>
+    ) => {
+      return {
+        getClientRects: () => clientRects
+      } as unknown as Range
+    }
+
+    const makeMockSelectionFromRange = (range: Range) => {
+      return {
+        isCollapsed: false,
+        getRangeAt: () => range
+      } as unknown as Selection
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('mergeSelectionRects merges same-line adjacent/overlapping rects', () => {
+      const rects = [
+        { x: 10, y: 20, width: 30, height: 16 },
+        { x: 40, y: 20, width: 30, height: 16 },
+        { x: 72, y: 20, width: 20, height: 16 }
+      ]
+      const merged = mergeSelectionRects(rects)
+      expect(merged).toHaveLength(1)
+      expect(merged[0]).toEqual({ x: 10, y: 20, width: 82, height: 16 })
+    })
+
+    it('mergeSelectionRects keeps different visual rows as separate boxes', () => {
+      const rects = [
+        { x: 10, y: 20, width: 30, height: 16 },
+        { x: 10, y: 50, width: 30, height: 16 }
+      ]
+      const merged = mergeSelectionRects(rects)
+      expect(merged).toHaveLength(2)
+      expect(merged[0]).toEqual({ x: 10, y: 20, width: 30, height: 16 })
+      expect(merged[1]).toEqual({ x: 10, y: 50, width: 30, height: 16 })
+    })
+
+    it('getSelectionOverlayRects groups cross-page selections into separate page containers without pre-merge', () => {
+      const page1Viewport = { left: 0, top: 0, width: 400, height: 150 }
+      const page2Viewport = { left: 0, top: 200, width: 400, height: 150 }
+      const page1 = createMockPageElement(1, page1Viewport)
+      const page2 = createMockPageElement(2, page2Viewport)
+
+      const pageRefs = new Map<number, HTMLDivElement>([
+        [1, page1 as HTMLDivElement],
+        [2, page2 as HTMLDivElement]
+      ])
+
+      if (!('elementFromPoint' in document)) {
+        Object.defineProperty(document, 'elementFromPoint', {
+          value: vi.fn(),
+          writable: true,
+          configurable: true
+        })
+      }
+      const elementFromPointSpy = vi
+        .spyOn(document, 'elementFromPoint')
+        .mockImplementation((_x, y) => {
+          if (typeof y === 'number' && y < page2Viewport.top) return page1
+          return page2
+        })
+
+      const page1Line1FragmentA = { left: 10, top: 10, width: 30, height: 16 }
+      const page1Line1FragmentB = { left: 40, top: 10, width: 30, height: 16 }
+      const page1Line2Fragment = { left: 10, top: 50, width: 30, height: 16 }
+      const page2Line1Fragment = { left: 10, top: 210, width: 60, height: 16 }
+
+      const clientRects = [
+        page1Line1FragmentA,
+        page1Line1FragmentB,
+        page1Line2Fragment,
+        page2Line1Fragment
+      ]
+
+      const range = makeMockRange(clientRects)
+      const selection = makeMockSelectionFromRange(range)
+
+      const viewerRoot = document.createElement('div')
+      document.body.appendChild(viewerRoot)
+      viewerRoot.appendChild(page1)
+      viewerRoot.appendChild(page2)
+
+      const result = getSelectionOverlayRects(selection, viewerRoot, pageRefs)
+
+      // No pre-merge: each raw client rect becomes its own overlay rect
+      expect(result).toHaveLength(4)
+
+      const page1Rects = result.filter((r) => r.pageNumber === 1)
+      expect(page1Rects).toHaveLength(3)
+      expect(page1Rects).toContainEqual(
+        expect.objectContaining({ x: 10, y: 10, width: 30, height: 16 })
+      )
+      expect(page1Rects).toContainEqual(
+        expect.objectContaining({ x: 40, y: 10, width: 30, height: 16 })
+      )
+      expect(page1Rects).toContainEqual(
+        expect.objectContaining({ x: 10, y: 50, width: 30, height: 16 })
+      )
+
+      const page2Rects = result.filter((r) => r.pageNumber === 2)
+      expect(page2Rects).toHaveLength(1)
+      expect(page2Rects[0]).toMatchObject({
+        x: 10,
+        y: 10,
+        width: 60,
+        height: 16
+      })
+
+      elementFromPointSpy.mockRestore()
+      document.body.removeChild(viewerRoot)
     })
   })
 
@@ -1122,6 +1387,31 @@ describe('IntermediateDocumentViewer', () => {
       expect(textBlockMatch[1]).not.toContain('pointer-events')
     })
 
+    it('keeps native selection visible for html-parser output when custom overlay is active', () => {
+      const scssSource = fs.readFileSync(
+        path.resolve(__dirname, '../src/styles/reader.scss'),
+        'utf-8'
+      )
+      const transparentSelectionBlockMatch = scssSource.match(
+        /\.hamster-reader__intermediate-document-viewer--custom-selection\s*\{([\s\S]*?)background-color:\s*transparent;([\s\S]*?)\n\}/
+      )
+
+      expect(transparentSelectionBlockMatch).toBeTruthy()
+      if (!transparentSelectionBlockMatch) {
+        throw new Error(
+          'Expected custom selection transparent SCSS block to exist'
+        )
+      }
+
+      const transparentSelectionBlock = `${transparentSelectionBlockMatch[1]}${transparentSelectionBlockMatch[2]}`
+      expect(transparentSelectionBlock).toContain(
+        'hamster-reader__intermediate-text'
+      )
+      expect(transparentSelectionBlock).not.toContain(
+        'hamster-reader__html-parser-output'
+      )
+    })
+
     it('normalizes blank-space drag endpoint to nearest text', async () => {
       const { document: mockDoc } = makeFourTextDocument()
       const onTextSelectionChange = vi.fn()
@@ -1845,16 +2135,24 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByText('Page 2 text')).toBeInTheDocument()
       })
 
+      const getLoadedPage = (pageNumber: number) => {
+        const page = pages.get(pageNumber)
+        if (!page) {
+          throw new Error(`Expected mock page ${pageNumber} to exist`)
+        }
+        return page
+      }
+
       // Pages outside range should not have getContent called
-      const page1 = pages.get(1)!
-      const page4 = pages.get(4)!
-      const page5 = pages.get(5)!
+      const page1 = getLoadedPage(1)
+      const page4 = getLoadedPage(4)
+      const page5 = getLoadedPage(5)
       expect(page1.getContent).not.toHaveBeenCalled()
       expect(page4.getContent).not.toHaveBeenCalled()
       expect(page5.getContent).not.toHaveBeenCalled()
 
       // Pages within range should have getContent called
-      const page2 = pages.get(2)!
+      const page2 = getLoadedPage(2)
       expect(page2.getContent).toHaveBeenCalled()
     })
 
@@ -1926,6 +2224,1103 @@ describe('IntermediateDocumentViewer', () => {
       expect(
         screen.getByTestId('intermediate-document-viewer')
       ).toBeEmptyDOMElement()
+    })
+  })
+
+  describe('selection overlay class', () => {
+    const customSelectionClass =
+      'hamster-reader__intermediate-document-viewer--custom-selection'
+
+    it('applies custom-selection class when selectionOverlay is true', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      expect(screen.getByTestId('intermediate-document-viewer')).toHaveClass(
+        customSelectionClass
+      )
+    })
+
+    it('applies custom-selection class when selectionOverlay object has enabled: true', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay={{ color: '#2563eb', opacity: 0.28, enabled: true }}
+        />
+      )
+
+      expect(screen.getByTestId('intermediate-document-viewer')).toHaveClass(
+        customSelectionClass
+      )
+    })
+
+    it('does not apply custom-selection class when selectionOverlay is omitted', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).not.toHaveClass(customSelectionClass)
+    })
+
+    it('does not apply custom-selection class when selectionOverlay is false', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay={false}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).not.toHaveClass(customSelectionClass)
+    })
+
+    it('does not apply custom-selection class when enabled is explicitly false', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay={{ enabled: false }}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).not.toHaveClass(customSelectionClass)
+    })
+  })
+
+  describe('selection handle snapping', () => {
+    const installRangeRectMocks = () => {
+      const originalGetClientRects = Range.prototype.getClientRects
+      const originalGetBoundingClientRect =
+        Range.prototype.getBoundingClientRect
+
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: vi.fn(() => [
+          makeDomRect({ left: 20, top: 24, width: 35, height: 9 })
+        ])
+      })
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: vi.fn(() =>
+          makeDomRect({ left: 50, top: 25, width: 0, height: 0 })
+        )
+      })
+
+      return () => {
+        Object.defineProperty(Range.prototype, 'getClientRects', {
+          configurable: true,
+          value: originalGetClientRects
+        })
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+          configurable: true,
+          value: originalGetBoundingClientRect
+        })
+      }
+    }
+
+    const installCaretPositionFromPoint = (node: Node, offset: number) => {
+      const original = (
+        globalThis.document as Document & {
+          caretPositionFromPoint?: unknown
+        }
+      ).caretPositionFromPoint
+      Object.defineProperty(globalThis.document, 'caretPositionFromPoint', {
+        configurable: true,
+        value: vi.fn(() => ({ offsetNode: node, offset }))
+      })
+
+      return () => {
+        Object.defineProperty(globalThis.document, 'caretPositionFromPoint', {
+          configurable: true,
+          value: original
+        })
+      }
+    }
+
+    const installCaretRangeFromPoint = (range: Range | null) => {
+      const original = (
+        globalThis.document as Document & {
+          caretRangeFromPoint?: unknown
+        }
+      ).caretRangeFromPoint
+      Object.defineProperty(globalThis.document, 'caretRangeFromPoint', {
+        configurable: true,
+        value: vi.fn(() => range)
+      })
+
+      return () => {
+        Object.defineProperty(globalThis.document, 'caretRangeFromPoint', {
+          configurable: true,
+          value: original
+        })
+      }
+    }
+
+    const makeLiveSelection = (range: Range) => {
+      let activeRange = range
+      return {
+        get activeRange() {
+          return activeRange
+        },
+        selection: {
+          get isCollapsed() {
+            return activeRange.collapsed
+          },
+          getRangeAt: vi.fn(() => activeRange),
+          removeAllRanges: vi.fn(),
+          addRange: vi.fn((nextRange: Range) => {
+            activeRange = nextRange
+          })
+        } as unknown as Selection & {
+          removeAllRanges: ReturnType<typeof vi.fn>
+          addRange: ReturnType<typeof vi.fn>
+        }
+      }
+    }
+
+    const appendHandle = (viewerRoot: HTMLElement, type: 'start' | 'end') => {
+      const handle = globalThis.document.createElement('button')
+      handle.dataset.handleType = type
+      viewerRoot.appendChild(handle)
+      return handle
+    }
+
+    it('rebuilds a start-handle range with the original end and refreshes overlay before pointerup', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const restoreRangeRects = installRangeRectMocks()
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = text.firstChild as Text
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(textNode, 2)
+      initialRange.setEnd(textNode, 8)
+      const liveSelection = makeLiveSelection(initialRange)
+      const pageRectSpy = mockElementRect(page, {
+        left: 10,
+        top: 10,
+        width: 100,
+        height: 150
+      })
+      const textRectSpy = mockElementRect(text, {
+        left: 20,
+        top: 24,
+        width: 60,
+        height: 12
+      })
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const restoreCaretPosition = installCaretPositionFromPoint(textNode, 0)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        const startHandle = appendHandle(viewerRoot, 'start')
+        startHandle.dispatchEvent(
+          new MouseEvent('pointerdown', {
+            bubbles: true,
+            clientX: 20,
+            clientY: 24
+          })
+        )
+        viewerRoot.dispatchEvent(
+          new MouseEvent('pointermove', {
+            bubbles: true,
+            clientX: 22,
+            clientY: 24
+          })
+        )
+
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
+        expect(liveSelection.activeRange.startContainer).toBe(textNode)
+        expect(liveSelection.activeRange.startOffset).toBe(0)
+        expect(liveSelection.activeRange.endContainer).toBe(textNode)
+        expect(liveSelection.activeRange.endOffset).toBe(8)
+        expect(
+          page.querySelectorAll('.hamster-reader__selection-overlay-path')
+        ).toHaveLength(1)
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretPosition()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreRangeRects()
+      }
+    })
+
+    it('snaps an end handle over blank space to the nearest text boundary', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const restoreRangeRects = installRangeRectMocks()
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = text.firstChild as Text
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(textNode, 0)
+      initialRange.setEnd(textNode, 4)
+      const liveSelection = makeLiveSelection(initialRange)
+      const pageRectSpy = mockElementRect(page, {
+        left: 10,
+        top: 10,
+        width: 100,
+        height: 150
+      })
+      const textRectSpy = mockElementRect(text, {
+        left: 20,
+        top: 24,
+        width: 60,
+        height: 12
+      })
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const restoreCaretRange = installCaretRangeFromPoint(null)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        const endHandle = appendHandle(viewerRoot, 'end')
+        endHandle.dispatchEvent(
+          new MouseEvent('pointerdown', {
+            bubbles: true,
+            clientX: 20,
+            clientY: 24
+          })
+        )
+        viewerRoot.dispatchEvent(
+          new MouseEvent('pointermove', {
+            bubbles: true,
+            clientX: 125,
+            clientY: 80
+          })
+        )
+
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
+        expect(liveSelection.activeRange.startContainer).toBe(textNode)
+        expect(liveSelection.activeRange.startOffset).toBe(0)
+        expect(liveSelection.activeRange.endContainer).toBe(textNode)
+        expect(liveSelection.activeRange.endOffset).toBe(textNode.length)
+        expect(
+          page.querySelectorAll('.hamster-reader__selection-overlay-path')
+        ).toHaveLength(1)
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretRange()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreRangeRects()
+      }
+    })
+
+    it('renders cloned start and end handles from the active selection', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const currentRects = [
+        makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+      ]
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay
+          selectionHandleElement={
+            <button type='button' className='custom-handle' />
+          }
+        />
+      )
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = mockElementRect(page, {
+        left: 5,
+        top: 5,
+        width: 100,
+        height: 150
+      })
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(makeSelectionWithRects(() => currentRects))
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        await waitFor(() => {
+          expect(
+            page.querySelectorAll('.hamster-reader__selection-handle')
+          ).toHaveLength(2)
+        })
+
+        const [startHandle, endHandle] = Array.from(
+          page.querySelectorAll('.hamster-reader__selection-handle')
+        ) as HTMLElement[]
+
+        expect(startHandle).toHaveClass(
+          'custom-handle',
+          'hamster-reader__selection-handle--start'
+        )
+        expect(startHandle).toHaveAttribute('type', 'button')
+        expect(startHandle).toHaveAttribute('data-handle-type', 'start')
+        expect(startHandle).toHaveStyle({ left: '10px', top: '28px' })
+
+        expect(endHandle).toHaveClass(
+          'custom-handle',
+          'hamster-reader__selection-handle--end'
+        )
+        expect(endHandle).toHaveAttribute('type', 'button')
+        expect(endHandle).toHaveAttribute('data-handle-type', 'end')
+        expect(endHandle).toHaveStyle({ left: '40px', top: '28px' })
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+
+    it('does not render custom handle elements for a collapsed selection', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue({
+        isCollapsed: true
+      } as Selection)
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            selectionOverlay
+            selectionHandleElement={
+              <button type='button' data-testid='handle' />
+            }
+          />
+        )
+
+        expect(screen.queryByTestId('handle')).not.toBeInTheDocument()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('selection overlay live drag refresh', () => {
+    it('updates overlay blocks during primary-button mousemove before mouseup', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      let currentRects = [
+        makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+      ]
+
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = vi
+        .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 5, top: 5, width: 100, height: 150 })
+        )
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(makeSelectionWithRects(() => currentRects))
+
+      try {
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousedown', {
+            bubbles: true,
+            button: 0,
+            clientX: 15,
+            clientY: 25
+          })
+        )
+
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousemove', {
+            bubbles: true,
+            buttons: 1,
+            clientX: 45,
+            clientY: 33
+          })
+        )
+
+        let blocks = getOverlayBlocks(page)
+        expect(blocks).toHaveLength(1)
+        expectPathCoversRect(blocks[0], {
+          left: 10,
+          top: 20,
+          width: 30,
+          height: 8
+        })
+
+        currentRects = [
+          makeDomRect({ left: 35, top: 55, width: 25, height: 10 })
+        ]
+
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousemove', {
+            bubbles: true,
+            buttons: 1,
+            clientX: 60,
+            clientY: 65
+          })
+        )
+
+        blocks = getOverlayBlocks(page)
+        expect(blocks).toHaveLength(1)
+        expectPathCoversRect(blocks[0], {
+          left: 30,
+          top: 50,
+          width: 25,
+          height: 10
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+
+    it('stops refreshing overlay blocks after primary button is lost', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      let currentRects = [
+        makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+      ]
+
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = vi
+        .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 5, top: 5, width: 100, height: 150 })
+        )
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(makeSelectionWithRects(() => currentRects))
+
+      try {
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousedown', {
+            bubbles: true,
+            button: 0,
+            clientX: 15,
+            clientY: 25
+          })
+        )
+
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousemove', {
+            bubbles: true,
+            buttons: 1,
+            clientX: 45,
+            clientY: 33
+          })
+        )
+
+        const initialBlock = getOverlayBlocks(page)[0]
+        expectPathCoversRect(initialBlock, {
+          left: 10,
+          top: 20,
+          width: 30,
+          height: 8
+        })
+
+        currentRects = [
+          makeDomRect({ left: 45, top: 75, width: 20, height: 12 })
+        ]
+
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousemove', {
+            bubbles: true,
+            buttons: 0,
+            clientX: 65,
+            clientY: 87
+          })
+        )
+
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousemove', {
+            bubbles: true,
+            buttons: 1,
+            clientX: 65,
+            clientY: 87
+          })
+        )
+
+        const blocks = getOverlayBlocks(page)
+        expect(blocks).toHaveLength(1)
+        expectPathCoversRect(blocks[0], {
+          left: 10,
+          top: 20,
+          width: 30,
+          height: 8
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('selection overlay cleanup', () => {
+    const customSelectionClass =
+      'hamster-reader__intermediate-document-viewer--custom-selection'
+
+    it('clears overlay class, blocks, and handles when selectionOverlay becomes disabled', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const overlayContainer = page.querySelector(
+        '.hamster-reader__selection-overlay'
+      ) as HTMLElement
+      const overlayBlock = globalThis.document.createElement('div')
+      overlayBlock.className = 'hamster-reader__selection-overlay-path'
+      overlayContainer.appendChild(overlayBlock)
+
+      expect(viewerRoot).toHaveClass(customSelectionClass)
+      expect(getOverlayBlocks(page)).toHaveLength(1)
+      expect(
+        page.querySelector('.hamster-reader__selection-handles')
+      ).toBeInTheDocument()
+
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay={false}
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).not.toHaveClass(customSelectionClass)
+      expect(overlayContainer).toBeEmptyDOMElement()
+      expect(
+        page.querySelector('.hamster-reader__selection-overlay')
+      ).toBeNull()
+      expect(
+        page.querySelector('.hamster-reader__selection-handles')
+      ).toBeNull()
+    })
+
+    it('clears collapsed and invalid selections from overlay blocks', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      let currentRects = [
+        makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+      ]
+
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = vi
+        .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 5, top: 5, width: 100, height: 150 })
+        )
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(makeSelectionWithRects(() => currentRects))
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(getOverlayBlocks(page)).toHaveLength(1)
+
+        getSelectionSpy.mockReturnValue({ isCollapsed: true } as Selection)
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(getOverlayBlocks(page)).toHaveLength(0)
+
+        currentRects = [makeDomRect({ left: 15, top: 25, width: 0, height: 8 })]
+        getSelectionSpy.mockReturnValue(
+          makeSelectionWithRects(() => currentRects)
+        )
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(getOverlayBlocks(page)).toHaveLength(0)
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+
+    it('refreshes overlay blocks on resize and scroll reflow', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      let currentRects = [
+        makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+      ]
+
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = vi
+        .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 5, top: 5, width: 100, height: 150 })
+        )
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(makeSelectionWithRects(() => currentRects))
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+        expect(getOverlayBlocks(page)).toHaveLength(1)
+        expectPathCoversRect(getOverlayBlocks(page)[0], {
+          left: 10,
+          top: 20,
+          width: 30,
+          height: 8
+        })
+
+        currentRects = [
+          makeDomRect({ left: 35, top: 45, width: 25, height: 10 })
+        ]
+        globalThis.window.dispatchEvent(new Event('resize'))
+
+        expect(getOverlayBlocks(page)).toHaveLength(1)
+        expectPathCoversRect(getOverlayBlocks(page)[0], {
+          left: 30,
+          top: 40,
+          width: 25,
+          height: 10
+        })
+
+        currentRects = [
+          makeDomRect({ left: 45, top: 55, width: 20, height: 12 })
+        ]
+        globalThis.document.dispatchEvent(new Event('scroll'))
+
+        expect(getOverlayBlocks(page)).toHaveLength(1)
+        expectPathCoversRect(getOverlayBlocks(page)[0], {
+          left: 40,
+          top: 50,
+          width: 20,
+          height: 12
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+
+    it('clears overlay containers on unmount and removes active listeners', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const { unmount } = render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const overlayContainer = page.querySelector(
+        '.hamster-reader__selection-overlay'
+      ) as HTMLElement
+      const overlayBlock = globalThis.document.createElement('div')
+      overlayBlock.className = 'hamster-reader__selection-overlay-path'
+      overlayContainer.appendChild(overlayBlock)
+
+      unmount()
+
+      expect(overlayContainer).toBeEmptyDOMElement()
+
+      const sentinel = globalThis.document.createElement('div')
+      sentinel.dataset.testid = 'detached-overlay-sentinel'
+      overlayContainer.appendChild(sentinel)
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeSelectionWithRects(() => [
+            makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+          ])
+        )
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+        globalThis.document.dispatchEvent(new MouseEvent('mouseup'))
+        globalThis.window.dispatchEvent(new Event('resize'))
+        globalThis.document.dispatchEvent(new Event('scroll'))
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousemove', { bubbles: true, buttons: 1 })
+        )
+
+        expect(getSelectionSpy).not.toHaveBeenCalled()
+        expect(overlayContainer).toContainElement(sentinel)
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('draws html-parser overlay with viewer-root-relative coordinates', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
+        '<div class="hamster-note-document"><div class="hamster-note-page">Parsed page text</div></div>'
+      )
+
+      render(<IntermediateDocumentViewer document={document} selectionOverlay />)
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = await screen.findByText('Parsed page text')
+      const overlay = viewerRoot.querySelector(
+        '.hamster-reader__selection-overlay'
+      ) as HTMLElement
+
+      const viewerRectSpy = vi
+        .spyOn(viewerRoot, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 100, top: 200, width: 500, height: 700 })
+        )
+      Object.defineProperty(viewerRoot, 'scrollLeft', {
+        value: 7,
+        configurable: true
+      })
+      Object.defineProperty(viewerRoot, 'scrollTop', {
+        value: 11,
+        configurable: true
+      })
+      const pageRectSpy = vi
+        .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 140, top: 260, width: 300, height: 400 })
+        )
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeSelectionWithRects(() => [
+            makeDomRect({ left: 150, top: 280, width: 45, height: 12 })
+          ])
+        )
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        const path = overlay.querySelector(
+          '.hamster-reader__selection-overlay-path'
+        ) as SVGPathElement
+        expectPathCoversRect(path, {
+          left: 57,
+          top: 91,
+          width: 45,
+          height: 12
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        viewerRectSpy.mockRestore()
+      }
+    })
+
+    it('keeps overlay after the click synthesized from a completed drag selection', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const removeAllRanges = vi.fn()
+
+      render(
+        <IntermediateDocumentViewer document={document} selectionOverlay />
+      )
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = vi
+        .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 5, top: 5, width: 100, height: 150 })
+        )
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const selection = {
+        ...makeSelectionWithRects(() => [
+          makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+        ]),
+        removeAllRanges
+      } as unknown as Selection
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(selection)
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+        expect(getOverlayBlocks(page)).toHaveLength(1)
+
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mousedown', {
+            bubbles: true,
+            button: 0,
+            clientX: 15,
+            clientY: 25
+          })
+        )
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            button: 0,
+            clientX: 45,
+            clientY: 33
+          })
+        )
+        viewerRoot.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        expect(removeAllRanges).not.toHaveBeenCalled()
+        expect(getOverlayBlocks(page)).toHaveLength(1)
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('blank click cancellation', () => {
+    it('clears selection and overlay when clicking blank page margin area', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const removeAllRanges = vi.fn()
+      const mockSelection = {
+        isCollapsed: false,
+        removeAllRanges,
+        anchorNode: null,
+        focusNode: null,
+        toString: () => 'selected text'
+      } as unknown as Selection
+
+      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const overlayContainer = page.querySelector(
+        '.hamster-reader__selection-overlay'
+      ) as HTMLElement
+
+      // Seed an overlay block to verify it gets cleared
+      const overlayBlock = globalThis.document.createElement('div')
+      overlayBlock.className = 'hamster-reader__selection-overlay-path'
+      overlayContainer.appendChild(overlayBlock)
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(mockSelection)
+
+      try {
+        // Click on the page div margin (blank area, not on text or overlay)
+        page.click()
+
+        expect(removeAllRanges).toHaveBeenCalled()
+        expect(
+          page.querySelector('.hamster-reader__selection-overlay-path')
+        ).toBeNull()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('does not clear selection when clicking on text span', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const removeAllRanges = vi.fn()
+      const mockSelection = {
+        isCollapsed: false,
+        removeAllRanges,
+        anchorNode: null,
+        focusNode: null,
+        toString: () => 'selected text'
+      } as unknown as Selection
+
+      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const textSpan = screen.getByText('Page 1 text')
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(mockSelection)
+
+      try {
+        textSpan.click()
+
+        expect(removeAllRanges).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('does not clear native selection when clicking html-parser output', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const removeAllRanges = vi.fn()
+      const mockSelection = {
+        isCollapsed: false,
+        removeAllRanges,
+        anchorNode: null,
+        focusNode: null,
+        toString: () => 'selected html text'
+      } as unknown as Selection
+
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-document"><p>Selectable HTML text</p></div>'
+      )
+      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+      })
+
+      const htmlParserOutput = screen.getByTestId('html-parser-output')
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(mockSelection)
+
+      try {
+        htmlParserOutput.click()
+
+        expect(removeAllRanges).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('does not clear selection when clicking overlay block or handle', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const removeAllRanges = vi.fn()
+      const mockSelection = {
+        isCollapsed: false,
+        removeAllRanges,
+        anchorNode: null,
+        focusNode: null,
+        toString: () => 'selected text'
+      } as unknown as Selection
+
+      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const overlayContainer = page.querySelector(
+        '.hamster-reader__selection-overlay'
+      ) as HTMLElement
+
+      const overlayBlock = globalThis.document.createElement('div')
+      overlayBlock.className = 'hamster-reader__selection-overlay-path'
+      overlayContainer.appendChild(overlayBlock)
+
+      const handle = globalThis.document.createElement('button')
+      handle.dataset.handleType = 'start'
+      viewerRoot.appendChild(handle)
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(mockSelection)
+
+      try {
+        overlayBlock.click()
+        expect(removeAllRanges).not.toHaveBeenCalled()
+
+        handle.click()
+        expect(removeAllRanges).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('does not trigger blank cancellation on handle drag mouseup', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const removeAllRanges = vi.fn()
+      const mockSelection = {
+        isCollapsed: false,
+        removeAllRanges,
+        anchorNode: null,
+        focusNode: null,
+        toString: () => 'selected text'
+      } as unknown as Selection
+
+      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+
+      // Simulate a handle element that would receive drag pointerup → click sequence
+      const handle = globalThis.document.createElement('button')
+      handle.dataset.handleType = 'end'
+      viewerRoot.appendChild(handle)
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(mockSelection)
+
+      try {
+        // Direct click on handle element — [data-handle-type] exclusion prevents blank cancellation
+        handle.click()
+
+        expect(removeAllRanges).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
     })
   })
 })

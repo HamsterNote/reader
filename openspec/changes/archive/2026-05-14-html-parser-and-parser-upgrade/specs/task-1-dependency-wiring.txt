@@ -1,0 +1,31 @@
+# Task 1: Dependency Wiring - TypeScript Verification
+
+## Date: 2026-05-02
+
+## Verification: yarn typecheck
+
+```
+$ yarn typecheck
+yarn run v1.22.22
+$ tsc --project tsconfig.json --noEmit
+Done in 1.91s.
+```
+
+## Result: PASS
+
+- TypeScript compilation succeeded with no errors
+- Module resolution for @hamster-note/html-parser works without additional declaration files
+- No "Cannot find module" errors
+
+## Modified Files
+- package.json: Added @hamster-note/html-parser@^0.5.1 to dependencies
+
+## package.json dependencies section after change:
+```json
+"dependencies": {
+  "@hamster-note/html-parser": "^0.5.1",
+  "@hamster-note/image-parser": "^0.1.0",
+  "@hamster-note/pdf-parser": "^0.5.1",
+  "@hamster-note/types": "^0.7.0"
+}
+```

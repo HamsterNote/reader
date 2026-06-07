@@ -1,0 +1,11 @@
+Task 4: Align src/types/pdf-parser.d.ts to the 0.6.0 export surface
+
+Updated shim includes:
+- PdfParser.encode(fileOrBuffer, options?, onProgress?) - with optional params
+- PdfParser.decode(intermediateDocument, options?, onProgress?) - with optional params  
+- EncodeOptions, DecodeOptions, ProgressInfo, ProgressCallback types
+- GenerationError export
+
+Note: The upstream @hamster-note/pdf-parser@0.6.0 package does not ship its own dist/index.d.ts (packaging bug), so the local ambient module declaration is the sole type source. The optional parameters and progress types were added per plan requirements to match the expected 0.6.0 consumer-facing API surface.
+
+Verification: yarn typecheck exits 0
