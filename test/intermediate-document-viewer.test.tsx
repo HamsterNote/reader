@@ -25,6 +25,7 @@ import {
 } from '../src/components/selection/selectionComposer'
 import {
   buildSelectionPayload as buildSerializedSelectionPayload,
+  type ReaderSelectedTextSegment,
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer } from '../src/index'
@@ -430,12 +431,16 @@ describe('selection primitive modules', () => {
       const result = resolveCaret(30, 15, {
         viewerRoot,
         pageRefs: new Map([[1, page as HTMLDivElement]]),
-        textElements: new Map([['a', { text: makeText('a', 'Alpha'), pageNumber: 1 }]])
+        textElements: new Map([
+          ['a', { text: makeText('a', 'Alpha'), pageNumber: 1 }]
+        ])
       })
 
       expect(caretPositionFromPoint).toHaveBeenCalledWith(30, 15)
       expect(result?.pageNumber).toBe(1)
-      expect(result?.range.startContainer).toBe(getRequiredTextNode(textElement))
+      expect(result?.range.startContainer).toBe(
+        getRequiredTextNode(textElement)
+      )
       expect(result?.range.startOffset).toBe(2)
     } finally {
       if (originalCaretPositionDescriptor) {
@@ -1649,6 +1654,59 @@ describe('IntermediateDocumentViewer', () => {
       return { document }
     }
 
+    // Direct-render selection only: reusable 3-page fixture for downstream selection UX tests.
+    const makeThreePageTextDocument = ({
+      page2Texts: page2TextOverrides
+    }: {
+      page2Texts?: Array<{ id: string; content: string }>
+    } = {}) => {
+      const page1Texts = [
+        { id: 'p1-alpha', content: 'P1 Alpha' },
+        { id: 'p1-bravo', content: 'P1 Bravo' },
+        { id: 'p1-charlie', content: 'P1 Charlie' }
+      ]
+      const page2Texts = page2TextOverrides ?? [
+        { id: 'p2-delta', content: 'P2 Delta' },
+        { id: 'p2-echo', content: 'P2 Echo' },
+        { id: 'p2-foxtrot', content: 'P2 Foxtrot' }
+      ]
+      const page3Texts = [
+        { id: 'p3-golf', content: 'P3 Golf' },
+        { id: 'p3-hotel', content: 'P3 Hotel' },
+        { id: 'p3-india', content: 'P3 India' }
+      ]
+
+      const pages = new Map<number, MockPage>()
+      pages.set(1, {
+        getContent: vi.fn(async () =>
+          page1Texts.map((text) => makeText(text.id, text.content))
+        )
+      })
+      pages.set(2, {
+        getContent: vi.fn(async () =>
+          page2Texts.map((text) => makeText(text.id, text.content))
+        )
+      })
+      pages.set(3, {
+        getContent: vi.fn(async () =>
+          page3Texts.map((text) => makeText(text.id, text.content))
+        )
+      })
+
+      const document = {
+        id: 'doc-three-page-texts',
+        title: 'Three Page Text Document',
+        pageCount: 3,
+        pageNumbers: [1, 2, 3],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 400, y: 400 })),
+        getPageByPageNumber: vi.fn((pageNumber: number) =>
+          Promise.resolve(pages.get(pageNumber))
+        )
+      } as unknown as IntermediateDocument
+
+      return { document }
+    }
+
     const queryTextSpan = (textId: string) => {
       const span = screen
         .getByTestId('intermediate-document-viewer')
@@ -1691,8 +1749,130 @@ describe('IntermediateDocumentViewer', () => {
       return { page2 }
     }
 
+    const mockThreePageDirectRenderSelectionRects = () => {
+      const page1 = screen.getByTestId('intermediate-page-1')
+      const page2 = screen.getByTestId('intermediate-page-2')
+      const page3 = screen.getByTestId('intermediate-page-3')
+      mockElementRect(page1, { left: 0, top: 0, width: 400, height: 180 })
+      mockElementRect(page2, { left: 0, top: 220, width: 400, height: 180 })
+      mockElementRect(page3, { left: 0, top: 440, width: 400, height: 180 })
+      mockElementRect(queryTextSpan('p1-alpha'), {
+        left: 20,
+        top: 20,
+        width: 80,
+        height: 20
+      })
+      mockElementRect(queryTextSpan('p1-bravo'), {
+        left: 20,
+        top: 60,
+        width: 80,
+        height: 20
+      })
+      mockElementRect(queryTextSpan('p1-charlie'), {
+        left: 20,
+        top: 100,
+        width: 80,
+        height: 20
+      })
+      const p2Delta = page2.querySelector('[data-text-id="p2-delta"]')
+      if (p2Delta instanceof HTMLElement) {
+        mockElementRect(p2Delta, {
+          left: 20,
+          top: 240,
+          width: 80,
+          height: 20
+        })
+      }
+      const p2Echo = page2.querySelector('[data-text-id="p2-echo"]')
+      if (p2Echo instanceof HTMLElement) {
+        mockElementRect(p2Echo, {
+          left: 20,
+          top: 280,
+          width: 80,
+          height: 20
+        })
+      }
+      const p2Foxtrot = page2.querySelector('[data-text-id="p2-foxtrot"]')
+      if (p2Foxtrot instanceof HTMLElement) {
+        mockElementRect(p2Foxtrot, {
+          left: 20,
+          top: 320,
+          width: 80,
+          height: 20
+        })
+      }
+      mockElementRect(queryTextSpan('p3-golf'), {
+        left: 20,
+        top: 460,
+        width: 80,
+        height: 20
+      })
+      mockElementRect(queryTextSpan('p3-hotel'), {
+        left: 20,
+        top: 500,
+        width: 80,
+        height: 20
+      })
+      mockElementRect(queryTextSpan('p3-india'), {
+        left: 20,
+        top: 540,
+        width: 80,
+        height: 20
+      })
+
+      return { page1, page2, page3 }
+    }
+
+    const renderThreePageDirectRenderSelectionFixture = async (
+      props: {
+        onTextSelectionChange?: ReturnType<typeof vi.fn>
+        onTextSelectionEnd?: ReturnType<typeof vi.fn>
+        onSelectText?: ReturnType<typeof vi.fn>
+        selectionOverlay?: boolean
+        page2Texts?: Array<{ id: string; content: string }>
+        loadPage2?: boolean
+      } = {}
+    ) => {
+      const { document: mockDoc } = makeThreePageTextDocument({
+        page2Texts: props.page2Texts
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          {...props}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+      })
+      if (props.loadPage2 !== false) {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-2')
+        )
+      }
+      intersectionObserverMock.trigger(
+        screen.getByTestId('intermediate-page-3')
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('P1 Alpha')).toBeInTheDocument()
+        expect(screen.getByText('P3 India')).toBeInTheDocument()
+      })
+      if (props.loadPage2 !== false && props.page2Texts?.length !== 0) {
+        await waitFor(() => {
+          expect(screen.getByText('P2 Delta')).toBeInTheDocument()
+        })
+      }
+    }
+
     const renderCrossPageSelectionFixture = async (
-      onTextSelectionChange: ReturnType<typeof vi.fn>
+      onTextSelectionChange: ReturnType<typeof vi.fn>,
+      props: {
+        onTextSelectionEnd?: ReturnType<typeof vi.fn>
+        onSelectText?: ReturnType<typeof vi.fn>
+      } = {}
     ) => {
       const { document: mockDoc } = makeCrossPageTextDocument()
       render(
@@ -1700,6 +1880,7 @@ describe('IntermediateDocumentViewer', () => {
           document={mockDoc}
           renderMode='direct'
           onTextSelectionChange={onTextSelectionChange}
+          {...props}
         />
       )
 
@@ -1716,46 +1897,57 @@ describe('IntermediateDocumentViewer', () => {
       })
     }
 
-    const dispatchActiveCrossPageMouseSelection = (
-      targetTextId: string,
-      pointer: { clientX: number; clientY: number }
-    ) => {
-      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
-      const anchorSpan = queryTextSpan('p1-b')
-      const focusSpan = queryTextSpan(targetTextId)
-      const overBroadIds = new Set(['p1-b', 'p2-a', 'p2-b', 'p2-c'])
+    const makeDirectRenderTextSelection = (textIds: string[]) => {
+      const firstSpan = queryTextSpan(textIds[0])
+      const lastSpan = queryTextSpan(textIds[textIds.length - 1])
+      const selectedIds = new Set(textIds)
 
-      viewerRoot.dispatchEvent(
-        new MouseEvent('mousedown', {
-          bubbles: true,
-          button: 0,
-          clientX: 60,
-          clientY: 70
-        })
-      )
-      viewerRoot.dispatchEvent(
-        new MouseEvent('mousemove', {
-          bubbles: true,
-          buttons: 1,
-          clientX: pointer.clientX,
-          clientY: pointer.clientY
-        })
-      )
-
-      const selection = makeMockSelection({
+      return makeMockSelection({
         isCollapsed: false,
-        anchorNode: getTextNode(anchorSpan),
-        focusNode: getTextNode(focusSpan),
-        toString: () => 'P1BP2AP2BP2C',
+        anchorNode: getTextNode(firstSpan),
+        focusNode: getTextNode(lastSpan),
+        toString: () =>
+          textIds
+            .map((textId) => queryTextSpan(textId).textContent ?? '')
+            .join(''),
         containsNode: (node: Node) => {
           if (!(node instanceof HTMLElement)) return false
+
           const textId = node.getAttribute('data-text-id')
-          return textId !== null && overBroadIds.has(textId)
+          return textId !== null && selectedIds.has(textId)
         }
       })
-      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+    }
 
-      globalThis.document.dispatchEvent(new Event('selectionchange'))
+    const makeDirectRenderTextSelectionWithEndpoints = ({
+      selectedTextIds,
+      anchorTextId,
+      focusTextId,
+      selectedText
+    }: {
+      selectedTextIds: string[]
+      anchorTextId: string
+      focusTextId: string
+      selectedText?: string
+    }) => {
+      const selectedIds = new Set(selectedTextIds)
+
+      return makeMockSelection({
+        isCollapsed: false,
+        anchorNode: getTextNode(queryTextSpan(anchorTextId)),
+        focusNode: getTextNode(queryTextSpan(focusTextId)),
+        toString: () =>
+          selectedText ??
+          selectedTextIds
+            .map((textId) => queryTextSpan(textId).textContent ?? '')
+            .join(''),
+        containsNode: (node: Node) => {
+          if (!(node instanceof HTMLElement)) return false
+
+          const textId = node.getAttribute('data-text-id')
+          return textId !== null && selectedIds.has(textId)
+        }
+      })
     }
 
     const installUnavailableCaretPointApis = () => {
@@ -2189,6 +2381,33 @@ describe('IntermediateDocumentViewer', () => {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
       }
+    })
+
+    it('provides a three-page fixture for direct-render selection only with stable data attributes and rects', async () => {
+      await renderThreePageDirectRenderSelectionFixture()
+      mockThreePageDirectRenderSelectionRects()
+
+      expect(queryTextSpan('p1-alpha')).toHaveAttribute('data-page-number', '1')
+      expect(queryTextSpan('p1-bravo')).toHaveAttribute('data-page-number', '1')
+      expect(queryTextSpan('p1-charlie')).toHaveAttribute(
+        'data-page-number',
+        '1'
+      )
+      expect(queryTextSpan('p2-delta')).toHaveAttribute('data-page-number', '2')
+      expect(queryTextSpan('p2-echo')).toHaveAttribute('data-page-number', '2')
+      expect(queryTextSpan('p2-foxtrot')).toHaveAttribute(
+        'data-page-number',
+        '2'
+      )
+      expect(queryTextSpan('p3-golf')).toHaveAttribute('data-page-number', '3')
+      expect(queryTextSpan('p3-hotel')).toHaveAttribute('data-page-number', '3')
+      expect(queryTextSpan('p3-india')).toHaveAttribute('data-page-number', '3')
+      expect(queryTextSpan('p3-india').getBoundingClientRect()).toMatchObject({
+        left: 20,
+        top: 540,
+        width: 80,
+        height: 20
+      })
     })
 
     it('handles cancelled drag once and allows a subsequent drag without stale anchor state', async () => {
@@ -2651,48 +2870,564 @@ describe('IntermediateDocumentViewer', () => {
       expect(detail.pageNumber).toBe(1)
     })
 
-    it('observes externally-created over-broad cross-page selection without using it as drag state', async () => {
+    it('ignores over-broad externally-created selection inside the viewer', async () => {
       const onTextSelectionChange = vi.fn()
       await renderCrossPageSelectionFixture(onTextSelectionChange)
-      const { page2 } = mockCrossPageSelectionRects()
+      mockCrossPageSelectionRects()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeDirectRenderTextSelection(['p1-b', 'p2-a', 'p2-b', 'p2-c'])
+        )
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('full-page page-margin drag expanded by native Selection does not emit whole-page detail', async () => {
+      const onTextSelectionEnd = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({ onTextSelectionEnd })
+      const { page2 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeDirectRenderTextSelection(['p2-delta', 'p2-echo', 'p2-foxtrot'])
+        )
       mockElementFromPoint(page2)
 
-      dispatchActiveCrossPageMouseSelection('p2-a', {
-        clientX: 60,
-        clientY: 240
+      try {
+        dispatchPointerDragStart(viewerRoot, { clientX: 4, clientY: 230 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 390, clientY: 350 })
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            clientX: 390,
+            clientY: 350
+          })
+        )
+
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('full-page page-background drag expanded by native Selection does not emit whole-page detail', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      const { page2 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeDirectRenderTextSelection(['p2-delta', 'p2-echo', 'p2-foxtrot'])
+        )
+      mockElementFromPoint(page2)
+
+      try {
+        dispatchPointerDragStart(viewerRoot, { clientX: 340, clientY: 230 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 340, clientY: 350 })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('full-page page-background drag expanded by native Selection does not emit onSelectText payload', async () => {
+      const onSelectText = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({ onSelectText })
+      const { page2 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeDirectRenderTextSelection(['p2-delta', 'p2-echo', 'p2-foxtrot'])
+        )
+      mockElementFromPoint(page2)
+
+      try {
+        dispatchPointerDragStart(viewerRoot, { clientX: 340, clientY: 230 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 340, clientY: 350 })
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            clientX: 340,
+            clientY: 350
+          })
+        )
+
+        expect(onSelectText).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('keeps legitimate full-page active mouse text-to-text drag selected text', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeDirectRenderTextSelection(['p2-delta', 'p2-echo', 'p2-foxtrot'])
+        )
+      mockElementFromPointByCoordinate((x, y) => {
+        if (x >= 20 && x <= 100 && y >= 240 && y <= 260) {
+          return queryTextSpan('p2-delta')
+        }
+        if (x >= 20 && x <= 100 && y >= 320 && y <= 340) {
+          return queryTextSpan('p2-foxtrot')
+        }
+        return screen.getByTestId('intermediate-page-2')
       })
 
-      expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
-      const [, detail] = onTextSelectionChange.mock.calls[0]
-      expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
-        'p1-b',
-        'p2-a',
-        'p2-b',
-        'p2-c'
-      ])
-      expect(detail.selectedText).toBe('P1BP2AP2BP2C')
+      try {
+        dispatchPointerDragStart(queryTextSpan('p2-delta'), {
+          clientX: 25,
+          clientY: 250
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 95, clientY: 330 })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p2-delta',
+          'p2-echo',
+          'p2-foxtrot'
+        ])
+        expect(detail.selectedText).toBe('P2 DeltaP2 EchoP2 Foxtrot')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
     })
 
     it('keeps legitimate active mouse cross-page selection through the pointer text', async () => {
       const onTextSelectionChange = vi.fn()
       await renderCrossPageSelectionFixture(onTextSelectionChange)
       const { page2 } = mockCrossPageSelectionRects()
-      mockElementFromPoint(page2)
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeDirectRenderTextSelection(['p1-b', 'p2-a', 'p2-b', 'p2-c'])
+        )
+      mockElementFromPointByCoordinate((_x, y) =>
+        y < 220 ? queryTextSpan('p1-b') : page2
+      )
 
-      dispatchActiveCrossPageMouseSelection('p2-c', {
-        clientX: 60,
-        clientY: 320
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 320
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-b',
+          'p2-a',
+          'p2-b',
+          'p2-c'
+        ])
+        expect(detail.selectedText).toBe('P1BP2AP2BP2C')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page active drag from page 1 word 2 to page 2 word 2 avoids selecting next full page', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderCrossPageSelectionFixture(onTextSelectionChange)
+      const { page2 } = mockCrossPageSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(
+        makeDirectRenderTextSelectionWithEndpoints({
+          selectedTextIds: ['p1-b', 'p2-a', 'p2-b', 'p2-c'],
+          anchorTextId: 'p1-b',
+          focusTextId: 'p2-c'
+        })
+      )
+      mockElementFromPointByCoordinate((_x, y) =>
+        y < 220 ? queryTextSpan('p1-b') : page2
+      )
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 280
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-b',
+          'p2-a',
+          'p2-b'
+        ])
+        expect(detail.selectedText).toBe('P1BP2AP2B')
+        expect(detail.selectedText).not.toContain('P2C')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page active drag from page 1 word 2 to page 3 word 2 is ordered and bounded', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      const { page1, page2, page3 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(
+        makeDirectRenderTextSelectionWithEndpoints({
+          selectedTextIds: [
+            'p1-bravo',
+            'p1-charlie',
+            'p2-delta',
+            'p2-echo',
+            'p2-foxtrot',
+            'p3-golf',
+            'p3-hotel',
+            'p3-india'
+          ],
+          anchorTextId: 'p1-bravo',
+          focusTextId: 'p3-india'
+        })
+      )
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y < 220) return page1
+        if (y < 440) return page2
+        return page3
       })
 
-      expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
-      const [, detail] = onTextSelectionChange.mock.calls[0]
-      expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
-        'p1-b',
-        'p2-a',
-        'p2-b',
-        'p2-c'
-      ])
-      expect(detail.selectedText).toBe('P1BP2AP2BP2C')
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 510
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-bravo',
+          'p1-charlie',
+          'p2-delta',
+          'p2-echo',
+          'p2-foxtrot',
+          'p3-golf',
+          'p3-hotel'
+        ])
+        expect(detail.selectedText).toBe(
+          'P1 BravoP1 CharlieP2 DeltaP2 EchoP2 FoxtrotP3 GolfP3 Hotel'
+        )
+        expect(detail.selectedText).not.toContain('P3 India')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page reverse drag from page 3 to page 1 returns the same ordered bounded text', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      const { page1, page2, page3 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(
+        makeDirectRenderTextSelectionWithEndpoints({
+          selectedTextIds: [
+            'p1-bravo',
+            'p1-charlie',
+            'p2-delta',
+            'p2-echo',
+            'p2-foxtrot',
+            'p3-golf',
+            'p3-hotel',
+            'p3-india'
+          ],
+          anchorTextId: 'p1-bravo',
+          focusTextId: 'p3-india'
+        })
+      )
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y < 220) return page1
+        if (y < 440) return page2
+        return page3
+      })
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p3-hotel'), {
+          clientX: 60,
+          clientY: 510
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 70
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-bravo',
+          'p1-charlie',
+          'p2-delta',
+          'p2-echo',
+          'p2-foxtrot',
+          'p3-golf',
+          'p3-hotel'
+        ])
+        expect(detail.selectedText).toBe(
+          'P1 BravoP1 CharlieP2 DeltaP2 EchoP2 FoxtrotP3 GolfP3 Hotel'
+        )
+        expect(detail.text).toBe(detail.texts[0])
+        expect(detail.pageNumber).toBe(1)
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page page-gutter endpoint resolves to nearest text on the pointer page', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      const { page1, page2, page3 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(
+        makeDirectRenderTextSelectionWithEndpoints({
+          selectedTextIds: [
+            'p1-bravo',
+            'p1-charlie',
+            'p2-delta',
+            'p2-echo',
+            'p2-foxtrot',
+            'p3-golf'
+          ],
+          anchorTextId: 'p1-bravo',
+          focusTextId: 'p3-golf'
+        })
+      )
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y < 220) return page1
+        if (y < 440) return page2
+        return page3
+      })
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 360
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-bravo',
+          'p1-charlie',
+          'p2-delta',
+          'p2-echo',
+          'p2-foxtrot'
+        ])
+        expect(detail.selectedText).not.toContain('P3 Golf')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page active drag skips an empty loaded middle page', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange,
+        page2Texts: []
+      })
+      const { page1, page2, page3 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(
+        makeDirectRenderTextSelectionWithEndpoints({
+          selectedTextIds: [
+            'p1-bravo',
+            'p1-charlie',
+            'p3-golf',
+            'p3-hotel',
+            'p3-india'
+          ],
+          anchorTextId: 'p1-bravo',
+          focusTextId: 'p3-india'
+        })
+      )
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y < 220) return page1
+        if (y < 440) return page2
+        return page3
+      })
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 510
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-bravo',
+          'p1-charlie',
+          'p3-golf',
+          'p3-hotel'
+        ])
+        expect(detail.selectedText).toBe('P1 BravoP1 CharlieP3 GolfP3 Hotel')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page fast pointer skip from page 1 to page 3 includes loaded middle-page text only when available', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange,
+        loadPage2: false
+      })
+      const { page1, page2, page3 } = mockThreePageDirectRenderSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(
+        makeDirectRenderTextSelectionWithEndpoints({
+          selectedTextIds: [
+            'p1-bravo',
+            'p1-charlie',
+            'p3-golf',
+            'p3-hotel',
+            'p3-india'
+          ],
+          anchorTextId: 'p1-bravo',
+          focusTextId: 'p3-india'
+        })
+      )
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y < 220) return page1
+        if (y < 440) return page2
+        return page3
+      })
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 510
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p1-bravo',
+          'p1-charlie',
+          'p2-delta',
+          'p2-echo',
+          'p2-foxtrot',
+          'p3-golf',
+          'p3-hotel'
+        ])
+        expect(detail.selectedText).toContain('P2 DeltaP2 EchoP2 Foxtrot')
+        expect(detail.selectedText).not.toContain('P3 India')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page onSelectText receives bounded ordered segments without signature changes', async () => {
+      const onSelectText = vi.fn()
+      await renderCrossPageSelectionFixture(vi.fn(), { onSelectText })
+      const { page2 } = mockCrossPageSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const selection = makeDirectRenderTextSelectionWithEndpoints({
+        selectedTextIds: ['p1-b', 'p2-a', 'p2-b', 'p2-c'],
+        anchorTextId: 'p1-b',
+        focusTextId: 'p2-c'
+      })
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(selection)
+      mockElementFromPointByCoordinate((_x, y) =>
+        y < 220 ? queryTextSpan('p1-b') : page2
+      )
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 280
+        })
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            clientX: 60,
+            clientY: 280
+          })
+        )
+
+        expect(onSelectText).toHaveBeenCalledTimes(1)
+        expect(onSelectText.mock.calls[0]).toHaveLength(3)
+        const [callbackSelection, segments, extractedText] =
+          onSelectText.mock.calls[0]
+        expect(callbackSelection).toBe(selection)
+        expect(
+          segments.map((segment: ReaderSelectedTextSegment) => segment.id)
+        ).toEqual(['p1-b', 'p2-a', 'p2-b'])
+        expect(
+          segments.map(
+            (segment: ReaderSelectedTextSegment) => segment.selectedText
+          )
+        ).toEqual(['P1B', 'P2A', 'P2B'])
+        expect(extractedText).toBe('P1BP2AP2B')
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
     })
 
     it('fires onTextSelectionEnd on mouseup with selection', async () => {
@@ -3816,6 +4551,158 @@ describe('IntermediateDocumentViewer', () => {
       viewerRoot.removeChild(blankNode)
     })
 
+    it('nearest blank drag start near last word snaps to same-page last text', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      mockThreePageDirectRenderSelectionRects()
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page3 = screen.getByTestId('intermediate-page-3')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installCaretPositionFromPoint(
+        getTextNode(queryTextSpan('p3-golf')),
+        0
+      )
+      mockElementFromPointByCoordinate((x, y) =>
+        x >= 20 && x <= 100 && y >= 500 && y <= 520
+          ? queryTextSpan('p3-hotel')
+          : page3
+      )
+
+      try {
+        dispatchPointerDragStart(viewerRoot, { clientX: 108, clientY: 550 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 12, clientY: 510 })
+
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
+        expect(liveSelection.selection.toString()).toBe('P3 HotelP3 India')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p3-hotel',
+          'p3-india'
+        ])
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('nearest blank drag move in inter-span gutter snaps to closer same-page text', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      mockThreePageDirectRenderSelectionRects()
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page2 = screen.getByTestId('intermediate-page-2')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((x, y) =>
+        x <= 100 && y >= 240 && y <= 260 ? queryTextSpan('p2-delta') : page2
+      )
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p2-delta'), {
+          clientX: 25,
+          clientY: 250
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 60, clientY: 304 })
+
+        expect(liveSelection.selection.toString()).toBe('P2 DeltaP2 Echo')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p2-delta',
+          'p2-echo'
+        ])
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('nearest blank drag move uses DOM-order tie-break for equal-distance text', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange
+      })
+      mockThreePageDirectRenderSelectionRects()
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page2 = screen.getByTestId('intermediate-page-2')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((x, y) =>
+        x <= 100 && y >= 240 && y <= 260 ? queryTextSpan('p2-delta') : page2
+      )
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p2-delta'), {
+          clientX: 25,
+          clientY: 250
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 60, clientY: 310 })
+
+        expect(liveSelection.selection.toString()).toBe('P2 DeltaP2 Echo')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'p2-delta',
+          'p2-echo'
+        ])
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('nearest blank drag more than 100px from page text creates no selection', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderThreePageDirectRenderSelectionFixture({
+        onTextSelectionChange,
+        selectionOverlay: true
+      })
+      mockThreePageDirectRenderSelectionRects()
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page3 = screen.getByTestId('intermediate-page-3')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installCaretPositionFromPoint(
+        getTextNode(queryTextSpan('p3-golf')),
+        0
+      )
+      mockElementFromPoint(page3)
+
+      try {
+        dispatchPointerDragStart(viewerRoot, { clientX: 320, clientY: 610 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 25, clientY: 550 })
+
+        expect(liveSelection.selection.addRange).not.toHaveBeenCalled()
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+        expect(viewerRoot.querySelectorAll('[data-handle-type]')).toHaveLength(
+          0
+        )
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
     it('drag selection across mixed text + background content only selects text spans', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       const onTextSelectionChange = vi.fn()
@@ -3853,7 +4740,7 @@ describe('IntermediateDocumentViewer', () => {
 
       try {
         dispatchPointerDragStart(textSpan, { clientX: 12, clientY: 18 })
-        dispatchPointerDragMove(viewerRoot, { clientX: 200, clientY: 100 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 95, clientY: 80 })
 
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
         const [, detail] = onTextSelectionChange.mock.calls[0]
@@ -5740,5 +6627,172 @@ describe('IntermediateDocumentViewer', () => {
       expect(result?.range.startContainer).toBe(getRequiredTextNode(textA))
       expect(result?.range.startContainer).not.toBe(bgImage)
     })
+  })
+})
+
+// Task 2 — Regression tests for the line+circle default selection handle
+// visual. These tests pin the contract that the renderer must keep emitting:
+//   • the wrapper class `hamster-reader__selection-handle--default` (so the
+//     pseudo-element CSS in reader.scss still applies),
+//   • the base class with the `--start`/`--end` modifier (so the CSS variant
+//     selector `.hamster-reader__selection-handle--default.hamster-reader__selection-handle--start`
+//     still matches and the wrapper still positions the line/circle correctly),
+//   • the `data-handle-type` attribute (so the drag adapter lookup via
+//     `[data-handle-type]` keeps working).
+// They also pin the endpoint-centered circle offsets in reader.scss so the
+// 8px circle center, not its edge, lands on the 2px line endpoint.
+describe('default selection handle (line+circle visual)', () => {
+  // Always-present rect mock so both start- and end-collapsed clones of the
+  // mocked Range return a non-empty geometry for handle position lookup.
+  const handleRects = [makeDomRect({ left: 15, top: 25, width: 30, height: 8 })]
+
+  // Render the viewer with the default (undefined selectionHandleElement)
+  // handle, install a mocked Selection that produces a non-collapsed range,
+  // and wait until both start and end handles have been appended to the
+  // first page. Returns the page element + a cleanup hook.
+  const renderDefaultHandleFixture = async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} selectionOverlay />)
+    const page = screen.getByTestId('intermediate-page-1')
+    const pageRectSpy = mockElementRect(page, {
+      left: 5,
+      top: 5,
+      width: 100,
+      height: 150
+    })
+    const elementFromPointSpy = mockElementFromPoint(page)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(makeSelectionWithRects(() => handleRects))
+
+    globalThis.document.dispatchEvent(new Event('selectionchange'))
+    await waitFor(() => {
+      expect(
+        page.querySelectorAll('.hamster-reader__selection-handle')
+      ).toHaveLength(2)
+    })
+
+    return {
+      page,
+      cleanup: () => {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    }
+  }
+
+  it('emits stable default-handle class names with --default and --{type} modifiers', async () => {
+    const { page, cleanup } = await renderDefaultHandleFixture()
+    try {
+      const [startHandle, endHandle] = Array.from(
+        page.querySelectorAll('.hamster-reader__selection-handle')
+      ) as HTMLElement[]
+
+      // Default wrapper marker that pseudo-element CSS hooks into.
+      expect(startHandle).toHaveClass(
+        'hamster-reader__selection-handle--default'
+      )
+      expect(endHandle).toHaveClass('hamster-reader__selection-handle--default')
+
+      // Side modifiers used by the compound CSS selector for line/circle
+      // positioning. Both classes must be present on the same element.
+      expect(startHandle).toHaveClass('hamster-reader__selection-handle--start')
+      expect(endHandle).toHaveClass('hamster-reader__selection-handle--end')
+
+      // Legacy per-side default class — historically attached and asserted on
+      // by adapter probes; keep stable to avoid silent contract drift.
+      expect(startHandle).toHaveClass(
+        'hamster-reader__selection-handle--default-start'
+      )
+      expect(endHandle).toHaveClass(
+        'hamster-reader__selection-handle--default-end'
+      )
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('exposes data-handle-type on default handles so adapter lookup still works', async () => {
+    const { page, cleanup } = await renderDefaultHandleFixture()
+    try {
+      const startHandle = page.querySelector('[data-handle-type="start"]')
+      const endHandle = page.querySelector('[data-handle-type="end"]')
+      expect(startHandle).toBeInstanceOf(HTMLElement)
+      expect(endHandle).toBeInstanceOf(HTMLElement)
+      // The default wrapper is a plain <div>, not a cloned custom element.
+      expect(startHandle?.tagName).toBe('DIV')
+      expect(endHandle?.tagName).toBe('DIV')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('positions default handles using the boundary anchor coordinates', async () => {
+    const { page, cleanup } = await renderDefaultHandleFixture()
+    try {
+      // Anchor formula: x = boundary.{left|right} - page.left,
+      //                  y = boundary.bottom - page.top.
+      // boundary rect = {left:15, top:25, width:30, height:8}; page offset
+      // = (5, 5). So start anchor = (15-5, 33-5) = (10, 28) and end anchor
+      // = ((15+30)-5, 33-5) = (40, 28).
+      const startHandle = page.querySelector(
+        '[data-handle-type="start"]'
+      ) as HTMLElement
+      const endHandle = page.querySelector(
+        '[data-handle-type="end"]'
+      ) as HTMLElement
+      expect(startHandle).toHaveStyle({ left: '10px', top: '28px' })
+      expect(endHandle).toHaveStyle({ left: '40px', top: '28px' })
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('centers default handle circles on the line endpoints in SCSS', () => {
+    const scssSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/styles/reader.scss'),
+      'utf-8'
+    )
+
+    // Start circle center sits on the line's upper endpoint: 8px diameter
+    // means radius 4px, so the circle top must be 4px above endpoint y=0.
+    expect(scssSource).toMatch(
+      /&\.hamster-reader__selection-handle--start[\s\S]*?right:\s*-3px;[\s\S]*?top:\s*-4px;/
+    )
+
+    // End circle center sits on the line's lower endpoint: mirror the same
+    // 4px radius below the wrapper/line bottom.
+    expect(scssSource).toMatch(
+      /&\.hamster-reader__selection-handle--end[\s\S]*?left:\s*-3px;[\s\S]*?bottom:\s*-4px;/
+    )
+  })
+
+  it('keeps default handle wrapper hit-target attributes intact for the drag adapter', async () => {
+    const { page, cleanup } = await renderDefaultHandleFixture()
+    try {
+      const startHandle = page.querySelector(
+        '[data-handle-type="start"]'
+      ) as HTMLElement
+      const endHandle = page.querySelector(
+        '[data-handle-type="end"]'
+      ) as HTMLElement
+
+      // The wrapper must stay pointer-events:auto so the drag adapter's
+      // pointerdown listener (attached at viewer root and filtered via
+      // `[data-handle-type]` closest()) actually captures touches on the
+      // default visual. The pseudo-element ::before/::after children draw
+      // the line+circle but inherit pointer-events:none in the new CSS.
+      expect(startHandle.style.pointerEvents).toBe('auto')
+      expect(endHandle.style.pointerEvents).toBe('auto')
+
+      // Adapter relies on closest('[data-handle-type]') from the pointer
+      // target; the wrapper itself owns that attribute (not a child node),
+      // so a pointerdown anywhere inside the 18×24px hit area finds it.
+      expect(startHandle.closest('[data-handle-type]')).toBe(startHandle)
+      expect(endHandle.closest('[data-handle-type]')).toBe(endHandle)
+    } finally {
+      cleanup()
+    }
   })
 })

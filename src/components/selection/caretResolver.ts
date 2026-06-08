@@ -50,6 +50,10 @@ const clampToRange = (value: number, min: number, max: number): number => {
   return 0
 }
 
+const MAX_NEAREST_TEXT_SNAP_DISTANCE_PX = 100
+const MAX_NEAREST_TEXT_SNAP_DISTANCE_SQUARED =
+  MAX_NEAREST_TEXT_SNAP_DISTANCE_PX * MAX_NEAREST_TEXT_SNAP_DISTANCE_PX
+
 const getPointToRectDistanceSquared = (
   point: { x: number; y: number },
   rect: { left: number; top: number; right: number; bottom: number }
@@ -180,6 +184,16 @@ export const getPageElementForPoint = (
   )
 }
 
+const isBeforeInDocumentOrder = (
+  element: HTMLElement,
+  otherElement: HTMLElement
+): boolean => {
+  return (
+    element.compareDocumentPosition(otherElement) ===
+    Node.DOCUMENT_POSITION_FOLLOWING
+  )
+}
+
 export const getNearestTextElementForPoint = (
   clientX: number,
   clientY: number,
@@ -208,15 +222,18 @@ export const getNearestTextElementForPoint = (
     if (distance < minDistance) {
       minDistance = distance
       nearestElement = element
-    } else if (distance === minDistance && nearestElement) {
-      const position = element.compareDocumentPosition(nearestElement)
-      if (position === Node.DOCUMENT_POSITION_FOLLOWING) {
-        nearestElement = element
-      }
+    } else if (
+      distance === minDistance &&
+      nearestElement &&
+      isBeforeInDocumentOrder(element, nearestElement)
+    ) {
+      nearestElement = element
     }
   }
 
-  return nearestElement
+  return minDistance <= MAX_NEAREST_TEXT_SNAP_DISTANCE_SQUARED
+    ? nearestElement
+    : null
 }
 
 const getClosestTextElement = (
@@ -323,7 +340,8 @@ export const resolveCaret = (
     options.caretPositionFromPoint ??
     caretDocument.caretPositionFromPoint?.bind(caretDocument)
   const caretRangeFromPoint =
-    options.caretRangeFromPoint ?? caretDocument.caretRangeFromPoint?.bind(caretDocument)
+    options.caretRangeFromPoint ??
+    caretDocument.caretRangeFromPoint?.bind(caretDocument)
 
   const positionResult = resolveValidCaretRange(
     resolveCaretPositionRange(

@@ -164,3 +164,27 @@ export const buildSelectionPayload = (
 
   return { selection, segments, extractedText }
 }
+
+export const buildSelectionPayloadFromTexts = (
+  selection: Selection,
+  texts: IntermediateText[]
+): ReaderSelectionPayload | null => {
+  const segments = texts.flatMap((text) => {
+    const selectedText = text.content ?? ''
+    if (selectedText.length === 0) return []
+
+    return [
+      {
+        ...text,
+        selectedText,
+        startCharIndex: 0,
+        endCharIndex: selectedText.length
+      }
+    ]
+  })
+
+  const extractedText = segments.map((segment) => segment.selectedText).join('')
+  if (segments.length === 0 || extractedText.trim().length === 0) return null
+
+  return { selection, segments, extractedText }
+}

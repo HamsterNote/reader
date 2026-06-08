@@ -301,9 +301,28 @@
     stroke: none;
   }
 
-  // Default android-style teardrop selection handle
+  // Default selection handle (2px vertical line + 4px-radius circle).
+  // The wrapper itself stays transparent and serves only as the hit target
+  // (18×24px). The visual line is drawn via `::after`, the circle via
+  // `::before`. Color follows --hamster-reader-selection-color.
+  //
+  // Geometry recap (see buildBoundaryHandlePosition):
+  //   • Start anchor = (left, bottom) of the first selected char.
+  //     Wrapper transform: translate(-100%, 0) → wrapper sits LEFT of and
+  //     BELOW the anchor (anchor touches the wrapper's TOP-RIGHT corner).
+  //     The vertical line runs along the wrapper's RIGHT edge so its TOP
+  //     endpoint lands exactly on the anchor (selection bottom edge), and
+  //     the circle sits on that TOP endpoint — visually above the line.
+  //   • End anchor = (right, bottom) of the last selected char.
+  //     Wrapper transform: translate(0, -100%) → wrapper sits RIGHT of and
+  //     ABOVE the anchor (anchor touches the wrapper's BOTTOM-LEFT corner).
+  //     The vertical line runs along the wrapper's LEFT edge so its BOTTOM
+  //     endpoint lands exactly on the anchor, and the circle sits on that
+  //     BOTTOM endpoint — visually below the line.
   &__selection-handle--default {
     position: absolute;
+    // Hit target preserved at 18px × 24px (>= prior teardrop size) so drag
+    // ergonomics do not regress despite the slimmer visual.
     width: 18px;
     height: 24px;
     pointer-events: auto;
@@ -311,25 +330,81 @@
     touch-action: none;
     z-index: 3;
 
-    background-color: var(--hamster-reader-selection-color, #ec4899);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    // Transparent wrapper: the visual handle is rendered by ::before/::after.
+    background: transparent;
 
     &:active {
       cursor: grabbing;
     }
 
-    // Start (mirrored): body sits LEFT of anchor; pointed bottom-right corner
-    // touches the start boundary of the selection.
-    &--start {
-      transform: translate(-100%, 0);
-      border-radius: 50% 50% 0 50%;
+    // Vertical 2px line. Spans the full 24px height of the wrapper; the
+    // start/end variants pin it to the appropriate edge so the line's
+    // endpoint coincides with the boundary anchor.
+    &::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 100%;
+      background-color: var(--hamster-reader-selection-color, #ec4899);
+      pointer-events: none;
     }
 
-    // End: body sits RIGHT of anchor; pointed bottom-left corner touches the
-    // end boundary of the selection.
-    &--end {
+    // Filled circle, 8px diameter (4px radius). Its CENTER is positioned on
+    // the upper line endpoint for the start handle and the lower line endpoint
+    // for the end handle. Horizontally centered on the 2px line.
+    &::before {
+      content: '';
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--hamster-reader-selection-color, #ec4899);
+      pointer-events: none;
+    }
+
+    // Start handle wrapper: pin line to the RIGHT edge so it terminates at
+    // the anchor (selection's start boundary). Circle sits on the TOP of the
+    // line, centered on it horizontally. The transform here overrides the
+    // base `.hamster-reader__selection-handle--start` translate to keep both
+    // selectors in sync as the visual evolves.
+    //
+    // Note: we match the wrapper via the `--start` modifier from the base
+    // selector (which the JSX already adds) rather than nesting under
+    // `--default--start` (with two dashes), because the wrapper className is
+    // `... --default ... --start ... --default-start` — only the single-dash
+    // `--start` and `--default` classes form a usable compound selector here.
+    &.hamster-reader__selection-handle--start {
+      transform: translate(-100%, 0);
+
+      &::after {
+        right: 0;
+      }
+      &::before {
+        // Center the 8px circle on the 2px line's upper endpoint.
+        // Horizontal: line center (from wrapper right) = 1px → circle.right = 1 - 4 = -3px.
+        // Vertical: endpoint y = 0 → circle.top = 0 - 4 = -4px.
+        right: -3px;
+        top: -4px;
+      }
+    }
+
+    // End handle wrapper: pin line to the LEFT edge so it terminates at the
+    // anchor (selection's end boundary). Circle sits on the BOTTOM of the
+    // line, centered on it horizontally.
+    &.hamster-reader__selection-handle--end {
       transform: translate(0, -100%);
-      border-radius: 50% 50% 50% 0;
+
+      &::after {
+        left: 0;
+      }
+      &::before {
+        // Center the 8px circle on the 2px line's lower endpoint.
+        // Horizontal mirror of start: line center is 1px from the LEFT edge.
+        // Vertical: endpoint y = 100% → circle.bottom = 0 - 4 = -4px.
+        left: -3px;
+        bottom: -4px;
+      }
     }
   }
 }

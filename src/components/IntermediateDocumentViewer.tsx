@@ -12,6 +12,7 @@ import {
   getNearestTextElementForPoint,
   getPageElementByPageNumber,
   getPageElementForPoint,
+  isSelectionBackgroundTarget,
   resolveCaret
 } from './selection/caretResolver'
 import {
@@ -24,6 +25,7 @@ import {
 } from './selection/selectionComposer'
 import {
   buildSelectionPayload,
+  buildSelectionPayloadFromTexts,
   getClosestTextElement,
   type ReaderSelectedTextSegment,
   type ReaderSelectionPayload,
@@ -1092,11 +1094,22 @@ export function IntermediateDocumentViewer({
   const textElementsRef = useRef<
     Map<string, { text: IntermediateText; pageNumber: number }>
   >(new Map())
+  const boundedDirectRenderPayloadsRef = useRef(
+    new WeakMap<ReaderTextSelectionDetail, ReaderSelectionPayload>()
+  )
   const activeMouseSelectionRef = useRef<{
     active: boolean
+    startClientX: number
+    startClientY: number
     clientX: number
     clientY: number
-  }>({ active: false, clientX: 0, clientY: 0 })
+  }>({
+    active: false,
+    startClientX: 0,
+    startClientY: 0,
+    clientX: 0,
+    clientY: 0
+  })
   const dragSelectionAnchorRef = useRef<{
     node: Node
     offset: number
@@ -1410,22 +1423,55 @@ export function IntermediateDocumentViewer({
       const minIndex = Math.min(startIndex, endIndex)
       const maxIndex = Math.max(startIndex, endIndex)
       const sortedElements = allTextElements.slice(minIndex, maxIndex + 1)
-      const texts = sortedElements.flatMap((el) => {
+      const orderedEntries = sortedElements.flatMap((el) => {
         const id = el.getAttribute('data-text-id')
         if (!id) return []
         const entry = textElementsRef.current.get(id)
-        return entry ? [entry.text] : []
+        return entry ? [entry] : []
       })
+      const texts = orderedEntries.map((entry) => entry.text)
 
       if (texts.length === 0) return null
 
-      return {
+      const selectedText = texts.map((text) => text.content ?? '').join('')
+
+      const detail = {
         text: texts[0],
         texts,
-        selectedText: texts.map((text) => text.content ?? '').join(''),
-        pageNumber: startEntry.pageNumber,
+        selectedText,
+        pageNumber: orderedEntries[0].pageNumber,
         selection
       }
+      const payload = buildSelectionPayloadFromTexts(selection, texts)
+      if (payload) {
+        boundedDirectRenderPayloadsRef.current.set(detail, payload)
+      }
+
+      return detail
+    },
+    []
+  )
+
+  const getNearestActiveTextElementForPoint = useCallback(
+    (
+      point: { clientX: number; clientY: number },
+      viewerRoot: HTMLElement
+    ): HTMLElement | null => {
+      const pageInfo = getPageElementForPoint(
+        point.clientX,
+        point.clientY,
+        viewerRoot,
+        pageRefs.current
+      )
+      if (!pageInfo) return null
+
+      return getNearestTextElementForPoint(
+        point.clientX,
+        point.clientY,
+        pageInfo.pageNumber,
+        viewerRoot,
+        textElementsRef.current
+      )
     },
     []
   )
@@ -1436,6 +1482,15 @@ export function IntermediateDocumentViewer({
       viewerRoot: HTMLElement
     ): ReaderTextSelectionDetail | null => {
       if (!activeMouseSelectionRef.current.active) return null
+
+      const startElement = getNearestActiveTextElementForPoint(
+        {
+          clientX: activeMouseSelectionRef.current.startClientX,
+          clientY: activeMouseSelectionRef.current.startClientY
+        },
+        viewerRoot
+      )
+      if (!startElement) return null
 
       const pointerPageInfo = getPageElementForPoint(
         activeMouseSelectionRef.current.clientX,
@@ -1454,32 +1509,163 @@ export function IntermediateDocumentViewer({
       )
       if (!snappedFocusElement) return null
 
-      const anchorElement = getClosestTextElement(selection.anchorNode)
-      const focusElement = getClosestTextElement(selection.focusNode)
-      if (!anchorElement || !focusElement) return null
-
-      const anchorPageNumber = Number(anchorElement.dataset.pageNumber)
-      const focusPageNumber = Number(focusElement.dataset.pageNumber)
-      const pointerPageNumber = pointerPageInfo.pageNumber
-
-      // 原生 selection 的 focus 端是拖拽移动端；当指针页与 focus 页一致时，
-      // 固定端取 anchor。反向拖拽同理，指针页落在 anchor 页时固定端取 focus。
-      let fixedElement: HTMLElement | null = null
-      if (pointerPageNumber === focusPageNumber) {
-        fixedElement = anchorElement
-      } else if (pointerPageNumber === anchorPageNumber) {
-        fixedElement = focusElement
-      }
-      if (!fixedElement) return null
-
       return buildSelectionDetailBetweenElements(
         selection,
         viewerRoot,
-        fixedElement,
+        startElement,
         snappedFocusElement
       )
     },
-    [buildSelectionDetailBetweenElements]
+    [buildSelectionDetailBetweenElements, getNearestActiveTextElementForPoint]
+  )
+
+  const getDirectTextElementForPoint = useCallback(
+    (
+      point: { clientX: number; clientY: number },
+      viewerRoot: HTMLElement
+    ): HTMLElement | null => {
+      const pointElement = viewerRoot.ownerDocument.elementFromPoint?.(
+        point.clientX,
+        point.clientY
+      )
+      const textElement = pointElement?.closest('[data-text-id]')
+      return textElement instanceof HTMLElement &&
+        viewerRoot.contains(textElement)
+        ? textElement
+        : null
+    },
+    []
+  )
+
+  const isOverBroadDirectRenderSelection = useCallback(
+    (selectedElements: HTMLElement[], viewerRoot: HTMLElement): boolean => {
+      const selectedIds = new Set(
+        selectedElements.flatMap((element) => {
+          const id = element.getAttribute('data-text-id')
+          return id ? [id] : []
+        })
+      )
+      const pageTextCounts = new Map<number, number>()
+      const selectedPageTextCounts = new Map<number, number>()
+
+      viewerRoot.querySelectorAll('[data-text-id]').forEach((element) => {
+        if (!(element instanceof HTMLElement)) return
+
+        const textId = element.getAttribute('data-text-id')
+        if (!textId || !textElementsRef.current.has(textId)) return
+
+        const pageNumber = Number(element.getAttribute('data-page-number'))
+        if (!Number.isFinite(pageNumber)) return
+
+        pageTextCounts.set(
+          pageNumber,
+          (pageTextCounts.get(pageNumber) ?? 0) + 1
+        )
+        if (selectedIds.has(textId)) {
+          selectedPageTextCounts.set(
+            pageNumber,
+            (selectedPageTextCounts.get(pageNumber) ?? 0) + 1
+          )
+        }
+      })
+
+      for (const [pageNumber, pageTextCount] of pageTextCounts) {
+        // 单个文本 span 的页面常见且合法；至少 3 个 span 才能代表“页面级”误选。
+        if (pageTextCount < 3) continue
+
+        const selectedCount = selectedPageTextCounts.get(pageNumber) ?? 0
+        if (selectedCount >= Math.ceil(pageTextCount * 0.9)) {
+          return true
+        }
+      }
+
+      return false
+    },
+    []
+  )
+
+  const hasValidActiveSelectionBoundaries = useCallback(
+    (selectedElements: HTMLElement[], viewerRoot: HTMLElement): boolean => {
+      if (!activeMouseSelectionRef.current.active) return false
+
+      const firstTextId = selectedElements[0]?.getAttribute('data-text-id')
+      const lastTextId =
+        selectedElements[selectedElements.length - 1]?.getAttribute(
+          'data-text-id'
+        )
+      if (!firstTextId || !lastTextId) return false
+
+      const startElement = getNearestActiveTextElementForPoint(
+        {
+          clientX: activeMouseSelectionRef.current.startClientX,
+          clientY: activeMouseSelectionRef.current.startClientY
+        },
+        viewerRoot
+      )
+      const endElement = getNearestActiveTextElementForPoint(
+        {
+          clientX: activeMouseSelectionRef.current.clientX,
+          clientY: activeMouseSelectionRef.current.clientY
+        },
+        viewerRoot
+      )
+      const startTextId = startElement?.getAttribute('data-text-id')
+      const endTextId = endElement?.getAttribute('data-text-id')
+      const firstPageNumber = Number(selectedElements[0]?.dataset.pageNumber)
+      const lastPageNumber = Number(
+        selectedElements[selectedElements.length - 1]?.dataset.pageNumber
+      )
+
+      if (firstPageNumber === lastPageNumber) {
+        const directStartTextId = getDirectTextElementForPoint(
+          {
+            clientX: activeMouseSelectionRef.current.startClientX,
+            clientY: activeMouseSelectionRef.current.startClientY
+          },
+          viewerRoot
+        )?.getAttribute('data-text-id')
+        const directEndTextId = getDirectTextElementForPoint(
+          {
+            clientX: activeMouseSelectionRef.current.clientX,
+            clientY: activeMouseSelectionRef.current.clientY
+          },
+          viewerRoot
+        )?.getAttribute('data-text-id')
+
+        return (
+          (directStartTextId === firstTextId &&
+            directEndTextId === lastTextId) ||
+          (directStartTextId === lastTextId && directEndTextId === firstTextId)
+        )
+      }
+
+      return (
+        (startTextId === firstTextId && endTextId === lastTextId) ||
+        (startTextId === lastTextId && endTextId === firstTextId)
+      )
+    },
+    [getDirectTextElementForPoint, getNearestActiveTextElementForPoint]
+  )
+
+  const shouldRejectOverBroadSelection = useCallback(
+    (
+      selectedElements: HTMLElement[],
+      viewerRoot: HTMLElement,
+      firstPageNumber: number,
+      lastPageNumber: number
+    ): boolean => {
+      if (!isOverBroadDirectRenderSelection(selectedElements, viewerRoot)) {
+        return false
+      }
+
+      if (!activeMouseSelectionRef.current.active) return true
+
+      return (
+        firstPageNumber === lastPageNumber &&
+        !hasValidActiveSelectionBoundaries(selectedElements, viewerRoot)
+      )
+    },
+    [hasValidActiveSelectionBoundaries, isOverBroadDirectRenderSelection]
   )
 
   const getSelectionDetail = useCallback(
@@ -1523,6 +1709,16 @@ export function IntermediateDocumentViewer({
       const lastPageNumber = Number(
         lastElement.getAttribute('data-page-number')
       )
+      if (
+        shouldRejectOverBroadSelection(
+          selectedElements,
+          viewerRoot,
+          firstPageNumber,
+          lastPageNumber
+        )
+      ) {
+        return null
+      }
 
       if (
         activeMouseSelectionRef.current.active &&
@@ -1560,7 +1756,11 @@ export function IntermediateDocumentViewer({
         selection
       }
     },
-    [buildNormalizedSelection, buildPointerClampedSelection]
+    [
+      buildNormalizedSelection,
+      buildPointerClampedSelection,
+      shouldRejectOverBroadSelection
+    ]
   )
 
   const markVisiblePage = useCallback(
@@ -1590,15 +1790,17 @@ export function IntermediateDocumentViewer({
     const selection = window.getSelection()
     if (!selection) return
 
+    const detail = getSelectionDetail(selection)
+    if (!detail) return
+
     if (onTextSelectionEnd) {
-      const detail = getSelectionDetail(selection)
-      if (detail) {
-        onTextSelectionEnd(detail.text, detail)
-      }
+      onTextSelectionEnd(detail.text, detail)
     }
 
     if (onSelectText) {
-      const payload = buildSelectionPayload(selection)
+      const payload =
+        boundedDirectRenderPayloadsRef.current.get(detail) ??
+        buildSelectionPayload(selection)
       if (payload) {
         onSelectText(payload.selection, payload.segments, payload.extractedText)
       }
@@ -2029,12 +2231,29 @@ export function IntermediateDocumentViewer({
     const root = viewerRootElement
     if (!root || !runtimeDocument) return
 
-    const resolveDragCaret = (clientX: number, clientY: number) =>
-      resolveCaret(clientX, clientY, {
+    const resolveDragCaret = (clientX: number, clientY: number) => {
+      const pointElement = root.ownerDocument.elementFromPoint?.(
+        clientX,
+        clientY
+      )
+      const pointTextElement = pointElement?.closest('[data-text-id]')
+      const shouldSnapToNearestText =
+        !pointTextElement ||
+        !root.contains(pointTextElement) ||
+        isSelectionBackgroundTarget(pointElement)
+
+      return resolveCaret(clientX, clientY, {
         viewerRoot: root,
         pageRefs: pageRefs.current,
-        textElements: textElementsRef.current
+        textElements: textElementsRef.current,
+        ...(shouldSnapToNearestText
+          ? {
+              caretPositionFromPoint: () => null,
+              caretRangeFromPoint: () => null
+            }
+          : {})
       })
+    }
 
     const finishDragSelection = (clientX: number, clientY: number) => {
       if (!dragSelectionAnchorRef.current) return
@@ -2091,6 +2310,8 @@ export function IntermediateDocumentViewer({
         dragSelectionEndEmittedRef.current = false
         activeMouseSelectionRef.current = {
           active: true,
+          startClientX: clientX,
+          startClientY: clientY,
           clientX,
           clientY
         }
