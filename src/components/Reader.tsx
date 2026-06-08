@@ -9,6 +9,8 @@ import type {
   BackgroundQuality,
   ReaderPageRange,
   ReaderRenderMode,
+  ReaderSelectedTextDragCallback,
+  ReaderSelectedTextSegment,
   ReaderSelectionHandleRenderProps,
   ReaderSelectionOverlayOptions,
   ReaderTextSelectionDetail
@@ -34,6 +36,14 @@ export type ReaderProps = {
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
   ) => void
+  onSelectText?: (
+    selection: Selection,
+    segments: ReaderSelectedTextSegment[],
+    extractedText: string
+  ) => void
+  onDragSelectedTextStart?: ReaderSelectedTextDragCallback
+  onDragSelectedTextMove?: ReaderSelectedTextDragCallback
+  onDragSelectedTextEnd?: ReaderSelectedTextDragCallback
   selectionOverlay?: boolean | ReaderSelectionOverlayOptions
   // 允许传入 null 显式禁用手柄渲染（透传给底层 IntermediateDocumentViewer）
   selectionHandleElement?: ReactElement<ReaderSelectionHandleRenderProps> | null
@@ -76,6 +86,10 @@ export function Reader({
   onOcrError,
   onTextSelectionChange,
   onTextSelectionEnd,
+  onSelectText,
+  onDragSelectedTextStart,
+  onDragSelectedTextMove,
+  onDragSelectedTextEnd,
   selectionOverlay,
   selectionHandleElement
 }: ReaderProps) {
@@ -164,6 +178,10 @@ export function Reader({
           onOcrError={onOcrError}
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+          onDragSelectedTextStart={onDragSelectedTextStart}
+          onDragSelectedTextMove={onDragSelectedTextMove}
+          onDragSelectedTextEnd={onDragSelectedTextEnd}
           selectionOverlay={selectionOverlay}
           selectionHandleElement={selectionHandleElement}
         />

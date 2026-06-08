@@ -254,7 +254,6 @@
   // Selection handle container
   &__selection-handle {
     position: absolute;
-    transform: translate(-50%, -100%);
     pointer-events: auto;
     cursor: grab;
     z-index: 3;
@@ -264,12 +263,16 @@
       cursor: grabbing;
     }
 
+    // Start handle: anchor at boundary LEFT edge → body extends LEFT of that
+    // point (mirrored teardrop sits left of the first selected character).
     &--start {
-      transform: translate(-50%, 0);
+      transform: translate(-100%, 0);
     }
 
+    // End handle: anchor at boundary RIGHT edge → body extends RIGHT of that
+    // point (teardrop sits right of the last selected character).
     &--end {
-      transform: translate(-50%, -100%);
+      transform: translate(0, -100%);
     }
   }
 
@@ -283,7 +286,7 @@
 
   // SVG path for merged polygon selection overlay
   &__selection-overlay-path {
-    fill: var(--hamster-reader-selection-color, #3b82f6);
+    fill: var(--hamster-reader-selection-color, #ec4899);
     fill-opacity: var(--hamster-reader-selection-opacity, 0.3);
     fill-rule: evenodd;
     pointer-events: none;
@@ -298,25 +301,26 @@
     pointer-events: auto;
     cursor: grab;
     touch-action: none;
-    transform: translate(-50%, -100%);
     z-index: 3;
 
-    // Teardrop shape using border-radius
-    background-color: var(--hamster-reader-selection-color, #3b82f6);
-    border-radius: 50% 50% 50% 0;
+    background-color: var(--hamster-reader-selection-color, #ec4899);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 
     &:active {
       cursor: grabbing;
     }
 
+    // Start (mirrored): body sits LEFT of anchor; pointed bottom-right corner
+    // touches the start boundary of the selection.
     &--start {
-      transform: translate(-50%, 0);
+      transform: translate(-100%, 0);
       border-radius: 50% 50% 0 50%;
     }
 
+    // End: body sits RIGHT of anchor; pointed bottom-left corner touches the
+    // end boundary of the selection.
     &--end {
-      transform: translate(-50%, -100%);
+      transform: translate(0, -100%);
       border-radius: 50% 50% 50% 0;
     }
   }

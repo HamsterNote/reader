@@ -18,6 +18,24 @@ export type ReaderTextSelectionDetail = {
   selection: Selection
 }
 
+export type ReaderSelectedTextSegment = IntermediateText & {
+  selectedText: string
+  startCharIndex: number
+  endCharIndex: number
+}
+
+export type ReaderSelectionPayload = {
+  selection: Selection
+  segments: ReaderSelectedTextSegment[]
+  extractedText: string
+}
+
+export type ReaderSelectedTextDragCallback = (
+  selection: Selection,
+  segments: ReaderSelectedTextSegment[],
+  extractedText: string
+) => void
+
 export type ReaderPageRange = {
   start: number
   end: number
@@ -39,7 +57,7 @@ export type ReaderSelectionOverlayRect = {
 
 /** 选择覆盖层配置选项 */
 export type ReaderSelectionOverlayOptions = {
-  /** 覆盖层颜色，默认 '#3b82f6' */
+  /** 覆盖层颜色，默认 '#ec4899' */
   color?: string
   /** 覆盖层透明度，默认 0.3 */
   opacity?: number
@@ -91,6 +109,14 @@ export type IntermediateDocumentViewerProps = {
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
   ) => void
+  onSelectText?: (
+    selection: Selection,
+    segments: ReaderSelectedTextSegment[],
+    extractedText: string
+  ) => void
+  onDragSelectedTextStart?: ReaderSelectedTextDragCallback
+  onDragSelectedTextMove?: ReaderSelectedTextDragCallback
+  onDragSelectedTextEnd?: ReaderSelectedTextDragCallback
   selectionOverlay?: boolean | ReaderSelectionOverlayOptions
   // 允许传入 null 显式禁用手柄渲染（运行时已支持，类型在此对齐）
   selectionHandleElement?: React.ReactElement<ReaderSelectionHandleRenderProps> | null
@@ -120,10 +146,57 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   height: 842
 }
 
+const getVisiblePageNumbers = (
+  allPageNumbers: number[],
+  pageRange: ReaderPageRange | undefined
+) => {
+  if (!pageRange) {
+    return allPageNumbers
+  }
+
+  const start = Math.trunc(pageRange.start)
+  const end = Math.trunc(pageRange.end)
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+    return []
+  }
+
+  return allPageNumbers.filter(
+    (pageNumber) => pageNumber >= start && pageNumber <= end
+  )
+}
+
 const isRuntimeDocument = (
   document: IntermediateDocument | IntermediateDocumentSerialized
 ): document is IntermediateDocument =>
   typeof (document as IntermediateDocument).getPageByPageNumber === 'function'
+
+const getRuntimeDocument = (
+  inputDocument:
+    | IntermediateDocument
+    | IntermediateDocumentSerialized
+    | null
+    | undefined
+) => {
+  if (!inputDocument) return null
+  return isRuntimeDocument(inputDocument)
+    ? inputDocument
+    : IntermediateDocument.parse(inputDocument)
+}
+
+const getSelectionOverlayOptions = (
+  selectionOverlay: IntermediateDocumentViewerProps['selectionOverlay']
+) => {
+  if (!selectionOverlay) return null
+  if (selectionOverlay === true) {
+    return { color: '#ec4899', opacity: 0.3, enabled: true }
+  }
+  return {
+    color: selectionOverlay.color ?? '#ec4899',
+    opacity: selectionOverlay.opacity ?? 0.3,
+    enabled: selectionOverlay.enabled ?? true
+  }
+}
 
 const isIntermediateText = (
   content: IntermediateContent
@@ -342,6 +415,124 @@ const getRootOverlayRect = (
   }
 }
 
+// Compute one boundary handle anchor point from a Selection's range.
+// - 'start' → anchor at the LEFT edge of the collapsed-start rect (handle body
+//   renders OUTSIDE/LEFT of selection so it never covers the first character).
+// - 'end' → anchor at the RIGHT edge of the collapsed-end rect.
+// Always returns page-relative coordinates plus the resolved page number.
+const buildBoundaryHandlePosition = (
+  range: Range,
+  type: 'start' | 'end',
+  viewerRoot: HTMLElement,
+  pageRefs: Map<number, HTMLDivElement>
+): { x: number; y: number; pageNumber: number } | null => {
+  const collapsedRange = range.cloneRange()
+  collapsedRange.collapse(type === 'start')
+  const collapsedRects = Array.from(collapsedRange.getClientRects())
+
+  let boundaryRect:
+    | DOMRect
+    | { left: number; right: number; top: number; bottom: number }
+  if (collapsedRects.length === 0) {
+    boundaryRect = collapsedRange.getBoundingClientRect()
+  } else if (type === 'start') {
+    boundaryRect = collapsedRects[0]
+  } else {
+    boundaryRect = collapsedRects[collapsedRects.length - 1]
+  }
+
+  const anchorX = type === 'start' ? boundaryRect.left : boundaryRect.right
+  const anchorY = boundaryRect.bottom
+
+  const pageInfo = getPageElementForPoint(
+    anchorX,
+    anchorY,
+    viewerRoot,
+    pageRefs
+  )
+  if (!pageInfo) return null
+
+  const pageRect = pageInfo.pageElement.getBoundingClientRect()
+  return {
+    x: anchorX - pageRect.left,
+    y: anchorY - pageRect.top,
+    pageNumber: pageInfo.pageNumber
+  }
+}
+
+// Assemble per-page handle positions from a selection range, optionally
+// computing viewer-root-relative coordinates for html-parser mode where pages
+// are not direct ancestors of the overlay layer.
+const buildSelectionHandlePositions = (
+  range: Range,
+  viewerRoot: HTMLElement,
+  pageRefs: Map<number, HTMLDivElement>,
+  htmlParserOverlayActive: boolean
+): Map<
+  number,
+  { start?: ReaderSelectionHandlePosition; end?: ReaderSelectionHandlePosition }
+> => {
+  const handlePositions = new Map<
+    number,
+    {
+      start?: ReaderSelectionHandlePosition
+      end?: ReaderSelectionHandlePosition
+    }
+  >()
+
+  const startPosition = buildBoundaryHandlePosition(
+    range,
+    'start',
+    viewerRoot,
+    pageRefs
+  )
+  if (startPosition) {
+    const entry = handlePositions.get(startPosition.pageNumber) ?? {}
+    entry.start = {
+      x: startPosition.x,
+      y: startPosition.y,
+      pageNumber: startPosition.pageNumber
+    }
+    if (htmlParserOverlayActive) {
+      const rootStart = getRootOverlayRect(
+        { ...entry.start, width: 0, height: 0 },
+        viewerRoot,
+        pageRefs
+      )
+      entry.start.rootX = rootStart.x
+      entry.start.rootY = rootStart.y
+    }
+    handlePositions.set(startPosition.pageNumber, entry)
+  }
+
+  const endPosition = buildBoundaryHandlePosition(
+    range,
+    'end',
+    viewerRoot,
+    pageRefs
+  )
+  if (endPosition) {
+    const entry = handlePositions.get(endPosition.pageNumber) ?? {}
+    entry.end = {
+      x: endPosition.x,
+      y: endPosition.y,
+      pageNumber: endPosition.pageNumber
+    }
+    if (htmlParserOverlayActive) {
+      const rootEnd = getRootOverlayRect(
+        { ...entry.end, width: 0, height: 0 },
+        viewerRoot,
+        pageRefs
+      )
+      entry.end.rootX = rootEnd.x
+      entry.end.rootY = rootEnd.y
+    }
+    handlePositions.set(endPosition.pageNumber, entry)
+  }
+
+  return handlePositions
+}
+
 const getTextTransform = (
   text: RenderableIntermediateText,
   skipRotate?: boolean
@@ -542,6 +733,145 @@ export const getClosestTextElement = (
   return element?.closest('[data-text-id]') ?? null
 }
 
+type TextElementRecord = {
+  text: IntermediateText
+  pageNumber: number
+}
+
+const textElementRecords = new WeakMap<HTMLElement, TextElementRecord>()
+
+const getSelectionViewerRoot = (selection: Selection): HTMLElement | null => {
+  const anchorElement = getClosestTextElement(selection.anchorNode)
+  const focusElement = getClosestTextElement(selection.focusNode)
+  if (!anchorElement || !focusElement) return null
+
+  const anchorRoot = anchorElement.closest(
+    '.hamster-reader__intermediate-document-viewer'
+  )
+  const focusRoot = focusElement.closest(
+    '.hamster-reader__intermediate-document-viewer'
+  )
+
+  return anchorRoot instanceof HTMLElement && anchorRoot === focusRoot
+    ? anchorRoot
+    : null
+}
+
+const getTextLength = (node: Node): number => node.textContent?.length ?? 0
+
+const getElementTextOffset = (
+  element: HTMLElement,
+  container: Node,
+  offset: number
+): number => {
+  if (container === element) {
+    return Array.from(element.childNodes)
+      .slice(0, offset)
+      .reduce((total, node) => total + getTextLength(node), 0)
+  }
+
+  let textOffset = 0
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+  let currentNode = walker.nextNode()
+
+  while (currentNode) {
+    if (currentNode === container) {
+      return textOffset + offset
+    }
+    textOffset += getTextLength(currentNode)
+    currentNode = walker.nextNode()
+  }
+
+  return textOffset
+}
+
+const intersectsRange = (range: Range, element: HTMLElement): boolean => {
+  try {
+    return range.intersectsNode(element)
+  } catch {
+    return false
+  }
+}
+
+const buildSegmentRange = (
+  selectionRange: Range,
+  element: HTMLElement
+): Range => {
+  const segmentRange = document.createRange()
+  segmentRange.selectNodeContents(element)
+
+  if (element.contains(selectionRange.startContainer)) {
+    segmentRange.setStart(
+      selectionRange.startContainer,
+      selectionRange.startOffset
+    )
+  }
+
+  if (element.contains(selectionRange.endContainer)) {
+    segmentRange.setEnd(selectionRange.endContainer, selectionRange.endOffset)
+  }
+
+  return segmentRange
+}
+
+export const buildSelectionPayload = (
+  selection: Selection
+): ReaderSelectionPayload | null => {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return null
+  }
+
+  const viewerRoot = getSelectionViewerRoot(selection)
+  if (!viewerRoot) return null
+
+  const selectionRange = selection.getRangeAt(0)
+  const segments = Array.from(
+    viewerRoot.querySelectorAll<HTMLElement>('[data-text-id]')
+  ).flatMap((element) => {
+    if (!intersectsRange(selectionRange, element)) return []
+
+    const record = textElementRecords.get(element)
+    if (!record) return []
+
+    const content = record.text.content ?? ''
+    const segmentRange = buildSegmentRange(selectionRange, element)
+    const rawStartCharIndex = getElementTextOffset(
+      element,
+      segmentRange.startContainer,
+      segmentRange.startOffset
+    )
+    const rawEndCharIndex = getElementTextOffset(
+      element,
+      segmentRange.endContainer,
+      segmentRange.endOffset
+    )
+    const startCharIndex = Math.max(
+      0,
+      Math.min(rawStartCharIndex, content.length)
+    )
+    const endCharIndex = Math.max(
+      startCharIndex,
+      Math.min(rawEndCharIndex, content.length)
+    )
+
+    if (endCharIndex <= startCharIndex) return []
+
+    return [
+      {
+        ...record.text,
+        selectedText: content.slice(startCharIndex, endCharIndex),
+        startCharIndex,
+        endCharIndex
+      }
+    ]
+  })
+
+  const extractedText = segments.map((segment) => segment.selectedText).join('')
+  if (segments.length === 0 || extractedText.trim().length === 0) return null
+
+  return { selection, segments, extractedText }
+}
+
 const clampToRange = (value: number, min: number, max: number): number => {
   if (value < min) return min - value
   if (value > max) return value - max
@@ -591,6 +921,76 @@ const getPageElementByPageNumber = (
   )
 }
 
+const getHtmlParserPageForPoint = (
+  pointElement: Element | null,
+  viewerRoot: HTMLElement
+): { pageElement: HTMLElement; pageNumber: number } | null => {
+  const htmlParserPageElement = pointElement?.closest('.hamster-note-page')
+  if (!htmlParserPageElement || !viewerRoot.contains(htmlParserPageElement)) {
+    return null
+  }
+
+  const pageElement = htmlParserPageElement as HTMLElement
+  const explicitPageNumber = getNumberFromDataPageNumber(pageElement)
+  if (explicitPageNumber !== null) {
+    return { pageElement, pageNumber: explicitPageNumber }
+  }
+
+  const pageElements = Array.from(
+    viewerRoot.querySelectorAll('.hamster-note-page')
+  )
+  const pageIndex = pageElements.indexOf(htmlParserPageElement)
+  return pageIndex === -1 ? null : { pageElement, pageNumber: pageIndex + 1 }
+}
+
+const getMarkedPageForPoint = (
+  pointElement: Element | null,
+  viewerRoot: HTMLElement,
+  pageRefs: Map<number, HTMLDivElement>
+): { pageElement: HTMLElement; pageNumber: number } | null => {
+  const hitElement = pointElement?.closest('[data-page-number]')
+  if (!hitElement || !viewerRoot.contains(hitElement)) return null
+
+  const pageNumber = getNumberFromDataPageNumber(hitElement as HTMLElement)
+  if (pageNumber === null) return null
+
+  const pageElement = getPageElementByPageNumber(
+    pageNumber,
+    viewerRoot,
+    pageRefs
+  )
+  return pageElement && viewerRoot.contains(pageElement)
+    ? { pageElement, pageNumber }
+    : null
+}
+
+const getNearestPageForPoint = (
+  clientX: number,
+  clientY: number,
+  pageRefs: Map<number, HTMLDivElement>
+): { pageElement: HTMLElement; pageNumber: number } | null => {
+  let nearestElement: HTMLDivElement | null = null
+  let minDistance = Infinity
+
+  for (const element of pageRefs.values()) {
+    const distance = getPointToRectDistanceSquared(
+      { x: clientX, y: clientY },
+      element.getBoundingClientRect()
+    )
+    if (distance < minDistance) {
+      minDistance = distance
+      nearestElement = element
+    }
+  }
+
+  return nearestElement
+    ? {
+        pageElement: nearestElement,
+        pageNumber: Number(nearestElement.dataset.pageNumber)
+      }
+    : null
+}
+
 export const getPageElementForPoint = (
   clientX: number,
   clientY: number,
@@ -600,67 +1000,11 @@ export const getPageElementForPoint = (
   if (!viewerRoot) return null
 
   const pointElement = document.elementFromPoint(clientX, clientY)
-  const htmlParserPageElement = pointElement?.closest('.hamster-note-page')
-  if (htmlParserPageElement && viewerRoot.contains(htmlParserPageElement)) {
-    const explicitPageNumber = getNumberFromDataPageNumber(
-      htmlParserPageElement as HTMLElement
-    )
-    if (explicitPageNumber !== null) {
-      return {
-        pageElement: htmlParserPageElement as HTMLElement,
-        pageNumber: explicitPageNumber
-      }
-    }
-
-    const pageElements = Array.from(
-      viewerRoot.querySelectorAll('.hamster-note-page')
-    )
-    const pageIndex = pageElements.indexOf(htmlParserPageElement)
-    if (pageIndex !== -1) {
-      return {
-        pageElement: htmlParserPageElement as HTMLElement,
-        pageNumber: pageIndex + 1
-      }
-    }
-  }
-
-  const hitElement = pointElement?.closest('[data-page-number]')
-
-  if (hitElement && viewerRoot.contains(hitElement)) {
-    const pageNumber = getNumberFromDataPageNumber(hitElement as HTMLElement)
-    if (pageNumber !== null) {
-      const pageElement = getPageElementByPageNumber(
-        pageNumber,
-        viewerRoot,
-        pageRefs
-      )
-      if (pageElement && viewerRoot.contains(pageElement)) {
-        return { pageElement, pageNumber }
-      }
-    }
-  }
-
-  let nearestElement: HTMLElement | null = null
-  let minDistance = Infinity
-
-  for (const element of pageRefs.values()) {
-    const rect = element.getBoundingClientRect()
-    const distance = getPointToRectDistanceSquared(
-      { x: clientX, y: clientY },
-      rect
-    )
-    if (distance < minDistance) {
-      minDistance = distance
-      nearestElement = element
-    }
-  }
-
-  if (!nearestElement) return null
-
-  return {
-    pageElement: nearestElement,
-    pageNumber: Number(nearestElement.dataset.pageNumber)
-  }
+  return (
+    getHtmlParserPageForPoint(pointElement, viewerRoot) ??
+    getMarkedPageForPoint(pointElement, viewerRoot, pageRefs) ??
+    getNearestPageForPoint(clientX, clientY, pageRefs)
+  )
 }
 
 export const getNearestTextElementForPoint = (
@@ -803,6 +1147,233 @@ const getCaretFromPoint = (
   }
 }
 
+type SelectedTextBodyDragState = {
+  active: boolean
+  pointerId: number | null
+  overlayElement: HTMLElement | null
+  payload: ReaderSelectionPayload | null
+}
+
+const emptySelectedTextBodyDragState = (): SelectedTextBodyDragState => ({
+  active: false,
+  pointerId: null,
+  overlayElement: null,
+  payload: null
+})
+
+const useSelectedTextBodyDrag = ({
+  viewerRootRef,
+  pageRefs,
+  overlayRectsRef,
+  onDragSelectedTextStart,
+  onDragSelectedTextMove,
+  onDragSelectedTextEnd
+}: {
+  viewerRootRef: { current: HTMLDivElement | null }
+  pageRefs: { current: Map<number, HTMLDivElement> }
+  overlayRectsRef: { current: ReaderSelectionOverlayRect[] }
+  onDragSelectedTextStart?: ReaderSelectedTextDragCallback
+  onDragSelectedTextMove?: ReaderSelectedTextDragCallback
+  onDragSelectedTextEnd?: ReaderSelectedTextDragCallback
+}) => {
+  const bodyDragStateRef = useRef<SelectedTextBodyDragState>(
+    emptySelectedTextBodyDragState()
+  )
+  const bodyDragRafIdRef = useRef<number | null>(null)
+  const bodyDragCallbacksEnabled = Boolean(
+    onDragSelectedTextStart || onDragSelectedTextMove || onDragSelectedTextEnd
+  )
+
+  const isPointInsideSelectionBody = useCallback(
+    (clientX: number, clientY: number) => {
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot || overlayRectsRef.current.length === 0) return false
+
+      const pageInfo = getPageElementForPoint(
+        clientX,
+        clientY,
+        viewerRoot,
+        pageRefs.current
+      )
+      if (!pageInfo) return false
+
+      const pageRect = pageInfo.pageElement.getBoundingClientRect()
+      const pageX = clientX - pageRect.left
+      const pageY = clientY - pageRect.top
+
+      return overlayRectsRef.current.some((rect) => {
+        if (rect.pageNumber !== pageInfo.pageNumber) return false
+        return (
+          pageX >= rect.x &&
+          pageX <= rect.x + rect.width &&
+          pageY >= rect.y &&
+          pageY <= rect.y + rect.height
+        )
+      })
+    },
+    [overlayRectsRef, pageRefs, viewerRootRef]
+  )
+
+  const cancelPendingBodyDragMove = useCallback(() => {
+    if (bodyDragRafIdRef.current !== null) {
+      cancelAnimationFrame(bodyDragRafIdRef.current)
+      bodyDragRafIdRef.current = null
+    }
+  }, [])
+
+  const resetBodyDragState = useCallback(() => {
+    bodyDragStateRef.current = emptySelectedTextBodyDragState()
+  }, [])
+
+  const handleBodyDragPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!bodyDragCallbacksEnabled || event.button !== 0) return
+
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-handle-type]')) return
+      if (!isPointInsideSelectionBody(event.clientX, event.clientY)) return
+
+      const selection = window.getSelection()
+      if (!selection) return
+
+      const payload = buildSelectionPayload(selection)
+      if (!payload) return
+
+      const overlayElement = event.currentTarget
+      bodyDragStateRef.current = {
+        active: true,
+        pointerId: event.pointerId,
+        overlayElement,
+        payload
+      }
+      overlayElement.setPointerCapture(event.pointerId)
+
+      if (onDragSelectedTextStart) {
+        onDragSelectedTextStart(
+          payload.selection,
+          payload.segments,
+          payload.extractedText
+        )
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+    },
+    [
+      bodyDragCallbacksEnabled,
+      isPointInsideSelectionBody,
+      onDragSelectedTextStart
+    ]
+  )
+
+  const handleBodyDragPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const bodyDragState = bodyDragStateRef.current
+      if (
+        !bodyDragState.active ||
+        bodyDragState.pointerId !== event.pointerId
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (!onDragSelectedTextMove || bodyDragRafIdRef.current !== null) return
+
+      bodyDragRafIdRef.current = requestAnimationFrame(() => {
+        bodyDragRafIdRef.current = null
+        const payload = bodyDragStateRef.current.payload
+        if (!bodyDragStateRef.current.active || !payload) return
+        onDragSelectedTextMove(
+          payload.selection,
+          payload.segments,
+          payload.extractedText
+        )
+      })
+    },
+    [onDragSelectedTextMove]
+  )
+
+  const finishBodyDrag = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const bodyDragState = bodyDragStateRef.current
+      if (
+        !bodyDragState.active ||
+        bodyDragState.pointerId !== event.pointerId
+      ) {
+        return
+      }
+
+      cancelPendingBodyDragMove()
+      const payload = bodyDragState.payload
+      const overlayElement = bodyDragState.overlayElement
+      resetBodyDragState()
+
+      if (overlayElement?.hasPointerCapture(event.pointerId)) {
+        overlayElement.releasePointerCapture(event.pointerId)
+      }
+
+      if (payload && onDragSelectedTextEnd) {
+        onDragSelectedTextEnd(
+          payload.selection,
+          payload.segments,
+          payload.extractedText
+        )
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+    },
+    [cancelPendingBodyDragMove, onDragSelectedTextEnd, resetBodyDragState]
+  )
+
+  const handleSelectionOverlayDragStart = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (bodyDragCallbacksEnabled) {
+        event.preventDefault()
+      }
+    },
+    [bodyDragCallbacksEnabled]
+  )
+
+  const overlayBodyDragProps = useMemo(
+    () =>
+      bodyDragCallbacksEnabled
+        ? {
+            onPointerDown: handleBodyDragPointerDown,
+            onPointerMove: handleBodyDragPointerMove,
+            onPointerUp: finishBodyDrag,
+            onPointerCancel: finishBodyDrag,
+            onDragStart: handleSelectionOverlayDragStart
+          }
+        : {},
+    [
+      bodyDragCallbacksEnabled,
+      finishBodyDrag,
+      handleBodyDragPointerDown,
+      handleBodyDragPointerMove,
+      handleSelectionOverlayDragStart
+    ]
+  )
+
+  const overlayBodyDragStyle = useMemo<React.CSSProperties>(
+    () =>
+      bodyDragCallbacksEnabled
+        ? { pointerEvents: 'auto', touchAction: 'none' }
+        : {},
+    [bodyDragCallbacksEnabled]
+  )
+
+  useEffect(() => cancelPendingBodyDragMove, [cancelPendingBodyDragMove])
+
+  return {
+    bodyDragCallbacksEnabled,
+    overlayBodyDragProps,
+    overlayBodyDragStyle
+  }
+}
+
 export function IntermediateDocumentViewer({
   document,
   serializedDocument,
@@ -815,38 +1386,21 @@ export function IntermediateDocumentViewer({
   onOcrError,
   onTextSelectionChange,
   onTextSelectionEnd,
+  onSelectText,
+  onDragSelectedTextStart,
+  onDragSelectedTextMove,
+  onDragSelectedTextEnd,
   selectionOverlay,
   selectionHandleElement
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
-
-    if (!inputDocument) {
-      return null
-    }
-
-    return isRuntimeDocument(inputDocument)
-      ? inputDocument
-      : IntermediateDocument.parse(inputDocument)
+    return getRuntimeDocument(inputDocument)
   }, [document, serializedDocument])
 
   const pageNumbers = useMemo(() => {
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
-
-    if (!pageRange) {
-      return allPageNumbers
-    }
-
-    const start = Math.trunc(pageRange.start)
-    const end = Math.trunc(pageRange.end)
-
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
-      return []
-    }
-
-    return allPageNumbers.filter(
-      (pageNumber) => pageNumber >= start && pageNumber <= end
-    )
+    return getVisiblePageNumbers(allPageNumbers, pageRange)
   }, [runtimeDocument, pageRange])
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
   const loadingPagesRef = useRef(new Set<number>())
@@ -905,17 +1459,22 @@ export function IntermediateDocumentViewer({
     >
   >(() => new Map())
 
-  const overlayOptions = useMemo(() => {
-    if (!selectionOverlay) return null
-    if (selectionOverlay === true) {
-      return { color: '#3b82f6', opacity: 0.3, enabled: true }
-    }
-    return {
-      color: selectionOverlay.color ?? '#3b82f6',
-      opacity: selectionOverlay.opacity ?? 0.3,
-      enabled: selectionOverlay.enabled ?? true
-    }
-  }, [selectionOverlay])
+  const overlayOptions = useMemo(
+    () => getSelectionOverlayOptions(selectionOverlay),
+    [selectionOverlay]
+  )
+  const {
+    bodyDragCallbacksEnabled,
+    overlayBodyDragProps,
+    overlayBodyDragStyle
+  } = useSelectedTextBodyDrag({
+    viewerRootRef,
+    pageRefs,
+    overlayRectsRef,
+    onDragSelectedTextStart,
+    onDragSelectedTextMove,
+    onDragSelectedTextEnd
+  })
 
   useEffect(() => {
     isMountedRef.current = true
@@ -1029,6 +1588,7 @@ export function IntermediateDocumentViewer({
       (element: HTMLSpanElement | null) => {
         if (element) {
           textElementsRef.current.set(text.id, { text, pageNumber })
+          textElementRecords.set(element, { text, pageNumber })
         } else {
           textElementsRef.current.delete(text.id)
         }
@@ -1115,6 +1675,107 @@ export function IntermediateDocumentViewer({
     []
   )
 
+  const buildSelectionDetailBetweenElements = useCallback(
+    (
+      selection: Selection,
+      viewerRoot: HTMLElement,
+      startElement: HTMLElement,
+      endElement: HTMLElement
+    ): ReaderTextSelectionDetail | null => {
+      const startId = startElement.getAttribute('data-text-id')
+      const endId = endElement.getAttribute('data-text-id')
+      if (!startId || !endId) return null
+
+      const startEntry = textElementsRef.current.get(startId)
+      const endEntry = textElementsRef.current.get(endId)
+      if (!startEntry || !endEntry) return null
+
+      const allTextElements = Array.from(
+        viewerRoot.querySelectorAll('[data-text-id]')
+      )
+      const startIndex = allTextElements.findIndex(
+        (el) => el.getAttribute('data-text-id') === startId
+      )
+      const endIndex = allTextElements.findIndex(
+        (el) => el.getAttribute('data-text-id') === endId
+      )
+      if (startIndex === -1 || endIndex === -1) return null
+
+      const minIndex = Math.min(startIndex, endIndex)
+      const maxIndex = Math.max(startIndex, endIndex)
+      const sortedElements = allTextElements.slice(minIndex, maxIndex + 1)
+      const texts = sortedElements.flatMap((el) => {
+        const id = el.getAttribute('data-text-id')
+        if (!id) return []
+        const entry = textElementsRef.current.get(id)
+        return entry ? [entry.text] : []
+      })
+
+      if (texts.length === 0) return null
+
+      return {
+        text: texts[0],
+        texts,
+        selectedText: texts.map((text) => text.content ?? '').join(''),
+        pageNumber: startEntry.pageNumber,
+        selection
+      }
+    },
+    []
+  )
+
+  const buildPointerClampedSelection = useCallback(
+    (
+      selection: Selection,
+      viewerRoot: HTMLElement
+    ): ReaderTextSelectionDetail | null => {
+      if (!activeMouseSelectionRef.current.active) return null
+
+      const pointerPageInfo = getPageElementForPoint(
+        activeMouseSelectionRef.current.clientX,
+        activeMouseSelectionRef.current.clientY,
+        viewerRoot,
+        pageRefs.current
+      )
+      if (!pointerPageInfo) return null
+
+      const snappedFocusElement = getNearestTextElementForPoint(
+        activeMouseSelectionRef.current.clientX,
+        activeMouseSelectionRef.current.clientY,
+        pointerPageInfo.pageNumber,
+        viewerRoot,
+        textElementsRef.current
+      )
+      if (!snappedFocusElement) return null
+
+      const anchorElement = getClosestTextElement(selection.anchorNode)
+      const focusElement = getClosestTextElement(selection.focusNode)
+      if (!anchorElement || !focusElement) return null
+
+      const anchorPageNumber = Number(anchorElement.dataset.pageNumber)
+      const focusPageNumber = Number(focusElement.dataset.pageNumber)
+      const pointerPageNumber = pointerPageInfo.pageNumber
+
+      // 原生 selection 的 focus 端是拖拽移动端；当指针页与 focus 页一致时，
+      // 固定端取 anchor。反向拖拽同理，指针页落在 anchor 页时固定端取 focus。
+      let fixedElement: HTMLElement | null = null
+      if (pointerPageNumber === focusPageNumber) {
+        fixedElement = anchorElement
+      } else if (pointerPageNumber === anchorPageNumber) {
+        fixedElement = focusElement
+      }
+      if (!fixedElement) return null
+
+      return buildSelectionDetailBetweenElements(
+        selection,
+        viewerRoot,
+        fixedElement,
+        snappedFocusElement
+      )
+    },
+    [buildSelectionDetailBetweenElements]
+  )
+
   const getSelectionDetail = useCallback(
     (selection: Selection): ReaderTextSelectionDetail | null => {
       if (!selection || selection.isCollapsed) return null
@@ -1148,10 +1809,25 @@ export function IntermediateDocumentViewer({
       })
 
       const firstElement = selectedElements[0]
+      const lastElement = selectedElements[selectedElements.length - 1]
       const firstTextId = firstElement.getAttribute('data-text-id')
       const firstPageNumber = Number(
         firstElement.getAttribute('data-page-number')
       )
+      const lastPageNumber = Number(
+        lastElement.getAttribute('data-page-number')
+      )
+
+      if (
+        activeMouseSelectionRef.current.active &&
+        firstPageNumber !== lastPageNumber
+      ) {
+        const pointerClampedDetail = buildPointerClampedSelection(
+          selection,
+          viewerRoot
+        )
+        if (pointerClampedDetail) return pointerClampedDetail
+      }
 
       if (!firstTextId) return null
 
@@ -1178,7 +1854,7 @@ export function IntermediateDocumentViewer({
         selection
       }
     },
-    [buildNormalizedSelection]
+    [buildNormalizedSelection, buildPointerClampedSelection]
   )
 
   const markVisiblePage = useCallback(
@@ -1198,16 +1874,32 @@ export function IntermediateDocumentViewer({
   )
 
   const emitSelectionEnd = useCallback(() => {
-    if (!onTextSelectionEnd) return
+    if (!onTextSelectionEnd && !onSelectText && !bodyDragCallbacksEnabled) {
+      return
+    }
 
     const selection = window.getSelection()
     if (!selection) return
 
-    const detail = getSelectionDetail(selection)
-    if (detail) {
-      onTextSelectionEnd(detail.text, detail)
+    if (onTextSelectionEnd) {
+      const detail = getSelectionDetail(selection)
+      if (detail) {
+        onTextSelectionEnd(detail.text, detail)
+      }
     }
-  }, [onTextSelectionEnd, getSelectionDetail])
+
+    if (onSelectText) {
+      const payload = buildSelectionPayload(selection)
+      if (payload) {
+        onSelectText(payload.selection, payload.segments, payload.extractedText)
+      }
+    }
+  }, [
+    onTextSelectionEnd,
+    onSelectText,
+    bodyDragCallbacksEnabled,
+    getSelectionDetail
+  ])
 
   useEffect(() => {
     if (!runtimeDocument || pageNumbers.length === 0) {
@@ -1406,7 +2098,7 @@ export function IntermediateDocumentViewer({
           if (onOcrError) {
             onOcrError(error, { pageNumber })
           }
-          // 没有 onOcrError 时静默吞掉，避免在生产代码中遗留 console.warn；
+          // 没有 onOcrError 时静默吞掉，避免在生产代码中遗留日志输出；
           // 调用方需要可观测性时应主动传入 onOcrError 回调。
         } finally {
           if (
@@ -1541,69 +2233,16 @@ export function IntermediateDocumentViewer({
       })
     }
 
-    // 根据每页的首/末矩形推导出 start/end 手柄位置（取该矩形底部两角）
-    const handlePositions = new Map<
-      number,
-      {
-        start?: ReaderSelectionHandlePosition
-        end?: ReaderSelectionHandlePosition
-      }
-    >()
-    const rectsByPage = new Map<number, ReaderSelectionOverlayRect[]>()
-    for (const rect of rects) {
-      const list = rectsByPage.get(rect.pageNumber)
-      if (list) list.push(rect)
-      else rectsByPage.set(rect.pageNumber, [rect])
-    }
-    const sortedPages = Array.from(rectsByPage.keys()).sort((a, b) => a - b)
-    sortedPages.forEach((pageNumber, index) => {
-      const pageRects = rectsByPage.get(pageNumber) ?? []
-      const sorted = [...pageRects].sort((a, b) => {
-        const yDiff = a.y - b.y
-        return Math.abs(yDiff) < 1 ? a.x - b.x : yDiff
-      })
-      const entry: {
-        start?: ReaderSelectionHandlePosition
-        end?: ReaderSelectionHandlePosition
-      } = {}
-      if (index === 0) {
-        const first = sorted[0]
-        entry.start = {
-          x: first.x,
-          y: first.y + first.height,
-          pageNumber
-        }
-      }
-      if (index === sortedPages.length - 1) {
-        const last = sorted[sorted.length - 1]
-        entry.end = {
-          x: last.x + last.width,
-          y: last.y + last.height,
-          pageNumber
-        }
-      }
-      if (htmlParserOverlayActive) {
-        if (entry.start) {
-          const rootStart = getRootOverlayRect(
-            { ...entry.start, width: 0, height: 0 },
-            viewerRoot,
-            pageRefs.current
-          )
-          entry.start.rootX = rootStart.x
-          entry.start.rootY = rootStart.y
-        }
-        if (entry.end) {
-          const rootEnd = getRootOverlayRect(
-            { ...entry.end, width: 0, height: 0 },
-            viewerRoot,
-            pageRefs.current
-          )
-          entry.end.rootX = rootEnd.x
-          entry.end.rootY = rootEnd.y
-        }
-      }
-      handlePositions.set(pageNumber, entry)
-    })
+    // 根据 selection 的 start/end 容器创建 collapsed range 并取其边界矩形：
+    // - start 手柄：锚定在 collapsed-start 矩形的 LEFT 边缘（不覆盖文字）
+    // - end 手柄：锚定在 collapsed-end 矩形的 RIGHT 边缘
+    const range = selection.getRangeAt(0)
+    const handlePositions = buildSelectionHandlePositions(
+      range,
+      viewerRoot,
+      pageRefs.current,
+      Boolean(htmlParserOverlayActive)
+    )
     setSelectionHandlePositions(handlePositions)
   }, [clearOverlay])
 
@@ -1762,7 +2401,9 @@ export function IntermediateDocumentViewer({
   }, [overlayOptions, clearOverlay])
 
   useEffect(() => {
-    if (!onTextSelectionEnd) return
+    if (!onTextSelectionEnd && !onSelectText && !bodyDragCallbacksEnabled) {
+      return
+    }
 
     const root = viewerRootRef.current
     if (!root) return
@@ -1792,7 +2433,12 @@ export function IntermediateDocumentViewer({
       root.removeEventListener('touchend', emitSelectionEnd)
       root.removeEventListener('keyup', handleKeyUp)
     }
-  }, [onTextSelectionEnd, emitSelectionEnd])
+  }, [
+    onTextSelectionEnd,
+    onSelectText,
+    bodyDragCallbacksEnabled,
+    emitSelectionEnd
+  ])
 
   const applyHandleDragSelection = useCallback(
     (movingCaretInfo: { range: Range; pageNumber: number }) => {
@@ -2090,10 +2736,14 @@ export function IntermediateDocumentViewer({
                 }
               }}
               className='hamster-reader__selection-overlay'
+              role='presentation'
+              aria-hidden='true'
+              {...overlayBodyDragProps}
               style={
                 {
                   '--hamster-reader-selection-color': overlayOptions.color,
-                  '--hamster-reader-selection-opacity': overlayOptions.opacity
+                  '--hamster-reader-selection-opacity': overlayOptions.opacity,
+                  ...overlayBodyDragStyle
                 } as React.CSSProperties
               }
             />
@@ -2188,11 +2838,15 @@ export function IntermediateDocumentViewer({
                     }
                   }}
                   className='hamster-reader__selection-overlay'
+                  role='presentation'
+                  aria-hidden='true'
+                  {...overlayBodyDragProps}
                   style={
                     {
                       '--hamster-reader-selection-color': overlayOptions.color,
                       '--hamster-reader-selection-opacity':
-                        overlayOptions.opacity
+                        overlayOptions.opacity,
+                      ...overlayBodyDragStyle
                     } as React.CSSProperties
                   }
                 />

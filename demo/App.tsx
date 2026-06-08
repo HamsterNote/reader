@@ -125,16 +125,18 @@ export function App() {
             backgroundQuality={backgroundQuality}
             ocr
             selectionOverlay={{
-              color: '#2563eb',
               opacity: 0.28,
               enabled: true
             }}
             onTextSelectionChange={() => {}}
             onTextSelectionEnd={() => {}}
+            onSelectText={(selection, segments, extractedText) =>
+              console.log({ selection, segments, extractedText })
+            }
           />
           <p style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
             Rendered with the direct text layer to demonstrate the custom
-            selection overlay
+            selection overlay (pink default)
           </p>
         </section>
       )}
@@ -195,6 +197,9 @@ export function App() {
         <Reader
           onFileUpload={handleFileUpload}
           emptyText='No document loaded'
+          onSelectText={(selection, segments, extractedText) =>
+            console.log({ selection, segments, extractedText })
+          }
         />
       </section>
       {uploadedFile && !isParsing && (

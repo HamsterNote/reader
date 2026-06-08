@@ -405,6 +405,230 @@ describe('Reader prop forwarding', () => {
     expect(detail.selectedText).toBe('Page 1 text')
   })
 
+  it('forwards onSelectText so viewer calls it on mouseup', async () => {
+    const onSelectText = vi.fn()
+    const { document } = makeLazyDocument(1)
+    render(<Reader document={document} onSelectText={onSelectText} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+    })
+
+    const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+    const textSpan = viewerRoot.querySelector(
+      '[data-text-id="text-1"]'
+    ) as HTMLElement
+    const textNode = textSpan.firstChild
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Expected rendered text span to contain a text node')
+    }
+    const range = globalThis.document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, 11)
+
+    const selection = {
+      isCollapsed: false,
+      anchorNode: textNode,
+      anchorOffset: 0,
+      focusNode: textNode,
+      focusOffset: 11,
+      rangeCount: 1,
+      getRangeAt: (index: number) => {
+        if (index !== 0) {
+          throw new Error('Selection mock only contains one range')
+        }
+        return range
+      },
+      toString: () => 'Page 1 text',
+      containsNode: (node: Node) => range.intersectsNode(node)
+    } as unknown as Selection
+
+    vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+
+    viewerRoot.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+
+    expect(onSelectText).toHaveBeenCalledTimes(1)
+    const [nativeSelection, segments, extractedText] =
+      onSelectText.mock.calls[0]
+    expect(nativeSelection).toBe(selection)
+    expect(extractedText).toBe('Page 1 text')
+    expect(extractedText).toBe(
+      segments
+        .map((segment: { selectedText: string }) => segment.selectedText)
+        .join('')
+    )
+    expect(segments[0]).toMatchObject({
+      id: 'text-1',
+      selectedText: 'Page 1 text',
+      startCharIndex: 0,
+      endCharIndex: 11
+    })
+  })
+
+  it('forwards selected-text body drag lifecycle props to the viewer', async () => {
+    const onDragSelectedTextStart = vi.fn()
+    const onDragSelectedTextMove = vi.fn()
+    const onDragSelectedTextEnd = vi.fn()
+    const { document } = makeLazyDocument(1)
+    render(
+      <Reader
+        document={document}
+        selectionOverlay
+        onDragSelectedTextStart={onDragSelectedTextStart}
+        onDragSelectedTextMove={onDragSelectedTextMove}
+        onDragSelectedTextEnd={onDragSelectedTextEnd}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+    })
+
+    const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+    const page = screen.getByTestId('intermediate-page-1')
+    const textSpan = viewerRoot.querySelector(
+      '[data-text-id="text-1"]'
+    ) as HTMLElement
+    const textNode = textSpan.firstChild
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Expected rendered text span to contain a text node')
+    }
+    const range = globalThis.document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, 11)
+    const collapsedRange = {
+      getClientRects: vi.fn(() => [
+        {
+          left: 20,
+          top: 24,
+          right: 20,
+          bottom: 36,
+          x: 20,
+          y: 24,
+          width: 0,
+          height: 12,
+          toJSON: () => ({ left: 20, top: 24, width: 0, height: 12 })
+        } as DOMRect
+      ]),
+      getBoundingClientRect: vi.fn(
+        () =>
+          ({
+            left: 20,
+            top: 24,
+            right: 20,
+            bottom: 36,
+            x: 20,
+            y: 24,
+            width: 0,
+            height: 12,
+            toJSON: () => ({ left: 20, top: 24, width: 0, height: 12 })
+          }) as DOMRect
+      ),
+      collapse: vi.fn()
+    } as unknown as Range
+    Object.defineProperty(range, 'getClientRects', {
+      configurable: true,
+      value: vi.fn(() => [
+        {
+          left: 20,
+          top: 24,
+          right: 80,
+          bottom: 36,
+          x: 20,
+          y: 24,
+          width: 60,
+          height: 12,
+          toJSON: () => ({ left: 20, top: 24, width: 60, height: 12 })
+        } as DOMRect
+      ])
+    })
+    Object.defineProperty(range, 'getBoundingClientRect', {
+      configurable: true,
+      value: vi.fn(
+        () =>
+          ({
+            left: 20,
+            top: 24,
+            right: 80,
+            bottom: 36,
+            x: 20,
+            y: 24,
+            width: 60,
+            height: 12,
+            toJSON: () => ({ left: 20, top: 24, width: 60, height: 12 })
+          }) as DOMRect
+      )
+    })
+    Object.defineProperty(range, 'cloneRange', {
+      configurable: true,
+      value: vi.fn(() => collapsedRange)
+    })
+    vi.spyOn(page, 'getBoundingClientRect').mockReturnValue({
+      left: 10,
+      top: 10,
+      right: 110,
+      bottom: 160,
+      x: 10,
+      y: 10,
+      width: 100,
+      height: 150,
+      toJSON: () => ({ left: 10, top: 10, width: 100, height: 150 })
+    } as DOMRect)
+    if (!('elementFromPoint' in globalThis.document)) {
+      Object.defineProperty(globalThis.document, 'elementFromPoint', {
+        value: vi.fn(() => page),
+        writable: true,
+        configurable: true
+      })
+    }
+    vi.spyOn(globalThis.document, 'elementFromPoint').mockReturnValue(page)
+
+    const selection = {
+      isCollapsed: false,
+      anchorNode: textNode,
+      anchorOffset: 0,
+      focusNode: textNode,
+      focusOffset: 11,
+      rangeCount: 1,
+      getRangeAt: (index: number) => {
+        if (index !== 0) {
+          throw new Error('Selection mock only contains one range')
+        }
+        return range
+      },
+      toString: () => 'Page 1 text',
+      containsNode: (node: Node) => range.intersectsNode(node)
+    } as unknown as Selection
+
+    vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+    globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+    const overlay = page.querySelector(
+      '.hamster-reader__selection-overlay'
+    ) as HTMLElement
+    overlay.dispatchEvent(
+      new MouseEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        clientX: 30,
+        clientY: 30
+      })
+    )
+    overlay.dispatchEvent(
+      new MouseEvent('pointercancel', {
+        bubbles: true,
+        clientX: 500,
+        clientY: 500
+      })
+    )
+
+    expect(onDragSelectedTextStart).toHaveBeenCalledTimes(1)
+    expect(onDragSelectedTextMove).not.toHaveBeenCalled()
+    expect(onDragSelectedTextEnd).toHaveBeenCalledTimes(1)
+    expect(onDragSelectedTextStart.mock.calls[0][0]).toBe(selection)
+    expect(onDragSelectedTextStart.mock.calls[0][2]).toBe('Page 1 text')
+  })
+
   it('forwards onTextSelectionChange so viewer calls it on selection', async () => {
     const onTextSelectionChange = vi.fn()
     const { document } = makeLazyDocument(1)

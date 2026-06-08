@@ -17,6 +17,11 @@ vi.mock('@hamster-note/pdf-parser', () => ({
 const mockCallbacks: {
   onTextSelectionChange?: (text: unknown, detail: unknown) => void
   onTextSelectionEnd?: (text: unknown, detail: unknown) => void
+  onSelectText?: (
+    selection: unknown,
+    segments: unknown,
+    extractedText: unknown
+  ) => void
 } = {}
 const mockReaderProps: unknown[] = []
 
@@ -29,12 +34,18 @@ vi.mock('@hamster-note/reader', () => ({
     selectionOverlay?: unknown
     onTextSelectionChange?: (text: unknown, detail: unknown) => void
     onTextSelectionEnd?: (text: unknown, detail: unknown) => void
+    onSelectText?: (
+      selection: unknown,
+      segments: unknown,
+      extractedText: unknown
+    ) => void
   }) => {
     mockReaderProps.push(props)
     if (props.onTextSelectionChange)
       mockCallbacks.onTextSelectionChange = props.onTextSelectionChange
     if (props.onTextSelectionEnd)
       mockCallbacks.onTextSelectionEnd = props.onTextSelectionEnd
+    if (props.onSelectText) mockCallbacks.onSelectText = props.onSelectText
     return (
       <div data-testid='mock-reader'>
         {props.document ? props.document.title : props.emptyText}
@@ -170,7 +181,7 @@ describe('demo parser flow', () => {
     expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
     expect(
       screen.getByText(
-        /Rendered with the direct text layer to demonstrate the custom selection overlay/
+        /Rendered with the direct text layer to demonstrate the custom selection overlay \(pink default\)/
       )
     ).toBeInTheDocument()
 
@@ -184,7 +195,6 @@ describe('demo parser flow', () => {
 
     expect(parsedReaderProps?.renderMode).toBe('direct')
     expect(parsedReaderProps?.selectionOverlay).toMatchObject({
-      color: '#2563eb',
       opacity: 0.28,
       enabled: true
     })
@@ -214,6 +224,50 @@ describe('demo parser flow', () => {
     mockCallbacks.onTextSelectionEnd?.(mockText, mockDetail)
 
     expect(consoleSpy).not.toHaveBeenCalled()
+
+    consoleSpy.mockRestore()
+  })
+
+  it('logs exactly one onSelectText payload on selection completion', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('SelectText Document')
+    )
+
+    render(<App />)
+    upload(makeFile('selecttext.pdf'))
+
+    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+
+    const mockSelection = { isCollapsed: false } as unknown as Selection
+    const mockSegments = [
+      {
+        id: 'text-1',
+        content: 'Hello',
+        selectedText: 'Hello',
+        startCharIndex: 0,
+        endCharIndex: 5
+      }
+    ]
+    const mockExtractedText = 'Hello'
+
+    mockCallbacks.onSelectText?.(mockSelection, mockSegments, mockExtractedText)
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1)
+    expect(consoleSpy).toHaveBeenCalledWith({
+      selection: mockSelection,
+      segments: mockSegments,
+      extractedText: mockExtractedText
+    })
+
+    const loggedPayload = consoleSpy.mock.calls[0][0] as {
+      selection: Selection
+      segments: Array<{ selectedText: string }>
+      extractedText: string
+    }
+    expect(loggedPayload.segments).toHaveLength(1)
+    expect(loggedPayload.segments[0].selectedText).toBe('Hello')
+    expect(loggedPayload.extractedText).toBe('Hello')
 
     consoleSpy.mockRestore()
   })
