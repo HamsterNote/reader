@@ -953,6 +953,19 @@
   resolved "https://registry.npmmirror.com/@system-ui-js/development-base/-/development-base-0.1.3.tgz#d40977a77344811928d1839c317f77cd5a2ed5f3"
   integrity sha512-/SPkWsJGi2bfD5CF5TDvpm0swfEp4TYMaBrtYuGP2dZXLmE8S+fr8ClEjdbwvNIXHzQyt96KDBvEHdLNSOJipg==
 
+"@system-ui-js/multi-drag-core@*":
+  version "0.4.0"
+  resolved "https://registry.yarnpkg.com/@system-ui-js/multi-drag-core/-/multi-drag-core-0.4.0.tgz#68dd401af22691ca55f840e0fd4b7818794473d6"
+  integrity sha512-7V366jAmK8hUjPJi9yYngabhuE+ixnRxZS7lw/1uNbxEYLaR/Mh5XtxMvY/gGHcL7tdJtYzE5lF1i786jKbKIA==
+
+"@system-ui-js/multi-drag@^0.4.0":
+  version "0.4.0"
+  resolved "https://registry.yarnpkg.com/@system-ui-js/multi-drag/-/multi-drag-0.4.0.tgz#0404192470eaa84a1afbe9ed01cf1ea1a2a12097"
+  integrity sha512-gZwFJ2hrpq8CCmJhdoViIQAFd1cD+o8uWJUP/+Myo2xuqvamIuZdDsd9rIaD+JV6otA9+JF2O9XV0vozmqafOg==
+  dependencies:
+    "@system-ui-js/multi-drag-core" "*"
+    loglevel "^1.9.2"
+
 "@techstark/opencv-js@^4.10.0-release.1":
   version "4.10.0-release.1"
   resolved "https://registry.yarnpkg.com/@techstark/opencv-js/-/opencv-js-4.10.0-release.1.tgz#5344c715c404c22419ac893c6a2d86727e2416fc"
@@ -2770,6 +2783,11 @@ lodash.merge@4.6.2, lodash.merge@^4.6.2:
   version "4.6.2"
   resolved "https://registry.npmmirror.com/lodash.merge/-/lodash.merge-4.6.2.tgz#558aa53b43b661e1925a0afdfa36a9a1085fe57a"
   integrity sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==
+
+loglevel@^1.9.2:
+  version "1.9.2"
+  resolved "https://registry.yarnpkg.com/loglevel/-/loglevel-1.9.2.tgz#c2e028d6c757720107df4e64508530db6621ba08"
+  integrity sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg==
 
 long@^5.0.0, long@^5.2.3:
   version "5.3.2"

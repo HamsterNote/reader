@@ -8,7 +8,46 @@ import type {
 import { IntermediateDocument } from '@hamster-note/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  getNearestTextElementForPoint,
+  getPageElementByPageNumber,
+  getPageElementForPoint,
+  resolveCaret
+} from './selection/caretResolver'
+import {
+  createDragSelectionAdapter,
+  type DragSelectionAdapter
+} from './selection/dragSelectionAdapter'
+import {
+  composeSelection,
+  createOrderedRange
+} from './selection/selectionComposer'
+import {
+  buildSelectionPayload,
+  getClosestTextElement,
+  type ReaderSelectedTextSegment,
+  type ReaderSelectionPayload,
+  textElementRecords
+} from './selection/selectionPayloadSerializer'
 import { polygonsToSvgPath, rectsToUnionPolygons } from './selectionGeometry'
+
+export {
+  getNearestTextElementForPoint,
+  getPageElementByPageNumber,
+  getPageElementForPoint,
+  resolveCaret
+} from './selection/caretResolver'
+export {
+  composeSelection,
+  createOrderedRange
+} from './selection/selectionComposer'
+export {
+  buildSelectionPayload,
+  getClosestTextElement,
+  type ReaderSelectedTextSegment,
+  type ReaderSelectionPayload,
+  textElementRecords
+} from './selection/selectionPayloadSerializer'
 
 export type ReaderTextSelectionDetail = {
   text: IntermediateText
@@ -16,18 +55,6 @@ export type ReaderTextSelectionDetail = {
   selectedText: string
   pageNumber: number
   selection: Selection
-}
-
-export type ReaderSelectedTextSegment = IntermediateText & {
-  selectedText: string
-  startCharIndex: number
-  endCharIndex: number
-}
-
-export type ReaderSelectionPayload = {
-  selection: Selection
-  segments: ReaderSelectedTextSegment[]
-  extractedText: string
 }
 
 export type ReaderSelectedTextDragCallback = (
@@ -726,432 +753,16 @@ const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
     id: `ocr-${pageNumber}-${text.id}`
   }))
 
-export const getClosestTextElement = (
-  node: Node | null
-): HTMLElement | null => {
-  const element = node instanceof Element ? node : node?.parentElement
-  return element?.closest('[data-text-id]') ?? null
-}
-
-type TextElementRecord = {
-  text: IntermediateText
-  pageNumber: number
-}
-
-const textElementRecords = new WeakMap<HTMLElement, TextElementRecord>()
-
-const getSelectionViewerRoot = (selection: Selection): HTMLElement | null => {
-  const anchorElement = getClosestTextElement(selection.anchorNode)
-  const focusElement = getClosestTextElement(selection.focusNode)
-  if (!anchorElement || !focusElement) return null
-
-  const anchorRoot = anchorElement.closest(
-    '.hamster-reader__intermediate-document-viewer'
-  )
-  const focusRoot = focusElement.closest(
-    '.hamster-reader__intermediate-document-viewer'
-  )
-
-  return anchorRoot instanceof HTMLElement && anchorRoot === focusRoot
-    ? anchorRoot
-    : null
-}
-
-const getTextLength = (node: Node): number => node.textContent?.length ?? 0
-
-const getElementTextOffset = (
-  element: HTMLElement,
-  container: Node,
-  offset: number
-): number => {
-  if (container === element) {
-    return Array.from(element.childNodes)
-      .slice(0, offset)
-      .reduce((total, node) => total + getTextLength(node), 0)
-  }
-
-  let textOffset = 0
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-  let currentNode = walker.nextNode()
-
-  while (currentNode) {
-    if (currentNode === container) {
-      return textOffset + offset
-    }
-    textOffset += getTextLength(currentNode)
-    currentNode = walker.nextNode()
-  }
-
-  return textOffset
-}
-
-const intersectsRange = (range: Range, element: HTMLElement): boolean => {
-  try {
-    return range.intersectsNode(element)
-  } catch {
-    return false
-  }
-}
-
-const buildSegmentRange = (
-  selectionRange: Range,
-  element: HTMLElement
-): Range => {
-  const segmentRange = document.createRange()
-  segmentRange.selectNodeContents(element)
-
-  if (element.contains(selectionRange.startContainer)) {
-    segmentRange.setStart(
-      selectionRange.startContainer,
-      selectionRange.startOffset
-    )
-  }
-
-  if (element.contains(selectionRange.endContainer)) {
-    segmentRange.setEnd(selectionRange.endContainer, selectionRange.endOffset)
-  }
-
-  return segmentRange
-}
-
-export const buildSelectionPayload = (
-  selection: Selection
-): ReaderSelectionPayload | null => {
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-    return null
-  }
-
-  const viewerRoot = getSelectionViewerRoot(selection)
-  if (!viewerRoot) return null
-
-  const selectionRange = selection.getRangeAt(0)
-  const segments = Array.from(
-    viewerRoot.querySelectorAll<HTMLElement>('[data-text-id]')
-  ).flatMap((element) => {
-    if (!intersectsRange(selectionRange, element)) return []
-
-    const record = textElementRecords.get(element)
-    if (!record) return []
-
-    const content = record.text.content ?? ''
-    const segmentRange = buildSegmentRange(selectionRange, element)
-    const rawStartCharIndex = getElementTextOffset(
-      element,
-      segmentRange.startContainer,
-      segmentRange.startOffset
-    )
-    const rawEndCharIndex = getElementTextOffset(
-      element,
-      segmentRange.endContainer,
-      segmentRange.endOffset
-    )
-    const startCharIndex = Math.max(
-      0,
-      Math.min(rawStartCharIndex, content.length)
-    )
-    const endCharIndex = Math.max(
-      startCharIndex,
-      Math.min(rawEndCharIndex, content.length)
-    )
-
-    if (endCharIndex <= startCharIndex) return []
-
-    return [
-      {
-        ...record.text,
-        selectedText: content.slice(startCharIndex, endCharIndex),
-        startCharIndex,
-        endCharIndex
-      }
-    ]
-  })
-
-  const extractedText = segments.map((segment) => segment.selectedText).join('')
-  if (segments.length === 0 || extractedText.trim().length === 0) return null
-
-  return { selection, segments, extractedText }
-}
-
-const clampToRange = (value: number, min: number, max: number): number => {
-  if (value < min) return min - value
-  if (value > max) return value - max
-  return 0
-}
-
-const getPointToRectDistanceSquared = (
-  point: { x: number; y: number },
-  rect: { left: number; top: number; right: number; bottom: number }
-): number => {
-  const dx = clampToRange(point.x, rect.left, rect.right)
-  const dy = clampToRange(point.y, rect.top, rect.bottom)
-  return dx * dx + dy * dy
-}
-
-const getNumberFromDataPageNumber = (element: HTMLElement): number | null => {
-  const pageNumber = Number(element.dataset.pageNumber)
-  return Number.isFinite(pageNumber) ? pageNumber : null
-}
-
-const getHtmlParserPageElementByPageNumber = (
-  pageNumber: number,
-  viewerRoot: HTMLElement
-): HTMLElement | null => {
-  const pageElements = Array.from(
-    viewerRoot.querySelectorAll('.hamster-note-page')
-  ) as HTMLElement[]
-
-  return (
-    pageElements.find((element) => {
-      const elementPageNumber = getNumberFromDataPageNumber(element)
-      return elementPageNumber === pageNumber
-    }) ??
-    pageElements[pageNumber - 1] ??
-    null
-  )
-}
-
-const getPageElementByPageNumber = (
-  pageNumber: number,
-  viewerRoot: HTMLElement,
-  pageRefs: Map<number, HTMLDivElement>
-): HTMLElement | null => {
-  return (
-    pageRefs.get(pageNumber) ??
-    getHtmlParserPageElementByPageNumber(pageNumber, viewerRoot)
-  )
-}
-
-const getHtmlParserPageForPoint = (
-  pointElement: Element | null,
-  viewerRoot: HTMLElement
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  const htmlParserPageElement = pointElement?.closest('.hamster-note-page')
-  if (!htmlParserPageElement || !viewerRoot.contains(htmlParserPageElement)) {
-    return null
-  }
-
-  const pageElement = htmlParserPageElement as HTMLElement
-  const explicitPageNumber = getNumberFromDataPageNumber(pageElement)
-  if (explicitPageNumber !== null) {
-    return { pageElement, pageNumber: explicitPageNumber }
-  }
-
-  const pageElements = Array.from(
-    viewerRoot.querySelectorAll('.hamster-note-page')
-  )
-  const pageIndex = pageElements.indexOf(htmlParserPageElement)
-  return pageIndex === -1 ? null : { pageElement, pageNumber: pageIndex + 1 }
-}
-
-const getMarkedPageForPoint = (
-  pointElement: Element | null,
-  viewerRoot: HTMLElement,
-  pageRefs: Map<number, HTMLDivElement>
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  const hitElement = pointElement?.closest('[data-page-number]')
-  if (!hitElement || !viewerRoot.contains(hitElement)) return null
-
-  const pageNumber = getNumberFromDataPageNumber(hitElement as HTMLElement)
-  if (pageNumber === null) return null
-
-  const pageElement = getPageElementByPageNumber(
-    pageNumber,
-    viewerRoot,
-    pageRefs
-  )
-  return pageElement && viewerRoot.contains(pageElement)
-    ? { pageElement, pageNumber }
-    : null
-}
-
-const getNearestPageForPoint = (
-  clientX: number,
-  clientY: number,
-  pageRefs: Map<number, HTMLDivElement>
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  let nearestElement: HTMLDivElement | null = null
-  let minDistance = Infinity
-
-  for (const element of pageRefs.values()) {
-    const distance = getPointToRectDistanceSquared(
-      { x: clientX, y: clientY },
-      element.getBoundingClientRect()
-    )
-    if (distance < minDistance) {
-      minDistance = distance
-      nearestElement = element
-    }
-  }
-
-  return nearestElement
-    ? {
-        pageElement: nearestElement,
-        pageNumber: Number(nearestElement.dataset.pageNumber)
-      }
-    : null
-}
-
-export const getPageElementForPoint = (
-  clientX: number,
-  clientY: number,
-  viewerRoot: HTMLElement | null,
-  pageRefs: Map<number, HTMLDivElement>
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  if (!viewerRoot) return null
-
-  const pointElement = document.elementFromPoint(clientX, clientY)
-  return (
-    getHtmlParserPageForPoint(pointElement, viewerRoot) ??
-    getMarkedPageForPoint(pointElement, viewerRoot, pageRefs) ??
-    getNearestPageForPoint(clientX, clientY, pageRefs)
-  )
-}
-
-export const getNearestTextElementForPoint = (
-  clientX: number,
-  clientY: number,
-  pageNumber: number,
-  viewerRoot: HTMLElement | null,
-  textElementsRef: Map<string, { text: IntermediateText; pageNumber: number }>
-): HTMLElement | null => {
-  if (!viewerRoot) return null
-
-  let nearestElement: HTMLElement | null = null
-  let minDistance = Infinity
-
-  for (const [id, entry] of textElementsRef.entries()) {
-    if (entry.pageNumber !== pageNumber) continue
-
-    const element = viewerRoot.querySelector(`[data-text-id="${id}"]`)
-    if (!element) continue
-
-    const rect = element.getBoundingClientRect()
-    const distance = getPointToRectDistanceSquared(
-      { x: clientX, y: clientY },
-      rect
-    )
-
-    if (distance < minDistance) {
-      minDistance = distance
-      nearestElement = element as HTMLElement
-    } else if (distance === minDistance && nearestElement) {
-      if (
-        (element as HTMLElement).compareDocumentPosition(nearestElement) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-      ) {
-        nearestElement = element as HTMLElement
-      }
-    }
-  }
-
-  return nearestElement
-}
-
-type CaretPointDocument = Document & {
-  caretPositionFromPoint?: (
-    x: number,
-    y: number
-  ) => { offsetNode: Node; offset: number } | null
-  caretRangeFromPoint?: (x: number, y: number) => Range | null
-}
-
-/**
- * Get caret position from a point, with fallback to nearest text element.
- * Uses caretPositionFromPoint/caretRangeFromPoint when available.
- */
-const buildSnapRange = (
-  nearestElement: HTMLElement,
-  clientX: number
-): Range => {
-  const range = document.createRange()
-  const textNode = nearestElement.firstChild
-  if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-    const rect = nearestElement.getBoundingClientRect()
-    const textContent = (textNode as Text).data ?? ''
-    const offset =
-      clientX >= rect.left + rect.width / 2 ? textContent.length : 0
-    range.setStart(textNode, offset)
-    range.collapse(true)
-  } else {
-    range.selectNodeContents(nearestElement)
-    range.collapse(true)
-  }
-  return range
-}
-
-const getCaretFromPoint = (
-  clientX: number,
-  clientY: number,
-  viewerRoot: HTMLElement,
-  pageRefs: Map<number, HTMLDivElement>,
-  textElementsRef: Map<string, { text: IntermediateText; pageNumber: number }>
-): { range: Range; pageNumber: number } | null => {
-  const caretDocument = document as CaretPointDocument
-
-  if (typeof caretDocument.caretPositionFromPoint === 'function') {
-    const pos = caretDocument.caretPositionFromPoint(clientX, clientY)
-    if (pos) {
-      const range = document.createRange()
-      range.setStart(pos.offsetNode, pos.offset)
-      range.collapse(true)
-
-      const pageInfo = getPageElementForPoint(
-        clientX,
-        clientY,
-        viewerRoot,
-        pageRefs
-      )
-      if (pageInfo) {
-        return { range, pageNumber: pageInfo.pageNumber }
-      }
-      range.detach()
-    }
-  }
-
-  if (typeof caretDocument.caretRangeFromPoint === 'function') {
-    const range = caretDocument.caretRangeFromPoint(clientX, clientY)
-    if (range) {
-      const pageInfo = getPageElementForPoint(
-        clientX,
-        clientY,
-        viewerRoot,
-        pageRefs
-      )
-      if (pageInfo) {
-        return { range, pageNumber: pageInfo.pageNumber }
-      }
-      range.detach()
-    }
-  }
-
-  const pageInfo = getPageElementForPoint(
-    clientX,
-    clientY,
-    viewerRoot,
-    pageRefs
-  )
-  if (!pageInfo) return null
-
-  const nearestElement = getNearestTextElementForPoint(
-    clientX,
-    clientY,
-    pageInfo.pageNumber,
-    viewerRoot,
-    textElementsRef
-  )
-  if (!nearestElement) return null
-
-  return {
-    range: buildSnapRange(nearestElement, clientX),
-    pageNumber: pageInfo.pageNumber
-  }
-}
-
 type SelectedTextBodyDragState = {
   active: boolean
   pointerId: number | null
   overlayElement: HTMLElement | null
   payload: ReaderSelectionPayload | null
+}
+
+type SelectedTextBodyDragAdapterEntry = {
+  adapter: DragSelectionAdapter
+  stopActivePointerEvent: (event: Event) => void
 }
 
 const emptySelectedTextBodyDragState = (): SelectedTextBodyDragState => ({
@@ -1180,6 +791,14 @@ const useSelectedTextBodyDrag = ({
     emptySelectedTextBodyDragState()
   )
   const bodyDragRafIdRef = useRef<number | null>(null)
+  const bodyDragAdaptersRef = useRef(
+    new Map<HTMLElement, SelectedTextBodyDragAdapterEntry>()
+  )
+  const beginBodyDragRef = useRef<
+    (overlayElement: HTMLElement, clientX: number, clientY: number) => boolean
+  >((_overlayElement, _clientX, _clientY) => false)
+  const moveBodyDragRef = useRef((_clientX: number, _clientY: number) => {})
+  const finishBodyDragRef = useRef((_clientX: number, _clientY: number) => {})
   const bodyDragCallbacksEnabled = Boolean(
     onDragSelectedTextStart || onDragSelectedTextMove || onDragSelectedTextEnd
   )
@@ -1225,28 +844,26 @@ const useSelectedTextBodyDrag = ({
     bodyDragStateRef.current = emptySelectedTextBodyDragState()
   }, [])
 
-  const handleBodyDragPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!bodyDragCallbacksEnabled || event.button !== 0) return
+  const beginBodyDrag = useCallback(
+    (overlayElement: HTMLElement, clientX: number, clientY: number) => {
+      if (!bodyDragCallbacksEnabled) return false
+      if (!isPointInsideSelectionBody(clientX, clientY)) return false
 
-      const target = event.target as HTMLElement | null
-      if (target?.closest('[data-handle-type]')) return
-      if (!isPointInsideSelectionBody(event.clientX, event.clientY)) return
-
+      // Retained as a payload source only: body dragging is initiated by the
+      // per-overlay Drag adapter, then reads the current composed Selection to
+      // preserve the legacy selected-text drag callback arguments.
       const selection = window.getSelection()
-      if (!selection) return
+      if (!selection) return false
 
       const payload = buildSelectionPayload(selection)
-      if (!payload) return
+      if (!payload) return false
 
-      const overlayElement = event.currentTarget
       bodyDragStateRef.current = {
         active: true,
-        pointerId: event.pointerId,
+        pointerId: null,
         overlayElement,
         payload
       }
-      overlayElement.setPointerCapture(event.pointerId)
 
       if (onDragSelectedTextStart) {
         onDragSelectedTextStart(
@@ -1256,8 +873,7 @@ const useSelectedTextBodyDrag = ({
         )
       }
 
-      event.preventDefault()
-      event.stopPropagation()
+      return true
     },
     [
       bodyDragCallbacksEnabled,
@@ -1266,19 +882,9 @@ const useSelectedTextBodyDrag = ({
     ]
   )
 
-  const handleBodyDragPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      const bodyDragState = bodyDragStateRef.current
-      if (
-        !bodyDragState.active ||
-        bodyDragState.pointerId !== event.pointerId
-      ) {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-
+  const handleBodyDragMove = useCallback(
+    (_clientX: number, _clientY: number) => {
+      if (!bodyDragStateRef.current.active) return
       if (!onDragSelectedTextMove || bodyDragRafIdRef.current !== null) return
 
       bodyDragRafIdRef.current = requestAnimationFrame(() => {
@@ -1296,23 +902,13 @@ const useSelectedTextBodyDrag = ({
   )
 
   const finishBodyDrag = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
+    (_clientX: number, _clientY: number) => {
       const bodyDragState = bodyDragStateRef.current
-      if (
-        !bodyDragState.active ||
-        bodyDragState.pointerId !== event.pointerId
-      ) {
-        return
-      }
+      if (!bodyDragState.active) return
 
       cancelPendingBodyDragMove()
       const payload = bodyDragState.payload
-      const overlayElement = bodyDragState.overlayElement
       resetBodyDragState()
-
-      if (overlayElement?.hasPointerCapture(event.pointerId)) {
-        overlayElement.releasePointerCapture(event.pointerId)
-      }
 
       if (payload && onDragSelectedTextEnd) {
         onDragSelectedTextEnd(
@@ -1321,12 +917,13 @@ const useSelectedTextBodyDrag = ({
           payload.extractedText
         )
       }
-
-      event.preventDefault()
-      event.stopPropagation()
     },
     [cancelPendingBodyDragMove, onDragSelectedTextEnd, resetBodyDragState]
   )
+
+  beginBodyDragRef.current = beginBodyDrag
+  moveBodyDragRef.current = handleBodyDragMove
+  finishBodyDragRef.current = finishBodyDrag
 
   const handleSelectionOverlayDragStart = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
@@ -1337,24 +934,107 @@ const useSelectedTextBodyDrag = ({
     [bodyDragCallbacksEnabled]
   )
 
+  const destroyBodyDragAdapters = useCallback(() => {
+    bodyDragAdaptersRef.current.forEach((entry, element) => {
+      // These native pointer listeners are guards, not body-drag lifecycle
+      // handlers. Drag owns start/move/end; the guards only stop an already
+      // active overlay drag from bubbling into the root text-selection adapter.
+      element.removeEventListener('pointerdown', entry.stopActivePointerEvent)
+      element.removeEventListener('pointermove', entry.stopActivePointerEvent)
+      element.removeEventListener('pointerup', entry.stopActivePointerEvent)
+      element.removeEventListener('pointercancel', entry.stopActivePointerEvent)
+      entry.adapter.destroy()
+    })
+    bodyDragAdaptersRef.current.clear()
+  }, [])
+
+  useEffect(() => {
+    if (!bodyDragCallbacksEnabled) {
+      destroyBodyDragAdapters()
+      return
+    }
+
+    const viewerRoot = viewerRootRef.current
+    if (!viewerRoot) {
+      destroyBodyDragAdapters()
+      return
+    }
+
+    const currentOverlayElements = new Set(
+      Array.from(
+        viewerRoot.querySelectorAll<HTMLElement>(
+          '.hamster-reader__selection-overlay'
+        )
+      )
+    )
+
+    bodyDragAdaptersRef.current.forEach((entry, element) => {
+      if (currentOverlayElements.has(element)) return
+
+      // Stale overlay guards are lifecycle cleanup for Drag-owned body drags;
+      // they do not initiate selection.
+      element.removeEventListener('pointerdown', entry.stopActivePointerEvent)
+      element.removeEventListener('pointermove', entry.stopActivePointerEvent)
+      element.removeEventListener('pointerup', entry.stopActivePointerEvent)
+      element.removeEventListener('pointercancel', entry.stopActivePointerEvent)
+      entry.adapter.destroy()
+      bodyDragAdaptersRef.current.delete(element)
+    })
+
+    currentOverlayElements.forEach((element) => {
+      if (bodyDragAdaptersRef.current.has(element)) return
+
+      const adapter = createDragSelectionAdapter(element, {
+        onStart: (clientX, clientY) => {
+          beginBodyDragRef.current(element, clientX, clientY)
+        },
+        onMove: (clientX, clientY) => {
+          moveBodyDragRef.current(clientX, clientY)
+        },
+        onEnd: (clientX, clientY) => {
+          finishBodyDragRef.current(clientX, clientY)
+        },
+        onAllEnd: (clientX, clientY) => {
+          finishBodyDragRef.current(clientX, clientY)
+        }
+      })
+      // Guard only: registered after the Drag adapter so Drag observes the
+      // pointer first, then native propagation is suppressed while active.
+      const stopActivePointerEvent = (event: Event) => {
+        if (!bodyDragStateRef.current.active) return
+
+        event.preventDefault()
+        event.stopPropagation()
+      }
+
+      element.addEventListener('pointerdown', stopActivePointerEvent)
+      element.addEventListener('pointermove', stopActivePointerEvent)
+      element.addEventListener('pointerup', stopActivePointerEvent)
+      element.addEventListener('pointercancel', stopActivePointerEvent)
+      bodyDragAdaptersRef.current.set(element, {
+        adapter,
+        stopActivePointerEvent
+      })
+    })
+  })
+
+  useEffect(
+    () => () => {
+      cancelPendingBodyDragMove()
+      resetBodyDragState()
+      destroyBodyDragAdapters()
+    },
+    [cancelPendingBodyDragMove, destroyBodyDragAdapters, resetBodyDragState]
+  )
+
   const overlayBodyDragProps = useMemo(
     () =>
       bodyDragCallbacksEnabled
         ? {
-            onPointerDown: handleBodyDragPointerDown,
-            onPointerMove: handleBodyDragPointerMove,
-            onPointerUp: finishBodyDrag,
-            onPointerCancel: finishBodyDrag,
             onDragStart: handleSelectionOverlayDragStart
           }
         : {},
-    [
-      bodyDragCallbacksEnabled,
-      finishBodyDrag,
-      handleBodyDragPointerDown,
-      handleBodyDragPointerMove,
-      handleSelectionOverlayDragStart
-    ]
+    [bodyDragCallbacksEnabled, handleSelectionOverlayDragStart]
   )
 
   const overlayBodyDragStyle = useMemo<React.CSSProperties>(
@@ -1364,8 +1044,6 @@ const useSelectedTextBodyDrag = ({
         : {},
     [bodyDragCallbacksEnabled]
   )
-
-  useEffect(() => cancelPendingBodyDragMove, [cancelPendingBodyDragMove])
 
   return {
     bodyDragCallbacksEnabled,
@@ -1409,6 +1087,8 @@ export function IntermediateDocumentViewer({
   const activeDocumentRef = useRef<IntermediateDocument | null>(null)
   const isMountedRef = useRef(false)
   const viewerRootRef = useRef<HTMLDivElement>(null)
+  const [viewerRootElement, setViewerRootElement] =
+    useState<HTMLDivElement | null>(null)
   const textElementsRef = useRef<
     Map<string, { text: IntermediateText; pageNumber: number }>
   >(new Map())
@@ -1417,6 +1097,16 @@ export function IntermediateDocumentViewer({
     clientX: number
     clientY: number
   }>({ active: false, clientX: 0, clientY: 0 })
+  const dragSelectionAnchorRef = useRef<{
+    node: Node
+    offset: number
+  } | null>(null)
+  const dragSelectionEndEmittedRef = useRef(false)
+  const skipNextMouseUpSelectionEndRef = useRef(false)
+  const lastDragComposedSelectionRef = useRef<{
+    selection: Selection
+    selectedText: string
+  } | null>(null)
   const ignoreNextBlankClickRef = useRef(false)
   const dragStateRef = useRef<{
     active: boolean
@@ -1463,6 +1153,17 @@ export function IntermediateDocumentViewer({
     () => getSelectionOverlayOptions(selectionOverlay),
     [selectionOverlay]
   )
+  const selectionHandleAdapterKey = useMemo(
+    () =>
+      Array.from(selectionHandlePositions.entries())
+        .flatMap(([pageNumber, entry]) => [
+          entry.start ? `${pageNumber}:start` : '',
+          entry.end ? `${pageNumber}:end` : ''
+        ])
+        .filter(Boolean)
+        .join('|'),
+    [selectionHandlePositions]
+  )
   const {
     bodyDragCallbacksEnabled,
     overlayBodyDragProps,
@@ -1499,6 +1200,11 @@ export function IntermediateDocumentViewer({
     setHtmlContent(null)
     setHtmlParserError(false)
   }, [runtimeDocument])
+
+  const setViewerRootRef = useCallback((element: HTMLDivElement | null) => {
+    viewerRootRef.current = element
+    setViewerRootElement(element)
+  }, [])
 
   // Primary render path: convert the runtime document to HTML via @hamster-note/html-parser.
   // On success we render the HTML fragment directly. Because html-parser output does not
@@ -1878,6 +1584,9 @@ export function IntermediateDocumentViewer({
       return
     }
 
+    // Retained as a payload source only. Gesture completion is driven by Drag
+    // (or by external/native Selection fallbacks below); this reads the live
+    // composed Selection to emit public callbacks without changing their API.
     const selection = window.getSelection()
     if (!selection) return
 
@@ -2135,8 +1844,20 @@ export function IntermediateDocumentViewer({
     if (!onTextSelectionChange) return
 
     const handleSelectionChange = () => {
+      // Retained for external Selection sync only. Drag-composed selections are
+      // emitted directly from the adapter path and skipped here to avoid double
+      // onTextSelectionChange callbacks.
       const selection = window.getSelection()
       if (!selection) return
+
+      const composedSelection = lastDragComposedSelectionRef.current
+      if (
+        composedSelection &&
+        composedSelection.selection === selection &&
+        composedSelection.selectedText === selection.toString()
+      ) {
+        return
+      }
 
       const detail = getSelectionDetail(selection)
       if (detail) {
@@ -2144,6 +1865,8 @@ export function IntermediateDocumentViewer({
       }
     }
 
+    // Observe browser/user-agent or test-created selections; this listener no
+    // longer drives drag selection initiation.
     globalThis.document.addEventListener(
       'selectionchange',
       handleSelectionChange
@@ -2182,6 +1905,9 @@ export function IntermediateDocumentViewer({
   const executeRefreshSelectionOverlay = useCallback(() => {
     rafIdRef.current = null
 
+    // Retained for overlay extraction from the live Selection, including
+    // externally-created selections. Drag paths refresh explicitly after they
+    // compose Selection ranges.
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed || !viewerRootRef.current) {
       if (
@@ -2264,10 +1990,14 @@ export function IntermediateDocumentViewer({
       return
     }
 
+    // External Selection observer only: keeps overlays in sync when Selection
+    // is created outside the Drag adapters (keyboard, browser UI, tests).
     globalThis.document.addEventListener(
       'selectionchange',
       refreshSelectionOverlay
     )
+    // Demoted native mouseup fallback: refreshes overlays after externally
+    // created native selections; root Drag remains the primary selection path.
     globalThis.document.addEventListener('mouseup', refreshSelectionOverlay)
 
     return () => {
@@ -2296,73 +2026,150 @@ export function IntermediateDocumentViewer({
   }, [overlayOptions, refreshSelectionOverlay])
 
   useEffect(() => {
-    const root = viewerRootRef.current
-    if (!root) return
+    const root = viewerRootElement
+    if (!root || !runtimeDocument) return
 
-    const handleMouseDown = (event: MouseEvent) => {
-      if (event.button !== 0) return // Only primary button
-      const target = event.target as Node
-      if (!root.contains(target)) return
-      activeMouseSelectionRef.current = {
-        active: true,
-        clientX: event.clientX,
-        clientY: event.clientY
-      }
-    }
+    const resolveDragCaret = (clientX: number, clientY: number) =>
+      resolveCaret(clientX, clientY, {
+        viewerRoot: root,
+        pageRefs: pageRefs.current,
+        textElements: textElementsRef.current
+      })
 
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!activeMouseSelectionRef.current.active) return
-      if (!(event.buttons & 1)) {
-        activeMouseSelectionRef.current.active = false
-        return
-      }
-      activeMouseSelectionRef.current.clientX = event.clientX
-      activeMouseSelectionRef.current.clientY = event.clientY
-      // 拖拽期间持续刷新覆盖层；overlay 启用时才有意义
-      if (overlayOptions?.enabled) {
-        refreshSelectionOverlay()
-      }
-    }
+    const finishDragSelection = (clientX: number, clientY: number) => {
+      if (!dragSelectionAnchorRef.current) return
 
-    const handleMouseUp = (event: MouseEvent) => {
-      if (!activeMouseSelectionRef.current.active) return
+      activeMouseSelectionRef.current.clientX = clientX
+      activeMouseSelectionRef.current.clientY = clientY
 
-      activeMouseSelectionRef.current.clientX = event.clientX
-      activeMouseSelectionRef.current.clientY = event.clientY
-
+      // Retained to inspect the Selection that the Drag path just composed, so
+      // blank-click suppression and final overlay refresh can be applied.
       const selection = window.getSelection()
       if (selection && !selection.isCollapsed) {
         ignoreNextBlankClickRef.current = true
         preserveOverlayDuringMouseUpRef.current = true
       }
 
-      const finishMouseSelectionAfterCurrentEvent = () => {
-        activeMouseSelectionRef.current.active = false
+      if (!dragSelectionEndEmittedRef.current) {
+        dragSelectionEndEmittedRef.current = true
+        skipNextMouseUpSelectionEndRef.current = true
+        emitSelectionEnd()
+        window.setTimeout(() => {
+          skipNextMouseUpSelectionEndRef.current = false
+        }, 0)
+      }
 
-        const currentSelection = window.getSelection()
-        if (
-          overlayOptions?.enabled &&
-          currentSelection &&
-          !currentSelection.isCollapsed
-        ) {
-          refreshSelectionOverlay()
+      activeMouseSelectionRef.current.active = false
+      dragSelectionAnchorRef.current = null
+
+      if (overlayOptions?.enabled && selection && !selection.isCollapsed) {
+        refreshSelectionOverlayRef.current()
+      }
+
+      preserveOverlayDuringMouseUpRef.current = false
+    }
+
+    const adapter = createDragSelectionAdapter(root, {
+      onStart: (clientX, clientY) => {
+        if (dragStateRef.current.active) {
+          dragSelectionAnchorRef.current = null
+          activeMouseSelectionRef.current.active = false
+          return
         }
 
-        preserveOverlayDuringMouseUpRef.current = false
-      }
-      window.setTimeout(finishMouseSelectionAfterCurrentEvent, 0)
-    }
+        const caretInfo = resolveDragCaret(clientX, clientY)
+        if (!caretInfo) {
+          dragSelectionAnchorRef.current = null
+          activeMouseSelectionRef.current.active = false
+          return
+        }
 
-    root.addEventListener('mousedown', handleMouseDown)
-    root.addEventListener('mousemove', handleMouseMove)
-    root.addEventListener('mouseup', handleMouseUp)
+        dragSelectionAnchorRef.current = {
+          node: caretInfo.range.startContainer,
+          offset: caretInfo.range.startOffset
+        }
+        dragSelectionEndEmittedRef.current = false
+        activeMouseSelectionRef.current = {
+          active: true,
+          clientX,
+          clientY
+        }
+        caretInfo.range.detach()
+      },
+      onMove: (clientX, clientY) => {
+        const anchor = dragSelectionAnchorRef.current
+        if (!anchor) return
+        if (dragStateRef.current.active) {
+          dragSelectionAnchorRef.current = null
+          activeMouseSelectionRef.current.active = false
+          return
+        }
+
+        activeMouseSelectionRef.current.clientX = clientX
+        activeMouseSelectionRef.current.clientY = clientY
+
+        // Required Selection composition capability check. Do not remove: the
+        // Drag adapter writes the composed range via removeAllRanges/addRange.
+        const writableSelection = window.getSelection()
+        if (
+          !writableSelection ||
+          typeof writableSelection.removeAllRanges !== 'function' ||
+          typeof writableSelection.addRange !== 'function'
+        ) {
+          return
+        }
+
+        const caretInfo = resolveDragCaret(clientX, clientY)
+        if (!caretInfo) return
+
+        const range = createOrderedRange(
+          anchor.node,
+          anchor.offset,
+          caretInfo.range.startContainer,
+          caretInfo.range.startOffset
+        )
+        caretInfo.range.detach()
+        composeSelection(range)
+
+        // Read back the composed Selection for payload/detail generation and
+        // to suppress the external selectionchange observer's duplicate event.
+        const selection = window.getSelection()
+        if (!selection) return
+
+        lastDragComposedSelectionRef.current = {
+          selection,
+          selectedText: selection.toString()
+        }
+
+        if (overlayOptions?.enabled) {
+          refreshSelectionOverlayRef.current()
+        }
+
+        if (onTextSelectionChange) {
+          const detail = getSelectionDetail(selection)
+          if (detail) {
+            onTextSelectionChange(detail.text, detail)
+          }
+        }
+      },
+      onEnd: finishDragSelection,
+      onAllEnd: finishDragSelection
+    })
 
     return () => {
-      root.removeEventListener('mousedown', handleMouseDown)
-      root.removeEventListener('mousemove', handleMouseMove)
-      root.removeEventListener('mouseup', handleMouseUp)
+      adapter.destroy()
+      activeMouseSelectionRef.current.active = false
+      dragSelectionAnchorRef.current = null
+      dragSelectionEndEmittedRef.current = false
     }
-  }, [overlayOptions, refreshSelectionOverlay])
+  }, [
+    viewerRootElement,
+    runtimeDocument,
+    overlayOptions?.enabled,
+    emitSelectionEnd,
+    getSelectionDetail,
+    onTextSelectionChange
+  ])
 
   useEffect(() => {
     if (!overlayOptions?.enabled) return
@@ -2387,6 +2194,9 @@ export function IntermediateDocumentViewer({
       if (target.closest('.hamster-reader__selection-overlay-path')) return
       if (target.closest('.hamster-reader__selection-handles')) return
       if (target.closest('[data-handle-type]')) return
+      // Blank-click cleanup is not a selection initiation path; it clears an
+      // existing external or Drag-composed Selection when the user clicks empty
+      // viewer space.
       const selection = window.getSelection()
       if (selection && !selection.isCollapsed) {
         selection.removeAllRanges()
@@ -2414,7 +2224,16 @@ export function IntermediateDocumentViewer({
       }
     }
 
+    // Demoted native mouseup/touchend fallback: Drag emits selection end for
+    // adapter-driven gestures. These listeners only cover externally-created
+    // native selections and keyboard/touch browser selection completions.
     const handleMouseUp = (event: MouseEvent) => {
+      if (skipNextMouseUpSelectionEndRef.current) {
+        skipNextMouseUpSelectionEndRef.current = false
+        activeMouseSelectionRef.current.active = false
+        return
+      }
+
       if (activeMouseSelectionRef.current.active) {
         activeMouseSelectionRef.current.clientX = event.clientX
         activeMouseSelectionRef.current.clientY = event.clientY
@@ -2452,8 +2271,8 @@ export function IntermediateDocumentViewer({
 
       let fixedPoint: { node: Node; offset: number } | null = null
       if (dragState.fixedAnchor) {
-        // 优先使用 pointerdown 时记录的固定端节点/偏移，
-        // 避免因 caretPositionFromPoint 抖动导致固定端漂移
+        // 优先使用 Drag start 时记录的固定端节点/偏移，
+        // 避免因浏览器 caret resolver 抖动导致固定端漂移。
         fixedPoint = {
           node: dragState.fixedAnchor.node,
           offset: dragState.fixedAnchor.offset
@@ -2464,12 +2283,14 @@ export function IntermediateDocumentViewer({
         )
         if (!fixedPageElement) return
         const fixedPageRect = fixedPageElement.getBoundingClientRect()
-        const fixedCaretInfo = getCaretFromPoint(
+        const fixedCaretInfo = resolveCaret(
           fixedPageRect.left + dragState.fixedPoint.x,
           fixedPageRect.top + dragState.fixedPoint.y,
-          viewerRoot,
-          pageRefs.current,
-          textElementsRef.current
+          {
+            viewerRoot,
+            pageRefs: pageRefs.current,
+            textElements: textElementsRef.current
+          }
         )
         if (!fixedCaretInfo) return
         fixedPoint = {
@@ -2488,28 +2309,13 @@ export function IntermediateDocumentViewer({
         dragState.handleType === 'start' ? movingPoint : fixedPoint
       const endPoint =
         dragState.handleType === 'start' ? fixedPoint : movingPoint
-      const orderRange = globalThis.document.createRange()
-      orderRange.setStart(startPoint.node, startPoint.offset)
-      orderRange.collapse(true)
-
-      const endIsBeforeStart =
-        orderRange.comparePoint(endPoint.node, endPoint.offset) < 0
-      orderRange.detach()
-
-      const newRange = globalThis.document.createRange()
-      if (endIsBeforeStart) {
-        newRange.setStart(endPoint.node, endPoint.offset)
-        newRange.setEnd(startPoint.node, startPoint.offset)
-      } else {
-        newRange.setStart(startPoint.node, startPoint.offset)
-        newRange.setEnd(endPoint.node, endPoint.offset)
-      }
-
-      const selection = window.getSelection()
-      if (selection) {
-        selection.removeAllRanges()
-        selection.addRange(newRange)
-      }
+      const newRange = createOrderedRange(
+        startPoint.node,
+        startPoint.offset,
+        endPoint.node,
+        endPoint.offset
+      )
+      composeSelection(newRange)
       // 手动触发覆盖层刷新：测试环境下 mock 的 selection 不会自动派发 selectionchange，
       // 真实浏览器中此处也提前刷新，避免拖动期间出现一帧延迟。
       refreshSelectionOverlayRef.current()
@@ -2517,23 +2323,22 @@ export function IntermediateDocumentViewer({
     []
   )
 
-  const handleHandlePointerDown = useCallback((event: React.PointerEvent) => {
-    const handleElement = (event.target as HTMLElement).closest(
-      '[data-handle-type]'
-    )
-    if (!handleElement) return
+  const beginHandleDrag = useCallback((handleType: 'start' | 'end') => {
+    if (dragStateRef.current.active || dragSelectionAnchorRef.current) {
+      return false
+    }
 
-    const handleType = handleElement.getAttribute('data-handle-type') as
-      | 'start'
-      | 'end'
-    if (!handleType) return
-
+    // Retained as handle-drag seed state only: the per-handle Drag adapter has
+    // already initiated the gesture, and this reads the current Selection range
+    // to determine the fixed anchor for subsequent composed updates.
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed) return
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      return false
+    }
 
     const range = selection.getRangeAt(0)
     const viewerRoot = viewerRootRef.current
-    if (!viewerRoot) return
+    if (!viewerRoot) return false
 
     // 记录固定端的实际节点/偏移；start 手柄拖动 → 固定端=range.end，反之亦然
     const fixedAnchor =
@@ -2576,58 +2381,41 @@ export function IntermediateDocumentViewer({
       },
       fixedAnchor
     }
-    ;(event.target as HTMLElement).setPointerCapture(event.pointerId)
 
-    event.preventDefault()
-    event.stopPropagation()
+    // 手柄拖拽接管后，清理主文本 Drag 的临时状态，避免 root adapter 同时合成选择区。
+    dragSelectionAnchorRef.current = null
+    activeMouseSelectionRef.current.active = false
+    return true
   }, [])
 
-  const handleHandlePointerMove = useCallback(
-    (event: React.PointerEvent) => {
+  const applyHandleDragAtPoint = useCallback(
+    (clientX: number, clientY: number) => {
       if (!dragStateRef.current.active || !dragStateRef.current.handleType)
-        return
+        return false
 
       const viewerRoot = viewerRootRef.current
-      if (!viewerRoot) return
+      if (!viewerRoot) return false
 
-      const caretInfo = getCaretFromPoint(
-        event.clientX,
-        event.clientY,
+      const caretInfo = resolveCaret(clientX, clientY, {
         viewerRoot,
-        pageRefs.current,
-        textElementsRef.current
-      )
+        pageRefs: pageRefs.current,
+        textElements: textElementsRef.current
+      })
 
-      if (!caretInfo) return
+      if (!caretInfo) return false
 
       applyHandleDragSelection(caretInfo)
       caretInfo.range.detach()
-
-      event.preventDefault()
-      event.stopPropagation()
+      return true
     },
     [applyHandleDragSelection]
   )
 
-  const handleHandlePointerUp = useCallback(
-    (event: React.PointerEvent) => {
+  const finishHandleDrag = useCallback(
+    (clientX: number, clientY: number) => {
       if (!dragStateRef.current.active) return
 
-      const viewerRoot = viewerRootRef.current
-      if (!viewerRoot) return
-
-      const caretInfo = getCaretFromPoint(
-        event.clientX,
-        event.clientY,
-        viewerRoot,
-        pageRefs.current,
-        textElementsRef.current
-      )
-
-      if (caretInfo) {
-        applyHandleDragSelection(caretInfo)
-        caretInfo.range.detach()
-      }
+      applyHandleDragAtPoint(clientX, clientY)
 
       dragStateRef.current = {
         active: false,
@@ -2636,11 +2424,97 @@ export function IntermediateDocumentViewer({
         fixedAnchor: null
       }
 
+      emitSelectionEnd()
+    },
+    [applyHandleDragAtPoint, emitSelectionEnd]
+  )
+
+  useEffect(() => {
+    const root = viewerRootElement
+    if (
+      !root ||
+      !runtimeDocument ||
+      selectionHandleElement === null ||
+      !selectionHandleAdapterKey
+    ) {
+      return
+    }
+
+    const handleElements: Array<{
+      element: HTMLElement
+      handleType: 'start' | 'end'
+    }> = []
+    for (const element of Array.from(
+      root.querySelectorAll<HTMLElement>('[data-handle-type]')
+    )) {
+      const handleType = element.dataset.handleType
+      if (handleType === 'start' || handleType === 'end') {
+        handleElements.push({ element, handleType })
+      }
+    }
+
+    if (handleElements.length === 0) return
+
+    // Guard only: per-handle Drag owns start/move/end. These native pointer
+    // listeners prevent the same pointer stream from bubbling into the root
+    // adapter or triggering browser-native handle behavior.
+    const stopHandlePointerEvent = (event: Event) => {
       event.preventDefault()
       event.stopPropagation()
-    },
-    [applyHandleDragSelection]
-  )
+    }
+    const pointerEventTypes = [
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel'
+    ] as const
+
+    const adapters = handleElements.map(({ element, handleType }) => {
+      const adapter = createDragSelectionAdapter(element, {
+        onStart: () => {
+          beginHandleDrag(handleType)
+        },
+        onMove: (clientX, clientY) => {
+          if (dragStateRef.current.handleType !== handleType) return
+          applyHandleDragAtPoint(clientX, clientY)
+        },
+        onEnd: finishHandleDrag,
+        onAllEnd: finishHandleDrag
+      })
+
+      pointerEventTypes.forEach((eventType) => {
+        element.addEventListener(eventType, stopHandlePointerEvent)
+      })
+
+      return { adapter, element }
+    })
+
+    return () => {
+      for (const { adapter, element } of adapters) {
+        for (const eventType of pointerEventTypes) {
+          element.removeEventListener(eventType, stopHandlePointerEvent)
+        }
+        adapter.destroy()
+      }
+
+      if (dragStateRef.current.active) {
+        dragStateRef.current = {
+          active: false,
+          handleType: null,
+          fixedPoint: null,
+          fixedAnchor: null
+        }
+      }
+    }
+  }, [
+    viewerRootElement,
+    selectionHandleAdapterKey,
+    runtimeDocument,
+    selectionHandleElement,
+    beginHandleDrag,
+    applyHandleDragAtPoint,
+    finishHandleDrag
+  ])
 
   const renderSelectionHandle = useCallback(
     (
@@ -2700,6 +2574,7 @@ export function IntermediateDocumentViewer({
   if (!runtimeDocument) {
     return (
       <div
+        ref={setViewerRootRef}
         className={rootClassName}
         data-testid='intermediate-document-viewer'
       />
@@ -2708,13 +2583,10 @@ export function IntermediateDocumentViewer({
 
   return (
     <div
-      ref={viewerRootRef}
+      ref={setViewerRootRef}
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
-      onPointerDown={handleHandlePointerDown}
-      onPointerMove={handleHandlePointerMove}
-      onPointerUp={handleHandlePointerUp}
     >
       {htmlContent && !htmlParserError ? (
         <>

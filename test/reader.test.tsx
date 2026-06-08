@@ -16,6 +16,104 @@ vi.mock('@hamster-note/html-parser', () => ({
   }
 }))
 
+vi.mock('@system-ui-js/multi-drag', () => {
+  const DragOperationType = {
+    Start: 'start',
+    Move: 'move',
+    End: 'end',
+    Inertial: 'inertial',
+    InertialEnd: 'inertialEnd',
+    AllEnd: 'allEnd'
+  }
+
+  const makeFinger = (event: MouseEvent | PointerEvent) => ({
+    pointerId: (event as PointerEvent).pointerId ?? 1,
+    getLastOperation: () => ({
+      point: { x: event.clientX, y: event.clientY },
+      timestamp: event.timeStamp
+    })
+  })
+
+  return {
+    DragOperationType,
+    Drag: class MockedDrag {
+      private readonly listeners = new Map<
+        string,
+        Array<(fingers: ReturnType<typeof makeFinger>[]) => void>
+      >()
+      private primaryPointerId: number | null = null
+
+      constructor(private readonly element: HTMLElement) {
+        this.element.addEventListener('pointerdown', this.handlePointerDown)
+        this.element.addEventListener('pointermove', this.handlePointerMove)
+        this.element.addEventListener('pointerup', this.handlePointerEnd)
+        this.element.addEventListener('pointercancel', this.handlePointerEnd)
+      }
+
+      addEventListener(
+        type: string,
+        callback: (fingers: ReturnType<typeof makeFinger>[]) => void
+      ) {
+        const callbacks = this.listeners.get(type) ?? []
+        callbacks.push(callback)
+        this.listeners.set(type, callbacks)
+      }
+
+      removeEventListener(
+        type: string,
+        callback?: (fingers: ReturnType<typeof makeFinger>[]) => void
+      ) {
+        if (!callback) {
+          this.listeners.delete(type)
+          return
+        }
+        const callbacks = this.listeners.get(type) ?? []
+        this.listeners.set(
+          type,
+          callbacks.filter((listener) => listener !== callback)
+        )
+      }
+
+      destroy() {
+        this.element.removeEventListener('pointerdown', this.handlePointerDown)
+        this.element.removeEventListener('pointermove', this.handlePointerMove)
+        this.element.removeEventListener('pointerup', this.handlePointerEnd)
+        this.element.removeEventListener('pointercancel', this.handlePointerEnd)
+      }
+
+      getCurrentOperationType() {
+        return this.primaryPointerId === null
+          ? DragOperationType.AllEnd
+          : DragOperationType.Move
+      }
+
+      private emit(type: string, event: MouseEvent | PointerEvent) {
+        this.listeners.get(type)?.forEach((listener) => {
+          listener([makeFinger(event)])
+        })
+      }
+
+      private handlePointerDown = (event: MouseEvent | PointerEvent) => {
+        if (event.button !== 0) return
+        this.primaryPointerId = (event as PointerEvent).pointerId ?? 1
+        this.emit(DragOperationType.Start, event)
+      }
+
+      private handlePointerMove = (event: MouseEvent | PointerEvent) => {
+        if (this.primaryPointerId === null) return
+        this.emit(DragOperationType.Move, event)
+      }
+
+      private handlePointerEnd = (event: MouseEvent | PointerEvent) => {
+        if (this.primaryPointerId === null) return
+        this.emit(DragOperationType.End, event)
+        this.emit(DragOperationType.AllEnd, event)
+        this.primaryPointerId = null
+      }
+    }
+  }
+})
+
 function makePage(number: number) {
   return {
     id: `page-${number}`,

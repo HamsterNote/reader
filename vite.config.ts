@@ -216,6 +216,12 @@ export default defineConfig(({ mode }) => ({
               replacement: fileURLToPath(
                 new URL('./test/mocks/image-parser.ts', import.meta.url)
               )
+            },
+            {
+              find: /^@system-ui-js\/multi-drag$/,
+              replacement: fileURLToPath(
+                new URL('./test/mocks/multi-drag.ts', import.meta.url)
+              )
             }
           ]
         : [])

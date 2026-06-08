@@ -222,7 +222,7 @@
     }
   }
 
-  // Intermediate page base image
+  // Intermediate page base image (direct-render path)
   &__intermediate-page-base-image {
     position: absolute;
     inset: 0;
@@ -230,9 +230,17 @@
     height: 100%;
     object-fit: fill;
     user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
     pointer-events: none;
     z-index: 0;
   }
+
+  // NOTE: The html-parser renders backgrounds as CSS `background-image` on
+  // `.hamster-note-page` divs, not as separate DOM elements. CSS backgrounds
+  // are inherently unselectable — they are not DOM nodes and cannot be captured
+  // by text selection or touch callout menus. The direct-render path above
+  // (base-image) covers the `<img>` background case.
 
   // Intermediate text spans
   &__intermediate-text {
