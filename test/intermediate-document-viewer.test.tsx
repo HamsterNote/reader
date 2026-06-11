@@ -2517,6 +2517,11 @@ describe('IntermediateDocumentViewer', () => {
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
         expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
         expect(onTextSelectionEnd.mock.calls[0][1].selectedText).toBe('BCD')
+        expect(liveSelection.selection.toString()).toBe('BCD')
+        expect(liveSelection.selection.isCollapsed).toBe(false)
+        expect(liveSelection.selection.rangeCount).toBe(1)
+        expect(liveSelection.selection.removeAllRanges).toHaveBeenCalledTimes(2)
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(2)
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
@@ -4752,6 +4757,938 @@ describe('IntermediateDocumentViewer', () => {
         getSelectionSpy.mockRestore()
       }
     })
+
+    it('[baseline] selectionchange callback payload has text and detail shape matching reader.test.tsx convention', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textSpan = viewerRoot.querySelector(
+        '[data-text-id="text-1"]'
+      ) as HTMLElement
+
+      const selection = makeMockSelection({
+        isCollapsed: false,
+        anchorNode: textSpan,
+        focusNode: textSpan,
+        toString: () => 'Page 1 text',
+        containsNode: (node: Node) => node === textSpan
+      })
+      vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+
+      const [text, detail] = onTextSelectionChange.mock.calls[0]
+      expect(text).toHaveProperty('id')
+      expect(text.id).toBe('text-1')
+      expect(detail).toHaveProperty('selectedText')
+      expect(detail).toHaveProperty('texts')
+      expect(detail).toHaveProperty('text')
+      expect(detail).toHaveProperty('pageNumber')
+      expect(detail.selectedText).toBe('Page 1 text')
+      expect(detail.text).toBe(text)
+      expect(detail.pageNumber).toBe(1)
+      expect(detail.texts).toHaveLength(1)
+      expect(detail.texts[0].id).toBe('text-1')
+    })
+
+    it('[baseline] multi-text selectionchange callback has detail.text equal to detail.texts[0]', async () => {
+      const onTextSelectionChange = vi.fn()
+      await renderCrossPageSelectionFixture(onTextSelectionChange)
+      mockCrossPageSelectionRects()
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const selection = makeDirectRenderTextSelectionWithEndpoints({
+        selectedTextIds: ['p1-b', 'p2-a', 'p2-b', 'p2-c'],
+        anchorTextId: 'p1-b',
+        focusTextId: 'p2-c'
+      })
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(selection)
+      const page2 = screen.getByTestId('intermediate-page-2')
+      mockElementFromPointByCoordinate((_x, y) =>
+        y < 220 ? queryTextSpan('p1-b') : page2
+      )
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+          clientX: 60,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 60,
+          clientY: 280
+        })
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [text, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.text).toBe(detail.texts[0])
+        expect(detail.text).toBe(text)
+        expect(detail.pageNumber).toBe(1)
+        expect(detail.texts).toHaveLength(3)
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('[baseline] completed selection renders start and end handles via data-handle-type', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const currentRects = [
+        makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+      ]
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = mockElementRect(page, {
+        left: 5,
+        top: 5,
+        width: 100,
+        height: 150
+      })
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(makeSelectionWithRects(() => currentRects))
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        await waitFor(() => {
+          expect(
+            page.querySelectorAll('.hamster-reader__selection-handle')
+          ).toHaveLength(2)
+        })
+
+        const startHandle = page.querySelector('[data-handle-type="start"]')
+        const endHandle = page.querySelector('[data-handle-type="end"]')
+        expect(startHandle).toBeInstanceOf(HTMLElement)
+        expect(endHandle).toBeInstanceOf(HTMLElement)
+        expect(startHandle).not.toBe(endHandle)
+      } finally {
+        getSelectionSpy.mockRestore()
+        elementFromPointSpy.mockRestore()
+        pageRectSpy.mockRestore()
+      }
+    })
+
+    it('[baseline] drag flow fires onTextSelectionChange during move and onTextSelectionEnd on completion', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+
+      try {
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 138
+        })
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+
+        const [endText, endDetail] = onTextSelectionEnd.mock.calls[0]
+        expect(endText).toHaveProperty('id')
+        expect(endDetail).toHaveProperty('selectedText')
+        expect(endDetail).toHaveProperty('texts')
+        expect(endDetail).toHaveProperty('text')
+        expect(endDetail.text).toBe(endText)
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('[baseline] drag flow callback detail.texts contains all selected text objects in order', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+
+      try {
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.selectedText).toBe('BCD')
+        expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+          'text-b',
+          'text-c',
+          'text-d'
+        ])
+        for (const t of detail.texts) {
+          expect(t).toHaveProperty('content')
+          expect(t).toHaveProperty('id')
+        }
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('renders drag preview overlay from preview geometry while native Selection rects are empty, then finalizes from native Selection', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(getTextNode(queryTextSpan('text-b')), 0)
+      initialRange.setEnd(getTextNode(queryTextSpan('text-c')), 1)
+      const liveSelection = makeLiveRangeSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+
+      const originalGetClientRects = Range.prototype.getClientRects
+      const originalGetBoundingClientRect =
+        Range.prototype.getBoundingClientRect
+      let nativeSelectionRects = [
+        makeDomRect({ left: 10, top: 50, width: 20, height: 56 })
+      ]
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: vi.fn(() => nativeSelectionRects)
+      })
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: vi.fn(
+          () =>
+            nativeSelectionRects[0] ??
+            makeDomRect({ left: 0, top: 0, width: 0, height: 0 })
+        )
+      })
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        await waitFor(() => {
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+        onTextSelectionChange.mockClear()
+
+        nativeSelectionRects = []
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+
+        const previewPath = page.querySelector(
+          '.hamster-reader__selection-overlay-path'
+        ) as SVGPathElement | null
+        expectPathCoversRect(previewPath ?? undefined, {
+          left: 10,
+          top: 50,
+          width: 21,
+          height: 96
+        })
+        await waitFor(() => {
+          const handles = viewerRoot.querySelectorAll('[data-handle-type]')
+          expect(handles).toHaveLength(2)
+          handles.forEach((handle) => {
+            expect(handle).toHaveAttribute('aria-hidden', 'true')
+            expect(handle).toHaveAttribute(
+              'data-selection-handle-hidden',
+              'true'
+            )
+            expect(
+              handle.classList.contains(
+                'hamster-reader__selection-handle--hidden'
+              )
+            ).toBe(true)
+          })
+        })
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+
+        nativeSelectionRects = [
+          makeDomRect({ left: 10, top: 50, width: 20, height: 96 })
+        ]
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 138
+        })
+
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+        const [endText, endDetail] = onTextSelectionEnd.mock.calls[0]
+        expect(endText).toHaveProperty('id', 'text-b')
+        expect(endDetail.text).toBe(endText)
+        expect(endDetail.selectedText).toBe('BCD')
+        expect(
+          endDetail.texts.map((text: IntermediateText) => text.id)
+        ).toEqual(['text-b', 'text-c', 'text-d'])
+        await waitFor(() => {
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+        const finalPath = page.querySelector(
+          '.hamster-reader__selection-overlay-path'
+        ) as SVGPathElement | null
+        expectPathCoversRect(finalPath ?? undefined, {
+          left: 10,
+          top: 50,
+          width: 20,
+          height: 96
+        })
+      } finally {
+        Object.defineProperty(Range.prototype, 'getClientRects', {
+          configurable: true,
+          value: originalGetClientRects
+        })
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+          configurable: true,
+          value: originalGetBoundingClientRect
+        })
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cross-page drag preview spans pages, then final pointerup scopes overlay and handles from native Selection rects', async () => {
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      const { document: mockDoc } = makeCrossPageTextDocument()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(
+        screen.getByTestId('intermediate-page-2')
+      )
+      await waitFor(() => {
+        expect(screen.getByText('P1B')).toBeInTheDocument()
+        expect(screen.getByText('P2C')).toBeInTheDocument()
+      })
+
+      mockCrossPageSelectionRects()
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page1 = screen.getByTestId('intermediate-page-1')
+      const page2 = screen.getByTestId('intermediate-page-2')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y < 220) return queryTextSpan('p1-b')
+        return queryTextSpan('p2-c')
+      })
+
+      const originalGetClientRects = Range.prototype.getClientRects
+      const originalGetBoundingClientRect =
+        Range.prototype.getBoundingClientRect
+      const p1TextNode = getTextNode(queryTextSpan('p1-b'))
+      const p2TextNode = getTextNode(queryTextSpan('p2-c'))
+      let rangeRectPhase: 'preview' | 'final' = 'preview'
+      const previewMustNotLeakRect = makeDomRect({
+        left: 200,
+        top: 80,
+        width: 55,
+        height: 17
+      })
+      const finalPage1Rect = makeDomRect({
+        left: 20,
+        top: 60,
+        width: 80,
+        height: 20
+      })
+      const finalPage2Rect = makeDomRect({
+        left: 20,
+        top: 310,
+        width: 80,
+        height: 20
+      })
+      const startBoundaryRect = makeDomRect({
+        left: 20,
+        top: 60,
+        width: 0,
+        height: 20
+      })
+      const endBoundaryRect = makeDomRect({
+        left: 100,
+        top: 310,
+        width: 0,
+        height: 20
+      })
+
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: vi.fn(function (this: Range) {
+          if (this.collapsed) {
+            if (this.startContainer === p1TextNode) return [startBoundaryRect]
+            if (this.startContainer === p2TextNode) return [endBoundaryRect]
+            return []
+          }
+          return rangeRectPhase === 'final'
+            ? [finalPage1Rect, finalPage2Rect]
+            : []
+        })
+      })
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: vi.fn(function (this: Range) {
+          if (this.collapsed) {
+            if (this.startContainer === p1TextNode) return startBoundaryRect
+            if (this.startContainer === p2TextNode) return endBoundaryRect
+            return makeDomRect({ left: 0, top: 0, width: 0, height: 0 })
+          }
+          return rangeRectPhase === 'final'
+            ? finalPage1Rect
+            : previewMustNotLeakRect
+        })
+      })
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+          clientX: 40,
+          clientY: 70
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 320 })
+
+        await waitFor(() => {
+          expect(getOverlayBlocks(page1)).toHaveLength(1)
+          expect(getOverlayBlocks(page2)).toHaveLength(1)
+        })
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(liveSelection.selection.toString()).toBe('P1BP2AP2BP2C')
+        expectPathCoversRect(getOverlayBlocks(page1)[0], {
+          left: 20,
+          top: 60,
+          width: 1,
+          height: 20
+        })
+        expectPathCoversRect(getOverlayBlocks(page2)[0], {
+          left: 100,
+          top: 90,
+          width: 1,
+          height: 20
+        })
+
+        rangeRectPhase = 'final'
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 320
+        })
+
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd.mock.calls[0][1].selectedText).toBe(
+          'P1BP2AP2BP2C'
+        )
+        expect(liveSelection.selection.toString()).toBe('P1BP2AP2BP2C')
+        expect(liveSelection.selection.isCollapsed).toBe(false)
+
+        await waitFor(() => {
+          expect(page1.querySelector('[data-handle-type="start"]')).toBeTruthy()
+          expect(page2.querySelector('[data-handle-type="end"]')).toBeTruthy()
+        })
+        expect(page1.querySelector('[data-handle-type="end"]')).toBeNull()
+        expect(page2.querySelector('[data-handle-type="start"]')).toBeNull()
+
+        expectPathCoversRect(getOverlayBlocks(page1)[0], {
+          left: 20,
+          top: 60,
+          width: 80,
+          height: 20
+        })
+        expectPathCoversRect(getOverlayBlocks(page2)[0], {
+          left: 20,
+          top: 90,
+          width: 80,
+          height: 20
+        })
+
+        const page1StartHandle = page1.querySelector(
+          '[data-handle-type="start"]'
+        ) as HTMLElement
+        const page2EndHandle = page2.querySelector(
+          '[data-handle-type="end"]'
+        ) as HTMLElement
+        expect(page1StartHandle).toHaveStyle({ left: '20px', top: '80px' })
+        expect(page2EndHandle).toHaveStyle({ left: '100px', top: '110px' })
+      } finally {
+        Object.defineProperty(Range.prototype, 'getClientRects', {
+          configurable: true,
+          value: originalGetClientRects
+        })
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+          configurable: true,
+          value: originalGetBoundingClientRect
+        })
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    describe('handle visibility during drag preview', () => {
+      const assertHandlesVisible = (root: HTMLElement) => {
+        const handles = root.querySelectorAll('[data-handle-type]')
+        expect(handles.length).toBeGreaterThanOrEqual(2)
+        handles.forEach((handle) => {
+          expect(handle).not.toHaveAttribute('aria-hidden', 'true')
+          expect(handle).not.toHaveAttribute(
+            'data-selection-handle-hidden',
+            'true'
+          )
+          expect(
+            handle.classList.contains(
+              'hamster-reader__selection-handle--hidden'
+            )
+          ).toBe(false)
+        })
+      }
+
+      const assertHandlesHidden = (root: HTMLElement) => {
+        const handles = root.querySelectorAll('[data-handle-type]')
+        expect(handles.length).toBeGreaterThanOrEqual(2)
+        handles.forEach((handle) => {
+          expect(handle).toHaveAttribute('aria-hidden', 'true')
+          expect(handle).toHaveAttribute('data-selection-handle-hidden', 'true')
+          expect(
+            handle.classList.contains(
+              'hamster-reader__selection-handle--hidden'
+            )
+          ).toBe(true)
+        })
+      }
+
+      const setupHandleVisibilityTest = () => {
+        const { document: mockDoc } = makeFourTextDocument()
+        const onTextSelectionChange = vi.fn()
+        const onTextSelectionEnd = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            renderMode='direct'
+            selectionOverlay
+            selectionHandleElement={<button type='button' />}
+            onTextSelectionChange={onTextSelectionChange}
+            onTextSelectionEnd={onTextSelectionEnd}
+          />
+        )
+
+        return { mockDoc, onTextSelectionChange, onTextSelectionEnd }
+      }
+
+      const setupSelectionAndDragContext = async () => {
+        const helpers = setupHandleVisibilityTest()
+
+        await waitFor(() => {
+          expect(screen.getByText('B')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const page = layoutFourTextPage()
+        const initialRange = globalThis.document.createRange()
+        initialRange.setStart(getTextNode(queryTextSpan('text-b')), 0)
+        initialRange.setEnd(getTextNode(queryTextSpan('text-c')), 1)
+        const liveSelection = makeLiveRangeSelection(initialRange)
+        const getSelectionSpy = vi
+          .spyOn(window, 'getSelection')
+          .mockReturnValue(liveSelection.selection)
+        const restoreCaretApis = installUnavailableCaretPointApis()
+        mockElementFromPoint(page)
+
+        const originalGetClientRects = Range.prototype.getClientRects
+        const originalGetBoundingClientRect =
+          Range.prototype.getBoundingClientRect
+        let nativeSelectionRects = [
+          makeDomRect({ left: 10, top: 50, width: 20, height: 56 })
+        ]
+        Object.defineProperty(Range.prototype, 'getClientRects', {
+          configurable: true,
+          value: vi.fn(() => nativeSelectionRects)
+        })
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+          configurable: true,
+          value: vi.fn(
+            () =>
+              nativeSelectionRects[0] ??
+              makeDomRect({ left: 0, top: 0, width: 0, height: 0 })
+          )
+        })
+
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+        await waitFor(() => {
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+
+        return {
+          ...helpers,
+          viewerRoot,
+          page,
+          liveSelection,
+          getSelectionSpy,
+          restoreCaretApis,
+          originalGetClientRects,
+          originalGetBoundingClientRect,
+          setNativeSelectionRects: (rects: DOMRect[]) => {
+            nativeSelectionRects = rects
+          }
+        }
+      }
+
+      // eslint-disable-next-line sonarjs/assertions-in-tests -- assertHandlesVisible contains expect()
+      it('keeps completed-selection handles visible after pointerdown without movement', async () => {
+        const ctx = await setupSelectionAndDragContext()
+        try {
+          dispatchPointerDragStart(screen.getByText('B'), {
+            clientX: 12,
+            clientY: 58
+          })
+
+          assertHandlesVisible(ctx.viewerRoot)
+        } finally {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: ctx.originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: ctx.originalGetBoundingClientRect
+          })
+          ctx.restoreCaretApis()
+          ctx.getSelectionSpy.mockRestore()
+        }
+      })
+
+      // eslint-disable-next-line sonarjs/assertions-in-tests -- assertHandlesHidden contains expect()
+      it('hides both handles after pointermove past drag threshold', async () => {
+        const ctx = await setupSelectionAndDragContext()
+        try {
+          ctx.setNativeSelectionRects([])
+          dispatchPointerDragStart(screen.getByText('B'), {
+            clientX: 12,
+            clientY: 58
+          })
+          dispatchPointerDragMove(ctx.viewerRoot, {
+            clientX: 100,
+            clientY: 138
+          })
+
+          await waitFor(() => {
+            assertHandlesHidden(ctx.viewerRoot)
+          })
+        } finally {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: ctx.originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: ctx.originalGetBoundingClientRect
+          })
+          ctx.restoreCaretApis()
+          ctx.getSelectionSpy.mockRestore()
+        }
+      })
+
+      // eslint-disable-next-line sonarjs/assertions-in-tests -- assertHandlesVisible/Hidden contain expect()
+      it('restores handles visible after pointerup finalizes overlay', async () => {
+        const ctx = await setupSelectionAndDragContext()
+        try {
+          ctx.setNativeSelectionRects([])
+          dispatchPointerDragStart(screen.getByText('B'), {
+            clientX: 12,
+            clientY: 58
+          })
+          dispatchPointerDragMove(ctx.viewerRoot, {
+            clientX: 100,
+            clientY: 138
+          })
+
+          await waitFor(() => {
+            assertHandlesHidden(ctx.viewerRoot)
+          })
+
+          ctx.setNativeSelectionRects([
+            makeDomRect({ left: 10, top: 50, width: 20, height: 96 })
+          ])
+          dispatchPointerDragEnd(ctx.viewerRoot, 'pointerup', {
+            clientX: 100,
+            clientY: 138
+          })
+
+          await waitFor(() => {
+            assertHandlesVisible(ctx.viewerRoot)
+          })
+        } finally {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: ctx.originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: ctx.originalGetBoundingClientRect
+          })
+          ctx.restoreCaretApis()
+          ctx.getSelectionSpy.mockRestore()
+        }
+      })
+
+      // eslint-disable-next-line sonarjs/assertions-in-tests -- assertHandlesVisible contains expect()
+      it('restores handles visible after pointercancel and returns to idle', async () => {
+        const ctx = await setupSelectionAndDragContext()
+        try {
+          ctx.setNativeSelectionRects([])
+          dispatchPointerDragStart(screen.getByText('B'), {
+            clientX: 12,
+            clientY: 58
+          })
+          dispatchPointerDragMove(ctx.viewerRoot, {
+            clientX: 100,
+            clientY: 138
+          })
+
+          await waitFor(() => {
+            assertHandlesHidden(ctx.viewerRoot)
+          })
+
+          ctx.setNativeSelectionRects([
+            makeDomRect({ left: 10, top: 50, width: 20, height: 96 })
+          ])
+          dispatchPointerDragEnd(ctx.viewerRoot, 'pointercancel', {
+            clientX: 100,
+            clientY: 138
+          })
+
+          await waitFor(() => {
+            assertHandlesVisible(ctx.viewerRoot)
+          })
+        } finally {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: ctx.originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: ctx.originalGetBoundingClientRect
+          })
+          ctx.restoreCaretApis()
+          ctx.getSelectionSpy.mockRestore()
+        }
+      })
+
+      it('cancels from armed without collapsing the existing native Selection and keeps handles visible', async () => {
+        const ctx = await setupSelectionAndDragContext()
+        try {
+          ctx.onTextSelectionChange.mockClear()
+          ctx.onTextSelectionEnd.mockClear()
+          ctx.liveSelection.selection.removeAllRanges.mockClear()
+          ctx.liveSelection.selection.addRange.mockClear()
+
+          dispatchPointerDragStart(screen.getByText('B'), {
+            clientX: 12,
+            clientY: 58
+          })
+          dispatchPointerDragEnd(ctx.viewerRoot, 'pointercancel', {
+            clientX: 12,
+            clientY: 58
+          })
+
+          expect(ctx.onTextSelectionChange).not.toHaveBeenCalled()
+          expect(ctx.onTextSelectionEnd).not.toHaveBeenCalled()
+          expect(ctx.liveSelection.selection.toString()).toBe('BC')
+          expect(ctx.liveSelection.selection.isCollapsed).toBe(false)
+          expect(
+            ctx.liveSelection.selection.removeAllRanges
+          ).not.toHaveBeenCalled()
+          expect(ctx.liveSelection.selection.addRange).not.toHaveBeenCalled()
+          assertHandlesVisible(ctx.viewerRoot)
+
+          dispatchPointerDragStart(screen.getByText('C'), {
+            clientX: 12,
+            clientY: 98
+          })
+          dispatchPointerDragMove(ctx.viewerRoot, {
+            clientX: 100,
+            clientY: 138
+          })
+
+          expect(ctx.onTextSelectionChange).toHaveBeenCalledTimes(1)
+          expect(ctx.onTextSelectionChange.mock.calls[0][1].selectedText).toBe(
+            'CD'
+          )
+        } finally {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: ctx.originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: ctx.originalGetBoundingClientRect
+          })
+          ctx.restoreCaretApis()
+          ctx.getSelectionSpy.mockRestore()
+        }
+      })
+
+      it('cancels from dragging once, restores handles, and starts the next drag with a fresh anchor', async () => {
+        const ctx = await setupSelectionAndDragContext()
+        try {
+          ctx.onTextSelectionChange.mockClear()
+          ctx.onTextSelectionEnd.mockClear()
+
+          ctx.setNativeSelectionRects([])
+          dispatchPointerDragStart(screen.getByText('B'), {
+            clientX: 12,
+            clientY: 58
+          })
+          dispatchPointerDragMove(ctx.viewerRoot, {
+            clientX: 100,
+            clientY: 98
+          })
+          await waitFor(() => {
+            assertHandlesHidden(ctx.viewerRoot)
+          })
+
+          ctx.setNativeSelectionRects([
+            makeDomRect({ left: 10, top: 50, width: 20, height: 56 })
+          ])
+          dispatchPointerDragEnd(ctx.viewerRoot, 'pointercancel', {
+            clientX: 100,
+            clientY: 98
+          })
+
+          expect(ctx.onTextSelectionEnd).toHaveBeenCalledTimes(1)
+          expect(ctx.onTextSelectionEnd.mock.calls[0][1].selectedText).toBe(
+            'BC'
+          )
+          await waitFor(() => {
+            assertHandlesVisible(ctx.viewerRoot)
+          })
+
+          dispatchPointerDragStart(screen.getByText('C'), {
+            clientX: 12,
+            clientY: 98
+          })
+          dispatchPointerDragMove(ctx.viewerRoot, {
+            clientX: 100,
+            clientY: 138
+          })
+
+          expect(ctx.onTextSelectionChange).toHaveBeenCalledTimes(2)
+          expect(ctx.onTextSelectionChange.mock.calls[1][1].selectedText).toBe(
+            'CD'
+          )
+        } finally {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: ctx.originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: ctx.originalGetBoundingClientRect
+          })
+          ctx.restoreCaretApis()
+          ctx.getSelectionSpy.mockRestore()
+        }
+      })
+    })
   })
 
   describe('polygon geometry rendering', () => {
@@ -5787,7 +6724,7 @@ describe('IntermediateDocumentViewer', () => {
         expectPathCoversRect(blocks[0], {
           left: 10,
           top: 20,
-          width: 30,
+          width: 31,
           height: 8
         })
 
@@ -5806,10 +6743,10 @@ describe('IntermediateDocumentViewer', () => {
         blocks = getOverlayBlocks(page)
         expect(blocks).toHaveLength(1)
         expectPathCoversRect(blocks[0], {
-          left: 30,
-          top: 50,
-          width: 25,
-          height: 10
+          left: 10,
+          top: 20,
+          width: 31,
+          height: 8
         })
       } finally {
         getSelectionSpy.mockRestore()
@@ -5910,7 +6847,7 @@ describe('IntermediateDocumentViewer', () => {
         expectPathCoversRect(initialBlock, {
           left: 10,
           top: 20,
-          width: 30,
+          width: 31,
           height: 8
         })
 
@@ -6766,6 +7703,38 @@ describe('default selection handle (line+circle visual)', () => {
     expect(scssSource).toMatch(
       /&\.hamster-reader__selection-handle--end[\s\S]*?left:\s*-3px;[\s\S]*?bottom:\s*-4px;/
     )
+  })
+
+  it('moves start handle wrapper above-left of anchor (translate -100%, -100%) while end handle stays right-above (translate 0, -100%)', () => {
+    const scssSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/styles/reader.scss'),
+      'utf-8'
+    )
+
+    // Start handle uses translate(-100%, -100%) in both the base
+    // `.hamster-reader__selection-handle--start` and the default compound
+    // override so the wrapper sits above-left of the anchor.
+    const startBaseMatches = scssSource.match(
+      /&--start\s*\{\s*transform:\s*translate\(-100%,\s*-100%\);/g
+    )
+    expect(startBaseMatches).toHaveLength(1)
+
+    const startDefaultMatches = scssSource.match(
+      /&\.hamster-reader__selection-handle--start\s*\{\s*transform:\s*translate\(-100%,\s*-100%\);/g
+    )
+    expect(startDefaultMatches).toHaveLength(1)
+
+    // End handle must remain unchanged: translate(0, -100%) in both base
+    // and default compound override.
+    const endBaseMatches = scssSource.match(
+      /&--end\s*\{\s*transform:\s*translate\(0,\s*-100%\);/g
+    )
+    expect(endBaseMatches).toHaveLength(1)
+
+    const endDefaultMatches = scssSource.match(
+      /&\.hamster-reader__selection-handle--end\s*\{\s*transform:\s*translate\(0,\s*-100%\);/g
+    )
+    expect(endDefaultMatches).toHaveLength(1)
   })
 
   it('keeps default handle wrapper hit-target attributes intact for the drag adapter', async () => {

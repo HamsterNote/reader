@@ -20,6 +20,18 @@ import {
   type DragSelectionAdapter
 } from './selection/dragSelectionAdapter'
 import {
+  armDragPreview,
+  cancelDragPreview,
+  createDragPreviewSession,
+  finalizeDragPreview,
+  geometryToOverlayRects,
+  shouldShowSelectionHandles,
+  updateDragPreview,
+  type DragPreviewRect,
+  type DragPreviewSession,
+  type DragPreviewState
+} from './selection/dragPreviewModel'
+import {
   composeSelection,
   createOrderedRange
 } from './selection/selectionComposer'
@@ -1110,9 +1122,15 @@ export function IntermediateDocumentViewer({
     clientX: 0,
     clientY: 0
   })
+  const dragPreviewSessionRef = useRef<DragPreviewSession>(
+    createDragPreviewSession()
+  )
+  const [dragPreviewState, setDragPreviewState] =
+    useState<DragPreviewState>('idle')
   const dragSelectionAnchorRef = useRef<{
     node: Node
     offset: number
+    previewRect: DragPreviewRect
   } | null>(null)
   const dragSelectionEndEmittedRef = useRef(false)
   const skipNextMouseUpSelectionEndRef = useRef(false)
@@ -2086,6 +2104,89 @@ export function IntermediateDocumentViewer({
   const htmlParserErrorRef = useRef(htmlParserError)
   htmlParserErrorRef.current = htmlParserError
 
+  const setDragPreviewSession = useCallback((session: DragPreviewSession) => {
+    dragPreviewSessionRef.current = session
+    setDragPreviewState((prevState) =>
+      prevState === session.state ? prevState : session.state
+    )
+  }, [])
+
+  const getCaretPreviewRect = useCallback(
+    (caretInfo: {
+      range: Range
+      pageNumber: number
+    }): DragPreviewRect | null => {
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot) return null
+
+      const textElement = getClosestTextElement(caretInfo.range.startContainer)
+      if (!textElement || !viewerRoot.contains(textElement)) return null
+
+      const pageElement = getPageElementByPageNumber(
+        caretInfo.pageNumber,
+        viewerRoot,
+        pageRefs.current
+      )
+      if (!pageElement) return null
+
+      const textRect = textElement.getBoundingClientRect()
+      const pageRect = pageElement.getBoundingClientRect()
+      const textLength = textElement.textContent?.length ?? 0
+      const startOffset = caretInfo.range.startOffset
+      const offsetRatio =
+        textLength > 0
+          ? Math.min(Math.max(startOffset, 0), textLength) / textLength
+          : 0
+      const caretX = textRect.left + textRect.width * offsetRatio
+
+      return {
+        x: caretX - pageRect.left,
+        y: textRect.top - pageRect.top,
+        width: 1,
+        height: Math.max(textRect.height, 1),
+        pageNumber: caretInfo.pageNumber
+      }
+    },
+    []
+  )
+
+  const renderSelectionOverlayRects = useCallback(
+    (rects: ReaderSelectionOverlayRect[]) => {
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot || rects.length === 0) return false
+
+      overlayRectsRef.current = rects
+
+      const htmlParserOverlayActive =
+        htmlContentRef.current && !htmlParserErrorRef.current
+
+      if (htmlParserOverlayActive) {
+        if (overlayElRef.current) {
+          const rootRects = rects.map((rect) =>
+            getRootOverlayRect(rect, viewerRoot, pageRefs.current)
+          )
+          const polygons = rectsToUnionPolygons(rootRects)
+          const d = polygonsToSvgPath(polygons)
+          overlayElRef.current.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+        }
+      } else {
+        overlayContainerRefs.current.forEach((container, pageNumber) => {
+          const pageRects = rects.filter((r) => r.pageNumber === pageNumber)
+          if (pageRects.length === 0) {
+            container.innerHTML = ''
+            return
+          }
+          const polygons = rectsToUnionPolygons(pageRects)
+          const d = polygonsToSvgPath(polygons)
+          container.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+        })
+      }
+
+      return true
+    },
+    []
+  )
+
   const clearOverlay = useCallback(() => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current)
@@ -2129,37 +2230,12 @@ export function IntermediateDocumentViewer({
       pageRefs.current
     )
 
-    overlayRectsRef.current = rects
-
     if (rects.length === 0) {
       clearOverlay()
       return
     }
 
-    const htmlParserOverlayActive =
-      htmlContentRef.current && !htmlParserErrorRef.current
-
-    if (htmlParserOverlayActive) {
-      if (overlayElRef.current) {
-        const rootRects = rects.map((rect) =>
-          getRootOverlayRect(rect, viewerRoot, pageRefs.current)
-        )
-        const polygons = rectsToUnionPolygons(rootRects)
-        const d = polygonsToSvgPath(polygons)
-        overlayElRef.current.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
-      }
-    } else {
-      overlayContainerRefs.current.forEach((container, pageNumber) => {
-        const pageRects = rects.filter((r) => r.pageNumber === pageNumber)
-        if (pageRects.length === 0) {
-          container.innerHTML = ''
-          return
-        }
-        const polygons = rectsToUnionPolygons(pageRects)
-        const d = polygonsToSvgPath(polygons)
-        container.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
-      })
-    }
+    renderSelectionOverlayRects(rects)
 
     // 根据 selection 的 start/end 容器创建 collapsed range 并取其边界矩形：
     // - start 手柄：锚定在 collapsed-start 矩形的 LEFT 边缘（不覆盖文字）
@@ -2169,10 +2245,10 @@ export function IntermediateDocumentViewer({
       range,
       viewerRoot,
       pageRefs.current,
-      Boolean(htmlParserOverlayActive)
+      Boolean(htmlContentRef.current && !htmlParserErrorRef.current)
     )
     setSelectionHandlePositions(handlePositions)
-  }, [clearOverlay])
+  }, [clearOverlay, renderSelectionOverlayRects])
 
   const refreshSelectionOverlay = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -2256,10 +2332,52 @@ export function IntermediateDocumentViewer({
     }
 
     const finishDragSelection = (clientX: number, clientY: number) => {
-      if (!dragSelectionAnchorRef.current) return
+      const anchor = dragSelectionAnchorRef.current
+      if (!anchor) {
+        activeMouseSelectionRef.current.active = false
+        dragSelectionAnchorRef.current = null
+        setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
+        return
+      }
+
+      if (dragPreviewSessionRef.current.state !== 'dragging') {
+        activeMouseSelectionRef.current.active = false
+        dragSelectionAnchorRef.current = null
+        setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
+        return
+      }
+
+      const finalizingPreview = finalizeDragPreview(
+        dragPreviewSessionRef.current
+      )
+      setDragPreviewSession(
+        finalizingPreview === dragPreviewSessionRef.current
+          ? cancelDragPreview(finalizingPreview)
+          : finalizingPreview
+      )
 
       activeMouseSelectionRef.current.clientX = clientX
       activeMouseSelectionRef.current.clientY = clientY
+
+      const finalCaretInfo = resolveDragCaret(clientX, clientY)
+      const writableSelection = window.getSelection()
+      if (
+        finalCaretInfo &&
+        writableSelection &&
+        typeof writableSelection.removeAllRanges === 'function' &&
+        typeof writableSelection.addRange === 'function'
+      ) {
+        const range = createOrderedRange(
+          anchor.node,
+          anchor.offset,
+          finalCaretInfo.range.startContainer,
+          finalCaretInfo.range.startOffset
+        )
+        finalCaretInfo.range.detach()
+        composeSelection(range)
+      } else {
+        finalCaretInfo?.range.detach()
+      }
 
       // Retained to inspect the Selection that the Drag path just composed, so
       // blank-click suppression and final overlay refresh can be applied.
@@ -2286,11 +2404,15 @@ export function IntermediateDocumentViewer({
       }
 
       preserveOverlayDuringMouseUpRef.current = false
+      setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
     }
 
     const adapter = createDragSelectionAdapter(root, {
       onStart: (clientX, clientY) => {
         if (dragStateRef.current.active) {
+          setDragPreviewSession(
+            cancelDragPreview(dragPreviewSessionRef.current)
+          )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
           return
@@ -2298,6 +2420,20 @@ export function IntermediateDocumentViewer({
 
         const caretInfo = resolveDragCaret(clientX, clientY)
         if (!caretInfo) {
+          setDragPreviewSession(
+            cancelDragPreview(dragPreviewSessionRef.current)
+          )
+          dragSelectionAnchorRef.current = null
+          activeMouseSelectionRef.current.active = false
+          return
+        }
+
+        const previewRect = getCaretPreviewRect(caretInfo)
+        if (!previewRect) {
+          caretInfo.range.detach()
+          setDragPreviewSession(
+            cancelDragPreview(dragPreviewSessionRef.current)
+          )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
           return
@@ -2305,8 +2441,12 @@ export function IntermediateDocumentViewer({
 
         dragSelectionAnchorRef.current = {
           node: caretInfo.range.startContainer,
-          offset: caretInfo.range.startOffset
+          offset: caretInfo.range.startOffset,
+          previewRect
         }
+        setDragPreviewSession(
+          armDragPreview(createDragPreviewSession(), { clientX, clientY })
+        )
         dragSelectionEndEmittedRef.current = false
         activeMouseSelectionRef.current = {
           active: true,
@@ -2321,6 +2461,9 @@ export function IntermediateDocumentViewer({
         const anchor = dragSelectionAnchorRef.current
         if (!anchor) return
         if (dragStateRef.current.active) {
+          setDragPreviewSession(
+            cancelDragPreview(dragPreviewSessionRef.current)
+          )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
           return
@@ -2328,6 +2471,31 @@ export function IntermediateDocumentViewer({
 
         activeMouseSelectionRef.current.clientX = clientX
         activeMouseSelectionRef.current.clientY = clientY
+
+        const caretInfo = resolveDragCaret(clientX, clientY)
+        if (!caretInfo) return
+
+        const focusPreviewRect = getCaretPreviewRect(caretInfo)
+        if (focusPreviewRect) {
+          const previewRects = geometryToOverlayRects(
+            anchor.previewRect,
+            focusPreviewRect
+          )
+          const nextPreview = updateDragPreview(
+            dragPreviewSessionRef.current,
+            { clientX, clientY },
+            previewRects
+          )
+          setDragPreviewSession(nextPreview)
+
+          if (
+            overlayOptions?.enabled &&
+            nextPreview.state === 'dragging' &&
+            nextPreview.previewRects.length > 0
+          ) {
+            renderSelectionOverlayRects(nextPreview.previewRects)
+          }
+        }
 
         // Required Selection composition capability check. Do not remove: the
         // Drag adapter writes the composed range via removeAllRanges/addRange.
@@ -2337,11 +2505,9 @@ export function IntermediateDocumentViewer({
           typeof writableSelection.removeAllRanges !== 'function' ||
           typeof writableSelection.addRange !== 'function'
         ) {
+          caretInfo.range.detach()
           return
         }
-
-        const caretInfo = resolveDragCaret(clientX, clientY)
-        if (!caretInfo) return
 
         const range = createOrderedRange(
           anchor.node,
@@ -2362,7 +2528,10 @@ export function IntermediateDocumentViewer({
           selectedText: selection.toString()
         }
 
-        if (overlayOptions?.enabled) {
+        if (
+          overlayOptions?.enabled &&
+          dragPreviewSessionRef.current.state !== 'dragging'
+        ) {
           refreshSelectionOverlayRef.current()
         }
 
@@ -2382,14 +2551,18 @@ export function IntermediateDocumentViewer({
       activeMouseSelectionRef.current.active = false
       dragSelectionAnchorRef.current = null
       dragSelectionEndEmittedRef.current = false
+      setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
     }
   }, [
     viewerRootElement,
     runtimeDocument,
     overlayOptions?.enabled,
     emitSelectionEnd,
+    getCaretPreviewRect,
     getSelectionDetail,
-    onTextSelectionChange
+    onTextSelectionChange,
+    renderSelectionOverlayRects,
+    setDragPreviewSession
   ])
 
   useEffect(() => {
@@ -2740,16 +2913,23 @@ export function IntermediateDocumentViewer({
   const renderSelectionHandle = useCallback(
     (
       type: 'start' | 'end',
-      position: ReaderSelectionHandlePosition
+      position: ReaderSelectionHandlePosition,
+      hidden?: boolean
     ): React.ReactNode => {
       if (selectionHandleElement === null) return null
       const baseStyle: React.CSSProperties = {
         position: 'absolute',
         left: `${position.rootX ?? position.x}px`,
         top: `${position.rootY ?? position.y}px`,
-        pointerEvents: 'auto'
+        pointerEvents: hidden ? 'none' : 'auto'
       }
-      const baseClassName = `hamster-reader__selection-handle hamster-reader__selection-handle--${type}`
+      const hiddenModifier = hidden
+        ? ' hamster-reader__selection-handle--hidden'
+        : ''
+      const baseClassName = `hamster-reader__selection-handle hamster-reader__selection-handle--${type}${hiddenModifier}`
+      const hiddenAttrs: Record<string, string> = hidden
+        ? { 'aria-hidden': 'true', 'data-selection-handle-hidden': 'true' }
+        : {}
 
       if (selectionHandleElement === undefined) {
         // 默认 Android 水滴样式手柄；具体外观由 SCSS 控制
@@ -2759,6 +2939,7 @@ export function IntermediateDocumentViewer({
             data-handle-type={type}
             className={`${baseClassName} hamster-reader__selection-handle--default hamster-reader__selection-handle--default-${type}`}
             style={baseStyle}
+            {...hiddenAttrs}
           />
         )
       }
@@ -2785,7 +2966,8 @@ export function IntermediateDocumentViewer({
           key: type,
           className: mergedClassName,
           style: mergedStyle,
-          'data-handle-type': type
+          'data-handle-type': type,
+          ...hiddenAttrs
         }
       )
     },
@@ -2855,18 +3037,24 @@ export function IntermediateDocumentViewer({
             >
               {Array.from(selectionHandlePositions.entries()).flatMap(
                 ([pageNumber, entry]) => {
+                  const handlesHidden =
+                    !shouldShowSelectionHandles(dragPreviewState)
                   const nodes: React.ReactNode[] = []
                   if (entry.start) {
                     nodes.push(
                       <React.Fragment key={`start-${pageNumber}`}>
-                        {renderSelectionHandle('start', entry.start)}
+                        {renderSelectionHandle(
+                          'start',
+                          entry.start,
+                          handlesHidden
+                        )}
                       </React.Fragment>
                     )
                   }
                   if (entry.end) {
                     nodes.push(
                       <React.Fragment key={`end-${pageNumber}`}>
-                        {renderSelectionHandle('end', entry.end)}
+                        {renderSelectionHandle('end', entry.end, handlesHidden)}
                       </React.Fragment>
                     )
                   }
@@ -2957,13 +3145,24 @@ export function IntermediateDocumentViewer({
                   }}
                 >
                   {(() => {
+                    const handlesHidden =
+                      !shouldShowSelectionHandles(dragPreviewState)
                     const entry = selectionHandlePositions.get(pageNumber)
                     if (!entry) return null
                     return (
                       <>
                         {entry.start &&
-                          renderSelectionHandle('start', entry.start)}
-                        {entry.end && renderSelectionHandle('end', entry.end)}
+                          renderSelectionHandle(
+                            'start',
+                            entry.start,
+                            handlesHidden
+                          )}
+                        {entry.end &&
+                          renderSelectionHandle(
+                            'end',
+                            entry.end,
+                            handlesHidden
+                          )}
                       </>
                     )
                   })()}

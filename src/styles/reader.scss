@@ -274,13 +274,20 @@
     // Start handle: anchor at boundary LEFT edge → body extends LEFT of that
     // point (mirrored teardrop sits left of the first selected character).
     &--start {
-      transform: translate(-100%, 0);
+      transform: translate(-100%, -100%);
     }
 
     // End handle: anchor at boundary RIGHT edge → body extends RIGHT of that
     // point (teardrop sits right of the last selected character).
     &--end {
       transform: translate(0, -100%);
+    }
+
+    // Hidden state: keep mounted but visually hidden during active drag.
+    // pointer-events: none prevents interaction; opacity: 0 hides visually.
+    &--hidden {
+      opacity: 0;
+      pointer-events: none;
     }
   }
 
@@ -308,8 +315,8 @@
   //
   // Geometry recap (see buildBoundaryHandlePosition):
   //   • Start anchor = (left, bottom) of the first selected char.
-  //     Wrapper transform: translate(-100%, 0) → wrapper sits LEFT of and
-  //     BELOW the anchor (anchor touches the wrapper's TOP-RIGHT corner).
+  //     Wrapper transform: translate(-100%, -100%) → wrapper sits ABOVE-LEFT
+  //     of the anchor (anchor touches the wrapper's BOTTOM-RIGHT corner).
   //     The vertical line runs along the wrapper's RIGHT edge so its TOP
   //     endpoint lands exactly on the anchor (selection bottom edge), and
   //     the circle sits on that TOP endpoint — visually above the line.
@@ -375,7 +382,7 @@
     // `... --default ... --start ... --default-start` — only the single-dash
     // `--start` and `--default` classes form a usable compound selector here.
     &.hamster-reader__selection-handle--start {
-      transform: translate(-100%, 0);
+      transform: translate(-100%, -100%);
 
       &::after {
         right: 0;
