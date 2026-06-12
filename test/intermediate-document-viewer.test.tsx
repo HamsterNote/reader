@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildSelectionPayload,
   getSelectionOverlayRects,
+  isNonSpaceBlankText,
   mergeSelectionRects
 } from '../src/components/IntermediateDocumentViewer'
 import {
@@ -962,6 +963,18 @@ describe('IntermediateDocumentViewer', () => {
       vi.restoreAllMocks()
     })
 
+    it('identifies non-space blank text without hiding ordinary spaces', () => {
+      expect(isNonSpaceBlankText('\n')).toBe(true)
+      expect(isNonSpaceBlankText('\t')).toBe(true)
+      expect(isNonSpaceBlankText('\u00A0')).toBe(true)
+      expect(isNonSpaceBlankText('\u200B')).toBe(true)
+      expect(isNonSpaceBlankText('')).toBe(false)
+      expect(isNonSpaceBlankText(' ')).toBe(false)
+      expect(isNonSpaceBlankText('  ')).toBe(false)
+      expect(isNonSpaceBlankText(' A ')).toBe(false)
+      expect(isNonSpaceBlankText('A')).toBe(false)
+    })
+
     it('mergeSelectionRects merges same-line adjacent/overlapping rects', () => {
       const rects = [
         { x: 10, y: 20, width: 30, height: 16 },
@@ -1054,6 +1067,136 @@ describe('IntermediateDocumentViewer', () => {
         width: 60,
         height: 16
       })
+
+      elementFromPointSpy.mockRestore()
+      document.body.removeChild(viewerRoot)
+    })
+
+    it('getSelectionOverlayRects omits non-space blank text rects while preserving space rects', () => {
+      const pageViewport = { left: 0, top: 0, width: 400, height: 150 }
+      const page = createMockPageElement(1, pageViewport)
+      const viewerRoot = document.createElement('div')
+      document.body.appendChild(viewerRoot)
+      viewerRoot.appendChild(page)
+
+      const makeTextSpan = (
+        id: string,
+        content: string,
+        rect: { left: number; top: number; width: number; height: number }
+      ) => {
+        const span = document.createElement('span')
+        span.setAttribute('data-text-id', id)
+        span.setAttribute('data-page-number', '1')
+        span.textContent = content
+        vi.spyOn(span, 'getBoundingClientRect').mockReturnValue({
+          left: rect.left,
+          top: rect.top,
+          right: rect.left + rect.width,
+          bottom: rect.top + rect.height,
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+          toJSON: () => rect
+        } as DOMRect)
+        page.appendChild(span)
+        return span
+      }
+
+      const visibleA = makeTextSpan('text-a', 'A', {
+        left: 10,
+        top: 10,
+        width: 10,
+        height: 16
+      })
+      makeTextSpan('text-blank', '\u200B', {
+        left: 20,
+        top: 10,
+        width: 10,
+        height: 16
+      })
+      makeTextSpan('text-space', ' ', {
+        left: 30,
+        top: 10,
+        width: 10,
+        height: 16
+      })
+      const visibleB = makeTextSpan('text-b', 'B', {
+        left: 40,
+        top: 10,
+        width: 10,
+        height: 16
+      })
+
+      if (!('elementFromPoint' in document)) {
+        Object.defineProperty(document, 'elementFromPoint', {
+          value: vi.fn(),
+          writable: true,
+          configurable: true
+        })
+      }
+      const elementFromPointSpy = vi
+        .spyOn(document, 'elementFromPoint')
+        .mockReturnValue(page)
+
+      const range = document.createRange()
+      range.setStart(visibleA.firstChild ?? visibleA, 0)
+      range.setEnd(visibleB.firstChild ?? visibleB, 1)
+      const selection = makeMockSelectionFromRange(range)
+      const pageRefs = new Map<number, HTMLDivElement>([
+        [1, page as HTMLDivElement]
+      ])
+      const textElements = new Map<
+        string,
+        { text: IntermediateText; pageNumber: number }
+      >([
+        [
+          'text-a',
+          {
+            text: { id: 'text-a', content: 'A' } as IntermediateText,
+            pageNumber: 1
+          }
+        ],
+        [
+          'text-blank',
+          {
+            text: { id: 'text-blank', content: '\u200B' } as IntermediateText,
+            pageNumber: 1
+          }
+        ],
+        [
+          'text-space',
+          {
+            text: { id: 'text-space', content: ' ' } as IntermediateText,
+            pageNumber: 1
+          }
+        ],
+        [
+          'text-b',
+          { text: { id: 'text-b', content: 'B' } as IntermediateText, pageNumber: 1 }
+        ]
+      ])
+
+      const result = getSelectionOverlayRects(
+        selection,
+        viewerRoot,
+        pageRefs,
+        textElements
+      )
+
+      expect(result).toHaveLength(3)
+      expect(result).toContainEqual(
+        expect.objectContaining({ x: 10, y: 10, width: 10, height: 16 })
+      )
+      expect(result).toContainEqual(
+        expect.objectContaining({ x: 30, y: 10, width: 10, height: 16 })
+      )
+      expect(result).toContainEqual(
+        expect.objectContaining({ x: 40, y: 10, width: 10, height: 16 })
+      )
+      expect(result).not.toContainEqual(
+        expect.objectContaining({ x: 20, y: 10, width: 10, height: 16 })
+      )
 
       elementFromPointSpy.mockRestore()
       document.body.removeChild(viewerRoot)
@@ -4943,6 +5086,58 @@ describe('IntermediateDocumentViewer', () => {
         expect(endDetail).toHaveProperty('texts')
         expect(endDetail).toHaveProperty('text')
         expect(endDetail.text).toBe(endText)
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('normalizes active mouseup selection away from page container boundaries', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionEnd = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const pageRange = globalThis.document.createRange()
+      pageRange.selectNodeContents(page)
+      const liveSelection = makeLiveRangeSelection(pageRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+
+      try {
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            clientX: 100,
+            clientY: 138
+          })
+        )
+
+        expect(liveSelection.activeRange.startContainer).toBe(
+          getTextNode(queryTextSpan('text-b'))
+        )
+        expect(liveSelection.activeRange.endContainer).toBe(
+          getTextNode(queryTextSpan('text-d'))
+        )
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()

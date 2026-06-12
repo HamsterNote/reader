@@ -95,6 +95,13 @@ export type ReaderSelectionOverlayRect = {
   pageNumber: number
 }
 
+const NON_SPACE_BLANK_TEXT_RE = /^[\s\u200B-\u200D\uFEFF]+$/u
+
+export const isNonSpaceBlankText = (content: string): boolean =>
+  content.length > 0 &&
+  NON_SPACE_BLANK_TEXT_RE.test(content) &&
+  content.replace(/ /g, '').length > 0
+
 /** 选择覆盖层配置选项 */
 export type ReaderSelectionOverlayOptions = {
   /** 覆盖层颜色，默认 '#ec4899' */
@@ -368,12 +375,17 @@ export const mergeSelectionRects = (
 export const getSelectionOverlayRects = (
   selection: Selection,
   viewerRoot: HTMLElement,
-  pageRefs: Map<number, HTMLDivElement>
+  pageRefs: Map<number, HTMLDivElement>,
+  textElements?: Map<string, { text: IntermediateText; pageNumber: number }>
 ): ReaderSelectionOverlayRect[] => {
   if (selection.isCollapsed) return []
 
   const range = selection.getRangeAt(0)
-  const clientRects = Array.from(range.getClientRects())
+  const clientRects = collectSelectionOverlayClientRects(
+    range,
+    viewerRoot,
+    textElements
+  )
 
   if (clientRects.length === 0) return []
 
@@ -431,6 +443,70 @@ export const getSelectionOverlayRects = (
   }
 
   return result
+}
+
+const collectSelectionOverlayClientRects = (
+  range: Range,
+  viewerRoot: HTMLElement,
+  textElements?: Map<string, { text: IntermediateText; pageNumber: number }>
+): DOMRect[] => {
+  if (!textElements) return Array.from(range.getClientRects())
+
+  const rects: DOMRect[] = []
+  let handledDirectText = false
+
+  viewerRoot.querySelectorAll('[data-text-id]').forEach((element) => {
+    if (!(element instanceof HTMLElement)) return
+
+    const textId = element.getAttribute('data-text-id')
+    const record = textId ? textElements.get(textId) : undefined
+    if (!record) return
+
+    try {
+      if (!range.intersectsNode(element)) return
+    } catch {
+      return
+    }
+
+    handledDirectText = true
+    if (isNonSpaceBlankText(record.text.content)) return
+
+    const elementRange = element.ownerDocument.createRange()
+    const clippedRange = element.ownerDocument.createRange()
+    try {
+      elementRange.selectNodeContents(element)
+      if (element.contains(range.startContainer)) {
+        clippedRange.setStart(range.startContainer, range.startOffset)
+      } else {
+        clippedRange.setStart(
+          elementRange.startContainer,
+          elementRange.startOffset
+        )
+      }
+
+      if (element.contains(range.endContainer)) {
+        clippedRange.setEnd(range.endContainer, range.endOffset)
+      } else {
+        clippedRange.setEnd(elementRange.endContainer, elementRange.endOffset)
+      }
+
+      const clippedRects =
+        typeof clippedRange.getClientRects === 'function'
+          ? Array.from(clippedRange.getClientRects())
+          : []
+      if (clippedRects.length > 0) {
+        rects.push(...clippedRects)
+        return
+      }
+
+      rects.push(element.getBoundingClientRect())
+    } finally {
+      elementRange.detach()
+      clippedRange.detach()
+    }
+  })
+
+  return handledDirectText ? rects : Array.from(range.getClientRects())
 }
 
 const getRootOverlayRect = (
@@ -1536,6 +1612,80 @@ export function IntermediateDocumentViewer({
     [buildSelectionDetailBetweenElements, getNearestActiveTextElementForPoint]
   )
 
+  const recomposeActiveTextSelection = useCallback(
+    (viewerRoot: HTMLElement): boolean => {
+      const activeSelection = activeMouseSelectionRef.current
+      if (!activeSelection.active) return false
+
+      const selection = window.getSelection()
+      if (
+        !selection ||
+        selection.isCollapsed ||
+        typeof selection.removeAllRanges !== 'function' ||
+        typeof selection.addRange !== 'function'
+      ) {
+        return false
+      }
+
+      const range = selection.getRangeAt(0)
+      const startTextElement =
+        range.startContainer instanceof Element
+          ? range.startContainer.closest('[data-text-id]')
+          : range.startContainer.parentElement?.closest('[data-text-id]')
+      const endTextElement =
+        range.endContainer instanceof Element
+          ? range.endContainer.closest('[data-text-id]')
+          : range.endContainer.parentElement?.closest('[data-text-id]')
+      if (
+        startTextElement instanceof HTMLElement &&
+        endTextElement instanceof HTMLElement &&
+        viewerRoot.contains(startTextElement) &&
+        viewerRoot.contains(endTextElement)
+      ) {
+        return false
+      }
+
+      const startCaretInfo = resolveCaret(
+        activeSelection.startClientX,
+        activeSelection.startClientY,
+        {
+          viewerRoot,
+          pageRefs: pageRefs.current,
+          textElements: textElementsRef.current
+        }
+      )
+      const endCaretInfo = resolveCaret(
+        activeSelection.clientX,
+        activeSelection.clientY,
+        {
+          viewerRoot,
+          pageRefs: pageRefs.current,
+          textElements: textElementsRef.current
+        }
+      )
+
+      if (!startCaretInfo || !endCaretInfo) {
+        startCaretInfo?.range.detach()
+        endCaretInfo?.range.detach()
+        return false
+      }
+
+      // 鼠标抬起时把浏览器可能包含的 Page 容器边界重新夹到文字 caret，
+      // 保留文本选择结果，但避免 Selection 里残留整页节点。
+      const normalizedRange = createOrderedRange(
+        startCaretInfo.range.startContainer,
+        startCaretInfo.range.startOffset,
+        endCaretInfo.range.startContainer,
+        endCaretInfo.range.startOffset
+      )
+      startCaretInfo.range.detach()
+      endCaretInfo.range.detach()
+      composeSelection(normalizedRange)
+      return true
+    },
+    []
+  )
+
   const getDirectTextElementForPoint = useCallback(
     (
       point: { clientX: number; clientY: number },
@@ -2226,7 +2376,8 @@ export function IntermediateDocumentViewer({
     const rects = getSelectionOverlayRects(
       selection,
       viewerRoot,
-      pageRefs.current
+      pageRefs.current,
+      textElementsRef.current
     )
 
     if (rects.length === 0) {
@@ -2374,6 +2525,7 @@ export function IntermediateDocumentViewer({
         )
         finalCaretInfo.range.detach()
         composeSelection(range)
+        recomposeActiveTextSelection(root)
       } else {
         finalCaretInfo?.range.detach()
       }
@@ -2560,6 +2712,7 @@ export function IntermediateDocumentViewer({
     getCaretPreviewRect,
     getSelectionDetail,
     onTextSelectionChange,
+    recomposeActiveTextSelection,
     renderSelectionOverlayRects,
     setDragPreviewSession
   ])
@@ -2631,6 +2784,7 @@ export function IntermediateDocumentViewer({
         activeMouseSelectionRef.current.clientX = event.clientX
         activeMouseSelectionRef.current.clientY = event.clientY
         ignoreNextBlankClickRef.current = true
+        recomposeActiveTextSelection(root)
       }
       emitSelectionEnd()
       activeMouseSelectionRef.current.active = false
@@ -2649,7 +2803,8 @@ export function IntermediateDocumentViewer({
     onTextSelectionEnd,
     onSelectText,
     bodyDragCallbacksEnabled,
-    emitSelectionEnd
+    emitSelectionEnd,
+    recomposeActiveTextSelection
   ])
 
   const applyHandleDragSelection = useCallback(
