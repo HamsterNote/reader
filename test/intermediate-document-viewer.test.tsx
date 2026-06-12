@@ -6413,6 +6413,115 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
+    it('keeps the selection after an end-handle drag followed by a blank synthesized click', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const restoreRangeRects = installRangeRectMocks()
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = text.firstChild as Text
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(textNode, 0)
+      initialRange.setEnd(textNode, 4)
+      const liveSelection = makeLiveSelection(initialRange)
+      const pageRectSpy = mockElementRect(page, {
+        left: 10,
+        top: 10,
+        width: 100,
+        height: 150
+      })
+      const textRectSpy = mockElementRect(text, {
+        left: 20,
+        top: 24,
+        width: 60,
+        height: 12
+      })
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const restoreCaretPosition = installCaretPositionFromPoint(textNode, 8)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        await waitFor(() => {
+          expect(
+            page.querySelectorAll('.hamster-reader__selection-handle')
+          ).toHaveLength(2)
+        })
+        await act(async () => {
+          await Promise.resolve()
+        })
+
+        const endHandle = viewerRoot.querySelector('[data-handle-type="end"]')
+        if (!(endHandle instanceof HTMLElement)) {
+          throw new Error('Expected rendered end handle')
+        }
+        endHandle.dispatchEvent(
+          new MouseEvent('pointerdown', {
+            bubbles: false,
+            button: 0,
+            clientX: 50,
+            clientY: 25
+          })
+        )
+        endHandle.dispatchEvent(
+          new MouseEvent('pointermove', {
+            bubbles: false,
+            clientX: 70,
+            clientY: 24
+          })
+        )
+        endHandle.dispatchEvent(
+          new MouseEvent('pointerup', {
+            bubbles: false,
+            clientX: 70,
+            clientY: 24
+          })
+        )
+
+        liveSelection.selection.removeAllRanges.mockClear()
+
+        page.dispatchEvent(
+          new MouseEvent('click', {
+            bubbles: true,
+            clientX: 95,
+            clientY: 95
+          })
+        )
+
+        expect(liveSelection.selection.removeAllRanges).not.toHaveBeenCalled()
+        expect(liveSelection.activeRange.startContainer).toBe(textNode)
+        expect(liveSelection.activeRange.startOffset).toBe(0)
+        expect(liveSelection.activeRange.endContainer).toBe(textNode)
+        expect(liveSelection.activeRange.endOffset).toBe(8)
+        expect(
+          page.querySelectorAll('.hamster-reader__selection-overlay-path')
+        ).toHaveLength(1)
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretPosition()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreRangeRects()
+      }
+    })
+
     it('renders cloned start and end handles from the active selection', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       const currentRects = [

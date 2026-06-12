@@ -1,11 +1,10 @@
-import type { DecodeOptions } from '@hamster-note/html-parser'
-import { HtmlParser } from '@hamster-note/html-parser'
-import type {
-  IntermediateContent,
-  IntermediateDocumentSerialized,
-  IntermediateText
+import { type DecodeOptions, HtmlParser } from '@hamster-note/html-parser'
+import {
+  type IntermediateContent,
+  IntermediateDocument,
+  type IntermediateDocumentSerialized,
+  type IntermediateText
 } from '@hamster-note/types'
-import { IntermediateDocument } from '@hamster-note/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -16,21 +15,21 @@ import {
   resolveCaret
 } from './selection/caretResolver'
 import {
-  createDragSelectionAdapter,
-  type DragSelectionAdapter
-} from './selection/dragSelectionAdapter'
-import {
   armDragPreview,
   cancelDragPreview,
   createDragPreviewSession,
+  type DragPreviewRect,
+  type DragPreviewSession,
+  type DragPreviewState,
   finalizeDragPreview,
   geometryToOverlayRects,
   shouldShowSelectionHandles,
-  updateDragPreview,
-  type DragPreviewRect,
-  type DragPreviewSession,
-  type DragPreviewState
+  updateDragPreview
 } from './selection/dragPreviewModel'
+import {
+  createDragSelectionAdapter,
+  type DragSelectionAdapter
+} from './selection/dragSelectionAdapter'
 import {
   composeSelection,
   createOrderedRange
@@ -2811,6 +2810,13 @@ export function IntermediateDocumentViewer({
 
       applyHandleDragAtPoint(clientX, clientY)
 
+      const selection = window.getSelection()
+      if (selection && !selection.isCollapsed) {
+        // 端点拖拽期间会临时禁用手柄 pointer-events，浏览器随后合成的 click
+        // 可能落到下方空白页上；这里消费一次空白点击，避免误清掉刚调整好的选区。
+        ignoreNextBlankClickRef.current = true
+      }
+
       dragStateRef.current = {
         active: false,
         handleType: null,
@@ -2866,14 +2872,24 @@ export function IntermediateDocumentViewer({
     const adapters = handleElements.map(({ element, handleType }) => {
       const adapter = createDragSelectionAdapter(element, {
         onStart: () => {
+          // 拖动开始时，禁用端点图标的指针事件，防止 mouseup 触发在端点上
+          element.style.pointerEvents = 'none'
           beginHandleDrag(handleType)
         },
         onMove: (clientX, clientY) => {
           if (dragStateRef.current.handleType !== handleType) return
           applyHandleDragAtPoint(clientX, clientY)
         },
-        onEnd: finishHandleDrag,
-        onAllEnd: finishHandleDrag
+        onEnd: (clientX, clientY) => {
+          // 拖动结束时，恢复端点图标的指针事件
+          element.style.pointerEvents = ''
+          finishHandleDrag(clientX, clientY)
+        },
+        onAllEnd: (clientX, clientY) => {
+          // 拖动结束时，恢复端点图标的指针事件
+          element.style.pointerEvents = ''
+          finishHandleDrag(clientX, clientY)
+        }
       })
 
       pointerEventTypes.forEach((eventType) => {
@@ -2888,6 +2904,8 @@ export function IntermediateDocumentViewer({
         for (const eventType of pointerEventTypes) {
           element.removeEventListener(eventType, stopHandlePointerEvent)
         }
+        // 清理时恢复端点图标的指针事件，防止因 effect 重新运行导致端点图标永久禁用
+        element.style.pointerEvents = ''
         adapter.destroy()
       }
 
