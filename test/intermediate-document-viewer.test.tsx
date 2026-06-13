@@ -45,6 +45,27 @@ vi.mock('@hamster-note/html-parser', () => ({
 
 vi.mock('@system-ui-js/multi-drag', () => {
   const dragInstancesKey = '__hamsterReaderMockDragInstances'
+  type MockFingerInput = {
+    pointerId: number
+    clientX: number
+    clientY: number
+    timeStamp?: number
+  }
+  type MockFinger = {
+    pointerId: number
+    getLastOperation: () => {
+      point: { x: number; y: number }
+      timestamp: number
+    }
+  }
+  type MockDragOptions = {
+    maxFingerCount?: number
+    inertial?: boolean
+    passive?: boolean
+    getPose?: (element: HTMLElement) => unknown
+    setPose?: (element: HTMLElement, pose: unknown) => void
+    setPoseOnEnd?: (element: HTMLElement, pose: unknown) => void
+  }
   const DragOperationType = {
     Start: 'start',
     Move: 'move',
@@ -54,13 +75,24 @@ vi.mock('@system-ui-js/multi-drag', () => {
     AllEnd: 'allEnd'
   }
 
-  const makeFinger = (event: MouseEvent | PointerEvent) => ({
-    pointerId: (event as PointerEvent).pointerId ?? 1,
-    getLastOperation: () => ({
-      point: { x: event.clientX, y: event.clientY },
-      timestamp: event.timeStamp
+  const makeFinger = (input: MockFingerInput): MockFinger => {
+    const timestamp = input.timeStamp ?? 0
+    return {
+      pointerId: input.pointerId,
+      getLastOperation: () => ({
+        point: { x: input.clientX, y: input.clientY },
+        timestamp
+      })
+    }
+  }
+
+  const makeFingerFromEvent = (event: MouseEvent | PointerEvent) =>
+    makeFinger({
+      pointerId: (event as PointerEvent).pointerId ?? 1,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      timeStamp: event.timeStamp
     })
-  })
 
   const getDragInstances = () => {
     const existing = Reflect.get(globalThis, dragInstancesKey) as
@@ -78,11 +110,15 @@ vi.mock('@system-ui-js/multi-drag', () => {
     Drag: class MockedDrag {
       private readonly listeners = new Map<
         string,
-        Array<(fingers: ReturnType<typeof makeFinger>[]) => void>
+        Array<(fingers: MockFinger[]) => void>
       >()
       private primaryPointerId: number | null = null
+      public destroyCount = 0
 
-      constructor(private readonly element: HTMLElement) {
+      constructor(
+        private readonly element: HTMLElement,
+        public readonly options: MockDragOptions = {}
+      ) {
         getDragInstances().push(this)
         this.element.addEventListener('pointerdown', this.handlePointerDown)
         this.element.addEventListener('pointermove', this.handlePointerMove)
@@ -92,7 +128,7 @@ vi.mock('@system-ui-js/multi-drag', () => {
 
       addEventListener(
         type: string,
-        callback: (fingers: ReturnType<typeof makeFinger>[]) => void
+        callback: (fingers: MockFinger[]) => void
       ) {
         const callbacks = this.listeners.get(type) ?? []
         callbacks.push(callback)
@@ -101,7 +137,7 @@ vi.mock('@system-ui-js/multi-drag', () => {
 
       removeEventListener(
         type: string,
-        callback?: (fingers: ReturnType<typeof makeFinger>[]) => void
+        callback?: (fingers: MockFinger[]) => void
       ) {
         if (!callback) {
           this.listeners.delete(type)
@@ -115,6 +151,7 @@ vi.mock('@system-ui-js/multi-drag', () => {
       }
 
       destroy() {
+        this.destroyCount += 1
         this.element.removeEventListener('pointerdown', this.handlePointerDown)
         this.element.removeEventListener('pointermove', this.handlePointerMove)
         this.element.removeEventListener('pointerup', this.handlePointerEnd)
@@ -127,27 +164,33 @@ vi.mock('@system-ui-js/multi-drag', () => {
           : DragOperationType.Move
       }
 
-      private emit(type: string, event: MouseEvent | PointerEvent) {
+      emit(type: string, fingers: MockFingerInput[]) {
         this.listeners.get(type)?.forEach((listener) => {
-          listener([makeFinger(event)])
+          listener(fingers.map(makeFinger))
+        })
+      }
+
+      private emitPointer(type: string, event: MouseEvent | PointerEvent) {
+        this.listeners.get(type)?.forEach((listener) => {
+          listener([makeFingerFromEvent(event)])
         })
       }
 
       private handlePointerDown = (event: MouseEvent | PointerEvent) => {
         if (event.button !== 0) return
         this.primaryPointerId = (event as PointerEvent).pointerId ?? 1
-        this.emit(DragOperationType.Start, event)
+        this.emitPointer(DragOperationType.Start, event)
       }
 
       private handlePointerMove = (event: MouseEvent | PointerEvent) => {
         if (this.primaryPointerId === null) return
-        this.emit(DragOperationType.Move, event)
+        this.emitPointer(DragOperationType.Move, event)
       }
 
       private handlePointerEnd = (event: MouseEvent | PointerEvent) => {
         if (this.primaryPointerId === null) return
-        this.emit(DragOperationType.End, event)
-        this.emit(DragOperationType.AllEnd, event)
+        this.emitPointer(DragOperationType.End, event)
+        this.emitPointer(DragOperationType.AllEnd, event)
         this.primaryPointerId = null
       }
     }
@@ -156,7 +199,27 @@ vi.mock('@system-ui-js/multi-drag', () => {
 
 const getMockDragInstances = () =>
   (Reflect.get(globalThis, '__hamsterReaderMockDragInstances') as
-    | Array<{ element: HTMLElement }>
+    | Array<{
+        element: HTMLElement
+        options: {
+          maxFingerCount?: number
+          inertial?: boolean
+          passive?: boolean
+          getPose?: (element: HTMLElement) => unknown
+          setPose?: (element: HTMLElement, pose: unknown) => void
+          setPoseOnEnd?: (element: HTMLElement, pose: unknown) => void
+        }
+        destroyCount: number
+        emit: (
+          type: string,
+          fingers: Array<{
+            pointerId: number
+            clientX: number
+            clientY: number
+            timeStamp?: number
+          }>
+        ) => void
+      }>
     | undefined) ?? []
 
 type MockPage = {
@@ -354,6 +417,61 @@ const mockElementFromPoint = (element: Element | null) => {
   return vi
     .spyOn(globalThis.document, 'elementFromPoint')
     .mockReturnValue(element)
+}
+
+const installQueuedIdleCallback = () => {
+  const originalRequestIdleCallback = window.requestIdleCallback
+  const originalCancelIdleCallback = window.cancelIdleCallback
+  let nextId = 1
+  const callbacks = new Map<number, IdleRequestCallback>()
+
+  const requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
+    const id = nextId
+    nextId += 1
+    callbacks.set(id, callback)
+    return id
+  })
+
+  Object.defineProperty(window, 'requestIdleCallback', {
+    configurable: true,
+    writable: true,
+    value: requestIdleCallback
+  })
+  Object.defineProperty(window, 'cancelIdleCallback', {
+    configurable: true,
+    writable: true,
+    value: vi.fn((id: number) => {
+      callbacks.delete(id)
+    })
+  })
+
+  return {
+    requestedCount() {
+      return requestIdleCallback.mock.calls.length
+    },
+    async flush() {
+      const pendingCallbacks = Array.from(callbacks.entries())
+      callbacks.clear()
+      await act(async () => {
+        for (const [, callback] of pendingCallbacks) {
+          callback({ didTimeout: false, timeRemaining: () => 50 })
+        }
+        await Promise.resolve()
+      })
+    },
+    restore() {
+      Object.defineProperty(window, 'requestIdleCallback', {
+        configurable: true,
+        writable: true,
+        value: originalRequestIdleCallback
+      })
+      Object.defineProperty(window, 'cancelIdleCallback', {
+        configurable: true,
+        writable: true,
+        value: originalCancelIdleCallback
+      })
+    }
+  }
 }
 
 const getRequiredTextNode = (element: HTMLElement) => {
@@ -948,6 +1066,931 @@ describe('IntermediateDocumentViewer', () => {
     expect(pages.get(100)?.getContent).not.toHaveBeenCalled()
   })
 
+  describe('lazy-release bookkeeping', () => {
+    it('default maxLoadedPages uses overscan default: cap 7 for overscan=1, cap 11 for overscan=3', async () => {
+      const idleCallback = installQueuedIdleCallback()
+
+      try {
+        // overscan=1 => defaultCap = max(5, 1*2+5) = 7
+        const { document: doc1, pages: pages1 } = makeDocument({
+          pageCount: 8
+        })
+        const { unmount: unmount1 } = render(
+          <IntermediateDocumentViewer document={doc1} />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 8; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages1.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        // 8 pages loaded > cap 7, so the oldest (page 1) should be evicted
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+        expect(screen.getByText('Page 8 text')).toBeInTheDocument()
+
+        unmount1()
+        idleCallback.restore()
+
+        // overscan=3 => defaultCap = max(5, 3*2+5) = 11
+        const idleCallback2 = installQueuedIdleCallback()
+        const { document: doc2, pages: pages2 } = makeDocument({
+          pageCount: 11
+        })
+
+        try {
+          render(<IntermediateDocumentViewer document={doc2} overscan={3} />)
+
+          for (let pageNumber = 1; pageNumber <= 11; pageNumber += 1) {
+            const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+            intersectionObserverMock.trigger(page)
+            await waitFor(() => {
+              expect(pages2.get(pageNumber)?.getContent).toHaveBeenCalledTimes(
+                1
+              )
+            })
+            intersectionObserverMock.trigger(page, false)
+          }
+
+          await idleCallback2.flush()
+
+          // 11 pages loaded == cap 11, so no eviction
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        } finally {
+          idleCallback2.restore()
+        }
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('Infinity disables eviction scheduling', () => {
+      const originalRequestIdleCallback = window.requestIdleCallback
+      const requestIdleCallback = vi.fn(() => 1)
+      Object.defineProperty(window, 'requestIdleCallback', {
+        configurable: true,
+        writable: true,
+        value: requestIdleCallback
+      })
+
+      try {
+        const { document } = makeDocument({ pageCount: 2 })
+
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            maxLoadedPages={Infinity}
+          />
+        )
+
+        expect(requestIdleCallback).not.toHaveBeenCalled()
+      } finally {
+        Object.defineProperty(window, 'requestIdleCallback', {
+          configurable: true,
+          writable: true,
+          value: originalRequestIdleCallback
+        })
+      }
+    })
+
+    it('maxLoadedPages floor honored: cap respects visible+overscan union', async () => {
+      const idleCallback = installQueuedIdleCallback()
+
+      try {
+        // maxLoadedPages=1 is below floor(5); with overscan=2 the protected
+        // union is at least visible(1) + overscan(2) = 3, but floor is 5.
+        const { document, pages } = makeDocument({ pageCount: 8 })
+
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={2}
+            maxLoadedPages={1}
+          />
+        )
+
+        // Load 6 pages sequentially, leaving each offscreen after load
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        // With floor=5, 6 loaded pages triggers eviction of 1 page (oldest).
+        // Pages 2-6 should still be present.
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+        expect(screen.getByText('Page 6 text')).toBeInTheDocument()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('maxLoadedPages runtime change schedules eviction', async () => {
+      const idleCallback = installQueuedIdleCallback()
+
+      try {
+        const { document, pages } = makeDocument({ pageCount: 20 })
+
+        const { rerender } = render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={10}
+          />
+        )
+
+        // Load 6 pages at cap 10 — no eviction expected
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+
+        // Lower cap to 3 (floor 5 applies, so effective cap = 5)
+        rerender(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={3}
+          />
+        )
+
+        await idleCallback.flush()
+
+        // 6 loaded > effective cap 5, so oldest page evicted
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+        expect(screen.getByText('Page 6 text')).toBeInTheDocument()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('invalid maxLoadedPages uses default cap, not Infinity', async () => {
+      const idleCallback = installQueuedIdleCallback()
+
+      try {
+        // Negative value should fall back to default cap (7 with overscan=1)
+        const { document: docNeg, pages: pagesNeg } = makeDocument({
+          pageCount: 8
+        })
+        const { unmount: unmountNeg } = render(
+          <IntermediateDocumentViewer document={docNeg} maxLoadedPages={-3} />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 8; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pagesNeg.get(pageNumber)?.getContent).toHaveBeenCalledTimes(
+              1
+            )
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        // 8 pages > default cap 7, so eviction should have happened
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+        expect(screen.getByText('Page 8 text')).toBeInTheDocument()
+
+        unmountNeg()
+        idleCallback.restore()
+
+        // NaN value should also fall back to default cap
+        const idleCallback2 = installQueuedIdleCallback()
+        const { document: docNaN, pages: pagesNaN } = makeDocument({
+          pageCount: 8
+        })
+
+        try {
+          render(
+            <IntermediateDocumentViewer
+              document={docNaN}
+              maxLoadedPages={NaN}
+            />
+          )
+
+          for (let pageNumber = 1; pageNumber <= 8; pageNumber += 1) {
+            const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+            intersectionObserverMock.trigger(page)
+            await waitFor(() => {
+              expect(
+                pagesNaN.get(pageNumber)?.getContent
+              ).toHaveBeenCalledTimes(1)
+            })
+            intersectionObserverMock.trigger(page, false)
+          }
+
+          await idleCallback2.flush()
+
+          await waitFor(() => {
+            expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+          })
+          expect(screen.getByText('Page 8 text')).toBeInTheDocument()
+        } finally {
+          idleCallback2.restore()
+        }
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('runtime cap change does not crash', async () => {
+      const consoleErrorSpy = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => {})
+      const { document } = makeDocument({ pageCount: 5 })
+
+      try {
+        const { rerender } = render(
+          <IntermediateDocumentViewer document={document} maxLoadedPages={5} />
+        )
+
+        rerender(
+          <IntermediateDocumentViewer document={document} maxLoadedPages={3} />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+        expect(consoleErrorSpy).not.toHaveBeenCalled()
+      } finally {
+        consoleErrorSpy.mockRestore()
+      }
+    })
+
+    it('cleanup clears eviction timer on unmount', () => {
+      const originalRequestIdleCallback = window.requestIdleCallback
+      const originalCancelIdleCallback = window.cancelIdleCallback
+      const originalClearTimeout = window.clearTimeout
+      const requestIdleCallback = vi.fn(() => 101)
+      const cancelIdleCallback = vi.fn()
+      const clearTimeoutSpy = vi.fn()
+
+      Object.defineProperty(window, 'requestIdleCallback', {
+        configurable: true,
+        writable: true,
+        value: requestIdleCallback
+      })
+      Object.defineProperty(window, 'cancelIdleCallback', {
+        configurable: true,
+        writable: true,
+        value: cancelIdleCallback
+      })
+      Object.defineProperty(window, 'clearTimeout', {
+        configurable: true,
+        writable: true,
+        value: clearTimeoutSpy
+      })
+
+      try {
+        const { document } = makeDocument({ pageCount: 2 })
+        const { unmount } = render(
+          <IntermediateDocumentViewer document={document} maxLoadedPages={5} />
+        )
+
+        expect(requestIdleCallback).toHaveBeenCalled()
+        cancelIdleCallback.mockClear()
+        clearTimeoutSpy.mockClear()
+
+        unmount()
+
+        expect(cancelIdleCallback).toHaveBeenCalledWith(101)
+        expect(clearTimeoutSpy).toHaveBeenCalledWith(101)
+      } finally {
+        Object.defineProperty(window, 'requestIdleCallback', {
+          configurable: true,
+          writable: true,
+          value: originalRequestIdleCallback
+        })
+        Object.defineProperty(window, 'cancelIdleCallback', {
+          configurable: true,
+          writable: true,
+          value: originalCancelIdleCallback
+        })
+        Object.defineProperty(window, 'clearTimeout', {
+          configurable: true,
+          writable: true,
+          value: originalClearTimeout
+        })
+      }
+    })
+
+    it('activePinchRef is initialized to false', () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+    })
+
+    it('pageLastVisibleAtRef records visible pages', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+
+      render(<IntermediateDocumentViewer document={document} overscan={0} />)
+
+      await waitFor(() => {
+        expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+      })
+
+      intersectionObserverMock.trigger(
+        screen.getByTestId('intermediate-page-2')
+      )
+
+      await waitFor(() => {
+        expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it('evicts offscreen pages by LRU when loaded count exceeds the cap', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+        expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+        expect(screen.getByText('Page 6 text')).toBeInTheDocument()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('evicts base image text status and loadability as one page bundle', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+      pages.forEach((page, pageNumber) => {
+        page.thumbnail = `data:image/png;base64,page-${pageNumber}`
+      })
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(
+              screen.getByText(`Page ${pageNumber} text`)
+            ).toBeInTheDocument()
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        await waitFor(() => {
+          const evictedPage = screen.getByTestId('intermediate-page-1')
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+          expect(
+            evictedPage.querySelector(
+              '.hamster-reader__intermediate-page-base-image'
+            )
+          ).not.toBeInTheDocument()
+          expect(evictedPage).not.toHaveClass(
+            'hamster-reader__intermediate-page--loading'
+          )
+        })
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('evicts ocr cache entries so OCR re-runs after base image reload', async () => {
+      const { ImageParser } = await import('@hamster-note/image-parser')
+      const encodeSpy = vi.mocked(ImageParser.encode)
+      encodeSpy.mockClear()
+      const idleCallback = installQueuedIdleCallback()
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => new Response(new Blob(['image'])))
+      const { document, pages } = makeDocument({ pageCount: 20 })
+      pages.forEach((page, pageNumber) => {
+        page.thumbnail = `data:image/png;base64,page-${pageNumber}`
+      })
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+            ocr
+          />
+        )
+
+        const page1 = screen.getByTestId('intermediate-page-1')
+        await waitFor(() => {
+          expect(
+            page1.querySelector('.hamster-reader__intermediate-page-base-image')
+          ).toBeInTheDocument()
+        })
+        intersectionObserverMock.trigger(page1)
+        await waitFor(() => {
+          expect(encodeSpy).toHaveBeenCalledTimes(1)
+          expect(
+            page1.querySelector('[data-text-id^="ocr-"]')
+          ).toBeInTheDocument()
+        })
+        await act(async () => {
+          await Promise.resolve()
+          await Promise.resolve()
+        })
+        intersectionObserverMock.trigger(page1, false)
+
+        for (let pageNumber = 2; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+          expect(
+            page1.querySelector('[data-text-id^="ocr-"]')
+          ).not.toBeInTheDocument()
+        })
+        const callsAfterEviction = encodeSpy.mock.calls.length
+
+        intersectionObserverMock.trigger(page1)
+
+        await waitFor(() => {
+          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(2)
+          expect(
+            page1.querySelector('.hamster-reader__intermediate-page-base-image')
+          ).toBeInTheDocument()
+        })
+        intersectionObserverMock.trigger(page1)
+
+        await waitFor(() => {
+          expect(encodeSpy.mock.calls.length).toBeGreaterThan(
+            callsAfterEviction
+          )
+        })
+      } finally {
+        fetchSpy.mockRestore()
+        idleCallback.restore()
+      }
+    })
+
+    it('reloads evicted page content when revisiting the page', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        const page1 = screen.getByTestId('intermediate-page-1')
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+
+        intersectionObserverMock.trigger(page1)
+
+        await waitFor(() => {
+          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(2)
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('html parser mode evicts per-page maps without clearing htmlContent', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+      const mockHtml =
+        '<div class="hamster-note-document"><div class="page">HTML Parser Output</div></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={0}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('html-parser-output')).toContainHTML(
+            'HTML Parser Output'
+          )
+        })
+        await waitFor(() => {
+          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+        })
+
+        await idleCallback.flush()
+
+        await waitFor(() => {
+          expect(screen.getByTestId('html-parser-output')).toContainHTML(
+            'HTML Parser Output'
+          )
+        })
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('zoom does not trigger eviction', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+      const onScaleChange = vi.fn()
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 5; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+        const scheduledAfterLoadedPages = idleCallback.requestedCount()
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+
+        await act(async () => {
+          viewerRoot.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              ctrlKey: true,
+              deltaY: -100,
+              clientX: 40,
+              clientY: 50,
+              deltaMode: WheelEvent.DOM_DELTA_PIXEL
+            })
+          )
+        })
+
+        expect(onScaleChange).toHaveBeenCalledTimes(1)
+        expect(idleCallback.requestedCount()).toBe(scheduledAfterLoadedPages)
+        for (let pageNumber = 1; pageNumber <= 5; pageNumber += 1) {
+          expect(
+            screen.getByText(`Page ${pageNumber} text`)
+          ).toBeInTheDocument()
+        }
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('never evicts visible pages', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        const visiblePage = screen.getByTestId('intermediate-page-1')
+        intersectionObserverMock.trigger(visiblePage)
+        await waitFor(() => {
+          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+        })
+
+        for (let pageNumber = 2; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        await waitFor(() => {
+          expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+        })
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('never evicts pages in overscan window', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={1}
+            maxLoadedPages={3}
+          />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          if (pageNumber !== 3) {
+            intersectionObserverMock.trigger(page, false)
+          }
+        }
+
+        await idleCallback.flush()
+
+        expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+        expect(screen.getByText('Page 4 text')).toBeInTheDocument()
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('never evicts pages with in flight loads', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+      let resolvePageOneContent: ((texts: IntermediateText[]) => void) | null =
+        null
+      pages.get(1)?.getContent.mockImplementationOnce(
+        () =>
+          new Promise<IntermediateText[]>((resolve) => {
+            resolvePageOneContent = resolve
+          })
+      )
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        const page1 = screen.getByTestId('intermediate-page-1')
+        intersectionObserverMock.trigger(page1)
+        await waitFor(() => {
+          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+        })
+        intersectionObserverMock.trigger(page1, false)
+
+        for (let pageNumber = 2; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+        await act(async () => {
+          resolvePageOneContent?.([makeText('text-1', 'Page 1 text')])
+          await Promise.resolve()
+        })
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+        expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('never evicts pages containing current selection', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+      let getSelectionSpy: ReturnType<typeof vi.spyOn> | null = null
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        const selectedText = screen.getByText('Page 1 text')
+        const range = globalThis.document.createRange()
+        range.selectNodeContents(selectedText)
+        getSelectionSpy = vi
+          .spyOn(window, 'getSelection')
+          .mockReturnValue(makeSelectionFromRange(range))
+
+        await idleCallback.flush()
+
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        await waitFor(() => {
+          expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+        })
+      } finally {
+        getSelectionSpy?.mockRestore()
+        idleCallback.restore()
+      }
+    })
+
+    it('eviction during active pinch is deferred', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 20 })
+
+      try {
+        const { unmount } = render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={5}
+          />
+        )
+
+        const gestureDrag = getMockDragInstances().find(
+          (instance) =>
+            instance.element ===
+              screen.getByTestId('intermediate-document-viewer') &&
+            instance.options.passive === undefined
+        )
+        if (!gestureDrag) {
+          throw new Error('Expected root gesture Drag instance')
+        }
+
+        gestureDrag.emit('start', [
+          { pointerId: 1, clientX: 0, clientY: 0 },
+          { pointerId: 2, clientX: 20, clientY: 0 }
+        ])
+
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
+          expect(
+            screen.getByText(`Page ${pageNumber} text`)
+          ).toBeInTheDocument()
+        }
+        unmount()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+
+    it('document and pageRange changes reset eviction state', async () => {
+      const idleCallback = installQueuedIdleCallback()
+      const { document, pages } = makeDocument({ pageCount: 10 })
+
+      try {
+        const { rerender } = render(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            maxLoadedPages={3}
+          />
+        )
+
+        const page1 = screen.getByTestId('intermediate-page-1')
+        intersectionObserverMock.trigger(page1)
+        await waitFor(() => {
+          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+        })
+
+        rerender(
+          <IntermediateDocumentViewer
+            document={document}
+            pageRange={{ start: 2, end: 10 }}
+            overscan={0}
+            maxLoadedPages={3}
+          />
+        )
+
+        expect(
+          screen.queryByTestId('intermediate-page-1')
+        ).not.toBeInTheDocument()
+        // Load 7 pages (2-8) to exceed effective cap of 5 (floor)
+        for (let pageNumber = 2; pageNumber <= 8; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        await idleCallback.flush()
+
+        await waitFor(() => {
+          expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+        })
+        expect(screen.getByText('Page 8 text')).toBeInTheDocument()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+  })
+
   it('stops showing the loading state when a loaded page has no text', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
     pages.get(1)?.getContent.mockResolvedValueOnce([])
@@ -1339,6 +2382,47 @@ describe('IntermediateDocumentViewer', () => {
 
       expect(result).toEqual([
         { x: 20, y: 30, width: 60, height: 16, pageNumber: 1 }
+      ])
+
+      elementFromPointSpy.mockRestore()
+      document.body.removeChild(viewerRoot)
+    })
+
+    it('scale geometry keeps getSelectionOverlayRects page-relative under transformed pages', () => {
+      const pageViewport = { left: 20, top: 40, width: 200, height: 200 }
+      const page = createMockPageElement(1, pageViewport)
+      const scaleSurface = document.createElement('div')
+      scaleSurface.dataset.testid = 'reader-scale-surface'
+      scaleSurface.style.transform = 'scale(2)'
+
+      const pageRefs = new Map<number, HTMLDivElement>([
+        [1, page as HTMLDivElement]
+      ])
+
+      if (!('elementFromPoint' in document)) {
+        Object.defineProperty(document, 'elementFromPoint', {
+          value: vi.fn(),
+          writable: true,
+          configurable: true
+        })
+      }
+      const elementFromPointSpy = vi
+        .spyOn(document, 'elementFromPoint')
+        .mockReturnValue(page)
+
+      const range = makeMockRange([
+        { left: 60, top: 80, width: 40, height: 20 }
+      ])
+      const selection = makeMockSelectionFromRange(range)
+      const viewerRoot = document.createElement('div')
+      document.body.appendChild(viewerRoot)
+      viewerRoot.appendChild(scaleSurface)
+      scaleSurface.appendChild(page)
+
+      const result = getSelectionOverlayRects(selection, viewerRoot, pageRefs)
+
+      expect(result).toEqual([
+        { x: 20, y: 20, width: 20, height: 10, pageNumber: 1 }
       ])
 
       elementFromPointSpy.mockRestore()
@@ -9225,6 +10309,533 @@ describe('IntermediateDocumentViewer', () => {
       // Should snap to nearest text (textA is closer at x=10..30 vs textB at x=50..70)
       expect(result?.range.startContainer).toBe(getRequiredTextNode(textA))
       expect(result?.range.startContainer).not.toBe(bgImage)
+    })
+  })
+
+  describe('zoom state', () => {
+    it('controlled scale prop applies CSS transform', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(<IntermediateDocumentViewer document={document} scale={2} />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      })
+
+      const surface = screen.getByTestId('reader-scale-surface')
+      expect(surface).toHaveStyle({ transform: 'scale(2)' })
+    })
+
+    it('controlled scale ignores internal updates', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const onScaleChange = vi.fn()
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          scale={1.5}
+          defaultScale={2}
+          onScaleChange={onScaleChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      })
+
+      const surface = screen.getByTestId('reader-scale-surface')
+      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+      expect(onScaleChange).not.toHaveBeenCalled()
+
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          scale={1.5}
+          defaultScale={3}
+          onScaleChange={onScaleChange}
+        />
+      )
+
+      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+      expect(onScaleChange).not.toHaveBeenCalled()
+    })
+
+    it('uncontrolled defaultScale initializes once', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={document} defaultScale={1.5} />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      })
+
+      const surface = screen.getByTestId('reader-scale-surface')
+      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+
+      rerender(
+        <IntermediateDocumentViewer document={document} defaultScale={2} />
+      )
+
+      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+    })
+
+    it('scale clamped to min and max', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          scale={10}
+          maxScale={4}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      })
+
+      let surface = screen.getByTestId('reader-scale-surface')
+      expect(surface).toHaveStyle({ transform: 'scale(4)' })
+
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          scale={0.01}
+          minScale={0.25}
+        />
+      )
+
+      surface = screen.getByTestId('reader-scale-surface')
+      expect(surface).toHaveStyle({ transform: 'scale(0.25)' })
+    })
+
+    it('scale one has no transform cost', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      })
+
+      const surface = screen.getByTestId('reader-scale-surface')
+      expect(surface.style.transform).toBe('')
+      expect(surface).not.toHaveAttribute('style')
+    })
+
+    it('selection under scale renders handle anchors in page-relative CSS pixels', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          scale={2}
+          selectionOverlay
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      })
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const pageRectSpy = mockElementRect(page, {
+        left: 5,
+        top: 5,
+        width: 200,
+        height: 300
+      })
+      const elementFromPointSpy = mockElementFromPoint(page)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(
+          makeSelectionWithRects(() => [
+            makeDomRect({ left: 25, top: 25, width: 30, height: 8 })
+          ])
+        )
+
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      await waitFor(() => {
+        expect(
+          page.querySelectorAll('.hamster-reader__selection-handle')
+        ).toHaveLength(2)
+      })
+
+      const startHandle = page.querySelector(
+        '[data-handle-type="start"]'
+      ) as HTMLElement
+      const endHandle = page.querySelector(
+        '[data-handle-type="end"]'
+      ) as HTMLElement
+
+      expect(startHandle).toHaveStyle({ left: '10px', top: '14px' })
+      expect(endHandle).toHaveStyle({ left: '25px', top: '14px' })
+
+      getSelectionSpy.mockRestore()
+      elementFromPointSpy.mockRestore()
+      pageRectSpy.mockRestore()
+    })
+
+    describe('pinch and wheel gestures', () => {
+      const getGestureDrag = () => {
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const gestureDrag = getMockDragInstances().find(
+          (instance) =>
+            instance.element === viewerRoot &&
+            instance.options.passive === undefined
+        )
+
+        if (!gestureDrag) {
+          throw new Error('Expected root gesture Drag instance')
+        }
+
+        return gestureDrag
+      }
+
+      it('ignores plain wheel scroll and pinch-zooms ctrl wheel from cursor focal point', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onScaleChange = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={1}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const plainWheel = new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: false,
+          deltaY: -100,
+          clientX: 40,
+          clientY: 50,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL
+        })
+        expect(viewerRoot.dispatchEvent(plainWheel)).toBe(true)
+        expect(plainWheel.defaultPrevented).toBe(false)
+        expect(onScaleChange).not.toHaveBeenCalled()
+
+        const pinchWheel = new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          deltaY: -100,
+          clientX: 40,
+          clientY: 50,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL
+        })
+        await act(async () => {
+          viewerRoot.dispatchEvent(pinchWheel)
+        })
+
+        const expectedScale = Math.exp(0.1)
+        expect(pinchWheel.defaultPrevented).toBe(true)
+        expect(onScaleChange).toHaveBeenCalledWith(expectedScale, {
+          source: 'wheel',
+          focalPoint: { x: 40, y: 50 }
+        })
+        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
+          transform: `scale(${expectedScale})`
+        })
+      })
+
+      it('uses scaleStep sign for ctrl wheel line and page deltas', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onScaleChange = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={2}
+            scaleStep={0.25}
+            minScale={1}
+            maxScale={3}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        await act(async () => {
+          viewerRoot.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              ctrlKey: true,
+              deltaY: -3,
+              clientX: 12,
+              clientY: 18,
+              deltaMode: WheelEvent.DOM_DELTA_LINE
+            })
+          )
+        })
+
+        expect(onScaleChange).toHaveBeenLastCalledWith(2.5, {
+          source: 'wheel',
+          focalPoint: { x: 12, y: 18 }
+        })
+        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
+          transform: 'scale(2.5)'
+        })
+
+        await act(async () => {
+          viewerRoot.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              ctrlKey: true,
+              deltaY: 1,
+              clientX: 20,
+              clientY: 30,
+              deltaMode: WheelEvent.DOM_DELTA_PAGE
+            })
+          )
+        })
+
+        expect(onScaleChange).toHaveBeenLastCalledWith(1.875, {
+          source: 'wheel',
+          focalPoint: { x: 20, y: 30 }
+        })
+        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
+          transform: 'scale(1.875)'
+        })
+      })
+
+      it('rapid wheel does not emit unchanged scale', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onScaleChange = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={4}
+            maxScale={4}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        await act(async () => {
+          for (let index = 0; index < 3; index += 1) {
+            viewerRoot.dispatchEvent(
+              new WheelEvent('wheel', {
+                bubbles: true,
+                cancelable: true,
+                ctrlKey: true,
+                deltaY: -1,
+                clientX: 12,
+                clientY: 18,
+                deltaMode: WheelEvent.DOM_DELTA_LINE
+              })
+            )
+          }
+        })
+
+        expect(onScaleChange).not.toHaveBeenCalled()
+        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
+          transform: 'scale(4)'
+        })
+      })
+
+      it('zero page document accepts scale props', () => {
+        const consoleErrorSpy = vi
+          .spyOn(console, 'error')
+          .mockImplementation(() => {})
+        const { document } = makeDocument({ pageCount: 0 })
+
+        try {
+          render(
+            <IntermediateDocumentViewer
+              document={document}
+              scale={2}
+              defaultScale={1.5}
+              onScaleChange={vi.fn()}
+              minScale={0.5}
+              maxScale={3}
+              scaleStep={0.2}
+              maxLoadedPages={1}
+            />
+          )
+
+          expect(
+            screen.getByTestId('intermediate-document-viewer')
+          ).toBeEmptyDOMElement()
+          expect(
+            screen.queryByTestId('reader-scale-surface')
+          ).not.toBeInTheDocument()
+          expect(consoleErrorSpy).not.toHaveBeenCalled()
+        } finally {
+          consoleErrorSpy.mockRestore()
+        }
+      })
+
+      it('invalid scale values are safe', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onScaleChange = vi.fn()
+        const { rerender } = render(
+          <IntermediateDocumentViewer
+            document={document}
+            scale={Number.NaN}
+            minScale={Number.NaN}
+            maxScale={-1}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        expect(screen.getByTestId('reader-scale-surface')).not.toHaveAttribute(
+          'style'
+        )
+
+        rerender(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={Number.NaN}
+            minScale={Number.NaN}
+            maxScale={-1}
+            scaleStep={-0.5}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        await act(async () => {
+          viewerRoot.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              ctrlKey: true,
+              deltaY: -1,
+              clientX: 12,
+              clientY: 18,
+              deltaMode: WheelEvent.DOM_DELTA_LINE
+            })
+          )
+        })
+
+        expect(onScaleChange).toHaveBeenCalledWith(1.1, {
+          source: 'wheel',
+          focalPoint: { x: 12, y: 18 }
+        })
+        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
+          transform: 'scale(1.1)'
+        })
+      })
+
+      it('pinch-zooms from two-finger distance ratio and centroid focal point', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onScaleChange = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={1}
+            minScale={0.5}
+            maxScale={3}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const gestureDrag = getGestureDrag()
+        expect(gestureDrag.options).toMatchObject({
+          maxFingerCount: 2,
+          inertial: false
+        })
+        const pose = gestureDrag.options.getPose?.(gestureDrag.element) as
+          | { position: { x: number; y: number }; scale?: number }
+          | undefined
+        expect(pose).toMatchObject({ position: { x: 0, y: 0 }, scale: 1 })
+
+        await act(async () => {
+          gestureDrag.emit('start', [
+            { pointerId: 1, clientX: 0, clientY: 0 },
+            { pointerId: 2, clientX: 100, clientY: 0 }
+          ])
+          gestureDrag.emit('move', [
+            { pointerId: 1, clientX: 0, clientY: 0 },
+            { pointerId: 2, clientX: 150, clientY: 0 }
+          ])
+        })
+
+        expect(onScaleChange).toHaveBeenCalledWith(1.5, {
+          source: 'pinch',
+          focalPoint: { x: 75, y: 0 }
+        })
+        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
+          transform: 'scale(1.5)'
+        })
+
+        await act(async () => {
+          gestureDrag.emit('allEnd', [])
+          gestureDrag.emit('move', [
+            { pointerId: 1, clientX: 0, clientY: 0 },
+            { pointerId: 2, clientX: 300, clientY: 0 }
+          ])
+        })
+
+        expect(onScaleChange).toHaveBeenCalledTimes(1)
+      })
+
+      it('ignores one-finger drag operations for zoom', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onScaleChange = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={1}
+            onScaleChange={onScaleChange}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const gestureDrag = getGestureDrag()
+        await act(async () => {
+          gestureDrag.emit('start', [
+            { pointerId: 1, clientX: 10, clientY: 20 }
+          ])
+          gestureDrag.emit('move', [{ pointerId: 1, clientX: 20, clientY: 30 }])
+          gestureDrag.emit('end', [{ pointerId: 1, clientX: 20, clientY: 30 }])
+        })
+
+        expect(onScaleChange).not.toHaveBeenCalled()
+        expect(screen.getByTestId('reader-scale-surface').style.transform).toBe(
+          ''
+        )
+      })
+
+      it('destroys the gesture Drag exactly once on cleanup', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const { unmount } = render(
+          <IntermediateDocumentViewer document={document} defaultScale={1} />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const gestureDrag = getGestureDrag()
+        unmount()
+
+        expect(gestureDrag.destroyCount).toBe(1)
+      })
     })
   })
 })

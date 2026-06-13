@@ -8,6 +8,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Reader } from '../src/index'
+import type { ReaderProps } from '../src/index'
 import { intersectionObserverMock } from './setup'
 
 vi.mock('@hamster-note/html-parser', () => ({
@@ -909,5 +910,59 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps['onSavedSelectionEdit']).toBeUndefined()
     expect(capturedViewerProps['onActiveSavedSelectionChange']).toBeUndefined()
     expect(capturedViewerProps['onSavedSelectionRestore']).toBeUndefined()
+  })
+})
+
+describe('Reader zoom props', () => {
+  beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+  })
+
+  it('compile-time: zoom props satisfy ReaderProps', () => {
+    const props = {
+      scale: 2,
+      defaultScale: 1.5,
+      onScaleChange: (
+        _scale: number,
+        detail: {
+          source: 'wheel' | 'pinch'
+          focalPoint?: { x: number; y: number }
+        }
+      ) => detail.source,
+      minScale: 0.25,
+      maxScale: 4,
+      scaleStep: 0.1,
+      maxLoadedPages: 7
+    } satisfies ReaderProps
+
+    expect(props.scale).toBe(2)
+    expect(props.maxLoadedPages).toBe(7)
+  })
+
+  it('renders with all zoom and lazy-release props without errors', () => {
+    const onScaleChange = vi.fn()
+    render(
+      <Reader
+        scale={2}
+        defaultScale={1.5}
+        onScaleChange={onScaleChange}
+        minScale={0.25}
+        maxScale={4}
+        scaleStep={0.1}
+        maxLoadedPages={7}
+        document={makeDocument({ pages: [makePage(1)] })}
+      />
+    )
+
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(capturedViewerProps['scale']).toBe(2)
+    expect(capturedViewerProps['defaultScale']).toBe(1.5)
+    expect(capturedViewerProps['onScaleChange']).toBe(onScaleChange)
+    expect(capturedViewerProps['minScale']).toBe(0.25)
+    expect(capturedViewerProps['maxScale']).toBe(4)
+    expect(capturedViewerProps['scaleStep']).toBe(0.1)
+    expect(capturedViewerProps['maxLoadedPages']).toBe(7)
   })
 })

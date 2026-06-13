@@ -290,6 +290,29 @@ describe('saved selection helpers', () => {
     expect(result.segments).toHaveLength(1)
   })
 
+  it('saved selection re resolves after eviction round trip', () => {
+    const saved = makeSavedSelection()
+    const firstInfo = makeTextElement(
+      makeText('text-1', 'The quick brown fox'),
+      1
+    )
+    const firstResult = resolveSavedSelection(saved, [firstInfo])
+
+    firstInfo.element.remove()
+    const evictedResult = resolveSavedSelection(saved, [])
+
+    const restoredInfo = makeTextElement(
+      makeText('text-1', 'The quick brown fox'),
+      1
+    )
+    const restoredResult = resolveSavedSelection(saved, [restoredInfo])
+
+    expect(firstResult.status).toBe('resolved')
+    expect(evictedResult.status).toBe('visual-fallback')
+    expect(restoredResult.status).toBe('resolved')
+    expect(restoredResult.range?.toString()).toBe('quick')
+  })
+
   it('restores by context when text id changes', () => {
     const info = makeTextElement(
       makeText('renamed-text', 'The quick brown fox'),
@@ -363,6 +386,25 @@ describe('saved selection helpers', () => {
       { x: 10, y: 20, width: 80, height: 16, pageNumber: 1 }
     ])
     expect(result.segments).toEqual([])
+  })
+
+  it('saved selection under scale keeps fallback geometry page-relative', () => {
+    const saved = makeSavedSelection({
+      visual: [
+        {
+          pageNumber: 1,
+          pageSize: { width: 100, height: 100 },
+          rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }]
+        }
+      ]
+    })
+
+    const result = resolveSavedSelection(saved, [])
+
+    expect(result.status).toBe('visual-fallback')
+    expect(result.rects).toEqual([
+      { x: 10, y: 20, width: 30, height: 10, pageNumber: 1 }
+    ])
   })
 
   it('restores cross-page selections with one editable range', () => {

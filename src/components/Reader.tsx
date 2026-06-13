@@ -66,6 +66,60 @@ export type ReaderProps = {
   onSavedSelectionRestore?: (
     results: ReaderSavedSelectionRestoreResult[]
   ) => void
+  // ---- Zoom props (all optional, forwarded unchanged) ----
+  /**
+   * Controlled zoom scale. When provided, Reader never mutates zoom internally;
+   * wheel/pinch gestures only report the next clamped value through
+   * `onScaleChange`, and the caller must pass a new `scale` back to update the
+   * view. Invalid/non-positive values are ignored in favor of the safe default
+   * scale of `1`, clamped to the active bounds.
+   */
+  scale?: number
+  /**
+   * Initial zoom scale for uncontrolled mode. This value is read once on mount,
+   * defaults to `1`, and is clamped to `minScale`/`maxScale`; later
+   * `defaultScale` changes do not reset user zoom.
+   */
+  defaultScale?: number
+  /**
+   * Called after a wheel or pinch gesture requests a real scale change. The
+   * first argument is the clamped next scale; `detail.source` identifies the
+   * gesture and `detail.focalPoint`, when present, is the viewport point that
+   * should remain visually anchored.
+   */
+  onScaleChange?: (
+    scale: number,
+    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+  ) => void
+  /**
+   * Minimum allowed zoom scale. Defaults to `0.25`; invalid or non-positive
+   * values fall back to that default. If `minScale` exceeds `maxScale`, the
+   * effective maximum is raised to the minimum so the range remains safe.
+   */
+  minScale?: number
+  /**
+   * Maximum allowed zoom scale. Defaults to `4`; invalid or non-positive values
+   * fall back to that default before the range is normalized.
+   */
+  maxScale?: number
+  /**
+   * Discrete wheel zoom step for line/page wheel events. Defaults to `0.1`
+   * (10% per tick); invalid or non-positive values fall back to the default.
+   * Pixel-mode touchpad wheels use their native exponential delta instead.
+   */
+  scaleStep?: number
+  // ---- Lazy-release prop ----
+  /**
+   * Maximum number of concurrently loaded pages before lazy eviction. The
+   * default is `max(5, overscanPages * 2 + 5)`. Only `Infinity` disables
+   * eviction entirely; `0`, negative, `NaN`, or other invalid values fall back
+   * to the default cap. Finite values are floored by the pages that must remain
+   * protected (visible pages, overscan, in-flight work, selections, active
+   * drags, and saved-selection anchors), so the runtime may keep more pages than
+   * requested. In html-parser mode, eviction preserves monolithic `htmlContent`;
+   * only per-page fallback maps and caches can be released.
+   */
+  maxLoadedPages?: number
 }
 
 const documentHasPages = (
@@ -115,7 +169,14 @@ export function Reader({
   onSavedSelectionEdit,
   activeSavedSelectionId,
   onActiveSavedSelectionChange,
-  onSavedSelectionRestore
+  onSavedSelectionRestore,
+  scale,
+  defaultScale,
+  onScaleChange,
+  minScale,
+  maxScale,
+  scaleStep,
+  maxLoadedPages
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -213,6 +274,13 @@ export function Reader({
           activeSavedSelectionId={activeSavedSelectionId}
           onActiveSavedSelectionChange={onActiveSavedSelectionChange}
           onSavedSelectionRestore={onSavedSelectionRestore}
+          scale={scale}
+          defaultScale={defaultScale}
+          onScaleChange={onScaleChange}
+          minScale={minScale}
+          maxScale={maxScale}
+          scaleStep={scaleStep}
+          maxLoadedPages={maxLoadedPages}
         />
       )
     }

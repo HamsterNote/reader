@@ -6,6 +6,12 @@ import {
   type IntermediateText
 } from '@hamster-note/types'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Drag,
+  DragOperationType,
+  type Finger,
+  type Pose
+} from '@system-ui-js/multi-drag'
 
 import {
   getNearestTextElementForPoint,
@@ -370,6 +376,60 @@ export type IntermediateDocumentViewerProps = {
   onSavedSelectionRestore?: (
     results: ReaderSavedSelectionRestoreResult[]
   ) => void
+  // ---- Zoom props ----
+  /**
+   * Controlled zoom scale. When provided, internal wheel/pinch gestures do not
+   * mutate scale state; they call `onScaleChange` with the next clamped value
+   * and wait for the caller to pass that value back. Invalid/non-positive values
+   * are treated as the safe default scale of `1`, then clamped to the active
+   * bounds.
+   */
+  scale?: number
+  /**
+   * Initial zoom scale for uncontrolled mode. Defaults to `1`, is clamped to the
+   * effective `minScale`/`maxScale` range, and is read only during initial state
+   * creation so later `defaultScale` prop changes do not reset user zoom.
+   */
+  defaultScale?: number
+  /**
+   * Fires only when a wheel or pinch gesture produces a changed, clamped scale.
+   * The detail object reports `source: 'wheel' | 'pinch'` and may include the
+   * viewport focal point used to preserve scroll anchoring.
+   */
+  onScaleChange?: (
+    scale: number,
+    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+  ) => void
+  /**
+   * Lower zoom bound. Defaults to `0.25`; invalid or non-positive values fall
+   * back to the default. If the normalized minimum is greater than the maximum,
+   * the maximum is raised to the minimum to keep clamping deterministic.
+   */
+  minScale?: number
+  /**
+   * Upper zoom bound. Defaults to `4`; invalid or non-positive values fall back
+   * to the default before the final range is normalized.
+   */
+  maxScale?: number
+  /**
+   * Discrete wheel zoom step for line/page wheel events. Defaults to `0.1`; an
+   * invalid or non-positive step falls back to that default. Pixel-mode touchpad
+   * deltas use an exponential scale factor instead of this step.
+   */
+  scaleStep?: number
+  // ---- Lazy-release prop ----
+  /**
+   * Maximum number of concurrently loaded pages before lazy eviction. Defaults
+   * to `max(5, overscan * 2 + 5)`. Only `Infinity` disables eviction entirely;
+   * `0`, negative, `NaN`, or other invalid values fall back to the default cap.
+   * Finite values are floored by protected pages (visible pages, overscan,
+   * in-flight work, active selection/drag/pinch state, and saved-selection
+   * anchors), so more pages may remain loaded than the raw value. With
+   * html-parser output, eviction preserves monolithic `htmlContent` because the
+   * parser cannot reconstruct individual pages; only per-page fallback maps and
+   * caches are released.
+   */
+  maxLoadedPages?: number
 }
 
 type PageSize = {
@@ -390,6 +450,7 @@ type RenderableIntermediateText = IntermediateText &
 
 type PageLoadStatus = 'loaded' | 'error'
 type HtmlParserDocumentInput = Parameters<typeof HtmlParser.decodeToHtml>[0]
+type GesturePoint = { x: number; y: number }
 
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
@@ -414,6 +475,97 @@ const getVisiblePageNumbers = (
   return allPageNumbers.filter(
     (pageNumber) => pageNumber >= start && pageNumber <= end
   )
+}
+
+function normalizeScaleValue(
+  value: number | undefined,
+  fallback: number
+): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return fallback
+  }
+
+  return value
+}
+
+function getEffectiveScaleRange(
+  minScale: number | undefined,
+  maxScale: number | undefined
+): { min: number; max: number } {
+  const min = normalizeScaleValue(minScale, 0.25)
+  const max = normalizeScaleValue(maxScale, 4)
+
+  if (min > max) {
+    return { min, max: min }
+  }
+
+  return { min, max }
+}
+
+function clampScale(
+  value: number,
+  range: { min: number; max: number }
+): number {
+  const safeValue = Number.isFinite(value) && value > 0 ? value : 1
+
+  return Math.max(range.min, Math.min(range.max, safeValue))
+}
+
+function getWheelScaleDelta(event: WheelEvent, scaleStep: number | undefined) {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
+    return Math.exp(-event.deltaY * 0.001)
+  }
+
+  const step = normalizeScaleValue(scaleStep, 0.1)
+  if (event.deltaY < 0) return 1 + step
+  if (event.deltaY > 0) return 1 - step
+  return 1
+}
+
+function getFingerPoint(finger: Finger | undefined): GesturePoint | null {
+  const point = finger?.getLastOperation()?.point
+  return point ? { x: point.x, y: point.y } : null
+}
+
+function getTwoFingerGeometry(fingers: Finger[]) {
+  if (fingers.length !== 2) return null
+
+  const first = getFingerPoint(fingers[0])
+  const second = getFingerPoint(fingers[1])
+  if (!first || !second) return null
+
+  const distance = Math.hypot(second.x - first.x, second.y - first.y)
+  if (distance <= 0) return null
+
+  return {
+    distance,
+    centroid: {
+      x: (first.x + second.x) / 2,
+      y: (first.y + second.y) / 2
+    }
+  }
+}
+
+function getEffectiveMaxLoadedPages(
+  maxLoadedPages: number | undefined,
+  overscan: number,
+  floorCount: number
+): number {
+  const defaultCap = Math.max(5, overscan * 2 + 5)
+  let configured = defaultCap
+
+  // Only Infinity disables eviction entirely; 0, negative, NaN, and other
+  // invalid values fall back to the default cap (same as omitting the prop).
+  if (maxLoadedPages === Infinity) return Infinity
+  if (
+    typeof maxLoadedPages === 'number' &&
+    Number.isFinite(maxLoadedPages) &&
+    maxLoadedPages > 0
+  ) {
+    configured = maxLoadedPages
+  }
+
+  return Math.max(configured, floorCount, 5)
 }
 
 const isRuntimeDocument = (
@@ -573,8 +725,42 @@ export const mergeSelectionRects = (
 
 /**
  * Extract selection overlay rectangles from a Selection object.
- * Converts viewport-relative rects to page-relative coordinates.
+ * Coordinate contract: selection APIs (`getSelectionOverlayRects`,
+ * `buildSelectionPayload`, handle positions, caret previews, and saved
+ * selection geometry) store page-relative CSS pixels. DOM hit-testing and
+ * `getBoundingClientRect()` values are viewport CSS pixels after the scale
+ * surface transform, so viewport boundaries must be converted back before
+ * comparing or persisting page-relative geometry.
  */
+const toScaledViewport = (value: number, effectiveScale: number): number =>
+  value * effectiveScale
+
+const toPageRelative = (value: number, effectiveScale: number): number =>
+  effectiveScale === 0 ? value : value / effectiveScale
+
+const getElementViewportScale = (element: HTMLElement): number => {
+  const scaleSurface = element.closest('[data-testid="reader-scale-surface"]')
+  const transform =
+    scaleSurface instanceof HTMLElement ? scaleSurface.style.transform : ''
+  const trimmedTransform = transform.trim()
+  const scale = trimmedTransform.startsWith('scale(')
+    ? Number.parseFloat(trimmedTransform.slice(6, -1))
+    : 1
+  return Number.isFinite(scale) && scale > 0 ? scale : 1
+}
+
+const getPageViewportPoint = (
+  pageElement: HTMLElement,
+  point: { x: number; y: number }
+): { x: number; y: number } => {
+  const pageRect = pageElement.getBoundingClientRect()
+  const pageScale = getElementViewportScale(pageElement)
+  return {
+    x: pageRect.left + toScaledViewport(point.x, pageScale),
+    y: pageRect.top + toScaledViewport(point.y, pageScale)
+  }
+}
+
 export const getSelectionOverlayRects = (
   selection: Selection,
   viewerRoot: HTMLElement,
@@ -620,8 +806,9 @@ export const getSelectionOverlayRects = (
 
     const pageRect = pageInfo.pageElement.getBoundingClientRect()
     const pageNumber = pageInfo.pageNumber
+    const pageScale = getElementViewportScale(pageInfo.pageElement)
 
-    // Convert viewport coords to page-relative coords
+    // Convert scaled viewport coords to page-relative CSS pixels.
     if (!rectsByPage.has(pageNumber)) {
       rectsByPage.set(pageNumber, [])
     }
@@ -629,10 +816,10 @@ export const getSelectionOverlayRects = (
     if (!pageRects) continue
 
     pageRects.push({
-      x: rect.left - pageRect.left,
-      y: rect.top - pageRect.top,
-      width: rect.width,
-      height: rect.height
+      x: toPageRelative(rect.left - pageRect.left, pageScale),
+      y: toPageRelative(rect.top - pageRect.top, pageScale),
+      width: toPageRelative(rect.width, pageScale),
+      height: toPageRelative(rect.height, pageScale)
     })
   }
 
@@ -747,11 +934,20 @@ const getRootOverlayRect = (
 
   const pageRect = pageElement.getBoundingClientRect()
   const rootRect = viewerRoot.getBoundingClientRect()
+  const rootScale = getElementViewportScale(viewerRoot)
 
   return {
     ...rect,
-    x: pageRect.left - rootRect.left + viewerRoot.scrollLeft + rect.x,
-    y: pageRect.top - rootRect.top + viewerRoot.scrollTop + rect.y
+    x:
+      toPageRelative(
+        pageRect.left - rootRect.left + viewerRoot.scrollLeft,
+        rootScale
+      ) + rect.x,
+    y:
+      toPageRelative(
+        pageRect.top - rootRect.top + viewerRoot.scrollTop,
+        rootScale
+      ) + rect.y
   }
 }
 
@@ -885,14 +1081,15 @@ const buildBoundaryHandlePosition = (
     'height' in boundaryRect
       ? boundaryRect.height
       : boundaryRect.bottom - boundaryRect.top
-  const textHeight = rawHeight > 0 ? rawHeight : 24
+  const pageScale = getElementViewportScale(pageInfo.pageElement)
+  const textHeight = rawHeight > 0 ? toPageRelative(rawHeight, pageScale) : 24
   const hitAreaWidth = textHeight / 2
   const hitAreaHeight = textHeight
 
   const pageRect = pageInfo.pageElement.getBoundingClientRect()
   return {
-    x: anchorX - pageRect.left,
-    y: anchorY - pageRect.top,
+    x: toPageRelative(anchorX - pageRect.left, pageScale),
+    y: toPageRelative(anchorY - pageRect.top, pageScale),
     pageNumber: pageInfo.pageNumber,
     textHeight,
     hitAreaWidth,
@@ -1105,6 +1302,30 @@ const createSetBaseImageHandler = (
   }
 }
 
+const deletePageEntry = <T,>(pageNumber: number) => {
+  return (currentEntries: Map<number, T>) => {
+    if (!currentEntries.has(pageNumber)) {
+      return currentEntries
+    }
+
+    const nextEntries = new Map(currentEntries)
+    nextEntries.delete(pageNumber)
+    return nextEntries
+  }
+}
+
+const deletePageFromSet = (pageNumber: number) => {
+  return (currentPages: Set<number>) => {
+    if (!currentPages.has(pageNumber)) {
+      return currentPages
+    }
+
+    const nextPages = new Set(currentPages)
+    nextPages.delete(pageNumber)
+    return nextPages
+  }
+}
+
 const getOcrCacheKey = (
   docId: string,
   pageNumber: number,
@@ -1236,16 +1457,21 @@ const useSelectedTextBodyDrag = ({
       if (!pageInfo) return false
 
       const pageRect = pageInfo.pageElement.getBoundingClientRect()
+      const pageScale = getElementViewportScale(pageInfo.pageElement)
       const pageX = clientX - pageRect.left
       const pageY = clientY - pageRect.top
 
       return overlayRectsRef.current.some((rect) => {
         if (rect.pageNumber !== pageInfo.pageNumber) return false
+        const rectX = toScaledViewport(rect.x, pageScale)
+        const rectY = toScaledViewport(rect.y, pageScale)
+        const rectWidth = toScaledViewport(rect.width, pageScale)
+        const rectHeight = toScaledViewport(rect.height, pageScale)
         return (
-          pageX >= rect.x &&
-          pageX <= rect.x + rect.width &&
-          pageY >= rect.y &&
-          pageY <= rect.y + rect.height
+          pageX >= rectX &&
+          pageX <= rectX + rectWidth &&
+          pageY >= rectY &&
+          pageY <= rectY + rectHeight
         )
       })
     },
@@ -1493,7 +1719,14 @@ export function IntermediateDocumentViewer({
   activeSavedSelectionId,
   onActiveSavedSelectionChange,
   onSavedSelectionEdit,
-  onSavedSelectionRestore
+  onSavedSelectionRestore,
+  scale,
+  defaultScale,
+  onScaleChange,
+  minScale,
+  maxScale,
+  scaleStep = 0.1,
+  maxLoadedPages
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
@@ -1508,11 +1741,102 @@ export function IntermediateDocumentViewer({
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
   const ocrCacheRef = useRef(new Map<string, IntermediateText[]>())
+  const evictedOcrPagesRef = useRef(new Set<number>())
   const activeDocumentRef = useRef<IntermediateDocument | null>(null)
   const isMountedRef = useRef(false)
   const viewerRootRef = useRef<HTMLDivElement>(null)
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
+
+  // Preserve the latest gesture/lazy-release settings for future handlers
+  // without triggering re-renders when they change.
+  const scaleStepRef = useRef(scaleStep)
+  scaleStepRef.current = scaleStep
+  const maxLoadedPagesRef = useRef(maxLoadedPages)
+  maxLoadedPagesRef.current = maxLoadedPages
+
+  // Internal scale for the uncontrolled mode. The callback form guarantees
+  // the initial value is computed only once, even if `defaultScale` changes.
+  const [internalScale, setInternalScale] = useState(() =>
+    clampScale(defaultScale ?? 1, getEffectiveScaleRange(minScale, maxScale))
+  )
+
+  // Controlled mode wins when `scale` is provided; otherwise the internal
+  // state drives the effective scale. The result is always clamped.
+  const effectiveScale = useMemo(
+    () =>
+      clampScale(
+        scale ?? internalScale,
+        getEffectiveScaleRange(minScale, maxScale)
+      ),
+    [scale, internalScale, minScale, maxScale]
+  )
+
+  const applyScale = useCallback(
+    (
+      nextScale: number,
+      detail: {
+        source: 'wheel' | 'pinch'
+        focalPoint?: { x: number; y: number }
+      }
+    ) => {
+      const range = getEffectiveScaleRange(minScale, maxScale)
+      const clamped = clampScale(nextScale, range)
+
+      if (clamped === effectiveScale) {
+        return
+      }
+
+      if (scale !== undefined) {
+        onScaleChange?.(clamped, detail)
+        return
+      }
+
+      setInternalScale(clamped)
+      onScaleChange?.(clamped, detail)
+
+      // Preserve the focal point so the content under the cursor/pinch stays
+      // stationary relative to the viewport after a scale change.
+      const focalPoint = detail.focalPoint
+      if (
+        viewerRootElement &&
+        typeof viewerRootElement.scrollLeft === 'number' &&
+        focalPoint
+      ) {
+        const oldScale = effectiveScale
+        const rect = viewerRootElement.getBoundingClientRect()
+        const xRatio =
+          (focalPoint.x - rect.left + viewerRootElement.scrollLeft) / oldScale
+        const yRatio =
+          (focalPoint.y - rect.top + viewerRootElement.scrollTop) / oldScale
+
+        requestAnimationFrame(() => {
+          viewerRootElement.scrollLeft =
+            xRatio * clamped - (focalPoint.x - rect.left)
+          viewerRootElement.scrollTop =
+            yRatio * clamped - (focalPoint.y - rect.top)
+        })
+      }
+    },
+    [
+      effectiveScale,
+      scale,
+      minScale,
+      maxScale,
+      onScaleChange,
+      viewerRootElement
+    ]
+  )
+
+  // Task 3's gesture handlers read the latest applyScale via this ref
+  // so they don't need to rebuild on every effectiveScale change.
+  const applyScaleRef = useRef(applyScale)
+  applyScaleRef.current = applyScale
+  const effectiveScaleRef = useRef(effectiveScale)
+  effectiveScaleRef.current = effectiveScale
+  const scaleRangeRef = useRef(getEffectiveScaleRange(minScale, maxScale))
+  scaleRangeRef.current = getEffectiveScaleRange(minScale, maxScale)
+
   const textElementsRef = useRef<
     Map<string, { text: IntermediateText; pageNumber: number }>
   >(new Map())
@@ -1537,6 +1861,7 @@ export function IntermediateDocumentViewer({
   )
   const [dragPreviewState, setDragPreviewState] =
     useState<DragPreviewState>('idle')
+  const dragPreviewStateRef = useRef<DragPreviewState>('idle')
   const dragSelectionAnchorRef = useRef<{
     node: Node
     offset: number
@@ -1567,7 +1892,15 @@ export function IntermediateDocumentViewer({
     previousSelection: ReaderSavedSelection
   } | null>(null)
   const [loadablePages, setLoadablePages] = useState(() => new Set<number>())
+  const loadablePagesRef = useRef(loadablePages)
   const [visiblePages, setVisiblePages] = useState(() => new Set<number>())
+  const pageLastVisibleAtRef = useRef(new Map<number, number>())
+  const evictionTimerRef = useRef<
+    ReturnType<typeof requestIdleCallback> | number | null
+  >(null)
+  const activePinchRef = useRef(false)
+  const lastKnownVisiblePagesRef = useRef(new Set<number>())
+  const pinnedPagesRef = useRef(new Set<number>())
   const [textsByPageNumber, setTextsByPageNumber] = useState(
     () => new Map<number, IntermediateText[]>()
   )
@@ -1705,6 +2038,23 @@ export function IntermediateDocumentViewer({
   })
 
   useEffect(() => {
+    const currentPageNumbers = new Set(pageNumbers)
+
+    pinnedPagesRef.current.clear()
+    activePinchRef.current = false
+    pageLastVisibleAtRef.current.forEach((_lastVisibleAt, pageNumber) => {
+      if (!currentPageNumbers.has(pageNumber)) {
+        pageLastVisibleAtRef.current.delete(pageNumber)
+      }
+    })
+    lastKnownVisiblePagesRef.current.forEach((pageNumber) => {
+      if (!currentPageNumbers.has(pageNumber)) {
+        lastKnownVisiblePagesRef.current.delete(pageNumber)
+      }
+    })
+  }, [pageNumbers])
+
+  useEffect(() => {
     isMountedRef.current = true
 
     return () => {
@@ -1718,6 +2068,7 @@ export function IntermediateDocumentViewer({
     loadingPagesRef.current.clear()
     ocrLoadingPagesRef.current.clear()
     ocrCacheRef.current.clear()
+    evictedOcrPagesRef.current.clear()
     setLoadablePages(new Set())
     setVisiblePages(new Set())
     setTextsByPageNumber(new Map())
@@ -1732,6 +2083,98 @@ export function IntermediateDocumentViewer({
     viewerRootRef.current = element
     setViewerRootElement(element)
   }, [])
+
+  useEffect(() => {
+    const root = viewerRootElement
+    if (!root) return
+
+    const noopPose: Pose = {
+      position: { x: 0, y: 0 },
+      width: 0,
+      height: 0,
+      scale: effectiveScaleRef.current
+    }
+    const pinchStartRef: {
+      distance: number
+      scale: number
+    } = {
+      distance: 0,
+      scale: 1
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      if (event.ctrlKey !== true) return
+
+      event.preventDefault()
+      const delta = getWheelScaleDelta(event, scaleStepRef.current)
+      const nextScale = clampScale(
+        effectiveScaleRef.current * delta,
+        scaleRangeRef.current
+      )
+      applyScaleRef.current(nextScale, {
+        source: 'wheel',
+        focalPoint: { x: event.clientX, y: event.clientY }
+      })
+    }
+
+    const handlePinchStart = (fingers: Finger[]) => {
+      const geometry = getTwoFingerGeometry(fingers)
+      if (!geometry) return
+
+      activePinchRef.current = true
+      pinchStartRef.distance = geometry.distance
+      pinchStartRef.scale = effectiveScaleRef.current
+    }
+
+    const handlePinchMove = (fingers: Finger[]) => {
+      const geometry = getTwoFingerGeometry(fingers)
+      if (!geometry || pinchStartRef.distance <= 0) return
+
+      const ratio = geometry.distance / pinchStartRef.distance
+      const nextScale = clampScale(
+        pinchStartRef.scale * ratio,
+        scaleRangeRef.current
+      )
+      applyScaleRef.current(nextScale, {
+        source: 'pinch',
+        focalPoint: geometry.centroid
+      })
+    }
+
+    const handlePinchEnd = (fingers: Finger[]) => {
+      if (fingers.length !== 2) return
+      handlePinchMove(fingers)
+    }
+
+    const handlePinchAllEnd = () => {
+      activePinchRef.current = false
+      pinchStartRef.distance = 0
+      pinchStartRef.scale = effectiveScaleRef.current
+    }
+
+    root.addEventListener('wheel', handleWheel, { passive: false })
+    const drag = new Drag(root, {
+      maxFingerCount: 2,
+      inertial: false,
+      getPose: () => noopPose,
+      setPose: () => {},
+      setPoseOnEnd: () => {}
+    })
+    drag.addEventListener(DragOperationType.Start, handlePinchStart)
+    drag.addEventListener(DragOperationType.Move, handlePinchMove)
+    drag.addEventListener(DragOperationType.End, handlePinchEnd)
+    drag.addEventListener(DragOperationType.AllEnd, handlePinchAllEnd)
+
+    return () => {
+      root.removeEventListener('wheel', handleWheel)
+      activePinchRef.current = false
+      drag.removeEventListener(DragOperationType.Start, handlePinchStart)
+      drag.removeEventListener(DragOperationType.Move, handlePinchMove)
+      drag.removeEventListener(DragOperationType.End, handlePinchEnd)
+      drag.removeEventListener(DragOperationType.AllEnd, handlePinchAllEnd)
+      drag.destroy()
+    }
+  }, [viewerRootElement])
 
   // Primary render path: convert the runtime document to HTML via @hamster-note/html-parser.
   // On success we render the HTML fragment directly. Because html-parser output does not
@@ -1804,6 +2247,287 @@ export function IntermediateDocumentViewer({
     },
     [overscan, pageNumbers]
   )
+
+  const evictPageBundle = useCallback(
+    (pageNumber: number) => {
+      if (!runtimeDocument) {
+        return false
+      }
+
+      if (
+        loadingPagesRef.current.has(pageNumber) ||
+        ocrLoadingPagesRef.current.has(pageNumber)
+      ) {
+        return false
+      }
+
+      const cacheKeyPrefix = `${runtimeDocument.id}::${pageNumber}::`
+      ocrCacheRef.current.forEach((_texts, cacheKey) => {
+        if (cacheKey.startsWith(cacheKeyPrefix)) {
+          ocrCacheRef.current.delete(cacheKey)
+        }
+      })
+      evictedOcrPagesRef.current.add(pageNumber)
+
+      pageLastVisibleAtRef.current.delete(pageNumber)
+      lastKnownVisiblePagesRef.current.delete(pageNumber)
+      setTextsByPageNumber(deletePageEntry(pageNumber))
+      setOcrTextsByPageNumber(deletePageEntry(pageNumber))
+      setBaseImagesByPageNumber(deletePageEntry(pageNumber))
+      setPageStatuses(deletePageEntry(pageNumber))
+      setLoadablePages(deletePageFromSet(pageNumber))
+      // html-parser mode preserves monolithic htmlContent: the parser output
+      // cannot be reconstructed per page, so only per-page maps/caches are freed.
+      setSavedSelectionDomVersion((version) => version + 1)
+      return true
+    },
+    [runtimeDocument]
+  )
+
+  const resolveProtectedPageNumberForNode = useCallback((node: Node | null) => {
+    if (!node) return null
+
+    const element =
+      node.nodeType === Node.ELEMENT_NODE
+        ? (node as Element)
+        : node.parentElement
+    const pageElement = element?.closest('[data-page-number]')
+    const pageNumberAttribute = pageElement?.getAttribute('data-page-number')
+    if (pageNumberAttribute) {
+      const pageNumber = Number(pageNumberAttribute)
+      if (Number.isFinite(pageNumber)) return pageNumber
+    }
+
+    for (const [pageNumber, pageRef] of pageRefs.current.entries()) {
+      if (pageRef.contains(node)) return pageNumber
+    }
+
+    return null
+  }, [])
+
+  const addProtectedPageRange = useCallback(
+    (
+      protectedPages: Set<number>,
+      startPageNumber: number,
+      endPageNumber: number
+    ) => {
+      const startIndex = pageNumbers.indexOf(startPageNumber)
+      const endIndex = pageNumbers.indexOf(endPageNumber)
+
+      if (startIndex === -1 || endIndex === -1) {
+        protectedPages.add(startPageNumber)
+        protectedPages.add(endPageNumber)
+        return
+      }
+
+      const minIndex = Math.min(startIndex, endIndex)
+      const maxIndex = Math.max(startIndex, endIndex)
+      for (let index = minIndex; index <= maxIndex; index += 1) {
+        protectedPages.add(pageNumbers[index])
+      }
+    },
+    [pageNumbers]
+  )
+
+  const getProtectedPages = useCallback(() => {
+    const protectedPages = new Set<number>()
+    const currentVisiblePages =
+      visiblePages.size > 0 ? visiblePages : lastKnownVisiblePagesRef.current
+
+    currentVisiblePages.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
+
+    const safeOverscan = Math.max(0, overscan)
+    currentVisiblePages.forEach((pageNumber) => {
+      const pageIndex = pageNumbers.indexOf(pageNumber)
+      if (pageIndex === -1) return
+
+      const startIndex = Math.max(0, pageIndex - safeOverscan)
+      const endIndex = Math.min(
+        pageNumbers.length - 1,
+        pageIndex + safeOverscan
+      )
+      for (let index = startIndex; index <= endIndex; index += 1) {
+        protectedPages.add(pageNumbers[index])
+      }
+    })
+
+    loadingPagesRef.current.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
+    ocrLoadingPagesRef.current.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
+    pinnedPagesRef.current.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
+
+    const selection = window.getSelection?.()
+    if (selection && !selection.isCollapsed) {
+      const anchorPageNumber = resolveProtectedPageNumberForNode(
+        selection.anchorNode
+      )
+      const focusPageNumber = resolveProtectedPageNumberForNode(
+        selection.focusNode
+      )
+      if (anchorPageNumber !== null) protectedPages.add(anchorPageNumber)
+      if (focusPageNumber !== null) protectedPages.add(focusPageNumber)
+      if (anchorPageNumber !== null && focusPageNumber !== null) {
+        addProtectedPageRange(protectedPages, anchorPageNumber, focusPageNumber)
+      }
+    }
+
+    const fixedPoint = dragStateRef.current.fixedPoint
+    if (fixedPoint) {
+      protectedPages.add(fixedPoint.pageNumber)
+    }
+
+    for (const result of resolvedSavedSelectionsRef.current.values()) {
+      protectedPages.add(result.selection.start.pageNumber)
+      protectedPages.add(result.selection.end.pageNumber)
+      result.selection.segments.forEach((segment) => {
+        protectedPages.add(segment.pageNumber)
+      })
+      result.segments.forEach((segment) => {
+        protectedPages.add(segment.pageNumber)
+      })
+      result.rects.forEach((rect) => {
+        protectedPages.add(rect.pageNumber)
+      })
+    }
+
+    return protectedPages
+  }, [
+    addProtectedPageRange,
+    overscan,
+    pageNumbers,
+    resolveProtectedPageNumberForNode,
+    visiblePages
+  ])
+
+  const scheduleEviction = useCallback(
+    (snapshot: { visiblePages: Set<number>; pageNumbers: number[] }) => {
+      if (evictionTimerRef.current !== null) {
+        return
+      }
+
+      const knownPageNumbers = new Set(snapshot.pageNumbers)
+      snapshot.visiblePages.forEach((pageNumber) => {
+        knownPageNumbers.add(pageNumber)
+      })
+      const initialProtectedPages = getProtectedPages()
+
+      const initialCap = getEffectiveMaxLoadedPages(
+        maxLoadedPages,
+        overscan,
+        initialProtectedPages.size
+      )
+
+      if (!Number.isFinite(initialCap)) {
+        return
+      }
+
+      const run = () => {
+        evictionTimerRef.current = null
+        if (dragPreviewStateRef.current !== 'idle' || activePinchRef.current) {
+          evictionTimerRef.current = window.setTimeout(run, 50)
+          return
+        }
+
+        pageLastVisibleAtRef.current.forEach((_lastVisibleAt, pageNumber) => {
+          if (!knownPageNumbers.has(pageNumber)) {
+            pageLastVisibleAtRef.current.delete(pageNumber)
+          }
+        })
+        lastKnownVisiblePagesRef.current.forEach((pageNumber) => {
+          if (!knownPageNumbers.has(pageNumber)) {
+            lastKnownVisiblePagesRef.current.delete(pageNumber)
+          }
+        })
+
+        const cap = getEffectiveMaxLoadedPages(
+          maxLoadedPages,
+          overscan,
+          getProtectedPages().size
+        )
+
+        if (!Number.isFinite(cap)) {
+          return
+        }
+
+        // Read current loaded pages from the ref so the async closure always
+        // sees the latest set, not the snapshot captured at schedule time.
+        const loadedPages = Array.from(loadablePagesRef.current).filter(
+          (pageNumber) => knownPageNumbers.has(pageNumber)
+        )
+
+        if (loadedPages.length <= cap) {
+          return
+        }
+
+        const protectedPages = getProtectedPages()
+        const evictionCandidates = loadedPages
+          .filter((pageNumber) => !protectedPages.has(pageNumber))
+          .sort((leftPageNumber, rightPageNumber) => {
+            const leftLastVisibleAt =
+              pageLastVisibleAtRef.current.get(leftPageNumber) ?? 0
+            const rightLastVisibleAt =
+              pageLastVisibleAtRef.current.get(rightPageNumber) ?? 0
+
+            if (leftLastVisibleAt === rightLastVisibleAt) {
+              return leftPageNumber - rightPageNumber
+            }
+
+            return leftLastVisibleAt - rightLastVisibleAt
+          })
+
+        let loadedCount = loadedPages.length
+        for (const pageNumber of evictionCandidates) {
+          if (loadedCount <= cap) {
+            break
+          }
+
+          if (evictPageBundle(pageNumber)) {
+            loadedCount -= 1
+          }
+        }
+      }
+
+      if (typeof window.requestIdleCallback === 'function') {
+        evictionTimerRef.current = window.requestIdleCallback(run, {
+          timeout: 200
+        })
+        return
+      }
+
+      evictionTimerRef.current = window.setTimeout(run, 0)
+    },
+    [evictPageBundle, getProtectedPages, maxLoadedPages, overscan]
+  )
+
+  useEffect(() => {
+    // Keep the async eviction callback seeing the current loaded page set
+    // without adding mutable ref values to the dependency array.
+    loadablePagesRef.current = loadablePages
+    scheduleEviction({ visiblePages, pageNumbers })
+
+    return () => {
+      const timer = evictionTimerRef.current
+
+      if (timer === null) {
+        return
+      }
+
+      if (typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(timer)
+      }
+
+      window.clearTimeout(timer)
+
+      evictionTimerRef.current = null
+    }
+  }, [loadablePages, pageNumbers, scheduleEviction, visiblePages])
 
   const setPageRef = useCallback(
     (pageNumber: number) => (element: HTMLDivElement | null) => {
@@ -2353,6 +3077,7 @@ export function IntermediateDocumentViewer({
 
   const markVisiblePage = useCallback(
     (pageNumber: number) => {
+      pageLastVisibleAtRef.current.set(pageNumber, Date.now())
       markLoadableWithOverscan(pageNumber)
       setVisiblePages((currentPages) => {
         if (currentPages.has(pageNumber)) {
@@ -2361,11 +3086,27 @@ export function IntermediateDocumentViewer({
 
         const nextPages = new Set(currentPages)
         nextPages.add(pageNumber)
+        lastKnownVisiblePagesRef.current = new Set(nextPages)
         return nextPages
       })
     },
     [markLoadableWithOverscan]
   )
+
+  const markHiddenPage = useCallback((pageNumber: number) => {
+    setVisiblePages((currentPages) => {
+      if (!currentPages.has(pageNumber)) {
+        return currentPages
+      }
+
+      const nextPages = new Set(currentPages)
+      nextPages.delete(pageNumber)
+      if (nextPages.size > 0) {
+        lastKnownVisiblePagesRef.current = new Set(nextPages)
+      }
+      return nextPages
+    })
+  }, [])
 
   const emitSelectionEnd = useCallback(() => {
     if (!onTextSelectionEnd && !onSelectText && !bodyDragCallbacksEnabled) {
@@ -2419,11 +3160,15 @@ export function IntermediateDocumentViewer({
           (entry.target as HTMLElement).dataset.pageNumber
         )
 
-        if (!Number.isFinite(pageNumber) || !entry.isIntersecting) {
+        if (!Number.isFinite(pageNumber)) {
           return
         }
 
-        markVisiblePage(pageNumber)
+        if (entry.isIntersecting) {
+          markVisiblePage(pageNumber)
+        } else {
+          markHiddenPage(pageNumber)
+        }
       })
     })
 
@@ -2438,7 +3183,13 @@ export function IntermediateDocumentViewer({
     return () => {
       observer.disconnect()
     }
-  }, [markLoadableWithOverscan, markVisiblePage, pageNumbers, runtimeDocument])
+  }, [
+    markHiddenPage,
+    markLoadableWithOverscan,
+    markVisiblePage,
+    pageNumbers,
+    runtimeDocument
+  ])
 
   useEffect(() => {
     if (!runtimeDocument) {
@@ -2554,8 +3305,9 @@ export function IntermediateDocumentViewer({
         baseImageSource
       )
       const cachedTexts = ocrCacheRef.current.get(cacheKey)
+      const shouldBypassCache = evictedOcrPagesRef.current.has(pageNumber)
 
-      if (cachedTexts) {
+      if (cachedTexts && !shouldBypassCache) {
         setOcrTextsByPageNumber((currentTexts) => {
           const nextTexts = new Map(currentTexts)
           nextTexts.set(pageNumber, cachedTexts)
@@ -2587,6 +3339,7 @@ export function IntermediateDocumentViewer({
           }
 
           ocrCacheRef.current.set(cacheKey, ocrTexts)
+          evictedOcrPagesRef.current.delete(pageNumber)
           setOcrTextsByPageNumber(createSetTextsHandler(pageNumber, ocrTexts))
         } catch (error) {
           if (
@@ -2678,10 +3431,20 @@ export function IntermediateDocumentViewer({
 
   const setDragPreviewSession = useCallback((session: DragPreviewSession) => {
     dragPreviewSessionRef.current = session
+    dragPreviewStateRef.current = session.state
     setDragPreviewState((prevState) =>
       prevState === session.state ? prevState : session.state
     )
   }, [])
+
+  const pinDragSelectionPages = useCallback(
+    (startPageNumber: number, endPageNumber: number) => {
+      const nextPinnedPages = new Set<number>()
+      addProtectedPageRange(nextPinnedPages, startPageNumber, endPageNumber)
+      pinnedPagesRef.current = nextPinnedPages
+    },
+    [addProtectedPageRange]
+  )
 
   const getCaretPreviewRect = useCallback(
     (caretInfo: {
@@ -2703,6 +3466,7 @@ export function IntermediateDocumentViewer({
 
       const textRect = textElement.getBoundingClientRect()
       const pageRect = pageElement.getBoundingClientRect()
+      const pageScale = getElementViewportScale(pageElement)
       const textLength = textElement.textContent?.length ?? 0
       const startOffset = caretInfo.range.startOffset
       const offsetRatio =
@@ -2712,10 +3476,10 @@ export function IntermediateDocumentViewer({
       const caretX = textRect.left + textRect.width * offsetRatio
 
       return {
-        x: caretX - pageRect.left,
-        y: textRect.top - pageRect.top,
+        x: toPageRelative(caretX - pageRect.left, pageScale),
+        y: toPageRelative(textRect.top - pageRect.top, pageScale),
         width: 1,
-        height: Math.max(textRect.height, 1),
+        height: Math.max(toPageRelative(textRect.height, pageScale), 1),
         pageNumber: caretInfo.pageNumber
       }
     },
@@ -2827,10 +3591,13 @@ export function IntermediateDocumentViewer({
       )
       if (!pageElement) return rect
       const pageRect = pageElement.getBoundingClientRect()
+      const pageScale = getElementViewportScale(pageElement)
       return {
         ...rect,
-        x: rect.x - pageRect.left,
-        y: rect.y - pageRect.top
+        x: toPageRelative(rect.x - pageRect.left, pageScale),
+        y: toPageRelative(rect.y - pageRect.top, pageScale),
+        width: toPageRelative(rect.width, pageScale),
+        height: toPageRelative(rect.height, pageScale)
       }
     },
     []
@@ -3118,11 +3885,13 @@ export function IntermediateDocumentViewer({
   // 记录最近一次解析时使用的 DOM 版本号，仅用于把 savedSelectionDomVersion
   // 真正用在回调体内，避免 exhaustive-deps 误报，同时保留触发重新解析的能力。
   const lastResolvedDomVersionRef = useRef(0)
+  const lastResolvedScaleRef = useRef(effectiveScale)
 
   // Task 4: 解析并渲染已保存选择覆盖层。
   // 使用 requestAnimationFrame 等待 DOM 更新完成后再扫描 [data-text-id] 元素。
   const resolveAndRenderSavedSelections = useCallback(() => {
     lastResolvedDomVersionRef.current = savedSelectionDomVersion
+    lastResolvedScaleRef.current = effectiveScale
 
     const viewerRoot = viewerRootRef.current
     if (!viewerRoot) return
@@ -3164,7 +3933,8 @@ export function IntermediateDocumentViewer({
     convertSavedSelectionRectToPageRect,
     renderSavedSelectionOverlays,
     refreshSavedSelectionHandles,
-    onSavedSelectionRestore
+    onSavedSelectionRestore,
+    effectiveScale
   ])
 
   // Task 4: 当 savedSelections、文档、overlay 开关或 DOM 版本变化时执行解析渲染。
@@ -3308,6 +4078,7 @@ export function IntermediateDocumentViewer({
 
       activeMouseSelectionRef.current.active = false
       dragSelectionAnchorRef.current = null
+      pinnedPagesRef.current.clear()
 
       if (overlayOptions?.enabled && selection && !selection.isCollapsed) {
         refreshSelectionOverlayRef.current()
@@ -3325,6 +4096,7 @@ export function IntermediateDocumentViewer({
           )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
+          pinnedPagesRef.current.clear()
           return
         }
 
@@ -3335,6 +4107,7 @@ export function IntermediateDocumentViewer({
           )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
+          pinnedPagesRef.current.clear()
           return
         }
 
@@ -3346,6 +4119,7 @@ export function IntermediateDocumentViewer({
           )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
+          pinnedPagesRef.current.clear()
           return
         }
 
@@ -3357,6 +4131,7 @@ export function IntermediateDocumentViewer({
         setDragPreviewSession(
           armDragPreview(createDragPreviewSession(), { clientX, clientY })
         )
+        pinnedPagesRef.current = new Set([caretInfo.pageNumber])
         dragSelectionEndEmittedRef.current = false
         activeMouseSelectionRef.current = {
           active: true,
@@ -3376,6 +4151,7 @@ export function IntermediateDocumentViewer({
           )
           dragSelectionAnchorRef.current = null
           activeMouseSelectionRef.current.active = false
+          pinnedPagesRef.current.clear()
           return
         }
 
@@ -3387,6 +4163,10 @@ export function IntermediateDocumentViewer({
 
         const focusPreviewRect = getCaretPreviewRect(caretInfo)
         if (focusPreviewRect) {
+          pinDragSelectionPages(
+            anchor.previewRect.pageNumber,
+            focusPreviewRect.pageNumber
+          )
           const previewRects = geometryToOverlayRects(
             anchor.previewRect,
             focusPreviewRect
@@ -3460,6 +4240,7 @@ export function IntermediateDocumentViewer({
       adapter.destroy()
       activeMouseSelectionRef.current.active = false
       dragSelectionAnchorRef.current = null
+      pinnedPagesRef.current.clear()
       dragSelectionEndEmittedRef.current = false
       setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
     }
@@ -3473,7 +4254,8 @@ export function IntermediateDocumentViewer({
     onTextSelectionChange,
     recomposeActiveTextSelection,
     renderSelectionOverlayRects,
-    setDragPreviewSession
+    setDragPreviewSession,
+    pinDragSelectionPages
   ])
 
   useEffect(() => {
@@ -3696,10 +4478,13 @@ export function IntermediateDocumentViewer({
           dragState.fixedPoint.pageNumber
         )
         if (!fixedPageElement) return
-        const fixedPageRect = fixedPageElement.getBoundingClientRect()
+        const fixedViewportPoint = getPageViewportPoint(
+          fixedPageElement,
+          dragState.fixedPoint
+        )
         const fixedCaretInfo = resolveCaret(
-          fixedPageRect.left + dragState.fixedPoint.x,
-          fixedPageRect.top + dragState.fixedPoint.y,
+          fixedViewportPoint.x,
+          fixedViewportPoint.y,
           {
             viewerRoot,
             pageRefs: pageRefs.current,
@@ -3718,6 +4503,12 @@ export function IntermediateDocumentViewer({
       const movingPoint = {
         node: movingCaretInfo.range.startContainer,
         offset: movingCaretInfo.range.startOffset
+      }
+      if (dragState.fixedPoint) {
+        pinDragSelectionPages(
+          dragState.fixedPoint.pageNumber,
+          movingCaretInfo.pageNumber
+        )
       }
       const startPoint =
         dragState.handleType === 'start' ? movingPoint : fixedPoint
@@ -3739,7 +4530,7 @@ export function IntermediateDocumentViewer({
         refreshSelectionOverlayRef.current()
       }
     },
-    [renderSavedSelectionEditPreview]
+    [pinDragSelectionPages, renderSavedSelectionEditPreview]
   )
 
   const beginHandleDrag = useCallback(
@@ -3825,6 +4616,7 @@ export function IntermediateDocumentViewer({
         },
         fixedAnchor
       }
+      pinnedPagesRef.current = new Set([fixedPageInfo.pageNumber])
 
       // 手柄拖拽接管后，清理主文本 Drag 的临时状态，避免 root adapter 同时合成选择区。
       dragSelectionAnchorRef.current = null
@@ -3878,6 +4670,7 @@ export function IntermediateDocumentViewer({
         fixedPoint: null,
         fixedAnchor: null
       }
+      pinnedPagesRef.current.clear()
 
       if (dragSource === 'saved') {
         commitSavedSelectionEdit()
@@ -4189,195 +4982,35 @@ export function IntermediateDocumentViewer({
       className={rootClassName}
       data-testid='intermediate-document-viewer'
     >
-      {htmlContent && !htmlParserError ? (
-        <>
-          <div
-            className='hamster-reader__html-parser-output'
-            data-testid='html-parser-output'
-            // The HTML comes from the trusted @hamster-note/html-parser package,
-            // which converts IntermediateDocument data into HTML fragments.
-            // Text selection hooks do not rely on this path because it may lack data-text-id attributes.
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
-            dangerouslySetInnerHTML={{ __html: htmlContent }}
-          />
-          {overlayOptions?.enabled && (
-            <div
-              ref={(el) => {
-                overlayElRef.current = el
-                if (el) {
-                  allOverlayContainersRef.current.add(el)
+      {(htmlContent && !htmlParserError) || pageNumbers.length > 0 ? (
+        <div
+          data-testid='reader-scale-surface'
+          style={
+            effectiveScale === 1
+              ? undefined
+              : {
+                  transform: `scale(${effectiveScale})`,
+                  transformOrigin: 'top left'
                 }
-              }}
-              className='hamster-reader__selection-overlay'
-              role='presentation'
-              aria-hidden='true'
-              {...overlayBodyDragProps}
-              style={
-                {
-                  '--hamster-reader-selection-color': overlayOptions.color,
-                  '--hamster-reader-selection-opacity': overlayOptions.opacity,
-                  ...overlayBodyDragStyle
-                } as React.CSSProperties
-              }
-            />
-          )}
-          {/* Task 4: 已保存选择覆盖层，独立于实时选择覆盖层。 */}
-          {overlayOptions?.enabled && (
-            <div
-              ref={(el) => {
-                savedOverlayElRef.current = el
-              }}
-              className='hamster-reader__saved-selection-overlay'
-              role='presentation'
-              aria-hidden='true'
-              onClick={handleSavedOverlayClick}
-              style={
-                {
-                  '--hamster-reader-saved-selection-color':
-                    overlayOptions.color,
-                  '--hamster-reader-saved-selection-opacity':
-                    overlayOptions.opacity
-                } as React.CSSProperties
-              }
-            />
-          )}
-          {overlayOptions?.enabled && selectionHandleElement !== null && (
-            <div
-              className='hamster-reader__saved-selection-handles'
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none'
-              }}
-            >
-              {Array.from(savedSelectionHandlePositions.entries()).flatMap(
-                ([pageNumber, entry]) => {
-                  const nodes: React.ReactNode[] = []
-                  if (entry.start) {
-                    nodes.push(
-                      <React.Fragment key={`saved-start-${pageNumber}`}>
-                        {renderSelectionHandle(
-                          'start',
-                          entry.start,
-                          false,
-                          'saved'
-                        )}
-                      </React.Fragment>
-                    )
-                  }
-                  if (entry.end) {
-                    nodes.push(
-                      <React.Fragment key={`saved-end-${pageNumber}`}>
-                        {renderSelectionHandle(
-                          'end',
-                          entry.end,
-                          false,
-                          'saved'
-                        )}
-                      </React.Fragment>
-                    )
-                  }
-                  return nodes
-                }
-              )}
-            </div>
-          )}
-          {overlayOptions?.enabled && selectionHandleElement !== null && (
-            <div
-              className='hamster-reader__selection-handles'
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none'
-              }}
-            >
-              {Array.from(selectionHandlePositions.entries()).flatMap(
-                ([pageNumber, entry]) => {
-                  const handlesHidden =
-                    !shouldShowSelectionHandles(dragPreviewState)
-                  const nodes: React.ReactNode[] = []
-                  if (entry.start) {
-                    nodes.push(
-                      <React.Fragment key={`start-${pageNumber}`}>
-                        {renderSelectionHandle(
-                          'start',
-                          entry.start,
-                          handlesHidden
-                        )}
-                      </React.Fragment>
-                    )
-                  }
-                  if (entry.end) {
-                    nodes.push(
-                      <React.Fragment key={`end-${pageNumber}`}>
-                        {renderSelectionHandle('end', entry.end, handlesHidden)}
-                      </React.Fragment>
-                    )
-                  }
-                  return nodes
-                }
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        pageNumbers.map((pageNumber) => {
-          const pageSize = normalizePageSize(
-            runtimeDocument.getPageSizeByPageNumber(pageNumber)
-          )
-          const texts = textsByPageNumber.get(pageNumber) ?? []
-          const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
-          const allTexts = [...texts, ...ocrTexts]
-          const pageStatus = pageStatuses.get(pageNumber)
-          const isPageLoading =
-            loadablePages.has(pageNumber) &&
-            pageStatus !== 'loaded' &&
-            pageStatus !== 'error'
-          const pageClassName = isPageLoading
-            ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
-            : 'hamster-reader__intermediate-page'
-
-          const baseImageSource = baseImagesByPageNumber.get(pageNumber)
-
-          return (
-            <div
-              key={pageNumber}
-              ref={setPageRef(pageNumber)}
-              className={pageClassName}
-              data-testid={`intermediate-page-${pageNumber}`}
-              data-page-number={pageNumber}
-              data-page-size-unavailable={
-                pageSize.pageSizeUnavailable ? 'true' : undefined
-              }
-              style={{
-                position: 'relative',
-                width: `${pageSize.width}px`,
-                height: `${pageSize.height}px`,
-                overflow: 'hidden'
-              }}
-            >
-              {baseImageSource && (
-                <img
-                  className='hamster-reader__intermediate-page-base-image'
-                  src={baseImageSource}
-                  alt=''
-                  aria-hidden='true'
-                />
-              )}
+          }
+        >
+          {htmlContent && !htmlParserError ? (
+            <>
+              <div
+                className='hamster-reader__html-parser-output'
+                data-testid='html-parser-output'
+                // The HTML comes from the trusted @hamster-note/html-parser package,
+                // which converts IntermediateDocument data into HTML fragments.
+                // Text selection hooks do not rely on this path because it may lack data-text-id attributes.
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
+                dangerouslySetInnerHTML={{ __html: htmlContent }}
+              />
               {overlayOptions?.enabled && (
                 <div
                   ref={(el) => {
+                    overlayElRef.current = el
                     if (el) {
-                      overlayContainerRefs.current.set(pageNumber, el)
                       allOverlayContainersRef.current.add(el)
-                    } else {
-                      overlayContainerRefs.current.delete(pageNumber)
                     }
                   }}
                   className='hamster-reader__selection-overlay'
@@ -4394,15 +5027,11 @@ export function IntermediateDocumentViewer({
                   }
                 />
               )}
-              {/* Task 4: 已保存选择覆盖层，每页独立容器。 */}
+              {/* Task 4: 已保存选择覆盖层，独立于实时选择覆盖层。 */}
               {overlayOptions?.enabled && (
                 <div
                   ref={(el) => {
-                    if (el) {
-                      savedOverlayContainerRefs.current.set(pageNumber, el)
-                    } else {
-                      savedOverlayContainerRefs.current.delete(pageNumber)
-                    }
+                    savedOverlayElRef.current = el
                   }}
                   className='hamster-reader__saved-selection-overlay'
                   role='presentation'
@@ -4430,28 +5059,36 @@ export function IntermediateDocumentViewer({
                     pointerEvents: 'none'
                   }}
                 >
-                  {(() => {
-                    const entry = savedSelectionHandlePositions.get(pageNumber)
-                    if (!entry) return null
-                    return (
-                      <>
-                        {entry.start &&
-                          renderSelectionHandle(
-                            'start',
-                            entry.start,
-                            false,
-                            'saved'
-                          )}
-                        {entry.end &&
-                          renderSelectionHandle(
-                            'end',
-                            entry.end,
-                            false,
-                            'saved'
-                          )}
-                      </>
-                    )
-                  })()}
+                  {Array.from(savedSelectionHandlePositions.entries()).flatMap(
+                    ([pageNumber, entry]) => {
+                      const nodes: React.ReactNode[] = []
+                      if (entry.start) {
+                        nodes.push(
+                          <React.Fragment key={`saved-start-${pageNumber}`}>
+                            {renderSelectionHandle(
+                              'start',
+                              entry.start,
+                              false,
+                              'saved'
+                            )}
+                          </React.Fragment>
+                        )
+                      }
+                      if (entry.end) {
+                        nodes.push(
+                          <React.Fragment key={`saved-end-${pageNumber}`}>
+                            {renderSelectionHandle(
+                              'end',
+                              entry.end,
+                              false,
+                              'saved'
+                            )}
+                          </React.Fragment>
+                        )
+                      }
+                      return nodes
+                    }
+                  )}
                 </div>
               )}
               {overlayOptions?.enabled && selectionHandleElement !== null && (
@@ -4466,62 +5103,241 @@ export function IntermediateDocumentViewer({
                     pointerEvents: 'none'
                   }}
                 >
-                  {(() => {
-                    const handlesHidden =
-                      !shouldShowSelectionHandles(dragPreviewState)
-                    const entry = selectionHandlePositions.get(pageNumber)
-                    if (!entry) return null
-                    return (
-                      <>
-                        {entry.start &&
-                          renderSelectionHandle(
-                            'start',
-                            entry.start,
-                            handlesHidden
-                          )}
-                        {entry.end &&
-                          renderSelectionHandle(
-                            'end',
-                            entry.end,
-                            handlesHidden
-                          )}
-                      </>
-                    )
-                  })()}
+                  {Array.from(selectionHandlePositions.entries()).flatMap(
+                    ([pageNumber, entry]) => {
+                      const handlesHidden =
+                        !shouldShowSelectionHandles(dragPreviewState)
+                      const nodes: React.ReactNode[] = []
+                      if (entry.start) {
+                        nodes.push(
+                          <React.Fragment key={`start-${pageNumber}`}>
+                            {renderSelectionHandle(
+                              'start',
+                              entry.start,
+                              handlesHidden
+                            )}
+                          </React.Fragment>
+                        )
+                      }
+                      if (entry.end) {
+                        nodes.push(
+                          <React.Fragment key={`end-${pageNumber}`}>
+                            {renderSelectionHandle(
+                              'end',
+                              entry.end,
+                              handlesHidden
+                            )}
+                          </React.Fragment>
+                        )
+                      }
+                      return nodes
+                    }
+                  )}
                 </div>
               )}
-              {isPageLoading && (
-                <div className='hamster-reader__intermediate-page-status'>
-                  Loading page {pageNumber}…
-                </div>
-              )}
-              {pageStatus === 'error' && (
-                <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
-                  Failed to load page {pageNumber}
-                </div>
-              )}
-              {allTexts.map((textData) => {
-                const text = textData as RenderableIntermediateText
-                const bbox = getTextBbox(text)
-                const style = buildTextSpanStyle(text, bbox)
+            </>
+          ) : (
+            pageNumbers.map((pageNumber) => {
+              const pageSize = normalizePageSize(
+                runtimeDocument.getPageSizeByPageNumber(pageNumber)
+              )
+              const texts = textsByPageNumber.get(pageNumber) ?? []
+              const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
+              const allTexts = [...texts, ...ocrTexts]
+              const pageStatus = pageStatuses.get(pageNumber)
+              const isPageLoading =
+                loadablePages.has(pageNumber) &&
+                pageStatus !== 'loaded' &&
+                pageStatus !== 'error'
+              const pageClassName = isPageLoading
+                ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
+                : 'hamster-reader__intermediate-page'
 
-                return (
-                  <span
-                    key={text.id}
-                    ref={setTextRef(text, pageNumber)}
-                    className='hamster-reader__intermediate-text'
-                    data-text-id={text.id}
-                    data-page-number={pageNumber}
-                    style={style}
-                  >
-                    {text.content}
-                  </span>
-                )
-              })}
-            </div>
-          )
-        })
-      )}
+              const baseImageSource = baseImagesByPageNumber.get(pageNumber)
+
+              return (
+                <div
+                  key={pageNumber}
+                  ref={setPageRef(pageNumber)}
+                  className={pageClassName}
+                  data-testid={`intermediate-page-${pageNumber}`}
+                  data-page-number={pageNumber}
+                  data-page-size-unavailable={
+                    pageSize.pageSizeUnavailable ? 'true' : undefined
+                  }
+                  style={{
+                    position: 'relative',
+                    width: `${pageSize.width}px`,
+                    height: `${pageSize.height}px`,
+                    overflow: 'hidden'
+                  }}
+                >
+                  {baseImageSource && (
+                    <img
+                      className='hamster-reader__intermediate-page-base-image'
+                      src={baseImageSource}
+                      alt=''
+                      aria-hidden='true'
+                    />
+                  )}
+                  {overlayOptions?.enabled && (
+                    <div
+                      ref={(el) => {
+                        if (el) {
+                          overlayContainerRefs.current.set(pageNumber, el)
+                          allOverlayContainersRef.current.add(el)
+                        } else {
+                          overlayContainerRefs.current.delete(pageNumber)
+                        }
+                      }}
+                      className='hamster-reader__selection-overlay'
+                      role='presentation'
+                      aria-hidden='true'
+                      {...overlayBodyDragProps}
+                      style={
+                        {
+                          '--hamster-reader-selection-color':
+                            overlayOptions.color,
+                          '--hamster-reader-selection-opacity':
+                            overlayOptions.opacity,
+                          ...overlayBodyDragStyle
+                        } as React.CSSProperties
+                      }
+                    />
+                  )}
+                  {/* Task 4: 已保存选择覆盖层，每页独立容器。 */}
+                  {overlayOptions?.enabled && (
+                    <div
+                      ref={(el) => {
+                        if (el) {
+                          savedOverlayContainerRefs.current.set(pageNumber, el)
+                        } else {
+                          savedOverlayContainerRefs.current.delete(pageNumber)
+                        }
+                      }}
+                      className='hamster-reader__saved-selection-overlay'
+                      role='presentation'
+                      aria-hidden='true'
+                      onClick={handleSavedOverlayClick}
+                      style={
+                        {
+                          '--hamster-reader-saved-selection-color':
+                            overlayOptions.color,
+                          '--hamster-reader-saved-selection-opacity':
+                            overlayOptions.opacity
+                        } as React.CSSProperties
+                      }
+                    />
+                  )}
+                  {overlayOptions?.enabled &&
+                    selectionHandleElement !== null && (
+                      <div
+                        className='hamster-reader__saved-selection-handles'
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: '100%',
+                          pointerEvents: 'none'
+                        }}
+                      >
+                        {(() => {
+                          const entry =
+                            savedSelectionHandlePositions.get(pageNumber)
+                          if (!entry) return null
+                          return (
+                            <>
+                              {entry.start &&
+                                renderSelectionHandle(
+                                  'start',
+                                  entry.start,
+                                  false,
+                                  'saved'
+                                )}
+                              {entry.end &&
+                                renderSelectionHandle(
+                                  'end',
+                                  entry.end,
+                                  false,
+                                  'saved'
+                                )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    )}
+                  {overlayOptions?.enabled &&
+                    selectionHandleElement !== null && (
+                      <div
+                        className='hamster-reader__selection-handles'
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: '100%',
+                          pointerEvents: 'none'
+                        }}
+                      >
+                        {(() => {
+                          const handlesHidden =
+                            !shouldShowSelectionHandles(dragPreviewState)
+                          const entry = selectionHandlePositions.get(pageNumber)
+                          if (!entry) return null
+                          return (
+                            <>
+                              {entry.start &&
+                                renderSelectionHandle(
+                                  'start',
+                                  entry.start,
+                                  handlesHidden
+                                )}
+                              {entry.end &&
+                                renderSelectionHandle(
+                                  'end',
+                                  entry.end,
+                                  handlesHidden
+                                )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    )}
+                  {isPageLoading && (
+                    <div className='hamster-reader__intermediate-page-status'>
+                      Loading page {pageNumber}…
+                    </div>
+                  )}
+                  {pageStatus === 'error' && (
+                    <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
+                      Failed to load page {pageNumber}
+                    </div>
+                  )}
+                  {allTexts.map((textData) => {
+                    const text = textData as RenderableIntermediateText
+                    const bbox = getTextBbox(text)
+                    const style = buildTextSpanStyle(text, bbox)
+
+                    return (
+                      <span
+                        key={text.id}
+                        ref={setTextRef(text, pageNumber)}
+                        className='hamster-reader__intermediate-text'
+                        data-text-id={text.id}
+                        data-page-number={pageNumber}
+                        style={style}
+                      >
+                        {text.content}
+                      </span>
+                    )
+                  })}
+                </div>
+              )
+            })
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
