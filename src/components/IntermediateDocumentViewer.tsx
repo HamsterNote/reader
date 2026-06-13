@@ -2922,11 +2922,24 @@ export function IntermediateDocumentViewer({
       if (!resolvedResult || resolvedResult.status !== 'resolved') return
 
       event.stopPropagation()
+
+      // 已保存 overlay 被选中时，它会成为唯一活跃 overlay：清掉实时选区
+      // 的原生 Selection、覆盖层和端点，避免两套端点图标同时出现。
+      const selection = window.getSelection()
+      if (
+        selection &&
+        !selection.isCollapsed &&
+        typeof selection.removeAllRanges === 'function'
+      ) {
+        selection.removeAllRanges()
+      }
+      clearOverlay()
+
       setActiveSavedSelectionId(
         effectiveActiveSavedSelectionId === savedId ? null : savedId
       )
     },
-    [effectiveActiveSavedSelectionId, setActiveSavedSelectionId]
+    [clearOverlay, effectiveActiveSavedSelectionId, setActiveSavedSelectionId]
   )
 
   const executeRefreshSelectionOverlay = useCallback(() => {
@@ -2947,6 +2960,12 @@ export function IntermediateDocumentViewer({
       return
     }
 
+    const isSavedHandleDragActive =
+      dragStateRef.current.active && dragStateRef.current.source === 'saved'
+    if (isSavedHandleDragActive || savedHandleDragContextRef.current) {
+      return
+    }
+
     const viewerRoot = viewerRootRef.current
     const rects = getSelectionOverlayRects(
       selection,
@@ -2958,6 +2977,13 @@ export function IntermediateDocumentViewer({
     if (rects.length === 0) {
       clearOverlay()
       return
+    }
+
+    // 新的实时文本选择会接管 overlay 选中态；此时取消已保存 overlay
+    // 的激活和手柄，保证同一时间最多只有一组端点图标。
+    if (effectiveActiveSavedSelectionId !== null) {
+      setActiveSavedSelectionId(null)
+      setSavedSelectionHandlePositions(new Map())
     }
 
     renderSelectionOverlayRects(rects)
@@ -2973,7 +2999,12 @@ export function IntermediateDocumentViewer({
       Boolean(htmlContentRef.current && !htmlParserErrorRef.current)
     )
     setSelectionHandlePositions(handlePositions)
-  }, [clearOverlay, renderSelectionOverlayRects])
+  }, [
+    clearOverlay,
+    effectiveActiveSavedSelectionId,
+    renderSelectionOverlayRects,
+    setActiveSavedSelectionId
+  ])
 
   const refreshSelectionOverlay = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -3555,10 +3586,9 @@ export function IntermediateDocumentViewer({
           : result
       )
       renderSavedSelectionOverlays(previewResults, context.id)
-      refreshSavedSelectionHandles(previewResults, context.id)
       return rects
     },
-    [renderSavedSelectionOverlays, refreshSavedSelectionHandles]
+    [renderSavedSelectionOverlays]
   )
 
   const commitSavedSelectionEdit = useCallback(() => {
@@ -3717,6 +3747,7 @@ export function IntermediateDocumentViewer({
           previousSelection: activeResult.selection
         }
         range = activeResult.range
+        clearOverlay()
       } else {
         savedHandleDragContextRef.current = null
         // Retained as handle-drag seed state only: the per-handle Drag adapter has
@@ -3780,7 +3811,7 @@ export function IntermediateDocumentViewer({
       activeMouseSelectionRef.current.active = false
       return true
     },
-    [effectiveActiveSavedSelectionId]
+    [clearOverlay, effectiveActiveSavedSelectionId]
   )
 
   const applyHandleDragAtPoint = useCallback(
@@ -3830,12 +3861,19 @@ export function IntermediateDocumentViewer({
 
       if (dragSource === 'saved') {
         commitSavedSelectionEdit()
+        const selection = window.getSelection()
+        if (selection && typeof selection.removeAllRanges === 'function') {
+          // 保存选区拖拽使用原生 Selection 作为临时编辑载体；提交后立即清掉，
+          // 避免后续 selectionchange 把它误判成新的实时选区并取消已保存 overlay。
+          selection.removeAllRanges()
+        }
+        clearOverlay()
         savedHandleDragContextRef.current = null
       } else {
         emitSelectionEnd()
       }
     },
-    [applyHandleDragAtPoint, commitSavedSelectionEdit, emitSelectionEnd]
+    [applyHandleDragAtPoint, clearOverlay, commitSavedSelectionEdit, emitSelectionEnd]
   )
 
   useEffect(() => {
@@ -3886,7 +3924,8 @@ export function IntermediateDocumentViewer({
 
     const fallbackDragState = {
       active: false,
-      pointerId: null as number | null
+      pointerId: null as number | null,
+      element: null as HTMLElement | null
     }
 
     const fallbackPointerMove = (event: PointerEvent) => {
@@ -3900,8 +3939,13 @@ export function IntermediateDocumentViewer({
       if (!fallbackDragState.active) return
       if (fallbackDragState.pointerId !== event.pointerId) return
       event.preventDefault()
+      const activeElement = fallbackDragState.element
       fallbackDragState.active = false
       fallbackDragState.pointerId = null
+      fallbackDragState.element = null
+      if (activeElement) {
+        activeElement.style.pointerEvents = ''
+      }
       finishHandleDrag(event.clientX, event.clientY)
       globalThis.document.removeEventListener(
         'pointermove',
@@ -3949,6 +3993,7 @@ export function IntermediateDocumentViewer({
         element.style.pointerEvents = 'none'
         fallbackDragState.active = true
         fallbackDragState.pointerId = event.pointerId
+        fallbackDragState.element = element
         globalThis.document.addEventListener('pointermove', fallbackPointerMove)
         globalThis.document.addEventListener('pointerup', fallbackPointerEnd)
         globalThis.document.addEventListener(

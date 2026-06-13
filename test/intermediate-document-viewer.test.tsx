@@ -8250,6 +8250,84 @@ describe('IntermediateDocumentViewer', () => {
       expect(end).toBeInTheDocument()
     })
 
+    it('clears live selection handles when activating a saved selection', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const savedSelection = makeSavedSelection({
+        id: 'saved-exclusive-1',
+        textId: 'text-1',
+        content: 'Page 1 text',
+        startCharIndex: 5,
+        endCharIndex: 11
+      })
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+          savedSelections={[savedSelection]}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = getRequiredTextNode(text)
+      mockElementRect(page, { left: 0, top: 0, width: 100, height: 150 })
+      mockElementRect(text, { left: 10, top: 20, width: 70, height: 12 })
+      elementFromPointSpy = mockElementFromPoint(text)
+
+      const liveRange = globalThis.document.createRange()
+      liveRange.setStart(textNode, 0)
+      liveRange.setEnd(textNode, 4)
+      const liveSelection = makeMutableSelection(liveRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        await waitFor(() => {
+          expect(
+            page.querySelectorAll(
+              '.hamster-reader__selection-handles .hamster-reader__selection-handle'
+            )
+          ).toHaveLength(2)
+        })
+
+        const savedOverlay = page.querySelector(
+          '.hamster-reader__saved-selection-overlay'
+        ) as HTMLElement
+        await waitFor(() => {
+          expect(
+            savedOverlay.querySelector(
+              '[data-saved-selection-id="saved-exclusive-1"]'
+            )
+          ).toBeInTheDocument()
+        })
+        const path = savedOverlay.querySelector(
+          '[data-saved-selection-id="saved-exclusive-1"]'
+        ) as SVGPathElement
+        path.dispatchEvent(
+          new MouseEvent('click', { bubbles: true, clientX: 15, clientY: 25 })
+        )
+
+        await waitFor(() => {
+          expect(getSavedHandles(page).all).toHaveLength(2)
+        })
+        expect(
+          page.querySelectorAll('.hamster-reader__selection-handle')
+        ).toHaveLength(2)
+        expect(liveSelection.selection.removeAllRanges).toHaveBeenCalledTimes(1)
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
     it('only allows one saved selection to be active at a time', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
 
@@ -8595,6 +8673,125 @@ describe('IntermediateDocumentViewer', () => {
           status: 'resolved',
           extractedText: 'Page 1 text'
         })
+      } finally {
+        restoreCaret()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('keeps saved handle drag active across internal selectionchange refreshes', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const onSavedSelectionEdit = vi.fn()
+      const onActiveSavedSelectionChange = vi.fn()
+      const savedSelection = makeSavedSelection({
+        id: 'saved-edit-selectionchange',
+        textId: 'text-1',
+        content: 'Page 1 text',
+        startCharIndex: 5,
+        endCharIndex: 11
+      })
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+          savedSelections={[savedSelection]}
+          onActiveSavedSelectionChange={onActiveSavedSelectionChange}
+          onSavedSelectionEdit={onSavedSelectionEdit}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = getRequiredTextNode(text)
+      mockElementRect(page, { left: 0, top: 0, width: 100, height: 150 })
+      mockElementRect(text, { left: 10, top: 20, width: 70, height: 12 })
+      elementFromPointSpy = mockElementFromPoint(text)
+
+      const savedOverlay = page.querySelector(
+        '.hamster-reader__saved-selection-overlay'
+      ) as HTMLElement
+      await waitFor(() => {
+        expect(
+          savedOverlay.querySelector(
+            '[data-saved-selection-id="saved-edit-selectionchange"]'
+          )
+        ).toBeInTheDocument()
+      })
+
+      const path = savedOverlay.querySelector(
+        '[data-saved-selection-id="saved-edit-selectionchange"]'
+      ) as SVGPathElement
+      path.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, clientX: 15, clientY: 25 })
+      )
+
+      await waitFor(() => {
+        expect(getSavedHandles(page).all).toHaveLength(2)
+      })
+
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(textNode, 0)
+      initialRange.collapse(true)
+      const liveSelection = makeMutableSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaret = installSavedSelectionCaret(textNode, 0)
+
+      try {
+        const startHandle = getSavedHandles(page).start
+        if (!(startHandle instanceof HTMLElement)) {
+          throw new Error('Expected saved start handle')
+        }
+
+        startHandle.dispatchEvent(
+          new MouseEvent('pointerdown', {
+            bubbles: false,
+            cancelable: true,
+            button: 0,
+            clientX: 15,
+            clientY: 25
+          })
+        )
+        globalThis.document.dispatchEvent(
+          new MouseEvent('pointermove', {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            clientX: 12,
+            clientY: 24
+          })
+        )
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+        await act(async () => {
+          await Promise.resolve()
+        })
+        globalThis.document.dispatchEvent(
+          new MouseEvent('pointerup', {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            clientX: 12,
+            clientY: 24
+          })
+        )
+
+        expect(onActiveSavedSelectionChange).not.toHaveBeenCalledWith(null)
+        expect(onSavedSelectionEdit).toHaveBeenCalledTimes(1)
+        const [, nextSelection] = onSavedSelectionEdit.mock.calls[0]
+        expect(nextSelection.start.charIndex).toBe(0)
+        expect(nextSelection.end.charIndex).toBe(11)
+        expect(
+          savedOverlay.querySelector(
+            '[data-saved-selection-id="saved-edit-selectionchange"]'
+          )
+        ).toHaveClass('hamster-reader__saved-selection-overlay-path--active')
       } finally {
         restoreCaret()
         getSelectionSpy.mockRestore()
