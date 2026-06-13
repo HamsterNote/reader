@@ -3,6 +3,7 @@ import type {
   BackgroundQuality,
   ReaderPageRange,
   ReaderSavedSelection,
+  ReaderSavedSelectionComment,
   ReaderSelectedTextSegment,
   ReaderSelectionOverlayRect
 } from '@hamster-note/reader'
@@ -16,7 +17,15 @@ import type {
   IntermediateDocument,
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { useCallback, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent
+} from 'react'
 
 /** 当前活跃选区的快照，用于构建保存选区 */
 type LiveSelectionSnapshot = {
@@ -197,6 +206,104 @@ export function App() {
   >(null)
   const [lastLiveSelection, setLastLiveSelection] =
     useState<LiveSelectionSnapshot | null>(null)
+
+  // 评论弹窗开关。点击浮动评论按钮后置 true。
+  const [isCommentDialogOpen, setIsCommentDialogOpen] = useState(false)
+  // 评论按钮浮动位置（视口坐标，px）。null 表示不渲染按钮。
+  // 数据来源：选中 overlay path 的 boundingClientRect（可跨多 path）。
+  const [commentButtonPosition, setCommentButtonPosition] = useState<{
+    left: number
+    top: number
+  } | null>(null)
+  // 评论输入框草稿
+  const [commentDraft, setCommentDraft] = useState('')
+  // 弹窗内容滚动到底部用，保证发送后能看到新评论
+  const commentListRef = useRef<HTMLUListElement | null>(null)
+
+  // 当前激活选区的快捷查找
+  const activeSelection = useMemo<ReaderSavedSelection | null>(() => {
+    if (!activeSavedSelectionId) return null
+    return (
+      savedSelections.find(
+        (selection) => selection.id === activeSavedSelectionId
+      ) ?? null
+    )
+  }, [activeSavedSelectionId, savedSelections])
+
+  /**
+   * 计算选中 overlay 浮动评论按钮的目标位置：
+   * - 取 [data-saved-selection-id={id}] 所有 path 的 boundingClientRect
+   * - 选其中 top 最小（最靠上）的那个矩形作为锚点
+   * - 按钮放在该矩形 top 上方 12px、水平居中
+   * 当 activeSavedSelectionId 变化或滚动/窗口尺寸变化时重新计算。
+   */
+  useLayoutEffect(() => {
+    if (!activeSavedSelectionId) {
+      setCommentButtonPosition(null)
+      return
+    }
+
+    let rafId = 0
+    const recompute = () => {
+      const paths = window.document.querySelectorAll<SVGPathElement>(
+        `path[data-saved-selection-id='${activeSavedSelectionId}']`
+      )
+      if (paths.length === 0) {
+        setCommentButtonPosition(null)
+        return
+      }
+      let topmost: DOMRect | null = null
+      paths.forEach((path) => {
+        const rect = path.getBoundingClientRect()
+        // 跳过尺寸为 0 的不可见 path
+        if (rect.width === 0 || rect.height === 0) return
+        if (!topmost || rect.top < topmost.top) {
+          topmost = rect
+        }
+      })
+      if (!topmost) {
+        setCommentButtonPosition(null)
+        return
+      }
+      // 必须显式断言，否则 TS 在闭包中将 topmost 推断为 never
+      const anchor = topmost as DOMRect
+      setCommentButtonPosition({
+        left: anchor.left + anchor.width / 2,
+        top: anchor.top
+      })
+    }
+
+    // 初次计算用 rAF，等 React 提交完 overlay DOM 后再读取布局
+    rafId = window.requestAnimationFrame(recompute)
+    const handleScrollOrResize = () => {
+      if (rafId) window.cancelAnimationFrame(rafId)
+      rafId = window.requestAnimationFrame(recompute)
+    }
+    window.addEventListener('scroll', handleScrollOrResize, true)
+    window.addEventListener('resize', handleScrollOrResize)
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId)
+      window.removeEventListener('scroll', handleScrollOrResize, true)
+      window.removeEventListener('resize', handleScrollOrResize)
+    }
+  }, [activeSavedSelectionId, savedSelections])
+
+  // 切换选区时重置评论草稿；激活选区被清空时关闭弹窗
+  useEffect(() => {
+    setCommentDraft('')
+    if (!activeSavedSelectionId) {
+      setIsCommentDialogOpen(false)
+    }
+  }, [activeSavedSelectionId])
+
+  // 弹窗打开后滚动评论列表到底部，便于查看最新评论
+  useEffect(() => {
+    if (!isCommentDialogOpen) return
+    const node = commentListRef.current
+    if (node) {
+      node.scrollTop = node.scrollHeight
+    }
+  }, [isCommentDialogOpen, activeSelection?.comments?.length])
 
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
@@ -439,6 +546,60 @@ export function App() {
     }
   }, [activeSavedSelectionId, savedSelections])
 
+  /**
+   * 发送评论：
+   * 1. 仅当存在 activeSelection 且 trimmed 草稿非空时执行
+   * 2. 将新 comment 追加到 activeSelection.comments，调用 handleSavedSelectionEdit
+   *    复用现有持久化路径（替换数组 + 写 localStorage）
+   * 3. 成功后清空草稿
+   */
+  const handleSendComment = useCallback(() => {
+    if (!activeSelection) return
+    const trimmed = commentDraft.trim()
+    if (trimmed.length === 0) return
+    const newComment: ReaderSavedSelectionComment = {
+      id: generateId(),
+      text: trimmed,
+      createdAt: Date.now()
+    }
+    const nextSelection: ReaderSavedSelection = {
+      ...activeSelection,
+      comments: [...(activeSelection.comments ?? []), newComment]
+    }
+    handleSavedSelectionEdit(activeSelection.id, nextSelection)
+    setCommentDraft('')
+  }, [activeSelection, commentDraft, handleSavedSelectionEdit])
+
+  /**
+   * textarea 键盘交互：
+   * - Enter（无 Shift、未输入法组词）→ 发送（阻止默认换行）
+   * - Shift+Enter → 默认换行行为
+   * - Esc → 关闭弹窗
+   */
+  const handleCommentKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setIsCommentDialogOpen(false)
+        return
+      }
+      if (
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault()
+        handleSendComment()
+      }
+    },
+    [handleSendComment]
+  )
+
+  // 用于禁用发送按钮的草稿空白判断
+  const isCommentDraftEmpty = commentDraft.trim().length === 0
+  // 当前激活选区的评论数量（用于浮动按钮气泡）
+  const activeCommentCount = activeSelection?.comments?.length ?? 0
+
   return (
     <main data-testid='reader-demo-root'>
       <h1>Hamster Reader Demo</h1>
@@ -614,6 +775,291 @@ export function App() {
           <p>Size: {uploadedFile.size} bytes</p>
           <p>Type: {uploadedFile.type}</p>
         </section>
+      )}
+      {/*
+        浮动评论按钮：仅当有激活选区且按钮位置已计算时渲染。
+        position:fixed 配合视口坐标，向上偏移 12px 让按钮悬浮在 overlay 上方；
+        transform 让按钮中心对齐 overlay 顶部水平中心。
+      */}
+      {activeSavedSelectionId &&
+        commentButtonPosition &&
+        !isCommentDialogOpen && (
+          <button
+            type='button'
+            onClick={() => setIsCommentDialogOpen(true)}
+            data-testid='comment-floating-button'
+            style={{
+              position: 'fixed',
+              left: `${commentButtonPosition.left}px`,
+              top: `${commentButtonPosition.top - 12}px`,
+              transform: 'translate(-50%, -100%)',
+              padding: '6px 12px',
+              borderRadius: '999px',
+              border: '1px solid #e5e7eb',
+              background: '#ffffff',
+              color: '#374151',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.12)',
+              cursor: 'pointer',
+              fontSize: '13px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              zIndex: 1000
+            }}
+          >
+            <span aria-hidden='true'>💬</span>
+            <span>评论</span>
+            {activeCommentCount > 0 && (
+              <span
+                data-testid='comment-floating-button-count'
+                style={{
+                  background: '#f59e0b',
+                  color: '#ffffff',
+                  borderRadius: '999px',
+                  padding: '0 6px',
+                  fontSize: '11px',
+                  lineHeight: '16px',
+                  minWidth: '16px',
+                  textAlign: 'center'
+                }}
+              >
+                {activeCommentCount}
+              </span>
+            )}
+          </button>
+        )}
+      {/*
+        评论弹窗：受控显示。点击 backdrop 或按 Esc 关闭；
+        backdrop 用 button 而不是带 role 的 div 以满足 jsx-a11y 规则。
+        dialog body 通过 stopPropagation 阻止冒泡到 backdrop。
+      */}
+      {isCommentDialogOpen && activeSelection && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100
+          }}
+        >
+          <button
+            type='button'
+            aria-label='关闭评论弹窗'
+            onClick={() => setIsCommentDialogOpen(false)}
+            data-testid='comment-dialog-backdrop'
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              padding: 0,
+              border: 'none',
+              cursor: 'pointer',
+              background: 'rgba(17, 24, 39, 0.45)'
+            }}
+          />
+          <div
+            role='dialog'
+            aria-modal='true'
+            aria-label='选区评论'
+            style={{
+              position: 'relative',
+              width: 'min(480px, 92vw)',
+              maxHeight: 'min(560px, 80vh)',
+              background: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: '0 20px 48px rgba(0, 0, 0, 0.24)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}
+            data-testid='comment-dialog'
+          >
+            <header
+              style={{
+                padding: '14px 16px',
+                borderBottom: '1px solid #e5e7eb',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px'
+              }}
+            >
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
+              >
+                <strong style={{ fontSize: '14px', color: '#111827' }}>
+                  评论 ({activeCommentCount})
+                </strong>
+                <span
+                  style={{
+                    fontSize: '12px',
+                    color: '#6b7280',
+                    maxWidth: '360px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                  title={activeSelection.text}
+                >
+                  {activeSelection.text || '(空白选区)'}
+                </span>
+              </div>
+              <button
+                type='button'
+                onClick={() => setIsCommentDialogOpen(false)}
+                aria-label='关闭'
+                data-testid='comment-dialog-close'
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  fontSize: '18px',
+                  color: '#6b7280',
+                  cursor: 'pointer',
+                  padding: '4px 8px'
+                }}
+              >
+                ×
+              </button>
+            </header>
+            <ul
+              ref={commentListRef}
+              data-testid='comment-list'
+              style={{
+                listStyle: 'none',
+                margin: 0,
+                padding: '12px 16px',
+                overflowY: 'auto',
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                background: '#f9fafb'
+              }}
+            >
+              {activeCommentCount === 0 && (
+                <li
+                  data-testid='comment-empty'
+                  style={{
+                    fontSize: '13px',
+                    color: '#9ca3af',
+                    textAlign: 'center',
+                    padding: '24px 8px'
+                  }}
+                >
+                  还没有评论，写下第一条吧。
+                </li>
+              )}
+              {activeSelection.comments?.map((comment) => (
+                <li
+                  key={comment.id}
+                  data-testid='comment-item'
+                  style={{
+                    background: '#ffffff',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    border: '1px solid #e5e7eb',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      color: '#9ca3af'
+                    }}
+                  >
+                    {new Date(comment.createdAt).toLocaleString()}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '14px',
+                      color: '#374151',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word'
+                    }}
+                  >
+                    {comment.text}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <footer
+              style={{
+                padding: '12px 16px',
+                borderTop: '1px solid #e5e7eb',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                background: '#ffffff'
+              }}
+            >
+              <textarea
+                value={commentDraft}
+                onChange={(event) => setCommentDraft(event.target.value)}
+                onKeyDown={handleCommentKeyDown}
+                placeholder='写下你的评论… (Enter 发送，Shift+Enter 换行)'
+                data-testid='comment-input'
+                rows={3}
+                style={{
+                  width: '100%',
+                  resize: 'vertical',
+                  borderRadius: '8px',
+                  border: '1px solid #e5e7eb',
+                  padding: '8px 10px',
+                  fontSize: '14px',
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: '8px'
+                }}
+              >
+                <button
+                  type='button'
+                  onClick={() => setIsCommentDialogOpen(false)}
+                  data-testid='comment-cancel-button'
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    border: '1px solid #e5e7eb',
+                    background: '#ffffff',
+                    color: '#374151',
+                    cursor: 'pointer',
+                    fontSize: '13px'
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  type='button'
+                  onClick={handleSendComment}
+                  disabled={isCommentDraftEmpty}
+                  data-testid='comment-send-button'
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: isCommentDraftEmpty ? '#cbd5e1' : '#3b82f6',
+                    color: '#ffffff',
+                    cursor: isCommentDraftEmpty ? 'not-allowed' : 'pointer',
+                    fontSize: '13px'
+                  }}
+                >
+                  发送
+                </button>
+              </div>
+            </footer>
+          </div>
+        </div>
       )}
     </main>
   )

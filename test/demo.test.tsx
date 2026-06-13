@@ -75,6 +75,27 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
               }}
             />
           )}
+          {/*
+           * Mock 渲染：为每个保存选区生成一个带 data-saved-selection-id 的 path 占位元素，
+           * 让 demo 内的浮动评论按钮位置计算 useLayoutEffect 能在测试中找到 anchor。
+           * 真实 Reader 在 SVG overlay 容器中渲染同名属性的 path（IntermediateDocumentViewer.tsx）。
+           */}
+          {props.savedSelections && props.savedSelections.length > 0 ? (
+            <svg
+              data-testid='mock-saved-selection-overlay'
+              style={{ position: 'absolute', inset: 0 }}
+            >
+              <title>mock saved selection overlay</title>
+              {props.savedSelections.map((selection) => (
+                <path
+                  key={selection.id}
+                  data-saved-selection-id={selection.id}
+                  data-testid={`mock-saved-path-${selection.id}`}
+                  d='M0,0 L10,0 L10,10 L0,10 Z'
+                />
+              ))}
+            </svg>
+          ) : null}
         </div>
       )
     }

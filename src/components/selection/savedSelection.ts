@@ -521,6 +521,7 @@ export const buildSavedSelection = (options: {
 /**
  * 用编辑后的实时 Selection payload 重建已保存选择。
  * 调用方仍持有源数据；这里返回全新对象，避免修改 savedSelections prop。
+ * 注意：此处需要主动透传 comments 等业务字段，否则编辑手柄拖动后会丢失。
  */
 export const rebuildSavedSelectionFromEdit = (options: {
   previousSelection: ReaderSavedSelection
@@ -528,8 +529,8 @@ export const rebuildSavedSelectionFromEdit = (options: {
   segments: ReaderSelectedTextSegment[]
   rects: ReaderSelectionOverlayRect[]
   pageSizes: Map<number, { width: number; height: number }>
-}): ReaderSavedSelection =>
-  buildSavedSelection({
+}): ReaderSavedSelection => {
+  const next = buildSavedSelection({
     id: options.previousSelection.id,
     document: options.previousSelection.document,
     selection: options.selection,
@@ -537,6 +538,13 @@ export const rebuildSavedSelectionFromEdit = (options: {
     rects: options.rects,
     pageSizes: options.pageSizes
   })
+  // 保留 previousSelection 上由调用方维护的额外字段（例如 comments），
+  // 这些字段在拖动手柄编辑选区时不应该被丢弃。
+  if (options.previousSelection.comments) {
+    next.comments = options.previousSelection.comments
+  }
+  return next
+}
 
 /**
  * 按 exact → context → selected-text → visual 的顺序恢复已保存选择。

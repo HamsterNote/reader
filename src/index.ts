@@ -12,6 +12,7 @@ export {
   type ReaderRenderMode,
   type ReaderSavedSelection,
   type ReaderSavedSelectionAnchor,
+  type ReaderSavedSelectionComment,
   type ReaderSavedSelectionEditDetail,
   type ReaderSavedSelectionRestoreResult,
   type ReaderSavedSelectionRestoreStatus,

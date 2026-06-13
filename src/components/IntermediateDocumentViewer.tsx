@@ -231,6 +231,21 @@ export type ReaderSavedSelectionEditDetail = {
  * - **只读回退**：当文本锚点无法解析时，使用 visual 数据渲染只读覆盖层；
  *   回退选择不可编辑，不显示拖动手柄。
  */
+/**
+ * 已保存选择上的评论。评论数据由调用方维护，库本身只负责透传与
+ * 在编辑选区时保留这些数据，不会主动渲染或修改评论内容。
+ */
+export type ReaderSavedSelectionComment = {
+  /** 评论唯一标识符（由调用方生成） */
+  id: string
+  /** 评论文本内容 */
+  text: string
+  /** 评论创建时间戳（毫秒） */
+  createdAt: number
+  /** 评论作者（可选） */
+  author?: string
+}
+
 export type ReaderSavedSelection = {
   /** 数据格式版本，当前固定为 1 */
   version: 1
@@ -248,6 +263,11 @@ export type ReaderSavedSelection = {
   segments: ReaderSavedSelectionSegment[]
   /** 视觉回退数据（按页分组，用于无法解析文本时的只读渲染） */
   visual: ReaderSavedSelectionVisualPage[]
+  /**
+   * 选区上的评论（可选）。库不解释这些数据，仅在 rebuildSavedSelectionFromEdit
+   * 等内部流程中保留它们，避免编辑手柄拖动时评论被意外丢弃。
+   */
+  comments?: ReaderSavedSelectionComment[]
 }
 
 const NON_SPACE_BLANK_TEXT_RE = /^[\s\u200B-\u200D\uFEFF]+$/u
@@ -3873,7 +3893,12 @@ export function IntermediateDocumentViewer({
         emitSelectionEnd()
       }
     },
-    [applyHandleDragAtPoint, clearOverlay, commitSavedSelectionEdit, emitSelectionEnd]
+    [
+      applyHandleDragAtPoint,
+      clearOverlay,
+      commitSavedSelectionEdit,
+      emitSelectionEnd
+    ]
   )
 
   useEffect(() => {
