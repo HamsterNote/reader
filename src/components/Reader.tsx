@@ -9,6 +9,9 @@ import type {
   BackgroundQuality,
   ReaderPageRange,
   ReaderRenderMode,
+  ReaderSavedSelection,
+  ReaderSavedSelectionEditDetail,
+  ReaderSavedSelectionRestoreResult,
   ReaderSelectedTextDragCallback,
   ReaderSelectedTextSegment,
   ReaderSelectionHandleRenderProps,
@@ -47,6 +50,22 @@ export type ReaderProps = {
   selectionOverlay?: boolean | ReaderSelectionOverlayOptions
   // 允许传入 null 显式禁用手柄渲染（透传给底层 IntermediateDocumentViewer）
   selectionHandleElement?: ReactElement<ReaderSelectionHandleRenderProps> | null
+  /** 已保存的选择列表（可选），透传给 IntermediateDocumentViewer */
+  savedSelections?: ReaderSavedSelection[]
+  /** 编辑已保存选择时的回调（可选），仅在拖动手柄提交时触发一次 */
+  onSavedSelectionEdit?: (
+    id: string,
+    selection: ReaderSavedSelection,
+    detail: ReaderSavedSelectionEditDetail
+  ) => void
+  /** 当前激活的已保存选择 ID（可选） */
+  activeSavedSelectionId?: string | null
+  /** 激活选择变化时的回调（可选） */
+  onActiveSavedSelectionChange?: (id: string | null) => void
+  /** 已保存选择恢复完成时的回调（可选） */
+  onSavedSelectionRestore?: (
+    results: ReaderSavedSelectionRestoreResult[]
+  ) => void
 }
 
 const documentHasPages = (
@@ -91,7 +110,12 @@ export function Reader({
   onDragSelectedTextMove,
   onDragSelectedTextEnd,
   selectionOverlay,
-  selectionHandleElement
+  selectionHandleElement,
+  savedSelections,
+  onSavedSelectionEdit,
+  activeSavedSelectionId,
+  onActiveSavedSelectionChange,
+  onSavedSelectionRestore
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -184,6 +208,11 @@ export function Reader({
           onDragSelectedTextEnd={onDragSelectedTextEnd}
           selectionOverlay={selectionOverlay}
           selectionHandleElement={selectionHandleElement}
+          savedSelections={savedSelections}
+          onSavedSelectionEdit={onSavedSelectionEdit}
+          activeSavedSelectionId={activeSavedSelectionId}
+          onActiveSavedSelectionChange={onActiveSavedSelectionChange}
+          onSavedSelectionRestore={onSavedSelectionRestore}
         />
       )
     }

@@ -1,7 +1,7 @@
-import { type DecodeOptions, HtmlParser } from '@hamster-note/html-parser'
+import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
 import {
-  type IntermediateContent,
   IntermediateDocument,
+  type IntermediateContent,
   type IntermediateDocumentSerialized,
   type IntermediateText
 } from '@hamster-note/types'
@@ -18,13 +18,13 @@ import {
   armDragPreview,
   cancelDragPreview,
   createDragPreviewSession,
-  type DragPreviewRect,
-  type DragPreviewSession,
-  type DragPreviewState,
   finalizeDragPreview,
   geometryToOverlayRects,
   shouldShowSelectionHandles,
-  updateDragPreview
+  updateDragPreview,
+  type DragPreviewRect,
+  type DragPreviewSession,
+  type DragPreviewState
 } from './selection/dragPreviewModel'
 import {
   createDragSelectionAdapter,
@@ -38,10 +38,15 @@ import {
   buildSelectionPayload,
   buildSelectionPayloadFromTexts,
   getClosestTextElement,
+  textElementRecords,
   type ReaderSelectedTextSegment,
-  type ReaderSelectionPayload,
-  textElementRecords
+  type ReaderSelectionPayload
 } from './selection/selectionPayloadSerializer'
+import {
+  rebuildSavedSelectionFromEdit,
+  resolveSavedSelection,
+  type TextElementInfo
+} from './selection/savedSelection'
 import { polygonsToSvgPath, rectsToUnionPolygons } from './selectionGeometry'
 
 export {
@@ -61,6 +66,15 @@ export {
   type ReaderSelectionPayload,
   textElementRecords
 } from './selection/selectionPayloadSerializer'
+export {
+  buildSavedSelection,
+  denormalizePageRects,
+  normalizePageRects,
+  resolveSavedSelection,
+  textHash,
+  type NormalizedRect,
+  type TextElementInfo
+} from './selection/savedSelection'
 
 export type ReaderTextSelectionDetail = {
   text: IntermediateText
@@ -95,6 +109,147 @@ export type ReaderSelectionOverlayRect = {
   pageNumber: number
 }
 
+/**
+ * 已保存选择的文本锚点信息。
+ * 用于精确定位选择在文档中的起始/结束位置。
+ * bbox 使用归一化坐标（0-1），相对于页面尺寸。
+ */
+export type ReaderSavedSelectionAnchor = {
+  /** 锚点所在页码 */
+  pageNumber: number
+  /** 文本元素的唯一标识符（可选，用于精确匹配） */
+  textId?: string
+  /** 文本内容的哈希值（可选，用于文本变化后的模糊匹配） */
+  textHash?: string
+  /** 锚点在文本元素中的字符索引（可选） */
+  charIndex?: number
+  /** 锚点前的上下文文本（可选，用于上下文匹配回退） */
+  contextBefore?: string
+  /** 锚点后的上下文文本（可选，用于上下文匹配回退） */
+  contextAfter?: string
+  /** 归一化的边界框坐标（可选，0-1 范围，相对于页面尺寸） */
+  bbox?: { x: number; y: number; width: number; height: number }
+}
+
+/**
+ * 已保存选择中的一个文本段落。
+ * 描述选择在单页内的一段连续文本及其位置信息。
+ */
+export type ReaderSavedSelectionSegment = {
+  /** 段落所在页码 */
+  pageNumber: number
+  /** 文本元素的唯一标识符（可选） */
+  textId?: string
+  /** 文本内容的哈希值（可选） */
+  textHash?: string
+  /** 段落起始字符索引（可选） */
+  startCharIndex?: number
+  /** 段落结束字符索引（可选） */
+  endCharIndex?: number
+  /** 段落中的已选文本内容（可选） */
+  selectedText?: string
+  /** 段落前的上下文文本（可选） */
+  contextBefore?: string
+  /** 段落后的上下文文本（可选） */
+  contextAfter?: string
+  /** 归一化的边界框坐标（可选，0-1 范围，相对于页面尺寸） */
+  bbox?: { x: number; y: number; width: number; height: number }
+}
+
+/**
+ * 已保存选择的视觉回退数据（单页）。
+ * 当文本锚点无法解析时，使用归一化矩形区域进行视觉渲染。
+ */
+export type ReaderSavedSelectionVisualPage = {
+  /** 页码 */
+  pageNumber: number
+  /** 页面尺寸（像素） */
+  pageSize: { width: number; height: number }
+  /** 归一化的矩形区域列表（0-1 范围，相对于页面尺寸） */
+  rects: Array<{ x: number; y: number; width: number; height: number }>
+}
+
+/** 已保存选择的恢复状态 */
+export type ReaderSavedSelectionRestoreStatus =
+  | 'resolved'
+  | 'visual-fallback'
+  | 'unresolved'
+
+/**
+ * 已保存选择的恢复结果。
+ * 包含恢复状态、覆盖层矩形、段落信息和提取的文本。
+ */
+export type ReaderSavedSelectionRestoreResult = {
+  /** 已保存选择的唯一标识符 */
+  id: string
+  /** 原始的已保存选择数据 */
+  selection: ReaderSavedSelection
+  /** 恢复状态 */
+  status: ReaderSavedSelectionRestoreStatus
+  /** 可编辑的恢复 Range；视觉回退和未解析状态为空 */
+  range?: Range
+  /** 恢复后的覆盖层矩形（页面坐标系），可能来自文本解析或视觉回退 */
+  rects: ReaderSelectionOverlayRect[]
+  /** 恢复后的段落信息，未解析时为空数组 */
+  segments: ReaderSavedSelectionSegment[]
+  /** 提取的文本内容，未解析时为空字符串 */
+  extractedText: string
+  /** 未完全解析的原因说明（可选） */
+  reason?: string
+}
+
+/**
+ * 已保存选择编辑事件的详细信息。
+ * 当用户通过拖动手柄编辑已保存选择时触发。
+ */
+export type ReaderSavedSelectionEditDetail = {
+  /** 已保存选择的唯一标识符 */
+  id: string
+  /** 编辑后的选择数据 */
+  selection: ReaderSavedSelection
+  /** 编辑前的选择数据 */
+  previousSelection: ReaderSavedSelection
+  /** 恢复状态 */
+  status: ReaderSavedSelectionRestoreStatus
+  /** 编辑后的段落信息 */
+  segments: ReaderSavedSelectionSegment[]
+  /** 编辑后提取的文本内容 */
+  extractedText: string
+  /** 状态说明（可选） */
+  reason?: string
+}
+
+/**
+ * 已保存选择的公共数据模型（v1 版本）。
+ *
+ * 设计原则：
+ * - **版本化**：`version` 字段为字面量 `1`，未来 schema 变更时递增。
+ * - **归一化坐标**：所有 bbox 和 visual rects 使用 0-1 归一化坐标，
+ *   相对于页面尺寸，确保跨分辨率一致性。
+ * - **调用方持久化**：Reader 和 IntermediateDocumentViewer 不实现持久化逻辑；
+ *   调用方负责保存/加载 savedSelections 数据。
+ * - **只读回退**：当文本锚点无法解析时，使用 visual 数据渲染只读覆盖层；
+ *   回退选择不可编辑，不显示拖动手柄。
+ */
+export type ReaderSavedSelection = {
+  /** 数据格式版本，当前固定为 1 */
+  version: 1
+  /** 已保存选择的唯一标识符（由调用方生成和管理） */
+  id: string
+  /** 文档标识符（可选，用于区分不同文档的选择） */
+  document?: string
+  /** 选择的完整文本内容 */
+  text: string
+  /** 选择起始锚点 */
+  start: ReaderSavedSelectionAnchor
+  /** 选择结束锚点 */
+  end: ReaderSavedSelectionAnchor
+  /** 选择包含的文本段落列表（支持跨页选择） */
+  segments: ReaderSavedSelectionSegment[]
+  /** 视觉回退数据（按页分组，用于无法解析文本时的只读渲染） */
+  visual: ReaderSavedSelectionVisualPage[]
+}
+
 const NON_SPACE_BLANK_TEXT_RE = /^[\s\u200B-\u200D\uFEFF]+$/u
 
 export const isNonSpaceBlankText = (content: string): boolean =>
@@ -119,6 +274,12 @@ export type ReaderSelectionHandlePosition = {
   pageNumber: number
   rootX?: number
   rootY?: number
+  /** 边界文字高度（像素），用于自定义手柄按文字大小调整触控区域 */
+  textHeight?: number
+  /** 触控区域宽度（像素），通常为 textHeight 的一半 */
+  hitAreaWidth?: number
+  /** 触控区域高度（像素），通常等于 textHeight */
+  hitAreaHeight?: number
 }
 
 /** 选择手柄渲染属性 */
@@ -129,6 +290,12 @@ export type ReaderSelectionHandleRenderProps = {
   position: ReaderSelectionHandlePosition
   /** 是否正在拖动 */
   isDragging: boolean
+  /** 边界文字高度（像素），可选以保持向后兼容 */
+  textHeight?: number
+  /** 触控区域宽度（像素），可选以保持向后兼容 */
+  hitAreaWidth?: number
+  /** 触控区域高度（像素），可选以保持向后兼容 */
+  hitAreaHeight?: number
 }
 
 /** 将背景质量级别映射为 html-parser 的 backgroundQuality 数值（0-1） */
@@ -167,6 +334,22 @@ export type IntermediateDocumentViewerProps = {
   selectionOverlay?: boolean | ReaderSelectionOverlayOptions
   // 允许传入 null 显式禁用手柄渲染（运行时已支持，类型在此对齐）
   selectionHandleElement?: React.ReactElement<ReaderSelectionHandleRenderProps> | null
+  /** 已保存的选择列表（可选），由调用方管理和持久化 */
+  savedSelections?: ReaderSavedSelection[]
+  /** 编辑已保存选择时的回调（可选），仅在拖动手柄提交时触发一次 */
+  onSavedSelectionEdit?: (
+    id: string,
+    selection: ReaderSavedSelection,
+    detail: ReaderSavedSelectionEditDetail
+  ) => void
+  /** 当前激活的已保存选择 ID（可选），null 表示无激活选择 */
+  activeSavedSelectionId?: string | null
+  /** 激活选择变化时的回调（可选） */
+  onActiveSavedSelectionChange?: (id: string | null) => void
+  /** 已保存选择恢复完成时的回调（可选），用于诊断恢复状态 */
+  onSavedSelectionRestore?: (
+    results: ReaderSavedSelectionRestoreResult[]
+  ) => void
 }
 
 type PageSize = {
@@ -455,7 +638,11 @@ const collectSelectionOverlayClientRects = (
   const rects: DOMRect[] = []
   let handledDirectText = false
 
-  viewerRoot.querySelectorAll('[data-text-id]').forEach((element) => {
+  const textIdElements = Array.from(
+    viewerRoot.querySelectorAll('[data-text-id]')
+  )
+
+  textIdElements.forEach((element) => {
     if (!(element instanceof HTMLElement)) return
 
     const textId = element.getAttribute('data-text-id')
@@ -499,12 +686,29 @@ const collectSelectionOverlayClientRects = (
         return
       }
 
+      // jsdom 未实现 Range.getClientRects；先尝试原始 Range，再回退到元素边界框。
+      const rangeRects =
+        typeof range.getClientRects === 'function'
+          ? Array.from(range.getClientRects())
+          : []
+      if (rangeRects.length > 0) {
+        rects.push(...rangeRects)
+        return
+      }
+
       rects.push(element.getBoundingClientRect())
     } finally {
       elementRange.detach()
       clippedRange.detach()
     }
   })
+
+  // direct-render 文本命中但无有效矩形时（常见于测试环境），使用原始 Range 矩形回退。
+  if (handledDirectText && rects.length === 0) {
+    return typeof range.getClientRects === 'function'
+      ? Array.from(range.getClientRects())
+      : rects
+  }
 
   return handledDirectText ? rects : Array.from(range.getClientRects())
 }
@@ -531,6 +735,85 @@ const getRootOverlayRect = (
   }
 }
 
+// Task 4: 辅助函数，用于收集某页上的矩形，避免在渲染回调中嵌套 filter。
+const collectPageRects = (
+  rects: ReaderSelectionOverlayRect[],
+  pageNumber: number
+): ReaderSelectionOverlayRect[] => {
+  const pageRects: ReaderSelectionOverlayRect[] = []
+  for (const rect of rects) {
+    if (rect.pageNumber === pageNumber) {
+      pageRects.push(rect)
+    }
+  }
+  return pageRects
+}
+
+const escapeSvgAttributeValue = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+// Task 4: 根据解析结果和激活状态生成单个已保存选择 SVG path 字符串。
+const buildSavedSelectionOverlayPath = (
+  result: ReaderSavedSelectionRestoreResult,
+  activeId: string | null,
+  pageRects?: ReaderSelectionOverlayRect[]
+): string => {
+  const rects = pageRects ?? result.rects
+  if (rects.length === 0) return ''
+  const polygons = rectsToUnionPolygons(rects)
+  const d = polygonsToSvgPath(polygons)
+  const isFallback = result.status === 'visual-fallback'
+  const isActive = result.id === activeId
+  const fallbackModifier = isFallback
+    ? ' hamster-reader__saved-selection-overlay-path--fallback'
+    : ''
+  const activeModifier = isActive
+    ? ' hamster-reader__saved-selection-overlay-path--active'
+    : ''
+  const fallbackAttr = isFallback ? ' data-saved-selection-fallback="true"' : ''
+  const savedSelectionId = escapeSvgAttributeValue(result.id)
+  return `<path class="hamster-reader__saved-selection-overlay-path${fallbackModifier}${activeModifier}" data-saved-selection-id="${savedSelectionId}"${fallbackAttr} fill-rule="evenodd" d="${d}"/>`
+}
+
+// Task 4: 为 html-parser 模式构建整份已保存选择 SVG 内容。
+const buildSavedSelectionOverlaySvgForHtmlParser = (
+  results: ReaderSavedSelectionRestoreResult[],
+  activeId: string | null,
+  viewerRoot: HTMLElement,
+  pageRefs: Map<number, HTMLDivElement>
+): string => {
+  const parts: string[] = []
+  for (const result of results) {
+    if (result.rects.length === 0) continue
+    const rootRects: ReaderSelectionOverlayRect[] = []
+    for (const rect of result.rects) {
+      rootRects.push(getRootOverlayRect(rect, viewerRoot, pageRefs))
+    }
+    parts.push(buildSavedSelectionOverlayPath(result, activeId, rootRects))
+  }
+  return `<svg class="hamster-reader__saved-selection-overlay-svg" width="100%" height="100%">${parts.join('')}</svg>`
+}
+
+// Task 4: 为 direct-render 模式构建单页已保存选择 SVG 内容。
+const buildSavedSelectionOverlaySvgForDirectPage = (
+  results: ReaderSavedSelectionRestoreResult[],
+  activeId: string | null,
+  pageNumber: number
+): string => {
+  const parts: string[] = []
+  for (const result of results) {
+    const pageRects = collectPageRects(result.rects, pageNumber)
+    if (pageRects.length === 0) continue
+    parts.push(buildSavedSelectionOverlayPath(result, activeId, pageRects))
+  }
+  return `<svg class="hamster-reader__saved-selection-overlay-svg" width="100%" height="100%">${parts.join('')}</svg>`
+}
+
 // Compute one boundary handle anchor point from a Selection's range.
 // - 'start' → anchor at the LEFT edge of the collapsed-start rect (handle body
 //   renders OUTSIDE/LEFT of selection so it never covers the first character).
@@ -541,7 +824,14 @@ const buildBoundaryHandlePosition = (
   type: 'start' | 'end',
   viewerRoot: HTMLElement,
   pageRefs: Map<number, HTMLDivElement>
-): { x: number; y: number; pageNumber: number } | null => {
+): {
+  x: number
+  y: number
+  pageNumber: number
+  textHeight: number
+  hitAreaWidth: number
+  hitAreaHeight: number
+} | null => {
   const collapsedRange = range.cloneRange()
   collapsedRange.collapse(type === 'start')
   const collapsedRects = Array.from(collapsedRange.getClientRects())
@@ -568,11 +858,25 @@ const buildBoundaryHandlePosition = (
   )
   if (!pageInfo) return null
 
+  // 优先使用 DOMRect 自带的 height；对于合成对象则通过 bottom - top 计算。
+  // 当边界矩形高度为 0 或不可用时，回退到现有默认手柄高度 24px，
+  // 保证默认手柄仍能用上 18×24 的 SCSS 回退尺寸。
+  const rawHeight =
+    'height' in boundaryRect
+      ? boundaryRect.height
+      : boundaryRect.bottom - boundaryRect.top
+  const textHeight = rawHeight > 0 ? rawHeight : 24
+  const hitAreaWidth = textHeight / 2
+  const hitAreaHeight = textHeight
+
   const pageRect = pageInfo.pageElement.getBoundingClientRect()
   return {
     x: anchorX - pageRect.left,
     y: anchorY - pageRect.top,
-    pageNumber: pageInfo.pageNumber
+    pageNumber: pageInfo.pageNumber,
+    textHeight,
+    hitAreaWidth,
+    hitAreaHeight
   }
 }
 
@@ -607,7 +911,10 @@ const buildSelectionHandlePositions = (
     entry.start = {
       x: startPosition.x,
       y: startPosition.y,
-      pageNumber: startPosition.pageNumber
+      pageNumber: startPosition.pageNumber,
+      textHeight: startPosition.textHeight,
+      hitAreaWidth: startPosition.hitAreaWidth,
+      hitAreaHeight: startPosition.hitAreaHeight
     }
     if (htmlParserOverlayActive) {
       const rootStart = getRootOverlayRect(
@@ -632,7 +939,10 @@ const buildSelectionHandlePositions = (
     entry.end = {
       x: endPosition.x,
       y: endPosition.y,
-      pageNumber: endPosition.pageNumber
+      pageNumber: endPosition.pageNumber,
+      textHeight: endPosition.textHeight,
+      hitAreaWidth: endPosition.hitAreaWidth,
+      hitAreaHeight: endPosition.hitAreaHeight
     }
     if (htmlParserOverlayActive) {
       const rootEnd = getRootOverlayRect(
@@ -1158,7 +1468,12 @@ export function IntermediateDocumentViewer({
   onDragSelectedTextMove,
   onDragSelectedTextEnd,
   selectionOverlay,
-  selectionHandleElement
+  selectionHandleElement,
+  savedSelections,
+  activeSavedSelectionId,
+  onActiveSavedSelectionChange,
+  onSavedSelectionEdit,
+  onSavedSelectionRestore
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
@@ -1217,9 +1532,20 @@ export function IntermediateDocumentViewer({
   const dragStateRef = useRef<{
     active: boolean
     handleType: 'start' | 'end' | null
+    source: 'live' | 'saved'
     fixedPoint: { x: number; y: number; pageNumber: number } | null
     fixedAnchor: { node: Node; offset: number } | null
-  }>({ active: false, handleType: null, fixedPoint: null, fixedAnchor: null })
+  }>({
+    active: false,
+    handleType: null,
+    source: 'live',
+    fixedPoint: null,
+    fixedAnchor: null
+  })
+  const savedHandleDragContextRef = useRef<{
+    id: string
+    previousSelection: ReaderSavedSelection
+  } | null>(null)
   const [loadablePages, setLoadablePages] = useState(() => new Set<number>())
   const [visiblePages, setVisiblePages] = useState(() => new Set<number>())
   const [textsByPageNumber, setTextsByPageNumber] = useState(
@@ -1255,6 +1581,39 @@ export function IntermediateDocumentViewer({
     >
   >(() => new Map())
 
+  // Task 4: 已保存选择覆盖层状态。
+  // 支持受控与非受控两种模式：当调用方传入 activeSavedSelectionId 时，
+  // 组件完全遵循该 prop；否则使用内部状态维护当前激活选择。
+  const isControlledActiveSavedSelection = activeSavedSelectionId !== undefined
+  const [internalActiveSavedSelectionId, setInternalActiveSavedSelectionId] =
+    useState<string | null>(null)
+  const effectiveActiveSavedSelectionId = isControlledActiveSavedSelection
+    ? activeSavedSelectionId
+    : internalActiveSavedSelectionId
+
+  // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
+  const resolvedSavedSelectionsRef = useRef<
+    Map<string, ReaderSavedSelectionRestoreResult>
+  >(new Map())
+  // 已保存选择覆盖层容器：direct 模式每页一个，html-parser 模式一个根容器。
+  const savedOverlayContainerRefs = useRef<Map<number, HTMLDivElement>>(
+    new Map()
+  )
+  const savedOverlayElRef = useRef<HTMLDivElement | null>(null)
+  // 已保存选择手柄位置，仅当某个已解析选择被激活时才有值。
+  const [savedSelectionHandlePositions, setSavedSelectionHandlePositions] =
+    useState<
+      Map<
+        number,
+        {
+          start?: ReaderSelectionHandlePosition
+          end?: ReaderSelectionHandlePosition
+        }
+      >
+    >(() => new Map())
+  // 用于在文本/page DOM 变化时触发已保存选择重新解析的版本计数器。
+  const [savedSelectionDomVersion, setSavedSelectionDomVersion] = useState(0)
+
   const overlayOptions = useMemo(
     () => getSelectionOverlayOptions(selectionOverlay),
     [selectionOverlay]
@@ -1269,6 +1628,48 @@ export function IntermediateDocumentViewer({
         .filter(Boolean)
         .join('|'),
     [selectionHandlePositions]
+  )
+  const savedSelectionHandleAdapterKey = useMemo(
+    () =>
+      Array.from(savedSelectionHandlePositions.entries())
+        .flatMap(([pageNumber, entry]) => [
+          entry.start ? `${pageNumber}:saved-start` : '',
+          entry.end ? `${pageNumber}:saved-end` : ''
+        ])
+        .filter(Boolean)
+        .join('|'),
+    [savedSelectionHandlePositions]
+  )
+
+  const buildSavedSelectionEditPageSizes = useCallback(
+    (
+      segments: ReaderSelectedTextSegment[],
+      rects: ReaderSelectionOverlayRect[]
+    ) => {
+      const pageSizeMap = new Map<number, { width: number; height: number }>()
+      if (!runtimeDocument) return pageSizeMap
+
+      const pageNumbersForEdit = new Set<number>()
+      for (const segment of segments) {
+        pageNumbersForEdit.add(segment.pageNumber ?? 1)
+      }
+      for (const rect of rects) {
+        pageNumbersForEdit.add(rect.pageNumber)
+      }
+
+      for (const pageNumber of pageNumbersForEdit) {
+        const pageSize = normalizePageSize(
+          runtimeDocument.getPageSizeByPageNumber(pageNumber)
+        )
+        pageSizeMap.set(pageNumber, {
+          width: pageSize.width,
+          height: pageSize.height
+        })
+      }
+
+      return pageSizeMap
+    },
+    [runtimeDocument]
   )
   const {
     bodyDragCallbacksEnabled,
@@ -1969,6 +2370,8 @@ export function IntermediateDocumentViewer({
         boundedDirectRenderPayloadsRef.current.get(detail) ??
         buildSelectionPayload(selection)
       if (payload) {
+        // 注意：onSelectText 签名固定为 3 参数（baseline 契约）；rects/pageSizes 等
+        // 字符级几何信息由调用方在拿到 payload 后自行通过 getSelectionOverlayRects 推导。
         onSelectText(payload.selection, payload.segments, payload.extractedText)
       }
     }
@@ -2342,17 +2745,189 @@ export function IntermediateDocumentViewer({
       rafIdRef.current = null
     }
     overlayRectsRef.current = []
-    if (overlayElRef.current) {
-      overlayElRef.current.innerHTML = ''
-    }
     overlayContainerRefs.current.forEach((container) => {
       container.innerHTML = ''
     })
     allOverlayContainersRef.current.forEach((container) => {
       container.innerHTML = ''
     })
-    setSelectionHandlePositions((prev) => (prev.size === 0 ? prev : new Map()))
+    if (overlayElRef.current) {
+      overlayElRef.current.innerHTML = ''
+    }
+    setSelectionHandlePositions(new Map())
   }, [])
+
+  // Task 4: 独立清理已保存选择覆盖层与手柄，避免与实时选择清理互相干扰。
+  const clearSavedSelectionOverlays = useCallback(() => {
+    resolvedSavedSelectionsRef.current.clear()
+    for (const container of savedOverlayContainerRefs.current.values()) {
+      container.innerHTML = ''
+    }
+    if (savedOverlayElRef.current) {
+      savedOverlayElRef.current.innerHTML = ''
+    }
+    setSavedSelectionHandlePositions(new Map())
+  }, [])
+
+  // Task 4: 构建解析器所需的 TextElementInfo 列表。
+  // 扫描 viewerRoot 中所有 [data-text-id] 元素，并与 textElementsRef 中的记录配对，
+  // 这样既能覆盖 direct-render 的文本 span，也能在 html-parser 输出带 data-text-id 时工作。
+  const buildTextElementInfosForSavedSelection = useCallback(
+    (viewerRoot: HTMLElement): TextElementInfo[] => {
+      const elements = Array.from(viewerRoot.querySelectorAll('[data-text-id]'))
+      return elements.flatMap((element) => {
+        const id = element.getAttribute('data-text-id')
+        if (!id) return []
+        const record = textElementsRef.current.get(id)
+        if (!record) return []
+        return [
+          {
+            element: element as HTMLElement,
+            text: record.text,
+            pageNumber: record.pageNumber
+          }
+        ]
+      })
+    },
+    []
+  )
+
+  // Task 4: 把 resolveSavedSelection 返回的客户端坐标矩形转换为页面相对坐标。
+  // resolveSavedSelection 的 rects 来自 Range.getClientRects，是 viewport 坐标；
+  // direct-render 覆盖层使用页面相对坐标，因此需要按对应页元素的位置做偏移。
+  const convertSavedSelectionRectToPageRect = useCallback(
+    (
+      rect: ReaderSelectionOverlayRect,
+      viewerRoot: HTMLElement
+    ): ReaderSelectionOverlayRect => {
+      const pageElement = getPageElementByPageNumber(
+        rect.pageNumber,
+        viewerRoot,
+        pageRefs.current
+      )
+      if (!pageElement) return rect
+      const pageRect = pageElement.getBoundingClientRect()
+      return {
+        ...rect,
+        x: rect.x - pageRect.left,
+        y: rect.y - pageRect.top
+      }
+    },
+    []
+  )
+
+  // Task 4: 渲染所有已保存选择覆盖层。
+  // 与实时选择覆盖层使用独立的 DOM 容器，避免互相污染；
+  // 每个选择单独生成 path，因此重叠的选择仍保持各自可点击。
+  const renderSavedSelectionOverlays = useCallback(
+    (results: ReaderSavedSelectionRestoreResult[], activeId: string | null) => {
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot || results.length === 0) {
+        for (const container of savedOverlayContainerRefs.current.values()) {
+          container.innerHTML = ''
+        }
+        if (savedOverlayElRef.current) {
+          savedOverlayElRef.current.innerHTML = ''
+        }
+        return
+      }
+
+      const htmlParserOverlayActive =
+        htmlContentRef.current && !htmlParserErrorRef.current
+
+      if (htmlParserOverlayActive) {
+        if (savedOverlayElRef.current) {
+          savedOverlayElRef.current.innerHTML =
+            buildSavedSelectionOverlaySvgForHtmlParser(
+              results,
+              activeId,
+              viewerRoot,
+              pageRefs.current
+            )
+        }
+        return
+      }
+
+      for (const [
+        pageNumber,
+        container
+      ] of savedOverlayContainerRefs.current.entries()) {
+        container.innerHTML = buildSavedSelectionOverlaySvgForDirectPage(
+          results,
+          activeId,
+          pageNumber
+        )
+      }
+    },
+    []
+  )
+
+  // Task 4: 根据激活状态计算已保存选择手柄位置。
+  // 只有解析成功（status === 'resolved' 且存在 range）的已保存选择才会显示手柄；
+  // 手柄计算复用 buildSelectionHandlePositions，与实时选择使用同一套几何逻辑。
+  const refreshSavedSelectionHandles = useCallback(
+    (results: ReaderSavedSelectionRestoreResult[], activeId: string | null) => {
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot) {
+        setSavedSelectionHandlePositions(new Map())
+        return
+      }
+
+      const activeResult = results.find((result) => result.id === activeId)
+      if (
+        !activeResult ||
+        activeResult.status !== 'resolved' ||
+        !activeResult.range
+      ) {
+        setSavedSelectionHandlePositions(new Map())
+        return
+      }
+
+      const htmlParserOverlayActive =
+        htmlContentRef.current && !htmlParserErrorRef.current
+      const positions = buildSelectionHandlePositions(
+        activeResult.range,
+        viewerRoot,
+        pageRefs.current,
+        Boolean(htmlParserOverlayActive)
+      )
+      setSavedSelectionHandlePositions(positions)
+    },
+    []
+  )
+
+  // Task 4: 激活/取消激活已保存选择。
+  // 受控模式下仅回调通知调用方；非受控模式下同步更新内部状态。
+  const setActiveSavedSelectionId = useCallback(
+    (id: string | null) => {
+      if (!isControlledActiveSavedSelection) {
+        setInternalActiveSavedSelectionId(id)
+      }
+      onActiveSavedSelectionChange?.(id)
+    },
+    [isControlledActiveSavedSelection, onActiveSavedSelectionChange]
+  )
+
+  // Task 4: 点击已保存选择覆盖层时切换激活状态。
+  // 视觉回退选择也允许激活，便于受控按钮（如删除）同步状态；手柄仍由 resolved range 单独控制。
+  const handleSavedOverlayClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement | null
+      const savedId = target
+        ?.closest('[data-saved-selection-id]')
+        ?.getAttribute('data-saved-selection-id')
+      if (!savedId) return
+
+      const resolvedResult = resolvedSavedSelectionsRef.current.get(savedId)
+      if (!resolvedResult || resolvedResult.status !== 'resolved') return
+
+      event.stopPropagation()
+      setActiveSavedSelectionId(
+        effectiveActiveSavedSelectionId === savedId ? null : savedId
+      )
+    },
+    [effectiveActiveSavedSelectionId, setActiveSavedSelectionId]
+  )
 
   const executeRefreshSelectionOverlay = useCallback(() => {
     rafIdRef.current = null
@@ -2452,6 +3027,139 @@ export function IntermediateDocumentViewer({
       globalThis.document.removeEventListener('scroll', refreshSelectionOverlay)
     }
   }, [overlayOptions, refreshSelectionOverlay])
+
+  // Task 4: 当页面文本、html-parser 内容或 OCR 结果变化时，递增 DOM 版本号，
+  // 触发已保存选择的重新解析。为了避免 hook 依赖数组中出现未在回调体中使用的
+  // 变量，这里用 ref 保存上一次状态并比较引用。
+  const savedSelectionDomStateRef = useRef({
+    textsByPageNumber,
+    ocrTextsByPageNumber,
+    htmlContent,
+    htmlParserError
+  })
+  useEffect(() => {
+    if (!overlayOptions?.enabled || !runtimeDocument) return
+
+    const prev = savedSelectionDomStateRef.current
+    const changed =
+      prev.textsByPageNumber !== textsByPageNumber ||
+      prev.ocrTextsByPageNumber !== ocrTextsByPageNumber ||
+      prev.htmlContent !== htmlContent ||
+      prev.htmlParserError !== htmlParserError
+    if (!changed) return
+
+    savedSelectionDomStateRef.current = {
+      textsByPageNumber,
+      ocrTextsByPageNumber,
+      htmlContent,
+      htmlParserError
+    }
+    setSavedSelectionDomVersion((version) => version + 1)
+  }, [
+    overlayOptions?.enabled,
+    runtimeDocument,
+    textsByPageNumber,
+    ocrTextsByPageNumber,
+    htmlContent,
+    htmlParserError
+  ])
+
+  // 记录最近一次解析时使用的 DOM 版本号，仅用于把 savedSelectionDomVersion
+  // 真正用在回调体内，避免 exhaustive-deps 误报，同时保留触发重新解析的能力。
+  const lastResolvedDomVersionRef = useRef(0)
+
+  // Task 4: 解析并渲染已保存选择覆盖层。
+  // 使用 requestAnimationFrame 等待 DOM 更新完成后再扫描 [data-text-id] 元素。
+  const resolveAndRenderSavedSelections = useCallback(() => {
+    lastResolvedDomVersionRef.current = savedSelectionDomVersion
+
+    const viewerRoot = viewerRootRef.current
+    if (!viewerRoot) return
+    if (!savedSelections || savedSelections.length === 0) {
+      clearSavedSelectionOverlays()
+      return
+    }
+
+    if (!isMountedRef.current) return
+
+    const textElementInfos = buildTextElementInfosForSavedSelection(viewerRoot)
+    const results: ReaderSavedSelectionRestoreResult[] = []
+    for (const selection of savedSelections) {
+      const resolved = resolveSavedSelection(selection, textElementInfos)
+      const pageRects: ReaderSelectionOverlayRect[] =
+        resolved.status === 'resolved'
+          ? resolved.rects.map((rect) =>
+              convertSavedSelectionRectToPageRect(rect, viewerRoot)
+            )
+          : resolved.rects
+      results.push({ ...resolved, rects: pageRects })
+    }
+
+    const resultsById = new Map<string, ReaderSavedSelectionRestoreResult>()
+    for (const result of results) {
+      resultsById.set(result.id, result)
+    }
+    resolvedSavedSelectionsRef.current = resultsById
+
+    onSavedSelectionRestore?.(results)
+    renderSavedSelectionOverlays(results, effectiveActiveSavedSelectionId)
+    refreshSavedSelectionHandles(results, effectiveActiveSavedSelectionId)
+  }, [
+    savedSelections,
+    savedSelectionDomVersion,
+    effectiveActiveSavedSelectionId,
+    clearSavedSelectionOverlays,
+    buildTextElementInfosForSavedSelection,
+    convertSavedSelectionRectToPageRect,
+    renderSavedSelectionOverlays,
+    refreshSavedSelectionHandles,
+    onSavedSelectionRestore
+  ])
+
+  // Task 4: 当 savedSelections、文档、overlay 开关或 DOM 版本变化时执行解析渲染。
+  // resolveAndRenderSavedSelections 的依赖已包含 savedSelections 与 savedSelectionDomVersion，
+  // 因此这里不需要重复声明，避免 exhaustive-deps 报错。
+  useEffect(() => {
+    if (!overlayOptions?.enabled || !runtimeDocument) return
+
+    const frameId = requestAnimationFrame(resolveAndRenderSavedSelections)
+    return () => {
+      cancelAnimationFrame(frameId)
+    }
+  }, [
+    overlayOptions?.enabled,
+    runtimeDocument,
+    resolveAndRenderSavedSelections
+  ])
+
+  // Task 4: 激活选择变化时重新渲染覆盖层（高亮样式）与手柄。
+  useEffect(() => {
+    if (!overlayOptions?.enabled) return
+    const results = Array.from(resolvedSavedSelectionsRef.current.values())
+    renderSavedSelectionOverlays(results, effectiveActiveSavedSelectionId)
+    refreshSavedSelectionHandles(results, effectiveActiveSavedSelectionId)
+  }, [
+    effectiveActiveSavedSelectionId,
+    overlayOptions?.enabled,
+    renderSavedSelectionOverlays,
+    refreshSavedSelectionHandles
+  ])
+
+  // Task 4: 布局变化时重新解析并渲染已保存选择，保证覆盖层与文本位置同步。
+  useEffect(() => {
+    if (!overlayOptions?.enabled) return
+
+    const handleLayoutChange = () => {
+      resolveAndRenderSavedSelections()
+    }
+
+    globalThis.window.addEventListener('resize', handleLayoutChange)
+    globalThis.document.addEventListener('scroll', handleLayoutChange)
+    return () => {
+      globalThis.window.removeEventListener('resize', handleLayoutChange)
+      globalThis.document.removeEventListener('scroll', handleLayoutChange)
+    }
+  }, [overlayOptions?.enabled, resolveAndRenderSavedSelections])
 
   useEffect(() => {
     const root = viewerRootElement
@@ -2723,7 +3431,7 @@ export function IntermediateDocumentViewer({
     const root = viewerRootRef.current
     if (!root) return
 
-    // 点击页面空白区域时清除原生 selection 与覆盖层；
+    // 点击页面空白区域时清除原生 selection、实时覆盖层以及已保存选择的激活状态；
     // 排除文本节点、覆盖层、手柄自身的点击。
     const handleBlankClick = (event: MouseEvent) => {
       if (ignoreNextBlankClickRef.current) {
@@ -2740,6 +3448,10 @@ export function IntermediateDocumentViewer({
       if (target.closest('.hamster-reader__selection-overlay-path')) return
       if (target.closest('.hamster-reader__selection-handles')) return
       if (target.closest('[data-handle-type]')) return
+      // Task 4: 已保存选择覆盖层及其手柄的点击由独立处理器处理，不在此处清除。
+      if (target.closest('.hamster-reader__saved-selection-overlay-path'))
+        return
+      if (target.closest('.hamster-reader__saved-selection-handles')) return
       // Blank-click cleanup is not a selection initiation path; it clears an
       // existing external or Drag-composed Selection when the user clicks empty
       // viewer space.
@@ -2748,13 +3460,22 @@ export function IntermediateDocumentViewer({
         selection.removeAllRanges()
       }
       clearOverlay()
+      // Task 4: 点击空白处取消已保存选择的激活状态（仅非受控模式需要更新内部状态）。
+      if (effectiveActiveSavedSelectionId !== null) {
+        setActiveSavedSelectionId(null)
+      }
     }
 
     root.addEventListener('click', handleBlankClick)
     return () => {
       root.removeEventListener('click', handleBlankClick)
     }
-  }, [overlayOptions, clearOverlay])
+  }, [
+    overlayOptions,
+    clearOverlay,
+    effectiveActiveSavedSelectionId,
+    setActiveSavedSelectionId
+  ])
 
   useEffect(() => {
     if (!onTextSelectionEnd && !onSelectText && !bodyDragCallbacksEnabled) {
@@ -2805,6 +3526,101 @@ export function IntermediateDocumentViewer({
     bodyDragCallbacksEnabled,
     emitSelectionEnd,
     recomposeActiveTextSelection
+  ])
+
+  const renderSavedSelectionEditPreview = useCallback(
+    (selection: Selection): ReaderSelectionOverlayRect[] => {
+      const context = savedHandleDragContextRef.current
+      const viewerRoot = viewerRootRef.current
+      if (!context || !viewerRoot || selection.isCollapsed) return []
+
+      const rects = getSelectionOverlayRects(
+        selection,
+        viewerRoot,
+        pageRefs.current,
+        textElementsRef.current
+      )
+      if (rects.length === 0 || selection.rangeCount === 0) return []
+
+      const previewResults = Array.from(
+        resolvedSavedSelectionsRef.current.values()
+      ).map((result) =>
+        result.id === context.id
+          ? {
+              ...result,
+              status: 'resolved' as const,
+              range: selection.getRangeAt(0),
+              rects
+            }
+          : result
+      )
+      renderSavedSelectionOverlays(previewResults, context.id)
+      refreshSavedSelectionHandles(previewResults, context.id)
+      return rects
+    },
+    [renderSavedSelectionOverlays, refreshSavedSelectionHandles]
+  )
+
+  const commitSavedSelectionEdit = useCallback(() => {
+    const context = savedHandleDragContextRef.current
+    const viewerRoot = viewerRootRef.current
+    if (!context || !viewerRoot) return
+
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      return
+    }
+
+    const payload = buildSelectionPayload(selection)
+    if (!payload) return
+
+    const rects = getSelectionOverlayRects(
+      selection,
+      viewerRoot,
+      pageRefs.current,
+      textElementsRef.current
+    )
+    if (rects.length === 0) return
+
+    const nextSelection = rebuildSavedSelectionFromEdit({
+      previousSelection: context.previousSelection,
+      selection,
+      segments: payload.segments,
+      rects,
+      pageSizes: buildSavedSelectionEditPageSizes(payload.segments, rects)
+    })
+    const nextResult: ReaderSavedSelectionRestoreResult = {
+      id: context.id,
+      selection: nextSelection,
+      status: 'resolved',
+      range: selection.getRangeAt(0),
+      rects,
+      segments: nextSelection.segments,
+      extractedText: payload.extractedText
+    }
+
+    resolvedSavedSelectionsRef.current = new Map(
+      resolvedSavedSelectionsRef.current
+    ).set(context.id, nextResult)
+    const optimisticResults = Array.from(
+      resolvedSavedSelectionsRef.current.values()
+    )
+    renderSavedSelectionOverlays(optimisticResults, context.id)
+    refreshSavedSelectionHandles(optimisticResults, context.id)
+
+    onSavedSelectionEdit?.(context.id, nextSelection, {
+      id: context.id,
+      selection: nextSelection,
+      previousSelection: context.previousSelection,
+      status: 'resolved',
+      segments: nextSelection.segments,
+      extractedText: payload.extractedText
+    })
+  }, [
+    buildSavedSelectionEditPageSizes,
+    onSavedSelectionEdit,
+    renderSavedSelectionOverlays,
+    refreshSavedSelectionHandles
   ])
 
   const applyHandleDragSelection = useCallback(
@@ -2864,77 +3680,108 @@ export function IntermediateDocumentViewer({
         endPoint.offset
       )
       composeSelection(newRange)
-      // 手动触发覆盖层刷新：测试环境下 mock 的 selection 不会自动派发 selectionchange，
-      // 真实浏览器中此处也提前刷新，避免拖动期间出现一帧延迟。
-      refreshSelectionOverlayRef.current()
+      const selection = window.getSelection()
+      if (dragState.source === 'saved' && selection) {
+        renderSavedSelectionEditPreview(selection)
+      } else {
+        // 手动触发覆盖层刷新：测试环境下 mock 的 selection 不会自动派发 selectionchange，
+        // 真实浏览器中此处也提前刷新，避免拖动期间出现一帧延迟。
+        refreshSelectionOverlayRef.current()
+      }
     },
-    []
+    [renderSavedSelectionEditPreview]
   )
 
-  const beginHandleDrag = useCallback((handleType: 'start' | 'end') => {
-    if (dragStateRef.current.active || dragSelectionAnchorRef.current) {
-      return false
-    }
+  const beginHandleDrag = useCallback(
+    (handleType: 'start' | 'end', source: 'live' | 'saved' = 'live') => {
+      if (dragStateRef.current.active || dragSelectionAnchorRef.current) {
+        return false
+      }
 
-    // Retained as handle-drag seed state only: the per-handle Drag adapter has
-    // already initiated the gesture, and this reads the current Selection range
-    // to determine the fixed anchor for subsequent composed updates.
-    const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-      return false
-    }
+      let range: Range | null = null
+      if (source === 'saved') {
+        const activeSavedId = effectiveActiveSavedSelectionId
+        const activeResult = activeSavedId
+          ? resolvedSavedSelectionsRef.current.get(activeSavedId)
+          : undefined
+        if (
+          !activeResult ||
+          activeResult.status !== 'resolved' ||
+          !activeResult.range
+        ) {
+          savedHandleDragContextRef.current = null
+          return false
+        }
+        savedHandleDragContextRef.current = {
+          id: activeResult.id,
+          previousSelection: activeResult.selection
+        }
+        range = activeResult.range
+      } else {
+        savedHandleDragContextRef.current = null
+        // Retained as handle-drag seed state only: the per-handle Drag adapter has
+        // already initiated the gesture, and this reads the current Selection range
+        // to determine the fixed anchor for subsequent composed updates.
+        const selection = window.getSelection()
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+          return false
+        }
+        range = selection.getRangeAt(0)
+      }
 
-    const range = selection.getRangeAt(0)
-    const viewerRoot = viewerRootRef.current
-    if (!viewerRoot) return false
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot || !range) return false
 
-    // 记录固定端的实际节点/偏移；start 手柄拖动 → 固定端=range.end，反之亦然
-    const fixedAnchor =
-      handleType === 'start'
-        ? { node: range.endContainer, offset: range.endOffset }
-        : { node: range.startContainer, offset: range.startOffset }
+      // 记录固定端的实际节点/偏移；start 手柄拖动 → 固定端=range.end，反之亦然
+      const fixedAnchor =
+        handleType === 'start'
+          ? { node: range.endContainer, offset: range.endOffset }
+          : { node: range.startContainer, offset: range.startOffset }
 
-    let fixedRange: Range
-    if (handleType === 'start') {
-      fixedRange = globalThis.document.createRange()
-      fixedRange.setStart(range.endContainer, range.endOffset)
-      fixedRange.collapse(true)
-    } else {
-      fixedRange = globalThis.document.createRange()
-      fixedRange.setStart(range.startContainer, range.startOffset)
-      fixedRange.collapse(true)
-    }
+      let fixedRange: Range
+      if (handleType === 'start') {
+        fixedRange = globalThis.document.createRange()
+        fixedRange.setStart(range.endContainer, range.endOffset)
+        fixedRange.collapse(true)
+      } else {
+        fixedRange = globalThis.document.createRange()
+        fixedRange.setStart(range.startContainer, range.startOffset)
+        fixedRange.collapse(true)
+      }
 
-    const fixedRect = fixedRange.getBoundingClientRect()
-    fixedRange.detach()
+      const fixedRect = fixedRange.getBoundingClientRect()
+      fixedRange.detach()
 
-    const fixedPageInfo = getPageElementForPoint(
-      fixedRect.left,
-      fixedRect.top,
-      viewerRoot,
-      pageRefs.current
-    )
+      const fixedPageInfo = getPageElementForPoint(
+        fixedRect.left,
+        fixedRect.top,
+        viewerRoot,
+        pageRefs.current
+      )
 
-    if (!fixedPageInfo) return
+      if (!fixedPageInfo) return false
 
-    const fixedPageRect = fixedPageInfo.pageElement.getBoundingClientRect()
+      const fixedPageRect = fixedPageInfo.pageElement.getBoundingClientRect()
 
-    dragStateRef.current = {
-      active: true,
-      handleType,
-      fixedPoint: {
-        x: fixedRect.left - fixedPageRect.left,
-        y: fixedRect.top - fixedPageRect.top,
-        pageNumber: fixedPageInfo.pageNumber
-      },
-      fixedAnchor
-    }
+      dragStateRef.current = {
+        active: true,
+        handleType,
+        source,
+        fixedPoint: {
+          x: fixedRect.left - fixedPageRect.left,
+          y: fixedRect.top - fixedPageRect.top,
+          pageNumber: fixedPageInfo.pageNumber
+        },
+        fixedAnchor
+      }
 
-    // 手柄拖拽接管后，清理主文本 Drag 的临时状态，避免 root adapter 同时合成选择区。
-    dragSelectionAnchorRef.current = null
-    activeMouseSelectionRef.current.active = false
-    return true
-  }, [])
+      // 手柄拖拽接管后，清理主文本 Drag 的临时状态，避免 root adapter 同时合成选择区。
+      dragSelectionAnchorRef.current = null
+      activeMouseSelectionRef.current.active = false
+      return true
+    },
+    [effectiveActiveSavedSelectionId]
+  )
 
   const applyHandleDragAtPoint = useCallback(
     (clientX: number, clientY: number) => {
@@ -2972,16 +3819,23 @@ export function IntermediateDocumentViewer({
         ignoreNextBlankClickRef.current = true
       }
 
+      const dragSource = dragStateRef.current.source
       dragStateRef.current = {
         active: false,
         handleType: null,
+        source: 'live',
         fixedPoint: null,
         fixedAnchor: null
       }
 
-      emitSelectionEnd()
+      if (dragSource === 'saved') {
+        commitSavedSelectionEdit()
+        savedHandleDragContextRef.current = null
+      } else {
+        emitSelectionEnd()
+      }
     },
-    [applyHandleDragAtPoint, emitSelectionEnd]
+    [applyHandleDragAtPoint, commitSavedSelectionEdit, emitSelectionEnd]
   )
 
   useEffect(() => {
@@ -2990,7 +3844,7 @@ export function IntermediateDocumentViewer({
       !root ||
       !runtimeDocument ||
       selectionHandleElement === null ||
-      !selectionHandleAdapterKey
+      !(selectionHandleAdapterKey || savedSelectionHandleAdapterKey)
     ) {
       return
     }
@@ -2998,13 +3852,19 @@ export function IntermediateDocumentViewer({
     const handleElements: Array<{
       element: HTMLElement
       handleType: 'start' | 'end'
+      source: 'live' | 'saved'
     }> = []
     for (const element of Array.from(
       root.querySelectorAll<HTMLElement>('[data-handle-type]')
     )) {
       const handleType = element.dataset.handleType
       if (handleType === 'start' || handleType === 'end') {
-        handleElements.push({ element, handleType })
+        handleElements.push({
+          element,
+          handleType,
+          source:
+            element.dataset.selectionHandleScope === 'saved' ? 'saved' : 'live'
+        })
       }
     }
 
@@ -3024,15 +3884,46 @@ export function IntermediateDocumentViewer({
       'pointercancel'
     ] as const
 
-    const adapters = handleElements.map(({ element, handleType }) => {
+    const fallbackDragState = {
+      active: false,
+      pointerId: null as number | null
+    }
+
+    const fallbackPointerMove = (event: PointerEvent) => {
+      if (!fallbackDragState.active) return
+      if (fallbackDragState.pointerId !== event.pointerId) return
+      event.preventDefault()
+      applyHandleDragAtPoint(event.clientX, event.clientY)
+    }
+
+    const fallbackPointerEnd = (event: PointerEvent) => {
+      if (!fallbackDragState.active) return
+      if (fallbackDragState.pointerId !== event.pointerId) return
+      event.preventDefault()
+      fallbackDragState.active = false
+      fallbackDragState.pointerId = null
+      finishHandleDrag(event.clientX, event.clientY)
+      globalThis.document.removeEventListener(
+        'pointermove',
+        fallbackPointerMove
+      )
+      globalThis.document.removeEventListener('pointerup', fallbackPointerEnd)
+      globalThis.document.removeEventListener(
+        'pointercancel',
+        fallbackPointerEnd
+      )
+    }
+
+    const adapters = handleElements.map(({ element, handleType, source }) => {
       const adapter = createDragSelectionAdapter(element, {
         onStart: () => {
           // 拖动开始时，禁用端点图标的指针事件，防止 mouseup 触发在端点上
           element.style.pointerEvents = 'none'
-          beginHandleDrag(handleType)
+          beginHandleDrag(handleType, source)
         },
         onMove: (clientX, clientY) => {
           if (dragStateRef.current.handleType !== handleType) return
+          if (dragStateRef.current.source !== source) return
           applyHandleDragAtPoint(clientX, clientY)
         },
         onEnd: (clientX, clientY) => {
@@ -3047,15 +3938,47 @@ export function IntermediateDocumentViewer({
         }
       })
 
+      const fallbackPointerStart = (event: PointerEvent) => {
+        const dragAlreadyStarted =
+          dragStateRef.current.active &&
+          dragStateRef.current.handleType === handleType &&
+          dragStateRef.current.source === source
+        if (!dragAlreadyStarted && !beginHandleDrag(handleType, source)) return
+        event.preventDefault()
+        event.stopPropagation()
+        element.style.pointerEvents = 'none'
+        fallbackDragState.active = true
+        fallbackDragState.pointerId = event.pointerId
+        globalThis.document.addEventListener('pointermove', fallbackPointerMove)
+        globalThis.document.addEventListener('pointerup', fallbackPointerEnd)
+        globalThis.document.addEventListener(
+          'pointercancel',
+          fallbackPointerEnd
+        )
+      }
+
+      element.addEventListener('pointerdown', fallbackPointerStart)
+
       pointerEventTypes.forEach((eventType) => {
         element.addEventListener(eventType, stopHandlePointerEvent)
       })
 
-      return { adapter, element }
+      return { adapter, element, fallbackPointerStart }
     })
 
     return () => {
-      for (const { adapter, element } of adapters) {
+      globalThis.document.removeEventListener(
+        'pointermove',
+        fallbackPointerMove
+      )
+      globalThis.document.removeEventListener('pointerup', fallbackPointerEnd)
+      globalThis.document.removeEventListener(
+        'pointercancel',
+        fallbackPointerEnd
+      )
+
+      for (const { adapter, element, fallbackPointerStart } of adapters) {
+        element.removeEventListener('pointerdown', fallbackPointerStart)
         for (const eventType of pointerEventTypes) {
           element.removeEventListener(eventType, stopHandlePointerEvent)
         }
@@ -3068,14 +3991,17 @@ export function IntermediateDocumentViewer({
         dragStateRef.current = {
           active: false,
           handleType: null,
+          source: 'live',
           fixedPoint: null,
           fixedAnchor: null
         }
+        savedHandleDragContextRef.current = null
       }
     }
   }, [
     viewerRootElement,
     selectionHandleAdapterKey,
+    savedSelectionHandleAdapterKey,
     runtimeDocument,
     selectionHandleElement,
     beginHandleDrag,
@@ -3087,7 +4013,8 @@ export function IntermediateDocumentViewer({
     (
       type: 'start' | 'end',
       position: ReaderSelectionHandlePosition,
-      hidden?: boolean
+      hidden?: boolean,
+      scope: 'live' | 'saved' = 'live'
     ): React.ReactNode => {
       if (selectionHandleElement === null) return null
       const baseStyle: React.CSSProperties = {
@@ -3105,21 +4032,32 @@ export function IntermediateDocumentViewer({
         : {}
 
       if (selectionHandleElement === undefined) {
-        // 默认 Android 水滴样式手柄；具体外观由 SCSS 控制
+        // 默认 Android 水滴样式手柄；具体外观由 SCSS 控制。
+        // 使用文字高度驱动触控区域尺寸，未提供时由 SCSS 回退到 18×24px。
+        const defaultStyle: React.CSSProperties = {
+          ...baseStyle,
+          '--hamster-reader-selection-handle-width': `${position.hitAreaWidth}px`,
+          '--hamster-reader-selection-handle-height': `${position.hitAreaHeight}px`
+        } as React.CSSProperties
         return (
           <div
             key={type}
             data-handle-type={type}
+            data-selection-handle-scope={scope}
             className={`${baseClassName} hamster-reader__selection-handle--default hamster-reader__selection-handle--default-${type}`}
-            style={baseStyle}
+            style={defaultStyle}
             {...hiddenAttrs}
           />
         )
       }
 
+      const isIntrinsicElement = typeof selectionHandleElement.type === 'string'
       const existingProps = (selectionHandleElement.props ?? {}) as {
         className?: string
         style?: React.CSSProperties
+        textHeight?: number
+        hitAreaWidth?: number
+        hitAreaHeight?: number
       }
       const mergedClassName = [existingProps.className, baseClassName]
         .filter(Boolean)
@@ -3128,18 +4066,35 @@ export function IntermediateDocumentViewer({
         ...(existingProps.style ?? {}),
         ...baseStyle
       }
+      // 只有自定义组件才传递文字高度元数据，避免把未知属性注入 DOM 元素
+      // （如 <button>）触发 React 警告。
+      const sizingProps = isIntrinsicElement
+        ? {}
+        : {
+            position,
+            textHeight: position.textHeight,
+            hitAreaWidth: position.hitAreaWidth,
+            hitAreaHeight: position.hitAreaHeight
+          }
       return React.cloneElement(
         selectionHandleElement as React.ReactElement<{
+          position?: ReaderSelectionHandlePosition
           className?: string
           style?: React.CSSProperties
           'data-handle-type'?: string
+          'data-selection-handle-scope'?: string
           key?: string
+          textHeight?: number
+          hitAreaWidth?: number
+          hitAreaHeight?: number
         }>,
         {
           key: type,
           className: mergedClassName,
           style: mergedStyle,
           'data-handle-type': type,
+          'data-selection-handle-scope': scope,
+          ...sizingProps,
           ...hiddenAttrs
         }
       )
@@ -3195,6 +4150,70 @@ export function IntermediateDocumentViewer({
                 } as React.CSSProperties
               }
             />
+          )}
+          {/* Task 4: 已保存选择覆盖层，独立于实时选择覆盖层。 */}
+          {overlayOptions?.enabled && (
+            <div
+              ref={(el) => {
+                savedOverlayElRef.current = el
+              }}
+              className='hamster-reader__saved-selection-overlay'
+              role='presentation'
+              aria-hidden='true'
+              onClick={handleSavedOverlayClick}
+              style={
+                {
+                  '--hamster-reader-saved-selection-color':
+                    overlayOptions.color,
+                  '--hamster-reader-saved-selection-opacity':
+                    overlayOptions.opacity
+                } as React.CSSProperties
+              }
+            />
+          )}
+          {overlayOptions?.enabled && selectionHandleElement !== null && (
+            <div
+              className='hamster-reader__saved-selection-handles'
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none'
+              }}
+            >
+              {Array.from(savedSelectionHandlePositions.entries()).flatMap(
+                ([pageNumber, entry]) => {
+                  const nodes: React.ReactNode[] = []
+                  if (entry.start) {
+                    nodes.push(
+                      <React.Fragment key={`saved-start-${pageNumber}`}>
+                        {renderSelectionHandle(
+                          'start',
+                          entry.start,
+                          false,
+                          'saved'
+                        )}
+                      </React.Fragment>
+                    )
+                  }
+                  if (entry.end) {
+                    nodes.push(
+                      <React.Fragment key={`saved-end-${pageNumber}`}>
+                        {renderSelectionHandle(
+                          'end',
+                          entry.end,
+                          false,
+                          'saved'
+                        )}
+                      </React.Fragment>
+                    )
+                  }
+                  return nodes
+                }
+              )}
+            </div>
           )}
           {overlayOptions?.enabled && selectionHandleElement !== null && (
             <div
@@ -3304,6 +4323,66 @@ export function IntermediateDocumentViewer({
                     } as React.CSSProperties
                   }
                 />
+              )}
+              {/* Task 4: 已保存选择覆盖层，每页独立容器。 */}
+              {overlayOptions?.enabled && (
+                <div
+                  ref={(el) => {
+                    if (el) {
+                      savedOverlayContainerRefs.current.set(pageNumber, el)
+                    } else {
+                      savedOverlayContainerRefs.current.delete(pageNumber)
+                    }
+                  }}
+                  className='hamster-reader__saved-selection-overlay'
+                  role='presentation'
+                  aria-hidden='true'
+                  onClick={handleSavedOverlayClick}
+                  style={
+                    {
+                      '--hamster-reader-saved-selection-color':
+                        overlayOptions.color,
+                      '--hamster-reader-saved-selection-opacity':
+                        overlayOptions.opacity
+                    } as React.CSSProperties
+                  }
+                />
+              )}
+              {overlayOptions?.enabled && selectionHandleElement !== null && (
+                <div
+                  className='hamster-reader__saved-selection-handles'
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  {(() => {
+                    const entry = savedSelectionHandlePositions.get(pageNumber)
+                    if (!entry) return null
+                    return (
+                      <>
+                        {entry.start &&
+                          renderSelectionHandle(
+                            'start',
+                            entry.start,
+                            false,
+                            'saved'
+                          )}
+                        {entry.end &&
+                          renderSelectionHandle(
+                            'end',
+                            entry.end,
+                            false,
+                            'saved'
+                          )}
+                      </>
+                    )
+                  })()}
+                </div>
               )}
               {overlayOptions?.enabled && selectionHandleElement !== null && (
                 <div

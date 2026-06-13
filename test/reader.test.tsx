@@ -16,6 +16,27 @@ vi.mock('@hamster-note/html-parser', () => ({
   }
 }))
 
+let capturedViewerProps: Record<string, unknown> = {}
+
+vi.mock(
+  '../src/components/IntermediateDocumentViewer',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../src/components/IntermediateDocumentViewer')
+      >()
+    return {
+      ...actual,
+      IntermediateDocumentViewer: (props: Record<string, unknown>) => {
+        capturedViewerProps = props
+        return actual.IntermediateDocumentViewer(
+          props as Parameters<typeof actual.IntermediateDocumentViewer>[0]
+        )
+      }
+    }
+  }
+)
+
 vi.mock('@system-ui-js/multi-drag', () => {
   const DragOperationType = {
     Start: 'start',
@@ -441,6 +462,10 @@ describe('Reader file upload', () => {
 })
 
 describe('Reader prop forwarding', () => {
+  beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+  })
+
   it('renders IntermediateDocumentViewer when ocr prop is passed', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} ocr />)
@@ -816,5 +841,73 @@ describe('Reader prop forwarding', () => {
     expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
     expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
     expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+  })
+
+  it('forwards saved-selection props unchanged to IntermediateDocumentViewer', () => {
+    const savedSelections = [
+      {
+        version: 1 as const,
+        id: 'sel-1',
+        document: 'doc-1',
+        text: 'Hello world',
+        start: { pageNumber: 1, textId: 't1', charIndex: 0 },
+        end: { pageNumber: 1, textId: 't1', charIndex: 11 },
+        segments: [
+          {
+            pageNumber: 1,
+            textId: 't1',
+            startCharIndex: 0,
+            endCharIndex: 11,
+            selectedText: 'Hello world'
+          }
+        ],
+        visual: [
+          {
+            pageNumber: 1,
+            pageSize: { width: 595, height: 842 },
+            rects: [{ x: 0.1, y: 0.2, width: 0.5, height: 0.02 }]
+          }
+        ]
+      }
+    ]
+
+    const onSavedSelectionEdit = vi.fn()
+    const onActiveSavedSelectionChange = vi.fn()
+    const onSavedSelectionRestore = vi.fn()
+
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(
+      <Reader
+        document={doc}
+        savedSelections={savedSelections}
+        activeSavedSelectionId='sel-1'
+        onSavedSelectionEdit={onSavedSelectionEdit}
+        onActiveSavedSelectionChange={onActiveSavedSelectionChange}
+        onSavedSelectionRestore={onSavedSelectionRestore}
+      />
+    )
+
+    expect(capturedViewerProps['savedSelections']).toBe(savedSelections)
+    expect(capturedViewerProps['activeSavedSelectionId']).toBe('sel-1')
+    expect(capturedViewerProps['onSavedSelectionEdit']).toBe(
+      onSavedSelectionEdit
+    )
+    expect(capturedViewerProps['onActiveSavedSelectionChange']).toBe(
+      onActiveSavedSelectionChange
+    )
+    expect(capturedViewerProps['onSavedSelectionRestore']).toBe(
+      onSavedSelectionRestore
+    )
+  })
+
+  it('forwards undefined saved-selection props when not provided', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} />)
+
+    expect(capturedViewerProps['savedSelections']).toBeUndefined()
+    expect(capturedViewerProps['activeSavedSelectionId']).toBeUndefined()
+    expect(capturedViewerProps['onSavedSelectionEdit']).toBeUndefined()
+    expect(capturedViewerProps['onActiveSavedSelectionChange']).toBeUndefined()
+    expect(capturedViewerProps['onSavedSelectionRestore']).toBeUndefined()
   })
 })
