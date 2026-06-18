@@ -32,7 +32,18 @@ export function App() {
 
 ### How It Works
 
-`Reader` accepts an intermediate document and internally renders it through `@hamster-note/html-parser`, converting the structured document data into HTML for display. Producers such as `@hamster-note/pdf-parser` can continue feeding the same intermediate-document contract. No consumer-side changes are required.
+`Reader` remains parser-agnostic. It accepts an intermediate document and internally renders it through `@hamster-note/html-parser`, converting the structured document data into HTML for display. Consumers (including the browser Demo) use parser packages to produce intermediate documents before passing them to `Reader`. Producers such as `@hamster-note/pdf-parser` can continue feeding the same intermediate-document contract. No consumer-side changes are required.
+
+#### Demo Upload Formats
+
+The browser Demo supports uploading and previewing the following formats:
+
+- **PDF** (`.pdf`)
+- **TXT** (`.txt`)
+- **DOCX** (`.docx`)
+- **Markdown** (`.md`, `.markdown`)
+
+EPUB (`.epub`) is **not supported** in this browser Demo because `@hamster-note/epub-parser` is Node.js-only and requires a separate server-side design.
 
 ## API Notes
 
@@ -45,10 +56,10 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
   document={document}
   ocr
   onTextSelectionChange={(text, detail) => {
-    console.log('selection changed', text, detail.selectedText)
+    // handle selection change
   }}
   onTextSelectionEnd={(text, detail) => {
-    console.log('selection ended', text, detail.selectedText)
+    // handle selection end
   }}
 />
 ```

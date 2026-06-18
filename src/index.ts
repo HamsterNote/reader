@@ -8,6 +8,7 @@ export {
   type IntermediateDocumentViewerProps,
   normalizePageRects,
   resolveSavedSelection,
+  type ReaderInteractionMode,
   type ReaderPageRange,
   type ReaderRenderMode,
   type ReaderSavedSelection,
@@ -42,4 +43,5 @@ export type ReaderInteractiveProps = Pick<
   | 'onDragSelectedTextStart'
   | 'onDragSelectedTextMove'
   | 'onDragSelectedTextEnd'
+  | 'interactionMode'
 >

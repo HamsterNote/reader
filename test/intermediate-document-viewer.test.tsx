@@ -33,6 +33,10 @@ import {
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer } from '../src/index'
+import {
+  VirtualPaper,
+  VirtualPaperInteractionMode
+} from './mocks/virtual-paper'
 import { intersectionObserverMock } from './setup'
 
 Reflect.set(globalThis, 'vi', vi)
@@ -1690,19 +1694,13 @@ describe('IntermediateDocumentViewer', () => {
 
         await idleCallback.flush()
         const scheduledAfterLoadedPages = idleCallback.requestedCount()
-        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const container = screen.getByTestId('virtual-paper-container')
 
         await act(async () => {
-          viewerRoot.dispatchEvent(
-            new WheelEvent('wheel', {
-              bubbles: true,
-              cancelable: true,
-              ctrlKey: true,
-              deltaY: -100,
-              clientX: 40,
-              clientY: 50,
-              deltaMode: WheelEvent.DOM_DELTA_PIXEL
-            })
+          VirtualPaper.__triggerTransformEnd(
+            container,
+            { x: 0, y: 0, scale: 1.1 },
+            VirtualPaperInteractionMode.MouseWheelCtrlZoom
           )
         })
 
@@ -1901,20 +1899,12 @@ describe('IntermediateDocumentViewer', () => {
           />
         )
 
-        const gestureDrag = getMockDragInstances().find(
-          (instance) =>
-            instance.element ===
-              screen.getByTestId('intermediate-document-viewer') &&
-            instance.options.passive === undefined
-        )
-        if (!gestureDrag) {
-          throw new Error('Expected root gesture Drag instance')
-        }
-
-        gestureDrag.emit('start', [
-          { pointerId: 1, clientX: 0, clientY: 0 },
-          { pointerId: 2, clientX: 20, clientY: 0 }
-        ])
+        await act(async () => {
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 0, y: 0, scale: 1 }
+          )
+        })
 
         for (let pageNumber = 1; pageNumber <= 6; pageNumber += 1) {
           const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
@@ -2392,8 +2382,8 @@ describe('IntermediateDocumentViewer', () => {
       const pageViewport = { left: 20, top: 40, width: 200, height: 200 }
       const page = createMockPageElement(1, pageViewport)
       const scaleSurface = document.createElement('div')
-      scaleSurface.dataset.testid = 'reader-scale-surface'
-      scaleSurface.style.transform = 'scale(2)'
+      scaleSurface.dataset.testid = 'virtual-paper-container'
+      scaleSurface.style.transform = 'translate3d(12px, 0px, 0) scale(2)'
 
       const pageRefs = new Map<number, HTMLDivElement>([
         [1, page as HTMLDivElement]
@@ -3535,43 +3525,67 @@ describe('IntermediateDocumentViewer', () => {
 
     const dispatchPointerDragStart = (
       target: HTMLElement,
-      point: { clientX: number; clientY: number }
+      point: { clientX: number; clientY: number },
+      options: { pointerId?: number; pointerType?: string } = {}
     ) => {
-      target.dispatchEvent(
-        new MouseEvent('pointerdown', {
-          bubbles: true,
-          button: 0,
-          clientX: point.clientX,
-          clientY: point.clientY
-        })
-      )
+      const event = new MouseEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+      Object.defineProperty(event, 'pointerId', {
+        configurable: true,
+        value: options.pointerId ?? 1
+      })
+      Object.defineProperty(event, 'pointerType', {
+        configurable: true,
+        value: options.pointerType ?? 'mouse'
+      })
+      target.dispatchEvent(event)
     }
 
     const dispatchPointerDragMove = (
       target: HTMLElement,
-      point: { clientX: number; clientY: number }
+      point: { clientX: number; clientY: number },
+      options: { pointerId?: number; pointerType?: string } = {}
     ) => {
-      target.dispatchEvent(
-        new MouseEvent('pointermove', {
-          bubbles: true,
-          clientX: point.clientX,
-          clientY: point.clientY
-        })
-      )
+      const event = new MouseEvent('pointermove', {
+        bubbles: true,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+      Object.defineProperty(event, 'pointerId', {
+        configurable: true,
+        value: options.pointerId ?? 1
+      })
+      Object.defineProperty(event, 'pointerType', {
+        configurable: true,
+        value: options.pointerType ?? 'mouse'
+      })
+      target.dispatchEvent(event)
     }
 
     const dispatchPointerDragEnd = (
       target: HTMLElement,
       type: 'pointerup' | 'pointercancel',
-      point: { clientX: number; clientY: number }
+      point: { clientX: number; clientY: number },
+      options: { pointerId?: number; pointerType?: string } = {}
     ) => {
-      target.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          clientX: point.clientX,
-          clientY: point.clientY
-        })
-      )
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+      Object.defineProperty(event, 'pointerId', {
+        configurable: true,
+        value: options.pointerId ?? 1
+      })
+      Object.defineProperty(event, 'pointerType', {
+        configurable: true,
+        value: options.pointerType ?? 'mouse'
+      })
+      target.dispatchEvent(event)
     }
 
     it('drag-composes a real DOM Selection across text spans from pointer trajectory', async () => {
@@ -3620,6 +3634,243 @@ describe('IntermediateDocumentViewer', () => {
 
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
       } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('selects the touched word after the default-mode long press delay', async () => {
+      const page = {
+        getContent: vi.fn(async () => [makeText('text-alpha', 'Alpha beta')])
+      }
+      const mockDoc = {
+        id: 'doc-long-press-word',
+        title: 'Long Press Word Document',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 400, y: 400 })),
+        getPageByPageNumber: vi.fn(() => Promise.resolve(page))
+      } as unknown as IntermediateDocument
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Alpha beta')).toBeInTheDocument()
+      })
+
+      const textElement = screen.getByText('Alpha beta')
+      const pageElement = screen.getByTestId('intermediate-page-1')
+      mockElementRect(pageElement, { left: 0, top: 0, width: 400, height: 220 })
+      mockElementRect(textElement, {
+        left: 10,
+        top: 20,
+        width: 100,
+        height: 16
+      })
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(textElement)
+      vi.useFakeTimers()
+
+      try {
+        dispatchPointerDragStart(
+          textElement,
+          { clientX: 12, clientY: 28 },
+          { pointerId: 7, pointerType: 'touch' }
+        )
+
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(500)
+        })
+
+        expect(liveSelection.selection.toString()).toBe('Alpha')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.selectedText).toBe('Alpha')
+      } finally {
+        vi.useRealTimers()
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('cancels default-mode touch long press when movement exceeds threshold', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+      })
+
+      const textElement = screen.getByText('B')
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const scaleSurface = screen.getByTestId('virtual-paper-container')
+      const pageElement = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(pageElement)
+      vi.useFakeTimers()
+
+      try {
+        dispatchPointerDragStart(
+          textElement,
+          { clientX: 12, clientY: 58 },
+          { pointerId: 8, pointerType: 'touch' }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 27, clientY: 58 },
+          { pointerId: 8, pointerType: 'touch' }
+        )
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(500)
+        })
+
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(scaleSurface).toHaveStyle({
+          transform: 'translate3d(0px, 0px, 0) scale(1)'
+        })
+      } finally {
+        vi.useRealTimers()
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('allows pen selection in stylus mode', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          interactionMode='stylus'
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+
+      try {
+        dispatchPointerDragStart(
+          screen.getByText('B'),
+          { clientX: 12, clientY: 58 },
+          { pointerId: 9, pointerType: 'pen' }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 100, clientY: 138 },
+          { pointerId: 9, pointerType: 'pen' }
+        )
+
+        expect(liveSelection.selection.toString()).toBe('BCD')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.selectedText).toBe('BCD')
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('blocks mouse and touch selection in stylus mode', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          interactionMode='stylus'
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+      vi.useFakeTimers()
+
+      try {
+        dispatchPointerDragStart(
+          screen.getByText('B'),
+          { clientX: 12, clientY: 58 },
+          { pointerId: 10, pointerType: 'mouse' }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 100, clientY: 138 },
+          { pointerId: 10, pointerType: 'mouse' }
+        )
+        dispatchPointerDragEnd(
+          viewerRoot,
+          'pointerup',
+          { clientX: 100, clientY: 138 },
+          { pointerId: 10, pointerType: 'mouse' }
+        )
+
+        dispatchPointerDragStart(
+          screen.getByText('B'),
+          { clientX: 12, clientY: 58 },
+          { pointerId: 11, pointerType: 'touch' }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 100, clientY: 138 },
+          { pointerId: 11, pointerType: 'touch' }
+        )
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(500)
+        })
+
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
         restoreCaretApis()
         getSelectionSpy.mockRestore()
       }
@@ -10322,8 +10573,10 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       })
 
-      const surface = screen.getByTestId('reader-scale-surface')
-      expect(surface).toHaveStyle({ transform: 'scale(2)' })
+      const surface = screen.getByTestId('virtual-paper-container')
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(2)'
+      })
     })
 
     it('controlled scale ignores internal updates', async () => {
@@ -10342,8 +10595,10 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       })
 
-      const surface = screen.getByTestId('reader-scale-surface')
-      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+      const surface = screen.getByTestId('virtual-paper-container')
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(1.5)'
+      })
       expect(onScaleChange).not.toHaveBeenCalled()
 
       rerender(
@@ -10355,7 +10610,9 @@ describe('IntermediateDocumentViewer', () => {
         />
       )
 
-      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(1.5)'
+      })
       expect(onScaleChange).not.toHaveBeenCalled()
     })
 
@@ -10369,14 +10626,18 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       })
 
-      const surface = screen.getByTestId('reader-scale-surface')
-      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+      const surface = screen.getByTestId('virtual-paper-container')
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(1.5)'
+      })
 
       rerender(
         <IntermediateDocumentViewer document={document} defaultScale={2} />
       )
 
-      expect(surface).toHaveStyle({ transform: 'scale(1.5)' })
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(1.5)'
+      })
     })
 
     it('scale clamped to min and max', async () => {
@@ -10393,8 +10654,10 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       })
 
-      let surface = screen.getByTestId('reader-scale-surface')
-      expect(surface).toHaveStyle({ transform: 'scale(4)' })
+      let surface = screen.getByTestId('virtual-paper-container')
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(4)'
+      })
 
       rerender(
         <IntermediateDocumentViewer
@@ -10404,8 +10667,10 @@ describe('IntermediateDocumentViewer', () => {
         />
       )
 
-      surface = screen.getByTestId('reader-scale-surface')
-      expect(surface).toHaveStyle({ transform: 'scale(0.25)' })
+      surface = screen.getByTestId('virtual-paper-container')
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(0.25)'
+      })
     })
 
     it('scale one has no transform cost', async () => {
@@ -10417,9 +10682,10 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       })
 
-      const surface = screen.getByTestId('reader-scale-surface')
-      expect(surface.style.transform).toBe('')
-      expect(surface).not.toHaveAttribute('style')
+      const surface = screen.getByTestId('virtual-paper-container')
+      expect(surface).toHaveStyle({
+        transform: 'translate3d(0px, 0px, 0) scale(1)'
+      })
     })
 
     it('selection under scale renders handle anchors in page-relative CSS pixels', async () => {
@@ -10476,22 +10742,10 @@ describe('IntermediateDocumentViewer', () => {
     })
 
     describe('pinch and wheel gestures', () => {
-      const getGestureDrag = () => {
-        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
-        const gestureDrag = getMockDragInstances().find(
-          (instance) =>
-            instance.element === viewerRoot &&
-            instance.options.passive === undefined
-        )
+      const getVirtualPaperContainer = () =>
+        screen.getByTestId('virtual-paper-container')
 
-        if (!gestureDrag) {
-          throw new Error('Expected root gesture Drag instance')
-        }
-
-        return gestureDrag
-      }
-
-      it('ignores plain wheel scroll and pinch-zooms ctrl wheel from cursor focal point', async () => {
+      it('maps VirtualPaper wheel transform source to scale-change wheel source', async () => {
         const { document } = makeDocument({ pageCount: 1 })
         const onScaleChange = vi.fn()
         render(
@@ -10506,54 +10760,30 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
-        const plainWheel = new WheelEvent('wheel', {
-          bubbles: true,
-          cancelable: true,
-          ctrlKey: false,
-          deltaY: -100,
-          clientX: 40,
-          clientY: 50,
-          deltaMode: WheelEvent.DOM_DELTA_PIXEL
-        })
-        expect(viewerRoot.dispatchEvent(plainWheel)).toBe(true)
-        expect(plainWheel.defaultPrevented).toBe(false)
-        expect(onScaleChange).not.toHaveBeenCalled()
-
-        const pinchWheel = new WheelEvent('wheel', {
-          bubbles: true,
-          cancelable: true,
-          ctrlKey: true,
-          deltaY: -100,
-          clientX: 40,
-          clientY: 50,
-          deltaMode: WheelEvent.DOM_DELTA_PIXEL
-        })
+        const container = getVirtualPaperContainer()
         await act(async () => {
-          viewerRoot.dispatchEvent(pinchWheel)
+          VirtualPaper.__triggerTransformEnd(
+            container,
+            { x: -4, y: 0, scale: 1.1 },
+            VirtualPaperInteractionMode.MouseWheelCtrlZoom
+          )
         })
 
-        const expectedScale = Math.exp(0.1)
-        expect(pinchWheel.defaultPrevented).toBe(true)
-        expect(onScaleChange).toHaveBeenCalledWith(expectedScale, {
-          source: 'wheel',
-          focalPoint: { x: 40, y: 50 }
+        expect(onScaleChange).toHaveBeenCalledWith(1.1, {
+          source: 'wheel'
         })
-        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
-          transform: `scale(${expectedScale})`
+        expect(container).toHaveStyle({
+          transform: 'translate3d(-4px, 0px, 0) scale(1.1)'
         })
       })
 
-      it('uses scaleStep sign for ctrl wheel line and page deltas', async () => {
+      it('accepts VirtualPaper pan transforms without scaling', async () => {
         const { document } = makeDocument({ pageCount: 1 })
         const onScaleChange = vi.fn()
         render(
           <IntermediateDocumentViewer
             document={document}
-            defaultScale={2}
-            scaleStep={0.25}
-            minScale={1}
-            maxScale={3}
+            defaultScale={1}
             onScaleChange={onScaleChange}
           />
         )
@@ -10562,49 +10792,14 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const container = getVirtualPaperContainer()
         await act(async () => {
-          viewerRoot.dispatchEvent(
-            new WheelEvent('wheel', {
-              bubbles: true,
-              cancelable: true,
-              ctrlKey: true,
-              deltaY: -3,
-              clientX: 12,
-              clientY: 18,
-              deltaMode: WheelEvent.DOM_DELTA_LINE
-            })
-          )
+          VirtualPaper.__triggerTransform(container, { x: -24, y: 0, scale: 1 })
         })
 
-        expect(onScaleChange).toHaveBeenLastCalledWith(2.5, {
-          source: 'wheel',
-          focalPoint: { x: 12, y: 18 }
-        })
-        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
-          transform: 'scale(2.5)'
-        })
-
-        await act(async () => {
-          viewerRoot.dispatchEvent(
-            new WheelEvent('wheel', {
-              bubbles: true,
-              cancelable: true,
-              ctrlKey: true,
-              deltaY: 1,
-              clientX: 20,
-              clientY: 30,
-              deltaMode: WheelEvent.DOM_DELTA_PAGE
-            })
-          )
-        })
-
-        expect(onScaleChange).toHaveBeenLastCalledWith(1.875, {
-          source: 'wheel',
-          focalPoint: { x: 20, y: 30 }
-        })
-        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
-          transform: 'scale(1.875)'
+        expect(onScaleChange).not.toHaveBeenCalled()
+        expect(container).toHaveStyle({
+          transform: 'translate3d(-24px, 0px, 0) scale(1)'
         })
       })
 
@@ -10624,26 +10819,20 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const container = getVirtualPaperContainer()
         await act(async () => {
           for (let index = 0; index < 3; index += 1) {
-            viewerRoot.dispatchEvent(
-              new WheelEvent('wheel', {
-                bubbles: true,
-                cancelable: true,
-                ctrlKey: true,
-                deltaY: -1,
-                clientX: 12,
-                clientY: 18,
-                deltaMode: WheelEvent.DOM_DELTA_LINE
-              })
+            VirtualPaper.__triggerTransformEnd(
+              container,
+              { x: 0, y: 0, scale: 4 },
+              VirtualPaperInteractionMode.MouseWheelCtrlZoom
             )
           }
         })
 
         expect(onScaleChange).not.toHaveBeenCalled()
-        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
-          transform: 'scale(4)'
+        expect(container).toHaveStyle({
+          transform: 'translate3d(0px, 0px, 0) scale(4)'
         })
       })
 
@@ -10662,7 +10851,6 @@ describe('IntermediateDocumentViewer', () => {
               onScaleChange={vi.fn()}
               minScale={0.5}
               maxScale={3}
-              scaleStep={0.2}
               maxLoadedPages={1}
             />
           )
@@ -10671,7 +10859,7 @@ describe('IntermediateDocumentViewer', () => {
             screen.getByTestId('intermediate-document-viewer')
           ).toBeEmptyDOMElement()
           expect(
-            screen.queryByTestId('reader-scale-surface')
+            screen.queryByTestId('virtual-paper-container')
           ).not.toBeInTheDocument()
           expect(consoleErrorSpy).not.toHaveBeenCalled()
         } finally {
@@ -10695,9 +10883,9 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        expect(screen.getByTestId('reader-scale-surface')).not.toHaveAttribute(
-          'style'
-        )
+        expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+          transform: 'translate3d(0px, 0px, 0) scale(1)'
+        })
 
         rerender(
           <IntermediateDocumentViewer
@@ -10705,36 +10893,28 @@ describe('IntermediateDocumentViewer', () => {
             defaultScale={Number.NaN}
             minScale={Number.NaN}
             maxScale={-1}
-            scaleStep={-0.5}
             onScaleChange={onScaleChange}
           />
         )
 
-        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const container = getVirtualPaperContainer()
         await act(async () => {
-          viewerRoot.dispatchEvent(
-            new WheelEvent('wheel', {
-              bubbles: true,
-              cancelable: true,
-              ctrlKey: true,
-              deltaY: -1,
-              clientX: 12,
-              clientY: 18,
-              deltaMode: WheelEvent.DOM_DELTA_LINE
-            })
+          VirtualPaper.__triggerTransformEnd(
+            container,
+            { x: -1.2, y: 0, scale: 1.1 },
+            VirtualPaperInteractionMode.MouseWheelCtrlZoom
           )
         })
 
         expect(onScaleChange).toHaveBeenCalledWith(1.1, {
-          source: 'wheel',
-          focalPoint: { x: 12, y: 18 }
+          source: 'wheel'
         })
-        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
-          transform: 'scale(1.1)'
+        expect(container).toHaveStyle({
+          transform: 'translate3d(-1.2px, 0px, 0) scale(1.1)'
         })
       })
 
-      it('pinch-zooms from two-finger distance ratio and centroid focal point', async () => {
+      it('maps VirtualPaper two-finger zoom source to scale-change pinch source', async () => {
         const { document } = makeDocument({ pageCount: 1 })
         const onScaleChange = vi.fn()
         render(
@@ -10751,44 +10931,21 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        const gestureDrag = getGestureDrag()
-        expect(gestureDrag.options).toMatchObject({
-          maxFingerCount: 2,
-          inertial: false
-        })
-        const pose = gestureDrag.options.getPose?.(gestureDrag.element) as
-          | { position: { x: number; y: number }; scale?: number }
-          | undefined
-        expect(pose).toMatchObject({ position: { x: 0, y: 0 }, scale: 1 })
-
+        const container = getVirtualPaperContainer()
         await act(async () => {
-          gestureDrag.emit('start', [
-            { pointerId: 1, clientX: 0, clientY: 0 },
-            { pointerId: 2, clientX: 100, clientY: 0 }
-          ])
-          gestureDrag.emit('move', [
-            { pointerId: 1, clientX: 0, clientY: 0 },
-            { pointerId: 2, clientX: 150, clientY: 0 }
-          ])
+          VirtualPaper.__triggerTransformEnd(container, {
+            x: -37.5,
+            y: 0,
+            scale: 1.5
+          })
         })
 
         expect(onScaleChange).toHaveBeenCalledWith(1.5, {
-          source: 'pinch',
-          focalPoint: { x: 75, y: 0 }
+          source: 'pinch'
         })
-        expect(screen.getByTestId('reader-scale-surface')).toHaveStyle({
-          transform: 'scale(1.5)'
+        expect(container).toHaveStyle({
+          transform: 'translate3d(-37.5px, 0px, 0) scale(1.5)'
         })
-
-        await act(async () => {
-          gestureDrag.emit('allEnd', [])
-          gestureDrag.emit('move', [
-            { pointerId: 1, clientX: 0, clientY: 0 },
-            { pointerId: 2, clientX: 300, clientY: 0 }
-          ])
-        })
-
-        expect(onScaleChange).toHaveBeenCalledTimes(1)
       })
 
       it('ignores one-finger drag operations for zoom', async () => {
@@ -10806,22 +10963,85 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        const gestureDrag = getGestureDrag()
+        const container = getVirtualPaperContainer()
         await act(async () => {
-          gestureDrag.emit('start', [
-            { pointerId: 1, clientX: 10, clientY: 20 }
-          ])
-          gestureDrag.emit('move', [{ pointerId: 1, clientX: 20, clientY: 30 }])
-          gestureDrag.emit('end', [{ pointerId: 1, clientX: 20, clientY: 30 }])
+          VirtualPaper.__triggerTransformEnd(
+            container,
+            { x: 10, y: 10, scale: 1 },
+            VirtualPaperInteractionMode.TouchSingleFingerPan
+          )
         })
 
         expect(onScaleChange).not.toHaveBeenCalled()
-        expect(screen.getByTestId('reader-scale-surface').style.transform).toBe(
-          ''
-        )
+        expect(container).toHaveStyle({
+          transform: 'translate3d(10px, 10px, 0) scale(1)'
+        })
       })
 
-      it('destroys the gesture Drag exactly once on cleanup', async () => {
+      it('keeps single-pointer selection locked after one finger leaves a pinch', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        const onTextSelectionChange = vi.fn()
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            renderMode='direct'
+            onTextSelectionChange={onTextSelectionChange}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const page = screen.getByTestId('intermediate-page-1')
+        const container = getVirtualPaperContainer()
+        const nativeSelection = window.getSelection()
+        if (!nativeSelection) {
+          throw new Error('Expected native Selection in test environment')
+        }
+        const getSelectionSpy = vi
+          .spyOn(window, 'getSelection')
+          .mockReturnValue(nativeSelection)
+        const elementFromPointSpy = mockElementFromPoint(page)
+
+        try {
+          await act(async () => {
+            VirtualPaper.__triggerTransform(container, { x: 0, y: 0, scale: 1 })
+            viewerRoot.dispatchEvent(
+              new MouseEvent('pointerdown', {
+                bubbles: true,
+                button: 0,
+                clientX: 10,
+                clientY: 10
+              })
+            )
+            viewerRoot.dispatchEvent(
+              new MouseEvent('pointermove', {
+                bubbles: true,
+                clientX: 10,
+                clientY: 50
+              })
+            )
+          })
+
+          expect(onTextSelectionChange).not.toHaveBeenCalled()
+          expect(getSelectionSpy).not.toHaveBeenCalled()
+
+          await act(async () => {
+            VirtualPaper.__triggerTransformEnd(container, {
+              x: 0,
+              y: 0,
+              scale: 1
+            })
+          })
+        } finally {
+          elementFromPointSpy.mockRestore()
+          getSelectionSpy.mockRestore()
+        }
+      })
+
+      it('unmounts while VirtualPaper owns gesture cleanup', async () => {
         const { document } = makeDocument({ pageCount: 1 })
         const { unmount } = render(
           <IntermediateDocumentViewer document={document} defaultScale={1} />
@@ -10831,10 +11051,12 @@ describe('IntermediateDocumentViewer', () => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
         })
 
-        const gestureDrag = getGestureDrag()
+        expect(getVirtualPaperContainer()).toBeInTheDocument()
         unmount()
 
-        expect(gestureDrag.destroyCount).toBe(1)
+        expect(
+          screen.queryByTestId('virtual-paper-container')
+        ).not.toBeInTheDocument()
       })
     })
   })

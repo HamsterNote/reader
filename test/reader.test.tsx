@@ -6,9 +6,12 @@ import {
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
+import {
+  SUPPORTED_UPLOAD_ACCEPT,
+  SUPPORTED_UPLOAD_COPY
+} from '../src/components/Reader'
+import type { ReaderInteractionMode, ReaderProps } from '../src/index'
 import { Reader } from '../src/index'
-import type { ReaderProps } from '../src/index'
 import { intersectionObserverMock } from './setup'
 
 vi.mock('@hamster-note/html-parser', () => ({
@@ -355,9 +358,14 @@ describe('Reader file upload', () => {
     render(<Reader document={null} />)
 
     const uploadZone = screen.getByTestId('upload-zone')
+    const fileInput = screen.getByTestId('file-input')
 
     expect(uploadZone).toBeInTheDocument()
-    expect(uploadZone).toHaveTextContent('Click or drag PDF to upload')
+    expect(uploadZone).toHaveTextContent('Click or drag document to upload')
+    expect(uploadZone).toHaveTextContent(
+      'Supports PDF, TXT, DOCX, and Markdown files'
+    )
+    expect(fileInput.getAttribute('accept')).toBe(SUPPORTED_UPLOAD_ACCEPT)
   })
 
   it('does not show upload zone when document is provided', () => {
@@ -451,6 +459,24 @@ describe('Reader file upload', () => {
 
     const fileInfo = screen.getByTestId('file-info')
     expect(fileInfo).toBeInTheDocument()
+  })
+
+  it('shows unknown type for files without a MIME type', () => {
+    const onFileUpload = vi.fn()
+    render(<Reader document={null} onFileUpload={onFileUpload} />)
+
+    const fileInput = screen.getByTestId('file-input')
+    const mockFile = createMockFile('notype-file', 1024, '')
+
+    fireEvent.change(fileInput, { target: { files: [mockFile] } })
+
+    const fileInfo = screen.getByTestId('file-info')
+    expect(fileInfo).toHaveTextContent('unknown type')
+    expect(fileInfo).not.toHaveTextContent('application/pdf')
+  })
+
+  it('exports SUPPORTED_UPLOAD_COPY with expected value', () => {
+    expect(SUPPORTED_UPLOAD_COPY).toBe('PDF, TXT, DOCX, and Markdown')
   })
 
   it('hides file info when document is provided', () => {
@@ -888,15 +914,13 @@ describe('Reader prop forwarding', () => {
       />
     )
 
-    expect(capturedViewerProps['savedSelections']).toBe(savedSelections)
-    expect(capturedViewerProps['activeSavedSelectionId']).toBe('sel-1')
-    expect(capturedViewerProps['onSavedSelectionEdit']).toBe(
-      onSavedSelectionEdit
-    )
-    expect(capturedViewerProps['onActiveSavedSelectionChange']).toBe(
+    expect(capturedViewerProps.savedSelections).toBe(savedSelections)
+    expect(capturedViewerProps.activeSavedSelectionId).toBe('sel-1')
+    expect(capturedViewerProps.onSavedSelectionEdit).toBe(onSavedSelectionEdit)
+    expect(capturedViewerProps.onActiveSavedSelectionChange).toBe(
       onActiveSavedSelectionChange
     )
-    expect(capturedViewerProps['onSavedSelectionRestore']).toBe(
+    expect(capturedViewerProps.onSavedSelectionRestore).toBe(
       onSavedSelectionRestore
     )
   })
@@ -905,11 +929,31 @@ describe('Reader prop forwarding', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} />)
 
-    expect(capturedViewerProps['savedSelections']).toBeUndefined()
-    expect(capturedViewerProps['activeSavedSelectionId']).toBeUndefined()
-    expect(capturedViewerProps['onSavedSelectionEdit']).toBeUndefined()
-    expect(capturedViewerProps['onActiveSavedSelectionChange']).toBeUndefined()
-    expect(capturedViewerProps['onSavedSelectionRestore']).toBeUndefined()
+    expect(capturedViewerProps.savedSelections).toBeUndefined()
+    expect(capturedViewerProps.activeSavedSelectionId).toBeUndefined()
+    expect(capturedViewerProps.onSavedSelectionEdit).toBeUndefined()
+    expect(capturedViewerProps.onActiveSavedSelectionChange).toBeUndefined()
+    expect(capturedViewerProps.onSavedSelectionRestore).toBeUndefined()
+  })
+
+  it('forwards interactionMode="stylus" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} interactionMode='stylus' />)
+    expect(capturedViewerProps.interactionMode).toBe('stylus')
+  })
+
+  it('defaults interactionMode to undefined when not provided (viewer defaults to "default")', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} />)
+    expect(capturedViewerProps.interactionMode).toBeUndefined()
+  })
+
+  it('compile-time: interactionMode satisfies ReaderProps', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      interactionMode: 'stylus' as ReaderInteractionMode
+    }
+    expect(props.interactionMode).toBe('stylus')
   })
 })
 
@@ -931,7 +975,6 @@ describe('Reader zoom props', () => {
       ) => detail.source,
       minScale: 0.25,
       maxScale: 4,
-      scaleStep: 0.1,
       maxLoadedPages: 7
     } satisfies ReaderProps
 
@@ -948,7 +991,6 @@ describe('Reader zoom props', () => {
         onScaleChange={onScaleChange}
         minScale={0.25}
         maxScale={4}
-        scaleStep={0.1}
         maxLoadedPages={7}
         document={makeDocument({ pages: [makePage(1)] })}
       />
@@ -957,12 +999,11 @@ describe('Reader zoom props', () => {
     expect(
       screen.getByTestId('intermediate-document-viewer')
     ).toBeInTheDocument()
-    expect(capturedViewerProps['scale']).toBe(2)
-    expect(capturedViewerProps['defaultScale']).toBe(1.5)
-    expect(capturedViewerProps['onScaleChange']).toBe(onScaleChange)
-    expect(capturedViewerProps['minScale']).toBe(0.25)
-    expect(capturedViewerProps['maxScale']).toBe(4)
-    expect(capturedViewerProps['scaleStep']).toBe(0.1)
-    expect(capturedViewerProps['maxLoadedPages']).toBe(7)
+    expect(capturedViewerProps.scale).toBe(2)
+    expect(capturedViewerProps.defaultScale).toBe(1.5)
+    expect(capturedViewerProps.onScaleChange).toBe(onScaleChange)
+    expect(capturedViewerProps.minScale).toBe(0.25)
+    expect(capturedViewerProps.maxScale).toBe(4)
+    expect(capturedViewerProps.maxLoadedPages).toBe(7)
   })
 })

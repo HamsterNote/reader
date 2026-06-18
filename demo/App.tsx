@@ -1,3 +1,5 @@
+import { DocxParser } from '@hamster-note/docx-parser'
+import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
   BackgroundQuality,
@@ -13,18 +15,19 @@ import {
   Reader
 } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
+import { TxtParser } from '@hamster-note/txt-parser'
 import type {
   IntermediateDocument,
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent
+  useState
 } from 'react'
 
 /** 当前活跃选区的快照，用于构建保存选区 */
@@ -46,6 +49,93 @@ type DocumentWithPageSizes = {
 }
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
+
+export const SUPPORTED_FILE_TYPE_LABEL = 'PDF, TXT, DOCX, Markdown'
+
+export const UNSUPPORTED_FILE_TYPE_MESSAGE =
+  'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
+
+export type SupportedParserLabel = 'PDF' | 'TXT' | 'DOCX' | 'Markdown'
+
+export type ParseUploadedDocumentResult =
+  | {
+      status: 'parsed'
+      label: SupportedParserLabel
+      document: ReaderDocument | undefined
+    }
+  | { status: 'failed'; label: SupportedParserLabel; error: string }
+  | { status: 'unsupported'; error: string }
+
+export function getFileExtension(fileName: string): string | null {
+  if (fileName.length === 0) return null
+
+  const lastDotIndex = fileName.lastIndexOf('.')
+  if (lastDotIndex < 0 || lastDotIndex === fileName.length - 1) return null
+
+  return fileName.slice(lastDotIndex + 1).toLowerCase()
+}
+
+export function getParserErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export async function parseUploadedDocument(
+  file: File,
+  pages: number[] | undefined
+): Promise<ParseUploadedDocumentResult> {
+  switch (getFileExtension(file.name)) {
+    case 'pdf':
+      try {
+        const document = await PdfParser.encode(
+          file,
+          pages ? { pages } : undefined
+        )
+        return { status: 'parsed', label: 'PDF', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'PDF',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'txt':
+      try {
+        const document = await TxtParser.encode(file)
+        return { status: 'parsed', label: 'TXT', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'TXT',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'docx':
+      try {
+        const document = await DocxParser.encodeToIntermediate(file)
+        return { status: 'parsed', label: 'DOCX', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'DOCX',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'md':
+    case 'markdown':
+      try {
+        const document = await MarkdownParser.encode(file)
+        return { status: 'parsed', label: 'Markdown', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'Markdown',
+          error: getParserErrorMessage(error)
+        }
+      }
+    default:
+      return { status: 'unsupported', error: UNSUPPORTED_FILE_TYPE_MESSAGE }
+  }
+}
 
 // localStorage 键名
 const STORAGE_KEY = 'hamster-reader-saved-selections'
@@ -246,7 +336,7 @@ export function App() {
     let rafId = 0
     const recompute = () => {
       const paths = window.document.querySelectorAll<SVGPathElement>(
-        `path[data-saved-selection-id='${activeSavedSelectionId}']`
+        `path[data-saved-selection-id='${CSS.escape(activeSavedSelectionId)}']`
       )
       if (paths.length === 0) {
         setCommentButtonPosition(null)
@@ -286,7 +376,7 @@ export function App() {
       window.removeEventListener('scroll', handleScrollOrResize, true)
       window.removeEventListener('resize', handleScrollOrResize)
     }
-  }, [activeSavedSelectionId, savedSelections])
+  }, [activeSavedSelectionId])
 
   // 切换选区时重置评论草稿；激活选区被清空时关闭弹窗
   useEffect(() => {
@@ -297,13 +387,14 @@ export function App() {
   }, [activeSavedSelectionId])
 
   // 弹窗打开后滚动评论列表到底部，便于查看最新评论
+  const activeCommentCount = activeSelection?.comments?.length ?? 0
   useEffect(() => {
     if (!isCommentDialogOpen) return
     const node = commentListRef.current
-    if (node) {
+    if (node && activeCommentCount >= 0) {
       node.scrollTop = node.scrollHeight
     }
-  }, [isCommentDialogOpen, activeSelection?.comments?.length])
+  }, [isCommentDialogOpen, activeCommentCount])
 
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
@@ -332,26 +423,40 @@ export function App() {
     setIsParsing(true)
 
     try {
-      const pages = buildParserPages()
-      const result = await PdfParser.encode(file, pages ? { pages } : undefined)
+      const selectedPages = buildParserPages()
+      const result = await parseUploadedDocument(file, selectedPages)
 
       if (requestId !== requestIdRef.current) {
         return
       }
 
-      if (result === undefined) {
-        setParseError('Failed to parse PDF: received undefined result')
+      if (result.status === 'unsupported') {
+        setParseError(result.error)
         setDocument(null)
-      } else {
-        setDocument(result)
+        return
       }
-    } catch (err) {
+
+      if (result.status === 'failed') {
+        setParseError(`Failed to parse ${result.label}: ${result.error}`)
+        setDocument(null)
+        return
+      }
+
+      if (result.document === undefined) {
+        setParseError(
+          `Failed to parse ${result.label}: received undefined result`
+        )
+        setDocument(null)
+        return
+      }
+
+      setDocument(result.document)
+    } catch (error) {
       if (requestId !== requestIdRef.current) {
         return
       }
 
-      const message = err instanceof Error ? err.message : String(err)
-      setParseError(`Failed to parse PDF: ${message}`)
+      setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
       setDocument(null)
     } finally {
       if (requestId === requestIdRef.current) {
@@ -597,9 +702,6 @@ export function App() {
 
   // 用于禁用发送按钮的草稿空白判断
   const isCommentDraftEmpty = commentDraft.trim().length === 0
-  // 当前激活选区的评论数量（用于浮动按钮气泡）
-  const activeCommentCount = activeSelection?.comments?.length ?? 0
-
   return (
     <main data-testid='reader-demo-root'>
       <h1>Hamster Reader Demo</h1>
@@ -709,7 +811,7 @@ export function App() {
         </section>
       )}
       <section style={{ marginBottom: '24px' }}>
-        <h2>Upload PDF</h2>
+        <h2>Upload {SUPPORTED_FILE_TYPE_LABEL}</h2>
         <div style={{ marginBottom: '16px' }}>
           <label
             style={{

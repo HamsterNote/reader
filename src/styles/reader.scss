@@ -163,11 +163,20 @@
     align-items: center;
     gap: 16px;
     padding: 16px;
-    overflow-y: auto;
-    overflow-x: hidden;
+    // VirtualPaper 的 wrapper 负责滚动与手势捕获；外层只保留垂直方向
+    // 的 flex 布局，不再自己处理 overflow 与 touch-action。
+    overflow: hidden;
     box-sizing: border-box;
     max-height: 100vh;
     scroll-behavior: smooth;
+
+    // VirtualPaper wrapper：占满 viewer 区域并作为手势/滚动容器。
+    .virtual-paper-wrapper {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      touch-action: none;
+    }
   }
 
   &__html-parser-output {

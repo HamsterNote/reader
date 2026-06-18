@@ -5,7 +5,7 @@ import {
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
 
@@ -15,6 +15,18 @@ import { App } from '../demo/App'
 
 vi.mock('@hamster-note/pdf-parser', () => ({
   PdfParser: { encode: vi.fn() }
+}))
+
+vi.mock('@hamster-note/txt-parser', () => ({
+  TxtParser: { encode: vi.fn() }
+}))
+
+vi.mock('@hamster-note/docx-parser', () => ({
+  DocxParser: { encodeToIntermediate: vi.fn() }
+}))
+
+vi.mock('@hamster-note/markdown-parser', () => ({
+  MarkdownParser: { encode: vi.fn() }
 }))
 
 const mockReaderProps: unknown[] = []
@@ -171,6 +183,8 @@ async function setupActiveSelection(savedSelectionId: string) {
 }
 
 describe('demo selection comments', () => {
+  let originalGetBoundingClientRect: Element['getBoundingClientRect']
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockReaderProps.length = 0
@@ -180,8 +194,7 @@ describe('demo selection comments', () => {
     // 但 demo 浮动按钮位置计算会过滤掉 width/height 为 0 的 path。
     // 这里给所有匹配 [data-saved-selection-id] 的元素临时返回有意义的 rect，
     // 让 useLayoutEffect 能解析出 anchor 并渲染浮动按钮。
-    const originalGetBoundingClientRect =
-      Element.prototype.getBoundingClientRect
+    originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
     Element.prototype.getBoundingClientRect = function () {
       if (
         this instanceof Element &&
@@ -203,6 +216,10 @@ describe('demo selection comments', () => {
       }
       return originalGetBoundingClientRect.call(this)
     }
+  })
+
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = originalGetBoundingClientRect
   })
 
   it('S2: hides floating button when no overlay is active', async () => {

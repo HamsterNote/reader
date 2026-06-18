@@ -17,7 +17,8 @@ const { DragOperationType } = await import('@system-ui-js/multi-drag')
 
 import {
   createDragSelectionAdapter,
-  type DragSelectionAdapterDragConstructor
+  type DragSelectionAdapterDragConstructor,
+  type DragSelectionPointerDetail
 } from '../src/components/selection/dragSelectionAdapter'
 
 type DragOperationTypeValue =
@@ -90,11 +91,16 @@ class FakeDrag {
 const FakeDragConstructor =
   FakeDrag as unknown as DragSelectionAdapterDragConstructor
 
-const makeFinger = (pointerId: number, x: number, y: number): FakeFinger => ({
+const makeFinger = (
+  pointerId: number,
+  x: number,
+  y: number,
+  timestamp = 1
+): FakeFinger => ({
   pointerId,
   getLastOperation: vi.fn(() => ({
     point: { x, y },
-    timestamp: 1
+    timestamp
   }))
 })
 
@@ -195,5 +201,141 @@ describe('createDragSelectionAdapter', () => {
 
     expect(events).toEqual(['start:50,60', 'end:51,61', 'allEnd:51,61'])
     expect(adapter.isActive()).toBe(false)
+  })
+
+  it('keeps legacy two-argument callbacks working without reading detail', () => {
+    const element = document.createElement('div')
+    const legacyStart = vi.fn((clientX: number, clientY: number) => {
+      expect(`${clientX},${clientY}`).toBe('70,80')
+    })
+
+    createDragSelectionAdapter(element, {
+      DragConstructor: FakeDragConstructor,
+      onStart: legacyStart
+    })
+
+    const drag = FakeDrag.instances.at(-1)
+    if (!drag) throw new Error('Expected fake Drag to be constructed')
+
+    drag.emit(DragOperationType.Start, [makeFinger(7, 70, 80, 700)])
+
+    expect(legacyStart).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes pointer detail to Start, Move, End, and AllEnd callbacks', () => {
+    const element = document.createElement('div')
+    const details: DragSelectionPointerDetail[] = []
+    const collectDetail = (
+      _clientX: number,
+      _clientY: number,
+      detail?: DragSelectionPointerDetail
+    ) => {
+      if (!detail) throw new Error('Expected pointer detail')
+      details.push(detail)
+    }
+
+    createDragSelectionAdapter(element, {
+      DragConstructor: FakeDragConstructor,
+      getPointerType: () => 'pen',
+      onStart: collectDetail,
+      onMove: collectDetail,
+      onEnd: collectDetail,
+      onAllEnd: collectDetail
+    })
+
+    const drag = FakeDrag.instances.at(-1)
+    if (!drag) throw new Error('Expected fake Drag to be constructed')
+
+    drag.emit(DragOperationType.Start, [makeFinger(42, 1, 2, 100)])
+    drag.emit(DragOperationType.Move, [makeFinger(42, 3, 4, 200)])
+    drag.emit(DragOperationType.End, [makeFinger(42, 5, 6, 300)])
+    drag.emit(DragOperationType.AllEnd, [makeFinger(42, 7, 8, 400)])
+
+    expect(details).toEqual([
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'pen',
+        timeStamp: 100
+      },
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'pen',
+        timeStamp: 200
+      },
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'pen',
+        timeStamp: 300
+      },
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'pen',
+        timeStamp: 400
+      }
+    ])
+  })
+
+  it('calls getPointerType with the current primary pointer id', () => {
+    const element = document.createElement('div')
+    const getPointerType = vi.fn((pointerId: number) => `type-${pointerId}`)
+    const onStart = vi.fn(
+      (
+        _clientX: number,
+        _clientY: number,
+        detail?: DragSelectionPointerDetail
+      ) => {
+        expect(detail?.pointerType).toBe('type-13')
+      }
+    )
+
+    createDragSelectionAdapter(element, {
+      DragConstructor: FakeDragConstructor,
+      getPointerType,
+      onStart
+    })
+
+    const drag = FakeDrag.instances.at(-1)
+    if (!drag) throw new Error('Expected fake Drag to be constructed')
+
+    drag.emit(DragOperationType.Start, [makeFinger(13, 11, 12, 130)])
+
+    expect(getPointerType).toHaveBeenCalledWith(13)
+  })
+
+  it('reports activePointerCount as fingers change during multi-touch', () => {
+    const element = document.createElement('div')
+    const counts: number[] = []
+    const onMove = vi.fn(
+      (
+        _clientX: number,
+        _clientY: number,
+        detail?: DragSelectionPointerDetail
+      ) => {
+        if (!detail) throw new Error('Expected pointer detail')
+        counts.push(detail.activePointerCount)
+      }
+    )
+
+    createDragSelectionAdapter(element, {
+      DragConstructor: FakeDragConstructor,
+      onStart: () => {},
+      onMove
+    })
+
+    const drag = FakeDrag.instances.at(-1)
+    if (!drag) throw new Error('Expected fake Drag to be constructed')
+
+    drag.emit(DragOperationType.Start, [makeFinger(1, 10, 20, 100)])
+    drag.emit(DragOperationType.Move, [
+      makeFinger(1, 11, 21, 110),
+      makeFinger(2, 30, 40, 111)
+    ])
+    drag.emit(DragOperationType.Move, [makeFinger(1, 12, 22, 120)])
+
+    expect(counts).toEqual([2, 1])
   })
 })

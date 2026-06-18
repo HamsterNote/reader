@@ -5,14 +5,21 @@ import {
   type IntermediateDocumentSerialized,
   type IntermediateText
 } from '@hamster-note/types'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Drag,
-  DragOperationType,
-  type Finger,
-  type Pose
-} from '@system-ui-js/multi-drag'
+  VirtualPaper,
+  VirtualPaperInteractionMode,
+  VirtualPaperRenderMode,
+  type VirtualPaperTransform,
+  type VirtualPaperTransformMeta
+} from '@hamster-note/virtual-paper'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  shouldArmLongPress,
+  shouldForceBlockSelection,
+  shouldStartSelectionOnPointerDown,
+  toReaderPointerType
+} from './gestureRouting'
 import {
   getNearestTextElementForPoint,
   getPageElementByPageNumber,
@@ -37,6 +44,11 @@ import {
   type DragSelectionAdapter
 } from './selection/dragSelectionAdapter'
 import {
+  rebuildSavedSelectionFromEdit,
+  resolveSavedSelection,
+  type TextElementInfo
+} from './selection/savedSelection'
+import {
   composeSelection,
   createOrderedRange
 } from './selection/selectionComposer'
@@ -48,11 +60,7 @@ import {
   type ReaderSelectedTextSegment,
   type ReaderSelectionPayload
 } from './selection/selectionPayloadSerializer'
-import {
-  rebuildSavedSelectionFromEdit,
-  resolveSavedSelection,
-  type TextElementInfo
-} from './selection/savedSelection'
+import { createWordRangeFromCaret } from './selection/wordRange'
 import { polygonsToSvgPath, rectsToUnionPolygons } from './selectionGeometry'
 
 export {
@@ -331,6 +339,17 @@ const BACKGROUND_QUALITY_MAP: Record<BackgroundQuality, number> = {
   high: 0.8
 }
 
+/** 交互模式：'default' 为默认触摸/鼠标模式，'stylus' 为手写笔优化模式 */
+export type ReaderInteractionMode = 'default' | 'stylus'
+
+type LongPressSession = {
+  pointerId: number
+  timerId: ReturnType<typeof setTimeout>
+  startX: number
+  startY: number
+  anchorRange: Range | null
+}
+
 export type IntermediateDocumentViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   serializedDocument?: IntermediateDocumentSerialized | null
@@ -411,12 +430,6 @@ export type IntermediateDocumentViewerProps = {
    * to the default before the final range is normalized.
    */
   maxScale?: number
-  /**
-   * Discrete wheel zoom step for line/page wheel events. Defaults to `0.1`; an
-   * invalid or non-positive step falls back to that default. Pixel-mode touchpad
-   * deltas use an exponential scale factor instead of this step.
-   */
-  scaleStep?: number
   // ---- Lazy-release prop ----
   /**
    * Maximum number of concurrently loaded pages before lazy eviction. Defaults
@@ -430,6 +443,8 @@ export type IntermediateDocumentViewerProps = {
    * caches are released.
    */
   maxLoadedPages?: number
+  /** 交互模式，影响手势处理行为 */
+  interactionMode?: ReaderInteractionMode
 }
 
 type PageSize = {
@@ -450,7 +465,6 @@ type RenderableIntermediateText = IntermediateText &
 
 type PageLoadStatus = 'loaded' | 'error'
 type HtmlParserDocumentInput = Parameters<typeof HtmlParser.decodeToHtml>[0]
-type GesturePoint = { x: number; y: number }
 
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
@@ -511,39 +525,13 @@ function clampScale(
   return Math.max(range.min, Math.min(range.max, safeValue))
 }
 
-function getWheelScaleDelta(event: WheelEvent, scaleStep: number | undefined) {
-  if (event.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
-    return Math.exp(-event.deltaY * 0.001)
-  }
-
-  const step = normalizeScaleValue(scaleStep, 0.1)
-  if (event.deltaY < 0) return 1 + step
-  if (event.deltaY > 0) return 1 - step
-  return 1
-}
-
-function getFingerPoint(finger: Finger | undefined): GesturePoint | null {
-  const point = finger?.getLastOperation()?.point
-  return point ? { x: point.x, y: point.y } : null
-}
-
-function getTwoFingerGeometry(fingers: Finger[]) {
-  if (fingers.length !== 2) return null
-
-  const first = getFingerPoint(fingers[0])
-  const second = getFingerPoint(fingers[1])
-  if (!first || !second) return null
-
-  const distance = Math.hypot(second.x - first.x, second.y - first.y)
-  if (distance <= 0) return null
-
-  return {
-    distance,
-    centroid: {
-      x: (first.x + second.x) / 2,
-      y: (first.y + second.y) / 2
-    }
-  }
+function getScaleChangeSource(
+  source: VirtualPaperTransformMeta['source']
+): 'wheel' | 'pinch' {
+  return source === VirtualPaperInteractionMode.MouseWheelCtrlZoom ||
+    source === VirtualPaperInteractionMode.MouseWheelZoom
+    ? 'wheel'
+    : 'pinch'
 }
 
 function getEffectiveMaxLoadedPages(
@@ -739,13 +727,38 @@ const toPageRelative = (value: number, effectiveScale: number): number =>
   effectiveScale === 0 ? value : value / effectiveScale
 
 const getElementViewportScale = (element: HTMLElement): number => {
-  const scaleSurface = element.closest('[data-testid="reader-scale-surface"]')
+  const scaleSurface = element.closest(
+    '[data-testid="virtual-paper-container"]'
+  )
   const transform =
-    scaleSurface instanceof HTMLElement ? scaleSurface.style.transform : ''
-  const trimmedTransform = transform.trim()
-  const scale = trimmedTransform.startsWith('scale(')
-    ? Number.parseFloat(trimmedTransform.slice(6, -1))
-    : 1
+    scaleSurface instanceof HTMLElement
+      ? scaleSurface.style.transform || getComputedStyle(scaleSurface).transform
+      : ''
+  const scaleMatch = /scale\(([^)]+)\)/.exec(transform)
+  if (scaleMatch) {
+    const scale = Number.parseFloat(scaleMatch[1])
+    return Number.isFinite(scale) && scale > 0 ? scale : 1
+  }
+
+  const matrix3dMatch = /matrix3d\(([^)]+)\)/.exec(transform)
+  if (matrix3dMatch) {
+    const values = matrix3dMatch[1]
+      .split(',')
+      .map((value) => Number(value.trim()))
+    const scale = Math.hypot(values[0] ?? 1, values[1] ?? 0, values[2] ?? 0)
+    return Number.isFinite(scale) && scale > 0 ? scale : 1
+  }
+
+  const matrixMatch = /matrix\(([^)]+)\)/.exec(transform)
+  if (matrixMatch) {
+    const values = matrixMatch[1]
+      .split(',')
+      .map((value) => Number(value.trim()))
+    const scale = Math.hypot(values[0] ?? 1, values[1] ?? 0)
+    return Number.isFinite(scale) && scale > 0 ? scale : 1
+  }
+
+  const scale = 1
   return Number.isFinite(scale) && scale > 0 ? scale : 1
 }
 
@@ -1725,8 +1738,8 @@ export function IntermediateDocumentViewer({
   onScaleChange,
   minScale,
   maxScale,
-  scaleStep = 0.1,
-  maxLoadedPages
+  maxLoadedPages,
+  interactionMode = 'default'
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
@@ -1748,94 +1761,42 @@ export function IntermediateDocumentViewer({
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
 
-  // Preserve the latest gesture/lazy-release settings for future handlers
-  // without triggering re-renders when they change.
-  const scaleStepRef = useRef(scaleStep)
-  scaleStepRef.current = scaleStep
   const maxLoadedPagesRef = useRef(maxLoadedPages)
   maxLoadedPagesRef.current = maxLoadedPages
+  // 交互模式 ref，供后续手势逻辑读取（Wave 1 仅透传，不做行为分支）
+  const interactionModeRef = useRef(interactionMode)
+  interactionModeRef.current = interactionMode
 
-  // Internal scale for the uncontrolled mode. The callback form guarantees
-  // the initial value is computed only once, even if `defaultScale` changes.
-  const [internalScale, setInternalScale] = useState(() =>
-    clampScale(defaultScale ?? 1, getEffectiveScaleRange(minScale, maxScale))
+  const scaleRange = useMemo(
+    () => getEffectiveScaleRange(minScale, maxScale),
+    [minScale, maxScale]
   )
-
-  // Controlled mode wins when `scale` is provided; otherwise the internal
-  // state drives the effective scale. The result is always clamped.
-  const effectiveScale = useMemo(
-    () =>
-      clampScale(
-        scale ?? internalScale,
+  const [paperTransform, setPaperTransform] = useState<VirtualPaperTransform>(
+    () => ({
+      x: 0,
+      y: 0,
+      scale: clampScale(
+        defaultScale ?? 1,
         getEffectiveScaleRange(minScale, maxScale)
-      ),
-    [scale, internalScale, minScale, maxScale]
+      )
+    })
   )
 
-  const applyScale = useCallback(
-    (
-      nextScale: number,
-      detail: {
-        source: 'wheel' | 'pinch'
-        focalPoint?: { x: number; y: number }
-      }
-    ) => {
-      const range = getEffectiveScaleRange(minScale, maxScale)
-      const clamped = clampScale(nextScale, range)
-
-      if (clamped === effectiveScale) {
-        return
-      }
-
-      if (scale !== undefined) {
-        onScaleChange?.(clamped, detail)
-        return
-      }
-
-      setInternalScale(clamped)
-      onScaleChange?.(clamped, detail)
-
-      // Preserve the focal point so the content under the cursor/pinch stays
-      // stationary relative to the viewport after a scale change.
-      const focalPoint = detail.focalPoint
-      if (
-        viewerRootElement &&
-        typeof viewerRootElement.scrollLeft === 'number' &&
-        focalPoint
-      ) {
-        const oldScale = effectiveScale
-        const rect = viewerRootElement.getBoundingClientRect()
-        const xRatio =
-          (focalPoint.x - rect.left + viewerRootElement.scrollLeft) / oldScale
-        const yRatio =
-          (focalPoint.y - rect.top + viewerRootElement.scrollTop) / oldScale
-
-        requestAnimationFrame(() => {
-          viewerRootElement.scrollLeft =
-            xRatio * clamped - (focalPoint.x - rect.left)
-          viewerRootElement.scrollTop =
-            yRatio * clamped - (focalPoint.y - rect.top)
-        })
-      }
-    },
-    [
-      effectiveScale,
-      scale,
-      minScale,
-      maxScale,
-      onScaleChange,
-      viewerRootElement
-    ]
+  const effectiveScale = useMemo(
+    () => clampScale(scale ?? paperTransform.scale, scaleRange),
+    [scale, paperTransform.scale, scaleRange]
   )
-
-  // Task 3's gesture handlers read the latest applyScale via this ref
-  // so they don't need to rebuild on every effectiveScale change.
-  const applyScaleRef = useRef(applyScale)
-  applyScaleRef.current = applyScale
   const effectiveScaleRef = useRef(effectiveScale)
   effectiveScaleRef.current = effectiveScale
-  const scaleRangeRef = useRef(getEffectiveScaleRange(minScale, maxScale))
-  scaleRangeRef.current = getEffectiveScaleRange(minScale, maxScale)
+
+  const virtualPaperTransform = useMemo<VirtualPaperTransform>(
+    () => ({
+      x: paperTransform.x,
+      y: paperTransform.y,
+      scale: effectiveScale
+    }),
+    [effectiveScale, paperTransform.x, paperTransform.y]
+  )
 
   const textElementsRef = useRef<
     Map<string, { text: IntermediateText; pageNumber: number }>
@@ -1867,6 +1828,9 @@ export function IntermediateDocumentViewer({
     offset: number
     previewRect: DragPreviewRect
   } | null>(null)
+  const longPressSessionRef = useRef<LongPressSession | null>(null)
+  const pointerTypesByIdRef = useRef(new Map<number, string>())
+  const pointerTextTargetsByIdRef = useRef(new Map<number, boolean>())
   const dragSelectionEndEmittedRef = useRef(false)
   const skipNextMouseUpSelectionEndRef = useRef(false)
   const lastDragComposedSelectionRef = useRef<{
@@ -1899,6 +1863,7 @@ export function IntermediateDocumentViewer({
     ReturnType<typeof requestIdleCallback> | number | null
   >(null)
   const activePinchRef = useRef(false)
+  const multiPointerLockedRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
   const [textsByPageNumber, setTextsByPageNumber] = useState(
@@ -2042,6 +2007,7 @@ export function IntermediateDocumentViewer({
 
     pinnedPagesRef.current.clear()
     activePinchRef.current = false
+    multiPointerLockedRef.current = false
     pageLastVisibleAtRef.current.forEach((_lastVisibleAt, pageNumber) => {
       if (!currentPageNumbers.has(pageNumber)) {
         pageLastVisibleAtRef.current.delete(pageNumber)
@@ -2084,97 +2050,54 @@ export function IntermediateDocumentViewer({
     setViewerRootElement(element)
   }, [])
 
-  useEffect(() => {
-    const root = viewerRootElement
-    if (!root) return
+  const handleVirtualPaperTransform = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      const clampedScale = clampScale(nextTransform.scale, scaleRange)
+      const isControlledScale = scale !== undefined
+      const nextStoredTransform = {
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: isControlledScale ? effectiveScaleRef.current : clampedScale
+      }
+      const source = getScaleChangeSource(meta.source)
+      const isTwoFingerGesture =
+        meta.source === VirtualPaperInteractionMode.TouchTwoFingerZoom ||
+        meta.source === VirtualPaperInteractionMode.TouchTwoFingerPan
 
-    const noopPose: Pose = {
-      position: { x: 0, y: 0 },
-      width: 0,
-      height: 0,
-      scale: effectiveScaleRef.current
-    }
-    const pinchStartRef: {
-      distance: number
-      scale: number
-    } = {
-      distance: 0,
-      scale: 1
-    }
+      setPaperTransform(nextStoredTransform)
 
-    const handleWheel = (event: WheelEvent) => {
-      if (event.ctrlKey !== true) return
+      if (isTwoFingerGesture && meta.phase !== 'end') {
+        activePinchRef.current = true
+        multiPointerLockedRef.current = true
+      }
+      if (meta.phase === 'end') {
+        activePinchRef.current = false
+        multiPointerLockedRef.current = false
+      }
 
-      event.preventDefault()
-      const delta = getWheelScaleDelta(event, scaleStepRef.current)
-      const nextScale = clampScale(
-        effectiveScaleRef.current * delta,
-        scaleRangeRef.current
+      if (clampedScale === effectiveScaleRef.current) return
+
+      onScaleChange?.(
+        clampedScale,
+        meta.focalPoint ? { source, focalPoint: meta.focalPoint } : { source }
       )
-      applyScaleRef.current(nextScale, {
-        source: 'wheel',
-        focalPoint: { x: event.clientX, y: event.clientY }
-      })
-    }
+    },
+    [onScaleChange, scale, scaleRange]
+  )
 
-    const handlePinchStart = (fingers: Finger[]) => {
-      const geometry = getTwoFingerGeometry(fingers)
-      if (!geometry) return
+  const handleVirtualPaperTransformChange = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      handleVirtualPaperTransform(nextTransform, meta)
+    },
+    [handleVirtualPaperTransform]
+  )
 
-      activePinchRef.current = true
-      pinchStartRef.distance = geometry.distance
-      pinchStartRef.scale = effectiveScaleRef.current
-    }
-
-    const handlePinchMove = (fingers: Finger[]) => {
-      const geometry = getTwoFingerGeometry(fingers)
-      if (!geometry || pinchStartRef.distance <= 0) return
-
-      const ratio = geometry.distance / pinchStartRef.distance
-      const nextScale = clampScale(
-        pinchStartRef.scale * ratio,
-        scaleRangeRef.current
-      )
-      applyScaleRef.current(nextScale, {
-        source: 'pinch',
-        focalPoint: geometry.centroid
-      })
-    }
-
-    const handlePinchEnd = (fingers: Finger[]) => {
-      if (fingers.length !== 2) return
-      handlePinchMove(fingers)
-    }
-
-    const handlePinchAllEnd = () => {
-      activePinchRef.current = false
-      pinchStartRef.distance = 0
-      pinchStartRef.scale = effectiveScaleRef.current
-    }
-
-    root.addEventListener('wheel', handleWheel, { passive: false })
-    const drag = new Drag(root, {
-      maxFingerCount: 2,
-      inertial: false,
-      getPose: () => noopPose,
-      setPose: () => {},
-      setPoseOnEnd: () => {}
-    })
-    drag.addEventListener(DragOperationType.Start, handlePinchStart)
-    drag.addEventListener(DragOperationType.Move, handlePinchMove)
-    drag.addEventListener(DragOperationType.End, handlePinchEnd)
-    drag.addEventListener(DragOperationType.AllEnd, handlePinchAllEnd)
-
-    return () => {
-      root.removeEventListener('wheel', handleWheel)
-      activePinchRef.current = false
-      drag.removeEventListener(DragOperationType.Start, handlePinchStart)
-      drag.removeEventListener(DragOperationType.Move, handlePinchMove)
-      drag.removeEventListener(DragOperationType.End, handlePinchEnd)
-      drag.removeEventListener(DragOperationType.AllEnd, handlePinchAllEnd)
-      drag.destroy()
-    }
-  }, [viewerRootElement])
+  const handleVirtualPaperTransformChangeEnd = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      handleVirtualPaperTransform(nextTransform, meta)
+    },
+    [handleVirtualPaperTransform]
+  )
 
   // Primary render path: convert the runtime document to HTML via @hamster-note/html-parser.
   // On success we render the HTML fragment directly. Because html-parser output does not
@@ -4010,7 +3933,136 @@ export function IntermediateDocumentViewer({
       })
     }
 
+    const isTextSelectionStartTarget = (
+      clientX: number,
+      clientY: number,
+      pointerId: number
+    ) => {
+      const nativePointerTargetHit =
+        pointerTextTargetsByIdRef.current.get(pointerId)
+      if (nativePointerTargetHit !== undefined) return nativePointerTargetHit
+
+      const pointElement = root.ownerDocument.elementFromPoint?.(
+        clientX,
+        clientY
+      )
+      const pointTextElement = pointElement?.closest('[data-text-id]')
+
+      return Boolean(
+        pointTextElement &&
+        root.contains(pointTextElement) &&
+        !isSelectionBackgroundTarget(pointElement)
+      )
+    }
+
+    const clearLongPressSession = () => {
+      const session = longPressSessionRef.current
+      if (!session) return
+
+      clearTimeout(session.timerId)
+      longPressSessionRef.current = null
+    }
+
+    const resetRootDragSelection = () => {
+      clearLongPressSession()
+      setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
+      dragSelectionAnchorRef.current = null
+      activeMouseSelectionRef.current.active = false
+      pinnedPagesRef.current.clear()
+    }
+
+    const emitTextSelectionChange = (selection: Selection) => {
+      lastDragComposedSelectionRef.current = {
+        selection,
+        selectedText: selection.toString()
+      }
+
+      if (!onTextSelectionChange) return
+
+      const selectionDetail = getSelectionDetail(selection)
+      if (selectionDetail) {
+        onTextSelectionChange(selectionDetail.text, selectionDetail)
+      }
+    }
+
+    const armTouchLongPress = (
+      clientX: number,
+      clientY: number,
+      pointerId: number
+    ) => {
+      const timerId = setTimeout(() => {
+        const session = longPressSessionRef.current
+        if (!session || session.pointerId !== pointerId) return
+
+        const caretInfo = resolveDragCaret(session.startX, session.startY)
+        if (!caretInfo) {
+          clearLongPressSession()
+          return
+        }
+
+        const wordRange = createWordRangeFromCaret(caretInfo.range)
+        caretInfo.range.detach()
+        if (!wordRange) {
+          clearLongPressSession()
+          return
+        }
+
+        const previewRect = getCaretPreviewRect({
+          range: wordRange,
+          pageNumber: caretInfo.pageNumber
+        })
+        const writableSelection = window.getSelection()
+        if (
+          !previewRect ||
+          !writableSelection ||
+          typeof writableSelection.removeAllRanges !== 'function' ||
+          typeof writableSelection.addRange !== 'function'
+        ) {
+          clearLongPressSession()
+          return
+        }
+
+        // 长按触发后先选中当前单词，并把单词起点作为后续拖拽扩展锚点。
+        dragSelectionAnchorRef.current = {
+          node: wordRange.startContainer,
+          offset: wordRange.startOffset,
+          previewRect
+        }
+        longPressSessionRef.current = {
+          ...session,
+          anchorRange: wordRange
+        }
+        setDragPreviewSession(
+          armDragPreview(createDragPreviewSession(), {
+            clientX: session.startX,
+            clientY: session.startY
+          })
+        )
+        pinnedPagesRef.current = new Set([caretInfo.pageNumber])
+        dragSelectionEndEmittedRef.current = false
+        activeMouseSelectionRef.current = {
+          active: true,
+          startClientX: session.startX,
+          startClientY: session.startY,
+          clientX: session.startX,
+          clientY: session.startY
+        }
+
+        composeSelection(wordRange)
+        emitTextSelectionChange(writableSelection)
+      }, 500)
+
+      longPressSessionRef.current = {
+        pointerId,
+        timerId,
+        startX: clientX,
+        startY: clientY,
+        anchorRange: null
+      }
+    }
+
     const finishDragSelection = (clientX: number, clientY: number) => {
+      clearLongPressSession()
       const anchor = dragSelectionAnchorRef.current
       if (!anchor) {
         activeMouseSelectionRef.current.active = false
@@ -4088,38 +4140,161 @@ export function IntermediateDocumentViewer({
       setDragPreviewSession(cancelDragPreview(dragPreviewSessionRef.current))
     }
 
-    const adapter = createDragSelectionAdapter(root, {
-      onStart: (clientX, clientY) => {
-        if (dragStateRef.current.active) {
-          setDragPreviewSession(
-            cancelDragPreview(dragPreviewSessionRef.current)
+    const rememberPointerType = (event: PointerEvent) => {
+      const pointerId = event.pointerId ?? 1
+      pointerTypesByIdRef.current.set(pointerId, event.pointerType || 'mouse')
+      if (event.type === 'pointerdown') {
+        const target = event.target instanceof Element ? event.target : null
+        pointerTextTargetsByIdRef.current.set(
+          pointerId,
+          Boolean(
+            target?.closest('[data-text-id]') &&
+            root.contains(target) &&
+            !isSelectionBackgroundTarget(target)
           )
-          dragSelectionAnchorRef.current = null
-          activeMouseSelectionRef.current.active = false
-          pinnedPagesRef.current.clear()
+        )
+      }
+    }
+
+    const forgetPointerType = (event: PointerEvent) => {
+      const pointerId = event.pointerId ?? 1
+      pointerTypesByIdRef.current.delete(pointerId)
+      pointerTextTargetsByIdRef.current.delete(pointerId)
+    }
+
+    root.addEventListener('pointerdown', rememberPointerType)
+    root.addEventListener('pointermove', rememberPointerType)
+    root.addEventListener('pointerup', forgetPointerType)
+    root.addEventListener('pointercancel', forgetPointerType)
+
+    const handleLongPressPointerMove = (
+      clientX: number,
+      clientY: number,
+      detailPointerId: number
+    ) => {
+      const longPressSession = longPressSessionRef.current
+      if (!longPressSession || longPressSession.pointerId !== detailPointerId) {
+        return false
+      }
+
+      const deltaY = clientY - longPressSession.startY
+      const moveDistance = Math.hypot(clientX - longPressSession.startX, deltaY)
+      if (longPressSession.anchorRange || moveDistance <= 10) return false
+
+      clearLongPressSession()
+
+      return true
+    }
+
+    const getWritableSelection = () => {
+      const writableSelection = window.getSelection()
+      if (
+        !writableSelection ||
+        typeof writableSelection.removeAllRanges !== 'function' ||
+        typeof writableSelection.addRange !== 'function'
+      ) {
+        return null
+      }
+
+      return writableSelection
+    }
+
+    const updateDragSelectionPreviewRects = (
+      anchor: NonNullable<typeof dragSelectionAnchorRef.current>,
+      caretInfo: { range: Range; pageNumber: number },
+      clientX: number,
+      clientY: number
+    ) => {
+      const focusPreviewRect = getCaretPreviewRect(caretInfo)
+      if (!focusPreviewRect) return
+
+      pinDragSelectionPages(
+        anchor.previewRect.pageNumber,
+        focusPreviewRect.pageNumber
+      )
+      const previewRects = geometryToOverlayRects(
+        anchor.previewRect,
+        focusPreviewRect
+      )
+      const nextPreview = updateDragPreview(
+        dragPreviewSessionRef.current,
+        { clientX, clientY },
+        previewRects
+      )
+      setDragPreviewSession(nextPreview)
+
+      if (
+        overlayOptions?.enabled &&
+        nextPreview.state === 'dragging' &&
+        nextPreview.previewRects.length > 0
+      ) {
+        renderSelectionOverlayRects(nextPreview.previewRects)
+      }
+    }
+
+    const adapter = createDragSelectionAdapter(root, {
+      onStart: (clientX, clientY, detail) => {
+        const pointerType = toReaderPointerType(detail?.pointerType)
+        const activePointerCount = detail?.activePointerCount ?? 1
+        const pointerId = detail?.pointerId ?? 0
+        let isOnText = isTextSelectionStartTarget(clientX, clientY, pointerId)
+        if (!isOnText && pointerType !== 'touch') {
+          const snappedCaretInfo = resolveDragCaret(clientX, clientY)
+          if (snappedCaretInfo) {
+            snappedCaretInfo.range.detach()
+            isOnText = true
+          }
+        }
+
+        if (
+          shouldForceBlockSelection(interactionModeRef.current, pointerType)
+        ) {
+          resetRootDragSelection()
+          return
+        }
+
+        if (multiPointerLockedRef.current && activePointerCount <= 1) {
+          resetRootDragSelection()
+          return
+        }
+
+        if (dragStateRef.current.active) {
+          resetRootDragSelection()
+          return
+        }
+
+        if (
+          shouldArmLongPress({
+            interactionMode: interactionModeRef.current,
+            pointerType
+          }) &&
+          isOnText
+        ) {
+          armTouchLongPress(clientX, clientY, pointerId)
+          return
+        }
+
+        if (
+          !shouldStartSelectionOnPointerDown({
+            interactionMode: interactionModeRef.current,
+            pointerType,
+            isOnText
+          })
+        ) {
+          resetRootDragSelection()
           return
         }
 
         const caretInfo = resolveDragCaret(clientX, clientY)
         if (!caretInfo) {
-          setDragPreviewSession(
-            cancelDragPreview(dragPreviewSessionRef.current)
-          )
-          dragSelectionAnchorRef.current = null
-          activeMouseSelectionRef.current.active = false
-          pinnedPagesRef.current.clear()
+          resetRootDragSelection()
           return
         }
 
         const previewRect = getCaretPreviewRect(caretInfo)
         if (!previewRect) {
           caretInfo.range.detach()
-          setDragPreviewSession(
-            cancelDragPreview(dragPreviewSessionRef.current)
-          )
-          dragSelectionAnchorRef.current = null
-          activeMouseSelectionRef.current.active = false
-          pinnedPagesRef.current.clear()
+          resetRootDragSelection()
           return
         }
 
@@ -4142,16 +4317,22 @@ export function IntermediateDocumentViewer({
         }
         caretInfo.range.detach()
       },
-      onMove: (clientX, clientY) => {
+      onMove: (clientX, clientY, detail) => {
+        const pointerId = detail?.pointerId ?? 0
+
+        if (multiPointerLockedRef.current) {
+          resetRootDragSelection()
+          return
+        }
+
+        if (handleLongPressPointerMove(clientX, clientY, pointerId)) {
+          return
+        }
+
         const anchor = dragSelectionAnchorRef.current
         if (!anchor) return
         if (dragStateRef.current.active) {
-          setDragPreviewSession(
-            cancelDragPreview(dragPreviewSessionRef.current)
-          )
-          dragSelectionAnchorRef.current = null
-          activeMouseSelectionRef.current.active = false
-          pinnedPagesRef.current.clear()
+          resetRootDragSelection()
           return
         }
 
@@ -4161,40 +4342,12 @@ export function IntermediateDocumentViewer({
         const caretInfo = resolveDragCaret(clientX, clientY)
         if (!caretInfo) return
 
-        const focusPreviewRect = getCaretPreviewRect(caretInfo)
-        if (focusPreviewRect) {
-          pinDragSelectionPages(
-            anchor.previewRect.pageNumber,
-            focusPreviewRect.pageNumber
-          )
-          const previewRects = geometryToOverlayRects(
-            anchor.previewRect,
-            focusPreviewRect
-          )
-          const nextPreview = updateDragPreview(
-            dragPreviewSessionRef.current,
-            { clientX, clientY },
-            previewRects
-          )
-          setDragPreviewSession(nextPreview)
-
-          if (
-            overlayOptions?.enabled &&
-            nextPreview.state === 'dragging' &&
-            nextPreview.previewRects.length > 0
-          ) {
-            renderSelectionOverlayRects(nextPreview.previewRects)
-          }
-        }
+        updateDragSelectionPreviewRects(anchor, caretInfo, clientX, clientY)
 
         // Required Selection composition capability check. Do not remove: the
         // Drag adapter writes the composed range via removeAllRanges/addRange.
-        const writableSelection = window.getSelection()
-        if (
-          !writableSelection ||
-          typeof writableSelection.removeAllRanges !== 'function' ||
-          typeof writableSelection.addRange !== 'function'
-        ) {
+        const writableSelection = getWritableSelection()
+        if (!writableSelection) {
           caretInfo.range.detach()
           return
         }
@@ -4233,11 +4386,19 @@ export function IntermediateDocumentViewer({
         }
       },
       onEnd: finishDragSelection,
-      onAllEnd: finishDragSelection
+      onAllEnd: finishDragSelection,
+      getPointerType: (pointerId) => pointerTypesByIdRef.current.get(pointerId)
     })
 
     return () => {
+      clearLongPressSession()
       adapter.destroy()
+      root.removeEventListener('pointerdown', rememberPointerType)
+      root.removeEventListener('pointermove', rememberPointerType)
+      root.removeEventListener('pointerup', forgetPointerType)
+      root.removeEventListener('pointercancel', forgetPointerType)
+      pointerTypesByIdRef.current.clear()
+      pointerTextTargetsByIdRef.current.clear()
       activeMouseSelectionRef.current.active = false
       dragSelectionAnchorRef.current = null
       pinnedPagesRef.current.clear()
@@ -4983,16 +5144,13 @@ export function IntermediateDocumentViewer({
       data-testid='intermediate-document-viewer'
     >
       {(htmlContent && !htmlParserError) || pageNumbers.length > 0 ? (
-        <div
-          data-testid='reader-scale-surface'
-          style={
-            effectiveScale === 1
-              ? undefined
-              : {
-                  transform: `scale(${effectiveScale})`,
-                  transformOrigin: 'top left'
-                }
-          }
+        <VirtualPaper
+          renderMode={VirtualPaperRenderMode.Transform}
+          transform={virtualPaperTransform}
+          minScale={scaleRange.min}
+          maxScale={scaleRange.max}
+          onTransformChange={handleVirtualPaperTransformChange}
+          onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
         >
           {htmlContent && !htmlParserError ? (
             <>
@@ -5336,7 +5494,7 @@ export function IntermediateDocumentViewer({
               )
             })
           )}
-        </div>
+        </VirtualPaper>
       ) : null}
     </div>
   )

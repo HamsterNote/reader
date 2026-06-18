@@ -7,6 +7,7 @@ import { type ReactElement, useCallback, useRef, useState } from 'react'
 
 import type {
   BackgroundQuality,
+  ReaderInteractionMode,
   ReaderPageRange,
   ReaderRenderMode,
   ReaderSavedSelection,
@@ -66,6 +67,8 @@ export type ReaderProps = {
   onSavedSelectionRestore?: (
     results: ReaderSavedSelectionRestoreResult[]
   ) => void
+  /** 交互模式，透传给 IntermediateDocumentViewer */
+  interactionMode?: ReaderInteractionMode
   // ---- Zoom props (all optional, forwarded unchanged) ----
   /**
    * Controlled zoom scale. When provided, Reader never mutates zoom internally;
@@ -102,12 +105,6 @@ export type ReaderProps = {
    * fall back to that default before the range is normalized.
    */
   maxScale?: number
-  /**
-   * Discrete wheel zoom step for line/page wheel events. Defaults to `0.1`
-   * (10% per tick); invalid or non-positive values fall back to the default.
-   * Pixel-mode touchpad wheels use their native exponential delta instead.
-   */
-  scaleStep?: number
   // ---- Lazy-release prop ----
   /**
    * Maximum number of concurrently loaded pages before lazy eviction. The
@@ -121,6 +118,11 @@ export type ReaderProps = {
    */
   maxLoadedPages?: number
 }
+
+export const SUPPORTED_UPLOAD_ACCEPT =
+  '.pdf,application/pdf,.txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,text/markdown,text/x-markdown'
+
+export const SUPPORTED_UPLOAD_COPY = 'PDF, TXT, DOCX, and Markdown'
 
 const documentHasPages = (
   document:
@@ -175,8 +177,8 @@ export function Reader({
   onScaleChange,
   minScale,
   maxScale,
-  scaleStep,
-  maxLoadedPages
+  maxLoadedPages,
+  interactionMode
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -279,8 +281,8 @@ export function Reader({
           onScaleChange={onScaleChange}
           minScale={minScale}
           maxScale={maxScale}
-          scaleStep={scaleStep}
           maxLoadedPages={maxLoadedPages}
+          interactionMode={interactionMode}
         />
       )
     }
@@ -302,7 +304,7 @@ export function Reader({
           <input
             ref={fileInputRef}
             type='file'
-            accept='.pdf,application/pdf'
+            accept={SUPPORTED_UPLOAD_ACCEPT}
             onChange={handleInputChange}
             className='hamster-reader__file-input'
             data-testid='file-input'
@@ -324,9 +326,13 @@ export function Reader({
               <line x1='12' y1='3' x2='12' y2='15' />
             </svg>
             <p className='hamster-reader__upload-text'>
-              {isDragging ? 'Drop PDF here' : 'Click or drag PDF to upload'}
+              {isDragging
+                ? 'Drop document here'
+                : 'Click or drag document to upload'}
             </p>
-            <p className='hamster-reader__upload-hint'>Supports PDF files</p>
+            <p className='hamster-reader__upload-hint'>
+              Supports PDF, TXT, DOCX, and Markdown files
+            </p>
           </div>
         </button>
       )}
@@ -357,7 +363,7 @@ export function Reader({
             <p className='hamster-reader__file-name'>{uploadedFile.name}</p>
             <p className='hamster-reader__file-meta'>
               {formatFileSize(uploadedFile.size)} •{' '}
-              {uploadedFile.type || 'application/pdf'}
+              {uploadedFile.type || 'unknown type'}
             </p>
           </div>
           <button

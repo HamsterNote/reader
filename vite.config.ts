@@ -222,6 +222,12 @@ export default defineConfig(({ mode }) => ({
               replacement: fileURLToPath(
                 new URL('./test/mocks/multi-drag.ts', import.meta.url)
               )
+            },
+            {
+              find: /^@hamster-note\/virtual-paper$/,
+              replacement: fileURLToPath(
+                new URL('./test/mocks/virtual-paper.tsx', import.meta.url)
+              )
             }
           ]
         : [])

@@ -1,5 +1,8 @@
+import { DocxParser } from '@hamster-note/docx-parser'
+import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type { ReaderSavedSelection } from '@hamster-note/reader'
+import { TxtParser } from '@hamster-note/txt-parser'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
@@ -11,6 +14,24 @@ import { App } from '../demo/App'
 
 vi.mock('@hamster-note/pdf-parser', () => ({
   PdfParser: {
+    encode: vi.fn()
+  }
+}))
+
+vi.mock('@hamster-note/txt-parser', () => ({
+  TxtParser: {
+    encode: vi.fn()
+  }
+}))
+
+vi.mock('@hamster-note/docx-parser', () => ({
+  DocxParser: {
+    encodeToIntermediate: vi.fn()
+  }
+}))
+
+vi.mock('@hamster-note/markdown-parser', () => ({
+  MarkdownParser: {
     encode: vi.fn()
   }
 }))
@@ -195,6 +216,128 @@ describe('demo parser flow', () => {
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
+  })
+
+  it.each([
+    {
+      fileName: 'success.pdf',
+      label: 'PDF',
+      title: 'PDF Routed Document',
+      arrange: (document: IntermediateDocument) =>
+        vi.mocked(PdfParser.encode).mockResolvedValue(document),
+      assertParserCall: (file: File) => {
+        expect(PdfParser.encode).toHaveBeenCalledWith(file, undefined)
+        expect(TxtParser.encode).not.toHaveBeenCalled()
+        expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+        expect(MarkdownParser.encode).not.toHaveBeenCalled()
+      }
+    },
+    {
+      fileName: 'BOOK.TXT',
+      label: 'TXT',
+      title: 'TXT Routed Document',
+      arrange: (document: IntermediateDocument) =>
+        vi.mocked(TxtParser.encode).mockResolvedValue(document),
+      assertParserCall: (file: File) => {
+        expect(TxtParser.encode).toHaveBeenCalledWith(file)
+        expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+        expect(MarkdownParser.encode).not.toHaveBeenCalled()
+      }
+    },
+    {
+      fileName: 'file.DOCX',
+      label: 'DOCX',
+      title: 'DOCX Routed Document',
+      arrange: (document: IntermediateDocument) =>
+        vi.mocked(DocxParser.encodeToIntermediate).mockResolvedValue(document),
+      assertParserCall: (file: File) => {
+        expect(DocxParser.encodeToIntermediate).toHaveBeenCalledWith(file)
+        expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(TxtParser.encode).not.toHaveBeenCalled()
+        expect(MarkdownParser.encode).not.toHaveBeenCalled()
+      }
+    },
+    {
+      fileName: 'notes.final.md',
+      label: 'Markdown',
+      title: 'Markdown MD Routed Document',
+      arrange: (document: IntermediateDocument) =>
+        vi.mocked(MarkdownParser.encode).mockResolvedValue(document),
+      assertParserCall: (file: File) => {
+        expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
+        expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(TxtParser.encode).not.toHaveBeenCalled()
+        expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+      }
+    },
+    {
+      fileName: 'README.markdown',
+      label: 'Markdown',
+      title: 'Markdown Long Routed Document',
+      arrange: (document: IntermediateDocument) =>
+        vi.mocked(MarkdownParser.encode).mockResolvedValue(document),
+      assertParserCall: (file: File) => {
+        expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
+        expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(TxtParser.encode).not.toHaveBeenCalled()
+        expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+      }
+    }
+  ])(
+    'routes supported $label upload $fileName by extension',
+    async (caseData) => {
+      const document = makeRuntimeDocument(caseData.title)
+      caseData.arrange(document)
+
+      render(<App />)
+      const uploadedFile = makeFile(caseData.fileName)
+      upload(uploadedFile)
+
+      expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+      expect(screen.getByText(caseData.title)).toBeInTheDocument()
+      expect(screen.getByText(`Name: ${caseData.fileName}`)).toBeInTheDocument()
+      expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
+      caseData.assertParserCall(uploadedFile)
+    }
+  )
+
+  it.each([
+    'book.epub',
+    'legacy.doc',
+    'component.mdx',
+    'README',
+    'archive.zip'
+  ])('rejects unsupported upload %s by extension', async (fileName) => {
+    render(<App />)
+    upload(makeFile(fileName))
+
+    expect(await screen.findByText('Parse Error')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(PdfParser.encode).not.toHaveBeenCalled()
+    expect(TxtParser.encode).not.toHaveBeenCalled()
+    expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+    expect(MarkdownParser.encode).not.toHaveBeenCalled()
+  })
+
+  it('shows a TXT parse error when the TXT parser rejects', async () => {
+    vi.mocked(TxtParser.encode).mockRejectedValue(new Error('bad txt'))
+
+    render(<App />)
+    const uploadedFile = makeFile('broken.txt')
+    upload(uploadedFile)
+
+    expect(await screen.findByText('Parse Error')).toBeInTheDocument()
+    expect(screen.getByText('Failed to parse TXT: bad txt')).toBeInTheDocument()
+    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(TxtParser.encode).toHaveBeenCalledTimes(1)
+    expect(TxtParser.encode).toHaveBeenCalledWith(uploadedFile)
+    expect(PdfParser.encode).not.toHaveBeenCalled()
   })
 
   it('shows a parse error when the parser returns undefined', async () => {
