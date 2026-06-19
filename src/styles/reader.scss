@@ -190,6 +190,20 @@
       contain: layout style;
       width: 100%;
     }
+
+    // Allow text selection in html-parser output even when the parent page
+    // has user-select: none. This is necessary because html-parser renders
+    // actual DOM text nodes (unlike the direct-render path which uses
+    // absolutely-positioned spans with explicit user-select: text).
+    user-select: text;
+    -webkit-user-select: text;
+
+    // Ensure text nodes inside the html-parser output are selectable.
+    .hamster-note-page,
+    .hamster-note-page * {
+      user-select: text;
+      -webkit-user-select: text;
+    }
   }
 
   // Intermediate page shell

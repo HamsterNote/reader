@@ -24,6 +24,7 @@ import {
   getNearestTextElementForPoint,
   getPageElementByPageNumber,
   getPageElementForPoint,
+  isHtmlParserSelectionTarget,
   isSelectionBackgroundTarget,
   resolveCaret
 } from './selection/caretResolver'
@@ -1513,6 +1514,19 @@ const useSelectedTextBodyDrag = ({
       const selection = window.getSelection()
       if (!selection) return false
 
+      const viewerRoot = viewerRootRef.current
+      if (!viewerRoot) return false
+
+      // html-parser native selections are visual-overlay only in this plan.
+      // They do not have direct-render text ids, so selected-text drag must not
+      // fabricate callback segments from parser DOM text nodes.
+      if (
+        isHtmlParserSelectionTarget(selection.anchorNode, viewerRoot) ||
+        isHtmlParserSelectionTarget(selection.focusNode, viewerRoot)
+      ) {
+        return false
+      }
+
       const payload = buildSelectionPayload(selection)
       if (!payload) return false
 
@@ -1536,7 +1550,8 @@ const useSelectedTextBodyDrag = ({
     [
       bodyDragCallbacksEnabled,
       isPointInsideSelectionBody,
-      onDragSelectedTextStart
+      onDragSelectedTextStart,
+      viewerRootRef
     ]
   )
 
@@ -2914,6 +2929,16 @@ export function IntermediateDocumentViewer({
       const focusInViewer = viewerRoot.contains(selection.focusNode)
       if (!anchorInViewer || !focusInViewer) return null
 
+      // html-parser native ranges intentionally stop at the visual overlay
+      // layer. Public text payload contracts stay direct-render-only until the
+      // parser can provide stable text ids compatible with saved selections.
+      if (
+        isHtmlParserSelectionTarget(selection.anchorNode, viewerRoot) ||
+        isHtmlParserSelectionTarget(selection.focusNode, viewerRoot)
+      ) {
+        return null
+      }
+
       const selectedElements: HTMLElement[] = []
       textElementsRef.current.forEach((_, id) => {
         const element = viewerRoot.querySelector(`[data-text-id="${id}"]`)
@@ -3377,7 +3402,40 @@ export function IntermediateDocumentViewer({
       const viewerRoot = viewerRootRef.current
       if (!viewerRoot) return null
 
-      const textElement = getClosestTextElement(caretInfo.range.startContainer)
+      const range = caretInfo.range
+      const startContainer = range.startContainer
+
+      const isHtmlParser =
+        startContainer.nodeType === Node.TEXT_NODE &&
+        isHtmlParserSelectionTarget(startContainer, viewerRoot)
+
+      if (isHtmlParser) {
+        const pageElement = getPageElementByPageNumber(
+          caretInfo.pageNumber,
+          viewerRoot,
+          pageRefs.current
+        )
+        if (!pageElement) return null
+
+        const pageRect = pageElement.getBoundingClientRect()
+        const pageScale = getElementViewportScale(pageElement)
+
+        const clientRects = range.getClientRects()
+        const rangeRect =
+          clientRects && clientRects.length > 0
+            ? clientRects[0]
+            : range.getBoundingClientRect()
+
+        return {
+          x: toPageRelative(rangeRect.left - pageRect.left, pageScale),
+          y: toPageRelative(rangeRect.top - pageRect.top, pageScale),
+          width: Math.max(toPageRelative(rangeRect.width, pageScale), 1),
+          height: Math.max(toPageRelative(rangeRect.height, pageScale), 1),
+          pageNumber: caretInfo.pageNumber
+        }
+      }
+
+      const textElement = getClosestTextElement(startContainer)
       if (!textElement || !viewerRoot.contains(textElement)) return null
 
       const pageElement = getPageElementByPageNumber(
@@ -3629,7 +3687,12 @@ export function IntermediateDocumentViewer({
       if (!savedId) return
 
       const resolvedResult = resolvedSavedSelectionsRef.current.get(savedId)
-      if (!resolvedResult || resolvedResult.status !== 'resolved') return
+      if (
+        !resolvedResult ||
+        (resolvedResult.status !== 'resolved' &&
+          resolvedResult.status !== 'visual-fallback')
+      )
+        return
 
       event.stopPropagation()
 
@@ -3915,15 +3978,21 @@ export function IntermediateDocumentViewer({
         clientY
       )
       const pointTextElement = pointElement?.closest('[data-text-id]')
+      const pointHtmlParserTextElement = isHtmlParserSelectionTarget(
+        pointElement ?? null,
+        root
+      )
       const shouldSnapToNearestText =
-        !pointTextElement ||
-        !root.contains(pointTextElement) ||
-        isSelectionBackgroundTarget(pointElement)
+        !pointHtmlParserTextElement &&
+        (!pointTextElement ||
+          !root.contains(pointTextElement) ||
+          isSelectionBackgroundTarget(pointElement))
 
       return resolveCaret(clientX, clientY, {
         viewerRoot: root,
         pageRefs: pageRefs.current,
         textElements: textElementsRef.current,
+        allowHtmlParserRange: pointHtmlParserTextElement,
         ...(shouldSnapToNearestText
           ? {
               caretPositionFromPoint: () => null,
@@ -3949,9 +4018,10 @@ export function IntermediateDocumentViewer({
       const pointTextElement = pointElement?.closest('[data-text-id]')
 
       return Boolean(
-        pointTextElement &&
-        root.contains(pointTextElement) &&
-        !isSelectionBackgroundTarget(pointElement)
+        (pointTextElement &&
+          root.contains(pointTextElement) &&
+          !isSelectionBackgroundTarget(pointElement)) ||
+        isHtmlParserSelectionTarget(pointElement ?? null, root)
       )
     }
 
@@ -4148,9 +4218,10 @@ export function IntermediateDocumentViewer({
         pointerTextTargetsByIdRef.current.set(
           pointerId,
           Boolean(
-            target?.closest('[data-text-id]') &&
-            root.contains(target) &&
-            !isSelectionBackgroundTarget(target)
+            (target?.closest('[data-text-id]') &&
+              root.contains(target) &&
+              !isSelectionBackgroundTarget(target)) ||
+            isHtmlParserSelectionTarget(target, root)
           )
         )
       }
@@ -4162,7 +4233,10 @@ export function IntermediateDocumentViewer({
       pointerTextTargetsByIdRef.current.delete(pointerId)
     }
 
-    root.addEventListener('pointerdown', rememberPointerType)
+    // Drag emits its Start callback from its own bubble-phase pointerdown
+    // listener. Capture pointer metadata first so touch long-press routing does
+    // not depend on listener registration order in tests or adapter internals.
+    root.addEventListener('pointerdown', rememberPointerType, { capture: true })
     root.addEventListener('pointermove', rememberPointerType)
     root.addEventListener('pointerup', forgetPointerType)
     root.addEventListener('pointercancel', forgetPointerType)
@@ -4393,7 +4467,9 @@ export function IntermediateDocumentViewer({
     return () => {
       clearLongPressSession()
       adapter.destroy()
-      root.removeEventListener('pointerdown', rememberPointerType)
+      root.removeEventListener('pointerdown', rememberPointerType, {
+        capture: true
+      })
       root.removeEventListener('pointermove', rememberPointerType)
       root.removeEventListener('pointerup', forgetPointerType)
       root.removeEventListener('pointercancel', forgetPointerType)

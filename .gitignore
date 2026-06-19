@@ -9,6 +9,9 @@ coverage/
 .DS_Store
 *.log
 
+.yalc/
+yalc.lock
+
 .idea/
 .vscode/
 
