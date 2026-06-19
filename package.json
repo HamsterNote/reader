@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@hamster-note/docx-parser": "^0.1.0",
-    "@hamster-note/html-parser": "^0.8.0",
+    "@hamster-note/html-parser": "file:.yalc/@hamster-note/html-parser",
     "@hamster-note/image-parser": "^0.3.0",
     "@hamster-note/markdown-parser": "0.1.2-beta.2",
     "@hamster-note/pdf-parser": "^0.7.0",

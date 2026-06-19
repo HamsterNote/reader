@@ -4798,7 +4798,10 @@ export function IntermediateDocumentViewer({
       const caretInfo = resolveCaret(clientX, clientY, {
         viewerRoot,
         pageRefs: pageRefs.current,
-        textElements: textElementsRef.current
+        textElements: textElementsRef.current,
+        // 拖拽手柄时启用「Y 钳制到最近文本行」精度修复：避免鼠标稍微偏离行
+        // 时浏览器 caret API 把光标吸附到行首/行末，丢失 X 携带的字符级精度。
+        snapToNearestLine: true
       })
 
       if (!caretInfo) return false

@@ -8066,6 +8066,140 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
+    // 回归测试：拖动手柄时，鼠标稍微偏离行的 Y 坐标（行间空隙、行下方 5px 等）
+    // 应根据鼠标 X 位置在行内插值出正确字符偏移，而不是退化为「行首/行末」二选一。
+    // Bug 修复前：caretPositionFromPoint 在文本 rect 之外返回 null，
+    // 然后 fallback buildSnapRange 仅根据 clientX 与 rect 中点比较选 0 或 textContent.length。
+    // Bug 修复后：handle drag 路径使用 snapToNearestLine 选项，
+    // 把 Y 钳制到最近文本行 rect 内，再次调用浏览器 caret API，从而拿到行内字符级偏移。
+    it('drags an end handle with off-line Y but mid-line X to a mid-line caret offset', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      const restoreRangeRects = installRangeRectMocks()
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = text.firstChild as Text
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(textNode, 0)
+      initialRange.setEnd(textNode, 4)
+      const liveSelection = makeLiveSelection(initialRange)
+      const pageRectSpy = mockElementRect(page, {
+        left: 10,
+        top: 10,
+        width: 100,
+        height: 150
+      })
+      // text rect: x in [20, 80], y in [24, 36], height 12, vertical center y=30
+      const textRectSpy = mockElementRect(text, {
+        left: 20,
+        top: 24,
+        width: 60,
+        height: 12
+      })
+      // elementFromPoint 在 (50, 80)（远在行下方）返回 page，模拟空白命中。
+      const elementFromPointSpy = mockElementFromPoint(page)
+
+      // 关键：caretPositionFromPoint 仅当 Y 落在 text rect 内时才返回有效结果。
+      // 用 Y=80 调用应返回 null（模拟浏览器 native API 在文本外的行为）。
+      // 修复后实现会把 Y 钳制到 [24+ε, 36-ε]，再次调用，此时返回 mid-line offset。
+      const caretPositionMock = vi.fn(
+        (x: number, y: number): { offsetNode: Node; offset: number } | null => {
+          if (y < 24 || y > 36) return null
+          // 行内：把 X 比例映射到字符偏移 [0, textNode.length]
+          // textNode.length === 'Page 1 text'.length === 11
+          const rectLeft = 20
+          const rectWidth = 60
+          const ratio = Math.min(1, Math.max(0, (x - rectLeft) / rectWidth))
+          return {
+            offsetNode: textNode,
+            offset: Math.round(ratio * textNode.length)
+          }
+        }
+      )
+      const originalCaretPosition = (
+        globalThis.document as Document & {
+          caretPositionFromPoint?: unknown
+        }
+      ).caretPositionFromPoint
+      Object.defineProperty(globalThis.document, 'caretPositionFromPoint', {
+        configurable: true,
+        value: caretPositionMock
+      })
+
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+        await waitFor(() => {
+          expect(
+            page.querySelectorAll('.hamster-reader__selection-handle')
+          ).toHaveLength(2)
+        })
+        await act(async () => {
+          await Promise.resolve()
+        })
+
+        const endHandle = viewerRoot.querySelector('[data-handle-type="end"]')
+        if (!(endHandle instanceof HTMLElement)) {
+          throw new Error('Expected rendered end handle')
+        }
+        endHandle.dispatchEvent(
+          new MouseEvent('pointerdown', {
+            bubbles: false,
+            button: 0,
+            clientX: 30,
+            clientY: 30
+          })
+        )
+        // pointermove：X 在文本水平中点 (50)，Y 在文本下方 50px（行下方空白）。
+        // 期望选区端点最终为行中点附近的字符（textNode.length / 2 ≈ 5-6），
+        // 不是 0 也不是 textNode.length。
+        endHandle.dispatchEvent(
+          new MouseEvent('pointermove', {
+            bubbles: false,
+            clientX: 50,
+            clientY: 80
+          })
+        )
+
+        expect(liveSelection.selection.addRange).toHaveBeenCalled()
+        expect(liveSelection.activeRange.endContainer).toBe(textNode)
+        const finalEndOffset = liveSelection.activeRange.endOffset
+        // 这是回归断言：Y 偏离行时不应再被吸附到行首/行末。
+        expect(finalEndOffset).not.toBe(0)
+        expect(finalEndOffset).not.toBe(textNode.length)
+        // 应靠近水平中点对应的字符偏移（X=50 落在 rect [20,80] 的正中，比例 0.5）。
+        expect(finalEndOffset).toBeGreaterThanOrEqual(4)
+        expect(finalEndOffset).toBeLessThanOrEqual(7)
+      } finally {
+        getSelectionSpy.mockRestore()
+        Object.defineProperty(globalThis.document, 'caretPositionFromPoint', {
+          configurable: true,
+          value: originalCaretPosition
+        })
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreRangeRects()
+      }
+    })
+
     it('keeps the selection after an end-handle drag followed by a blank synthesized click', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       const restoreRangeRects = installRangeRectMocks()

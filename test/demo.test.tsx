@@ -392,7 +392,7 @@ describe('demo parser flow', () => {
     expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
     expect(
       screen.getByText(
-        /Rendered with the direct text layer to demonstrate the custom selection overlay \(pink default\)/
+        /Rendered through the html-parser path to demonstrate the custom selection overlay \(pink default\)/
       )
     ).toBeInTheDocument()
 
@@ -404,7 +404,7 @@ describe('demo parser flow', () => {
         'selectionOverlay' in props
     )
 
-    expect(parsedReaderProps?.renderMode).toBe('direct')
+    expect(parsedReaderProps?.renderMode).toBe('html-parser')
     expect(parsedReaderProps?.selectionOverlay).toMatchObject({
       opacity: 0.28,
       enabled: true

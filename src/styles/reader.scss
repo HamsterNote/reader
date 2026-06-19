@@ -167,7 +167,10 @@
     // 的 flex 布局，不再自己处理 overflow 与 touch-action。
     overflow: hidden;
     box-sizing: border-box;
-    max-height: 100vh;
+    // 通过 CSS 变量提供可覆盖的默认高度，避免 Transform 模式下 flex 子元素
+    // 因父元素无确定高度而塌陷（默认占满视口高度，组件库消费者可自定义）。
+    height: var(--hamster-reader-viewer-height, 100vh);
+    max-height: var(--hamster-reader-viewer-max-height, 100vh);
     scroll-behavior: smooth;
 
     // VirtualPaper wrapper：占满 viewer 区域并作为手势/滚动容器。
@@ -194,8 +197,7 @@
     position: relative;
     box-sizing: border-box;
     background-color: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
+    outline: 1px solid #e5e7eb;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     overflow: hidden;
     flex-shrink: 0;

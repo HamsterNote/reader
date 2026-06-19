@@ -19,6 +19,10 @@ export type ResolveCaretOptions = {
   caretPositionFromPoint?: CaretPositionFromPoint
   caretRangeFromPoint?: CaretRangeFromPoint
   document?: Document
+  // 选区手柄拖拽时启用：当 (clientX, clientY) 落在文本行外（行间空隙、行上方/下方），
+  // 把 Y 钳制到最近文本行 rect 内再调用浏览器 caret API，
+  // 从而保留 X 携带的字符级精度，避免被浏览器吸附到行首/行末。
+  snapToNearestLine?: boolean
 }
 
 type CaretPointDocument = Document & {
@@ -271,6 +275,94 @@ const buildSnapRange = (
   return range
 }
 
+// snapToNearestLine 模式（手柄拖拽）专用：浏览器 caret API 在 Y-clamp 后仍失败时，
+// 用 X 在 rect 水平区间内的比例插值出字符偏移，比「左半边→0、右半边→length」精细。
+const buildProportionalSnapRange = (
+  nearestElement: HTMLElement,
+  clientX: number,
+  clientY: number
+): Range => {
+  const range = globalThis.document.createRange()
+  const textNode = nearestElement.firstChild
+  if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+    const targetRect =
+      pickNearestClientRect(nearestElement, clientX, clientY) ??
+      nearestElement.getBoundingClientRect()
+    const textContent = (textNode as Text).data ?? ''
+    const offset = computeProportionalOffset(
+      clientX,
+      targetRect.left,
+      targetRect.width,
+      textContent.length
+    )
+    range.setStart(textNode, offset)
+    range.collapse(true)
+  } else {
+    range.selectNodeContents(nearestElement)
+    range.collapse(true)
+  }
+  return range
+}
+
+// 把 X 在 rect 水平区间内的位置按比例映射成字符偏移。这是 Y-clamp 后浏览器 caret API
+// 仍失败时的兜底，比原先「左半边 → 0、右半边 → length」的二分阶跃精确得多。
+// 假设字符宽度近似均匀，对当前 PDF 直渲染单文字 span（whiteSpace: pre）足够准确。
+const computeProportionalOffset = (
+  clientX: number,
+  rectLeft: number,
+  rectWidth: number,
+  textLength: number
+): number => {
+  if (textLength <= 0) return 0
+  if (rectWidth <= 0) return clientX >= rectLeft ? textLength : 0
+  const ratio = (clientX - rectLeft) / rectWidth
+  const clampedRatio = Math.min(1, Math.max(0, ratio))
+  const offset = Math.round(clampedRatio * textLength)
+  return Math.min(textLength, Math.max(0, offset))
+}
+
+// 从最近文本元素的所有 client rects（多行包裹时可能多于一个）中挑出
+// 与 (clientX, clientY) 距离最小的那一个。这样 Y-clamp 时使用的是
+// 真正可见的行 rect，而不是元素整体（多行 inline 的 bounding box 包含行间空隙）。
+const pickNearestClientRect = (
+  element: HTMLElement,
+  clientX: number,
+  clientY: number
+): DOMRect | null => {
+  const rects = Array.from(element.getClientRects())
+  if (rects.length === 0) {
+    const bounding = element.getBoundingClientRect()
+    return bounding.width > 0 || bounding.height > 0 ? bounding : null
+  }
+  let nearestRect: DOMRect | null = null
+  let minDistance = Infinity
+  for (const rect of rects) {
+    const distance = getPointToRectDistanceSquared(
+      { x: clientX, y: clientY },
+      rect
+    )
+    if (distance < minDistance) {
+      minDistance = distance
+      nearestRect = rect
+    }
+  }
+  return nearestRect
+}
+
+// 把 Y 钳制到 rect 垂直区间内：留出 epsilon 以避开浏览器 native caret API
+// 在 rect 边缘的「吸附到行首/行末」启发式行为；rect 极薄时退化为垂直中心。
+const clampYIntoRect = (clientY: number, rect: DOMRect): number => {
+  const epsilon = Math.min(1, rect.height / 2)
+  const top = rect.top + epsilon
+  const bottom = rect.bottom - epsilon
+  if (top >= bottom) {
+    return rect.top + rect.height / 2
+  }
+  if (clientY < top) return top
+  if (clientY > bottom) return bottom
+  return clientY
+}
+
 const getCaretPageInfo = (
   clientX: number,
   clientY: number,
@@ -329,6 +421,78 @@ const resolveCaretRange = (
   return caretRangeFromPoint(clientX, clientY)
 }
 
+// 判断 (clientX, clientY) 是否真正落在某个 viewer 内的文本元素上：
+// - 用 elementFromPoint 拿到命中元素
+// - 该元素或其祖先是 [data-text-id]
+// - 不在 selection 背景目标内
+// 用于决定 snapToNearestLine 模式下是否需要做 Y-clamp。
+const isPointDirectlyOnTextElement = (
+  clientX: number,
+  clientY: number,
+  viewerRoot: HTMLElement,
+  ownerDocument: Document
+): boolean => {
+  const pointElement = ownerDocument.elementFromPoint?.(clientX, clientY)
+  if (!pointElement) return false
+  const textElement = pointElement.closest('[data-text-id]')
+  if (!textElement || !viewerRoot.contains(textElement)) return false
+  if (isSelectionBackgroundTarget(pointElement)) return false
+  return true
+}
+
+// 校验 caret API 返回的 range 是否落在指定的 nearest text 元素内。
+// 浏览器在 Y-clamp 后可能仍把光标解析到相邻文本元素（例如 ascender 重叠区域），
+// 此时拒绝该结果，避免选区跨到错误的文本项。
+const isCaretRangeWithinElement = (
+  range: Range,
+  expectedElement: HTMLElement
+): boolean => {
+  const container = range.startContainer
+  const element =
+    container.nodeType === Node.ELEMENT_NODE
+      ? (container as Element)
+      : container.parentElement
+  if (!element) return false
+  return expectedElement.contains(element)
+}
+
+const resolveCaretInsideElement = (
+  element: HTMLElement,
+  clientX: number,
+  clientY: number,
+  caretPositionFromPoint: CaretPositionFromPoint | undefined,
+  caretRangeFromPoint: CaretRangeFromPoint | undefined,
+  ownerDocument: Document
+): Range | null => {
+  const targetRect = pickNearestClientRect(element, clientX, clientY)
+  if (!targetRect) return null
+  const clampedY = clampYIntoRect(clientY, targetRect)
+
+  const positionRange = resolveCaretPositionRange(
+    caretPositionFromPoint,
+    clientX,
+    clampedY,
+    ownerDocument
+  )
+  if (positionRange) {
+    if (isCaretRangeWithinElement(positionRange, element)) return positionRange
+    positionRange.detach()
+  }
+
+  const rangeFromPoint = resolveCaretRange(
+    caretRangeFromPoint,
+    clientX,
+    clampedY
+  )
+  if (rangeFromPoint) {
+    if (isCaretRangeWithinElement(rangeFromPoint, element))
+      return rangeFromPoint
+    rangeFromPoint.detach()
+  }
+
+  return null
+}
+
 export const resolveCaret = (
   clientX: number,
   clientY: number,
@@ -343,28 +507,42 @@ export const resolveCaret = (
     options.caretRangeFromPoint ??
     caretDocument.caretRangeFromPoint?.bind(caretDocument)
 
-  const positionResult = resolveValidCaretRange(
-    resolveCaretPositionRange(
-      caretPositionFromPoint,
+  // snapToNearestLine 模式：当 pointer 不在文本上时，跳过初次「原始 (x,y)」浏览器调用，
+  // 改用「最近文本元素 + Y-clamp 后再调用 caret API」，避免浏览器把 Y 偏离行的点
+  // 解析为该行的行首/行末。pointer 在文本上时仍走原路径，保留正常字符精度。
+  const onText =
+    !options.snapToNearestLine ||
+    isPointDirectlyOnTextElement(
       clientX,
       clientY,
+      options.viewerRoot,
       ownerDocument
-    ),
-    clientX,
-    clientY,
-    options,
-    ownerDocument
-  )
-  if (positionResult) return positionResult
+    )
 
-  const rangeResult = resolveValidCaretRange(
-    resolveCaretRange(caretRangeFromPoint, clientX, clientY),
-    clientX,
-    clientY,
-    options,
-    ownerDocument
-  )
-  if (rangeResult) return rangeResult
+  if (onText) {
+    const positionResult = resolveValidCaretRange(
+      resolveCaretPositionRange(
+        caretPositionFromPoint,
+        clientX,
+        clientY,
+        ownerDocument
+      ),
+      clientX,
+      clientY,
+      options,
+      ownerDocument
+    )
+    if (positionResult) return positionResult
+
+    const rangeResult = resolveValidCaretRange(
+      resolveCaretRange(caretRangeFromPoint, clientX, clientY),
+      clientX,
+      clientY,
+      options,
+      ownerDocument
+    )
+    if (rangeResult) return rangeResult
+  }
 
   const pageInfo = getCaretPageInfo(clientX, clientY, options, ownerDocument)
   if (!pageInfo) return null
@@ -377,6 +555,24 @@ export const resolveCaret = (
     options.textElements
   )
   if (!nearestElement) return null
+
+  if (options.snapToNearestLine) {
+    const clampedRange = resolveCaretInsideElement(
+      nearestElement,
+      clientX,
+      clientY,
+      caretPositionFromPoint,
+      caretRangeFromPoint,
+      ownerDocument
+    )
+    if (clampedRange) {
+      return { range: clampedRange, pageNumber: pageInfo.pageNumber }
+    }
+    return {
+      range: buildProportionalSnapRange(nearestElement, clientX, clientY),
+      pageNumber: pageInfo.pageNumber
+    }
+  }
 
   return {
     range: buildSnapRange(nearestElement, clientX),

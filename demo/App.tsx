@@ -789,7 +789,7 @@ export function App() {
           <Reader
             document={document}
             pageRange={buildPageRange()}
-            renderMode='direct'
+            renderMode='html-parser'
             backgroundQuality={backgroundQuality}
             ocr
             selectionOverlay={{
@@ -805,7 +805,7 @@ export function App() {
             onActiveSavedSelectionChange={setActiveSavedSelectionId}
           />
           <p style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
-            Rendered with the direct text layer to demonstrate the custom
+            Rendered through the html-parser path to demonstrate the custom
             selection overlay (pink default)
           </p>
         </section>
