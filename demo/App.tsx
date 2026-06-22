@@ -514,7 +514,7 @@ export function App() {
     }
 
     const id = generateId()
-    const liveSelection = window.getSelection()
+    const liveSelection = globalThis.document.getSelection()
     const fallbackSelection = {
       toString: () => lastLiveSelection.text,
       isCollapsed: false,

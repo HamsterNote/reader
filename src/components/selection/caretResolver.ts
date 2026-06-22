@@ -53,6 +53,7 @@ const SELECTION_CHROME_TARGET_SELECTOR = [
   '.hamster-reader__selection-overlay',
   '.hamster-reader__selection-overlay-path',
   '.hamster-reader__saved-selection-handles',
+  '.hamster-reader__saved-selection-overlay',
   '.hamster-reader__selection-handle'
 ].join(', ')
 
@@ -357,7 +358,7 @@ const buildSnapRange = (
   nearestElement: HTMLElement,
   clientX: number
 ): Range => {
-  const range = globalThis.document.createRange()
+  const range = nearestElement.ownerDocument.createRange()
   const textNode = nearestElement.firstChild
   if (textNode && textNode.nodeType === Node.TEXT_NODE) {
     const rect = nearestElement.getBoundingClientRect()
@@ -380,7 +381,7 @@ const buildProportionalSnapRange = (
   clientX: number,
   clientY: number
 ): Range => {
-  const range = globalThis.document.createRange()
+  const range = nearestElement.ownerDocument.createRange()
   const textNode = nearestElement.firstChild
   if (textNode && textNode.nodeType === Node.TEXT_NODE) {
     const targetRect =

@@ -4,14 +4,30 @@ export const createOrderedRange = (
   endNode: Node,
   endOffset: number
 ): Range => {
-  const orderRange = globalThis.document.createRange()
+  const ownerDocument = startNode.ownerDocument ?? globalThis.document
+  const collapsedRange = ownerDocument.createRange()
+  collapsedRange.setStart(startNode, startOffset)
+  collapsedRange.collapse(true)
+
+  if (endNode.ownerDocument !== ownerDocument) {
+    return collapsedRange
+  }
+
+  const orderRange = ownerDocument.createRange()
   orderRange.setStart(startNode, startOffset)
   orderRange.collapse(true)
 
-  const endIsBeforeStart = orderRange.comparePoint(endNode, endOffset) < 0
+  let endIsBeforeStart = false
+  try {
+    endIsBeforeStart = orderRange.comparePoint(endNode, endOffset) < 0
+  } catch {
+    orderRange.detach()
+    return collapsedRange
+  }
   orderRange.detach()
+  collapsedRange.detach()
 
-  const range = globalThis.document.createRange()
+  const range = ownerDocument.createRange()
   if (endIsBeforeStart) {
     range.setStart(endNode, endOffset)
     range.setEnd(startNode, startOffset)
@@ -24,7 +40,8 @@ export const createOrderedRange = (
 }
 
 export const composeSelection = (range: Range): void => {
-  const selection = window.getSelection()
+  const ownerWindow = range.startContainer.ownerDocument?.defaultView
+  const selection = ownerWindow?.getSelection()
   if (!selection) return
 
   selection.removeAllRanges()

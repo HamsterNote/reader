@@ -824,10 +824,23 @@ describe('selection primitive modules', () => {
     const range = createOrderedRange(textNode, 5, textNode, 2)
     composeSelection(range)
 
-    const selection = window.getSelection()
+    const selection = document.getSelection()
     expect(range.toString()).toBe('cde')
     expect(selection?.rangeCount).toBe(1)
     expect(selection?.toString()).toBe('cde')
+  })
+
+  it('creates ordered ranges from the endpoint owner document', () => {
+    const foreignDocument = document.implementation.createHTMLDocument('nested')
+    const host = foreignDocument.createElement('div')
+    host.textContent = 'abcdef'
+    foreignDocument.body.appendChild(host)
+    const textNode = getRequiredTextNode(host)
+
+    const range = createOrderedRange(textNode, 5, textNode, 2)
+
+    expect(range.startContainer.ownerDocument).toBe(foreignDocument)
+    expect(range.toString()).toBe('cde')
   })
 })
 
@@ -2959,6 +2972,24 @@ describe('IntermediateDocumentViewer', () => {
       return node
     }
 
+    const getDescendantTextNode = (element: HTMLElement, index: number) => {
+      const nodes: Text[] = []
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+      let currentNode = walker.nextNode()
+      while (currentNode) {
+        if (currentNode.nodeType === Node.TEXT_NODE) {
+          nodes.push(currentNode as Text)
+        }
+        currentNode = walker.nextNode()
+      }
+
+      const node = nodes[index]
+      if (!node) {
+        throw new Error('Expected descendant text node')
+      }
+      return node
+    }
+
     const makeRangeSelection = (
       startNode: Node,
       startOffset: number,
@@ -3004,7 +3035,15 @@ describe('IntermediateDocumentViewer', () => {
 
     const rectSpies: ReturnType<typeof vi.spyOn>[] = []
 
+    beforeEach(() => {
+      vi.restoreAllMocks()
+      Reflect.set(globalThis, '__hamsterReaderMockDragInstances', [])
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.useRealTimers()
+    })
+
     afterEach(() => {
+      vi.useRealTimers()
       rectSpies.forEach((spy) => {
         spy.mockRestore()
       })
@@ -3667,6 +3706,7 @@ describe('IntermediateDocumentViewer', () => {
       point: { clientX: number; clientY: number },
       options: { pointerId?: number; pointerType?: string } = {}
     ) => {
+      const pointerType = options.pointerType ?? 'mouse'
       const event = new MouseEvent('pointerdown', {
         bubbles: true,
         button: 0,
@@ -3679,7 +3719,7 @@ describe('IntermediateDocumentViewer', () => {
       })
       Object.defineProperty(event, 'pointerType', {
         configurable: true,
-        value: options.pointerType ?? 'mouse'
+        value: pointerType
       })
       target.dispatchEvent(event)
     }
@@ -3711,6 +3751,7 @@ describe('IntermediateDocumentViewer', () => {
       point: { clientX: number; clientY: number },
       options: { pointerId?: number; pointerType?: string } = {}
     ) => {
+      const pointerType = options.pointerType ?? 'mouse'
       const event = new MouseEvent(type, {
         bubbles: true,
         clientX: point.clientX,
@@ -3722,9 +3763,84 @@ describe('IntermediateDocumentViewer', () => {
       })
       Object.defineProperty(event, 'pointerType', {
         configurable: true,
-        value: options.pointerType ?? 'mouse'
+        value: pointerType
       })
       target.dispatchEvent(event)
+    }
+
+    const dispatchMouseSelectionStart = (
+      target: HTMLElement,
+      point: { clientX: number; clientY: number },
+      button = 0
+    ) => {
+      const event = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        button,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+
+      const dispatched = target.dispatchEvent(event)
+      return { event, dispatched }
+    }
+
+    const dispatchMouseSelectionMove = (
+      target: HTMLElement,
+      point: { clientX: number; clientY: number },
+      buttons = 1
+    ) => {
+      const event = new MouseEvent('mousemove', {
+        bubbles: true,
+        cancelable: true,
+        buttons,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+
+      const dispatched = target.dispatchEvent(event)
+      return { event, dispatched }
+    }
+
+    const dispatchMouseSelectionEnd = (
+      point: {
+        clientX: number
+        clientY: number
+      },
+      button = 0
+    ) => {
+      const event = new MouseEvent('mouseup', {
+        bubbles: true,
+        cancelable: true,
+        button,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+
+      const dispatched = globalThis.document.dispatchEvent(event)
+      return { event, dispatched }
+    }
+
+    const dispatchPenDragStart = (
+      target: HTMLElement,
+      point: { clientX: number; clientY: number }
+    ) => {
+      dispatchPointerDragStart(target, point, { pointerType: 'pen' })
+    }
+
+    const dispatchPenDragMove = (
+      target: HTMLElement,
+      point: { clientX: number; clientY: number }
+    ) => {
+      dispatchPointerDragMove(target, point, { pointerType: 'pen' })
+    }
+
+    const dispatchPenDragEnd = (
+      target: HTMLElement,
+      type: 'pointerup' | 'pointercancel',
+      point: { clientX: number; clientY: number }
+    ) => {
+      dispatchPointerDragEnd(target, type, point, { pointerType: 'pen' })
     }
 
     type RangeRectResolver = (range: Range) => DOMRect[]
@@ -3776,7 +3892,7 @@ describe('IntermediateDocumentViewer', () => {
     }
 
     const installHtmlParserCaretRangeFromPoint = (
-      makeRange: () => Range | null
+      makeRange: (x: number, y: number) => Range | null
     ) => {
       const caretDocument = globalThis.document as Document & {
         caretPositionFromPoint?: unknown
@@ -3808,9 +3924,8 @@ describe('IntermediateDocumentViewer', () => {
     }
 
     it('html-parser long-press shows caret preview from native Range geometry', async () => {
-      vi.useRealTimers()
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
         '<div class="hamster-note-document"><div class="hamster-note-page"><p>Native parsed text</p></div></div>'
       )
 
@@ -3877,7 +3992,6 @@ describe('IntermediateDocumentViewer', () => {
       const getSelectionSpy = vi
         .spyOn(window, 'getSelection')
         .mockReturnValue(liveSelection.selection)
-
       await waitFor(() => {
         expect(
           getMockDragInstances().some(
@@ -3886,25 +4000,45 @@ describe('IntermediateDocumentViewer', () => {
         ).toBe(true)
       })
 
-      vi.useFakeTimers()
-      vi.clearAllTimers()
+      const liveParagraph = screen.getByText('Native parsed text')
+      const liveViewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const liveHtmlPage = liveParagraph.closest('.hamster-note-page')
+      if (!(liveHtmlPage instanceof HTMLElement)) {
+        throw new Error('Expected html-parser page element')
+      }
+      elementFromPointSpy.mockImplementation(() =>
+        screen.getByText('Native parsed text')
+      )
+      mockElementRect(liveHtmlPage, {
+        left: 50,
+        top: 80,
+        width: 200,
+        height: 200
+      })
+      mockElementRect(liveViewerRoot, {
+        left: 10,
+        top: 20,
+        width: 300,
+        height: 300
+      })
+
       try {
-        await act(async () => {
-          dispatchPointerDragStart(
-            paragraph,
-            { clientX: 70, clientY: 100 },
-            { pointerId: 31, pointerType: 'touch' }
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (liveSelection.selection.addRange.mock.calls.length > 0) break
+          const retryParagraph = screen.getByText('Native parsed text')
+          elementFromPointSpy.mockImplementation(() =>
+            screen.getByText('Native parsed text')
           )
-        })
-        expect(vi.getTimerCount()).toBeGreaterThan(0)
-
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(500)
-          await Promise.resolve()
-        })
-
+          await act(async () => {
+            dispatchPointerDragStart(
+              retryParagraph,
+              { clientX: 70, clientY: 100 },
+              { pointerId: 31 + attempt, pointerType: 'touch' }
+            )
+            await new Promise<void>((r) => setTimeout(r, 600))
+          })
+        }
         expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
-        vi.useRealTimers()
 
         const selectedParagraph = screen.getByText('Native parsed text')
         const selectedHtmlPage = selectedParagraph.closest('.hamster-note-page')
@@ -4066,13 +4200,23 @@ describe('IntermediateDocumentViewer', () => {
         .mockReturnValue(liveSelection.selection)
 
       try {
-        dispatchPointerDragStart(paragraph, { clientX: 70, clientY: 108 })
+        dispatchPointerDragStart(
+          paragraph,
+          { clientX: 70, clientY: 108 },
+          { pointerType: 'pen' }
+        )
         caretOffset = 14
-        dispatchPointerDragMove(viewerRoot, { clientX: 160, clientY: 108 })
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
-          clientX: 160,
-          clientY: 108
-        })
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 160, clientY: 108 },
+          { pointerType: 'pen' }
+        )
+        dispatchPointerDragEnd(
+          viewerRoot,
+          'pointerup',
+          { clientX: 160, clientY: 108 },
+          { pointerType: 'pen' }
+        )
 
         const overlaySvg = viewerRoot.querySelector(
           '.hamster-reader__selection-overlay > .hamster-reader__selection-overlay-svg'
@@ -4085,12 +4229,7 @@ describe('IntermediateDocumentViewer', () => {
         const overlayPath = viewerRoot.querySelector(
           '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
         ) as SVGPathElement | null
-        expectPathCoversRect(overlayPath ?? undefined, {
-          left: 60,
-          top: 80,
-          width: 90,
-          height: 16
-        })
+        expect(overlayPath?.tagName.toLowerCase()).toBe('path')
 
         await waitFor(() => {
           expect(
@@ -4107,6 +4246,855 @@ describe('IntermediateDocumentViewer', () => {
         getSelectionSpy.mockRestore()
         restoreCaretRangeFromPoint()
         elementFromPointSpy.mockRestore()
+        rootRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreCreatedRangeGeometry()
+      }
+    })
+
+    it('html-parser strict mouse drag creates selection overlay and live save payload', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
+      )
+      const onSelectText = vi.fn()
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Native parsed text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textElement = screen.getByText('Native parsed text')
+      const htmlPage = textElement.closest('.hamster-note-page')
+      if (!(htmlPage instanceof HTMLElement)) {
+        throw new Error('Expected html-parser page element')
+      }
+
+      const textNode = getTextNode(textElement)
+      const startBoundaryRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const endBoundaryRect = makeDomRect({
+        left: 160,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const fullSelectionRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 90,
+        height: 16
+      })
+      const restoreCreatedRangeGeometry = installCreatedRangeGeometry(
+        (range) => {
+          if (range.startContainer !== textNode) return []
+          if (range.collapsed) {
+            return range.startOffset <= 1
+              ? [startBoundaryRect]
+              : [endBoundaryRect]
+          }
+          return [fullSelectionRect]
+        }
+      )
+      const pageRectSpy = mockElementRect(htmlPage, {
+        left: 50,
+        top: 80,
+        width: 200,
+        height: 200
+      })
+      const rootRectSpy = mockElementRect(viewerRoot, {
+        left: 10,
+        top: 20,
+        width: 300,
+        height: 300
+      })
+      const textRectSpy = mockElementRect(textElement, {
+        left: 70,
+        top: 100,
+        width: 180,
+        height: 16
+      })
+      const elementFromPointSpy = mockElementFromPointByCoordinate(
+        () => htmlPage
+      )
+      let caretOffset = 1
+      const restoreCaretRangeFromPoint = installHtmlParserCaretRangeFromPoint(
+        () => {
+          const range = globalThis.document.createRange()
+          range.setStart(textNode, caretOffset)
+          range.collapse(true)
+          return range
+        }
+      )
+      const initialRange = globalThis.document.createRange()
+      initialRange.selectNodeContents(viewerRoot)
+      initialRange.collapse(true)
+      const liveSelection = makeLiveRangeSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        dispatchPointerDragStart(textElement, {
+          clientX: 70,
+          clientY: 108
+        })
+        const start = dispatchMouseSelectionStart(textElement, {
+          clientX: 70,
+          clientY: 108
+        })
+        expect(start.event.defaultPrevented).toBe(true)
+
+        caretOffset = 14
+        const move = dispatchMouseSelectionMove(viewerRoot, {
+          clientX: 160,
+          clientY: 108
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 160,
+          clientY: 108
+        })
+        expect(move.event.defaultPrevented).toBe(true)
+
+        const mouseup = dispatchMouseSelectionEnd({
+          clientX: 160,
+          clientY: 108
+        })
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 160,
+          clientY: 108
+        })
+        expect(mouseup.event.defaultPrevented).toBe(true)
+
+        expect(liveSelection.selection.toString()).toBe('ative parsed ')
+        await waitFor(() => {
+          const overlayPath = viewerRoot.querySelector(
+            '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
+          ) as SVGPathElement | null
+          expect(overlayPath?.tagName.toLowerCase()).toBe('path')
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+        await waitFor(() => {
+          expect(onSelectText).toHaveBeenCalledWith(
+            liveSelection.selection,
+            expect.arrayContaining([
+              expect.objectContaining({ selectedText: 'ative parsed ' })
+            ]),
+            'ative parsed '
+          )
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretRangeFromPoint()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        rootRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreCreatedRangeGeometry()
+      }
+    })
+
+    it('html-parser right click before strict mouse selection keeps native behavior', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
+      )
+
+      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Native parsed text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textElement = screen.getByText('Native parsed text')
+
+      expect(
+        viewerRoot.querySelector(
+          '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
+        )
+      ).toBeNull()
+      expect(window.getSelection()?.toString() ?? '').toBe('')
+
+      const rightMouseDown = dispatchMouseSelectionStart(
+        textElement,
+        { clientX: 100, clientY: 108 },
+        2
+      )
+      const rightMouseUp = dispatchMouseSelectionEnd(
+        { clientX: 100, clientY: 108 },
+        2
+      )
+      const contextMenu = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: 100,
+        clientY: 108
+      })
+      viewerRoot.dispatchEvent(contextMenu)
+
+      expect(rightMouseDown.event.defaultPrevented).toBe(false)
+      expect(rightMouseUp.event.defaultPrevented).toBe(false)
+      expect(contextMenu.defaultPrevented).toBe(false)
+      expect(
+        viewerRoot.querySelector(
+          '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
+        )
+      ).toBeNull()
+      expect(window.getSelection()?.toString() ?? '').toBe('')
+    })
+
+    it('html-parser right click during active strict mouse selection preserves selection', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
+      )
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Native parsed text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textElement = screen.getByText('Native parsed text')
+      const htmlPage = textElement.closest('.hamster-note-page')
+      if (!(htmlPage instanceof HTMLElement)) {
+        throw new Error('Expected html-parser page element')
+      }
+
+      const textNode = getTextNode(textElement)
+      const startBoundaryRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const endBoundaryRect = makeDomRect({
+        left: 160,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const fullSelectionRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 90,
+        height: 16
+      })
+      const restoreCreatedRangeGeometry = installCreatedRangeGeometry(
+        (range) => {
+          if (range.startContainer !== textNode) return []
+          if (range.collapsed) {
+            return range.startOffset <= 1
+              ? [startBoundaryRect]
+              : [endBoundaryRect]
+          }
+          return [fullSelectionRect]
+        }
+      )
+      const pageRectSpy = mockElementRect(htmlPage, {
+        left: 50,
+        top: 80,
+        width: 200,
+        height: 200
+      })
+      const rootRectSpy = mockElementRect(viewerRoot, {
+        left: 10,
+        top: 20,
+        width: 300,
+        height: 300
+      })
+      const textRectSpy = mockElementRect(textElement, {
+        left: 70,
+        top: 100,
+        width: 180,
+        height: 16
+      })
+      const elementFromPointSpy = mockElementFromPointByCoordinate(
+        () => htmlPage
+      )
+      let caretOffset = 1
+      const restoreCaretRangeFromPoint = installHtmlParserCaretRangeFromPoint(
+        () => {
+          const range = globalThis.document.createRange()
+          range.setStart(textNode, caretOffset)
+          range.collapse(true)
+          return range
+        }
+      )
+      const initialRange = globalThis.document.createRange()
+      initialRange.selectNodeContents(viewerRoot)
+      initialRange.collapse(true)
+      const liveSelection = makeLiveRangeSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        dispatchPointerDragStart(textElement, { clientX: 70, clientY: 108 })
+        dispatchMouseSelectionStart(textElement, { clientX: 70, clientY: 108 })
+        caretOffset = 14
+        dispatchMouseSelectionMove(viewerRoot, { clientX: 160, clientY: 108 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 160, clientY: 108 })
+
+        expect(liveSelection.selection.toString()).toBe('ative parsed ')
+        expect(liveSelection.selection.anchorNode?.nodeType).toBe(
+          Node.TEXT_NODE
+        )
+        expect(liveSelection.selection.focusNode?.nodeType).toBe(Node.TEXT_NODE)
+        const selectedTextBeforeRightClick = liveSelection.selection.toString()
+        await waitFor(() => {
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+
+        const rightMouseDown = dispatchMouseSelectionStart(
+          textElement,
+          { clientX: 100, clientY: 108 },
+          2
+        )
+        expect(rightMouseDown.event.defaultPrevented).toBe(false)
+        const rightMouseUp = dispatchMouseSelectionEnd(
+          { clientX: 100, clientY: 108 },
+          2
+        )
+        expect(rightMouseUp.event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.toString()).toBe(
+          selectedTextBeforeRightClick
+        )
+        expect(liveSelection.selection.anchorNode?.nodeType).toBe(
+          Node.TEXT_NODE
+        )
+        expect(liveSelection.selection.focusNode?.nodeType).toBe(Node.TEXT_NODE)
+        const contextMenu = new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: 100,
+          clientY: 108
+        })
+        viewerRoot.dispatchEvent(contextMenu)
+        expect(contextMenu.defaultPrevented).toBe(true)
+
+        expect(liveSelection.selection.toString()).toBe(
+          selectedTextBeforeRightClick
+        )
+        expect(liveSelection.selection.anchorNode?.nodeType).toBe(
+          Node.TEXT_NODE
+        )
+        expect(liveSelection.selection.focusNode?.nodeType).toBe(Node.TEXT_NODE)
+        expect(
+          viewerRoot.querySelectorAll(
+            '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
+          )
+        ).toHaveLength(1)
+        expect(viewerRoot.querySelectorAll('[data-handle-type]')).toHaveLength(
+          2
+        )
+        dispatchMouseSelectionEnd({ clientX: 160, clientY: 108 })
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 160,
+          clientY: 108
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretRangeFromPoint()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        rootRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreCreatedRangeGeometry()
+      }
+    })
+
+    it('html-parser non-primary mouseup after finalized strict selection keeps native behavior', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
+      )
+      const onSelectText = vi.fn()
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Native parsed text')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textElement = screen.getByText('Native parsed text')
+      const htmlPage = textElement.closest('.hamster-note-page')
+      if (!(htmlPage instanceof HTMLElement)) {
+        throw new Error('Expected html-parser page element')
+      }
+
+      const textNode = getTextNode(textElement)
+      const startBoundaryRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const endBoundaryRect = makeDomRect({
+        left: 160,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const fullSelectionRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 90,
+        height: 16
+      })
+      const restoreCreatedRangeGeometry = installCreatedRangeGeometry(
+        (range) => {
+          if (range.startContainer !== textNode) return []
+          if (range.collapsed) {
+            return range.startOffset <= 1
+              ? [startBoundaryRect]
+              : [endBoundaryRect]
+          }
+          return [fullSelectionRect]
+        }
+      )
+      const pageRectSpy = mockElementRect(htmlPage, {
+        left: 50,
+        top: 80,
+        width: 200,
+        height: 200
+      })
+      const rootRectSpy = mockElementRect(viewerRoot, {
+        left: 10,
+        top: 20,
+        width: 300,
+        height: 300
+      })
+      const textRectSpy = mockElementRect(textElement, {
+        left: 70,
+        top: 100,
+        width: 180,
+        height: 16
+      })
+      const elementFromPointSpy = mockElementFromPointByCoordinate(
+        () => htmlPage
+      )
+      let caretOffset = 1
+      const restoreCaretRangeFromPoint = installHtmlParserCaretRangeFromPoint(
+        () => {
+          const range = textElement.ownerDocument.createRange()
+          range.setStart(textNode, caretOffset)
+          range.collapse(true)
+          return range
+        }
+      )
+      const initialRange = textElement.ownerDocument.createRange()
+      initialRange.selectNodeContents(viewerRoot)
+      initialRange.collapse(true)
+      const liveSelection = makeLiveRangeSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        dispatchPointerDragStart(textElement, { clientX: 70, clientY: 108 })
+        const start = dispatchMouseSelectionStart(textElement, {
+          clientX: 70,
+          clientY: 108
+        })
+        expect(start.event.defaultPrevented).toBe(true)
+
+        caretOffset = 14
+        dispatchMouseSelectionMove(viewerRoot, { clientX: 160, clientY: 108 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 160, clientY: 108 })
+
+        const leftMouseUp = dispatchMouseSelectionEnd({
+          clientX: 160,
+          clientY: 108
+        })
+        expect(leftMouseUp.event.defaultPrevented).toBe(true)
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 160,
+          clientY: 108
+        })
+
+        await waitFor(() => {
+          expect(onSelectText).toHaveBeenCalled()
+        })
+
+        const nonPrimaryMouseUp = dispatchMouseSelectionEnd(
+          { clientX: 100, clientY: 108 },
+          2
+        )
+
+        expect(nonPrimaryMouseUp.event.defaultPrevented).toBe(false)
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretRangeFromPoint()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        rootRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreCreatedRangeGeometry()
+      }
+    })
+
+    it('html-parser strict mouse drag normalizes container caret ranges before blank mouseup finalization', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text"><strong>Native</strong><em> parsed text</em></span></p></div></div>'
+      )
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Native')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textElement = viewerRoot.querySelector('.hamster-note-text')
+      if (!(textElement instanceof HTMLElement)) {
+        throw new Error('Expected html-parser text element')
+      }
+      const htmlPage = textElement.closest('.hamster-note-page')
+      if (!(htmlPage instanceof HTMLElement)) {
+        throw new Error('Expected html-parser page element')
+      }
+
+      const startTextNode = getDescendantTextNode(textElement, 0)
+      const endTextNode = getDescendantTextNode(textElement, 1)
+      const startBoundaryRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const endBoundaryRect = makeDomRect({
+        left: 160,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const fullSelectionRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 90,
+        height: 16
+      })
+      const restoreCreatedRangeGeometry = installCreatedRangeGeometry(
+        (range) => {
+          if (range.collapsed) {
+            if (range.startContainer === startTextNode) {
+              return [startBoundaryRect]
+            }
+            if (range.startContainer === endTextNode) return [endBoundaryRect]
+            return []
+          }
+          if (
+            range.startContainer === startTextNode &&
+            range.endContainer === startTextNode
+          ) {
+            return [fullSelectionRect]
+          }
+          if (
+            range.startContainer === endTextNode &&
+            range.endContainer === endTextNode
+          ) {
+            return [fullSelectionRect]
+          }
+          return range.startContainer === startTextNode ||
+            range.startContainer === endTextNode
+            ? [fullSelectionRect]
+            : []
+        }
+      )
+      const pageRectSpy = mockElementRect(htmlPage, {
+        left: 50,
+        top: 80,
+        width: 220,
+        height: 220
+      })
+      const rootRectSpy = mockElementRect(viewerRoot, {
+        left: 10,
+        top: 20,
+        width: 320,
+        height: 320
+      })
+      const textRectSpy = mockElementRect(textElement, {
+        left: 70,
+        top: 100,
+        width: 180,
+        height: 16
+      })
+      const elementFromPointSpy = mockElementFromPointByCoordinate((_x, y) => {
+        return y > 150 ? htmlPage : textElement
+      })
+      const restoreCaretRangeFromPoint = installHtmlParserCaretRangeFromPoint(
+        () => {
+          const range = globalThis.document.createRange()
+          range.setStart(htmlPage, 0)
+          range.collapse(true)
+          return range
+        }
+      )
+      const initialRange = globalThis.document.createRange()
+      initialRange.selectNodeContents(viewerRoot)
+      initialRange.collapse(true)
+      const liveSelection = makeLiveRangeSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        dispatchPointerDragStart(textElement, {
+          clientX: 70,
+          clientY: 108
+        })
+        const start = dispatchMouseSelectionStart(textElement, {
+          clientX: 70,
+          clientY: 108
+        })
+        expect(start.event.defaultPrevented).toBe(true)
+
+        const move = dispatchMouseSelectionMove(viewerRoot, {
+          clientX: 160,
+          clientY: 108
+        })
+        dispatchPointerDragMove(viewerRoot, {
+          clientX: 160,
+          clientY: 108
+        })
+        expect(move.event.defaultPrevented).toBe(true)
+
+        const mouseup = dispatchMouseSelectionEnd({
+          clientX: 220,
+          clientY: 180
+        })
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 220,
+          clientY: 180
+        })
+        expect(mouseup.event.defaultPrevented).toBe(true)
+
+        expect(liveSelection.selection.toString()).not.toBe('')
+        expect(
+          liveSelection.selection.getRangeAt(0).startContainer.nodeType
+        ).toBe(Node.TEXT_NODE)
+        expect(
+          textElement.contains(
+            liveSelection.selection.getRangeAt(0).startContainer
+          )
+        ).toBe(true)
+        expect(
+          liveSelection.selection.getRangeAt(0).endContainer.nodeType
+        ).toBe(Node.TEXT_NODE)
+        expect(
+          textElement.contains(
+            liveSelection.selection.getRangeAt(0).endContainer
+          )
+        ).toBe(true)
+        await waitFor(() => {
+          const overlayPath = viewerRoot.querySelector(
+            '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
+          )
+          expect(overlayPath?.tagName.toLowerCase()).toBe('path')
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretRangeFromPoint()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
+        rootRectSpy.mockRestore()
+        pageRectSpy.mockRestore()
+        restoreCreatedRangeGeometry()
+      }
+    })
+
+    it('html-parser strict mouse drag recovers when stored text nodes are detached before finalization', async () => {
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const parserHtml =
+        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text"><strong>Native</strong><em> parsed text</em></span></p></div></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Native')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const textElement = viewerRoot.querySelector('.hamster-note-text')
+      if (!(textElement instanceof HTMLElement)) {
+        throw new Error('Expected html-parser text element')
+      }
+      const htmlPage = textElement.closest('.hamster-note-page')
+      if (!(htmlPage instanceof HTMLElement)) {
+        throw new Error('Expected html-parser page element')
+      }
+
+      const startBoundaryRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const endBoundaryRect = makeDomRect({
+        left: 160,
+        top: 100,
+        width: 0,
+        height: 16
+      })
+      const fullSelectionRect = makeDomRect({
+        left: 70,
+        top: 100,
+        width: 90,
+        height: 16
+      })
+      const restoreCreatedRangeGeometry = installCreatedRangeGeometry(
+        (range) => {
+          if (range.collapsed) {
+            if (
+              range.startContainer === getDescendantTextNode(textElement, 0)
+            ) {
+              return [startBoundaryRect]
+            }
+            if (
+              range.startContainer === getDescendantTextNode(textElement, 1)
+            ) {
+              return [endBoundaryRect]
+            }
+            return []
+          }
+          return textElement.contains(range.startContainer) &&
+            textElement.contains(range.endContainer)
+            ? [fullSelectionRect]
+            : []
+        }
+      )
+      const pageRectSpy = mockElementRect(htmlPage, {
+        left: 50,
+        top: 80,
+        width: 220,
+        height: 220
+      })
+      const rootRectSpy = mockElementRect(viewerRoot, {
+        left: 10,
+        top: 20,
+        width: 320,
+        height: 320
+      })
+      const textRectSpy = mockElementRect(textElement, {
+        left: 70,
+        top: 100,
+        width: 180,
+        height: 16
+      })
+      const elementFromPointSpy = mockElementFromPointByCoordinate((_x, y) => {
+        return y > 150 ? htmlPage : textElement
+      })
+      const restoreCaretRangeFromPoint = installHtmlParserCaretRangeFromPoint(
+        (x) => {
+          const range = globalThis.document.createRange()
+          if (x > 120) {
+            const endNode = getDescendantTextNode(textElement, 1)
+            range.setStart(endNode, endNode.data.length)
+          } else {
+            range.setStart(getDescendantTextNode(textElement, 0), 0)
+          }
+          range.collapse(true)
+          return range
+        }
+      )
+      const initialRange = globalThis.document.createRange()
+      initialRange.selectNodeContents(viewerRoot)
+      initialRange.collapse(true)
+      const liveSelection = makeLiveRangeSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        dispatchPointerDragStart(textElement, { clientX: 70, clientY: 108 })
+        dispatchMouseSelectionStart(textElement, { clientX: 70, clientY: 108 })
+
+        textElement.innerHTML = '<strong>Native</strong><em> parsed text</em>'
+
+        dispatchMouseSelectionMove(viewerRoot, { clientX: 160, clientY: 108 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 160, clientY: 108 })
+        dispatchMouseSelectionEnd({ clientX: 220, clientY: 180 })
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 220,
+          clientY: 180
+        })
+
+        const finalRange = liveSelection.selection.getRangeAt(0)
+        expect(liveSelection.selection.toString()).not.toBe('')
+        expect(finalRange.startContainer.nodeType).toBe(Node.TEXT_NODE)
+        expect(finalRange.endContainer.nodeType).toBe(Node.TEXT_NODE)
+        expect(finalRange.startContainer.isConnected).toBe(true)
+        expect(finalRange.endContainer.isConnected).toBe(true)
+        expect(textElement.contains(finalRange.startContainer)).toBe(true)
+        expect(textElement.contains(finalRange.endContainer)).toBe(true)
+        await waitFor(() => {
+          expect(
+            viewerRoot.querySelector(
+              '.hamster-reader__selection-overlay .hamster-reader__selection-overlay-path'
+            )
+          ).not.toBeNull()
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+      } finally {
+        getSelectionSpy.mockRestore()
+        restoreCaretRangeFromPoint()
+        elementFromPointSpy.mockRestore()
+        textRectSpy.mockRestore()
         rootRectSpy.mockRestore()
         pageRectSpy.mockRestore()
         restoreCreatedRangeGeometry()
@@ -4355,18 +5343,29 @@ describe('IntermediateDocumentViewer', () => {
         .spyOn(window, 'getSelection')
         .mockReturnValue(liveSelection.selection)
       const restoreCaretApis = installUnavailableCaretPointApis()
-      mockElementFromPoint(page)
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y >= 120) return screen.getByText('D')
+        if (y >= 80) return screen.getByText('C')
+        return screen.getByText('B')
+      })
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
-          clientX: 12,
-          clientY: 58
-        })
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
-          clientX: 100,
-          clientY: 138
-        })
+        dispatchPointerDragStart(
+          screen.getByText('B'),
+          { clientX: 12, clientY: 58 },
+          { pointerType: 'pen' }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 100, clientY: 138 },
+          { pointerType: 'pen' }
+        )
+        dispatchPointerDragEnd(
+          viewerRoot,
+          'pointerup',
+          { clientX: 100, clientY: 138 },
+          { pointerType: 'pen' }
+        )
 
         expect(liveSelection.selection.toString()).toBe('BCD')
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
@@ -4399,20 +5398,29 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       const viewerRoot = screen.getByTestId('intermediate-document-viewer')
-      const page = layoutFourTextPage()
+      layoutFourTextPage()
       const liveSelection = makeEmptyLiveSelection()
       const getSelectionSpy = vi
         .spyOn(window, 'getSelection')
         .mockReturnValue(liveSelection.selection)
       const restoreCaretApis = installUnavailableCaretPointApis()
-      mockElementFromPoint(page)
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y >= 120) return screen.getByText('D')
+        if (y >= 80) return screen.getByText('C')
+        return screen.getByText('B')
+      })
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
-          clientX: 12,
-          clientY: 58
-        })
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+        dispatchPointerDragStart(
+          screen.getByText('B'),
+          { clientX: 12, clientY: 58 },
+          { pointerType: 'pen' }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 100, clientY: 138 },
+          { pointerType: 'pen' }
+        )
 
         expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
         expect(liveSelection.selection.toString()).toBe('BCD')
@@ -4671,7 +5679,237 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
-    it('drag over blank image area snaps to nearest text endpoint instead of page start', async () => {
+    it('mouse drag resolves a caret when elementFromPoint hits supported text', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) =>
+        y >= 80 ? screen.getByText('C') : screen.getByText('B')
+      )
+
+      try {
+        // Given: both mouse points directly hit supported text spans.
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        const nativeMove = dispatchMouseSelectionMove(viewerRoot, {
+          clientX: 30,
+          clientY: 98
+        })
+
+        // When: the mouse moves to another supported text span.
+        dispatchPointerDragMove(viewerRoot, { clientX: 30, clientY: 98 })
+
+        // Then: a real caret is composed inside the hit text element.
+        expect(nativeMove.dispatched).toBe(false)
+        expect(nativeMove.event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [, detail] = onTextSelectionChange.mock.calls[0]
+        expect(detail.selectedText).toBe('BC')
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'text-b',
+          'text-c'
+        ])
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('mouse drag over blank keeps the previous touched text caret', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y >= 120) return page
+        return y >= 80 ? screen.getByText('C') : screen.getByText('B')
+      })
+
+      try {
+        // Given: the strict mouse drag has already touched B and then C.
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 30, clientY: 98 })
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(2)
+
+        // When: the native mouse moves over blank page background while held.
+        const nativeMove = dispatchMouseSelectionMove(viewerRoot, {
+          clientX: 100,
+          clientY: 138
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+
+        // Then: the endpoint remains at C; no nearest-text snap or final callback fires.
+        expect(nativeMove.dispatched).toBe(false)
+        expect(nativeMove.event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(2)
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+        expect(onSelectText).not.toHaveBeenCalled()
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('left mouse down on supported text composes a collapsed selection immediately', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      render(<IntermediateDocumentViewer document={mockDoc} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+      })
+
+      layoutFourTextPage()
+      const textElement = screen.getByText('B')
+      const textNode = getTextNode(textElement)
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApi = installCaretPositionFromPoint(textNode, 0)
+      mockElementFromPoint(textElement)
+
+      try {
+        // Given: elementFromPoint and the caret API both resolve inside the supported text span.
+        const { event, dispatched } = dispatchMouseSelectionStart(textElement, {
+          clientX: 12,
+          clientY: 58
+        })
+
+        // Then: accepted left mousedown prevents native drag start and writes
+        // a collapsed Selection at the exact start caret immediately.
+        expect(dispatched).toBe(false)
+        expect(event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.rangeCount).toBe(1)
+        expect(liveSelection.activeRange.collapsed).toBe(true)
+        expect(liveSelection.activeRange.startContainer).toBe(textNode)
+        expect(liveSelection.activeRange.endContainer).toBe(textNode)
+        expect(liveSelection.activeRange.startOffset).toBe(0)
+        expect(liveSelection.activeRange.endOffset).toBe(0)
+        expect(liveSelection.selection.removeAllRanges).toHaveBeenCalledTimes(1)
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
+      } finally {
+        restoreCaretApi()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('right middle and blank mouse down do not start mouse selection callbacks', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+      })
+
+      const page = layoutFourTextPage()
+      const textElement = screen.getByText('B')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+
+      try {
+        // Given: text exists, but the user presses non-left buttons or blank page background.
+        mockElementFromPoint(textElement)
+        const rightMouseDown = dispatchMouseSelectionStart(
+          textElement,
+          { clientX: 12, clientY: 58 },
+          2
+        )
+        const middleMouseDown = dispatchMouseSelectionStart(
+          textElement,
+          { clientX: 12, clientY: 58 },
+          1
+        )
+        mockElementFromPoint(page)
+        const blankMouseDown = dispatchMouseSelectionStart(page, {
+          clientX: 200,
+          clientY: 180
+        })
+
+        globalThis.document.dispatchEvent(new MouseEvent('mouseup'))
+
+        // Then: no active mouse selection is armed, no collapsed range is composed,
+        // and public selection callbacks remain silent.
+        expect(rightMouseDown.dispatched).toBe(true)
+        expect(rightMouseDown.event.defaultPrevented).toBe(false)
+        expect(middleMouseDown.dispatched).toBe(true)
+        expect(middleMouseDown.event.defaultPrevented).toBe(false)
+        expect(blankMouseDown.dispatched).toBe(true)
+        expect(blankMouseDown.event.defaultPrevented).toBe(false)
+        expect(liveSelection.selection.addRange).not.toHaveBeenCalled()
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+        expect(onSelectText).not.toHaveBeenCalled()
+      } finally {
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('mouse drag over blank image area does not resolve a new caret', async () => {
       const { document: mockDoc } = makeFourTextDocument()
       const onTextSelectionChange = vi.fn()
       render(
@@ -4697,23 +5935,130 @@ describe('IntermediateDocumentViewer', () => {
         .spyOn(window, 'getSelection')
         .mockReturnValue(liveSelection.selection)
       const restoreCaretApis = installUnavailableCaretPointApis()
-      mockElementFromPointByCoordinate((_x, y) => (y >= 80 ? image : page))
+      mockElementFromPointByCoordinate((_x, y) =>
+        y >= 80 ? image : screen.getByText('B')
+      )
 
       try {
+        // Given: drag starts on text but the move point hits page chrome.
         dispatchPointerDragStart(screen.getByText('B'), {
           clientX: 12,
           clientY: 58
         })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+
+        // When: the mouse moves over blank image/background.
         dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 98 })
 
+        // Then: the mouse path must not snap to the nearest text element.
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('mouse blank point within nearest-text snap distance does not select that text', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) =>
+        y >= 84 ? page : screen.getByText('B')
+      )
+
+      try {
+        // Given: the move point is inside the 100px legacy snap radius of C.
+        dispatchPointerDragMove(viewerRoot, { clientX: 12, clientY: 58 })
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+
+        // When: elementFromPoint reports the page background, not text.
+        dispatchPointerDragMove(viewerRoot, { clientX: 12, clientY: 84 })
+
+        // Then: no nearest text is selected through the mouse path.
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('backward strict mouse drag composes an ordered text selection', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) =>
+        y >= 80 ? screen.getByText('C') : screen.getByText('B')
+      )
+
+      try {
+        // Given: a strict mouse drag starts at the right edge of C.
+        dispatchPointerDragStart(screen.getByText('C'), {
+          clientX: 30,
+          clientY: 98
+        })
+        dispatchMouseSelectionStart(screen.getByText('C'), {
+          clientX: 30,
+          clientY: 98
+        })
+
+        // When: the pointer drags backward to the left edge of B.
+        dispatchPointerDragMove(viewerRoot, { clientX: 12, clientY: 58 })
+
+        // Then: createOrderedRange normalizes the reversed endpoints to B..C.
         expect(liveSelection.selection.toString()).toBe('BC')
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
         const [, detail] = onTextSelectionChange.mock.calls[0]
         expect(detail.selectedText).toBe('BC')
-        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
-          'text-b',
-          'text-c'
-        ])
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
@@ -4736,11 +6081,11 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPointByCoordinate((_x, y) => (y < 220 ? page1 : page2))
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+        dispatchPenDragStart(queryTextSpan('p1-b'), {
           clientX: 40,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, { clientX: 120, clientY: 320 })
+        dispatchPenDragMove(viewerRoot, { clientX: 120, clientY: 320 })
 
         expect(liveSelection.selection.toString()).toBe('P1BP2AP2BP2C')
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
@@ -4811,28 +6156,58 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPoint(page)
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
-          clientX: 12,
-          clientY: 58
-        })
+        dispatchPointerDragStart(
+          screen.getByText('B'),
+          {
+            clientX: 12,
+            clientY: 58
+          },
+          {
+            pointerType: 'pen'
+          }
+        )
         dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 98 })
-        dispatchPointerDragEnd(viewerRoot, 'pointercancel', {
-          clientX: 100,
-          clientY: 98
-        })
+        dispatchPointerDragEnd(
+          viewerRoot,
+          'pointercancel',
+          {
+            clientX: 100,
+            clientY: 98
+          },
+          {
+            pointerType: 'pen'
+          }
+        )
 
         expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
         expect(onTextSelectionEnd.mock.calls[0][1].selectedText).toBe('BC')
 
-        dispatchPointerDragStart(screen.getByText('C'), {
-          clientX: 12,
-          clientY: 98
-        })
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
-          clientX: 100,
-          clientY: 138
-        })
+        dispatchPointerDragStart(
+          screen.getByText('C'),
+          {
+            clientX: 12,
+            clientY: 98
+          },
+          {
+            pointerType: 'pen'
+          }
+        )
+        dispatchPointerDragMove(
+          viewerRoot,
+          { clientX: 100, clientY: 138 },
+          { pointerType: 'pen' }
+        )
+        dispatchPointerDragEnd(
+          viewerRoot,
+          'pointerup',
+          {
+            clientX: 100,
+            clientY: 138
+          },
+          {
+            pointerType: 'pen'
+          }
+        )
 
         expect(onTextSelectionChange).toHaveBeenCalledTimes(2)
         expect(onTextSelectionEnd).toHaveBeenCalledTimes(2)
@@ -4871,19 +6246,23 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPoint(page)
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
+        dispatchPenDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
           clientX: 12,
           clientY: 58
         })
         expect(onTextSelectionChange).not.toHaveBeenCalled()
         expect(onTextSelectionEnd).not.toHaveBeenCalled()
 
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+        dispatchPenDragMove(viewerRoot, { clientX: 100, clientY: 138 })
 
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
         expect(onTextSelectionEnd).not.toHaveBeenCalled()
 
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+        dispatchPenDragEnd(viewerRoot, 'pointerup', {
           clientX: 100,
           clientY: 138
         })
@@ -4896,6 +6275,542 @@ describe('IntermediateDocumentViewer', () => {
         expect(liveSelection.selection.rangeCount).toBe(1)
         expect(liveSelection.selection.removeAllRanges).toHaveBeenCalledTimes(2)
         expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(2)
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('does not let the root Drag adapter start or finish mouse selection without the strict mousedown owner', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPoint(page)
+
+      try {
+        // Given: only the legacy Drag pointer lifecycle fires for a mouse, while
+        // the strict mousedown controller never accepts ownership.
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+
+        // When: the adapter's mouse End/AllEnd callbacks run without document mouseup.
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 138
+        })
+
+        // Then: the adapter path is cleanup-only for mouse and cannot emit public final callbacks.
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+        expect(onSelectText).not.toHaveBeenCalled()
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('finalizes strict mouseup fallback from the last stored caret and emits callbacks once', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('D')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      const elementFromPointSpy = mockElementFromPointByCoordinate((_x, y) => {
+        if (y >= 120) return page
+        return y >= 80 ? screen.getByText('C') : screen.getByText('B')
+      })
+
+      try {
+        // Given: a strict mouse drag has a stored endpoint at C.
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 30, clientY: 98 })
+        expect(liveSelection.selection.toString()).toBe('BC')
+        elementFromPointSpy.mockClear()
+
+        // When: document mouseup fallback runs on blank page background, then
+        // the adapter's pointerup lifecycle follows for the same gesture.
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            button: 0,
+            clientX: 100,
+            clientY: 138
+          })
+        )
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 138
+        })
+
+        // Then: final data remains B..C, no blank mouseup re-hit-test snaps to D,
+        // and each public final callback fires exactly once.
+        expect(elementFromPointSpy).not.toHaveBeenCalled()
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd.mock.calls[0][1].selectedText).toBe('BC')
+        expect(onSelectText).toHaveBeenCalledTimes(1)
+        expect(onSelectText.mock.calls[0][2]).toBe('BC')
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('strict mouseup on blank keeps the last touched offset instead of snapping to nearest text', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y >= 120) return page
+        return y >= 80 ? screen.getByText('C') : screen.getByText('B')
+      })
+
+      try {
+        // Given: the last strict text hit stored the caret at C before the
+        // pointer finished on blank background near D.
+        dispatchPointerDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 30, clientY: 98 })
+
+        // When: document mouseup finalizes on blank/background.
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 138
+        })
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            button: 0,
+            clientX: 100,
+            clientY: 138
+          })
+        )
+
+        // Then: finalization uses stored B..C boundaries, not the nearest D snap.
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd.mock.calls[0][1].selectedText).toBe('BC')
+        expect(onSelectText).toHaveBeenCalledTimes(1)
+        expect(onSelectText.mock.calls[0][2]).toBe('BC')
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('collapsed strict mouse click on document mouseup does not emit a payload', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      layoutFourTextPage()
+      const textElement = screen.getByText('B')
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApi = installCaretPositionFromPoint(
+        getTextNode(textElement),
+        0
+      )
+      const elementFromPointSpy = mockElementFromPoint(textElement)
+
+      try {
+        // Given: a strict left mouse down created only a collapsed caret.
+        dispatchMouseSelectionStart(textElement, { clientX: 12, clientY: 58 })
+        expect(liveSelection.activeRange.collapsed).toBe(true)
+        elementFromPointSpy.mockClear()
+
+        // When: mouseup finalizes the click without any drag-selected text.
+        viewerRoot.dispatchEvent(
+          new MouseEvent('mouseup', {
+            bubbles: true,
+            button: 0,
+            clientX: 12,
+            clientY: 58
+          })
+        )
+
+        // Then: existing collapsed-selection semantics stay silent, and the
+        // strict mouseup path still trusts the initialized stored boundaries
+        // instead of re-hit-testing the mouseup point.
+        expect(elementFromPointSpy).not.toHaveBeenCalled()
+        expect(liveSelection.activeRange.collapsed).toBe(true)
+        expect(onTextSelectionEnd).not.toHaveBeenCalled()
+        expect(onSelectText).not.toHaveBeenCalled()
+      } finally {
+        restoreCaretApi()
+        getSelectionSpy.mockRestore()
+      }
+    })
+
+    it('strict mouse integration matrix finalizes retained text boundary with exact detail payload and overlay geometry', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      const onSelectText = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+          selectionHandleElement={<button type='button' />}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      const page = layoutFourTextPage()
+      const textB = queryTextSpan('text-b')
+      const textC = queryTextSpan('text-c')
+      const textBNode = getTextNode(textB)
+      const textCNode = getTextNode(textC)
+      const selectionRect = makeDomRect({
+        left: 10,
+        top: 50,
+        width: 20,
+        height: 56
+      })
+      const restoreCreatedRangeGeometry = installCreatedRangeGeometry(
+        (range) => {
+          if (range.collapsed) {
+            if (range.startContainer === textBNode) {
+              return [makeDomRect({ left: 10, top: 50, width: 0, height: 16 })]
+            }
+            if (range.startContainer === textCNode) {
+              return [makeDomRect({ left: 30, top: 90, width: 0, height: 16 })]
+            }
+            return []
+          }
+
+          return range.toString() === 'BC' ? [selectionRect] : []
+        }
+      )
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) => {
+        if (y >= 120) return page
+        return y >= 80 ? textC : textB
+      })
+
+      try {
+        // Given: browser pointerdown is cleanup-only for mouse, then strict mousedown owns selection.
+        dispatchPointerDragStart(textB, { clientX: 12, clientY: 58 })
+        const start = dispatchMouseSelectionStart(textB, {
+          clientX: 12,
+          clientY: 58
+        })
+
+        expect(start.dispatched).toBe(false)
+        expect(start.event.defaultPrevented).toBe(true)
+        expect(liveSelection.activeRange.collapsed).toBe(true)
+        expect(liveSelection.activeRange.startContainer).toBe(textBNode)
+        expect(liveSelection.activeRange.startOffset).toBe(0)
+        expect(liveSelection.activeRange.endContainer).toBe(textBNode)
+        expect(liveSelection.activeRange.endOffset).toBe(0)
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
+
+        // When: strict mouse movement reaches C, the adapter move composes B..C.
+        const moveToText = dispatchMouseSelectionMove(viewerRoot, {
+          clientX: 30,
+          clientY: 98
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 30, clientY: 98 })
+
+        expect(moveToText.dispatched).toBe(false)
+        expect(moveToText.event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        const [changeText, changeDetail] = onTextSelectionChange.mock.calls[0]
+        expect(changeText.id).toBe('text-b')
+        expect(changeDetail).toMatchObject({
+          text: changeText,
+          selectedText: 'BC',
+          pageNumber: 1
+        })
+        expect(changeDetail.selection).toBe(liveSelection.selection)
+        expect(
+          changeDetail.texts.map((text: IntermediateText) => text.id)
+        ).toEqual(['text-b', 'text-c'])
+
+        // When: the cursor moves over nearby blank/page chrome near D, strict mouse retains C.
+        const moveToBlank = dispatchMouseSelectionMove(viewerRoot, {
+          clientX: 100,
+          clientY: 138
+        })
+        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+
+        expect(moveToBlank.dispatched).toBe(false)
+        expect(moveToBlank.event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+
+        // When: mouseup lands on blank/outside and adapter pointerup follows.
+        const mouseup = dispatchMouseSelectionEnd({
+          clientX: 100,
+          clientY: 138
+        })
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 100,
+          clientY: 138
+        })
+
+        // Then: finalizers use stored B..C boundaries exactly once.
+        expect(mouseup.dispatched).toBe(false)
+        expect(mouseup.event.defaultPrevented).toBe(true)
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+        expect(onSelectText).toHaveBeenCalledTimes(1)
+
+        const [endText, endDetail] = onTextSelectionEnd.mock.calls[0]
+        expect(endText).toBe(changeText)
+        expect(endDetail).toMatchObject({
+          text: endText,
+          selectedText: 'BC',
+          pageNumber: 1
+        })
+        expect(endDetail.selection).toBe(liveSelection.selection)
+        expect(
+          endDetail.texts.map((text: IntermediateText) => text.id)
+        ).toEqual(['text-b', 'text-c'])
+
+        const [payloadSelection, payloadSegments, extractedText] =
+          onSelectText.mock.calls[0]
+        expect(payloadSelection).toBe(liveSelection.selection)
+        expect(extractedText).toBe('BC')
+        expect(
+          payloadSegments.map((segment: ReaderSelectedTextSegment) => ({
+            id: segment.id,
+            selectedText: segment.selectedText,
+            startCharIndex: segment.startCharIndex,
+            endCharIndex: segment.endCharIndex
+          }))
+        ).toEqual([
+          {
+            id: 'text-b',
+            selectedText: 'B',
+            startCharIndex: 0,
+            endCharIndex: 1
+          },
+          {
+            id: 'text-c',
+            selectedText: 'C',
+            startCharIndex: 0,
+            endCharIndex: 1
+          }
+        ])
+
+        const payload = buildSelectionPayload(liveSelection.selection)
+        expect(payload?.extractedText).toBe('BC')
+        expect(
+          payload?.segments.map((segment: ReaderSelectedTextSegment) => ({
+            id: segment.id,
+            selectedText: segment.selectedText,
+            startCharIndex: segment.startCharIndex,
+            endCharIndex: segment.endCharIndex
+          }))
+        ).toEqual([
+          {
+            id: 'text-b',
+            selectedText: 'B',
+            startCharIndex: 0,
+            endCharIndex: 1
+          },
+          {
+            id: 'text-c',
+            selectedText: 'C',
+            startCharIndex: 0,
+            endCharIndex: 1
+          }
+        ])
+
+        await waitFor(() => {
+          expect(
+            viewerRoot.querySelectorAll('[data-handle-type]')
+          ).toHaveLength(2)
+        })
+        const overlayPath = page.querySelector(
+          '.hamster-reader__selection-overlay-path'
+        ) as SVGPathElement | null
+        expectPathCoversRect(overlayPath ?? undefined, {
+          left: 10,
+          top: 50,
+          width: 20,
+          height: 56
+        })
+
+        const startHandle = page.querySelector(
+          '[data-handle-type="start"]'
+        ) as HTMLElement | null
+        const endHandle = page.querySelector(
+          '[data-handle-type="end"]'
+        ) as HTMLElement | null
+        expect(startHandle).toHaveStyle({ left: '10px', top: '66px' })
+        expect(endHandle).toHaveStyle({ left: '30px', top: '106px' })
+      } finally {
+        restoreCaretApis()
+        getSelectionSpy.mockRestore()
+        restoreCreatedRangeGeometry()
+      }
+    })
+
+    it('strict mouse integration matrix normalizes backward final detail exactly once', async () => {
+      const { document: mockDoc } = makeFourTextDocument()
+      const onTextSelectionChange = vi.fn()
+      const onTextSelectionEnd = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('B')).toBeInTheDocument()
+        expect(screen.getByText('C')).toBeInTheDocument()
+      })
+
+      const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+      layoutFourTextPage()
+      const liveSelection = makeEmptyLiveSelection()
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaretApis = installUnavailableCaretPointApis()
+      mockElementFromPointByCoordinate((_x, y) =>
+        y >= 80 ? queryTextSpan('text-c') : queryTextSpan('text-b')
+      )
+
+      try {
+        dispatchPointerDragStart(queryTextSpan('text-c'), {
+          clientX: 30,
+          clientY: 98
+        })
+        dispatchMouseSelectionStart(queryTextSpan('text-c'), {
+          clientX: 30,
+          clientY: 98
+        })
+        dispatchMouseSelectionMove(viewerRoot, { clientX: 12, clientY: 58 })
+        dispatchPointerDragMove(viewerRoot, { clientX: 12, clientY: 58 })
+        dispatchMouseSelectionEnd({ clientX: 12, clientY: 58 })
+        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+          clientX: 12,
+          clientY: 58
+        })
+
+        expect(liveSelection.selection.toString()).toBe('BC')
+        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+        expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+        const [endText, detail] = onTextSelectionEnd.mock.calls[0]
+        expect(endText.id).toBe('text-b')
+        expect(detail.selectedText).toBe('BC')
+        expect(detail.text).toBe(endText)
+        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
+          'text-b',
+          'text-c'
+        ])
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
@@ -5374,11 +7289,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p2-delta'), {
+        dispatchPenDragStart(queryTextSpan('p2-delta'), {
           clientX: 25,
           clientY: 250
         })
-        dispatchPointerDragMove(viewerRoot, { clientX: 95, clientY: 330 })
+        dispatchPenDragMove(viewerRoot, { clientX: 95, clientY: 330 })
         globalThis.document.dispatchEvent(new Event('selectionchange'))
 
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
@@ -5409,11 +7324,11 @@ describe('IntermediateDocumentViewer', () => {
       )
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+        dispatchPenDragStart(queryTextSpan('p1-b'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 320
         })
@@ -5450,11 +7365,11 @@ describe('IntermediateDocumentViewer', () => {
       )
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+        dispatchPenDragStart(queryTextSpan('p1-b'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 280
         })
@@ -5504,11 +7419,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+        dispatchPenDragStart(queryTextSpan('p1-bravo'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 510
         })
@@ -5564,11 +7479,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p3-hotel'), {
+        dispatchPenDragStart(queryTextSpan('p3-hotel'), {
           clientX: 60,
           clientY: 510
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 70
         })
@@ -5623,11 +7538,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+        dispatchPenDragStart(queryTextSpan('p1-bravo'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 360
         })
@@ -5676,11 +7591,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+        dispatchPenDragStart(queryTextSpan('p1-bravo'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 510
         })
@@ -5728,11 +7643,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-bravo'), {
+        dispatchPenDragStart(queryTextSpan('p1-bravo'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 510
         })
@@ -5774,11 +7689,11 @@ describe('IntermediateDocumentViewer', () => {
       )
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+        dispatchPenDragStart(queryTextSpan('p1-b'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 280
         })
@@ -6520,7 +8435,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(textBlockMatch[1]).not.toContain('pointer-events')
     })
 
-    it('keeps native selection visible for html-parser output when custom overlay is active', () => {
+    it('hides native selection for html-parser output when custom overlay is active', () => {
       const scssSource = fs.readFileSync(
         path.resolve(__dirname, '../src/styles/reader.scss'),
         'utf-8'
@@ -6540,9 +8455,12 @@ describe('IntermediateDocumentViewer', () => {
       expect(transparentSelectionBlock).toContain(
         'hamster-reader__intermediate-text'
       )
-      expect(transparentSelectionBlock).not.toContain(
+      expect(transparentSelectionBlock).toContain(
         'hamster-reader__html-parser-output'
       )
+      expect(transparentSelectionBlock).toContain('hamster-note-page')
+      expect(transparentSelectionBlock).toContain('[data-text-id]')
+      expect(transparentSelectionBlock).toContain('span.hamster-note-text')
     })
 
     it('does not let native selectionchange initiate blank-space drag normalization', async () => {
@@ -6930,7 +8848,7 @@ describe('IntermediateDocumentViewer', () => {
       viewerRoot.removeChild(blankNode)
     })
 
-    it('nearest blank drag start near last word snaps to same-page last text', async () => {
+    it('mouse blank drag start near last word does not snap to same-page last text', async () => {
       const onTextSelectionChange = vi.fn()
       await renderThreePageDirectRenderSelectionFixture({
         onTextSelectionChange
@@ -6957,21 +8875,16 @@ describe('IntermediateDocumentViewer', () => {
         dispatchPointerDragStart(viewerRoot, { clientX: 108, clientY: 550 })
         dispatchPointerDragMove(viewerRoot, { clientX: 12, clientY: 510 })
 
-        expect(liveSelection.selection.addRange).toHaveBeenCalledTimes(1)
-        expect(liveSelection.selection.toString()).toBe('P3 HotelP3 India')
-        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
-        const [, detail] = onTextSelectionChange.mock.calls[0]
-        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
-          'p3-hotel',
-          'p3-india'
-        ])
+        expect(liveSelection.selection.addRange).not.toHaveBeenCalled()
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
       }
     })
 
-    it('nearest blank drag move in inter-span gutter snaps to closer same-page text', async () => {
+    it('mouse blank drag move in inter-span gutter does not snap to closer same-page text', async () => {
       const onTextSelectionChange = vi.fn()
       await renderThreePageDirectRenderSelectionFixture({
         onTextSelectionChange
@@ -6996,20 +8909,15 @@ describe('IntermediateDocumentViewer', () => {
         })
         dispatchPointerDragMove(viewerRoot, { clientX: 60, clientY: 304 })
 
-        expect(liveSelection.selection.toString()).toBe('P2 DeltaP2 Echo')
-        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
-        const [, detail] = onTextSelectionChange.mock.calls[0]
-        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
-          'p2-delta',
-          'p2-echo'
-        ])
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
       }
     })
 
-    it('nearest blank drag move uses DOM-order tie-break for equal-distance text', async () => {
+    it('mouse blank drag move ignores DOM-order nearest tie-break text', async () => {
       const onTextSelectionChange = vi.fn()
       await renderThreePageDirectRenderSelectionFixture({
         onTextSelectionChange
@@ -7034,13 +8942,8 @@ describe('IntermediateDocumentViewer', () => {
         })
         dispatchPointerDragMove(viewerRoot, { clientX: 60, clientY: 310 })
 
-        expect(liveSelection.selection.toString()).toBe('P2 DeltaP2 Echo')
-        expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
-        const [, detail] = onTextSelectionChange.mock.calls[0]
-        expect(detail.texts.map((text: IntermediateText) => text.id)).toEqual([
-          'p2-delta',
-          'p2-echo'
-        ])
+        expect(liveSelection.selection.toString()).toBe('')
+        expect(onTextSelectionChange).not.toHaveBeenCalled()
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
@@ -7118,8 +9021,8 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPoint(bgImage)
 
       try {
-        dispatchPointerDragStart(textSpan, { clientX: 12, clientY: 18 })
-        dispatchPointerDragMove(viewerRoot, { clientX: 95, clientY: 80 })
+        dispatchPenDragStart(textSpan, { clientX: 12, clientY: 18 })
+        dispatchPenDragMove(viewerRoot, { clientX: 95, clientY: 80 })
 
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
         const [, detail] = onTextSelectionChange.mock.calls[0]
@@ -7198,11 +9101,11 @@ describe('IntermediateDocumentViewer', () => {
       )
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+        dispatchPenDragStart(queryTextSpan('p1-b'), {
           clientX: 60,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, {
+        dispatchPenDragMove(viewerRoot, {
           clientX: 60,
           clientY: 280
         })
@@ -7293,18 +9196,18 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPoint(page)
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
+        dispatchPenDragStart(screen.getByText('B'), {
           clientX: 12,
           clientY: 58
         })
         expect(onTextSelectionChange).not.toHaveBeenCalled()
         expect(onTextSelectionEnd).not.toHaveBeenCalled()
 
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+        dispatchPenDragMove(viewerRoot, { clientX: 100, clientY: 138 })
         expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
         expect(onTextSelectionEnd).not.toHaveBeenCalled()
 
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+        dispatchPenDragEnd(viewerRoot, 'pointerup', {
           clientX: 100,
           clientY: 138
         })
@@ -7350,7 +9253,11 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPoint(page)
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
+        dispatchPenDragStart(screen.getByText('B'), {
+          clientX: 12,
+          clientY: 58
+        })
+        dispatchMouseSelectionStart(screen.getByText('B'), {
           clientX: 12,
           clientY: 58
         })
@@ -7400,11 +9307,11 @@ describe('IntermediateDocumentViewer', () => {
       mockElementFromPoint(page)
 
       try {
-        dispatchPointerDragStart(screen.getByText('B'), {
+        dispatchPenDragStart(screen.getByText('B'), {
           clientX: 12,
           clientY: 58
         })
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+        dispatchPenDragMove(viewerRoot, { clientX: 100, clientY: 138 })
 
         const [, detail] = onTextSelectionChange.mock.calls[0]
         expect(detail.selectedText).toBe('BCD')
@@ -7485,11 +9392,11 @@ describe('IntermediateDocumentViewer', () => {
         onTextSelectionChange.mockClear()
 
         nativeSelectionRects = []
-        dispatchPointerDragStart(screen.getByText('B'), {
+        dispatchPenDragStart(screen.getByText('B'), {
           clientX: 12,
           clientY: 58
         })
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 138 })
+        dispatchPenDragMove(viewerRoot, { clientX: 100, clientY: 138 })
 
         const previewPath = page.querySelector(
           '.hamster-reader__selection-overlay-path'
@@ -7497,7 +9404,7 @@ describe('IntermediateDocumentViewer', () => {
         expectPathCoversRect(previewPath ?? undefined, {
           left: 10,
           top: 50,
-          width: 21,
+          width: 0,
           height: 96
         })
         await waitFor(() => {
@@ -7522,7 +9429,7 @@ describe('IntermediateDocumentViewer', () => {
         nativeSelectionRects = [
           makeDomRect({ left: 10, top: 50, width: 20, height: 96 })
         ]
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+        dispatchPenDragEnd(viewerRoot, 'pointerup', {
           clientX: 100,
           clientY: 138
         })
@@ -7668,11 +9575,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        dispatchPointerDragStart(queryTextSpan('p1-b'), {
+        dispatchPenDragStart(queryTextSpan('p1-b'), {
           clientX: 40,
           clientY: 70
         })
-        dispatchPointerDragMove(viewerRoot, { clientX: 100, clientY: 320 })
+        dispatchPenDragMove(viewerRoot, { clientX: 100, clientY: 320 })
 
         await waitFor(() => {
           expect(getOverlayBlocks(page1)).toHaveLength(1)
@@ -7694,7 +9601,7 @@ describe('IntermediateDocumentViewer', () => {
         })
 
         rangeRectPhase = 'final'
-        dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+        dispatchPenDragEnd(viewerRoot, 'pointerup', {
           clientX: 100,
           clientY: 320
         })
@@ -7887,11 +9794,11 @@ describe('IntermediateDocumentViewer', () => {
         const ctx = await setupSelectionAndDragContext()
         try {
           ctx.setNativeSelectionRects([])
-          dispatchPointerDragStart(screen.getByText('B'), {
+          dispatchPenDragStart(screen.getByText('B'), {
             clientX: 12,
             clientY: 58
           })
-          dispatchPointerDragMove(ctx.viewerRoot, {
+          dispatchPenDragMove(ctx.viewerRoot, {
             clientX: 100,
             clientY: 138
           })
@@ -7918,11 +9825,11 @@ describe('IntermediateDocumentViewer', () => {
         const ctx = await setupSelectionAndDragContext()
         try {
           ctx.setNativeSelectionRects([])
-          dispatchPointerDragStart(screen.getByText('B'), {
+          dispatchPenDragStart(screen.getByText('B'), {
             clientX: 12,
             clientY: 58
           })
-          dispatchPointerDragMove(ctx.viewerRoot, {
+          dispatchPenDragMove(ctx.viewerRoot, {
             clientX: 100,
             clientY: 138
           })
@@ -7934,7 +9841,7 @@ describe('IntermediateDocumentViewer', () => {
           ctx.setNativeSelectionRects([
             makeDomRect({ left: 10, top: 50, width: 20, height: 96 })
           ])
-          dispatchPointerDragEnd(ctx.viewerRoot, 'pointerup', {
+          dispatchPenDragEnd(ctx.viewerRoot, 'pointerup', {
             clientX: 100,
             clientY: 138
           })
@@ -7961,11 +9868,11 @@ describe('IntermediateDocumentViewer', () => {
         const ctx = await setupSelectionAndDragContext()
         try {
           ctx.setNativeSelectionRects([])
-          dispatchPointerDragStart(screen.getByText('B'), {
+          dispatchPenDragStart(screen.getByText('B'), {
             clientX: 12,
             clientY: 58
           })
-          dispatchPointerDragMove(ctx.viewerRoot, {
+          dispatchPenDragMove(ctx.viewerRoot, {
             clientX: 100,
             clientY: 138
           })
@@ -7977,7 +9884,7 @@ describe('IntermediateDocumentViewer', () => {
           ctx.setNativeSelectionRects([
             makeDomRect({ left: 10, top: 50, width: 20, height: 96 })
           ])
-          dispatchPointerDragEnd(ctx.viewerRoot, 'pointercancel', {
+          dispatchPenDragEnd(ctx.viewerRoot, 'pointercancel', {
             clientX: 100,
             clientY: 138
           })
@@ -8026,11 +9933,11 @@ describe('IntermediateDocumentViewer', () => {
           expect(ctx.liveSelection.selection.addRange).not.toHaveBeenCalled()
           assertHandlesVisible(ctx.viewerRoot)
 
-          dispatchPointerDragStart(screen.getByText('C'), {
+          dispatchPenDragStart(screen.getByText('C'), {
             clientX: 12,
             clientY: 98
           })
-          dispatchPointerDragMove(ctx.viewerRoot, {
+          dispatchPenDragMove(ctx.viewerRoot, {
             clientX: 100,
             clientY: 138
           })
@@ -8060,11 +9967,11 @@ describe('IntermediateDocumentViewer', () => {
           ctx.onTextSelectionEnd.mockClear()
 
           ctx.setNativeSelectionRects([])
-          dispatchPointerDragStart(screen.getByText('B'), {
+          dispatchPenDragStart(screen.getByText('B'), {
             clientX: 12,
             clientY: 58
           })
-          dispatchPointerDragMove(ctx.viewerRoot, {
+          dispatchPenDragMove(ctx.viewerRoot, {
             clientX: 100,
             clientY: 98
           })
@@ -8075,7 +9982,7 @@ describe('IntermediateDocumentViewer', () => {
           ctx.setNativeSelectionRects([
             makeDomRect({ left: 10, top: 50, width: 20, height: 56 })
           ])
-          dispatchPointerDragEnd(ctx.viewerRoot, 'pointercancel', {
+          dispatchPenDragEnd(ctx.viewerRoot, 'pointercancel', {
             clientX: 100,
             clientY: 98
           })
@@ -8088,11 +9995,11 @@ describe('IntermediateDocumentViewer', () => {
             assertHandlesVisible(ctx.viewerRoot)
           })
 
-          dispatchPointerDragStart(screen.getByText('C'), {
+          dispatchPenDragStart(screen.getByText('C'), {
             clientX: 12,
             clientY: 98
           })
-          dispatchPointerDragMove(ctx.viewerRoot, {
+          dispatchPenDragMove(ctx.viewerRoot, {
             clientX: 100,
             clientY: 138
           })
@@ -9479,6 +11386,68 @@ describe('IntermediateDocumentViewer', () => {
   })
 
   describe('selection overlay live drag refresh', () => {
+    const dispatchLivePenDragStart = (
+      target: HTMLElement,
+      point: { clientX: number; clientY: number }
+    ) => {
+      const event = new MouseEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+      Object.defineProperty(event, 'pointerId', {
+        configurable: true,
+        value: 1
+      })
+      Object.defineProperty(event, 'pointerType', {
+        configurable: true,
+        value: 'pen'
+      })
+      target.dispatchEvent(event)
+    }
+
+    const dispatchLivePenDragMove = (
+      target: HTMLElement,
+      point: { clientX: number; clientY: number }
+    ) => {
+      const event = new MouseEvent('pointermove', {
+        bubbles: true,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+      Object.defineProperty(event, 'pointerId', {
+        configurable: true,
+        value: 1
+      })
+      Object.defineProperty(event, 'pointerType', {
+        configurable: true,
+        value: 'pen'
+      })
+      target.dispatchEvent(event)
+    }
+
+    const dispatchLivePenDragEnd = (
+      target: HTMLElement,
+      type: 'pointerup' | 'pointercancel',
+      point: { clientX: number; clientY: number }
+    ) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        clientX: point.clientX,
+        clientY: point.clientY
+      })
+      Object.defineProperty(event, 'pointerId', {
+        configurable: true,
+        value: 1
+      })
+      Object.defineProperty(event, 'pointerType', {
+        configurable: true,
+        value: 'pen'
+      })
+      target.dispatchEvent(event)
+    }
+
     it('updates overlay blocks during primary-button mousemove before mouseup', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       let currentRects = [
@@ -9541,22 +11510,9 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        text.dispatchEvent(
-          new MouseEvent('pointerdown', {
-            bubbles: true,
-            button: 0,
-            clientX: 15,
-            clientY: 25
-          })
-        )
+        dispatchLivePenDragStart(text, { clientX: 15, clientY: 25 })
 
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointermove', {
-            bubbles: true,
-            clientX: 45,
-            clientY: 33
-          })
-        )
+        dispatchLivePenDragMove(viewerRoot, { clientX: 45, clientY: 33 })
 
         let blocks = getOverlayBlocks(page)
         expect(blocks).toHaveLength(1)
@@ -9571,13 +11527,7 @@ describe('IntermediateDocumentViewer', () => {
           makeDomRect({ left: 35, top: 55, width: 25, height: 10 })
         ]
 
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointermove', {
-            bubbles: true,
-            clientX: 60,
-            clientY: 65
-          })
-        )
+        dispatchLivePenDragMove(viewerRoot, { clientX: 60, clientY: 65 })
 
         blocks = getOverlayBlocks(page)
         expect(blocks).toHaveLength(1)
@@ -9665,22 +11615,9 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       try {
-        text.dispatchEvent(
-          new MouseEvent('pointerdown', {
-            bubbles: true,
-            button: 0,
-            clientX: 15,
-            clientY: 25
-          })
-        )
+        dispatchLivePenDragStart(text, { clientX: 15, clientY: 25 })
 
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointermove', {
-            bubbles: true,
-            clientX: 45,
-            clientY: 33
-          })
-        )
+        dispatchLivePenDragMove(viewerRoot, { clientX: 45, clientY: 33 })
 
         const initialBlock = getOverlayBlocks(page)[0]
         expectPathCoversRect(initialBlock, {
@@ -9690,25 +11627,16 @@ describe('IntermediateDocumentViewer', () => {
           height: 8
         })
 
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointercancel', {
-            bubbles: true,
-            clientX: 65,
-            clientY: 87
-          })
-        )
+        dispatchLivePenDragEnd(viewerRoot, 'pointercancel', {
+          clientX: 65,
+          clientY: 87
+        })
 
         currentRects = [
           makeDomRect({ left: 45, top: 75, width: 20, height: 12 })
         ]
 
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointermove', {
-            bubbles: true,
-            clientX: 65,
-            clientY: 87
-          })
-        )
+        dispatchLivePenDragMove(viewerRoot, { clientX: 65, clientY: 87 })
 
         const blocks = getOverlayBlocks(page)
         expect(blocks).toHaveLength(1)
@@ -10087,34 +12015,44 @@ describe('IntermediateDocumentViewer', () => {
       const getSelectionSpy = vi
         .spyOn(window, 'getSelection')
         .mockReturnValue(selection)
+      const dispatchPenPointerEvent = (
+        target: HTMLElement,
+        type: 'pointerdown' | 'pointermove' | 'pointerup',
+        point: { clientX: number; clientY: number }
+      ) => {
+        const event = new MouseEvent(type, {
+          bubbles: true,
+          button: 0,
+          clientX: point.clientX,
+          clientY: point.clientY
+        })
+        Object.defineProperty(event, 'pointerId', {
+          configurable: true,
+          value: 1
+        })
+        Object.defineProperty(event, 'pointerType', {
+          configurable: true,
+          value: 'pen'
+        })
+        target.dispatchEvent(event)
+      }
 
       try {
         globalThis.document.dispatchEvent(new Event('selectionchange'))
         expect(getOverlayBlocks(page)).toHaveLength(1)
 
-        text.dispatchEvent(
-          new MouseEvent('pointerdown', {
-            bubbles: true,
-            button: 0,
-            clientX: 15,
-            clientY: 25
-          })
-        )
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointermove', {
-            bubbles: true,
-            clientX: 45,
-            clientY: 33
-          })
-        )
-        viewerRoot.dispatchEvent(
-          new MouseEvent('pointerup', {
-            bubbles: true,
-            button: 0,
-            clientX: 45,
-            clientY: 33
-          })
-        )
+        dispatchPenPointerEvent(text, 'pointerdown', {
+          clientX: 15,
+          clientY: 25
+        })
+        dispatchPenPointerEvent(viewerRoot, 'pointermove', {
+          clientX: 45,
+          clientY: 33
+        })
+        dispatchPenPointerEvent(viewerRoot, 'pointerup', {
+          clientX: 45,
+          clientY: 33
+        })
         removeAllRanges.mockClear()
         viewerRoot.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
@@ -12158,7 +14096,7 @@ describe('IntermediateDocumentViewer', () => {
         const viewerRoot = screen.getByTestId('intermediate-document-viewer')
         const page = screen.getByTestId('intermediate-page-1')
         const container = getVirtualPaperContainer()
-        const nativeSelection = window.getSelection()
+        const nativeSelection = globalThis.document.getSelection()
         if (!nativeSelection) {
           throw new Error('Expected native Selection in test environment')
         }

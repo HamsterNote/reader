@@ -63,7 +63,10 @@ const getElementTextOffset = (
   }
 
   let textOffset = 0
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+  const walker = element.ownerDocument.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT
+  )
   let currentNode = walker.nextNode()
 
   while (currentNode) {
@@ -89,7 +92,7 @@ const buildSegmentRange = (
   selectionRange: Range,
   element: HTMLElement
 ): Range => {
-  const segmentRange = document.createRange()
+  const segmentRange = element.ownerDocument.createRange()
   segmentRange.selectNodeContents(element)
 
   if (element.contains(selectionRange.startContainer)) {

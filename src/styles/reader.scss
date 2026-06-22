@@ -483,13 +483,26 @@
 }
 
 // Suppress native selection highlight when custom overlay is active on the
-// direct-render path. The html-parser path does not expose the same page/text
-// refs for drawing our overlay, so it must keep the browser's native selection
-// visible.
+// direct-render path and the html-parser path. Both paths now support the
+// custom selection overlay, so we hide the browser's native highlight for all
+// selectable text within the custom-selection viewer scope.
 .hamster-reader__intermediate-document-viewer--custom-selection {
-  .hamster-reader__intermediate-text::selection,
-  .hamster-reader__intermediate-text *::selection {
-    background-color: transparent;
+  // Direct-render path: absolutely-positioned text spans.
+  .hamster-reader__intermediate-text,
+  .hamster-reader__intermediate-text *,
+  // Html-parser path: rendered DOM text nodes.
+  .hamster-reader__html-parser-output,
+  .hamster-reader__html-parser-output *,
+  .hamster-note-page,
+  .hamster-note-page *,
+  [data-text-id],
+  [data-text-id] *,
+  span.hamster-note-text,
+  span.hamster-note-text * {
+    &::selection,
+    &::-moz-selection {
+      background-color: transparent;
+    }
   }
 }
 
