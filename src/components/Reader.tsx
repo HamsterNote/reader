@@ -113,8 +113,9 @@ export type ReaderProps = {
    * to the default cap. Finite values are floored by the pages that must remain
    * protected (visible pages, overscan, in-flight work, selections, active
    * drags, and saved-selection anchors), so the runtime may keep more pages than
-   * requested. In html-parser mode, eviction preserves monolithic `htmlContent`;
-   * only per-page fallback maps and caches can be released.
+   * requested. In html-parser mode, eviction releases per-page decoded HTML and
+   * fallback state; evicted pages are decoded again when they re-enter the
+   * loadable window.
    */
   maxLoadedPages?: number
 }

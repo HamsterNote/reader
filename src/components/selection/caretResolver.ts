@@ -107,13 +107,24 @@ const getHtmlParserPageElementByPageNumber = (
   )
 }
 
+const getHtmlParserPageElementFromSlot = (
+  slotElement: HTMLDivElement
+): HTMLElement | null =>
+  slotElement.querySelector<HTMLElement>(':scope .hamster-note-page')
+
 export const getPageElementByPageNumber = (
   pageNumber: number,
   viewerRoot: HTMLElement,
   pageRefs: Map<number, HTMLDivElement>
 ): HTMLElement | null => {
+  const slotElement = pageRefs.get(pageNumber)
+  const htmlParserPageElement = slotElement
+    ? getHtmlParserPageElementFromSlot(slotElement)
+    : null
+
   return (
-    pageRefs.get(pageNumber) ??
+    htmlParserPageElement ??
+    slotElement ??
     getHtmlParserPageElementByPageNumber(pageNumber, viewerRoot)
   )
 }

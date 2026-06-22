@@ -773,6 +773,20 @@ const BACKGROUND_QUALITY_MAP: Record<BackgroundQuality, number> = {
   high: 0.8
 }
 
+type HtmlPageStatus = 'loading' | 'decoded' | 'fallback'
+
+function buildHtmlParserDecodeOptions(
+  backgroundQuality: BackgroundQuality | undefined
+): DecodeOptions | undefined {
+  return backgroundQuality
+    ? {
+        background: {
+          backgroundQuality: BACKGROUND_QUALITY_MAP[backgroundQuality]
+        }
+      }
+    : undefined
+}
+
 /** 交互模式：'default' 为默认触摸/鼠标模式，'stylus' 为手写笔优化模式 */
 export type ReaderInteractionMode = 'default' | 'stylus'
 
@@ -872,9 +886,8 @@ export type IntermediateDocumentViewerProps = {
    * Finite values are floored by protected pages (visible pages, overscan,
    * in-flight work, active selection/drag/pinch state, and saved-selection
    * anchors), so more pages may remain loaded than the raw value. With
-   * html-parser output, eviction preserves monolithic `htmlContent` because the
-   * parser cannot reconstruct individual pages; only per-page fallback maps and
-   * caches are released.
+   * html-parser output, eviction releases per-page decoded html state so an
+   * evicted page can be decoded again when it re-enters the loadable window.
    */
   maxLoadedPages?: number
   /** 交互模式，影响手势处理行为 */
@@ -898,7 +911,7 @@ type RenderableIntermediateText = IntermediateText &
   }>
 
 type PageLoadStatus = 'loaded' | 'error'
-type HtmlParserDocumentInput = Parameters<typeof HtmlParser.decodeToHtml>[0]
+type HtmlParserPageInput = Parameters<typeof HtmlParser.decodePageToHtml>[0]
 
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
@@ -1398,6 +1411,19 @@ const getRootOverlayRect = (
   }
 }
 
+const isDecodedHtmlParserPage = (
+  pageNumber: number,
+  viewerRoot: HTMLElement,
+  pageRefs: Map<number, HTMLDivElement>
+): boolean => {
+  const pageElement = getPageElementByPageNumber(
+    pageNumber,
+    viewerRoot,
+    pageRefs
+  )
+  return Boolean(pageElement?.classList.contains('hamster-note-page'))
+}
+
 // Task 4: 辅助函数，用于收集某页上的矩形，避免在渲染回调中嵌套 filter。
 const collectPageRects = (
   rects: ReaderSelectionOverlayRect[],
@@ -1587,7 +1613,10 @@ const buildSelectionHandlePositions = (
       hitAreaWidth: startPosition.hitAreaWidth,
       hitAreaHeight: startPosition.hitAreaHeight
     }
-    if (htmlParserOverlayActive) {
+    if (
+      htmlParserOverlayActive &&
+      isDecodedHtmlParserPage(startPosition.pageNumber, viewerRoot, pageRefs)
+    ) {
       const rootStart = getRootOverlayRect(
         { ...entry.start, width: 0, height: 0 },
         viewerRoot,
@@ -1615,7 +1644,10 @@ const buildSelectionHandlePositions = (
       hitAreaWidth: endPosition.hitAreaWidth,
       hitAreaHeight: endPosition.hitAreaHeight
     }
-    if (htmlParserOverlayActive) {
+    if (
+      htmlParserOverlayActive &&
+      isDecodedHtmlParserPage(endPosition.pageNumber, viewerRoot, pageRefs)
+    ) {
       const rootEnd = getRootOverlayRect(
         { ...entry.end, width: 0, height: 0 },
         viewerRoot,
@@ -1663,7 +1695,10 @@ const buildSavedRectHandlePositions = (
       hitAreaWidth: textHeight / 2,
       hitAreaHeight: textHeight
     }
-    if (htmlParserOverlayActive) {
+    if (
+      htmlParserOverlayActive &&
+      isDecodedHtmlParserPage(rect.pageNumber, viewerRoot, pageRefs)
+    ) {
       const rootPosition = getRootOverlayRect(
         { ...position, width: 0, height: 0 },
         viewerRoot,
@@ -1788,6 +1823,25 @@ const createSetPageStatusHandler = (
   status: PageLoadStatus
 ) => {
   return (currentStatuses: Map<number, PageLoadStatus>) => {
+    const nextStatuses = new Map(currentStatuses)
+    nextStatuses.set(pageNumber, status)
+    return nextStatuses
+  }
+}
+
+const createSetHtmlPageHandler = (pageNumber: number, html: string) => {
+  return (currentPages: Map<number, string>) => {
+    const nextPages = new Map(currentPages)
+    nextPages.set(pageNumber, html)
+    return nextPages
+  }
+}
+
+const createSetHtmlPageStatusHandler = (
+  pageNumber: number,
+  status: HtmlPageStatus
+) => {
+  return (currentStatuses: Map<number, HtmlPageStatus>) => {
     const nextStatuses = new Map(currentStatuses)
     nextStatuses.set(pageNumber, status)
     return nextStatuses
@@ -2460,8 +2514,27 @@ export function IntermediateDocumentViewer({
   const [baseImagesByPageNumber, setBaseImagesByPageNumber] = useState(
     () => new Map<number, string>()
   )
-  const [htmlContent, setHtmlContent] = useState<string | null>(null)
-  const [htmlParserError, setHtmlParserError] = useState(false)
+  const [htmlPagesByPageNumber, setHtmlPagesByPageNumber] = useState(
+    () => new Map<number, string>()
+  )
+  const htmlPagesByPageNumberRef = useRef(htmlPagesByPageNumber)
+  htmlPagesByPageNumberRef.current = htmlPagesByPageNumber
+  const [htmlPageStatusesByPageNumber, setHtmlPageStatusesByPageNumber] =
+    useState(() => new Map<number, HtmlPageStatus>())
+  const htmlPageStatusesByPageNumberRef = useRef(htmlPageStatusesByPageNumber)
+  htmlPageStatusesByPageNumberRef.current = htmlPageStatusesByPageNumber
+  const decodingPageNumbersRef = useRef(new Set<number>())
+  const decodeGenerationRef = useRef(0)
+  const decodeResetInputsRef = useRef({
+    runtimeDocument,
+    renderMode,
+    backgroundQuality
+  })
+  // htmlContent is now a stable mode flag for legacy selection/overlay branches;
+  // actual html-parser markup lives in per-page lazy decode maps.
+  const htmlContent =
+    renderMode === 'direct' ? null : 'html-parser-output-active'
+  const htmlParserError = false
   const overlayRectsRef = useRef<ReaderSelectionOverlayRect[]>([])
   const overlayContainerRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   // 记录所有曾出现过的 overlay 容器，便于 React 卸载后仍能清理孤立 DOM 节点
@@ -2617,8 +2690,10 @@ export function IntermediateDocumentViewer({
 
   useEffect(() => {
     activeDocumentRef.current = runtimeDocument
+    decodeGenerationRef.current += 1
     loadingPagesRef.current.clear()
     ocrLoadingPagesRef.current.clear()
+    decodingPageNumbersRef.current.clear()
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
     setLoadablePages(new Set())
@@ -2627,9 +2702,20 @@ export function IntermediateDocumentViewer({
     setOcrTextsByPageNumber(new Map())
     setPageStatuses(new Map())
     setBaseImagesByPageNumber(new Map())
-    setHtmlContent(null)
-    setHtmlParserError(false)
+    setHtmlPagesByPageNumber(new Map())
+    setHtmlPageStatusesByPageNumber(new Map())
   }, [runtimeDocument])
+
+  const bumpDecodeGeneration = useCallback(() => {
+    decodeGenerationRef.current += 1
+    decodingPageNumbersRef.current.clear()
+    return decodeGenerationRef.current
+  }, [])
+
+  const isCurrentDecodeGeneration = useCallback(
+    (generation: number) => generation === decodeGenerationRef.current,
+    []
+  )
 
   const setViewerRootRef = useCallback((element: HTMLDivElement | null) => {
     viewerRootRef.current = element
@@ -2685,49 +2771,119 @@ export function IntermediateDocumentViewer({
     [handleVirtualPaperTransform]
   )
 
-  // Primary render path: convert the runtime document to HTML via @hamster-note/html-parser.
-  // On success we render the HTML fragment directly. Because html-parser output does not
-  // expose the same `data-text-id` span tree that powers text-selection and OCR overlays,
-  // those features are only fully available on the fallback (direct-render) path.
-  // The fallback automatically activates when decodeToHtml throws or returns empty.
   useEffect(() => {
+    const shouldResetDecode =
+      decodeResetInputsRef.current.runtimeDocument !== runtimeDocument ||
+      decodeResetInputsRef.current.renderMode !== renderMode ||
+      decodeResetInputsRef.current.backgroundQuality !== backgroundQuality
+
+    if (shouldResetDecode) {
+      const nextHtmlPages = new Map<number, string>()
+      const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()
+      decodeResetInputsRef.current = {
+        runtimeDocument,
+        renderMode,
+        backgroundQuality
+      }
+      bumpDecodeGeneration()
+      htmlPagesByPageNumberRef.current = nextHtmlPages
+      htmlPageStatusesByPageNumberRef.current = nextHtmlPageStatuses
+      setHtmlPagesByPageNumber(nextHtmlPages)
+      setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
+    }
+
     if (!runtimeDocument || renderMode === 'direct') {
-      setHtmlContent(null)
-      setHtmlParserError(renderMode === 'direct')
+      if (!shouldResetDecode) {
+        const nextHtmlPages = new Map<number, string>()
+        const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()
+        htmlPagesByPageNumberRef.current = nextHtmlPages
+        htmlPageStatusesByPageNumberRef.current = nextHtmlPageStatuses
+        setHtmlPagesByPageNumber(nextHtmlPages)
+        setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
+      }
       return
     }
 
-    let cancelled = false
+    const generation = decodeGenerationRef.current
+    const decodeOptions = buildHtmlParserDecodeOptions(backgroundQuality)
 
-    const decodeOptions: DecodeOptions | undefined = backgroundQuality
-      ? {
-          background: {
-            backgroundQuality: BACKGROUND_QUALITY_MAP[backgroundQuality]
+    loadablePages.forEach((pageNumber) => {
+      if (
+        htmlPagesByPageNumberRef.current.has(pageNumber) ||
+        htmlPageStatusesByPageNumberRef.current.get(pageNumber) ===
+          'fallback' ||
+        decodingPageNumbersRef.current.has(pageNumber)
+      ) {
+        return
+      }
+
+      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
+
+      try {
+        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
+      } catch {
+        setHtmlPageStatusesByPageNumber(
+          createSetHtmlPageStatusHandler(pageNumber, 'fallback')
+        )
+        return
+      }
+
+      if (!pagePromise) {
+        setHtmlPageStatusesByPageNumber(
+          createSetHtmlPageStatusHandler(pageNumber, 'fallback')
+        )
+        return
+      }
+
+      decodingPageNumbersRef.current.add(pageNumber)
+      pagePromise
+        .then((page) => {
+          if (!page) return ''
+          return HtmlParser.decodePageToHtml(
+            page as unknown as HtmlParserPageInput,
+            decodeOptions
+          )
+        })
+        .then((html) => {
+          if (!isCurrentDecodeGeneration(generation)) {
+            return
           }
-        }
-      : undefined
 
-    HtmlParser.decodeToHtml(
-      runtimeDocument as unknown as HtmlParserDocumentInput,
-      decodeOptions
-    )
-      .then((html) => {
-        if (!cancelled) {
-          setHtmlContent(html)
-          setHtmlParserError(false)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setHtmlContent(null)
-          setHtmlParserError(true)
-        }
-      })
+          if (html.trim().length === 0) {
+            setHtmlPageStatusesByPageNumber(
+              createSetHtmlPageStatusHandler(pageNumber, 'fallback')
+            )
+            return
+          }
 
-    return () => {
-      cancelled = true
-    }
-  }, [runtimeDocument, renderMode, backgroundQuality])
+          setHtmlPagesByPageNumber(createSetHtmlPageHandler(pageNumber, html))
+          setHtmlPageStatusesByPageNumber(
+            createSetHtmlPageStatusHandler(pageNumber, 'decoded')
+          )
+        })
+        .catch(() => {
+          if (!isCurrentDecodeGeneration(generation)) {
+            return
+          }
+
+          setHtmlPageStatusesByPageNumber(
+            createSetHtmlPageStatusHandler(pageNumber, 'fallback')
+          )
+        })
+        .finally(() => {
+          if (isCurrentDecodeGeneration(generation)) {
+            decodingPageNumbersRef.current.delete(pageNumber)
+          }
+        })
+    })
+  }, [
+    runtimeDocument,
+    renderMode,
+    backgroundQuality,
+    loadablePages,
+    bumpDecodeGeneration,
+    isCurrentDecodeGeneration
+  ])
 
   const markLoadableWithOverscan = useCallback(
     (pageNumber: number) => {
@@ -2765,7 +2921,8 @@ export function IntermediateDocumentViewer({
 
       if (
         loadingPagesRef.current.has(pageNumber) ||
-        ocrLoadingPagesRef.current.has(pageNumber)
+        ocrLoadingPagesRef.current.has(pageNumber) ||
+        decodingPageNumbersRef.current.has(pageNumber)
       ) {
         return false
       }
@@ -2785,8 +2942,8 @@ export function IntermediateDocumentViewer({
       setBaseImagesByPageNumber(deletePageEntry(pageNumber))
       setPageStatuses(deletePageEntry(pageNumber))
       setLoadablePages(deletePageFromSet(pageNumber))
-      // html-parser mode preserves monolithic htmlContent: the parser output
-      // cannot be reconstructed per page, so only per-page maps/caches are freed.
+      setHtmlPagesByPageNumber(deletePageEntry(pageNumber))
+      setHtmlPageStatusesByPageNumber(deletePageEntry(pageNumber))
       setSavedSelectionDomVersion((version) => version + 1)
       return true
     },
@@ -3201,7 +3358,7 @@ export function IntermediateDocumentViewer({
 
   const buildHtmlParserSelectionPayload = useCallback(
     (selection: Selection): ReaderSelectionPayload | null => {
-      if (!htmlContent || htmlParserError) return null
+      if (!htmlContent) return null
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
         return null
       }
@@ -3276,7 +3433,7 @@ export function IntermediateDocumentViewer({
 
       return { selection, segments, extractedText }
     },
-    [htmlContent, htmlParserError, pageNumbers, textsByPageNumber]
+    [htmlContent, pageNumbers, textsByPageNumber]
   )
 
   const getNearestActiveTextElementForPoint = useCallback(
@@ -4415,13 +4572,38 @@ export function IntermediateDocumentViewer({
 
       if (htmlParserOverlayActive) {
         if (overlayElRef.current) {
-          const rootRects = rects.map((rect) =>
-            getRootOverlayRect(rect, viewerRoot, pageRefs.current)
+          const rootRects = rects.flatMap((rect) =>
+            isDecodedHtmlParserPage(
+              rect.pageNumber,
+              viewerRoot,
+              pageRefs.current
+            )
+              ? [getRootOverlayRect(rect, viewerRoot, pageRefs.current)]
+              : []
           )
           const polygons = rectsToUnionPolygons(rootRects)
           const d = polygonsToSvgPath(polygons)
-          overlayElRef.current.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+          overlayElRef.current.innerHTML =
+            d.length > 0
+              ? `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+              : ''
         }
+        overlayContainerRefs.current.forEach((container, pageNumber) => {
+          const pageRects = isDecodedHtmlParserPage(
+            pageNumber,
+            viewerRoot,
+            pageRefs.current
+          )
+            ? []
+            : rects.filter((r) => r.pageNumber === pageNumber)
+          if (pageRects.length === 0) {
+            container.innerHTML = ''
+            return
+          }
+          const polygons = rectsToUnionPolygons(pageRects)
+          const d = polygonsToSvgPath(polygons)
+          container.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+        })
       } else {
         overlayContainerRefs.current.forEach((container, pageNumber) => {
           const pageRects = rects.filter((r) => r.pageNumber === pageNumber)
@@ -4864,14 +5046,13 @@ export function IntermediateDocumentViewer({
     }
   }, [overlayOptions, refreshSelectionOverlay])
 
-  // Task 4: 当页面文本、html-parser 内容或 OCR 结果变化时，递增 DOM 版本号，
+  // 当页面文本、html-parser 模式状态或 OCR 结果变化时，递增 DOM 版本号，
   // 触发已保存选择的重新解析。为了避免 hook 依赖数组中出现未在回调体中使用的
   // 变量，这里用 ref 保存上一次状态并比较引用。
   const savedSelectionDomStateRef = useRef({
     textsByPageNumber,
     ocrTextsByPageNumber,
-    htmlContent,
-    htmlParserError
+    htmlContent
   })
   useEffect(() => {
     if (!overlayOptions?.enabled || !runtimeDocument) return
@@ -4880,15 +5061,13 @@ export function IntermediateDocumentViewer({
     const changed =
       prev.textsByPageNumber !== textsByPageNumber ||
       prev.ocrTextsByPageNumber !== ocrTextsByPageNumber ||
-      prev.htmlContent !== htmlContent ||
-      prev.htmlParserError !== htmlParserError
+      prev.htmlContent !== htmlContent
     if (!changed) return
 
     savedSelectionDomStateRef.current = {
       textsByPageNumber,
       ocrTextsByPageNumber,
-      htmlContent,
-      htmlParserError
+      htmlContent
     }
     setSavedSelectionDomVersion((version) => version + 1)
   }, [
@@ -4896,8 +5075,7 @@ export function IntermediateDocumentViewer({
     runtimeDocument,
     textsByPageNumber,
     ocrTextsByPageNumber,
-    htmlContent,
-    htmlParserError
+    htmlContent
   ])
 
   // 记录最近一次解析时使用的 DOM 版本号，仅用于把 savedSelectionDomVersion
@@ -7125,10 +7303,170 @@ export function IntermediateDocumentViewer({
     [selectionHandleElement]
   )
 
-  const htmlParserInnerHtml = useMemo(
-    () => ({ __html: htmlContent ?? '' }),
-    [htmlContent]
-  )
+  // 渲染 direct 模式页面内部内容（base image、overlay 容器、加载/错误状态、文本 spans）。
+  // 被 direct 分支和 html-parser 模式下的 fallback/loading 页面共享。
+  const renderDirectPageInner = (pageNumber: number) => {
+    const texts = textsByPageNumber.get(pageNumber) ?? []
+    const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
+    const allTexts = [...texts, ...ocrTexts]
+    const directPageStatus = pageStatuses.get(pageNumber)
+    const isDirectPageLoading =
+      loadablePages.has(pageNumber) &&
+      directPageStatus !== 'loaded' &&
+      directPageStatus !== 'error'
+    const directBaseImageSource = baseImagesByPageNumber.get(pageNumber)
+
+    return (
+      <>
+        {directBaseImageSource && (
+          <img
+            className='hamster-reader__intermediate-page-base-image'
+            src={directBaseImageSource}
+            alt=''
+            aria-hidden='true'
+          />
+        )}
+        {overlayOptions?.enabled && (
+          <div
+            ref={(el) => {
+              if (el) {
+                overlayContainerRefs.current.set(pageNumber, el)
+                allOverlayContainersRef.current.add(el)
+              } else {
+                overlayContainerRefs.current.delete(pageNumber)
+              }
+            }}
+            className='hamster-reader__selection-overlay'
+            role='presentation'
+            aria-hidden='true'
+            {...overlayBodyDragProps}
+            style={
+              {
+                '--hamster-reader-selection-color': overlayOptions.color,
+                '--hamster-reader-selection-opacity': overlayOptions.opacity,
+                ...overlayBodyDragStyle
+              } as React.CSSProperties
+            }
+          />
+        )}
+        {/* Task 4: 已保存选择覆盖层，每页独立容器。 */}
+        {overlayOptions?.enabled && (
+          <div
+            ref={(el) => {
+              if (el) {
+                savedOverlayContainerRefs.current.set(pageNumber, el)
+              } else {
+                savedOverlayContainerRefs.current.delete(pageNumber)
+              }
+            }}
+            className='hamster-reader__saved-selection-overlay'
+            role='presentation'
+            aria-hidden='true'
+            onClick={handleSavedOverlayClick}
+            style={
+              {
+                '--hamster-reader-saved-selection-color': overlayOptions.color,
+                '--hamster-reader-saved-selection-opacity':
+                  overlayOptions.opacity
+              } as React.CSSProperties
+            }
+          />
+        )}
+        {overlayOptions?.enabled && selectionHandleElement !== null && (
+          <div
+            className='hamster-reader__saved-selection-handles'
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none'
+            }}
+          >
+            {(() => {
+              const savedEntry = savedSelectionHandlePositions.get(pageNumber)
+              if (!savedEntry) return null
+              return (
+                <>
+                  {savedEntry.start &&
+                    renderSelectionHandle(
+                      'start',
+                      savedEntry.start,
+                      false,
+                      'saved'
+                    )}
+                  {savedEntry.end &&
+                    renderSelectionHandle(
+                      'end',
+                      savedEntry.end,
+                      false,
+                      'saved'
+                    )}
+                </>
+              )
+            })()}
+          </div>
+        )}
+        {overlayOptions?.enabled && selectionHandleElement !== null && (
+          <div
+            className='hamster-reader__selection-handles'
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none'
+            }}
+          >
+            {(() => {
+              const handlesHidden =
+                !shouldShowSelectionHandles(dragPreviewState)
+              const entry = selectionHandlePositions.get(pageNumber)
+              if (!entry) return null
+              return (
+                <>
+                  {entry.start &&
+                    renderSelectionHandle('start', entry.start, handlesHidden)}
+                  {entry.end &&
+                    renderSelectionHandle('end', entry.end, handlesHidden)}
+                </>
+              )
+            })()}
+          </div>
+        )}
+        {isDirectPageLoading && (
+          <div className='hamster-reader__intermediate-page-status'>
+            Loading page {pageNumber}…
+          </div>
+        )}
+        {directPageStatus === 'error' && (
+          <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
+            Failed to load page {pageNumber}
+          </div>
+        )}
+        {allTexts.map((textData) => {
+          const text = textData as RenderableIntermediateText
+          const bbox = getTextBbox(text)
+          const spanStyle = buildTextSpanStyle(text, bbox)
+
+          return (
+            <span
+              key={text.id}
+              ref={setTextRef(text, pageNumber)}
+              className='hamster-reader__intermediate-text'
+              data-text-id={text.id}
+              data-page-number={pageNumber}
+              style={spanStyle}
+            >
+              {text.content}
+            </span>
+          )
+        })}
+      </>
+    )
+  }
 
   if (!runtimeDocument) {
     return (
@@ -7147,7 +7485,7 @@ export function IntermediateDocumentViewer({
       className={rootClassName}
       data-testid='intermediate-document-viewer'
     >
-      {(htmlContent && !htmlParserError) || pageNumbers.length > 0 ? (
+      {pageNumbers.length > 0 ? (
         <VirtualPaper
           renderMode={VirtualPaperRenderMode.Transform}
           transform={virtualPaperTransform}
@@ -7156,19 +7494,59 @@ export function IntermediateDocumentViewer({
           onTransformChange={handleVirtualPaperTransformChange}
           onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
         >
-          {htmlContent && !htmlParserError ? (
+          {renderMode !== 'direct' ? (
             <>
-              {htmlContent ? (
-                <div
-                  className='hamster-reader__html-parser-output'
-                  data-testid='html-parser-output'
-                  // The HTML comes from the trusted @hamster-note/html-parser package,
-                  // which converts IntermediateDocument data into HTML fragments.
-                  // Text selection hooks do not rely on this path because it may lack data-text-id attributes.
-                  // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
-                  dangerouslySetInnerHTML={htmlParserInnerHtml}
-                />
-              ) : null}
+              <div
+                className='hamster-reader__html-parser-output'
+                data-testid='html-parser-output'
+              >
+                <div className='hamster-note-document'>
+                  {pageNumbers.map((pageNumber) => {
+                    const htmlPageSize = normalizePageSize(
+                      runtimeDocument.getPageSizeByPageNumber(pageNumber)
+                    )
+                    const htmlPageStatusEntry =
+                      htmlPageStatusesByPageNumber.get(pageNumber)
+                    const htmlPageHtmlEntry =
+                      htmlPagesByPageNumber.get(pageNumber)
+                    const isHtmlPageDecoded =
+                      htmlPageStatusEntry === 'decoded' &&
+                      Boolean(htmlPageHtmlEntry)
+
+                    return (
+                      <div
+                        key={pageNumber}
+                        ref={setPageRef(pageNumber)}
+                        className='hamster-reader__intermediate-page'
+                        data-testid={`intermediate-page-${pageNumber}`}
+                        data-page-number={pageNumber}
+                        data-page-size-unavailable={
+                          htmlPageSize.pageSizeUnavailable ? 'true' : undefined
+                        }
+                        style={{
+                          position: 'relative',
+                          width: `${htmlPageSize.width}px`,
+                          height: `${htmlPageSize.height}px`,
+                          overflow: 'hidden'
+                        }}
+                      >
+                        {isHtmlPageDecoded ? (
+                          <div
+                            // The HTML comes from the trusted @hamster-note/html-parser package,
+                            // which converts IntermediateDocument data into per-page HTML fragments.
+                            // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
+                            dangerouslySetInnerHTML={{
+                              __html: htmlPageHtmlEntry ?? ''
+                            }}
+                          />
+                        ) : (
+                          renderDirectPageInner(pageNumber)
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
               {overlayOptions?.enabled && (
                 <div
                   ref={(el) => {
@@ -7302,200 +7680,36 @@ export function IntermediateDocumentViewer({
             </>
           ) : (
             pageNumbers.map((pageNumber) => {
-              const pageSize = normalizePageSize(
+              const directPageSize = normalizePageSize(
                 runtimeDocument.getPageSizeByPageNumber(pageNumber)
               )
-              const texts = textsByPageNumber.get(pageNumber) ?? []
-              const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
-              const allTexts = [...texts, ...ocrTexts]
-              const pageStatus = pageStatuses.get(pageNumber)
-              const isPageLoading =
+              const directPageStatusEntry = pageStatuses.get(pageNumber)
+              const isDirectPageLoading =
                 loadablePages.has(pageNumber) &&
-                pageStatus !== 'loaded' &&
-                pageStatus !== 'error'
-              const pageClassName = isPageLoading
+                directPageStatusEntry !== 'loaded' &&
+                directPageStatusEntry !== 'error'
+              const directPageClassName = isDirectPageLoading
                 ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
                 : 'hamster-reader__intermediate-page'
-
-              const baseImageSource = baseImagesByPageNumber.get(pageNumber)
 
               return (
                 <div
                   key={pageNumber}
                   ref={setPageRef(pageNumber)}
-                  className={pageClassName}
+                  className={directPageClassName}
                   data-testid={`intermediate-page-${pageNumber}`}
                   data-page-number={pageNumber}
                   data-page-size-unavailable={
-                    pageSize.pageSizeUnavailable ? 'true' : undefined
+                    directPageSize.pageSizeUnavailable ? 'true' : undefined
                   }
                   style={{
                     position: 'relative',
-                    width: `${pageSize.width}px`,
-                    height: `${pageSize.height}px`,
+                    width: `${directPageSize.width}px`,
+                    height: `${directPageSize.height}px`,
                     overflow: 'hidden'
                   }}
                 >
-                  {baseImageSource && (
-                    <img
-                      className='hamster-reader__intermediate-page-base-image'
-                      src={baseImageSource}
-                      alt=''
-                      aria-hidden='true'
-                    />
-                  )}
-                  {overlayOptions?.enabled && (
-                    <div
-                      ref={(el) => {
-                        if (el) {
-                          overlayContainerRefs.current.set(pageNumber, el)
-                          allOverlayContainersRef.current.add(el)
-                        } else {
-                          overlayContainerRefs.current.delete(pageNumber)
-                        }
-                      }}
-                      className='hamster-reader__selection-overlay'
-                      role='presentation'
-                      aria-hidden='true'
-                      {...overlayBodyDragProps}
-                      style={
-                        {
-                          '--hamster-reader-selection-color':
-                            overlayOptions.color,
-                          '--hamster-reader-selection-opacity':
-                            overlayOptions.opacity,
-                          ...overlayBodyDragStyle
-                        } as React.CSSProperties
-                      }
-                    />
-                  )}
-                  {/* Task 4: 已保存选择覆盖层，每页独立容器。 */}
-                  {overlayOptions?.enabled && (
-                    <div
-                      ref={(el) => {
-                        if (el) {
-                          savedOverlayContainerRefs.current.set(pageNumber, el)
-                        } else {
-                          savedOverlayContainerRefs.current.delete(pageNumber)
-                        }
-                      }}
-                      className='hamster-reader__saved-selection-overlay'
-                      role='presentation'
-                      aria-hidden='true'
-                      onClick={handleSavedOverlayClick}
-                      style={
-                        {
-                          '--hamster-reader-saved-selection-color':
-                            overlayOptions.color,
-                          '--hamster-reader-saved-selection-opacity':
-                            overlayOptions.opacity
-                        } as React.CSSProperties
-                      }
-                    />
-                  )}
-                  {overlayOptions?.enabled &&
-                    selectionHandleElement !== null && (
-                      <div
-                        className='hamster-reader__saved-selection-handles'
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          height: '100%',
-                          pointerEvents: 'none'
-                        }}
-                      >
-                        {(() => {
-                          const entry =
-                            savedSelectionHandlePositions.get(pageNumber)
-                          if (!entry) return null
-                          return (
-                            <>
-                              {entry.start &&
-                                renderSelectionHandle(
-                                  'start',
-                                  entry.start,
-                                  false,
-                                  'saved'
-                                )}
-                              {entry.end &&
-                                renderSelectionHandle(
-                                  'end',
-                                  entry.end,
-                                  false,
-                                  'saved'
-                                )}
-                            </>
-                          )
-                        })()}
-                      </div>
-                    )}
-                  {overlayOptions?.enabled &&
-                    selectionHandleElement !== null && (
-                      <div
-                        className='hamster-reader__selection-handles'
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          height: '100%',
-                          pointerEvents: 'none'
-                        }}
-                      >
-                        {(() => {
-                          const handlesHidden =
-                            !shouldShowSelectionHandles(dragPreviewState)
-                          const entry = selectionHandlePositions.get(pageNumber)
-                          if (!entry) return null
-                          return (
-                            <>
-                              {entry.start &&
-                                renderSelectionHandle(
-                                  'start',
-                                  entry.start,
-                                  handlesHidden
-                                )}
-                              {entry.end &&
-                                renderSelectionHandle(
-                                  'end',
-                                  entry.end,
-                                  handlesHidden
-                                )}
-                            </>
-                          )
-                        })()}
-                      </div>
-                    )}
-                  {isPageLoading && (
-                    <div className='hamster-reader__intermediate-page-status'>
-                      Loading page {pageNumber}…
-                    </div>
-                  )}
-                  {pageStatus === 'error' && (
-                    <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
-                      Failed to load page {pageNumber}
-                    </div>
-                  )}
-                  {allTexts.map((textData) => {
-                    const text = textData as RenderableIntermediateText
-                    const bbox = getTextBbox(text)
-                    const style = buildTextSpanStyle(text, bbox)
-
-                    return (
-                      <span
-                        key={text.id}
-                        ref={setTextRef(text, pageNumber)}
-                        className='hamster-reader__intermediate-text'
-                        data-text-id={text.id}
-                        data-page-number={pageNumber}
-                        style={style}
-                      >
-                        {text.content}
-                      </span>
-                    )
-                  })}
+                  {renderDirectPageInner(pageNumber)}
                 </div>
               )
             })

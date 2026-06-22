@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildSelectionPayload,
   getSelectionOverlayRects,
+  getPageElementByPageNumber,
   isNonSpaceBlankText,
   mergeSelectionRects,
   type ReaderSavedSelection,
@@ -44,7 +45,8 @@ Reflect.set(globalThis, 'vi', vi)
 
 vi.mock('@hamster-note/html-parser', () => ({
   HtmlParser: {
-    decodeToHtml: vi.fn()
+    decodeToHtml: vi.fn(),
+    decodePageToHtml: vi.fn()
   }
 }))
 
@@ -875,6 +877,21 @@ const makeSelectionWithRects = (getRects: () => DOMRect[]) => {
   } as unknown as Selection
 }
 
+const createDeferred = <T,>() => {
+  let resolveDeferred: (value: T | PromiseLike<T>) => void = () => {}
+  let rejectDeferred: (reason?: unknown) => void = () => {}
+  const promise = new Promise<T>((resolve, reject) => {
+    resolveDeferred = resolve
+    rejectDeferred = reject
+  })
+
+  return {
+    promise,
+    resolve: resolveDeferred,
+    reject: rejectDeferred
+  }
+}
+
 /**
  * Create a mock Selection that returns DIFFERENT rects for the full range vs
  * collapsed start/end boundary ranges. Used to prove handle positions derive
@@ -1005,7 +1022,10 @@ describe('IntermediateDocumentViewer', () => {
 
   beforeEach(() => {
     Reflect.set(globalThis, '__hamsterReaderMockDragInstances', [])
+    vi.mocked(HtmlParser.decodeToHtml).mockReset()
+    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
     vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
   })
 
   it('is exported from the public entrypoint', () => {
@@ -1055,12 +1075,12 @@ describe('IntermediateDocumentViewer', () => {
     ).toBeEmptyDOMElement()
   })
 
-  it('renders html-parser output for runtime documents', async () => {
-    const { document } = makeDocument({ pageCount: 1 })
+  it('renders html-parser output for runtime documents with decodePageToHtml', async () => {
+    const { document, pages } = makeDocument({ pageCount: 1 })
     const mockHtml =
-      '<div class="hamster-note-document"><div class="page">HTML Parser Output</div></div>'
+      '<div class="hamster-note-page"><div class="page">HTML Parser Output</div></div>'
 
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
 
     render(<IntermediateDocumentViewer document={document} />)
 
@@ -1068,7 +1088,11 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
+      pages.get(1),
+      undefined
+    )
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'HTML Parser Output'
     )
@@ -1117,9 +1141,9 @@ describe('IntermediateDocumentViewer', () => {
         ]
       } as unknown as IntermediateDocumentSerialized
       const mockHtml =
-        '<div class="hamster-note-document"><div class="page">Serialized HTML</div></div>'
+        '<div class="hamster-note-page"><div class="page">Serialized HTML</div></div>'
 
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
 
       render(
         <IntermediateDocumentViewer serializedDocument={serializedDocument} />
@@ -1129,13 +1153,8 @@ describe('IntermediateDocumentViewer', () => {
         expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
       })
 
-      expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'serialized-doc',
-          pageCount: 1
-        }),
-        undefined
-      )
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
+      expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
       expect(screen.getByTestId('html-parser-output')).toContainHTML(
         'Serialized HTML'
       )
@@ -1145,37 +1164,230 @@ describe('IntermediateDocumentViewer', () => {
     }
   })
 
-  it('falls back to direct renderer when html-parser fails', async () => {
+  it('html-parser output wraps page slots in hamster-note-document', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
+      '<div class="hamster-note-page">Page 1 content</div>'
+    )
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const output = screen.getByTestId('html-parser-output')
+    expect(output).toHaveClass('hamster-reader__html-parser-output')
+
+    const documentWrapper = output.querySelector('.hamster-note-document')
+    expect(documentWrapper).not.toBeNull()
+
+    const slot = screen.getByTestId('intermediate-page-1')
+    expect(documentWrapper).toContainElement(slot)
+    expect(slot).toHaveClass('hamster-reader__intermediate-page')
+    expect(slot).toHaveAttribute('data-page-number', '1')
+  })
+
+  it('decoded html-parser page slot contains child hamster-note-page', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
+      '<div class="hamster-note-page"><p>Decoded content</p></div>'
+    )
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await screen.findByText('Decoded content')
+
+    const slot = screen.getByTestId('intermediate-page-1')
+    const notePage = slot.querySelector('.hamster-note-page')
+    expect(notePage).not.toBeNull()
+    expect(notePage).toHaveTextContent('Decoded content')
+  })
+
+  it('html-parser page slots preserve width/height style in all states', async () => {
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    const failedPage = pages.get(2) as unknown
+    vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(async (page) => {
+      if (page === failedPage) {
+        throw new Error('Page 2 failed')
+      }
+      return '<div class="hamster-note-page">Decoded</div>'
+    })
+
+    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+
+    // Before decode resolves, all slots should have page dimensions
+    expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
+      width: '100px',
+      height: '150px'
+    })
+    expect(screen.getByTestId('intermediate-page-2')).toHaveStyle({
+      width: '100px',
+      height: '150px'
+    })
+
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(3)
+    })
+
+    // After decode: page 1 decoded, page 2 fallback, page 3 decoded
+    // All slots should still have the same dimensions
+    for (const pageNumber of [1, 2, 3]) {
+      expect(screen.getByTestId(`intermediate-page-${pageNumber}`)).toHaveStyle(
+        {
+          width: '100px',
+          height: '150px'
+        }
+      )
+    }
+  })
+
+  it('failed html-parser page shows direct-rendered text in same slot', async () => {
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const failedPage = pages.get(2) as unknown
+    vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(async (page) => {
+      if (page === failedPage) {
+        throw new Error('Page 2 failed')
+      }
+      return '<div class="hamster-note-page">Page 1 decoded</div>'
+    })
+
+    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+
+    await screen.findByText('Page 1 decoded')
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(2)
+    })
+
+    // Page 1 decoded: should show html-parser content
+    const slot1 = screen.getByTestId('intermediate-page-1')
+    expect(slot1.querySelector('.hamster-note-page')).not.toBeNull()
+
+    // Page 2 failed: should show direct-rendered text inside its slot
+    const slot2 = screen.getByTestId('intermediate-page-2')
+    expect(slot2).toHaveAttribute('data-page-number', '2')
+    expect(slot2).toHaveTextContent('Page 2 text')
+    expect(slot2.querySelector('.hamster-note-page')).toBeNull()
+  })
+
+  it('page lookup resolves decoded child hamster-note-page for html-parser pages', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
+      '<div class="hamster-note-page"><p>Lookup target</p></div>'
+    )
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await screen.findByText('Lookup target')
+
+    const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+    const htmlParserPages = viewerRoot.querySelectorAll(
+      '.hamster-reader__html-parser-output .hamster-note-page'
+    )
+    expect(htmlParserPages).toHaveLength(1)
+
+    // The slot is the pageRefs target; the .hamster-note-page is the
+    // selection target inside the slot.
+    const slot = screen.getByTestId('intermediate-page-1')
+    expect(slot.querySelector('.hamster-note-page')).not.toBeNull()
+  })
+
+  it('keeps html-parser output shell when html-parser page fails', async () => {
     const { document } = makeDocument({ pageCount: 1 })
 
-    vi.mocked(HtmlParser.decodeToHtml).mockRejectedValueOnce(
+    vi.mocked(HtmlParser.decodePageToHtml).mockRejectedValueOnce(
       new Error('Parser failed')
     )
 
     render(<IntermediateDocumentViewer document={document} />)
 
     await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       expect(screen.getByText('Page 1 text')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
-    expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+    expect(
+      screen
+        .getByTestId('intermediate-page-1')
+        .querySelector('.hamster-note-page')
+    ).toBeNull()
   })
 
-  it('falls back to direct renderer when html-parser returns empty string', async () => {
+  it('keeps html-parser output shell when html-parser returns empty string', async () => {
     const { document } = makeDocument({ pageCount: 1 })
 
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce('')
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce('')
 
     render(<IntermediateDocumentViewer document={document} />)
 
     await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       expect(screen.getByText('Page 1 text')).toBeInTheDocument()
     })
 
-    expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
+    expect(
+      screen
+        .getByTestId('intermediate-page-1')
+        .querySelector('.hamster-note-page')
+    ).toBeNull()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('passes high backgroundQuality to decodePageToHtml', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
+      '<div class="hamster-note-page">High quality</div>'
+    )
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        backgroundQuality='high'
+      />
+    )
+
+    await screen.findByText('High quality')
+
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
+      expect.anything(),
+      { background: { backgroundQuality: 0.8 } }
+    )
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('passes undefined backgroundQuality options to decodePageToHtml when absent', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
+      '<div class="hamster-note-page">Default quality</div>'
+    )
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    await screen.findByText('Default quality')
+
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined
+    )
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('direct renderMode calls neither decodePageToHtml nor decodeToHtml', async () => {
+    const { document, pages } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer document={document} renderMode='direct' />
+    )
+
+    await waitFor(() => {
+      expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+    })
+
+    expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
   })
 
   it('loads the first page immediately and later pages after intersection with overscan', async () => {
@@ -1200,6 +1412,306 @@ describe('IntermediateDocumentViewer', () => {
 
     expect(pages.get(5)?.getContent).not.toHaveBeenCalled()
     expect(await screen.findByText('Page 3 text')).toBeInTheDocument()
+  })
+
+  it('lazy decodePageToHtml decodes only loadable pages before IntersectionObserver exposes more pages', async () => {
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    const decodedPageNumbers = new WeakMap<object, number>()
+    const decodePromises = new Map<
+      number,
+      ReturnType<typeof createDeferred<string>>
+    >()
+    pages.forEach((page, pageNumber) => {
+      decodedPageNumbers.set(page as unknown as object, pageNumber)
+      decodePromises.set(pageNumber, createDeferred<string>())
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(async (page) => {
+      const pageNumber = decodedPageNumbers.get(page as unknown as object)
+      if (!pageNumber) return ''
+      return decodePromises.get(pageNumber)?.promise ?? ''
+    })
+
+    render(<IntermediateDocumentViewer document={document} overscan={0} />)
+
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
+    })
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
+      pages.get(1),
+      undefined
+    )
+    expect(screen.queryByText('Decoded page 2')).not.toBeInTheDocument()
+
+    intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-2'))
+
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(2)
+    })
+    await act(async () => {
+      decodePromises
+        .get(1)
+        ?.resolve('<div class="hamster-note-page">Decoded page 1</div>')
+      decodePromises
+        .get(2)
+        ?.resolve('<div class="hamster-note-page">Decoded page 2</div>')
+      await Promise.all([
+        decodePromises.get(1)?.promise,
+        decodePromises.get(2)?.promise
+      ])
+    })
+
+    await screen.findByText('Decoded page 1')
+    await screen.findByText('Decoded page 2')
+    expect(HtmlParser.decodePageToHtml).toHaveBeenLastCalledWith(
+      pages.get(2),
+      undefined
+    )
+    expect(screen.queryByText('Decoded page 3')).not.toBeInTheDocument()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('decodePageToHtml duplicate renders do not duplicate in-flight calls for the same page', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const firstDecode = createDeferred<string>()
+    vi.mocked(HtmlParser.decodePageToHtml).mockReturnValueOnce(
+      firstDecode.promise
+    )
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer document={document} />
+    )
+
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
+    })
+
+    rerender(<IntermediateDocumentViewer document={document} />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      firstDecode.resolve('<div class="hamster-note-page">Decoded once</div>')
+      await firstDecode.promise
+    })
+
+    expect(await screen.findByText('Decoded once')).toBeInTheDocument()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('stale decodePageToHtml results are ignored after backgroundQuality changes', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const staleDecode = createDeferred<string>()
+    vi.mocked(HtmlParser.decodePageToHtml)
+      .mockReturnValueOnce(staleDecode.promise)
+      .mockResolvedValueOnce(
+        '<div class="hamster-note-page">Fresh high quality decode</div>'
+      )
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer document={document} />
+    )
+
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
+    })
+
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        backgroundQuality='high'
+      />
+    )
+
+    await screen.findByText('Fresh high quality decode')
+
+    await act(async () => {
+      staleDecode.resolve('<div class="hamster-note-page">Stale decode</div>')
+      await staleDecode.promise
+    })
+
+    expect(screen.queryByText('Stale decode')).not.toBeInTheDocument()
+    expect(screen.getByText('Fresh high quality decode')).toBeInTheDocument()
+    expect(HtmlParser.decodePageToHtml).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      { background: { backgroundQuality: 0.8 } }
+    )
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('decodePageToHtml page failure only falls back that page', async () => {
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    const failedPage = pages.get(2) as unknown
+    const decodedPageNumbers = new WeakMap<object, number>()
+    pages.forEach((page, pageNumber) => {
+      decodedPageNumbers.set(page as unknown as object, pageNumber)
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(async (page) => {
+      if (page === failedPage) {
+        throw new Error('Page 2 failed')
+      }
+      const pageNumber = decodedPageNumbers.get(page as unknown as object)
+      return `<div class="hamster-note-page">Decoded page ${pageNumber}</div>`
+    })
+
+    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+
+    await screen.findByText('Decoded page 1')
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(3)
+    })
+    expect(screen.getByText('Decoded page 1')).toBeInTheDocument()
+    expect(screen.queryByText('Page 2 failed')).not.toBeInTheDocument()
+    await screen.findByText('Decoded page 3')
+    expect(screen.getByText('Decoded page 1')).toBeInTheDocument()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('only the failed page falls back when the first page fails decode', async () => {
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    const failedPage = pages.get(1) as unknown
+    const decodedPageNumbers = new WeakMap<object, number>()
+    pages.forEach((page, pageNumber) => {
+      decodedPageNumbers.set(page as unknown as object, pageNumber)
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(async (page) => {
+      if (page === failedPage) {
+        throw new Error('Page 1 failed')
+      }
+      const pageNumber = decodedPageNumbers.get(page as unknown as object)
+      return `<div class="hamster-note-page">Decoded page ${pageNumber}</div>`
+    })
+
+    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+
+    await waitFor(() => {
+      expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(3)
+    })
+    await screen.findByText('Decoded page 2')
+    await screen.findByText('Decoded page 3')
+
+    expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+
+    const slot1 = screen.getByTestId('intermediate-page-1')
+    expect(slot1).toHaveTextContent('Page 1 text')
+    expect(slot1.querySelector('.hamster-note-page')).toBeNull()
+
+    const slot2 = screen.getByTestId('intermediate-page-2')
+    const slot2HtmlPage = slot2.querySelector('.hamster-note-page')
+    expect(slot2HtmlPage).not.toBeNull()
+    expect(slot2HtmlPage).toHaveTextContent('Decoded page 2')
+
+    const slot3 = screen.getByTestId('intermediate-page-3')
+    const slot3HtmlPage = slot3.querySelector('.hamster-note-page')
+    expect(slot3HtmlPage).not.toBeNull()
+    expect(slot3HtmlPage).toHaveTextContent('Decoded page 3')
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('resolves decoded page after first page html parser failure', async () => {
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const failedPage = pages.get(1) as unknown
+    const savedSelection = makeSavedSelection({
+      id: 'saved-page-2',
+      fallbackOnly: true,
+      visualRects: [{ pageNumber: 2, x: 10, y: 20, width: 40, height: 12 }]
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(async (page) => {
+      if (page === failedPage) {
+        throw new Error('Page 1 failed')
+      }
+      return '<div class="hamster-note-page"><p>Selectable page 2</p></div>'
+    })
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={1}
+        selectionOverlay
+        savedSelections={[savedSelection]}
+      />
+    )
+
+    await screen.findByText('Selectable page 2')
+
+    const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+    const slot1 = screen.getByTestId('intermediate-page-1')
+    const slot2 = screen.getByTestId('intermediate-page-2')
+    const page2 = slot2.querySelector(
+      '.hamster-note-page'
+    ) as HTMLElement | null
+    if (!page2) {
+      throw new Error('Expected page 2 to decode through html-parser')
+    }
+    expect(slot1.querySelector('.hamster-note-page')).toBeNull()
+    expect(
+      getPageElementByPageNumber(
+        2,
+        viewerRoot,
+        new Map([[2, slot2 as HTMLDivElement]])
+      )
+    ).toBe(page2)
+
+    const viewerRectSpy = vi
+      .spyOn(viewerRoot, 'getBoundingClientRect')
+      .mockReturnValue(
+        makeDomRect({ left: 100, top: 200, width: 500, height: 700 })
+      )
+    const slotRectSpy = vi
+      .spyOn(slot2, 'getBoundingClientRect')
+      .mockReturnValue(
+        makeDomRect({ left: 140, top: 260, width: 300, height: 400 })
+      )
+    const pageRectSpy = vi
+      .spyOn(page2, 'getBoundingClientRect')
+      .mockReturnValue(
+        makeDomRect({ left: 160, top: 290, width: 250, height: 320 })
+      )
+
+    try {
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          overscan={1}
+          selectionOverlay
+          savedSelections={[savedSelection]}
+        />
+      )
+
+      const getSavedPath = () =>
+        Array.from(
+          viewerRoot.querySelectorAll(
+            '.hamster-reader__saved-selection-overlay'
+          )
+        )
+          .filter(
+            (element) => !element.closest('.hamster-reader__intermediate-page')
+          )
+          .map((element) =>
+            element.querySelector(
+              '.hamster-reader__saved-selection-overlay-path'
+            )
+          )
+          .find(
+            (element): element is SVGPathElement =>
+              element instanceof SVGElement
+          )
+      await waitFor(() => {
+        expect(getSavedPath()).toBeInTheDocument()
+      })
+      const path = getSavedPath()
+      expect(path?.getAttribute('data-saved-selection-id')).toBe('saved-page-2')
+      expect(path?.getAttribute('d')).toContain('50')
+    } finally {
+      viewerRectSpy.mockRestore()
+      slotRectSpy.mockRestore()
+      pageRectSpy.mockRestore()
+    }
+
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
   })
 
   it('protects large documents by loading only the intersecting page and overscan', async () => {
@@ -1783,38 +2295,73 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
-    it('html parser mode evicts per-page maps without clearing htmlContent', async () => {
+    it('reconstructs evicted html parser page', async () => {
       const idleCallback = installQueuedIdleCallback()
-      const { document, pages } = makeDocument({ pageCount: 20 })
-      const mockHtml =
-        '<div class="hamster-note-document"><div class="page">HTML Parser Output</div></div>'
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+      const { document, pages } = makeDocument({ pageCount: 7 })
+      const decodedPageNumbers = new WeakMap<object, number>()
+      pages.forEach((page, pageNumber) => {
+        decodedPageNumbers.set(page as unknown as object, pageNumber)
+      })
+      const decodeCallsByPageNumber = new Map<number, number>()
+      vi.mocked(HtmlParser.decodePageToHtml).mockImplementation(
+        async (page) => {
+          const pageNumber = decodedPageNumbers.get(page as unknown as object)
+          if (!pageNumber) return ''
+          const callCount = (decodeCallsByPageNumber.get(pageNumber) ?? 0) + 1
+          decodeCallsByPageNumber.set(pageNumber, callCount)
+          return `<div class="hamster-note-page">Decoded page ${pageNumber} pass ${callCount}</div>`
+        }
+      )
 
       try {
         render(
           <IntermediateDocumentViewer
             document={document}
             overscan={0}
-            maxLoadedPages={0}
+            maxLoadedPages={5}
           />
         )
 
+        const page2 = screen.getByTestId('intermediate-page-2')
+        intersectionObserverMock.trigger(page2)
         await waitFor(() => {
-          expect(screen.getByTestId('html-parser-output')).toContainHTML(
-            'HTML Parser Output'
-          )
+          expect(screen.getByText('Decoded page 2 pass 1')).toBeInTheDocument()
         })
-        await waitFor(() => {
-          expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
-        })
+
+        intersectionObserverMock.trigger(page2, false)
+        for (let pageNumber = 3; pageNumber <= 7; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          await waitFor(() => {
+            expect(
+              screen.getByText(`Decoded page ${pageNumber} pass 1`)
+            ).toBeInTheDocument()
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
 
         await idleCallback.flush()
 
         await waitFor(() => {
-          expect(screen.getByTestId('html-parser-output')).toContainHTML(
-            'HTML Parser Output'
-          )
+          expect(
+            screen.queryByText('Decoded page 2 pass 1')
+          ).not.toBeInTheDocument()
         })
+
+        intersectionObserverMock.trigger(page2)
+
+        await waitFor(() => {
+          expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(8)
+          expect(screen.getByText('Decoded page 2 pass 2')).toBeInTheDocument()
+        })
+        expect(
+          screen.queryByText('Decoded page 2 pass 1')
+        ).not.toBeInTheDocument()
+        expect(HtmlParser.decodePageToHtml).toHaveBeenLastCalledWith(
+          pages.get(2),
+          undefined
+        )
+        expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
       } finally {
         idleCallback.restore()
       }
@@ -2588,7 +3135,7 @@ describe('IntermediateDocumentViewer', () => {
 
   it('shows a page error instead of loading forever when page lookup throws', async () => {
     const { document } = makeDocument({ pageCount: 1 })
-    vi.mocked(document.getPageByPageNumber).mockImplementationOnce(() => {
+    vi.mocked(document.getPageByPageNumber).mockImplementation(() => {
       throw new Error('page lookup failed')
     })
 
@@ -3039,6 +3586,7 @@ describe('IntermediateDocumentViewer', () => {
       vi.restoreAllMocks()
       Reflect.set(globalThis, '__hamsterReaderMockDragInstances', [])
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
       vi.useRealTimers()
     })
 
@@ -3925,9 +4473,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('html-parser long-press shows caret preview from native Range geometry', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p>Native parsed text</p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p>Native parsed text</p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue(parserHtml)
 
       render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
 
@@ -4114,9 +4663,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('html-parser drag creates overlay SVG and handles', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p>Native parsed text</p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p>Native parsed text</p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
 
       render(
         <IntermediateDocumentViewer
@@ -4175,6 +4725,15 @@ describe('IntermediateDocumentViewer', () => {
         width: 200,
         height: 200
       })
+      const slotRectSpy = mockElementRect(
+        screen.getByTestId('intermediate-page-1'),
+        {
+          left: 50,
+          top: 80,
+          width: 200,
+          height: 200
+        }
+      )
       const rootRectSpy = mockElementRect(viewerRoot, {
         left: 10,
         top: 20,
@@ -4248,15 +4807,17 @@ describe('IntermediateDocumentViewer', () => {
         elementFromPointSpy.mockRestore()
         rootRectSpy.mockRestore()
         pageRectSpy.mockRestore()
+        slotRectSpy.mockRestore()
         restoreCreatedRangeGeometry()
       }
     })
 
     it('html-parser strict mouse drag creates selection overlay and live save payload', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
       const onSelectText = vi.fn()
 
       render(
@@ -4411,9 +4972,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('html-parser right click before strict mouse selection keeps native behavior', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
 
       render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
 
@@ -4462,9 +5024,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('html-parser right click during active strict mouse selection preserves selection', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
 
       render(
         <IntermediateDocumentViewer
@@ -4633,9 +5196,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('html-parser non-primary mouseup after finalized strict selection keeps native behavior', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p><span class="hamster-note-text">Native parsed text</span></p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
       const onSelectText = vi.fn()
 
       render(
@@ -4771,9 +5335,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('html-parser strict mouse drag normalizes container caret ranges before blank mouseup finalization', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text"><strong>Native</strong><em> parsed text</em></span></p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p><span class="hamster-note-text"><strong>Native</strong><em> parsed text</em></span></p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
 
       render(
         <IntermediateDocumentViewer
@@ -4952,8 +5517,9 @@ describe('IntermediateDocumentViewer', () => {
     it('html-parser strict mouse drag recovers when stored text nodes are detached before finalization', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       const parserHtml =
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p><span class="hamster-note-text"><strong>Native</strong><em> parsed text</em></span></p></div></div>'
+        '<div class="hamster-note-page"><p><span class="hamster-note-text"><strong>Native</strong><em> parsed text</em></span></p></div>'
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
 
       render(
         <IntermediateDocumentViewer
@@ -5110,9 +5676,10 @@ describe('IntermediateDocumentViewer', () => {
         onDragSelectedTextEnd?: ReturnType<typeof vi.fn>
       }) => {
         const { document: mockDoc } = makeDocument({ pageCount: 1 })
-        vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-          '<div class="hamster-note-document"><div class="hamster-note-page"><p>Native parsed text</p></div></div>'
-        )
+        const parserHtml =
+          '<div class="hamster-note-page"><p>Native parsed text</p></div>'
+        vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+        vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
 
         render(
           <IntermediateDocumentViewer
@@ -5170,6 +5737,17 @@ describe('IntermediateDocumentViewer', () => {
           width: 200,
           height: 200
         })
+        // 页面 slot（hamster-reader__intermediate-page）是 html-parser 模式下
+        // getRootOverlayRect 的 pageRefs 来源，必须与 .hamster-note-page 保持相同几何。
+        const slotRectSpy = mockElementRect(
+          screen.getByTestId('intermediate-page-1'),
+          {
+            left: 50,
+            top: 80,
+            width: 200,
+            height: 200
+          }
+        )
         const rootRectSpy = mockElementRect(viewerRoot, {
           left: 10,
           top: 20,
@@ -5200,6 +5778,7 @@ describe('IntermediateDocumentViewer', () => {
           elementFromPointSpy,
           rootRectSpy,
           pageRectSpy,
+          slotRectSpy,
           restoreCreatedRangeGeometry
         }
       }
@@ -5239,6 +5818,7 @@ describe('IntermediateDocumentViewer', () => {
           fixture.elementFromPointSpy.mockRestore()
           fixture.rootRectSpy.mockRestore()
           fixture.pageRectSpy.mockRestore()
+          fixture.slotRectSpy.mockRestore()
           fixture.restoreCreatedRangeGeometry()
         }
       })
@@ -11871,9 +12451,10 @@ describe('IntermediateDocumentViewer', () => {
 
     it('draws html-parser overlay with viewer-root-relative coordinates', async () => {
       const { document } = makeDocument({ pageCount: 1 })
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
-        '<div class="hamster-note-document"><div class="hamster-note-page"><p>Parsed page text</p></div></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p>Parsed page text</p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue(parserHtml)
 
       render(
         <IntermediateDocumentViewer document={document} selectionOverlay />
@@ -11881,7 +12462,7 @@ describe('IntermediateDocumentViewer', () => {
 
       await screen.findByText('Parsed page text')
       const page = globalThis.document.querySelector(
-        '.hamster-note-document > .hamster-note-page'
+        '.hamster-reader__html-parser-output .hamster-note-page'
       ) as HTMLElement
       const text = page.querySelector('p')?.firstChild
       if (!(text instanceof Text)) {
@@ -11910,6 +12491,12 @@ describe('IntermediateDocumentViewer', () => {
       })
       const pageRectSpy = vi
         .spyOn(page, 'getBoundingClientRect')
+        .mockReturnValue(
+          makeDomRect({ left: 140, top: 260, width: 300, height: 400 })
+        )
+      const slotPage = screen.getByTestId('intermediate-page-1')
+      const slotRectSpy = vi
+        .spyOn(slotPage, 'getBoundingClientRect')
         .mockReturnValue(
           makeDomRect({ left: 140, top: 260, width: 300, height: 400 })
         )
@@ -11974,6 +12561,7 @@ describe('IntermediateDocumentViewer', () => {
         range.detach()
         elementFromPointSpy.mockRestore()
         pageRectSpy.mockRestore()
+        slotRectSpy.mockRestore()
         viewerRectSpy.mockRestore()
       }
     })
@@ -12217,7 +12805,7 @@ describe('IntermediateDocumentViewer', () => {
     it('renders saved selection overlay paths in html-parser mode using visual fallback', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
-        '<div class="hamster-note-document"><div class="hamster-note-page">Parsed page text</div></div>'
+        '<div class="hamster-note-page">Parsed page text</div>'
       )
 
       const savedSelection = makeSavedSelection({
@@ -12229,6 +12817,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[savedSelection]}
         />
@@ -12271,6 +12860,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[savedSelection]}
         />
@@ -12385,6 +12975,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[savedSelection]}
           onActiveSavedSelectionChange={onActiveSavedSelectionChange}
@@ -12446,6 +13037,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[savedSelection]}
           onActiveSavedSelectionChange={onActiveSavedSelectionChange}
@@ -12601,6 +13193,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[first, second]}
         />
@@ -12701,6 +13294,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[savedSelection]}
           onActiveSavedSelectionChange={onActiveSavedSelectionChange}
@@ -12780,6 +13374,7 @@ describe('IntermediateDocumentViewer', () => {
       render(
         <IntermediateDocumentViewer
           document={mockDoc}
+          renderMode='direct'
           selectionOverlay
           savedSelections={[savedSelection]}
           onActiveSavedSelectionChange={onActiveSavedSelectionChange}
@@ -12848,7 +13443,10 @@ describe('IntermediateDocumentViewer', () => {
     it('activates visual-fallback saved selection in html-parser mode without rendering handles', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
-        '<div class="hamster-note-document"><div class="hamster-note-page">Parsed page text</div></div>'
+        '<div class="hamster-note-page">Parsed page text</div>'
+      )
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue(
+        '<div class="hamster-note-page">Parsed page text</div>'
       )
 
       const onActiveSavedSelectionChange = vi.fn()
@@ -12870,9 +13468,16 @@ describe('IntermediateDocumentViewer', () => {
       const viewerRoot = await screen.findByTestId(
         'intermediate-document-viewer'
       )
-      const savedOverlay = viewerRoot.querySelector(
-        '.hamster-reader__saved-selection-overlay'
-      ) as HTMLElement
+      const savedOverlay = Array.from(
+        viewerRoot.querySelectorAll('.hamster-reader__saved-selection-overlay')
+      ).find(
+        (element): element is HTMLElement =>
+          element instanceof HTMLElement &&
+          !element.closest('.hamster-reader__intermediate-page')
+      )
+      if (!savedOverlay) {
+        throw new Error('Expected root saved selection overlay')
+      }
 
       await waitFor(() => {
         const path = savedOverlay.querySelector(
@@ -12906,7 +13511,7 @@ describe('IntermediateDocumentViewer', () => {
     it('keeps unresolved saved selection inert in html-parser mode', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
-        '<div class="hamster-note-document"><div class="hamster-note-page">Parsed page text</div></div>'
+        '<div class="hamster-note-page">Parsed page text</div>'
       )
 
       const onActiveSavedSelectionChange = vi.fn()
@@ -12933,7 +13538,7 @@ describe('IntermediateDocumentViewer', () => {
     it('renders edit handles for resolved saved selection in html-parser mode when active', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
-        '<div class="hamster-note-document"><div class="hamster-note-page">Parsed page text</div></div>'
+        '<div class="hamster-note-page">Parsed page text</div>'
       )
 
       const onActiveSavedSelectionChange = vi.fn()
@@ -13302,7 +13907,13 @@ describe('IntermediateDocumentViewer', () => {
         toString: () => 'selected text'
       } as unknown as Selection
 
-      render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -13378,9 +13989,10 @@ describe('IntermediateDocumentViewer', () => {
         toString: () => 'selected html text'
       } as unknown as Selection
 
-      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(
-        '<div class="hamster-note-document"><p>Selectable HTML text</p></div>'
-      )
+      const parserHtml =
+        '<div class="hamster-note-page"><p>Selectable HTML text</p></div>'
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(parserHtml)
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(parserHtml)
       render(<IntermediateDocumentViewer document={mockDoc} selectionOverlay />)
 
       await waitFor(() => {

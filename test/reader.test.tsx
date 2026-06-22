@@ -16,7 +16,8 @@ import { intersectionObserverMock } from './setup'
 
 vi.mock('@hamster-note/html-parser', () => ({
   HtmlParser: {
-    decodeToHtml: vi.fn()
+    decodeToHtml: vi.fn(),
+    decodePageToHtml: vi.fn()
   }
 }))
 
@@ -232,7 +233,10 @@ function createMockFile(
 
 describe('Reader public API', () => {
   beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockReset()
+    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
     vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
   })
 
   it('renders the provided document title on the public entry', () => {
@@ -283,21 +287,11 @@ describe('Reader public API', () => {
   })
 
   it('renders document content through html-parser-backed viewer path', async () => {
-    const mockHtml =
-      '<div class="hamster-note-document"><div class="page">Reader HTML</div></div>'
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)
+    const mockHtml = '<div class="hamster-note-page">Reader HTML</div>'
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
 
-    const document = {
-      id: 'doc-1',
-      title: 'Test Document',
-      pageCount: 1,
-      pageNumbers: [1],
-      getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
-      getPageByPageNumber: () =>
-        Promise.resolve({
-          getContent: () => Promise.resolve([{ id: 't1', content: 'text' }])
-        })
-    } as unknown as IntermediateDocument
+    const { document, pages } = makeLazyDocument(1)
+    const page = pages.get(1)
 
     render(<Reader document={document} />)
 
@@ -305,14 +299,29 @@ describe('Reader public API', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, undefined)
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'Reader HTML'
     )
   })
 
+  it('passes direct renderMode through without parser calls', async () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} renderMode='direct' />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+    })
+
+    expect(capturedViewerProps.renderMode).toBe('direct')
+    expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
   it('falls back when html-parser decode fails', async () => {
-    vi.mocked(HtmlParser.decodeToHtml).mockRejectedValueOnce(
+    vi.mocked(HtmlParser.decodePageToHtml).mockRejectedValueOnce(
       new Error('decode failed')
     )
 
@@ -337,8 +346,9 @@ describe('Reader public API', () => {
       expect(screen.getByText('Reader fallback')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodeToHtml).toHaveBeenCalledWith(document, undefined)
-    expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalled()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+    expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
   })
 
   it('shows the document title fallback when pages are empty', () => {
@@ -490,7 +500,10 @@ describe('Reader file upload', () => {
 
 describe('Reader prop forwarding', () => {
   beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockReset()
+    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
     vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
   })
 
   it('renders IntermediateDocumentViewer when ocr prop is passed', () => {
@@ -959,7 +972,10 @@ describe('Reader prop forwarding', () => {
 
 describe('Reader zoom props', () => {
   beforeEach(() => {
+    vi.mocked(HtmlParser.decodeToHtml).mockReset()
+    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
     vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
   })
 
   it('compile-time: zoom props satisfy ReaderProps', () => {

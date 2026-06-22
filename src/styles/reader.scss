@@ -186,9 +186,33 @@
     width: 100%;
     box-sizing: border-box;
 
+    // Page-only html-parser fragment layout rules.
+    // decodePageToHtml returns .hamster-note-page fragments without injecting
+    // document/page/text/image layout CSS, so Reader must provide the scoped
+    // styles here under the html-parser output root.
     .hamster-note-document {
+      position: relative;
+      display: block;
       contain: layout style;
       width: 100%;
+    }
+
+    .hamster-note-page {
+      position: relative;
+      overflow: visible;
+      background-repeat: no-repeat;
+      background-position: top center;
+      background-size: contain;
+    }
+
+    .hamster-note-text {
+      position: absolute;
+      white-space: pre;
+      transform-origin: 0 0;
+    }
+
+    .hamster-note-image {
+      position: absolute;
     }
 
     // Allow text selection in html-parser output even when the parent page
