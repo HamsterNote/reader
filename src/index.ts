@@ -4,7 +4,6 @@ export {
   buildSelectionPayload,
   denormalizePageRects,
   IntermediateDocumentViewer,
-  getSelectionOverlayRects,
   type IntermediateDocumentViewerProps,
   normalizePageRects,
   resolveSavedSelection,
@@ -19,10 +18,7 @@ export {
   type ReaderSavedSelectionRestoreStatus,
   type ReaderSavedSelectionSegment,
   type ReaderSavedSelectionVisualPage,
-  type ReaderSelectedTextDragCallback,
   type ReaderSelectedTextSegment,
-  type ReaderSelectionHandleRenderProps,
-  type ReaderSelectionOverlayOptions,
   type ReaderSelectionOverlayRect,
   type ReaderSelectionPayload,
   type ReaderTextSelectionDetail,
@@ -32,16 +28,11 @@ export {
 } from './components/IntermediateDocumentViewer'
 export { Reader, type ReaderProps } from './components/Reader'
 
-export type { ReaderSelectionOverlayPolygon } from './components/selectionGeometry'
-
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
   | 'ocr'
   | 'onSelectText'
   | 'onTextSelectionChange'
   | 'onTextSelectionEnd'
-  | 'onDragSelectedTextStart'
-  | 'onDragSelectedTextMove'
-  | 'onDragSelectedTextEnd'
   | 'interactionMode'
 >

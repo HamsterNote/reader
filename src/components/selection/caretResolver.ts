@@ -49,14 +49,6 @@ const BACKGROUND_TARGET_SELECTOR = [
 const HTML_PARSER_TEXT_ROOT_SELECTOR =
   '.hamster-reader__html-parser-output .hamster-note-page'
 
-const SELECTION_CHROME_TARGET_SELECTOR = [
-  '.hamster-reader__selection-overlay',
-  '.hamster-reader__selection-overlay-path',
-  '.hamster-reader__saved-selection-handles',
-  '.hamster-reader__saved-selection-overlay',
-  '.hamster-reader__selection-handle'
-].join(', ')
-
 const getElementFromNode = (node: Node | null): Element | null =>
   node instanceof Element ? node : (node?.parentElement ?? null)
 
@@ -180,7 +172,7 @@ const getHtmlParserPageForPoint = (
   viewerRoot: HTMLElement,
   point: ClientPoint
 ): { pageElement: HTMLElement; pageNumber: number } | null => {
-  if (!pointElement || isSelectionChromeTarget(pointElement)) {
+  if (!pointElement) {
     return getNearestHtmlParserPageForPoint(point, viewerRoot)
   }
 
@@ -325,11 +317,6 @@ const getClosestTextElement = (
 const isValidCaretRange = (range: Range, viewerRoot: HTMLElement): boolean =>
   Boolean(getClosestTextElement(range.startContainer, viewerRoot))
 
-const isSelectionChromeTarget = (node: Node | null): boolean => {
-  const element = getElementFromNode(node)
-  return Boolean(element?.closest(SELECTION_CHROME_TARGET_SELECTOR))
-}
-
 const getHtmlParserTextRoot = (
   node: Node,
   viewerRoot: HTMLElement
@@ -340,7 +327,6 @@ const getHtmlParserTextRoot = (
   const htmlParserTextRoot = element?.closest(HTML_PARSER_TEXT_ROOT_SELECTOR)
   if (!(htmlParserTextRoot instanceof HTMLElement)) return null
   if (!viewerRoot.contains(htmlParserTextRoot)) return null
-  if (isSelectionChromeTarget(node)) return null
   return htmlParserTextRoot
 }
 
@@ -352,7 +338,6 @@ export const isHtmlParserSelectionTarget = (
   if (!element || !viewerRoot.contains(element)) return false
   if (element.matches('.hamster-note-page')) return false
   if (isSelectionBackgroundTarget(element)) return false
-  if (isSelectionChromeTarget(element)) return false
   return Boolean(element.closest(HTML_PARSER_TEXT_ROOT_SELECTOR))
 }
 

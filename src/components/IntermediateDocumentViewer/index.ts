@@ -1,5 +1,4 @@
 export {
-  getSelectionOverlayRects,
   IntermediateDocumentViewer,
   isNonSpaceBlankText,
   mergeSelectionRects,
@@ -15,10 +14,6 @@ export {
   type ReaderSavedSelectionRestoreStatus,
   type ReaderSavedSelectionSegment,
   type ReaderSavedSelectionVisualPage,
-  type ReaderSelectedTextDragCallback,
-  type ReaderSelectionHandlePosition,
-  type ReaderSelectionHandleRenderProps,
-  type ReaderSelectionOverlayOptions,
   type ReaderSelectionOverlayRect,
   type ReaderRenderMode,
   type ReaderTextSelectionDetail
