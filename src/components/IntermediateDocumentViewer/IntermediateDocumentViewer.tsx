@@ -2358,6 +2358,32 @@ const useSelectedTextBodyDrag = ({
   }
 }
 
+/**
+ * 记忆化 HTML 页面内容子组件
+ *
+ * 隔离 dangerouslySetInnerHTML，使其不受父组件 IntermediateDocumentViewer
+ * 中无关 state 变化（选区、overlay 等）导致的重新渲染影响。
+ *
+ * React.memo 对 string prop 做浅比较（值比较），所以当 html 字符串未变化时
+ * 不会重新渲染，从而避免触发浏览器侧的 Parse HTML + set innerHTML。
+ */
+const HtmlPageContent = React.memo(
+  ({ html }: { html: string }) => {
+    // 缓存 dangerouslySetInnerHTML 对象，稳定对象 identity
+    const htmlObj = useMemo(() => ({ __html: html }), [html])
+    return (
+      <div
+        // HTML 来自受信任的 @hamster-note/html-parser 包，
+        // 将 IntermediateDocument 数据转换为每页 HTML 片段。
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
+        dangerouslySetInnerHTML={htmlObj}
+      />
+    )
+  }
+)
+
+HtmlPageContent.displayName = 'HtmlPageContent'
+
 export function IntermediateDocumentViewer({
   document,
   serializedDocument,
@@ -2529,6 +2555,12 @@ export function IntermediateDocumentViewer({
   >(null)
   const activePinchRef = useRef(false)
   const multiPointerLockedRef = useRef(false)
+  // 跟踪 VirtualPaper 是否正在活动 transform（pan/zoom），用于在 transform 期间暂停 eviction
+  const isTransformingRef = useRef(false)
+  // transform 结束后递增，驱动 eviction effect 在活动 transform 期间被跳过后重新执行
+  const [evictionBump, setEvictionBump] = useState(0)
+  // 标记活动 transform 期间是否有 eviction 被跳过，仅在确实跳过时才在 transform 结束后补偿
+  const evictionSkippedDuringTransformRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
   const [textsByPageNumber, setTextsByPageNumber] = useState(
@@ -2786,6 +2818,7 @@ export function IntermediateDocumentViewer({
 
   const handleVirtualPaperTransformChange = useCallback(
     (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      isTransformingRef.current = true
       handleVirtualPaperTransform(nextTransform, meta)
     },
     [handleVirtualPaperTransform]
@@ -2793,7 +2826,13 @@ export function IntermediateDocumentViewer({
 
   const handleVirtualPaperTransformChangeEnd = useCallback(
     (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      isTransformingRef.current = false
       handleVirtualPaperTransform(nextTransform, meta)
+      // 仅在活动 transform 期间确实跳过了 eviction 时才补偿触发
+      if (evictionSkippedDuringTransformRef.current) {
+        evictionSkippedDuringTransformRef.current = false
+        setEvictionBump((v) => v + 1)
+      }
     },
     [handleVirtualPaperTransform]
   )
@@ -3200,9 +3239,17 @@ export function IntermediateDocumentViewer({
   )
 
   useEffect(() => {
+    // eslint-disable-next-line sonarjs/void-use -- 依赖仅用于触发 effect 刷新，无需消费值
+    void evictionBump
     // Keep the async eviction callback seeing the current loaded page set
     // without adding mutable ref values to the dependency array.
     loadablePagesRef.current = loadablePages
+
+    // 活动 transform（pan/zoom）期间跳过 eviction，避免 decode/evict 乒乓循环
+    if (isTransformingRef.current) {
+      evictionSkippedDuringTransformRef.current = true
+      return
+    }
     scheduleEviction({ visiblePages, pageNumbers })
 
     return () => {
@@ -3220,18 +3267,27 @@ export function IntermediateDocumentViewer({
 
       evictionTimerRef.current = null
     }
-  }, [loadablePages, pageNumbers, scheduleEviction, visiblePages])
+  }, [loadablePages, pageNumbers, scheduleEviction, visiblePages, evictionBump])
 
-  const setPageRef = useCallback(
-    (pageNumber: number) => (element: HTMLDivElement | null) => {
-      if (element) {
-        pageRefs.current.set(pageNumber, element)
-      } else {
-        pageRefs.current.delete(pageNumber)
-      }
-    },
-    []
+  // 缓存每个 pageNumber 对应的稳定 ref callback，避免每次渲染创建新函数
+  // 导致 React detach/attach ref —— 旧做法在每个 transform frame 都会 churn pageRefs.current
+  const stablePageRefCallbacks = useRef(
+    new Map<number, (element: HTMLDivElement | null) => void>()
   )
+  const setPageRef = useCallback((pageNumber: number) => {
+    let callback = stablePageRefCallbacks.current.get(pageNumber)
+    if (!callback) {
+      callback = (element: HTMLDivElement | null) => {
+        if (element) {
+          pageRefs.current.set(pageNumber, element)
+        } else {
+          pageRefs.current.delete(pageNumber)
+        }
+      }
+      stablePageRefCallbacks.current.set(pageNumber, callback)
+    }
+    return callback
+  }, [])
 
   const setTextRef = useCallback(
     (text: IntermediateText, pageNumber: number) =>
@@ -7605,14 +7661,7 @@ export function IntermediateDocumentViewer({
                         }}
                       >
                         {isHtmlPageDecoded ? (
-                          <div
-                            // The HTML comes from the trusted @hamster-note/html-parser package,
-                            // which converts IntermediateDocument data into per-page HTML fragments.
-                            // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
-                            dangerouslySetInnerHTML={{
-                              __html: htmlPageHtmlEntry ?? ''
-                            }}
-                          />
+                          <HtmlPageContent html={htmlPageHtmlEntry ?? ''} />
                         ) : (
                           renderDirectPageInner(pageNumber)
                         )}

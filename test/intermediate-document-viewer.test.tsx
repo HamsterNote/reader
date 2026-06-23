@@ -1704,7 +1704,10 @@ describe('IntermediateDocumentViewer', () => {
       })
       const path = getSavedPath()
       expect(path?.getAttribute('data-saved-selection-id')).toBe('saved-page-2')
-      expect(path?.getAttribute('d')).toContain('50')
+      // 修复 HtmlPageContent memo 后，rerender 不再重建 DOM 元素，
+        // getBoundingClientRect mock 正确生效，overlay 坐标基于真实 mock 值。
+        // pageRect.left=160, rootRect.left=100 → x 偏移=60, rect.x=10 → final x=70
+        expect(path?.getAttribute('d')).toContain('70')
     } finally {
       viewerRectSpy.mockRestore()
       slotRectSpy.mockRestore()
