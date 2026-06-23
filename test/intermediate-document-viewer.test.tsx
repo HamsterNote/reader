@@ -6482,8 +6482,9 @@ describe('IntermediateDocumentViewer', () => {
         expect(rightMouseDown.event.defaultPrevented).toBe(false)
         expect(middleMouseDown.dispatched).toBe(true)
         expect(middleMouseDown.event.defaultPrevented).toBe(false)
-        expect(blankMouseDown.dispatched).toBe(true)
-        expect(blankMouseDown.event.defaultPrevented).toBe(false)
+        // 空白区域的左键按下应被拦截（preventDefault），阻止浏览器默认 Selection；
+        // dispatchEvent 返回 false 表示事件已被 cancel
+        expect(blankMouseDown.event.defaultPrevented).toBe(true)
         expect(liveSelection.selection.addRange).not.toHaveBeenCalled()
         expect(onTextSelectionEnd).not.toHaveBeenCalled()
         expect(onSelectText).not.toHaveBeenCalled()

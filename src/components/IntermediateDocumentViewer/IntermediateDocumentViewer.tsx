@@ -5763,7 +5763,11 @@ export function IntermediateDocumentViewer({
         root,
         event.target instanceof Element ? event.target : null
       )
-      if (!hit) return
+      // 鼠标不在文字上时拦截，阻止浏览器默认 Selection 行为（与选择结束时一致）
+      if (!hit) {
+        event.preventDefault()
+        return
+      }
 
       const previewRect = getCaretPreviewRect(hit)
       if (!previewRect) {
@@ -6192,13 +6196,9 @@ export function IntermediateDocumentViewer({
         input.clientY,
         input.pointerId
       )
-      if (startedOnText || input.pointerType === 'touch') return startedOnText
-
-      const snappedCaretInfo = resolveDragCaret(input.clientX, input.clientY)
-      if (!snappedCaretInfo) return false
-
-      snappedCaretInfo.range.detach()
-      return true
+      // 选择开始时，如果指针不在文字上，直接返回 false，不再 snap 到最近文字。
+      // 与选择结束时的行为保持一致：不在文字上就不触发选择。
+      return startedOnText
     }
 
     const shouldResetPointerStart = (input: {
