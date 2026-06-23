@@ -338,4 +338,63 @@ describe('createDragSelectionAdapter', () => {
 
     expect(counts).toEqual([2, 1])
   })
+
+  // Task 6 — 验证 pointerType='touch' 的手柄拖拽行为
+  it('passes pointerType=touch through Start, Move, End, and AllEnd callbacks', () => {
+    const element = document.createElement('div')
+    const details: DragSelectionPointerDetail[] = []
+    const collectDetail = (
+      _clientX: number,
+      _clientY: number,
+      detail?: DragSelectionPointerDetail
+    ) => {
+      if (!detail) throw new Error('Expected pointer detail')
+      details.push(detail)
+    }
+
+    createDragSelectionAdapter(element, {
+      DragConstructor: FakeDragConstructor,
+      getPointerType: () => 'touch',
+      onStart: collectDetail,
+      onMove: collectDetail,
+      onEnd: collectDetail,
+      onAllEnd: collectDetail
+    })
+
+    const drag = FakeDrag.instances.at(-1)
+    if (!drag) throw new Error('Expected fake Drag to be constructed')
+
+    drag.emit(DragOperationType.Start, [makeFinger(42, 1, 2, 100)])
+    drag.emit(DragOperationType.Move, [makeFinger(42, 3, 4, 200)])
+    drag.emit(DragOperationType.End, [makeFinger(42, 5, 6, 300)])
+    drag.emit(DragOperationType.AllEnd, [makeFinger(42, 7, 8, 400)])
+
+    // 全部 4 个回调都应收到 pointerType='touch'
+    expect(details).toEqual([
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'touch',
+        timeStamp: 100
+      },
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'touch',
+        timeStamp: 200
+      },
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'touch',
+        timeStamp: 300
+      },
+      {
+        pointerId: 42,
+        activePointerCount: 1,
+        pointerType: 'touch',
+        timeStamp: 400
+      }
+    ])
+  })
 })

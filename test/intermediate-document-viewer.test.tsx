@@ -5954,7 +5954,10 @@ describe('IntermediateDocumentViewer', () => {
             viewerRoot.querySelectorAll('[data-handle-type]')
           ).toHaveLength(2)
         })
-        expect(getOverlayBlocks(page)).toHaveLength(1)
+        // T3: live selection renders independent rect-region paths (one per
+        // text-element rect) instead of a single union path. BCD spans 3
+        // text elements, so expect 3 paths.
+        expect(getOverlayBlocks(page)).toHaveLength(3)
       } finally {
         restoreCaretApis()
         getSelectionSpy.mockRestore()
@@ -10602,6 +10605,333 @@ describe('IntermediateDocumentViewer', () => {
         }
       })
     })
+
+    // Task 6 — live handle drag / chrome hit-testing / selector reuse
+    describe('Task 6: live handle drag and overlay chrome hardening', () => {
+      const installDynamicRangeRectMocks = () => {
+        const originalGetClientRects = Range.prototype.getClientRects
+        const originalGetBoundingClientRect =
+          Range.prototype.getBoundingClientRect
+
+        // 根据 range 的 startContainer/endContainer 所在元素的位置返回对应 rect。
+        // collectSelectionOverlayClientRects 为每个文本元素创建 clippedRange，
+        // 所以这里按 clippedRange 覆盖的文本元素返回该元素的 viewport rect —
+        // 这样 B/C/D 各有不同坐标，overlay path data 在选区扩展时可见地改变。
+        const getRectForRange = (range: Range): DOMRect[] => {
+          // 检查 range 是否与某个已知 text-id 元素相交，返回该元素的 rect
+          const startEl = range.startContainer.parentElement
+          const endEl = range.endContainer.parentElement
+          for (const [id, rect] of [
+            ['text-a', { left: 10, top: 10, width: 20, height: 16 }],
+            ['text-b', { left: 10, top: 50, width: 20, height: 16 }],
+            ['text-c', { left: 10, top: 90, width: 20, height: 16 }],
+            ['text-d', { left: 10, top: 130, width: 20, height: 16 }]
+          ] as const) {
+            const el = globalThis.document.querySelector(
+              `[data-text-id="${id}"]`
+            )
+            if (
+              el &&
+              (el === startEl || el === endEl || range.intersectsNode(el))
+            ) {
+              // 如果 range 横跨多行，返回包含所有行的合并 rect
+              return [makeDomRect(rect)]
+            }
+          }
+          return [makeDomRect({ left: 20, top: 24, width: 35, height: 9 })]
+        }
+
+        Object.defineProperty(Range.prototype, 'getClientRects', {
+          configurable: true,
+          value: vi.fn(function (this: Range) {
+            return getRectForRange(this)
+          })
+        })
+        Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+          configurable: true,
+          value: vi.fn(function (this: Range) {
+            const rects = getRectForRange(this)
+            return (
+              rects[0] ?? makeDomRect({ left: 0, top: 0, width: 0, height: 0 })
+            )
+          })
+        })
+
+        return () => {
+          Object.defineProperty(Range.prototype, 'getClientRects', {
+            configurable: true,
+            value: originalGetClientRects
+          })
+          Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+            configurable: true,
+            value: originalGetBoundingClientRect
+          })
+        }
+      }
+
+      it('changes live SVG path data when dragging the end handle extends the selection', async () => {
+        // 验证 T3 独立 SVG path 渲染下，实时手柄拖拽改变 overlay path data
+        const { document: mockDoc } = makeFourTextDocument()
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            renderMode='direct'
+            selectionOverlay
+            selectionHandleElement={<button type='button' />}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('B')).toBeInTheDocument()
+          expect(screen.getByText('D')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const page = layoutFourTextPage()
+
+        // 初始选区 BC
+        const initialRange = globalThis.document.createRange()
+        initialRange.setStart(getTextNode(queryTextSpan('text-b')), 0)
+        initialRange.setEnd(getTextNode(queryTextSpan('text-c')), 1)
+        const liveSelection = makeLiveRangeSelection(initialRange)
+        const getSelectionSpy = vi
+          .spyOn(window, 'getSelection')
+          .mockReturnValue(liveSelection.selection)
+        const restoreRangeRects = installDynamicRangeRectMocks()
+        const elementFromPointSpy = mockElementFromPoint(page)
+
+        try {
+          globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+          await waitFor(() => {
+            expect(
+              viewerRoot.querySelectorAll('[data-handle-type]')
+            ).toHaveLength(2)
+          })
+          await act(async () => {
+            await Promise.resolve()
+          })
+
+          // 初始 overlay path：选区 "BC" → B 和 C 各一条独立 path（T3 独立路径渲染）
+          let blocks = getOverlayBlocks(page)
+          expect(blocks.length).toBe(2)
+          // 记录所有 path d 的拼接 — 拖拽后整体应变化
+          const initialAllPathD = blocks
+            .map((b) => b.getAttribute('d') || '')
+            .join('|')
+          expect(initialAllPathD).toBeTruthy()
+
+          // caret API 定位到 text-d
+          const restoreCaret = installCaretPositionFromPoint(
+            getTextNode(queryTextSpan('text-d')),
+            1
+          )
+
+          // 拖拽 end handle 到 D（clientY:138 → text-d 区域）
+          const endHandle = page.querySelector(
+            '[data-handle-type="end"]'
+          ) as HTMLElement
+          dispatchHandleDragEvent(endHandle, 'pointerdown', {
+            clientX: 50,
+            clientY: 25
+          })
+          dispatchHandleDragEvent(endHandle, 'pointermove', {
+            clientX: 18,
+            clientY: 138
+          })
+
+          expect(liveSelection.selection.toString()).toBe('BCD')
+
+          // 拖拽后 overlay path 数量应增加（BCD → B、C、D 三条独立 path）
+          blocks = getOverlayBlocks(page)
+          expect(blocks.length).toBe(3)
+          // 所有 path d 拼接应与初始不同 — 证明拖拽改变了 SVG 覆盖层
+          const updatedAllPathD = blocks
+            .map((b) => b.getAttribute('d') || '')
+            .join('|')
+          expect(updatedAllPathD).not.toBe(initialAllPathD)
+
+          // 验证第三条 path 覆盖了 D 的区域（page-relative {10,130,20,16}）
+          expectPathCoversRect(blocks[2], {
+            left: 10,
+            top: 130,
+            width: 20,
+            height: 16
+          })
+
+          dispatchHandleDragEvent(endHandle, 'pointerup', {
+            clientX: 18,
+            clientY: 138
+          })
+
+          restoreCaret()
+        } finally {
+          elementFromPointSpy.mockRestore()
+          restoreRangeRects()
+          getSelectionSpy.mockRestore()
+        }
+      })
+
+      it('clicking overlay path does not start accidental text selection', async () => {
+        // 验证 caret hit-testing 跳过 overlay chrome：
+        // 点击 overlay-path 不应触发文本选区
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+        const onTextSelectionChange = vi.fn()
+        const onTextSelectionEnd = vi.fn()
+
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            renderMode='direct'
+            selectionOverlay
+            onTextSelectionChange={onTextSelectionChange}
+            onTextSelectionEnd={onTextSelectionEnd}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        const viewerRoot = screen.getByTestId('intermediate-document-viewer')
+        const page = screen.getByTestId('intermediate-page-1')
+        const liveSelection = makeEmptyLiveSelection()
+        const getSelectionSpy = vi
+          .spyOn(window, 'getSelection')
+          .mockReturnValue(liveSelection.selection)
+        const restoreCaretApis = installUnavailableCaretPointApis()
+        mockElementFromPoint(page)
+
+        try {
+          const overlayContainer = page.querySelector(
+            '.hamster-reader__selection-overlay'
+          ) as HTMLElement
+          // jsdom 测试中用 div 模拟 overlay-path 即可（caret hit-testing 通过 className 匹配）
+          const overlayPath = globalThis.document.createElement('div')
+          overlayPath.className = 'hamster-reader__selection-overlay-path'
+          overlayContainer.appendChild(overlayPath)
+
+          // SELECTION_CHROME_HIT_SELECTOR 排除 overlay-path → 不触发选区
+          dispatchPointerDragStart(overlayPath, { clientX: 25, clientY: 28 })
+          dispatchPointerDragMove(viewerRoot, { clientX: 30, clientY: 35 })
+          dispatchPointerDragEnd(viewerRoot, 'pointerup', {
+            clientX: 30,
+            clientY: 35
+          })
+
+          expect(onTextSelectionChange).not.toHaveBeenCalled()
+          expect(onTextSelectionEnd).not.toHaveBeenCalled()
+        } finally {
+          restoreCaretApis()
+          getSelectionSpy.mockRestore()
+        }
+      })
+
+      it('overlay path matches SELECTION_CHROME_TARGET_SELECTOR in caretResolver', () => {
+        // 直接验证 overlay path 元素匹配 caretResolver 的 chrome selector
+        const path = document.createElementNS(
+          'http://www.w3.org/2000/svg',
+          'path'
+        )
+        path.setAttribute('class', 'hamster-reader__selection-overlay-path')
+
+        expect(
+          path.closest(
+            '.hamster-reader__selection-overlay, .hamster-reader__selection-overlay-path, .hamster-reader__saved-selection-handles, .hamster-reader__saved-selection-overlay, .hamster-reader__selection-handle'
+          )
+        ).toBe(path)
+      })
+
+      it('SELECTION_CHROME_HIT_SELECTOR includes .hamster-reader__selection-overlay-path', () => {
+        // 断言 T3 未引入新类名：viewer selector 仍包含 overlay-path
+        const viewerSource = fs.readFileSync(
+          path.resolve(
+            __dirname,
+            '../src/components/IntermediateDocumentViewer/IntermediateDocumentViewer.tsx'
+          ),
+          'utf-8'
+        )
+        const selectorBlockMatch = viewerSource.match(
+          /SELECTION_CHROME_HIT_SELECTOR\s*=\s*\[([\s\S]*?)\]\.join\(',\s*'\)/
+        )
+        expect(selectorBlockMatch).toBeTruthy()
+        if (selectorBlockMatch) {
+          expect(selectorBlockMatch[1]).toContain(
+            '.hamster-reader__selection-overlay-path'
+          )
+        }
+      })
+
+      it('SELECTION_CHROME_TARGET_SELECTOR in caretResolver includes .hamster-reader__selection-overlay-path', () => {
+        // 断言 caretResolver selector 仍包含 overlay-path
+        const caretSource = fs.readFileSync(
+          path.resolve(
+            __dirname,
+            '../src/components/selection/caretResolver.ts'
+          ),
+          'utf-8'
+        )
+        const selectorBlockMatch = caretSource.match(
+          /SELECTION_CHROME_TARGET_SELECTOR\s*=\s*\[([\s\S]*?)\]\.join\(',\s*'\)/
+        )
+        expect(selectorBlockMatch).toBeTruthy()
+        if (selectorBlockMatch) {
+          expect(selectorBlockMatch[1]).toContain(
+            '.hamster-reader__selection-overlay-path'
+          )
+        }
+      })
+
+      it('live overlay uses hamster-reader__selection-overlay-path class (no new class from T3)', async () => {
+        // 实际渲染后断言 DOM 中 path 使用现有类名
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            renderMode='direct'
+            selectionOverlay
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        const page = screen.getByTestId('intermediate-page-1')
+        const pageRectSpy = mockElementRect(page, {
+          left: 5,
+          top: 5,
+          width: 100,
+          height: 150
+        })
+        const elementFromPointSpy = mockElementFromPoint(page)
+        const getSelectionSpy = vi
+          .spyOn(window, 'getSelection')
+          .mockReturnValue(
+            makeSelectionWithRects(() => [
+              makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+            ])
+          )
+
+        try {
+          globalThis.document.dispatchEvent(new Event('selectionchange'))
+          await waitFor(() => {
+            expect(getOverlayBlocks(page).length).toBeGreaterThanOrEqual(1)
+          })
+
+          expect(
+            page.querySelector('.hamster-reader__selection-overlay-path')
+          ).toBeInTheDocument()
+          expect(
+            page.querySelector('.hamster-reader__selection-overlay-svg')
+          ).toBeInTheDocument()
+        } finally {
+          getSelectionSpy.mockRestore()
+          elementFromPointSpy.mockRestore()
+          pageRectSpy.mockRestore()
+        }
+      })
+    })
   })
 
   describe('polygon geometry rendering', () => {
@@ -13893,6 +14223,495 @@ describe('IntermediateDocumentViewer', () => {
         localElementFromPointSpy.mockRestore()
       }
     })
+
+    // Task 5: pan/zoom transform 后 saved overlay/handle 刷新验证
+    describe('saved selection overlay transform refresh', () => {
+      it('rebuilds html-parser saved overlay SVG on pan-only transform', async () => {
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+        vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
+          '<div class="hamster-note-page">Parsed page text</div>'
+        )
+        vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue(
+          '<div class="hamster-note-page">Parsed page text</div>'
+        )
+
+        const savedSelection = makeSavedSelection({
+          id: 'saved-pan-html',
+          fallbackOnly: true,
+          visualRects: [{ pageNumber: 1, x: 10, y: 20, width: 40, height: 12 }]
+        })
+
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            selectionOverlay
+            savedSelections={[savedSelection]}
+          />
+        )
+
+        const viewerRoot = await screen.findByTestId(
+          'intermediate-document-viewer'
+        )
+        const savedOverlay = Array.from(
+          viewerRoot.querySelectorAll(
+            '.hamster-reader__saved-selection-overlay'
+          )
+        ).find(
+          (el): el is HTMLElement =>
+            el instanceof HTMLElement &&
+            !el.closest('.hamster-reader__intermediate-page')
+        )
+        if (!savedOverlay) throw new Error('Expected root saved overlay')
+
+        await waitFor(() => {
+          expect(
+            savedOverlay.querySelector(
+              '.hamster-reader__saved-selection-overlay-path'
+            )
+          ).toBeInTheDocument()
+        })
+
+        const initialPath = savedOverlay.querySelector(
+          '.hamster-reader__saved-selection-overlay-path'
+        ) as SVGPathElement
+
+        await act(async () => {
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 50, y: 60, scale: 1 }
+          )
+        })
+
+        // render-only refresh 重建 SVG（innerHTML 替换），旧 path 节点应脱离文档
+        await waitFor(() => {
+          expect(savedOverlay.contains(initialPath)).toBe(false)
+        })
+
+        const refreshedPath = savedOverlay.querySelector(
+          '.hamster-reader__saved-selection-overlay-path'
+        ) as SVGPathElement
+        expect(refreshedPath).toHaveAttribute(
+          'data-saved-selection-id',
+          'saved-pan-html'
+        )
+      })
+
+      it('rebuilds html-parser saved overlay SVG on zoom-only transform', async () => {
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+        vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
+          '<div class="hamster-note-page">Parsed page text</div>'
+        )
+        vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue(
+          '<div class="hamster-note-page">Parsed page text</div>'
+        )
+
+        const savedSelection = makeSavedSelection({
+          id: 'saved-zoom-html',
+          fallbackOnly: true,
+          visualRects: [{ pageNumber: 1, x: 10, y: 20, width: 40, height: 12 }]
+        })
+
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            selectionOverlay
+            savedSelections={[savedSelection]}
+          />
+        )
+
+        const viewerRoot = await screen.findByTestId(
+          'intermediate-document-viewer'
+        )
+        const savedOverlay = Array.from(
+          viewerRoot.querySelectorAll(
+            '.hamster-reader__saved-selection-overlay'
+          )
+        ).find(
+          (el): el is HTMLElement =>
+            el instanceof HTMLElement &&
+            !el.closest('.hamster-reader__intermediate-page')
+        )
+        if (!savedOverlay) throw new Error('Expected root saved overlay')
+
+        await waitFor(() => {
+          expect(
+            savedOverlay.querySelector(
+              '.hamster-reader__saved-selection-overlay-path'
+            )
+          ).toBeInTheDocument()
+        })
+
+        const initialPath = savedOverlay.querySelector(
+          '.hamster-reader__saved-selection-overlay-path'
+        ) as SVGPathElement
+
+        await act(async () => {
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 0, y: 0, scale: 2 }
+          )
+        })
+
+        await waitFor(() => {
+          expect(savedOverlay.contains(initialPath)).toBe(false)
+        })
+      })
+
+      it('rebuilds html-parser saved overlay SVG on zoom+pan transform', async () => {
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+        vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue(
+          '<div class="hamster-note-page">Parsed page text</div>'
+        )
+        vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue(
+          '<div class="hamster-note-page">Parsed page text</div>'
+        )
+
+        const savedSelection = makeSavedSelection({
+          id: 'saved-zoompan-html',
+          fallbackOnly: true,
+          visualRects: [{ pageNumber: 1, x: 10, y: 20, width: 40, height: 12 }]
+        })
+
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            selectionOverlay
+            savedSelections={[savedSelection]}
+          />
+        )
+
+        const viewerRoot = await screen.findByTestId(
+          'intermediate-document-viewer'
+        )
+        const savedOverlay = Array.from(
+          viewerRoot.querySelectorAll(
+            '.hamster-reader__saved-selection-overlay'
+          )
+        ).find(
+          (el): el is HTMLElement =>
+            el instanceof HTMLElement &&
+            !el.closest('.hamster-reader__intermediate-page')
+        )
+        if (!savedOverlay) throw new Error('Expected root saved overlay')
+
+        await waitFor(() => {
+          expect(
+            savedOverlay.querySelector(
+              '.hamster-reader__saved-selection-overlay-path'
+            )
+          ).toBeInTheDocument()
+        })
+
+        const initialPath = savedOverlay.querySelector(
+          '.hamster-reader__saved-selection-overlay-path'
+        ) as SVGPathElement
+
+        await act(async () => {
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 30, y: 40, scale: 1.5 }
+          )
+        })
+
+        await waitFor(() => {
+          expect(savedOverlay.contains(initialPath)).toBe(false)
+        })
+      })
+
+      it('keeps direct-render saved overlay path stable on pan-only transform', async () => {
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+
+        const savedSelection = makeSavedSelection({
+          id: 'saved-pan-direct',
+          fallbackOnly: true,
+          visualRects: [{ pageNumber: 1, x: 10, y: 20, width: 40, height: 12 }]
+        })
+
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            renderMode='direct'
+            selectionOverlay
+            savedSelections={[savedSelection]}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        const page = screen.getByTestId('intermediate-page-1')
+        const savedOverlay = page.querySelector(
+          '.hamster-reader__saved-selection-overlay'
+        ) as HTMLElement
+
+        await waitFor(() => {
+          expect(
+            savedOverlay.querySelector(
+              '.hamster-reader__saved-selection-overlay-path'
+            )
+          ).toBeInTheDocument()
+        })
+
+        const getPathD = () =>
+          (
+            savedOverlay.querySelector(
+              '.hamster-reader__saved-selection-overlay-path'
+            ) as SVGPathElement
+          ).getAttribute('d') || ''
+
+        const initialD = getPathD()
+        expect(initialD).toBeTruthy()
+
+        await act(async () => {
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 50, y: 60, scale: 1 }
+          )
+        })
+
+        // direct-render: page-relative 坐标不随 pan 变化（CSS transform 自动带动覆盖层）
+        await waitFor(() => {
+          expect(getPathD()).toBe(initialD)
+        })
+      })
+
+      it('refreshes saved handles on pan-only transform', async () => {
+        const { document: mockDoc } = makeDocument({ pageCount: 1 })
+
+        const savedSelection = makeSavedSelection({
+          id: 'saved-handle-pan',
+          textId: 'text-1',
+          content: 'Page 1 text',
+          startCharIndex: 0,
+          endCharIndex: 6
+        })
+
+        render(
+          <IntermediateDocumentViewer
+            document={mockDoc}
+            renderMode='direct'
+            selectionOverlay
+            savedSelections={[savedSelection]}
+            activeSavedSelectionId='saved-handle-pan'
+          />
+        )
+
+        const viewerRoot = await screen.findByTestId(
+          'intermediate-document-viewer'
+        )
+        const page = screen.getByTestId('intermediate-page-1')
+        const localElementFromPointSpy = mockElementFromPoint(page)
+
+        try {
+          // 初始 mock：page 在原点
+          mockElementRect(page, {
+            left: 0,
+            top: 0,
+            width: 100,
+            height: 150
+          })
+
+          await waitFor(() => {
+            expect(getSavedHandles(viewerRoot).all).toHaveLength(2)
+          })
+
+          const getStartHandleLeft = () => {
+            const handles = getSavedHandles(viewerRoot)
+            const start = handles.start as HTMLElement | null
+            return start?.style.left ?? ''
+          }
+
+          const initialLeft = getStartHandleLeft()
+
+          // 模拟 pan 后 page 位置变化
+          mockElementRect(page, {
+            left: 100,
+            top: 100,
+            width: 100,
+            height: 150
+          })
+
+          await act(async () => {
+            VirtualPaper.__triggerTransform(
+              screen.getByTestId('virtual-paper-container'),
+              { x: 100, y: 100, scale: 1 }
+            )
+          })
+
+          // pan 后 refreshSavedSelectionHandles 重算手柄位置，pageRect 变化导致
+          // page-relative 坐标变化，handle left 应改变
+          await waitFor(() => {
+            expect(getStartHandleLeft()).not.toBe(initialLeft)
+          })
+
+          const { start, end } = getSavedHandles(viewerRoot)
+          expect(start).toBeInTheDocument()
+          expect(end).toBeInTheDocument()
+        } finally {
+          localElementFromPointSpy.mockRestore()
+        }
+      })
+    })
+
+    // Task 6 — saved handle drag preview before commit
+    it('updates saved overlay preview path during drag before onSavedSelectionEdit commit', async () => {
+      // 验证 renderSavedSelectionEditPreview 在 commit（pointerup）前
+      // 实时更新 saved overlay 预览 — 通过 DOM 节点替换检测和 path data 变化
+      const { document: mockDoc } = makeDocument({ pageCount: 1 })
+      const onSavedSelectionEdit = vi.fn()
+      const savedSelection = makeSavedSelection({
+        id: 'saved-preview-drag',
+        textId: 'text-1',
+        content: 'Page 1 text',
+        startCharIndex: 5,
+        endCharIndex: 11
+      })
+
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='direct'
+          selectionOverlay
+          savedSelections={[savedSelection]}
+          activeSavedSelectionId='saved-preview-drag'
+          onSavedSelectionEdit={onSavedSelectionEdit}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      const page = screen.getByTestId('intermediate-page-1')
+      const text = screen.getByText('Page 1 text')
+      const textNode = getRequiredTextNode(text)
+      mockElementRect(page, { left: 0, top: 0, width: 100, height: 150 })
+      mockElementRect(text, { left: 10, top: 20, width: 70, height: 12 })
+      const localElementFromPointSpy = mockElementFromPoint(text)
+
+      const savedOverlay = page.querySelector(
+        '.hamster-reader__saved-selection-overlay'
+      ) as HTMLElement
+
+      await waitFor(() => {
+        expect(
+          savedOverlay.querySelector(
+            '[data-saved-selection-id="saved-preview-drag"]'
+          )
+        ).toBeInTheDocument()
+      })
+
+      // 记录初始 path DOM 节点引用 — renderSavedSelectionEditPreview 通过
+      // innerHTML 重建 SVG，旧 path 节点会脱离文档
+      const getSavedPath = () =>
+        savedOverlay.querySelector(
+          '[data-saved-selection-id="saved-preview-drag"]'
+        ) as SVGPathElement | null
+
+      const initialPath = getSavedPath()
+      expect(initialPath).toBeTruthy()
+      const initialPathD = initialPath?.getAttribute('d') || ''
+      expect(initialPathD).toBeTruthy()
+
+      await waitFor(() => {
+        expect(getSavedHandles(page).all).toHaveLength(2)
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      // 重写 Range.getClientRects 使拖拽后的 rect 与初始不同
+      // beforeEach 设置的 mock 固定返回 {10,20,30,8}
+      // 拖拽后将选区扩展到从 charIndex 0 开始，rect 扩大
+      const overrideGetClientRects = vi.fn(() => [
+        makeDomRect({ left: 10, top: 20, width: 70, height: 12 })
+      ])
+      Object.defineProperty(Range.prototype, 'getClientRects', {
+        configurable: true,
+        value: overrideGetClientRects
+      })
+      Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+        configurable: true,
+        value: vi.fn(() =>
+          makeDomRect({ left: 10, top: 20, width: 70, height: 12 })
+        )
+      })
+
+      const initialRange = globalThis.document.createRange()
+      initialRange.setStart(textNode, 0)
+      initialRange.collapse(true)
+      const liveSelection = makeMutableSelection(initialRange)
+      const getSelectionSpy = vi
+        .spyOn(window, 'getSelection')
+        .mockReturnValue(liveSelection.selection)
+      const restoreCaret = installSavedSelectionCaret(textNode, 0)
+
+      try {
+        const startHandle = getSavedHandles(page).start
+        if (!(startHandle instanceof HTMLElement)) {
+          throw new Error('Expected saved start handle')
+        }
+
+        // pointerdown — 开始拖拽
+        startHandle.dispatchEvent(
+          new MouseEvent('pointerdown', {
+            bubbles: false,
+            cancelable: true,
+            button: 0,
+            clientX: 15,
+            clientY: 25
+          })
+        )
+
+        // pointermove — 拖拽中，尚未 commit
+        // renderSavedSelectionEditPreview 应在此刻重建 saved overlay 预览
+        startHandle.dispatchEvent(
+          new MouseEvent('pointermove', {
+            bubbles: false,
+            cancelable: true,
+            button: 0,
+            clientX: 12,
+            clientY: 24
+          })
+        )
+
+        // 关键断言 1：commit 前 saved overlay 预览已重建
+        // renderSavedSelectionEditPreview 通过 innerHTML 重建，
+        // 旧 path 节点应脱离文档（与新 T5 测试相同的检测方式）
+        await waitFor(() => {
+          expect(savedOverlay.contains(initialPath)).toBe(false)
+        })
+
+        // 关键断言 2：新 path 的 d 应与初始不同（rect 从 {10,20,30,8} 扩大为 {10,20,70,12}）
+        const previewPath = getSavedPath()
+        expect(previewPath).toBeTruthy()
+        const previewPathD = previewPath?.getAttribute('d') || ''
+        expect(previewPathD).not.toBe(initialPathD)
+
+        // commit 前不应调用 onSavedSelectionEdit
+        expect(onSavedSelectionEdit).not.toHaveBeenCalled()
+
+        // pointerup — commit
+        startHandle.dispatchEvent(
+          new MouseEvent('pointerup', {
+            bubbles: false,
+            cancelable: true,
+            button: 0,
+            clientX: 12,
+            clientY: 24
+          })
+        )
+
+        expect(onSavedSelectionEdit).toHaveBeenCalledTimes(1)
+        const [, nextSelection] = onSavedSelectionEdit.mock.calls[0]
+        expect(nextSelection.start.charIndex).toBe(0)
+      } finally {
+        restoreCaret()
+        getSelectionSpy.mockRestore()
+        localElementFromPointSpy.mockRestore()
+      }
+    })
   })
 
   describe('blank click cancellation', () => {
@@ -14969,6 +15788,200 @@ describe('default selection handle (line+circle visual)', () => {
       expect(endHandle.closest('[data-handle-type]')).toBe(endHandle)
     } finally {
       cleanup()
+    }
+  })
+
+  // —— T4: 4px circular endpoint handles with preserved hit targets ——
+  // These tests lock the contract that:
+  //   • the default handle element carries `data-selection-handle-scope` so the
+  //     drag adapter can distinguish live vs saved handle scopes,
+  //   • the renderer sets `--hamster-reader-selection-handle-width` /
+  //     `--hamster-reader-selection-handle-height` CSS custom properties on the
+  //     default wrapper, driving the transparent hit-target size from SCSS,
+  //   • the SCSS `::before` pseudo-element is an 8px diameter circle
+  //     (`width: 8px; height: 8px; border-radius: 50%`, i.e. r=4px),
+  //   • the SCSS wrapper hit target dimensions are driven by those CSS
+  //     variables (with px fallbacks),
+  //   • a custom `selectionHandleElement` does NOT receive the default visual
+  //     wrapper internals (`--default` class, CSS custom properties).
+
+  it('exposes data-selection-handle-scope on default handles for live scope', async () => {
+    const { page, cleanup } = await renderDefaultHandleFixture()
+    try {
+      // 默认手柄渲染时 scope='live'，data-selection-handle-scope 必须存在
+      // 以便拖拽适配器区分实时选区与已保存选区的手柄。
+      const startHandle = page.querySelector(
+        '[data-handle-type="start"]'
+      ) as HTMLElement
+      const endHandle = page.querySelector(
+        '[data-handle-type="end"]'
+      ) as HTMLElement
+      expect(startHandle).toHaveAttribute('data-selection-handle-scope', 'live')
+      expect(endHandle).toHaveAttribute('data-selection-handle-scope', 'live')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('sets --hamster-reader-selection-handle-width/height CSS custom properties on default handles', async () => {
+    const { page, cleanup } = await renderDefaultHandleFixture()
+    try {
+      // 默认手柄的触控区域尺寸由 CSS 自定义属性驱动；
+      // 渲染器必须将 hitAreaWidth / hitAreaHeight 写入 inline style。
+      // handleRects 的 height=8 → hitAreaWidth=4, hitAreaHeight=8
+      const startHandle = page.querySelector(
+        '[data-handle-type="start"]'
+      ) as HTMLElement
+      const endHandle = page.querySelector(
+        '[data-handle-type="end"]'
+      ) as HTMLElement
+
+      expect(
+        startHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-width'
+        )
+      ).not.toBe('')
+      expect(
+        startHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-height'
+        )
+      ).not.toBe('')
+
+      expect(
+        endHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-width'
+        )
+      ).not.toBe('')
+      expect(
+        endHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-height'
+        )
+      ).not.toBe('')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('SCSS ::before pseudo-element is an 8px diameter circle (r=4px, border-radius 50%)', () => {
+    const scssSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/styles/reader.scss'),
+      'utf-8'
+    )
+
+    // --default 块内的 ::before 定义了圆形视觉元素：
+    // width: 8px; height: 8px; border-radius: 50% → 直径 8px，半径 4px
+    // 全文件仅此一处 ::before 包含 width/height/border-radius
+    expect(scssSource).toMatch(
+      /&__selection-handle--default\s*\{[\s\S]*?&::before\s*\{[\s\S]*?width:\s*8px;[\s\S]*?height:\s*8px;[\s\S]*?border-radius:\s*50%;/
+    )
+  })
+
+  it('SCSS default handle wrapper hit-target is driven by CSS custom properties', () => {
+    const scssSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/styles/reader.scss'),
+      'utf-8'
+    )
+
+    // 默认手柄 wrapper 的宽高必须引用 CSS 变量，带 px 回退值
+    // --hamster-reader-selection-handle-width / --hamster-reader-selection-handle-height
+    expect(scssSource).toMatch(
+      /&__selection-handle--default\s*\{[\s\S]*?width:\s*var\(--hamster-reader-selection-handle-width,\s*18px\)/
+    )
+    expect(scssSource).toMatch(
+      /&__selection-handle--default\s*\{[\s\S]*?height:\s*var\(--hamster-reader-selection-handle-height,\s*24px\)/
+    )
+  })
+
+  it('custom selectionHandleElement does not receive default visual wrapper internals', async () => {
+    // 自定义手柄不应获得 --default 类名或 CSS 自定义属性；
+    // 这些是默认视觉 wrapper 的内部实现细节。
+    const { document } = makeDocument({ pageCount: 1 })
+    const handleRects = [
+      makeDomRect({ left: 15, top: 25, width: 30, height: 8 })
+    ]
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        selectionOverlay
+        selectionHandleElement={
+          <button type='button' className='custom-handle' />
+        }
+      />
+    )
+
+    const page = screen.getByTestId('intermediate-page-1')
+    const pageRectSpy = mockElementRect(page, {
+      left: 5,
+      top: 5,
+      width: 100,
+      height: 150
+    })
+    const elementFromPointSpy = mockElementFromPoint(page)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(makeSelectionWithRects(() => handleRects))
+
+    try {
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      await waitFor(() => {
+        expect(
+          page.querySelectorAll('.hamster-reader__selection-handle')
+        ).toHaveLength(2)
+      })
+
+      const [startHandle, endHandle] = Array.from(
+        page.querySelectorAll('.hamster-reader__selection-handle')
+      ) as HTMLElement[]
+
+      // 自定义手柄不应有 --default 类（那是默认视觉 wrapper 的标记）
+      expect(startHandle).not.toHaveClass(
+        'hamster-reader__selection-handle--default'
+      )
+      expect(endHandle).not.toHaveClass(
+        'hamster-reader__selection-handle--default'
+      )
+
+      // 自定义手柄不应有 --default-start / --default-end 类
+      expect(startHandle).not.toHaveClass(
+        'hamster-reader__selection-handle--default-start'
+      )
+      expect(endHandle).not.toHaveClass(
+        'hamster-reader__selection-handle--default-end'
+      )
+
+      // 自定义手柄不应接收默认 wrapper 的 CSS 自定义属性
+      expect(
+        startHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-width'
+        )
+      ).toBe('')
+      expect(
+        startHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-height'
+        )
+      ).toBe('')
+      expect(
+        endHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-width'
+        )
+      ).toBe('')
+      expect(
+        endHandle.style.getPropertyValue(
+          '--hamster-reader-selection-handle-height'
+        )
+      ).toBe('')
+
+      // 自定义手柄仍应保留拖拽适配器所需的数据属性
+      expect(startHandle).toHaveAttribute('data-handle-type', 'start')
+      expect(endHandle).toHaveAttribute('data-handle-type', 'end')
+      expect(startHandle).toHaveAttribute('data-selection-handle-scope', 'live')
+      expect(endHandle).toHaveAttribute('data-selection-handle-scope', 'live')
+    } finally {
+      getSelectionSpy.mockRestore()
+      elementFromPointSpy.mockRestore()
+      pageRectSpy.mockRestore()
     }
   })
 })

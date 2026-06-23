@@ -177,10 +177,21 @@ const createElementRange = (
   return range
 }
 
+/**
+ * 将 Range 的客户端矩形解析为覆盖层矩形。
+ *
+ * 坐标原点标注：
+ * - DOM Range 矩形（getClientRects / getBoundingClientRect）标记为 `origin: 'viewport'`，
+ *   调用方（viewer 边界）需做 viewport→page-relative 转换。
+ * - fallback bbox 是 0-1 归一化坐标，这里用 pageSize 反归一化为页面像素坐标，
+ *   标记为 `origin: 'page-relative'`，调用方不应再减去页面视口偏移。
+ *   若 pageSize 不可用，保留 0-1 值但仍标记 page-relative（viewer 可按 pageSize 缩放）。
+ */
 const resolveRangeRects = (
   range: Range,
   pageNumber: number,
-  fallbackBbox?: NormalizedRect
+  fallbackBbox?: NormalizedRect,
+  pageSize?: { width: number; height: number }
 ): ReaderSelectionOverlayRect[] => {
   const clientRects = Array.from(range.getClientRects()).filter(
     (rect) => rect.width > 0 && rect.height > 0
@@ -191,7 +202,8 @@ const resolveRangeRects = (
       y: rect.y,
       width: rect.width,
       height: rect.height,
-      pageNumber
+      pageNumber,
+      origin: 'viewport' as const
     }))
   }
 
@@ -203,12 +215,32 @@ const resolveRangeRects = (
         y: rect.y,
         width: rect.width,
         height: rect.height,
-        pageNumber
+        pageNumber,
+        origin: 'viewport' as const
       }
     ]
   }
 
-  return fallbackBbox ? [{ ...fallbackBbox, pageNumber }] : []
+  if (!fallbackBbox) return []
+
+  // fallback bbox 是 0-1 归一化坐标，反归一化为页面像素坐标
+  // 使其与 buildVisualFallback 输出一致（同为 page-relative），
+  // 避免 viewer 边界对 fallback bbox 做 viewport→page-relative 二次转换。
+  if (pageSize && hasValidPageSize(pageSize)) {
+    return [
+      {
+        x: clamp01(fallbackBbox.x) * pageSize.width,
+        y: clamp01(fallbackBbox.y) * pageSize.height,
+        width: clamp01(fallbackBbox.width) * pageSize.width,
+        height: clamp01(fallbackBbox.height) * pageSize.height,
+        pageNumber,
+        origin: 'page-relative' as const
+      }
+    ]
+  }
+
+  // pageSize 不可用时保留 0-1 值，仍标记 page-relative
+  return [{ ...fallbackBbox, pageNumber, origin: 'page-relative' as const }]
 }
 
 const getAnchorDistance = (
@@ -387,6 +419,11 @@ const resolveSegmentForRects = (
   return resolveSegmentBySelectedText(segment, textElements)
 }
 
+/**
+ * 视觉回退：无法解析 DOM Range 时，从 persisted visual 数据重建覆盖层矩形。
+ * 反归一化后的矩形已经是页面相对像素坐标，标记 origin: 'page-relative'，
+ * viewer 边界不应再做 viewport→page-relative 转换。
+ */
 const buildVisualFallback = (
   selection: ReaderSavedSelection,
   reason: string
@@ -397,29 +434,53 @@ const buildVisualFallback = (
   rects: selection.visual.flatMap((page) =>
     denormalizePageRects(page.rects, page.pageSize).map((rect) => ({
       ...rect,
-      pageNumber: page.pageNumber
+      pageNumber: page.pageNumber,
+      origin: 'page-relative' as const
     }))
   ),
+  rectsOrigin: 'page-relative',
   segments: [],
   extractedText: '',
   reason
 })
 
+/**
+ * 构建 resolved 状态的恢复结果。
+ * rectsOrigin 由 rects 中各 rect 的 origin 字段汇总得出：
+ * 全为 viewport → 'viewport'；全为 page-relative → 'page-relative'；混合 → 'mixed'。
+ */
 const buildResolvedResult = (
   selection: ReaderSavedSelection,
   range: Range,
   rects: ReaderSelectionOverlayRect[],
   segments: ReaderSavedSelectionSegment[],
   extractedText: string
-): ReaderSavedSelectionRestoreResult => ({
-  id: selection.id,
-  selection,
-  status: 'resolved',
-  range,
-  rects,
-  segments,
-  extractedText
-})
+): ReaderSavedSelectionRestoreResult => {
+  const hasViewport = rects.some((r) => r.origin === 'viewport')
+  const hasPageRelative = rects.some((r) => r.origin === 'page-relative')
+  // 推断 rects 的 origin 类型：全 viewport / 全 page-relative / 混合
+  let rectsOrigin: 'viewport' | 'page-relative' | 'mixed'
+  if (hasViewport && hasPageRelative) {
+    rectsOrigin = 'mixed'
+  } else if (hasViewport) {
+    rectsOrigin = 'viewport'
+  } else if (hasPageRelative) {
+    rectsOrigin = 'page-relative'
+  } else {
+    rectsOrigin = 'viewport'
+  }
+
+  return {
+    id: selection.id,
+    selection,
+    status: 'resolved',
+    range,
+    rects,
+    rectsOrigin,
+    segments,
+    extractedText
+  }
+}
 
 /**
  * 生成轻量、稳定的文本哈希。使用本地 FNV-1a 32 位实现，避免引入依赖。
@@ -548,11 +609,25 @@ export const rebuildSavedSelectionFromEdit = (options: {
 
 /**
  * 按 exact → context → selected-text → visual 的顺序恢复已保存选择。
+ *
+ * 坐标原点处理：
+ * 从 selection.visual 构建 pageSize 查找表，传给 resolveRangeRects，
+ * 使 fallback bbox 能从 0-1 归一化反转为页面像素坐标（origin: 'page-relative'），
+ * 与 DOM Range 矩形（origin: 'viewport'）区分，避免 viewer 边界二次转换。
  */
 export const resolveSavedSelection = (
   selection: ReaderSavedSelection,
   textElements: TextElementInfo[]
 ): ReaderSavedSelectionRestoreResult => {
+  // 从 persisted visual 数据提取每页的 pageSize，供 fallback bbox 反归一化使用
+  const pageSizesFromVisual = new Map<
+    number,
+    { width: number; height: number }
+  >()
+  for (const page of selection.visual) {
+    pageSizesFromVisual.set(page.pageNumber, page.pageSize)
+  }
+
   const start =
     resolveAnchorExact(selection.start, textElements) ??
     resolveAnchorContext(selection.start, textElements)
@@ -573,7 +648,12 @@ export const resolveSavedSelection = (
         resolved.startCharIndex,
         resolved.endCharIndex
       )
-      return resolveRangeRects(segmentRange, segment.pageNumber, segment.bbox)
+      return resolveRangeRects(
+        segmentRange,
+        segment.pageNumber,
+        segment.bbox,
+        pageSizesFromVisual.get(segment.pageNumber)
+      )
     })
     return buildResolvedResult(
       selection,
@@ -608,7 +688,12 @@ export const resolveSavedSelection = (
           match.startCharIndex,
           match.endCharIndex
         )
-        return resolveRangeRects(segmentRange, segment.pageNumber, segment.bbox)
+        return resolveRangeRects(
+          segmentRange,
+          segment.pageNumber,
+          segment.bbox,
+          pageSizesFromVisual.get(segment.pageNumber)
+        )
       })
       return buildResolvedResult(
         selection,

@@ -179,3 +179,28 @@ export function polygonsToSvgPath(
   }
   return parts.join(' ')
 }
+
+/**
+ * 将矩形数组中的每个矩形转换为独立的 SVG path `d` 属性字符串。
+ *
+ * 与 rectsToUnionPolygons 不同，此函数不做并集合并：
+ * 每个矩形生成一个独立的闭合矩形路径 `M x y L ... Z`。
+ * 用于实时选择覆盖层（live selection overlay），保证每个 rect-region
+ * 拥有独立的 <path> 元素，便于后续手柄拖拽和命中测试。
+ *
+ * 返回值：每个元素是单个矩形的 path `d` 字符串，顺序与输入 rects 一致。
+ */
+export function rectsToIndependentSvgPaths(
+  rects: ReaderSelectionOverlayRect[]
+): string[] {
+  const paths: string[] = []
+  for (const rect of rects) {
+    const x2 = rect.x + rect.width
+    const y2 = rect.y + rect.height
+    // 顺时针绘制矩形：左上 → 右上 → 右下 → 左下 → 闭合
+    paths.push(
+      `M ${rect.x} ${rect.y} L ${x2} ${rect.y} L ${x2} ${y2} L ${rect.x} ${y2} Z`
+    )
+  }
+  return paths
+}

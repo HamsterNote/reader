@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ReaderSelectionOverlayRect } from '../src/components/IntermediateDocumentViewer'
 import {
   polygonsToSvgPath,
+  rectsToIndependentSvgPaths,
   rectsToUnionPolygons,
   type ReaderSelectionOverlayPolygon
 } from '../src/components/selectionGeometry'
@@ -88,5 +89,84 @@ describe('polygonsToSvgPath', () => {
     expect(path).toContain('M 0 0')
     expect(path).toContain('Z M')
     expect(path.endsWith('Z')).toBe(true)
+  })
+})
+
+describe('rectsToIndependentSvgPaths', () => {
+  it('两个相交矩形（会被 union 合并）→ 返回 2 条独立路径', () => {
+    const rects: ReaderSelectionOverlayRect[] = [
+      { x: 0, y: 0, width: 50, height: 50, pageNumber: 1 },
+      { x: 25, y: 25, width: 50, height: 50, pageNumber: 1 }
+    ]
+
+    // 验证 union 会将这两个矩形合并为 1 个多边形
+    const unionPolygons = rectsToUnionPolygons(rects)
+    expect(unionPolygons).toHaveLength(1)
+
+    // 独立路径模式下应返回 2 条路径，不做合并
+    const paths = rectsToIndependentSvgPaths(rects)
+    expect(paths).toHaveLength(2)
+  })
+
+  it('每条路径的 d 数据匹配对应矩形的四角坐标', () => {
+    const rects: ReaderSelectionOverlayRect[] = [
+      { x: 10, y: 20, width: 30, height: 40, pageNumber: 1 },
+      { x: 50, y: 60, width: 25, height: 35, pageNumber: 1 }
+    ]
+
+    const paths = rectsToIndependentSvgPaths(rects)
+    expect(paths).toHaveLength(2)
+
+    // 第一条路径：M 10 20 L 40 20 L 40 60 L 10 60 Z
+    expect(paths[0]).toBe('M 10 20 L 40 20 L 40 60 L 10 60 Z')
+
+    // 第二条路径：M 50 60 L 75 60 L 75 95 L 50 95 Z
+    expect(paths[1]).toBe('M 50 60 L 75 60 L 75 95 L 50 95 Z')
+  })
+
+  it('三条同页相交矩形 → 返回 3 条独立路径', () => {
+    const rects: ReaderSelectionOverlayRect[] = [
+      { x: 0, y: 0, width: 100, height: 20, pageNumber: 1 },
+      { x: 0, y: 10, width: 100, height: 20, pageNumber: 1 },
+      { x: 0, y: 15, width: 100, height: 20, pageNumber: 1 }
+    ]
+
+    const unionPolygons = rectsToUnionPolygons(rects)
+    expect(unionPolygons).toHaveLength(1)
+
+    const paths = rectsToIndependentSvgPaths(rects)
+    expect(paths).toHaveLength(3)
+
+    for (const d of paths) {
+      expect(d.startsWith('M')).toBe(true)
+      expect(d.endsWith('Z')).toBe(true)
+    }
+  })
+
+  it('跨页矩形 → 每个矩形仍独立，不按页分组', () => {
+    const rects: ReaderSelectionOverlayRect[] = [
+      { x: 0, y: 0, width: 10, height: 10, pageNumber: 1 },
+      { x: 0, y: 0, width: 10, height: 10, pageNumber: 2 }
+    ]
+
+    const paths = rectsToIndependentSvgPaths(rects)
+    expect(paths).toHaveLength(2)
+    expect(paths[0]).toBe('M 0 0 L 10 0 L 10 10 L 0 10 Z')
+    expect(paths[1]).toBe('M 0 0 L 10 0 L 10 10 L 0 10 Z')
+  })
+
+  it('空数组 → 返回空数组', () => {
+    const paths = rectsToIndependentSvgPaths([])
+    expect(paths).toHaveLength(0)
+  })
+
+  it('单矩形 → 返回 1 条路径，四角坐标正确', () => {
+    const rects: ReaderSelectionOverlayRect[] = [
+      { x: 5, y: 5, width: 15, height: 25, pageNumber: 1 }
+    ]
+
+    const paths = rectsToIndependentSvgPaths(rects)
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toBe('M 5 5 L 20 5 L 20 30 L 5 30 Z')
   })
 })

@@ -62,7 +62,11 @@ import {
   type ReaderSelectionPayload
 } from '../selection/selectionPayloadSerializer'
 import { createWordRangeFromCaret } from '../selection/wordRange'
-import { polygonsToSvgPath, rectsToUnionPolygons } from '../selectionGeometry'
+import {
+  polygonsToSvgPath,
+  rectsToIndependentSvgPaths,
+  rectsToUnionPolygons
+} from '../selectionGeometry'
 
 export {
   getNearestTextElementForPoint,
@@ -548,13 +552,24 @@ export type ReaderRenderMode = 'html-parser' | 'direct'
 /** 背景质量级别：low（低）、medium（中）、high（高） */
 export type BackgroundQuality = 'low' | 'medium' | 'high'
 
-/** 选择覆盖层矩形区域（页面坐标系） */
+/**
+ * 选择覆盖层矩形区域。
+ *
+ * 坐标原由可选 `origin` 字段标识：
+ * - `'viewport'`    — 来自 Range.getClientRects / getBoundingClientRect 的浏览器视口坐标，
+ *                      viewer 边界需调用 convertSavedSelectionRectToPageRect 转为页面相对坐标。
+ * - `'page-relative'` — 已是页面像素相对坐标（来自归一化 bbox 反归一化或 visual fallback），
+ *                      viewer 边界不应再做 viewport→page-relative 转换，否则会双重偏移。
+ * - `undefined`     — 历史调用方未显式标注，按 viewport 坐标处理（向后兼容）。
+ */
 export type ReaderSelectionOverlayRect = {
   x: number
   y: number
   width: number
   height: number
   pageNumber: number
+  /** 坐标原点标识，用于 viewer 边界区分 viewport / page-relative */
+  origin?: 'viewport' | 'page-relative'
 }
 
 /**
@@ -636,8 +651,16 @@ export type ReaderSavedSelectionRestoreResult = {
   status: ReaderSavedSelectionRestoreStatus
   /** 可编辑的恢复 Range；视觉回退和未解析状态为空 */
   range?: Range
-  /** 恢复后的覆盖层矩形（页面坐标系），可能来自文本解析或视觉回退 */
+  /** 恢复后的覆盖层矩形，坐标原点由 rectsOrigin 标识 */
   rects: ReaderSelectionOverlayRect[]
+  /**
+   * rects 的坐标原点：
+   * - `'viewport'`      — 浏览器视口坐标，viewer 需转为 page-relative
+   * - `'page-relative'` — 已是页面相对像素坐标，viewer 不应二次转换
+   * - `'mixed'`         — 混合来源，需逐 rect 检查 origin 字段
+   * - `undefined`       — 历史行为，按 viewport 处理（向后兼容）
+   */
+  rectsOrigin?: 'viewport' | 'page-relative' | 'mixed'
   /** 恢复后的段落信息，未解析时为空数组 */
   segments: ReaderSavedSelectionSegment[]
   /** 提取的文本内容，未解析时为空字符串 */
@@ -2422,6 +2445,13 @@ export function IntermediateDocumentViewer({
       scale: effectiveScale
     }),
     [effectiveScale, paperTransform.x, paperTransform.y]
+  )
+
+  // Task 5: transform 版本字符串——pan/zoom 任一变化时产生新引用，
+  // 用于驱动 saved overlay/handle 的 render-only 刷新 effect。
+  const savedSelectionTransformVersion = useMemo(
+    () => `${paperTransform.x}:${paperTransform.y}:${effectiveScale}`,
+    [paperTransform.x, paperTransform.y, effectiveScale]
   )
 
   const textElementsRef = useRef<
@@ -4567,6 +4597,25 @@ export function IntermediateDocumentViewer({
 
       overlayRectsRef.current = rects
 
+      // 为一组矩形生成独立 <path> 元素的 SVG 字符串。
+      // Phase 1: 不做并集合并，每个 rect 拥有独立的 <path>，
+      // 为一组矩形生成独立 <path> 元素的 SVG 字符串。
+      // Phase 1: 不做并集合并，每个 rect 拥有独立的 <path>，
+      // 便于后续手柄拖拽命中测试和区域级操作。
+      const buildIndependentPathsSvg = (
+        bucketRects: ReaderSelectionOverlayRect[]
+      ): string => {
+        const dStrings = rectsToIndependentSvgPaths(bucketRects)
+        if (dStrings.length === 0) return ''
+        const pathTags = dStrings
+          .map(
+            (d) =>
+              `<path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/>`
+          )
+          .join('')
+        return `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%">${pathTags}</svg>`
+      }
+
       const htmlParserOverlayActive =
         htmlContentRef.current && !htmlParserErrorRef.current
 
@@ -4581,12 +4630,7 @@ export function IntermediateDocumentViewer({
               ? [getRootOverlayRect(rect, viewerRoot, pageRefs.current)]
               : []
           )
-          const polygons = rectsToUnionPolygons(rootRects)
-          const d = polygonsToSvgPath(polygons)
-          overlayElRef.current.innerHTML =
-            d.length > 0
-              ? `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
-              : ''
+          overlayElRef.current.innerHTML = buildIndependentPathsSvg(rootRects)
         }
         overlayContainerRefs.current.forEach((container, pageNumber) => {
           const pageRects = isDecodedHtmlParserPage(
@@ -4595,25 +4639,21 @@ export function IntermediateDocumentViewer({
             pageRefs.current
           )
             ? []
-            : rects.filter((r) => r.pageNumber === pageNumber)
+            : collectPageRects(rects, pageNumber)
           if (pageRects.length === 0) {
             container.innerHTML = ''
             return
           }
-          const polygons = rectsToUnionPolygons(pageRects)
-          const d = polygonsToSvgPath(polygons)
-          container.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+          container.innerHTML = buildIndependentPathsSvg(pageRects)
         })
       } else {
         overlayContainerRefs.current.forEach((container, pageNumber) => {
-          const pageRects = rects.filter((r) => r.pageNumber === pageNumber)
+          const pageRects = collectPageRects(rects, pageNumber)
           if (pageRects.length === 0) {
             container.innerHTML = ''
             return
           }
-          const polygons = rectsToUnionPolygons(pageRects)
-          const d = polygonsToSvgPath(polygons)
-          container.innerHTML = `<svg class="hamster-reader__selection-overlay-svg" width="100%" height="100%"><path class="hamster-reader__selection-overlay-path" fill-rule="evenodd" d="${d}"/></svg>`
+          container.innerHTML = buildIndependentPathsSvg(pageRects)
         })
       }
 
@@ -4701,14 +4741,25 @@ export function IntermediateDocumentViewer({
     [pageNumbers, textsByPageNumber]
   )
 
-  // Task 4: 把 resolveSavedSelection 返回的客户端坐标矩形转换为页面相对坐标。
+  // Task 4 / T2: 把 resolveSavedSelection 返回的客户端坐标矩形转换为页面相对坐标。
   // resolveSavedSelection 的 rects 来自 Range.getClientRects，是 viewport 坐标；
   // direct-render 覆盖层使用页面相对坐标，因此需要按对应页元素的位置做偏移。
+  //
+  // 坐标原点处理（T2 修复）：
+  // - origin === 'viewport' 或 undefined（历史调用方）：执行 viewport→page-relative 转换。
+  // - origin === 'page-relative'：已是页面相对像素坐标（来自 fallback bbox 反归一化
+  //   或 visual fallback），直接返回，不做 viewport 减法和 scale 除法，
+  //   否则会对已正确的坐标做二次偏移，产生负数/垃圾值。
   const convertSavedSelectionRectToPageRect = useCallback(
     (
       rect: ReaderSelectionOverlayRect,
       viewerRoot: HTMLElement
     ): ReaderSelectionOverlayRect => {
+      // page-relative 坐标已经是页面相对像素，不需要也不应该做 viewport→page 转换
+      if (rect.origin === 'page-relative') {
+        return rect
+      }
+      // viewport 或 undefined（历史行为）：执行 viewport→page-relative 转换
       const pageElement = getPageElementByPageNumber(
         rect.pageNumber,
         viewerRoot,
@@ -5102,6 +5153,12 @@ export function IntermediateDocumentViewer({
     const results: ReaderSavedSelectionRestoreResult[] = []
     for (const selection of savedSelections) {
       const resolved = resolveSavedSelection(selection, textElementInfos)
+      // T2: 仅对 resolved 状态的 viewport/undefined origin rects 做 viewport→page-relative 转换。
+      // convertSavedSelectionRectToPageRect 内部已按 rect.origin 逐条判断：
+      //   - origin === 'page-relative' → 直接返回（fallback bbox / resolved 混合中的 fallback rect）
+      //   - origin === 'viewport' 或 undefined → 执行 viewport→page-relative 转换
+      // visual-fallback 和 unresolved 状态的 rects 已经是 page-relative（buildVisualFallback 标注），
+      // 直接透传，不做任何转换。
       const pageRects: ReaderSelectionOverlayRect[] =
         resolved.status === 'resolved'
           ? resolved.rects.map((rect) =>
@@ -5177,6 +5234,27 @@ export function IntermediateDocumentViewer({
       globalThis.document.removeEventListener('scroll', handleLayoutChange)
     }
   }, [overlayOptions?.enabled, resolveAndRenderSavedSelections])
+
+  // Task 5: pan/zoom 时仅对已保存 overlay/handle 执行 render-only 刷新。
+  // html-parser root overlay 的 getRootOverlayRect 依赖 page 与 root 的视口差值，
+  // transform 变化后该差值改变，需重算路径坐标和 rootX/rootY。
+  // direct-render 覆盖层在页面容器内，CSS transform 自动跟随，此处刷新保证一致性。
+  // 使用 resolvedSavedSelectionsRef 缓存结果，不重新解析 DOM Range。
+  useEffect(() => {
+    // eslint-disable-next-line sonarjs/void-use -- 依赖仅用于触发 effect 刷新，无需消费值
+    void savedSelectionTransformVersion
+    if (!overlayOptions?.enabled) return
+    const results = Array.from(resolvedSavedSelectionsRef.current.values())
+    if (results.length === 0) return
+    renderSavedSelectionOverlays(results, effectiveActiveSavedSelectionId)
+    refreshSavedSelectionHandles(results, effectiveActiveSavedSelectionId)
+  }, [
+    savedSelectionTransformVersion,
+    overlayOptions?.enabled,
+    effectiveActiveSavedSelectionId,
+    renderSavedSelectionOverlays,
+    refreshSavedSelectionHandles
+  ])
 
   useEffect(() => {
     const root = viewerRootElement

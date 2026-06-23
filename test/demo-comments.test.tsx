@@ -438,3 +438,111 @@ describe('demo selection comments', () => {
     expect(stored[0]?.comments?.[0]?.text).toBe('first comment')
   })
 })
+
+// ---------------------------------------------------------------------------
+// T7: 评论 UI 路径查询兼容性测试
+// T3 将 live selection overlay 改为多条独立 path（hamster-reader__selection-overlay-path），
+// 但 saved selection overlay 仍为 union 单 path（hamster-reader__saved-selection-overlay-path），
+// 且评论浮动 UI 仅通过 data-saved-selection-id 查询 saved path，不查询 live path。
+// 本组测试验证 T3 后评论 UI 选择器不受影响。
+// ---------------------------------------------------------------------------
+
+describe('demo comment UI SVG path query compatibility (T7)', () => {
+  let originalGetBoundingClientRect: Element['getBoundingClientRect']
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockReaderProps.length = 0
+    localStorage.clear()
+
+    originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function () {
+      if (
+        this instanceof Element &&
+        this.hasAttribute('data-saved-selection-id')
+      ) {
+        return {
+          x: 100,
+          y: 200,
+          left: 100,
+          top: 200,
+          right: 200,
+          bottom: 220,
+          width: 100,
+          height: 20,
+          toJSON() {
+            return {}
+          }
+        } as DOMRect
+      }
+      return originalGetBoundingClientRect.call(this)
+    }
+  })
+
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = originalGetBoundingClientRect
+  })
+
+  it('T7-D: comment floating button queries data-saved-selection-id, not live overlay paths', async () => {
+    // 验证评论 UI 只查询 saved path（data-saved-selection-id），
+    // 不查询 live overlay path（T3 后 live 有多条 selection-overlay-path）。
+    const selection = makeValidSavedSelection(
+      't7-comment-query-1',
+      'Comment query test'
+    )
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([selection]))
+
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('T7 Comment Query Document')
+    )
+    render(<App />)
+    upload(makeFile('t7-comment-query.pdf'))
+    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('load-selections-button'))
+
+    const onActiveSavedSelectionChange =
+      getLatestParsedReaderProps()?.onActiveSavedSelectionChange
+    expect(onActiveSavedSelectionChange).toBeDefined()
+    act(() => {
+      onActiveSavedSelectionChange?.('t7-comment-query-1')
+    })
+
+    // 浮动按钮出现 -> 说明 data-saved-selection-id 查询成功
+    const floatingButton = await screen.findByTestId('comment-floating-button')
+    expect(floatingButton).toBeInTheDocument()
+  })
+
+  it('T7-E: multiple saved selections do not collide in comment path queries', async () => {
+    // 多个 saved selection 同时存在时，评论 UI 应只查询当前激活的 id。
+    const first = makeValidSavedSelection('t7-multi-1', 'First for query')
+    const second = makeValidSavedSelection('t7-multi-2', 'Second for query')
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([first, second]))
+
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('T7 Multi Query Document')
+    )
+    render(<App />)
+    upload(makeFile('t7-multi-query.pdf'))
+    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('load-selections-button'))
+
+    const onActiveSavedSelectionChange =
+      getLatestParsedReaderProps()?.onActiveSavedSelectionChange
+
+    // 激活第一个 -> 浮动按钮定位到第一个的 path
+    act(() => {
+      onActiveSavedSelectionChange?.('t7-multi-1')
+    })
+    expect(
+      await screen.findByTestId('comment-floating-button')
+    ).toBeInTheDocument()
+
+    // 验证 DOM 中两个 saved path 都存在（各自有独立 data-saved-selection-id）
+    const path1 = screen.getByTestId('mock-saved-path-t7-multi-1')
+    const path2 = screen.getByTestId('mock-saved-path-t7-multi-2')
+    expect(path1).toHaveAttribute('data-saved-selection-id', 't7-multi-1')
+    expect(path2).toHaveAttribute('data-saved-selection-id', 't7-multi-2')
+  })
+})
