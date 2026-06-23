@@ -8,7 +8,6 @@ import {
 import {
   VirtualPaper,
   VirtualPaperInteractionMode,
-  VirtualPaperRenderMode,
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
@@ -2779,10 +2778,8 @@ export function IntermediateDocumentViewer({
 
       if (clampedScale === effectiveScaleRef.current) return
 
-      onScaleChange?.(
-        clampedScale,
-        meta.focalPoint ? { source, focalPoint: meta.focalPoint } : { source }
-      )
+      // 新版 virtual-paper 的 meta 不再包含 focalPoint
+      onScaleChange?.(clampedScale, { source })
     },
     [onScaleChange, scale, scaleRange]
   )
@@ -7565,7 +7562,6 @@ export function IntermediateDocumentViewer({
     >
       {pageNumbers.length > 0 ? (
         <VirtualPaper
-          renderMode={VirtualPaperRenderMode.Transform}
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}

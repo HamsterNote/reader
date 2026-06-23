@@ -1,6 +1,17 @@
 /**
- * 本地类型 shim，覆盖 @hamster-note/virtual-paper@0.1.0-beta.1 空白的
- * dist/index.d.ts。声明完全基于该版本源码导出的公开 API。
+ * 本地类型 shim，覆盖 @hamster-note/virtual-paper 空白的
+ * dist/index.d.ts（仅 `export {}`）。声明基于该版本运行时
+ * 实际导出的公开 API，随版本变化时需同步更新。
+ *
+ * 该版本（yalc 本地链接）的运行时导出：
+ * - DEFAULT_ENABLED_INTERACTIONS（常量）
+ * - VirtualPaper（组件）
+ * - VirtualPaperInitialPlacement（枚举）
+ * - VirtualPaperInteractionMode（枚举）
+ *
+ * 已移除：VirtualPaperRenderMode 枚举与 renderMode prop。
+ * 新增：readerMode / containMode / inertialScroll / edgeElasticScroll /
+ *       readerModeZoomDebounceMs props。
  */
 
 import type { CSSProperties, HTMLAttributes, ReactNode } from 'react'
@@ -22,11 +33,6 @@ declare module '@hamster-note/virtual-paper' {
     Center = 'Center'
   }
 
-  export enum VirtualPaperRenderMode {
-    Transform = 'Transform',
-    Scroll = 'Scroll'
-  }
-
   /**
    * 变换状态。x/y 是容器在 wrapper 内的位移（像素），scale 是缩放比例。
    */
@@ -44,11 +50,10 @@ declare module '@hamster-note/virtual-paper' {
     inputType: 'pointer' | 'wheel' | 'programmatic'
     phase: 'start' | 'change' | 'end'
     active?: boolean
-    focalPoint?: { x: number; y: number }
   }
 
   /**
-   * Scroll 模式下用于撑开容器的内容尺寸。
+   * 用于撑开容器的内容尺寸（在 contain / reader 模式下参与布局计算）。
    */
   export type VirtualPaperContentSize = {
     width: number
@@ -65,15 +70,31 @@ declare module '@hamster-note/virtual-paper' {
      */
     enabledInteractions?: VirtualPaperInteractionMode[]
     /**
-     * 非受控模式下首次挂载时如何放置容器。
+     * 非受控模式下首次挂载时如何放置容器。默认 Center。
      */
     initialPlacement?: VirtualPaperInitialPlacement
     /**
-     * Transform 模式通过 CSS transform 移动容器；Scroll 模式通过 overflow 滚动实现。
+     * Reader 模式：启用针对阅读场景优化的手势行为（如滚轮缩放防抖）。
      */
-    renderMode?: VirtualPaperRenderMode
+    readerMode?: boolean
     /**
-     * Scroll 模式下用于计算容器大小的内容尺寸。
+     * Contain 模式：将内容约束在容器可视区域内。
+     */
+    containMode?: boolean
+    /**
+     * 惯性滚动：手势结束后保持减速滑动。
+     */
+    inertialScroll?: boolean
+    /**
+     * 边缘弹性滚动：到达边界后产生回弹效果。
+     */
+    edgeElasticScroll?: boolean
+    /**
+     * Reader 模式下滚轮缩放的防抖毫秒数。
+     */
+    readerModeZoomDebounceMs?: number
+    /**
+     * 内容尺寸，参与 contain / reader 模式的布局计算。
      */
     contentSize?: VirtualPaperContentSize
     /**

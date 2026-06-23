@@ -6,7 +6,7 @@
  *   data-testid="virtual-paper-container"
  * - container 使用 `translate3d(...)` 形式的 transform
  * - 支持受控 `transform`、非受控 `defaultTransform` 与默认居中放置
- * - 将 `minScale`、`maxScale`、`renderMode`、`enabledInteractions`、
+ * - 将 `minScale`、`maxScale`、`enabledInteractions`、
  *   `containerProps` 透传给 DOM 用于断言
  * - 提供 `__triggerTransform` 与 `__triggerTransformEnd` 静态辅助方法，
  *   让测试可以模拟手势产生的 transform 变化
@@ -31,11 +31,6 @@ export enum VirtualPaperInitialPlacement {
   Center = 'Center'
 }
 
-export enum VirtualPaperRenderMode {
-  Transform = 'Transform',
-  Scroll = 'Scroll'
-}
-
 export type VirtualPaperTransform = {
   x: number
   y: number
@@ -57,7 +52,16 @@ export type VirtualPaperProps = {
   children?: React.ReactNode
   enabledInteractions?: VirtualPaperInteractionMode[]
   initialPlacement?: VirtualPaperInitialPlacement
-  renderMode?: VirtualPaperRenderMode
+  /** v0.1.0-beta.1+：阅读模式（连续滚动/单页） */
+  readerMode?: boolean
+  /** v0.1.0-beta.1+：容器模式，替代已移除的 renderMode */
+  containMode?: 'contain' | 'cover' | 'stretch'
+  /** v0.1.0-beta.1+：惯性滚动 */
+  inertialScroll?: boolean
+  /** v0.1.0-beta.1+：边缘弹性滚动 */
+  edgeElasticScroll?: boolean
+  /** v0.1.0-beta.1+：阅读模式缩放防抖时间（毫秒） */
+  readerModeZoomDebounceMs?: number
   contentSize?: VirtualPaperContentSize
   transform?: VirtualPaperTransform
   defaultTransform?: VirtualPaperTransform
@@ -123,7 +127,6 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
     enabledInteractions = DEFAULT_ENABLED_INTERACTIONS,
     // eslint-disable-next-line sonarjs/no-unused-vars
     initialPlacement: _initialPlacement,
-    renderMode = VirtualPaperRenderMode.Transform,
     contentSize,
     transform: controlledTransform,
     defaultTransform,
@@ -207,15 +210,13 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
         .join(' ')}
       style={{
         position: 'relative',
-        overflow:
-          renderMode === VirtualPaperRenderMode.Scroll ? 'auto' : 'hidden',
+        overflow: 'hidden',
         width: '100%',
         height: '100%',
         ...style,
         ...wrapperStyleFromProps
       }}
       data-enabled-interactions={enabledInteractions.join(',')}
-      data-render-mode={renderMode}
       data-min-scale={minScale}
       data-max-scale={maxScale}
       {...restWrapperProps}
