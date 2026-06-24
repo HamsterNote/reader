@@ -1,3 +1,12 @@
+// Selection 库类型别名直接从 @hamster-note/selection re-export，
+// 绕过 IntermediateDocumentViewer 中的 type alias 转发
+// （TS 5.9 在 bundler + isolatedModules 下 export type X = ExternalType 存在已知问题）
+export type {
+  MousePosition as ReaderMousePosition,
+  SelectionRange as ReaderSelectionRange,
+  SelectionRef as ReaderSelectionRef
+} from '@hamster-note/selection'
+
 export {
   type BackgroundQuality,
   buildSavedSelection,
@@ -35,4 +44,14 @@ export type ReaderInteractiveProps = Pick<
   | 'onTextSelectionChange'
   | 'onTextSelectionEnd'
   | 'interactionMode'
+  | 'ranges'
+  | 'selectedRangeId'
+  | 'onSelect'
+  | 'onSelectRange'
+  | 'onSelectionStart'
+  | 'onSelectionEnd'
+  | 'onHighlight'
+  | 'highlightColor'
+  | 'selectionColor'
+  | 'selectionPopover'
 >

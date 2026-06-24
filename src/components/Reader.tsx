@@ -6,6 +6,12 @@ import type {
 import { useCallback, useRef, useState } from 'react'
 
 import type {
+  MousePosition as ReaderMousePosition,
+  SelectionRange as ReaderSelectionRange,
+  SelectionRef as ReaderSelectionRef
+} from '@hamster-note/selection'
+
+import type {
   BackgroundQuality,
   ReaderInteractionMode,
   ReaderPageRange,
@@ -90,6 +96,39 @@ export type ReaderProps = {
    * loadable window.
    */
   maxLoadedPages?: number
+  // ---- Selection props (forwarded to IntermediateDocumentViewer; html-parser mode only) ----
+  /** 受控的已高亮 range 列表 */
+  ranges?: ReaderSelectionRange[]
+  /** 非受控模式下 ranges 的初始值 */
+  defaultRanges?: ReaderSelectionRange[]
+  /** 受控的当前选中 range ID */
+  selectedRangeId?: string | null
+  /** 非受控模式下 selectedRangeId 的初始值 */
+  defaultSelectedRangeId?: string | null
+  /** 用户确认高亮时触发 */
+  onSelect?: (range: ReaderSelectionRange) => void
+  /** 用户点击或取消选中某个已高亮 range 时触发 */
+  onSelectRange?: (id: string | null) => void
+  /** 用户开始选择时触发（容器内 mousedown） */
+  onSelectionStart?: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  /** 用户结束选择时触发（容器内 mouseup）；注意 touch 选择可能不触发 */
+  onSelectionEnd?: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  /** 执行高亮操作时额外触发（在 onSelect 之后） */
+  onHighlight?: (range: ReaderSelectionRange) => void
+  /** 已确认高亮的 Overlay 颜色 */
+  highlightColor?: string
+  /** 正在选择中的临时 Overlay 颜色 */
+  selectionColor?: string
+  /** 被选中的高亮上方弹出的 Popover 内容 */
+  selectionPopover?: React.ReactNode
+  /** Selection 组件的命令式 ref，暴露 highlight()/clear() */
+  selectionRef?: React.Ref<ReaderSelectionRef>
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -141,7 +180,20 @@ export function Reader({
   minScale,
   maxScale,
   maxLoadedPages,
-  interactionMode
+  interactionMode,
+  ranges,
+  defaultRanges,
+  selectedRangeId,
+  defaultSelectedRangeId,
+  onSelect,
+  onSelectRange,
+  onSelectionStart,
+  onSelectionEnd,
+  onHighlight,
+  highlightColor,
+  selectionColor,
+  selectionPopover,
+  selectionRef
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -236,6 +288,19 @@ export function Reader({
           maxScale={maxScale}
           maxLoadedPages={maxLoadedPages}
           interactionMode={interactionMode}
+          ranges={ranges}
+          defaultRanges={defaultRanges}
+          selectedRangeId={selectedRangeId}
+          defaultSelectedRangeId={defaultSelectedRangeId}
+          onSelect={onSelect}
+          onSelectRange={onSelectRange}
+          onSelectionStart={onSelectionStart}
+          onSelectionEnd={onSelectionEnd}
+          onHighlight={onHighlight}
+          highlightColor={highlightColor}
+          selectionColor={selectionColor}
+          selectionPopover={selectionPopover}
+          selectionRef={selectionRef}
         />
       )
     }

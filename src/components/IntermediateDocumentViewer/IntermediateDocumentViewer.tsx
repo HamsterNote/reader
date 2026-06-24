@@ -1,4 +1,10 @@
 import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
+import { Selection as HamsterSelection } from '@hamster-note/selection'
+import type {
+  MousePosition as HamsterMousePosition,
+  SelectionRange as HamsterSelectionRange,
+  SelectionRef as HamsterSelectionRef
+} from '@hamster-note/selection'
 import {
   IntermediateDocument,
   type IntermediateContent,
@@ -61,6 +67,16 @@ export type ReaderTextSelectionDetail = {
   pageNumber: number
   selection: Selection
 }
+
+/**
+ * Reader 前缀的 Selection 库类型别名。
+ * Reader 已导出大量 selection 符号（ReaderSavedSelection 系列、
+ * ReaderSelectionOverlayRect 等），这里使用 Reader 前缀避免与
+ * @hamster-note/selection 库的原生类型名冲突。
+ */
+export type ReaderSelectionRange = HamsterSelectionRange
+export type ReaderSelectionRef = HamsterSelectionRef
+export type ReaderMousePosition = HamsterMousePosition
 
 export type ReaderPageRange = {
   start: number
@@ -364,6 +380,39 @@ export type IntermediateDocumentViewerProps = {
   maxLoadedPages?: number
   /** 交互模式，影响手势处理行为 */
   interactionMode?: ReaderInteractionMode
+  // ---- Selection 库集成 props（仅 html-parser 模式生效）----
+  /** 受控的已高亮 range 列表；传入时组件不内部 mutation，缺失则用内部 state 从 defaultRanges 初始化 */
+  ranges?: ReaderSelectionRange[]
+  /** 非受控模式下 ranges 的初始值，默认空数组 */
+  defaultRanges?: ReaderSelectionRange[]
+  /** 受控的当前选中 range ID；null 表示未选中；缺失则用内部 state 从 defaultSelectedRangeId 初始化 */
+  selectedRangeId?: string | null
+  /** 非受控模式下 selectedRangeId 的初始值，默认 null */
+  defaultSelectedRangeId?: string | null
+  /** 用户确认高亮时触发；非受控 ranges 模式下内部先 append range 再回调 */
+  onSelect?: (range: ReaderSelectionRange) => void
+  /** 用户点击或取消选中某个已高亮 range 时触发 */
+  onSelectRange?: (id: string | null) => void
+  /** 用户开始选择时触发（容器内 mousedown），mousePos 为 viewport 坐标 */
+  onSelectionStart?: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  /** 用户结束选择时触发（容器内 mouseup 且有有效选区）；注意 Selection 库此回调基于 mouseup，touch 选择可能不触发 */
+  onSelectionEnd?: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  /** 执行高亮操作时额外触发（在 onSelect 之后） */
+  onHighlight?: (range: ReaderSelectionRange) => void
+  /** 已确认高亮的 Overlay 颜色（CSS color），默认半透明黄 */
+  highlightColor?: string
+  /** 正在选择中的临时 Overlay 颜色（CSS color），默认半透明粉 */
+  selectionColor?: string
+  /** 当某个高亮被选中时，在其上方弹出的 Popover 内容（ReactNode），由调用方完全控制 */
+  selectionPopover?: React.ReactNode
+  /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法，仅 html-parser 模式有效 */
+  selectionRef?: React.Ref<ReaderSelectionRef>
 }
 
 type PageSize = {
@@ -899,7 +948,20 @@ export function IntermediateDocumentViewer({
   minScale,
   maxScale,
   maxLoadedPages,
-  interactionMode = 'default'
+  interactionMode = 'default',
+  ranges,
+  defaultRanges,
+  selectedRangeId,
+  defaultSelectedRangeId,
+  onSelect,
+  onSelectRange,
+  onSelectionStart: onSelectionStartProp,
+  onSelectionEnd: onSelectionEndProp,
+  onHighlight,
+  highlightColor,
+  selectionColor,
+  selectionPopover,
+  selectionRef
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
@@ -924,6 +986,23 @@ export function IntermediateDocumentViewer({
   // 交互模式 ref，供后续手势逻辑读取（Wave 1 仅透传，不做行为分支）
   const interactionModeRef = useRef(interactionMode)
   interactionModeRef.current = interactionMode
+
+  // ---- Selection 库受控/非受控 state ----
+  // ranges 受控（prop 提供）则直接用；否则内部 state 从 defaultRanges 初始化
+  const isRangesControlled = ranges !== undefined
+  const [internalRanges, setInternalRanges] = useState<ReaderSelectionRange[]>(
+    () => defaultRanges ?? []
+  )
+  const effectiveRanges = isRangesControlled ? ranges! : internalRanges
+
+  // selectedRangeId 同理
+  const isSelectedRangeIdControlled = selectedRangeId !== undefined
+  const [internalSelectedRangeId, setInternalSelectedRangeId] = useState<
+    string | null
+  >(defaultSelectedRangeId ?? null)
+  const effectiveSelectedRangeId = isSelectedRangeIdControlled
+    ? selectedRangeId!
+    : internalSelectedRangeId
 
   const scaleRange = useMemo(
     () => getEffectiveScaleRange(minScale, maxScale),
@@ -1769,6 +1848,47 @@ export function IntermediateDocumentViewer({
     }
   }, [onTextSelectionEnd, onSelectText, getSelectionDetail])
 
+  // ---- Selection 库回调桥接 ----
+  // Selection.onSelect：非受控模式下内部先 append range，再回调外部
+  const handleSelectionSelect = useCallback(
+    (range: ReaderSelectionRange) => {
+      if (!isRangesControlled) {
+        setInternalRanges((prev) => [...prev, range])
+      }
+      onSelect?.(range)
+    },
+    [isRangesControlled, onSelect]
+  )
+
+  // Selection.onSelectRange：非受控模式下内部先更新 ID，再回调外部
+  const handleSelectionSelectRange = useCallback(
+    (id: string | null) => {
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(id)
+      }
+      onSelectRange?.(id)
+    },
+    [isSelectedRangeIdControlled, onSelectRange]
+  )
+
+  // Selection.onSelectionStart：直接转发到外部 prop
+  const handleSelectionStart = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      onSelectionStartProp?.(mousePos, selection)
+    },
+    [onSelectionStartProp]
+  )
+
+  // Selection.onSelectionEnd：仅转发到外部 prop。
+  // 不桥接 emitSelectionEnd，因为原生 mouseup 监听已负责 legacy 通路
+  // （onTextSelectionEnd/onSelectText），避免双重触发。
+  const handleSelectionEnd = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      onSelectionEndProp?.(mousePos, selection)
+    },
+    [onSelectionEndProp]
+  )
+
   useEffect(() => {
     if (!runtimeDocument || pageNumbers.length === 0) {
       return
@@ -2144,7 +2264,25 @@ export function IntermediateDocumentViewer({
           onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
         >
           {renderMode !== 'direct' ? (
-            <>
+            <HamsterSelection
+              ranges={effectiveRanges}
+              selectedRangeId={effectiveSelectedRangeId}
+              onSelect={onSelect ? handleSelectionSelect : undefined}
+              onSelectRange={
+                onSelectRange ? handleSelectionSelectRange : undefined
+              }
+              onSelectionStart={
+                onSelectionStartProp ? handleSelectionStart : undefined
+              }
+              onSelectionEnd={
+                onSelectionEndProp ? handleSelectionEnd : undefined
+              }
+              onHighlight={onHighlight}
+              highlightColor={highlightColor}
+              selectionColor={selectionColor}
+              popover={selectionPopover}
+              ref={selectionRef}
+            >
               <div
                 className='hamster-reader__html-parser-output'
                 data-testid='html-parser-output'
@@ -2190,7 +2328,7 @@ export function IntermediateDocumentViewer({
                 </div>
               </div>
               {/* 已移除 html-parser 根级 selection/saved-selection SVG overlay 与手柄 JSX。 */}
-            </>
+            </HamsterSelection>
           ) : (
             pageNumbers.map((pageNumber) => {
               const directPageSize = normalizePageSize(
