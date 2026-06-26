@@ -2,6 +2,7 @@ import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
 import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   MousePosition as HamsterMousePosition,
+  OverlayRectType as HamsterOverlayRectType,
   SelectionRange as HamsterSelectionRange,
   SelectionRef as HamsterSelectionRef
 } from '@hamster-note/selection'
@@ -77,6 +78,7 @@ export type ReaderTextSelectionDetail = {
 export type ReaderSelectionRange = HamsterSelectionRange
 export type ReaderSelectionRef = HamsterSelectionRef
 export type ReaderMousePosition = HamsterMousePosition
+export type ReaderSelectionOverlayRectType = HamsterOverlayRectType
 
 export type ReaderPageRange = {
   start: number
@@ -399,10 +401,7 @@ export type IntermediateDocumentViewerProps = {
     selection: Selection
   ) => void
   /** 用户结束选择时触发（容器内 mouseup 且有有效选区）；注意 Selection 库此回调基于 mouseup，touch 选择可能不触发 */
-  onSelectionEnd?: (
-    mousePos: ReaderMousePosition,
-    selection: Selection
-  ) => void
+  onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   /** 执行高亮操作时额外触发（在 onSelect 之后） */
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 已确认高亮的 Overlay 颜色（CSS color），默认半透明黄 */
@@ -413,6 +412,8 @@ export type IntermediateDocumentViewerProps = {
   selectionPopover?: React.ReactNode
   /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法，仅 html-parser 模式有效 */
   selectionRef?: React.Ref<ReaderSelectionRef>
+  /** 选区 Overlay 矩形坐标类型；默认 'percent' */
+  overlayRectType?: ReaderSelectionOverlayRectType
 }
 
 type PageSize = {
@@ -912,20 +913,18 @@ const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
  * React.memo 对 string prop 做浅比较（值比较），所以当 html 字符串未变化时
  * 不会重新渲染，从而避免触发浏览器侧的 Parse HTML + set innerHTML。
  */
-const HtmlPageContent = React.memo(
-  ({ html }: { html: string }) => {
-    // 缓存 dangerouslySetInnerHTML 对象，稳定对象 identity
-    const htmlObj = useMemo(() => ({ __html: html }), [html])
-    return (
-      <div
-        // HTML 来自受信任的 @hamster-note/html-parser 包，
-        // 将 IntermediateDocument 数据转换为每页 HTML 片段。
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
-        dangerouslySetInnerHTML={htmlObj}
-      />
-    )
-  }
-)
+const HtmlPageContent = React.memo(({ html }: { html: string }) => {
+  // 缓存 dangerouslySetInnerHTML 对象，稳定对象 identity
+  const htmlObj = useMemo(() => ({ __html: html }), [html])
+  return (
+    <div
+      // HTML 来自受信任的 @hamster-note/html-parser 包，
+      // 将 IntermediateDocument 数据转换为每页 HTML 片段。
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
+      dangerouslySetInnerHTML={htmlObj}
+    />
+  )
+})
 
 HtmlPageContent.displayName = 'HtmlPageContent'
 
@@ -961,7 +960,8 @@ export function IntermediateDocumentViewer({
   highlightColor,
   selectionColor,
   selectionPopover,
-  selectionRef
+  selectionRef,
+  overlayRectType = 'percent'
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
@@ -1695,10 +1695,7 @@ export function IntermediateDocumentViewer({
   )
 
   const shouldRejectOverBroadSelection = useCallback(
-    (
-      selectedElements: HTMLElement[],
-      viewerRoot: HTMLElement
-    ): boolean => {
+    (selectedElements: HTMLElement[], viewerRoot: HTMLElement): boolean => {
       return isOverBroadDirectRenderSelection(selectedElements, viewerRoot)
     },
     [isOverBroadDirectRenderSelection]
@@ -1751,9 +1748,7 @@ export function IntermediateDocumentViewer({
       const firstPageNumber = Number(
         firstElement.getAttribute('data-page-number')
       )
-      if (
-        shouldRejectOverBroadSelection(selectedElements, viewerRoot)
-      ) {
+      if (shouldRejectOverBroadSelection(selectedElements, viewerRoot)) {
         return null
       }
 
@@ -2281,6 +2276,7 @@ export function IntermediateDocumentViewer({
               highlightColor={highlightColor}
               selectionColor={selectionColor}
               popover={selectionPopover}
+              overlayRectType={overlayRectType}
               ref={selectionRef}
             >
               <div

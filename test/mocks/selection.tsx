@@ -1,14 +1,25 @@
 import * as React from 'react'
 
+export type OverlayRectType = 'px' | 'percent'
+
 export interface SelectionRange {
   id: string
   text: string
   start: number
   end: number
   createdAt: number
+  overlayRectType?: OverlayRectType
+  rects?: OverlayRect[] | PercentOverlayRect[]
 }
 
 export interface OverlayRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PercentOverlayRect {
   x: number
   y: number
   width: number
@@ -38,6 +49,17 @@ export interface SelectionProps {
   selectionColor?: string
   className?: string
   popover?: React.ReactNode
+  overlayRectType?: OverlayRectType
+}
+
+export let lastSelectionProps: SelectionProps | null = null
+
+export function getLastSelectionProps(): SelectionProps | null {
+  return lastSelectionProps
+}
+
+export function clearLastSelectionProps(): void {
+  lastSelectionProps = null
 }
 
 export interface UseTextSelectionResult {
@@ -51,9 +73,10 @@ export interface UseTextSelectionResult {
 const noop = () => {}
 
 export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
-  ({ children }, ref) => {
+  (props, ref) => {
+    lastSelectionProps = props
     React.useImperativeHandle(ref, () => ({ highlight: noop, clear: noop }))
-    return <>{children}</>
+    return <>{props.children}</>
   }
 )
 Selection.displayName = 'Selection'

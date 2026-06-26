@@ -157,12 +157,15 @@ export function App() {
   }, [])
 
   // 删除单个 range
-  const handleRemoveRange = useCallback((id: string) => {
-    setRanges((prev) => prev.filter((r) => r.id !== id))
-    if (selectedRangeId === id) {
-      setSelectedRangeId(null)
-    }
-  }, [selectedRangeId])
+  const handleRemoveRange = useCallback(
+    (id: string) => {
+      setRanges((prev) => prev.filter((r) => r.id !== id))
+      if (selectedRangeId === id) {
+        setSelectedRangeId(null)
+      }
+    },
+    [selectedRangeId]
+  )
 
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
@@ -279,6 +282,7 @@ export function App() {
             pageRange={buildPageRange()}
             renderMode='html-parser'
             backgroundQuality={backgroundQuality}
+            overlayRectType='percent'
             ocr
             onTextSelectionChange={() => {}}
             onTextSelectionEnd={() => {}}
@@ -369,9 +373,7 @@ export function App() {
                             : '1px solid #ddd',
                         borderRadius: '4px',
                         background:
-                          selectedRangeId === range.id
-                            ? '#e3f2fd'
-                            : '#fafafa',
+                          selectedRangeId === range.id ? '#e3f2fd' : '#fafafa',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap'

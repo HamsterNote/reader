@@ -3,6 +3,7 @@
 // （TS 5.9 在 bundler + isolatedModules 下 export type X = ExternalType 存在已知问题）
 export type {
   MousePosition as ReaderMousePosition,
+  OverlayRectType as ReaderSelectionOverlayRectType,
   SelectionRange as ReaderSelectionRange,
   SelectionRef as ReaderSelectionRef
 } from '@hamster-note/selection'
@@ -54,4 +55,5 @@ export type ReaderInteractiveProps = Pick<
   | 'highlightColor'
   | 'selectionColor'
   | 'selectionPopover'
+  | 'overlayRectType'
 >

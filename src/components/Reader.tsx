@@ -7,6 +7,7 @@ import { useCallback, useRef, useState } from 'react'
 
 import type {
   MousePosition as ReaderMousePosition,
+  OverlayRectType as ReaderSelectionOverlayRectType,
   SelectionRange as ReaderSelectionRange,
   SelectionRef as ReaderSelectionRef
 } from '@hamster-note/selection'
@@ -115,10 +116,7 @@ export type ReaderProps = {
     selection: Selection
   ) => void
   /** 用户结束选择时触发（容器内 mouseup）；注意 touch 选择可能不触发 */
-  onSelectionEnd?: (
-    mousePos: ReaderMousePosition,
-    selection: Selection
-  ) => void
+  onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   /** 执行高亮操作时额外触发（在 onSelect 之后） */
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 已确认高亮的 Overlay 颜色 */
@@ -129,6 +127,8 @@ export type ReaderProps = {
   selectionPopover?: React.ReactNode
   /** Selection 组件的命令式 ref，暴露 highlight()/clear() */
   selectionRef?: React.Ref<ReaderSelectionRef>
+  /** 选区 Overlay 矩形坐标类型；默认 'percent' */
+  overlayRectType?: ReaderSelectionOverlayRectType
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -193,7 +193,8 @@ export function Reader({
   highlightColor,
   selectionColor,
   selectionPopover,
-  selectionRef
+  selectionRef,
+  overlayRectType = 'percent'
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -301,6 +302,7 @@ export function Reader({
           selectionColor={selectionColor}
           selectionPopover={selectionPopover}
           selectionRef={selectionRef}
+          overlayRectType={overlayRectType}
         />
       )
     }

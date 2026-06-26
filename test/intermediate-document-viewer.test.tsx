@@ -10,9 +10,7 @@ import type {
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  buildSelectionPayload
-} from '../src/components/IntermediateDocumentViewer'
+import { buildSelectionPayload } from '../src/components/IntermediateDocumentViewer'
 import {
   isSelectionBackgroundTarget,
   resolveCaret
@@ -26,6 +24,11 @@ import {
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer } from '../src/index'
+import type { OverlayRectType } from './mocks/selection'
+import {
+  clearLastSelectionProps,
+  getLastSelectionProps
+} from './mocks/selection'
 import {
   VirtualPaper,
   VirtualPaperInteractionMode
@@ -127,7 +130,6 @@ const createDeferred = <T,>() => {
     reject: rejectDeferred
   }
 }
-
 
 const makeDomRect = (rect: RectInput) =>
   ({
@@ -490,8 +492,6 @@ describe('selection primitive modules', () => {
     expect(page.dataset.pageNumber).toBe('1')
   })
 
-
-
   it('composes a real DOM Selection and orders reversed endpoints', () => {
     const host = document.createElement('div')
     host.textContent = 'abcdef'
@@ -521,9 +521,7 @@ describe('selection primitive modules', () => {
   })
 })
 
-
 describe('IntermediateDocumentViewer', () => {
-
   beforeEach(() => {
     Reflect.set(globalThis, '__hamsterReaderMockDragInstances', [])
     vi.mocked(HtmlParser.decodeToHtml).mockReset()
@@ -1114,7 +1112,6 @@ describe('IntermediateDocumentViewer', () => {
     expect(slot3HtmlPage).toHaveTextContent('Decoded page 3')
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
   })
-
 
   it('protects large documents by loading only the intersecting page and overscan', async () => {
     const { document, pages } = makeDocument({ pageCount: 100 })
@@ -2149,7 +2146,6 @@ describe('IntermediateDocumentViewer', () => {
       )
     })
   })
-
 
   it('shows a page error instead of loading forever when text loading fails', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
@@ -3217,18 +3213,6 @@ describe('IntermediateDocumentViewer', () => {
       return { event, dispatched }
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
     it('cancels default-mode touch long press when movement exceeds threshold', async () => {
       const { document: mockDoc } = makeFourTextDocument()
       const onTextSelectionChange = vi.fn()
@@ -3490,7 +3474,6 @@ describe('IntermediateDocumentViewer', () => {
         getSelectionSpy.mockRestore()
       }
     })
-
 
     it('does not fire onTextSelectionChange when selection is collapsed', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
@@ -3805,9 +3788,6 @@ describe('IntermediateDocumentViewer', () => {
       )
     })
 
-
-
-
     it('fires onSelectText with a multi-segment payload', async () => {
       const { document: mockDoc } = makeFourTextDocument()
       const onSelectText = vi.fn()
@@ -4086,7 +4066,6 @@ describe('IntermediateDocumentViewer', () => {
 
       expect(textBlockMatch[1]).not.toContain('pointer-events')
     })
-
 
     it('does not let native selectionchange initiate blank-space drag normalization', async () => {
       const { document: mockDoc } = makeFourTextDocument()
@@ -4575,7 +4554,6 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
-
     it('[baseline] selectionchange callback payload has text and detail shape matching reader.test.tsx convention', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
       const onTextSelectionChange = vi.fn()
@@ -5026,12 +5004,6 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-
-
-
-
-
-
   describe('background image unselectability', () => {
     it('SCSS base-image rule includes user-select: none, -webkit-user-select: none, -webkit-touch-callout: none, and pointer-events: none', () => {
       const scssSource = fs.readFileSync(
@@ -5332,7 +5304,6 @@ describe('IntermediateDocumentViewer', () => {
         transform: 'translate3d(0px, 0px, 0) scale(1)'
       })
     })
-
 
     describe('pinch and wheel gestures', () => {
       const getVirtualPaperContainer = () =>
@@ -5655,3 +5626,75 @@ describe('IntermediateDocumentViewer', () => {
   })
 })
 
+describe('selection overlayRectType integration', () => {
+  beforeEach(() => {
+    clearLastSelectionProps()
+  })
+
+  afterEach(() => {
+    clearLastSelectionProps()
+  })
+
+  it('defaults overlayRectType to percent when omitted', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    expect(getLastSelectionProps()?.overlayRectType).toBe('percent')
+  })
+
+  it('passes explicit overlayRectType="percent" to HamsterSelection', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        overlayRectType='percent'
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    expect(getLastSelectionProps()?.overlayRectType).toBe('percent')
+  })
+
+  it('passes explicit overlayRectType="px" to HamsterSelection', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        overlayRectType='px'
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    expect(getLastSelectionProps()?.overlayRectType).toBe('px')
+  })
+
+  it('accepts overlayRectType values at type level', () => {
+    const percentValue: OverlayRectType = 'percent'
+    const pxValue: OverlayRectType = 'px'
+    expect(percentValue).toBe('percent')
+    expect(pxValue).toBe('px')
+  })
+})

@@ -87,6 +87,7 @@ export function App() {
       document={document}
       renderMode='html-parser'
       ranges={ranges}
+      overlayRectType='percent'
       onSelect={(range) => setRanges((prev) => [...prev, range])}
     />
   )
@@ -110,12 +111,14 @@ export function App() {
 | `selectionColor` | `string` | CSS color for active selection overlay. |
 | `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection. |
 | `selectionRef` | `React.Ref<ReaderSelectionRef>` | Ref to the Selection component. Exposes `highlight()` and `clear()`. |
+| `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
 
 ### Exported Types
 
 ```ts
 import type {
-  ReaderSelectionRange,    // { id, text, start, end, createdAt }
+  ReaderSelectionRange,    // { id, text, start, end, createdAt, overlayRectType?, rects? }
+  ReaderSelectionOverlayRectType,  // 'px' | 'percent'
   ReaderSelectionRef,      // { highlight(): void; clear(): void }
   ReaderMousePosition      // { x, y } — viewport coordinates (clientX/clientY)
 } from '@hamster-note/reader'

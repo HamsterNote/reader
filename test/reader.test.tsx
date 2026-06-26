@@ -731,6 +731,26 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.interactionMode).toBeUndefined()
   })
 
+  it('forwards overlayRectType="percent" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} {...{ overlayRectType: 'percent' }} />)
+    expect(capturedViewerProps.overlayRectType).toBe('percent')
+  })
+
+  it('forwards overlayRectType="px" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} {...{ overlayRectType: 'px' }} />)
+    expect(capturedViewerProps.overlayRectType).toBe('px')
+  })
+
+  it('compile-time: overlayRectType satisfies ReaderProps', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      overlayRectType: 'percent'
+    }
+    expect(props.overlayRectType).toBe('percent')
+  })
+
   it('compile-time: interactionMode satisfies ReaderProps', () => {
     const props: ReaderProps = {
       document: makeDocument({ pages: [makePage(1)] }),
