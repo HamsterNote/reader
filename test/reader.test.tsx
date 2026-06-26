@@ -299,7 +299,7 @@ describe('Reader public API', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, undefined)
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, { background: { backgroundQuality: 0.8 } })
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'Reader HTML'

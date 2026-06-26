@@ -592,7 +592,7 @@ describe('IntermediateDocumentViewer', () => {
 
     expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
       pages.get(1),
-      undefined
+      { background: { backgroundQuality: 0.8 } }
     )
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
@@ -860,7 +860,7 @@ describe('IntermediateDocumentViewer', () => {
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
   })
 
-  it('passes undefined backgroundQuality options to decodePageToHtml when absent', async () => {
+  it('passes default high backgroundQuality options to decodePageToHtml when absent', async () => {
     const { document } = makeDocument({ pageCount: 1 })
     vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
       '<div class="hamster-note-page">Default quality</div>'
@@ -872,7 +872,7 @@ describe('IntermediateDocumentViewer', () => {
 
     expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
       expect.anything(),
-      undefined
+      { background: { backgroundQuality: 0.8 } }
     )
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
   })
@@ -940,7 +940,7 @@ describe('IntermediateDocumentViewer', () => {
     })
     expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
       pages.get(1),
-      undefined
+      { background: { backgroundQuality: 0.8 } }
     )
     expect(screen.queryByText('Decoded page 2')).not.toBeInTheDocument()
 
@@ -966,7 +966,7 @@ describe('IntermediateDocumentViewer', () => {
     await screen.findByText('Decoded page 2')
     expect(HtmlParser.decodePageToHtml).toHaveBeenLastCalledWith(
       pages.get(2),
-      undefined
+      { background: { backgroundQuality: 0.8 } }
     )
     expect(screen.queryByText('Decoded page 3')).not.toBeInTheDocument()
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
@@ -1013,7 +1013,7 @@ describe('IntermediateDocumentViewer', () => {
       )
 
     const { rerender } = render(
-      <IntermediateDocumentViewer document={document} />
+      <IntermediateDocumentViewer document={document} backgroundQuality='low' />
     )
 
     await waitFor(() => {
@@ -1758,7 +1758,7 @@ describe('IntermediateDocumentViewer', () => {
         ).not.toBeInTheDocument()
         expect(HtmlParser.decodePageToHtml).toHaveBeenLastCalledWith(
           pages.get(2),
-          undefined
+          { background: { backgroundQuality: 0.8 } }
         )
         expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
       } finally {

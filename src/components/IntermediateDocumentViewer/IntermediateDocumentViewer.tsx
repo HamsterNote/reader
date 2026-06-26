@@ -935,7 +935,7 @@ export function IntermediateDocumentViewer({
   overscan = 1,
   pageRange,
   renderMode = 'html-parser',
-  backgroundQuality,
+  backgroundQuality = 'high',
   ocr,
   onOcrError,
   onTextSelectionChange,
