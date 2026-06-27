@@ -77,7 +77,29 @@ const noop = () => {}
 export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
   (props, ref) => {
     lastSelectionProps = props
-    React.useImperativeHandle(ref, () => ({ highlight: noop, clear: noop }))
+    React.useImperativeHandle(ref, () => ({
+      highlight: () => {
+        if (props.onSelect) {
+          props.onSelect({
+            id: 'highlight-id',
+            text: 'Mocked highlight',
+            start: 0,
+            end: 10,
+            createdAt: 123456789
+          })
+        }
+        if (props.onHighlight) {
+          props.onHighlight({
+            id: 'highlight-id',
+            text: 'Mocked highlight',
+            start: 0,
+            end: 10,
+            createdAt: 123456789
+          })
+        }
+      },
+      clear: noop
+    }))
     return (
       <div className='hsn-selection-container'>
         <div className='hsn-selection-content'>{props.children}</div>

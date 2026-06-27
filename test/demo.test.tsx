@@ -72,7 +72,16 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         mockCallbacks.onTextSelectionEnd = props.onTextSelectionEnd
       if (props.onSelectText) mockCallbacks.onSelectText = props.onSelectText
       return (
-        <div data-testid='mock-reader'>
+        <div
+          data-testid='mock-reader'
+          className='hamster-reader'
+          style={{
+            height: '100%',
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
           {props.document ? props.document.title : props.emptyText}
           {props.onFileUpload && (
             <input
@@ -147,7 +156,7 @@ describe('demo parser flow', () => {
     upload(uploadedFile)
 
     expect(screen.getByText('Parsing...')).toBeInTheDocument()
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('Success Document')).toBeInTheDocument()
     expect(screen.getByText('Name: success.pdf')).toBeInTheDocument()
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
@@ -231,7 +240,33 @@ describe('demo parser flow', () => {
       const uploadedFile = makeFile(caseData.fileName)
       upload(uploadedFile)
 
-      expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const shell = screen.getByTestId('reader-demo-root')
+      expect(shell).toHaveClass('hamster-demo-shell')
+
+      const sidebar = screen.getByTestId('demo-sidebar-settings').parentElement
+      expect(sidebar).toHaveClass('hamster-demo-sidebar')
+
+      const main = screen.getByTestId('mock-reader').parentElement
+      expect(main).toHaveClass('hamster-demo-main')
+
+      // Check Reader height fill integration
+      const readerRoot = screen.getByTestId('mock-reader')
+      expect(readerRoot).toHaveStyle({
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      })
+
+      const highlightGroup = screen.queryByTestId('demo-sidebar-highlights')
+      if (highlightGroup) {
+        expect(
+          highlightGroup.querySelectorAll('button[aria-label]')
+        ).not.toHaveLength(0)
+      }
+
       expect(screen.getByText(caseData.title)).toBeInTheDocument()
       expect(screen.getByText(`Name: ${caseData.fileName}`)).toBeInTheDocument()
       expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
@@ -255,7 +290,7 @@ describe('demo parser flow', () => {
         'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
       )
     ).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(PdfParser.encode).not.toHaveBeenCalled()
     expect(TxtParser.encode).not.toHaveBeenCalled()
     expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -271,7 +306,7 @@ describe('demo parser flow', () => {
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse TXT: bad txt')).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(TxtParser.encode).toHaveBeenCalledTimes(1)
     expect(TxtParser.encode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
@@ -288,7 +323,7 @@ describe('demo parser flow', () => {
     expect(
       screen.getByText('Failed to parse PDF: received undefined result')
     ).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
@@ -302,7 +337,7 @@ describe('demo parser flow', () => {
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse PDF: bad pdf')).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
@@ -314,7 +349,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     upload(makeFile('ocr.pdf'))
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
   })
 
@@ -327,7 +362,7 @@ describe('demo parser flow', () => {
     render(<App />)
     upload(makeFile('callback.pdf'))
 
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const mockText = { id: 'text-1', content: 'Hello' }
     const mockDetail = {
@@ -355,7 +390,7 @@ describe('demo parser flow', () => {
     render(<App />)
     upload(makeFile('selecttext.pdf'))
 
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const uploadReaderProps = mockReaderProps.find(
       (
@@ -403,6 +438,465 @@ describe('demo parser flow', () => {
       expect(screen.queryByText('Stale Document')).not.toBeInTheDocument()
       expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
       expect(screen.queryByText('Parsing...')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('demo highlighting interactions', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mockReaderProps.length = 0
+      localStorage.clear()
+    })
+
+    it('provides autoHighlight toggle that updates Reader prop', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Auto Highlight Document')
+      )
+      render(<App />)
+      upload(makeFile('auto.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const toggle = screen.getByTestId('auto-highlight-toggle')
+      expect(toggle).not.toBeChecked()
+
+      let uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+      expect(uploadReaderProps?.autoHighlight).toBe(false)
+
+      fireEvent.click(toggle)
+      expect(toggle).toBeChecked()
+
+      await waitFor(() => {
+        uploadReaderProps = mockReaderProps[
+          mockReaderProps.length - 1
+        ] as Record<string, unknown>
+        expect(uploadReaderProps?.autoHighlight).toBe(true)
+      })
+    })
+
+    it('renders selectionPopover with 高亮 and 背景颜色设置', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Popover Document')
+      )
+      render(<App />)
+      upload(makeFile('popover.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const popover = render(
+        uploadReaderProps?.selectionPopover as React.ReactElement
+      )
+      expect(popover.getByText('高亮')).toBeInTheDocument()
+      expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
+
+      const colorInput = popover.container.querySelector('input[type="color"]')
+      expect(colorInput).toBeInTheDocument()
+    })
+
+    it('renders highlightPopover with 删除 and 背景颜色设置', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Highlight Popover Document')
+      )
+      render(<App />)
+      upload(makeFile('hpopover.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const popover = render(
+        uploadReaderProps?.highlightPopover as React.ReactElement
+      )
+      expect(popover.getByText('删除')).toBeInTheDocument()
+      expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
+    })
+
+    it('does not store a highlight on selection end when autoHighlight is false', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('No Auto Highlight Document')
+      )
+      render(<App />)
+      upload(makeFile('no-auto.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const onSelectionEnd = uploadReaderProps?.onSelectionEnd as () => void
+      onSelectionEnd()
+
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+    })
+
+    it('calls selectionRef.current?.highlight() when 高亮 is clicked', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Manual Highlight Document')
+      )
+      render(<App />)
+      upload(makeFile('manual.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const highlightSpy = vi.fn()
+      const refFromProps =
+        uploadReaderProps?.selectionRef as React.MutableRefObject<unknown>
+
+      refFromProps.current = { highlight: highlightSpy, clear: vi.fn() }
+
+      const popover = render(
+        uploadReaderProps?.selectionPopover as React.ReactElement
+      )
+      fireEvent.click(popover.getByText('高亮'))
+
+      expect(highlightSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('changes the highlightColor prop when color input is changed', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Color Document')
+      )
+      render(<App />)
+      upload(makeFile('color.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      let uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const popover = render(
+        uploadReaderProps?.selectionPopover as React.ReactElement
+      )
+      const colorInput = popover.container.querySelector(
+        'input[type="color"]'
+      ) as HTMLInputElement
+
+      fireEvent.change(colorInput, { target: { value: '#ff0000' } })
+
+      await waitFor(() => {
+        uploadReaderProps = mockReaderProps[
+          mockReaderProps.length - 1
+        ] as Record<string, unknown>
+        expect(uploadReaderProps?.highlightColor).toBe('#ff0000')
+      })
+    })
+
+    it('removes range by id and clears selectedRangeId when 删除 is clicked', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Delete Document')
+      )
+      render(<App />)
+      upload(makeFile('delete.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      let uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight({ id: 'del-range', text: 'text to delete' })
+
+      expect(await screen.findByText('text to delete')).toBeInTheDocument()
+
+      const onSelectRange = uploadReaderProps?.onSelectRange as (
+        id: string
+      ) => void
+
+      onSelectRange('del-range')
+
+      await waitFor(() => {
+        uploadReaderProps = mockReaderProps[
+          mockReaderProps.length - 1
+        ] as Record<string, unknown>
+        expect(uploadReaderProps?.selectedRangeId).toBe('del-range')
+      })
+
+      const popover = render(
+        uploadReaderProps?.highlightPopover as React.ReactElement
+      )
+
+      const deleteButton = popover.container.querySelector('button')
+      if (deleteButton) {
+        fireEvent.click(deleteButton)
+      }
+
+      await waitFor(() => {
+        const elements = screen.queryAllByText('text to delete')
+        expect(elements).toHaveLength(0)
+      })
+
+      const stored = JSON.parse(
+        localStorage.getItem('hamster-reader-demo:highlights:delete.pdf') ||
+          '[]'
+      )
+      expect(stored).toHaveLength(0)
+
+      uploadReaderProps = mockReaderProps[mockReaderProps.length - 1] as Record<
+        string,
+        unknown
+      >
+      expect(uploadReaderProps?.selectedRangeId).toBe(null)
+    })
+
+    it('stores exactly one range even if both onSelect and onHighlight are triggered', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Single Store Document')
+      )
+      render(<App />)
+      upload(makeFile('single.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      const onSelect = uploadReaderProps?.onSelect as (range: unknown) => void
+
+      const range = { id: 'single-range', text: 'single text' }
+      onHighlight(range)
+      onSelect(range)
+
+      expect(await screen.findByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getAllByText('single text')).toHaveLength(1)
+    })
+  })
+
+  describe('demo highlighting persistence', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mockReaderProps.length = 0
+      localStorage.clear()
+    })
+
+    it('defaults to no highlights on fresh render with empty localStorage', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Clean Document')
+      )
+
+      render(<App />)
+      upload(makeFile('clean.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+    })
+
+    it('writes a new highlight to localStorage when onHighlight is called', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Highlight Document')
+      )
+
+      render(<App />)
+      upload(makeFile('highlight.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (
+          props
+        ): props is {
+          emptyText?: string
+          onHighlight?: (...args: unknown[]) => unknown
+          document?: unknown
+        } =>
+          typeof props === 'object' &&
+          props !== null &&
+          'onHighlight' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      uploadReaderProps?.onHighlight?.({
+        id: 'range-1',
+        text: 'hello highlight'
+      })
+
+      expect(await screen.findByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getByText('hello highlight')).toBeInTheDocument()
+
+      const stored = JSON.parse(
+        localStorage.getItem('hamster-reader-demo:highlights:highlight.pdf') ||
+          '[]'
+      )
+      expect(stored).toHaveLength(1)
+      expect(stored[0].id).toBe('range-1')
+      expect(stored[0].text).toBe('hello highlight')
+    })
+
+    it('restores stored highlights when reloading a file', async () => {
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:restored.pdf',
+        JSON.stringify([
+          {
+            id: 'range-1',
+            text: 'restored highlight',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
+
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Restored Document')
+      )
+
+      render(<App />)
+      upload(makeFile('restored.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.getByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getByText('restored highlight')).toBeInTheDocument()
+    })
+
+    it('isolates highlights per file name', async () => {
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:file-a.pdf',
+        JSON.stringify([
+          {
+            id: 'range-a',
+            text: 'file A highlight',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
+
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('File B Document')
+      )
+
+      render(<App />)
+      upload(makeFile('file-b.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      expect(screen.queryByText('file A highlight')).not.toBeInTheDocument()
+    })
+
+    it('yields empty array for invalid JSON or wrong shape', async () => {
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:corrupt.pdf',
+        '{ not valid json ]'
+      )
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:wrong-shape.pdf',
+        JSON.stringify([{ id: 'partial' }])
+      )
+
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Corrupt Document')
+      )
+
+      const { unmount } = render(<App />)
+      upload(makeFile('corrupt.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      unmount()
+
+      render(<App />)
+      upload(makeFile('wrong-shape.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+    })
+
+    it('ignores stale parser results applying older highlights to a newer file', async () => {
+      const staleRequest = createDeferred<IntermediateDocument | undefined>()
+      const freshRequest = createDeferred<IntermediateDocument | undefined>()
+
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:stale.pdf',
+        JSON.stringify([
+          {
+            id: 'range-stale',
+            text: 'stale text',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:fresh.pdf',
+        JSON.stringify([
+          {
+            id: 'range-fresh',
+            text: 'fresh text',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
+
+      vi.mocked(PdfParser.encode)
+        .mockReturnValueOnce(staleRequest.promise)
+        .mockReturnValueOnce(freshRequest.promise)
+
+      render(<App />)
+      upload(makeFile('stale.pdf'))
+      upload(makeFile('fresh.pdf'))
+
+      freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
+      expect(await screen.findByText('Fresh Document')).toBeInTheDocument()
+
+      expect(screen.getByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getByText('fresh text')).toBeInTheDocument()
+      expect(screen.queryByText('stale text')).not.toBeInTheDocument()
+
+      staleRequest.resolve(makeRuntimeDocument('Stale Document'))
+      await new Promise((r) => setTimeout(r, 10))
+
+      expect(screen.queryByText('Stale Document')).not.toBeInTheDocument()
+      expect(screen.queryByText('stale text')).not.toBeInTheDocument()
     })
   })
 })

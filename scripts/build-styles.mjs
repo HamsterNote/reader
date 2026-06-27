@@ -9,7 +9,7 @@ const readerStylesPath = 'src/styles/index.scss'
 const distStylePath = 'dist/style.css'
 const selectionStyleSpecifier = '@hamster-note/selection/style.css'
 const selectionImportPattern =
-  /^\s*@import\s+(?:url\()?['"]@hamster-note\/selection\/style\.css['"]\)?;\s*$/gm
+  /^[ \t]*@import[ \t]+url\(['"]@hamster-note\/selection\/style\.css['"]\);[ \t]*$/gm
 
 function buildReaderCss() {
   const result = compile(readerStylesPath, {

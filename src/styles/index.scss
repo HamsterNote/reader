@@ -3,4 +3,4 @@
 /* dev 模式下 Vite 会通过 package export inline selection CSS；
    lib build 时 scripts/build-styles.mjs 会解析同一个 export，移除此 @import 并追加真实 CSS，
    保证发布的 @hamster-note/reader/style.css 是自包含的。 */
-@import '@hamster-note/selection/style.css';
+@import url('@hamster-note/selection/style.css');

@@ -80,6 +80,7 @@ import { useState } from 'react'
 
 export function App() {
   // 受控模式：Reader 不内部修改 ranges，由 onSelect 回调外部追加
+  // The Demo implements this controlled pattern, persisting ranges to localStorage keyed by filename.
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
 
   return (
@@ -105,12 +106,14 @@ export function App() {
 | `onSelect` | `(range: ReaderSelectionRange) => void` | Fired when the user finishes a new selection. In uncontrolled mode, Reader appends the range internally before calling this. |
 | `onSelectRange` | `(id: string \| null) => void` | Fired when the user clicks an existing highlight. |
 | `onUpdateRange` | `(range: ReaderSelectionRange) => void` | Fired when the user drags a selected highlight range handle. In uncontrolled mode, Reader replaces the matching range internally before calling this; controlled callers must update their `ranges` array. |
-| `onHighlight` | `(range: ReaderSelectionRange) => void` | Fired when a range is highlighted via the ref API. |
+| `onHighlight` | `(range: ReaderSelectionRange) => void` | Fired when a range is highlighted via the ref API or via Reader's internal auto-highlight (when `autoHighlight` is enabled). |
 | `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
 | `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
-| `highlightColor` | `string` | CSS color for highlight overlays. |
+| `autoHighlight` | `boolean` | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`. |
+| `highlightColor` | `string` | CSS color for highlight overlays. In Phase 1, this applies globally to all highlights. |
 | `selectionColor` | `string` | CSS color for active selection overlay. |
-| `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection. |
+| `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
+| `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
 | `selectionRef` | `React.Ref<ReaderSelectionRef>` | Ref to the Selection component. Exposes `highlight()` and `clear()`. |
 | `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
 

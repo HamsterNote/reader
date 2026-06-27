@@ -315,3 +315,72 @@
     background-position: -200% 0;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Demo Shell Layout Contract
+// ---------------------------------------------------------------------------
+.hamster-demo-shell {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.hamster-demo-sidebar {
+  width: 300px;
+  background-color: #f9fafb; /* gray-50 */
+  border-right: 1px solid #e5e7eb;
+  overflow-y: auto;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.hamster-demo-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0; // prevent flex blowout
+
+  .hamster-reader {
+    height: 100%;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+
+    &__upload-zone {
+      flex: 1;
+      height: 100%;
+      min-height: 0; // allows it to shrink and grow based on flex rules
+    }
+
+    &__intermediate-document-viewer {
+      height: 100%;
+      max-height: 100%;
+      // flex: 1 is not strictly necessary here because height: 100% does the job, 
+      // but the layout in App handles standard viewer height via css vars if not overriden.
+    }
+  }
+}
+
+.hamster-demo-action-group {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+
+  button {
+    &:hover {
+      background-color: #f3f4f6 !important; /* overrides inline styles for hover */
+    }
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px #3b82f6;
+    }
+  }
+}

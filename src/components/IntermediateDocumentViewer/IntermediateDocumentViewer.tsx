@@ -412,6 +412,10 @@ export type IntermediateDocumentViewerProps = {
   selectionColor?: string
   /** 当某个高亮被选中时，在其上方弹出的 Popover 内容（ReactNode），由调用方完全控制 */
   selectionPopover?: React.ReactNode
+  /** 被高亮的片段上方弹出的 Popover 内容，未提供时 fallback 到 selectionPopover */
+  highlightPopover?: React.ReactNode
+  /** 是否在选区结束时自动触发高亮，默认为 false */
+  autoHighlight?: boolean
   /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法，仅 html-parser 模式有效 */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
@@ -1013,6 +1017,8 @@ type ViewerContentProps = DirectPageResources & {
   highlightColor: string | undefined
   selectionColor: string | undefined
   selectionPopover: React.ReactNode
+  highlightPopover: React.ReactNode
+  autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
   selectionRef: React.Ref<ReaderSelectionRef> | undefined
   htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
@@ -1046,9 +1052,13 @@ const getSelectionRectBounds = (
   overlayRectType: ReaderSelectionOverlayRectType
 ) => ({
   x:
-    overlayRectType === 'percent' ? (rect.x / 100) * containerRect.width : rect.x,
+    overlayRectType === 'percent'
+      ? (rect.x / 100) * containerRect.width
+      : rect.x,
   y:
-    overlayRectType === 'percent' ? (rect.y / 100) * containerRect.height : rect.y,
+    overlayRectType === 'percent'
+      ? (rect.y / 100) * containerRect.height
+      : rect.y,
   width:
     overlayRectType === 'percent'
       ? (rect.width / 100) * containerRect.width
@@ -1078,7 +1088,8 @@ const findSelectionRangeAtPoint = (
 ) => {
   for (const range of ranges) {
     const rects = range.rects ?? []
-    const rangeOverlayRectType = range.overlayRectType ?? hitTest.overlayRectType
+    const rangeOverlayRectType =
+      range.overlayRectType ?? hitTest.overlayRectType
     const hasHitRect = rects.some((rect) => {
       const bounds = getSelectionRectBounds(
         rect,
@@ -1297,6 +1308,8 @@ function ViewerContent({
   highlightColor,
   selectionColor,
   selectionPopover,
+  highlightPopover,
+  autoHighlight,
   overlayRectType,
   selectionRef,
   htmlPageStatusesByPageNumber,
@@ -1309,6 +1322,33 @@ function ViewerContent({
   loadablePages,
   baseImagesByPageNumber
 }: ViewerContentProps) {
+  const fallbackSelectionRef = useRef<ReaderSelectionRef>(null)
+
+  const mergedSelectionRef = useCallback(
+    (node: ReaderSelectionRef | null) => {
+      fallbackSelectionRef.current = node
+
+      if (typeof selectionRef === 'function') {
+        selectionRef(node)
+      } else if (selectionRef) {
+        ;(
+          selectionRef as React.MutableRefObject<ReaderSelectionRef | null>
+        ).current = node
+      }
+    },
+    [selectionRef]
+  )
+
+  const handleSelectionEndWrap = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      if (autoHighlight && fallbackSelectionRef.current) {
+        fallbackSelectionRef.current.highlight()
+      }
+      handleSelectionEnd(mousePos, selection)
+    },
+    [handleSelectionEnd, autoHighlight]
+  )
+
   const delegatedSelectionClickRangeRef = useRef<string | null>(null)
   const selectionClickStartSelectedRangeIdRef = useRef<string | null>(null)
 
@@ -1358,10 +1398,12 @@ function ViewerContent({
       const containerRect = selectionContainer.getBoundingClientRect()
       const localX = event.clientX - containerRect.left
       const localY = event.clientY - containerRect.top
-      const hitRange = findSelectionRangeAtPoint(
-        effectiveRanges,
-        { localX, localY, containerRect, overlayRectType }
-      )
+      const hitRange = findSelectionRangeAtPoint(effectiveRanges, {
+        localX,
+        localY,
+        containerRect,
+        overlayRectType
+      })
 
       if (!hitRange) {
         return
@@ -1414,21 +1456,18 @@ function ViewerContent({
       const containerRect = selectionContainer.getBoundingClientRect()
       const localX = event.clientX - containerRect.left
       const localY = event.clientY - containerRect.top
-      const hitRange = findSelectionRangeAtPoint(
-        effectiveRanges,
-        { localX, localY, containerRect, overlayRectType }
-      )
+      const hitRange = findSelectionRangeAtPoint(effectiveRanges, {
+        localX,
+        localY,
+        containerRect,
+        overlayRectType
+      })
 
       selectionClickStartSelectedRangeIdRef.current = hitRange
         ? effectiveSelectedRangeId
         : null
     },
-    [
-      effectiveRanges,
-      effectiveSelectedRangeId,
-      overlayRectType,
-      renderMode
-    ]
+    [effectiveRanges, effectiveSelectedRangeId, overlayRectType, renderMode]
   )
 
   return (
@@ -1442,6 +1481,7 @@ function ViewerContent({
     >
       {pageNumbers.length > 0 ? (
         <VirtualPaper
+          containMode='contain'
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}
@@ -1459,15 +1499,17 @@ function ViewerContent({
                 onSelectionStartProp ? handleSelectionStart : undefined
               }
               onSelectionEnd={
-                onSelectionEndProp ? handleSelectionEnd : undefined
+                onSelectionEndProp || autoHighlight
+                  ? handleSelectionEndWrap
+                  : undefined
               }
               onHighlight={onHighlight}
               highlightColor={highlightColor}
               selectionColor={selectionColor}
-              popover={selectionPopover}
+              popover={highlightPopover ?? selectionPopover}
               selectionPopover={selectionPopover}
               overlayRectType={overlayRectType}
-              ref={selectionRef}
+              ref={mergedSelectionRef}
             >
               <HtmlParserPages
                 pageNumbers={pageNumbers}
@@ -1535,6 +1577,8 @@ export function IntermediateDocumentViewer({
   highlightColor,
   selectionColor,
   selectionPopover,
+  highlightPopover,
+  autoHighlight,
   selectionRef,
   overlayRectType = 'percent'
 }: IntermediateDocumentViewerProps) {
@@ -2795,6 +2839,8 @@ export function IntermediateDocumentViewer({
       highlightColor={highlightColor}
       selectionColor={selectionColor}
       selectionPopover={selectionPopover}
+      highlightPopover={highlightPopover}
+      autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
       htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}

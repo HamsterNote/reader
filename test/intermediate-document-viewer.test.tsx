@@ -5305,6 +5305,20 @@ describe('IntermediateDocumentViewer', () => {
     describe('pinch and wheel gestures', () => {
       const getVirtualPaperContainer = () =>
         screen.getByTestId('virtual-paper-container')
+      const getVirtualPaperWrapper = () =>
+        screen.getByTestId('virtual-paper-wrapper')
+
+      it('passes containMode="contain" to VirtualPaper', async () => {
+        const { document } = makeDocument({ pageCount: 1 })
+        render(<IntermediateDocumentViewer document={document} />)
+
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+
+        const wrapper = getVirtualPaperWrapper()
+        expect(wrapper).toHaveAttribute('data-contain-mode', 'contain')
+      })
 
       it('maps VirtualPaper wheel transform source to scale-change wheel source', async () => {
         const { document } = makeDocument({ pageCount: 1 })
@@ -5738,7 +5752,9 @@ describe('selection overlayRectType integration', () => {
       width: 200,
       height: 100
     })
-    const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(null)
 
     selectionContainer.dispatchEvent(
       new MouseEvent('mousedown', {
@@ -5814,7 +5830,9 @@ describe('selection overlayRectType integration', () => {
       width: 200,
       height: 100
     })
-    const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(null)
 
     selectionContainer.dispatchEvent(
       new MouseEvent('mousedown', {
@@ -5908,7 +5926,9 @@ describe('selection overlayRectType integration', () => {
       width: 200,
       height: 100
     })
-    const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(null)
 
     selectionContainer.dispatchEvent(
       new MouseEvent('mousedown', {
@@ -5981,5 +6001,61 @@ describe('selection prop forwarding integration', () => {
     selectionProps?.onUpdateRange?.(updatedRange)
 
     expect(onUpdateRange).toHaveBeenCalledWith(updatedRange)
+  })
+
+  it('forwards distinct highlightPopover and selectionPopover', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const selectionPopover = <div data-testid='select'>S</div>
+    const highlightPopover = <div data-testid='highlight'>H</div>
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const selectionProps = getLastSelectionProps()
+    expect(selectionProps?.popover).toBe(highlightPopover)
+    expect(selectionProps?.selectionPopover).toBe(selectionPopover)
+    expect(selectionProps).not.toHaveProperty('autoHighlight')
+  })
+
+  it('autoHighlight calls highlight on selection end and triggers onHighlight', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onHighlight = vi.fn()
+    const onSelect = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        autoHighlight={true}
+        onHighlight={onHighlight}
+        onSelect={onSelect}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const selectionProps = getLastSelectionProps()
+    const selection = {} as Selection
+    const mousePos = { x: 0, y: 0 }
+
+    selectionProps?.onSelectionEnd?.(mousePos, selection)
+
+    expect(onSelect).toHaveBeenCalled()
+    expect(onHighlight).toHaveBeenCalled()
+    expect(selectionProps).not.toHaveProperty('autoHighlight')
   })
 })

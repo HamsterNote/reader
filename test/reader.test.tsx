@@ -745,6 +745,16 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.overlayRectType).toBe('px')
   })
 
+  it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const popover = <div>Test Popover</div>
+    render(
+      <Reader document={doc} autoHighlight={true} highlightPopover={popover} />
+    )
+    expect(capturedViewerProps.autoHighlight).toBe(true)
+    expect(capturedViewerProps.highlightPopover).toBe(popover)
+  })
+
   it('compile-time: overlayRectType satisfies ReaderProps', () => {
     const props: ReaderProps = {
       document: makeDocument({ pages: [makePage(1)] }),

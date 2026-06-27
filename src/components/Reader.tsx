@@ -127,6 +127,10 @@ export type ReaderProps = {
   selectionColor?: string
   /** 被选中的高亮上方弹出的 Popover 内容 */
   selectionPopover?: React.ReactNode
+  /** 被高亮的片段上方弹出的 Popover 内容，未提供时 fallback 到 selectionPopover */
+  highlightPopover?: React.ReactNode
+  /** 是否在选区结束时自动触发高亮，默认为 false */
+  autoHighlight?: boolean
   /** Selection 组件的命令式 ref，暴露 highlight()/clear() */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
@@ -196,6 +200,8 @@ export function Reader({
   highlightColor,
   selectionColor,
   selectionPopover,
+  highlightPopover,
+  autoHighlight,
   selectionRef,
   overlayRectType = 'percent'
 }: ReaderProps) {
@@ -305,6 +311,8 @@ export function Reader({
           highlightColor={highlightColor}
           selectionColor={selectionColor}
           selectionPopover={selectionPopover}
+          highlightPopover={highlightPopover}
+          autoHighlight={autoHighlight}
           selectionRef={selectionRef}
           overlayRectType={overlayRectType}
         />
