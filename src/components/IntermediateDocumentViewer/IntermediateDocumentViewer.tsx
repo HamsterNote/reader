@@ -928,6 +928,379 @@ const HtmlPageContent = React.memo(({ html }: { html: string }) => {
 
 HtmlPageContent.displayName = 'HtmlPageContent'
 
+type SetTextRef = (
+  text: IntermediateText,
+  pageNumber: number
+) => (element: HTMLSpanElement | null) => void
+
+type DirectPageInnerProps = {
+  pageNumber: number
+  texts: IntermediateText[]
+  ocrTexts: IntermediateText[]
+  pageStatus: PageLoadStatus | undefined
+  isLoadable: boolean
+  baseImageSource: string | undefined
+  setTextRef: SetTextRef
+}
+
+type PageRefSetter = (
+  pageNumber: number
+) => (element: HTMLDivElement | null) => void
+
+type DirectPageResources = {
+  textsByPageNumber: Map<number, IntermediateText[]>
+  ocrTextsByPageNumber: Map<number, IntermediateText[]>
+  pageStatuses: Map<number, PageLoadStatus>
+  loadablePages: Set<number>
+  baseImagesByPageNumber: Map<number, string>
+}
+
+type HtmlParserPagesProps = DirectPageResources & {
+  pageNumbers: number[]
+  runtimeDocument: IntermediateDocument
+  htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
+  htmlPagesByPageNumber: Map<number, string>
+  setPageRef: PageRefSetter
+  setTextRef: SetTextRef
+}
+
+type DirectPagesProps = DirectPageResources & {
+  pageNumbers: number[]
+  runtimeDocument: IntermediateDocument
+  setPageRef: PageRefSetter
+  setTextRef: SetTextRef
+}
+
+type ViewerContentProps = DirectPageResources & {
+  rootClassName: string
+  viewerRootRef: React.Ref<HTMLDivElement>
+  runtimeDocument: IntermediateDocument
+  pageNumbers: number[]
+  virtualPaperTransform: VirtualPaperTransform
+  scaleRange: { min: number; max: number }
+  handleVirtualPaperTransformChange: (
+    nextTransform: VirtualPaperTransform,
+    meta: VirtualPaperTransformMeta
+  ) => void
+  handleVirtualPaperTransformChangeEnd: (
+    nextTransform: VirtualPaperTransform,
+    meta: VirtualPaperTransformMeta
+  ) => void
+  renderMode: ReaderRenderMode
+  effectiveRanges: ReaderSelectionRange[]
+  effectiveSelectedRangeId: string | null
+  onSelect: ((range: ReaderSelectionRange) => void) | undefined
+  handleSelectionSelect: (range: ReaderSelectionRange) => void
+  onSelectRange: ((id: string | null) => void) | undefined
+  handleSelectionSelectRange: (id: string | null) => void
+  onSelectionStartProp:
+    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
+    | undefined
+  handleSelectionStart: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  onSelectionEndProp:
+    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
+    | undefined
+  handleSelectionEnd: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  onHighlight: ((range: ReaderSelectionRange) => void) | undefined
+  highlightColor: string | undefined
+  selectionColor: string | undefined
+  selectionPopover: React.ReactNode
+  overlayRectType: ReaderSelectionOverlayRectType
+  selectionRef: React.Ref<ReaderSelectionRef> | undefined
+  htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
+  htmlPagesByPageNumber: Map<number, string>
+  setPageRef: PageRefSetter
+  setTextRef: SetTextRef
+}
+
+function DirectPageInner({
+  pageNumber,
+  texts,
+  ocrTexts,
+  pageStatus,
+  isLoadable,
+  baseImageSource,
+  setTextRef
+}: DirectPageInnerProps) {
+  const allTexts = [...texts, ...ocrTexts]
+  const isDirectPageLoading =
+    isLoadable && pageStatus !== 'loaded' && pageStatus !== 'error'
+
+  return (
+    <>
+      {baseImageSource && (
+        <img
+          className='hamster-reader__intermediate-page-base-image'
+          src={baseImageSource}
+          alt=''
+          aria-hidden='true'
+        />
+      )}
+      {isDirectPageLoading && (
+        <div className='hamster-reader__intermediate-page-status'>
+          Loading page {pageNumber}…
+        </div>
+      )}
+      {pageStatus === 'error' && (
+        <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
+          Failed to load page {pageNumber}
+        </div>
+      )}
+      {allTexts.map((textData) => {
+        const text = textData as RenderableIntermediateText
+        const bbox = getTextBbox(text)
+        const spanStyle = buildTextSpanStyle(text, bbox)
+
+        return (
+          <span
+            key={text.id}
+            ref={setTextRef(text, pageNumber)}
+            className='hamster-reader__intermediate-text'
+            data-text-id={text.id}
+            data-page-number={pageNumber}
+            style={spanStyle}
+          >
+            {text.content}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+function HtmlParserPages({
+  pageNumbers,
+  runtimeDocument,
+  htmlPageStatusesByPageNumber,
+  htmlPagesByPageNumber,
+  setPageRef,
+  setTextRef,
+  textsByPageNumber,
+  ocrTextsByPageNumber,
+  pageStatuses,
+  loadablePages,
+  baseImagesByPageNumber
+}: HtmlParserPagesProps) {
+  return (
+    <div
+      className='hamster-reader__html-parser-output'
+      data-testid='html-parser-output'
+    >
+      <div className='hamster-note-document'>
+        {pageNumbers.map((pageNumber) => {
+          const htmlPageSize = normalizePageSize(
+            runtimeDocument.getPageSizeByPageNumber(pageNumber)
+          )
+          const htmlPageStatusEntry =
+            htmlPageStatusesByPageNumber.get(pageNumber)
+          const htmlPageHtmlEntry = htmlPagesByPageNumber.get(pageNumber)
+          const isHtmlPageDecoded =
+            htmlPageStatusEntry === 'decoded' && Boolean(htmlPageHtmlEntry)
+
+          return (
+            <div
+              key={pageNumber}
+              ref={setPageRef(pageNumber)}
+              className='hamster-reader__intermediate-page'
+              data-testid={`intermediate-page-${pageNumber}`}
+              data-page-number={pageNumber}
+              data-page-size-unavailable={
+                htmlPageSize.pageSizeUnavailable ? 'true' : undefined
+              }
+              style={{
+                position: 'relative',
+                width: `${htmlPageSize.width}px`,
+                height: `${htmlPageSize.height}px`,
+                overflow: 'hidden'
+              }}
+            >
+              {isHtmlPageDecoded ? (
+                <HtmlPageContent html={htmlPageHtmlEntry ?? ''} />
+              ) : (
+                <DirectPageInner
+                  pageNumber={pageNumber}
+                  texts={textsByPageNumber.get(pageNumber) ?? []}
+                  ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
+                  pageStatus={pageStatuses.get(pageNumber)}
+                  isLoadable={loadablePages.has(pageNumber)}
+                  baseImageSource={baseImagesByPageNumber.get(pageNumber)}
+                  setTextRef={setTextRef}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function DirectPages({
+  pageNumbers,
+  runtimeDocument,
+  setPageRef,
+  setTextRef,
+  textsByPageNumber,
+  ocrTextsByPageNumber,
+  pageStatuses,
+  loadablePages,
+  baseImagesByPageNumber
+}: DirectPagesProps) {
+  return pageNumbers.map((pageNumber) => {
+    const directPageSize = normalizePageSize(
+      runtimeDocument.getPageSizeByPageNumber(pageNumber)
+    )
+    const directPageStatusEntry = pageStatuses.get(pageNumber)
+    const isDirectPageLoading =
+      loadablePages.has(pageNumber) &&
+      directPageStatusEntry !== 'loaded' &&
+      directPageStatusEntry !== 'error'
+    const directPageClassName = isDirectPageLoading
+      ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
+      : 'hamster-reader__intermediate-page'
+
+    return (
+      <div
+        key={pageNumber}
+        ref={setPageRef(pageNumber)}
+        className={directPageClassName}
+        data-testid={`intermediate-page-${pageNumber}`}
+        data-page-number={pageNumber}
+        data-page-size-unavailable={
+          directPageSize.pageSizeUnavailable ? 'true' : undefined
+        }
+        style={{
+          position: 'relative',
+          width: `${directPageSize.width}px`,
+          height: `${directPageSize.height}px`,
+          overflow: 'hidden'
+        }}
+      >
+        <DirectPageInner
+          pageNumber={pageNumber}
+          texts={textsByPageNumber.get(pageNumber) ?? []}
+          ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
+          pageStatus={directPageStatusEntry}
+          isLoadable={loadablePages.has(pageNumber)}
+          baseImageSource={baseImagesByPageNumber.get(pageNumber)}
+          setTextRef={setTextRef}
+        />
+      </div>
+    )
+  })
+}
+
+function ViewerContent({
+  rootClassName,
+  viewerRootRef,
+  runtimeDocument,
+  pageNumbers,
+  virtualPaperTransform,
+  scaleRange,
+  handleVirtualPaperTransformChange,
+  handleVirtualPaperTransformChangeEnd,
+  renderMode,
+  effectiveRanges,
+  effectiveSelectedRangeId,
+  onSelect,
+  handleSelectionSelect,
+  onSelectRange,
+  handleSelectionSelectRange,
+  onSelectionStartProp,
+  handleSelectionStart,
+  onSelectionEndProp,
+  handleSelectionEnd,
+  onHighlight,
+  highlightColor,
+  selectionColor,
+  selectionPopover,
+  overlayRectType,
+  selectionRef,
+  htmlPageStatusesByPageNumber,
+  htmlPagesByPageNumber,
+  setPageRef,
+  setTextRef,
+  textsByPageNumber,
+  ocrTextsByPageNumber,
+  pageStatuses,
+  loadablePages,
+  baseImagesByPageNumber
+}: ViewerContentProps) {
+  return (
+    <div
+      ref={viewerRootRef}
+      role='document'
+      className={rootClassName}
+      data-testid='intermediate-document-viewer'
+    >
+      {pageNumbers.length > 0 ? (
+        <VirtualPaper
+          transform={virtualPaperTransform}
+          minScale={scaleRange.min}
+          maxScale={scaleRange.max}
+          onTransformChange={handleVirtualPaperTransformChange}
+          onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
+        >
+          {renderMode !== 'direct' ? (
+            <HamsterSelection
+              ranges={effectiveRanges}
+              selectedRangeId={effectiveSelectedRangeId}
+              onSelect={onSelect ? handleSelectionSelect : undefined}
+              onSelectRange={
+                onSelectRange ? handleSelectionSelectRange : undefined
+              }
+              onSelectionStart={
+                onSelectionStartProp ? handleSelectionStart : undefined
+              }
+              onSelectionEnd={
+                onSelectionEndProp ? handleSelectionEnd : undefined
+              }
+              onHighlight={onHighlight}
+              highlightColor={highlightColor}
+              selectionColor={selectionColor}
+              popover={selectionPopover}
+              overlayRectType={overlayRectType}
+              ref={selectionRef}
+            >
+              <HtmlParserPages
+                pageNumbers={pageNumbers}
+                runtimeDocument={runtimeDocument}
+                htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
+                htmlPagesByPageNumber={htmlPagesByPageNumber}
+                setPageRef={setPageRef}
+                setTextRef={setTextRef}
+                textsByPageNumber={textsByPageNumber}
+                ocrTextsByPageNumber={ocrTextsByPageNumber}
+                pageStatuses={pageStatuses}
+                loadablePages={loadablePages}
+                baseImagesByPageNumber={baseImagesByPageNumber}
+              />
+            </HamsterSelection>
+          ) : (
+            <DirectPages
+              pageNumbers={pageNumbers}
+              runtimeDocument={runtimeDocument}
+              setPageRef={setPageRef}
+              setTextRef={setTextRef}
+              textsByPageNumber={textsByPageNumber}
+              ocrTextsByPageNumber={ocrTextsByPageNumber}
+              pageStatuses={pageStatuses}
+              loadablePages={loadablePages}
+              baseImagesByPageNumber={baseImagesByPageNumber}
+            />
+          )}
+        </VirtualPaper>
+      ) : null}
+    </div>
+  )
+}
+
 export function IntermediateDocumentViewer({
   document,
   serializedDocument,
@@ -2150,10 +2523,6 @@ export function IntermediateDocumentViewer({
     }
   }, [onTextSelectionChange, getSelectionDetail])
 
-  // 已移除 SVG overlay 渲染、保存选区 overlay 同步与手柄刷新 effects；原生 Selection 负责视觉反馈。
-
-  // 已移除自定义拖拽/触摸选区 adapter 与 overlay 刷新 effect，改由浏览器原生 Selection 处理拖选。
-
   useEffect(() => {
     const root = viewerRootRef.current
     if (!root) return
@@ -2175,64 +2544,6 @@ export function IntermediateDocumentViewer({
     }
   }, [emitSelectionEnd])
 
-  // 已移除保存选区手柄拖拽处理与手柄渲染函数；保存选区仅保留数据类型，不再渲染 SVG/手柄 UI。
-
-  // 渲染 direct 模式页面内部内容（base image、overlay 容器、加载/错误状态、文本 spans）。
-  // 被 direct 分支和 html-parser 模式下的 fallback/loading 页面共享。
-  const renderDirectPageInner = (pageNumber: number) => {
-    const texts = textsByPageNumber.get(pageNumber) ?? []
-    const ocrTexts = ocrTextsByPageNumber.get(pageNumber) ?? []
-    const allTexts = [...texts, ...ocrTexts]
-    const directPageStatus = pageStatuses.get(pageNumber)
-    const isDirectPageLoading =
-      loadablePages.has(pageNumber) &&
-      directPageStatus !== 'loaded' &&
-      directPageStatus !== 'error'
-    const directBaseImageSource = baseImagesByPageNumber.get(pageNumber)
-
-    return (
-      <>
-        {directBaseImageSource && (
-          <img
-            className='hamster-reader__intermediate-page-base-image'
-            src={directBaseImageSource}
-            alt=''
-            aria-hidden='true'
-          />
-        )}
-        {/* 已移除 direct 模式页面内 selection/saved-selection SVG overlay 与手柄 JSX。 */}
-        {isDirectPageLoading && (
-          <div className='hamster-reader__intermediate-page-status'>
-            Loading page {pageNumber}…
-          </div>
-        )}
-        {directPageStatus === 'error' && (
-          <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
-            Failed to load page {pageNumber}
-          </div>
-        )}
-        {allTexts.map((textData) => {
-          const text = textData as RenderableIntermediateText
-          const bbox = getTextBbox(text)
-          const spanStyle = buildTextSpanStyle(text, bbox)
-
-          return (
-            <span
-              key={text.id}
-              ref={setTextRef(text, pageNumber)}
-              className='hamster-reader__intermediate-text'
-              data-text-id={text.id}
-              data-page-number={pageNumber}
-              style={spanStyle}
-            >
-              {text.content}
-            </span>
-          )
-        })}
-      </>
-    )
-  }
-
   if (!runtimeDocument) {
     return (
       <div
@@ -2244,125 +2555,43 @@ export function IntermediateDocumentViewer({
   }
 
   return (
-    <div
-      ref={setViewerRootRef}
-      role='document'
-      className={rootClassName}
-      data-testid='intermediate-document-viewer'
-    >
-      {pageNumbers.length > 0 ? (
-        <VirtualPaper
-          transform={virtualPaperTransform}
-          minScale={scaleRange.min}
-          maxScale={scaleRange.max}
-          onTransformChange={handleVirtualPaperTransformChange}
-          onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
-        >
-          {renderMode !== 'direct' ? (
-            <HamsterSelection
-              ranges={effectiveRanges}
-              selectedRangeId={effectiveSelectedRangeId}
-              onSelect={onSelect ? handleSelectionSelect : undefined}
-              onSelectRange={
-                onSelectRange ? handleSelectionSelectRange : undefined
-              }
-              onSelectionStart={
-                onSelectionStartProp ? handleSelectionStart : undefined
-              }
-              onSelectionEnd={
-                onSelectionEndProp ? handleSelectionEnd : undefined
-              }
-              onHighlight={onHighlight}
-              highlightColor={highlightColor}
-              selectionColor={selectionColor}
-              popover={selectionPopover}
-              overlayRectType={overlayRectType}
-              ref={selectionRef}
-            >
-              <div
-                className='hamster-reader__html-parser-output'
-                data-testid='html-parser-output'
-              >
-                <div className='hamster-note-document'>
-                  {pageNumbers.map((pageNumber) => {
-                    const htmlPageSize = normalizePageSize(
-                      runtimeDocument.getPageSizeByPageNumber(pageNumber)
-                    )
-                    const htmlPageStatusEntry =
-                      htmlPageStatusesByPageNumber.get(pageNumber)
-                    const htmlPageHtmlEntry =
-                      htmlPagesByPageNumber.get(pageNumber)
-                    const isHtmlPageDecoded =
-                      htmlPageStatusEntry === 'decoded' &&
-                      Boolean(htmlPageHtmlEntry)
-
-                    return (
-                      <div
-                        key={pageNumber}
-                        ref={setPageRef(pageNumber)}
-                        className='hamster-reader__intermediate-page'
-                        data-testid={`intermediate-page-${pageNumber}`}
-                        data-page-number={pageNumber}
-                        data-page-size-unavailable={
-                          htmlPageSize.pageSizeUnavailable ? 'true' : undefined
-                        }
-                        style={{
-                          position: 'relative',
-                          width: `${htmlPageSize.width}px`,
-                          height: `${htmlPageSize.height}px`,
-                          overflow: 'hidden'
-                        }}
-                      >
-                        {isHtmlPageDecoded ? (
-                          <HtmlPageContent html={htmlPageHtmlEntry ?? ''} />
-                        ) : (
-                          renderDirectPageInner(pageNumber)
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-              {/* 已移除 html-parser 根级 selection/saved-selection SVG overlay 与手柄 JSX。 */}
-            </HamsterSelection>
-          ) : (
-            pageNumbers.map((pageNumber) => {
-              const directPageSize = normalizePageSize(
-                runtimeDocument.getPageSizeByPageNumber(pageNumber)
-              )
-              const directPageStatusEntry = pageStatuses.get(pageNumber)
-              const isDirectPageLoading =
-                loadablePages.has(pageNumber) &&
-                directPageStatusEntry !== 'loaded' &&
-                directPageStatusEntry !== 'error'
-              const directPageClassName = isDirectPageLoading
-                ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
-                : 'hamster-reader__intermediate-page'
-
-              return (
-                <div
-                  key={pageNumber}
-                  ref={setPageRef(pageNumber)}
-                  className={directPageClassName}
-                  data-testid={`intermediate-page-${pageNumber}`}
-                  data-page-number={pageNumber}
-                  data-page-size-unavailable={
-                    directPageSize.pageSizeUnavailable ? 'true' : undefined
-                  }
-                  style={{
-                    position: 'relative',
-                    width: `${directPageSize.width}px`,
-                    height: `${directPageSize.height}px`,
-                    overflow: 'hidden'
-                  }}
-                >
-                  {renderDirectPageInner(pageNumber)}
-                </div>
-              )
-            })
-          )}
-        </VirtualPaper>
-      ) : null}
-    </div>
+    <ViewerContent
+      rootClassName={rootClassName}
+      viewerRootRef={setViewerRootRef}
+      runtimeDocument={runtimeDocument}
+      pageNumbers={pageNumbers}
+      virtualPaperTransform={virtualPaperTransform}
+      scaleRange={scaleRange}
+      handleVirtualPaperTransformChange={handleVirtualPaperTransformChange}
+      handleVirtualPaperTransformChangeEnd={
+        handleVirtualPaperTransformChangeEnd
+      }
+      renderMode={renderMode}
+      effectiveRanges={effectiveRanges}
+      effectiveSelectedRangeId={effectiveSelectedRangeId}
+      onSelect={onSelect}
+      handleSelectionSelect={handleSelectionSelect}
+      onSelectRange={onSelectRange}
+      handleSelectionSelectRange={handleSelectionSelectRange}
+      onSelectionStartProp={onSelectionStartProp}
+      handleSelectionStart={handleSelectionStart}
+      onSelectionEndProp={onSelectionEndProp}
+      handleSelectionEnd={handleSelectionEnd}
+      onHighlight={onHighlight}
+      highlightColor={highlightColor}
+      selectionColor={selectionColor}
+      selectionPopover={selectionPopover}
+      overlayRectType={overlayRectType}
+      selectionRef={selectionRef}
+      htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
+      htmlPagesByPageNumber={htmlPagesByPageNumber}
+      setPageRef={setPageRef}
+      setTextRef={setTextRef}
+      textsByPageNumber={textsByPageNumber}
+      ocrTextsByPageNumber={ocrTextsByPageNumber}
+      pageStatuses={pageStatuses}
+      loadablePages={loadablePages}
+      baseImagesByPageNumber={baseImagesByPageNumber}
+    />
   )
 }

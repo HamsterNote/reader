@@ -271,11 +271,15 @@ describe('saved selection helpers', () => {
     ])
     expect(normalizePageRects(rects, { width: 0, height: 100 })).toEqual([])
     expect(
-      denormalizePageRects([{ x: -0.5, y: 0.2, width: 1.5, height: 2 }], {
-        width: 100,
-        height: 100
-      })
-    ).toEqual([{ x: 0, y: 20, width: 100, height: 100, pageNumber: 0 }])
+      denormalizePageRects(
+        [{ x: -0.5, y: 0.2, width: 1.5, height: 2 }],
+        {
+          width: 100,
+          height: 100
+        },
+        3
+      )
+    ).toEqual([{ x: 0, y: 20, width: 100, height: 100, pageNumber: 3 }])
   })
 
   it('restores exact anchors before fallback paths', () => {

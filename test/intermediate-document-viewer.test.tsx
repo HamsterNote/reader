@@ -590,10 +590,9 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
-      pages.get(1),
-      { background: { backgroundQuality: 0.8 } }
-    )
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(pages.get(1), {
+      background: { backgroundQuality: 0.8 }
+    })
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'HTML Parser Output'
@@ -938,10 +937,9 @@ describe('IntermediateDocumentViewer', () => {
     await waitFor(() => {
       expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
     })
-    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(
-      pages.get(1),
-      { background: { backgroundQuality: 0.8 } }
-    )
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(pages.get(1), {
+      background: { backgroundQuality: 0.8 }
+    })
     expect(screen.queryByText('Decoded page 2')).not.toBeInTheDocument()
 
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-2'))
@@ -964,10 +962,9 @@ describe('IntermediateDocumentViewer', () => {
 
     await screen.findByText('Decoded page 1')
     await screen.findByText('Decoded page 2')
-    expect(HtmlParser.decodePageToHtml).toHaveBeenLastCalledWith(
-      pages.get(2),
-      { background: { backgroundQuality: 0.8 } }
-    )
+    expect(HtmlParser.decodePageToHtml).toHaveBeenLastCalledWith(pages.get(2), {
+      background: { backgroundQuality: 0.8 }
+    })
     expect(screen.queryByText('Decoded page 3')).not.toBeInTheDocument()
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
   })

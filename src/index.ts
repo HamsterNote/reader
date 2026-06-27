@@ -55,5 +55,6 @@ export type ReaderInteractiveProps = Pick<
   | 'highlightColor'
   | 'selectionColor'
   | 'selectionPopover'
+  | 'selectionRef'
   | 'overlayRectType'
 >
