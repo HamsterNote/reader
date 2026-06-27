@@ -49,6 +49,7 @@ export type ReaderInteractiveProps = Pick<
   | 'selectedRangeId'
   | 'onSelect'
   | 'onSelectRange'
+  | 'onUpdateRange'
   | 'onSelectionStart'
   | 'onSelectionEnd'
   | 'onHighlight'

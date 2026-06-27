@@ -110,6 +110,8 @@ export type ReaderProps = {
   onSelect?: (range: ReaderSelectionRange) => void
   /** 用户点击或取消选中某个已高亮 range 时触发 */
   onSelectRange?: (id: string | null) => void
+  /** 用户拖动已高亮 range 的首尾手柄调整范围时触发 */
+  onUpdateRange?: (range: ReaderSelectionRange) => void
   /** 用户开始选择时触发（容器内 mousedown） */
   onSelectionStart?: (
     mousePos: ReaderMousePosition,
@@ -187,6 +189,7 @@ export function Reader({
   defaultSelectedRangeId,
   onSelect,
   onSelectRange,
+  onUpdateRange,
   onSelectionStart,
   onSelectionEnd,
   onHighlight,
@@ -295,6 +298,7 @@ export function Reader({
           defaultSelectedRangeId={defaultSelectedRangeId}
           onSelect={onSelect}
           onSelectRange={onSelectRange}
+          onUpdateRange={onUpdateRange}
           onSelectionStart={onSelectionStart}
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}

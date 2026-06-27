@@ -30,7 +30,7 @@
     "build:lib": "yarn build:lib:js && yarn build:lib:types && yarn build:lib:styles",
     "build:lib:js": "vite build --config vite.lib.config.ts",
     "build:lib:types": "tsc --project tsconfig.build.json",
-    "build:lib:styles": "sass src/styles/index.scss dist/style.css --no-source-map && cat node_modules/@hamster-note/selection/dist/index.css >> dist/style.css",
+    "build:lib:styles": "node scripts/build-styles.mjs",
     "build:demo": "vite build",
     "build:all": "yarn build:lib && yarn build:demo",
     "build": "yarn build:all",

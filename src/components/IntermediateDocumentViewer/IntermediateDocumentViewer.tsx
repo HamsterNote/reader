@@ -395,6 +395,8 @@ export type IntermediateDocumentViewerProps = {
   onSelect?: (range: ReaderSelectionRange) => void
   /** 用户点击或取消选中某个已高亮 range 时触发 */
   onSelectRange?: (id: string | null) => void
+  /** 用户拖动已高亮 range 的首尾手柄调整范围时触发；非受控 ranges 模式下内部先替换对应 range */
+  onUpdateRange?: (range: ReaderSelectionRange) => void
   /** 用户开始选择时触发（容器内 mousedown），mousePos 为 viewport 坐标 */
   onSelectionStart?: (
     mousePos: ReaderMousePosition,
@@ -991,8 +993,8 @@ type ViewerContentProps = DirectPageResources & {
   effectiveSelectedRangeId: string | null
   onSelect: ((range: ReaderSelectionRange) => void) | undefined
   handleSelectionSelect: (range: ReaderSelectionRange) => void
-  onSelectRange: ((id: string | null) => void) | undefined
   handleSelectionSelectRange: (id: string | null) => void
+  handleSelectionUpdateRange: (range: ReaderSelectionRange) => void
   onSelectionStartProp:
     | ((mousePos: ReaderMousePosition, selection: Selection) => void)
     | undefined
@@ -1017,6 +1019,81 @@ type ViewerContentProps = DirectPageResources & {
   htmlPagesByPageNumber: Map<number, string>
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
+}
+
+type SelectionOverlayRect = NonNullable<ReaderSelectionRange['rects']>[number]
+
+type SelectionRectBounds = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+type SelectionRangeHitTest = {
+  localX: number
+  localY: number
+  containerRect: DOMRect
+  overlayRectType: ReaderSelectionOverlayRectType
+}
+
+const SELECTION_INTERACTIVE_SELECTOR =
+  '.hsn-selection-handle, .hsn-selection-popover'
+
+const getSelectionRectBounds = (
+  rect: SelectionOverlayRect,
+  containerRect: DOMRect,
+  overlayRectType: ReaderSelectionOverlayRectType
+) => ({
+  x:
+    overlayRectType === 'percent' ? (rect.x / 100) * containerRect.width : rect.x,
+  y:
+    overlayRectType === 'percent' ? (rect.y / 100) * containerRect.height : rect.y,
+  width:
+    overlayRectType === 'percent'
+      ? (rect.width / 100) * containerRect.width
+      : rect.width,
+  height:
+    overlayRectType === 'percent'
+      ? (rect.height / 100) * containerRect.height
+      : rect.height
+})
+
+const isPointInsideSelectionRect = (
+  bounds: SelectionRectBounds,
+  localX: number,
+  localY: number
+) => {
+  return (
+    localX >= bounds.x &&
+    localX <= bounds.x + bounds.width &&
+    localY >= bounds.y &&
+    localY <= bounds.y + bounds.height
+  )
+}
+
+const findSelectionRangeAtPoint = (
+  ranges: ReaderSelectionRange[],
+  hitTest: SelectionRangeHitTest
+) => {
+  for (const range of ranges) {
+    const rects = range.rects ?? []
+    const rangeOverlayRectType = range.overlayRectType ?? hitTest.overlayRectType
+    const hasHitRect = rects.some((rect) => {
+      const bounds = getSelectionRectBounds(
+        rect,
+        hitTest.containerRect,
+        rangeOverlayRectType
+      )
+      return isPointInsideSelectionRect(bounds, hitTest.localX, hitTest.localY)
+    })
+
+    if (hasHitRect) {
+      return range
+    }
+  }
+
+  return null
 }
 
 function DirectPageInner({
@@ -1210,8 +1287,8 @@ function ViewerContent({
   effectiveSelectedRangeId,
   onSelect,
   handleSelectionSelect,
-  onSelectRange,
   handleSelectionSelectRange,
+  handleSelectionUpdateRange,
   onSelectionStartProp,
   handleSelectionStart,
   onSelectionEndProp,
@@ -1232,12 +1309,136 @@ function ViewerContent({
   loadablePages,
   baseImagesByPageNumber
 }: ViewerContentProps) {
+  const delegatedSelectionClickRangeRef = useRef<string | null>(null)
+  const selectionClickStartSelectedRangeIdRef = useRef<string | null>(null)
+
+  const handleHamsterSelectionSelectRange = useCallback(
+    (id: string | null) => {
+      const delegatedRangeId = delegatedSelectionClickRangeRef.current
+      if (delegatedRangeId !== null && id === delegatedRangeId) {
+        delegatedSelectionClickRangeRef.current = null
+        return
+      }
+
+      handleSelectionSelectRange(id)
+    },
+    [handleSelectionSelectRange]
+  )
+
+  const handleSelectionOverlayClickCapture = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (renderMode === 'direct') {
+        return
+      }
+
+      const eventTarget = event.target
+      if (!(eventTarget instanceof Element)) {
+        return
+      }
+
+      if (eventTarget.closest(SELECTION_INTERACTIVE_SELECTOR)) {
+        return
+      }
+
+      const activeSelection =
+        event.currentTarget.ownerDocument.defaultView?.getSelection?.() ?? null
+      if (
+        activeSelection &&
+        !activeSelection.isCollapsed &&
+        activeSelection.toString()
+      ) {
+        return
+      }
+
+      const selectionContainer = eventTarget.closest('.hsn-selection-container')
+      if (!(selectionContainer instanceof HTMLElement)) {
+        return
+      }
+
+      const containerRect = selectionContainer.getBoundingClientRect()
+      const localX = event.clientX - containerRect.left
+      const localY = event.clientY - containerRect.top
+      const hitRange = findSelectionRangeAtPoint(
+        effectiveRanges,
+        { localX, localY, containerRect, overlayRectType }
+      )
+
+      if (!hitRange) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      event.nativeEvent.stopImmediatePropagation()
+      delegatedSelectionClickRangeRef.current = hitRange.id
+      const selectedRangeIdAtClickStart =
+        selectionClickStartSelectedRangeIdRef.current
+      selectionClickStartSelectedRangeIdRef.current = null
+      const nextSelectedRangeId =
+        hitRange.id === selectedRangeIdAtClickStart ? null : hitRange.id
+      if (nextSelectedRangeId !== effectiveSelectedRangeId) {
+        handleSelectionSelectRange(nextSelectedRangeId)
+      }
+
+      event.currentTarget.ownerDocument.defaultView?.setTimeout(() => {
+        if (delegatedSelectionClickRangeRef.current === hitRange.id) {
+          delegatedSelectionClickRangeRef.current = null
+        }
+      }, 0)
+    },
+    [
+      effectiveRanges,
+      effectiveSelectedRangeId,
+      handleSelectionSelectRange,
+      overlayRectType,
+      renderMode
+    ]
+  )
+
+  const handleSelectionOverlayMouseDownCapture = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (renderMode === 'direct') {
+        return
+      }
+
+      const eventTarget = event.target
+      if (!(eventTarget instanceof Element)) {
+        return
+      }
+
+      const selectionContainer = eventTarget.closest('.hsn-selection-container')
+      if (!(selectionContainer instanceof HTMLElement)) {
+        return
+      }
+
+      const containerRect = selectionContainer.getBoundingClientRect()
+      const localX = event.clientX - containerRect.left
+      const localY = event.clientY - containerRect.top
+      const hitRange = findSelectionRangeAtPoint(
+        effectiveRanges,
+        { localX, localY, containerRect, overlayRectType }
+      )
+
+      selectionClickStartSelectedRangeIdRef.current = hitRange
+        ? effectiveSelectedRangeId
+        : null
+    },
+    [
+      effectiveRanges,
+      effectiveSelectedRangeId,
+      overlayRectType,
+      renderMode
+    ]
+  )
+
   return (
     <div
       ref={viewerRootRef}
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
+      onClickCapture={handleSelectionOverlayClickCapture}
+      onMouseDownCapture={handleSelectionOverlayMouseDownCapture}
     >
       {pageNumbers.length > 0 ? (
         <VirtualPaper
@@ -1252,9 +1453,8 @@ function ViewerContent({
               ranges={effectiveRanges}
               selectedRangeId={effectiveSelectedRangeId}
               onSelect={onSelect ? handleSelectionSelect : undefined}
-              onSelectRange={
-                onSelectRange ? handleSelectionSelectRange : undefined
-              }
+              onSelectRange={handleHamsterSelectionSelectRange}
+              onUpdateRange={handleSelectionUpdateRange}
               onSelectionStart={
                 onSelectionStartProp ? handleSelectionStart : undefined
               }
@@ -1265,6 +1465,7 @@ function ViewerContent({
               highlightColor={highlightColor}
               selectionColor={selectionColor}
               popover={selectionPopover}
+              selectionPopover={selectionPopover}
               overlayRectType={overlayRectType}
               ref={selectionRef}
             >
@@ -1327,6 +1528,7 @@ export function IntermediateDocumentViewer({
   defaultSelectedRangeId,
   onSelect,
   onSelectRange,
+  onUpdateRange,
   onSelectionStart: onSelectionStartProp,
   onSelectionEnd: onSelectionEndProp,
   onHighlight,
@@ -2239,6 +2441,18 @@ export function IntermediateDocumentViewer({
     [isSelectedRangeIdControlled, onSelectRange]
   )
 
+  const handleSelectionUpdateRange = useCallback(
+    (range: ReaderSelectionRange) => {
+      if (!isRangesControlled) {
+        setInternalRanges((prev) =>
+          prev.map((current) => (current.id === range.id ? range : current))
+        )
+      }
+      onUpdateRange?.(range)
+    },
+    [isRangesControlled, onUpdateRange]
+  )
+
   // Selection.onSelectionStart：直接转发到外部 prop
   const handleSelectionStart = useCallback(
     (mousePos: ReaderMousePosition, selection: Selection) => {
@@ -2571,8 +2785,8 @@ export function IntermediateDocumentViewer({
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       onSelect={onSelect}
       handleSelectionSelect={handleSelectionSelect}
-      onSelectRange={onSelectRange}
       handleSelectionSelectRange={handleSelectionSelectRange}
+      handleSelectionUpdateRange={handleSelectionUpdateRange}
       onSelectionStartProp={onSelectionStartProp}
       handleSelectionStart={handleSelectionStart}
       onSelectionEndProp={onSelectionEndProp}

@@ -1,6 +1,6 @@
 @use './reader';
 
-/* dev 模式下 Vite 会 inline 此 CSS @import（解析到 node_modules）；
-   build 时 Sass CLI 将其保留为 CSS @import（浏览器忽略，因出现在规则之后），
-   随后 build:lib:styles 脚本通过 cat 追加完整 Selection CSS 到 dist/style.css 末尾生效。 */
-@import '../../node_modules/@hamster-note/selection/dist/index.css';
+/* dev 模式下 Vite 会通过 package export inline selection CSS；
+   lib build 时 scripts/build-styles.mjs 会解析同一个 export，移除此 @import 并追加真实 CSS，
+   保证发布的 @hamster-note/reader/style.css 是自包含的。 */
+@import '@hamster-note/selection/style.css';

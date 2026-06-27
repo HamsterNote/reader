@@ -149,6 +149,12 @@ export function App() {
     setSelectedRangeId(id)
   }, [])
 
+  const handleUpdateRange = useCallback((range: ReaderSelectionRange) => {
+    setRanges((prev) =>
+      prev.map((current) => (current.id === range.id ? range : current))
+    )
+  }, [])
+
   // 清空所有高亮 range
   const handleClearAllRanges = useCallback(() => {
     setRanges([])
@@ -291,6 +297,7 @@ export function App() {
             selectedRangeId={selectedRangeId}
             onSelect={handleSelectionSelect}
             onSelectRange={handleSelectRange}
+            onUpdateRange={handleUpdateRange}
             onSelectionEnd={handleSelectionEnd}
             selectionRef={selectionRef}
             highlightColor='rgba(255, 193, 7, 0.35)'

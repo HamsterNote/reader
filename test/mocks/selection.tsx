@@ -42,6 +42,7 @@ export interface SelectionProps {
   selectedRangeId?: string | null
   onSelect?: (range: SelectionRange) => void
   onSelectRange?: (id: string | null) => void
+  onUpdateRange?: (range: SelectionRange) => void
   onSelectionStart?: (mousePos: MousePosition, selection: Selection) => void
   onSelectionEnd?: (mousePos: MousePosition, selection: Selection) => void
   onHighlight?: (range: SelectionRange) => void
@@ -49,6 +50,7 @@ export interface SelectionProps {
   selectionColor?: string
   className?: string
   popover?: React.ReactNode
+  selectionPopover?: React.ReactNode
   overlayRectType?: OverlayRectType
 }
 
@@ -76,7 +78,11 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
   (props, ref) => {
     lastSelectionProps = props
     React.useImperativeHandle(ref, () => ({ highlight: noop, clear: noop }))
-    return <>{props.children}</>
+    return (
+      <div className='hsn-selection-container'>
+        <div className='hsn-selection-content'>{props.children}</div>
+      </div>
+    )
   }
 )
 Selection.displayName = 'Selection'

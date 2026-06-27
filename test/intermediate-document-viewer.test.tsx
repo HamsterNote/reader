@@ -5694,4 +5694,292 @@ describe('selection overlayRectType integration', () => {
     expect(percentValue).toBe('percent')
     expect(pxValue).toBe('px')
   })
+
+  it('delegates percent overlay rect clicks to range selection without raising overlay hit layer', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelectRange = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[
+          {
+            id: 'range-1',
+            text: 'Page',
+            start: 0,
+            end: 4,
+            createdAt: 1,
+            overlayRectType: 'percent',
+            rects: [{ x: 10, y: 10, width: 20, height: 10 }]
+          }
+        ]}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const selectionContainer = globalThis.document.querySelector(
+      '.hsn-selection-container'
+    )
+    expect(selectionContainer).toBeInstanceOf(HTMLElement)
+
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('selection container not rendered')
+    }
+
+    mockElementRect(selectionContainer, {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100
+    })
+    const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+
+    selectionContainer.dispatchEvent(
+      new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 30,
+        clientY: 12
+      })
+    )
+
+    const clickEvent = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 30,
+      clientY: 12
+    })
+    const stopImmediatePropagationSpy = vi.spyOn(
+      clickEvent,
+      'stopImmediatePropagation'
+    )
+
+    selectionContainer.dispatchEvent(clickEvent)
+    getLastSelectionProps()?.onSelectRange?.('range-1')
+
+    expect(onSelectRange).toHaveBeenCalledWith('range-1')
+    expect(onSelectRange).toHaveBeenCalledTimes(1)
+    expect(stopImmediatePropagationSpy).toHaveBeenCalled()
+    getSelectionSpy.mockRestore()
+  })
+
+  it('toggles the selected range off when delegated overlay rect is clicked again', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelectRange = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[
+          {
+            id: 'range-1',
+            text: 'Page',
+            start: 0,
+            end: 4,
+            createdAt: 1,
+            overlayRectType: 'px',
+            rects: [{ x: 20, y: 10, width: 40, height: 20 }]
+          }
+        ]}
+        selectedRangeId='range-1'
+        overlayRectType='px'
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const selectionContainer = globalThis.document.querySelector(
+      '.hsn-selection-container'
+    )
+    expect(selectionContainer).toBeInstanceOf(HTMLElement)
+
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('selection container not rendered')
+    }
+
+    mockElementRect(selectionContainer, {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100
+    })
+    const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+
+    selectionContainer.dispatchEvent(
+      new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 30,
+        clientY: 12
+      })
+    )
+    getLastSelectionProps()?.onSelectRange?.(null)
+
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[
+          {
+            id: 'range-1',
+            text: 'Page',
+            start: 0,
+            end: 4,
+            createdAt: 1,
+            overlayRectType: 'px',
+            rects: [{ x: 20, y: 10, width: 40, height: 20 }]
+          }
+        ]}
+        selectedRangeId={null}
+        overlayRectType='px'
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    const clickEvent = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 30,
+      clientY: 12
+    })
+    const stopImmediatePropagationSpy = vi.spyOn(
+      clickEvent,
+      'stopImmediatePropagation'
+    )
+
+    selectionContainer.dispatchEvent(clickEvent)
+    getLastSelectionProps()?.onSelectRange?.('range-1')
+
+    expect(onSelectRange).toHaveBeenCalledWith(null)
+    expect(onSelectRange).toHaveBeenCalledTimes(1)
+    expect(stopImmediatePropagationSpy).toHaveBeenCalled()
+    getSelectionSpy.mockRestore()
+  })
+
+  it('updates uncontrolled selected range state when no onSelectRange callback is provided', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[
+          {
+            id: 'range-1',
+            text: 'Page',
+            start: 0,
+            end: 4,
+            createdAt: 1,
+            overlayRectType: 'percent',
+            rects: [{ x: 10, y: 10, width: 20, height: 10 }]
+          }
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const selectionContainer = globalThis.document.querySelector(
+      '.hsn-selection-container'
+    )
+    expect(selectionContainer).toBeInstanceOf(HTMLElement)
+
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('selection container not rendered')
+    }
+
+    mockElementRect(selectionContainer, {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100
+    })
+    const getSelectionSpy = vi.spyOn(window, 'getSelection').mockReturnValue(null)
+
+    selectionContainer.dispatchEvent(
+      new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 30,
+        clientY: 12
+      })
+    )
+    selectionContainer.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 30,
+        clientY: 12
+      })
+    )
+    getLastSelectionProps()?.onSelectRange?.('range-1')
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.selectedRangeId).toBe('range-1')
+    })
+
+    getSelectionSpy.mockRestore()
+  })
+})
+
+describe('selection prop forwarding integration', () => {
+  beforeEach(() => {
+    clearLastSelectionProps()
+  })
+
+  afterEach(() => {
+    clearLastSelectionProps()
+  })
+
+  it('forwards active popover and range update handling to HamsterSelection', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const range = {
+      id: 'range-1',
+      text: 'Page',
+      start: 0,
+      end: 4,
+      createdAt: 1
+    }
+    const onUpdateRange = vi.fn()
+    const selectionPopover = <button type='button'>Highlight</button>
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[range]}
+        selectedRangeId='range-1'
+        onUpdateRange={onUpdateRange}
+        selectionPopover={selectionPopover}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    const selectionProps = getLastSelectionProps()
+    expect(selectionProps?.popover).toBe(selectionPopover)
+    expect(selectionProps?.selectionPopover).toBe(selectionPopover)
+
+    const updatedRange = { ...range, end: 5, text: 'Page ' }
+    selectionProps?.onUpdateRange?.(updatedRange)
+
+    expect(onUpdateRange).toHaveBeenCalledWith(updatedRange)
+  })
 })

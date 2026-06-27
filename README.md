@@ -104,6 +104,7 @@ export function App() {
 | `defaultSelectedRangeId` | `string \| null` | Initial selected range ID for uncontrolled mode. |
 | `onSelect` | `(range: ReaderSelectionRange) => void` | Fired when the user finishes a new selection. In uncontrolled mode, Reader appends the range internally before calling this. |
 | `onSelectRange` | `(id: string \| null) => void` | Fired when the user clicks an existing highlight. |
+| `onUpdateRange` | `(range: ReaderSelectionRange) => void` | Fired when the user drags a selected highlight range handle. In uncontrolled mode, Reader replaces the matching range internally before calling this; controlled callers must update their `ranges` array. |
 | `onHighlight` | `(range: ReaderSelectionRange) => void` | Fired when a range is highlighted via the ref API. |
 | `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
 | `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
