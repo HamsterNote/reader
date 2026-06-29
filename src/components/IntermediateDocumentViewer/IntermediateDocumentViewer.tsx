@@ -20,6 +20,7 @@ import {
 } from '@hamster-note/virtual-paper'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { PopoverPortal } from '../PopoverPortal'
 import { isHtmlParserSelectionTarget } from '../selection/caretResolver'
 import {
   buildSelectionPayload,
@@ -1043,8 +1044,10 @@ type SelectionRangeHitTest = {
   overlayRectType: ReaderSelectionOverlayRectType
 }
 
+// 包含 portal 渲染的 popover 内容（.hamster-reader-popover-portal），
+// 确保点击 portal 内的按钮时不会触发 selection overlay 的点击逻辑
 const SELECTION_INTERACTIVE_SELECTOR =
-  '.hsn-selection-handle, .hsn-selection-popover'
+  '.hsn-selection-handle, .hsn-selection-popover, .hamster-reader-popover-portal'
 
 const getSelectionRectBounds = (
   rect: SelectionOverlayRect,
@@ -1324,6 +1327,11 @@ function ViewerContent({
 }: ViewerContentProps) {
   const fallbackSelectionRef = useRef<ReaderSelectionRef>(null)
 
+  // --- Portal popover 可见性控制 ---
+  // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
+  const [popoverVisible, setPopoverVisible] = useState(true)
+  const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const mergedSelectionRef = useCallback(
     (node: ReaderSelectionRef | null) => {
       fallbackSelectionRef.current = node
@@ -1470,6 +1478,43 @@ function ViewerContent({
     [effectiveRanges, effectiveSelectedRangeId, overlayRectType, renderMode]
   )
 
+  // 包装 VirtualPaper 的 transform 回调：
+  // transform 进行中时立即隐藏 portal popover，结束后 debounce 500ms 再显示
+  const handleTransformChangeWithPopover = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      setPopoverVisible(false)
+      if (popoverDebounceRef.current) {
+        clearTimeout(popoverDebounceRef.current)
+        popoverDebounceRef.current = null
+      }
+      handleVirtualPaperTransformChange(nextTransform, meta)
+    },
+    [handleVirtualPaperTransformChange]
+  )
+
+  const handleTransformChangeEndWithPopover = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      handleVirtualPaperTransformChangeEnd(nextTransform, meta)
+      if (popoverDebounceRef.current) {
+        clearTimeout(popoverDebounceRef.current)
+      }
+      popoverDebounceRef.current = setTimeout(() => {
+        setPopoverVisible(true)
+        popoverDebounceRef.current = null
+      }, 500)
+    },
+    [handleVirtualPaperTransformChangeEnd]
+  )
+
+  // 组件卸载时清理 debounce 定时器，防止内存泄漏
+  useEffect(() => {
+    return () => {
+      if (popoverDebounceRef.current) {
+        clearTimeout(popoverDebounceRef.current)
+      }
+    }
+  }, [])
+
   return (
     <div
       ref={viewerRootRef}
@@ -1485,8 +1530,8 @@ function ViewerContent({
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}
-          onTransformChange={handleVirtualPaperTransformChange}
-          onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
+          onTransformChange={handleTransformChangeWithPopover}
+          onTransformChangeEnd={handleTransformChangeEndWithPopover}
         >
           {renderMode !== 'direct' ? (
             <HamsterSelection
@@ -1506,8 +1551,16 @@ function ViewerContent({
               onHighlight={onHighlight}
               highlightColor={highlightColor}
               selectionColor={selectionColor}
-              popover={highlightPopover ?? selectionPopover}
-              selectionPopover={selectionPopover}
+              popover={
+                <PopoverPortal visible={popoverVisible}>
+                  {highlightPopover ?? selectionPopover}
+                </PopoverPortal>
+              }
+              selectionPopover={
+                <PopoverPortal visible={popoverVisible}>
+                  {selectionPopover}
+                </PopoverPortal>
+              }
               overlayRectType={overlayRectType}
               ref={mergedSelectionRef}
             >

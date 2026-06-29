@@ -86,6 +86,8 @@
     padding: 16px;
     font-size: 16px;
     color: #374151;
+    height: 100%;
+    box-sizing: border-box;
   }
 
   // File info section
@@ -293,18 +295,30 @@
   // by text selection or touch callout menus. The direct-render path above
   // (base-image) covers the `<img>` background case.
 
-  // Intermediate text spans
-  &__intermediate-text {
-    position: absolute;
-    display: inline-block;
-    white-space: pre;
-    box-sizing: border-box;
-    user-select: text;
-    -webkit-user-select: text;
-    z-index: 1;
-  }
+    // Intermediate text spans
+    &__intermediate-text {
+      position: absolute;
+      display: inline-block;
+      white-space: pre;
+      box-sizing: border-box;
+      user-select: text;
+      -webkit-user-select: text;
+      z-index: 1;
+    }
 
-}
+    // 高亮标记使用 multiply 混合模式
+    // percent 模式：将 blend 应用到 overlay 容器，影响所有子 rect
+    .hsn-selection-percent-overlay {
+      mix-blend-mode: multiply;
+      opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
+    }
+
+    // pixel 模式（SVG rect）保持 blend 在 rect 本身
+    .hsn-selection-rect--highlight {
+      mix-blend-mode: multiply;
+    }
+
+  }
 
 // Skeleton shimmer animation (global, scoped to keyframes only)
 @keyframes skeleton-shimmer {

@@ -639,7 +639,22 @@ export function App() {
                   value={
                     highlightColor.startsWith('#') ? highlightColor : '#ffc107'
                   }
-                  onChange={(e) => setHighlightColor(e.target.value)}
+                  onChange={(e) => {
+                    const newColor = e.target.value
+                    setHighlightColor(newColor)
+                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
+                    if (selectedRangeId) {
+                      const selectedRange = ranges.find(
+                        (r) => r.id === selectedRangeId
+                      )
+                      if (selectedRange) {
+                        handleUpdateRange({
+                          ...selectedRange,
+                          markerStyle: { backgroundColor: newColor }
+                        })
+                      }
+                    }
+                  }}
                   style={{
                     width: '20px',
                     height: '20px',
