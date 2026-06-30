@@ -4,6 +4,7 @@ import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
   BackgroundQuality,
   ReaderPageRange,
+  ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '@hamster-note/reader'
@@ -139,6 +140,10 @@ export function App() {
   const [backgroundQuality, setBackgroundQuality] =
     useState<BackgroundQuality>('medium')
   const [autoHighlight, setAutoHighlight] = useState(false)
+  // 渲染模式选择：默认 intermediate-document（懒加载），html-parser 可显式切换
+  const [renderMode, setRenderMode] = useState<ReaderRenderMode>(
+    'intermediate-document'
+  )
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
@@ -419,6 +424,33 @@ export function App() {
                     gap: '8px'
                   }}
                 >
+                  <span>Render Mode:</span>
+                  <select
+                    value={renderMode}
+                    onChange={(e) =>
+                      setRenderMode(e.target.value as ReaderRenderMode)
+                    }
+                    style={{ padding: '4px 8px' }}
+                    data-testid='render-mode-select'
+                  >
+                    <option value='intermediate-document'>
+                      intermediate-document (default, lazy)
+                    </option>
+                    <option value='html-parser'>
+                      html-parser (linked selection)
+                    </option>
+                    <option value='direct'>direct</option>
+                  </select>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
                   <input
                     type='checkbox'
                     checked={autoHighlight}
@@ -434,8 +466,7 @@ export function App() {
                 <div data-testid='highlight-color-select' />
               </div>
               <p style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
-                Rendered through the html-parser path with native browser
-                selection
+                Render mode: {renderMode}
               </p>
             </section>
           )}
@@ -555,7 +586,7 @@ export function App() {
           onFileUpload={handleFileUpload}
           emptyText='No document loaded'
           pageRange={buildPageRange()}
-          renderMode='html-parser'
+          renderMode={renderMode}
           backgroundQuality={backgroundQuality}
           overlayRectType='percent'
           ocr

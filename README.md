@@ -32,7 +32,28 @@ export function App() {
 
 ### How It Works
 
-`Reader` remains parser-agnostic. It accepts an intermediate document and internally renders it through `@hamster-note/html-parser`, converting the structured document data into HTML for display. Consumers (including the browser Demo) use parser packages to produce intermediate documents before passing them to `Reader`. Producers such as `@hamster-note/pdf-parser` can continue feeding the same intermediate-document contract. No consumer-side changes are required.
+`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through one of three render modes, controlled by the optional `renderMode` prop:
+
+| `renderMode` | Description | Default? |
+|---|---|---|
+| `'intermediate-document'` | New lazy renderer. Renders stable page shells first, then loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release. Designed for long documents without blocking the main thread. | **Yes** — used when `renderMode` is omitted. |
+| `'html-parser'` | Decodes each page to an HTML fragment via `@hamster-note/html-parser` (`HtmlParser.decodePageToHtml`). The original render path; retained for explicit compatibility. Text-selection (`@hamster-note/selection`) linked-range features are fully active in this mode. | No — opt in with `renderMode='html-parser'`. |
+| `'direct'` | Renders intermediate-document content (texts, images, OCR) directly without html-parser. Useful when you want the raw document structure without HTML conversion. | No — opt in with `renderMode='direct'`. |
+
+> **Note**: `@hamster-note/html-parser` remains a dependency and is **not** removed. Users who need the html-parser path (e.g., for linked-range selection features) can explicitly opt in via `renderMode='html-parser'`. When `Reader` successfully renders through html-parser, text-selection and OCR overlays rely on the html-parser output markup and may behave differently than on the direct or intermediate-document paths. If html-parser decoding fails for a page, the component falls back to direct rendering for that page.
+
+#### Lazy Page Loading Props (`intermediate-document` mode only)
+
+When `renderMode` is omitted (or set to `'intermediate-document'`), the following optional props control the lazy loading queue:
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `initialLoadedPages` | `number` | `1` | Number of pages to load immediately on mount (before visibility-based queue kicks in). |
+| `pageLoadConcurrency` | `number` | `3` | Maximum number of pages loaded concurrently. |
+| `pageLoadEnterDelayMs` | `number` | `500` | A non-initial page must remain continuously visible for this duration (ms) before its content load is enqueued. Prevents fast-scroll from triggering loads. |
+| `pageUnloadDelayMs` | `number` | `5000` | After a loaded page leaves the visible window, wait this duration (ms) before unloading its content back to an empty shell. Re-entering before the delay cancels the unload. |
+
+These props are ignored in `'html-parser'` and `'direct'` modes.
 
 #### Demo Upload Formats
 
@@ -49,7 +70,7 @@ EPUB (`.epub`) is **not supported** in this browser Demo because `@hamster-note/
 
 Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
 
-> **Note**: When `Reader` successfully renders through the html-parser path, text-selection and OCR overlays rely on the html-parser output markup and may behave differently than on the legacy direct-render fallback path. If you need full text-selection or OCR fidelity, the component automatically falls back to the direct renderer when html-parser decoding fails.
+> **Note**: To use the linked-range text-selection features described below, set `renderMode='html-parser'` explicitly. In the default `'intermediate-document'` mode, text selection relies on the lazy-rendered page content markup and may behave differently. The component falls back to direct rendering when html-parser decoding fails.
 
 ```tsx
 <Reader
@@ -68,7 +89,7 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 
 `Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features, highlighted ranges, popovers, and programmatic control on top of the native browser `Selection` API.
 
-The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is active only in `html-parser` render mode. The `direct` render path and the legacy native callbacks are unaffected.
+The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is fully active in `html-parser` render mode (opt-in via `renderMode='html-parser'`). The `direct` render path, the default `intermediate-document` path, and the legacy native callbacks are unaffected by the linked-range Selection component.
 
 ### Linked range shape
 
@@ -91,7 +112,9 @@ In `html-parser` mode, `Reader` uses a linked range shape. Each endpoint carries
 
 Public page ids are always `page-${pageNumber}` (for example, `page-1`, `page-2`). Internally, each `Reader` instance scopes runtime Selection ids so two Readers on the same page cannot collide, but public callbacks and stored data stay unscoped. You should only read and write the public `page-${pageNumber}` ids.
 
-### Quick Start
+### Quick Start (html-parser mode with linked selection)
+
+To use the linked-range selection features below, explicitly opt into `html-parser` render mode:
 
 ```tsx
 import { Reader } from '@hamster-note/reader'
