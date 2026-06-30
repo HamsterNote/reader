@@ -139,6 +139,15 @@ export type ReaderProps = {
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
+  // ---- intermediate-document 懒加载队列 props（转发给 IntermediateDocumentViewer）----
+  /** 初始立即加载的页数，转发给 viewer，默认 1 */
+  initialLoadedPages?: number
+  /** 并发加载页数上限，转发给 viewer，默认 3 */
+  pageLoadConcurrency?: number
+  /** 进入可加载窗口后发起加载前的延迟（毫秒），转发给 viewer，默认 500 */
+  pageLoadEnterDelayMs?: number
+  /** 离开可加载窗口后卸载内容的延迟（毫秒），转发给 viewer，默认 5000 */
+  pageUnloadDelayMs?: number
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -211,7 +220,11 @@ export function Reader({
   highlightPopover,
   autoHighlight,
   selectionRef,
-  overlayRectType = 'percent'
+  overlayRectType = 'percent',
+  initialLoadedPages,
+  pageLoadConcurrency,
+  pageLoadEnterDelayMs,
+  pageUnloadDelayMs
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -327,6 +340,10 @@ export function Reader({
           autoHighlight={autoHighlight}
           selectionRef={selectionRef}
           overlayRectType={overlayRectType}
+          initialLoadedPages={initialLoadedPages}
+          pageLoadConcurrency={pageLoadConcurrency}
+          pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+          pageUnloadDelayMs={pageUnloadDelayMs}
         />
       )
     }

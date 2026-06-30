@@ -654,7 +654,12 @@ describe('IntermediateDocumentViewer', () => {
   it('renders page placeholders immediately using document dimensions', () => {
     const { document } = makeDocument({ pageCount: 2 })
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     expect(
       screen.getByTestId('intermediate-document-viewer')
@@ -672,7 +677,12 @@ describe('IntermediateDocumentViewer', () => {
   it('falls back to default dimensions when page size is missing', () => {
     const { document } = makeDocument({ pageCount: 1, pageSize: {} })
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
       width: '595px',
@@ -687,7 +697,12 @@ describe('IntermediateDocumentViewer', () => {
   it('renders an empty viewer for an empty document', () => {
     const { document } = makeDocument({ pageCount: 0 })
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     expect(
       screen.getByTestId('intermediate-document-viewer')
@@ -701,7 +716,12 @@ describe('IntermediateDocumentViewer', () => {
 
     vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
@@ -764,7 +784,10 @@ describe('IntermediateDocumentViewer', () => {
       vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
 
       render(
-        <IntermediateDocumentViewer serializedDocument={serializedDocument} />
+        <IntermediateDocumentViewer
+          serializedDocument={serializedDocument}
+          renderMode='html-parser'
+        />
       )
 
       await waitFor(() => {
@@ -788,7 +811,12 @@ describe('IntermediateDocumentViewer', () => {
       '<div class="hamster-note-page">Page 1 content</div>'
     )
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
@@ -812,7 +840,12 @@ describe('IntermediateDocumentViewer', () => {
       '<div class="hamster-note-page"><p>Decoded content</p></div>'
     )
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await screen.findByText('Decoded content')
 
@@ -832,7 +865,13 @@ describe('IntermediateDocumentViewer', () => {
       return '<div class="hamster-note-page">Decoded</div>'
     })
 
-    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={2}
+        renderMode='html-parser'
+      />
+    )
 
     // Before decode resolves, all slots should have page dimensions
     expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
@@ -870,7 +909,13 @@ describe('IntermediateDocumentViewer', () => {
       return '<div class="hamster-note-page">Page 1 decoded</div>'
     })
 
-    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={2}
+        renderMode='html-parser'
+      />
+    )
 
     await screen.findByText('Page 1 decoded')
     await waitFor(() => {
@@ -894,7 +939,12 @@ describe('IntermediateDocumentViewer', () => {
       '<div class="hamster-note-page"><p>Lookup target</p></div>'
     )
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await screen.findByText('Lookup target')
 
@@ -917,7 +967,12 @@ describe('IntermediateDocumentViewer', () => {
       new Error('Parser failed')
     )
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
@@ -938,7 +993,12 @@ describe('IntermediateDocumentViewer', () => {
 
     vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce('')
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
@@ -964,6 +1024,7 @@ describe('IntermediateDocumentViewer', () => {
       <IntermediateDocumentViewer
         document={document}
         backgroundQuality='high'
+        renderMode='html-parser'
       />
     )
 
@@ -982,7 +1043,12 @@ describe('IntermediateDocumentViewer', () => {
       '<div class="hamster-note-page">Default quality</div>'
     )
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await screen.findByText('Default quality')
 
@@ -1011,7 +1077,13 @@ describe('IntermediateDocumentViewer', () => {
   it('loads the first page immediately and later pages after intersection with overscan', async () => {
     const { document, pages } = makeDocument({ pageCount: 5 })
 
-    render(<IntermediateDocumentViewer document={document} overscan={1} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={1}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
@@ -1049,7 +1121,13 @@ describe('IntermediateDocumentViewer', () => {
       return decodePromises.get(pageNumber)?.promise ?? ''
     })
 
-    render(<IntermediateDocumentViewer document={document} overscan={0} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={0}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
@@ -1094,14 +1172,22 @@ describe('IntermediateDocumentViewer', () => {
     )
 
     const { rerender } = render(
-      <IntermediateDocumentViewer document={document} />
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
     )
 
     await waitFor(() => {
       expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(1)
     })
 
-    rerender(<IntermediateDocumentViewer document={document} />)
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
     await act(async () => {
       await Promise.resolve()
     })
@@ -1127,7 +1213,11 @@ describe('IntermediateDocumentViewer', () => {
       )
 
     const { rerender } = render(
-      <IntermediateDocumentViewer document={document} backgroundQuality='low' />
+      <IntermediateDocumentViewer
+        document={document}
+        backgroundQuality='low'
+        renderMode='html-parser'
+      />
     )
 
     await waitFor(() => {
@@ -1138,6 +1228,7 @@ describe('IntermediateDocumentViewer', () => {
       <IntermediateDocumentViewer
         document={document}
         backgroundQuality='high'
+        renderMode='html-parser'
       />
     )
 
@@ -1173,7 +1264,13 @@ describe('IntermediateDocumentViewer', () => {
       return `<div class="hamster-note-page">Decoded page ${pageNumber}</div>`
     })
 
-    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={2}
+        renderMode='html-parser'
+      />
+    )
 
     await screen.findByText('Decoded page 1')
     await waitFor(() => {
@@ -1201,7 +1298,13 @@ describe('IntermediateDocumentViewer', () => {
       return `<div class="hamster-note-page">Decoded page ${pageNumber}</div>`
     })
 
-    render(<IntermediateDocumentViewer document={document} overscan={2} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={2}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(HtmlParser.decodePageToHtml).toHaveBeenCalledTimes(3)
@@ -1230,7 +1333,13 @@ describe('IntermediateDocumentViewer', () => {
   it('protects large documents by loading only the intersecting page and overscan', async () => {
     const { document, pages } = makeDocument({ pageCount: 100 })
 
-    render(<IntermediateDocumentViewer document={document} overscan={1} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        overscan={1}
+        renderMode='html-parser'
+      />
+    )
 
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-1'))
 
@@ -1257,7 +1366,10 @@ describe('IntermediateDocumentViewer', () => {
           pageCount: 8
         })
         const { unmount: unmount1 } = render(
-          <IntermediateDocumentViewer document={doc1} />
+          <IntermediateDocumentViewer
+            document={doc1}
+            renderMode='html-parser'
+          />
         )
 
         for (let pageNumber = 1; pageNumber <= 8; pageNumber += 1) {
@@ -1287,7 +1399,13 @@ describe('IntermediateDocumentViewer', () => {
         })
 
         try {
-          render(<IntermediateDocumentViewer document={doc2} overscan={3} />)
+          render(
+            <IntermediateDocumentViewer
+              document={doc2}
+              overscan={3}
+              renderMode='html-parser'
+            />
+          )
 
           for (let pageNumber = 1; pageNumber <= 11; pageNumber += 1) {
             const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
@@ -1328,6 +1446,7 @@ describe('IntermediateDocumentViewer', () => {
           <IntermediateDocumentViewer
             document={document}
             maxLoadedPages={Infinity}
+            renderMode='html-parser'
           />
         )
 
@@ -1354,6 +1473,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={2}
             maxLoadedPages={1}
+            renderMode='html-parser'
           />
         )
 
@@ -1391,6 +1511,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={10}
+            renderMode='html-parser'
           />
         )
 
@@ -1413,6 +1534,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={3}
+            renderMode='html-parser'
           />
         )
 
@@ -1437,7 +1559,11 @@ describe('IntermediateDocumentViewer', () => {
           pageCount: 8
         })
         const { unmount: unmountNeg } = render(
-          <IntermediateDocumentViewer document={docNeg} maxLoadedPages={-3} />
+          <IntermediateDocumentViewer
+            document={docNeg}
+            maxLoadedPages={-3}
+            renderMode='html-parser'
+          />
         )
 
         for (let pageNumber = 1; pageNumber <= 8; pageNumber += 1) {
@@ -1473,6 +1599,7 @@ describe('IntermediateDocumentViewer', () => {
             <IntermediateDocumentViewer
               document={docNaN}
               maxLoadedPages={NaN}
+              renderMode='html-parser'
             />
           )
 
@@ -1509,11 +1636,19 @@ describe('IntermediateDocumentViewer', () => {
 
       try {
         const { rerender } = render(
-          <IntermediateDocumentViewer document={document} maxLoadedPages={5} />
+          <IntermediateDocumentViewer
+            document={document}
+            maxLoadedPages={5}
+            renderMode='html-parser'
+          />
         )
 
         rerender(
-          <IntermediateDocumentViewer document={document} maxLoadedPages={3} />
+          <IntermediateDocumentViewer
+            document={document}
+            maxLoadedPages={3}
+            renderMode='html-parser'
+          />
         )
 
         await waitFor(() => {
@@ -1552,7 +1687,11 @@ describe('IntermediateDocumentViewer', () => {
       try {
         const { document } = makeDocument({ pageCount: 2 })
         const { unmount } = render(
-          <IntermediateDocumentViewer document={document} maxLoadedPages={5} />
+          <IntermediateDocumentViewer
+            document={document}
+            maxLoadedPages={5}
+            renderMode='html-parser'
+          />
         )
 
         expect(requestIdleCallback).toHaveBeenCalled()
@@ -1585,7 +1724,12 @@ describe('IntermediateDocumentViewer', () => {
     it('activePinchRef is initialized to false', () => {
       const { document } = makeDocument({ pageCount: 1 })
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
     })
@@ -1593,7 +1737,13 @@ describe('IntermediateDocumentViewer', () => {
     it('pageLastVisibleAtRef records visible pages', async () => {
       const { document, pages } = makeDocument({ pageCount: 3 })
 
-      render(<IntermediateDocumentViewer document={document} overscan={0} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          overscan={0}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
@@ -1618,6 +1768,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -1655,6 +1806,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -1708,6 +1860,7 @@ describe('IntermediateDocumentViewer', () => {
             overscan={0}
             maxLoadedPages={5}
             ocr
+            renderMode='html-parser'
           />
         )
 
@@ -1779,6 +1932,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -1832,6 +1986,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -1892,6 +2047,7 @@ describe('IntermediateDocumentViewer', () => {
             overscan={0}
             maxLoadedPages={5}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -1938,6 +2094,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -1977,6 +2134,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={1}
             maxLoadedPages={3}
+            renderMode='html-parser'
           />
         )
 
@@ -2022,6 +2180,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -2067,6 +2226,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -2108,6 +2268,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={5}
+            renderMode='html-parser'
           />
         )
 
@@ -2150,6 +2311,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             overscan={0}
             maxLoadedPages={3}
+            renderMode='html-parser'
           />
         )
 
@@ -2165,6 +2327,7 @@ describe('IntermediateDocumentViewer', () => {
             pageRange={{ start: 2, end: 10 }}
             overscan={0}
             maxLoadedPages={3}
+            renderMode='html-parser'
           />
         )
 
@@ -2197,7 +2360,12 @@ describe('IntermediateDocumentViewer', () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
     pages.get(1)?.getContent.mockResolvedValueOnce([])
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
@@ -2208,7 +2376,73 @@ describe('IntermediateDocumentViewer', () => {
         'hamster-reader__intermediate-page--loading'
       )
     })
-    expect(screen.queryByText('Loading page 1…')).not.toBeInTheDocument()
+  })
+
+  // ---- intermediate-document 默认渲染模式（任务 1）----
+  // 省略 renderMode 或显式传入 'intermediate-document' 时，组件走新增默认分支，
+  // 既不调用 HtmlParser.decodePageToHtml 也不调用 decodeToHtml；'html-parser' 与 'direct' 语义不变。
+  describe('intermediate-document renderMode (default branch)', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    })
+
+    it('omitted renderMode defaults to intermediate-document and calls neither html-parser method', async () => {
+      const { document, pages } = makeDocument({ pageCount: 1 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+      })
+
+      expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
+      expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+      // 占位分支复用 direct 渲染，仍应渲染页面槽位（非 html-parser-output）
+      expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+    })
+
+    it('explicit renderMode="intermediate-document" calls neither html-parser method', async () => {
+      const { document, pages } = makeDocument({ pageCount: 1 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='intermediate-document'
+        />
+      )
+
+      await waitFor(() => {
+        expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+      })
+
+      expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
+      expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+    })
+
+    it('explicit renderMode="html-parser" still decodes via HtmlParser.decodePageToHtml', async () => {
+      const { document, pages } = makeDocument({ pageCount: 1 })
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(
+        '<div class="hamster-note-page">HTML Output</div>'
+      )
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
+
+      await waitFor(() => {
+        expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(pages.get(1), {
+          background: { backgroundQuality: 0.8 }
+        })
+      })
+      expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+    })
   })
 
   it('renders the converted page background from getThumbnail', async () => {
@@ -2220,7 +2454,12 @@ describe('IntermediateDocumentViewer', () => {
 
     page.getThumbnail = vi.fn(async () => 'data:image/png;base64,converted')
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       const baseImage = screen
@@ -2246,7 +2485,12 @@ describe('IntermediateDocumentViewer', () => {
       src: 'data:image/png;base64,parser-object'
     }))
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     await waitFor(() => {
       const baseImage = screen
@@ -2267,7 +2511,12 @@ describe('IntermediateDocumentViewer', () => {
       .get(1)
       ?.getContent.mockRejectedValueOnce(new Error('text load failed'))
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     expect(await screen.findByText('Failed to load page 1')).toBeInTheDocument()
     expect(screen.getByTestId('intermediate-page-1')).not.toHaveClass(
@@ -2281,7 +2530,12 @@ describe('IntermediateDocumentViewer', () => {
       throw new Error('page lookup failed')
     })
 
-    render(<IntermediateDocumentViewer document={document} />)
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
 
     expect(await screen.findByText('Failed to load page 1')).toBeInTheDocument()
     expect(screen.getByTestId('intermediate-page-1')).not.toHaveClass(
@@ -2320,7 +2574,10 @@ describe('IntermediateDocumentViewer', () => {
     } as unknown as IntermediateDocument
 
     const { rerender } = render(
-      <IntermediateDocumentViewer document={documentA} />
+      <IntermediateDocumentViewer
+        document={documentA}
+        renderMode='html-parser'
+      />
     )
 
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-1'))
@@ -2329,7 +2586,12 @@ describe('IntermediateDocumentViewer', () => {
       expect(pageA.getContent).toHaveBeenCalledTimes(1)
     })
 
-    rerender(<IntermediateDocumentViewer document={documentB} />)
+    rerender(
+      <IntermediateDocumentViewer
+        document={documentB}
+        renderMode='html-parser'
+      />
+    )
 
     intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-1'))
 
@@ -2350,7 +2612,10 @@ describe('IntermediateDocumentViewer', () => {
   it('disconnects the observer on unmount', () => {
     const { document } = makeDocument({ pageCount: 1 })
     const { unmount } = render(
-      <IntermediateDocumentViewer document={document} />
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
     )
     const observer = intersectionObserverMock.instances[0]
     const disconnectSpy = vi.spyOn(observer, 'disconnect')
@@ -2375,7 +2640,12 @@ describe('IntermediateDocumentViewer', () => {
         pageWithThumbnail as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -2408,7 +2678,13 @@ describe('IntermediateDocumentViewer', () => {
           }) as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} ocr />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -2435,7 +2711,13 @@ describe('IntermediateDocumentViewer', () => {
         pageWithThumbnail as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} ocr />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -2467,7 +2749,13 @@ describe('IntermediateDocumentViewer', () => {
         pageWithThumbnail as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} ocr />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -2512,6 +2800,7 @@ describe('IntermediateDocumentViewer', () => {
           document={document}
           ocr
           onOcrError={onOcrError}
+          renderMode='html-parser'
         />
       )
 
@@ -2572,7 +2861,11 @@ describe('IntermediateDocumentViewer', () => {
       } as unknown as IntermediateDocument
 
       const { rerender } = render(
-        <IntermediateDocumentViewer document={documentA} ocr />
+        <IntermediateDocumentViewer
+          document={documentA}
+          ocr
+          renderMode='html-parser'
+        />
       )
 
       await waitFor(() => {
@@ -2583,7 +2876,13 @@ describe('IntermediateDocumentViewer', () => {
         screen.getByTestId('intermediate-page-1')
       )
 
-      rerender(<IntermediateDocumentViewer document={documentB} ocr />)
+      rerender(
+        <IntermediateDocumentViewer
+          document={documentB}
+          ocr
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page B text')).toBeInTheDocument()
@@ -3488,6 +3787,7 @@ describe('IntermediateDocumentViewer', () => {
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
+          renderMode='html-parser'
         />
       )
 
@@ -3540,6 +3840,7 @@ describe('IntermediateDocumentViewer', () => {
           document={mockDoc}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
+          renderMode='html-parser'
         />
       )
 
@@ -3596,6 +3897,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -3621,6 +3923,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -3648,6 +3951,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -3685,6 +3989,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -3824,6 +4129,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionEnd={onTextSelectionEnd}
+          renderMode='html-parser'
         />
       )
 
@@ -3860,6 +4166,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onSelectText={onSelectText}
+          renderMode='html-parser'
         />
       )
 
@@ -3909,6 +4216,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onSelectText={onSelectText}
+          renderMode='html-parser'
         />
       )
 
@@ -3962,7 +4270,12 @@ describe('IntermediateDocumentViewer', () => {
 
     it('builds an exact-boundary payload from the shared helper', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      render(<IntermediateDocumentViewer document={mockDoc} />)
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -3996,6 +4309,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onSelectText={onSelectText}
+          renderMode='html-parser'
         />
       )
 
@@ -4020,6 +4334,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onSelectText={onSelectText}
+          renderMode='html-parser'
         />
       )
 
@@ -4044,6 +4359,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionEnd={onTextSelectionEnd}
+          renderMode='html-parser'
         />
       )
 
@@ -4077,6 +4393,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionEnd={onTextSelectionEnd}
+          renderMode='html-parser'
         />
       )
 
@@ -4112,6 +4429,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionEnd={onTextSelectionEnd}
+          renderMode='html-parser'
         />
       )
 
@@ -4137,6 +4455,7 @@ describe('IntermediateDocumentViewer', () => {
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
+          renderMode='html-parser'
         />
       )
 
@@ -4151,7 +4470,12 @@ describe('IntermediateDocumentViewer', () => {
 
     it('does not assign pointer-events: none to text spans', async () => {
       const { document: mockDoc } = makeDocument({ pageCount: 1 })
-      render(<IntermediateDocumentViewer document={mockDoc} />)
+      render(
+        <IntermediateDocumentViewer
+          document={mockDoc}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -4188,6 +4512,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4252,6 +4577,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionEnd={onTextSelectionEnd}
+          renderMode='html-parser'
         />
       )
 
@@ -4319,6 +4645,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4357,6 +4684,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4417,6 +4745,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4477,6 +4806,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4537,6 +4867,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4675,6 +5006,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={mockDoc}
           onTextSelectionChange={onTextSelectionChange}
+          renderMode='html-parser'
         />
       )
 
@@ -4776,7 +5108,12 @@ describe('IntermediateDocumentViewer', () => {
       const text = makePolygonText('polygon-text', 'Horizontal text', polygon)
       const { document } = makePolygonDocument([text])
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Horizontal text')).toBeInTheDocument()
@@ -4799,7 +5136,12 @@ describe('IntermediateDocumentViewer', () => {
       const text = makePolygonText('malformed-text', 'Fallback text', polygon)
       const { document } = makePolygonDocument([text])
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Fallback text')).toBeInTheDocument()
@@ -4823,7 +5165,12 @@ describe('IntermediateDocumentViewer', () => {
       const text = makePolygonText('rotated-text', 'Rotated text', polygon)
       const { document } = makePolygonDocument([text])
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Rotated text')).toBeInTheDocument()
@@ -4861,7 +5208,12 @@ describe('IntermediateDocumentViewer', () => {
       } as unknown as IntermediateText
       const { document } = makePolygonDocument([text])
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('No polygon text')).toBeInTheDocument()
@@ -4888,7 +5240,12 @@ describe('IntermediateDocumentViewer', () => {
         pageWithThumbnail as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         const img = screen
@@ -4903,7 +5260,12 @@ describe('IntermediateDocumentViewer', () => {
     it('does not render base image for pages without thumbnail data', async () => {
       const { document } = makeDocument({ pageCount: 1 })
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 text')).toBeInTheDocument()
@@ -4923,7 +5285,12 @@ describe('IntermediateDocumentViewer', () => {
         pageWithThumbnail as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         const page = screen.getByTestId('intermediate-page-1')
@@ -4952,6 +5319,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 2, end: 4 }}
+          renderMode='html-parser'
         />
       )
 
@@ -4972,7 +5340,12 @@ describe('IntermediateDocumentViewer', () => {
     it('renders all pages when pageRange is not provided', () => {
       const { document } = makeDocument({ pageCount: 3 })
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
@@ -4986,6 +5359,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 10, end: 20 }}
+          renderMode='html-parser'
         />
       )
 
@@ -5001,6 +5375,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 4, end: 2 }}
+          renderMode='html-parser'
         />
       )
 
@@ -5016,6 +5391,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 2, end: 3 }}
+          renderMode='html-parser'
         />
       )
 
@@ -5059,6 +5435,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 3, end: 3 }}
+          renderMode='html-parser'
         />
       )
 
@@ -5084,6 +5461,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 1.7, end: 3.9 }}
+          renderMode='html-parser'
         />
       )
 
@@ -5103,6 +5481,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: Infinity, end: 3 }}
+          renderMode='html-parser'
         />
       )
 
@@ -5114,6 +5493,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           pageRange={{ start: 1, end: NaN }}
+          renderMode='html-parser'
         />
       )
 
@@ -5219,7 +5599,12 @@ describe('IntermediateDocumentViewer', () => {
         pageWithThumbnail as unknown as IntermediatePage
       )
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         const img = screen
@@ -5303,7 +5688,13 @@ describe('IntermediateDocumentViewer', () => {
     it('controlled scale prop applies CSS transform', async () => {
       const { document } = makeDocument({ pageCount: 1 })
 
-      render(<IntermediateDocumentViewer document={document} scale={2} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          scale={2}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
@@ -5324,6 +5715,7 @@ describe('IntermediateDocumentViewer', () => {
           scale={1.5}
           defaultScale={2}
           onScaleChange={onScaleChange}
+          renderMode='html-parser'
         />
       )
 
@@ -5343,6 +5735,7 @@ describe('IntermediateDocumentViewer', () => {
           scale={1.5}
           defaultScale={3}
           onScaleChange={onScaleChange}
+          renderMode='html-parser'
         />
       )
 
@@ -5355,7 +5748,11 @@ describe('IntermediateDocumentViewer', () => {
     it('uncontrolled defaultScale initializes once', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       const { rerender } = render(
-        <IntermediateDocumentViewer document={document} defaultScale={1.5} />
+        <IntermediateDocumentViewer
+          document={document}
+          defaultScale={1.5}
+          renderMode='html-parser'
+        />
       )
 
       await waitFor(() => {
@@ -5368,7 +5765,11 @@ describe('IntermediateDocumentViewer', () => {
       })
 
       rerender(
-        <IntermediateDocumentViewer document={document} defaultScale={2} />
+        <IntermediateDocumentViewer
+          document={document}
+          defaultScale={2}
+          renderMode='html-parser'
+        />
       )
 
       expect(surface).toHaveStyle({
@@ -5383,6 +5784,7 @@ describe('IntermediateDocumentViewer', () => {
           document={document}
           scale={10}
           maxScale={4}
+          renderMode='html-parser'
         />
       )
 
@@ -5400,6 +5802,7 @@ describe('IntermediateDocumentViewer', () => {
           document={document}
           scale={0.01}
           minScale={0.25}
+          renderMode='html-parser'
         />
       )
 
@@ -5412,7 +5815,12 @@ describe('IntermediateDocumentViewer', () => {
     it('scale one has no transform cost', async () => {
       const { document } = makeDocument({ pageCount: 1 })
 
-      render(<IntermediateDocumentViewer document={document} />)
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+        />
+      )
 
       await waitFor(() => {
         expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
@@ -5432,7 +5840,12 @@ describe('IntermediateDocumentViewer', () => {
 
       it('passes containMode to VirtualPaper', async () => {
         const { document } = makeDocument({ pageCount: 1 })
-        render(<IntermediateDocumentViewer document={document} />)
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            renderMode='html-parser'
+          />
+        )
 
         await waitFor(() => {
           expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
@@ -5450,6 +5863,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             defaultScale={1}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -5482,6 +5896,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             defaultScale={1}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -5509,6 +5924,7 @@ describe('IntermediateDocumentViewer', () => {
             defaultScale={4}
             maxScale={4}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -5549,6 +5965,7 @@ describe('IntermediateDocumentViewer', () => {
               minScale={0.5}
               maxScale={3}
               maxLoadedPages={1}
+              renderMode='html-parser'
             />
           )
 
@@ -5573,6 +5990,7 @@ describe('IntermediateDocumentViewer', () => {
             scale={Number.NaN}
             minScale={Number.NaN}
             maxScale={-1}
+            renderMode='html-parser'
           />
         )
 
@@ -5591,6 +6009,7 @@ describe('IntermediateDocumentViewer', () => {
             minScale={Number.NaN}
             maxScale={-1}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -5621,6 +6040,7 @@ describe('IntermediateDocumentViewer', () => {
             minScale={0.5}
             maxScale={3}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -5653,6 +6073,7 @@ describe('IntermediateDocumentViewer', () => {
             document={document}
             defaultScale={1}
             onScaleChange={onScaleChange}
+            renderMode='html-parser'
           />
         )
 
@@ -5741,7 +6162,11 @@ describe('IntermediateDocumentViewer', () => {
       it('unmounts while VirtualPaper owns gesture cleanup', async () => {
         const { document } = makeDocument({ pageCount: 1 })
         const { unmount } = render(
-          <IntermediateDocumentViewer document={document} defaultScale={1} />
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={1}
+            renderMode='html-parser'
+          />
         )
 
         await waitFor(() => {

@@ -106,7 +106,20 @@ export type ReaderPageRange = {
   end: number
 }
 
-export type ReaderRenderMode = 'html-parser' | 'direct'
+/**
+ * 渲染模式：
+ * - `'html-parser'`：走 html-parser 解码路径（`HtmlParser.decodePageToHtml`），逐页解码为 HTML 片段渲染。
+ * - `'direct'`：直接渲染中间文档内容，不经过 html-parser，不调用 `HtmlParser.decodePageToHtml`。
+ * - `'intermediate-document'`：新增的默认模式。当前阶段为占位实现，复用 direct 渲染最小化满足编译，
+ *   绝不调用 html-parser。后续任务 将在此基础上实现真正的懒加载队列。
+ *
+ * 当调用方省略 `renderMode` 时，组件默认使用 `'intermediate-document'`。
+ * 显式传入 `'html-parser'` 或 `'direct'` 仍走各自既有路径，行为保持不变。
+ */
+export type ReaderRenderMode =
+  | 'html-parser'
+  | 'direct'
+  | 'intermediate-document'
 
 /** 背景质量级别：low（低）、medium（中）、high（高） */
 export type BackgroundQuality = 'low' | 'medium' | 'high'
@@ -445,6 +458,23 @@ export type IntermediateDocumentViewerProps = {
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
+  // ---- intermediate-document 懒加载队列 props（仅新增默认模式预留，当前占位分支暂未消费）----
+  /**
+   * 初始立即加载的页数。省略时默认 `1`。后续任务 将在 `'intermediate-document'` 懒加载队列中消费。
+   */
+  initialLoadedPages?: number
+  /**
+   * 同时并发加载的页数上限。省略时默认 `3`。
+   */
+  pageLoadConcurrency?: number
+  /**
+   * 页面进入可加载窗口后、真正发起加载前的延迟（毫秒）。省略时默认 `500`。
+   */
+  pageLoadEnterDelayMs?: number
+  /**
+   * 页面离开可加载窗口后、卸载其内容的延迟（毫秒）。省略时默认 `5000`。
+   */
+  pageUnloadDelayMs?: number
 }
 
 type PageSize = {
@@ -1656,7 +1686,7 @@ function ViewerContent({
           onTransformChange={handleTransformChangeWithPopover}
           onTransformChangeEnd={handleTransformChangeEndWithPopover}
         >
-          {renderMode !== 'direct' ? (
+          {renderMode === 'html-parser' ? (
             // T5/T7：每页内容自带一个 linked-mode HamsterSelection；
             // 公共 ReaderSelectionRef 通过 runtime selectionId 复用这些子 ref。
             <HtmlParserPages
@@ -1692,7 +1722,9 @@ function ViewerContent({
               selectionRefForRuntimeId={selectionRefForRuntimeId}
             />
           ) : (
-            <DirectPages
+            /* 'direct' 与新增默认 'intermediate-document' 分支：均不调用 html-parser。
+             * 当前 intermediate-document 为占位实现，复用 direct 渲染最小化满足编译，
+             * 真正的懒加载队列将在后续任务 中替换此占位。 */ <DirectPages
               pageNumbers={pageNumbers}
               runtimeDocument={runtimeDocument}
               setPageRef={setPageRef}
@@ -1716,7 +1748,7 @@ export function IntermediateDocumentViewer({
   className,
   overscan = 1,
   pageRange,
-  renderMode = 'html-parser',
+  renderMode = 'intermediate-document',
   backgroundQuality = 'high',
   ocr,
   onOcrError,
@@ -1750,12 +1782,31 @@ export function IntermediateDocumentViewer({
   highlightPopover,
   autoHighlight,
   selectionRef,
-  overlayRectType = 'percent'
+  overlayRectType = 'percent',
+  initialLoadedPages = 1,
+  pageLoadConcurrency = 3,
+  pageLoadEnterDelayMs = 500,
+  pageUnloadDelayMs = 5000
 }: IntermediateDocumentViewerProps) {
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
     return getRuntimeDocument(inputDocument)
   }, [document, serializedDocument])
+
+  // intermediate-document 模式懒加载队列参数。当前占位分支复用 direct 渲染、暂不消费这四个值，
+  // 此处集中预留，后续任务（队列实现）会从该 ref 读取以驱动逐页懒加载/卸载节流。
+  const lazyQueueConfigRef = useRef({
+    initialLoadedPages,
+    pageLoadConcurrency,
+    pageLoadEnterDelayMs,
+    pageUnloadDelayMs
+  })
+  lazyQueueConfigRef.current = {
+    initialLoadedPages,
+    pageLoadConcurrency,
+    pageLoadEnterDelayMs,
+    pageUnloadDelayMs
+  }
 
   const pageNumbers = useMemo(() => {
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
@@ -2049,7 +2100,8 @@ export function IntermediateDocumentViewer({
       setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
     }
 
-    if (!runtimeDocument || renderMode === 'direct') {
+    // 仅显式 html-parser 模式需要逐页解码；direct 与中间默认模式均不走 html-parser。
+    if (!runtimeDocument || renderMode !== 'html-parser') {
       if (!shouldResetDecode) {
         const nextHtmlPages = new Map<number, string>()
         const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()

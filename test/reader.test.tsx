@@ -293,7 +293,7 @@ describe('Reader public API', () => {
     const { document, pages } = makeLazyDocument(1)
     const page = pages.get(1)
 
-    render(<Reader document={document} />)
+    render(<Reader document={document} renderMode='html-parser' />)
 
     await waitFor(() => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
@@ -342,7 +342,7 @@ describe('Reader public API', () => {
         })
     } as unknown as IntermediateDocument
 
-    render(<Reader document={document} />)
+    render(<Reader document={document} renderMode='html-parser' />)
 
     await waitFor(() => {
       expect(screen.getByText('Reader fallback')).toBeInTheDocument()
@@ -823,5 +823,72 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.minScale).toBe(0.25)
     expect(capturedViewerProps.maxScale).toBe(4)
     expect(capturedViewerProps.maxLoadedPages).toBe(7)
+  })
+
+  it('omitted renderMode forwards intermediate-document as the new viewer default', async () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+    })
+
+    // Reader 不传 renderMode，由 viewer 内部默认为 'intermediate-document'，
+    // 因此 forwarded 到 IntermediateDocumentViewer 的 renderMode 应为 undefined。
+    expect(capturedViewerProps.renderMode).toBeUndefined()
+    expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
+    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+  })
+
+  it('explicit renderMode="html-parser" still decodes via HtmlParser.decodePageToHtml', async () => {
+    const mockHtml = '<div class="hamster-note-page">Reader HTML</div>'
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
+
+    const { document, pages } = makeLazyDocument(1)
+    const page = pages.get(1)
+
+    render(<Reader document={document} renderMode='html-parser' />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    })
+
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, {
+      background: { backgroundQuality: 0.8 }
+    })
+    expect(capturedViewerProps.renderMode).toBe('html-parser')
+  })
+
+  it('forwards intermediate-document lazy props with defaults to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} />)
+
+    expect(capturedViewerProps.initialLoadedPages).toBeUndefined()
+    expect(capturedViewerProps.pageLoadConcurrency).toBeUndefined()
+    expect(capturedViewerProps.pageLoadEnterDelayMs).toBeUndefined()
+    expect(capturedViewerProps.pageUnloadDelayMs).toBeUndefined()
+  })
+
+  it('forwards explicit intermediate-document lazy props to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        renderMode='intermediate-document'
+        initialLoadedPages={2}
+        pageLoadConcurrency={5}
+        pageLoadEnterDelayMs={250}
+        pageUnloadDelayMs={3000}
+      />
+    )
+
+    expect(capturedViewerProps.renderMode).toBe('intermediate-document')
+    expect(capturedViewerProps.initialLoadedPages).toBe(2)
+    expect(capturedViewerProps.pageLoadConcurrency).toBe(5)
+    expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
+    expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
   })
 })
