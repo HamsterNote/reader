@@ -9802,3 +9802,342 @@ describe('multi-reader isolation', () => {
     )
   })
 })
+
+// ---- intermediate-document selection 与 OCR 回归测试（任务 7）----
+// 验证新增默认模式下 selection 行为与 html-parser 一致：
+// - 已加载页面由 HamsterSelection linked-mode 包裹
+// - selection create/update/delete 回调正确桥接到公共 API
+// - popover 在包裹器内渲染
+// - 空外壳不渲染 selection 包裹器
+// - OCR 仅在已加载可见且有底图的页面上运行；
+//   evictedOcrPagesRef 守卫使 stale OCR 结果不会写回已卸载的页面。
+describe('intermediate-document selection and OCR regression (task-7)', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+    vi.mocked(HtmlParser.decodeToHtml).mockReset()
+    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('renders one linked HamsterSelection per loaded page in intermediate-document mode', async () => {
+    const { document, pages } = makeDocument({ pageCount: 3 })
+
+    render(<IntermediateDocumentViewer document={document} />)
+
+    // initialLoadedPages 默认为 1，仅页 1 加载
+    await waitFor(() => {
+      expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+    })
+    await screen.findByText('Page 1 text')
+
+    // 仅页 1 已加载 → 注册了恰好 1 个 linked HamsterSelection 实例
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+      const props = getAllSelectionProps()[0]
+      expect(props?.selectionId).toMatch(/:page-1$/u)
+      expect(props?.linkedMode).toBe(true)
+    })
+
+    // 页 2、3 为空外壳 → 不渲染 selection 包裹器
+    const page2 = screen.getByTestId('intermediate-page-2')
+    expect(page2.querySelector('.hsn-selection-container')).toBeNull()
+    const page3 = screen.getByTestId('intermediate-page-3')
+    expect(page3.querySelector('.hsn-selection-container')).toBeNull()
+  })
+
+  it('fires public onSelect/onUpdateRange/onSelectRange when linked callbacks are simulated', async () => {
+    const onSelect = vi.fn()
+    const onUpdateRange = vi.fn()
+    const onSelectRange = vi.fn()
+    const onLinkedDataChange = vi.fn()
+
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        onSelect={onSelect}
+        onUpdateRange={onUpdateRange}
+        onSelectRange={onSelectRange}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+
+    const page1Id = requireRuntimeSelectionId(':page-1')
+
+    // create：模拟 linked select → 公共 onSelect 触发（unscoped page-id）
+    const range = makeRuntimeLinkedRange(page1Id, {
+      id: 'sel-1',
+      text: 'Selected'
+    })
+    act(() => {
+      simulateLinkedSelect(page1Id, range)
+    })
+
+    await waitFor(() => {
+      expect(onSelect).toHaveBeenCalledTimes(1)
+    })
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sel-1',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 }
+      })
+    )
+
+    // update：模拟 linked update → 公共 onUpdateRange 触发
+    const updatedRange = makeRuntimeLinkedRange(page1Id, {
+      id: 'sel-1',
+      text: 'Updated',
+      end: { selectionId: page1Id, offset: 7 }
+    })
+    act(() => {
+      simulateLinkedUpdateRange(page1Id, updatedRange)
+    })
+
+    await waitFor(() => {
+      expect(onUpdateRange).toHaveBeenCalledTimes(1)
+    })
+    expect(onUpdateRange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sel-1',
+        end: { selectionId: 'page-1', offset: 7 }
+      })
+    )
+
+    // delete/deselect：模拟 linked selectRange → 公共 onSelectRange 触发
+    act(() => {
+      simulateLinkedSelectRange(page1Id, 'sel-1')
+    })
+
+    await waitFor(() => {
+      expect(onSelectRange).toHaveBeenCalledWith('sel-1')
+    })
+
+    act(() => {
+      simulateLinkedSelectRange(page1Id, null)
+    })
+
+    await waitFor(() => {
+      expect(onSelectRange).toHaveBeenCalledWith(null)
+    })
+  })
+
+  it('popovers are forwarded to the HamsterSelection wrapper for loaded pages', async () => {
+    const selectionPopover = <div data-testid='sel-popover'>SP</div>
+    const highlightPopover = <div data-testid='hl-popover'>HP</div>
+
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+
+    const props = getAllSelectionProps()[0]
+    expectPopoverToContain(props?.popover, highlightPopover)
+    expectPopoverToContain(props?.selectionPopover, selectionPopover)
+  })
+
+  it('empty shells do not render HamsterSelection wrappers when initialLoadedPages=0', () => {
+    const { document, pages } = makeDocument({ pageCount: 3 })
+
+    render(
+      <IntermediateDocumentViewer document={document} initialLoadedPages={0} />
+    )
+
+    expect(getAllSelectionProps()).toHaveLength(0)
+    expect(pages.get(1)?.getContent).not.toHaveBeenCalled()
+
+    for (let pageNumber = 1; pageNumber <= 3; pageNumber += 1) {
+      const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+      expect(page).toHaveAttribute('data-selection-id')
+      expect(page.querySelector('.hsn-selection-container')).toBeNull()
+    }
+  })
+
+  it('OCR runs only for visible loaded pages with base images, not for empty shells', async () => {
+    const { ImageParser } = await import('@hamster-note/image-parser')
+    const encodeSpy = vi.mocked(ImageParser.encode)
+    encodeSpy.mockClear()
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(new Blob(['image'])))
+
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    pages.forEach((page, pageNumber) => {
+      page.thumbnail = `data:image/png;base64,page-${pageNumber}`
+    })
+
+    try {
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      // 等待页 1加载并出现底图
+      const page1 = screen.getByTestId('intermediate-page-1')
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+
+      // 触发页 1 可见 → OCR 运行
+      intersectionObserverMock.trigger(page1)
+
+      await waitFor(() => {
+        expect(encodeSpy).toHaveBeenCalledTimes(1)
+        expect(
+          page1.querySelector('[data-text-id^="ocr-"]')
+        ).toBeInTheDocument()
+      })
+
+      // 页 2、3 为空外壳 → 不应有 OCR 文本
+      const page2 = screen.getByTestId('intermediate-page-2')
+      expect(
+        page2.querySelector('[data-text-id^="ocr-"]')
+      ).not.toBeInTheDocument()
+      const page3 = screen.getByTestId('intermediate-page-3')
+      expect(
+        page3.querySelector('[data-text-id^="ocr-"]')
+      ).not.toBeInTheDocument()
+
+      // 加载页 2 并使其可见 → OCR 应在页 2 上运行
+      intersectionObserverMock.trigger(page2)
+      await waitFor(() => {
+        expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
+      })
+      await waitFor(() => {
+        expect(
+          page2.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page2)
+
+      await waitFor(() => {
+        expect(encodeSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
+        expect(
+          page2.querySelector('[data-text-id^="ocr-"]')
+        ).toBeInTheDocument()
+      })
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('stale OCR results are dropped after page eviction via evictedOcrPagesRef guard', async () => {
+    const { ImageParser } = await import('@hamster-note/image-parser')
+    const encodeSpy = vi.mocked(ImageParser.encode)
+    encodeSpy.mockClear()
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(new Blob(['image'])))
+
+    const idleCallback = installQueuedIdleCallback()
+
+    const { document, pages } = makeDocument({ pageCount: 8 })
+    pages.forEach((page, pageNumber) => {
+      page.thumbnail = `data:image/png;base64,page-${pageNumber}`
+    })
+
+    try {
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          overscan={0}
+          maxLoadedPages={3}
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      // 加载页 1、可见 → OCR 运行
+      const page1 = screen.getByTestId('intermediate-page-1')
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page1)
+
+      await waitFor(() => {
+        expect(encodeSpy).toHaveBeenCalledTimes(1)
+        expect(
+          page1.querySelector('[data-text-id^="ocr-"]')
+        ).toBeInTheDocument()
+      })
+
+      // 离屏页 1，加载足够页面触发 LRU 驱逐
+      // effective cap = max(maxLoadedPages=3, floor=5) = 5，需 6 页以上才触发
+      intersectionObserverMock.trigger(page1, false)
+
+      for (let pageNumber = 2; pageNumber <= 7; pageNumber += 1) {
+        const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+        intersectionObserverMock.trigger(page)
+        await waitFor(() => {
+          expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+        })
+        intersectionObserverMock.trigger(page, false)
+      }
+
+      await idleCallback.flush()
+
+      // 页 1 被驱逐：文本、底图、OCR 文本均清空
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).not.toBeInTheDocument()
+      })
+      expect(
+        page1.querySelector('[data-text-id^="ocr-"]')
+      ).not.toBeInTheDocument()
+      expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+
+      const callsAfterEviction = encodeSpy.mock.calls.length
+
+      // 重新加载页 1 → OCR 被重新发起（cache 被 evictedOcrPagesRef 绕过）
+      intersectionObserverMock.trigger(page1)
+
+      await waitFor(() => {
+        expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(2)
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page1)
+
+      await waitFor(() => {
+        expect(encodeSpy.mock.calls.length).toBeGreaterThan(callsAfterEviction)
+      })
+    } finally {
+      fetchSpy.mockRestore()
+      idleCallback.restore()
+    }
+  })
+})

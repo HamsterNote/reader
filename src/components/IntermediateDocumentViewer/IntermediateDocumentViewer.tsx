@@ -1351,6 +1351,40 @@ type IntermediateDocumentPagesProps = DirectPageResources & {
   setTextRef: SetTextRef
   runtimePageSelectionId: (pageNumber: number) => string
   imagesByPageNumber: Map<number, IntermediateImage[]>
+  // 与 HtmlParserPages 一致的 linked-mode selection props：
+  // 每个「已加载」页面内容由一个 HamsterSelection 实例包裹，
+  // 使用 runtimePageSelectionId(pageNumber) 作为 runtime 选中 id，
+  // 共享同一份 runtime LinkedSelectionData 引用，并通过回调桥接 public 语义。
+  runtimeLinkedData: LinkedSelectionData
+  handleLinkedDataChange: (next: LinkedSelectionData) => void
+  handleLinkedSelect: (range: LinkedSelectionRange) => void
+  handleLinkedUpdateRange: (range: LinkedSelectionRange) => void
+  handleLinkedSelectRange: (id: string | null) => void
+  onSelectionStartProp:
+    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
+    | undefined
+  handleSelectionStart: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  onSelectionEndProp:
+    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
+    | undefined
+  handleSelectionEnd: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  autoHighlight: boolean | undefined
+  highlightColor: string | undefined
+  selectionColor: string | undefined
+  overlayRectType: ReaderSelectionOverlayRectType
+  effectiveSelectedRangeId: string | null
+  selectionPopover: React.ReactNode
+  highlightPopover: React.ReactNode
+  popoverVisible: boolean
+  selectionRefForRuntimeId: (
+    selectionId: string
+  ) => (node: ReaderSelectionRef | null) => void
 }
 
 function IntermediateDocumentPages({
@@ -1362,43 +1396,146 @@ function IntermediateDocumentPages({
   textsByPageNumber,
   ocrTextsByPageNumber,
   baseImagesByPageNumber,
-  imagesByPageNumber
+  imagesByPageNumber,
+  pageStatuses,
+  runtimeLinkedData,
+  handleLinkedDataChange,
+  handleLinkedSelect,
+  handleLinkedUpdateRange,
+  handleLinkedSelectRange,
+  onSelectionStartProp,
+  handleSelectionStart,
+  onSelectionEndProp,
+  handleSelectionEnd,
+  autoHighlight,
+  highlightColor,
+  selectionColor,
+  overlayRectType,
+  effectiveSelectedRangeId,
+  selectionPopover,
+  highlightPopover,
+  popoverVisible,
+  selectionRefForRuntimeId
 }: IntermediateDocumentPagesProps) {
-  return pageNumbers.map((pageNumber) => {
-    const shellPageSize = normalizePageSize(
-      runtimeDocument.getPageSizeByPageNumber(pageNumber)
+  // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
+  // 实例可以渲染 popover，其余页面传入 undefined（与 HtmlParserPages 行为一致）。
+  const popoverOwnerRuntimeId = useMemo(() => {
+    const selectedId = runtimeLinkedData.selectedRangeId
+    if (!selectedId) {
+      return null
+    }
+    const selectedRange = runtimeLinkedData.items.find(
+      (range) => range.id === selectedId
     )
-    const shellSelectionId = runtimePageSelectionId(pageNumber)
+    return selectedRange ? selectedRange.start.selectionId : null
+  }, [runtimeLinkedData.selectedRangeId, runtimeLinkedData.items])
 
-    return (
-      <div
-        key={pageNumber}
-        ref={setPageRef(pageNumber)}
-        className='hamster-reader__intermediate-page'
-        data-testid={`intermediate-page-${pageNumber}`}
-        data-page-number={pageNumber}
-        data-selection-id={shellSelectionId}
-        data-page-size-unavailable={
-          shellPageSize.pageSizeUnavailable ? 'true' : undefined
-        }
-        style={{
-          position: 'relative',
-          width: `${shellPageSize.width}px`,
-          height: `${shellPageSize.height}px`,
-          overflow: 'hidden'
-        }}
-      >
-        <IntermediateDocumentPageContent
-          pageNumber={pageNumber}
-          texts={textsByPageNumber.get(pageNumber) ?? []}
-          ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
-          baseImageSource={baseImagesByPageNumber.get(pageNumber)}
-          images={imagesByPageNumber.get(pageNumber) ?? []}
-          setTextRef={setTextRef}
-        />
-      </div>
-    )
-  })
+  // onSelectionStart 仅在调用方提供 prop 时启用；
+  // onSelectionEnd 当调用方提供 prop 或 autoHighlight 时启用。
+  const selectionStartHandler = onSelectionStartProp
+    ? handleSelectionStart
+    : undefined
+  const selectionEndHandler =
+    onSelectionEndProp || autoHighlight ? handleSelectionEnd : undefined
+
+  return (
+    <div className='hamster-note-document'>
+      {pageNumbers.map((pageNumber) => {
+        const shellPageSize = normalizePageSize(
+          runtimeDocument.getPageSizeByPageNumber(pageNumber)
+        )
+        const shellSelectionId = runtimePageSelectionId(pageNumber)
+
+        // 判断页面是否已加载内容：只有已加载（texts 或底图存在）的页面
+        // 才参与 selection；空外壳不渲染 HamsterSelection 包裹。
+        const pageTexts = textsByPageNumber.get(pageNumber)
+        const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
+        const isPageContentLoaded =
+          pageStatuses.get(pageNumber) === 'loaded' &&
+          ((pageTexts !== undefined && pageTexts.length > 0) ||
+            Boolean(pageBaseImage))
+
+        // popover gating：owner 为 null（无 selected range）时所有页面均呈现 popover，
+        // 否则仅 shellSelectionId === popoverOwnerRuntimeId 的页面拿到真实 popover 内容。
+        const isPopoverOwner =
+          popoverOwnerRuntimeId === null ||
+          popoverOwnerRuntimeId === shellSelectionId
+        const pagePopover = isPopoverOwner ? (
+          <PopoverPortal visible={popoverVisible}>
+            {highlightPopover ?? selectionPopover}
+          </PopoverPortal>
+        ) : undefined
+        const pageSelectionPopover = isPopoverOwner ? (
+          <PopoverPortal visible={popoverVisible}>
+            {selectionPopover}
+          </PopoverPortal>
+        ) : undefined
+
+        // 页面内容：已加载时由 HamsterSelection linked-mode 包裹，
+        // 未加载（空外壳）时直接渲染 IntermediateDocumentPageContent（无内容）。
+        const pageContent = (
+          <IntermediateDocumentPageContent
+            pageNumber={pageNumber}
+            texts={pageTexts ?? []}
+            ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
+            baseImageSource={pageBaseImage}
+            images={imagesByPageNumber.get(pageNumber) ?? []}
+            setTextRef={setTextRef}
+          />
+        )
+
+        return (
+          <div
+            key={pageNumber}
+            ref={setPageRef(pageNumber)}
+            className='hamster-reader__intermediate-page'
+            data-testid={`intermediate-page-${pageNumber}`}
+            data-page-number={pageNumber}
+            data-selection-id={shellSelectionId}
+            data-page-size-unavailable={
+              shellPageSize.pageSizeUnavailable ? 'true' : undefined
+            }
+            style={{
+              position: 'relative',
+              width: `${shellPageSize.width}px`,
+              height: `${shellPageSize.height}px`,
+              overflow: 'hidden'
+            }}
+          >
+            {isPageContentLoaded ? (
+              <HamsterSelection
+                selectionId={shellSelectionId}
+                linkedMode
+                linkedData={runtimeLinkedData}
+                onLinkedDataChange={handleLinkedDataChange}
+                onLinkedSelect={handleLinkedSelect}
+                onLinkedUpdateRange={handleLinkedUpdateRange}
+                onLinkedSelectRange={handleLinkedSelectRange}
+                ranges={[]}
+                selectedRangeId={effectiveSelectedRangeId}
+                onSelect={undefined}
+                onSelectRange={undefined}
+                onUpdateRange={undefined}
+                onSelectionStart={selectionStartHandler}
+                onSelectionEnd={selectionEndHandler}
+                onHighlight={undefined}
+                highlightColor={highlightColor}
+                selectionColor={selectionColor}
+                popover={pagePopover}
+                selectionPopover={pageSelectionPopover}
+                overlayRectType={overlayRectType}
+                ref={selectionRefForRuntimeId(shellSelectionId)}
+              >
+                {pageContent}
+              </HamsterSelection>
+            ) : (
+              pageContent
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 function ViewerContent({
@@ -1719,6 +1856,24 @@ function ViewerContent({
         loadablePages={loadablePages}
         baseImagesByPageNumber={baseImagesByPageNumber}
         imagesByPageNumber={imagesByPageNumber}
+        runtimeLinkedData={runtimeLinkedData}
+        handleLinkedDataChange={handlePageLinkedDataChange}
+        handleLinkedSelect={handleLinkedSelect}
+        handleLinkedUpdateRange={handleLinkedUpdateRange}
+        handleLinkedSelectRange={handlePageLinkedSelectRange}
+        onSelectionStartProp={onSelectionStartProp}
+        handleSelectionStart={handleSelectionStart}
+        onSelectionEndProp={onSelectionEndProp}
+        handleSelectionEnd={handleSelectionEndWrap}
+        autoHighlight={autoHighlight}
+        highlightColor={highlightColor}
+        selectionColor={selectionColor}
+        overlayRectType={overlayRectType}
+        effectiveSelectedRangeId={effectiveSelectedRangeId}
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+        popoverVisible={popoverVisible}
+        selectionRefForRuntimeId={selectionRefForRuntimeId}
       />
     )
   }
