@@ -1976,6 +1976,11 @@ export function IntermediateDocumentViewer({
   const ocrLoadingPagesRef = useRef(new Set<number>())
   const ocrCacheRef = useRef(new Map<string, IntermediateText[]>())
   const evictedOcrPagesRef = useRef(new Set<number>())
+  // 每页 OCR 驱逐代际：离屏卸载时递增对应页码代际。OCR 异步任务发起时
+  // 捕获代际，resolve 时比对——不一致即运行期间被卸载过（stale，丢弃），
+  // 一致则为重载后的新鲜结果（写回）。借此区分卸载前 stale OCR 与重载后
+  // 重新发起的 OCR，修复仅凭 evictedOcrPagesRef.has 导致重载后永久被拒的死锁。
+  const ocrEvictGenerationRef = useRef(new Map<number, number>())
   // 被 evictLazyPageBundle 卸载的初始页面集合。enqueueInitialPages 的
   // isPageLoaded 检查此集合，防止 eviction 后 lazyPageQueue identity
   // 变化触发 effect 重跑而重新加载已卸载的页面。页面重新进入可见窗口
@@ -2298,6 +2303,11 @@ export function IntermediateDocumentViewer({
     return decodeGenerationRef.current
   }, [])
 
+  const bumpOcrEvictGeneration = useCallback((pageNumber: number) => {
+    const current = ocrEvictGenerationRef.current.get(pageNumber) ?? 0
+    ocrEvictGenerationRef.current.set(pageNumber, current + 1)
+  }, [])
+
   const isCurrentDecodeGeneration = useCallback(
     (generation: number) => generation === decodeGenerationRef.current,
     []
@@ -2532,9 +2542,10 @@ export function IntermediateDocumentViewer({
       setLoadablePages(deletePageFromSet(pageNumber))
       setHtmlPagesByPageNumber(deletePageEntry(pageNumber))
       setHtmlPageStatusesByPageNumber(deletePageEntry(pageNumber))
+      bumpOcrEvictGeneration(pageNumber)
       return true
     },
-    [runtimeDocument]
+    [runtimeDocument, bumpOcrEvictGeneration]
   )
 
   // intermediate-document 模式专用：将离屏页面内容包卸载回空外壳。
@@ -2573,9 +2584,10 @@ export function IntermediateDocumentViewer({
       setImagesByPageNumber(deletePageEntry(pageNumber))
       setPageStatuses(deletePageEntry(pageNumber))
       setLoadablePages(deletePageFromSet(pageNumber))
+      bumpOcrEvictGeneration(pageNumber)
       return true
     },
-    [runtimeDocument]
+    [runtimeDocument, bumpOcrEvictGeneration]
   )
 
   const resolveProtectedPageNumberForNode = useCallback((node: Node | null) => {
@@ -3471,6 +3483,9 @@ export function IntermediateDocumentViewer({
       }
 
       ocrLoadingPagesRef.current.add(pageNumber)
+      // 捕获本次 OCR 发起时该页的驱逐代际，resolve 时比对以识别 stale 结果。
+      const ocrRunGeneration =
+        ocrEvictGenerationRef.current.get(pageNumber) ?? 0
 
       const runOcr = async () => {
         try {
@@ -3492,9 +3507,11 @@ export function IntermediateDocumentViewer({
             return
           }
 
-          // 页面可能已被离屏卸载（evictLazyPageBundle 添加了 evictedOcrPagesRef
-          // 标记），此时不应将 stale OCR 结果写回空外壳
-          if (evictedOcrPagesRef.current.has(pageNumber)) {
+          // 该页在本次 OCR 运行期间被离屏卸载过（代际已变），结果为 stale，
+          // 丢弃以免写回已卸载的空外壳；重载后会以新代际重新发起 OCR。
+          const currentGeneration =
+            ocrEvictGenerationRef.current.get(pageNumber) ?? 0
+          if (currentGeneration !== ocrRunGeneration) {
             return
           }
 

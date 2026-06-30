@@ -107,6 +107,12 @@ export function useLazyPageQueue(
 
   // 待加载页码队列（保持插入顺序，不去重存储层，enqueuePage 内去重）
   const queuedPageNumbersRef = useRef<number[]>([])
+  // 本 hook 自己写入 loadingPagesRef 的页码集合。loadingPagesRef 由
+  // direct/html-parser 路径共享，cancelAll 不能整体清空它，否则会误删其他
+  // 路径的在途标记。借此集合维护「懒队列拥有」的边界：cancelAll 仅清除
+  // 这些页码，从而在 renderMode 切换时也能正确回收，且不影响 document-change
+  // effect 的整体清理路径。
+  const lazyInFlightPagesRef = useRef(new Set<number>())
   // 每次 document/renderMode 变化时递增的代际 token；
   // 在途 async 结果在 resolve 时比对，不匹配则丢弃。
   const generationRef = useRef(0)
@@ -186,6 +192,7 @@ export function useLazyPageQueue(
 
       // 标记在途，入队并发计数
       loadingPagesRef.current.add(pageNumber)
+      lazyInFlightPagesRef.current.add(pageNumber)
 
       pagePromise
         .then((page) =>
@@ -219,6 +226,7 @@ export function useLazyPageQueue(
           // 清除在途标记（仅当仍在同一 generation）
           if (generationRef.current === generation) {
             loadingPagesRef.current.delete(pageNumber)
+            lazyInFlightPagesRef.current.delete(pageNumber)
           }
           // 尝试启动队列中下一个页码（保持并发满载）
           // 使用 microtask 延迟以避免在 finally 中同步触发新加载
@@ -368,9 +376,15 @@ export function useLazyPageQueue(
   const cancelAll = useCallback(() => {
     queuedPageNumbersRef.current = []
     generationRef.current += 1
-    // loadingPagesRef.current.clear() 由外层 document-change effect 统一处理，
-    // 此处不重复清理以避免与 document effect 竞争。
-  }, [])
+    // 清除懒队列自己写入的在途标记。document 变更时外层 effect 会整体
+    // clear loadingPagesRef，但 renderMode 变更不会，故此处按 hook 拥有的
+    // 边界回收，避免 renderMode 切换后 stale 在途页码永久滞留；同时不触碰
+    // direct/html-parser 路径写入的其他在途标记。
+    lazyInFlightPagesRef.current.forEach((pageNumber) => {
+      loadingPagesRef.current.delete(pageNumber)
+    })
+    lazyInFlightPagesRef.current.clear()
+  }, [loadingPagesRef])
 
   // document/renderMode 变化时自动 cancelAll：这两个 dep 作为触发键，
   // effect body 不直接使用它们的值，仅通过 cancelAll 重置队列代际。
@@ -380,11 +394,17 @@ export function useLazyPageQueue(
 
   // unmount 时清空队列
   useEffect(() => {
+    const lazyInFlightPages = lazyInFlightPagesRef.current
+    const loadingPages = loadingPagesRef.current
     return () => {
       queuedPageNumbersRef.current = []
       generationRef.current += 1
+      lazyInFlightPages.forEach((pageNumber) => {
+        loadingPages.delete(pageNumber)
+      })
+      lazyInFlightPages.clear()
     }
-  }, [])
+  }, [loadingPagesRef])
 
   return { enqueueInitialPages, enqueuePage, cancelAll }
 }

@@ -11,6 +11,21 @@ import type { IntermediateImage, IntermediateText } from '@hamster-note/types'
  */
 
 /**
+ * 几何计算用的单个点（[x, y]）。声明为 readonly tuple，既兼容运行期
+ * 解析器/OCR 提供的可变 `[number, number][]`，也兼容 `@hamster-note/types`
+ * 中 `IntermediateImage.polygon` / `IntermediateText.polygon` 的只读四点
+ * 多边形（`Polygon`），从而无需 `as unknown` 逃逸即可统一处理。
+ */
+export type GeometryPoint = readonly [number, number]
+
+/**
+ * 几何计算用的多边形：任意数量的 {@link GeometryPoint} 只读数组。
+ * `IntermediateImage.polygon`（4 点 `Polygon`）与运行期文本的
+ * `[number, number][]` 均可直接赋值给该类型。
+ */
+export type GeometryPolygon = readonly GeometryPoint[]
+
+/**
  * 渲染时可用的 IntermediateText —— 序列化字段之外，运行期可能附带
  * 解析器/OCR 提供的 x/y/width/height/polygon/rotate/skew 几何信息。
  */
@@ -20,7 +35,7 @@ export type RenderableIntermediateText = IntermediateText &
     y: number
     width: number
     height: number
-    polygon: [number, number][]
+    polygon: GeometryPolygon
     rotate: number
     skew: number
   }>
@@ -37,7 +52,7 @@ export type PolygonGeometry = {
 /**
  * 合并多边形顶点为一个轴对齐包围盒（适用于少于 4 个有效顶点或非标准四边形）。
  */
-export const getTextBoundingBox = (polygon: [number, number][]) => {
+export const getTextBoundingBox = (polygon: GeometryPolygon) => {
   if (!polygon || polygon.length < 4) {
     return { x: 0, y: 0, width: 0, height: 0 }
   }
@@ -58,7 +73,7 @@ export const getTextBoundingBox = (polygon: [number, number][]) => {
  * 返回 null 表示多边形不规范，调用方应回退到轴对齐包围盒。
  */
 export const getPolygonTextGeometry = (
-  polygon: [number, number][] | undefined
+  polygon: GeometryPolygon | undefined
 ): PolygonGeometry | null => {
   if (
     !polygon ||
@@ -207,16 +222,14 @@ export const buildTextSpanStyle = (
  * 复用与文本相同的四边形几何逻辑；polygon 缺失或非法时回退到 0 尺寸。
  */
 export const getImageGeometry = (image: IntermediateImage): PolygonGeometry => {
-  const geometry = getPolygonTextGeometry(
-    image.polygon as unknown as [number, number][]
-  )
+  const geometry = getPolygonTextGeometry(image.polygon)
 
   if (geometry) {
     return geometry
   }
 
   // polygon 不规范时回退到轴对齐包围盒
-  const polygon = image.polygon as unknown as [number, number][]
+  const polygon = image.polygon
   if (polygon && polygon.length >= 4) {
     return { ...getTextBoundingBox(polygon), rotation: 0 }
   }

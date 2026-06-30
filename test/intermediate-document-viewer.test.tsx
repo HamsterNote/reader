@@ -3261,6 +3261,85 @@ describe('IntermediateDocumentViewer', () => {
           .querySelector('.hamster-reader__intermediate-page-image')
       ).not.toBeInTheDocument()
     })
+
+    it('renderMode switch while a lazy load is in-flight clears loadingPagesRef', async () => {
+      // 页 1 的 getContent 为 deferred：第一次入队后保持在途，模拟切换 renderMode
+      // 时仍有未完成的懒加载，验证 cancelAll 正确回收 loadingPagesRef。
+      let resolveFirstContent: (
+        content: IntermediateContent[]
+      ) => void = () => {}
+      let getContentCalls = 0
+      const getContent = vi.fn(() => {
+        getContentCalls += 1
+        if (getContentCalls === 1) {
+          return new Promise<IntermediateContent[]>((resolve) => {
+            resolveFirstContent = resolve
+          })
+        }
+        return Promise.resolve([
+          makeText('reloaded-p1', 'Reloaded Page 1') as IntermediateContent
+        ])
+      })
+
+      const document = {
+        id: 'rendermode-switch-doc',
+        title: 'RenderMode Switch Doc',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn(() =>
+          Promise.resolve({
+            getContent,
+            getThumbnail: vi.fn(async () => undefined)
+          })
+        )
+      } as unknown as IntermediateDocument
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+        />
+      )
+
+      // 第一次懒加载发起 → 页 1 在途（getContent deferred 未 resolve）
+      await waitFor(() => {
+        expect(getContent).toHaveBeenCalledTimes(1)
+      })
+
+      // 切换到 html-parser → cancelAll 触发，generation 递增。
+      // 旧实现下页 1 的在途标记永久滞留于 loadingPagesRef。
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='html-parser'
+          initialLoadedPages={1}
+        />
+      )
+
+      // resolve 卸载前发起的 stale 加载 → generation 不匹配，.finally 不删除
+      resolveFirstContent([
+        makeText('stale-p1', 'Stale Page 1') as IntermediateContent
+      ])
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      // 切回 intermediate-document → 页 1 应能重新加载并显示新内容。
+      // 若 loadingPagesRef 未被 cancelAll 清理，页 1 会被并发守卫永久跳过。
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1').textContent).toContain(
+          'Reloaded Page 1'
+        )
+      })
+    })
   })
   // ---- end intermediate-document 懒加载队列语义 ----
 
@@ -10137,6 +10216,202 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       })
     } finally {
       fetchSpy.mockRestore()
+      idleCallback.restore()
+    }
+  })
+
+  it('OCR text reappears after lazy unload then reload (reload deadlock fix)', async () => {
+    const { ImageParser } = await import('@hamster-note/image-parser')
+    const encodeSpy = vi.mocked(ImageParser.encode)
+    encodeSpy.mockClear()
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(new Blob(['image'])))
+
+    const idleCallback = installQueuedIdleCallback()
+
+    const { document, pages } = makeDocument({ pageCount: 8 })
+    pages.forEach((page, pageNumber) => {
+      page.thumbnail = `data:image/png;base64,page-${pageNumber}`
+    })
+
+    try {
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          overscan={0}
+          maxLoadedPages={3}
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      // 页 1 加载并可见 → OCR 运行并出现 OCR 文本
+      const page1 = screen.getByTestId('intermediate-page-1')
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page1)
+
+      await waitFor(() => {
+        expect(
+          page1.querySelector('[data-text-id^="ocr-"]')
+        ).toBeInTheDocument()
+      })
+
+      // 离屏页 1，加载其余页面触发 LRU 驱逐（effective cap=5，需 >5 页）
+      intersectionObserverMock.trigger(page1, false)
+      for (let pageNumber = 2; pageNumber <= 7; pageNumber += 1) {
+        const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+        intersectionObserverMock.trigger(page)
+        await waitFor(() => {
+          expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+        })
+        intersectionObserverMock.trigger(page, false)
+      }
+
+      await idleCallback.flush()
+
+      // 页 1 被驱逐：底图与 OCR 文本均清空
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).not.toBeInTheDocument()
+      })
+      expect(
+        page1.querySelector('[data-text-id^="ocr-"]')
+      ).not.toBeInTheDocument()
+
+      // 重新加载页 1 → 底图回来 → OCR 重新发起 → OCR 文本重新出现
+      // （旧实现中 evictedOcrPagesRef 永不清除，OCR 结果被永久拒绝，此处会失败）
+      intersectionObserverMock.trigger(page1)
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page1)
+
+      await waitFor(() => {
+        expect(
+          page1.querySelector('[data-text-id^="ocr-"]')
+        ).toBeInTheDocument()
+      })
+    } finally {
+      fetchSpy.mockRestore()
+      idleCallback.restore()
+    }
+  })
+
+  it('stale OCR result from before reload does not repopulate the reloaded page', async () => {
+    const { ImageParser } = await import('@hamster-note/image-parser')
+    const encodeSpy = vi.mocked(ImageParser.encode)
+    encodeSpy.mockClear()
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(new Blob(['image'])))
+
+    // 每次 encode 返回不同 OCR 文本，用于区分卸载前（stale）与重载后（fresh）
+    // 的结果：重载后页面必须显示新结果，而不能残留卸载前的旧 OCR 文本。
+    const makeOcrDoc = (textContent: string) =>
+      ({
+        id: `ocr-${textContent}`,
+        title: 'OCR',
+        pageCount: 1,
+        pageNumbers: [1],
+        pages: [
+          {
+            id: `ocr-page-${textContent}`,
+            number: 1,
+            width: 100,
+            height: 150,
+            content: [makeText(`ocr-${textContent}`, textContent)]
+          }
+        ],
+        getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
+        getPageByPageNumber: () =>
+          Promise.resolve({ getContent: async () => [] })
+      }) as unknown as IntermediateDocument
+
+    let encodeCallCount = 0
+    encodeSpy.mockImplementation(async () => {
+      encodeCallCount += 1
+      return makeOcrDoc(
+        encodeCallCount === 1 ? 'OCR before reload' : 'OCR after reload'
+      )
+    })
+
+    const idleCallback = installQueuedIdleCallback()
+
+    const { document, pages } = makeDocument({ pageCount: 8 })
+    pages.forEach((page, pageNumber) => {
+      page.thumbnail = `data:image/png;base64,page-${pageNumber}`
+    })
+
+    try {
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          overscan={0}
+          maxLoadedPages={3}
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      // 页 1 可见 → 第一次 OCR 完成 → 显示「OCR before reload」并缓存
+      const page1 = screen.getByTestId('intermediate-page-1')
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page1)
+      await waitFor(() => {
+        expect(screen.getByText('OCR before reload')).toBeInTheDocument()
+      })
+
+      // 离屏页 1 并加载其余页面触发驱逐（OCR 已完成，可被驱逐；代际递增）
+      intersectionObserverMock.trigger(page1, false)
+      for (let pageNumber = 2; pageNumber <= 7; pageNumber += 1) {
+        const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+        intersectionObserverMock.trigger(page)
+        await waitFor(() => {
+          expect(pages.get(pageNumber)?.getContent).toHaveBeenCalledTimes(1)
+        })
+        intersectionObserverMock.trigger(page, false)
+      }
+      await idleCallback.flush()
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).not.toBeInTheDocument()
+      })
+      expect(
+        page1.querySelector('[data-text-id^="ocr-1-"]')
+      ).not.toBeInTheDocument()
+
+      // 重新加载页 1 → OCR 重新发起并返回「OCR after reload」。
+      // 页面必须显示新结果，且卸载前的「OCR before reload」不得残留/回填。
+      intersectionObserverMock.trigger(page1)
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      intersectionObserverMock.trigger(page1)
+      await waitFor(() => {
+        const ocrSpan = page1.querySelector('[data-text-id^="ocr-1-"]')
+        expect(ocrSpan).toBeInTheDocument()
+        expect(ocrSpan?.textContent).toBe('OCR after reload')
+      })
+    } finally {
+      fetchSpy.mockRestore()
+      encodeSpy.mockReset()
       idleCallback.restore()
     }
   })
