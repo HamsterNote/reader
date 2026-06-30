@@ -1821,6 +1821,11 @@ export function IntermediateDocumentViewer({
   const ocrLoadingPagesRef = useRef(new Set<number>())
   const ocrCacheRef = useRef(new Map<string, IntermediateText[]>())
   const evictedOcrPagesRef = useRef(new Set<number>())
+  // 被 evictLazyPageBundle 卸载的初始页面集合。enqueueInitialPages 的
+  // isPageLoaded 检查此集合，防止 eviction 后 lazyPageQueue identity
+  // 变化触发 effect 重跑而重新加载已卸载的页面。页面重新进入可见窗口
+  // 时从集合中移除，允许通过 enqueuePage 重新加载。
+  const lazilyEvictedPagesRef = useRef(new Set<number>())
   const activeDocumentRef = useRef<IntermediateDocument | null>(null)
   const isMountedRef = useRef(false)
   const viewerRootRef = useRef<HTMLDivElement>(null)
@@ -1992,6 +1997,7 @@ export function IntermediateDocumentViewer({
     isIntermediateImage,
     callbacks: {
       onPageLoaded: ({ pageNumber, baseImage, texts, images }) => {
+        lazilyEvictedPagesRef.current.delete(pageNumber)
         setBaseImagesByPageNumber(
           createSetBaseImageHandler(pageNumber, baseImage)
         )
@@ -2007,7 +2013,9 @@ export function IntermediateDocumentViewer({
         setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
         setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
       },
-      isPageLoaded: (pageNumber) => textsByPageNumber.has(pageNumber)
+      isPageLoaded: (pageNumber) =>
+        textsByPageNumber.has(pageNumber) ||
+        lazilyEvictedPagesRef.current.has(pageNumber)
     }
   })
 
@@ -2056,6 +2064,29 @@ export function IntermediateDocumentViewer({
     pendingVisibilityTimersRef.current.set(pageNumber, timer)
   }, [])
 
+  // intermediate-document 模式下离屏页面卸载定时器（按页码 keyed）。
+  // 页面离开可加载窗口后启动 pageUnloadDelayMs 定时器，仅当页面持续
+  // 离开至定时器触发时才卸载其内容包回到空外壳；页面在定时器触发前
+  // 重新进入可见窗口则取消挂起卸载，保持内容。
+  const pendingUnloadTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
+
+  const clearUnloadTimer = useCallback((pageNumber: number) => {
+    const timer = pendingUnloadTimersRef.current.get(pageNumber)
+    if (timer) {
+      clearTimeout(timer)
+      pendingUnloadTimersRef.current.delete(pageNumber)
+    }
+  }, [])
+
+  const clearAllUnloadTimers = useCallback(() => {
+    pendingUnloadTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    pendingUnloadTimersRef.current.clear()
+  }, [])
+
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
   useEffect(() => {
@@ -2093,6 +2124,7 @@ export function IntermediateDocumentViewer({
     decodingPageNumbersRef.current.clear()
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
+    lazilyEvictedPagesRef.current.clear()
     setLoadablePages(new Set())
     setVisiblePages(new Set())
     setTextsByPageNumber(new Map())
@@ -2102,7 +2134,8 @@ export function IntermediateDocumentViewer({
     setImagesByPageNumber(new Map())
     setHtmlPagesByPageNumber(new Map())
     setHtmlPageStatusesByPageNumber(new Map())
-  }, [runtimeDocument])
+    clearAllUnloadTimers()
+  }, [runtimeDocument, clearAllUnloadTimers])
 
   const bumpDecodeGeneration = useCallback(() => {
     decodeGenerationRef.current += 1
@@ -2349,6 +2382,47 @@ export function IntermediateDocumentViewer({
     [runtimeDocument]
   )
 
+  // intermediate-document 模式专用：将离屏页面内容包卸载回空外壳。
+  // 仅清除该模式下管理的状态 maps（texts/ocrTexts/baseImages/images/
+  // pageStatuses/loadablePages/ocrCacheRefs），不触碰 html-parser 专属的
+  // htmlPagesByPageNumber / htmlPageStatusesByPageNumber，避免误删
+  // explicit html-parser 模式添加的页面状态。
+  const evictLazyPageBundle = useCallback(
+    (pageNumber: number) => {
+      if (!runtimeDocument) {
+        return false
+      }
+
+      if (
+        loadingPagesRef.current.has(pageNumber) ||
+        ocrLoadingPagesRef.current.has(pageNumber) ||
+        decodingPageNumbersRef.current.has(pageNumber)
+      ) {
+        return false
+      }
+
+      const cacheKeyPrefix = `${runtimeDocument.id}::${pageNumber}::`
+      ocrCacheRef.current.forEach((_texts, cacheKey) => {
+        if (cacheKey.startsWith(cacheKeyPrefix)) {
+          ocrCacheRef.current.delete(cacheKey)
+        }
+      })
+      evictedOcrPagesRef.current.add(pageNumber)
+      lazilyEvictedPagesRef.current.add(pageNumber)
+
+      pageLastVisibleAtRef.current.delete(pageNumber)
+      lastKnownVisiblePagesRef.current.delete(pageNumber)
+      setTextsByPageNumber(deletePageEntry(pageNumber))
+      setOcrTextsByPageNumber(deletePageEntry(pageNumber))
+      setBaseImagesByPageNumber(deletePageEntry(pageNumber))
+      setImagesByPageNumber(deletePageEntry(pageNumber))
+      setPageStatuses(deletePageEntry(pageNumber))
+      setLoadablePages(deletePageFromSet(pageNumber))
+      return true
+    },
+    [runtimeDocument]
+  )
+
   const resolveProtectedPageNumberForNode = useCallback((node: Node | null) => {
     if (!node) return null
 
@@ -2452,6 +2526,40 @@ export function IntermediateDocumentViewer({
     visiblePages
   ])
 
+  // getProtectedPages 的 ref，供定时器回调在触发时读取最新版本。
+  // 与 renderModeRef / enqueueVisiblePageRef 模式一致：定时器创建时捕获
+  // 的是 ref，触发时通过 ref 读取最新的 getProtectedPages，避免闭包
+  // 捕获到 stale 的 visiblePages 状态。
+  const getProtectedPagesRef = useRef(getProtectedPages)
+  getProtectedPagesRef.current = getProtectedPages
+
+  const schedulePageUnload = useCallback(
+    (pageNumber: number) => {
+      if (pendingUnloadTimersRef.current.has(pageNumber)) {
+        return
+      }
+      const delay = lazyQueueConfigRef.current.pageUnloadDelayMs
+      const timer = setTimeout(() => {
+        pendingUnloadTimersRef.current.delete(pageNumber)
+        if (!isMountedRef.current) {
+          return
+        }
+        if (renderModeRef.current !== 'intermediate-document') {
+          return
+        }
+        // 通过 ref 读取最新的 getProtectedPages，确保定时器触发时
+        // 使用的是已 flush 的 visiblePages 状态而非创建时的闭包。
+        const protectedPages = getProtectedPagesRef.current()
+        if (protectedPages.has(pageNumber)) {
+          return
+        }
+        evictLazyPageBundle(pageNumber)
+      }, delay)
+      pendingUnloadTimersRef.current.set(pageNumber, timer)
+    },
+    [evictLazyPageBundle]
+  )
+
   const scheduleEviction = useCallback(
     (snapshot: { visiblePages: Set<number>; pageNumbers: number[] }) => {
       if (evictionTimerRef.current !== null) {
@@ -2534,7 +2642,11 @@ export function IntermediateDocumentViewer({
             break
           }
 
-          if (evictPageBundle(pageNumber)) {
+          const evictFn =
+            renderModeRef.current === 'intermediate-document'
+              ? evictLazyPageBundle
+              : evictPageBundle
+          if (evictFn(pageNumber)) {
             loadedCount -= 1
           }
         }
@@ -2549,7 +2661,13 @@ export function IntermediateDocumentViewer({
 
       evictionTimerRef.current = window.setTimeout(run, 0)
     },
-    [evictPageBundle, getProtectedPages, maxLoadedPages, overscan]
+    [
+      evictPageBundle,
+      evictLazyPageBundle,
+      getProtectedPages,
+      maxLoadedPages,
+      overscan
+    ]
   )
 
   useEffect(() => {
@@ -2986,6 +3104,11 @@ export function IntermediateDocumentViewer({
 
         if (entry.isIntersecting) {
           markVisiblePage(pageNumber)
+          // 页面重新进入可见窗口：取消挂起的离屏卸载定时器，保持内容
+          if (renderModeRef.current === 'intermediate-document') {
+            clearUnloadTimer(pageNumber)
+            lazilyEvictedPagesRef.current.delete(pageNumber)
+          }
           // intermediate-document 默认模式：非初始页面需持续可见
           // pageLoadEnterDelayMs 后才入队加载，避免快速滚动把所有路过
           // 页面都入队。html-parser / direct 模式保持原有行为，不受影响。
@@ -3004,6 +3127,7 @@ export function IntermediateDocumentViewer({
           // 页面离开可加载窗口：取消挂起的入队定时器，保持空外壳。
           if (renderModeRef.current === 'intermediate-document') {
             cancelVisibilityEnqueue(pageNumber)
+            schedulePageUnload(pageNumber)
           }
         }
       })
@@ -3019,9 +3143,10 @@ export function IntermediateDocumentViewer({
 
     return () => {
       observer.disconnect()
-      // 观察者销毁时清除本效应周期内的所有挂起可见性定时器，防止
-      // 卸载/文档切换后仍触发迟到入队。
+      // 观察者销毁时清除本效应周期内的所有挂起可见性/卸载定时器，防止
+      // 卸载/文档切换后仍触发迟到入队或卸载。
       clearAllVisibilityTimers()
+      clearAllUnloadTimers()
     }
   }, [
     markHiddenPage,
@@ -3031,7 +3156,10 @@ export function IntermediateDocumentViewer({
     runtimeDocument,
     scheduleVisibilityEnqueue,
     cancelVisibilityEnqueue,
-    clearAllVisibilityTimers
+    clearAllVisibilityTimers,
+    clearUnloadTimer,
+    schedulePageUnload,
+    clearAllUnloadTimers
   ])
 
   useEffect(() => {
@@ -3134,14 +3262,15 @@ export function IntermediateDocumentViewer({
     lazyPageQueue.enqueueInitialPages(pageNumbers)
   }, [pageNumbers, runtimeDocument, renderMode, lazyPageQueue])
 
-  // renderMode/unmount 变更时清除所有挂起的可见性入队定时器，配合
-  // lazyPageQueue.cancelAll() 防止 stale 入队。document 变更由 IO effect
-  // 的 cleanup（disconnect + clearAllVisibilityTimers）覆盖。
+  // renderMode/unmount 变更时清除所有挂起的可见性入队定时器和离屏卸载
+  // 定时器，配合 lazyPageQueue.cancelAll() 防止 stale 入队/卸载。
+  // document 变更由 IO effect 的 cleanup + document-change effect 覆盖。
   useEffect(() => {
     return () => {
       clearAllVisibilityTimers()
+      clearAllUnloadTimers()
     }
-  }, [renderMode, clearAllVisibilityTimers])
+  }, [renderMode, clearAllVisibilityTimers, clearAllUnloadTimers])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
@@ -3205,6 +3334,12 @@ export function IntermediateDocumentViewer({
             !isMountedRef.current ||
             activeDocumentRef.current !== runtimeDocument
           ) {
+            return
+          }
+
+          // 页面可能已被离屏卸载（evictLazyPageBundle 添加了 evictedOcrPagesRef
+          // 标记），此时不应将 stale OCR 结果写回空外壳
+          if (evictedOcrPagesRef.current.has(pageNumber)) {
             return
           }
 

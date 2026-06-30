@@ -3586,6 +3586,538 @@ describe('IntermediateDocumentViewer', () => {
   })
   // ---- end intermediate-document 可见性 500ms 防抖 ----
 
+  // ---- intermediate-document 离屏延迟卸载 5000ms ----
+  describe('intermediate-document offscreen lazy release', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    })
+
+    // 定义 deferred 页面文档辅助：每页返回 deferred getContent promise，
+    // 允许精确控制加载完成时机以验证 in-flight 保护语义。
+    function makeDeferredPageDocument({ pageCount }: { pageCount: number }) {
+      const pageNumbers = Array.from(
+        { length: pageCount },
+        (_, index) => index + 1
+      )
+      const pageDeferreds = new Map<
+        number,
+        {
+          getContent: ReturnType<typeof vi.fn>
+          resolveContent: (content: IntermediateContent[]) => void
+        }
+      >()
+
+      pageNumbers.forEach((pageNumber) => {
+        let resolveContent: (content: IntermediateContent[]) => void = () => {}
+        const contentPromise = new Promise<IntermediateContent[]>((resolve) => {
+          resolveContent = resolve
+        })
+        pageDeferreds.set(pageNumber, {
+          getContent: vi.fn(() => contentPromise),
+          resolveContent
+        })
+      })
+
+      const document = {
+        id: 'deferred-doc',
+        title: 'Deferred Document',
+        pageCount,
+        pageNumbers,
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn((pageNumber: number) =>
+          Promise.resolve({
+            getContent: pageDeferreds.get(pageNumber)?.getContent
+          })
+        )
+      } as unknown as IntermediateDocument
+
+      return { document, pageDeferreds }
+    }
+
+    it('leave -> 4999ms keeps content; 5000ms unloads to shell', async () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageLoadEnterDelayMs={0}
+          overscan={0}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      // 把页 1 标记为可见，确保卸载页 3 时 protectedPages 不包含页 3
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-1')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+
+      // 使用真实定时器加载页 3（pageLoadEnterDelayMs=0 立即入队）
+      // 必须在 async act 内触发 + 等待，因为 enqueue 通过 setTimeout(0) →
+      // promise 链在 act 外执行，React 19 不会 flush 这些 setState
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        // 等待 setTimeout(0) 触发 enqueue → promise 链落地
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+
+      vi.useFakeTimers()
+      try {
+        // 页 3 离开 → 启动 5000ms 卸载定时器
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3'),
+          false
+        )
+
+        // 4999ms 后内容仍在
+        act(() => {
+          vi.advanceTimersByTime(4999)
+        })
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+
+        // 再推 1ms（总计 5000ms）→ 卸载到空外壳
+        act(() => {
+          vi.advanceTimersByTime(1)
+        })
+        expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('re-enter before 5000ms cancels unload (content persists past 5000ms)', async () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3'),
+          false
+        )
+        act(() => {
+          vi.advanceTimersByTime(3000)
+        })
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+
+        // 页 3 重新进入 → 取消卸载定时器
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        // 推过 5000ms（原卸载定时器应已被取消）
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('in-flight page does not unload ( getContent deferred while unload timer fires )', async () => {
+      const { document, pageDeferreds } = makeDeferredPageDocument({
+        pageCount: 5
+      })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      // 页 1 的 getContent 是 deferred → 页 1 处于 in-flight
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-1'),
+          false
+        )
+        // 5000ms 后定时器触发 → 但页 1 仍在 in-flight → 不应卸载
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+
+        // resolve 页 1 → 页 1 加载完成（证明未被卸载）
+        vi.useRealTimers()
+        pageDeferreds
+          .get(1)
+          ?.resolveContent([
+            makeText('text-1', 'Page 1 text') as IntermediateContent
+          ])
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+        vi.useFakeTimers()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('overscan-protected page does not unload when nearby visible page keeps it in protected window', async () => {
+      const { document } = makeDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          overscan={1}
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-4')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(screen.getByText('Page 4 text')).toBeInTheDocument()
+
+      vi.useFakeTimers()
+      try {
+        // 页 3 离开 → 启动卸载定时器（但页 4 仍可见，overscan=1 保护页 3）
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3'),
+          false
+        )
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+        // 页 3 被 protectedPages 保护 → 不卸载
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('stale async result after unload does not repopulate page', async () => {
+      const { document, pageDeferreds } = makeDeferredPageDocument({
+        pageCount: 5
+      })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageLoadEnterDelayMs={0}
+          overscan={0}
+        />
+      )
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      // resolve 初始页 1 → 加载完成
+      pageDeferreds
+        .get(1)
+        ?.resolveContent([
+          makeText('text-1', 'Page 1 text') as IntermediateContent
+        ])
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-1')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+
+      // 页 3 进入 → 加载开始（getContent deferred）
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(pageDeferreds.get(3)?.getContent).toHaveBeenCalled()
+
+      // resolve 页 3 → 加载完成
+      pageDeferreds
+        .get(3)
+        ?.resolveContent([
+          makeText('text-3', 'Page 3 text') as IntermediateContent
+        ])
+      await waitFor(() => {
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+      })
+
+      vi.useFakeTimers()
+      try {
+        // 页 3 离开 → 5000ms → 卸载
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3'),
+          false
+        )
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+        expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+
+        // stale resolve 页 3 → 不应重新填充（promise 只 resolve 一次；
+        // 重新加载需重新进入可见窗口触发新的 enqueuePage）
+        vi.useRealTimers()
+        pageDeferreds
+          .get(3)
+          ?.resolveContent([
+            makeText('text-3-stale', 'Page 3 stale') as IntermediateContent
+          ])
+        await act(async () => {
+          await Promise.resolve()
+        })
+        expect(screen.queryByText('Page 3 stale')).not.toBeInTheDocument()
+        expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+        vi.useFakeTimers()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('stale OCR result after unload is ignored (evictedOcrPagesRef guard)', async () => {
+      const { ImageParser } = await import('@hamster-note/image-parser')
+      const encodeSpy = vi.mocked(ImageParser.encode)
+      encodeSpy.mockClear()
+
+      // OCR 需要通过 fetch 获取 base image blob，必须 mock fetch
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => new Response(new Blob(['image'])))
+
+      // OCR 延迟解析：mockImplementationOnce 使第一次 encode 调用返回
+      // deferred promise，允许测试在 unload 后才 resolve，验证 stale guard。
+      let resolveOcr: (doc: IntermediateDocument) => void = () => {}
+      encodeSpy.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOcr = resolve
+          })
+      )
+
+      // 页 1 无 thumbnail → 不触发 OCR，避免消耗 mockImplementationOnce。
+      // 仅页 3 有 thumbnail，确保第一次 encode 调用属于页 3。
+      const pageWithThumbnail = {
+        getContent: vi.fn(
+          async () =>
+            [makeText('text-3', 'Page 3 text')] as IntermediateContent[]
+        ),
+        thumbnail: 'data:image/png;base64,thumb-3'
+      }
+      const document = {
+        id: 'doc-ocr-deferred',
+        title: 'OCR Deferred',
+        pageCount: 5,
+        pageNumbers: [1, 2, 3, 4, 5],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn((pn: number) => {
+          if (pn === 1) {
+            return Promise.resolve({
+              getContent: vi.fn(
+                async () =>
+                  [makeText('text-1', 'Page 1 text')] as IntermediateContent[]
+              )
+            })
+          }
+          if (pn === 3) {
+            return Promise.resolve(pageWithThumbnail)
+          }
+          return Promise.resolve({
+            getContent: vi.fn(async () => [])
+          })
+        })
+      } as unknown as IntermediateDocument
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ocr
+          pageLoadEnterDelayMs={0}
+          overscan={0}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-1')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+
+      // 页 3 进入 → 加载 → 有 base image → OCR 启动（deferred）
+      await act(async () => {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(encodeSpy).toHaveBeenCalledTimes(1)
+      })
+
+      // resolve OCR → 填充 OCR texts
+      const mockOcrDoc = {
+        id: 'ocr-doc-3',
+        title: 'OCR Page 3',
+        pageCount: 1,
+        pageNumbers: [1],
+        pages: [
+          {
+            id: 'ocr-page-3',
+            number: 1,
+            width: 100,
+            height: 150,
+            content: [makeText('ocr-3', 'OCR 3')]
+          }
+        ],
+        getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
+        getPageByPageNumber: () =>
+          Promise.resolve({ getContent: async () => [] })
+      } as unknown as IntermediateDocument
+
+      resolveOcr(mockOcrDoc)
+      await waitFor(() => {
+        expect(screen.getByText('OCR 3')).toBeInTheDocument()
+      })
+
+      vi.useFakeTimers()
+      try {
+        // 页 3 离开 → 5000ms → 卸载
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3'),
+          false
+        )
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+        // 页 3 内容和 OCR texts 均被清除
+        expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+        expect(screen.queryByText('OCR 3')).not.toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+
+      // stale OCR 不会重新出现（evictedOcrPagesRef guard）
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(screen.queryByText('OCR 3')).not.toBeInTheDocument()
+      encodeSpy.mockRestore()
+      fetchSpy.mockRestore()
+    })
+
+    it('maxLoadedPages evicts oldest eligible offscreen page while protecting visible pages', async () => {
+      const idleCallback = installQueuedIdleCallback()
+
+      try {
+        const { document } = makeDocument({ pageCount: 10 })
+
+        // getEffectiveMaxLoadedPages 有最低下限 5，因此 maxLoadedPages=5
+        // 时 effective cap = max(5, floorCount, 5) = 5。需要 >5 页已加载
+        // 才会触发驱逐。
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            maxLoadedPages={5}
+            initialLoadedPages={5}
+            overscan={0}
+            pageLoadEnterDelayMs={0}
+            pageUnloadDelayMs={60000}
+          />
+        )
+
+        // 等 5 个初始页加载
+        await waitFor(() => {
+          expect(screen.getByText('Page 5 text')).toBeInTheDocument()
+        })
+
+        // 所有 5 页都标记为可见然后离开
+        await act(async () => {
+          for (let pn = 1; pn <= 5; pn += 1) {
+            intersectionObserverMock.trigger(
+              screen.getByTestId(`intermediate-page-${pn}`)
+            )
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+
+        for (let pn = 1; pn <= 5; pn += 1) {
+          intersectionObserverMock.trigger(
+            screen.getByTestId(`intermediate-page-${pn}`),
+            false
+          )
+        }
+
+        // 页 7 进入可见 → 加载 → 6 页 > cap 5
+        await act(async () => {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-7')
+          )
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+        expect(screen.getByText('Page 7 text')).toBeInTheDocument()
+
+        // 刷新 idle callback 触发 maxLoadedPages 驱逐
+        await idleCallback.flush()
+
+        // 页 1 应被驱逐（最旧的离屏未保护页）
+        await waitFor(() => {
+          expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+        })
+
+        // 页 7（可见）应保留
+        expect(screen.getByText('Page 7 text')).toBeInTheDocument()
+      } finally {
+        idleCallback.restore()
+      }
+    })
+  })
+  // ---- end intermediate-document 离屏延迟卸载 5000ms ----
+
   it('renders the converted page background from getThumbnail', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
     const page = pages.get(1)
