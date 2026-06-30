@@ -2,8 +2,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { HtmlParser } from '@hamster-note/html-parser'
 import type {
+  IntermediateContent,
   IntermediateDocument,
   IntermediateDocumentSerialized,
+  IntermediateImage,
   IntermediatePage,
   IntermediateText
 } from '@hamster-note/types'
@@ -2520,7 +2522,13 @@ describe('IntermediateDocumentViewer', () => {
     it('shell renders a sized slot per pageNumber with data-selection-id and no loader calls', () => {
       const { document, pages } = makeStrictLazyDocument({ pageCount: 3 })
 
-      render(<IntermediateDocumentViewer document={document} />)
+      // initialLoadedPages=0 保持纯外壳契约：不触发任何页面内容加载
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={0}
+        />
+      )
 
       // 外壳应立即渲染，不调用任何加载器
       expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(1)
@@ -2559,6 +2567,7 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer
           document={document}
           renderMode='intermediate-document'
+          initialLoadedPages={0}
         />
       )
 
@@ -2665,7 +2674,10 @@ describe('IntermediateDocumentViewer', () => {
       const { document, pages } = makeStrictLazyDocument({ pageCount: 2 })
 
       const { rerender } = render(
-        <IntermediateDocumentViewer document={document} />
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={0}
+        />
       )
 
       expect(document.getPageByPageNumber).not.toHaveBeenCalled()
@@ -2673,7 +2685,12 @@ describe('IntermediateDocumentViewer', () => {
         expect(page.getContent).not.toHaveBeenCalled()
       })
 
-      rerender(<IntermediateDocumentViewer document={document} />)
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={0}
+        />
+      )
 
       // 重新渲染后仍不应触发加载器
       expect(document.getPageByPageNumber).not.toHaveBeenCalled()
@@ -2685,6 +2702,262 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
   // ---- end intermediate-document 外壳渲染 ----
+
+  // ---- intermediate-document 已加载页面内容渲染（任务 3）----
+  // 默认模式下，前 initialLoadedPages 页会通过最小加载触发器加载内容，
+  // 然后由 IntermediateDocumentPageContent 渲染底图、文本 span、OCR span、
+  // IntermediateImage 内容项。以下测试覆盖 thumbnail duck typing、文本几何、
+  // 图片几何/样式以及旧版 texts/getTexts() 兼容性。
+  describe('intermediate-document content rendering', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    })
+
+    function makeImage(
+      id: string,
+      src: string,
+      overrides: Partial<IntermediateImage> = {}
+    ): IntermediateImage {
+      return {
+        id,
+        src,
+        polygon: [
+          [10, 20],
+          [110, 20],
+          [110, 120],
+          [10, 120]
+        ],
+        opacity: 0.8,
+        ...overrides
+      } as IntermediateImage
+    }
+
+    // 构建一个单页 intermediate-document 测试文档，允许自定义 page 行为
+    function makeContentTestDocument(
+      page: Record<string, unknown>
+    ): IntermediateDocument {
+      return {
+        id: 'content-test-doc',
+        title: 'Content Test',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 200, y: 300 })),
+        getPageByPageNumber: vi.fn(() => Promise.resolve(page))
+      } as unknown as IntermediateDocument
+    }
+
+    it('renders base image from getThumbnail() returning a raw string', async () => {
+      const page = {
+        getContent: vi.fn(async () => []),
+        getThumbnail: vi.fn(async () => 'data:image/png;base64,thumb-str')
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        const baseImage = screen
+          .getByTestId('intermediate-page-1')
+          .querySelector('.hamster-reader__intermediate-page-base-image')
+        expect(baseImage).toBeInTheDocument()
+        expect(baseImage).toHaveAttribute(
+          'src',
+          'data:image/png;base64,thumb-str'
+        )
+      })
+      expect(page.getThumbnail).toHaveBeenCalledTimes(1)
+    })
+
+    it('renders base image from getThumbnail() returning { src }', async () => {
+      const page = {
+        getContent: vi.fn(async () => []),
+        getThumbnail: vi.fn(async () => ({
+          src: 'data:image/png;base64,thumb-obj'
+        }))
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        const baseImage = screen
+          .getByTestId('intermediate-page-1')
+          .querySelector('.hamster-reader__intermediate-page-base-image')
+        expect(baseImage).toBeInTheDocument()
+        expect(baseImage).toHaveAttribute(
+          'src',
+          'data:image/png;base64,thumb-obj'
+        )
+      })
+      expect(page.getThumbnail).toHaveBeenCalledTimes(1)
+    })
+
+    it('renders IntermediateText spans from getContent() with correct text and geometry', async () => {
+      const text = makeText('text-1', 'Hello World')
+      const page = {
+        getContent: vi.fn(async () => [text] as IntermediateContent[]),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Hello World')).toBeInTheDocument()
+      })
+
+      const span = screen
+        .getByTestId('intermediate-page-1')
+        .querySelector('.hamster-reader__intermediate-text')
+      expect(span).toBeInTheDocument()
+      expect(span).toHaveAttribute('data-text-id', 'text-1')
+      expect(span).toHaveAttribute('data-page-number', '1')
+      // polygon [[10,20],[50,20],[50,36],[10,36]] → x=10, y=20, w=40, h=16
+      expect(span).toHaveStyle({ left: '10px', top: '20px' })
+    })
+
+    it('renders IntermediateImage content entries with geometry and opacity', async () => {
+      const image = makeImage('img-1', 'data:image/png;base64,content-img')
+      const page = {
+        getContent: vi.fn(async () => [image] as IntermediateContent[]),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        const img = screen
+          .getByTestId('intermediate-page-1')
+          .querySelector('.hamster-reader__intermediate-page-image')
+        expect(img).toBeInTheDocument()
+      })
+
+      const img = screen
+        .getByTestId('intermediate-page-1')
+        .querySelector('.hamster-reader__intermediate-page-image')
+      expect(img).toHaveAttribute('src', 'data:image/png;base64,content-img')
+      expect(img).toHaveAttribute('data-image-id', 'img-1')
+      // polygon [[10,20],[110,20],[110,120],[10,120]] → x=10,y=20,w=100,h=100
+      expect(img).toHaveStyle({ left: '10px', top: '20px' })
+      expect(img).toHaveStyle({ opacity: '0.8' })
+    })
+
+    it('filters out blank-only text spans from getContent()', async () => {
+      const visibleText = makeText('text-visible', 'Real text')
+      const blankText = makeText('text-blank', '')
+      const page = {
+        getContent: vi.fn(
+          async () => [visibleText, blankText] as IntermediateContent[]
+        ),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Real text')).toBeInTheDocument()
+      })
+
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1.querySelector('[data-text-id="text-blank"]')).toBeNull()
+      expect(
+        page1.querySelectorAll('.hamster-reader__intermediate-text')
+      ).toHaveLength(1)
+    })
+
+    it('supports older texts property shape instead of getContent()', async () => {
+      const text = makeText('legacy-text', 'Legacy content')
+      const page = {
+        // 无 getContent / getTexts，仅有 texts 属性
+        texts: [text]
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Legacy content')).toBeInTheDocument()
+      })
+    })
+
+    it('supports older getTexts() method shape instead of getContent()', async () => {
+      const text = makeText('legacy-gettexts', 'getTexts content')
+      const page = {
+        getTexts: vi.fn(async () => [text] as IntermediateContent[])
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('getTexts content')).toBeInTheDocument()
+      })
+      expect(page.getTexts).toHaveBeenCalledTimes(1)
+    })
+
+    it('renders both text and image content entries on the same loaded page', async () => {
+      const text = makeText('mixed-text', 'Mixed page text')
+      const image = makeImage('mixed-img', 'data:image/png;base64,mixed')
+      const page = {
+        getContent: vi.fn(async () => [text, image] as IntermediateContent[]),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Mixed page text')).toBeInTheDocument()
+      })
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(
+        page1.querySelector('.hamster-reader__intermediate-page-image')
+      ).toBeInTheDocument()
+      expect(
+        page1.querySelector('.hamster-reader__intermediate-text')
+      ).toBeInTheDocument()
+    })
+
+    it('does not load non-initial pages when initialLoadedPages=1', async () => {
+      const page1 = {
+        getContent: vi.fn(
+          async () => [makeText('p1', 'Page 1')] as IntermediateContent[]
+        ),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const page2 = {
+        getContent: vi.fn(
+          async () => [makeText('p2', 'Page 2')] as IntermediateContent[]
+        ),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = {
+        id: 'multi-doc',
+        title: 'Multi',
+        pageCount: 2,
+        pageNumbers: [1, 2],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn((n: number) =>
+          Promise.resolve(n === 1 ? page1 : page2)
+        )
+      } as unknown as IntermediateDocument
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(page1.getContent).toHaveBeenCalledTimes(1)
+      })
+      // 第二页不应被加载（initialLoadedPages 默认 1）
+      expect(page2.getContent).not.toHaveBeenCalled()
+      expect(screen.getByTestId('intermediate-page-2')).toBeEmptyDOMElement()
+    })
+  })
+  // ---- end intermediate-document 内容渲染 ----
 
   it('renders the converted page background from getThumbnail', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })

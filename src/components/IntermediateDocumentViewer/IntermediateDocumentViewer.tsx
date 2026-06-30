@@ -8,6 +8,7 @@ import {
   IntermediateDocument,
   type IntermediateContent,
   type IntermediateDocumentSerialized,
+  type IntermediateImage,
   type IntermediateText
 } from '@hamster-note/types'
 import {
@@ -48,6 +49,15 @@ import {
   runtimePageSelectionId,
   type RuntimeLinkedSelectionTransient
 } from './selectionAdapter'
+// 共享纯几何/样式辅助（文本 span + IntermediateImage），供 direct / html-parser /
+// intermediate-document 三种渲染模式复用，避免 viewer 文件继续膨胀。
+import {
+  buildTextSpanStyle,
+  getTextBbox,
+  type RenderableIntermediateText
+} from './pageContentGeometry'
+// intermediate-document 默认模式的已加载页面内容渲染器
+import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 
 export {
   getNearestTextElementForPoint,
@@ -482,17 +492,6 @@ type PageSize = {
   height: number
 }
 
-type RenderableIntermediateText = IntermediateText &
-  Partial<{
-    x: number
-    y: number
-    width: number
-    height: number
-    polygon: [number, number][]
-    rotate: number
-    skew: number
-  }>
-
 type PageLoadStatus = 'loaded' | 'error'
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
@@ -606,6 +605,11 @@ const isIntermediateText = (
   content: IntermediateContent
 ): content is IntermediateText => 'content' in content && 'fontSize' in content
 
+// IntermediateImage 内容项判断（与 isIntermediateText 互补）
+const isIntermediateImage = (
+  content: IntermediateContent
+): content is IntermediateImage => 'src' in content && 'polygon' in content
+
 const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
   const pageSizeUnavailable =
     !(typeof size?.x === 'number' && size.x > 0) ||
@@ -618,69 +622,6 @@ const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
       : DEFAULT_PAGE_SIZE.height
 
   return { width, height, pageSizeUnavailable }
-}
-
-const getTextBoundingBox = (polygon: [number, number][]) => {
-  if (!polygon || polygon.length < 4) {
-    return { x: 0, y: 0, width: 0, height: 0 }
-  }
-  const xs = polygon.map((point) => point?.[0]).filter(Number.isFinite)
-  const ys = polygon.map((point) => point?.[1]).filter(Number.isFinite)
-  if (xs.length === 0 || ys.length === 0) {
-    return { x: 0, y: 0, width: 0, height: 0 }
-  }
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
-  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
-}
-
-const getPolygonTextGeometry = (
-  polygon: [number, number][] | undefined
-): {
-  x: number
-  y: number
-  width: number
-  height: number
-  rotation: number
-} | null => {
-  if (
-    !polygon ||
-    polygon.length !== 4 ||
-    !polygon.every(
-      (p) =>
-        Array.isArray(p) &&
-        p.length === 2 &&
-        typeof p[0] === 'number' &&
-        typeof p[1] === 'number' &&
-        Number.isFinite(p[0]) &&
-        Number.isFinite(p[1])
-    )
-  ) {
-    return null
-  }
-
-  const p0 = polygon[0]
-  const p1 = polygon[1]
-  const p2 = polygon[2]
-
-  const width = Math.sqrt((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2)
-  const height = Math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
-
-  if (width === 0 || height === 0) {
-    return null
-  }
-
-  const rotation = (Math.atan2(p1[1] - p0[1], p1[0] - p0[0]) * 180) / Math.PI
-
-  return {
-    x: p0[0],
-    y: p0[1],
-    width,
-    height,
-    rotation
-  }
 }
 
 /**
@@ -725,95 +666,6 @@ export const mergeSelectionRects = (
   return merged
 }
 
-const getTextTransform = (
-  text: RenderableIntermediateText,
-  skipRotate?: boolean
-) => {
-  const transforms: string[] = []
-
-  if (!skipRotate && text.rotate) {
-    transforms.push(`rotate(${text.rotate}deg)`)
-  }
-
-  if (text.skew) {
-    transforms.push(`skewX(${text.skew}deg)`)
-  }
-
-  return transforms.length > 0 ? transforms.join(' ') : undefined
-}
-
-const getTextBbox = (text: RenderableIntermediateText) => {
-  const polygonGeometry = getPolygonTextGeometry(text.polygon)
-  const usePolygonGeometry = polygonGeometry !== null
-
-  if (usePolygonGeometry) {
-    return {
-      x: polygonGeometry.x,
-      y: polygonGeometry.y,
-      width: polygonGeometry.width,
-      height: polygonGeometry.height,
-      rotation: polygonGeometry.rotation
-    }
-  }
-
-  if (text.polygon) {
-    return {
-      ...getTextBoundingBox(text.polygon),
-      rotation: 0
-    }
-  }
-
-  return {
-    x: text.x ?? 0,
-    y: text.y ?? 0,
-    width: text.width ?? 0,
-    height: text.height ?? 0,
-    rotation: 0
-  }
-}
-
-const buildTextSpanStyle = (
-  text: RenderableIntermediateText,
-  bbox: ReturnType<typeof getTextBbox>
-) => {
-  const textTransform = getTextTransform(text, !!bbox.rotation)
-  const transform = [
-    bbox.rotation ? `rotate(${bbox.rotation}deg)` : '',
-    textTransform
-  ]
-    .filter(Boolean)
-    .join(' ')
-
-  return {
-    position: 'absolute' as const,
-    left: Number.isFinite(bbox.x) ? `${bbox.x}px` : '0px',
-    top: Number.isFinite(bbox.y) ? `${bbox.y}px` : '0px',
-    width:
-      Number.isFinite(bbox.width) && bbox.width > 0
-        ? `${bbox.width}px`
-        : undefined,
-    height:
-      Number.isFinite(bbox.height) && bbox.height > 0
-        ? `${bbox.height}px`
-        : undefined,
-    fontSize:
-      Number.isFinite(text.fontSize) && text.fontSize > 0
-        ? `${text.fontSize}px`
-        : undefined,
-    fontFamily: text.fontFamily || undefined,
-    fontWeight: text.fontWeight || undefined,
-    fontStyle: text.italic ? 'italic' : undefined,
-    color: text.color || undefined,
-    lineHeight:
-      Number.isFinite(text.lineHeight) && text.lineHeight > 0
-        ? `${text.lineHeight}px`
-        : undefined,
-    transform,
-    transformOrigin: 'left top' as const,
-    whiteSpace: 'pre' as const
-  }
-}
-
 const createSetTextsHandler = (
   pageNumber: number,
   texts: IntermediateText[]
@@ -822,6 +674,17 @@ const createSetTextsHandler = (
     const nextTexts = new Map(currentTexts)
     nextTexts.set(pageNumber, texts)
     return nextTexts
+  }
+}
+
+const createSetImagesHandler = (
+  pageNumber: number,
+  images: IntermediateImage[]
+) => {
+  return (currentImages: Map<number, IntermediateImage[]>) => {
+    const nextImages = new Map(currentImages)
+    nextImages.set(pageNumber, images)
+    return nextImages
   }
 }
 
@@ -955,6 +818,44 @@ const getImageParserInput = async (imageSource: string) => {
   return response.blob()
 }
 
+// 兼容当前 getContent() 与旧版 texts / getTexts() 形状的内容提取。
+// 优先调用 getContent()；若不存在则回退到 texts 属性或 getTexts() 方法。
+type PageWithContent = {
+  getContent?: () =>
+    | Promise<IntermediateContent[] | IntermediateText[]>
+    | IntermediateContent[]
+    | IntermediateText[]
+  getTexts?: () =>
+    | Promise<IntermediateContent[] | IntermediateText[]>
+    | IntermediateContent[]
+    | IntermediateText[]
+  texts?: IntermediateContent[] | IntermediateText[]
+}
+
+const getPageContentEntries = async (
+  page: unknown
+): Promise<IntermediateContent[]> => {
+  if (!page || typeof page !== 'object') {
+    return []
+  }
+
+  const pageWithContent = page as PageWithContent
+
+  if (typeof pageWithContent.getContent === 'function') {
+    return pageWithContent.getContent()
+  }
+
+  if (typeof pageWithContent.getTexts === 'function') {
+    return pageWithContent.getTexts()
+  }
+
+  if (Array.isArray(pageWithContent.texts)) {
+    return pageWithContent.texts
+  }
+
+  return []
+}
+
 const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
   texts.map((text) => ({
     ...text,
@@ -1074,6 +975,7 @@ type ViewerContentProps = DirectPageResources & {
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
+  imagesByPageNumber: Map<number, IntermediateImage[]>
   handleVirtualPaperTransformChange: (
     nextTransform: VirtualPaperTransform,
     meta: VirtualPaperTransformMeta
@@ -1427,38 +1329,40 @@ function DirectPages({
 }
 
 /**
- * `intermediate-document` 默认模式的纯页面外壳渲染器。
+ * `intermediate-document` 默认模式的页面渲染器。
  *
- * 仅依据 `pageNumbers`（或经 `pageRange` 过滤后的当前页码列表）和
- * `runtimeDocument.getPageSizeByPageNumber` 渲染稳定的空页面槽位
- * （`.hamster-reader__intermediate-page`）。
+ * 为每个 `pageNumbers` 条目渲染一个 `.hamster-reader__intermediate-page` 外壳，
+ * 设置 `data-testid`、`data-page-number`、`data-selection-id` 及尺寸
+ * （`normalizePageSize(getPageSizeByPageNumber)`，回退 `DEFAULT_PAGE_SIZE`）。
  *
- * 关键约束（与懒加载队列契约一致）：
- * - 绝不调用 `runtimeDocument.pages`、`getPageByPageNumber`、`getContent`、
- *   `getThumbnail` 等任何页面/内容加载器；外壳仅用于撑出尺寸与 DOM 锚点。
- * - 绝不使用 `dangerouslySetInnerHTML`；外壳内不渲染任何文本/图片内容。
- * - 每个外壳设置 `data-testid='intermediate-page-N'`、`data-page-number`、
- *   `data-selection-id`（由 `runtimePageSelectionId(pageNumber)` 派生），
- *   以及通过 `normalizePageSize(getPageSizeByPageNumber)` 计算的 width/height，
- *   当页面尺寸不可用时回退到 `DEFAULT_PAGE_SIZE`。
+ * 当某页已在内容 maps 中拥有已加载内容时，在外壳内渲染
+ * `<IntermediateDocumentPageContent>`（底图 + 文本 span + OCR span + 图片项）；
+ * 未加载的页面保持空外壳，由懒加载队列（后续任务）填充。
  *
- * 懒加载队列（后续任务）将在此外壳基础上按可加载窗口逐页填充/卸载真实内容。
+ * 关键约束：外壳渲染阶段绝不调用页面/内容加载器；绝不使用
+ * `dangerouslySetInnerHTML`；内容由独立渲染器以 React 元素绘制。
  */
-type IntermediateDocumentPagesProps = {
+type IntermediateDocumentPagesProps = DirectPageResources & {
   pageNumbers: number[]
   runtimeDocument: IntermediateDocument
   setPageRef: PageRefSetter
+  setTextRef: SetTextRef
   runtimePageSelectionId: (pageNumber: number) => string
+  imagesByPageNumber: Map<number, IntermediateImage[]>
 }
 
 function IntermediateDocumentPages({
   pageNumbers,
   runtimeDocument,
   setPageRef,
-  runtimePageSelectionId
+  setTextRef,
+  runtimePageSelectionId,
+  textsByPageNumber,
+  ocrTextsByPageNumber,
+  baseImagesByPageNumber,
+  imagesByPageNumber
 }: IntermediateDocumentPagesProps) {
   return pageNumbers.map((pageNumber) => {
-    // 仅读取页面尺寸元数据，不触发任何页面内容加载
     const shellPageSize = normalizePageSize(
       runtimeDocument.getPageSizeByPageNumber(pageNumber)
     )
@@ -1481,7 +1385,16 @@ function IntermediateDocumentPages({
           height: `${shellPageSize.height}px`,
           overflow: 'hidden'
         }}
-      />
+      >
+        <IntermediateDocumentPageContent
+          pageNumber={pageNumber}
+          texts={textsByPageNumber.get(pageNumber) ?? []}
+          ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
+          baseImageSource={baseImagesByPageNumber.get(pageNumber)}
+          images={imagesByPageNumber.get(pageNumber) ?? []}
+          setTextRef={setTextRef}
+        />
+      </div>
     )
   })
 }
@@ -1524,7 +1437,8 @@ function ViewerContent({
   ocrTextsByPageNumber,
   pageStatuses,
   loadablePages,
-  baseImagesByPageNumber
+  baseImagesByPageNumber,
+  imagesByPageNumber
 }: ViewerContentProps) {
   const selectionRefsByRuntimeIdRef = useRef(
     new Map<string, ReaderSelectionRef>()
@@ -1787,14 +1701,22 @@ function ViewerContent({
       />
     )
   } else {
-    /* 'intermediate-document' 默认分支：仅渲染空页面外壳，绝不调用
-     * 页面/内容加载器；真实懒加载队列将在后续任务 中在此基础上实现。 */
+    /* 'intermediate-document' 默认分支：渲染页面外壳，并在已加载页面的
+     * 外壳内绘制内容（底图 + 文本 + 图片项）。外壳阶段不调用页面/内容加载器；
+     * 真实懒加载队列将在后续任务 中在此基础上实现。 */
     pagesNode = (
       <IntermediateDocumentPages
         pageNumbers={pageNumbers}
         runtimeDocument={runtimeDocument}
         setPageRef={setPageRef}
+        setTextRef={setTextRef}
         runtimePageSelectionId={runtimePageSelectionId}
+        textsByPageNumber={textsByPageNumber}
+        ocrTextsByPageNumber={ocrTextsByPageNumber}
+        pageStatuses={pageStatuses}
+        loadablePages={loadablePages}
+        baseImagesByPageNumber={baseImagesByPageNumber}
+        imagesByPageNumber={imagesByPageNumber}
       />
     )
   }
@@ -2026,6 +1948,10 @@ export function IntermediateDocumentViewer({
   )
   const [baseImagesByPageNumber, setBaseImagesByPageNumber] = useState(
     () => new Map<number, string>()
+  )
+  // intermediate-document 模式专用：getContent() 返回的 IntermediateImage 内容项
+  const [imagesByPageNumber, setImagesByPageNumber] = useState(
+    () => new Map<number, IntermediateImage[]>()
   )
   const [htmlPagesByPageNumber, setHtmlPagesByPageNumber] = useState(
     () => new Map<number, string>()
@@ -3085,6 +3011,99 @@ export function IntermediateDocumentViewer({
     })
   }, [loadablePages, runtimeDocument, renderMode, textsByPageNumber])
 
+  // intermediate-document 模式的最小首屏加载触发器。
+  // 在懒加载队列（后续任务）就绪前，临时用于触发前 initialLoadedPages 页的
+  // 内容加载，使渲染器能展示真实内容。队列实现后将替换为按可见窗口逐页加载。
+  useEffect(() => {
+    if (renderMode !== 'intermediate-document' || !runtimeDocument) {
+      return
+    }
+
+    const initialCount = lazyQueueConfigRef.current.initialLoadedPages
+    const targetPages = pageNumbers.slice(0, initialCount)
+
+    targetPages.forEach((pageNumber) => {
+      if (
+        textsByPageNumber.has(pageNumber) ||
+        loadingPagesRef.current.has(pageNumber)
+      ) {
+        return
+      }
+
+      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
+
+      try {
+        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
+      } catch {
+        setBaseImagesByPageNumber(
+          createSetBaseImageHandler(pageNumber, undefined)
+        )
+        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
+        setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
+        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
+        return
+      }
+
+      if (!pagePromise) {
+        setBaseImagesByPageNumber(
+          createSetBaseImageHandler(pageNumber, undefined)
+        )
+        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
+        setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
+        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
+        return
+      }
+
+      loadingPagesRef.current.add(pageNumber)
+      pagePromise
+        .then((page) =>
+          Promise.all([getBaseImageFromPage(page), getPageContentEntries(page)])
+        )
+        .then(([baseImage, content]) => {
+          if (
+            !isMountedRef.current ||
+            activeDocumentRef.current !== runtimeDocument
+          ) {
+            return
+          }
+
+          const texts = content.filter(isIntermediateText)
+          const images = content.filter(isIntermediateImage)
+          setBaseImagesByPageNumber(
+            createSetBaseImageHandler(pageNumber, baseImage)
+          )
+          setTextsByPageNumber(createSetTextsHandler(pageNumber, texts))
+          setImagesByPageNumber(createSetImagesHandler(pageNumber, images))
+          setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
+        })
+        .catch(() => {
+          if (
+            !isMountedRef.current ||
+            activeDocumentRef.current !== runtimeDocument
+          ) {
+            return
+          }
+
+          setBaseImagesByPageNumber(
+            createSetBaseImageHandler(pageNumber, undefined)
+          )
+          setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
+          setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
+          setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
+        })
+        .finally(() => {
+          if (
+            !isMountedRef.current ||
+            activeDocumentRef.current !== runtimeDocument
+          ) {
+            return
+          }
+
+          loadingPagesRef.current.delete(pageNumber)
+        })
+    })
+  }, [pageNumbers, runtimeDocument, renderMode, textsByPageNumber])
+
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
       return
@@ -3296,6 +3315,7 @@ export function IntermediateDocumentViewer({
       pageStatuses={pageStatuses}
       loadablePages={loadablePages}
       baseImagesByPageNumber={baseImagesByPageNumber}
+      imagesByPageNumber={imagesByPageNumber}
     />
   )
 }
