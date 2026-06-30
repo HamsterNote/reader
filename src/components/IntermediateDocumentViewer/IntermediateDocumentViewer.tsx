@@ -58,6 +58,8 @@ import {
 } from './pageContentGeometry'
 // intermediate-document 默认模式的已加载页面内容渲染器
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+// intermediate-document 默认模式的懒加载页面队列 hook
+import { useLazyPageQueue, type LazyPageQueueConfig } from './useLazyPageQueue'
 
 export {
   getNearestTextElementForPoint,
@@ -1795,9 +1797,9 @@ export function IntermediateDocumentViewer({
     return getRuntimeDocument(inputDocument)
   }, [document, serializedDocument])
 
-  // intermediate-document 模式懒加载队列参数。当前占位分支复用 direct 渲染、暂不消费这四个值，
-  // 此处集中预留，后续任务（队列实现）会从该 ref 读取以驱动逐页懒加载/卸载节流。
-  const lazyQueueConfigRef = useRef({
+  // intermediate-document 模式懒加载队列参数。集中存储四个 lazy props，
+  // 供 useLazyPageQueue hook 读取以驱动逐页懒加载/并发/卸载节流。
+  const lazyQueueConfigRef = useRef<LazyPageQueueConfig>({
     initialLoadedPages,
     pageLoadConcurrency,
     pageLoadEnterDelayMs,
@@ -1968,6 +1970,40 @@ export function IntermediateDocumentViewer({
     runtimeDocument,
     renderMode,
     backgroundQuality
+  })
+
+  // intermediate-document 默认模式懒加载队列 hook。
+  // 队列项为页码，通过 generation token 忽略 stale async 结果，
+  // 并复用 loadingPagesRef 强制并发上限。callbacks 复用已有的
+  // createSet*Handler immutable updater helpers 更新状态 maps。
+  const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
+    renderMode,
+    activeDocumentRef,
+    isMountedRef,
+    loadingPagesRef,
+    getBaseImageFromPage,
+    getPageContentEntries,
+    isIntermediateText,
+    isIntermediateImage,
+    callbacks: {
+      onPageLoaded: ({ pageNumber, baseImage, texts, images }) => {
+        setBaseImagesByPageNumber(
+          createSetBaseImageHandler(pageNumber, baseImage)
+        )
+        setTextsByPageNumber(createSetTextsHandler(pageNumber, texts))
+        setImagesByPageNumber(createSetImagesHandler(pageNumber, images))
+        setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
+      },
+      onPageError: (pageNumber) => {
+        setBaseImagesByPageNumber(
+          createSetBaseImageHandler(pageNumber, undefined)
+        )
+        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
+        setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
+        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
+      },
+      isPageLoaded: (pageNumber) => textsByPageNumber.has(pageNumber)
+    }
   })
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
@@ -3011,98 +3047,17 @@ export function IntermediateDocumentViewer({
     })
   }, [loadablePages, runtimeDocument, renderMode, textsByPageNumber])
 
-  // intermediate-document 模式的最小首屏加载触发器。
-  // 在懒加载队列（后续任务）就绪前，临时用于触发前 initialLoadedPages 页的
-  // 内容加载，使渲染器能展示真实内容。队列实现后将替换为按可见窗口逐页加载。
+  // intermediate-document 模式的懒加载队列触发器。
+  // 在 shell 就绪后（pageNumbers/runtimeDocument 稳定），通过
+  // useLazyPageQueue hook 入队前 initialLoadedPages 页并启动加载。
+  // 队列强制 pageLoadConcurrency 并发上限，去重 queued/in-flight/loaded，
+  // 并通过 generation token 忽略 document/renderMode 变更后的 stale 结果。
   useEffect(() => {
     if (renderMode !== 'intermediate-document' || !runtimeDocument) {
       return
     }
-
-    const initialCount = lazyQueueConfigRef.current.initialLoadedPages
-    const targetPages = pageNumbers.slice(0, initialCount)
-
-    targetPages.forEach((pageNumber) => {
-      if (
-        textsByPageNumber.has(pageNumber) ||
-        loadingPagesRef.current.has(pageNumber)
-      ) {
-        return
-      }
-
-      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
-
-      try {
-        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
-      } catch {
-        setBaseImagesByPageNumber(
-          createSetBaseImageHandler(pageNumber, undefined)
-        )
-        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-        setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
-        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        return
-      }
-
-      if (!pagePromise) {
-        setBaseImagesByPageNumber(
-          createSetBaseImageHandler(pageNumber, undefined)
-        )
-        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-        setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
-        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        return
-      }
-
-      loadingPagesRef.current.add(pageNumber)
-      pagePromise
-        .then((page) =>
-          Promise.all([getBaseImageFromPage(page), getPageContentEntries(page)])
-        )
-        .then(([baseImage, content]) => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          const texts = content.filter(isIntermediateText)
-          const images = content.filter(isIntermediateImage)
-          setBaseImagesByPageNumber(
-            createSetBaseImageHandler(pageNumber, baseImage)
-          )
-          setTextsByPageNumber(createSetTextsHandler(pageNumber, texts))
-          setImagesByPageNumber(createSetImagesHandler(pageNumber, images))
-          setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
-        })
-        .catch(() => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          setBaseImagesByPageNumber(
-            createSetBaseImageHandler(pageNumber, undefined)
-          )
-          setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-          setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
-          setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        })
-        .finally(() => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          loadingPagesRef.current.delete(pageNumber)
-        })
-    })
-  }, [pageNumbers, runtimeDocument, renderMode, textsByPageNumber])
+    lazyPageQueue.enqueueInitialPages(pageNumbers)
+  }, [pageNumbers, runtimeDocument, renderMode, lazyPageQueue])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {

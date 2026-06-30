@@ -2959,6 +2959,235 @@ describe('IntermediateDocumentViewer', () => {
   })
   // ---- end intermediate-document 内容渲染 ----
 
+  // ---- intermediate-document 懒加载队列语义（任务 4）----
+  // 队列项为页码，强制 pageLoadConcurrency 并发上限，去重 queued/in-flight/loaded，
+  // 并通过 generation token 忽略 document/renderMode 变更后的 stale async 结果。
+  describe('intermediate-document lazy page queue', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    })
+
+    // 构建一个多页 intermediate-document 测试文档，每页返回 deferred getContent，
+    // 允许测试精确控制加载完成时机以验证并发语义。
+    function makeDeferredPageDocument({ pageCount }: { pageCount: number }) {
+      const pageNumbers = Array.from(
+        { length: pageCount },
+        (_, index) => index + 1
+      )
+      const pageDeferreds = new Map<
+        number,
+        {
+          getContent: ReturnType<typeof vi.fn>
+          getThumbnail: ReturnType<typeof vi.fn>
+          resolveContent: (content: IntermediateContent[]) => void
+        }
+      >()
+
+      pageNumbers.forEach((pageNumber) => {
+        let resolveContent: (content: IntermediateContent[]) => void = () => {}
+        const contentPromise = new Promise<IntermediateContent[]>((resolve) => {
+          resolveContent = resolve
+        })
+        pageDeferreds.set(pageNumber, {
+          getContent: vi.fn(() => contentPromise),
+          getThumbnail: vi.fn(async () => undefined),
+          resolveContent
+        })
+      })
+
+      const document = {
+        id: 'deferred-doc',
+        title: 'Deferred Document',
+        pageCount,
+        pageNumbers,
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn((pageNumber: number) =>
+          Promise.resolve({
+            getContent: pageDeferreds.get(pageNumber)?.getContent,
+            getThumbnail: pageDeferreds.get(pageNumber)?.getThumbnail
+          })
+        )
+      } as unknown as IntermediateDocument
+
+      return { document, pageDeferreds }
+    }
+
+    it('initialLoadedPages=1 loads only page 1 on mount, not page 100 of a 100-page doc', async () => {
+      const { document, pageDeferreds } = makeDeferredPageDocument({
+        pageCount: 100
+      })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      // 页 1 应被调用 getPageByPageNumber
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+      // 页 100 不应被加载
+      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(100)
+      expect(pageDeferreds.get(100)?.getContent).not.toHaveBeenCalled()
+    })
+
+    it('no more than 3 page loads active at once with deferred promises', async () => {
+      // initialLoadedPages=5 但 pageLoadConcurrency=3，仅 3 个应同时 in-flight
+      const { document, pageDeferreds } = makeDeferredPageDocument({
+        pageCount: 10
+      })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={5}
+          pageLoadConcurrency={3}
+        />
+      )
+
+      // 等待 microtask 稳定
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(2)
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
+      })
+
+      // 恰好 3 页被调用 getPageByPageNumber（并发上限 3）
+      expect(document.getPageByPageNumber).toHaveBeenCalledTimes(3)
+      // 页 4、5 尚未入队（等待 3 个在途之一完成）
+      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(4)
+      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(5)
+      // 页 1-3 的 getContent 已被调用（在途）
+      expect(pageDeferreds.get(1)?.getContent).toHaveBeenCalled()
+      expect(pageDeferreds.get(2)?.getContent).toHaveBeenCalled()
+      expect(pageDeferreds.get(3)?.getContent).toHaveBeenCalled()
+    })
+
+    it('next queued page starts after an active load resolves', async () => {
+      const { document, pageDeferreds } = makeDeferredPageDocument({
+        pageCount: 10
+      })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={5}
+          pageLoadConcurrency={3}
+        />
+      )
+
+      // 等待 3 个在途
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledTimes(3)
+      })
+
+      // 解析页 1 的 getContent → 应触发页 4 入队
+      pageDeferreds
+        .get(1)
+        ?.resolveContent([makeText('p1', 'Page 1') as IntermediateContent])
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(4)
+      })
+
+      // 页 5 仍未入队（仍有 2 个在途：页 2、3）
+      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(5)
+    })
+
+    it('duplicate queue requests do not duplicate loader calls', async () => {
+      const { document } = makeDeferredPageDocument({ pageCount: 3 })
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+        />
+      )
+
+      // 等待页 1 入队
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      const callsBeforeRerender = (
+        document.getPageByPageNumber as ReturnType<typeof vi.fn>
+      ).mock.calls.length
+
+      // 重新渲染 → enqueueInitialPages 再次被调用
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+        />
+      )
+
+      // 等待 microtask
+      await waitFor(() => {
+        expect(
+          (document.getPageByPageNumber as ReturnType<typeof vi.fn>).mock.calls
+            .length
+        ).toBeGreaterThanOrEqual(callsBeforeRerender)
+      })
+
+      // 页 1 不应被重复加载（已加载或在途 → 去重）
+      const page1Calls = (
+        document.getPageByPageNumber as ReturnType<typeof vi.fn>
+      ).mock.calls.filter((call) => call[0] === 1).length
+      expect(page1Calls).toBe(1)
+    })
+
+    it('stale results after document switch are ignored', async () => {
+      const { document: doc1, pageDeferreds: deferreds1 } =
+        makeDeferredPageDocument({ pageCount: 3 })
+      const { document: doc2, pageDeferreds: deferreds2 } =
+        makeDeferredPageDocument({ pageCount: 3 })
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={doc1} initialLoadedPages={1} />
+      )
+
+      // 等待 doc1 页 1 入队
+      await waitFor(() => {
+        expect(doc1.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      // 切换到 doc2
+      rerender(
+        <IntermediateDocumentViewer document={doc2} initialLoadedPages={1} />
+      )
+
+      // 等待 doc2 页 1 入队
+      await waitFor(() => {
+        expect(doc2.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      // 解析 doc1 页 1 的 stale 结果
+      deferreds1
+        .get(1)
+        ?.resolveContent([
+          makeText('stale-p1', 'Stale Page 1') as IntermediateContent
+        ])
+
+      // 解析 doc2 页 1 的真实结果
+      deferreds2
+        .get(1)
+        ?.resolveContent([
+          makeText('fresh-p1', 'Fresh Page 1') as IntermediateContent
+        ])
+
+      // 等待 doc2 页 1 加载完成
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1').textContent).toContain(
+          'Fresh Page 1'
+        )
+      })
+
+      // doc1 的 stale 结果不应出现
+      expect(screen.queryByText('Stale Page 1')).not.toBeInTheDocument()
+    })
+  })
+  // ---- end intermediate-document 懒加载队列语义 ----
+
   it('renders the converted page background from getThumbnail', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
     const page = pages.get(1)
