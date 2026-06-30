@@ -2394,13 +2394,11 @@ describe('IntermediateDocumentViewer', () => {
 
       render(<IntermediateDocumentViewer document={document} />)
 
-      await waitFor(() => {
-        expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
-      })
-
+      // intermediate-document 默认分支仅渲染空外壳，不触发任何页面/内容加载
       expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
       expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
-      // 占位分支复用 direct 渲染，仍应渲染页面槽位（非 html-parser-output）
+      expect(pages.get(1)?.getContent).not.toHaveBeenCalled()
+      // 外壳分支不渲染 html-parser-output
       expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
     })
@@ -2415,12 +2413,9 @@ describe('IntermediateDocumentViewer', () => {
         />
       )
 
-      await waitFor(() => {
-        expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
-      })
-
       expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
       expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+      expect(pages.get(1)?.getContent).not.toHaveBeenCalled()
     })
 
     it('explicit renderMode="html-parser" still decodes via HtmlParser.decodePageToHtml', async () => {
@@ -2444,6 +2439,252 @@ describe('IntermediateDocumentViewer', () => {
       expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     })
   })
+
+  // ---- intermediate-document 外壳渲染（任务 2）----
+  // 省略 renderMode 或显式 'intermediate-document' 时，组件渲染纯页面外壳：
+  // 每个页码对应一个 .hamster-reader__intermediate-page 空槽位，
+  // 设置 data-testid/data-page-number/data-selection-id 及尺寸，
+  // 绝不调用 getPageByPageNumber/getContent/getThumbnail 等加载器。
+  describe('intermediate-document shell rendering', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    })
+
+    // 严格懒加载文档 fixture：
+    // - pageNumbers 返回页码列表
+    // - getPageSizeByPageNumber 返回每页尺寸
+    // - pages getter 一旦读取即抛错（严格懒加载契约）
+    // - getPageByPageNumber/getContent/getThumbnail 为 spy，
+    //   在外壳-only 渲染期间被调用会让测试失败
+    function makeStrictLazyDocument({
+      pageCount = 3,
+      pageSize = { x: 100, y: 150 }
+    }: {
+      pageCount?: number
+      pageSize?: { x?: number; y?: number }
+    } = {}) {
+      const pageNumbers = Array.from(
+        { length: pageCount },
+        (_, index) => index + 1
+      )
+      const pages = new Map<
+        number,
+        {
+          getContent: ReturnType<typeof vi.fn>
+          getThumbnail?: ReturnType<typeof vi.fn>
+        }
+      >()
+
+      pageNumbers.forEach((pageNumber) => {
+        pages.set(pageNumber, {
+          getContent: vi.fn(async () => [
+            makeText(`text-${pageNumber}`, `Page ${pageNumber} text`)
+          ]),
+          getThumbnail: vi.fn(async () => undefined)
+        })
+      })
+
+      const strictDocument = {
+        id: 'strict-doc',
+        title: 'Strict Lazy Document',
+        pageCount,
+        pageNumbers,
+        getPageSizeByPageNumber: vi.fn((pageNumber: number) => {
+          // 每页返回相同尺寸，便于断言；可按 pageNumber 做差异化
+          if (pageNumber === 2) {
+            return { x: 200, y: 300 }
+          }
+          return pageSize
+        }),
+        getPageByPageNumber: vi.fn((pageNumber: number) =>
+          Promise.resolve(pages.get(pageNumber))
+        )
+      } as unknown as IntermediateDocument
+
+      // 严格懒加载契约：pages getter 一旦读取即抛错
+      Object.defineProperty(strictDocument, 'pages', {
+        get() {
+          throw new Error(
+            'strict lazy document: pages getter must not be read for shell rendering'
+          )
+        },
+        configurable: true
+      })
+
+      return { document: strictDocument, pages }
+    }
+
+    it('shell renders a sized slot per pageNumber with data-selection-id and no loader calls', () => {
+      const { document, pages } = makeStrictLazyDocument({ pageCount: 3 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      // 外壳应立即渲染，不调用任何加载器
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(1)
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(2)
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(3)
+      expect(document.getPageByPageNumber).not.toHaveBeenCalled()
+      pages.forEach((page) => {
+        expect(page.getContent).not.toHaveBeenCalled()
+        expect(page.getThumbnail).not.toHaveBeenCalled()
+      })
+      expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
+      expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
+
+      // 每页外壳应有尺寸、选择 id 与 testid
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1).toHaveClass('hamster-reader__intermediate-page')
+      expect(page1).toHaveAttribute('data-page-number', '1')
+      expect(page1).toHaveAttribute('data-selection-id')
+      expect(page1.getAttribute('data-selection-id')).toMatch(/:page-1$/)
+      expect(page1).toHaveStyle({ width: '100px', height: '150px' })
+
+      // 第二页返回了不同尺寸
+      const page2 = screen.getByTestId('intermediate-page-2')
+      expect(page2).toHaveStyle({ width: '200px', height: '300px' })
+      expect(page2).toHaveAttribute('data-page-number', '2')
+      expect(page2.getAttribute('data-selection-id')).toMatch(/:page-2$/)
+
+      const page3 = screen.getByTestId('intermediate-page-3')
+      expect(page3).toHaveStyle({ width: '100px', height: '150px' })
+    })
+
+    it('shell uses explicit renderMode="intermediate-document" identically', () => {
+      const { document, pages } = makeStrictLazyDocument({ pageCount: 1 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='intermediate-document'
+        />
+      )
+
+      expect(document.getPageByPageNumber).not.toHaveBeenCalled()
+      expect(pages.get(1)?.getContent).not.toHaveBeenCalled()
+      expect(pages.get(1)?.getThumbnail).not.toHaveBeenCalled()
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+    })
+
+    it('shell renders empty slots without page text content', () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 2 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      // 外壳内不应渲染任何文本内容
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1).toBeEmptyDOMElement()
+      const page2 = screen.getByTestId('intermediate-page-2')
+      expect(page2).toBeEmptyDOMElement()
+      expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+      expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+    })
+
+    it('shell falls back to DEFAULT_PAGE_SIZE when getPageSizeByPageNumber returns undefined/invalid', () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 1 })
+
+      // 返回 undefined 触发回退
+      vi.mocked(document.getPageSizeByPageNumber).mockReturnValue(undefined)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1).toHaveStyle({ width: '595px', height: '842px' })
+      expect(page1).toHaveAttribute('data-page-size-unavailable', 'true')
+    })
+
+    it('shell falls back to DEFAULT_PAGE_SIZE when getPageSizeByPageNumber returns invalid dimensions', () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 1 })
+
+      // 返回部分无效尺寸（x=0, y 非法）
+      vi.mocked(document.getPageSizeByPageNumber).mockReturnValue({
+        x: 0,
+        y: -1
+      })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1).toHaveStyle({ width: '595px', height: '842px' })
+      expect(page1).toHaveAttribute('data-page-size-unavailable', 'true')
+    })
+
+    it('shell respects pageRange filtering', () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 5 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageRange={{ start: 2, end: 4 }}
+        />
+      )
+
+      // 仅渲染 pageRange 内的页码外壳
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-4')).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-1')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-5')
+      ).not.toBeInTheDocument()
+
+      // 仅对范围内的页码读取尺寸
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(2)
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(3)
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledWith(4)
+      expect(document.getPageSizeByPageNumber).not.toHaveBeenCalledWith(1)
+      expect(document.getPageSizeByPageNumber).not.toHaveBeenCalledWith(5)
+    })
+
+    it('shell renders empty viewer for empty document', () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 0 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      expect(
+        screen.getByTestId('intermediate-document-viewer')
+      ).toBeEmptyDOMElement()
+    })
+
+    it('strict lazy document pages getter throws when read', () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 1 })
+
+      // 严格懒加载契约：读取 pages getter 必须抛错。
+      // 使用表达式箭头函数读取 getter（作为隐式返回值，避免 no-unused-expressions），
+      // 不使用 void / any。
+      expect(() => (document as unknown as { pages: unknown }).pages).toThrow(
+        /pages getter must not be read/
+      )
+    })
+
+    it('shell survives rerender without calling loaders', () => {
+      const { document, pages } = makeStrictLazyDocument({ pageCount: 2 })
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={document} />
+      )
+
+      expect(document.getPageByPageNumber).not.toHaveBeenCalled()
+      pages.forEach((page) => {
+        expect(page.getContent).not.toHaveBeenCalled()
+      })
+
+      rerender(<IntermediateDocumentViewer document={document} />)
+
+      // 重新渲染后仍不应触发加载器
+      expect(document.getPageByPageNumber).not.toHaveBeenCalled()
+      pages.forEach((page) => {
+        expect(page.getContent).not.toHaveBeenCalled()
+      })
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+    })
+  })
+  // ---- end intermediate-document 外壳渲染 ----
 
   it('renders the converted page background from getThumbnail', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })

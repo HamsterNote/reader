@@ -1426,6 +1426,66 @@ function DirectPages({
   })
 }
 
+/**
+ * `intermediate-document` 默认模式的纯页面外壳渲染器。
+ *
+ * 仅依据 `pageNumbers`（或经 `pageRange` 过滤后的当前页码列表）和
+ * `runtimeDocument.getPageSizeByPageNumber` 渲染稳定的空页面槽位
+ * （`.hamster-reader__intermediate-page`）。
+ *
+ * 关键约束（与懒加载队列契约一致）：
+ * - 绝不调用 `runtimeDocument.pages`、`getPageByPageNumber`、`getContent`、
+ *   `getThumbnail` 等任何页面/内容加载器；外壳仅用于撑出尺寸与 DOM 锚点。
+ * - 绝不使用 `dangerouslySetInnerHTML`；外壳内不渲染任何文本/图片内容。
+ * - 每个外壳设置 `data-testid='intermediate-page-N'`、`data-page-number`、
+ *   `data-selection-id`（由 `runtimePageSelectionId(pageNumber)` 派生），
+ *   以及通过 `normalizePageSize(getPageSizeByPageNumber)` 计算的 width/height，
+ *   当页面尺寸不可用时回退到 `DEFAULT_PAGE_SIZE`。
+ *
+ * 懒加载队列（后续任务）将在此外壳基础上按可加载窗口逐页填充/卸载真实内容。
+ */
+type IntermediateDocumentPagesProps = {
+  pageNumbers: number[]
+  runtimeDocument: IntermediateDocument
+  setPageRef: PageRefSetter
+  runtimePageSelectionId: (pageNumber: number) => string
+}
+
+function IntermediateDocumentPages({
+  pageNumbers,
+  runtimeDocument,
+  setPageRef,
+  runtimePageSelectionId
+}: IntermediateDocumentPagesProps) {
+  return pageNumbers.map((pageNumber) => {
+    // 仅读取页面尺寸元数据，不触发任何页面内容加载
+    const shellPageSize = normalizePageSize(
+      runtimeDocument.getPageSizeByPageNumber(pageNumber)
+    )
+    const shellSelectionId = runtimePageSelectionId(pageNumber)
+
+    return (
+      <div
+        key={pageNumber}
+        ref={setPageRef(pageNumber)}
+        className='hamster-reader__intermediate-page'
+        data-testid={`intermediate-page-${pageNumber}`}
+        data-page-number={pageNumber}
+        data-selection-id={shellSelectionId}
+        data-page-size-unavailable={
+          shellPageSize.pageSizeUnavailable ? 'true' : undefined
+        }
+        style={{
+          position: 'relative',
+          width: `${shellPageSize.width}px`,
+          height: `${shellPageSize.height}px`,
+          overflow: 'hidden'
+        }}
+      />
+    )
+  })
+}
+
 function ViewerContent({
   rootClassName,
   viewerRootRef,
@@ -1670,6 +1730,75 @@ function ViewerContent({
     }
   }, [])
 
+  // 根据 renderMode 选择页面内容渲染器。
+  // 这里使用独立的 if/else if/else 赋值，而非嵌套三元表达式，
+  // 以满足 sonarjs/no-nested-conditional 规则并保持可读性。
+  let pagesNode: React.ReactNode
+  if (renderMode === 'html-parser') {
+    // T5/T7：每页内容自带一个 linked-mode HamsterSelection；
+    // 公共 ReaderSelectionRef 通过 runtime selectionId 复用这些子 ref。
+    pagesNode = (
+      <HtmlParserPages
+        pageNumbers={pageNumbers}
+        runtimeDocument={runtimeDocument}
+        htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
+        htmlPagesByPageNumber={htmlPagesByPageNumber}
+        setPageRef={setPageRef}
+        setTextRef={setTextRef}
+        textsByPageNumber={textsByPageNumber}
+        ocrTextsByPageNumber={ocrTextsByPageNumber}
+        pageStatuses={pageStatuses}
+        loadablePages={loadablePages}
+        baseImagesByPageNumber={baseImagesByPageNumber}
+        runtimePageSelectionId={runtimePageSelectionId}
+        runtimeLinkedData={runtimeLinkedData}
+        handleLinkedDataChange={handlePageLinkedDataChange}
+        handleLinkedSelect={handleLinkedSelect}
+        handleLinkedUpdateRange={handleLinkedUpdateRange}
+        handleLinkedSelectRange={handlePageLinkedSelectRange}
+        onSelectionStartProp={onSelectionStartProp}
+        handleSelectionStart={handleSelectionStart}
+        onSelectionEndProp={onSelectionEndProp}
+        handleSelectionEnd={handleSelectionEndWrap}
+        autoHighlight={autoHighlight}
+        highlightColor={highlightColor}
+        selectionColor={selectionColor}
+        overlayRectType={overlayRectType}
+        effectiveSelectedRangeId={effectiveSelectedRangeId}
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+        popoverVisible={popoverVisible}
+        selectionRefForRuntimeId={selectionRefForRuntimeId}
+      />
+    )
+  } else if (renderMode === 'direct') {
+    /* 'direct' 渲染路径：不调用 html-parser，直接渲染页面文本/图片内容 */
+    pagesNode = (
+      <DirectPages
+        pageNumbers={pageNumbers}
+        runtimeDocument={runtimeDocument}
+        setPageRef={setPageRef}
+        setTextRef={setTextRef}
+        textsByPageNumber={textsByPageNumber}
+        ocrTextsByPageNumber={ocrTextsByPageNumber}
+        pageStatuses={pageStatuses}
+        loadablePages={loadablePages}
+        baseImagesByPageNumber={baseImagesByPageNumber}
+      />
+    )
+  } else {
+    /* 'intermediate-document' 默认分支：仅渲染空页面外壳，绝不调用
+     * 页面/内容加载器；真实懒加载队列将在后续任务 中在此基础上实现。 */
+    pagesNode = (
+      <IntermediateDocumentPages
+        pageNumbers={pageNumbers}
+        runtimeDocument={runtimeDocument}
+        setPageRef={setPageRef}
+        runtimePageSelectionId={runtimePageSelectionId}
+      />
+    )
+  }
+
   return (
     <div
       ref={viewerRootRef}
@@ -1686,56 +1815,7 @@ function ViewerContent({
           onTransformChange={handleTransformChangeWithPopover}
           onTransformChangeEnd={handleTransformChangeEndWithPopover}
         >
-          {renderMode === 'html-parser' ? (
-            // T5/T7：每页内容自带一个 linked-mode HamsterSelection；
-            // 公共 ReaderSelectionRef 通过 runtime selectionId 复用这些子 ref。
-            <HtmlParserPages
-              pageNumbers={pageNumbers}
-              runtimeDocument={runtimeDocument}
-              htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
-              htmlPagesByPageNumber={htmlPagesByPageNumber}
-              setPageRef={setPageRef}
-              setTextRef={setTextRef}
-              textsByPageNumber={textsByPageNumber}
-              ocrTextsByPageNumber={ocrTextsByPageNumber}
-              pageStatuses={pageStatuses}
-              loadablePages={loadablePages}
-              baseImagesByPageNumber={baseImagesByPageNumber}
-              runtimePageSelectionId={runtimePageSelectionId}
-              runtimeLinkedData={runtimeLinkedData}
-              handleLinkedDataChange={handlePageLinkedDataChange}
-              handleLinkedSelect={handleLinkedSelect}
-              handleLinkedUpdateRange={handleLinkedUpdateRange}
-              handleLinkedSelectRange={handlePageLinkedSelectRange}
-              onSelectionStartProp={onSelectionStartProp}
-              handleSelectionStart={handleSelectionStart}
-              onSelectionEndProp={onSelectionEndProp}
-              handleSelectionEnd={handleSelectionEndWrap}
-              autoHighlight={autoHighlight}
-              highlightColor={highlightColor}
-              selectionColor={selectionColor}
-              overlayRectType={overlayRectType}
-              effectiveSelectedRangeId={effectiveSelectedRangeId}
-              selectionPopover={selectionPopover}
-              highlightPopover={highlightPopover}
-              popoverVisible={popoverVisible}
-              selectionRefForRuntimeId={selectionRefForRuntimeId}
-            />
-          ) : (
-            /* 'direct' 与新增默认 'intermediate-document' 分支：均不调用 html-parser。
-             * 当前 intermediate-document 为占位实现，复用 direct 渲染最小化满足编译，
-             * 真正的懒加载队列将在后续任务 中替换此占位。 */ <DirectPages
-              pageNumbers={pageNumbers}
-              runtimeDocument={runtimeDocument}
-              setPageRef={setPageRef}
-              setTextRef={setTextRef}
-              textsByPageNumber={textsByPageNumber}
-              ocrTextsByPageNumber={ocrTextsByPageNumber}
-              pageStatuses={pageStatuses}
-              loadablePages={loadablePages}
-              baseImagesByPageNumber={baseImagesByPageNumber}
-            />
-          )}
+          {pagesNode}
         </VirtualPaper>
       ) : null}
     </div>
@@ -2922,6 +3002,12 @@ export function IntermediateDocumentViewer({
       return
     }
 
+    // intermediate-document 默认模式仅渲染空外壳，绝不调用页面/内容加载器；
+    // 真实懒加载队列将在后续任务 中实现。
+    if (renderMode === 'intermediate-document') {
+      return
+    }
+
     loadablePages.forEach((pageNumber) => {
       if (
         textsByPageNumber.has(pageNumber) ||
@@ -2997,7 +3083,7 @@ export function IntermediateDocumentViewer({
           loadingPagesRef.current.delete(pageNumber)
         })
     })
-  }, [loadablePages, runtimeDocument, textsByPageNumber])
+  }, [loadablePages, runtimeDocument, renderMode, textsByPageNumber])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
