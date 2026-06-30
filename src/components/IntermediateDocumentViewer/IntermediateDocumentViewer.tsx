@@ -2048,6 +2048,7 @@ export function IntermediateDocumentViewer({
     setOcrTextsByPageNumber(new Map())
     setPageStatuses(new Map())
     setBaseImagesByPageNumber(new Map())
+    setImagesByPageNumber(new Map())
     setHtmlPagesByPageNumber(new Map())
     setHtmlPageStatusesByPageNumber(new Map())
   }, [runtimeDocument])

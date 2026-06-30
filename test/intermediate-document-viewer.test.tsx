@@ -3185,6 +3185,82 @@ describe('IntermediateDocumentViewer', () => {
       // doc1 的 stale 结果不应出现
       expect(screen.queryByText('Stale Page 1')).not.toBeInTheDocument()
     })
+
+    it('stale images from old document are cleared on document switch', async () => {
+      // doc1 页 1 包含 IntermediateImage 内容项
+      const imageContent: IntermediateImage = {
+        id: 'img-1',
+        src: 'data:image/png;base64,old',
+        polygon: [
+          [0, 0],
+          [50, 0],
+          [50, 50],
+          [0, 50]
+        ],
+        opacity: 1
+      } as IntermediateImage
+
+      const doc1 = {
+        id: 'img-doc-1',
+        title: 'Image Doc 1',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn(() =>
+          Promise.resolve({
+            getContent: vi.fn(async () => [imageContent]),
+            getThumbnail: vi.fn(async () => undefined)
+          })
+        )
+      } as unknown as IntermediateDocument
+
+      // doc2 页 1 只有文本（无图片）
+      const doc2 = {
+        id: 'text-doc-2',
+        title: 'Text Doc 2',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+        getPageByPageNumber: vi.fn(() =>
+          Promise.resolve({
+            getContent: vi.fn(async () => [
+              makeText('fresh-text', 'Fresh Text') as IntermediateContent
+            ]),
+            getThumbnail: vi.fn(async () => undefined)
+          })
+        )
+      } as unknown as IntermediateDocument
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={doc1} />
+      )
+
+      // 等待 doc1 页 1 图片渲染
+      await waitFor(() => {
+        const img = screen
+          .getByTestId('intermediate-page-1')
+          .querySelector('.hamster-reader__intermediate-page-image')
+        expect(img).toBeInTheDocument()
+        expect(img).toHaveAttribute('src', 'data:image/png;base64,old')
+      })
+
+      // 切换到 doc2
+      rerender(<IntermediateDocumentViewer document={doc2} />)
+
+      // 等待 doc2 页 1 文本加载完成
+      await waitFor(() => {
+        expect(screen.getByTestId('intermediate-page-1').textContent).toContain(
+          'Fresh Text'
+        )
+      })
+
+      // doc1 的 stale 图片不应残留
+      expect(
+        screen
+          .getByTestId('intermediate-page-1')
+          .querySelector('.hamster-reader__intermediate-page-image')
+      ).not.toBeInTheDocument()
+    })
   })
   // ---- end intermediate-document 懒加载队列语义 ----
 
