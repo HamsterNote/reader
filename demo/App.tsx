@@ -15,6 +15,7 @@ import type {
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
 import { useCallback, useRef, useState } from 'react'
+import { parseHighlights, serializeHighlights } from './highlightStorage'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -109,43 +110,15 @@ export async function parseUploadedDocument(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function parseHighlightsJson(jsonStr: string | null): ReaderSelectionRange[] {
-  if (!jsonStr) return []
-  try {
-    const parsed = JSON.parse(jsonStr)
-    if (!Array.isArray(parsed)) return []
-    // Strict validation: check all required fields of ReaderSelectionRange
-    const isValidRange = (item: unknown): item is ReaderSelectionRange => {
-      if (!item || typeof item !== 'object') return false
-      const record = item as Record<string, unknown>
-      return (
-        typeof record.id === 'string' &&
-        typeof record.text === 'string' &&
-        typeof record.start === 'number' &&
-        typeof record.end === 'number' &&
-        typeof record.createdAt === 'number'
-      )
-    }
-
-    // Check if ALL items in the array are valid. If not, consider the whole storage corrupted and return [].
-    // Returning [] on partial corruption avoids weird crashes or half-working states.
-    if (!parsed.every(isValidRange)) {
-      return []
-    }
-    return parsed
-  } catch {
-    return []
-  }
-}
-
 function persistHighlights(
   fileName: string | undefined,
   ranges: ReaderSelectionRange[]
 ) {
   if (!fileName) return
+  const persistableRanges = parseHighlights(serializeHighlights(ranges))
   localStorage.setItem(
     `hamster-reader-demo:highlights:${fileName}`,
-    JSON.stringify(ranges)
+    serializeHighlights(persistableRanges)
   )
 }
 
@@ -295,7 +268,7 @@ export function App() {
       const storedHighlights = localStorage.getItem(
         `hamster-reader-demo:highlights:${file.name}`
       )
-      setRanges(parseHighlightsJson(storedHighlights))
+      setRanges(parseHighlights(storedHighlights))
       setSelectedRangeId(null)
     } catch (error) {
       if (requestId !== requestIdRef.current) {

@@ -6,13 +6,6 @@ import type {
 import { useCallback, useRef, useState } from 'react'
 
 import type {
-  MousePosition as ReaderMousePosition,
-  OverlayRectType as ReaderSelectionOverlayRectType,
-  SelectionRange as ReaderSelectionRange,
-  SelectionRef as ReaderSelectionRef
-} from '@hamster-note/selection'
-
-import type {
   BackgroundQuality,
   ReaderInteractionMode,
   ReaderPageRange,
@@ -21,6 +14,13 @@ import type {
   ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
+import type {
+  ReaderLinkedSelectionData,
+  ReaderMousePosition,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../types/selection'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -108,6 +108,10 @@ export type ReaderProps = {
   defaultSelectedRangeId?: string | null
   /** 用户确认高亮时触发 */
   onSelect?: (range: ReaderSelectionRange) => void
+  onLinkedDataChange?: (next: ReaderLinkedSelectionData) => void
+  onLinkedSelect?: (range: ReaderSelectionRange) => void
+  onLinkedUpdateRange?: (range: ReaderSelectionRange) => void
+  onLinkedSelectRange?: (id: string | null) => void
   /** 用户点击或取消选中某个已高亮 range 时触发 */
   onSelectRange?: (id: string | null) => void
   /** 用户拖动已高亮 range 的首尾手柄调整范围时触发 */
@@ -192,6 +196,10 @@ export function Reader({
   selectedRangeId,
   defaultSelectedRangeId,
   onSelect,
+  onLinkedDataChange,
+  onLinkedSelect,
+  onLinkedUpdateRange,
+  onLinkedSelectRange,
   onSelectRange,
   onUpdateRange,
   onSelectionStart,
@@ -303,6 +311,10 @@ export function Reader({
           selectedRangeId={selectedRangeId}
           defaultSelectedRangeId={defaultSelectedRangeId}
           onSelect={onSelect}
+          onLinkedDataChange={onLinkedDataChange}
+          onLinkedSelect={onLinkedSelect}
+          onLinkedUpdateRange={onLinkedUpdateRange}
+          onLinkedSelectRange={onLinkedSelectRange}
           onSelectRange={onSelectRange}
           onUpdateRange={onUpdateRange}
           onSelectionStart={onSelectionStart}

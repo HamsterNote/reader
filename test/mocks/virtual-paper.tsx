@@ -55,7 +55,7 @@ export type VirtualPaperProps = {
   /** v0.1.0-beta.1+：阅读模式（连续滚动/单页） */
   readerMode?: boolean
   /** v0.1.0-beta.1+：容器模式，替代已移除的 renderMode */
-  containMode?: 'contain' | 'cover' | 'stretch'
+  containMode?: boolean | 'contain' | 'cover' | 'stretch'
   /** v0.1.0-beta.1+：惯性滚动 */
   inertialScroll?: boolean
   /** v0.1.0-beta.1+：边缘弹性滚动 */

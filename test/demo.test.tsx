@@ -1,6 +1,7 @@
 import { DocxParser } from '@hamster-note/docx-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
+import type { ReaderSelectionRange } from '@hamster-note/reader'
 
 import { TxtParser } from '@hamster-note/txt-parser'
 import {
@@ -46,6 +47,7 @@ const mockCallbacks: {
   ) => void
 } = {}
 const mockReaderProps: unknown[] = []
+const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 
 vi.mock('@hamster-note/reader', async (importOriginal) => {
   // 部分 mock：保留库内纯函数，仅替换 Reader 组件
@@ -121,6 +123,43 @@ function makeFile(name: string) {
   const file = new File(['pdf'], name, { type: 'application/pdf' })
   Object.defineProperty(file, 'size', { value: 3 })
   return file
+}
+
+function makeLinkedRange(
+  id: string,
+  text: string,
+  selectionId = 'page-1'
+): ReaderSelectionRange {
+  return {
+    id,
+    text,
+    start: { selectionId, offset: 1 },
+    end: { selectionId, offset: 6 },
+    createdAt: 1000,
+    overlayRectType: 'percent',
+    rectsBySelectionId: {
+      [selectionId]: [{ x: 10, y: 20, width: 30, height: 40 }]
+    }
+  }
+}
+
+function highlightStorageKey(fileName: string): string {
+  return `${HIGHLIGHT_STORAGE_PREFIX}${fileName}`
+}
+
+function findDocumentReaderProps(): Record<string, unknown> | undefined {
+  for (let index = mockReaderProps.length - 1; index >= 0; index -= 1) {
+    const props = mockReaderProps[index]
+    if (
+      typeof props === 'object' &&
+      props !== null &&
+      'document' in props &&
+      props.document !== undefined
+    ) {
+      return props
+    }
+  }
+  return undefined
 }
 
 function upload(file: File) {
@@ -633,7 +672,7 @@ describe('demo parser flow', () => {
       const onHighlight = uploadReaderProps?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight({ id: 'del-range', text: 'text to delete' })
+      onHighlight(makeLinkedRange('del-range', 'text to delete'))
 
       expect(await screen.findByText('text to delete')).toBeInTheDocument()
 
@@ -665,10 +704,9 @@ describe('demo parser flow', () => {
       })
 
       const stored = JSON.parse(
-        localStorage.getItem('hamster-reader-demo:highlights:delete.pdf') ||
-          '[]'
+        localStorage.getItem(highlightStorageKey('delete.pdf')) || '{}'
       )
-      expect(stored).toHaveLength(0)
+      expect(stored).toEqual({ version: 2, ranges: [] })
 
       uploadReaderProps = mockReaderProps[mockReaderProps.length - 1] as Record<
         string,
@@ -698,7 +736,7 @@ describe('demo parser flow', () => {
       ) => void
       const onSelect = uploadReaderProps?.onSelect as (range: unknown) => void
 
-      const range = { id: 'single-range', text: 'single text' }
+      const range = makeLinkedRange('single-range', 'single text')
       onHighlight(range)
       onSelect(range)
 
@@ -751,34 +789,180 @@ describe('demo parser flow', () => {
       )
 
       uploadReaderProps?.onHighlight?.({
-        id: 'range-1',
-        text: 'hello highlight'
+        ...makeLinkedRange('range-1', 'hello highlight')
       })
 
       expect(await screen.findByText('已创建高亮 (1)')).toBeInTheDocument()
       expect(screen.getByText('hello highlight')).toBeInTheDocument()
 
       const stored = JSON.parse(
-        localStorage.getItem('hamster-reader-demo:highlights:highlight.pdf') ||
-          '[]'
+        localStorage.getItem(highlightStorageKey('highlight.pdf')) || '{}'
       )
-      expect(stored).toHaveLength(1)
-      expect(stored[0].id).toBe('range-1')
-      expect(stored[0].text).toBe('hello highlight')
+      expect(stored).toEqual({
+        version: 2,
+        ranges: [makeLinkedRange('range-1', 'hello highlight')]
+      })
+    })
+
+    it('keeps valid v2 ranges and drops invalid v2 entries when loading', async () => {
+      const validRangeA = makeLinkedRange('range-a', 'valid A')
+      const validRangeB = makeLinkedRange('range-b', 'valid B', 'page-2')
+      localStorage.setItem(
+        highlightStorageKey('mixed.pdf'),
+        JSON.stringify({
+          version: 2,
+          ranges: [
+            validRangeA,
+            {
+              ...validRangeA,
+              start: { selectionId: 'reader-1:page-1', offset: 1 }
+            },
+            { ...validRangeA, rectsBySelectionId: { 'page-0': [] } },
+            null,
+            validRangeB
+          ]
+        })
+      )
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Mixed Document')
+      )
+
+      render(<App />)
+      upload(makeFile('mixed.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.getByText('已创建高亮 (2)')).toBeInTheDocument()
+      expect(screen.getByText('valid A')).toBeInTheDocument()
+      expect(screen.getByText('valid B')).toBeInTheDocument()
+    })
+
+    it('ignores old unversioned bare-array highlights instead of guessing page ownership', async () => {
+      localStorage.setItem(
+        highlightStorageKey('legacy.pdf'),
+        JSON.stringify([
+          {
+            id: 'legacy-range',
+            text: 'legacy highlight',
+            start: 0,
+            end: 10,
+            createdAt: 1000,
+            rects: [{ x: 1, y: 2, width: 3, height: 4 }]
+          }
+        ])
+      )
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Legacy Document')
+      )
+
+      render(<App />)
+      upload(makeFile('legacy.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      expect(screen.queryByText('legacy highlight')).not.toBeInTheDocument()
+    })
+
+    it('updates a highlight by id and persists the v2 envelope', async () => {
+      const originalRange = makeLinkedRange('range-update', 'before update')
+      const updatedRange = {
+        ...originalRange,
+        text: 'after update',
+        markerStyle: { backgroundColor: '#ff0000' }
+      }
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Update Document')
+      )
+
+      render(<App />)
+      upload(makeFile('update.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(originalRange)
+      expect(await screen.findByText('before update')).toBeInTheDocument()
+
+      const onUpdateRange = findDocumentReaderProps()?.onUpdateRange as (
+        range: unknown
+      ) => void
+      onUpdateRange(updatedRange)
+
+      await waitFor(() => {
+        expect(screen.getByText('after update')).toBeInTheDocument()
+      })
+      const stored = JSON.parse(
+        localStorage.getItem(highlightStorageKey('update.pdf')) || '{}'
+      )
+      expect(stored).toEqual({ version: 2, ranges: [updatedRange] })
+    })
+
+    it('clears all highlights and persists an empty v2 envelope', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Clear Document')
+      )
+
+      render(<App />)
+      upload(makeFile('clear.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('range-clear-a', 'clear A'))
+      onHighlight(makeLinkedRange('range-clear-b', 'clear B', 'page-2'))
+      expect(await screen.findByText('已创建高亮 (2)')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('清空全部'))
+
+      await waitFor(() => {
+        expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      })
+      const stored = JSON.parse(
+        localStorage.getItem(highlightStorageKey('clear.pdf')) || '{}'
+      )
+      expect(stored).toEqual({ version: 2, ranges: [] })
+    })
+
+    it('does not persist runtime-scoped selection ids', async () => {
+      const runtimeScopedRange = {
+        ...makeLinkedRange('runtime-range', 'runtime scoped'),
+        start: { selectionId: 'reader-linked-1:page-1', offset: 1 },
+        end: { selectionId: 'reader-linked-1:page-1', offset: 6 },
+        rectsBySelectionId: {
+          'reader-linked-1:page-1': [{ x: 10, y: 20, width: 30, height: 40 }]
+        }
+      }
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Runtime Id Document')
+      )
+
+      render(<App />)
+      upload(makeFile('runtime.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(runtimeScopedRange)
+
+      await waitFor(() => {
+        expect(
+          localStorage.getItem(highlightStorageKey('runtime.pdf'))
+        ).not.toBe(null)
+      })
+      const storedRaw = localStorage.getItem(highlightStorageKey('runtime.pdf'))
+      expect(storedRaw).not.toContain('reader-linked-1')
+      expect(JSON.parse(storedRaw || '{}')).toEqual({ version: 2, ranges: [] })
     })
 
     it('restores stored highlights when reloading a file', async () => {
       localStorage.setItem(
-        'hamster-reader-demo:highlights:restored.pdf',
-        JSON.stringify([
-          {
-            id: 'range-1',
-            text: 'restored highlight',
-            start: 0,
-            end: 10,
-            createdAt: Date.now()
-          }
-        ])
+        highlightStorageKey('restored.pdf'),
+        JSON.stringify({
+          version: 2,
+          ranges: [makeLinkedRange('range-1', 'restored highlight')]
+        })
       )
 
       vi.mocked(PdfParser.encode).mockResolvedValue(
@@ -795,16 +979,11 @@ describe('demo parser flow', () => {
 
     it('isolates highlights per file name', async () => {
       localStorage.setItem(
-        'hamster-reader-demo:highlights:file-a.pdf',
-        JSON.stringify([
-          {
-            id: 'range-a',
-            text: 'file A highlight',
-            start: 0,
-            end: 10,
-            createdAt: Date.now()
-          }
-        ])
+        highlightStorageKey('file-a.pdf'),
+        JSON.stringify({
+          version: 2,
+          ranges: [makeLinkedRange('range-a', 'file A highlight')]
+        })
       )
 
       vi.mocked(PdfParser.encode).mockResolvedValue(
@@ -822,11 +1001,11 @@ describe('demo parser flow', () => {
 
     it('yields empty array for invalid JSON or wrong shape', async () => {
       localStorage.setItem(
-        'hamster-reader-demo:highlights:corrupt.pdf',
+        highlightStorageKey('corrupt.pdf'),
         '{ not valid json ]'
       )
       localStorage.setItem(
-        'hamster-reader-demo:highlights:wrong-shape.pdf',
+        highlightStorageKey('wrong-shape.pdf'),
         JSON.stringify([{ id: 'partial' }])
       )
 
@@ -853,28 +1032,18 @@ describe('demo parser flow', () => {
       const freshRequest = createDeferred<IntermediateDocument | undefined>()
 
       localStorage.setItem(
-        'hamster-reader-demo:highlights:stale.pdf',
-        JSON.stringify([
-          {
-            id: 'range-stale',
-            text: 'stale text',
-            start: 0,
-            end: 10,
-            createdAt: Date.now()
-          }
-        ])
+        highlightStorageKey('stale.pdf'),
+        JSON.stringify({
+          version: 2,
+          ranges: [makeLinkedRange('range-stale', 'stale text')]
+        })
       )
       localStorage.setItem(
-        'hamster-reader-demo:highlights:fresh.pdf',
-        JSON.stringify([
-          {
-            id: 'range-fresh',
-            text: 'fresh text',
-            start: 0,
-            end: 10,
-            createdAt: Date.now()
-          }
-        ])
+        highlightStorageKey('fresh.pdf'),
+        JSON.stringify({
+          version: 2,
+          ranges: [makeLinkedRange('range-fresh', 'fresh text')]
+        })
       )
 
       vi.mocked(PdfParser.encode)

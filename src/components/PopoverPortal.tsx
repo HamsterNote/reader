@@ -82,7 +82,7 @@ export function PopoverPortal({
       */}
       <div
         ref={anchorRef}
-        aria-hidden="true"
+        aria-hidden='true'
         style={{
           position: 'absolute',
           left: 0,
@@ -101,7 +101,7 @@ export function PopoverPortal({
             // 添加 hsn-selection-popover class，使 Selection 库的 click-outside
             // 检测（e.target.closest('.hsn-selection-popover')）能识别 portal 内容，
             // 防止点击删除按钮/取色器时触发 deselect 关闭 popover
-            className="hamster-reader-popover-portal hsn-selection-popover"
+            className='hamster-reader-popover-portal hsn-selection-popover'
             style={{
               position: 'fixed',
               left: `${position.left}px`,

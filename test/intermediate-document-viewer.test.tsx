@@ -8,6 +8,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { act, render, screen, waitFor } from '@testing-library/react'
+import { createRef, isValidElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { buildSelectionPayload } from '../src/components/IntermediateDocumentViewer'
@@ -24,10 +25,22 @@ import {
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer } from '../src/index'
+import type { ReaderSelectionRange, ReaderSelectionRef } from '../src/index'
 import type { OverlayRectType } from './mocks/selection'
 import {
-  clearLastSelectionProps,
-  getLastSelectionProps
+  clearSelectionProps,
+  getAllSelectionProps,
+  getLastSelectionProps,
+  getSelectionRefCallCounts,
+  simulateLinkedDataChange,
+  simulateLinkedSelect,
+  simulateLinkedSelectRange,
+  simulateLinkedUpdateRange
+} from './mocks/selection'
+import type {
+  LinkedSelectionData,
+  LinkedSelectionRange,
+  SelectionProps
 } from './mocks/selection'
 import {
   VirtualPaper,
@@ -36,6 +49,110 @@ import {
 import { intersectionObserverMock } from './setup'
 
 Reflect.set(globalThis, 'vi', vi)
+
+function expectPopoverToContain(node: ReactNode, expected: ReactNode): void {
+  if (!isValidElement<{ children?: ReactNode }>(node)) {
+    throw new Error('Expected popover to be a React element')
+  }
+
+  expect(node.props.children).toBe(expected)
+}
+
+function makeReaderSelectionRange(
+  overrides: Partial<ReaderSelectionRange> = {}
+): ReaderSelectionRange {
+  return {
+    id: 'range-1',
+    text: 'Page',
+    start: { selectionId: 'page-1', offset: 0 },
+    end: { selectionId: 'page-1', offset: 4 },
+    createdAt: 1,
+    rectsBySelectionId: {
+      'page-1': [{ x: 10, y: 10, width: 20, height: 10 }]
+    },
+    ...overrides
+  }
+}
+
+function makeRuntimeLinkedRange(
+  runtimeSelectionId: string,
+  overrides: Partial<LinkedSelectionRange> = {}
+): LinkedSelectionRange {
+  return {
+    id: 'runtime-range-1',
+    text: 'Linked text',
+    start: { selectionId: runtimeSelectionId, offset: 0 },
+    end: { selectionId: runtimeSelectionId, offset: 11 },
+    createdAt: 10,
+    rectsBySelectionId: {
+      [runtimeSelectionId]: [{ x: 1, y: 2, width: 3, height: 4 }]
+    },
+    ...overrides
+  }
+}
+
+function requireRuntimeSelectionId(pageSuffix = ':page-1'): string {
+  const selectionId = getAllSelectionProps().find((props) =>
+    props.selectionId?.endsWith(pageSuffix)
+  )?.selectionId
+
+  if (!selectionId) {
+    throw new Error(`Expected runtime selection id ending with ${pageSuffix}`)
+  }
+
+  return selectionId
+}
+
+function requireSelectionPropsById(selectionId: string): SelectionProps {
+  const selectionProps = getAllSelectionProps().find(
+    (props) => props.selectionId === selectionId
+  )
+
+  if (!selectionProps) {
+    throw new Error(`Expected Selection props for ${selectionId}`)
+  }
+
+  return selectionProps
+}
+
+function requireIntermediatePageTextNode(pageNumber: number): Text {
+  const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+  const textElement = page.querySelector('.hamster-reader__intermediate-text')
+
+  if (!(textElement instanceof HTMLElement)) {
+    throw new Error(`Expected page ${pageNumber} to render text content`)
+  }
+
+  const textNode = getRequiredTextNode(textElement)
+  if (!(textNode instanceof Text)) {
+    throw new Error(
+      `Expected page ${pageNumber} text content to be a Text node`
+    )
+  }
+
+  return textNode
+}
+
+function selectNativeTextAcrossPages(
+  startPageNumber: number,
+  endPageNumber = startPageNumber
+): Selection {
+  const startNode = requireIntermediatePageTextNode(startPageNumber)
+  const endNode = requireIntermediatePageTextNode(endPageNumber)
+  const endText = endNode.textContent ?? ''
+  const range = document.createRange()
+  range.setStart(startNode, 0)
+  range.setEnd(endNode, Math.min(endText.length, 4))
+
+  const selection = window.getSelection()
+  if (!selection) {
+    throw new Error('Expected native Selection in test environment')
+  }
+
+  selection.removeAllRanges()
+  selection.addRange(range)
+  return selection
+}
 
 vi.mock('@hamster-note/html-parser', () => ({
   HtmlParser: {
@@ -4810,9 +4927,14 @@ describe('IntermediateDocumentViewer', () => {
 
       await waitFor(() => {
         const page = screen.getByTestId('intermediate-page-1')
-        const children = Array.from(page.children)
-        const imgIndex = children.findIndex((el) => el.tagName === 'IMG')
-        const textIndex = children.findIndex((el) =>
+        // T5：页面内容被每页 HamsterSelection 包裹，
+        // img/text span 现在嵌套在 .hsn-selection-content 内；
+        // 但 DOM 顺序（img 在 text 之前）由 Selection 子树保持不变。
+        const descendants = Array.from(
+          page.querySelectorAll('img, .hamster-reader__intermediate-text')
+        ) as HTMLElement[]
+        const imgIndex = descendants.findIndex((el) => el.tagName === 'IMG')
+        const textIndex = descendants.findIndex((el) =>
           el.classList.contains('hamster-reader__intermediate-text')
         )
         expect(imgIndex).toBeGreaterThanOrEqual(0)
@@ -5308,7 +5430,7 @@ describe('IntermediateDocumentViewer', () => {
       const getVirtualPaperWrapper = () =>
         screen.getByTestId('virtual-paper-wrapper')
 
-      it('passes containMode="contain" to VirtualPaper', async () => {
+      it('passes containMode to VirtualPaper', async () => {
         const { document } = makeDocument({ pageCount: 1 })
         render(<IntermediateDocumentViewer document={document} />)
 
@@ -5317,7 +5439,7 @@ describe('IntermediateDocumentViewer', () => {
         })
 
         const wrapper = getVirtualPaperWrapper()
-        expect(wrapper).toHaveAttribute('data-contain-mode', 'contain')
+        expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
       })
 
       it('maps VirtualPaper wheel transform source to scale-change wheel source', async () => {
@@ -5639,11 +5761,11 @@ describe('IntermediateDocumentViewer', () => {
 
 describe('selection overlayRectType integration', () => {
   beforeEach(() => {
-    clearLastSelectionProps()
+    clearSelectionProps()
   })
 
   afterEach(() => {
-    clearLastSelectionProps()
+    clearSelectionProps()
   })
 
   it('defaults overlayRectType to percent when omitted', async () => {
@@ -5708,273 +5830,318 @@ describe('selection overlayRectType integration', () => {
     expect(percentValue).toBe('percent')
     expect(pxValue).toBe('px')
   })
+})
 
-  it('delegates percent overlay rect clicks to range selection without raising overlay hit layer', async () => {
-    const { document } = makeDocument({ pageCount: 1 })
-    const onSelectRange = vi.fn()
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
-
-    render(
-      <IntermediateDocumentViewer
-        document={document}
-        renderMode='html-parser'
-        ranges={[
-          {
-            id: 'range-1',
-            text: 'Page',
-            start: 0,
-            end: 4,
-            createdAt: 1,
-            overlayRectType: 'percent',
-            rects: [{ x: 10, y: 10, width: 20, height: 10 }]
-          }
-        ]}
-        onSelectRange={onSelectRange}
-      />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
-    })
-
-    const selectionContainer = globalThis.document.querySelector(
-      '.hsn-selection-container'
-    )
-    expect(selectionContainer).toBeInstanceOf(HTMLElement)
-
-    if (!(selectionContainer instanceof HTMLElement)) {
-      throw new Error('selection container not rendered')
-    }
-
-    mockElementRect(selectionContainer, {
-      left: 0,
-      top: 0,
-      width: 200,
-      height: 100
-    })
-    const getSelectionSpy = vi
-      .spyOn(window, 'getSelection')
-      .mockReturnValue(null)
-
-    selectionContainer.dispatchEvent(
-      new MouseEvent('mousedown', {
-        bubbles: true,
-        cancelable: true,
-        clientX: 30,
-        clientY: 12
-      })
-    )
-
-    const clickEvent = new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true,
-      clientX: 30,
-      clientY: 12
-    })
-    const stopImmediatePropagationSpy = vi.spyOn(
-      clickEvent,
-      'stopImmediatePropagation'
-    )
-
-    selectionContainer.dispatchEvent(clickEvent)
-    getLastSelectionProps()?.onSelectRange?.('range-1')
-
-    expect(onSelectRange).toHaveBeenCalledWith('range-1')
-    expect(onSelectRange).toHaveBeenCalledTimes(1)
-    expect(stopImmediatePropagationSpy).toHaveBeenCalled()
-    getSelectionSpy.mockRestore()
+describe('page-scoped overlay hit testing', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
   })
 
-  it('toggles the selected range off when delegated overlay rect is clicked again', async () => {
-    const { document } = makeDocument({ pageCount: 1 })
-    const onSelectRange = vi.fn()
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
-
-    const { rerender } = render(
-      <IntermediateDocumentViewer
-        document={document}
-        renderMode='html-parser'
-        ranges={[
-          {
-            id: 'range-1',
-            text: 'Page',
-            start: 0,
-            end: 4,
-            createdAt: 1,
-            overlayRectType: 'px',
-            rects: [{ x: 20, y: 10, width: 40, height: 20 }]
-          }
-        ]}
-        selectedRangeId='range-1'
-        overlayRectType='px'
-        onSelectRange={onSelectRange}
-      />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
-    })
-
-    const selectionContainer = globalThis.document.querySelector(
-      '.hsn-selection-container'
-    )
-    expect(selectionContainer).toBeInstanceOf(HTMLElement)
-
-    if (!(selectionContainer instanceof HTMLElement)) {
-      throw new Error('selection container not rendered')
-    }
-
-    mockElementRect(selectionContainer, {
-      left: 0,
-      top: 0,
-      width: 200,
-      height: 100
-    })
-    const getSelectionSpy = vi
-      .spyOn(window, 'getSelection')
-      .mockReturnValue(null)
-
-    selectionContainer.dispatchEvent(
-      new MouseEvent('mousedown', {
-        bubbles: true,
-        cancelable: true,
-        clientX: 30,
-        clientY: 12
-      })
-    )
-    getLastSelectionProps()?.onSelectRange?.(null)
-
-    rerender(
-      <IntermediateDocumentViewer
-        document={document}
-        renderMode='html-parser'
-        ranges={[
-          {
-            id: 'range-1',
-            text: 'Page',
-            start: 0,
-            end: 4,
-            createdAt: 1,
-            overlayRectType: 'px',
-            rects: [{ x: 20, y: 10, width: 40, height: 20 }]
-          }
-        ]}
-        selectedRangeId={null}
-        overlayRectType='px'
-        onSelectRange={onSelectRange}
-      />
-    )
-
-    const clickEvent = new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true,
-      clientX: 30,
-      clientY: 12
-    })
-    const stopImmediatePropagationSpy = vi.spyOn(
-      clickEvent,
-      'stopImmediatePropagation'
-    )
-
-    selectionContainer.dispatchEvent(clickEvent)
-    getLastSelectionProps()?.onSelectRange?.('range-1')
-
-    expect(onSelectRange).toHaveBeenCalledWith(null)
-    expect(onSelectRange).toHaveBeenCalledTimes(1)
-    expect(stopImmediatePropagationSpy).toHaveBeenCalled()
-    getSelectionSpy.mockRestore()
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
   })
 
-  it('updates uncontrolled selected range state when no onSelectRange callback is provided', async () => {
-    const { document } = makeDocument({ pageCount: 1 })
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
-
-    render(
-      <IntermediateDocumentViewer
-        document={document}
-        renderMode='html-parser'
-        ranges={[
-          {
-            id: 'range-1',
-            text: 'Page',
-            start: 0,
-            end: 4,
-            createdAt: 1,
-            overlayRectType: 'percent',
-            rects: [{ x: 10, y: 10, width: 20, height: 10 }]
-          }
-        ]}
-      />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
-    })
-
-    const selectionContainer = globalThis.document.querySelector(
-      '.hsn-selection-container'
-    )
-    expect(selectionContainer).toBeInstanceOf(HTMLElement)
+  const requirePageSelectionContainer = (pageNumber: number): HTMLElement => {
+    const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+    const selectionContainer = page.querySelector('.hsn-selection-container')
 
     if (!(selectionContainer instanceof HTMLElement)) {
-      throw new Error('selection container not rendered')
+      throw new Error(`Expected page ${pageNumber} selection container`)
     }
 
-    mockElementRect(selectionContainer, {
-      left: 0,
-      top: 0,
-      width: 200,
-      height: 100
-    })
-    const getSelectionSpy = vi
-      .spyOn(window, 'getSelection')
-      .mockReturnValue(null)
+    return selectionContainer
+  }
 
+  const dispatchSelectionContainerClick = (
+    selectionContainer: HTMLElement,
+    point: { readonly clientX: number; readonly clientY: number }
+  ): void => {
     selectionContainer.dispatchEvent(
       new MouseEvent('mousedown', {
         bubbles: true,
         cancelable: true,
-        clientX: 30,
-        clientY: 12
+        clientX: point.clientX,
+        clientY: point.clientY
       })
     )
     selectionContainer.dispatchEvent(
       new MouseEvent('click', {
         bubbles: true,
         cancelable: true,
-        clientX: 30,
-        clientY: 12
+        clientX: point.clientX,
+        clientY: point.clientY
       })
     )
-    getLastSelectionProps()?.onSelectRange?.('range-1')
+  }
+
+  it('selects a linked rect on page 2 once via the page Selection callback', async () => {
+    // Given: a public range belongs only to page 2.
+    const { document } = makeDocument({ pageCount: 2 })
+    const onSelectRange = vi.fn()
+    const page2Range = makeReaderSelectionRange({
+      id: 'page-2-range',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[page2Range]}
+        onSelectRange={onSelectRange}
+      />
+    )
 
     await waitFor(() => {
-      expect(getLastSelectionProps()?.selectedRangeId).toBe('range-1')
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const selectionContainer = requirePageSelectionContainer(2)
+    mockElementRect(selectionContainer, {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100
+    })
+    vi.spyOn(window, 'getSelection').mockReturnValue(null)
+
+    // When: the DOM click reaches the page container, then the linked library
+    // reports the page-scoped overlay hit for that page.
+    dispatchSelectionContainerClick(selectionContainer, {
+      clientX: 30,
+      clientY: 12
+    })
+    act(() => {
+      simulateLinkedSelectRange(runtimePage2Id, 'page-2-range')
     })
 
-    getSelectionSpy.mockRestore()
+    // Then: Reader emits the public selected-range callback exactly once.
+    expect(onSelectRange).toHaveBeenCalledTimes(1)
+    expect(onSelectRange).toHaveBeenCalledWith('page-2-range')
+    await waitFor(() => {
+      const page2Props = getAllSelectionProps().find(
+        (props) => props.selectionId === runtimePage2Id
+      )
+      expect(page2Props?.linkedData?.selectedRangeId).toBe('page-2-range')
+    })
+  })
+
+  it('toggles an already-selected linked rect to null once', async () => {
+    // Given: page 2 owns the selected range in uncontrolled linked data.
+    const { document } = makeDocument({ pageCount: 2 })
+    const onSelectRange = vi.fn()
+    const selectedRange = makeReaderSelectionRange({
+      id: 'toggle-page-2-range',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 20, y: 10, width: 40, height: 20 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        defaultRanges={[selectedRange]}
+        defaultSelectedRangeId='toggle-page-2-range'
+        overlayRectType='px'
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.selectedRangeId).toBe(
+        'toggle-page-2-range'
+      )
+    })
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+
+    // When: the page Selection reports its linked toggle result.
+    act(() => {
+      simulateLinkedSelectRange(runtimePage2Id, null)
+    })
+
+    // Then: the selected id is cleared and the public callback fires once.
+    expect(onSelectRange).toHaveBeenCalledTimes(1)
+    expect(onSelectRange).toHaveBeenCalledWith(null)
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.selectedRangeId).toBeNull()
+    })
+  })
+
+  it('does not call onSelectRange when clicking empty page area', async () => {
+    // Given: page 1 has a stored range, but the click is outside its rects.
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelectRange = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[makeReaderSelectionRange()]}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const selectionContainer = requirePageSelectionContainer(1)
+    mockElementRect(selectionContainer, {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100
+    })
+    vi.spyOn(window, 'getSelection').mockReturnValue(null)
+
+    // When: only the empty-page DOM click occurs and the linked library reports
+    // no range hit.
+    dispatchSelectionContainerClick(selectionContainer, {
+      clientX: 190,
+      clientY: 90
+    })
+
+    // Then: Reader does not synthesize a selected-range callback itself.
+    expect(onSelectRange).not.toHaveBeenCalled()
+  })
+
+  it('ignores a cross-page range rect that belongs to another page', async () => {
+    // Given: the page-2 rect would match the page-1 click if Reader flattened
+    // rectsBySelectionId against the clicked page container.
+    const { document } = makeDocument({ pageCount: 2 })
+    const onSelectRange = vi.fn()
+    const crossPageRange = makeReaderSelectionRange({
+      id: 'cross-page-range',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-1': [{ x: 80, y: 80, width: 10, height: 10 }],
+        'page-2': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[crossPageRange]}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const page1SelectionContainer = requirePageSelectionContainer(1)
+    mockElementRect(page1SelectionContainer, {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100
+    })
+    vi.spyOn(window, 'getSelection').mockReturnValue(null)
+
+    // When: page 1 is clicked at coordinates that match only page 2's rect.
+    dispatchSelectionContainerClick(page1SelectionContainer, {
+      clientX: 30,
+      clientY: 12
+    })
+
+    // Then: no global flat-range fallback selects the cross-page range.
+    expect(onSelectRange).not.toHaveBeenCalled()
+  })
+
+  it('renders one popover after clicking a cross-page linked range', async () => {
+    // Given: a cross-page range starts on page 1 and has rects on both pages.
+    const { document } = makeDocument({ pageCount: 2 })
+    const onSelectRange = vi.fn()
+    const selectionPopover = <div data-testid='select-popover'>Select</div>
+    const highlightPopover = (
+      <div data-testid='highlight-popover'>Highlight</div>
+    )
+    const crossPageRange = makeReaderSelectionRange({
+      id: 'cross-page-popover-range',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-1': [{ x: 5, y: 5, width: 10, height: 10 }],
+        'page-2': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        defaultRanges={[crossPageRange]}
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const page2SelectionContainer = requirePageSelectionContainer(2)
+
+    // When: the linked page-2 Selection reports a click on that cross-page range.
+    dispatchSelectionContainerClick(page2SelectionContainer, {
+      clientX: 30,
+      clientY: 12
+    })
+    act(() => {
+      simulateLinkedSelectRange(runtimePage2Id, 'cross-page-popover-range')
+    })
+
+    // Then: selected-range emission is single, and popover ownership is gated to
+    // the range start page rather than duplicated across pages.
+    expect(onSelectRange).toHaveBeenCalledTimes(1)
+    expect(onSelectRange).toHaveBeenCalledWith('cross-page-popover-range')
+    await waitFor(() => {
+      const visiblePopovers = getAllSelectionProps().filter(
+        (props) => props.popover !== undefined
+      )
+      expect(visiblePopovers).toHaveLength(1)
+    })
+    const propsByRuntimeId = new Map(
+      getAllSelectionProps().map((props) => [props.selectionId, props])
+    )
+    expectPopoverToContain(
+      propsByRuntimeId.get(runtimePage1Id)?.popover,
+      highlightPopover
+    )
+    expect(propsByRuntimeId.get(runtimePage2Id)?.popover).toBeUndefined()
   })
 })
 
 describe('selection prop forwarding integration', () => {
   beforeEach(() => {
-    clearLastSelectionProps()
+    clearSelectionProps()
   })
 
   afterEach(() => {
-    clearLastSelectionProps()
+    clearSelectionProps()
   })
 
-  it('forwards active popover and range update handling to HamsterSelection', async () => {
+  it('forwards active popover to HamsterSelection', async () => {
     const { document } = makeDocument({ pageCount: 1 })
-    const range = {
-      id: 'range-1',
-      text: 'Page',
-      start: 0,
-      end: 4,
-      createdAt: 1
-    }
-    const onUpdateRange = vi.fn()
+    const range = makeReaderSelectionRange()
     const selectionPopover = <button type='button'>Highlight</button>
     vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
 
@@ -5984,7 +6151,6 @@ describe('selection prop forwarding integration', () => {
         renderMode='html-parser'
         ranges={[range]}
         selectedRangeId='range-1'
-        onUpdateRange={onUpdateRange}
         selectionPopover={selectionPopover}
       />
     )
@@ -5994,13 +6160,8 @@ describe('selection prop forwarding integration', () => {
     })
 
     const selectionProps = getLastSelectionProps()
-    expect(selectionProps?.popover).toBe(selectionPopover)
-    expect(selectionProps?.selectionPopover).toBe(selectionPopover)
-
-    const updatedRange = { ...range, end: 5, text: 'Page ' }
-    selectionProps?.onUpdateRange?.(updatedRange)
-
-    expect(onUpdateRange).toHaveBeenCalledWith(updatedRange)
+    expectPopoverToContain(selectionProps?.popover, selectionPopover)
+    expectPopoverToContain(selectionProps?.selectionPopover, selectionPopover)
   })
 
   it('forwards distinct highlightPopover and selectionPopover', async () => {
@@ -6023,12 +6184,12 @@ describe('selection prop forwarding integration', () => {
     })
 
     const selectionProps = getLastSelectionProps()
-    expect(selectionProps?.popover).toBe(highlightPopover)
-    expect(selectionProps?.selectionPopover).toBe(selectionPopover)
+    expectPopoverToContain(selectionProps?.popover, highlightPopover)
+    expectPopoverToContain(selectionProps?.selectionPopover, selectionPopover)
     expect(selectionProps).not.toHaveProperty('autoHighlight')
   })
 
-  it('autoHighlight calls highlight on selection end and triggers onHighlight', async () => {
+  it('autoHighlight does not leak legacy range callbacks as linked public payloads', async () => {
     const { document } = makeDocument({ pageCount: 1 })
     const onHighlight = vi.fn()
     const onSelect = vi.fn()
@@ -6054,8 +6215,1492 @@ describe('selection prop forwarding integration', () => {
 
     selectionProps?.onSelectionEnd?.(mousePos, selection)
 
-    expect(onSelect).toHaveBeenCalled()
-    expect(onHighlight).toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onHighlight).not.toHaveBeenCalled()
     expect(selectionProps).not.toHaveProperty('autoHighlight')
+  })
+
+  it('does not register linked Selection props for direct render mode', async () => {
+    const { document } = makeDocument({ pageCount: 3 })
+
+    render(
+      <IntermediateDocumentViewer document={document} renderMode='direct' />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+    })
+
+    expect(getAllSelectionProps()).toHaveLength(0)
+  })
+})
+
+describe('linked data adapter integration', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('initializes uncontrolled linked data from default ranges and selected id', async () => {
+    // Given: uncontrolled props provide a public page-scoped range.
+    const { document } = makeDocument({ pageCount: 2 })
+    const range = makeReaderSelectionRange({
+      id: 'default-range',
+      start: { selectionId: 'page-2', offset: 1 },
+      end: { selectionId: 'page-2', offset: 5 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 5, y: 6, width: 7, height: 8 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: the viewer renders in html-parser mode.
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        defaultRanges={[range]}
+        defaultSelectedRangeId='default-range'
+      />
+    )
+
+    // Then: linkedData is runtime-scoped, while preserving the public range id.
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.items).toHaveLength(1)
+    })
+    const linkedData = getLastSelectionProps()?.linkedData
+    const runtimeRange = linkedData?.items[0]
+
+    expect(linkedData?.selectedRangeId).toBe('default-range')
+    expect(runtimeRange?.id).toBe('default-range')
+    expect(runtimeRange?.start.selectionId).toMatch(
+      /^reader-linked-.+:page-2$/u
+    )
+    expect(runtimeRange?.end.selectionId).toBe(runtimeRange?.start.selectionId)
+    expect(Object.keys(runtimeRange?.rectsBySelectionId ?? {})).toEqual([
+      runtimeRange?.start.selectionId
+    ])
+  })
+
+  it('uses controlled ranges and selected id instead of uncontrolled defaults', async () => {
+    // Given: controlled props disagree with default props.
+    const { document } = makeDocument({ pageCount: 2 })
+    const defaultRange = makeReaderSelectionRange({ id: 'default-range' })
+    const controlledRange = makeReaderSelectionRange({
+      id: 'controlled-range',
+      start: { selectionId: 'page-2', offset: 2 },
+      end: { selectionId: 'page-2', offset: 6 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 11, y: 12, width: 13, height: 14 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: the viewer receives both controlled and default selection props.
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[controlledRange]}
+        defaultRanges={[defaultRange]}
+        selectedRangeId='controlled-range'
+        defaultSelectedRangeId='default-range'
+      />
+    )
+
+    // Then: runtime linkedData reflects only the controlled public state.
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.items[0]?.id).toBe(
+        'controlled-range'
+      )
+    })
+    expect(getLastSelectionProps()?.linkedData?.selectedRangeId).toBe(
+      'controlled-range'
+    )
+    expect(getLastSelectionProps()?.linkedData?.items).toHaveLength(1)
+  })
+
+  it('uses scoped visible page ids for runtime selection order without visible indexes', async () => {
+    // Given: only pages 2 and 3 are visible.
+    const { document } = makeDocument({ pageCount: 3 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: pageRange hides page 1.
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 2, end: 3 }}
+      />
+    )
+
+    // Then: selectionOrder is based on real page numbers, not visible indexes.
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.selectionOrder).toHaveLength(
+        2
+      )
+    })
+    const selectionOrder =
+      getLastSelectionProps()?.linkedData?.selectionOrder ?? []
+
+    expect(selectionOrder[0]).toMatch(/^reader-linked-.+:page-2$/u)
+    expect(selectionOrder[1]).toMatch(/^reader-linked-.+:page-3$/u)
+    expect(selectionOrder.every((id) => !id.endsWith(':page-1'))).toBe(true)
+  })
+
+  it('keeps hidden page ranges in linked items while excluding hidden pages from selectionOrder', async () => {
+    // Given: stored public data belongs to page 2.
+    const { document } = makeDocument({ pageCount: 2 })
+    const hiddenPageRange = makeReaderSelectionRange({
+      id: 'hidden-page-range',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 20, y: 20, width: 10, height: 10 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: pageRange mounts only page 1.
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 1, end: 1 }}
+        ranges={[hiddenPageRange]}
+      />
+    )
+
+    // Then: the range stays in linkedData items, but page 2 is absent from order.
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.items[0]?.id).toBe(
+        'hidden-page-range'
+      )
+    })
+    const linkedData = getLastSelectionProps()?.linkedData
+    expect(linkedData?.items[0]?.start.selectionId).toMatch(
+      /^reader-linked-.+:page-2$/u
+    )
+    expect(linkedData?.selectionOrder).toHaveLength(1)
+    expect(linkedData?.selectionOrder[0]).toMatch(/^reader-linked-.+:page-1$/u)
+  })
+
+  it('filters foreign runtime ids before updating public uncontrolled state', async () => {
+    // Given: a linked Selection instance and a mixed runtime payload from a global registry.
+    const { document } = makeDocument({ pageCount: 1 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.selectionId).toMatch(
+        /^reader-linked-.+:page-1$/u
+      )
+    })
+    const runtimePageId = getLastSelectionProps()?.selectionId
+    if (!runtimePageId) {
+      throw new Error('Expected runtime selection id')
+    }
+
+    const mixedLinkedData: LinkedSelectionData = {
+      items: [
+        {
+          id: 'own-range',
+          text: 'Own text',
+          start: { selectionId: runtimePageId, offset: 0 },
+          end: { selectionId: runtimePageId, offset: 8 },
+          createdAt: 2,
+          rectsBySelectionId: {
+            [runtimePageId]: [{ x: 1, y: 2, width: 3, height: 4 }],
+            'other-reader:page-1': [{ x: 9, y: 9, width: 9, height: 9 }]
+          }
+        },
+        {
+          id: 'foreign-range',
+          text: 'Foreign text',
+          start: { selectionId: 'other-reader:page-1', offset: 0 },
+          end: { selectionId: 'other-reader:page-1', offset: 4 },
+          createdAt: 3,
+          rectsBySelectionId: {
+            'other-reader:page-1': [{ x: 5, y: 6, width: 7, height: 8 }]
+          }
+        }
+      ],
+      selectedRangeId: 'own-range',
+      selectionOrder: [runtimePageId, 'other-reader:page-1'],
+      overlayRectType: 'percent',
+      draggingRange: { type: 'persisted-range', id: 'own-range' },
+      selectingText: true
+    }
+
+    // When: the library reports linked data with this Reader and foreign ids mixed together.
+    act(() => {
+      simulateLinkedDataChange(runtimePageId, mixedLinkedData)
+    })
+
+    // Then: the next runtime data is rebuilt only from public unscoped state for this Reader.
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.items).toHaveLength(1)
+    })
+    const nextLinkedData = getLastSelectionProps()?.linkedData
+    const ownRange = nextLinkedData?.items[0]
+
+    expect(ownRange?.id).toBe('own-range')
+    expect(ownRange?.start.selectionId).toBe(runtimePageId)
+    expect(ownRange?.end.selectionId).toBe(runtimePageId)
+    expect(Object.keys(ownRange?.rectsBySelectionId ?? {})).toEqual([
+      runtimePageId
+    ])
+    expect(nextLinkedData?.selectionOrder).toEqual([runtimePageId])
+    expect(nextLinkedData?.draggingRange).toEqual({
+      type: 'persisted-range',
+      id: 'own-range'
+    })
+    expect(nextLinkedData?.selectingText).toBe(true)
+  })
+
+  it('emits public callbacks with unscoped page ids after runtime range mapping', async () => {
+    // Given: the library reports a runtime-scoped selection range.
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelect = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        onSelect={onSelect}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.selectionId).toMatch(
+        /^reader-linked-.+:page-1$/u
+      )
+    })
+    const runtimePageId = getLastSelectionProps()?.selectionId
+    if (!runtimePageId) {
+      throw new Error('Expected runtime selection id')
+    }
+
+    // When: a linked select callback includes runtime endpoint and rect ids.
+    act(() => {
+      simulateLinkedSelect(runtimePageId, {
+        id: 'public-callback-range',
+        text: 'Callback text',
+        start: { selectionId: runtimePageId, offset: 0 },
+        end: { selectionId: runtimePageId, offset: 13 },
+        createdAt: 4,
+        rectsBySelectionId: {
+          [runtimePageId]: [{ x: 3, y: 4, width: 5, height: 6 }]
+        }
+      })
+    })
+
+    // Then: public callback payload contains only public page ids.
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'public-callback-range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 13 },
+        rectsBySelectionId: {
+          'page-1': [{ x: 3, y: 4, width: 5, height: 6 }]
+        }
+      })
+    )
+  })
+})
+
+describe('linked callback bridge', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('emits same-page linked selections through public onSelect once', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelect = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        onSelect={onSelect}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimePageId = requireRuntimeSelectionId()
+    const range = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'same-page-linked-range'
+    })
+
+    act(() => {
+      simulateLinkedSelect(runtimePageId, range)
+      simulateLinkedSelect(runtimePageId, range)
+    })
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'same-page-linked-range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 },
+        rectsBySelectionId: {
+          'page-1': [{ x: 1, y: 2, width: 3, height: 4 }]
+        }
+      })
+    )
+  })
+
+  it('emits cross-page linked selections with public rect keys once', async () => {
+    const { document } = makeDocument({ pageCount: 2 })
+    const onSelect = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        onSelect={onSelect}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const range = makeRuntimeLinkedRange(runtimePage1Id, {
+      id: 'cross-page-linked-range',
+      end: { selectionId: runtimePage2Id, offset: 7 },
+      rectsBySelectionId: {
+        [runtimePage1Id]: [{ x: 1, y: 2, width: 3, height: 4 }],
+        [runtimePage2Id]: [{ x: 5, y: 6, width: 7, height: 8 }]
+      }
+    })
+
+    act(() => {
+      simulateLinkedSelect(runtimePage1Id, range)
+    })
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'cross-page-linked-range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-2', offset: 7 },
+        rectsBySelectionId: {
+          'page-1': [{ x: 1, y: 2, width: 3, height: 4 }],
+          'page-2': [{ x: 5, y: 6, width: 7, height: 8 }]
+        }
+      })
+    )
+  })
+
+  it('replaces uncontrolled linked ranges only from onLinkedDataChange', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onUpdateRange = vi.fn()
+    const originalRange = makeReaderSelectionRange({
+      id: 'replace-me',
+      text: 'Original text'
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        defaultRanges={[originalRange]}
+        onUpdateRange={onUpdateRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimePageId = requireRuntimeSelectionId()
+    const updatedRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'replace-me',
+      text: 'Updated text',
+      end: { selectionId: runtimePageId, offset: 12 },
+      rectsBySelectionId: {
+        [runtimePageId]: [{ x: 9, y: 8, width: 7, height: 6 }]
+      }
+    })
+
+    act(() => {
+      simulateLinkedUpdateRange(runtimePageId, updatedRange)
+    })
+
+    expect(onUpdateRange).toHaveBeenCalledTimes(1)
+    expect(getLastSelectionProps()?.linkedData?.items[0]?.text).toBe(
+      'Original text'
+    )
+
+    act(() => {
+      simulateLinkedDataChange(runtimePageId, {
+        items: [updatedRange],
+        selectedRangeId: 'replace-me',
+        selectionOrder: [runtimePageId],
+        overlayRectType: 'percent'
+      })
+    })
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.items[0]?.text).toBe(
+        'Updated text'
+      )
+    })
+    expect(getLastSelectionProps()?.linkedData?.items[0]?.end.offset).toBe(12)
+    expect(getLastSelectionProps()?.linkedData?.selectedRangeId).toBe(
+      'replace-me'
+    )
+  })
+
+  it('toggles linked selected id through data change and emits onSelectRange once', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelectRange = vi.fn()
+    const selectedRange = makeReaderSelectionRange({ id: 'toggle-me' })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        defaultRanges={[selectedRange]}
+        defaultSelectedRangeId='toggle-me'
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.selectedRangeId).toBe(
+        'toggle-me'
+      )
+    })
+    const runtimePageId = requireRuntimeSelectionId()
+    const currentData = getLastSelectionProps()?.linkedData
+    if (!currentData) {
+      throw new Error('Expected linked data before toggling range')
+    }
+
+    act(() => {
+      simulateLinkedDataChange(runtimePageId, {
+        ...currentData,
+        selectedRangeId: null
+      })
+      simulateLinkedSelectRange(runtimePageId, null)
+    })
+
+    await waitFor(() => {
+      expect(getLastSelectionProps()?.linkedData?.selectedRangeId).toBeNull()
+    })
+    expect(onSelectRange).toHaveBeenCalledTimes(1)
+    expect(onSelectRange).toHaveBeenCalledWith(null)
+  })
+
+  it('emits onHighlight once for one highlight operation', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onSelect = vi.fn()
+    const onHighlight = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionRef={selectionRef}
+        onSelect={onSelect}
+        onHighlight={onHighlight}
+      />
+    )
+
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const runtimePageId = requireRuntimeSelectionId()
+    const highlightedRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'highlight-linked-range'
+    })
+
+    act(() => {
+      selectionRef.current?.highlight()
+      simulateLinkedDataChange(runtimePageId, {
+        items: [highlightedRange],
+        selectedRangeId: 'highlight-linked-range',
+        selectionOrder: [runtimePageId],
+        overlayRectType: 'percent'
+      })
+      simulateLinkedSelect(runtimePageId, highlightedRange)
+      simulateLinkedSelect(runtimePageId, highlightedRange)
+    })
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'highlight-linked-range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 }
+      })
+    )
+  })
+
+  it('does not emit onHighlight for plain linked select or update callbacks', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const onSelect = vi.fn()
+    const onUpdateRange = vi.fn()
+    const onHighlight = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        onSelect={onSelect}
+        onUpdateRange={onUpdateRange}
+        onHighlight={onHighlight}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimePageId = requireRuntimeSelectionId()
+    const selectedRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'plain-linked-range'
+    })
+    const updatedRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'plain-linked-range',
+      text: 'Plain update',
+      end: { selectionId: runtimePageId, offset: 12 }
+    })
+
+    act(() => {
+      simulateLinkedSelect(runtimePageId, selectedRange)
+      simulateLinkedUpdateRange(runtimePageId, updatedRange)
+    })
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onUpdateRange).toHaveBeenCalledTimes(1)
+    expect(onHighlight).not.toHaveBeenCalled()
+  })
+
+  it('does not pass legacy range callbacks to linked-mode Selection children', async () => {
+    const { document } = makeDocument({ pageCount: 2 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        onSelect={vi.fn()}
+        onSelectRange={vi.fn()}
+        onUpdateRange={vi.fn()}
+        onHighlight={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+
+    getAllSelectionProps().forEach((props) => {
+      expect(props.onSelect).toBeUndefined()
+      expect(props.onSelectRange).toBeUndefined()
+      expect(props.onUpdateRange).toBeUndefined()
+      expect(props.onHighlight).toBeUndefined()
+    })
+  })
+})
+
+describe('multiplex selectionRef', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  it('routes external highlight to the page owning the active native selection', async () => {
+    // Given: 三页 html-parser viewer 暴露一个公共 selectionRef。
+    const { document } = makeDocument({ pageCount: 3 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionRef={selectionRef}
+      />
+    )
+
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const runtimePage3Id = requireRuntimeSelectionId(':page-3')
+    selectNativeTextAcrossPages(2)
+
+    // When: 外部调用公共 ref.highlight()。
+    act(() => {
+      selectionRef.current?.highlight()
+    })
+
+    // Then: 只调用 page-2 的子 Selection ref，不能退回到第一页。
+    expect(getSelectionRefCallCounts(runtimePage1Id).highlight).toBe(0)
+    expect(getSelectionRefCallCounts(runtimePage2Id).highlight).toBe(1)
+    expect(getSelectionRefCallCounts(runtimePage3Id).highlight).toBe(0)
+  })
+
+  it('emits one public cross-page range after highlighting a cross-page active selection', async () => {
+    // Given: 活跃原生选区从 page-1 跨到 page-2。
+    const { document } = makeDocument({ pageCount: 2 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onSelect = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionRef={selectionRef}
+        onSelect={onSelect}
+      />
+    )
+
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const range = makeRuntimeLinkedRange(runtimePage1Id, {
+      id: 'multiplex-cross-page-range',
+      end: { selectionId: runtimePage2Id, offset: 4 },
+      rectsBySelectionId: {
+        [runtimePage1Id]: [{ x: 1, y: 2, width: 3, height: 4 }],
+        [runtimePage2Id]: [{ x: 5, y: 6, width: 7, height: 8 }]
+      }
+    })
+    selectNativeTextAcrossPages(1, 2)
+
+    // When: multiplex highlight 只触发一个页面 ref，随后 linked 库回传一个跨页 range。
+    act(() => {
+      selectionRef.current?.highlight()
+      simulateLinkedDataChange(runtimePage1Id, {
+        items: [range],
+        selectedRangeId: 'multiplex-cross-page-range',
+        selectionOrder: [runtimePage1Id, runtimePage2Id],
+        overlayRectType: 'percent'
+      })
+      simulateLinkedSelect(runtimePage1Id, range)
+      simulateLinkedSelect(runtimePage1Id, range)
+    })
+
+    // Then: 只有 owner 页执行 highlight，公共 onSelect 只得到一个 page-1→page-2 range。
+    expect(getSelectionRefCallCounts(runtimePage1Id).highlight).toBe(1)
+    expect(getSelectionRefCallCounts(runtimePage2Id).highlight).toBe(0)
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'multiplex-cross-page-range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-2', offset: 4 },
+        rectsBySelectionId: {
+          'page-1': [{ x: 1, y: 2, width: 3, height: 4 }],
+          'page-2': [{ x: 5, y: 6, width: 7, height: 8 }]
+        }
+      })
+    )
+  })
+
+  it('clears every mounted child ref through the public selectionRef', async () => {
+    // Given: 三页都挂载了独立的 Selection ref，且浏览器中有活跃选区。
+    const { document } = makeDocument({ pageCount: 3 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionRef={selectionRef}
+      />
+    )
+
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const runtimePage3Id = requireRuntimeSelectionId(':page-3')
+    selectNativeTextAcrossPages(2)
+    expect(window.getSelection()?.rangeCount).toBe(1)
+
+    // When: 外部调用 clear()。
+    act(() => {
+      selectionRef.current?.clear()
+    })
+
+    // Then: 每个 mounted page ref 都收到 clear，且原生 selection 被清掉。
+    expect(getSelectionRefCallCounts(runtimePage1Id).clear).toBe(1)
+    expect(getSelectionRefCallCounts(runtimePage2Id).clear).toBe(1)
+    expect(getSelectionRefCallCounts(runtimePage3Id).clear).toBe(1)
+    expect(window.getSelection()?.rangeCount).toBe(0)
+  })
+
+  it('autoHighlight calls one child highlight and dedupes onSelect/onHighlight', async () => {
+    // Given: autoHighlight 开启，用户在 page-2 结束一次原生选区。
+    const { document } = makeDocument({ pageCount: 3 })
+    const onSelect = vi.fn()
+    const onHighlight = vi.fn()
+    const onSelectionEnd = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        autoHighlight
+        onSelect={onSelect}
+        onHighlight={onHighlight}
+        onSelectionEnd={onSelectionEnd}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const runtimePage3Id = requireRuntimeSelectionId(':page-3')
+    const page2Props = getAllSelectionProps().find(
+      (props) => props.selectionId === runtimePage2Id
+    )
+    if (!page2Props) {
+      throw new Error('Expected page-2 Selection props')
+    }
+    const selection = selectNativeTextAcrossPages(2)
+    const range = makeRuntimeLinkedRange(runtimePage2Id, {
+      id: 'auto-multiplex-highlight-range'
+    })
+
+    // When: linked Selection 结束选区，autoHighlight 走 multiplex highlight 一次。
+    act(() => {
+      page2Props.onSelectionEnd?.({ x: 12, y: 34 }, selection)
+      simulateLinkedDataChange(runtimePage2Id, {
+        items: [range],
+        selectedRangeId: 'auto-multiplex-highlight-range',
+        selectionOrder: [runtimePage1Id, runtimePage2Id, runtimePage3Id],
+        overlayRectType: 'percent'
+      })
+      simulateLinkedSelect(runtimePage2Id, range)
+      simulateLinkedSelect(runtimePage2Id, range)
+    })
+
+    // Then: 没有对三页循环 highlight，公共回调也不会重复。
+    expect(getSelectionRefCallCounts(runtimePage1Id).highlight).toBe(0)
+    expect(getSelectionRefCallCounts(runtimePage2Id).highlight).toBe(1)
+    expect(getSelectionRefCallCounts(runtimePage3Id).highlight).toBe(0)
+    expect(onSelectionEnd).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+  })
+})
+
+// T5：每页一个 linked-mode HamsterSelection 实例。
+// 校验：实例数量、runtime id、共享 linkedData、popover gating、legacy 回调禁止通道。
+describe('per-page linked selection ownership', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('renders exactly one HamsterSelection per html-parser page with unique page-N runtime ids', async () => {
+    // Given: 一个 3 页文档，renderMode=html-parser 已默认。
+    const { document } = makeDocument({ pageCount: 3 })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: viewer 渲染。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+      />
+    )
+
+    // Then: 注册了恰好 3 个 linked 实例，runtime id 末尾依次为 page-1/page-2/page-3，
+    // 每个实例的 selectionId 都共享同一个 readerLinkedScopeId 前缀。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const allProps = getAllSelectionProps()
+    const scopeMatches = allProps.map((p) =>
+      p.selectionId?.match(/^reader-linked-(.+):page-(\d+)$/u)
+    )
+    expect(scopeMatches.every(Boolean)).toBe(true)
+
+    const scopeId = scopeMatches[0]![1]
+    expect(scopeMatches.map((m) => m![1])).toEqual([scopeId, scopeId, scopeId])
+    expect(
+      allProps.map((p) => p.selectionId).sort((a, b) => a!.localeCompare(b!))
+    ).toEqual([
+      `reader-linked-${scopeId}:page-1`,
+      `reader-linked-${scopeId}:page-2`,
+      `reader-linked-${scopeId}:page-3`
+    ])
+  })
+
+  it('passes the identical shared runtime LinkedSelectionData reference to every per-page Selection instance', async () => {
+    // Given: 三页文档，defaultRanges 覆盖 page-2 的 range。
+    const { document } = makeDocument({ pageCount: 3 })
+    const range = makeReaderSelectionRange({
+      id: 'shared-range',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 1, y: 2, width: 3, height: 4 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: viewer 渲染。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        defaultRanges={[range]}
+      />
+    )
+
+    // Then: 每页 Selection 收到的 linkedData 都是同一个对象引用。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const all = getAllSelectionProps()
+    const linkedDataPage1 = all[0]?.linkedData
+    const linkedDataPage2 = all[1]?.linkedData
+    const linkedDataPage3 = all[2]?.linkedData
+
+    expect(linkedDataPage1).toBeDefined()
+    // 三个实例持有同一份 shared runtime LinkedSelectionData 引用
+    expect(linkedDataPage1).toBe(linkedDataPage2)
+    expect(linkedDataPage2).toBe(linkedDataPage3)
+    // 并包含 page-2 的 runtime range
+    expect(linkedDataPage1?.items).toHaveLength(1)
+    expect(linkedDataPage1?.items[0]?.start.selectionId).toBe(
+      `reader-linked-${all[0]?.selectionId
+        ?.split(':')[0]
+        ?.replace('reader-linked-', '')}:page-2`
+    )
+  })
+
+  it('gates selectionPopover and highlightPopover to the page owning the selected range start endpoint', async () => {
+    // Given: 三页文档，selected range 的 start endpoint 落在 page-2。
+    const { document } = makeDocument({ pageCount: 3 })
+    const selectionPopover = <div data-testid='select'>S</div>
+    const highlightPopover = <div data-testid='highlight'>H</div>
+    const range = makeReaderSelectionRange({
+      id: 'gated-range',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: viewer 以 controlled ranges + selectedRangeId 渲染。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[range]}
+        selectedRangeId='gated-range'
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+      />
+    )
+
+    // Then: 等三页全部注册。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const all = getAllSelectionProps()
+    const byId = new Map(all.map((p) => [p.selectionId!, p]))
+    const page2Id = Array.from(byId.keys()).find((id) =>
+      id.endsWith(':page-2')
+    )!
+    const page1Id = Array.from(byId.keys()).find((id) =>
+      id.endsWith(':page-1')
+    )!
+    const page3Id = Array.from(byId.keys()).find((id) =>
+      id.endsWith(':page-3')
+    )!
+
+    // owner 页（page-2）拿到真实 popover 内容
+    expectPopoverToContain(byId.get(page2Id)?.popover, highlightPopover)
+    expectPopoverToContain(
+      byId.get(page2Id)?.selectionPopover,
+      selectionPopover
+    )
+
+    // 其余页的 popover / selectionPopover 必须为 undefined
+    expect(byId.get(page1Id)?.popover).toBeUndefined()
+    expect(byId.get(page1Id)?.selectionPopover).toBeUndefined()
+    expect(byId.get(page3Id)?.popover).toBeUndefined()
+    expect(byId.get(page3Id)?.selectionPopover).toBeUndefined()
+  })
+
+  it('forwards popovers to every page when there is no selected range (active selection flow)', async () => {
+    // Given: 三页文档，无 selectedRangeId。
+    const { document } = makeDocument({ pageCount: 3 })
+    const selectionPopover = <div data-testid='select'>S</div>
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: viewer 渲染时未传入 selectedRangeId。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionPopover={selectionPopover}
+      />
+    )
+
+    // Then: 三页均持有真实的 popover / selectionPopover，
+    // 因为没有 selected range 的 gating，active text selection 可在任一页面发生。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const all = getAllSelectionProps()
+    all.forEach((p) => {
+      expectPopoverToContain(p.popover, selectionPopover)
+      expectPopoverToContain(p.selectionPopover, selectionPopover)
+    })
+  })
+
+  it('does NOT pass legacy range callbacks (onSelect/onUpdateRange/onHighlight) to linked-mode Selection children', async () => {
+    // Given: 三页文档，调用方提供 onSelect/onUpdateRange/onHighlight 公共回调。
+    const { document } = makeDocument({ pageCount: 3 })
+    const onSelect = vi.fn()
+    const onUpdateRange = vi.fn()
+    const onHighlight = vi.fn()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: viewer 渲染。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        onSelect={onSelect}
+        onUpdateRange={onUpdateRange}
+        onHighlight={onHighlight}
+      />
+    )
+
+    // Then: 每页 Selection 实例的 legacy range callbacks 都显式为 undefined，
+    // 公共回调只能通过 onLinkedSelect/onLinkedUpdateRange 桥接触发。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const all = getAllSelectionProps()
+    all.forEach((p) => {
+      expect(p.onSelect).toBeUndefined()
+      expect(p.onUpdateRange).toBeUndefined()
+      expect(p.onHighlight).toBeUndefined()
+    })
+  })
+
+  it('keeps hidden page ranges in shared linkedData while not creating Selection instances for hidden pages', async () => {
+    // Given: 三页文档，pageRange 仅可见 page-1，但 range 的 start endpoint 落在隐藏的 page-2。
+    const { document } = makeDocument({ pageCount: 3 })
+    const hiddenRange = makeReaderSelectionRange({
+      id: 'hidden-range',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 4 },
+      rectsBySelectionId: {
+        'page-2': [{ x: 5, y: 6, width: 7, height: 8 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    // When: viewer 仅渲染 page-1。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 1, end: 1 }}
+        ranges={[hiddenRange]}
+      />
+    )
+
+    // Then: 只创建 1 个 Selection 实例（page-1），
+    // 但 shared linkedData 的 items 仍包含 hidden page-2 的 range。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const onlyProps = getAllSelectionProps()[0]
+    expect(onlyProps?.selectionId).toMatch(/^reader-linked-.+:page-1$/u)
+    expect(onlyProps?.linkedData?.items).toHaveLength(1)
+    expect(onlyProps?.linkedData?.items[0]?.id).toBe('hidden-range')
+    // selectionOrder 仅包含可见页面
+    expect(onlyProps?.linkedData?.selectionOrder).toHaveLength(1)
+    expect(onlyProps?.linkedData?.selectionOrder[0]).toBe(
+      onlyProps?.selectionId
+    )
+  })
+
+  it('renders zero Selection instances for direct render mode (parity check)', async () => {
+    // Given: 三页文档，direct 渲染模式。
+    const { document } = makeDocument({ pageCount: 3 })
+
+    // When: viewer 渲染。
+    render(
+      <IntermediateDocumentViewer document={document} renderMode='direct' />
+    )
+
+    // Then: 全部页面渲染完，但 Selection mock 注册表为空。
+    await waitFor(() => {
+      expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
+    })
+    expect(getAllSelectionProps()).toHaveLength(0)
+  })
+})
+
+describe('pageRange stability', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  it('keeps a stored page-2 range while pageRange hides and remounts page 2', async () => {
+    // Given: 非受控存储里已有一个 public page-2 range。
+    const { document } = makeDocument({ pageCount: 2 })
+    const storedPage2Range = makeReaderSelectionRange({
+      id: 'stored-page-2-range',
+      start: { selectionId: 'page-2', offset: 1 },
+      end: { selectionId: 'page-2', offset: 5 },
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-2': [{ x: 0.25, y: 0.2, width: 0.5, height: 0.1 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 2, end: 2 }}
+        defaultRanges={[storedPage2Range]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+      expect(getAllSelectionProps()[0]?.selectionId).toMatch(
+        /^reader-linked-.+:page-2$/u
+      )
+    })
+    const initialRuntimePage2Id = requireRuntimeSelectionId(':page-2')
+    const initialPage2Props = requireSelectionPropsById(initialRuntimePage2Id)
+    expect(initialPage2Props.linkedData?.items[0]).toMatchObject({
+      id: 'stored-page-2-range',
+      start: { selectionId: initialRuntimePage2Id, offset: 1 },
+      end: { selectionId: initialRuntimePage2Id, offset: 5 },
+      rectsBySelectionId: {
+        [initialRuntimePage2Id]: [{ x: 0.25, y: 0.2, width: 0.5, height: 0.1 }]
+      }
+    })
+
+    // When: pageRange 临时隐藏 page-2，只挂载 page-1。
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 1, end: 1 }}
+        defaultRanges={[storedPage2Range]}
+      />
+    )
+
+    // Then: public 存储 range 仍在 shared linkedData.items，
+    // 但 hidden page-2 不再出现在 selectionOrder/DOM/registry。
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+      expect(getAllSelectionProps()[0]?.selectionId).toMatch(
+        /^reader-linked-.+:page-1$/u
+      )
+    })
+    const hiddenRuntimePage1Id = requireRuntimeSelectionId(':page-1')
+    const hiddenPageProps = requireSelectionPropsById(hiddenRuntimePage1Id)
+    expect(screen.queryByTestId('intermediate-page-2')).not.toBeInTheDocument()
+    expect(hiddenPageProps.linkedData?.items[0]?.id).toBe('stored-page-2-range')
+    expect(hiddenPageProps.linkedData?.items[0]?.start.selectionId).toBe(
+      initialRuntimePage2Id
+    )
+    expect(
+      Object.keys(
+        hiddenPageProps.linkedData?.items[0]?.rectsBySelectionId ?? {}
+      )
+    ).toEqual([initialRuntimePage2Id])
+    expect(hiddenPageProps.linkedData?.selectionOrder).toEqual([
+      hiddenRuntimePage1Id
+    ])
+
+    // When: page-2 becomes visible again.
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 2, end: 2 }}
+        defaultRanges={[storedPage2Range]}
+      />
+    )
+
+    // Then: the same stored public range re-renders against page-2's runtime id.
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+      expect(getAllSelectionProps()[0]?.selectionId).toBe(initialRuntimePage2Id)
+    })
+    const remountedPage2Props = requireSelectionPropsById(initialRuntimePage2Id)
+    expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+    expect(remountedPage2Props.linkedData?.selectionOrder).toEqual([
+      initialRuntimePage2Id
+    ])
+    expect(remountedPage2Props.linkedData?.items[0]).toMatchObject({
+      id: 'stored-page-2-range',
+      start: { selectionId: initialRuntimePage2Id, offset: 1 },
+      end: { selectionId: initialRuntimePage2Id, offset: 5 },
+      rectsBySelectionId: {
+        [initialRuntimePage2Id]: [{ x: 0.25, y: 0.2, width: 0.5, height: 0.1 }]
+      }
+    })
+  })
+})
+
+describe('resize/count stability', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  it('keeps percent rects relative to the page Selection container instead of the html-parser output', async () => {
+    // Given: page-1/page-2 have intentionally different page dimensions and
+    // page-2 stores a percent rect. A global html-parser output box would produce
+    // different pixels than the page-local .hsn-selection-container.
+    const { document } = makeDocument({ pageCount: 2 })
+    vi.mocked(document.getPageSizeByPageNumber).mockImplementation(
+      (pageNumber) =>
+        pageNumber === 2 ? { x: 240, y: 360 } : { x: 120, y: 180 }
+    )
+    const page2Range = makeReaderSelectionRange({
+      id: 'resize-page-2-range',
+      start: { selectionId: 'page-2', offset: 2 },
+      end: { selectionId: 'page-2', offset: 8 },
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-2': [{ x: 0.5, y: 0.25, width: 0.25, height: 0.1 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        ranges={[page2Range]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const output = screen.getByTestId('html-parser-output')
+    const page2 = screen.getByTestId('intermediate-page-2')
+    const page2SelectionContainer = page2.querySelector(
+      '.hsn-selection-container'
+    )
+    if (!(page2SelectionContainer instanceof HTMLElement)) {
+      throw new Error('Expected page 2 selection container')
+    }
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    mockElementRect(output, { left: 0, top: 0, width: 1000, height: 1000 })
+    mockElementRect(page2SelectionContainer, {
+      left: 40,
+      top: 60,
+      width: 240,
+      height: 360
+    })
+
+    const page2Props = requireSelectionPropsById(runtimePage2Id)
+    const runtimeRange = page2Props.linkedData?.items[0]
+    const runtimeRect = runtimeRange?.rectsBySelectionId[runtimePage2Id]?.[0]
+
+    expect(page2).toHaveStyle({ width: '240px', height: '360px' })
+    expect(page2Props.overlayRectType).toBe('percent')
+    expect(page2Props.linkedData?.overlayRectType).toBe('percent')
+    expect(runtimeRange?.start.selectionId).toBe(runtimePage2Id)
+    expect(Object.keys(runtimeRange?.rectsBySelectionId ?? {})).toEqual([
+      runtimePage2Id
+    ])
+    expect(runtimeRect).toEqual({ x: 0.5, y: 0.25, width: 0.25, height: 0.1 })
+
+    const pageRect = page2SelectionContainer.getBoundingClientRect()
+    const outputRect = output.getBoundingClientRect()
+    expect({
+      left: pageRect.left + 0.5 * pageRect.width,
+      top: pageRect.top + 0.25 * pageRect.height,
+      width: 0.25 * pageRect.width,
+      height: 0.1 * pageRect.height
+    }).toEqual({ left: 160, top: 150, width: 60, height: 36 })
+    expect({
+      left: outputRect.left + 0.5 * outputRect.width,
+      top: outputRect.top + 0.25 * outputRect.height,
+      width: 0.25 * outputRect.width,
+      height: 0.1 * outputRect.height
+    }).not.toEqual({ left: 160, top: 150, width: 60, height: 36 })
+  })
+
+  it('limits cross-page selection context to mounted page containers when visible page count changes', async () => {
+    // Given: a cross-page public range is stored, but pageRange mounts only page-1.
+    const { document } = makeDocument({ pageCount: 2 })
+    const crossPageRange = makeReaderSelectionRange({
+      id: 'visible-only-cross-page-range',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-2', offset: 6 },
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+        'page-2': [{ x: 0.2, y: 0.3, width: 0.4, height: 0.1 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 1, end: 1 }}
+        ranges={[crossPageRange]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const page1OnlyRuntimeId = requireRuntimeSelectionId(':page-1')
+    const page1OnlyProps = requireSelectionPropsById(page1OnlyRuntimeId)
+    const hiddenRuntimePage2Id = page1OnlyRuntimeId.replace(
+      ':page-1',
+      ':page-2'
+    )
+
+    expect(screen.queryByTestId('intermediate-page-2')).not.toBeInTheDocument()
+    expect(page1OnlyProps.linkedData?.selectionOrder).toEqual([
+      page1OnlyRuntimeId
+    ])
+    expect(page1OnlyProps.linkedData?.items[0]).toMatchObject({
+      start: { selectionId: page1OnlyRuntimeId, offset: 0 },
+      end: { selectionId: hiddenRuntimePage2Id, offset: 6 },
+      rectsBySelectionId: {
+        [page1OnlyRuntimeId]: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+        [hiddenRuntimePage2Id]: [{ x: 0.2, y: 0.3, width: 0.4, height: 0.1 }]
+      }
+    })
+
+    // When: the visible count expands to mount both page containers.
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        pageRange={{ start: 1, end: 2 }}
+        ranges={[crossPageRange]}
+      />
+    )
+
+    // Then: the stored range shape is unchanged, and only now can linked
+    // selection order include both mounted pages.
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const page2Props = requireSelectionPropsById(runtimePage2Id)
+
+    expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+    expect(page2Props.linkedData?.selectionOrder).toEqual([
+      runtimePage1Id,
+      runtimePage2Id
+    ])
+    expect(page2Props.linkedData?.items[0]).toMatchObject({
+      start: { selectionId: runtimePage1Id, offset: 0 },
+      end: { selectionId: runtimePage2Id, offset: 6 },
+      rectsBySelectionId: {
+        [runtimePage1Id]: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+        [runtimePage2Id]: [{ x: 0.2, y: 0.3, width: 0.4, height: 0.1 }]
+      }
+    })
+  })
+})
+
+describe('multi-reader isolation', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearSelectionProps()
+  })
+
+  it('filters foreign runtime ids so identical public page-1 data does not cross-talk', async () => {
+    // Given: two Reader instances render identical public page-1 ranges.
+    const { document: firstDocument } = makeDocument({ pageCount: 1 })
+    const { document: secondDocument } = makeDocument({ pageCount: 1 })
+    const onFirstSelect = vi.fn()
+    const onSecondSelect = vi.fn()
+    const publicRange = makeReaderSelectionRange({
+      id: 'shared-public-page-1-range',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 4 },
+      rectsBySelectionId: {
+        'page-1': [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }]
+      }
+    })
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <>
+        <IntermediateDocumentViewer
+          document={firstDocument}
+          renderMode='html-parser'
+          defaultRanges={[publicRange]}
+          onSelect={onFirstSelect}
+        />
+        <IntermediateDocumentViewer
+          document={secondDocument}
+          renderMode='html-parser'
+          defaultRanges={[publicRange]}
+          onSelect={onSecondSelect}
+        />
+      </>
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const page1RuntimeIds = getAllSelectionProps()
+      .flatMap((props) => (props.selectionId ? [props.selectionId] : []))
+      .sort()
+    const firstRuntimeId = page1RuntimeIds[0]
+    const secondRuntimeId = page1RuntimeIds[1]
+    if (!firstRuntimeId || !secondRuntimeId) {
+      throw new Error('Expected two runtime page-1 ids')
+    }
+    expect(firstRuntimeId).not.toBe(secondRuntimeId)
+
+    const secondOwnRange = makeRuntimeLinkedRange(secondRuntimeId, {
+      id: 'second-own-range',
+      text: 'Second own range',
+      rectsBySelectionId: {
+        [secondRuntimeId]: [{ x: 0.2, y: 0.2, width: 0.3, height: 0.1 }],
+        [firstRuntimeId]: [{ x: 0.8, y: 0.8, width: 0.1, height: 0.1 }]
+      }
+    })
+    const foreignRange = makeRuntimeLinkedRange(firstRuntimeId, {
+      id: 'foreign-first-reader-range'
+    })
+
+    // When: the second Reader receives linked data polluted by the first
+    // Reader's runtime id in selectionOrder, rects, and a foreign range.
+    act(() => {
+      simulateLinkedDataChange(secondRuntimeId, {
+        items: [secondOwnRange, foreignRange],
+        selectedRangeId: 'second-own-range',
+        selectionOrder: [secondRuntimeId, firstRuntimeId],
+        overlayRectType: 'percent'
+      })
+      simulateLinkedSelect(secondRuntimeId, foreignRange)
+    })
+
+    // Then: the second Reader rebuilds public state only from its own scoped ids,
+    // and the foreign callback payload is dropped instead of leaking publicly.
+    await waitFor(() => {
+      const secondProps = requireSelectionPropsById(secondRuntimeId)
+      expect(secondProps.linkedData?.items).toHaveLength(1)
+    })
+    const secondProps = requireSelectionPropsById(secondRuntimeId)
+    expect(secondProps.linkedData?.selectionOrder).toEqual([secondRuntimeId])
+    expect(secondProps.linkedData?.items[0]).toMatchObject({
+      id: 'second-own-range',
+      start: { selectionId: secondRuntimeId, offset: 0 },
+      end: { selectionId: secondRuntimeId, offset: 11 },
+      rectsBySelectionId: {
+        [secondRuntimeId]: [{ x: 0.2, y: 0.2, width: 0.3, height: 0.1 }]
+      }
+    })
+    expect(onFirstSelect).not.toHaveBeenCalled()
+    expect(onSecondSelect).not.toHaveBeenCalled()
+
+    // When: the second Reader reports an own scoped selection.
+    act(() => {
+      simulateLinkedSelect(secondRuntimeId, secondOwnRange)
+    })
+
+    // Then: only the second callback receives public, unscoped page-1 data.
+    expect(onFirstSelect).not.toHaveBeenCalled()
+    expect(onSecondSelect).toHaveBeenCalledTimes(1)
+    expect(onSecondSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'second-own-range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 },
+        rectsBySelectionId: {
+          'page-1': [{ x: 0.2, y: 0.2, width: 0.3, height: 0.1 }]
+        }
+      })
+    )
   })
 })

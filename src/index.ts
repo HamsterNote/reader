@@ -4,9 +4,16 @@
 export type {
   MousePosition as ReaderMousePosition,
   OverlayRectType as ReaderSelectionOverlayRectType,
-  SelectionRange as ReaderSelectionRange,
   SelectionRef as ReaderSelectionRef
 } from '@hamster-note/selection'
+
+export type {
+  ReaderLinkedSelectionData,
+  ReaderLinkedSelectionRange,
+  ReaderSelectionEndpoint,
+  ReaderSelectionRange,
+  ReaderSelectionRect
+} from './types/selection'
 
 export {
   type BackgroundQuality,
@@ -48,6 +55,10 @@ export type ReaderInteractiveProps = Pick<
   | 'ranges'
   | 'selectedRangeId'
   | 'onSelect'
+  | 'onLinkedDataChange'
+  | 'onLinkedSelect'
+  | 'onLinkedUpdateRange'
+  | 'onLinkedSelectRange'
   | 'onSelectRange'
   | 'onUpdateRange'
   | 'onSelectionStart'

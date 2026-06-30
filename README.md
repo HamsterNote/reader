@@ -66,9 +66,30 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 
 ## Text Selection (@hamster-note/selection)
 
-`Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features — highlighted ranges, popovers, and programmatic control — on top of the native browser `Selection` API.
+`Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features, highlighted ranges, popovers, and programmatic control on top of the native browser `Selection` API.
 
-The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is active only in `html-parser` render mode; the `direct` render path is unaffected.
+The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is active only in `html-parser` render mode. The `direct` render path and the legacy native callbacks are unaffected.
+
+### Linked range shape
+
+In `html-parser` mode, `Reader` uses a linked range shape. Each endpoint carries a public page `selectionId`, and overlay rectangles are grouped by that page id in `rectsBySelectionId`.
+
+```ts
+{
+  id: 'highlight-1',
+  text: 'Selected text',
+  start: { selectionId: 'page-1', offset: 12 },
+  end: { selectionId: 'page-2', offset: 34 },
+  createdAt: Date.now(),
+  overlayRectType: 'percent',
+  rectsBySelectionId: {
+    'page-1': [{ x: 0.1, y: 0.2, width: 0.5, height: 0.05 }],
+    'page-2': [{ x: 0.05, y: 0.1, width: 0.4, height: 0.05 }]
+  }
+}
+```
+
+Public page ids are always `page-${pageNumber}` (for example, `page-1`, `page-2`). Internally, each `Reader` instance scopes runtime Selection ids so two Readers on the same page cannot collide, but public callbacks and stored data stay unscoped. You should only read and write the public `page-${pageNumber}` ids.
 
 ### Quick Start
 
@@ -78,10 +99,23 @@ import type { ReaderSelectionRange } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'   // includes Selection CSS
 import { useState } from 'react'
 
+const initialRanges: ReaderSelectionRange[] = [
+  {
+    id: 'highlight-1',
+    text: 'Selected text on page 1',
+    start: { selectionId: 'page-1', offset: 12 },
+    end: { selectionId: 'page-1', offset: 34 },
+    createdAt: Date.now(),
+    overlayRectType: 'percent',
+    rectsBySelectionId: {
+      'page-1': [{ x: 0.1, y: 0.2, width: 0.5, height: 0.05 }]
+    }
+  }
+]
+
 export function App() {
   // 受控模式：Reader 不内部修改 ranges，由 onSelect 回调外部追加
-  // The Demo implements this controlled pattern, persisting ranges to localStorage keyed by filename.
-  const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+  const [ranges, setRanges] = useState<ReaderSelectionRange[]>(initialRanges)
 
   return (
     <Reader
@@ -90,6 +124,9 @@ export function App() {
       ranges={ranges}
       overlayRectType='percent'
       onSelect={(range) => setRanges((prev) => [...prev, range])}
+      onUpdateRange={(range) =>
+        setRanges((prev) => prev.map((r) => (r.id === range.id ? range : r)))
+      }
     />
   )
 }
@@ -99,7 +136,7 @@ export function App() {
 
 | Prop | Type | Description |
 |---|---|---|
-| `ranges` | `ReaderSelectionRange[]` | Controlled highlight ranges. Reader does not mutate this array. |
+| `ranges` | `ReaderSelectionRange[]` | Controlled highlight ranges in the linked shape. Reader does not mutate this array. |
 | `defaultRanges` | `ReaderSelectionRange[]` | Initial ranges for uncontrolled mode (when `ranges` is omitted). |
 | `selectedRangeId` | `string \| null` | Controlled currently-selected range ID. |
 | `defaultSelectedRangeId` | `string \| null` | Initial selected range ID for uncontrolled mode. |
@@ -121,10 +158,10 @@ export function App() {
 
 ```ts
 import type {
-  ReaderSelectionRange,    // { id, text, start, end, createdAt, overlayRectType?, rects? }
+  ReaderSelectionRange,    // linked: { id, text, start, end, rectsBySelectionId, overlayRectType? }
   ReaderSelectionOverlayRectType,  // 'px' | 'percent'
   ReaderSelectionRef,      // { highlight(): void; clear(): void }
-  ReaderMousePosition      // { x, y } — viewport coordinates (clientX/clientY)
+  ReaderMousePosition      // { x, y }, viewport coordinates (clientX/clientY)
 } from '@hamster-note/reader'
 ```
 
@@ -134,9 +171,13 @@ import type {
 
 ### Legacy Selection Callbacks
 
-The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` callbacks are preserved for backward compatibility. They continue to fire through the native `mouseup`/`touchend`/`selectionchange` listeners on the viewer root element, independent of the `<Selection>` component.
+The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` callbacks are preserved for backward compatibility. They continue to fire through the native `mouseup`/`touchend`/`selectionchange` listeners on the viewer root element, independent of the `<Selection>` component. They are not affected by the linked range shape.
 
 > **Note**: `onSelectionEnd` is **mouseup-based**. On touch devices, the selection-end signal relies on the legacy `touchend` listener (which fires `onTextSelectionEnd` / `onSelectText`), not `onSelectionEnd`.
+
+### Demo localStorage Migration
+
+The browser Demo persists highlights to localStorage keyed by filename. The stored shape is now `{ version: 2, ranges: ReaderSelectionRange[] }`. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the highlights instead.
 
 ### Programmatic Control
 
