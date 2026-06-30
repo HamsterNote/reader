@@ -3264,6 +3264,328 @@ describe('IntermediateDocumentViewer', () => {
   })
   // ---- end intermediate-document 懒加载队列语义 ----
 
+  // ---- intermediate-document 可见性 500ms 防抖与快速滚动取消（任务 5）----
+  // 非初始页面需持续可见 pageLoadEnterDelayMs（默认 500ms）才会入队加载；
+  // 页面在定时器触发前离开可加载窗口则取消挂起入队，保持空外壳。
+  // 快速滚动经过多页不应把所有路过页面都入队。所有定时器在 unmount 与
+  // document/renderMode 变更时被清除，杜绝迟到入队。
+  describe('intermediate-document visibility 500ms enqueue debounce', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    })
+
+    // 注意：React 19 + testing-library 的 render/rerender 与 async act 在
+    // vi.useFakeTimers() 下会因 React 内部 setTimeout(0) 不触发而挂死。故先以
+    // 真实定时器 render 并用 waitFor 等待初始页加载稳态，再切入 fake timers
+    // 测防抖，全程使用同步 act(() => vi.advanceTimersByTime(N))；任何 rerender
+    // 必须先切回真实定时器。sync act 不会排空多 tick promise 链，故 getContent
+    // 断言前用纯 microtask flush 推进队列的 async 加载链。
+
+    // 纯微任务刷新（不依赖 fake/real timers，不触发 React 内部 act 定时器），
+    // 用于在 sync act 推进假定时器后让队列的 getPageByPageNumber -> getContent
+    // promise 链落地，以便断言 getContent 被调用。
+    const flushQueueMicrotasks = async () => {
+      for (let i = 0; i < 20; i += 1) {
+        await Promise.resolve()
+      }
+    }
+
+    it('page must remain continuously visible for 500ms before enqueueing (enter -> 499ms -> no load; -> 500ms -> load)', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        // 页 3 进入可加载窗口 → 启动 500ms 定时器
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(499)
+        })
+        expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(3)
+        expect(pages.get(3)?.getContent).not.toHaveBeenCalled()
+
+        // 继续推进到 500ms，页面仍可见 → 定时器触发 → enqueuePage → 加载
+        act(() => {
+          vi.advanceTimersByTime(1)
+        })
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
+        // sync act 不排空多 tick promise 链，手动 flush 让 getContent 落地
+        await flushQueueMicrotasks()
+        expect(pages.get(3)?.getContent).toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('page leaving before 500ms cancels pending enqueue (no load even after timers advance)', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+        expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(3)
+
+        // 页 3 在 500ms 前离开 → 取消挂起入队
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3'),
+          false
+        )
+        act(() => {
+          vi.advanceTimersByTime(2000)
+        })
+        await flushQueueMicrotasks()
+        expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(3)
+        expect(pages.get(3)?.getContent).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('fast scroll across many pages only loads initial pages (all transient pages leave before 500ms)', async () => {
+      const pageCount = 10
+      const { document } = makeDocument({ pageCount })
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        // 快速滚动：每页短暂进入再离开（每页可见 <500ms）
+        for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
+          const page = screen.getByTestId(`intermediate-page-${pageNumber}`)
+          intersectionObserverMock.trigger(page)
+          act(() => {
+            vi.advanceTimersByTime(100)
+          })
+          intersectionObserverMock.trigger(page, false)
+        }
+
+        act(() => {
+          vi.advanceTimersByTime(3000)
+        })
+        await flushQueueMicrotasks()
+
+        // 仅初始页 1 被加载；页 2..10 均因 <500ms 离开被取消，不应入队
+        const getPage = document.getPageByPageNumber as ReturnType<typeof vi.fn>
+        const calledPageNumbers = Array.from(
+          new Set(getPage.mock.calls.map((call) => call[0]))
+        )
+        expect(calledPageNumbers).toEqual([1])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('pending visibility timers are cleared on unmount (no late enqueue after unmount)', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+
+      const { unmount } = render(
+        <IntermediateDocumentViewer document={document} />
+      )
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+
+        unmount()
+
+        const callsBefore = (
+          document.getPageByPageNumber as ReturnType<typeof vi.fn>
+        ).mock.calls.length
+
+        act(() => {
+          vi.advanceTimersByTime(2000)
+        })
+        await flushQueueMicrotasks()
+        expect(
+          (document.getPageByPageNumber as ReturnType<typeof vi.fn>).mock.calls
+            .length
+        ).toBe(callsBefore)
+        expect(pages.get(3)?.getContent).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('pending visibility timers are cleared on document switch (no late enqueue after document change)', async () => {
+      const { document: doc1 } = makeDocument({ pageCount: 3 })
+      const { document: doc2, pages: pages2 } = makeDocument({ pageCount: 3 })
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={doc1} />
+      )
+
+      await waitFor(() => {
+        expect(doc1.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+
+        // rerender 必须在真实定时器下进行（RTL rerender 内部 act 在 fake
+        // timers 下会挂死）；切到真实定时器后 rerender，IO effect cleanup 会
+        // 清除 doc1 页 3 的挂起可见性定时器。
+        vi.useRealTimers()
+        rerender(<IntermediateDocumentViewer document={doc2} />)
+
+        await waitFor(() => {
+          expect(doc2.getPageByPageNumber).toHaveBeenCalledWith(1)
+        })
+
+        // 再切回 fake timers 推进远超 500ms，确认 doc1 页 3 的迟到入队未触发
+        vi.useFakeTimers()
+        act(() => {
+          vi.advanceTimersByTime(2000)
+        })
+        await flushQueueMicrotasks()
+        expect(doc1.getPageByPageNumber).not.toHaveBeenCalledWith(3)
+        // doc2 页 3 也未被防抖入队（未进入可见窗口）
+        expect(doc2.getPageByPageNumber).not.toHaveBeenCalledWith(3)
+        expect(pages2.get(3)?.getContent).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('pending visibility timers are cleared on renderMode switch (no late enqueue after mode change)', async () => {
+      const { document } = makeDocument({ pageCount: 30 })
+
+      const { rerender } = render(
+        <IntermediateDocumentViewer
+          document={document}
+          overscan={0}
+          initialLoadedPages={1}
+        />
+      )
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-30')
+        )
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+
+        // rerender 必须在真实定时器下进行；renderMode 变更触发 renderMode
+        // cleanup effect 清除所有挂起可见性定时器（页 30 防抖即被取消）。
+        vi.useRealTimers()
+        rerender(
+          <IntermediateDocumentViewer
+            document={document}
+            overscan={0}
+            initialLoadedPages={1}
+            renderMode='html-parser'
+          />
+        )
+
+        // 等待 html-parser 模式稳定。markVisiblePage 在 intermediate-document
+        // 阶段已将页 30 加入 loadablePages，故 html-parser 会正常加载它——
+        // 这是正确行为，与防抖定时器无关。
+        await waitFor(() => {
+          expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
+        })
+        await flushQueueMicrotasks()
+
+        // 记录 html-parser 自身加载稳定后的调用次数。
+        const getPage = document.getPageByPageNumber as ReturnType<typeof vi.fn>
+        const callsAfterSettle = getPage.mock.calls.length
+
+        // 推进远超 500ms：若防抖定时器未被 renderMode cleanup 清除，
+        // 此处会触发迟到入队。由于 enqueuePage 在 html-parser 模式下
+        // early-return，即使定时器漏清也不会有可见副作用——此断言
+        // 验证的是定时器清理的 hygiene（无迟到回调）。
+        vi.useFakeTimers()
+        act(() => {
+          vi.advanceTimersByTime(2000)
+        })
+        await flushQueueMicrotasks()
+        expect(getPage.mock.calls.length).toBe(callsAfterSettle)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('adjusting pageLoadEnterDelayMs applies the new debounce duration', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          pageLoadEnterDelayMs={300}
+        />
+      )
+
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(299)
+        })
+        expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(3)
+
+        act(() => {
+          vi.advanceTimersByTime(1)
+        })
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
+        await flushQueueMicrotasks()
+        expect(pages.get(3)?.getContent).toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+  // ---- end intermediate-document 可见性 500ms 防抖 ----
+
   it('renders the converted page background from getThumbnail', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
     const page = pages.get(1)

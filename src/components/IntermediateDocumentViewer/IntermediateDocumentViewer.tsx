@@ -1830,6 +1830,11 @@ export function IntermediateDocumentViewer({
   // 交互模式 ref，供后续手势逻辑读取（Wave 1 仅透传，不做行为分支）
   const interactionModeRef = useRef(interactionMode)
   interactionModeRef.current = interactionMode
+  // renderMode ref，供 IntersectionObserver 回调在 intermediate-document 模式下
+  // 读取当前模式以决定是否启用 500ms 可见性防抖，避免将 renderMode 加入
+  // IO effect deps 导致观察者在每次渲染时重建。
+  const renderModeRef = useRef(renderMode)
+  renderModeRef.current = renderMode
   const reactInstanceId = useId()
   const readerLinkedScopeId = useMemo(
     () => `reader-linked-${reactInstanceId}`,
@@ -2005,6 +2010,52 @@ export function IntermediateDocumentViewer({
       isPageLoaded: (pageNumber) => textsByPageNumber.has(pageNumber)
     }
   })
+
+  const enqueueVisiblePageRef = useRef(lazyPageQueue.enqueuePage)
+  enqueueVisiblePageRef.current = lazyPageQueue.enqueuePage
+
+  // intermediate-document 模式下 IO 可见性防抖定时器（按页码 keyed）。
+  // 页面进入可加载窗口后启动 pageLoadEnterDelayMs 定时器，仅当页面持续
+  // 可见至定时器触发时才调用 enqueuePage；页面提前离开则取消挂起入队，
+  // 保持空外壳，从而避免快速滚动把所有路过页面都入队加载。
+  // enqueuePage 不能作为 scheduleVisibilityEnqueue 的依赖：它由 useLazyPageQueue
+  // 返回，其 callbacks 依赖每渲染新建，故 enqueuePage 每渲染变 identity；若
+  // 进入 IO effect deps 会导致观察者每渲染重建 -> markLoadableWithOverscan
+  // -> setLoadablePages 死循环。改由 ref 在定时器触发时读取最新 enqueuePage。
+  const pendingVisibilityTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
+
+  const clearAllVisibilityTimers = useCallback(() => {
+    pendingVisibilityTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    pendingVisibilityTimersRef.current.clear()
+  }, [])
+
+  const cancelVisibilityEnqueue = useCallback((pageNumber: number) => {
+    const timer = pendingVisibilityTimersRef.current.get(pageNumber)
+    if (timer) {
+      clearTimeout(timer)
+      pendingVisibilityTimersRef.current.delete(pageNumber)
+    }
+  }, [])
+
+  const scheduleVisibilityEnqueue = useCallback((pageNumber: number) => {
+    if (pendingVisibilityTimersRef.current.has(pageNumber)) {
+      return
+    }
+    const delay = lazyQueueConfigRef.current.pageLoadEnterDelayMs
+    const timer = setTimeout(() => {
+      pendingVisibilityTimersRef.current.delete(pageNumber)
+      if (!isMountedRef.current) {
+        return
+      }
+      enqueueVisiblePageRef.current(pageNumber)
+    }, delay)
+    pendingVisibilityTimersRef.current.set(pageNumber, timer)
+  }, [])
+
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
   useEffect(() => {
@@ -2935,8 +2986,25 @@ export function IntermediateDocumentViewer({
 
         if (entry.isIntersecting) {
           markVisiblePage(pageNumber)
+          // intermediate-document 默认模式：非初始页面需持续可见
+          // pageLoadEnterDelayMs 后才入队加载，避免快速滚动把所有路过
+          // 页面都入队。html-parser / direct 模式保持原有行为，不受影响。
+          if (renderModeRef.current !== 'intermediate-document') {
+            return
+          }
+          const pageIndex = pageNumbers.indexOf(pageNumber)
+          const initialPageCount = lazyQueueConfigRef.current.initialLoadedPages
+          // 初始页面已由 enqueueInitialPages 处理，无需防抖。
+          if (pageIndex >= 0 && pageIndex < initialPageCount) {
+            return
+          }
+          scheduleVisibilityEnqueue(pageNumber)
         } else {
           markHiddenPage(pageNumber)
+          // 页面离开可加载窗口：取消挂起的入队定时器，保持空外壳。
+          if (renderModeRef.current === 'intermediate-document') {
+            cancelVisibilityEnqueue(pageNumber)
+          }
         }
       })
     })
@@ -2951,13 +3019,19 @@ export function IntermediateDocumentViewer({
 
     return () => {
       observer.disconnect()
+      // 观察者销毁时清除本效应周期内的所有挂起可见性定时器，防止
+      // 卸载/文档切换后仍触发迟到入队。
+      clearAllVisibilityTimers()
     }
   }, [
     markHiddenPage,
     markLoadableWithOverscan,
     markVisiblePage,
     pageNumbers,
-    runtimeDocument
+    runtimeDocument,
+    scheduleVisibilityEnqueue,
+    cancelVisibilityEnqueue,
+    clearAllVisibilityTimers
   ])
 
   useEffect(() => {
@@ -3059,6 +3133,15 @@ export function IntermediateDocumentViewer({
     }
     lazyPageQueue.enqueueInitialPages(pageNumbers)
   }, [pageNumbers, runtimeDocument, renderMode, lazyPageQueue])
+
+  // renderMode/unmount 变更时清除所有挂起的可见性入队定时器，配合
+  // lazyPageQueue.cancelAll() 防止 stale 入队。document 变更由 IO effect
+  // 的 cleanup（disconnect + clearAllVisibilityTimers）覆盖。
+  useEffect(() => {
+    return () => {
+      clearAllVisibilityTimers()
+    }
+  }, [renderMode, clearAllVisibilityTimers])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
