@@ -13,13 +13,14 @@ export type IntermediateDocumentRenderTimingStage =
   | 'ocr-processing'
 
 /** 渲染计时记录条目 */
+export type DetailValue = string | number | boolean | null
 export interface IntermediateDocumentRenderTimingEntry {
   stage: IntermediateDocumentRenderTimingStage
   startedAt: number
   endedAt: number
   durationMs: number
   pageNumber?: number
-  detail?: Readonly<Record<string, string | number | boolean | null>>
+  detail?: Readonly<Record<string, DetailValue>>
 }
 
 /** 渲染计时回调 */
@@ -48,14 +49,17 @@ export interface IntermediateDocumentRenderTiming {
     stage: IntermediateDocumentRenderTimingStage,
     context?: {
       pageNumber?: number
-      detail?: Record<string, string | number | boolean | null>
+      detail?: Record<string, DetailValue>
     }
   ) => () => void
   /** 同步测量 fn 执行耗时并返回 fn 结果 */
   measure: <T>(
     stage: IntermediateDocumentRenderTimingStage,
     context:
-      | { pageNumber?: number; detail?: Record<string, string | number | boolean | null> }
+      | {
+          pageNumber?: number
+          detail?: Record<string, string | number | boolean | null>
+        }
       | undefined,
     fn: () => T
   ) => T

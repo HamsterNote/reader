@@ -1,8 +1,5 @@
 import type { ReaderSelectionRef } from '@hamster-note/reader'
-import type {
-  CSSProperties,
-  PointerEvent as ReactPointerEvent
-} from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useRef } from 'react'
 
 const highlightButtonStyle: CSSProperties = {

@@ -266,7 +266,7 @@ const makeDomRect = (rect: RectInput) =>
 const mockElementRect = (element: HTMLElement, rect: RectInput) =>
   vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(makeDomRect(rect))
 
-const INTERMEDIATE_DOCUMENT_TIMING_STAGES = [
+const _INTERMEDIATE_DOCUMENT_TIMING_STAGES = [
   'document-resolution',
   'shell-rendering',
   'initial-page-loading',
@@ -278,7 +278,7 @@ const INTERMEDIATE_DOCUMENT_TIMING_STAGES = [
 ] as const
 
 type IntermediateDocumentTimingStage =
-  (typeof INTERMEDIATE_DOCUMENT_TIMING_STAGES)[number]
+  (typeof _INTERMEDIATE_DOCUMENT_TIMING_STAGES)[number]
 
 type IntermediateDocumentTimingEntry = {
   readonly stage: IntermediateDocumentTimingStage
@@ -4473,9 +4473,15 @@ describe('IntermediateDocumentViewer', () => {
 
       // Then: page-content-rendering is scoped to the loaded page, not every empty shell.
       const entries = getTimingEntries(onTiming)
-      expect(getPageTimingEntries(entries, 'page-content-rendering', 1)).toHaveLength(1)
-      expect(getPageTimingEntries(entries, 'page-content-rendering', 2)).toHaveLength(0)
-      expect(getPageTimingEntries(entries, 'page-content-rendering', 3)).toHaveLength(0)
+      expect(
+        getPageTimingEntries(entries, 'page-content-rendering', 1)
+      ).toHaveLength(1)
+      expect(
+        getPageTimingEntries(entries, 'page-content-rendering', 2)
+      ).toHaveLength(0)
+      expect(
+        getPageTimingEntries(entries, 'page-content-rendering', 3)
+      ).toHaveLength(0)
     })
 
     it('does not report page content rendering again for unchanged loaded pages during transform', async () => {
@@ -4495,16 +4501,23 @@ describe('IntermediateDocumentViewer', () => {
       await screen.findByText('Page 1 text')
       const beforeTransformEntries = getTimingEntries(onTiming)
       expect(
-        getPageTimingEntries(beforeTransformEntries, 'page-content-rendering', 1)
+        getPageTimingEntries(
+          beforeTransformEntries,
+          'page-content-rendering',
+          1
+        )
       ).toHaveLength(1)
 
       // When: VirtualPaper reports a transform change but visible loaded content is unchanged.
       act(() => {
-        VirtualPaper.__triggerTransform(screen.getByTestId('virtual-paper-container'), {
-          x: -16,
-          y: 0,
-          scale: 1
-        })
+        VirtualPaper.__triggerTransform(
+          screen.getByTestId('virtual-paper-container'),
+          {
+            x: -16,
+            y: 0,
+            scale: 1
+          }
+        )
       })
       await flushIntermediateDocumentMicrotasks()
 
@@ -4541,7 +4554,9 @@ describe('IntermediateDocumentViewer', () => {
       // When: page 2 remains visible past the configured enter delay.
       vi.useFakeTimers()
       try {
-        intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-2'))
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-2')
+        )
         act(() => {
           vi.advanceTimersByTime(20)
         })
@@ -4594,7 +4609,9 @@ describe('IntermediateDocumentViewer', () => {
 
       // Then: the unload stage is reported for the page that left view.
       const entries = getTimingEntries(onTiming)
-      expectFiniteTimingEntry(requirePageTimingStage(entries, 'offscreen-unload', 2))
+      expectFiniteTimingEntry(
+        requirePageTimingStage(entries, 'offscreen-unload', 2)
+      )
     })
 
     it('reports OCR processing timing for a visible page with a base image', async () => {
@@ -7791,7 +7808,7 @@ describe('IntermediateDocumentViewer', () => {
         'utf-8'
       )
       const coarsePointerBlockMatch = scssSource.match(
-        /@media\s*\(pointer:\s*coarse\)\s*\{([\s\S]*?)\n\s*\}\n\s*\}/
+        /@media\s*\(pointer:\s*coarse\)\s*\{([^}]*)\}/
       )
       expect(coarsePointerBlockMatch).toBeTruthy()
       if (!coarsePointerBlockMatch) {

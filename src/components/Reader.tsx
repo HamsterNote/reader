@@ -353,7 +353,9 @@ export function Reader({
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
           pageUnloadDelayMs={pageUnloadDelayMs}
-          onIntermediateDocumentRenderTiming={onIntermediateDocumentRenderTiming}
+          onIntermediateDocumentRenderTiming={
+            onIntermediateDocumentRenderTiming
+          }
         />
       )
     }

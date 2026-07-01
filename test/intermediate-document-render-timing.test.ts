@@ -25,15 +25,15 @@ describe('createIntermediateDocumentRenderTiming', () => {
     const onTiming: IntermediateDocumentRenderTimingCallback = vi.fn()
 
     // When: 用 measure 测量一个 stage
-    createIntermediateDocumentRenderTiming({ callback: onTiming, clock }).measure(
-      'page-content-rendering',
-      { pageNumber: 1 },
-      () => 'result'
-    )
+    createIntermediateDocumentRenderTiming({
+      callback: onTiming,
+      clock
+    }).measure('page-content-rendering', { pageNumber: 1 }, () => 'result')
 
     // Then: callback 收到正确的 timing entry，且 fn 返回值被透传
     expect(onTiming).toHaveBeenCalledTimes(1)
-    const entry = (onTiming as ReturnType<typeof vi.fn>).mock.calls[0][0] as IntermediateDocumentRenderTimingEntry
+    const entry = (onTiming as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as IntermediateDocumentRenderTimingEntry
     expect(entry.durationMs).toBe(25)
     expect(entry.startedAt).toBe(10)
     expect(entry.endedAt).toBe(35)
@@ -46,11 +46,10 @@ describe('createIntermediateDocumentRenderTiming', () => {
     const clock: IntermediateDocumentRenderTimingClock = { now: () => 10 }
 
     // When: 测量一个 stage
-    createIntermediateDocumentRenderTiming({ clock, envEnabled: false }).measure(
-      'page-content-rendering',
-      undefined,
-      () => {}
-    )
+    createIntermediateDocumentRenderTiming({
+      clock,
+      envEnabled: false
+    }).measure('page-content-rendering', undefined, () => {})
 
     // Then: console.debug 未被调用
     expect(consoleDebugSpy).not.toHaveBeenCalled()
@@ -71,7 +70,8 @@ describe('createIntermediateDocumentRenderTiming', () => {
 
     // Then: console.debug 被调用一次，entry 包含完整信息
     expect(consoleDebugSpy).toHaveBeenCalledTimes(1)
-    const entry = (consoleDebugSpy as ReturnType<typeof vi.fn>).mock.calls[0][1] as IntermediateDocumentRenderTimingEntry
+    const entry = (consoleDebugSpy as ReturnType<typeof vi.fn>).mock
+      .calls[0][1] as IntermediateDocumentRenderTimingEntry
     expect(entry.durationMs).toBe(25)
     expect(entry.stage).toBe('page-content-rendering')
     expect(entry.pageNumber).toBe(1)
@@ -84,11 +84,11 @@ describe('createIntermediateDocumentRenderTiming', () => {
     }
     const onTiming: IntermediateDocumentRenderTimingCallback = vi.fn()
 
-    createIntermediateDocumentRenderTiming({ callback: onTiming, clock, envEnabled: true }).measure(
-      'document-resolution',
-      undefined,
-      () => {}
-    )
+    createIntermediateDocumentRenderTiming({
+      callback: onTiming,
+      clock,
+      envEnabled: true
+    }).measure('document-resolution', undefined, () => {})
 
     expect(onTiming).toHaveBeenCalledTimes(1)
     expect(consoleDebugSpy).toHaveBeenCalledTimes(1)
@@ -98,11 +98,10 @@ describe('createIntermediateDocumentRenderTiming', () => {
     const clock: IntermediateDocumentRenderTimingClock = { now: () => 10 }
     const onTiming: IntermediateDocumentRenderTimingCallback = vi.fn()
 
-    const result = createIntermediateDocumentRenderTiming({ clock, envEnabled: false }).measure(
-      'page-content-rendering',
-      undefined,
-      () => 'hello'
-    )
+    const result = createIntermediateDocumentRenderTiming({
+      clock,
+      envEnabled: false
+    }).measure('page-content-rendering', undefined, () => 'hello')
 
     expect(result).toBe('hello')
     expect(onTiming).not.toHaveBeenCalled()
@@ -114,13 +113,17 @@ describe('createIntermediateDocumentRenderTiming', () => {
       now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(50)
     }
     const onTiming: IntermediateDocumentRenderTimingCallback = vi.fn()
-    const timing = createIntermediateDocumentRenderTiming({ callback: onTiming, clock })
+    const timing = createIntermediateDocumentRenderTiming({
+      callback: onTiming,
+      clock
+    })
 
     const finish = timing.start('content-extraction', { pageNumber: 2 })
     finish()
 
     expect(onTiming).toHaveBeenCalledTimes(1)
-    const entry = (onTiming as ReturnType<typeof vi.fn>).mock.calls[0][0] as IntermediateDocumentRenderTimingEntry
+    const entry = (onTiming as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as IntermediateDocumentRenderTimingEntry
     expect(entry.durationMs).toBe(40)
     expect(entry.pageNumber).toBe(2)
   })

@@ -1378,8 +1378,8 @@ function DirectPages({
  * `intermediate-document` 默认模式的页面渲染器。
  *
  * 为每个 `pageNumbers` 条目渲染一个 `.hamster-reader__intermediate-page` 外壳，
-  * 设置 `data-testid`、`data-page-number`、`data-selection-id` 及缓存尺寸
-  * （缺失时回退 `DEFAULT_PAGE_SIZE`）。
+ * 设置 `data-testid`、`data-page-number`、`data-selection-id` 及缓存尺寸
+ * （缺失时回退 `DEFAULT_PAGE_SIZE`）。
  *
  * 当某页已在内容 maps 中拥有已加载内容时，在外壳内渲染
  * `<IntermediateDocumentPageContent>`（底图 + 文本 span + OCR span + 图片项）；
@@ -1525,7 +1525,9 @@ function IntermediateDocumentPages({
               ocrTextsByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_TEXTS
             }
             baseImageSource={pageBaseImage}
-            images={imagesByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_IMAGES}
+            images={
+              imagesByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_IMAGES
+            }
             setTextRef={setTextRef}
             onRenderTiming={onPageRenderTiming}
           />
@@ -1575,9 +1577,7 @@ function IntermediateDocumentPages({
               >
                 {pageContent}
               </HamsterSelection>
-            ) : (
-              null
-            )}
+            ) : null}
           </div>
         )
       })}
@@ -2056,7 +2056,8 @@ export function IntermediateDocumentViewer({
 
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
-    if (!renderTimingRef.current.enabled) return getRuntimeDocument(inputDocument)
+    if (!renderTimingRef.current.enabled)
+      return getRuntimeDocument(inputDocument)
 
     const startedAt = getRenderTimingNow()
     const nextRuntimeDocument = getRuntimeDocument(inputDocument)
@@ -3653,7 +3654,12 @@ export function IntermediateDocumentViewer({
           loadingPagesRef.current.delete(pageNumber)
         })
     })
-  }, [isIntermediateDocumentMode, loadablePages, runtimeDocument, textsByPageNumber])
+  }, [
+    isIntermediateDocumentMode,
+    loadablePages,
+    runtimeDocument,
+    textsByPageNumber
+  ])
 
   // intermediate-document 模式的懒加载队列触发器。
   // 在 shell 就绪后（pageNumbers/runtimeDocument 稳定），通过
@@ -3701,7 +3707,11 @@ export function IntermediateDocumentViewer({
       clearAllVisibilityTimers()
       clearAllUnloadTimers()
     }
-  }, [isIntermediateDocumentMode, clearAllVisibilityTimers, clearAllUnloadTimers])
+  }, [
+    isIntermediateDocumentMode,
+    clearAllVisibilityTimers,
+    clearAllUnloadTimers
+  ])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
