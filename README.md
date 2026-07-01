@@ -32,11 +32,12 @@ export function App() {
 
 ### How It Works
 
-`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through one of three render modes, controlled by the optional `renderMode` prop:
+`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through one of four render modes, controlled by the optional `renderMode` prop:
 
 | `renderMode` | Description | Default? |
 |---|---|---|
-| `'intermediate-document'` | New lazy renderer. Renders stable page shells first, then loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release. Designed for long documents without blocking the main thread. | **Yes** — used when `renderMode` is omitted. |
+| `'virtual-paper'` | Default virtual-paper renderer. Renders stable page shells inside `VirtualPaper` contain mode, loads a page only when it enters the viewport, caches loaded text by document/page in IndexedDB, and clears page DOM when it leaves the viewport. | **Yes** — used when `renderMode` is omitted. |
+| `'intermediate-document'` | Lazy renderer with page queue controls. Renders stable page shells first, then loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release. Designed for long documents without blocking the main thread. | No — opt in with `renderMode='intermediate-document'`. |
 | `'html-parser'` | Decodes each page to an HTML fragment via `@hamster-note/html-parser` (`HtmlParser.decodePageToHtml`). The original render path; retained for explicit compatibility. Text-selection (`@hamster-note/selection`) linked-range features are fully active in this mode. | No — opt in with `renderMode='html-parser'`. |
 | `'direct'` | Renders intermediate-document content (texts, images, OCR) directly without html-parser. Useful when you want the raw document structure without HTML conversion. | No — opt in with `renderMode='direct'`. |
 
@@ -44,7 +45,7 @@ export function App() {
 
 #### Lazy Page Loading Props (`intermediate-document` mode only)
 
-When `renderMode` is omitted (or set to `'intermediate-document'`), the following optional props control the lazy loading queue:
+When `renderMode` is set to `'intermediate-document'`, the following optional props control the lazy loading queue:
 
 | Prop | Type | Default | Description |
 |---|---|---|---|
@@ -54,6 +55,38 @@ When `renderMode` is omitted (or set to `'intermediate-document'`), the followin
 | `pageUnloadDelayMs` | `number` | `5000` | After a loaded page leaves the visible window, wait this duration (ms) before unloading its content back to an empty shell. Re-entering before the delay cancels the unload. |
 
 These props are ignored in `'html-parser'` and `'direct'` modes.
+
+#### Render Timing (`intermediate-document` mode)
+
+To diagnose bottlenecks in the `intermediate-document` render pipeline, you can opt in to stage-by-stage timing logs. Production builds emit **no timing output by default**.
+
+**Activation paths:**
+
+1. **Callback prop** — receive every timing entry in code:
+   ```tsx
+   <Reader
+     renderMode='intermediate-document'
+     onIntermediateDocumentRenderTiming={(entry) => {
+       console.table(entry)
+     }}
+   />
+   ```
+
+2. **Environment flag** — print `console.debug` logs when no callback is provided:
+   ```bash
+   VITE_HAMSTER_READER_INTERMEDIATE_TIMING=true
+   ```
+
+Each entry has the following shape:
+
+| Field | Type | Description |
+|---|---|---|
+| `stage` | `string` | One of `document-resolution`, `shell-rendering`, `initial-page-loading`, `content-extraction`, `page-content-rendering`, `visibility-lazy-loading`, `offscreen-unload`, `ocr-processing`. |
+| `startedAt` | `number` | Start timestamp (ms). |
+| `endedAt` | `number` | End timestamp (ms). |
+| `durationMs` | `number` | `endedAt - startedAt`. |
+| `pageNumber` | `number` *(optional)* | Present for page-scoped stages. |
+| `detail` | `object` *(optional)* | Stage-specific context such as `pageCount`, `textCount`, `imageCount`, or `status`. |
 
 #### Demo Upload Formats
 
@@ -70,7 +103,7 @@ EPUB (`.epub`) is **not supported** in this browser Demo because `@hamster-note/
 
 Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
 
-> **Note**: To use the linked-range text-selection features described below, set `renderMode='html-parser'` explicitly. In the default `'intermediate-document'` mode, text selection relies on the lazy-rendered page content markup and may behave differently. The component falls back to direct rendering when html-parser decoding fails.
+> **Note**: To use the linked-range text-selection features described below, set `renderMode='html-parser'` explicitly. The default `'virtual-paper'` mode is optimized for viewport-driven page loading and currently renders plain page text for validation. The component falls back to direct rendering when html-parser decoding fails.
 
 ```tsx
 <Reader
@@ -89,7 +122,7 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 
 `Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features, highlighted ranges, popovers, and programmatic control on top of the native browser `Selection` API.
 
-The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is fully active in `html-parser` render mode (opt-in via `renderMode='html-parser'`). The `direct` render path, the default `intermediate-document` path, and the legacy native callbacks are unaffected by the linked-range Selection component.
+The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is fully active in `html-parser` render mode (opt-in via `renderMode='html-parser'`). The default `virtual-paper` path, the `intermediate-document` path, the `direct` path, and the legacy native callbacks are unaffected by the linked-range Selection component.
 
 ### Linked range shape
 

@@ -64,6 +64,7 @@ export type LinkedSelectionData = {
   overlayRectType?: OverlayRectType
   draggingRange?: LinkedSelectionDragState | null
   selectingText?: boolean
+  activeRange?: LinkedSelectionRange | null
 }
 
 export interface SelectionProps {

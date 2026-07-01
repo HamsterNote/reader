@@ -316,6 +316,28 @@
       mix-blend-mode: multiply;
     }
 
+    // Selection 容器与内容区高度占满页面外壳，避免嵌套 flex/absolute
+    // 布局中因高度未显式声明而导致的选择 overlay 偏移或空白。
+    .hsn-selection-container,
+    .hsn-selection-content {
+      height: 100%;
+    }
+
+    // 与 @hamster-note/selection Demo 保持一致：移动端/粗指针设备上禁用
+    // 浏览器原生文本选择，避免长按时出现系统 selection handles 和选框；桌面端
+    // 仍保留 text selection，供 selection 包读取 Range 并绘制自定义高亮。
+    @media (pointer: coarse) {
+      &__intermediate-text,
+      .hsn-selection-content &__intermediate-text,
+      &__html-parser-output,
+      &__html-parser-output .hamster-note-page,
+      &__html-parser-output .hamster-note-page * {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+    }
+
   }
 
 // Skeleton shimmer animation (global, scoped to keyframes only)

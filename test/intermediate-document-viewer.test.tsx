@@ -26,7 +26,7 @@ import {
   buildSelectionPayload as buildSerializedSelectionPayload,
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
-import { IntermediateDocumentViewer } from '../src/index'
+import { IntermediateDocumentViewer, Reader } from '../src/index'
 import type { ReaderSelectionRange, ReaderSelectionRef } from '../src/index'
 import type { OverlayRectType } from './mocks/selection'
 import {
@@ -266,6 +266,87 @@ const makeDomRect = (rect: RectInput) =>
 const mockElementRect = (element: HTMLElement, rect: RectInput) =>
   vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(makeDomRect(rect))
 
+const INTERMEDIATE_DOCUMENT_TIMING_STAGES = [
+  'document-resolution',
+  'shell-rendering',
+  'initial-page-loading',
+  'content-extraction',
+  'page-content-rendering',
+  'visibility-lazy-loading',
+  'offscreen-unload',
+  'ocr-processing'
+] as const
+
+type IntermediateDocumentTimingStage =
+  (typeof INTERMEDIATE_DOCUMENT_TIMING_STAGES)[number]
+
+type IntermediateDocumentTimingEntry = {
+  readonly stage: IntermediateDocumentTimingStage
+  readonly pageNumber?: number
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly durationMs: number
+}
+
+type IntermediateDocumentTimingCallback = (
+  entry: IntermediateDocumentTimingEntry
+) => void
+
+const makeTimingSpy = () => vi.fn<IntermediateDocumentTimingCallback>()
+
+const getTimingEntries = (onTiming: ReturnType<typeof makeTimingSpy>) =>
+  onTiming.mock.calls.map((call) => call[0])
+
+const requireTimingStage = (
+  entries: readonly IntermediateDocumentTimingEntry[],
+  stage: IntermediateDocumentTimingStage
+) => {
+  const entry = entries.find((candidate) => candidate.stage === stage)
+  if (!entry) {
+    throw new Error(`Expected timing entry for stage ${stage}`)
+  }
+  return entry
+}
+
+const requirePageTimingStage = (
+  entries: readonly IntermediateDocumentTimingEntry[],
+  stage: IntermediateDocumentTimingStage,
+  pageNumber: number
+) => {
+  const entry = entries.find(
+    (candidate) =>
+      candidate.stage === stage && candidate.pageNumber === pageNumber
+  )
+  if (!entry) {
+    throw new Error(
+      `Expected timing entry for stage ${stage} on page ${pageNumber}`
+    )
+  }
+  return entry
+}
+
+const getPageTimingEntries = (
+  entries: readonly IntermediateDocumentTimingEntry[],
+  stage: IntermediateDocumentTimingStage,
+  pageNumber: number
+) =>
+  entries.filter(
+    (entry) => entry.stage === stage && entry.pageNumber === pageNumber
+  )
+
+const expectFiniteTimingEntry = (entry: IntermediateDocumentTimingEntry) => {
+  expect(Number.isFinite(entry.startedAt)).toBe(true)
+  expect(Number.isFinite(entry.endedAt)).toBe(true)
+  expect(Number.isFinite(entry.durationMs)).toBe(true)
+  expect(entry.durationMs).toBeGreaterThanOrEqual(0)
+}
+
+const flushIntermediateDocumentMicrotasks = async () => {
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    await Promise.resolve()
+  }
+}
+
 const mockElementFromPoint = (element: Element | null) => {
   if (!('elementFromPoint' in globalThis.document)) {
     Object.defineProperty(globalThis.document, 'elementFromPoint', {
@@ -342,6 +423,21 @@ const getRequiredTextNode = (element: HTMLElement) => {
   }
   return node
 }
+
+const makeTextMetrics = (width: number): TextMetrics => ({
+  width,
+  actualBoundingBoxLeft: 0,
+  actualBoundingBoxRight: width,
+  actualBoundingBoxAscent: 0,
+  actualBoundingBoxDescent: 0,
+  fontBoundingBoxAscent: 0,
+  fontBoundingBoxDescent: 0,
+  emHeightAscent: 0,
+  emHeightDescent: 0,
+  hangingBaseline: 0,
+  alphabeticBaseline: 0,
+  ideographicBaseline: 0
+})
 
 const makeCollapsedRange = (node: Node, offset: number) => {
   const range = document.createRange()
@@ -2700,6 +2796,30 @@ describe('IntermediateDocumentViewer', () => {
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
       expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
     })
+
+    it('reuses cached page sizes during VirtualPaper pan rerenders', async () => {
+      const { document } = makeStrictLazyDocument({ pageCount: 2 })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          renderMode='intermediate-document'
+          initialLoadedPages={0}
+        />
+      )
+
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledTimes(2)
+
+      const container = screen.getByTestId('virtual-paper-container')
+      await act(async () => {
+        VirtualPaper.__triggerTransform(container, { x: -32, y: 0, scale: 1 })
+      })
+
+      expect(container).toHaveStyle({
+        transform: 'translate3d(-32px, 0px, 0) scale(1)'
+      })
+      expect(document.getPageSizeByPageNumber).toHaveBeenCalledTimes(2)
+    })
   })
   // ---- end intermediate-document 外壳渲染 ----
 
@@ -2819,6 +2939,43 @@ describe('IntermediateDocumentViewer', () => {
       expect(span).toHaveStyle({ left: '10px', top: '20px' })
     })
 
+    it('scales IntermediateText width to match polygon width', async () => {
+      const originalGetContext = HTMLCanvasElement.prototype.getContext
+      const measureText = vi.fn((content: string) =>
+        makeTextMetrics(content === 'Scaled text' ? 80 : 40)
+      )
+      Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+        configurable: true,
+        value: vi.fn(() => ({
+          font: '',
+          measureText
+        }))
+      })
+      const text = makeText('scaled-text', 'Scaled text')
+      const page = {
+        getContent: vi.fn(async () => [text] as IntermediateContent[]),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = makeContentTestDocument(page)
+
+      try {
+        render(<IntermediateDocumentViewer document={document} />)
+
+        await waitFor(() => {
+          expect(screen.getByText('Scaled text')).toBeInTheDocument()
+        })
+
+        const span = screen.getByText('Scaled text')
+        expect(span.style.transform).toBe('scaleX(0.5)')
+        expect(measureText).toHaveBeenCalledWith('Scaled text')
+      } finally {
+        Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+          configurable: true,
+          value: originalGetContext
+        })
+      }
+    })
+
     it('renders IntermediateImage content entries with geometry and opacity', async () => {
       const image = makeImage('img-1', 'data:image/png;base64,content-img')
       const page = {
@@ -2844,6 +3001,40 @@ describe('IntermediateDocumentViewer', () => {
       // polygon [[10,20],[110,20],[110,120],[10,120]] → x=10,y=20,w=100,h=100
       expect(img).toHaveStyle({ left: '10px', top: '20px' })
       expect(img).toHaveStyle({ opacity: '0.8' })
+    })
+
+    it('does not render IntermediateImage content entries with blank src values', async () => {
+      const emptyImage = makeImage('img-empty', '')
+      const blankImage = makeImage('img-blank', '   ')
+      const visibleImage = makeImage(
+        'img-visible',
+        'data:image/png;base64,visible'
+      )
+      const page = {
+        getContent: vi.fn(
+          async () =>
+            [emptyImage, blankImage, visibleImage] as IntermediateContent[]
+        ),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      const document = makeContentTestDocument(page)
+
+      render(<IntermediateDocumentViewer document={document} />)
+
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId('intermediate-page-1')
+            .querySelector('[data-image-id="img-visible"]')
+        ).toBeInTheDocument()
+      })
+
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1.querySelector('[data-image-id="img-empty"]')).toBeNull()
+      expect(page1.querySelector('[data-image-id="img-blank"]')).toBeNull()
+      expect(
+        page1.querySelectorAll('.hamster-reader__intermediate-page-image')
+      ).toHaveLength(1)
     })
 
     it('filters out blank-only text spans from getContent()', async () => {
@@ -4196,6 +4387,295 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
   // ---- end intermediate-document 离屏延迟卸载 5000ms ----
+
+  describe('intermediate-document render timing integration', () => {
+    beforeEach(() => {
+      vi.mocked(HtmlParser.decodeToHtml).mockReset()
+      vi.mocked(HtmlParser.decodePageToHtml).mockReset()
+      vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
+      vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+      delete process.env.READER_RENDER_TIMING_DEBUG
+    })
+
+    type ReaderTimingTestProps = {
+      readonly document: IntermediateDocument
+      readonly renderMode: 'intermediate-document'
+      readonly onIntermediateDocumentRenderTiming?: IntermediateDocumentTimingCallback
+      readonly initialLoadedPages?: number
+      readonly pageLoadEnterDelayMs?: number
+      readonly pageUnloadDelayMs?: number
+      readonly ocr?: boolean
+      readonly overscan?: number
+    }
+
+    const ReaderWithTiming = (props: ReaderTimingTestProps) => (
+      <Reader {...props} />
+    )
+
+    it('reports timing entries for document resolution, shell rendering, initial loading, content extraction, and page rendering', async () => {
+      // Given: the callback is enabled for the intermediate-document Reader path.
+      const onTiming = makeTimingSpy()
+      const { document } = makeDocument({ pageCount: 1 })
+
+      // When: the first page loads through the initial-page pipeline.
+      render(
+        <ReaderWithTiming
+          document={document}
+          renderMode='intermediate-document'
+          onIntermediateDocumentRenderTiming={onTiming}
+          initialLoadedPages={1}
+        />
+      )
+
+      await screen.findByText('Page 1 text')
+
+      // Then: all happy-path timing stages are emitted with valid timing fields.
+      const entries = getTimingEntries(onTiming)
+      for (const stage of [
+        'document-resolution',
+        'shell-rendering',
+        'initial-page-loading',
+        'content-extraction',
+        'page-content-rendering'
+      ] as const) {
+        expectFiniteTimingEntry(requireTimingStage(entries, stage))
+      }
+
+      for (const stage of [
+        'initial-page-loading',
+        'content-extraction',
+        'page-content-rendering'
+      ] as const) {
+        expect(requirePageTimingStage(entries, stage, 1).pageNumber).toBe(1)
+      }
+
+      entries.forEach(expectFiniteTimingEntry)
+    })
+
+    it('reports page content rendering only for initially loaded pages', async () => {
+      // Given: the document has more shells than the configured initial page load count.
+      const onTiming = makeTimingSpy()
+      const { document } = makeDocument({ pageCount: 3 })
+
+      // When: intermediate-document mounts with only page 1 in the initial lazy batch.
+      render(
+        <ReaderWithTiming
+          document={document}
+          renderMode='intermediate-document'
+          onIntermediateDocumentRenderTiming={onTiming}
+          initialLoadedPages={1}
+        />
+      )
+
+      await screen.findByText('Page 1 text')
+      expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+      expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+
+      // Then: page-content-rendering is scoped to the loaded page, not every empty shell.
+      const entries = getTimingEntries(onTiming)
+      expect(getPageTimingEntries(entries, 'page-content-rendering', 1)).toHaveLength(1)
+      expect(getPageTimingEntries(entries, 'page-content-rendering', 2)).toHaveLength(0)
+      expect(getPageTimingEntries(entries, 'page-content-rendering', 3)).toHaveLength(0)
+    })
+
+    it('does not report page content rendering again for unchanged loaded pages during transform', async () => {
+      // Given: page 1 has already rendered its loaded content once.
+      const onTiming = makeTimingSpy()
+      const { document } = makeDocument({ pageCount: 3 })
+
+      render(
+        <ReaderWithTiming
+          document={document}
+          renderMode='intermediate-document'
+          onIntermediateDocumentRenderTiming={onTiming}
+          initialLoadedPages={1}
+        />
+      )
+
+      await screen.findByText('Page 1 text')
+      const beforeTransformEntries = getTimingEntries(onTiming)
+      expect(
+        getPageTimingEntries(beforeTransformEntries, 'page-content-rendering', 1)
+      ).toHaveLength(1)
+
+      // When: VirtualPaper reports a transform change but visible loaded content is unchanged.
+      act(() => {
+        VirtualPaper.__triggerTransform(screen.getByTestId('virtual-paper-container'), {
+          x: -16,
+          y: 0,
+          scale: 1
+        })
+      })
+      await flushIntermediateDocumentMicrotasks()
+
+      // Then: shell timing may update, but page-content-rendering is not re-emitted.
+      const afterTransformEntries = getTimingEntries(onTiming)
+      expect(
+        getPageTimingEntries(afterTransformEntries, 'page-content-rendering', 1)
+      ).toHaveLength(1)
+      expect(
+        getPageTimingEntries(afterTransformEntries, 'page-content-rendering', 2)
+      ).toHaveLength(0)
+      expect(
+        getPageTimingEntries(afterTransformEntries, 'page-content-rendering', 3)
+      ).toHaveLength(0)
+    })
+
+    it('reports visibility lazy-loading and page 2 content extraction timing after delayed intersection', async () => {
+      // Given: page 2 is outside the initial page set and needs the visibility delay.
+      const onTiming = makeTimingSpy()
+      const { document } = makeDocument({ pageCount: 2 })
+
+      render(
+        <ReaderWithTiming
+          document={document}
+          renderMode='intermediate-document'
+          onIntermediateDocumentRenderTiming={onTiming}
+          initialLoadedPages={1}
+          pageLoadEnterDelayMs={20}
+        />
+      )
+
+      await screen.findByText('Page 1 text')
+
+      // When: page 2 remains visible past the configured enter delay.
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(screen.getByTestId('intermediate-page-2'))
+        act(() => {
+          vi.advanceTimersByTime(20)
+        })
+        await flushIntermediateDocumentMicrotasks()
+      } finally {
+        vi.useRealTimers()
+      }
+
+      await screen.findByText('Page 2 text')
+
+      // Then: visibility loading and content extraction are both page-scoped.
+      const entries = getTimingEntries(onTiming)
+      expectFiniteTimingEntry(
+        requirePageTimingStage(entries, 'visibility-lazy-loading', 2)
+      )
+      expectFiniteTimingEntry(
+        requirePageTimingStage(entries, 'content-extraction', 2)
+      )
+    })
+
+    it('reports offscreen unload timing when a loaded page leaves the viewport past the delay', async () => {
+      // Given: enough pages are loaded for a later page to be unloaded independently.
+      const onTiming = makeTimingSpy()
+      const { document } = makeDocument({ pageCount: 3 })
+
+      render(
+        <ReaderWithTiming
+          document={document}
+          renderMode='intermediate-document'
+          onIntermediateDocumentRenderTiming={onTiming}
+          initialLoadedPages={3}
+          pageUnloadDelayMs={20}
+          overscan={0}
+        />
+      )
+
+      await screen.findByText('Page 2 text')
+      const page2 = screen.getByTestId('intermediate-page-2')
+
+      // When: the loaded page stays offscreen past the unload delay.
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(page2, false)
+        act(() => {
+          vi.advanceTimersByTime(20)
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+
+      // Then: the unload stage is reported for the page that left view.
+      const entries = getTimingEntries(onTiming)
+      expectFiniteTimingEntry(requirePageTimingStage(entries, 'offscreen-unload', 2))
+    })
+
+    it('reports OCR processing timing for a visible page with a base image', async () => {
+      // Given: OCR is enabled and the loaded page has a thumbnail/base image.
+      const { ImageParser } = await import('@hamster-note/image-parser')
+      const encodeSpy = vi.mocked(ImageParser.encode)
+      encodeSpy.mockClear()
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => new Response(new Blob(['image'])))
+      const onTiming = makeTimingSpy()
+      const { document, pages } = makeDocument({ pageCount: 1 })
+      const page1 = pages.get(1)
+      if (!page1) {
+        throw new Error('Expected mock page 1 to exist')
+      }
+      page1.thumbnail = 'data:image/png;base64,page-1'
+
+      try {
+        render(
+          <ReaderWithTiming
+            document={document}
+            renderMode='intermediate-document'
+            onIntermediateDocumentRenderTiming={onTiming}
+            initialLoadedPages={1}
+            ocr
+          />
+        )
+
+        const pageElement = screen.getByTestId('intermediate-page-1')
+        await waitFor(() => {
+          expect(
+            pageElement.querySelector(
+              '.hamster-reader__intermediate-page-base-image'
+            )
+          ).toBeInTheDocument()
+        })
+
+        // When: the page becomes visible and OCR starts.
+        intersectionObserverMock.trigger(pageElement)
+
+        await waitFor(() => {
+          expect(encodeSpy).toHaveBeenCalled()
+        })
+
+        // Then: OCR processing timing is emitted for that page.
+        const entries = getTimingEntries(onTiming)
+        expectFiniteTimingEntry(
+          requirePageTimingStage(entries, 'ocr-processing', 1)
+        )
+      } finally {
+        fetchSpy.mockRestore()
+      }
+    })
+
+    it('does not log timing output by default when no callback and no env flag are provided', async () => {
+      // Given: timing debug output is disabled by default.
+      const consoleDebugSpy = vi
+        .spyOn(console, 'debug')
+        .mockImplementation(() => {})
+      const { document } = makeDocument({ pageCount: 1 })
+
+      try {
+        // When: the Reader renders without a timing callback.
+        render(
+          <Reader
+            document={document}
+            renderMode='intermediate-document'
+            initialLoadedPages={1}
+          />
+        )
+
+        await screen.findByText('Page 1 text')
+
+        // Then: no timing fallback log is emitted.
+        expect(consoleDebugSpy).not.toHaveBeenCalled()
+      } finally {
+        consoleDebugSpy.mockRestore()
+      }
+    })
+  })
 
   it('renders the converted page background from getThumbnail', async () => {
     const { document, pages } = makeDocument({ pageCount: 1 })
@@ -7305,6 +7785,30 @@ describe('IntermediateDocumentViewer', () => {
       expect(textBlock).toContain('-webkit-user-select: text')
     })
 
+    it('SCSS suppresses native mobile selection handles on coarse pointers', () => {
+      const scssSource = fs.readFileSync(
+        path.resolve(__dirname, '../src/styles/reader.scss'),
+        'utf-8'
+      )
+      const coarsePointerBlockMatch = scssSource.match(
+        /@media\s*\(pointer:\s*coarse\)\s*\{([\s\S]*?)\n\s*\}\n\s*\}/
+      )
+      expect(coarsePointerBlockMatch).toBeTruthy()
+      if (!coarsePointerBlockMatch) {
+        throw new Error('Expected coarse-pointer SCSS block to exist')
+      }
+
+      const block = coarsePointerBlockMatch[1]
+      expect(block).toContain('&__intermediate-text')
+      expect(block).toContain('.hsn-selection-content &__intermediate-text')
+      expect(block).toContain('&__html-parser-output')
+      expect(block).toContain('&__html-parser-output .hamster-note-page')
+      expect(block).toContain('&__html-parser-output .hamster-note-page *')
+      expect(block).toContain('user-select: none')
+      expect(block).toContain('-webkit-user-select: none')
+      expect(block).toContain('-webkit-touch-callout: none')
+    })
+
     it('SCSS documents that html-parser backgrounds are CSS background-image and inherently unselectable', () => {
       const scssSource = fs.readFileSync(
         path.resolve(__dirname, '../src/styles/reader.scss'),
@@ -8567,6 +9071,48 @@ describe('linked data adapter integration', () => {
     expect(linkedData?.selectionOrder[0]).toMatch(/^reader-linked-.+:page-1$/u)
   })
 
+  it('keeps normalized mounted selection order across intermediate rerenders', async () => {
+    // Given: only the first lazy page has mounted a linked Selection instance.
+    const { document } = makeDocument({ pageCount: 3 })
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer document={document} initialLoadedPages={1} />
+    )
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePage1Id).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+
+    // When: the selection package normalizes selectionOrder to its mounted registry.
+    act(() => {
+      simulateLinkedDataChange(runtimePage1Id, {
+        ...currentLinkedData,
+        selectionOrder: [runtimePage1Id]
+      })
+    })
+
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        className='second-render'
+      />
+    )
+
+    // Then: the parent preserves the normalized order instead of rebuilding all pages.
+    await waitFor(() => {
+      expect(
+        requireSelectionPropsById(runtimePage1Id).linkedData?.selectionOrder
+      ).toEqual([runtimePage1Id])
+    })
+  })
+
   it('filters foreign runtime ids before updating public uncontrolled state', async () => {
     // Given: a linked Selection instance and a mixed runtime payload from a global registry.
     const { document } = makeDocument({ pageCount: 1 })
@@ -9049,6 +9595,59 @@ describe('multiplex selectionRef', () => {
     })
 
     // Then: 只调用 page-2 的子 Selection ref，不能退回到第一页。
+    expect(getSelectionRefCallCounts(runtimePage1Id).highlight).toBe(0)
+    expect(getSelectionRefCallCounts(runtimePage2Id).highlight).toBe(1)
+    expect(getSelectionRefCallCounts(runtimePage3Id).highlight).toBe(0)
+  })
+
+  it('routes external highlight by linked activeRange when native selection is gone', async () => {
+    // Given: 移动端点击 Popover 前，Selection 已把活跃选区同步到 linkedData.activeRange。
+    const { document } = makeDocument({ pageCount: 3 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        renderMode='html-parser'
+        selectionRef={selectionRef}
+      />
+    )
+
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+      expect(getAllSelectionProps()).toHaveLength(3)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const runtimePage3Id = requireRuntimeSelectionId(':page-3')
+    const activeRange = makeRuntimeLinkedRange(runtimePage2Id, {
+      id: 'mobile-active-range'
+    })
+
+    act(() => {
+      simulateLinkedDataChange(runtimePage2Id, {
+        items: [],
+        selectedRangeId: null,
+        selectionOrder: [runtimePage1Id, runtimePage2Id, runtimePage3Id],
+        overlayRectType: 'percent',
+        activeRange
+      })
+      window.getSelection()?.removeAllRanges()
+    })
+
+    await waitFor(() => {
+      expect(
+        requireSelectionPropsById(runtimePage2Id).linkedData?.activeRange?.id
+      ).toBe('mobile-active-range')
+    })
+
+    // When: Popover 按钮触发公共 ref.highlight()，此时原生 Selection 已被移动端清掉。
+    act(() => {
+      selectionRef.current?.highlight()
+    })
+
+    // Then: 仍按 linked activeRange 找到 page-2，不能退回到第一页导致无效高亮。
     expect(getSelectionRefCallCounts(runtimePage1Id).highlight).toBe(0)
     expect(getSelectionRefCallCounts(runtimePage2Id).highlight).toBe(1)
     expect(getSelectionRefCallCounts(runtimePage3Id).highlight).toBe(0)

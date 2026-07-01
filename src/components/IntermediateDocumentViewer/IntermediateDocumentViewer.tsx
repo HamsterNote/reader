@@ -2,7 +2,8 @@ import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
 import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
-  LinkedSelectionRange
+  LinkedSelectionRange,
+  SelectionRange
 } from '@hamster-note/selection'
 import {
   IntermediateDocument,
@@ -12,12 +13,18 @@ import {
   type IntermediateText
 } from '@hamster-note/types'
 import {
+  createIntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingEntry
+} from './renderTiming'
+import {
   VirtualPaper,
   VirtualPaperInteractionMode,
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
 import React, {
+  Profiler,
   useCallback,
   useEffect,
   useId,
@@ -42,6 +49,7 @@ import type {
   ReaderSelectionRef
 } from '../../types/selection'
 import {
+  areRuntimeLinkedTransientsEqual,
   buildRuntimeLinkedSelectionData,
   extractRuntimeLinkedTransient,
   mapRuntimeLinkedDataToPublic,
@@ -52,10 +60,10 @@ import {
 // 共享纯几何/样式辅助（文本 span + IntermediateImage），供 direct / html-parser /
 // intermediate-document 三种渲染模式复用，避免 viewer 文件继续膨胀。
 import {
-  buildTextSpanStyle,
   getTextBbox,
   type RenderableIntermediateText
 } from './pageContentGeometry'
+import { buildTextSpanStyle } from './textSpanStyle'
 // intermediate-document 默认模式的已加载页面内容渲染器
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 // intermediate-document 默认模式的懒加载页面队列 hook
@@ -94,6 +102,15 @@ const getSelectionForRoot = (
   return viewerRoot?.ownerDocument.defaultView?.getSelection?.() ?? null
 }
 
+const EMPTY_SELECTION_RANGES: SelectionRange[] = []
+const EMPTY_INTERMEDIATE_TEXTS: IntermediateText[] = []
+const EMPTY_INTERMEDIATE_IMAGES: IntermediateImage[] = []
+
+const getRenderTimingNow = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+
 export type ReaderTextSelectionDetail = {
   text: IntermediateText
   texts: IntermediateText[]
@@ -131,6 +148,7 @@ export type ReaderPageRange = {
 export type ReaderRenderMode =
   | 'html-parser'
   | 'direct'
+  | 'virtual-paper'
   | 'intermediate-document'
 
 /** 背景质量级别：low（低）、medium（中）、high（高） */
@@ -487,11 +505,17 @@ export type IntermediateDocumentViewerProps = {
    * 页面离开可加载窗口后、卸载其内容的延迟（毫秒）。省略时默认 `5000`。
    */
   pageUnloadDelayMs?: number
+  /** intermediate-document 渲染阶段计时回调 */
+  onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
 }
 
 type PageSize = {
   width: number
   height: number
+}
+
+type NormalizedPageSize = PageSize & {
+  pageSizeUnavailable: boolean
 }
 
 type PageLoadStatus = 'loaded' | 'error'
@@ -607,10 +631,15 @@ const isIntermediateText = (
   content: IntermediateContent
 ): content is IntermediateText => 'content' in content && 'fontSize' in content
 
-// IntermediateImage 内容项判断（与 isIntermediateText 互补）
 const isIntermediateImage = (
   content: IntermediateContent
-): content is IntermediateImage => 'src' in content && 'polygon' in content
+): content is IntermediateImage => {
+  if (!('src' in content) || !('polygon' in content)) {
+    return false
+  }
+
+  return typeof content.src === 'string' && content.src.trim().length > 0
+}
 
 const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
   const pageSizeUnavailable =
@@ -625,6 +654,11 @@ const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
 
   return { width, height, pageSizeUnavailable }
 }
+
+const getCachedPageSize = (
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>,
+  pageNumber: number
+) => pageSizesByPageNumber.get(pageNumber) ?? normalizePageSize(undefined)
 
 /**
  * Merge overlapping or adjacent rectangles on the same line.
@@ -910,6 +944,7 @@ type PageRefSetter = (
 ) => (element: HTMLDivElement | null) => void
 
 type DirectPageResources = {
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
   textsByPageNumber: Map<number, IntermediateText[]>
   ocrTextsByPageNumber: Map<number, IntermediateText[]>
   pageStatuses: Map<number, PageLoadStatus>
@@ -919,7 +954,6 @@ type DirectPageResources = {
 
 type HtmlParserPagesProps = DirectPageResources & {
   pageNumbers: number[]
-  runtimeDocument: IntermediateDocument
   htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
   htmlPagesByPageNumber: Map<number, string>
   setPageRef: PageRefSetter
@@ -965,7 +999,6 @@ type HtmlParserPagesProps = DirectPageResources & {
 
 type DirectPagesProps = DirectPageResources & {
   pageNumbers: number[]
-  runtimeDocument: IntermediateDocument
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
 }
@@ -973,11 +1006,18 @@ type DirectPagesProps = DirectPageResources & {
 type ViewerContentProps = DirectPageResources & {
   rootClassName: string
   viewerRootRef: React.Ref<HTMLDivElement>
-  runtimeDocument: IntermediateDocument
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
   imagesByPageNumber: Map<number, IntermediateImage[]>
+  onPageRenderTiming:
+    | ((
+        pageNumber: number,
+        startTime: number,
+        commitTime: number,
+        actualDuration: number
+      ) => void)
+    | undefined
   handleVirtualPaperTransformChange: (
     nextTransform: VirtualPaperTransform,
     meta: VirtualPaperTransformMeta
@@ -1026,6 +1066,11 @@ type ViewerContentProps = DirectPageResources & {
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
+
+type PageLoadTimingStart = {
+  readonly startedAt: number
+  readonly stage: 'initial-page-loading' | 'visibility-lazy-loading'
+}
 
 const getElementFromSelectionNode = (node: Node | null): Element | null => {
   if (!node) return null
@@ -1112,7 +1157,7 @@ function DirectPageInner({
 
 function HtmlParserPages({
   pageNumbers,
-  runtimeDocument,
+  pageSizesByPageNumber,
   htmlPageStatusesByPageNumber,
   htmlPagesByPageNumber,
   setPageRef,
@@ -1174,8 +1219,9 @@ function HtmlParserPages({
     >
       <div className='hamster-note-document'>
         {pageNumbers.map((pageNumber) => {
-          const htmlPageSize = normalizePageSize(
-            runtimeDocument.getPageSizeByPageNumber(pageNumber)
+          const htmlPageSize = getCachedPageSize(
+            pageSizesByPageNumber,
+            pageNumber
           )
           const htmlPageStatusEntry =
             htmlPageStatusesByPageNumber.get(pageNumber)
@@ -1238,7 +1284,7 @@ function HtmlParserPages({
                 onLinkedSelect={handleLinkedSelect}
                 onLinkedUpdateRange={handleLinkedUpdateRange}
                 onLinkedSelectRange={handleLinkedSelectRange}
-                ranges={[]}
+                ranges={EMPTY_SELECTION_RANGES}
                 selectedRangeId={effectiveSelectedRangeId}
                 onSelect={undefined}
                 onSelectRange={undefined}
@@ -1277,9 +1323,9 @@ function HtmlParserPages({
 
 function DirectPages({
   pageNumbers,
-  runtimeDocument,
   setPageRef,
   setTextRef,
+  pageSizesByPageNumber,
   textsByPageNumber,
   ocrTextsByPageNumber,
   pageStatuses,
@@ -1287,9 +1333,7 @@ function DirectPages({
   baseImagesByPageNumber
 }: DirectPagesProps) {
   return pageNumbers.map((pageNumber) => {
-    const directPageSize = normalizePageSize(
-      runtimeDocument.getPageSizeByPageNumber(pageNumber)
-    )
+    const directPageSize = getCachedPageSize(pageSizesByPageNumber, pageNumber)
     const directPageStatusEntry = pageStatuses.get(pageNumber)
     const isDirectPageLoading =
       loadablePages.has(pageNumber) &&
@@ -1334,8 +1378,8 @@ function DirectPages({
  * `intermediate-document` 默认模式的页面渲染器。
  *
  * 为每个 `pageNumbers` 条目渲染一个 `.hamster-reader__intermediate-page` 外壳，
- * 设置 `data-testid`、`data-page-number`、`data-selection-id` 及尺寸
- * （`normalizePageSize(getPageSizeByPageNumber)`，回退 `DEFAULT_PAGE_SIZE`）。
+  * 设置 `data-testid`、`data-page-number`、`data-selection-id` 及缓存尺寸
+  * （缺失时回退 `DEFAULT_PAGE_SIZE`）。
  *
  * 当某页已在内容 maps 中拥有已加载内容时，在外壳内渲染
  * `<IntermediateDocumentPageContent>`（底图 + 文本 span + OCR span + 图片项）；
@@ -1346,7 +1390,6 @@ function DirectPages({
  */
 type IntermediateDocumentPagesProps = DirectPageResources & {
   pageNumbers: number[]
-  runtimeDocument: IntermediateDocument
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
   runtimePageSelectionId: (pageNumber: number) => string
@@ -1385,14 +1428,20 @@ type IntermediateDocumentPagesProps = DirectPageResources & {
   selectionRefForRuntimeId: (
     selectionId: string
   ) => (node: ReaderSelectionRef | null) => void
+  onPageRenderTiming?: (
+    pageNumber: number,
+    startTime: number,
+    commitTime: number,
+    actualDuration: number
+  ) => void
 }
 
 function IntermediateDocumentPages({
   pageNumbers,
-  runtimeDocument,
   setPageRef,
   setTextRef,
   runtimePageSelectionId,
+  pageSizesByPageNumber,
   textsByPageNumber,
   ocrTextsByPageNumber,
   baseImagesByPageNumber,
@@ -1415,7 +1464,8 @@ function IntermediateDocumentPages({
   selectionPopover,
   highlightPopover,
   popoverVisible,
-  selectionRefForRuntimeId
+  selectionRefForRuntimeId,
+  onPageRenderTiming
 }: IntermediateDocumentPagesProps) {
   // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
   // 实例可以渲染 popover，其余页面传入 undefined（与 HtmlParserPages 行为一致）。
@@ -1441,19 +1491,15 @@ function IntermediateDocumentPages({
   return (
     <div className='hamster-note-document'>
       {pageNumbers.map((pageNumber) => {
-        const shellPageSize = normalizePageSize(
-          runtimeDocument.getPageSizeByPageNumber(pageNumber)
+        const shellPageSize = getCachedPageSize(
+          pageSizesByPageNumber,
+          pageNumber
         )
         const shellSelectionId = runtimePageSelectionId(pageNumber)
 
-        // 判断页面是否已加载内容：只有已加载（texts 或底图存在）的页面
-        // 才参与 selection；空外壳不渲染 HamsterSelection 包裹。
         const pageTexts = textsByPageNumber.get(pageNumber)
         const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
-        const isPageContentLoaded =
-          pageStatuses.get(pageNumber) === 'loaded' &&
-          ((pageTexts !== undefined && pageTexts.length > 0) ||
-            Boolean(pageBaseImage))
+        const isPageContentLoaded = pageStatuses.get(pageNumber) === 'loaded'
 
         // popover gating：owner 为 null（无 selected range）时所有页面均呈现 popover，
         // 否则仅 shellSelectionId === popoverOwnerRuntimeId 的页面拿到真实 popover 内容。
@@ -1471,18 +1517,19 @@ function IntermediateDocumentPages({
           </PopoverPortal>
         ) : undefined
 
-        // 页面内容：已加载时由 HamsterSelection linked-mode 包裹，
-        // 未加载（空外壳）时直接渲染 IntermediateDocumentPageContent（无内容）。
-        const pageContent = (
+        const pageContent = isPageContentLoaded ? (
           <IntermediateDocumentPageContent
             pageNumber={pageNumber}
-            texts={pageTexts ?? []}
-            ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
+            texts={pageTexts ?? EMPTY_INTERMEDIATE_TEXTS}
+            ocrTexts={
+              ocrTextsByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_TEXTS
+            }
             baseImageSource={pageBaseImage}
-            images={imagesByPageNumber.get(pageNumber) ?? []}
+            images={imagesByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_IMAGES}
             setTextRef={setTextRef}
+            onRenderTiming={onPageRenderTiming}
           />
-        )
+        ) : null
 
         return (
           <div
@@ -1511,7 +1558,7 @@ function IntermediateDocumentPages({
                 onLinkedSelect={handleLinkedSelect}
                 onLinkedUpdateRange={handleLinkedUpdateRange}
                 onLinkedSelectRange={handleLinkedSelectRange}
-                ranges={[]}
+                ranges={EMPTY_SELECTION_RANGES}
                 selectedRangeId={effectiveSelectedRangeId}
                 onSelect={undefined}
                 onSelectRange={undefined}
@@ -1529,7 +1576,7 @@ function IntermediateDocumentPages({
                 {pageContent}
               </HamsterSelection>
             ) : (
-              pageContent
+              null
             )}
           </div>
         )
@@ -1541,8 +1588,8 @@ function IntermediateDocumentPages({
 function ViewerContent({
   rootClassName,
   viewerRootRef,
-  runtimeDocument,
   pageNumbers,
+  pageSizesByPageNumber,
   virtualPaperTransform,
   scaleRange,
   handleVirtualPaperTransformChange,
@@ -1577,7 +1624,8 @@ function ViewerContent({
   pageStatuses,
   loadablePages,
   baseImagesByPageNumber,
-  imagesByPageNumber
+  imagesByPageNumber,
+  onPageRenderTiming
 }: ViewerContentProps) {
   const selectionRefsByRuntimeIdRef = useRef(
     new Map<string, ReaderSelectionRef>()
@@ -1627,21 +1675,43 @@ function ViewerContent({
     return ownerSelectionIds.some(Boolean) ? null : undefined
   }, [runtimePageSelectionId])
 
+  const getActiveLinkedRangeOwnerRef = useCallback(() => {
+    const activeRange = runtimeLinkedData.activeRange
+    if (!activeRange) return undefined
+
+    const ownerSelectionIds = [
+      activeRange.start.selectionId,
+      activeRange.end.selectionId
+    ]
+
+    for (const selectionId of ownerSelectionIds) {
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return null
+  }, [runtimeLinkedData.activeRange])
+
   const highlightSelection = useCallback(() => {
     const operation = beginLinkedHighlightOperation()
 
     try {
       const ownerSelectionRef = getActiveSelectionOwnerRef()
-      const selectionRef =
+      const linkedRangeOwnerSelectionRef =
         ownerSelectionRef === undefined
-          ? getFirstVisibleSelectionRef()
+          ? getActiveLinkedRangeOwnerRef()
           : ownerSelectionRef
+      const selectionRef =
+        linkedRangeOwnerSelectionRef === undefined
+          ? getFirstVisibleSelectionRef()
+          : linkedRangeOwnerSelectionRef
       selectionRef?.highlight()
     } finally {
       schedulePendingLinkedHighlightCleanup(operation)
     }
   }, [
     beginLinkedHighlightOperation,
+    getActiveLinkedRangeOwnerRef,
     getActiveSelectionOwnerRef,
     getFirstVisibleSelectionRef,
     schedulePendingLinkedHighlightCleanup
@@ -1793,7 +1863,7 @@ function ViewerContent({
     pagesNode = (
       <HtmlParserPages
         pageNumbers={pageNumbers}
-        runtimeDocument={runtimeDocument}
+        pageSizesByPageNumber={pageSizesByPageNumber}
         htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
         htmlPagesByPageNumber={htmlPagesByPageNumber}
         setPageRef={setPageRef}
@@ -1829,9 +1899,9 @@ function ViewerContent({
     pagesNode = (
       <DirectPages
         pageNumbers={pageNumbers}
-        runtimeDocument={runtimeDocument}
         setPageRef={setPageRef}
         setTextRef={setTextRef}
+        pageSizesByPageNumber={pageSizesByPageNumber}
         textsByPageNumber={textsByPageNumber}
         ocrTextsByPageNumber={ocrTextsByPageNumber}
         pageStatuses={pageStatuses}
@@ -1843,13 +1913,13 @@ function ViewerContent({
     /* 'intermediate-document' 默认分支：渲染页面外壳，并在已加载页面的
      * 外壳内绘制内容（底图 + 文本 + 图片项）。外壳阶段不调用页面/内容加载器；
      * 真实懒加载队列将在后续任务 中在此基础上实现。 */
-    pagesNode = (
+    const intermediateDocumentPages = (
       <IntermediateDocumentPages
         pageNumbers={pageNumbers}
-        runtimeDocument={runtimeDocument}
         setPageRef={setPageRef}
         setTextRef={setTextRef}
         runtimePageSelectionId={runtimePageSelectionId}
+        pageSizesByPageNumber={pageSizesByPageNumber}
         textsByPageNumber={textsByPageNumber}
         ocrTextsByPageNumber={ocrTextsByPageNumber}
         pageStatuses={pageStatuses}
@@ -1874,7 +1944,28 @@ function ViewerContent({
         highlightPopover={highlightPopover}
         popoverVisible={popoverVisible}
         selectionRefForRuntimeId={selectionRefForRuntimeId}
+        onPageRenderTiming={onPageRenderTiming}
       />
+    )
+
+    pagesNode = onPageRenderTiming ? (
+      <Profiler
+        id='intermediate-document-shell'
+        onRender={(
+          _id,
+          _phase,
+          actualDuration,
+          _baseDuration,
+          startTime,
+          commitTime
+        ) => {
+          onPageRenderTiming(0, startTime, commitTime, actualDuration)
+        }}
+      >
+        {intermediateDocumentPages}
+      </Profiler>
+    ) : (
+      intermediateDocumentPages
     )
   }
 
@@ -1945,12 +2036,54 @@ export function IntermediateDocumentViewer({
   initialLoadedPages = 1,
   pageLoadConcurrency = 3,
   pageLoadEnterDelayMs = 500,
-  pageUnloadDelayMs = 5000
+  pageUnloadDelayMs = 5000,
+  onIntermediateDocumentRenderTiming
 }: IntermediateDocumentViewerProps) {
+  // Render timing controller: stable across renders, callback identity
+  // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
+  // instrumentation.
+  const renderTimingCallbackRef = useRef(onIntermediateDocumentRenderTiming)
+  renderTimingCallbackRef.current = onIntermediateDocumentRenderTiming
+  const renderTimingRef = useRef(
+    createIntermediateDocumentRenderTiming({
+      callback: (...args) => renderTimingCallbackRef.current?.(...args)
+    })
+  )
+  const renderPhaseTimingBufferRef = useRef<
+    IntermediateDocumentRenderTimingEntry[]
+  >([])
+  const pageLoadTimingStartsRef = useRef(new Map<number, PageLoadTimingStart>())
+
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
-    return getRuntimeDocument(inputDocument)
+    if (!renderTimingRef.current.enabled) return getRuntimeDocument(inputDocument)
+
+    const startedAt = getRenderTimingNow()
+    const nextRuntimeDocument = getRuntimeDocument(inputDocument)
+    const endedAt = getRenderTimingNow()
+    renderPhaseTimingBufferRef.current.push({
+      stage: 'document-resolution',
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      detail: {
+        hasDocument: Boolean(document),
+        hasSerializedDocument: Boolean(serializedDocument),
+        pageCount: nextRuntimeDocument?.pageNumbers.length ?? 0
+      }
+    })
+    return nextRuntimeDocument
   }, [document, serializedDocument])
+
+  useEffect(() => {
+    const buffer = renderPhaseTimingBufferRef.current
+    if (buffer.length === 0) return
+
+    renderPhaseTimingBufferRef.current = []
+    buffer.forEach((entry) => {
+      renderTimingRef.current.record(entry)
+    })
+  })
 
   // intermediate-document 模式懒加载队列参数。集中存储四个 lazy props，
   // 供 useLazyPageQueue hook 读取以驱动逐页懒加载/并发/卸载节流。
@@ -1971,6 +2104,19 @@ export function IntermediateDocumentViewer({
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
     return getVisiblePageNumbers(allPageNumbers, pageRange)
   }, [runtimeDocument, pageRange])
+  const pageSizesByPageNumber = useMemo(() => {
+    const nextPageSizes = new Map<number, NormalizedPageSize>()
+    if (!runtimeDocument) return nextPageSizes
+
+    pageNumbers.forEach((pageNumber) => {
+      nextPageSizes.set(
+        pageNumber,
+        normalizePageSize(runtimeDocument.getPageSizeByPageNumber(pageNumber))
+      )
+    })
+
+    return nextPageSizes
+  }, [runtimeDocument, pageNumbers])
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
@@ -2000,6 +2146,7 @@ export function IntermediateDocumentViewer({
   // IO effect deps 导致观察者在每次渲染时重建。
   const renderModeRef = useRef(renderMode)
   renderModeRef.current = renderMode
+  const isIntermediateDocumentMode = renderMode === 'intermediate-document'
   const reactInstanceId = useId()
   const readerLinkedScopeId = useMemo(
     () => `reader-linked-${reactInstanceId}`,
@@ -2010,6 +2157,39 @@ export function IntermediateDocumentViewer({
       runtimePageSelectionId(readerLinkedScopeId, pageNumber),
     [readerLinkedScopeId]
   )
+
+  const handlePageRenderTiming = useCallback(
+    (
+      pageNumber: number,
+      startTime: number,
+      commitTime: number,
+      actualDuration: number
+    ) => {
+      if (pageNumber === 0) {
+        renderTimingRef.current.record({
+          stage: 'shell-rendering',
+          startedAt: startTime,
+          endedAt: commitTime,
+          durationMs: actualDuration,
+          detail: { pageCount: pageNumbers.length }
+        })
+        return
+      }
+
+      renderTimingRef.current.record({
+        stage: 'page-content-rendering',
+        startedAt: startTime,
+        endedAt: commitTime,
+        durationMs: actualDuration,
+        pageNumber
+      })
+    },
+    [pageNumbers.length]
+  )
+  const pageRenderTimingHandler =
+    renderTimingRef.current.enabled && isIntermediateDocumentMode
+      ? handlePageRenderTiming
+      : undefined
 
   // ---- Selection 库受控/非受控 state ----
   // ranges 受控（prop 提供）则直接用；否则内部 state 从 defaultRanges 初始化
@@ -2157,6 +2337,25 @@ export function IntermediateDocumentViewer({
     isIntermediateImage,
     callbacks: {
       onPageLoaded: ({ pageNumber, baseImage, texts, images }) => {
+        const loadTimingStart = pageLoadTimingStartsRef.current.get(pageNumber)
+        if (loadTimingStart) {
+          const endedAt = getRenderTimingNow()
+          renderTimingRef.current.record({
+            stage: loadTimingStart.stage,
+            startedAt: loadTimingStart.startedAt,
+            endedAt,
+            durationMs: endedAt - loadTimingStart.startedAt,
+            pageNumber
+          })
+          renderTimingRef.current.record({
+            stage: 'content-extraction',
+            startedAt: loadTimingStart.startedAt,
+            endedAt,
+            durationMs: endedAt - loadTimingStart.startedAt,
+            pageNumber
+          })
+          pageLoadTimingStartsRef.current.delete(pageNumber)
+        }
         lazilyEvictedPagesRef.current.delete(pageNumber)
         setBaseImagesByPageNumber(
           createSetBaseImageHandler(pageNumber, baseImage)
@@ -2166,6 +2365,7 @@ export function IntermediateDocumentViewer({
         setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
       },
       onPageError: (pageNumber) => {
+        pageLoadTimingStartsRef.current.delete(pageNumber)
         setBaseImagesByPageNumber(
           createSetBaseImageHandler(pageNumber, undefined)
         )
@@ -2174,7 +2374,10 @@ export function IntermediateDocumentViewer({
         setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
       },
       isPageLoaded: (pageNumber) =>
+        pageStatuses.get(pageNumber) === 'loaded' ||
         textsByPageNumber.has(pageNumber) ||
+        baseImagesByPageNumber.has(pageNumber) ||
+        imagesByPageNumber.has(pageNumber) ||
         lazilyEvictedPagesRef.current.has(pageNumber)
     }
   })
@@ -2218,6 +2421,12 @@ export function IntermediateDocumentViewer({
       pendingVisibilityTimersRef.current.delete(pageNumber)
       if (!isMountedRef.current) {
         return
+      }
+      if (renderTimingRef.current.enabled) {
+        pageLoadTimingStartsRef.current.set(pageNumber, {
+          stage: 'visibility-lazy-loading',
+          startedAt: getRenderTimingNow()
+        })
       }
       enqueueVisiblePageRef.current(pageNumber)
     }, delay)
@@ -2499,6 +2708,19 @@ export function IntermediateDocumentViewer({
       )
 
       setLoadablePages((currentPages) => {
+        let hasMissingPage = false
+
+        for (let index = startIndex; index <= endIndex; index += 1) {
+          if (!currentPages.has(pageNumbers[index])) {
+            hasMissingPage = true
+            break
+          }
+        }
+
+        if (!hasMissingPage) {
+          return currentPages
+        }
+
         const nextPages = new Set(currentPages)
 
         for (let index = startIndex; index <= endIndex; index += 1) {
@@ -2720,7 +2942,18 @@ export function IntermediateDocumentViewer({
         if (protectedPages.has(pageNumber)) {
           return
         }
-        evictLazyPageBundle(pageNumber)
+        const startedAt = getRenderTimingNow()
+        const didEvict = evictLazyPageBundle(pageNumber)
+        if (didEvict) {
+          const endedAt = getRenderTimingNow()
+          renderTimingRef.current.record({
+            stage: 'offscreen-unload',
+            startedAt,
+            endedAt,
+            durationMs: endedAt - startedAt,
+            pageNumber
+          })
+        }
       }, delay)
       pendingUnloadTimersRef.current.set(pageNumber, timer)
     },
@@ -3165,7 +3398,12 @@ export function IntermediateDocumentViewer({
         readerLinkedScopeId
       )
 
-      setRuntimeLinkedTransient(extractRuntimeLinkedTransient(next))
+      const nextTransient = extractRuntimeLinkedTransient(next)
+      setRuntimeLinkedTransient((currentTransient) =>
+        areRuntimeLinkedTransientsEqual(currentTransient, nextTransient)
+          ? currentTransient
+          : nextTransient
+      )
       onLinkedDataChange?.(publicLinkedData)
 
       if (!isRangesControlled) {
@@ -3336,7 +3574,7 @@ export function IntermediateDocumentViewer({
 
     // intermediate-document 默认模式仅渲染空外壳，绝不调用页面/内容加载器；
     // 真实懒加载队列将在后续任务 中实现。
-    if (renderMode === 'intermediate-document') {
+    if (isIntermediateDocumentMode) {
       return
     }
 
@@ -3415,7 +3653,7 @@ export function IntermediateDocumentViewer({
           loadingPagesRef.current.delete(pageNumber)
         })
     })
-  }, [loadablePages, runtimeDocument, renderMode, textsByPageNumber])
+  }, [isIntermediateDocumentMode, loadablePages, runtimeDocument, textsByPageNumber])
 
   // intermediate-document 模式的懒加载队列触发器。
   // 在 shell 就绪后（pageNumbers/runtimeDocument 稳定），通过
@@ -3423,21 +3661,47 @@ export function IntermediateDocumentViewer({
   // 队列强制 pageLoadConcurrency 并发上限，去重 queued/in-flight/loaded，
   // 并通过 generation token 忽略 document/renderMode 变更后的 stale 结果。
   useEffect(() => {
-    if (renderMode !== 'intermediate-document' || !runtimeDocument) {
+    if (!isIntermediateDocumentMode || !runtimeDocument) {
       return
     }
+    if (renderTimingRef.current.enabled) {
+      const initialCount = lazyQueueConfigRef.current.initialLoadedPages
+      const targetPages = pageNumbers.slice(0, initialCount)
+      targetPages.forEach((pageNumber) => {
+        if (
+          !textsByPageNumber.has(pageNumber) &&
+          !loadingPagesRef.current.has(pageNumber) &&
+          !pageLoadTimingStartsRef.current.has(pageNumber)
+        ) {
+          pageLoadTimingStartsRef.current.set(pageNumber, {
+            stage: 'initial-page-loading',
+            startedAt: getRenderTimingNow()
+          })
+        }
+      })
+    }
     lazyPageQueue.enqueueInitialPages(pageNumbers)
-  }, [pageNumbers, runtimeDocument, renderMode, lazyPageQueue])
+  }, [
+    isIntermediateDocumentMode,
+    pageNumbers,
+    runtimeDocument,
+    lazyPageQueue,
+    textsByPageNumber
+  ])
 
   // renderMode/unmount 变更时清除所有挂起的可见性入队定时器和离屏卸载
   // 定时器，配合 lazyPageQueue.cancelAll() 防止 stale 入队/卸载。
   // document 变更由 IO effect 的 cleanup + document-change effect 覆盖。
   useEffect(() => {
+    if (!isIntermediateDocumentMode) {
+      return
+    }
+
     return () => {
       clearAllVisibilityTimers()
       clearAllUnloadTimers()
     }
-  }, [renderMode, clearAllVisibilityTimers, clearAllUnloadTimers])
+  }, [isIntermediateDocumentMode, clearAllVisibilityTimers, clearAllUnloadTimers])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
@@ -3445,7 +3709,7 @@ export function IntermediateDocumentViewer({
     }
 
     const isOcrEnabled =
-      ocr === true || (typeof ocr === 'object' && ocr.enabled !== false)
+      ocr === true || (typeof ocr === 'object' && ocr.enabled === true)
 
     if (!isOcrEnabled) {
       return
@@ -3487,6 +3751,7 @@ export function IntermediateDocumentViewer({
       const ocrRunGeneration =
         ocrEvictGenerationRef.current.get(pageNumber) ?? 0
 
+      const startedAt = getRenderTimingNow()
       const runOcr = async () => {
         try {
           const { ImageParser } = await import('@hamster-note/image-parser')
@@ -3536,6 +3801,14 @@ export function IntermediateDocumentViewer({
             isMountedRef.current &&
             activeDocumentRef.current === runtimeDocument
           ) {
+            const endedAt = getRenderTimingNow()
+            renderTimingRef.current.record({
+              stage: 'ocr-processing',
+              startedAt,
+              endedAt,
+              durationMs: endedAt - startedAt,
+              pageNumber
+            })
             ocrLoadingPagesRef.current.delete(pageNumber)
           }
         }
@@ -3621,8 +3894,8 @@ export function IntermediateDocumentViewer({
     <ViewerContent
       rootClassName={rootClassName}
       viewerRootRef={setViewerRootRef}
-      runtimeDocument={runtimeDocument}
       pageNumbers={pageNumbers}
+      pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
       handleVirtualPaperTransformChange={handleVirtualPaperTransformChange}
@@ -3662,6 +3935,7 @@ export function IntermediateDocumentViewer({
       loadablePages={loadablePages}
       baseImagesByPageNumber={baseImagesByPageNumber}
       imagesByPageNumber={imagesByPageNumber}
+      onPageRenderTiming={pageRenderTimingHandler}
     />
   )
 }

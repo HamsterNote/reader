@@ -1,4 +1,5 @@
 import type { IntermediateImage, IntermediateText } from '@hamster-note/types'
+import type { CSSProperties } from 'react'
 
 /**
  * intermediate-document / direct / html-parser 三种渲染模式共享的
@@ -114,27 +115,6 @@ export const getPolygonTextGeometry = (
 }
 
 /**
- * 计算文本 span 的额外 CSS transform（rotate / skewX）。
- * 当 bbox 已包含旋转角时可通过 skipRotate 跳过重复旋转。
- */
-export const getTextTransform = (
-  text: RenderableIntermediateText,
-  skipRotate?: boolean
-) => {
-  const transforms: string[] = []
-
-  if (!skipRotate && text.rotate) {
-    transforms.push(`rotate(${text.rotate}deg)`)
-  }
-
-  if (text.skew) {
-    transforms.push(`skewX(${text.skew}deg)`)
-  }
-
-  return transforms.length > 0 ? transforms.join(' ') : undefined
-}
-
-/**
  * 计算单个文本 span 的包围盒（优先使用四边形精确几何，回退到轴对齐包围盒，
  * 最后回退到 x/y/width/height 字段）。
  */
@@ -165,51 +145,6 @@ export const getTextBbox = (text: RenderableIntermediateText) => {
     width: text.width ?? 0,
     height: text.height ?? 0,
     rotation: 0
-  }
-}
-
-/**
- * 根据文本几何与字体属性构建文本 span 的内联样式。
- */
-export const buildTextSpanStyle = (
-  text: RenderableIntermediateText,
-  bbox: ReturnType<typeof getTextBbox>
-) => {
-  const textTransform = getTextTransform(text, !!bbox.rotation)
-  const transform = [
-    bbox.rotation ? `rotate(${bbox.rotation}deg)` : '',
-    textTransform
-  ]
-    .filter(Boolean)
-    .join(' ')
-
-  return {
-    position: 'absolute' as const,
-    left: Number.isFinite(bbox.x) ? `${bbox.x}px` : '0px',
-    top: Number.isFinite(bbox.y) ? `${bbox.y}px` : '0px',
-    width:
-      Number.isFinite(bbox.width) && bbox.width > 0
-        ? `${bbox.width}px`
-        : undefined,
-    height:
-      Number.isFinite(bbox.height) && bbox.height > 0
-        ? `${bbox.height}px`
-        : undefined,
-    fontSize:
-      Number.isFinite(text.fontSize) && text.fontSize > 0
-        ? `${text.fontSize}px`
-        : undefined,
-    fontFamily: text.fontFamily || undefined,
-    fontWeight: text.fontWeight || undefined,
-    fontStyle: text.italic ? 'italic' : undefined,
-    color: text.color || undefined,
-    lineHeight:
-      Number.isFinite(text.lineHeight) && text.lineHeight > 0
-        ? `${text.lineHeight}px`
-        : undefined,
-    transform,
-    transformOrigin: 'left top' as const,
-    whiteSpace: 'pre' as const
   }
 }
 
@@ -247,8 +182,8 @@ export const getImageGeometry = (image: IntermediateImage): PolygonGeometry => {
 export const buildImageStyle = (
   image: IntermediateImage,
   geometry: PolygonGeometry
-): React.CSSProperties => {
-  const baseStyle: React.CSSProperties = {
+): CSSProperties => {
+  const baseStyle: CSSProperties = {
     position: 'absolute',
     left: `${geometry.x}px`,
     top: `${geometry.y}px`,

@@ -44,3 +44,12 @@ export {
   type NormalizedRect,
   type TextElementInfo
 } from '../selection/savedSelection'
+export {
+  createIntermediateDocumentRenderTiming,
+  type CreateIntermediateDocumentRenderTimingOptions,
+  type IntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingClock,
+  type IntermediateDocumentRenderTimingEntry,
+  type IntermediateDocumentRenderTimingStage
+} from './renderTiming'

@@ -13,6 +13,7 @@ import type {
   ReaderSelectedTextSegment,
   ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
+import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import type {
   ReaderLinkedSelectionData,
@@ -21,6 +22,7 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../types/selection'
+import { DocumentViewer } from './DocumentViewer'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -148,6 +150,8 @@ export type ReaderProps = {
   pageLoadEnterDelayMs?: number
   /** 离开可加载窗口后卸载内容的延迟（毫秒），转发给 viewer，默认 5000 */
   pageUnloadDelayMs?: number
+  /** intermediate-document 渲染阶段计时回调，转发给 IntermediateDocumentViewer */
+  onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -186,7 +190,7 @@ export function Reader({
   onFileUpload,
   overscanPages,
   pageRange,
-  renderMode,
+  renderMode = 'virtual-paper',
   backgroundQuality,
   ocr,
   onOcrError,
@@ -224,7 +228,8 @@ export function Reader({
   initialLoadedPages,
   pageLoadConcurrency,
   pageLoadEnterDelayMs,
-  pageUnloadDelayMs
+  pageUnloadDelayMs,
+  onIntermediateDocumentRenderTiming
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -300,6 +305,10 @@ export function Reader({
 
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
+      if (renderMode === 'virtual-paper') {
+        return <DocumentViewer document={document} />
+      }
+
       return (
         <IntermediateDocumentViewer
           document={document}
@@ -344,6 +353,7 @@ export function Reader({
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
           pageUnloadDelayMs={pageUnloadDelayMs}
+          onIntermediateDocumentRenderTiming={onIntermediateDocumentRenderTiming}
         />
       )
     }

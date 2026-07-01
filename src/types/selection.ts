@@ -34,8 +34,12 @@ export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
   readonly __readerSelectionRangeBrand?: never
 }
 
-export type ReaderLinkedSelectionData = Omit<LinkedSelectionData, 'items'> & {
+export type ReaderLinkedSelectionData = Omit<
+  LinkedSelectionData,
+  'items' | 'activeRange'
+> & {
   items: ReaderLinkedSelectionRange[]
+  activeRange?: ReaderLinkedSelectionRange | null
 }
 
 export type ReaderSelectionRef = SelectionRef

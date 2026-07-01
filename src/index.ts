@@ -41,7 +41,14 @@ export {
   type ReaderTextSelectionDetail,
   textHash,
   type NormalizedRect,
-  type TextElementInfo
+  type TextElementInfo,
+  createIntermediateDocumentRenderTiming,
+  type CreateIntermediateDocumentRenderTimingOptions,
+  type IntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingClock,
+  type IntermediateDocumentRenderTimingEntry,
+  type IntermediateDocumentRenderTimingStage
 } from './components/IntermediateDocumentViewer'
 export { Reader, type ReaderProps } from './components/Reader'
 

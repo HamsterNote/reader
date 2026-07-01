@@ -17,6 +17,7 @@ import type {
 } from '@hamster-note/types'
 import { useCallback, useRef, useState } from 'react'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
+import { MobileSafeHighlightButton } from './MobileSafeHighlightButton'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -589,7 +590,7 @@ export function App() {
           renderMode={renderMode}
           backgroundQuality={backgroundQuality}
           overlayRectType='percent'
-          ocr
+          ocr={{ enabled: false }}
           onTextSelectionChange={() => {}}
           onTextSelectionEnd={() => {}}
           onSelectText={() => {}}
@@ -617,18 +618,7 @@ export function App() {
                 fontSize: '14px'
               }}
             >
-              <button
-                type='button'
-                onClick={() => selectionRef.current?.highlight()}
-                style={{
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: '#fff',
-                  border: 'none'
-                }}
-              >
-                高亮
-              </button>
+              <MobileSafeHighlightButton selectionRef={selectionRef} />
               <label
                 style={{
                   display: 'flex',

@@ -1,13 +1,13 @@
 import type { IntermediateImage, IntermediateText } from '@hamster-note/types'
-import type { CSSProperties } from 'react'
+import { memo, Profiler, type CSSProperties } from 'react'
 
 import {
   buildImageStyle,
-  buildTextSpanStyle,
   getImageGeometry,
   getTextBbox,
   type RenderableIntermediateText
 } from './pageContentGeometry'
+import { buildTextSpanStyle } from './textSpanStyle'
 
 /**
  * `intermediate-document` 默认模式已加载页面的内容渲染器。
@@ -47,6 +47,12 @@ export type IntermediateDocumentPageContentProps = {
   images: IntermediateImage[]
   /** 文本 span ref 注册回调 */
   setTextRef: IntermediateDocumentSetTextRef
+  onRenderTiming?: (
+    pageNumber: number,
+    startTime: number,
+    commitTime: number,
+    actualDuration: number
+  ) => void
 }
 
 /**
@@ -69,7 +75,7 @@ const renderTextSpan = (
 ) => {
   const text = textData as RenderableIntermediateText
   const bbox = getTextBbox(text)
-  const spanStyle: CSSProperties = buildTextSpanStyle(text, bbox)
+  const spanStyle: CSSProperties = buildTextSpanStyle(text, bbox, true)
 
   return (
     <span
@@ -106,19 +112,20 @@ const renderImageEntry = (image: IntermediateImage) => {
   )
 }
 
-export function IntermediateDocumentPageContent({
+function IntermediateDocumentPageContentComponent({
   pageNumber,
   texts,
   ocrTexts,
   baseImageSource,
   images,
-  setTextRef
+  setTextRef,
+  onRenderTiming
 }: IntermediateDocumentPageContentProps) {
   // 过滤纯空白文本 span，与 direct / html-parser 路径保持一致
   const renderableTexts = texts.filter(isRenderableText)
   const renderableOcrTexts = ocrTexts.filter(isRenderableText)
 
-  return (
+  const content = (
     <>
       {/* 基础底图层：来自 thumbnail / image / getThumbnail() 的 duck typing 解析 */}
       {baseImageSource && (
@@ -144,4 +151,28 @@ export function IntermediateDocumentPageContent({
       )}
     </>
   )
+
+  if (!onRenderTiming) return content
+
+  return (
+    <Profiler
+      id={`intermediate-page-content-${pageNumber}`}
+      onRender={(
+        _id,
+        _phase,
+        actualDuration,
+        _baseDuration,
+        startTime,
+        commitTime
+      ) => {
+        onRenderTiming(pageNumber, startTime, commitTime, actualDuration)
+      }}
+    >
+      {content}
+    </Profiler>
+  )
 }
+
+export const IntermediateDocumentPageContent = memo(
+  IntermediateDocumentPageContentComponent
+)
