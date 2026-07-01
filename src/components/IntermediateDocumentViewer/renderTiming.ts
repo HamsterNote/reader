@@ -58,7 +58,7 @@ export interface IntermediateDocumentRenderTiming {
     context:
       | {
           pageNumber?: number
-          detail?: Record<string, string | number | boolean | null>
+          detail?: Record<string, DetailValue>
         }
       | undefined,
     fn: () => T

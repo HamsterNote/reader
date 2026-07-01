@@ -4575,6 +4575,7 @@ describe('IntermediateDocumentViewer', () => {
       expectFiniteTimingEntry(
         requirePageTimingStage(entries, 'content-extraction', 2)
       )
+      expect(entries.length).toBeGreaterThanOrEqual(2)
     })
 
     it('reports offscreen unload timing when a loaded page leaves the viewport past the delay', async () => {
@@ -4612,6 +4613,7 @@ describe('IntermediateDocumentViewer', () => {
       expectFiniteTimingEntry(
         requirePageTimingStage(entries, 'offscreen-unload', 2)
       )
+      expect(entries.length).toBeGreaterThanOrEqual(1)
     })
 
     it('reports OCR processing timing for a visible page with a base image', async () => {
