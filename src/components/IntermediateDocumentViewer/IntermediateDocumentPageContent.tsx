@@ -14,12 +14,12 @@ import { buildTextSpanStyle } from './textSpanStyle'
  *
  * 该组件渲染在外壳 `.hamster-reader__intermediate-page` 内部，负责把已加载
  * 的页面内容 bundle（基础底图、文本 span、OCR 文本 span、IntermediateImage
- * 内容项）绘制到 DOM。它复用与 direct / html-parser 路径相同的几何辅助函数，
+ * 内容项）绘制到 DOM。它复用统一的几何辅助函数，
  * 以保证选择、OCR 与测试行为一致。
  *
  * 关键约束：
  * - 绝不使用 `dangerouslySetInnerHTML`；所有内容均由 React 元素渲染。
- * - 保留与 direct 路径一致的 thumbnail / base-image duck typing。
+ * - 保留 thumbnail / base-image duck typing。
  * - 文本 span 沿用 `.hamster-reader__intermediate-text` + `data-text-id` +
  *   `data-page-number`，以便选择载荷序列化器 / OCR / 测试正常工作。
  * - IntermediateImage 内容项以绝对定位 `<img>` 绘制，几何由 polygon 决定。
@@ -58,14 +58,13 @@ export type IntermediateDocumentPageContentProps = {
 /**
  * 判断文本内容是否应被渲染。
  *
- * 纯空白（含零宽字符、全角空格等）的 "占位 span" 在原始 direct / html-parser
- * 路径中也会被过滤，这里保持一致以避免选择范围异常。
+ * 纯空白（含零宽字符、全角空格等）的 "占位 span" 会被过滤，避免选择范围异常。
  */
 const isRenderableText = (text: IntermediateText): boolean =>
   text.content.length > 0
 
 /**
- * 渲染单个文本 span。复用 direct 路径的几何与样式逻辑。
+ * 渲染单个文本 span。复用统一的几何与样式逻辑。
  */
 const renderTextSpan = (
   textData: IntermediateText,
@@ -121,7 +120,7 @@ function IntermediateDocumentPageContentComponent({
   setTextRef,
   onRenderTiming
 }: IntermediateDocumentPageContentProps) {
-  // 过滤纯空白文本 span，与 direct / html-parser 路径保持一致
+  // 过滤纯空白文本 span，与页面内容渲染契约保持一致
   const renderableTexts = texts.filter(isRenderableText)
   const renderableOcrTexts = ocrTexts.filter(isRenderableText)
 

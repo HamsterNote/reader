@@ -50,7 +50,7 @@ export interface LazyPageQueueCallbacks {
  * `useLazyPageQueue` 返回的稳定函数集合。
  * - `enqueueInitialPages`：在 shell 就绪后入队前 `initialLoadedPages` 页。
  * - `enqueuePage`：入队单个页码（例如由可见性观察器触发）。
- * - `cancelAll`：在文档/renderMode 变更时清空队列并忽略在途结果。
+ * - `cancelAll`：清空队列并忽略在途结果。
  */
 export interface LazyPageQueueApi {
   enqueueInitialPages: (pageNumbers: number[]) => void
@@ -63,13 +63,10 @@ export interface LazyPageQueueApi {
  *
  * 设计要点：
  * - 队列项是 **页码**（number），不是已加载的 `IntermediatePage` 对象。
- * - 在开始一个队列项前，重新检查：renderMode 仍为 'intermediate-document'、
- *   document 仍是当前活动文档、页码仍在当前 pageNumbers 中、未已加载/在途。
+ * - 在开始一个队列项前，重新检查：document 仍是当前活动文档、页码仍在当前 pageNumbers 中、未已加载/在途。
  * - 通过 `loadingPagesRef`（Set<number>）强制并发上限 `pageLoadConcurrency`。
  * - 对 queued/in-flight/loaded 页码去重。
- * - document/renderMode 变更时，`cancelAll` 清空队列；在途 async 结果通过
- *   generation token 被忽略。
- * - 不与 html-parser 的 `decodingPageNumbersRef` 共享状态，保持模式隔离。
+ * - `cancelAll` 清空队列；在途 async 结果通过 generation token 被忽略。
  *
  * 加载流程：`getPageByPageNumber` → `getBaseImageFromPage` + `getPageContentEntries`
  * → 用 `isIntermediateText`/`isIntermediateImage` 过滤 → 调用 callbacks 更新状态。
@@ -78,7 +75,6 @@ export function useLazyPageQueue(
   configRef: React.MutableRefObject<LazyPageQueueConfig>,
   runtimeDocument: IntermediateDocument | null,
   options: {
-    renderMode: string
     activeDocumentRef: React.MutableRefObject<IntermediateDocument | null>
     isMountedRef: React.MutableRefObject<boolean>
     loadingPagesRef: React.MutableRefObject<Set<number>>
@@ -94,7 +90,6 @@ export function useLazyPageQueue(
   }
 ): LazyPageQueueApi {
   const {
-    renderMode,
     activeDocumentRef,
     isMountedRef,
     loadingPagesRef,
@@ -107,13 +102,9 @@ export function useLazyPageQueue(
 
   // 待加载页码队列（保持插入顺序，不去重存储层，enqueuePage 内去重）
   const queuedPageNumbersRef = useRef<number[]>([])
-  // 本 hook 自己写入 loadingPagesRef 的页码集合。loadingPagesRef 由
-  // direct/html-parser 路径共享，cancelAll 不能整体清空它，否则会误删其他
-  // 路径的在途标记。借此集合维护「懒队列拥有」的边界：cancelAll 仅清除
-  // 这些页码，从而在 renderMode 切换时也能正确回收，且不影响 document-change
-  // effect 的整体清理路径。
+  // 本 hook 自己写入 loadingPagesRef 的页码集合。借此集合维护「懒队列拥有」的边界：cancelAll 仅清除这些页码。
   const lazyInFlightPagesRef = useRef(new Set<number>())
-  // 每次 document/renderMode 变化时递增的代际 token；
+  // 每次取消时递增的代际 token；
   // 在途 async 结果在 resolve 时比对，不匹配则丢弃。
   const generationRef = useRef(0)
   // 当前 pageNumbers 快照，用于在开始加载前校验页码仍被需要。
@@ -163,10 +154,7 @@ export function useLazyPageQueue(
         return
       }
 
-      // 二次守卫：renderMode/document/页码仍有效
-      if (renderMode !== 'intermediate-document') {
-        return
-      }
+      // 二次守卫：document/页码仍有效
       if (activeDocumentRef.current !== document) {
         return
       }
@@ -246,7 +234,6 @@ export function useLazyPageQueue(
     },
     [
       runtimeDocument,
-      renderMode,
       activeDocumentRef,
       isMountedRef,
       loadingPagesRef,
@@ -268,9 +255,6 @@ export function useLazyPageQueue(
       if (generationRef.current !== generation) {
         return
       }
-      if (renderMode !== 'intermediate-document') {
-        return
-      }
       if (!runtimeDocument || activeDocumentRef.current !== runtimeDocument) {
         return
       }
@@ -287,7 +271,6 @@ export function useLazyPageQueue(
     [
       configRef,
       runtimeDocument,
-      renderMode,
       activeDocumentRef,
       loadingPagesRef,
       dequeueNextLoadable,
@@ -306,8 +289,7 @@ export function useLazyPageQueue(
     (pageNumbers: number[]) => {
       // 更新当前 range 快照
       currentRangePageNumbersRef.current = pageNumbers
-      // 仅 intermediate-document 模式生效
-      if (renderMode !== 'intermediate-document' || !runtimeDocument) {
+      if (!runtimeDocument) {
         return
       }
 
@@ -330,14 +312,7 @@ export function useLazyPageQueue(
 
       pumpQueue(generationRef.current)
     },
-    [
-      configRef,
-      runtimeDocument,
-      renderMode,
-      callbacks,
-      loadingPagesRef,
-      pumpQueue
-    ]
+    [configRef, runtimeDocument, callbacks, loadingPagesRef, pumpQueue]
   )
 
   /**
@@ -346,7 +321,7 @@ export function useLazyPageQueue(
    */
   const enqueuePage = useCallback(
     (pageNumber: number) => {
-      if (renderMode !== 'intermediate-document' || !runtimeDocument) {
+      if (!runtimeDocument) {
         return
       }
       // 页码不在当前 range → 忽略
@@ -366,31 +341,27 @@ export function useLazyPageQueue(
       queuedPageNumbersRef.current.push(pageNumber)
       pumpQueue(generationRef.current)
     },
-    [runtimeDocument, renderMode, callbacks, loadingPagesRef, pumpQueue]
+    [runtimeDocument, callbacks, loadingPagesRef, pumpQueue]
   )
 
   /**
-   * 在 document/renderMode 变更时清空队列并使在途结果失效。
+   * 清空队列并使在途结果失效。
    * 递增 generation token，使所有在途 promise 的 resolve 被忽略。
    */
   const cancelAll = useCallback(() => {
     queuedPageNumbersRef.current = []
     generationRef.current += 1
-    // 清除懒队列自己写入的在途标记。document 变更时外层 effect 会整体
-    // clear loadingPagesRef，但 renderMode 变更不会，故此处按 hook 拥有的
-    // 边界回收，避免 renderMode 切换后 stale 在途页码永久滞留；同时不触碰
-    // direct/html-parser 路径写入的其他在途标记。
+    // 清除懒队列自己写入的在途标记。
     lazyInFlightPagesRef.current.forEach((pageNumber) => {
       loadingPagesRef.current.delete(pageNumber)
     })
     lazyInFlightPagesRef.current.clear()
   }, [loadingPagesRef])
 
-  // document/renderMode 变化时自动 cancelAll：这两个 dep 作为触发键，
-  // effect body 不直接使用它们的值，仅通过 cancelAll 重置队列代际。
+  // document identity 变化时自动 cancelAll。
   useEffect(() => {
     cancelAll()
-  }, [runtimeDocument, renderMode, cancelAll])
+  }, [runtimeDocument, cancelAll])
 
   // unmount 时清空队列
   useEffect(() => {

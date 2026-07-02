@@ -16,7 +16,6 @@ export type {
 } from './types/selection'
 
 export {
-  type BackgroundQuality,
   buildSavedSelection,
   buildSelectionPayload,
   denormalizePageRects,
@@ -26,7 +25,6 @@ export {
   resolveSavedSelection,
   type ReaderInteractionMode,
   type ReaderPageRange,
-  type ReaderRenderMode,
   type ReaderSavedSelection,
   type ReaderSavedSelectionAnchor,
   type ReaderSavedSelectionComment,

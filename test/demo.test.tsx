@@ -58,7 +58,6 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
       document?: IntermediateDocument | IntermediateDocumentSerialized | null
       emptyText?: string
       onFileUpload?: (file: File) => void
-      renderMode?: string
       onTextSelectionChange?: (text: unknown, detail: unknown) => void
       onTextSelectionEnd?: (text: unknown, detail: unknown) => void
       onSelectText?: (
@@ -392,37 +391,16 @@ describe('demo parser flow', () => {
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
   })
 
-  it('defaults renderMode to intermediate-document (new lazy renderer)', async () => {
+  it('does not expose render-mode-select in demo settings', async () => {
     vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Render Mode Document')
+      makeRuntimeDocument('No Render Mode Document')
     )
 
     render(<App />)
-    upload(makeFile('rendermode.pdf'))
+    upload(makeFile('norendermode.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    const readerProps = findDocumentReaderProps()
-    expect(readerProps?.renderMode).toBe('intermediate-document')
-  })
-
-  it('exposes render-mode-select and switches to html-parser when selected', async () => {
-    vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Switch Render Mode Document')
-    )
-
-    render(<App />)
-    upload(makeFile('switchmode.pdf'))
-    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-
-    const select = screen.getByTestId('render-mode-select') as HTMLSelectElement
-    expect(select.value).toBe('intermediate-document')
-
-    fireEvent.change(select, { target: { value: 'html-parser' } })
-
-    await waitFor(() => {
-      const readerProps = findDocumentReaderProps()
-      expect(readerProps?.renderMode).toBe('html-parser')
-    })
+    expect(screen.queryByTestId('render-mode-select')).not.toBeInTheDocument()
   })
 
   it('logs selection events when callbacks are invoked', async () => {

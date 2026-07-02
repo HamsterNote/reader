@@ -6,10 +6,8 @@ import type {
 import { useCallback, useRef, useState } from 'react'
 
 import type {
-  BackgroundQuality,
   ReaderInteractionMode,
   ReaderPageRange,
-  ReaderRenderMode,
   ReaderSelectedTextSegment,
   ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
@@ -22,7 +20,6 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../types/selection'
-import { DocumentViewer } from './DocumentViewer'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -31,8 +28,6 @@ export type ReaderProps = {
   onFileUpload?: (file: File) => void
   overscanPages?: number
   pageRange?: ReaderPageRange
-  renderMode?: ReaderRenderMode
-  backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
   onTextSelectionChange?: (
@@ -94,12 +89,8 @@ export type ReaderProps = {
    * to the default cap. Finite values are floored by the pages that must remain
    * protected (visible pages, overscan, in-flight work, selections, active
    * drags, and saved-selection anchors), so the runtime may keep more pages than
-   * requested. In html-parser mode, eviction releases per-page decoded HTML and
-   * fallback state; evicted pages are decoded again when they re-enter the
-   * loadable window.
    */
   maxLoadedPages?: number
-  // ---- Selection props (forwarded to IntermediateDocumentViewer; html-parser mode only) ----
   /** 受控的已高亮 range 列表 */
   ranges?: ReaderSelectionRange[]
   /** 非受控模式下 ranges 的初始值 */
@@ -190,8 +181,6 @@ export function Reader({
   onFileUpload,
   overscanPages,
   pageRange,
-  renderMode = 'virtual-paper',
-  backgroundQuality,
   ocr,
   onOcrError,
   onTextSelectionChange,
@@ -305,17 +294,11 @@ export function Reader({
 
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
-      if (renderMode === 'virtual-paper') {
-        return <DocumentViewer document={document} />
-      }
-
       return (
         <IntermediateDocumentViewer
           document={document}
           overscan={overscanPages}
           pageRange={pageRange}
-          renderMode={renderMode}
-          backgroundQuality={backgroundQuality}
           ocr={ocr}
           onOcrError={onOcrError}
           onTextSelectionChange={onTextSelectionChange}

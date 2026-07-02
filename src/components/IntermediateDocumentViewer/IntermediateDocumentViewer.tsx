@@ -1,4 +1,3 @@
-import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
 import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
@@ -34,7 +33,6 @@ import React, {
 } from 'react'
 
 import { PopoverPortal } from '../PopoverPortal'
-import { isHtmlParserSelectionTarget } from '../selection/caretResolver'
 import {
   buildSelectionPayload,
   textElementRecords,
@@ -57,13 +55,6 @@ import {
   runtimePageSelectionId,
   type RuntimeLinkedSelectionTransient
 } from './selectionAdapter'
-// 共享纯几何/样式辅助（文本 span + IntermediateImage），供 direct / html-parser /
-// intermediate-document 三种渲染模式复用，避免 viewer 文件继续膨胀。
-import {
-  getTextBbox,
-  type RenderableIntermediateText
-} from './pageContentGeometry'
-import { buildTextSpanStyle } from './textSpanStyle'
 // intermediate-document 默认模式的已加载页面内容渲染器
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 // intermediate-document 默认模式的懒加载页面队列 hook
@@ -134,25 +125,6 @@ export type ReaderPageRange = {
   start: number
   end: number
 }
-
-/**
- * 渲染模式：
- * - `'html-parser'`：走 html-parser 解码路径（`HtmlParser.decodePageToHtml`），逐页解码为 HTML 片段渲染。
- * - `'direct'`：直接渲染中间文档内容，不经过 html-parser，不调用 `HtmlParser.decodePageToHtml`。
- * - `'intermediate-document'`：新增的默认模式。当前阶段为占位实现，复用 direct 渲染最小化满足编译，
- *   绝不调用 html-parser。后续任务 将在此基础上实现真正的懒加载队列。
- *
- * 当调用方省略 `renderMode` 时，组件默认使用 `'intermediate-document'`。
- * 显式传入 `'html-parser'` 或 `'direct'` 仍走各自既有路径，行为保持不变。
- */
-export type ReaderRenderMode =
-  | 'html-parser'
-  | 'direct'
-  | 'virtual-paper'
-  | 'intermediate-document'
-
-/** 背景质量级别：low（低）、medium（中）、high（高） */
-export type BackgroundQuality = 'low' | 'medium' | 'high'
 
 /**
  * 选择覆盖层矩形区域。
@@ -350,27 +322,6 @@ export const isNonSpaceBlankText = (content: string): boolean =>
   NON_SPACE_BLANK_TEXT_RE.test(content) &&
   content.replace(/ /g, '').length > 0
 
-/** 将背景质量级别映射为 html-parser 的 backgroundQuality 数值（0-1） */
-const BACKGROUND_QUALITY_MAP: Record<BackgroundQuality, number> = {
-  low: 0.1,
-  medium: 0.3,
-  high: 0.8
-}
-
-type HtmlPageStatus = 'loading' | 'decoded' | 'fallback'
-
-function buildHtmlParserDecodeOptions(
-  backgroundQuality: BackgroundQuality | undefined
-): DecodeOptions | undefined {
-  return backgroundQuality
-    ? {
-        background: {
-          backgroundQuality: BACKGROUND_QUALITY_MAP[backgroundQuality]
-        }
-      }
-    : undefined
-}
-
 /** 交互模式：'default' 为默认触摸/鼠标模式，'stylus' 为手写笔优化模式 */
 export type ReaderInteractionMode = 'default' | 'stylus'
 
@@ -380,8 +331,6 @@ export type IntermediateDocumentViewerProps = {
   className?: string
   overscan?: number
   pageRange?: ReaderPageRange
-  renderMode?: ReaderRenderMode
-  backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
   onTextSelectionChange?: (
@@ -440,13 +389,10 @@ export type IntermediateDocumentViewerProps = {
    * Finite values are floored by protected pages (visible pages, overscan,
    * in-flight work, active selection/drag/pinch state, and saved-selection
    * anchors), so more pages may remain loaded than the raw value. With
-   * html-parser output, eviction releases per-page decoded html state so an
-   * evicted page can be decoded again when it re-enters the loadable window.
    */
   maxLoadedPages?: number
   /** 交互模式，影响手势处理行为 */
   interactionMode?: ReaderInteractionMode
-  // ---- Selection 库集成 props（仅 html-parser 模式生效）----
   /** 受控的已高亮 range 列表；传入时组件不内部 mutation，缺失则用内部 state 从 defaultRanges 初始化 */
   ranges?: ReaderSelectionRange[]
   /** 非受控模式下 ranges 的初始值，默认空数组 */
@@ -484,13 +430,12 @@ export type IntermediateDocumentViewerProps = {
   highlightPopover?: React.ReactNode
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
-  /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法，仅 html-parser 模式有效 */
+  /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法 */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
-  // ---- intermediate-document 懒加载队列 props（仅新增默认模式预留，当前占位分支暂未消费）----
   /**
-   * 初始立即加载的页数。省略时默认 `1`。后续任务 将在 `'intermediate-document'` 懒加载队列中消费。
+   * 初始立即加载的页数。省略时默认 `1`。
    */
   initialLoadedPages?: number
   /**
@@ -735,25 +680,6 @@ const createSetPageStatusHandler = (
   }
 }
 
-const createSetHtmlPageHandler = (pageNumber: number, html: string) => {
-  return (currentPages: Map<number, string>) => {
-    const nextPages = new Map(currentPages)
-    nextPages.set(pageNumber, html)
-    return nextPages
-  }
-}
-
-const createSetHtmlPageStatusHandler = (
-  pageNumber: number,
-  status: HtmlPageStatus
-) => {
-  return (currentStatuses: Map<number, HtmlPageStatus>) => {
-    const nextStatuses = new Map(currentStatuses)
-    nextStatuses.set(pageNumber, status)
-    return nextStatuses
-  }
-}
-
 const createSetBaseImageHandler = (
   pageNumber: number,
   baseImage: string | undefined
@@ -830,12 +756,12 @@ const getBaseImageFromPage = async (page: unknown) => {
   }
 
   const pageWithImage = page as PageWithBaseImage
-  const directBaseImage =
+  const inlineBaseImage =
     getStringBaseImage(pageWithImage.thumbnail) ??
     getStringBaseImage(pageWithImage.image)
 
-  if (directBaseImage) {
-    return directBaseImage
+  if (inlineBaseImage) {
+    return inlineBaseImage
   }
 
   if (typeof pageWithImage.getThumbnail !== 'function') {
@@ -900,50 +826,16 @@ const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
 
 // 已移除自定义 SVG 选区 overlay 的拖拽 hook；文本选择改回浏览器原生 Selection。
 
-/**
- * 记忆化 HTML 页面内容子组件
- *
- * 隔离 dangerouslySetInnerHTML，使其不受父组件 IntermediateDocumentViewer
- * 中无关 state 变化（选区、overlay 等）导致的重新渲染影响。
- *
- * React.memo 对 string prop 做浅比较（值比较），所以当 html 字符串未变化时
- * 不会重新渲染，从而避免触发浏览器侧的 Parse HTML + set innerHTML。
- */
-const HtmlPageContent = React.memo(({ html }: { html: string }) => {
-  // 缓存 dangerouslySetInnerHTML 对象，稳定对象 identity
-  const htmlObj = useMemo(() => ({ __html: html }), [html])
-  return (
-    <div
-      // HTML 来自受信任的 @hamster-note/html-parser 包，
-      // 将 IntermediateDocument 数据转换为每页 HTML 片段。
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
-      dangerouslySetInnerHTML={htmlObj}
-    />
-  )
-})
-
-HtmlPageContent.displayName = 'HtmlPageContent'
-
 type SetTextRef = (
   text: IntermediateText,
   pageNumber: number
 ) => (element: HTMLSpanElement | null) => void
 
-type DirectPageInnerProps = {
-  pageNumber: number
-  texts: IntermediateText[]
-  ocrTexts: IntermediateText[]
-  pageStatus: PageLoadStatus | undefined
-  isLoadable: boolean
-  baseImageSource: string | undefined
-  setTextRef: SetTextRef
-}
-
 type PageRefSetter = (
   pageNumber: number
 ) => (element: HTMLDivElement | null) => void
 
-type DirectPageResources = {
+type PageResources = {
   pageSizesByPageNumber: Map<number, NormalizedPageSize>
   textsByPageNumber: Map<number, IntermediateText[]>
   ocrTextsByPageNumber: Map<number, IntermediateText[]>
@@ -952,58 +844,7 @@ type DirectPageResources = {
   baseImagesByPageNumber: Map<number, string>
 }
 
-type HtmlParserPagesProps = DirectPageResources & {
-  pageNumbers: number[]
-  htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
-  htmlPagesByPageNumber: Map<number, string>
-  setPageRef: PageRefSetter
-  setTextRef: SetTextRef
-  // T5: per-page linked-mode selection props
-  // 每个 .hamster-reader__intermediate-page 内容由一个 HamsterSelection 实例包裹，
-  // 使用 runtimePageSelectionId(pageNumber) 作为 runtime 选中 id，
-  // 共享同一份 runtime LinkedSelectionData 引用，并通过回调桥接 public 语义。
-  runtimePageSelectionId: (pageNumber: number) => string
-  runtimeLinkedData: LinkedSelectionData
-  handleLinkedDataChange: (next: LinkedSelectionData) => void
-  handleLinkedSelect: (range: LinkedSelectionRange) => void
-  handleLinkedUpdateRange: (range: LinkedSelectionRange) => void
-  handleLinkedSelectRange: (id: string | null) => void
-  onSelectionStartProp:
-    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
-    | undefined
-  handleSelectionStart: (
-    mousePos: ReaderMousePosition,
-    selection: Selection
-  ) => void
-  onSelectionEndProp:
-    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
-    | undefined
-  // 已包装 autoHighlight 逻辑（含 fallback ref.highlight()）的 onSelectionEnd
-  handleSelectionEnd: (
-    mousePos: ReaderMousePosition,
-    selection: Selection
-  ) => void
-  autoHighlight: boolean | undefined
-  highlightColor: string | undefined
-  selectionColor: string | undefined
-  overlayRectType: ReaderSelectionOverlayRectType
-  effectiveSelectedRangeId: string | null
-  selectionPopover: React.ReactNode
-  highlightPopover: React.ReactNode
-  // 控制 PopoverPortal 在 VirtualPaper 平移/缩放期间的可见性
-  popoverVisible: boolean
-  selectionRefForRuntimeId: (
-    selectionId: string
-  ) => (node: ReaderSelectionRef | null) => void
-}
-
-type DirectPagesProps = DirectPageResources & {
-  pageNumbers: number[]
-  setPageRef: PageRefSetter
-  setTextRef: SetTextRef
-}
-
-type ViewerContentProps = DirectPageResources & {
+type ViewerContentProps = PageResources & {
   rootClassName: string
   viewerRootRef: React.Ref<HTMLDivElement>
   pageNumbers: number[]
@@ -1026,7 +867,6 @@ type ViewerContentProps = DirectPageResources & {
     nextTransform: VirtualPaperTransform,
     meta: VirtualPaperTransformMeta
   ) => void
-  renderMode: ReaderRenderMode
   effectiveSelectedRangeId: string | null
   runtimePageSelectionId: (pageNumber: number) => string
   runtimeLinkedData: LinkedSelectionData
@@ -1059,8 +899,6 @@ type ViewerContentProps = DirectPageResources & {
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
   selectionRef: React.Ref<ReaderSelectionRef> | undefined
-  htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
-  htmlPagesByPageNumber: Map<number, string>
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
 }
@@ -1100,280 +938,6 @@ const getRuntimeSelectionIdFromSelectionNode = (
   return Number.isFinite(pageNumber) ? runtimePageSelectionId(pageNumber) : null
 }
 
-function DirectPageInner({
-  pageNumber,
-  texts,
-  ocrTexts,
-  pageStatus,
-  isLoadable,
-  baseImageSource,
-  setTextRef
-}: DirectPageInnerProps) {
-  const allTexts = [...texts, ...ocrTexts]
-  const isDirectPageLoading =
-    isLoadable && pageStatus !== 'loaded' && pageStatus !== 'error'
-
-  return (
-    <>
-      {baseImageSource && (
-        <img
-          className='hamster-reader__intermediate-page-base-image'
-          src={baseImageSource}
-          alt=''
-          aria-hidden='true'
-        />
-      )}
-      {isDirectPageLoading && (
-        <div className='hamster-reader__intermediate-page-status'>
-          Loading page {pageNumber}…
-        </div>
-      )}
-      {pageStatus === 'error' && (
-        <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
-          Failed to load page {pageNumber}
-        </div>
-      )}
-      {allTexts.map((textData) => {
-        const text = textData as RenderableIntermediateText
-        const bbox = getTextBbox(text)
-        const spanStyle = buildTextSpanStyle(text, bbox)
-
-        return (
-          <span
-            key={text.id}
-            ref={setTextRef(text, pageNumber)}
-            className='hamster-reader__intermediate-text'
-            data-text-id={text.id}
-            data-page-number={pageNumber}
-            style={spanStyle}
-          >
-            {text.content}
-          </span>
-        )
-      })}
-    </>
-  )
-}
-
-function HtmlParserPages({
-  pageNumbers,
-  pageSizesByPageNumber,
-  htmlPageStatusesByPageNumber,
-  htmlPagesByPageNumber,
-  setPageRef,
-  setTextRef,
-  textsByPageNumber,
-  ocrTextsByPageNumber,
-  pageStatuses,
-  loadablePages,
-  baseImagesByPageNumber,
-  runtimePageSelectionId,
-  runtimeLinkedData,
-  handleLinkedDataChange,
-  handleLinkedSelect,
-  handleLinkedUpdateRange,
-  handleLinkedSelectRange,
-  onSelectionStartProp,
-  handleSelectionStart,
-  onSelectionEndProp,
-  handleSelectionEnd,
-  autoHighlight,
-  highlightColor,
-  selectionColor,
-  overlayRectType,
-  effectiveSelectedRangeId,
-  selectionPopover,
-  highlightPopover,
-  popoverVisible,
-  selectionRefForRuntimeId
-}: HtmlParserPagesProps) {
-  // 计算 popover 归属：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
-  // 实例可以渲染 selectionPopover / highlightPopover，其余页面均传入 undefined，
-  // 避免多页面同时为同一 selected range 重复 rendering popover。
-  // 当 selectedRangeId 为 null / 在 items 中找不到时，不进行 gating：
-  // 每个页面都可呈现 popover（覆盖 active text selection 跟随当前页面的用户行为）。
-  const popoverOwnerRuntimeId = useMemo(() => {
-    const selectedId = runtimeLinkedData.selectedRangeId
-    if (!selectedId) {
-      return null
-    }
-    const selectedRange = runtimeLinkedData.items.find(
-      (range) => range.id === selectedId
-    )
-    return selectedRange ? selectedRange.start.selectionId : null
-  }, [runtimeLinkedData.selectedRangeId, runtimeLinkedData.items])
-
-  // 与外层 ViewerContent 行为一致：onSelectionStart 仅在调用方提供 prop 时启用；
-  // onSelectionEnd 当调用方提供 prop 或 autoHighlight 时启用；autoHighlight
-  // 由 ViewerContent 的 multiplex wrapper 决定具体调用哪个页面 ref。
-  const selectionStartHandler = onSelectionStartProp
-    ? handleSelectionStart
-    : undefined
-  const selectionEndHandler =
-    onSelectionEndProp || autoHighlight ? handleSelectionEnd : undefined
-
-  return (
-    <div
-      className='hamster-reader__html-parser-output'
-      data-testid='html-parser-output'
-    >
-      <div className='hamster-note-document'>
-        {pageNumbers.map((pageNumber) => {
-          const htmlPageSize = getCachedPageSize(
-            pageSizesByPageNumber,
-            pageNumber
-          )
-          const htmlPageStatusEntry =
-            htmlPageStatusesByPageNumber.get(pageNumber)
-          const htmlPageHtmlEntry = htmlPagesByPageNumber.get(pageNumber)
-          const isHtmlPageDecoded =
-            htmlPageStatusEntry === 'decoded' && Boolean(htmlPageHtmlEntry)
-
-          // runtime 选中 id 由 readerLinkedScopeId + 页码派生，
-          // 公共持久化层始终使用 `page-${pageNumber}`。
-          const pageRuntimeId = runtimePageSelectionId(pageNumber)
-
-          // popover gating：owner 为 null（无 selected range）时所有页面均呈现 popover，
-          // 否则仅 pageRuntimeId === popoverOwnerRuntimeId 的页面拿到真实 popover 内容，
-          // 其余页面传入 undefined 以避免重复渲染同一 selected range 的 popover。
-          const isPopoverOwner =
-            popoverOwnerRuntimeId === null ||
-            popoverOwnerRuntimeId === pageRuntimeId
-          const pagePopover = isPopoverOwner ? (
-            <PopoverPortal visible={popoverVisible}>
-              {highlightPopover ?? selectionPopover}
-            </PopoverPortal>
-          ) : undefined
-          const pageSelectionPopover = isPopoverOwner ? (
-            <PopoverPortal visible={popoverVisible}>
-              {selectionPopover}
-            </PopoverPortal>
-          ) : undefined
-
-          return (
-            <div
-              key={pageNumber}
-              ref={setPageRef(pageNumber)}
-              className='hamster-reader__intermediate-page'
-              data-testid={`intermediate-page-${pageNumber}`}
-              data-page-number={pageNumber}
-              data-selection-id={pageRuntimeId}
-              data-page-size-unavailable={
-                htmlPageSize.pageSizeUnavailable ? 'true' : undefined
-              }
-              style={{
-                position: 'relative',
-                width: `${htmlPageSize.width}px`,
-                height: `${htmlPageSize.height}px`,
-                overflow: 'hidden'
-              }}
-            >
-              {/*
-               * T5：每个 .hamster-reader__intermediate-page 内容由独立的
-               * HamsterSelection（linked-mode）包裹；所有页面共享同一份
-               * runtime LinkedSelectionData 引用，回调桥接回 public 语义。
-               * 不手动调用 registerLinkedContainer —— Selection 内部自注册。
-               * legacy range callbacks（onSelect/onUpdateRange/onHighlight）
-               * 显式传 undefined，禁止以 legacy 通道下放 linked payload。
-               */}
-              <HamsterSelection
-                selectionId={pageRuntimeId}
-                linkedMode
-                linkedData={runtimeLinkedData}
-                onLinkedDataChange={handleLinkedDataChange}
-                onLinkedSelect={handleLinkedSelect}
-                onLinkedUpdateRange={handleLinkedUpdateRange}
-                onLinkedSelectRange={handleLinkedSelectRange}
-                ranges={EMPTY_SELECTION_RANGES}
-                selectedRangeId={effectiveSelectedRangeId}
-                onSelect={undefined}
-                onSelectRange={undefined}
-                onUpdateRange={undefined}
-                onSelectionStart={selectionStartHandler}
-                onSelectionEnd={selectionEndHandler}
-                onHighlight={undefined}
-                highlightColor={highlightColor}
-                selectionColor={selectionColor}
-                popover={pagePopover}
-                selectionPopover={pageSelectionPopover}
-                overlayRectType={overlayRectType}
-                ref={selectionRefForRuntimeId(pageRuntimeId)}
-              >
-                {isHtmlPageDecoded ? (
-                  <HtmlPageContent html={htmlPageHtmlEntry ?? ''} />
-                ) : (
-                  <DirectPageInner
-                    pageNumber={pageNumber}
-                    texts={textsByPageNumber.get(pageNumber) ?? []}
-                    ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
-                    pageStatus={pageStatuses.get(pageNumber)}
-                    isLoadable={loadablePages.has(pageNumber)}
-                    baseImageSource={baseImagesByPageNumber.get(pageNumber)}
-                    setTextRef={setTextRef}
-                  />
-                )}
-              </HamsterSelection>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function DirectPages({
-  pageNumbers,
-  setPageRef,
-  setTextRef,
-  pageSizesByPageNumber,
-  textsByPageNumber,
-  ocrTextsByPageNumber,
-  pageStatuses,
-  loadablePages,
-  baseImagesByPageNumber
-}: DirectPagesProps) {
-  return pageNumbers.map((pageNumber) => {
-    const directPageSize = getCachedPageSize(pageSizesByPageNumber, pageNumber)
-    const directPageStatusEntry = pageStatuses.get(pageNumber)
-    const isDirectPageLoading =
-      loadablePages.has(pageNumber) &&
-      directPageStatusEntry !== 'loaded' &&
-      directPageStatusEntry !== 'error'
-    const directPageClassName = isDirectPageLoading
-      ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
-      : 'hamster-reader__intermediate-page'
-
-    return (
-      <div
-        key={pageNumber}
-        ref={setPageRef(pageNumber)}
-        className={directPageClassName}
-        data-testid={`intermediate-page-${pageNumber}`}
-        data-page-number={pageNumber}
-        data-page-size-unavailable={
-          directPageSize.pageSizeUnavailable ? 'true' : undefined
-        }
-        style={{
-          position: 'relative',
-          width: `${directPageSize.width}px`,
-          height: `${directPageSize.height}px`,
-          overflow: 'hidden'
-        }}
-      >
-        <DirectPageInner
-          pageNumber={pageNumber}
-          texts={textsByPageNumber.get(pageNumber) ?? []}
-          ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
-          pageStatus={directPageStatusEntry}
-          isLoadable={loadablePages.has(pageNumber)}
-          baseImageSource={baseImagesByPageNumber.get(pageNumber)}
-          setTextRef={setTextRef}
-        />
-      </div>
-    )
-  })
-}
-
 /**
  * `intermediate-document` 默认模式的页面渲染器。
  *
@@ -1388,13 +952,12 @@ function DirectPages({
  * 关键约束：外壳渲染阶段绝不调用页面/内容加载器；绝不使用
  * `dangerouslySetInnerHTML`；内容由独立渲染器以 React 元素绘制。
  */
-type IntermediateDocumentPagesProps = DirectPageResources & {
+type IntermediateDocumentPagesProps = PageResources & {
   pageNumbers: number[]
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
   runtimePageSelectionId: (pageNumber: number) => string
   imagesByPageNumber: Map<number, IntermediateImage[]>
-  // 与 HtmlParserPages 一致的 linked-mode selection props：
   // 每个「已加载」页面内容由一个 HamsterSelection 实例包裹，
   // 使用 runtimePageSelectionId(pageNumber) 作为 runtime 选中 id，
   // 共享同一份 runtime LinkedSelectionData 引用，并通过回调桥接 public 语义。
@@ -1468,7 +1031,7 @@ function IntermediateDocumentPages({
   onPageRenderTiming
 }: IntermediateDocumentPagesProps) {
   // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
-  // 实例可以渲染 popover，其余页面传入 undefined（与 HtmlParserPages 行为一致）。
+  // 实例可以渲染 popover，其余页面传入 undefined。
   const popoverOwnerRuntimeId = useMemo(() => {
     const selectedId = runtimeLinkedData.selectedRangeId
     if (!selectedId) {
@@ -1594,7 +1157,6 @@ function ViewerContent({
   scaleRange,
   handleVirtualPaperTransformChange,
   handleVirtualPaperTransformChangeEnd,
-  renderMode,
   effectiveSelectedRangeId,
   runtimePageSelectionId,
   runtimeLinkedData,
@@ -1615,8 +1177,6 @@ function ViewerContent({
   autoHighlight,
   overlayRectType,
   selectionRef,
-  htmlPageStatusesByPageNumber,
-  htmlPagesByPageNumber,
   setPageRef,
   setTextRef,
   textsByPageNumber,
@@ -1853,121 +1413,60 @@ function ViewerContent({
     }
   }, [])
 
-  // 根据 renderMode 选择页面内容渲染器。
-  // 这里使用独立的 if/else if/else 赋值，而非嵌套三元表达式，
-  // 以满足 sonarjs/no-nested-conditional 规则并保持可读性。
-  let pagesNode: React.ReactNode
-  if (renderMode === 'html-parser') {
-    // T5/T7：每页内容自带一个 linked-mode HamsterSelection；
-    // 公共 ReaderSelectionRef 通过 runtime selectionId 复用这些子 ref。
-    pagesNode = (
-      <HtmlParserPages
-        pageNumbers={pageNumbers}
-        pageSizesByPageNumber={pageSizesByPageNumber}
-        htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
-        htmlPagesByPageNumber={htmlPagesByPageNumber}
-        setPageRef={setPageRef}
-        setTextRef={setTextRef}
-        textsByPageNumber={textsByPageNumber}
-        ocrTextsByPageNumber={ocrTextsByPageNumber}
-        pageStatuses={pageStatuses}
-        loadablePages={loadablePages}
-        baseImagesByPageNumber={baseImagesByPageNumber}
-        runtimePageSelectionId={runtimePageSelectionId}
-        runtimeLinkedData={runtimeLinkedData}
-        handleLinkedDataChange={handlePageLinkedDataChange}
-        handleLinkedSelect={handleLinkedSelect}
-        handleLinkedUpdateRange={handleLinkedUpdateRange}
-        handleLinkedSelectRange={handlePageLinkedSelectRange}
-        onSelectionStartProp={onSelectionStartProp}
-        handleSelectionStart={handleSelectionStart}
-        onSelectionEndProp={onSelectionEndProp}
-        handleSelectionEnd={handleSelectionEndWrap}
-        autoHighlight={autoHighlight}
-        highlightColor={highlightColor}
-        selectionColor={selectionColor}
-        overlayRectType={overlayRectType}
-        effectiveSelectedRangeId={effectiveSelectedRangeId}
-        selectionPopover={selectionPopover}
-        highlightPopover={highlightPopover}
-        popoverVisible={popoverVisible}
-        selectionRefForRuntimeId={selectionRefForRuntimeId}
-      />
-    )
-  } else if (renderMode === 'direct') {
-    /* 'direct' 渲染路径：不调用 html-parser，直接渲染页面文本/图片内容 */
-    pagesNode = (
-      <DirectPages
-        pageNumbers={pageNumbers}
-        setPageRef={setPageRef}
-        setTextRef={setTextRef}
-        pageSizesByPageNumber={pageSizesByPageNumber}
-        textsByPageNumber={textsByPageNumber}
-        ocrTextsByPageNumber={ocrTextsByPageNumber}
-        pageStatuses={pageStatuses}
-        loadablePages={loadablePages}
-        baseImagesByPageNumber={baseImagesByPageNumber}
-      />
-    )
-  } else {
-    /* 'intermediate-document' 默认分支：渲染页面外壳，并在已加载页面的
-     * 外壳内绘制内容（底图 + 文本 + 图片项）。外壳阶段不调用页面/内容加载器；
-     * 真实懒加载队列将在后续任务 中在此基础上实现。 */
-    const intermediateDocumentPages = (
-      <IntermediateDocumentPages
-        pageNumbers={pageNumbers}
-        setPageRef={setPageRef}
-        setTextRef={setTextRef}
-        runtimePageSelectionId={runtimePageSelectionId}
-        pageSizesByPageNumber={pageSizesByPageNumber}
-        textsByPageNumber={textsByPageNumber}
-        ocrTextsByPageNumber={ocrTextsByPageNumber}
-        pageStatuses={pageStatuses}
-        loadablePages={loadablePages}
-        baseImagesByPageNumber={baseImagesByPageNumber}
-        imagesByPageNumber={imagesByPageNumber}
-        runtimeLinkedData={runtimeLinkedData}
-        handleLinkedDataChange={handlePageLinkedDataChange}
-        handleLinkedSelect={handleLinkedSelect}
-        handleLinkedUpdateRange={handleLinkedUpdateRange}
-        handleLinkedSelectRange={handlePageLinkedSelectRange}
-        onSelectionStartProp={onSelectionStartProp}
-        handleSelectionStart={handleSelectionStart}
-        onSelectionEndProp={onSelectionEndProp}
-        handleSelectionEnd={handleSelectionEndWrap}
-        autoHighlight={autoHighlight}
-        highlightColor={highlightColor}
-        selectionColor={selectionColor}
-        overlayRectType={overlayRectType}
-        effectiveSelectedRangeId={effectiveSelectedRangeId}
-        selectionPopover={selectionPopover}
-        highlightPopover={highlightPopover}
-        popoverVisible={popoverVisible}
-        selectionRefForRuntimeId={selectionRefForRuntimeId}
-        onPageRenderTiming={onPageRenderTiming}
-      />
-    )
+  const intermediateDocumentPages = (
+    <IntermediateDocumentPages
+      pageNumbers={pageNumbers}
+      setPageRef={setPageRef}
+      setTextRef={setTextRef}
+      runtimePageSelectionId={runtimePageSelectionId}
+      pageSizesByPageNumber={pageSizesByPageNumber}
+      textsByPageNumber={textsByPageNumber}
+      ocrTextsByPageNumber={ocrTextsByPageNumber}
+      pageStatuses={pageStatuses}
+      loadablePages={loadablePages}
+      baseImagesByPageNumber={baseImagesByPageNumber}
+      imagesByPageNumber={imagesByPageNumber}
+      runtimeLinkedData={runtimeLinkedData}
+      handleLinkedDataChange={handlePageLinkedDataChange}
+      handleLinkedSelect={handleLinkedSelect}
+      handleLinkedUpdateRange={handleLinkedUpdateRange}
+      handleLinkedSelectRange={handlePageLinkedSelectRange}
+      onSelectionStartProp={onSelectionStartProp}
+      handleSelectionStart={handleSelectionStart}
+      onSelectionEndProp={onSelectionEndProp}
+      handleSelectionEnd={handleSelectionEndWrap}
+      autoHighlight={autoHighlight}
+      highlightColor={highlightColor}
+      selectionColor={selectionColor}
+      overlayRectType={overlayRectType}
+      effectiveSelectedRangeId={effectiveSelectedRangeId}
+      selectionPopover={selectionPopover}
+      highlightPopover={highlightPopover}
+      popoverVisible={popoverVisible}
+      selectionRefForRuntimeId={selectionRefForRuntimeId}
+      onPageRenderTiming={onPageRenderTiming}
+    />
+  )
 
-    pagesNode = onPageRenderTiming ? (
-      <Profiler
-        id='intermediate-document-shell'
-        onRender={(
-          _id,
-          _phase,
-          actualDuration,
-          _baseDuration,
-          startTime,
-          commitTime
-        ) => {
-          onPageRenderTiming(0, startTime, commitTime, actualDuration)
-        }}
-      >
-        {intermediateDocumentPages}
-      </Profiler>
-    ) : (
-      intermediateDocumentPages
-    )
-  }
+  const pagesNode = onPageRenderTiming ? (
+    <Profiler
+      id='intermediate-document-shell'
+      onRender={(
+        _id,
+        _phase,
+        actualDuration,
+        _baseDuration,
+        startTime,
+        commitTime
+      ) => {
+        onPageRenderTiming(0, startTime, commitTime, actualDuration)
+      }}
+    >
+      {intermediateDocumentPages}
+    </Profiler>
+  ) : (
+    intermediateDocumentPages
+  )
 
   return (
     <div
@@ -1978,7 +1477,7 @@ function ViewerContent({
     >
       {pageNumbers.length > 0 ? (
         <VirtualPaper
-          containMode
+          containMode='contain'
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}
@@ -1998,8 +1497,6 @@ export function IntermediateDocumentViewer({
   className,
   overscan = 1,
   pageRange,
-  renderMode = 'intermediate-document',
-  backgroundQuality = 'high',
   ocr,
   onOcrError,
   onTextSelectionChange,
@@ -2142,12 +1639,6 @@ export function IntermediateDocumentViewer({
   // 交互模式 ref，供后续手势逻辑读取（Wave 1 仅透传，不做行为分支）
   const interactionModeRef = useRef(interactionMode)
   interactionModeRef.current = interactionMode
-  // renderMode ref，供 IntersectionObserver 回调在 intermediate-document 模式下
-  // 读取当前模式以决定是否启用 500ms 可见性防抖，避免将 renderMode 加入
-  // IO effect deps 导致观察者在每次渲染时重建。
-  const renderModeRef = useRef(renderMode)
-  renderModeRef.current = renderMode
-  const isIntermediateDocumentMode = renderMode === 'intermediate-document'
   const reactInstanceId = useId()
   const readerLinkedScopeId = useMemo(
     () => `reader-linked-${reactInstanceId}`,
@@ -2187,10 +1678,9 @@ export function IntermediateDocumentViewer({
     },
     [pageNumbers.length]
   )
-  const pageRenderTimingHandler =
-    renderTimingRef.current.enabled && isIntermediateDocumentMode
-      ? handlePageRenderTiming
-      : undefined
+  const pageRenderTimingHandler = renderTimingRef.current.enabled
+    ? handlePageRenderTiming
+    : undefined
 
   // ---- Selection 库受控/非受控 state ----
   // ranges 受控（prop 提供）则直接用；否则内部 state 从 defaultRanges 初始化
@@ -2306,29 +1796,11 @@ export function IntermediateDocumentViewer({
   const [imagesByPageNumber, setImagesByPageNumber] = useState(
     () => new Map<number, IntermediateImage[]>()
   )
-  const [htmlPagesByPageNumber, setHtmlPagesByPageNumber] = useState(
-    () => new Map<number, string>()
-  )
-  const htmlPagesByPageNumberRef = useRef(htmlPagesByPageNumber)
-  htmlPagesByPageNumberRef.current = htmlPagesByPageNumber
-  const [htmlPageStatusesByPageNumber, setHtmlPageStatusesByPageNumber] =
-    useState(() => new Map<number, HtmlPageStatus>())
-  const htmlPageStatusesByPageNumberRef = useRef(htmlPageStatusesByPageNumber)
-  htmlPageStatusesByPageNumberRef.current = htmlPageStatusesByPageNumber
-  const decodingPageNumbersRef = useRef(new Set<number>())
-  const decodeGenerationRef = useRef(0)
-  const decodeResetInputsRef = useRef({
-    runtimeDocument,
-    renderMode,
-    backgroundQuality
-  })
-
   // intermediate-document 默认模式懒加载队列 hook。
   // 队列项为页码，通过 generation token 忽略 stale async 结果，
   // 并复用 loadingPagesRef 强制并发上限。callbacks 复用已有的
   // createSet*Handler immutable updater helpers 更新状态 maps。
   const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
-    renderMode,
     activeDocumentRef,
     isMountedRef,
     loadingPagesRef,
@@ -2488,10 +1960,8 @@ export function IntermediateDocumentViewer({
 
   useEffect(() => {
     activeDocumentRef.current = runtimeDocument
-    decodeGenerationRef.current += 1
     loadingPagesRef.current.clear()
     ocrLoadingPagesRef.current.clear()
-    decodingPageNumbersRef.current.clear()
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
     lazilyEvictedPagesRef.current.clear()
@@ -2502,26 +1972,13 @@ export function IntermediateDocumentViewer({
     setPageStatuses(new Map())
     setBaseImagesByPageNumber(new Map())
     setImagesByPageNumber(new Map())
-    setHtmlPagesByPageNumber(new Map())
-    setHtmlPageStatusesByPageNumber(new Map())
     clearAllUnloadTimers()
   }, [runtimeDocument, clearAllUnloadTimers])
-
-  const bumpDecodeGeneration = useCallback(() => {
-    decodeGenerationRef.current += 1
-    decodingPageNumbersRef.current.clear()
-    return decodeGenerationRef.current
-  }, [])
 
   const bumpOcrEvictGeneration = useCallback((pageNumber: number) => {
     const current = ocrEvictGenerationRef.current.get(pageNumber) ?? 0
     ocrEvictGenerationRef.current.set(pageNumber, current + 1)
   }, [])
-
-  const isCurrentDecodeGeneration = useCallback(
-    (generation: number) => generation === decodeGenerationRef.current,
-    []
-  )
 
   const setViewerRootRef = useCallback((element: HTMLDivElement | null) => {
     viewerRootRef.current = element
@@ -2581,118 +2038,6 @@ export function IntermediateDocumentViewer({
     [handleVirtualPaperTransform]
   )
 
-  useEffect(() => {
-    const shouldResetDecode =
-      decodeResetInputsRef.current.runtimeDocument !== runtimeDocument ||
-      decodeResetInputsRef.current.renderMode !== renderMode ||
-      decodeResetInputsRef.current.backgroundQuality !== backgroundQuality
-
-    if (shouldResetDecode) {
-      const nextHtmlPages = new Map<number, string>()
-      const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()
-      decodeResetInputsRef.current = {
-        runtimeDocument,
-        renderMode,
-        backgroundQuality
-      }
-      bumpDecodeGeneration()
-      htmlPagesByPageNumberRef.current = nextHtmlPages
-      htmlPageStatusesByPageNumberRef.current = nextHtmlPageStatuses
-      setHtmlPagesByPageNumber(nextHtmlPages)
-      setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
-    }
-
-    // 仅显式 html-parser 模式需要逐页解码；direct 与中间默认模式均不走 html-parser。
-    if (!runtimeDocument || renderMode !== 'html-parser') {
-      if (!shouldResetDecode) {
-        const nextHtmlPages = new Map<number, string>()
-        const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()
-        htmlPagesByPageNumberRef.current = nextHtmlPages
-        htmlPageStatusesByPageNumberRef.current = nextHtmlPageStatuses
-        setHtmlPagesByPageNumber(nextHtmlPages)
-        setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
-      }
-      return
-    }
-
-    const generation = decodeGenerationRef.current
-    const decodeOptions = buildHtmlParserDecodeOptions(backgroundQuality)
-
-    loadablePages.forEach((pageNumber) => {
-      if (
-        htmlPagesByPageNumberRef.current.has(pageNumber) ||
-        htmlPageStatusesByPageNumberRef.current.get(pageNumber) ===
-          'fallback' ||
-        decodingPageNumbersRef.current.has(pageNumber)
-      ) {
-        return
-      }
-
-      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
-
-      try {
-        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
-      } catch {
-        setHtmlPageStatusesByPageNumber(
-          createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-        )
-        return
-      }
-
-      if (!pagePromise) {
-        setHtmlPageStatusesByPageNumber(
-          createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-        )
-        return
-      }
-
-      decodingPageNumbersRef.current.add(pageNumber)
-      pagePromise
-        .then((page) => {
-          if (!page) return ''
-          return HtmlParser.decodePageToHtml(page, decodeOptions)
-        })
-        .then((html) => {
-          if (!isCurrentDecodeGeneration(generation)) {
-            return
-          }
-
-          if (html.trim().length === 0) {
-            setHtmlPageStatusesByPageNumber(
-              createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-            )
-            return
-          }
-
-          setHtmlPagesByPageNumber(createSetHtmlPageHandler(pageNumber, html))
-          setHtmlPageStatusesByPageNumber(
-            createSetHtmlPageStatusHandler(pageNumber, 'decoded')
-          )
-        })
-        .catch(() => {
-          if (!isCurrentDecodeGeneration(generation)) {
-            return
-          }
-
-          setHtmlPageStatusesByPageNumber(
-            createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-          )
-        })
-        .finally(() => {
-          if (isCurrentDecodeGeneration(generation)) {
-            decodingPageNumbersRef.current.delete(pageNumber)
-          }
-        })
-    })
-  }, [
-    runtimeDocument,
-    renderMode,
-    backgroundQuality,
-    loadablePages,
-    bumpDecodeGeneration,
-    isCurrentDecodeGeneration
-  ])
-
   const markLoadableWithOverscan = useCallback(
     (pageNumber: number) => {
       const pageIndex = pageNumbers.indexOf(pageNumber)
@@ -2734,48 +2079,6 @@ export function IntermediateDocumentViewer({
     [overscan, pageNumbers]
   )
 
-  const evictPageBundle = useCallback(
-    (pageNumber: number) => {
-      if (!runtimeDocument) {
-        return false
-      }
-
-      if (
-        loadingPagesRef.current.has(pageNumber) ||
-        ocrLoadingPagesRef.current.has(pageNumber) ||
-        decodingPageNumbersRef.current.has(pageNumber)
-      ) {
-        return false
-      }
-
-      const cacheKeyPrefix = `${runtimeDocument.id}::${pageNumber}::`
-      ocrCacheRef.current.forEach((_texts, cacheKey) => {
-        if (cacheKey.startsWith(cacheKeyPrefix)) {
-          ocrCacheRef.current.delete(cacheKey)
-        }
-      })
-      evictedOcrPagesRef.current.add(pageNumber)
-
-      pageLastVisibleAtRef.current.delete(pageNumber)
-      lastKnownVisiblePagesRef.current.delete(pageNumber)
-      setTextsByPageNumber(deletePageEntry(pageNumber))
-      setOcrTextsByPageNumber(deletePageEntry(pageNumber))
-      setBaseImagesByPageNumber(deletePageEntry(pageNumber))
-      setPageStatuses(deletePageEntry(pageNumber))
-      setLoadablePages(deletePageFromSet(pageNumber))
-      setHtmlPagesByPageNumber(deletePageEntry(pageNumber))
-      setHtmlPageStatusesByPageNumber(deletePageEntry(pageNumber))
-      bumpOcrEvictGeneration(pageNumber)
-      return true
-    },
-    [runtimeDocument, bumpOcrEvictGeneration]
-  )
-
-  // intermediate-document 模式专用：将离屏页面内容包卸载回空外壳。
-  // 仅清除该模式下管理的状态 maps（texts/ocrTexts/baseImages/images/
-  // pageStatuses/loadablePages/ocrCacheRefs），不触碰 html-parser 专属的
-  // htmlPagesByPageNumber / htmlPageStatusesByPageNumber，避免误删
-  // explicit html-parser 模式添加的页面状态。
   const evictLazyPageBundle = useCallback(
     (pageNumber: number) => {
       if (!runtimeDocument) {
@@ -2784,8 +2087,7 @@ export function IntermediateDocumentViewer({
 
       if (
         loadingPagesRef.current.has(pageNumber) ||
-        ocrLoadingPagesRef.current.has(pageNumber) ||
-        decodingPageNumbersRef.current.has(pageNumber)
+        ocrLoadingPagesRef.current.has(pageNumber)
       ) {
         return false
       }
@@ -2917,7 +2219,7 @@ export function IntermediateDocumentViewer({
   ])
 
   // getProtectedPages 的 ref，供定时器回调在触发时读取最新版本。
-  // 与 renderModeRef / enqueueVisiblePageRef 模式一致：定时器创建时捕获
+  // 与 enqueueVisiblePageRef 模式一致：定时器创建时捕获
   // 的是 ref，触发时通过 ref 读取最新的 getProtectedPages，避免闭包
   // 捕获到 stale 的 visiblePages 状态。
   const getProtectedPagesRef = useRef(getProtectedPages)
@@ -2932,9 +2234,6 @@ export function IntermediateDocumentViewer({
       const timer = setTimeout(() => {
         pendingUnloadTimersRef.current.delete(pageNumber)
         if (!isMountedRef.current) {
-          return
-        }
-        if (renderModeRef.current !== 'intermediate-document') {
           return
         }
         // 通过 ref 读取最新的 getProtectedPages，确保定时器触发时
@@ -3043,11 +2342,7 @@ export function IntermediateDocumentViewer({
             break
           }
 
-          const evictFn =
-            renderModeRef.current === 'intermediate-document'
-              ? evictLazyPageBundle
-              : evictPageBundle
-          if (evictFn(pageNumber)) {
+          if (evictLazyPageBundle(pageNumber)) {
             loadedCount -= 1
           }
         }
@@ -3062,13 +2357,7 @@ export function IntermediateDocumentViewer({
 
       evictionTimerRef.current = window.setTimeout(run, 0)
     },
-    [
-      evictPageBundle,
-      evictLazyPageBundle,
-      getProtectedPages,
-      maxLoadedPages,
-      overscan
-    ]
+    [evictLazyPageBundle, getProtectedPages, maxLoadedPages, overscan]
   )
 
   useEffect(() => {
@@ -3199,16 +2488,6 @@ export function IntermediateDocumentViewer({
       const anchorInViewer = viewerRoot.contains(selection.anchorNode)
       const focusInViewer = viewerRoot.contains(selection.focusNode)
       if (!anchorInViewer || !focusInViewer) return null
-
-      // html-parser native ranges intentionally stop at the visual overlay
-      // layer. Public text payload contracts stay direct-render-only until the
-      // parser can provide stable text ids compatible with saved selections.
-      if (
-        isHtmlParserSelectionTarget(selection.anchorNode, viewerRoot) ||
-        isHtmlParserSelectionTarget(selection.focusNode, viewerRoot)
-      ) {
-        return null
-      }
 
       const selectedElements: HTMLElement[] = []
       textElementsRef.current.forEach((_, id) => {
@@ -3510,31 +2789,18 @@ export function IntermediateDocumentViewer({
 
         if (entry.isIntersecting) {
           markVisiblePage(pageNumber)
-          // 页面重新进入可见窗口：取消挂起的离屏卸载定时器，保持内容
-          if (renderModeRef.current === 'intermediate-document') {
-            clearUnloadTimer(pageNumber)
-            lazilyEvictedPagesRef.current.delete(pageNumber)
-          }
-          // intermediate-document 默认模式：非初始页面需持续可见
-          // pageLoadEnterDelayMs 后才入队加载，避免快速滚动把所有路过
-          // 页面都入队。html-parser / direct 模式保持原有行为，不受影响。
-          if (renderModeRef.current !== 'intermediate-document') {
-            return
-          }
+          clearUnloadTimer(pageNumber)
+          lazilyEvictedPagesRef.current.delete(pageNumber)
           const pageIndex = pageNumbers.indexOf(pageNumber)
           const initialPageCount = lazyQueueConfigRef.current.initialLoadedPages
-          // 初始页面已由 enqueueInitialPages 处理，无需防抖。
           if (pageIndex >= 0 && pageIndex < initialPageCount) {
             return
           }
           scheduleVisibilityEnqueue(pageNumber)
         } else {
           markHiddenPage(pageNumber)
-          // 页面离开可加载窗口：取消挂起的入队定时器，保持空外壳。
-          if (renderModeRef.current === 'intermediate-document') {
-            cancelVisibilityEnqueue(pageNumber)
-            schedulePageUnload(pageNumber)
-          }
+          cancelVisibilityEnqueue(pageNumber)
+          schedulePageUnload(pageNumber)
         }
       })
     })
@@ -3572,104 +2838,6 @@ export function IntermediateDocumentViewer({
     if (!runtimeDocument) {
       return
     }
-
-    // intermediate-document 默认模式仅渲染空外壳，绝不调用页面/内容加载器；
-    // 真实懒加载队列将在后续任务 中实现。
-    if (isIntermediateDocumentMode) {
-      return
-    }
-
-    loadablePages.forEach((pageNumber) => {
-      if (
-        textsByPageNumber.has(pageNumber) ||
-        loadingPagesRef.current.has(pageNumber)
-      ) {
-        return
-      }
-
-      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
-
-      try {
-        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
-      } catch {
-        setBaseImagesByPageNumber(
-          createSetBaseImageHandler(pageNumber, undefined)
-        )
-        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        return
-      }
-
-      if (!pagePromise) {
-        setBaseImagesByPageNumber(
-          createSetBaseImageHandler(pageNumber, undefined)
-        )
-        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        return
-      }
-
-      loadingPagesRef.current.add(pageNumber)
-      pagePromise
-        .then((page) => {
-          return Promise.all([getBaseImageFromPage(page), page.getContent()])
-        })
-        .then(([baseImage, content]) => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          const texts = content.filter(isIntermediateText)
-          setBaseImagesByPageNumber(
-            createSetBaseImageHandler(pageNumber, baseImage)
-          )
-          setTextsByPageNumber(createSetTextsHandler(pageNumber, texts))
-          setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
-        })
-        .catch(() => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          setBaseImagesByPageNumber(
-            createSetBaseImageHandler(pageNumber, undefined)
-          )
-          setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-          setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        })
-        .finally(() => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          loadingPagesRef.current.delete(pageNumber)
-        })
-    })
-  }, [
-    isIntermediateDocumentMode,
-    loadablePages,
-    runtimeDocument,
-    textsByPageNumber
-  ])
-
-  // intermediate-document 模式的懒加载队列触发器。
-  // 在 shell 就绪后（pageNumbers/runtimeDocument 稳定），通过
-  // useLazyPageQueue hook 入队前 initialLoadedPages 页并启动加载。
-  // 队列强制 pageLoadConcurrency 并发上限，去重 queued/in-flight/loaded，
-  // 并通过 generation token 忽略 document/renderMode 变更后的 stale 结果。
-  useEffect(() => {
-    if (!isIntermediateDocumentMode || !runtimeDocument) {
-      return
-    }
     if (renderTimingRef.current.enabled) {
       const initialCount = lazyQueueConfigRef.current.initialLoadedPages
       const targetPages = pageNumbers.slice(0, initialCount)
@@ -3687,31 +2855,14 @@ export function IntermediateDocumentViewer({
       })
     }
     lazyPageQueue.enqueueInitialPages(pageNumbers)
-  }, [
-    isIntermediateDocumentMode,
-    pageNumbers,
-    runtimeDocument,
-    lazyPageQueue,
-    textsByPageNumber
-  ])
+  }, [pageNumbers, runtimeDocument, lazyPageQueue, textsByPageNumber])
 
-  // renderMode/unmount 变更时清除所有挂起的可见性入队定时器和离屏卸载
-  // 定时器，配合 lazyPageQueue.cancelAll() 防止 stale 入队/卸载。
-  // document 变更由 IO effect 的 cleanup + document-change effect 覆盖。
   useEffect(() => {
-    if (!isIntermediateDocumentMode) {
-      return
-    }
-
     return () => {
       clearAllVisibilityTimers()
       clearAllUnloadTimers()
     }
-  }, [
-    isIntermediateDocumentMode,
-    clearAllVisibilityTimers,
-    clearAllUnloadTimers
-  ])
+  }, [clearAllVisibilityTimers, clearAllUnloadTimers])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
@@ -3912,7 +3063,6 @@ export function IntermediateDocumentViewer({
       handleVirtualPaperTransformChangeEnd={
         handleVirtualPaperTransformChangeEnd
       }
-      renderMode={renderMode}
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       runtimePageSelectionId={getRuntimePageSelectionId}
       runtimeLinkedData={runtimeLinkedData}
@@ -3935,8 +3085,6 @@ export function IntermediateDocumentViewer({
       autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
-      htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
-      htmlPagesByPageNumber={htmlPagesByPageNumber}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
       textsByPageNumber={textsByPageNumber}

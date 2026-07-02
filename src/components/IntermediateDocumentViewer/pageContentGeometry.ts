@@ -2,13 +2,13 @@ import type { IntermediateImage, IntermediateText } from '@hamster-note/types'
 import type { CSSProperties } from 'react'
 
 /**
- * intermediate-document / direct / html-parser 三种渲染模式共享的
+ * intermediate-document 渲染器使用的
  * 纯几何与样式辅助函数。
  *
  * 这些函数从 `IntermediateDocumentViewer.tsx` 中抽取出来，供新的
- * `IntermediateDocumentPageContent` 渲染器以及原有渲染器复用，避免在
+ * `IntermediateDocumentPageContent` 渲染器复用，避免在
  * 巨大的 viewer 文件中继续膨胀。所有函数均为纯函数，无闭包依赖，
- * 由现有 direct / html-parser 测试覆盖验证行为一致性。
+ * 由现有 intermediate-document 测试覆盖验证行为一致性。
  */
 
 /**

@@ -2,7 +2,6 @@ export {
   IntermediateDocumentViewer,
   isNonSpaceBlankText,
   mergeSelectionRects,
-  type BackgroundQuality,
   type IntermediateDocumentViewerProps,
   type ReaderInteractionMode,
   type ReaderPageRange,
@@ -15,7 +14,6 @@ export {
   type ReaderSavedSelectionSegment,
   type ReaderSavedSelectionVisualPage,
   type ReaderSelectionOverlayRect,
-  type ReaderRenderMode,
   type ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
 export {
