@@ -128,7 +128,7 @@ export type ReaderProps = {
   highlightPopover?: React.ReactNode
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
-  /** Selection 组件的命令式 ref，暴露 highlight()/clear() */
+  /** Reader 自有命令式 ref，暴露 highlight()/clear()/scrollToRange(id) */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType

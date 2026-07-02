@@ -2,7 +2,8 @@ import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
-  SelectionRange
+  SelectionRange,
+  SelectionRef
 } from '@hamster-note/selection'
 import {
   IntermediateDocument,
@@ -22,6 +23,11 @@ import {
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
+import {
+  computePageOriginY,
+  computeTransform,
+  resolveRangeJumpTarget
+} from './rangeJumpHelpers'
 import React, {
   Profiler,
   useCallback,
@@ -96,6 +102,7 @@ const getSelectionForRoot = (
 const EMPTY_SELECTION_RANGES: SelectionRange[] = []
 const EMPTY_INTERMEDIATE_TEXTS: IntermediateText[] = []
 const EMPTY_INTERMEDIATE_IMAGES: IntermediateImage[] = []
+const JUMP_PIN_CLEANUP_DELAY_MS = 5000
 
 const getRenderTimingNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -605,6 +612,31 @@ const getCachedPageSize = (
   pageNumber: number
 ) => pageSizesByPageNumber.get(pageNumber) ?? normalizePageSize(undefined)
 
+const getKnownPageSize = (
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>,
+  pageNumber: number
+): NormalizedPageSize | null => {
+  const pageSize = pageSizesByPageNumber.get(pageNumber)
+  return pageSize && !pageSize.pageSizeUnavailable ? pageSize : null
+}
+
+const getWidestKnownPageSize = (
+  pageNumbers: number[],
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
+): NormalizedPageSize | null => {
+  let widestPageSize: NormalizedPageSize | null = null
+
+  for (const pageNumber of pageNumbers) {
+    const pageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
+    if (!pageSize) return null
+    if (!widestPageSize || pageSize.width > widestPageSize.width) {
+      widestPageSize = pageSize
+    }
+  }
+
+  return widestPageSize
+}
+
 /**
  * Merge overlapping or adjacent rectangles on the same line.
  * Uses a tolerance of 2px to handle minor gaps between text spans.
@@ -850,6 +882,7 @@ type ViewerContentProps = PageResources & {
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
+  onScrollToRange: (id: string) => void
   imagesByPageNumber: Map<number, IntermediateImage[]>
   onPageRenderTiming:
     | ((
@@ -990,7 +1023,7 @@ type IntermediateDocumentPagesProps = PageResources & {
   popoverVisible: boolean
   selectionRefForRuntimeId: (
     selectionId: string
-  ) => (node: ReaderSelectionRef | null) => void
+  ) => (node: SelectionRef | null) => void
   onPageRenderTiming?: (
     pageNumber: number,
     startTime: number,
@@ -1155,6 +1188,7 @@ function ViewerContent({
   pageSizesByPageNumber,
   virtualPaperTransform,
   scaleRange,
+  onScrollToRange,
   handleVirtualPaperTransformChange,
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
@@ -1187,11 +1221,9 @@ function ViewerContent({
   imagesByPageNumber,
   onPageRenderTiming
 }: ViewerContentProps) {
-  const selectionRefsByRuntimeIdRef = useRef(
-    new Map<string, ReaderSelectionRef>()
-  )
+  const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
-    new Map<string, (node: ReaderSelectionRef | null) => void>()
+    new Map<string, (node: SelectionRef | null) => void>()
   )
   const syncForwardedSelectionRefRef = useRef<() => void>(() => {})
 
@@ -1286,9 +1318,10 @@ function ViewerContent({
   const publicSelectionRef = useMemo<ReaderSelectionRef>(
     () => ({
       highlight: highlightSelection,
-      clear: clearSelections
+      clear: clearSelections,
+      scrollToRange: onScrollToRange
     }),
-    [clearSelections, highlightSelection]
+    [clearSelections, highlightSelection, onScrollToRange]
   )
 
   const syncForwardedSelectionRef = useCallback(() => {
@@ -1323,7 +1356,7 @@ function ViewerContent({
     let setSelectionRef =
       selectionRefSettersByRuntimeIdRef.current.get(selectionId)
     if (!setSelectionRef) {
-      setSelectionRef = (node: ReaderSelectionRef | null) => {
+      setSelectionRef = (node: SelectionRef | null) => {
         if (node) {
           selectionRefsByRuntimeIdRef.current.set(selectionId, node)
         } else {
@@ -1780,6 +1813,10 @@ export function IntermediateDocumentViewer({
   const evictionSkippedDuringTransformRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
+  const jumpPinTokensRef = useRef(new Map<number, symbol>())
+  const jumpPinCleanupTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
   const [textsByPageNumber, setTextsByPageNumber] = useState(
     () => new Map<number, IntermediateText[]>()
   )
@@ -1929,12 +1966,59 @@ export function IntermediateDocumentViewer({
     pendingUnloadTimersRef.current.clear()
   }, [])
 
+  const clearJumpPinCleanupTimer = useCallback((pageNumber: number) => {
+    const timer = jumpPinCleanupTimersRef.current.get(pageNumber)
+    if (!timer) {
+      return
+    }
+    clearTimeout(timer)
+    jumpPinCleanupTimersRef.current.delete(pageNumber)
+  }, [])
+
+  const releaseJumpPinnedPage = useCallback(
+    (pageNumber: number, token: symbol) => {
+      if (jumpPinTokensRef.current.get(pageNumber) !== token) {
+        return
+      }
+      clearJumpPinCleanupTimer(pageNumber)
+      jumpPinTokensRef.current.delete(pageNumber)
+      pinnedPagesRef.current.delete(pageNumber)
+    },
+    [clearJumpPinCleanupTimer]
+  )
+
+  const clearAllJumpPins = useCallback(() => {
+    jumpPinCleanupTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    jumpPinCleanupTimersRef.current.clear()
+    jumpPinTokensRef.current.clear()
+    pinnedPagesRef.current.clear()
+  }, [])
+
+  const pinJumpTargetPage = useCallback(
+    (pageNumber: number): symbol => {
+      const token = Symbol(`jump-target-page-${pageNumber}`)
+      clearJumpPinCleanupTimer(pageNumber)
+      jumpPinTokensRef.current.set(pageNumber, token)
+      pinnedPagesRef.current.add(pageNumber)
+
+      const timer = setTimeout(() => {
+        releaseJumpPinnedPage(pageNumber, token)
+      }, JUMP_PIN_CLEANUP_DELAY_MS)
+      jumpPinCleanupTimersRef.current.set(pageNumber, timer)
+
+      return token
+    },
+    [clearJumpPinCleanupTimer, releaseJumpPinnedPage]
+  )
+
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
   useEffect(() => {
     const currentPageNumbers = new Set(pageNumbers)
 
-    pinnedPagesRef.current.clear()
+    clearAllJumpPins()
     activePinchRef.current = false
     multiPointerLockedRef.current = false
     pageLastVisibleAtRef.current.forEach((_lastVisibleAt, pageNumber) => {
@@ -1947,7 +2031,7 @@ export function IntermediateDocumentViewer({
         lastKnownVisiblePagesRef.current.delete(pageNumber)
       }
     })
-  }, [pageNumbers])
+  }, [clearAllJumpPins, pageNumbers])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -1973,7 +2057,8 @@ export function IntermediateDocumentViewer({
     setBaseImagesByPageNumber(new Map())
     setImagesByPageNumber(new Map())
     clearAllUnloadTimers()
-  }, [runtimeDocument, clearAllUnloadTimers])
+    clearAllJumpPins()
+  }, [runtimeDocument, clearAllUnloadTimers, clearAllJumpPins])
 
   const bumpOcrEvictGeneration = useCallback((pageNumber: number) => {
     const current = ocrEvictGenerationRef.current.get(pageNumber) ?? 0
@@ -2078,6 +2163,125 @@ export function IntermediateDocumentViewer({
     },
     [overscan, pageNumbers]
   )
+
+  const scrollToRange = useCallback(
+    (rangeId: string) => {
+      if (!runtimeDocument || pageNumbers.length === 0) return
+
+      const widestPageSize = getWidestKnownPageSize(
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      if (!widestPageSize) return
+
+      const initialTarget = resolveRangeJumpTarget({
+        ranges: effectiveRangesRef.current,
+        rangeId,
+        rectType: overlayRectType,
+        pageWidth: widestPageSize.width,
+        pageHeight: widestPageSize.height
+      })
+      if (!initialTarget) return
+      if (!pageNumbers.includes(initialTarget.pageNumber)) return
+
+      const targetPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        initialTarget.pageNumber
+      )
+      if (!targetPageSize) return
+
+      const target = resolveRangeJumpTarget({
+        ranges: effectiveRangesRef.current,
+        rangeId,
+        rectType: overlayRectType,
+        pageWidth: targetPageSize.width,
+        pageHeight: targetPageSize.height
+      })
+      if (!target) return
+
+      const viewportElement = viewerRootRef.current?.querySelector(
+        '.virtual-paper-wrapper'
+      )
+      if (!(viewportElement instanceof HTMLElement)) return
+
+      const viewportRect = viewportElement.getBoundingClientRect()
+      const contentWidth = widestPageSize.width
+      const lastPageNumber = pageNumbers.at(-1)
+      if (lastPageNumber === undefined) return
+      const lastPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        lastPageNumber
+      )
+      if (!lastPageSize) return
+      const contentHeight =
+        computePageOriginY(lastPageNumber, pageNumbers, pageSizesByPageNumber) +
+        lastPageSize.height
+
+      const pageOriginY = computePageOriginY(
+        target.pageNumber,
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      const targetContentX =
+        (contentWidth - targetPageSize.width) / 2 + target.centerX
+      const targetContentY = pageOriginY + target.centerY
+      const nextTransform = computeTransform({
+        viewportWidth: viewportRect.width,
+        viewportHeight: viewportRect.height,
+        contentWidth,
+        contentHeight,
+        targetContentX,
+        targetContentY,
+        scale: effectiveScaleRef.current
+      })
+      if (!nextTransform) return
+
+      const targetPageNumber = target.pageNumber
+      const alreadyLoaded = pageStatuses.get(targetPageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(targetPageNumber)
+      clearUnloadTimer(targetPageNumber)
+      lazilyEvictedPagesRef.current.delete(targetPageNumber)
+      markLoadableWithOverscan(targetPageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(targetPageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(targetPageNumber)
+      }
+
+      setPaperTransform((currentTransform) => ({
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: currentTransform.scale
+      }))
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      overlayRectType,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      releaseJumpPinnedPage,
+      runtimeDocument
+    ]
+  )
+
+  useEffect(() => {
+    pageStatuses.forEach((status, pageNumber) => {
+      if (status !== 'loaded' && status !== 'error') {
+        return
+      }
+      const token = jumpPinTokensRef.current.get(pageNumber)
+      if (token) {
+        releaseJumpPinnedPage(pageNumber, token)
+      }
+    })
+  }, [pageStatuses, releaseJumpPinnedPage])
 
   const evictLazyPageBundle = useCallback(
     (pageNumber: number) => {
@@ -3059,6 +3263,7 @@ export function IntermediateDocumentViewer({
       pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
+      onScrollToRange={scrollToRange}
       handleVirtualPaperTransformChange={handleVirtualPaperTransformChange}
       handleVirtualPaperTransformChangeEnd={
         handleVirtualPaperTransformChangeEnd

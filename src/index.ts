@@ -3,8 +3,7 @@
 // （TS 5.9 在 bundler + isolatedModules 下 export type X = ExternalType 存在已知问题）
 export type {
   MousePosition as ReaderMousePosition,
-  OverlayRectType as ReaderSelectionOverlayRectType,
-  SelectionRef as ReaderSelectionRef
+  OverlayRectType as ReaderSelectionOverlayRectType
 } from '@hamster-note/selection'
 
 export type {
@@ -12,7 +11,8 @@ export type {
   ReaderLinkedSelectionRange,
   ReaderSelectionEndpoint,
   ReaderSelectionRange,
-  ReaderSelectionRect
+  ReaderSelectionRect,
+  ReaderSelectionRef
 } from './types/selection'
 
 export {

@@ -2,15 +2,22 @@ import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createRef, type RefObject } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
   SUPPORTED_UPLOAD_COPY
 } from '../src/components/Reader'
-import type { ReaderInteractionMode, ReaderProps } from '../src/index'
+import type {
+  ReaderInteractionMode,
+  ReaderProps,
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../src/index'
 import { Reader } from '../src/index'
+import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
 import { intersectionObserverMock } from './setup'
 
 let capturedViewerProps: Record<string, unknown> = {}
@@ -211,6 +218,39 @@ function makeLazyDocument(pageCount: number = 1): {
   } as unknown as IntermediateDocument
 
   return { document, pages }
+}
+
+type RectInput = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+const makeDomRect = (rect: RectInput) =>
+  ({
+    left: rect.left,
+    top: rect.top,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+    toJSON: () => rect
+  }) as DOMRect
+
+const mockElementRect = (element: HTMLElement, rect: RectInput) =>
+  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(makeDomRect(rect))
+
+function requireReaderSelectionRef(
+  ref: RefObject<ReaderSelectionRef | null>
+): ReaderSelectionRef {
+  if (!ref.current) {
+    throw new Error('Expected Reader selection ref to be available')
+  }
+
+  return ref.current
 }
 
 function createMockFile(
@@ -418,6 +458,7 @@ describe('Reader file upload', () => {
 describe('Reader prop forwarding', () => {
   beforeEach(() => {
     capturedViewerProps = {}
+    clearSelectionProps()
   })
 
   it('renders IntermediateDocumentViewer when ocr prop is passed', () => {
@@ -655,6 +696,126 @@ describe('Reader prop forwarding', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} {...{ overlayRectType: 'px' }} />)
     expect(capturedViewerProps.overlayRectType).toBe('px')
+  })
+
+  it('forwards Reader selection, scale, and lazy props to IntermediateDocumentViewer unchanged', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const ranges: ReaderSelectionRange[] = [
+      {
+        id: 'forwarded-range',
+        text: 'Forwarded range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 },
+        createdAt: 10,
+        overlayRectType: 'percent',
+        rectsBySelectionId: {
+          'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+        }
+      }
+    ]
+
+    render(
+      <Reader
+        document={doc}
+        selectionRef={selectionRef}
+        ranges={ranges}
+        selectedRangeId='forwarded-range'
+        overlayRectType='percent'
+        initialLoadedPages={2}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={250}
+        pageUnloadDelayMs={3000}
+        onScaleChange={onScaleChange}
+      />
+    )
+
+    expect(capturedViewerProps.selectionRef).toBe(selectionRef)
+    expect(capturedViewerProps.ranges).toBe(ranges)
+    expect(capturedViewerProps.selectedRangeId).toBe('forwarded-range')
+    expect(capturedViewerProps.overlayRectType).toBe('percent')
+    expect(capturedViewerProps.initialLoadedPages).toBe(2)
+    expect(capturedViewerProps.pageLoadConcurrency).toBe(4)
+    expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
+    expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
+    expect(capturedViewerProps.onScaleChange).toBe(onScaleChange)
+  })
+
+  it('exposes scrollToRange on the forwarded Reader ref without firing onScaleChange', async () => {
+    // Given: Reader owns the public ref and a controlled selected range on page 3.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const range: ReaderSelectionRange = {
+      id: 'reader-jump-page-3',
+      text: 'Reader jump target',
+      start: { selectionId: 'page-3', offset: 0 },
+      end: { selectionId: 'page-3', offset: 11 },
+      createdAt: 30,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-3': [{ x: 10, y: 20, width: 20, height: 20 }]
+      }
+    }
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        ranges={[range]}
+        selectedRangeId='reader-jump-page-3'
+        selectionRef={selectionRef}
+        initialLoadedPages={1}
+        scale={2}
+        onScaleChange={onScaleChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 100
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    expect(publicRef).toEqual({
+      highlight: expect.any(Function),
+      clear: expect.any(Function),
+      scrollToRange: expect.any(Function)
+    })
+
+    // When: callers jump through Reader's public selectionRef.
+    act(() => {
+      publicRef.scrollToRange('reader-jump-page-3')
+    })
+
+    // Then: VirtualPaper translation changes, scale stays controlled, and no scale callback fires.
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      transform: 'translate3d(-15px, -704px, 0) scale(2)'
+    })
+    expect(onScaleChange).not.toHaveBeenCalled()
+
+    // And: selected-range ownership stays with selectedRangeId and the range's start page.
+    await screen.findByText('Page 3 text')
+    await waitFor(() => {
+      expect(
+        getAllSelectionProps().some((props) =>
+          props.selectionId?.endsWith(':page-3')
+        )
+      ).toBe(true)
+    })
+    const pageThreeSelectionProps = getAllSelectionProps().find((props) =>
+      props.selectionId?.endsWith(':page-3')
+    )
+    expect(pageThreeSelectionProps?.linkedData?.selectedRangeId).toBe(
+      'reader-jump-page-3'
+    )
+    expect(
+      pageThreeSelectionProps?.linkedData?.items.find(
+        (item) => item.id === 'reader-jump-page-3'
+      )?.start.selectionId
+    ).toBe(pageThreeSelectionProps?.selectionId)
   })
 
   it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {

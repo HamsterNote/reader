@@ -4,8 +4,7 @@ import type {
   MousePosition,
   OverlayRect,
   OverlayRectType,
-  SelectionEndpoint,
-  SelectionRef
+  SelectionEndpoint
 } from '@hamster-note/selection'
 
 /**
@@ -42,6 +41,20 @@ export type ReaderLinkedSelectionData = Omit<
   activeRange?: ReaderLinkedSelectionRange | null
 }
 
-export type ReaderSelectionRef = SelectionRef
+/**
+ * Reader 公开 selection ref 接口。
+ *
+ * 由 Reader 自己实现，不是上游 @hamster-note/selection 的 `SelectionRef`。
+ * Reader 在内部将 `highlight()` / `clear()` 分发到各页面的上游
+ * `SelectionRef`，并新增 `scrollToRange()` 来滚动到指定 range。
+ */
+export interface ReaderSelectionRef {
+  /** 执行高亮：将当前用户选中的文本确认为一个持久高亮 range。 */
+  highlight: () => void
+  /** 清除所有页面的高亮和选区状态。 */
+  clear: () => void
+  /** 滚动视图到指定 range（按 range id 查找）。实现细节留给 Reader 内部。 */
+  scrollToRange: (id: string) => void
+}
 export type ReaderMousePosition = MousePosition
 export type ReaderSelectionOverlayRectType = OverlayRectType

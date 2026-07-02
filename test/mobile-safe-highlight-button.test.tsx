@@ -10,7 +10,8 @@ function makeSelectionRef(highlight: () => void): {
   return {
     current: {
       highlight,
-      clear: vi.fn()
+      clear: vi.fn(),
+      scrollToRange: vi.fn()
     }
   }
 }

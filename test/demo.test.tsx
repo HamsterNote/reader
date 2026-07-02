@@ -65,6 +65,7 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         segments: unknown,
         extractedText: unknown
       ) => void
+      selectionRef?: React.MutableRefObject<unknown>
     }) => {
       mockReaderProps.push(props)
       if (props.onTextSelectionChange)
@@ -72,6 +73,14 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
       if (props.onTextSelectionEnd)
         mockCallbacks.onTextSelectionEnd = props.onTextSelectionEnd
       if (props.onSelectText) mockCallbacks.onSelectText = props.onSelectText
+      if (props.selectionRef) {
+        props.selectionRef.current = {
+          highlight: vi.fn(),
+          clear: vi.fn(),
+          scrollToRange: vi.fn(),
+          ...((props.selectionRef.current as Record<string, unknown>) || {})
+        }
+      }
       return (
         <div
           data-testid='mock-reader'
@@ -753,6 +762,179 @@ describe('demo parser flow', () => {
 
       expect(await screen.findByText('已创建高亮 (1)')).toBeInTheDocument()
       expect(screen.getAllByText('single text')).toHaveLength(1)
+    })
+
+    it('sets selectedRangeId and calls scrollToRange when sidebar highlight item is clicked', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Sidebar Click Document')
+      )
+      render(<App />)
+      upload(makeFile('sidebar-click.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = findDocumentReaderProps()
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('sidebar-range', 'sidebar text'))
+
+      expect(await screen.findByText('sidebar text')).toBeInTheDocument()
+
+      const refObj = uploadReaderProps?.selectionRef as React.MutableRefObject<{
+        scrollToRange: ReturnType<typeof vi.fn>
+      } | null>
+
+      fireEvent.click(screen.getByText('sidebar text'))
+
+      await waitFor(() => {
+        const updatedProps = findDocumentReaderProps()
+        expect(updatedProps?.selectedRangeId).toBe('sidebar-range')
+      })
+      expect(refObj.current?.scrollToRange).toHaveBeenCalledWith(
+        'sidebar-range'
+      )
+      expect(refObj.current?.scrollToRange).toHaveBeenCalledTimes(1)
+    })
+
+    it('clicking the same sidebar highlight twice keeps it selected and calls scrollToRange twice', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Double Click Document')
+      )
+      render(<App />)
+      upload(makeFile('double-click.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = findDocumentReaderProps()
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('dc-range', 'double click text'))
+
+      expect(await screen.findByText('double click text')).toBeInTheDocument()
+
+      const refObj = uploadReaderProps?.selectionRef as React.MutableRefObject<{
+        scrollToRange: ReturnType<typeof vi.fn>
+      } | null>
+
+      fireEvent.click(screen.getByText('double click text'))
+      fireEvent.click(screen.getByText('double click text'))
+
+      await waitFor(() => {
+        const updatedProps = findDocumentReaderProps()
+        expect(updatedProps?.selectedRangeId).toBe('dc-range')
+      })
+      expect(refObj.current?.scrollToRange).toHaveBeenCalledTimes(2)
+      expect(refObj.current?.scrollToRange).toHaveBeenCalledWith('dc-range')
+    })
+
+    it('delete and clear do not call scrollToRange', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('No Scroll Delete Document')
+      )
+      render(<App />)
+      upload(makeFile('no-scroll-delete.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      let uploadReaderProps = findDocumentReaderProps()
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('no-scroll-del', 'text for no scroll delete'))
+
+      expect(
+        await screen.findByText('text for no scroll delete')
+      ).toBeInTheDocument()
+
+      const refObj = uploadReaderProps?.selectionRef as React.MutableRefObject<{
+        scrollToRange: ReturnType<typeof vi.fn>
+      } | null>
+
+      const onSelectRange = uploadReaderProps?.onSelectRange as (
+        id: string
+      ) => void
+      onSelectRange('no-scroll-del')
+
+      await waitFor(() => {
+        uploadReaderProps = findDocumentReaderProps()!
+        expect(uploadReaderProps?.selectedRangeId).toBe('no-scroll-del')
+      })
+
+      const popover = render(
+        uploadReaderProps?.highlightPopover as React.ReactElement
+      )
+      const deleteButton = popover.container.querySelector('button')
+      if (deleteButton) {
+        fireEvent.click(deleteButton)
+      }
+
+      await waitFor(() => {
+        expect(
+          screen.queryByText('text for no scroll delete')
+        ).not.toBeInTheDocument()
+      })
+
+      expect(refObj.current?.scrollToRange).not.toHaveBeenCalled()
+    })
+
+    it('null selectionRef does not throw and still updates selectedRangeId', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Null Ref Document')
+      )
+      render(<App />)
+      upload(makeFile('null-ref.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = findDocumentReaderProps()
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('null-ref-range', 'null ref text'))
+
+      expect(await screen.findByText('null ref text')).toBeInTheDocument()
+
+      const refObj =
+        uploadReaderProps?.selectionRef as React.MutableRefObject<null>
+      refObj.current = null
+
+      expect(() => {
+        fireEvent.click(screen.getByText('null ref text'))
+      }).not.toThrow()
+
+      await waitFor(() => {
+        const updatedProps = findDocumentReaderProps()
+        expect(updatedProps?.selectedRangeId).toBe('null-ref-range')
+      })
+    })
+
+    it('absent selectionRef.current does not throw and still updates selectedRangeId', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Absent Ref Current Document')
+      )
+      render(<App />)
+      upload(makeFile('absent-ref-current.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = findDocumentReaderProps()
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('absent-ref-range', 'absent ref text'))
+
+      expect(await screen.findByText('absent ref text')).toBeInTheDocument()
+
+      const refObj =
+        uploadReaderProps?.selectionRef as React.MutableRefObject<unknown>
+      refObj.current = undefined
+
+      expect(() => {
+        fireEvent.click(screen.getByText('absent ref text'))
+      }).not.toThrow()
+
+      await waitFor(() => {
+        const updatedProps = findDocumentReaderProps()
+        expect(updatedProps?.selectedRangeId).toBe('absent-ref-range')
+      })
+      expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
     })
   })
 

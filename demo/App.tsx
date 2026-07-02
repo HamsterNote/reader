@@ -207,6 +207,12 @@ export function App() {
     [selectedRangeId, uploadedFile?.name]
   )
 
+  // 侧边栏高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
+  const handleHighlightSelect = useCallback((id: string) => {
+    setSelectedRangeId(id)
+    selectionRef.current?.scrollToRange(id)
+  }, [])
+
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
       return undefined
@@ -460,11 +466,7 @@ export function App() {
                   <button
                     type='button'
                     aria-label='Select highlight'
-                    onClick={() =>
-                      setSelectedRangeId(
-                        selectedRangeId === range.id ? null : range.id
-                      )
-                    }
+                    onClick={() => handleHighlightSelect(range.id)}
                     style={{
                       flex: 1,
                       textAlign: 'left',

@@ -193,7 +193,7 @@ export function App() {
 | `selectionColor` | `string` | CSS color for active selection overlay. |
 | `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
 | `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
-| `selectionRef` | `React.Ref<ReaderSelectionRef>` | Ref to the Selection component. Exposes `highlight()` and `clear()`. |
+| `selectionRef` | `React.Ref<ReaderSelectionRef>` | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range. |
 | `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
 
 ### Exported Types
@@ -202,7 +202,7 @@ export function App() {
 import type {
   ReaderSelectionRange,    // linked: { id, text, start, end, rectsBySelectionId, overlayRectType? }
   ReaderSelectionOverlayRectType,  // 'px' | 'percent'
-  ReaderSelectionRef,      // { highlight(): void; clear(): void }
+  ReaderSelectionRef,      // { highlight(): void; clear(): void; scrollToRange(id: string): void }
   ReaderMousePosition      // { x, y }, viewport coordinates (clientX/clientY)
 } from '@hamster-note/reader'
 ```
@@ -223,6 +223,8 @@ The browser Demo persists highlights to localStorage keyed by filename. The stor
 
 ### Programmatic Control
 
+`selectionRef` exposes Reader-level commands. `highlight()` and `clear()` are forwarded to the active page Selection instances; `scrollToRange(id)` is implemented by Reader to translate the VirtualPaper viewport to an existing range while preserving the current scale.
+
 ```tsx
 import { useRef } from 'react'
 import type { ReaderSelectionRef } from '@hamster-note/reader'
@@ -234,6 +236,9 @@ selectionRef.current?.highlight()
 
 // Clear all highlights
 selectionRef.current?.clear()
+
+// Scroll the viewer to a specific range by id
+selectionRef.current?.scrollToRange('highlight-1')
 ```
 
 ## Peer Dependencies

@@ -7,10 +7,28 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { act, render, screen, waitFor } from '@testing-library/react'
-import { isValidElement, type ReactNode } from 'react'
+import {
+  createRef,
+  isValidElement,
+  type ReactNode,
+  type RefObject
+} from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { buildSelectionPayload } from '../src/components/IntermediateDocumentViewer'
+import {
+  computePageOriginY,
+  computeTransform,
+  findRangeById,
+  parsePublicPageId,
+  rectCenterToPagePixels,
+  resolveRangeJumpTarget,
+  selectTargetRect
+} from '../src/components/IntermediateDocumentViewer/rangeJumpHelpers'
+import type {
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../src/types/selection'
 import {
   isSelectionBackgroundTarget,
   resolveCaret
@@ -86,6 +104,16 @@ function requireSelectionPropsById(selectionId: string): SelectionProps {
   }
 
   return selectionProps
+}
+
+function requireReaderSelectionRef(
+  ref: RefObject<ReaderSelectionRef | null>
+): ReaderSelectionRef {
+  if (!ref.current) {
+    throw new Error('Expected Reader selection ref to be available')
+  }
+
+  return ref.current
 }
 
 type MockPage = {
@@ -4231,5 +4259,1119 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       encodeSpy.mockReset()
       idleCallback.restore()
     }
+  })
+
+  describe('public selection ref range jumps', () => {
+    const pageThreeRange: ReaderSelectionRange = {
+      id: 'jump-page-3',
+      text: 'Jump target',
+      start: { selectionId: 'page-3', offset: 0 },
+      end: { selectionId: 'page-3', offset: 11 },
+      createdAt: 30,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-3': [{ x: 10, y: 20, width: 20, height: 20 }]
+      }
+    }
+    const pageFourRange: ReaderSelectionRange = {
+      id: 'jump-page-4',
+      text: 'Out of range target',
+      start: { selectionId: 'page-4', offset: 0 },
+      end: { selectionId: 'page-4', offset: 11 },
+      createdAt: 40,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-4': [{ x: 10, y: 20, width: 20, height: 20 }]
+      }
+    }
+    const emptyRectsRange: ReaderSelectionRange = {
+      id: 'empty-rects',
+      text: 'No target rects',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 11 },
+      createdAt: 50,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {}
+    }
+    const malformedSelectionIdRange: ReaderSelectionRange = {
+      id: 'malformed-selection-id',
+      text: 'Malformed page id',
+      start: { selectionId: 'not-a-page-id', offset: 0 },
+      end: { selectionId: 'not-a-page-id', offset: 11 },
+      createdAt: 60,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'not-a-page-id': [{ x: 10, y: 20, width: 20, height: 20 }]
+      }
+    }
+    const unchangedTransform = 'translate3d(0px, 0px, 0) scale(1)'
+
+    type NoOpJumpFixtureOptions = {
+      ranges: ReaderSelectionRange[]
+      pageCount?: number
+      pageSize?: { x?: number; y?: number }
+      wrapperRect?: RectInput
+    }
+
+    const renderNoOpJumpFixture = async ({
+      ranges,
+      pageCount = 3,
+      pageSize = { x: 100, y: 150 },
+      wrapperRect = { left: 0, top: 0, width: 50, height: 100 }
+    }: NoOpJumpFixtureOptions) => {
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({ pageCount, pageSize })
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={ranges}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), wrapperRect)
+
+      return {
+        document,
+        selectionRef,
+        container: screen.getByTestId('virtual-paper-container')
+      }
+    }
+
+    const expectScrollToRangeNoThrow = (
+      selectionRef: RefObject<ReaderSelectionRef | null>,
+      rangeId: string
+    ) => {
+      const readerSelectionRef = requireReaderSelectionRef(selectionRef)
+
+      expect(() => {
+        act(() => {
+          readerSelectionRef.scrollToRange(rangeId)
+        })
+      }).not.toThrow()
+    }
+
+    describe('invalid/no-op scrollToRange paths', () => {
+      it('keeps transform unchanged for an unknown range id', async () => {
+        // Given: a mounted public ref and unchanged controlled ranges.
+        const ranges = [pageThreeRange]
+        const expectedRanges = structuredClone(ranges)
+        const { selectionRef, container } = await renderNoOpJumpFixture({
+          ranges
+        })
+        const previousTransform = container.style.transform
+
+        // When: the caller asks the public ref to jump to an unknown id.
+        expectScrollToRangeNoThrow(selectionRef, 'missing-range')
+
+        // Then: VirtualPaper and stored ranges remain unchanged.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged for empty rectsBySelectionId', async () => {
+        // Given: the range id exists but has no stored target rects.
+        const ranges = [emptyRectsRange]
+        const expectedRanges = structuredClone(ranges)
+        const { selectionRef, container } = await renderNoOpJumpFixture({
+          ranges
+        })
+        const previousTransform = container.style.transform
+
+        // When: the caller jumps through the public ref API.
+        expectScrollToRangeNoThrow(selectionRef, 'empty-rects')
+
+        // Then: no transform or range data mutates.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged for a malformed selection id', async () => {
+        // Given: rects exist, but their public page id cannot be parsed.
+        const ranges = [malformedSelectionIdRange]
+        const expectedRanges = structuredClone(ranges)
+        const { selectionRef, container } = await renderNoOpJumpFixture({
+          ranges
+        })
+        const previousTransform = container.style.transform
+
+        // When: the caller jumps through the public ref API.
+        expectScrollToRangeNoThrow(selectionRef, 'malformed-selection-id')
+
+        // Then: no transform or range data mutates.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged when target page is outside current pageNumbers', async () => {
+        // Given: ranges mention page 4, but current pageNumbers only contain 1-3.
+        const ranges = [pageFourRange]
+        const expectedRanges = structuredClone(ranges)
+        const { document, selectionRef, container } =
+          await renderNoOpJumpFixture({ ranges })
+        const previousTransform = container.style.transform
+
+        // When: the caller selects a range outside the rendered pageNumbers.
+        expectScrollToRangeNoThrow(selectionRef, 'jump-page-4')
+
+        // Then: VirtualPaper no-ops and no parser/page-range expansion path runs.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(4)
+        expect(document.getPageSizeByPageNumber).not.toHaveBeenCalledWith(4)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged when page size is unavailable', async () => {
+        // Given: every visible page falls back to the default size for render only.
+        const ranges = [pageThreeRange]
+        const expectedRanges = structuredClone(ranges)
+        const { selectionRef, container } = await renderNoOpJumpFixture({
+          ranges,
+          pageSize: {}
+        })
+        const previousTransform = container.style.transform
+
+        // When: scrollToRange cannot resolve a known page size for jump math.
+        expectScrollToRangeNoThrow(selectionRef, 'jump-page-3')
+
+        // Then: no transform or range data mutates.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged when viewport dimensions are missing', async () => {
+        // Given: jsdom exposes a mounted VirtualPaper wrapper with zero layout.
+        const ranges = [pageThreeRange]
+        const expectedRanges = structuredClone(ranges)
+        const { selectionRef, container } = await renderNoOpJumpFixture({
+          ranges,
+          wrapperRect: { left: 0, top: 0, width: 0, height: 0 }
+        })
+        const previousTransform = container.style.transform
+
+        // When: computeTransform receives missing viewport dimensions.
+        expectScrollToRangeNoThrow(selectionRef, 'jump-page-3')
+
+        // Then: no transform or range data mutates.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged when content dimensions are unavailable', async () => {
+        // Given: page sizes have invalid content dimensions for jump math.
+        const ranges = [pageThreeRange]
+        const expectedRanges = structuredClone(ranges)
+        const { selectionRef, container } = await renderNoOpJumpFixture({
+          ranges,
+          pageSize: { x: 0, y: 0 }
+        })
+        const previousTransform = container.style.transform
+
+        // When: scrollToRange cannot derive a valid content box.
+        expectScrollToRangeNoThrow(selectionRef, 'jump-page-3')
+
+        // Then: no transform or range data mutates.
+        expect(container.style.transform).toBe(previousTransform)
+        expect(container.style.transform).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+
+      it('keeps transform unchanged when no runtime document is mounted', async () => {
+        // Given: a public ref was exposed by a mounted runtime document.
+        const selectionRef = createRef<ReaderSelectionRef>()
+        const ranges = [pageThreeRange]
+        const expectedRanges = structuredClone(ranges)
+        const { document } = makeDocument({
+          pageCount: 3,
+          pageSize: { x: 100, y: 150 }
+        })
+        const { rerender } = render(
+          <IntermediateDocumentViewer
+            document={document}
+            ranges={ranges}
+            selectionRef={selectionRef}
+            initialLoadedPages={1}
+          />
+        )
+        await screen.findByText('Page 1 text')
+        const previousTransform = screen.getByTestId('virtual-paper-container')
+          .style.transform
+        const publicRef = requireReaderSelectionRef(selectionRef)
+
+        rerender(
+          <IntermediateDocumentViewer
+            ranges={ranges}
+            selectionRef={selectionRef}
+            initialLoadedPages={1}
+          />
+        )
+
+        // When: a stale-but-public ref method is called after runtime document removal.
+        expect(selectionRef.current).toBeNull()
+        expect(() => {
+          act(() => {
+            publicRef.scrollToRange('jump-page-3')
+          })
+        }).not.toThrow()
+
+        // Then: remounting the same document shows the stored transform/ranges unchanged.
+        rerender(
+          <IntermediateDocumentViewer
+            document={document}
+            ranges={ranges}
+            selectionRef={selectionRef}
+            initialLoadedPages={1}
+          />
+        )
+        await screen.findByText('Page 1 text')
+        expect(
+          screen.getByTestId('virtual-paper-container').style.transform
+        ).toBe(previousTransform)
+        expect(
+          screen.getByTestId('virtual-paper-container').style.transform
+        ).toBe(unchangedTransform)
+        expect(ranges).toEqual(expectedRanges)
+      })
+    })
+
+    it('updates the controlled VirtualPaper translate for a page-3 range', async () => {
+      // Given: a mounted reader selection ref and a measurable VirtualPaper viewport.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: the public ref is asked to jump to the range.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then: the VirtualPaper container receives the computed translate.
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(0px, -327px, 0) scale(1)'
+      })
+    })
+
+    it('preserves controlled scale and does not call onScaleChange while jumping', async () => {
+      // Given: scale is controlled externally at 2x.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const onScaleChange = vi.fn()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          scale={2}
+          onScaleChange={onScaleChange}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: jumping to the page-3 target.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then: translation changes, scale stays 2, and no scale callback fires.
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(-15px, -704px, 0) scale(2)'
+      })
+      expect(onScaleChange).not.toHaveBeenCalled()
+    })
+
+    it('loads a lazy target page on jump and unpins it after load cleanup', async () => {
+      // Given: only page 1 is initially loaded while page 3 exists as an empty shell.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document, pages } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          overscan={0}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      const page3 = screen.getByTestId('intermediate-page-3')
+      expect(page3).toBeEmptyDOMElement()
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: jumping to page 3.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then: the transform updates immediately, and only the target lazy page loads.
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(0px, -327px, 0) scale(1)'
+      })
+      await screen.findByText('Page 3 text')
+      expect(pages.get(3)?.getContent).toHaveBeenCalledTimes(1)
+      expect(pages.get(2)?.getContent).not.toHaveBeenCalled()
+
+      // And: once page 3 has loaded, the jump pin is removed so normal unload can evict it.
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(page3, false)
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+        expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not load pages outside overscan solely because of a jump', async () => {
+      // Given: a five-page document with overscan disabled.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document, pages } = makeDocument({
+        pageCount: 5,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          overscan={0}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: jumping directly to page 3.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+      await screen.findByText('Page 3 text')
+
+      // Then: adjacent and intervening pages remain unloaded shells.
+      expect(pages.get(2)?.getContent).not.toHaveBeenCalled()
+      expect(pages.get(4)?.getContent).not.toHaveBeenCalled()
+      expect(pages.get(5)?.getContent).not.toHaveBeenCalled()
+      expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+      expect(screen.queryByText('Page 4 text')).not.toBeInTheDocument()
+      expect(screen.queryByText('Page 5 text')).not.toBeInTheDocument()
+    })
+
+    it('reloads a lazily evicted jump target and cancels its pending unload', async () => {
+      // Given: page 3 has loaded, left the viewport, and been evicted to an empty shell.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document, pages } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={3}
+          overscan={0}
+        />
+      )
+      await screen.findByText('Page 3 text')
+      const page3 = screen.getByTestId('intermediate-page-3')
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(page3, false)
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+        expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
+      } finally {
+        vi.useRealTimers()
+      }
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: the evicted page is targeted by scrollToRange, then an old hidden signal fires.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(page3, false)
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+
+      // Then: lazilyEvictedPagesRef no longer makes the queue skip the page; it reloads once.
+      await screen.findByText('Page 3 text')
+      expect(pages.get(3)?.getContent).toHaveBeenCalledTimes(2)
+    })
+  })
+})
+
+// ── rangeJumpHelpers (task 3) ─────────────────────────────────────────
+// Pure helpers for resolving a public range id → { pageNumber, centerX, centerY }
+// using page-N ids, stable rect key ordering, and percent/px coordinate conversion.
+
+describe('rangeJumpHelpers', () => {
+  // ── parsePublicPageId ────────────────────────────────────────────────
+
+  describe('parsePublicPageId', () => {
+    it('parses valid page-3 to 3', () => {
+      expect(parsePublicPageId('page-3')).toBe(3)
+    })
+
+    it('parses page-1 to 1', () => {
+      expect(parsePublicPageId('page-1')).toBe(1)
+    })
+
+    it('parses page-999 to 999', () => {
+      expect(parsePublicPageId('page-999')).toBe(999)
+    })
+
+    it('returns null for malformed id "foo"', () => {
+      expect(parsePublicPageId('foo')).toBeNull()
+    })
+
+    it('returns null for empty string', () => {
+      expect(parsePublicPageId('')).toBeNull()
+    })
+
+    it('returns null for page-0 (zero page number)', () => {
+      expect(parsePublicPageId('page-0')).toBeNull()
+    })
+
+    it('returns null for page-1.5 (non-integer)', () => {
+      expect(parsePublicPageId('page-1.5')).toBeNull()
+    })
+
+    it('returns null for page- (missing number)', () => {
+      expect(parsePublicPageId('page-')).toBeNull()
+    })
+
+    it('returns null for scoped id like "scope-1:page-2"', () => {
+      expect(parsePublicPageId('scope-1:page-2')).toBeNull()
+    })
+  })
+
+  // ── findRangeById ────────────────────────────────────────────────────
+
+  describe('findRangeById', () => {
+    const ranges: ReaderSelectionRange[] = [
+      {
+        id: 'range-a',
+        text: 'Alpha',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 },
+        createdAt: 100,
+        rectsBySelectionId: {
+          'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+        }
+      },
+      {
+        id: 'range-b',
+        text: 'Bravo',
+        start: { selectionId: 'page-2', offset: 0 },
+        end: { selectionId: 'page-2', offset: 5 },
+        createdAt: 200,
+        rectsBySelectionId: {
+          'page-2': [{ x: 50, y: 60, width: 40, height: 20 }]
+        }
+      }
+    ]
+
+    it('finds range-a by id', () => {
+      const found = findRangeById(ranges, 'range-a')
+      expect(found?.id).toBe('range-a')
+      expect(found?.text).toBe('Alpha')
+    })
+
+    it('finds range-b by id', () => {
+      const found = findRangeById(ranges, 'range-b')
+      expect(found?.id).toBe('range-b')
+    })
+
+    it('returns null for missing id', () => {
+      expect(findRangeById(ranges, 'range-missing')).toBeNull()
+    })
+
+    it('returns null for empty ranges array', () => {
+      expect(findRangeById([], 'range-a')).toBeNull()
+    })
+  })
+
+  // ── selectTargetRect ─────────────────────────────────────────────────
+
+  describe('selectTargetRect', () => {
+    it('selects first rect from start.selectionId when that key has rects', () => {
+      const range: ReaderSelectionRange = {
+        id: 'r1',
+        text: '',
+        start: { selectionId: 'page-2', offset: 0 },
+        end: { selectionId: 'page-2', offset: 5 },
+        createdAt: 0,
+        rectsBySelectionId: {
+          'page-1': [{ x: 10, y: 10, width: 10, height: 10 }],
+          'page-2': [
+            { x: 20, y: 20, width: 20, height: 20 },
+            { x: 30, y: 30, width: 30, height: 30 }
+          ]
+        }
+      }
+
+      const result = selectTargetRect(range)
+      expect(result?.pageId).toBe('page-2')
+      expect(result?.rect).toEqual({ x: 20, y: 20, width: 20, height: 20 })
+    })
+
+    it('falls back to first available rect by stable key order when start key is missing', () => {
+      const range: ReaderSelectionRange = {
+        id: 'r2',
+        text: '',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 },
+        createdAt: 0,
+        rectsBySelectionId: {
+          'page-3': [{ x: 50, y: 60, width: 40, height: 20 }],
+          'page-2': [{ x: 10, y: 20, width: 30, height: 10 }]
+        }
+      }
+
+      // start key 'page-1' has no rects → fallback to sorted keys → 'page-2' < 'page-3'
+      const result = selectTargetRect(range)
+      expect(result?.pageId).toBe('page-2')
+      expect(result?.rect).toEqual({ x: 10, y: 20, width: 30, height: 10 })
+    })
+
+    it('returns null when rectsBySelectionId is empty', () => {
+      const range: ReaderSelectionRange = {
+        id: 'r3',
+        text: '',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 },
+        createdAt: 0,
+        rectsBySelectionId: {}
+      }
+
+      expect(selectTargetRect(range)).toBeNull()
+    })
+
+    it('returns null when all rect arrays are empty', () => {
+      const range: ReaderSelectionRange = {
+        id: 'r4',
+        text: '',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 },
+        createdAt: 0,
+        rectsBySelectionId: { 'page-1': [], 'page-2': [] }
+      }
+
+      expect(selectTargetRect(range)).toBeNull()
+    })
+
+    it('skips start key with empty rect array and falls back', () => {
+      const range: ReaderSelectionRange = {
+        id: 'r5',
+        text: '',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 },
+        createdAt: 0,
+        rectsBySelectionId: {
+          'page-1': [],
+          'page-2': [{ x: 5, y: 5, width: 5, height: 5 }]
+        }
+      }
+
+      const result = selectTargetRect(range)
+      expect(result?.pageId).toBe('page-2')
+      expect(result?.rect).toEqual({ x: 5, y: 5, width: 5, height: 5 })
+    })
+  })
+
+  // ── rectCenterToPagePixels ───────────────────────────────────────────
+
+  describe('rectCenterToPagePixels', () => {
+    it('converts percent rect { x:60, y:20, width:20, height:10 } on 1000x1000 page to center (700,250)', () => {
+      const center = rectCenterToPagePixels(
+        { x: 60, y: 20, width: 20, height: 10 },
+        'percent',
+        1000,
+        1000
+      )
+      expect(center).toEqual({ centerX: 700, centerY: 250 })
+    })
+
+    it('converts px rect { x:600, y:200, width:200, height:100 } to center (700,250)', () => {
+      const center = rectCenterToPagePixels(
+        { x: 600, y: 200, width: 200, height: 100 },
+        'px',
+        1000,
+        1000
+      )
+      // centerX = 600 + 200/2 = 700, centerY = 200 + 100/2 = 250
+      expect(center).toEqual({ centerX: 700, centerY: 250 })
+    })
+
+    it('handles zero-size rect (point)', () => {
+      const center = rectCenterToPagePixels(
+        { x: 500, y: 500, width: 0, height: 0 },
+        'px',
+        1000,
+        1000
+      )
+      expect(center).toEqual({ centerX: 500, centerY: 500 })
+    })
+
+    it('percent rect on non-square page scales axes independently', () => {
+      const center = rectCenterToPagePixels(
+        { x: 0, y: 0, width: 100, height: 100 },
+        'percent',
+        800,
+        600
+      )
+      // Full-page rect: centerX = 50% * 800 = 400, centerY = 50% * 600 = 300
+      expect(center).toEqual({ centerX: 400, centerY: 300 })
+    })
+  })
+
+  // ── resolveRangeJumpTarget (integration) ─────────────────────────────
+
+  describe('resolveRangeJumpTarget', () => {
+    const ranges: ReaderSelectionRange[] = [
+      {
+        id: 'hl-1',
+        text: 'Page 1 highlight',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 10 },
+        createdAt: 100,
+        overlayRectType: 'percent',
+        rectsBySelectionId: {
+          'page-1': [{ x: 10, y: 20, width: 50, height: 5 }]
+        }
+      },
+      {
+        id: 'hl-2',
+        text: 'Page 3 cross-page',
+        start: { selectionId: 'page-3', offset: 0 },
+        end: { selectionId: 'page-4', offset: 5 },
+        createdAt: 200,
+        overlayRectType: 'percent',
+        rectsBySelectionId: {
+          'page-3': [
+            { x: 60, y: 20, width: 20, height: 10 },
+            { x: 80, y: 30, width: 10, height: 5 }
+          ],
+          'page-4': [{ x: 5, y: 10, width: 80, height: 5 }]
+        }
+      },
+      {
+        id: 'hl-3',
+        text: 'Page 2 no rects',
+        start: { selectionId: 'page-2', offset: 0 },
+        end: { selectionId: 'page-2', offset: 5 },
+        createdAt: 300,
+        rectsBySelectionId: {}
+      },
+      {
+        id: 'hl-4',
+        text: 'Page 5 px rect',
+        start: { selectionId: 'page-5', offset: 0 },
+        end: { selectionId: 'page-5', offset: 5 },
+        createdAt: 400,
+        overlayRectType: 'px',
+        rectsBySelectionId: {
+          'page-5': [{ x: 600, y: 200, width: 200, height: 100 }]
+        }
+      }
+    ]
+
+    it('resolves hl-1 on page-1 with percent rect center', () => {
+      const target = resolveRangeJumpTarget({
+        ranges,
+        rangeId: 'hl-1',
+        pageWidth: 1000,
+        pageHeight: 1000
+      })
+      // percent: x=10+50/2=35% → 350, y=20+5/2=22.5% → 225
+      expect(target).toEqual({
+        pageNumber: 1,
+        centerX: 350,
+        centerY: 225
+      })
+    })
+
+    it('resolves hl-2 using start page-3 first rect (percent on 1000x1000)', () => {
+      const target = resolveRangeJumpTarget({
+        ranges,
+        rangeId: 'hl-2',
+        pageWidth: 1000,
+        pageHeight: 1000
+      })
+      // start page = page-3, first rect = {x:60,y:20,w:20,h:10}
+      // centerX = (60+10)/100*1000 = 700, centerY = (20+5)/100*1000 = 250
+      expect(target).toEqual({
+        pageNumber: 3,
+        centerX: 700,
+        centerY: 250
+      })
+    })
+
+    it('returns null for range with empty rectsBySelectionId (hl-3)', () => {
+      const target = resolveRangeJumpTarget({
+        ranges,
+        rangeId: 'hl-3',
+        pageWidth: 1000,
+        pageHeight: 1000
+      })
+      expect(target).toBeNull()
+    })
+
+    it('resolves hl-4 with px rect (700, 250)', () => {
+      const target = resolveRangeJumpTarget({
+        ranges,
+        rangeId: 'hl-4',
+        pageWidth: 1000,
+        pageHeight: 1000
+      })
+      // px: centerX = 600+100=700, centerY = 200+50=250
+      expect(target).toEqual({
+        pageNumber: 5,
+        centerX: 700,
+        centerY: 250
+      })
+    })
+
+    it('returns null for non-existent range id', () => {
+      const target = resolveRangeJumpTarget({
+        ranges,
+        rangeId: 'does-not-exist',
+        pageWidth: 1000,
+        pageHeight: 1000
+      })
+      expect(target).toBeNull()
+    })
+
+    it('explicit rectType overrides range.overlayRectType', () => {
+      // hl-4 has overlayRectType='px', but force 'percent' override
+      const target = resolveRangeJumpTarget({
+        ranges,
+        rangeId: 'hl-4',
+        rectType: 'percent',
+        pageWidth: 1000,
+        pageHeight: 1000
+      })
+      // percent: (600+200/2)/100*1000 = 7000 → huge, but proves override works
+      expect(target).not.toBeNull()
+      expect(target?.centerX).toBe(7000)
+    })
+
+    it('falls back to percent when no overlayRectType is set', () => {
+      const noTypeRanges: ReaderSelectionRange[] = [
+        {
+          id: 'no-type',
+          text: '',
+          start: { selectionId: 'page-1', offset: 0 },
+          end: { selectionId: 'page-1', offset: 5 },
+          createdAt: 0,
+          rectsBySelectionId: {
+            'page-1': [{ x: 50, y: 50, width: 0, height: 0 }]
+          }
+        }
+      ]
+
+      const target = resolveRangeJumpTarget({
+        ranges: noTypeRanges,
+        rangeId: 'no-type',
+        pageWidth: 800,
+        pageHeight: 600
+      })
+      // percent: 50%*800=400, 50%*600=300
+      expect(target).toEqual({
+        pageNumber: 1,
+        centerX: 400,
+        centerY: 300
+      })
+    })
+  })
+
+  // ── computePageOriginY ──────────────────────────────────────────────
+
+  describe('computePageOriginY', () => {
+    const pageSizes = new Map([
+      [1, { width: 1000, height: 3000 }],
+      [2, { width: 800, height: 1200 }],
+      [3, { width: 600, height: 900 }]
+    ])
+    const pageNumbers = [1, 2, 3]
+
+    it('returns 0 for the first page (no preceding pages)', () => {
+      expect(computePageOriginY(1, pageNumbers, pageSizes)).toBe(0)
+    })
+
+    it('sums preceding page heights + gaps for page 2', () => {
+      // page 1 height (3000) + gap (16) = 3016
+      expect(computePageOriginY(2, pageNumbers, pageSizes)).toBe(3016)
+    })
+
+    it('sums all preceding pages for page 3', () => {
+      // page1(3000)+gap(16) + page2(1200)+gap(16) = 4232
+      expect(computePageOriginY(3, pageNumbers, pageSizes)).toBe(4232)
+    })
+
+    it('treats missing page size as height 0', () => {
+      const sparseSizes = new Map([[2, { width: 800, height: 500 }]])
+      // page 1 missing → height 0 + gap 16 = 16
+      expect(computePageOriginY(2, [1, 2], sparseSizes)).toBe(16)
+    })
+  })
+
+  // ── computeTransform ────────────────────────────────────────────────
+
+  describe('computeTransform', () => {
+    // Spec test matrix: viewport 500×500, content 1000×3000, scale 1.
+    const base = {
+      viewportWidth: 500,
+      viewportHeight: 500,
+      contentWidth: 1000,
+      contentHeight: 3000,
+      scale: 1
+    }
+
+    it('centers target (700, 2250) → unclamped x=-450, y=-2000', () => {
+      // rawX = 500/2 - 700*1 = -450  (within [-500, 0])
+      // rawY = 500/2 - 2250*1 = -2000 (within [-2500, 0])
+      const t = computeTransform({
+        ...base,
+        targetContentX: 700,
+        targetContentY: 2250
+      })
+      expect(t).toEqual({ x: -450, y: -2000, scale: 1 })
+    })
+
+    it('clamps x and y for target beyond bottom-right edge', () => {
+      // rawX = 250 - 1500*1 = -1250 → clamped to -500
+      // rawY = 250 - 4000*1 = -3750 → clamped to -2500
+      const t = computeTransform({
+        ...base,
+        targetContentX: 1500,
+        targetContentY: 4000
+      })
+      expect(t).not.toBeNull()
+      expect(t!.x).toBe(-500)
+      expect(t!.y).toBe(-2500)
+    })
+
+    it('clamps x and y for target beyond top-left edge', () => {
+      // rawX = 250 - (-200)*1 = 450 → clamped to 0
+      // rawY = 250 - (-100)*1 = 350 → clamped to 0
+      const t = computeTransform({
+        ...base,
+        targetContentX: -200,
+        targetContentY: -100
+      })
+      expect(t).not.toBeNull()
+      expect(t!.x).toBe(0)
+      expect(t!.y).toBe(0)
+    })
+
+    it('centers axis when content is smaller than viewport', () => {
+      // content 400×300, viewport 500×500, scale 1
+      // scaledW=400 < 500 → center: (500-400)/2 = 50
+      // scaledH=300 < 500 → center: (500-300)/2 = 100
+      const t = computeTransform({
+        viewportWidth: 500,
+        viewportHeight: 500,
+        contentWidth: 400,
+        contentHeight: 300,
+        targetContentX: 200,
+        targetContentY: 150,
+        scale: 1
+      })
+      expect(t).toEqual({ x: 50, y: 100, scale: 1 })
+    })
+
+    it('ignores target position when content < viewport (always centered)', () => {
+      // Same content/viewport as above but target at extreme position
+      const t = computeTransform({
+        viewportWidth: 500,
+        viewportHeight: 500,
+        contentWidth: 400,
+        contentHeight: 300,
+        targetContentX: 0,
+        targetContentY: 0,
+        scale: 1
+      })
+      // Still centered at (50, 100) — contain forces centering.
+      expect(t).toEqual({ x: 50, y: 100, scale: 1 })
+    })
+
+    it('returns null for zero viewport width', () => {
+      expect(
+        computeTransform({
+          ...base,
+          viewportWidth: 0,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('returns null for zero viewport height', () => {
+      expect(
+        computeTransform({
+          ...base,
+          viewportHeight: 0,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('returns null for zero content width', () => {
+      expect(
+        computeTransform({
+          ...base,
+          contentWidth: 0,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('returns null for zero content height', () => {
+      expect(
+        computeTransform({
+          ...base,
+          contentHeight: 0,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('returns null for zero scale', () => {
+      expect(
+        computeTransform({
+          ...base,
+          scale: 0,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('returns null for NaN viewport', () => {
+      expect(
+        computeTransform({
+          ...base,
+          viewportWidth: NaN,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('returns null for NaN target coordinates', () => {
+      expect(
+        computeTransform({ ...base, targetContentX: NaN, targetContentY: 100 })
+      ).toBeNull()
+    })
+
+    it('returns null for negative scale', () => {
+      expect(
+        computeTransform({
+          ...base,
+          scale: -1,
+          targetContentX: 100,
+          targetContentY: 100
+        })
+      ).toBeNull()
+    })
+
+    it('applies scale correctly to clamping', () => {
+      // content 1000×3000, scale 0.5 → scaled 500×1500, viewport 500×500
+      // scaledW=500 == viewportW=500 → center: (500-500)/2 = 0
+      // scaledH=1500 > 500 → clamp
+      // rawY = 250 - 1500*0.5 = -500, clamp to [-1000, 0] → -500
+      const t = computeTransform({
+        viewportWidth: 500,
+        viewportHeight: 500,
+        contentWidth: 1000,
+        contentHeight: 3000,
+        targetContentX: 500,
+        targetContentY: 1500,
+        scale: 0.5
+      })
+      expect(t).toEqual({ x: 0, y: -500, scale: 0.5 })
+    })
+
+    it('applies scale > 1 correctly', () => {
+      // content 300×200, scale 2 → scaled 600×400, viewport 500×500
+      // scaledW=600 > 500 → clamp
+      // rawX = 250 - 150*2 = -50, clamp to [-100, 0] → -50
+      // scaledH=400 < 500 → center: (500-400)/2 = 50
+      const t = computeTransform({
+        viewportWidth: 500,
+        viewportHeight: 500,
+        contentWidth: 300,
+        contentHeight: 200,
+        targetContentX: 150,
+        targetContentY: 100,
+        scale: 2
+      })
+      expect(t).toEqual({ x: -50, y: 50, scale: 2 })
+    })
   })
 })
