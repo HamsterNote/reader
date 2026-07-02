@@ -1477,7 +1477,7 @@ function ViewerContent({
     >
       {pageNumbers.length > 0 ? (
         <VirtualPaper
-          containMode='contain'
+          containMode={true}
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}

@@ -798,12 +798,12 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
   })
 
-  it('VirtualPaper receives containMode="contain" via IntermediateDocumentViewer', () => {
+  it('VirtualPaper receives containMode={true} via IntermediateDocumentViewer', () => {
     const { document } = makeLazyDocument(1)
 
     render(<Reader document={document} />)
 
     const wrapper = screen.getByTestId('virtual-paper-wrapper')
-    expect(wrapper).toHaveAttribute('data-contain-mode', 'contain')
+    expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
   })
 })
