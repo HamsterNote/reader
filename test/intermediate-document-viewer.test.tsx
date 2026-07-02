@@ -2100,6 +2100,254 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
+    describe('active linked selection lazy release', () => {
+      beforeEach(() => {
+        clearSelectionProps()
+      })
+
+      afterEach(() => {
+        clearSelectionProps()
+      })
+
+      it('keeps an offscreen page loaded while its linked activeRange is selecting text', async () => {
+        // Given: page 3 is loaded and has a runtime linked Selection id.
+        const { document } = makeDocument({ pageCount: 5 })
+
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            pageLoadEnterDelayMs={0}
+            overscan={0}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        await act(async () => {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-3')
+          )
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+        expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+
+        const page3Id = await waitFor(() =>
+          requireRuntimeSelectionId(':page-3')
+        )
+        const linkedData = requireSelectionPropsById(page3Id).linkedData
+        if (!linkedData) {
+          throw new Error('Expected linked data for page 3')
+        }
+
+        // When: linked selection is actively selecting text on page 3.
+        const activeRange = makeRuntimeLinkedRange(page3Id, {
+          id: 'als-happy-active-range'
+        })
+        act(() => {
+          simulateLinkedDataChange(page3Id, {
+            ...linkedData,
+            activeRange,
+            selectingText: true
+          })
+        })
+        await waitFor(() => {
+          expect(
+            requireSelectionPropsById(page3Id).linkedData?.activeRange?.id
+          ).toBe('als-happy-active-range')
+        })
+
+        await act(async () => {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-1')
+          )
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+
+        vi.useFakeTimers()
+        try {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-3'),
+            false
+          )
+          act(() => {
+            vi.advanceTimersByTime(5000)
+          })
+
+          // Then: active linked selection should protect the offscreen page.
+          expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('keeps every page between activeRange endpoints loaded while selecting across pages', async () => {
+        // Given: pages 2, 3, and 4 are loaded before the cross-page drag leaves view.
+        const { document } = makeDocument({ pageCount: 5 })
+
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            pageLoadEnterDelayMs={0}
+            overscan={0}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        for (const pageNumber of [2, 3, 4]) {
+          await act(async () => {
+            intersectionObserverMock.trigger(
+              screen.getByTestId(`intermediate-page-${pageNumber}`)
+            )
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          })
+          expect(screen.getByText(`Page ${pageNumber} text`)).toBeInTheDocument()
+        }
+
+        const page2Id = await waitFor(() =>
+          requireRuntimeSelectionId(':page-2')
+        )
+        const page4Id = await waitFor(() =>
+          requireRuntimeSelectionId(':page-4')
+        )
+        const linkedData = requireSelectionPropsById(page2Id).linkedData
+        if (!linkedData) {
+          throw new Error('Expected linked data for page 2')
+        }
+
+        // When: activeRange spans from page 2 to page 4.
+        const activeRange = makeRuntimeLinkedRange(page2Id, {
+          id: 'als-span-active-range',
+          end: { selectionId: page4Id, offset: 11 },
+          rectsBySelectionId: {
+            [page2Id]: [{ x: 1, y: 2, width: 3, height: 4 }],
+            [page4Id]: [{ x: 5, y: 6, width: 7, height: 8 }]
+          }
+        })
+        act(() => {
+          simulateLinkedDataChange(page2Id, {
+            ...linkedData,
+            activeRange,
+            selectingText: true
+          })
+        })
+        await waitFor(() => {
+          expect(
+            requireSelectionPropsById(page2Id).linkedData?.activeRange?.id
+          ).toBe('als-span-active-range')
+        })
+
+        await act(async () => {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-1')
+          )
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+
+        vi.useFakeTimers()
+        try {
+          for (const pageNumber of [2, 3, 4]) {
+            intersectionObserverMock.trigger(
+              screen.getByTestId(`intermediate-page-${pageNumber}`),
+              false
+            )
+          }
+          act(() => {
+            vi.advanceTimersByTime(5000)
+          })
+
+          // Then: both endpoints and the page between them stay loaded.
+          expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+          expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+          expect(screen.getByText('Page 4 text')).toBeInTheDocument()
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('evicts an unrelated offscreen page while another page has an active linked selection', async () => {
+        // Given: pages 3 and 4 are both loaded, but only page 3 owns the activeRange.
+        const { document } = makeDocument({ pageCount: 5 })
+
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            pageLoadEnterDelayMs={0}
+            overscan={0}
+          />
+        )
+
+        await waitFor(() => {
+          expect(screen.getByText('Page 1 text')).toBeInTheDocument()
+        })
+
+        for (const pageNumber of [3, 4]) {
+          await act(async () => {
+            intersectionObserverMock.trigger(
+              screen.getByTestId(`intermediate-page-${pageNumber}`)
+            )
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          })
+          expect(screen.getByText(`Page ${pageNumber} text`)).toBeInTheDocument()
+        }
+
+        const page3Id = await waitFor(() =>
+          requireRuntimeSelectionId(':page-3')
+        )
+        const linkedData = requireSelectionPropsById(page3Id).linkedData
+        if (!linkedData) {
+          throw new Error('Expected linked data for page 3')
+        }
+
+        // When: page 3 has an active linked selection and page 4 is unrelated.
+        const activeRange = makeRuntimeLinkedRange(page3Id, {
+          id: 'als-regress-active-range'
+        })
+        act(() => {
+          simulateLinkedDataChange(page3Id, {
+            ...linkedData,
+            activeRange,
+            selectingText: true
+          })
+        })
+        await waitFor(() => {
+          expect(
+            requireSelectionPropsById(page3Id).linkedData?.activeRange?.id
+          ).toBe('als-regress-active-range')
+        })
+
+        await act(async () => {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-1')
+          )
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        })
+
+        vi.useFakeTimers()
+        try {
+          for (const pageNumber of [3, 4]) {
+            intersectionObserverMock.trigger(
+              screen.getByTestId(`intermediate-page-${pageNumber}`),
+              false
+            )
+          }
+          act(() => {
+            vi.advanceTimersByTime(5000)
+          })
+
+          // Then: active page remains, unrelated offscreen page is evicted.
+          expect(screen.getByText('Page 3 text')).toBeInTheDocument()
+          expect(screen.queryByText('Page 4 text')).not.toBeInTheDocument()
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+    })
+
     it('stale async result after unload does not repopulate page', async () => {
       const { document, pageDeferreds } = makeDeferredPageDocument({
         pageCount: 5

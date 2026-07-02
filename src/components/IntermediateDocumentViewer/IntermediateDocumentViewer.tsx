@@ -2340,6 +2340,20 @@ export function IntermediateDocumentViewer({
     return null
   }, [])
 
+  // 将 Selection 库的运行时 selectionId 映射回 pageNumber，
+  // 用于保护正在拖选的跨页 activeRange 对应的页面。
+  const resolveProtectedPageNumberForRuntimeSelectionId = useCallback(
+    (selectionId: string) => {
+      for (const pageNumber of pageNumbers) {
+        if (getRuntimePageSelectionId(pageNumber) === selectionId) {
+          return pageNumber
+        }
+      }
+      return null
+    },
+    [getRuntimePageSelectionId, pageNumbers]
+  )
+
   const addProtectedPageRange = useCallback(
     (
       protectedPages: Set<number>,
@@ -2413,12 +2427,30 @@ export function IntermediateDocumentViewer({
       }
     }
 
+    // 保护 Selection 库正在拖选的 activeRange，避免离屏卸载打断跨页选区。
+    const activeLinkedRange = runtimeLinkedData.activeRange
+    if (activeLinkedRange) {
+      const startPageNumber = resolveProtectedPageNumberForRuntimeSelectionId(
+        activeLinkedRange.start.selectionId
+      )
+      const endPageNumber = resolveProtectedPageNumberForRuntimeSelectionId(
+        activeLinkedRange.end.selectionId
+      )
+      if (startPageNumber !== null) protectedPages.add(startPageNumber)
+      if (endPageNumber !== null) protectedPages.add(endPageNumber)
+      if (startPageNumber !== null && endPageNumber !== null) {
+        addProtectedPageRange(protectedPages, startPageNumber, endPageNumber)
+      }
+    }
+
     return protectedPages
   }, [
     addProtectedPageRange,
     overscan,
     pageNumbers,
     resolveProtectedPageNumberForNode,
+    resolveProtectedPageNumberForRuntimeSelectionId,
+    runtimeLinkedData.activeRange,
     visiblePages
   ])
 
