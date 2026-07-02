@@ -46,7 +46,7 @@
     "@hamster-note/docx-parser": "^0.1.0",
     "@hamster-note/image-parser": "^0.3.0",
     "@hamster-note/markdown-parser": "0.1.2-beta.2",
-    "@hamster-note/pdf-parser": "file:.yalc/@hamster-note/pdf-parser",
+    "@hamster-note/pdf-parser": "^1.0.0",
     "@hamster-note/txt-parser": "^0.3.0",
     "@hamster-note/types": "^0.8.0",
     "@hamster-note/virtual-paper": "file:.yalc/@hamster-note/virtual-paper",

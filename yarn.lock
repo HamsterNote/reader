@@ -482,10 +482,10 @@
     mdast-util-to-markdown "^2.1.2"
     micromark-extension-gfm "^3.0.0"
 
-"@hamster-note/pdf-parser@^0.7.0":
-  version "0.7.0"
-  resolved "https://registry.npmjs.org/@hamster-note/pdf-parser/-/pdf-parser-0.7.0.tgz#b2855e0df43a5012de6b1dd51c6ab8b7d35bc568"
-  integrity sha512-78GC106AxLDackD6Giy6PL3qbu2vwvkcLlWWrhe76Gc/Phl7S+DeCzqN1zx9h00FClFv00jMJIeeozCbSwCLog==
+"@hamster-note/pdf-parser@^1.0.0":
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/pdf-parser/-/pdf-parser-1.0.0.tgz#6adaf0037d1846d8072a385557617607a1aa8ecb"
+  integrity sha512-S8tlCPW1/pgMU8BIWjCTjTRBsQimoFmn188ud5eGmm6SBSxR5KHKW1t+Jg1pcbHb78xBmLhVlOEBsMEV/DVgBA==
   dependencies:
     "@hamster-note/document-parser" "^0.2.1"
     "@hamster-note/types" "0.8.0"
