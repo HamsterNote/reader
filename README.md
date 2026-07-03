@@ -262,6 +262,6 @@ selectionRef.current?.scrollToRange('highlight-1')
 
 ## 发版规则
 
-- Push `version/x.y.z` branches for stable releases.
-- Push `version/x.y.z-*` branches for pre-releases.
+- Push a `vX.Y.Z` tag for stable releases.
+- Push a `vX.Y.Z-<prerelease>` tag for pre-releases (e.g. `v1.0.0-beta`, `v1.0.0-dev`).
 - Publish tag selection follows the package version suffix: no suffix -> `latest`, `-dev` -> `dev`, `-beta` -> `beta`.
