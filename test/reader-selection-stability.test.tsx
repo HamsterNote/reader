@@ -29,6 +29,8 @@ vi.mock('@hamster-note/selection', async () => {
         ref,
         () => ({
           highlight: () => {},
+          confirm: () => {},
+          confirmRect: () => {},
           clear: () => {}
         }),
         []

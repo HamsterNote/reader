@@ -508,8 +508,10 @@
     pdf-lib "^1.17.1"
     pdfjs-dist "5.4.530"
 
-"@hamster-note/selection@file:.yalc/@hamster-note/selection":
-  version "0.0.0"
+"@hamster-note/selection@0.0.2-beta.1":
+  version "0.0.2-beta.1"
+  resolved "https://registry.yarnpkg.com/@hamster-note/selection/-/selection-0.0.2-beta.1.tgz#79660efc39f19d481af8bf61ebc7c57f5d1f4c3d"
+  integrity sha512-tu5focrR2VKlOlVkIa1xRWS560sdaF5xHkxrcUZlBOFnftWhdruIm99lqxRRgTI83LBg8W4KBGg3sUixCBp65Q==
 
 "@hamster-note/txt-parser@^0.3.0":
   version "0.3.0"
