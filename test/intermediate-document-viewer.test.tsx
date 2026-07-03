@@ -2205,7 +2205,9 @@ describe('IntermediateDocumentViewer', () => {
             )
             await new Promise((resolve) => setTimeout(resolve, 50))
           })
-          expect(screen.getByText(`Page ${pageNumber} text`)).toBeInTheDocument()
+          expect(
+            screen.getByText(`Page ${pageNumber} text`)
+          ).toBeInTheDocument()
         }
 
         const page2Id = await waitFor(() =>
@@ -2292,7 +2294,9 @@ describe('IntermediateDocumentViewer', () => {
             )
             await new Promise((resolve) => setTimeout(resolve, 50))
           })
-          expect(screen.getByText(`Page ${pageNumber} text`)).toBeInTheDocument()
+          expect(
+            screen.getByText(`Page ${pageNumber} text`)
+          ).toBeInTheDocument()
         }
 
         const page3Id = await waitFor(() =>
