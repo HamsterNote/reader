@@ -3,7 +3,7 @@
  * dist/index.d.ts（仅 `export {}`）。声明基于该版本运行时
  * 实际导出的公开 API，随版本变化时需同步更新。
  *
- * 该版本（yalc 本地链接）的运行时导出：
+ * 该版本（npm 0.1.0-beta.2）的运行时导出：
  * - DEFAULT_ENABLED_INTERACTIONS（常量）
  * - VirtualPaper（组件）
  * - VirtualPaperInitialPlacement（枚举）
