@@ -997,6 +997,18 @@
     "@system-ui-js/multi-drag-core" "*"
     loglevel "^1.9.2"
 
+"@tanstack/react-virtual@^3.14.5":
+  version "3.14.5"
+  resolved "https://registry.yarnpkg.com/@tanstack/react-virtual/-/react-virtual-3.14.5.tgz#183c959aeb85448899dcb1a4da55213e5d4f6078"
+  integrity sha512-4EKRXh7zBLkbKbFmG3AUVkircuHd+7OdT1pocJSepxtfBd3qnrJgJ5rtPkRYyo9fmyVb2+pI2xPy5oYvMLQy6A==
+  dependencies:
+    "@tanstack/virtual-core" "3.17.3"
+
+"@tanstack/virtual-core@3.17.3":
+  version "3.17.3"
+  resolved "https://registry.yarnpkg.com/@tanstack/virtual-core/-/virtual-core-3.17.3.tgz#71ae7e658fe155392a2dcbf640035febdf2fdb05"
+  integrity sha512-8Np/TFELpI0ySuJoVmjvOrQYXH/8sTX0Biv9szhFhY39xOdAAY+smrMxjxOum/ux3eM8MUJQsEJ0/R0UpvC8dw==
+
 "@techstark/opencv-js@^4.10.0-release.1":
   version "4.10.0-release.1"
   resolved "https://registry.yarnpkg.com/@techstark/opencv-js/-/opencv-js-4.10.0-release.1.tgz#5344c715c404c22419ac893c6a2d86727e2416fc"

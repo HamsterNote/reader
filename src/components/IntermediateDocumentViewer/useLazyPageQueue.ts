@@ -58,6 +58,8 @@ export interface LazyPageQueueApi {
   cancelAll: () => void
 }
 
+type LazyPageQueueMode = 'layout' | 'text'
+
 /**
  * intermediate-document 默认模式的懒加载页面队列 hook。
  *
@@ -75,13 +77,14 @@ export function useLazyPageQueue(
   configRef: React.MutableRefObject<LazyPageQueueConfig>,
   runtimeDocument: IntermediateDocument | null,
   options: {
+    mode?: LazyPageQueueMode
     activeDocumentRef: React.MutableRefObject<IntermediateDocument | null>
     isMountedRef: React.MutableRefObject<boolean>
     loadingPagesRef: React.MutableRefObject<Set<number>>
     // scale 可选参数用于按当前缩放比例请求更高/更低分辨率的缩略图，
     // 使放大后的背景图更清晰。初始加载时不传 scale（使用默认值），
     // 仅在 debounced thumbnail refresh effect 中按 effectiveScale 传入。
-    getBaseImageFromPage: (
+    getBaseImageFromPage?: (
       page: unknown,
       scale?: number
     ) => Promise<string | undefined>
@@ -89,7 +92,7 @@ export function useLazyPageQueue(
     isIntermediateText: (
       content: IntermediateContent
     ) => content is IntermediateText
-    isIntermediateImage: (
+    isIntermediateImage?: (
       content: IntermediateContent
     ) => content is IntermediateImage
     callbacks: LazyPageQueueCallbacks
@@ -98,6 +101,7 @@ export function useLazyPageQueue(
   }
 ): LazyPageQueueApi {
   const {
+    mode = 'layout',
     activeDocumentRef,
     isMountedRef,
     loadingPagesRef,
@@ -119,9 +123,11 @@ export function useLazyPageQueue(
   // 当前 pageNumbers 快照，用于在开始加载前校验页码仍被需要。
   // 由 enqueueInitialPages 调用时更新。
   const currentRangePageNumbersRef = useRef<number[]>([])
+  const previousRuntimeDocumentRef = useRef<IntermediateDocument | null>(null)
   // pumpQueue 的 stable ref，用于解决 startPageLoad <-> pumpQueue 循环依赖。
   // pumpQueueRef.current 始终指向最新的 pumpQueue 实现。
   const pumpQueueRef = useRef<(generation: number) => void>(() => {})
+  const hasRuntimeDocument = runtimeDocument !== null
 
   /**
    * 从队列中取出首个仍可加载的页码。
@@ -157,7 +163,7 @@ export function useLazyPageQueue(
    */
   const startPageLoad = useCallback(
     (pageNumber: number, generation: number) => {
-      const document = runtimeDocument
+      const document = activeDocumentRef.current
       // document 可能在 generation 检查之间变为 null
       if (!document) {
         return
@@ -192,12 +198,20 @@ export function useLazyPageQueue(
       lazyInFlightPagesRef.current.add(pageNumber)
 
       pagePromise
-        .then((page) =>
-          Promise.all([
-            getBaseImageFromPage(page, effectiveScaleRef.current),
+        .then((page) => {
+          if (mode === 'text') {
+            return Promise.all([
+              Promise.resolve(undefined),
+              getPageContentEntries(page)
+            ])
+          }
+
+          return Promise.all([
+            getBaseImageFromPage?.(page, effectiveScaleRef.current) ??
+              Promise.resolve(undefined),
             getPageContentEntries(page)
           ])
-        )
+        })
         .then(([baseImage, content]) => {
           // stale 守卫：unmount / document 切换 / generation 过期
           if (
@@ -209,7 +223,10 @@ export function useLazyPageQueue(
           }
 
           const texts = content.filter(isIntermediateText)
-          const images = content.filter(isIntermediateImage)
+          const images =
+            mode === 'text' || !isIntermediateImage
+              ? []
+              : content.filter(isIntermediateImage)
           callbacks.onPageLoaded({ pageNumber, baseImage, texts, images })
         })
         .catch(() => {
@@ -245,11 +262,11 @@ export function useLazyPageQueue(
       // 注意：startPageLoad 内部不直接 pump；由调用方 pumpQueue 驱动
     },
     [
-      runtimeDocument,
       activeDocumentRef,
       isMountedRef,
       loadingPagesRef,
       callbacks,
+      mode,
       getBaseImageFromPage,
       getPageContentEntries,
       isIntermediateText,
@@ -268,7 +285,7 @@ export function useLazyPageQueue(
       if (generationRef.current !== generation) {
         return
       }
-      if (!runtimeDocument || activeDocumentRef.current !== runtimeDocument) {
+      if (!activeDocumentRef.current) {
         return
       }
 
@@ -283,7 +300,6 @@ export function useLazyPageQueue(
     },
     [
       configRef,
-      runtimeDocument,
       activeDocumentRef,
       loadingPagesRef,
       dequeueNextLoadable,
@@ -302,7 +318,7 @@ export function useLazyPageQueue(
     (pageNumbers: number[]) => {
       // 更新当前 range 快照
       currentRangePageNumbersRef.current = pageNumbers
-      if (!runtimeDocument) {
+      if (!hasRuntimeDocument) {
         return
       }
 
@@ -325,7 +341,7 @@ export function useLazyPageQueue(
 
       pumpQueue(generationRef.current)
     },
-    [configRef, runtimeDocument, callbacks, loadingPagesRef, pumpQueue]
+    [configRef, hasRuntimeDocument, callbacks, loadingPagesRef, pumpQueue]
   )
 
   /**
@@ -334,8 +350,13 @@ export function useLazyPageQueue(
    */
   const enqueuePage = useCallback(
     (pageNumber: number) => {
-      if (!runtimeDocument) {
+      if (!hasRuntimeDocument) {
         return
+      }
+      if (mode === 'text') {
+        currentRangePageNumbersRef.current = [
+          ...new Set([...currentRangePageNumbersRef.current, pageNumber])
+        ]
       }
       // 页码不在当前 range → 忽略
       if (!currentRangePageNumbersRef.current.includes(pageNumber)) {
@@ -354,7 +375,7 @@ export function useLazyPageQueue(
       queuedPageNumbersRef.current.push(pageNumber)
       pumpQueue(generationRef.current)
     },
-    [runtimeDocument, callbacks, loadingPagesRef, pumpQueue]
+    [mode, hasRuntimeDocument, callbacks, loadingPagesRef, pumpQueue]
   )
 
   /**
@@ -373,6 +394,10 @@ export function useLazyPageQueue(
 
   // document identity 变化时自动 cancelAll。
   useEffect(() => {
+    if (previousRuntimeDocumentRef.current === runtimeDocument) {
+      return
+    }
+    previousRuntimeDocumentRef.current = runtimeDocument
     cancelAll()
   }, [runtimeDocument, cancelAll])
 

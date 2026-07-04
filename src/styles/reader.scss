@@ -190,6 +190,50 @@
     }
   }
 
+  // ---- 文本渲染模式（renderMode="text"）scoped styles (T7) ----
+  // 文本模式使用独立的 class 体系，与 layout 模式
+  // (.hamster-reader__intermediate-page / .hamster-reader__intermediate-text)
+  // 完全隔离。以下 class 在 CSS 源码顺序上后于 layout 模式的
+  // &__intermediate-document-viewer 定义，从而在同元素上覆盖其
+  // display:flex / overflow:hidden —— 无需 inline style。
+  // 注意：文本模式根节点同时携带 .hamster-reader__intermediate-document-viewer
+  // （供 buildSelectionPayload 的 getClosestTextElement 查找 viewer root），
+  // 这是跨模块 CSS 依赖，不可移除。
+
+  // 文本模式 viewer 根 / 原生滚动容器：
+  // display:block 覆盖 layout 模式的 display:flex
+  // overflow:auto 提供原生滚动（layout 模式为 overflow:hidden）
+  &__intermediate-text-viewer,
+  &__intermediate-text-scroll {
+    display: block;
+    overflow: auto;
+    box-sizing: border-box;
+    position: relative;
+  }
+
+  // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
+  // CSS 只负责 position:relative 作为绝对定位页面的包含块
+  &__intermediate-text-spacer {
+    position: relative;
+    width: 100%;
+  }
+
+  // 文本模式单页容器：
+  // 绝对定位（由 inline transform 动态偏移），padding 固定 5px，
+  // 宽度占满 spacer。padding 从 inline style 迁移到 CSS。
+  &__intermediate-text-page {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 5px;
+    box-sizing: border-box;
+  }
+
+  // 注意：&__intermediate-text--flow 修饰符定义在 &__intermediate-text
+  // 之后（见文件下方），以确保 CSS 源码顺序覆盖 layout 模式的
+  // position:absolute / display:inline-block / white-space:pre。
+
   &__html-parser-output {
     width: 100%;
     box-sizing: border-box;
@@ -310,6 +354,16 @@
       user-select: text;
       -webkit-user-select: text;
       z-index: 1;
+    }
+
+    // 文本模式 flow span 修饰符 (T7)：
+    // 必须在 &__intermediate-text 之后定义，以 CSS 源码顺序覆盖
+    // layout 模式的 position:absolute / display:inline-block / white-space:pre，
+    // 改为普通文档流内联文本。
+    &__intermediate-text--flow {
+      position: static;
+      display: inline;
+      white-space: normal;
     }
 
     // 高亮标记使用 multiply 混合模式

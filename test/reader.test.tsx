@@ -13,6 +13,7 @@ import {
 import type {
   ReaderInteractionMode,
   ReaderProps,
+  ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../src/index'
@@ -317,6 +318,103 @@ describe('Reader public API', () => {
     expect(
       screen.queryByTestId('intermediate-document-viewer')
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('Reader renderMode', () => {
+  it('default renderMode renders the layout viewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} />)
+
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-document-text-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('explicit renderMode="layout" renders the layout viewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} renderMode='layout' />)
+
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-document-text-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('renderMode text renders the separate text viewer without VirtualPaper', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} renderMode='text' />)
+
+    expect(
+      screen.getByTestId('intermediate-document-text-viewer')
+    ).toBeInTheDocument()
+    // 文本模式必须不渲染 VirtualPaper wrapper
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+    // 文本模式也不应渲染 layout 模式的 viewer 根节点
+    expect(
+      screen.queryByTestId('intermediate-document-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('renderMode text forwards only text-mode props without runtime errors', () => {
+    const onTextSelectionChange = vi.fn()
+    const onTextSelectionEnd = vi.fn()
+    const onSelectText = vi.fn()
+    const onTiming = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        pageRange={{ start: 1, end: 1 }}
+        maxLoadedPages={5}
+        initialLoadedPages={2}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={250}
+        pageUnloadDelayMs={3000}
+        onTextSelectionChange={onTextSelectionChange}
+        onTextSelectionEnd={onTextSelectionEnd}
+        onSelectText={onSelectText}
+        onIntermediateDocumentRenderTiming={onTiming}
+      />
+    )
+
+    const textViewer = screen.getByTestId('intermediate-document-text-viewer')
+    expect(textViewer).toBeInTheDocument()
+    expect(textViewer).toHaveAttribute('data-title', 'Hamster Reader Title')
+    // 文本模式同样挂在 reader-content 内
+    expect(screen.getByTestId('reader-content')).toContainElement(textViewer)
+  })
+
+  it('renderMode text renders for a runtime (lazy) document', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} renderMode='text' />)
+
+    expect(
+      screen.getByTestId('intermediate-document-text-viewer')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+  })
+
+  it('compile-time: renderMode satisfies ReaderProps as ReaderRenderMode', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      renderMode: 'text' as ReaderRenderMode
+    }
+    expect(props.renderMode).toBe('text')
   })
 })
 

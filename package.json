@@ -51,7 +51,8 @@
     "@hamster-note/txt-parser": "^0.3.0",
     "@hamster-note/types": "^0.8.0",
     "@hamster-note/virtual-paper": "0.1.0-beta.2",
-    "@system-ui-js/multi-drag": "^0.4.0"
+    "@system-ui-js/multi-drag": "^0.4.0",
+    "@tanstack/react-virtual": "^3.14.5"
   },
   "peerDependencies": {
     "@hamster-note/selection": "0.0.2-beta.1",

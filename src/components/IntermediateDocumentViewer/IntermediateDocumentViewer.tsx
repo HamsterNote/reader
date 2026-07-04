@@ -476,7 +476,7 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   height: 842
 }
 
-const getVisiblePageNumbers = (
+export const getVisiblePageNumbers = (
   allPageNumbers: number[],
   pageRange: ReaderPageRange | undefined
 ) => {
@@ -566,7 +566,7 @@ const isRuntimeDocument = (
 ): document is IntermediateDocument =>
   typeof (document as IntermediateDocument).getPageByPageNumber === 'function'
 
-const getRuntimeDocument = (
+export const getRuntimeDocument = (
   inputDocument:
     | IntermediateDocument
     | IntermediateDocumentSerialized
@@ -579,11 +579,11 @@ const getRuntimeDocument = (
     : IntermediateDocument.parse(inputDocument)
 }
 
-const isIntermediateText = (
+export const isIntermediateText = (
   content: IntermediateContent
 ): content is IntermediateText => 'content' in content && 'fontSize' in content
 
-const isIntermediateImage = (
+export const isIntermediateImage = (
   content: IntermediateContent
 ): content is IntermediateImage => {
   if (!('src' in content) || !('polygon' in content)) {
@@ -832,7 +832,7 @@ type PageWithContent = {
   texts?: IntermediateContent[] | IntermediateText[]
 }
 
-const getPageContentEntries = async (
+export const getPageContentEntries = async (
   page: unknown
 ): Promise<IntermediateContent[]> => {
   if (!page || typeof page !== 'object') {
@@ -2180,22 +2180,35 @@ export function IntermediateDocumentViewer({
       // 并行获取每页按当前 scale 的缩略图
       await Promise.all(
         pagesToRefresh.map(async (pageNumber) => {
-          if (!isMountedRef.current || activeDocumentRef.current !== activeDoc) return
+          if (!isMountedRef.current || activeDocumentRef.current !== activeDoc)
+            return
           try {
             const pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
             if (!pagePromise) return
             const page = await pagePromise
-            if (!isMountedRef.current || activeDocumentRef.current !== activeDoc) return
+            if (
+              !isMountedRef.current ||
+              activeDocumentRef.current !== activeDoc
+            )
+              return
 
             // 如果用户在 fetch 期间又缩放了，跳过此页更新（新的 debounce 会处理）
             if (effectiveScaleRef.current !== effectiveScale) return
 
-            const newBaseImage = await getBaseImageFromPage(page, effectiveScale)
-            if (!isMountedRef.current || activeDocumentRef.current !== activeDoc) return
+            const newBaseImage = await getBaseImageFromPage(
+              page,
+              effectiveScale
+            )
+            if (
+              !isMountedRef.current ||
+              activeDocumentRef.current !== activeDoc
+            )
+              return
             if (effectiveScaleRef.current !== effectiveScale) return
 
             // 仅当新缩略图与当前不同时才更新，避免不必要的 re-render
-            const currentBaseImage = baseImagesByPageNumberRef.current.get(pageNumber)
+            const currentBaseImage =
+              baseImagesByPageNumberRef.current.get(pageNumber)
             if (newBaseImage && newBaseImage !== currentBaseImage) {
               setBaseImagesByPageNumber(
                 createSetBaseImageHandler(pageNumber, newBaseImage)
@@ -2466,6 +2479,21 @@ export function IntermediateDocumentViewer({
     [pageNumbers]
   )
 
+  const addResolvedProtectedPageRange = useCallback(
+    (
+      protectedPages: Set<number>,
+      startPageNumber: number | null,
+      endPageNumber: number | null
+    ) => {
+      if (startPageNumber !== null) protectedPages.add(startPageNumber)
+      if (endPageNumber !== null) protectedPages.add(endPageNumber)
+      if (startPageNumber !== null && endPageNumber !== null) {
+        addProtectedPageRange(protectedPages, startPageNumber, endPageNumber)
+      }
+    },
+    [addProtectedPageRange]
+  )
+
   const getProtectedPages = useCallback(() => {
     const protectedPages = new Set<number>()
     const currentVisiblePages =
@@ -2508,11 +2536,11 @@ export function IntermediateDocumentViewer({
       const focusPageNumber = resolveProtectedPageNumberForNode(
         selection.focusNode
       )
-      if (anchorPageNumber !== null) protectedPages.add(anchorPageNumber)
-      if (focusPageNumber !== null) protectedPages.add(focusPageNumber)
-      if (anchorPageNumber !== null && focusPageNumber !== null) {
-        addProtectedPageRange(protectedPages, anchorPageNumber, focusPageNumber)
-      }
+      addResolvedProtectedPageRange(
+        protectedPages,
+        anchorPageNumber,
+        focusPageNumber
+      )
     }
 
     // 保护 Selection 库正在拖选的 activeRange，避免离屏卸载打断跨页选区。
@@ -2524,16 +2552,16 @@ export function IntermediateDocumentViewer({
       const endPageNumber = resolveProtectedPageNumberForRuntimeSelectionId(
         activeLinkedRange.end.selectionId
       )
-      if (startPageNumber !== null) protectedPages.add(startPageNumber)
-      if (endPageNumber !== null) protectedPages.add(endPageNumber)
-      if (startPageNumber !== null && endPageNumber !== null) {
-        addProtectedPageRange(protectedPages, startPageNumber, endPageNumber)
-      }
+      addResolvedProtectedPageRange(
+        protectedPages,
+        startPageNumber,
+        endPageNumber
+      )
     }
 
     return protectedPages
   }, [
-    addProtectedPageRange,
+    addResolvedProtectedPageRange,
     overscan,
     pageNumbers,
     resolveProtectedPageNumberForNode,

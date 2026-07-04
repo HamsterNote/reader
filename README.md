@@ -107,6 +107,12 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 />
 ```
 
+### Text render mode
+
+`Reader` uses `renderMode='layout'` by default. Set `renderMode='text'` to render a text-only reading view that mounts and loads only the virtual pages currently visible in the scroll viewport.
+
+Text mode renders document text as normal flow content. It does not render page images, intermediate images, or OCR output, and it does not convert existing layout-mode highlight geometry into text-flow highlight geometry.
+
 ## Text Selection (@hamster-note/selection)
 
 `Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features, highlighted ranges, popovers, and programmatic control on top of the native browser `Selection` API.

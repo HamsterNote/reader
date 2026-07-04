@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   ReaderLinkedSelectionRange,
   ReaderProps,
+  ReaderRenderMode,
   ReaderSelectionRange
 } from '../src'
 
@@ -43,14 +44,18 @@ const linkedRange = {
 const linkedRangeAlias: ReaderLinkedSelectionRange = linkedRange
 
 /**
- * RED 合约测试：ReaderProps 不再接受 renderMode 属性。
- * 若生产代码仍导出 renderMode，此条件类型解析为 true，
- * AssertFalse<true> 将触发 TS 编译错误。
+ * GREEN 合约测试（T2 text-render-mode）：ReaderProps 现在重新接受 renderMode 属性，
+ * 类型为 ReaderRenderMode ('layout' | 'text')。
+ * 历史 commit bb8cd89 曾移除旧版 render modes 并用 RED 测试锁定移除；
+ * T2 以新的 'layout' | 'text' 设计重新引入，此测试随之翻转为 GREEN。
  */
-type RenderModeNotInReaderProps = 'renderMode' extends keyof ReaderProps
+type RenderModeInReaderProps = 'renderMode' extends keyof ReaderProps
   ? true
   : false
-const _renderModeRejected: AssertFalse<RenderModeNotInReaderProps> = false
+const _renderModeAccepted: RenderModeInReaderProps = true
+
+const _renderModeValue: ReaderRenderMode = 'layout'
+const _readerPropsRenderMode: ReaderProps['renderMode'] = _renderModeValue
 
 describe('Reader public selection types', () => {
   it('accepts linked ranges keyed by public page selection ids', () => {
@@ -63,13 +68,11 @@ describe('Reader public selection types', () => {
   })
 
   /**
-   * RED 合约测试（运行时辅助）：确认 ReaderProps 类型不包含 renderMode。
-   * 若类型层面已通过编译（说明 renderMode 已从 ReaderProps 移除），
-   * 则此运行时断言作为二次保障；若 TS 编译失败，测试不会执行到此处。
+   * GREEN 合约测试（运行时辅助，T2 text-render-mode）：确认 ReaderProps 类型
+   * 已重新接受 renderMode 属性且类型为 ReaderRenderMode。编译通过即证明契约成立。
    */
-  it('ReaderProps type rejects renderMode property', () => {
-    // 编译通过即证明 renderMode 已从 ReaderProps 移除；
-    // 此处仅做运行时占位断言。
-    expect(_renderModeRejected).toBe(false)
+  it('ReaderProps type accepts renderMode as ReaderRenderMode', () => {
+    expect(_renderModeAccepted).toBe(true)
+    expect(_readerPropsRenderMode).toBe('layout')
   })
 })

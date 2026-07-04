@@ -13,6 +13,7 @@ import type {
 } from './IntermediateDocumentViewer'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
+import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import type {
   ReaderLinkedSelectionData,
   ReaderMousePosition,
@@ -20,6 +21,8 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../types/selection'
+
+export type ReaderRenderMode = 'layout' | 'text'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -30,6 +33,14 @@ export type ReaderProps = {
   pageRange?: ReaderPageRange
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  /**
+   * Reader 级渲染模式。
+   * - `'layout'`（默认/省略）：走现有 `IntermediateDocumentViewer` + `VirtualPaper` 的
+   *   布局渲染路径，保留全部缩放 / linked-range selection / overlay 能力。
+   * - `'text'`：走独立的 `IntermediateDocumentTextViewer` 文本模式路径，不经过
+   *   `VirtualPaper`，仅接受文本模式子集 props。
+   */
+  renderMode?: ReaderRenderMode
   onTextSelectionChange?: (
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
@@ -183,6 +194,7 @@ export function Reader({
   pageRange,
   ocr,
   onOcrError,
+  renderMode,
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
@@ -294,6 +306,29 @@ export function Reader({
 
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
+      // text 模式走独立的 IntermediateDocumentTextViewer，不经过 VirtualPaper。
+      // 仅转发文本模式支持的 props 子集，layout 独有 props（缩放/linked-range
+      // selection/overlay 等）不传入文本视图。
+      if (renderMode === 'text') {
+        return (
+          <IntermediateDocumentTextViewer
+            document={document}
+            pageRange={pageRange}
+            className={className}
+            maxLoadedPages={maxLoadedPages}
+            initialLoadedPages={initialLoadedPages}
+            pageLoadConcurrency={pageLoadConcurrency}
+            pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+            pageUnloadDelayMs={pageUnloadDelayMs}
+            onTextSelectionChange={onTextSelectionChange}
+            onTextSelectionEnd={onTextSelectionEnd}
+            onSelectText={onSelectText}
+            onIntermediateDocumentRenderTiming={
+              onIntermediateDocumentRenderTiming
+            }
+          />
+        )
+      }
       return (
         <IntermediateDocumentViewer
           document={document}

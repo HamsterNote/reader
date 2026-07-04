@@ -1,17 +1,21 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import * as sass from 'sass'
 import type {
   IntermediateContent,
   IntermediateDocument,
   IntermediateImage,
   IntermediateText
 } from '@hamster-note/types'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import {
   createRef,
   isValidElement,
   type ReactNode,
-  type RefObject
+  type RefObject,
+  useCallback,
+  useRef
 } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -41,6 +45,7 @@ import {
   buildSelectionPayload as buildSerializedSelectionPayload,
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
+import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import { IntermediateDocumentViewer, Reader } from '../src/index'
 import type { OverlayRectType } from './mocks/selection'
 import {
@@ -53,9 +58,19 @@ import {
 } from './mocks/selection'
 import type { LinkedSelectionRange, SelectionProps } from './mocks/selection'
 import { VirtualPaper } from './mocks/virtual-paper'
-import { intersectionObserverMock } from './setup'
+import {
+  intersectionObserverMock,
+  mockElementSize,
+  setScrollContainerSize
+} from './setup'
 
 Reflect.set(globalThis, 'vi', vi)
+
+// T7: 编译 reader.scss 为 CSS 字符串，在测试中注入 <style> 标签
+// 使 jsdom 的 getComputedStyle 能读取 SCSS 规则
+const readerStyles = sass.compile(
+  path.resolve(__dirname, '../src/styles/reader.scss')
+).css
 
 function expectPopoverToContain(node: ReactNode, expected: ReactNode): void {
   if (!isValidElement<{ children?: ReactNode }>(node)) {
@@ -443,6 +458,67 @@ const makeSelectionFromRange = (range: Range) =>
     containsNode: (node: Node) => range.intersectsNode(node)
   }) as unknown as Selection
 
+const TEXT_MODE_ROW_HEIGHTS = [35, 55, 45] as const
+
+function TextModeVirtualizerHarness() {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: TEXT_MODE_ROW_HEIGHTS.length,
+    estimateSize: (index) => TEXT_MODE_ROW_HEIGHTS[index] ?? 40,
+    getScrollElement: () => parentRef.current,
+    measureElement: (element) => element.getBoundingClientRect().height,
+    overscan: 0
+  })
+
+  const setRowRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (!element) {
+        return
+      }
+
+      const index = Number(element.dataset.index)
+      mockElementSize(element, {
+        width: 300,
+        height: TEXT_MODE_ROW_HEIGHTS[index] ?? 40
+      })
+      virtualizer.measureElement(element)
+    },
+    [virtualizer]
+  )
+
+  return (
+    <div
+      ref={parentRef}
+      data-testid='text-mode-scroll-container'
+      style={{ height: 80, overflow: 'auto', width: 300 }}
+    >
+      <div
+        data-testid='text-mode-virtual-spacer'
+        style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
+      >
+        {virtualizer.getVirtualItems().map((virtualItem) => (
+          <div
+            key={virtualItem.key}
+            ref={setRowRef}
+            data-index={virtualItem.index}
+            data-size={virtualItem.size}
+            data-start={virtualItem.start}
+            data-testid={`text-mode-row-${virtualItem.index}`}
+            style={{
+              height: TEXT_MODE_ROW_HEIGHTS[virtualItem.index],
+              position: 'absolute',
+              transform: `translateY(${virtualItem.start}px)`,
+              width: '100%'
+            }}
+          >
+            Row {virtualItem.index}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 describe('selection primitive modules', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -681,6 +757,424 @@ describe('IntermediateDocumentViewer', () => {
 
   it('is exported from the public entrypoint', () => {
     expect(IntermediateDocumentViewer).toBeTypeOf('function')
+  })
+
+  it('text mode virtualizer harness mounts with deterministic measurements', async () => {
+    render(<TextModeVirtualizerHarness />)
+    const scrollContainer = screen.getByTestId('text-mode-scroll-container')
+    setScrollContainerSize(scrollContainer, {
+      width: 300,
+      height: 80,
+      scrollHeight: 135
+    })
+
+    const firstRow = await screen.findByTestId('text-mode-row-0')
+
+    await waitFor(() => {
+      expect(firstRow).toHaveAttribute('data-size', '35')
+      expect(firstRow).toHaveAttribute('data-start', '0')
+      expect(firstRow).toHaveStyle({ transform: 'translateY(0px)' })
+      expect(screen.getByTestId('text-mode-row-1')).toHaveAttribute(
+        'data-start',
+        '35'
+      )
+      expect(screen.getByTestId('text-mode-virtual-spacer')).toHaveStyle({
+        height: '135px'
+      })
+    })
+  })
+
+  // ---- 文本模式虚拟化（T3）----
+  // IntermediateDocumentTextViewer 使用 @tanstack/react-virtual 的原生滚动虚拟化，
+  // overscan=0 严格保证只渲染可见视口内的页面 DOM。以下测试验证：
+  // - 视口仅容纳一页时，只有 page 1 存在，page 2/20 不在 DOM 中
+  // - 根节点有正确的 data-testid
+  // - 文本模式不挂载 VirtualPaper（无 virtual-paper-wrapper）
+  it('text mode renders only visible virtual pages', async () => {
+    // 20 页文档，确保虚拟化有意义
+    const { document } = makeDocument({ pageCount: 20 })
+
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    // 根节点存在且有 role='document'
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    expect(scrollEl).toHaveAttribute('role', 'document')
+
+    // 视口高度 600px < 估计页高 800px，确保虚拟范围只含第一页
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+    // 等待页 1 进入虚拟范围
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    expect(page1).toHaveAttribute('data-page-number', '1')
+
+    // 用真实高度 mock 页 1，让虚拟化器测量稳定（防止 jsdom 0 高度级联）
+    mockElementSize(page1, { width: 800, height: 800 })
+
+    // 虚拟化器稳定后：只有 page 1 在 DOM，page 2/20 不存在
+    await waitFor(() => {
+      expect(screen.getByTestId('intermediate-text-page-1')).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-text-page-2')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-text-page-20')
+      ).not.toBeInTheDocument()
+    })
+
+    // 文本模式不挂载 VirtualPaper
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+  })
+
+  it('text mode lazy loads only visible pages', async () => {
+    const pageNumbers = Array.from({ length: 20 }, (_, index) => index + 1)
+    const thumbnailSpies = new Map<number, ReturnType<typeof vi.fn>>()
+    const getContentSpies = new Map<number, ReturnType<typeof vi.fn>>()
+
+    const document = {
+      id: 'text-lazy-doc',
+      title: 'Text Lazy Document',
+      pageCount: 20,
+      pageNumbers,
+      getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+      getPageByPageNumber: vi.fn((pageNumber: number) => {
+        if (pageNumber === 20) {
+          throw new Error('text mode must not load page 20')
+        }
+
+        const getThumbnail = vi.fn(async () => {
+          throw new Error('text mode must not request thumbnails')
+        })
+        const getContent = vi.fn(async () => [
+          makeText(`text-${pageNumber}`, `Visible page ${pageNumber}`),
+          {
+            id: `image-${pageNumber}`,
+            src: `data:image/png;base64,page-${pageNumber}`,
+            polygon: [
+              [0, 0],
+              [10, 0],
+              [10, 10],
+              [0, 10]
+            ],
+            opacity: 1
+          } as IntermediateImage
+        ])
+        thumbnailSpies.set(pageNumber, getThumbnail)
+        getContentSpies.set(pageNumber, getContent)
+        return Promise.resolve({ getContent, getThumbnail })
+      })
+    } as unknown as IntermediateDocument
+
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+    await waitFor(() => {
+      expect(screen.getByText('Visible page 1')).toBeInTheDocument()
+    })
+
+    expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+    expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(20)
+    expect(getContentSpies.get(1)).toHaveBeenCalledTimes(1)
+    thumbnailSpies.forEach((getThumbnail) => {
+      expect(getThumbnail).not.toHaveBeenCalled()
+    })
+    expect(
+      screen.queryByTestId('intermediate-text-page-20')
+    ).not.toBeInTheDocument()
+  })
+
+  // ---- 文本模式内容渲染（T5）----
+  // IntermediateDocumentTextPageContent 以普通文档流绘制 IntermediateText：
+  // 只渲染文本 span（带 --flow class + data-text-id），isEOL 后追加 <br>，
+  // 图片 / OCR / 底图在文本模式下不渲染。
+  it('text mode content renders only IntermediateText in flow order', async () => {
+    const eolText: IntermediateText = {
+      ...makeText('text-eol', 'Hello'),
+      isEOL: true
+    }
+
+    const document = {
+      id: 'text-content-doc',
+      title: 'Text Content Document',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+      getPageByPageNumber: vi.fn(() => {
+        const getThumbnail = vi.fn(
+          async () => 'data:image/png;base64,thumbnail'
+        )
+        const getContent = vi.fn(async () => [
+          eolText,
+          {
+            id: 'image-1',
+            src: 'data:image/png;base64,mixed-image',
+            polygon: [
+              [0, 0],
+              [10, 0],
+              [10, 10],
+              [0, 10]
+            ],
+            opacity: 1
+          } as IntermediateImage
+        ])
+        return Promise.resolve({ getContent, getThumbnail })
+      })
+    } as unknown as IntermediateDocument
+
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+    const helloText = await screen.findByText('Hello')
+    expect(helloText).toBeInTheDocument()
+
+    const textSpan = helloText.closest('.hamster-reader__intermediate-text')
+    expect(textSpan).not.toBeNull()
+    expect(textSpan).toHaveClass('hamster-reader__intermediate-text--flow')
+    expect(textSpan).toHaveAttribute('data-text-id', 'text-eol')
+    expect(textSpan).toHaveAttribute('data-page-number', '1')
+
+    const pageDiv = screen.getByTestId('intermediate-text-page-1')
+    expect(pageDiv).toHaveClass('hamster-reader__intermediate-text-page')
+    expect(pageDiv.innerHTML).toContain('<br>')
+
+    expect(pageDiv.querySelector('img')).not.toBeInTheDocument()
+    expect(
+      pageDiv.querySelector('.hamster-reader__intermediate-page-image')
+    ).not.toBeInTheDocument()
+    expect(
+      pageDiv.querySelector('.hamster-reader__intermediate-page-base-image')
+    ).not.toBeInTheDocument()
+    expect(pageDiv.querySelector('[data-ocr]')).not.toBeInTheDocument()
+
+    const allTextSpans = pageDiv.querySelectorAll(
+      '.hamster-reader__intermediate-text--flow'
+    )
+    allTextSpans.forEach((span) => {
+      expect(span.hasAttribute('data-text-id')).toBe(true)
+      expect(span.hasAttribute('data-page-number')).toBe(true)
+    })
+  })
+
+  it('text mode mounted selection callbacks', async () => {
+    const onTextSelectionChange = vi.fn()
+    const onTextSelectionEnd = vi.fn()
+    const onSelectText = vi.fn()
+
+    const document = {
+      id: 'text-selection-doc',
+      title: 'Text Selection Document',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: vi.fn(() => ({ x: 100, y: 150 })),
+      getPageByPageNumber: vi.fn(() => {
+        const getContent = vi.fn(async () => [
+          makeText('text-sel-1', 'Hello Text Mode')
+        ])
+        const getThumbnail = vi.fn(async () => 'data:image/png;base64,thumb')
+        return Promise.resolve({ getContent, getThumbnail })
+      })
+    } as unknown as IntermediateDocument
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onTextSelectionChange={onTextSelectionChange}
+        onTextSelectionEnd={onTextSelectionEnd}
+        onSelectText={onSelectText}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+    const textSpan = await screen.findByText('Hello Text Mode')
+    expect(textSpan).toBeInTheDocument()
+    expect(
+      textSpan.closest('.hamster-reader__intermediate-text')
+    ).toHaveAttribute('data-text-id', 'text-sel-1')
+
+    // 页面 data-selection-id 须包含 runtimePageSelectionId 格式（scopeId:page-1）
+    const pageDiv = screen.getByTestId('intermediate-text-page-1')
+    const selectionId = pageDiv.getAttribute('data-selection-id')
+    expect(selectionId).toMatch(/:page-1$/)
+
+    // 构造 mock Selection
+    const textNode = textSpan.firstChild
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Expected text span to contain a text node')
+    }
+    const range = globalThis.document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, 'Hello Text Mode'.length)
+
+    const selection = {
+      isCollapsed: false,
+      anchorNode: textNode,
+      anchorOffset: 0,
+      focusNode: textNode,
+      focusOffset: 'Hello Text Mode'.length,
+      rangeCount: 1,
+      getRangeAt: (index: number) => {
+        if (index !== 0) {
+          throw new Error('Selection mock only contains one range')
+        }
+        return range
+      },
+      toString: () => 'Hello Text Mode',
+      containsNode: (node: Node) => {
+        try {
+          return range.intersectsNode(node)
+        } catch {
+          return false
+        }
+      }
+    } as unknown as Selection
+
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(selection)
+
+    try {
+      // 触发 selectionchange → onTextSelectionChange
+      globalThis.document.dispatchEvent(new Event('selectionchange'))
+
+      expect(onTextSelectionChange).toHaveBeenCalledTimes(1)
+      const [changeText, changeDetail] = onTextSelectionChange.mock.calls[0]
+      expect(changeText.id).toBe('text-sel-1')
+      expect(changeDetail.selectedText).toBe('Hello Text Mode')
+      expect(changeDetail.pageNumber).toBe(1)
+
+      // 触发 mouseup → onTextSelectionEnd + onSelectText
+      scrollEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+
+      expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+      const [endText, endDetail] = onTextSelectionEnd.mock.calls[0]
+      expect(endText.id).toBe('text-sel-1')
+      expect(endDetail.selectedText).toBe('Hello Text Mode')
+
+      expect(onSelectText).toHaveBeenCalledTimes(1)
+      const [nativeSelection, segments, extractedText] =
+        onSelectText.mock.calls[0]
+      expect(nativeSelection).toBe(selection)
+      expect(extractedText).toBe('Hello Text Mode')
+      expect(segments.length).toBe(1)
+      expect(segments[0].selectedText).toBe('Hello Text Mode')
+      expect(extractedText).toBe(
+        segments
+          .map((segment: { selectedText: string }) => segment.selectedText)
+          .join('')
+      )
+    } finally {
+      getSelectionSpy.mockRestore()
+    }
+  })
+
+  // ---- T7: text-mode scoped SCSS styles ----
+  // 验证文本模式的静态布局样式已从 inline 迁移到 SCSS class，
+  // 且 layout 模式不受影响。注入 reader.scss 编译后的 CSS 使
+  // jsdom 的 getComputedStyle 能读取规则。
+  describe('text mode scoped SCSS styles (T7)', () => {
+    let styleEl: HTMLStyleElement | null = null
+
+    beforeEach(() => {
+      styleEl = document.createElement('style')
+      styleEl.textContent = readerStyles
+      document.head.appendChild(styleEl)
+    })
+
+    afterEach(() => {
+      styleEl?.remove()
+      styleEl = null
+    })
+
+    it('text mode page has scoped class and computed padding from CSS', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} />)
+
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+      const page = await screen.findByTestId('intermediate-text-page-1')
+
+      expect(page).toHaveClass('hamster-reader__intermediate-text-page')
+      expect(page.style.padding).toBe('')
+      expect(
+        window.getComputedStyle(page).getPropertyValue('padding-top')
+      ).toBe('5px')
+    })
+
+    it('text mode root has scoped classes without inline overflow or display', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} />)
+
+      const root = screen.getByTestId('intermediate-document-text-viewer')
+
+      expect(root).toHaveClass('hamster-reader__intermediate-text-viewer')
+      expect(root).toHaveClass('hamster-reader__intermediate-text-scroll')
+      expect(root).toHaveClass('hamster-reader__intermediate-document-viewer')
+      expect(root.style.overflow).toBe('')
+      expect(root.style.display).toBe('')
+
+      const computed = window.getComputedStyle(root)
+      expect(computed.getPropertyValue('overflow')).toBe('auto')
+      expect(computed.getPropertyValue('display')).toBe('block')
+    })
+
+    it('text mode span has --flow class with static position from CSS', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} />)
+
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+      const textSpan = await screen.findByText('Page 1 text')
+      expect(textSpan).toHaveClass('hamster-reader__intermediate-text--flow')
+
+      const computed = window.getComputedStyle(textSpan)
+      expect(computed.getPropertyValue('position')).toBe('static')
+      expect(computed.getPropertyValue('display')).toBe('inline')
+      expect(computed.getPropertyValue('white-space')).toBe('normal')
+    })
+
+    it('text mode page inline style only contains dynamic transform', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} />)
+
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+      const page = await screen.findByTestId('intermediate-text-page-1')
+
+      const inlineStyle = page.style.cssText
+      expect(inlineStyle).toContain('transform')
+      expect(inlineStyle).not.toContain('padding')
+      expect(inlineStyle).not.toContain('position')
+      expect(inlineStyle).not.toContain('width')
+    })
+
+    it('text mode regression: layout mode renders VirtualPaper without text-mode classes', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentViewer document={document} />)
+
+      expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-document-text-viewer')
+      ).not.toBeInTheDocument()
+
+      const page = screen.getByTestId('intermediate-page-1')
+      expect(page).toHaveClass('hamster-reader__intermediate-page')
+      expect(page).not.toHaveClass('hamster-reader__intermediate-text-page')
+
+      const viewer = screen.getByTestId('intermediate-document-viewer')
+      expect(viewer).not.toHaveClass('hamster-reader__intermediate-text-viewer')
+      expect(viewer).not.toHaveClass('hamster-reader__intermediate-text-scroll')
+      expect(viewer).not.toHaveClass('hamster-reader__intermediate-text-spacer')
+    })
   })
 
   // ---- intermediate-document 默认渲染模式（任务 1）----

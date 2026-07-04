@@ -17,6 +17,14 @@ export {
   type ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
 export {
+  IntermediateDocumentTextViewer,
+  type IntermediateDocumentTextViewerProps
+} from './IntermediateDocumentTextViewer'
+export {
+  IntermediateDocumentTextPageContent,
+  type IntermediateDocumentTextPageContentProps
+} from './IntermediateDocumentTextPageContent'
+export {
   getNearestTextElementForPoint,
   getPageElementByPageNumber,
   getPageElementForPoint,

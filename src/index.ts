@@ -48,7 +48,11 @@ export {
   type IntermediateDocumentRenderTimingEntry,
   type IntermediateDocumentRenderTimingStage
 } from './components/IntermediateDocumentViewer'
-export { Reader, type ReaderProps } from './components/Reader'
+export {
+  Reader,
+  type ReaderProps,
+  type ReaderRenderMode
+} from './components/Reader'
 
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
