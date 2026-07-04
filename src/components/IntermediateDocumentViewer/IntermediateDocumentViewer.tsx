@@ -760,7 +760,9 @@ const getOcrCacheKey = (
 type PageWithBaseImage = {
   thumbnail?: unknown
   image?: unknown
-  getThumbnail?: () => Promise<unknown> | unknown
+  // scale 参数对应 IntermediatePage.getThumbnail(scale)，
+  // 用于按当前缩放比例获取更高分辨率的缩略图，放大时背景图更清晰
+  getThumbnail?: (scale?: number) => Promise<unknown> | unknown
 }
 
 type ImageSourceLike = {
@@ -782,7 +784,9 @@ const getStringBaseImage = (imageSource: unknown) => {
   return undefined
 }
 
-const getBaseImageFromPage = async (page: unknown) => {
+// scale 可选参数传入 getThumbnail(scale)，用于按当前缩放比例请求
+// 对应分辨率的缩略图。不传时使用 getThumbnail 的默认行为（初始加载）。
+const getBaseImageFromPage = async (page: unknown, scale?: number) => {
   if (!page || typeof page !== 'object') {
     return undefined
   }
@@ -792,6 +796,8 @@ const getBaseImageFromPage = async (page: unknown) => {
     getStringBaseImage(pageWithImage.thumbnail) ??
     getStringBaseImage(pageWithImage.image)
 
+  // 如果页面内联了静态缩略图（thumbnail/image 属性），直接使用，
+  // 不走 getThumbnail —— 内联缩略图不支持按 scale 生成不同分辨率
   if (inlineBaseImage) {
     return inlineBaseImage
   }
@@ -801,7 +807,7 @@ const getBaseImageFromPage = async (page: unknown) => {
   }
 
   try {
-    return getStringBaseImage(await pageWithImage.getThumbnail())
+    return getStringBaseImage(await pageWithImage.getThumbnail(scale))
   } catch {
     return undefined
   }
@@ -1833,6 +1839,17 @@ export function IntermediateDocumentViewer({
   const [imagesByPageNumber, setImagesByPageNumber] = useState(
     () => new Map<number, IntermediateImage[]>()
   )
+
+  // --- debounced thumbnail refresh 所需的 refs ---
+  // 在 setTimeout 回调中读取最新 state，避免将这些 state 加入 effect deps 导致循环
+  const pageStatusesRef = useRef(pageStatuses)
+  pageStatusesRef.current = pageStatuses
+  const baseImagesByPageNumberRef = useRef(baseImagesByPageNumber)
+  baseImagesByPageNumberRef.current = baseImagesByPageNumber
+  const pageNumbersRef = useRef(pageNumbers)
+  pageNumbersRef.current = pageNumbers
+  // 记录上次刷新缩略图时的 scale，避免微小缩放变化触发不必要的重新生成
+  const lastThumbnailRefreshScaleRef = useRef(effectiveScale)
   // intermediate-document 默认模式懒加载队列 hook。
   // 队列项为页码，通过 generation token 忽略 stale async 结果，
   // 并复用 loadingPagesRef 强制并发上限。callbacks 复用已有的
@@ -1845,6 +1862,7 @@ export function IntermediateDocumentViewer({
     getPageContentEntries,
     isIntermediateText,
     isIntermediateImage,
+    effectiveScaleRef,
     callbacks: {
       onPageLoaded: ({ pageNumber, baseImage, texts, images }) => {
         const loadTimingStart = pageLoadTimingStartsRef.current.get(pageNumber)
@@ -2122,6 +2140,76 @@ export function IntermediateDocumentViewer({
     },
     [handleVirtualPaperTransform]
   )
+
+  // 缩放结束后 debounce 300ms，按当前 effectiveScale 刷新可见已加载页面的缩略图。
+  // 传入 scale 给 getThumbnail(scale) 获取匹配实际展示尺寸的分辨率，
+  // 放大时背景图更清晰，缩小时节省内存。
+  // scale 变化 < 0.1 时不刷新，避免微小缩放触发不必要的缩略图重新生成。
+  useEffect(() => {
+    const prevScale = lastThumbnailRefreshScaleRef.current
+    if (Math.abs(effectiveScale - prevScale) < 0.1) {
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      if (!isMountedRef.current || !runtimeDocument) return
+      const activeDoc = activeDocumentRef.current
+      if (activeDoc !== runtimeDocument) return
+
+      // 在 setTimeout 回调中通过 ref 读取最新 state，避免将其加入 effect deps
+      const visibleSet = lastKnownVisiblePagesRef.current
+      const statuses = pageStatusesRef.current
+      const validPageNumbers = new Set(pageNumbersRef.current)
+
+      const pagesToRefresh: number[] = []
+      visibleSet.forEach((pageNumber) => {
+        if (
+          validPageNumbers.has(pageNumber) &&
+          statuses.get(pageNumber) === 'loaded'
+        ) {
+          pagesToRefresh.push(pageNumber)
+        }
+      })
+
+      // 先记录本次刷新的 scale，即使没有可刷新的页面也更新，
+      // 避免后续相同 scale 反复进入 effect
+      lastThumbnailRefreshScaleRef.current = effectiveScale
+
+      if (pagesToRefresh.length === 0) return
+
+      // 并行获取每页按当前 scale 的缩略图
+      await Promise.all(
+        pagesToRefresh.map(async (pageNumber) => {
+          if (!isMountedRef.current || activeDocumentRef.current !== activeDoc) return
+          try {
+            const pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
+            if (!pagePromise) return
+            const page = await pagePromise
+            if (!isMountedRef.current || activeDocumentRef.current !== activeDoc) return
+
+            // 如果用户在 fetch 期间又缩放了，跳过此页更新（新的 debounce 会处理）
+            if (effectiveScaleRef.current !== effectiveScale) return
+
+            const newBaseImage = await getBaseImageFromPage(page, effectiveScale)
+            if (!isMountedRef.current || activeDocumentRef.current !== activeDoc) return
+            if (effectiveScaleRef.current !== effectiveScale) return
+
+            // 仅当新缩略图与当前不同时才更新，避免不必要的 re-render
+            const currentBaseImage = baseImagesByPageNumberRef.current.get(pageNumber)
+            if (newBaseImage && newBaseImage !== currentBaseImage) {
+              setBaseImagesByPageNumber(
+                createSetBaseImageHandler(pageNumber, newBaseImage)
+              )
+            }
+          } catch {
+            // 单页刷新失败不影响其他页
+          }
+        })
+      )
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [effectiveScale, runtimeDocument])
 
   const markLoadableWithOverscan = useCallback(
     (pageNumber: number) => {

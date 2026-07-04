@@ -163,14 +163,16 @@
     flex-direction: column;
     align-items: center;
     gap: 16px;
+    // 阅读器背景色：浅灰，衬托白色页面
+    background-color: #f3f4f6;
     // VirtualPaper 的 wrapper 负责滚动与手势捕获；外层只保留垂直方向
     // 的 flex 布局，不再自己处理 overflow 与 touch-action。
     overflow: hidden;
     box-sizing: border-box;
     // 通过 CSS 变量提供可覆盖的默认高度，避免 Transform 模式下 flex 子元素
-    // 因父元素无确定高度而塌陷（默认占满视口高度，组件库消费者可自定义）。
-    height: var(--hamster-reader-viewer-height, 100vh);
-    max-height: var(--hamster-reader-viewer-max-height, 100vh);
+    // 因父元素无确定高度而塌陷（默认占满父容器高度，组件库消费者可自定义）。
+    height: var(--hamster-reader-viewer-height, 100%);
+    max-height: var(--hamster-reader-viewer-max-height, 100%);
     scroll-behavior: smooth;
 
     // VirtualPaper wrapper：占满 viewer 区域并作为手势/滚动容器。
@@ -179,6 +181,12 @@
       width: 100%;
       min-height: 0;
       touch-action: none;
+    }
+
+    // 中间文档每页之间的外边距，与 VirtualPaper 缩放/平移无关，
+    // 仅用于页面间距（transform 会等比缩放 margin）。
+    .hamster-reader__intermediate-page {
+      margin: 12px;
     }
   }
 
@@ -235,7 +243,7 @@
     position: relative;
     box-sizing: border-box;
     background-color: #ffffff;
-    outline: 1px solid #e5e7eb;
+    // 恢复页面阴影，在浅灰背景上产生层次感
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     overflow: hidden;
     flex-shrink: 0;

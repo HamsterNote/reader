@@ -78,7 +78,13 @@ export function useLazyPageQueue(
     activeDocumentRef: React.MutableRefObject<IntermediateDocument | null>
     isMountedRef: React.MutableRefObject<boolean>
     loadingPagesRef: React.MutableRefObject<Set<number>>
-    getBaseImageFromPage: (page: unknown) => Promise<string | undefined>
+    // scale 可选参数用于按当前缩放比例请求更高/更低分辨率的缩略图，
+    // 使放大后的背景图更清晰。初始加载时不传 scale（使用默认值），
+    // 仅在 debounced thumbnail refresh effect 中按 effectiveScale 传入。
+    getBaseImageFromPage: (
+      page: unknown,
+      scale?: number
+    ) => Promise<string | undefined>
     getPageContentEntries: (page: unknown) => Promise<IntermediateContent[]>
     isIntermediateText: (
       content: IntermediateContent
@@ -87,6 +93,8 @@ export function useLazyPageQueue(
       content: IntermediateContent
     ) => content is IntermediateImage
     callbacks: LazyPageQueueCallbacks
+    // 当前 effectiveScale 的 ref，用于懒加载时按当前缩放比例请求合适分辨率的缩略图
+    effectiveScaleRef: React.MutableRefObject<number>
   }
 ): LazyPageQueueApi {
   const {
@@ -97,7 +105,8 @@ export function useLazyPageQueue(
     getPageContentEntries,
     isIntermediateText,
     isIntermediateImage,
-    callbacks
+    callbacks,
+    effectiveScaleRef
   } = options
 
   // 待加载页码队列（保持插入顺序，不去重存储层，enqueuePage 内去重）
@@ -184,7 +193,10 @@ export function useLazyPageQueue(
 
       pagePromise
         .then((page) =>
-          Promise.all([getBaseImageFromPage(page), getPageContentEntries(page)])
+          Promise.all([
+            getBaseImageFromPage(page, effectiveScaleRef.current),
+            getPageContentEntries(page)
+          ])
         )
         .then(([baseImage, content]) => {
           // stale 守卫：unmount / document 切换 / generation 过期
@@ -241,7 +253,8 @@ export function useLazyPageQueue(
       getBaseImageFromPage,
       getPageContentEntries,
       isIntermediateText,
-      isIntermediateImage
+      isIntermediateImage,
+      effectiveScaleRef
     ]
   )
 
