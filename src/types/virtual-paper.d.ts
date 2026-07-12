@@ -3,15 +3,13 @@
  * dist/index.d.ts（仅 `export {}`）。声明基于该版本运行时
  * 实际导出的公开 API，随版本变化时需同步更新。
  *
- * 该版本（yalc 本地链接）的运行时导出：
+ * 该版本（npm 0.2.0）的运行时导出：
  * - DEFAULT_ENABLED_INTERACTIONS（常量）
  * - VirtualPaper（组件）
  * - VirtualPaperInitialPlacement（枚举）
  * - VirtualPaperInteractionMode（枚举）
  *
- * 已移除：VirtualPaperRenderMode 枚举与 renderMode prop。
- * 新增：readerMode / containMode / inertialScroll / edgeElasticScroll /
- *       readerModeZoomDebounceMs props。
+ * 新增：containMarginX / containMarginY / lazyWillChange props。
  */
 
 import type { CSSProperties, HTMLAttributes, ReactNode } from 'react'
@@ -93,6 +91,18 @@ declare module '@hamster-note/virtual-paper' {
      * Reader 模式下滚轮缩放的防抖毫秒数。
      */
     readerModeZoomDebounceMs?: number
+    /**
+     * contain 模式下内容区在 X 方向保留的额外边距（像素），默认 0。
+     */
+    containMarginX?: number
+    /**
+     * contain 模式下内容区在 Y 方向保留的额外边距（像素），默认 0。
+     */
+    containMarginY?: number
+    /**
+     * 延迟应用 will-change 的阈值（像素），默认 0。
+     */
+    lazyWillChange?: number
     /**
      * 内容尺寸，参与 contain / reader 模式的布局计算。
      */

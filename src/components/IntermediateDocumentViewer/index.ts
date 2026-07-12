@@ -2,10 +2,10 @@ export {
   IntermediateDocumentViewer,
   isNonSpaceBlankText,
   mergeSelectionRects,
-  type BackgroundQuality,
   type IntermediateDocumentViewerProps,
   type ReaderInteractionMode,
   type ReaderPageRange,
+  type ReaderTouchPanMode,
   type ReaderSavedSelection,
   type ReaderSavedSelectionAnchor,
   type ReaderSavedSelectionComment,
@@ -15,9 +15,16 @@ export {
   type ReaderSavedSelectionSegment,
   type ReaderSavedSelectionVisualPage,
   type ReaderSelectionOverlayRect,
-  type ReaderRenderMode,
   type ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
+export {
+  IntermediateDocumentTextViewer,
+  type IntermediateDocumentTextViewerProps
+} from './IntermediateDocumentTextViewer'
+export {
+  IntermediateDocumentTextPageContent,
+  type IntermediateDocumentTextPageContentProps
+} from './IntermediateDocumentTextPageContent'
 export {
   getNearestTextElementForPoint,
   getPageElementByPageNumber,
@@ -44,3 +51,12 @@ export {
   type NormalizedRect,
   type TextElementInfo
 } from '../selection/savedSelection'
+export {
+  createIntermediateDocumentRenderTiming,
+  type CreateIntermediateDocumentRenderTimingOptions,
+  type IntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingClock,
+  type IntermediateDocumentRenderTimingEntry,
+  type IntermediateDocumentRenderTimingStage
+} from './renderTiming'

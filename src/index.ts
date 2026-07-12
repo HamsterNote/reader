@@ -4,12 +4,20 @@
 export type {
   MousePosition as ReaderMousePosition,
   OverlayRectType as ReaderSelectionOverlayRectType,
-  SelectionRange as ReaderSelectionRange,
-  SelectionRef as ReaderSelectionRef
+  SelectionRect as ReaderSelectionRectangle,
+  SelectionTool as ReaderSelectionTool
 } from '@hamster-note/selection'
 
+export type {
+  ReaderLinkedSelectionData,
+  ReaderLinkedSelectionRange,
+  ReaderSelectionEndpoint,
+  ReaderSelectionRange,
+  ReaderSelectionRect,
+  ReaderSelectionRef
+} from './types/selection'
+
 export {
-  type BackgroundQuality,
   buildSavedSelection,
   buildSelectionPayload,
   denormalizePageRects,
@@ -19,7 +27,7 @@ export {
   resolveSavedSelection,
   type ReaderInteractionMode,
   type ReaderPageRange,
-  type ReaderRenderMode,
+  type ReaderTouchPanMode,
   type ReaderSavedSelection,
   type ReaderSavedSelectionAnchor,
   type ReaderSavedSelectionComment,
@@ -34,9 +42,20 @@ export {
   type ReaderTextSelectionDetail,
   textHash,
   type NormalizedRect,
-  type TextElementInfo
+  type TextElementInfo,
+  createIntermediateDocumentRenderTiming,
+  type CreateIntermediateDocumentRenderTimingOptions,
+  type IntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingClock,
+  type IntermediateDocumentRenderTimingEntry,
+  type IntermediateDocumentRenderTimingStage
 } from './components/IntermediateDocumentViewer'
-export { Reader, type ReaderProps } from './components/Reader'
+export {
+  Reader,
+  type ReaderProps,
+  type ReaderRenderMode
+} from './components/Reader'
 
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
@@ -45,9 +64,14 @@ export type ReaderInteractiveProps = Pick<
   | 'onTextSelectionChange'
   | 'onTextSelectionEnd'
   | 'interactionMode'
+  | 'touchPanMode'
   | 'ranges'
   | 'selectedRangeId'
   | 'onSelect'
+  | 'onLinkedDataChange'
+  | 'onLinkedSelect'
+  | 'onLinkedUpdateRange'
+  | 'onLinkedSelectRange'
   | 'onSelectRange'
   | 'onUpdateRange'
   | 'onSelectionStart'
@@ -58,4 +82,10 @@ export type ReaderInteractiveProps = Pick<
   | 'selectionPopover'
   | 'selectionRef'
   | 'overlayRectType'
+  | 'tool'
+  | 'rects'
+  | 'selectedRectId'
+  | 'onCreateRect'
+  | 'onSelectRect'
+  | 'onUpdateRect'
 >

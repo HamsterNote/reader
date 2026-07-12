@@ -1,25 +1,26 @@
-import { HtmlParser } from '@hamster-note/html-parser'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createRef, type RefObject } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
   SUPPORTED_UPLOAD_COPY
 } from '../src/components/Reader'
-import type { ReaderInteractionMode, ReaderProps } from '../src/index'
+import type {
+  ReaderInteractionMode,
+  ReaderProps,
+  ReaderRenderMode,
+  ReaderSelectionRange,
+  ReaderSelectionRef,
+  ReaderTouchPanMode
+} from '../src/index'
 import { Reader } from '../src/index'
+import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
 import { intersectionObserverMock } from './setup'
-
-vi.mock('@hamster-note/html-parser', () => ({
-  HtmlParser: {
-    decodeToHtml: vi.fn(),
-    decodePageToHtml: vi.fn()
-  }
-}))
 
 let capturedViewerProps: Record<string, unknown> = {}
 
@@ -221,6 +222,39 @@ function makeLazyDocument(pageCount: number = 1): {
   return { document, pages }
 }
 
+type RectInput = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+const makeDomRect = (rect: RectInput) =>
+  ({
+    left: rect.left,
+    top: rect.top,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+    toJSON: () => rect
+  }) as DOMRect
+
+const mockElementRect = (element: HTMLElement, rect: RectInput) =>
+  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(makeDomRect(rect))
+
+function requireReaderSelectionRef(
+  ref: RefObject<ReaderSelectionRef | null>
+): ReaderSelectionRef {
+  if (!ref.current) {
+    throw new Error('Expected Reader selection ref to be available')
+  }
+
+  return ref.current
+}
+
 function createMockFile(
   name: string,
   size: number,
@@ -233,10 +267,7 @@ function createMockFile(
 
 describe('Reader public API', () => {
   beforeEach(() => {
-    vi.mocked(HtmlParser.decodeToHtml).mockReset()
-    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    capturedViewerProps = {}
   })
 
   it('renders the provided document title on the public entry', () => {
@@ -257,20 +288,16 @@ describe('Reader public API', () => {
     expect(root).toHaveTextContent('Nothing to render')
   })
 
-  it('renders the intermediate viewer when a document has pages', () => {
+  it('renders IntermediateDocumentViewer by default for a paged serialized document', () => {
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
 
     expect(
       screen.getByTestId('intermediate-document-viewer')
     ).toBeInTheDocument()
-    expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
-      width: '100px',
-      height: '150px'
-    })
-    expect(screen.queryByText('Hamster Reader Title')).not.toBeInTheDocument()
+    expect(screen.getByTestId('reader-content')).toBeInTheDocument()
   })
 
-  it('renders the intermediate viewer for a runtime document', () => {
+  it('renders IntermediateDocumentViewer by default for a runtime document', () => {
     const runtimeDocument = IntermediateDocument.parse(
       makeDocument({ pages: [makePage(1)] })
     )
@@ -280,77 +307,7 @@ describe('Reader public API', () => {
     expect(
       screen.getByTestId('intermediate-document-viewer')
     ).toBeInTheDocument()
-    expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
-      width: '100px',
-      height: '150px'
-    })
-  })
-
-  it('renders document content through html-parser-backed viewer path', async () => {
-    const mockHtml = '<div class="hamster-note-page">Reader HTML</div>'
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValueOnce(mockHtml)
-
-    const { document, pages } = makeLazyDocument(1)
-    const page = pages.get(1)
-
-    render(<Reader document={document} />)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
-    })
-
-    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, {
-      background: { backgroundQuality: 0.8 }
-    })
-    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
-    expect(screen.getByTestId('html-parser-output')).toContainHTML(
-      'Reader HTML'
-    )
-  })
-
-  it('passes direct renderMode through without parser calls', async () => {
-    const { document } = makeLazyDocument(1)
-
-    render(<Reader document={document} renderMode='direct' />)
-
-    await waitFor(() => {
-      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
-    })
-
-    expect(capturedViewerProps.renderMode).toBe('direct')
-    expect(HtmlParser.decodePageToHtml).not.toHaveBeenCalled()
-    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
-  })
-
-  it('falls back when html-parser decode fails', async () => {
-    vi.mocked(HtmlParser.decodePageToHtml).mockRejectedValueOnce(
-      new Error('decode failed')
-    )
-
-    const document = {
-      id: 'doc-1',
-      title: 'Test Document',
-      pageCount: 1,
-      pageNumbers: [1],
-      getPageSizeByPageNumber: () => ({ x: 100, y: 150 }),
-      getPageByPageNumber: () =>
-        Promise.resolve({
-          getContent: () =>
-            Promise.resolve([
-              { id: 't1', content: 'Reader fallback', fontSize: 12 }
-            ])
-        })
-    } as unknown as IntermediateDocument
-
-    render(<Reader document={document} />)
-
-    await waitFor(() => {
-      expect(screen.getByText('Reader fallback')).toBeInTheDocument()
-    })
-
-    expect(HtmlParser.decodePageToHtml).toHaveBeenCalled()
-    expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
-    expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-content')).toBeInTheDocument()
   })
 
   it('shows the document title fallback when pages are empty', () => {
@@ -362,6 +319,103 @@ describe('Reader public API', () => {
     expect(
       screen.queryByTestId('intermediate-document-viewer')
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('Reader renderMode', () => {
+  it('default renderMode renders the layout viewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} />)
+
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-document-text-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('explicit renderMode="layout" renders the layout viewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} renderMode='layout' />)
+
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-document-text-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('renderMode text renders the separate text viewer without VirtualPaper', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} renderMode='text' />)
+
+    expect(
+      screen.getByTestId('intermediate-document-text-viewer')
+    ).toBeInTheDocument()
+    // 文本模式必须不渲染 VirtualPaper wrapper
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+    // 文本模式也不应渲染 layout 模式的 viewer 根节点
+    expect(
+      screen.queryByTestId('intermediate-document-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('renderMode text forwards only text-mode props without runtime errors', () => {
+    const onTextSelectionChange = vi.fn()
+    const onTextSelectionEnd = vi.fn()
+    const onSelectText = vi.fn()
+    const onTiming = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        pageRange={{ start: 1, end: 1 }}
+        maxLoadedPages={5}
+        initialLoadedPages={2}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={250}
+        pageUnloadDelayMs={3000}
+        onTextSelectionChange={onTextSelectionChange}
+        onTextSelectionEnd={onTextSelectionEnd}
+        onSelectText={onSelectText}
+        onIntermediateDocumentRenderTiming={onTiming}
+      />
+    )
+
+    const textViewer = screen.getByTestId('intermediate-document-text-viewer')
+    expect(textViewer).toBeInTheDocument()
+    expect(textViewer).toHaveAttribute('data-title', 'Hamster Reader Title')
+    // 文本模式同样挂在 reader-content 内
+    expect(screen.getByTestId('reader-content')).toContainElement(textViewer)
+  })
+
+  it('renderMode text renders for a runtime (lazy) document', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} renderMode='text' />)
+
+    expect(
+      screen.getByTestId('intermediate-document-text-viewer')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+  })
+
+  it('compile-time: renderMode satisfies ReaderProps as ReaderRenderMode', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      renderMode: 'text' as ReaderRenderMode
+    }
+    expect(props.renderMode).toBe('text')
   })
 })
 
@@ -502,10 +556,8 @@ describe('Reader file upload', () => {
 
 describe('Reader prop forwarding', () => {
   beforeEach(() => {
-    vi.mocked(HtmlParser.decodeToHtml).mockReset()
-    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    capturedViewerProps = {}
+    clearSelectionProps()
   })
 
   it('renders IntermediateDocumentViewer when ocr prop is passed', () => {
@@ -727,6 +779,12 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.interactionMode).toBe('stylus')
   })
 
+  it('forwards touchPanMode="two-finger" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} touchPanMode='two-finger' />)
+    expect(capturedViewerProps.touchPanMode).toBe('two-finger')
+  })
+
   it('defaults interactionMode to undefined when not provided (viewer defaults to "default")', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} />)
@@ -743,6 +801,262 @@ describe('Reader prop forwarding', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} {...{ overlayRectType: 'px' }} />)
     expect(capturedViewerProps.overlayRectType).toBe('px')
+  })
+
+  it('forwards Reader selection, scale, and lazy props to IntermediateDocumentViewer unchanged', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const ranges: ReaderSelectionRange[] = [
+      {
+        id: 'forwarded-range',
+        text: 'Forwarded range',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 },
+        createdAt: 10,
+        overlayRectType: 'percent',
+        rectsBySelectionId: {
+          'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+        }
+      }
+    ]
+
+    render(
+      <Reader
+        document={doc}
+        selectionRef={selectionRef}
+        ranges={ranges}
+        selectedRangeId='forwarded-range'
+        overlayRectType='percent'
+        initialLoadedPages={2}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={250}
+        pageUnloadDelayMs={3000}
+        onScaleChange={onScaleChange}
+      />
+    )
+
+    expect(capturedViewerProps.selectionRef).toBe(selectionRef)
+    expect(capturedViewerProps.ranges).toBe(ranges)
+    expect(capturedViewerProps.selectedRangeId).toBe('forwarded-range')
+    expect(capturedViewerProps.overlayRectType).toBe('percent')
+    expect(capturedViewerProps.initialLoadedPages).toBe(2)
+    expect(capturedViewerProps.pageLoadConcurrency).toBe(4)
+    expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
+    expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
+    expect(capturedViewerProps.onScaleChange).toBe(onScaleChange)
+  })
+
+  it('exposes scrollToRange on the forwarded Reader ref without firing onScaleChange', async () => {
+    // Given: Reader owns the public ref and a controlled selected range on page 3.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const range: ReaderSelectionRange = {
+      id: 'reader-jump-page-3',
+      text: 'Reader jump target',
+      start: { selectionId: 'page-3', offset: 0 },
+      end: { selectionId: 'page-3', offset: 11 },
+      createdAt: 30,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-3': [{ x: 10, y: 20, width: 20, height: 20 }]
+      }
+    }
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        ranges={[range]}
+        selectedRangeId='reader-jump-page-3'
+        selectionRef={selectionRef}
+        initialLoadedPages={1}
+        scale={2}
+        onScaleChange={onScaleChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 100
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    expect(publicRef).toEqual({
+      highlight: expect.any(Function),
+      confirm: expect.any(Function),
+      confirmRect: expect.any(Function),
+      clear: expect.any(Function),
+      scrollToRange: expect.any(Function),
+      scrollToRect: expect.any(Function),
+      scrollToPosition: expect.any(Function)
+    })
+
+    // When: callers jump through Reader's public selectionRef.
+    act(() => {
+      publicRef.scrollToRange('reader-jump-page-3')
+    })
+
+    // Then: VirtualPaper translation changes, scale stays controlled, and no scale callback fires.
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      transform: 'translate3d(-15px, -704px, 0) scale(2)'
+    })
+    expect(onScaleChange).not.toHaveBeenCalled()
+
+    // And: selected-range ownership stays with selectedRangeId and the range's start page.
+    await screen.findByText('Page 3 text')
+    await waitFor(() => {
+      expect(
+        getAllSelectionProps().some((props) =>
+          props.selectionId?.endsWith(':page-3')
+        )
+      ).toBe(true)
+    })
+    const pageThreeSelectionProps = getAllSelectionProps().find((props) =>
+      props.selectionId?.endsWith(':page-3')
+    )
+    expect(pageThreeSelectionProps?.linkedData?.selectedRangeId).toBe(
+      'reader-jump-page-3'
+    )
+    expect(
+      pageThreeSelectionProps?.linkedData?.items.find(
+        (item) => item.id === 'reader-jump-page-3'
+      )?.start.selectionId
+    ).toBe(pageThreeSelectionProps?.selectionId)
+  })
+
+  it('exposes scrollToPosition on the forwarded Reader ref without firing onScaleChange', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        selectionRef={selectionRef}
+        initialLoadedPages={1}
+        scale={1.5}
+        onScaleChange={onScaleChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 300
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    act(() => {
+      publicRef.scrollToPosition({ x: 120, y: 240 })
+    })
+
+    // scrollToPosition treats x/y as content-space scroll offsets.
+    // With scale=1.5 and a 200x300 wrapper, the x offset is centered
+    // because scaled content width (150px) fits; y is clamped to -360px
+    // because scaled content height (723px) is taller than the wrapper.
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      transform: 'translate3d(25px, -360px, 0) scale(1.5)'
+    })
+    expect(onScaleChange).not.toHaveBeenCalled()
+  })
+
+  it('exposes scrollToRect on the forwarded Reader ref without firing onScaleChange', async () => {
+    // Given: Reader owns the public ref and a controlled rect on page 3.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        rects={[
+          {
+            id: 'reader-rect-page-3',
+            createdAt: 40,
+            overlayRectType: 'percent',
+            start: { x: 10, y: 20 },
+            end: { x: 30, y: 40 },
+            selectionId: 'page-3',
+            rect: { x: 10, y: 20, width: 20, height: 20 }
+          }
+        ]}
+        selectedRectId='reader-rect-page-3'
+        selectionRef={selectionRef}
+        initialLoadedPages={1}
+        scale={2}
+        onScaleChange={onScaleChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 100
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    act(() => {
+      publicRef.scrollToRect('reader-rect-page-3')
+    })
+
+    // Then: VirtualPaper translates to center page 3's rect, scale stays controlled.
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      transform: 'translate3d(-15px, -704px, 0) scale(2)'
+    })
+    expect(onScaleChange).not.toHaveBeenCalled()
+
+    await screen.findByText('Page 3 text')
+  })
+
+  it('maps public rect selection ids to runtime ids for Selection and back to public ids on create', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onCreateRect = vi.fn()
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        rects={[
+          {
+            id: 'reader-rect-page-1',
+            createdAt: 40,
+            overlayRectType: 'percent',
+            start: { x: 10, y: 20 },
+            end: { x: 30, y: 40 },
+            selectionId: 'page-1',
+            rect: { x: 10, y: 20, width: 20, height: 20 }
+          }
+        ]}
+        selectionRef={selectionRef}
+        tool='rect'
+        onCreateRect={onCreateRect}
+        initialLoadedPages={1}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const pageOneSelectionProps = getAllSelectionProps().find((props) =>
+      props.selectionId?.endsWith(':page-1')
+    )
+    expect(pageOneSelectionProps?.rects).toEqual([
+      expect.objectContaining({
+        selectionId: pageOneSelectionProps?.selectionId
+      })
+    ])
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    act(() => {
+      publicRef.confirmRect()
+    })
+
+    expect(onCreateRect).toHaveBeenCalledWith(
+      expect.objectContaining({ selectionId: 'page-1' })
+    )
   })
 
   it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
@@ -770,14 +1084,43 @@ describe('Reader prop forwarding', () => {
     }
     expect(props.interactionMode).toBe('stylus')
   })
+
+  it('compile-time: touchPanMode satisfies ReaderProps', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      touchPanMode: 'two-finger' as ReaderTouchPanMode
+    }
+    expect(props.touchPanMode).toBe('two-finger')
+  })
+
+  it('forwards onIntermediateDocumentRenderTiming to IntermediateDocumentViewer', () => {
+    const onIntermediateDocumentRenderTiming = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(
+      <Reader
+        document={doc}
+        onIntermediateDocumentRenderTiming={onIntermediateDocumentRenderTiming}
+      />
+    )
+    expect(capturedViewerProps.onIntermediateDocumentRenderTiming).toBe(
+      onIntermediateDocumentRenderTiming
+    )
+  })
+
+  it('compile-time: onIntermediateDocumentRenderTiming satisfies ReaderProps', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      onIntermediateDocumentRenderTiming: (entry) => {
+        expect(entry.durationMs).toBeGreaterThanOrEqual(0)
+      }
+    }
+    expect(props.onIntermediateDocumentRenderTiming).toBeTypeOf('function')
+  })
 })
 
 describe('Reader zoom props', () => {
   beforeEach(() => {
-    vi.mocked(HtmlParser.decodeToHtml).mockReset()
-    vi.mocked(HtmlParser.decodePageToHtml).mockReset()
-    vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')
-    vi.mocked(HtmlParser.decodePageToHtml).mockResolvedValue('')
+    capturedViewerProps = {}
   })
 
   it('compile-time: zoom props satisfy ReaderProps', () => {
@@ -823,5 +1166,65 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.minScale).toBe(0.25)
     expect(capturedViewerProps.maxScale).toBe(4)
     expect(capturedViewerProps.maxLoadedPages).toBe(7)
+  })
+
+  it('renders IntermediateDocumentViewer by default', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} />)
+
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+  })
+
+  it('forwards intermediate-document lazy props with defaults to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} />)
+
+    expect(capturedViewerProps.initialLoadedPages).toBeUndefined()
+    expect(capturedViewerProps.pageLoadConcurrency).toBeUndefined()
+    expect(capturedViewerProps.pageLoadEnterDelayMs).toBeUndefined()
+    expect(capturedViewerProps.pageUnloadDelayMs).toBeUndefined()
+  })
+
+  it('forwards explicit intermediate-document lazy props to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        initialLoadedPages={2}
+        pageLoadConcurrency={5}
+        pageLoadEnterDelayMs={250}
+        pageUnloadDelayMs={3000}
+      />
+    )
+
+    expect(capturedViewerProps.initialLoadedPages).toBe(2)
+    expect(capturedViewerProps.pageLoadConcurrency).toBe(5)
+    expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
+    expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
+  })
+
+  it('VirtualPaper receives containMode={true} via IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} />)
+
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
+  })
+
+  it('forwards containMarginX and containMarginY to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader document={document} containMarginX={24} containMarginY={48} />
+    )
+
+    expect(capturedViewerProps.containMarginX).toBe(24)
+    expect(capturedViewerProps.containMarginY).toBe(48)
   })
 })

@@ -83,9 +83,10 @@
 
   // Content area
   &__content {
-    padding: 16px;
     font-size: 16px;
     color: #374151;
+    height: 100%;
+    box-sizing: border-box;
   }
 
   // File info section
@@ -162,15 +163,16 @@
     flex-direction: column;
     align-items: center;
     gap: 16px;
-    padding: 16px;
+    // 阅读器背景色：浅灰，衬托白色页面
+    background-color: #f3f4f6;
     // VirtualPaper 的 wrapper 负责滚动与手势捕获；外层只保留垂直方向
     // 的 flex 布局，不再自己处理 overflow 与 touch-action。
     overflow: hidden;
     box-sizing: border-box;
     // 通过 CSS 变量提供可覆盖的默认高度，避免 Transform 模式下 flex 子元素
-    // 因父元素无确定高度而塌陷（默认占满视口高度，组件库消费者可自定义）。
-    height: var(--hamster-reader-viewer-height, 100vh);
-    max-height: var(--hamster-reader-viewer-max-height, 100vh);
+    // 因父元素无确定高度而塌陷（默认占满父容器高度，组件库消费者可自定义）。
+    height: var(--hamster-reader-viewer-height, 100%);
+    max-height: var(--hamster-reader-viewer-max-height, 100%);
     scroll-behavior: smooth;
 
     // VirtualPaper wrapper：占满 viewer 区域并作为手势/滚动容器。
@@ -180,7 +182,57 @@
       min-height: 0;
       touch-action: none;
     }
+
+    // 中间文档每页之间的外边距，与 VirtualPaper 缩放/平移无关，
+    // 仅用于页面间距（transform 会等比缩放 margin）。
+    .hamster-reader__intermediate-page {
+      margin: 12px;
+    }
   }
+
+  // ---- 文本渲染模式（renderMode="text"）scoped styles (T7) ----
+  // 文本模式使用独立的 class 体系，与 layout 模式
+  // (.hamster-reader__intermediate-page / .hamster-reader__intermediate-text)
+  // 完全隔离。以下 class 在 CSS 源码顺序上后于 layout 模式的
+  // &__intermediate-document-viewer 定义，从而在同元素上覆盖其
+  // display:flex / overflow:hidden —— 无需 inline style。
+  // 注意：文本模式根节点同时携带 .hamster-reader__intermediate-document-viewer
+  // （供 buildSelectionPayload 的 getClosestTextElement 查找 viewer root），
+  // 这是跨模块 CSS 依赖，不可移除。
+
+  // 文本模式 viewer 根 / 原生滚动容器：
+  // display:block 覆盖 layout 模式的 display:flex
+  // overflow:auto 提供原生滚动（layout 模式为 overflow:hidden）
+  &__intermediate-text-viewer,
+  &__intermediate-text-scroll {
+    display: block;
+    overflow: auto;
+    box-sizing: border-box;
+    position: relative;
+  }
+
+  // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
+  // CSS 只负责 position:relative 作为绝对定位页面的包含块
+  &__intermediate-text-spacer {
+    position: relative;
+    width: 100%;
+  }
+
+  // 文本模式单页容器：
+  // 绝对定位（由 inline transform 动态偏移），padding 固定 5px，
+  // 宽度占满 spacer。padding 从 inline style 迁移到 CSS。
+  &__intermediate-text-page {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 5px;
+    box-sizing: border-box;
+  }
+
+  // 注意：&__intermediate-text--flow 修饰符定义在 &__intermediate-text
+  // 之后（见文件下方），以确保 CSS 源码顺序覆盖 layout 模式的
+  // position:absolute / display:inline-block / white-space:pre。
 
   &__html-parser-output {
     width: 100%;
@@ -235,7 +287,7 @@
     position: relative;
     box-sizing: border-box;
     background-color: #ffffff;
-    outline: 1px solid #e5e7eb;
+    // 恢复页面阴影，在浅灰背景上产生层次感
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     overflow: hidden;
     flex-shrink: 0;
@@ -293,18 +345,62 @@
   // by text selection or touch callout menus. The direct-render path above
   // (base-image) covers the `<img>` background case.
 
-  // Intermediate text spans
-  &__intermediate-text {
-    position: absolute;
-    display: inline-block;
-    white-space: pre;
-    box-sizing: border-box;
-    user-select: text;
-    -webkit-user-select: text;
-    z-index: 1;
-  }
+    // Intermediate text spans
+    &__intermediate-text {
+      position: absolute;
+      display: inline-block;
+      white-space: pre;
+      box-sizing: border-box;
+      user-select: text;
+      -webkit-user-select: text;
+      z-index: 1;
+    }
 
-}
+    // 文本模式 flow span 修饰符 (T7)：
+    // 必须在 &__intermediate-text 之后定义，以 CSS 源码顺序覆盖
+    // layout 模式的 position:absolute / display:inline-block / white-space:pre，
+    // 改为普通文档流内联文本。
+    &__intermediate-text--flow {
+      position: static;
+      display: inline;
+      white-space: normal;
+    }
+
+    // 高亮标记使用 multiply 混合模式
+    // percent 模式：将 blend 应用到 overlay 容器，影响所有子 rect
+    .hsn-selection-percent-overlay {
+      mix-blend-mode: multiply;
+      opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
+    }
+
+    // pixel 模式（SVG rect）保持 blend 在 rect 本身
+    .hsn-selection-rect--highlight {
+      mix-blend-mode: multiply;
+    }
+
+    // Selection 容器与内容区高度占满页面外壳，避免嵌套 flex/absolute
+    // 布局中因高度未显式声明而导致的选择 overlay 偏移或空白。
+    .hsn-selection-container,
+    .hsn-selection-content {
+      height: 100%;
+    }
+
+    // 与 @hamster-note/selection Demo 保持一致：移动端/粗指针设备上禁用
+    // 浏览器原生文本选择，避免长按时出现系统 selection handles 和选框；桌面端
+    // 仍保留 text selection，供 selection 包读取 Range 并绘制自定义高亮。
+    @media (pointer: coarse) {
+      &__intermediate-text,
+      .hsn-selection-content &__intermediate-text,
+      &__html-parser-output,
+      &__html-parser-output .hamster-note-page,
+      &__html-parser-output .hamster-note-page * {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+    }
+
+  }
 
 // Skeleton shimmer animation (global, scoped to keyframes only)
 @keyframes skeleton-shimmer {

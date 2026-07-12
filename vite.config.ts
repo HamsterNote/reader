@@ -11,7 +11,14 @@ const pdfParserStandardFontsPath = fileURLToPath(
     import.meta.url
   )
 )
+const pdfParserWorkerPath = fileURLToPath(
+  new URL(
+    './node_modules/@hamster-note/pdf-parser/dist/pdf.worker.min.mjs',
+    import.meta.url
+  )
+)
 const pdfParserStandardFontsRoute = '/pdfjs-standard-fonts/'
+const pdfParserWorkerRoute = '/pdfjs-worker/pdf.worker.min.mjs'
 const onnxRuntimeWebDistPath = fileURLToPath(
   new URL('./node_modules/onnxruntime-web/dist/', import.meta.url)
 )
@@ -39,6 +46,17 @@ function pdfParserStandardFontsPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const requestUrl = request.url
+
+        if (requestUrl?.split('?')[0] === pdfParserWorkerRoute) {
+          response.setHeader('Content-Type', 'text/javascript')
+          createReadStream(pdfParserWorkerPath)
+            .on('error', () => {
+              response.statusCode = 404
+              response.end()
+            })
+            .pipe(response)
+          return
+        }
 
         if (!requestUrl?.startsWith(pdfParserStandardFontsRoute)) {
           next()
@@ -82,16 +100,26 @@ function pdfParserStandardFontsPlugin(): Plugin {
           source: readFileSync(filePath)
         })
       }
+      this.emitFile({
+        type: 'asset',
+        fileName: pdfParserWorkerRoute.slice(1),
+        source: readFileSync(pdfParserWorkerPath)
+      })
     },
     transform(code, id) {
       if (!id.includes('/@hamster-note/pdf-parser/dist/pdfParser-')) {
         return null
       }
 
-      const updatedCode = code.replace(
-        'new URL("./standard_fonts/", import.meta.url).href',
-        'new URL((import.meta.env.BASE_URL || "/") + "pdfjs-standard-fonts/", window.location.origin).href'
-      )
+      const updatedCode = code
+        .replace(
+          'new URL("./standard_fonts/", import.meta.url).href',
+          'new URL((import.meta.env.BASE_URL || "/") + "pdfjs-standard-fonts/", window.location.origin).href'
+        )
+        .replace(
+          'new URL("./pdf.worker.min.mjs", import.meta.url).href',
+          'new URL((import.meta.env.BASE_URL || "/") + "pdfjs-worker/pdf.worker.min.mjs", window.location.origin).href'
+        )
 
       if (updatedCode === code) {
         return null

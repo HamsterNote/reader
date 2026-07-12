@@ -1,32 +1,80 @@
-import { HtmlParser, type DecodeOptions } from '@hamster-note/html-parser'
 import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
-  MousePosition as HamsterMousePosition,
-  OverlayRectType as HamsterOverlayRectType,
-  SelectionRange as HamsterSelectionRange,
-  SelectionRef as HamsterSelectionRef
+  LinkedSelectionData,
+  LinkedSelectionRange,
+  SelectionRange,
+  SelectionRef
 } from '@hamster-note/selection'
 import {
   IntermediateDocument,
   type IntermediateContent,
   type IntermediateDocumentSerialized,
+  type IntermediateImage,
   type IntermediateText
 } from '@hamster-note/types'
 import {
+  DEFAULT_ENABLED_INTERACTIONS,
   VirtualPaper,
   VirtualPaperInteractionMode,
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  type ReactNode,
+  type Ref,
+  Profiler,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 
-import { isHtmlParserSelectionTarget } from '../selection/caretResolver'
+import type {
+  ReaderLinkedSelectionData,
+  ReaderMousePosition,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool
+} from '../../types/selection'
+import { PopoverPortal } from '../PopoverPortal'
 import {
   buildSelectionPayload,
   textElementRecords,
   type ReaderSelectedTextSegment,
   type ReaderSelectionPayload
 } from '../selection/selectionPayloadSerializer'
+import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import {
+  computePageOriginY,
+  computeTransform,
+  computeTransformForOffset,
+  parsePublicPageId,
+  rectCenterToPagePixels,
+  resolveRangeJumpTarget
+} from './rangeJumpHelpers'
+import {
+  createIntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingEntry
+} from './renderTiming'
+import {
+  areRuntimeLinkedTransientsEqual,
+  buildRuntimeLinkedSelectionData,
+  extractRuntimeLinkedTransient,
+  mapPublicRectanglesToRuntime,
+  mapRuntimeLinkedDataToPublic,
+  mapRuntimeRectangleToPublic,
+  mapRuntimeRangeToPublic,
+  mapRuntimeSelectionIdToPublic,
+  runtimePageSelectionId,
+  type RuntimeLinkedSelectionTransient
+} from './selectionAdapter'
+// intermediate-document 默认模式的懒加载页面队列 hook
+import { useLazyPageQueue, type LazyPageQueueConfig } from './useLazyPageQueue'
 
 export {
   getNearestTextElementForPoint,
@@ -61,6 +109,16 @@ const getSelectionForRoot = (
   return viewerRoot?.ownerDocument.defaultView?.getSelection?.() ?? null
 }
 
+const EMPTY_SELECTION_RANGES: SelectionRange[] = []
+const EMPTY_INTERMEDIATE_TEXTS: IntermediateText[] = []
+const EMPTY_INTERMEDIATE_IMAGES: IntermediateImage[] = []
+const JUMP_PIN_CLEANUP_DELAY_MS = 5000
+
+const getRenderTimingNow = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+
 export type ReaderTextSelectionDetail = {
   text: IntermediateText
   texts: IntermediateText[]
@@ -69,26 +127,21 @@ export type ReaderTextSelectionDetail = {
   selection: Selection
 }
 
-/**
- * Reader 前缀的 Selection 库类型别名。
- * Reader 已导出大量 selection 符号（ReaderSavedSelection 系列、
- * ReaderSelectionOverlayRect 等），这里使用 Reader 前缀避免与
- * @hamster-note/selection 库的原生类型名冲突。
- */
-export type ReaderSelectionRange = HamsterSelectionRange
-export type ReaderSelectionRef = HamsterSelectionRef
-export type ReaderMousePosition = HamsterMousePosition
-export type ReaderSelectionOverlayRectType = HamsterOverlayRectType
+export type {
+  ReaderLinkedSelectionData,
+  ReaderLinkedSelectionRange,
+  ReaderMousePosition,
+  ReaderSelectionEndpoint,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRect,
+  ReaderSelectionRef
+} from '../../types/selection'
 
 export type ReaderPageRange = {
   start: number
   end: number
 }
-
-export type ReaderRenderMode = 'html-parser' | 'direct'
-
-/** 背景质量级别：low（低）、medium（中）、high（高） */
-export type BackgroundQuality = 'low' | 'medium' | 'high'
 
 /**
  * 选择覆盖层矩形区域。
@@ -286,29 +339,11 @@ export const isNonSpaceBlankText = (content: string): boolean =>
   NON_SPACE_BLANK_TEXT_RE.test(content) &&
   content.replace(/ /g, '').length > 0
 
-/** 将背景质量级别映射为 html-parser 的 backgroundQuality 数值（0-1） */
-const BACKGROUND_QUALITY_MAP: Record<BackgroundQuality, number> = {
-  low: 0.1,
-  medium: 0.3,
-  high: 0.8
-}
-
-type HtmlPageStatus = 'loading' | 'decoded' | 'fallback'
-
-function buildHtmlParserDecodeOptions(
-  backgroundQuality: BackgroundQuality | undefined
-): DecodeOptions | undefined {
-  return backgroundQuality
-    ? {
-        background: {
-          backgroundQuality: BACKGROUND_QUALITY_MAP[backgroundQuality]
-        }
-      }
-    : undefined
-}
-
 /** 交互模式：'default' 为默认触摸/鼠标模式，'stylus' 为手写笔优化模式 */
 export type ReaderInteractionMode = 'default' | 'stylus'
+
+/** Touch/mouse pan mode for document scrolling through VirtualPaper. Default is single-finger pan. */
+export type ReaderTouchPanMode = 'single-finger' | 'two-finger'
 
 export type IntermediateDocumentViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -316,8 +351,6 @@ export type IntermediateDocumentViewerProps = {
   className?: string
   overscan?: number
   pageRange?: ReaderPageRange
-  renderMode?: ReaderRenderMode
-  backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
   onTextSelectionChange?: (
@@ -376,13 +409,12 @@ export type IntermediateDocumentViewerProps = {
    * Finite values are floored by protected pages (visible pages, overscan,
    * in-flight work, active selection/drag/pinch state, and saved-selection
    * anchors), so more pages may remain loaded than the raw value. With
-   * html-parser output, eviction releases per-page decoded html state so an
-   * evicted page can be decoded again when it re-enters the loadable window.
    */
   maxLoadedPages?: number
   /** 交互模式，影响手势处理行为 */
   interactionMode?: ReaderInteractionMode
-  // ---- Selection 库集成 props（仅 html-parser 模式生效）----
+  /** 触摸文档平移模式：'single-finger' 为单指平移（默认），'two-finger' 为双指平移，避免与手写笔/选择操作冲突 */
+  touchPanMode?: ReaderTouchPanMode
   /** 受控的已高亮 range 列表；传入时组件不内部 mutation，缺失则用内部 state 从 defaultRanges 初始化 */
   ranges?: ReaderSelectionRange[]
   /** 非受控模式下 ranges 的初始值，默认空数组 */
@@ -393,6 +425,10 @@ export type IntermediateDocumentViewerProps = {
   defaultSelectedRangeId?: string | null
   /** 用户确认高亮时触发；非受控 ranges 模式下内部先 append range 再回调 */
   onSelect?: (range: ReaderSelectionRange) => void
+  onLinkedDataChange?: (next: ReaderLinkedSelectionData) => void
+  onLinkedSelect?: (range: ReaderSelectionRange) => void
+  onLinkedUpdateRange?: (range: ReaderSelectionRange) => void
+  onLinkedSelectRange?: (id: string | null) => void
   /** 用户点击或取消选中某个已高亮 range 时触发 */
   onSelectRange?: (id: string | null) => void
   /** 用户拖动已高亮 range 的首尾手柄调整范围时触发；非受控 ranges 模式下内部先替换对应 range */
@@ -416,10 +452,44 @@ export type IntermediateDocumentViewerProps = {
   highlightPopover?: React.ReactNode
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
-  /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法，仅 html-parser 模式有效 */
+  /** Selection 组件的命令式 ref，暴露 highlight()/clear()/confirm()/confirmRect() 方法 */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
+  /** 当前选择工具模式；默认 'text'，传 'rect' 启用矩形框选 */
+  tool?: ReaderSelectionTool
+  /** 当前已存在的矩形框选列表（受控） */
+  rects?: ReaderSelectionRectangle[]
+  /** 当前被选中的矩形框选 ID（受控属性）；null 表示未选中任何矩形 */
+  selectedRectId?: string | null
+  /** 当用户确认一个新矩形框选时触发 */
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  /** 当用户选中/取消选中某个矩形框选时触发 */
+  onSelectRect?: (id: string | null) => void
+  /** 当用户拖动矩形手柄调整后触发 */
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  /**
+   * 初始立即加载的页数。省略时默认 `1`。
+   */
+  initialLoadedPages?: number
+  /**
+   * 同时并发加载的页数上限。省略时默认 `3`。
+   */
+  pageLoadConcurrency?: number
+  /**
+   * 页面进入可加载窗口后、真正发起加载前的延迟（毫秒）。省略时默认 `500`。
+   */
+  pageLoadEnterDelayMs?: number
+  /**
+   * 页面离开可加载窗口后、卸载其内容的延迟（毫秒）。省略时默认 `5000`。
+   */
+  pageUnloadDelayMs?: number
+  /** intermediate-document 渲染阶段计时回调 */
+  onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
+  /** VirtualPaper 水平留白边距，单位 px */
+  containMarginX?: number
+  /** VirtualPaper 垂直留白边距，单位 px */
+  containMarginY?: number
 }
 
 type PageSize = {
@@ -427,26 +497,22 @@ type PageSize = {
   height: number
 }
 
-type RenderableIntermediateText = IntermediateText &
-  Partial<{
-    x: number
-    y: number
-    width: number
-    height: number
-    polygon: [number, number][]
-    rotate: number
-    skew: number
-  }>
+type NormalizedPageSize = PageSize & {
+  pageSizeUnavailable: boolean
+}
 
 type PageLoadStatus = 'loaded' | 'error'
-type HtmlParserPageInput = Parameters<typeof HtmlParser.decodePageToHtml>[0]
-
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
   height: 842
 }
 
-const getVisiblePageNumbers = (
+const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS =
+  DEFAULT_ENABLED_INTERACTIONS.filter(
+    (mode) => mode !== VirtualPaperInteractionMode.TouchSingleFingerPan
+  )
+
+export const getVisiblePageNumbers = (
   allPageNumbers: number[],
   pageRange: ReaderPageRange | undefined
 ) => {
@@ -536,7 +602,7 @@ const isRuntimeDocument = (
 ): document is IntermediateDocument =>
   typeof (document as IntermediateDocument).getPageByPageNumber === 'function'
 
-const getRuntimeDocument = (
+export const getRuntimeDocument = (
   inputDocument:
     | IntermediateDocument
     | IntermediateDocumentSerialized
@@ -549,9 +615,19 @@ const getRuntimeDocument = (
     : IntermediateDocument.parse(inputDocument)
 }
 
-const isIntermediateText = (
+export const isIntermediateText = (
   content: IntermediateContent
 ): content is IntermediateText => 'content' in content && 'fontSize' in content
+
+export const isIntermediateImage = (
+  content: IntermediateContent
+): content is IntermediateImage => {
+  if (!('src' in content) || !('polygon' in content)) {
+    return false
+  }
+
+  return typeof content.src === 'string' && content.src.trim().length > 0
+}
 
 const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
   const pageSizeUnavailable =
@@ -567,67 +643,34 @@ const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
   return { width, height, pageSizeUnavailable }
 }
 
-const getTextBoundingBox = (polygon: [number, number][]) => {
-  if (!polygon || polygon.length < 4) {
-    return { x: 0, y: 0, width: 0, height: 0 }
-  }
-  const xs = polygon.map((point) => point?.[0]).filter(Number.isFinite)
-  const ys = polygon.map((point) => point?.[1]).filter(Number.isFinite)
-  if (xs.length === 0 || ys.length === 0) {
-    return { x: 0, y: 0, width: 0, height: 0 }
-  }
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
-  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+const getCachedPageSize = (
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>,
+  pageNumber: number
+) => pageSizesByPageNumber.get(pageNumber) ?? normalizePageSize(undefined)
+
+const getKnownPageSize = (
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>,
+  pageNumber: number
+): NormalizedPageSize | null => {
+  const pageSize = pageSizesByPageNumber.get(pageNumber)
+  return pageSize && !pageSize.pageSizeUnavailable ? pageSize : null
 }
 
-const getPolygonTextGeometry = (
-  polygon: [number, number][] | undefined
-): {
-  x: number
-  y: number
-  width: number
-  height: number
-  rotation: number
-} | null => {
-  if (
-    !polygon ||
-    polygon.length !== 4 ||
-    !polygon.every(
-      (p) =>
-        Array.isArray(p) &&
-        p.length === 2 &&
-        typeof p[0] === 'number' &&
-        typeof p[1] === 'number' &&
-        Number.isFinite(p[0]) &&
-        Number.isFinite(p[1])
-    )
-  ) {
-    return null
+const getWidestKnownPageSize = (
+  pageNumbers: number[],
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
+): NormalizedPageSize | null => {
+  let widestPageSize: NormalizedPageSize | null = null
+
+  for (const pageNumber of pageNumbers) {
+    const pageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
+    if (!pageSize) return null
+    if (!widestPageSize || pageSize.width > widestPageSize.width) {
+      widestPageSize = pageSize
+    }
   }
 
-  const p0 = polygon[0]
-  const p1 = polygon[1]
-  const p2 = polygon[2]
-
-  const width = Math.sqrt((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2)
-  const height = Math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
-
-  if (width === 0 || height === 0) {
-    return null
-  }
-
-  const rotation = (Math.atan2(p1[1] - p0[1], p1[0] - p0[0]) * 180) / Math.PI
-
-  return {
-    x: p0[0],
-    y: p0[1],
-    width,
-    height,
-    rotation
-  }
+  return widestPageSize
 }
 
 /**
@@ -672,95 +715,6 @@ export const mergeSelectionRects = (
   return merged
 }
 
-const getTextTransform = (
-  text: RenderableIntermediateText,
-  skipRotate?: boolean
-) => {
-  const transforms: string[] = []
-
-  if (!skipRotate && text.rotate) {
-    transforms.push(`rotate(${text.rotate}deg)`)
-  }
-
-  if (text.skew) {
-    transforms.push(`skewX(${text.skew}deg)`)
-  }
-
-  return transforms.length > 0 ? transforms.join(' ') : undefined
-}
-
-const getTextBbox = (text: RenderableIntermediateText) => {
-  const polygonGeometry = getPolygonTextGeometry(text.polygon)
-  const usePolygonGeometry = polygonGeometry !== null
-
-  if (usePolygonGeometry) {
-    return {
-      x: polygonGeometry.x,
-      y: polygonGeometry.y,
-      width: polygonGeometry.width,
-      height: polygonGeometry.height,
-      rotation: polygonGeometry.rotation
-    }
-  }
-
-  if (text.polygon) {
-    return {
-      ...getTextBoundingBox(text.polygon),
-      rotation: 0
-    }
-  }
-
-  return {
-    x: text.x ?? 0,
-    y: text.y ?? 0,
-    width: text.width ?? 0,
-    height: text.height ?? 0,
-    rotation: 0
-  }
-}
-
-const buildTextSpanStyle = (
-  text: RenderableIntermediateText,
-  bbox: ReturnType<typeof getTextBbox>
-) => {
-  const textTransform = getTextTransform(text, !!bbox.rotation)
-  const transform = [
-    bbox.rotation ? `rotate(${bbox.rotation}deg)` : '',
-    textTransform
-  ]
-    .filter(Boolean)
-    .join(' ')
-
-  return {
-    position: 'absolute' as const,
-    left: Number.isFinite(bbox.x) ? `${bbox.x}px` : '0px',
-    top: Number.isFinite(bbox.y) ? `${bbox.y}px` : '0px',
-    width:
-      Number.isFinite(bbox.width) && bbox.width > 0
-        ? `${bbox.width}px`
-        : undefined,
-    height:
-      Number.isFinite(bbox.height) && bbox.height > 0
-        ? `${bbox.height}px`
-        : undefined,
-    fontSize:
-      Number.isFinite(text.fontSize) && text.fontSize > 0
-        ? `${text.fontSize}px`
-        : undefined,
-    fontFamily: text.fontFamily || undefined,
-    fontWeight: text.fontWeight || undefined,
-    fontStyle: text.italic ? 'italic' : undefined,
-    color: text.color || undefined,
-    lineHeight:
-      Number.isFinite(text.lineHeight) && text.lineHeight > 0
-        ? `${text.lineHeight}px`
-        : undefined,
-    transform,
-    transformOrigin: 'left top' as const,
-    whiteSpace: 'pre' as const
-  }
-}
-
 const createSetTextsHandler = (
   pageNumber: number,
   texts: IntermediateText[]
@@ -772,30 +726,22 @@ const createSetTextsHandler = (
   }
 }
 
+const createSetImagesHandler = (
+  pageNumber: number,
+  images: IntermediateImage[]
+) => {
+  return (currentImages: Map<number, IntermediateImage[]>) => {
+    const nextImages = new Map(currentImages)
+    nextImages.set(pageNumber, images)
+    return nextImages
+  }
+}
+
 const createSetPageStatusHandler = (
   pageNumber: number,
   status: PageLoadStatus
 ) => {
   return (currentStatuses: Map<number, PageLoadStatus>) => {
-    const nextStatuses = new Map(currentStatuses)
-    nextStatuses.set(pageNumber, status)
-    return nextStatuses
-  }
-}
-
-const createSetHtmlPageHandler = (pageNumber: number, html: string) => {
-  return (currentPages: Map<number, string>) => {
-    const nextPages = new Map(currentPages)
-    nextPages.set(pageNumber, html)
-    return nextPages
-  }
-}
-
-const createSetHtmlPageStatusHandler = (
-  pageNumber: number,
-  status: HtmlPageStatus
-) => {
-  return (currentStatuses: Map<number, HtmlPageStatus>) => {
     const nextStatuses = new Map(currentStatuses)
     nextStatuses.set(pageNumber, status)
     return nextStatuses
@@ -850,7 +796,9 @@ const getOcrCacheKey = (
 type PageWithBaseImage = {
   thumbnail?: unknown
   image?: unknown
-  getThumbnail?: () => Promise<unknown> | unknown
+  // scale 参数对应 IntermediatePage.getThumbnail(scale)，
+  // 用于按当前缩放比例获取更高分辨率的缩略图，放大时背景图更清晰
+  getThumbnail?: (scale?: number) => Promise<unknown> | unknown
 }
 
 type ImageSourceLike = {
@@ -872,18 +820,22 @@ const getStringBaseImage = (imageSource: unknown) => {
   return undefined
 }
 
-const getBaseImageFromPage = async (page: unknown) => {
+// scale 可选参数传入 getThumbnail(scale)，用于按当前缩放比例请求
+// 对应分辨率的缩略图。不传时使用 getThumbnail 的默认行为（初始加载）。
+const getBaseImageFromPage = async (page: unknown, scale?: number) => {
   if (!page || typeof page !== 'object') {
     return undefined
   }
 
   const pageWithImage = page as PageWithBaseImage
-  const directBaseImage =
+  const inlineBaseImage =
     getStringBaseImage(pageWithImage.thumbnail) ??
     getStringBaseImage(pageWithImage.image)
 
-  if (directBaseImage) {
-    return directBaseImage
+  // 如果页面内联了静态缩略图（thumbnail/image 属性），直接使用，
+  // 不走 getThumbnail —— 内联缩略图不支持按 scale 生成不同分辨率
+  if (inlineBaseImage) {
+    return inlineBaseImage
   }
 
   if (typeof pageWithImage.getThumbnail !== 'function') {
@@ -891,7 +843,7 @@ const getBaseImageFromPage = async (page: unknown) => {
   }
 
   try {
-    return getStringBaseImage(await pageWithImage.getThumbnail())
+    return getStringBaseImage(await pageWithImage.getThumbnail(scale))
   } catch {
     return undefined
   }
@@ -902,6 +854,44 @@ const getImageParserInput = async (imageSource: string) => {
   return response.blob()
 }
 
+// 兼容当前 getContent() 与旧版 texts / getTexts() 形状的内容提取。
+// 优先调用 getContent()；若不存在则回退到 texts 属性或 getTexts() 方法。
+type PageWithContent = {
+  getContent?: () =>
+    | Promise<IntermediateContent[] | IntermediateText[]>
+    | IntermediateContent[]
+    | IntermediateText[]
+  getTexts?: () =>
+    | Promise<IntermediateContent[] | IntermediateText[]>
+    | IntermediateContent[]
+    | IntermediateText[]
+  texts?: IntermediateContent[] | IntermediateText[]
+}
+
+export const getPageContentEntries = async (
+  page: unknown
+): Promise<IntermediateContent[]> => {
+  if (!page || typeof page !== 'object') {
+    return []
+  }
+
+  const pageWithContent = page as PageWithContent
+
+  if (typeof pageWithContent.getContent === 'function') {
+    return pageWithContent.getContent()
+  }
+
+  if (typeof pageWithContent.getTexts === 'function') {
+    return pageWithContent.getTexts()
+  }
+
+  if (Array.isArray(pageWithContent.texts)) {
+    return pageWithContent.texts
+  }
+
+  return []
+}
+
 const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
   texts.map((text) => ({
     ...text,
@@ -910,50 +900,17 @@ const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
 
 // 已移除自定义 SVG 选区 overlay 的拖拽 hook；文本选择改回浏览器原生 Selection。
 
-/**
- * 记忆化 HTML 页面内容子组件
- *
- * 隔离 dangerouslySetInnerHTML，使其不受父组件 IntermediateDocumentViewer
- * 中无关 state 变化（选区、overlay 等）导致的重新渲染影响。
- *
- * React.memo 对 string prop 做浅比较（值比较），所以当 html 字符串未变化时
- * 不会重新渲染，从而避免触发浏览器侧的 Parse HTML + set innerHTML。
- */
-const HtmlPageContent = React.memo(({ html }: { html: string }) => {
-  // 缓存 dangerouslySetInnerHTML 对象，稳定对象 identity
-  const htmlObj = useMemo(() => ({ __html: html }), [html])
-  return (
-    <div
-      // HTML 来自受信任的 @hamster-note/html-parser 包，
-      // 将 IntermediateDocument 数据转换为每页 HTML 片段。
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted html-parser output
-      dangerouslySetInnerHTML={htmlObj}
-    />
-  )
-})
-
-HtmlPageContent.displayName = 'HtmlPageContent'
-
 type SetTextRef = (
   text: IntermediateText,
   pageNumber: number
 ) => (element: HTMLSpanElement | null) => void
 
-type DirectPageInnerProps = {
-  pageNumber: number
-  texts: IntermediateText[]
-  ocrTexts: IntermediateText[]
-  pageStatus: PageLoadStatus | undefined
-  isLoadable: boolean
-  baseImageSource: string | undefined
-  setTextRef: SetTextRef
-}
-
 type PageRefSetter = (
   pageNumber: number
 ) => (element: HTMLDivElement | null) => void
 
-type DirectPageResources = {
+type PageResources = {
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
   textsByPageNumber: Map<number, IntermediateText[]>
   ocrTextsByPageNumber: Map<number, IntermediateText[]>
   pageStatuses: Map<number, PageLoadStatus>
@@ -961,29 +918,28 @@ type DirectPageResources = {
   baseImagesByPageNumber: Map<number, string>
 }
 
-type HtmlParserPagesProps = DirectPageResources & {
-  pageNumbers: number[]
-  runtimeDocument: IntermediateDocument
-  htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
-  htmlPagesByPageNumber: Map<number, string>
-  setPageRef: PageRefSetter
-  setTextRef: SetTextRef
-}
-
-type DirectPagesProps = DirectPageResources & {
-  pageNumbers: number[]
-  runtimeDocument: IntermediateDocument
-  setPageRef: PageRefSetter
-  setTextRef: SetTextRef
-}
-
-type ViewerContentProps = DirectPageResources & {
+type ViewerContentProps = PageResources & {
   rootClassName: string
-  viewerRootRef: React.Ref<HTMLDivElement>
-  runtimeDocument: IntermediateDocument
+  viewerRootRef: Ref<HTMLDivElement>
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
+  onScrollToRange: (id: string) => void
+  onScrollToRect: (id: string) => void
+  onScrollToPosition: (position: {
+    x: number
+    y: number
+    scale?: number
+  }) => void
+  imagesByPageNumber: Map<number, IntermediateImage[]>
+  onPageRenderTiming:
+    | ((
+        pageNumber: number,
+        startTime: number,
+        commitTime: number,
+        actualDuration: number
+      ) => void)
+    | undefined
   handleVirtualPaperTransformChange: (
     nextTransform: VirtualPaperTransform,
     meta: VirtualPaperTransformMeta
@@ -992,13 +948,17 @@ type ViewerContentProps = DirectPageResources & {
     nextTransform: VirtualPaperTransform,
     meta: VirtualPaperTransformMeta
   ) => void
-  renderMode: ReaderRenderMode
-  effectiveRanges: ReaderSelectionRange[]
   effectiveSelectedRangeId: string | null
-  onSelect: ((range: ReaderSelectionRange) => void) | undefined
-  handleSelectionSelect: (range: ReaderSelectionRange) => void
-  handleSelectionSelectRange: (id: string | null) => void
-  handleSelectionUpdateRange: (range: ReaderSelectionRange) => void
+  runtimePageSelectionId: (pageNumber: number) => string
+  runtimeLinkedData: LinkedSelectionData
+  handleLinkedDataChange: (next: LinkedSelectionData) => void
+  handleLinkedSelect: (range: LinkedSelectionRange) => void
+  handleLinkedUpdateRange: (range: LinkedSelectionRange) => void
+  handleLinkedSelectRange: (id: string | null) => void
+  beginLinkedHighlightOperation: () => PendingLinkedHighlightOperation
+  schedulePendingLinkedHighlightCleanup: (
+    operation: PendingLinkedHighlightOperation
+  ) => void
   onSelectionStartProp:
     | ((mousePos: ReaderMousePosition, selection: Selection) => void)
     | undefined
@@ -1013,298 +973,317 @@ type ViewerContentProps = DirectPageResources & {
     mousePos: ReaderMousePosition,
     selection: Selection
   ) => void
-  onHighlight: ((range: ReaderSelectionRange) => void) | undefined
   highlightColor: string | undefined
   selectionColor: string | undefined
-  selectionPopover: React.ReactNode
-  highlightPopover: React.ReactNode
+  selectionPopover: ReactNode
+  highlightPopover: ReactNode
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
-  selectionRef: React.Ref<ReaderSelectionRef> | undefined
-  htmlPageStatusesByPageNumber: Map<number, HtmlPageStatus>
-  htmlPagesByPageNumber: Map<number, string>
+  selectionRef: Ref<ReaderSelectionRef> | undefined
+  tool?: ReaderSelectionTool
+  rects?: ReaderSelectionRectangle[]
+  selectedRectId?: string | null
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  onSelectRect?: (id: string | null) => void
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
+  touchPanMode?: ReaderTouchPanMode
+  containMarginX?: number
+  containMarginY?: number
 }
 
-type SelectionOverlayRect = NonNullable<ReaderSelectionRange['rects']>[number]
+type PendingLinkedHighlightOperation = ReadonlySet<string>
 
-type SelectionRectBounds = {
-  x: number
-  y: number
-  width: number
-  height: number
+type PageLoadTimingStart = {
+  readonly startedAt: number
+  readonly stage: 'initial-page-loading' | 'visibility-lazy-loading'
 }
 
-type SelectionRangeHitTest = {
-  localX: number
-  localY: number
-  containerRect: DOMRect
-  overlayRectType: ReaderSelectionOverlayRectType
+const getElementFromSelectionNode = (node: Node | null): Element | null => {
+  if (!node) return null
+  return node instanceof Element ? node : node.parentElement
 }
 
-const SELECTION_INTERACTIVE_SELECTOR =
-  '.hsn-selection-handle, .hsn-selection-popover'
+const getRuntimeSelectionIdFromSelectionNode = (
+  node: Node | null,
+  runtimePageSelectionId: (pageNumber: number) => string
+): string | null => {
+  const element = getElementFromSelectionNode(node)
+  if (!element) return null
 
-const getSelectionRectBounds = (
-  rect: SelectionOverlayRect,
-  containerRect: DOMRect,
-  overlayRectType: ReaderSelectionOverlayRectType
-) => ({
-  x:
-    overlayRectType === 'percent'
-      ? (rect.x / 100) * containerRect.width
-      : rect.x,
-  y:
-    overlayRectType === 'percent'
-      ? (rect.y / 100) * containerRect.height
-      : rect.y,
-  width:
-    overlayRectType === 'percent'
-      ? (rect.width / 100) * containerRect.width
-      : rect.width,
-  height:
-    overlayRectType === 'percent'
-      ? (rect.height / 100) * containerRect.height
-      : rect.height
-})
-
-const isPointInsideSelectionRect = (
-  bounds: SelectionRectBounds,
-  localX: number,
-  localY: number
-) => {
-  return (
-    localX >= bounds.x &&
-    localX <= bounds.x + bounds.width &&
-    localY >= bounds.y &&
-    localY <= bounds.y + bounds.height
-  )
-}
-
-const findSelectionRangeAtPoint = (
-  ranges: ReaderSelectionRange[],
-  hitTest: SelectionRangeHitTest
-) => {
-  for (const range of ranges) {
-    const rects = range.rects ?? []
-    const rangeOverlayRectType =
-      range.overlayRectType ?? hitTest.overlayRectType
-    const hasHitRect = rects.some((rect) => {
-      const bounds = getSelectionRectBounds(
-        rect,
-        hitTest.containerRect,
-        rangeOverlayRectType
-      )
-      return isPointInsideSelectionRect(bounds, hitTest.localX, hitTest.localY)
-    })
-
-    if (hasHitRect) {
-      return range
-    }
+  const selectionContainer = element.closest('.hsn-selection-container')
+  if (selectionContainer instanceof HTMLElement) {
+    const selectionId = selectionContainer.dataset.selectionId
+    if (selectionId) return selectionId
   }
 
-  return null
+  const pageContainer = element.closest('.hamster-reader__intermediate-page')
+  if (!(pageContainer instanceof HTMLElement)) return null
+
+  const pageSelectionId = pageContainer.dataset.selectionId
+  if (pageSelectionId) return pageSelectionId
+
+  const pageNumber = Number(pageContainer.dataset.pageNumber)
+  return Number.isFinite(pageNumber) ? runtimePageSelectionId(pageNumber) : null
 }
 
-function DirectPageInner({
-  pageNumber,
-  texts,
-  ocrTexts,
-  pageStatus,
-  isLoadable,
-  baseImageSource,
-  setTextRef
-}: DirectPageInnerProps) {
-  const allTexts = [...texts, ...ocrTexts]
-  const isDirectPageLoading =
-    isLoadable && pageStatus !== 'loaded' && pageStatus !== 'error'
+/**
+ * `intermediate-document` 默认模式的页面渲染器。
+ *
+ * 为每个 `pageNumbers` 条目渲染一个 `.hamster-reader__intermediate-page` 外壳，
+ * 设置 `data-testid`、`data-page-number`、`data-selection-id` 及缓存尺寸
+ * （缺失时回退 `DEFAULT_PAGE_SIZE`）。
+ *
+ * 当某页已在内容 maps 中拥有已加载内容时，在外壳内渲染
+ * `<IntermediateDocumentPageContent>`（底图 + 文本 span + OCR span + 图片项）；
+ * 未加载的页面保持空外壳，由懒加载队列（后续任务）填充。
+ *
+ * 关键约束：外壳渲染阶段绝不调用页面/内容加载器；绝不使用
+ * `dangerouslySetInnerHTML`；内容由独立渲染器以 React 元素绘制。
+ */
+type IntermediateDocumentPagesProps = PageResources & {
+  pageNumbers: number[]
+  setPageRef: PageRefSetter
+  setTextRef: SetTextRef
+  runtimePageSelectionId: (pageNumber: number) => string
+  imagesByPageNumber: Map<number, IntermediateImage[]>
+  // 每个「已加载」页面内容由一个 HamsterSelection 实例包裹，
+  // 使用 runtimePageSelectionId(pageNumber) 作为 runtime 选中 id，
+  // 共享同一份 runtime LinkedSelectionData 引用，并通过回调桥接 public 语义。
+  runtimeLinkedData: LinkedSelectionData
+  handleLinkedDataChange: (next: LinkedSelectionData) => void
+  handleLinkedSelect: (range: LinkedSelectionRange) => void
+  handleLinkedUpdateRange: (range: LinkedSelectionRange) => void
+  handleLinkedSelectRange: (id: string | null) => void
+  onSelectionStartProp:
+    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
+    | undefined
+  handleSelectionStart: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  onSelectionEndProp:
+    | ((mousePos: ReaderMousePosition, selection: Selection) => void)
+    | undefined
+  handleSelectionEnd: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  autoHighlight: boolean | undefined
+  highlightColor: string | undefined
+  selectionColor: string | undefined
+  overlayRectType: ReaderSelectionOverlayRectType
+  effectiveSelectedRangeId: string | null
+  selectionPopover: ReactNode
+  highlightPopover: ReactNode
+  popoverVisible: boolean
+  selectionRefForRuntimeId: (
+    selectionId: string
+  ) => (node: SelectionRef | null) => void
+  tool?: ReaderSelectionTool
+  rects?: ReaderSelectionRectangle[]
+  selectedRectId?: string | null
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  onSelectRect?: (id: string | null) => void
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  onRectPointerUp?: (pageNumber: number) => void
+  onPageRenderTiming?: (
+    pageNumber: number,
+    startTime: number,
+    commitTime: number,
+    actualDuration: number
+  ) => void
+}
+
+function IntermediateDocumentPages({
+  pageNumbers,
+  setPageRef,
+  setTextRef,
+  runtimePageSelectionId,
+  pageSizesByPageNumber,
+  textsByPageNumber,
+  ocrTextsByPageNumber,
+  baseImagesByPageNumber,
+  imagesByPageNumber,
+  pageStatuses,
+  runtimeLinkedData,
+  handleLinkedDataChange,
+  handleLinkedSelect,
+  handleLinkedUpdateRange,
+  handleLinkedSelectRange,
+  onSelectionStartProp,
+  handleSelectionStart,
+  onSelectionEndProp,
+  handleSelectionEnd,
+  autoHighlight,
+  highlightColor,
+  selectionColor,
+  overlayRectType,
+  effectiveSelectedRangeId,
+  selectionPopover,
+  highlightPopover,
+  popoverVisible,
+  selectionRefForRuntimeId,
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
+  onRectPointerUp,
+  onPageRenderTiming
+}: IntermediateDocumentPagesProps) {
+  // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
+  // 实例可以渲染 popover，其余页面传入 undefined。
+  const popoverOwnerRuntimeId = useMemo(() => {
+    const selectedId = runtimeLinkedData.selectedRangeId
+    if (!selectedId) {
+      return null
+    }
+    const selectedRange = runtimeLinkedData.items.find(
+      (range) => range.id === selectedId
+    )
+    return selectedRange ? selectedRange.start.selectionId : null
+  }, [runtimeLinkedData.selectedRangeId, runtimeLinkedData.items])
+
+  // onSelectionStart 仅在调用方提供 prop 时启用；
+  // onSelectionEnd 当调用方提供 prop 或 autoHighlight 时启用。
+  const selectionStartHandler = onSelectionStartProp
+    ? handleSelectionStart
+    : undefined
+  const selectionEndHandler =
+    onSelectionEndProp || autoHighlight ? handleSelectionEnd : undefined
 
   return (
-    <>
-      {baseImageSource && (
-        <img
-          className='hamster-reader__intermediate-page-base-image'
-          src={baseImageSource}
-          alt=''
-          aria-hidden='true'
-        />
-      )}
-      {isDirectPageLoading && (
-        <div className='hamster-reader__intermediate-page-status'>
-          Loading page {pageNumber}…
-        </div>
-      )}
-      {pageStatus === 'error' && (
-        <div className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--error'>
-          Failed to load page {pageNumber}
-        </div>
-      )}
-      {allTexts.map((textData) => {
-        const text = textData as RenderableIntermediateText
-        const bbox = getTextBbox(text)
-        const spanStyle = buildTextSpanStyle(text, bbox)
+    <div className='hamster-note-document'>
+      {pageNumbers.map((pageNumber) => {
+        const shellPageSize = getCachedPageSize(
+          pageSizesByPageNumber,
+          pageNumber
+        )
+        const shellSelectionId = runtimePageSelectionId(pageNumber)
+
+        const pageTexts = textsByPageNumber.get(pageNumber)
+        const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
+        const isPageContentLoaded = pageStatuses.get(pageNumber) === 'loaded'
+
+        // popover gating：owner 为 null（无 selected range）时所有页面均呈现 popover，
+        // 否则仅 shellSelectionId === popoverOwnerRuntimeId 的页面拿到真实 popover 内容。
+        const isPopoverOwner =
+          popoverOwnerRuntimeId === null ||
+          popoverOwnerRuntimeId === shellSelectionId
+        const pagePopover = isPopoverOwner ? (
+          <PopoverPortal visible={popoverVisible}>
+            {highlightPopover ?? selectionPopover}
+          </PopoverPortal>
+        ) : undefined
+        const pageSelectionPopover = isPopoverOwner ? (
+          <PopoverPortal visible={popoverVisible}>
+            {selectionPopover}
+          </PopoverPortal>
+        ) : undefined
+
+        const pageContent = isPageContentLoaded ? (
+          <IntermediateDocumentPageContent
+            pageNumber={pageNumber}
+            texts={pageTexts ?? EMPTY_INTERMEDIATE_TEXTS}
+            ocrTexts={
+              ocrTextsByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_TEXTS
+            }
+            baseImageSource={pageBaseImage}
+            images={
+              imagesByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_IMAGES
+            }
+            setTextRef={setTextRef}
+            onRenderTiming={onPageRenderTiming}
+          />
+        ) : null
 
         return (
-          <span
-            key={text.id}
-            ref={setTextRef(text, pageNumber)}
-            className='hamster-reader__intermediate-text'
-            data-text-id={text.id}
+          <div
+            key={pageNumber}
+            ref={setPageRef(pageNumber)}
+            className='hamster-reader__intermediate-page'
+            data-testid={`intermediate-page-${pageNumber}`}
             data-page-number={pageNumber}
-            style={spanStyle}
+            data-selection-id={shellSelectionId}
+            data-page-size-unavailable={
+              shellPageSize.pageSizeUnavailable ? 'true' : undefined
+            }
+            onPointerUp={() => onRectPointerUp?.(pageNumber)}
+            style={{
+              position: 'relative',
+              width: `${shellPageSize.width}px`,
+              height: `${shellPageSize.height}px`,
+              overflow: 'hidden'
+            }}
           >
-            {text.content}
-          </span>
+            {isPageContentLoaded ? (
+              <HamsterSelection
+                selectionId={shellSelectionId}
+                linkedMode
+                linkedData={runtimeLinkedData}
+                onLinkedDataChange={handleLinkedDataChange}
+                onLinkedSelect={handleLinkedSelect}
+                onLinkedUpdateRange={handleLinkedUpdateRange}
+                onLinkedSelectRange={handleLinkedSelectRange}
+                ranges={EMPTY_SELECTION_RANGES}
+                selectedRangeId={effectiveSelectedRangeId}
+                onSelect={undefined}
+                onSelectRange={undefined}
+                onUpdateRange={undefined}
+                onSelectionStart={selectionStartHandler}
+                onSelectionEnd={selectionEndHandler}
+                onHighlight={undefined}
+                highlightColor={highlightColor}
+                selectionColor={selectionColor}
+                popover={pagePopover}
+                selectionPopover={pageSelectionPopover}
+                overlayRectType={overlayRectType}
+                tool={tool}
+                rects={rects}
+                selectedRectId={selectedRectId}
+                onCreateRect={onCreateRect}
+                onSelectRect={onSelectRect}
+                onUpdateRect={onUpdateRect}
+                ref={selectionRefForRuntimeId(shellSelectionId)}
+              >
+                {pageContent}
+              </HamsterSelection>
+            ) : null}
+          </div>
         )
       })}
-    </>
-  )
-}
-
-function HtmlParserPages({
-  pageNumbers,
-  runtimeDocument,
-  htmlPageStatusesByPageNumber,
-  htmlPagesByPageNumber,
-  setPageRef,
-  setTextRef,
-  textsByPageNumber,
-  ocrTextsByPageNumber,
-  pageStatuses,
-  loadablePages,
-  baseImagesByPageNumber
-}: HtmlParserPagesProps) {
-  return (
-    <div
-      className='hamster-reader__html-parser-output'
-      data-testid='html-parser-output'
-    >
-      <div className='hamster-note-document'>
-        {pageNumbers.map((pageNumber) => {
-          const htmlPageSize = normalizePageSize(
-            runtimeDocument.getPageSizeByPageNumber(pageNumber)
-          )
-          const htmlPageStatusEntry =
-            htmlPageStatusesByPageNumber.get(pageNumber)
-          const htmlPageHtmlEntry = htmlPagesByPageNumber.get(pageNumber)
-          const isHtmlPageDecoded =
-            htmlPageStatusEntry === 'decoded' && Boolean(htmlPageHtmlEntry)
-
-          return (
-            <div
-              key={pageNumber}
-              ref={setPageRef(pageNumber)}
-              className='hamster-reader__intermediate-page'
-              data-testid={`intermediate-page-${pageNumber}`}
-              data-page-number={pageNumber}
-              data-page-size-unavailable={
-                htmlPageSize.pageSizeUnavailable ? 'true' : undefined
-              }
-              style={{
-                position: 'relative',
-                width: `${htmlPageSize.width}px`,
-                height: `${htmlPageSize.height}px`,
-                overflow: 'hidden'
-              }}
-            >
-              {isHtmlPageDecoded ? (
-                <HtmlPageContent html={htmlPageHtmlEntry ?? ''} />
-              ) : (
-                <DirectPageInner
-                  pageNumber={pageNumber}
-                  texts={textsByPageNumber.get(pageNumber) ?? []}
-                  ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
-                  pageStatus={pageStatuses.get(pageNumber)}
-                  isLoadable={loadablePages.has(pageNumber)}
-                  baseImageSource={baseImagesByPageNumber.get(pageNumber)}
-                  setTextRef={setTextRef}
-                />
-              )}
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
-}
-
-function DirectPages({
-  pageNumbers,
-  runtimeDocument,
-  setPageRef,
-  setTextRef,
-  textsByPageNumber,
-  ocrTextsByPageNumber,
-  pageStatuses,
-  loadablePages,
-  baseImagesByPageNumber
-}: DirectPagesProps) {
-  return pageNumbers.map((pageNumber) => {
-    const directPageSize = normalizePageSize(
-      runtimeDocument.getPageSizeByPageNumber(pageNumber)
-    )
-    const directPageStatusEntry = pageStatuses.get(pageNumber)
-    const isDirectPageLoading =
-      loadablePages.has(pageNumber) &&
-      directPageStatusEntry !== 'loaded' &&
-      directPageStatusEntry !== 'error'
-    const directPageClassName = isDirectPageLoading
-      ? 'hamster-reader__intermediate-page hamster-reader__intermediate-page--loading'
-      : 'hamster-reader__intermediate-page'
-
-    return (
-      <div
-        key={pageNumber}
-        ref={setPageRef(pageNumber)}
-        className={directPageClassName}
-        data-testid={`intermediate-page-${pageNumber}`}
-        data-page-number={pageNumber}
-        data-page-size-unavailable={
-          directPageSize.pageSizeUnavailable ? 'true' : undefined
-        }
-        style={{
-          position: 'relative',
-          width: `${directPageSize.width}px`,
-          height: `${directPageSize.height}px`,
-          overflow: 'hidden'
-        }}
-      >
-        <DirectPageInner
-          pageNumber={pageNumber}
-          texts={textsByPageNumber.get(pageNumber) ?? []}
-          ocrTexts={ocrTextsByPageNumber.get(pageNumber) ?? []}
-          pageStatus={directPageStatusEntry}
-          isLoadable={loadablePages.has(pageNumber)}
-          baseImageSource={baseImagesByPageNumber.get(pageNumber)}
-          setTextRef={setTextRef}
-        />
-      </div>
-    )
-  })
 }
 
 function ViewerContent({
   rootClassName,
   viewerRootRef,
-  runtimeDocument,
   pageNumbers,
+  pageSizesByPageNumber,
   virtualPaperTransform,
   scaleRange,
+  onScrollToRange,
+  onScrollToRect,
+  onScrollToPosition,
   handleVirtualPaperTransformChange,
   handleVirtualPaperTransformChangeEnd,
-  renderMode,
-  effectiveRanges,
   effectiveSelectedRangeId,
-  onSelect,
-  handleSelectionSelect,
-  handleSelectionSelectRange,
-  handleSelectionUpdateRange,
+  runtimePageSelectionId,
+  runtimeLinkedData,
+  handleLinkedDataChange,
+  handleLinkedSelect,
+  handleLinkedUpdateRange,
+  handleLinkedSelectRange,
+  beginLinkedHighlightOperation,
+  schedulePendingLinkedHighlightCleanup,
   onSelectionStartProp,
   handleSelectionStart,
   onSelectionEndProp,
   handleSelectionEnd,
-  onHighlight,
   highlightColor,
   selectionColor,
   selectionPopover,
@@ -1312,162 +1291,349 @@ function ViewerContent({
   autoHighlight,
   overlayRectType,
   selectionRef,
-  htmlPageStatusesByPageNumber,
-  htmlPagesByPageNumber,
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
   setPageRef,
   setTextRef,
   textsByPageNumber,
   ocrTextsByPageNumber,
   pageStatuses,
   loadablePages,
-  baseImagesByPageNumber
+  baseImagesByPageNumber,
+  imagesByPageNumber,
+  onPageRenderTiming,
+  touchPanMode,
+  containMarginX,
+  containMarginY
 }: ViewerContentProps) {
-  const fallbackSelectionRef = useRef<ReaderSelectionRef>(null)
+  const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
+  const selectionRefSettersByRuntimeIdRef = useRef(
+    new Map<string, (node: SelectionRef | null) => void>()
+  )
+  const syncForwardedSelectionRefRef = useRef<() => void>(() => {})
 
-  const mergedSelectionRef = useCallback(
-    (node: ReaderSelectionRef | null) => {
-      fallbackSelectionRef.current = node
+  // --- Portal popover 可见性控制 ---
+  // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
+  const [popoverVisible, setPopoverVisible] = useState(true)
+  const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-      if (typeof selectionRef === 'function') {
-        selectionRef(node)
-      } else if (selectionRef) {
-        ;(
-          selectionRef as React.MutableRefObject<ReaderSelectionRef | null>
-        ).current = node
-      }
+  const getFirstVisibleSelectionRef = useCallback(() => {
+    for (const pageNumber of pageNumbers) {
+      const selectionId = runtimePageSelectionId(pageNumber)
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return undefined
+  }, [pageNumbers, runtimePageSelectionId])
+
+  const getActiveSelectionOwnerRef = useCallback(() => {
+    const activeSelection = window.getSelection()
+    if (!activeSelection || activeSelection.isCollapsed) return undefined
+
+    const ownerSelectionIds = [
+      getRuntimeSelectionIdFromSelectionNode(
+        activeSelection.anchorNode,
+        runtimePageSelectionId
+      ),
+      getRuntimeSelectionIdFromSelectionNode(
+        activeSelection.focusNode,
+        runtimePageSelectionId
+      )
+    ]
+
+    for (const selectionId of ownerSelectionIds) {
+      if (!selectionId) continue
+
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return ownerSelectionIds.some(Boolean) ? null : undefined
+  }, [runtimePageSelectionId])
+
+  const getActiveLinkedRangeOwnerRef = useCallback(() => {
+    const activeRange = runtimeLinkedData.activeRange
+    if (!activeRange) return undefined
+
+    const ownerSelectionIds = [
+      activeRange.start.selectionId,
+      activeRange.end.selectionId
+    ]
+
+    for (const selectionId of ownerSelectionIds) {
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return null
+  }, [runtimeLinkedData.activeRange])
+
+  const getActiveSelectionRef = useCallback(() => {
+    const ownerSelectionRef = getActiveSelectionOwnerRef()
+    const linkedRangeOwnerSelectionRef =
+      ownerSelectionRef === undefined
+        ? getActiveLinkedRangeOwnerRef()
+        : ownerSelectionRef
+    return linkedRangeOwnerSelectionRef === undefined
+      ? getFirstVisibleSelectionRef()
+      : linkedRangeOwnerSelectionRef
+  }, [
+    getActiveLinkedRangeOwnerRef,
+    getActiveSelectionOwnerRef,
+    getFirstVisibleSelectionRef
+  ])
+
+  const highlightSelection = useCallback(() => {
+    const operation = beginLinkedHighlightOperation()
+
+    try {
+      getActiveSelectionRef()?.highlight()
+    } finally {
+      schedulePendingLinkedHighlightCleanup(operation)
+    }
+  }, [
+    beginLinkedHighlightOperation,
+    getActiveSelectionRef,
+    schedulePendingLinkedHighlightCleanup
+  ])
+
+  const confirmRectSelection = useCallback(() => {
+    selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
+      selectionRef.confirmRect()
+    })
+  }, [])
+
+  const handleRectPointerUp = useCallback(
+    (pageNumber: number) => {
+      if (!autoHighlight || tool !== 'rect') return
+      const selectionId = runtimePageSelectionId(pageNumber)
+      selectionRefsByRuntimeIdRef.current.get(selectionId)?.confirmRect()
     },
-    [selectionRef]
+    [autoHighlight, runtimePageSelectionId, tool]
   )
 
-  const handleSelectionEndWrap = useCallback(
-    (mousePos: ReaderMousePosition, selection: Selection) => {
-      if (autoHighlight && fallbackSelectionRef.current) {
-        fallbackSelectionRef.current.highlight()
-      }
-      handleSelectionEnd(mousePos, selection)
-    },
-    [handleSelectionEnd, autoHighlight]
-  )
+  const confirmSelection = useCallback(() => {
+    if (tool === 'rect') {
+      confirmRectSelection()
+      return
+    }
+    getActiveSelectionRef()?.confirm()
+  }, [confirmRectSelection, getActiveSelectionRef, tool])
 
-  const delegatedSelectionClickRangeRef = useRef<string | null>(null)
-  const selectionClickStartSelectedRangeIdRef = useRef<string | null>(null)
+  const clearSelections = useCallback(() => {
+    selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
+      selectionRef.clear()
+    })
+  }, [])
 
-  const handleHamsterSelectionSelectRange = useCallback(
-    (id: string | null) => {
-      const delegatedRangeId = delegatedSelectionClickRangeRef.current
-      if (delegatedRangeId !== null && id === delegatedRangeId) {
-        delegatedSelectionClickRangeRef.current = null
-        return
-      }
-
-      handleSelectionSelectRange(id)
-    },
-    [handleSelectionSelectRange]
-  )
-
-  const handleSelectionOverlayClickCapture = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (renderMode === 'direct') {
-        return
-      }
-
-      const eventTarget = event.target
-      if (!(eventTarget instanceof Element)) {
-        return
-      }
-
-      if (eventTarget.closest(SELECTION_INTERACTIVE_SELECTOR)) {
-        return
-      }
-
-      const activeSelection =
-        event.currentTarget.ownerDocument.defaultView?.getSelection?.() ?? null
-      if (
-        activeSelection &&
-        !activeSelection.isCollapsed &&
-        activeSelection.toString()
-      ) {
-        return
-      }
-
-      const selectionContainer = eventTarget.closest('.hsn-selection-container')
-      if (!(selectionContainer instanceof HTMLElement)) {
-        return
-      }
-
-      const containerRect = selectionContainer.getBoundingClientRect()
-      const localX = event.clientX - containerRect.left
-      const localY = event.clientY - containerRect.top
-      const hitRange = findSelectionRangeAtPoint(effectiveRanges, {
-        localX,
-        localY,
-        containerRect,
-        overlayRectType
-      })
-
-      if (!hitRange) {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-      event.nativeEvent.stopImmediatePropagation()
-      delegatedSelectionClickRangeRef.current = hitRange.id
-      const selectedRangeIdAtClickStart =
-        selectionClickStartSelectedRangeIdRef.current
-      selectionClickStartSelectedRangeIdRef.current = null
-      const nextSelectedRangeId =
-        hitRange.id === selectedRangeIdAtClickStart ? null : hitRange.id
-      if (nextSelectedRangeId !== effectiveSelectedRangeId) {
-        handleSelectionSelectRange(nextSelectedRangeId)
-      }
-
-      event.currentTarget.ownerDocument.defaultView?.setTimeout(() => {
-        if (delegatedSelectionClickRangeRef.current === hitRange.id) {
-          delegatedSelectionClickRangeRef.current = null
-        }
-      }, 0)
-    },
+  const publicSelectionRef = useMemo<ReaderSelectionRef>(
+    () => ({
+      highlight: highlightSelection,
+      confirm: confirmSelection,
+      confirmRect: confirmRectSelection,
+      clear: clearSelections,
+      scrollToRange: onScrollToRange,
+      scrollToRect: onScrollToRect,
+      scrollToPosition: onScrollToPosition
+    }),
     [
-      effectiveRanges,
-      effectiveSelectedRangeId,
-      handleSelectionSelectRange,
-      overlayRectType,
-      renderMode
+      clearSelections,
+      confirmSelection,
+      confirmRectSelection,
+      highlightSelection,
+      onScrollToRange,
+      onScrollToRect,
+      onScrollToPosition
     ]
   )
 
-  const handleSelectionOverlayMouseDownCapture = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (renderMode === 'direct') {
-        return
+  const syncForwardedSelectionRef = useCallback(() => {
+    const forwardedRef =
+      selectionRefsByRuntimeIdRef.current.size > 0 ? publicSelectionRef : null
+
+    if (typeof selectionRef === 'function') {
+      selectionRef(forwardedRef)
+    } else if (selectionRef) {
+      ;(
+        selectionRef as React.MutableRefObject<ReaderSelectionRef | null>
+      ).current = forwardedRef
+    }
+  }, [publicSelectionRef, selectionRef])
+
+  syncForwardedSelectionRefRef.current = syncForwardedSelectionRef
+
+  useEffect(() => {
+    syncForwardedSelectionRef()
+    return () => {
+      if (typeof selectionRef === 'function') {
+        selectionRef(null)
+      } else if (selectionRef) {
+        ;(
+          selectionRef as React.MutableRefObject<ReaderSelectionRef | null>
+        ).current = null
       }
+    }
+  }, [selectionRef, syncForwardedSelectionRef])
 
-      const eventTarget = event.target
-      if (!(eventTarget instanceof Element)) {
-        return
+  const selectionRefForRuntimeId = useCallback((selectionId: string) => {
+    let setSelectionRef =
+      selectionRefSettersByRuntimeIdRef.current.get(selectionId)
+    if (!setSelectionRef) {
+      setSelectionRef = (node: SelectionRef | null) => {
+        if (node) {
+          selectionRefsByRuntimeIdRef.current.set(selectionId, node)
+        } else {
+          selectionRefsByRuntimeIdRef.current.delete(selectionId)
+        }
+
+        syncForwardedSelectionRefRef.current()
       }
+      selectionRefSettersByRuntimeIdRef.current.set(
+        selectionId,
+        setSelectionRef
+      )
+    }
 
-      const selectionContainer = eventTarget.closest('.hsn-selection-container')
-      if (!(selectionContainer instanceof HTMLElement)) {
-        return
+    return setSelectionRef
+  }, [])
+
+  const handleSelectionEndWrap = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      if (autoHighlight) {
+        highlightSelection()
       }
-
-      const containerRect = selectionContainer.getBoundingClientRect()
-      const localX = event.clientX - containerRect.left
-      const localY = event.clientY - containerRect.top
-      const hitRange = findSelectionRangeAtPoint(effectiveRanges, {
-        localX,
-        localY,
-        containerRect,
-        overlayRectType
-      })
-
-      selectionClickStartSelectedRangeIdRef.current = hitRange
-        ? effectiveSelectedRangeId
-        : null
+      handleSelectionEnd(mousePos, selection)
     },
-    [effectiveRanges, effectiveSelectedRangeId, overlayRectType, renderMode]
+    [autoHighlight, handleSelectionEnd, highlightSelection]
+  )
+
+  const runtimeLinkedDataRef = useRef(runtimeLinkedData)
+  runtimeLinkedDataRef.current = runtimeLinkedData
+
+  const handlePageLinkedDataChange = useCallback(
+    (next: LinkedSelectionData) => {
+      runtimeLinkedDataRef.current = next
+      handleLinkedDataChange(next)
+    },
+    [handleLinkedDataChange]
+  )
+
+  const handlePageLinkedSelectRange = useCallback(
+    (id: string | null) => {
+      const currentData = runtimeLinkedDataRef.current
+      if (currentData.selectedRangeId !== id) {
+        handlePageLinkedDataChange({
+          ...currentData,
+          selectedRangeId: id
+        })
+      }
+      handleLinkedSelectRange(id)
+    },
+    [handleLinkedSelectRange, handlePageLinkedDataChange]
+  )
+
+  // 包装 VirtualPaper 的 transform 回调：
+  // transform 进行中时立即隐藏 portal popover，结束后 debounce 500ms 再显示
+  const handleTransformChangeWithPopover = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      setPopoverVisible(false)
+      if (popoverDebounceRef.current) {
+        clearTimeout(popoverDebounceRef.current)
+        popoverDebounceRef.current = null
+      }
+      handleVirtualPaperTransformChange(nextTransform, meta)
+    },
+    [handleVirtualPaperTransformChange]
+  )
+
+  const handleTransformChangeEndWithPopover = useCallback(
+    (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      handleVirtualPaperTransformChangeEnd(nextTransform, meta)
+      if (popoverDebounceRef.current) {
+        clearTimeout(popoverDebounceRef.current)
+      }
+      popoverDebounceRef.current = setTimeout(() => {
+        setPopoverVisible(true)
+        popoverDebounceRef.current = null
+      }, 500)
+    },
+    [handleVirtualPaperTransformChangeEnd]
+  )
+
+  // 组件卸载时清理 debounce 定时器，防止内存泄漏
+  useEffect(() => {
+    return () => {
+      if (popoverDebounceRef.current) {
+        clearTimeout(popoverDebounceRef.current)
+      }
+    }
+  }, [])
+
+  const intermediateDocumentPages = (
+    <IntermediateDocumentPages
+      pageNumbers={pageNumbers}
+      setPageRef={setPageRef}
+      setTextRef={setTextRef}
+      runtimePageSelectionId={runtimePageSelectionId}
+      pageSizesByPageNumber={pageSizesByPageNumber}
+      textsByPageNumber={textsByPageNumber}
+      ocrTextsByPageNumber={ocrTextsByPageNumber}
+      pageStatuses={pageStatuses}
+      loadablePages={loadablePages}
+      baseImagesByPageNumber={baseImagesByPageNumber}
+      imagesByPageNumber={imagesByPageNumber}
+      runtimeLinkedData={runtimeLinkedData}
+      handleLinkedDataChange={handlePageLinkedDataChange}
+      handleLinkedSelect={handleLinkedSelect}
+      handleLinkedUpdateRange={handleLinkedUpdateRange}
+      handleLinkedSelectRange={handlePageLinkedSelectRange}
+      onSelectionStartProp={onSelectionStartProp}
+      handleSelectionStart={handleSelectionStart}
+      onSelectionEndProp={onSelectionEndProp}
+      handleSelectionEnd={handleSelectionEndWrap}
+      autoHighlight={autoHighlight}
+      highlightColor={highlightColor}
+      selectionColor={selectionColor}
+      overlayRectType={overlayRectType}
+      effectiveSelectedRangeId={effectiveSelectedRangeId}
+      selectionPopover={selectionPopover}
+      highlightPopover={highlightPopover}
+      popoverVisible={popoverVisible}
+      selectionRefForRuntimeId={selectionRefForRuntimeId}
+      tool={tool}
+      rects={rects}
+      selectedRectId={selectedRectId}
+      onCreateRect={onCreateRect}
+      onSelectRect={onSelectRect}
+      onUpdateRect={onUpdateRect}
+      onRectPointerUp={handleRectPointerUp}
+      onPageRenderTiming={onPageRenderTiming}
+    />
+  )
+
+  const pagesNode = onPageRenderTiming ? (
+    <Profiler
+      id='intermediate-document-shell'
+      onRender={(
+        _id,
+        _phase,
+        actualDuration,
+        _baseDuration,
+        startTime,
+        commitTime
+      ) => {
+        onPageRenderTiming(0, startTime, commitTime, actualDuration)
+      }}
+    >
+      {intermediateDocumentPages}
+    </Profiler>
+  ) : (
+    intermediateDocumentPages
   )
 
   return (
@@ -1476,68 +1642,24 @@ function ViewerContent({
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
-      onClickCapture={handleSelectionOverlayClickCapture}
-      onMouseDownCapture={handleSelectionOverlayMouseDownCapture}
     >
       {pageNumbers.length > 0 ? (
         <VirtualPaper
-          containMode='contain'
+          containMode={true}
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}
-          onTransformChange={handleVirtualPaperTransformChange}
-          onTransformChangeEnd={handleVirtualPaperTransformChangeEnd}
+          enabledInteractions={
+            touchPanMode === 'two-finger'
+              ? TWO_FINGER_TOUCH_ENABLED_INTERACTIONS
+              : DEFAULT_ENABLED_INTERACTIONS
+          }
+          onTransformChange={handleTransformChangeWithPopover}
+          onTransformChangeEnd={handleTransformChangeEndWithPopover}
+          containMarginX={containMarginX}
+          containMarginY={containMarginY}
         >
-          {renderMode !== 'direct' ? (
-            <HamsterSelection
-              ranges={effectiveRanges}
-              selectedRangeId={effectiveSelectedRangeId}
-              onSelect={onSelect ? handleSelectionSelect : undefined}
-              onSelectRange={handleHamsterSelectionSelectRange}
-              onUpdateRange={handleSelectionUpdateRange}
-              onSelectionStart={
-                onSelectionStartProp ? handleSelectionStart : undefined
-              }
-              onSelectionEnd={
-                onSelectionEndProp || autoHighlight
-                  ? handleSelectionEndWrap
-                  : undefined
-              }
-              onHighlight={onHighlight}
-              highlightColor={highlightColor}
-              selectionColor={selectionColor}
-              popover={highlightPopover ?? selectionPopover}
-              selectionPopover={selectionPopover}
-              overlayRectType={overlayRectType}
-              ref={mergedSelectionRef}
-            >
-              <HtmlParserPages
-                pageNumbers={pageNumbers}
-                runtimeDocument={runtimeDocument}
-                htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
-                htmlPagesByPageNumber={htmlPagesByPageNumber}
-                setPageRef={setPageRef}
-                setTextRef={setTextRef}
-                textsByPageNumber={textsByPageNumber}
-                ocrTextsByPageNumber={ocrTextsByPageNumber}
-                pageStatuses={pageStatuses}
-                loadablePages={loadablePages}
-                baseImagesByPageNumber={baseImagesByPageNumber}
-              />
-            </HamsterSelection>
-          ) : (
-            <DirectPages
-              pageNumbers={pageNumbers}
-              runtimeDocument={runtimeDocument}
-              setPageRef={setPageRef}
-              setTextRef={setTextRef}
-              textsByPageNumber={textsByPageNumber}
-              ocrTextsByPageNumber={ocrTextsByPageNumber}
-              pageStatuses={pageStatuses}
-              loadablePages={loadablePages}
-              baseImagesByPageNumber={baseImagesByPageNumber}
-            />
-          )}
+          {pagesNode}
         </VirtualPaper>
       ) : null}
     </div>
@@ -1550,8 +1672,6 @@ export function IntermediateDocumentViewer({
   className,
   overscan = 1,
   pageRange,
-  renderMode = 'html-parser',
-  backgroundQuality = 'high',
   ocr,
   onOcrError,
   onTextSelectionChange,
@@ -1564,11 +1684,16 @@ export function IntermediateDocumentViewer({
   maxScale,
   maxLoadedPages,
   interactionMode = 'default',
+  touchPanMode,
   ranges,
   defaultRanges,
   selectedRangeId,
   defaultSelectedRangeId,
   onSelect,
+  onLinkedDataChange,
+  onLinkedSelect,
+  onLinkedUpdateRange,
+  onLinkedSelectRange,
   onSelectRange,
   onUpdateRange,
   onSelectionStart: onSelectionStartProp,
@@ -1580,22 +1705,115 @@ export function IntermediateDocumentViewer({
   highlightPopover,
   autoHighlight,
   selectionRef,
-  overlayRectType = 'percent'
+  overlayRectType = 'percent',
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
+  initialLoadedPages = 1,
+  pageLoadConcurrency = 3,
+  pageLoadEnterDelayMs = 500,
+  pageUnloadDelayMs = 5000,
+  onIntermediateDocumentRenderTiming,
+  containMarginX,
+  containMarginY
 }: IntermediateDocumentViewerProps) {
+  // Render timing controller: stable across renders, callback identity
+  // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
+  // instrumentation.
+  const renderTimingCallbackRef = useRef(onIntermediateDocumentRenderTiming)
+  renderTimingCallbackRef.current = onIntermediateDocumentRenderTiming
+  const renderTimingRef = useRef(
+    createIntermediateDocumentRenderTiming({
+      callback: (...args) => renderTimingCallbackRef.current?.(...args)
+    })
+  )
+  const renderPhaseTimingBufferRef = useRef<
+    IntermediateDocumentRenderTimingEntry[]
+  >([])
+  const pageLoadTimingStartsRef = useRef(new Map<number, PageLoadTimingStart>())
+
   const runtimeDocument = useMemo(() => {
     const inputDocument = document ?? serializedDocument
-    return getRuntimeDocument(inputDocument)
+    if (!renderTimingRef.current.enabled)
+      return getRuntimeDocument(inputDocument)
+
+    const startedAt = getRenderTimingNow()
+    const nextRuntimeDocument = getRuntimeDocument(inputDocument)
+    const endedAt = getRenderTimingNow()
+    renderPhaseTimingBufferRef.current.push({
+      stage: 'document-resolution',
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      detail: {
+        hasDocument: Boolean(document),
+        hasSerializedDocument: Boolean(serializedDocument),
+        pageCount: nextRuntimeDocument?.pageNumbers.length ?? 0
+      }
+    })
+    return nextRuntimeDocument
   }, [document, serializedDocument])
+
+  useEffect(() => {
+    const buffer = renderPhaseTimingBufferRef.current
+    if (buffer.length === 0) return
+
+    renderPhaseTimingBufferRef.current = []
+    buffer.forEach((entry) => {
+      renderTimingRef.current.record(entry)
+    })
+  })
+
+  // intermediate-document 模式懒加载队列参数。集中存储四个 lazy props，
+  // 供 useLazyPageQueue hook 读取以驱动逐页懒加载/并发/卸载节流。
+  const lazyQueueConfigRef = useRef<LazyPageQueueConfig>({
+    initialLoadedPages,
+    pageLoadConcurrency,
+    pageLoadEnterDelayMs,
+    pageUnloadDelayMs
+  })
+  lazyQueueConfigRef.current = {
+    initialLoadedPages,
+    pageLoadConcurrency,
+    pageLoadEnterDelayMs,
+    pageUnloadDelayMs
+  }
 
   const pageNumbers = useMemo(() => {
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
     return getVisiblePageNumbers(allPageNumbers, pageRange)
   }, [runtimeDocument, pageRange])
+  const pageSizesByPageNumber = useMemo(() => {
+    const nextPageSizes = new Map<number, NormalizedPageSize>()
+    if (!runtimeDocument) return nextPageSizes
+
+    pageNumbers.forEach((pageNumber) => {
+      nextPageSizes.set(
+        pageNumber,
+        normalizePageSize(runtimeDocument.getPageSizeByPageNumber(pageNumber))
+      )
+    })
+
+    return nextPageSizes
+  }, [runtimeDocument, pageNumbers])
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
   const ocrCacheRef = useRef(new Map<string, IntermediateText[]>())
   const evictedOcrPagesRef = useRef(new Set<number>())
+  // 每页 OCR 驱逐代际：离屏卸载时递增对应页码代际。OCR 异步任务发起时
+  // 捕获代际，resolve 时比对——不一致即运行期间被卸载过（stale，丢弃），
+  // 一致则为重载后的新鲜结果（写回）。借此区分卸载前 stale OCR 与重载后
+  // 重新发起的 OCR，修复仅凭 evictedOcrPagesRef.has 导致重载后永久被拒的死锁。
+  const ocrEvictGenerationRef = useRef(new Map<number, number>())
+  // 被 evictLazyPageBundle 卸载的初始页面集合。enqueueInitialPages 的
+  // isPageLoaded 检查此集合，防止 eviction 后 lazyPageQueue identity
+  // 变化触发 effect 重跑而重新加载已卸载的页面。页面重新进入可见窗口
+  // 时从集合中移除，允许通过 enqueuePage 重新加载。
+  const lazilyEvictedPagesRef = useRef(new Set<number>())
   const activeDocumentRef = useRef<IntermediateDocument | null>(null)
   const isMountedRef = useRef(false)
   const viewerRootRef = useRef<HTMLDivElement>(null)
@@ -1605,6 +1823,48 @@ export function IntermediateDocumentViewer({
   // 交互模式 ref，供后续手势逻辑读取（Wave 1 仅透传，不做行为分支）
   const interactionModeRef = useRef(interactionMode)
   interactionModeRef.current = interactionMode
+  const reactInstanceId = useId()
+  const readerLinkedScopeId = useMemo(
+    () => `reader-linked-${reactInstanceId}`,
+    [reactInstanceId]
+  )
+  const getRuntimePageSelectionId = useCallback(
+    (pageNumber: number) =>
+      runtimePageSelectionId(readerLinkedScopeId, pageNumber),
+    [readerLinkedScopeId]
+  )
+
+  const handlePageRenderTiming = useCallback(
+    (
+      pageNumber: number,
+      startTime: number,
+      commitTime: number,
+      actualDuration: number
+    ) => {
+      if (pageNumber === 0) {
+        renderTimingRef.current.record({
+          stage: 'shell-rendering',
+          startedAt: startTime,
+          endedAt: commitTime,
+          durationMs: actualDuration,
+          detail: { pageCount: pageNumbers.length }
+        })
+        return
+      }
+
+      renderTimingRef.current.record({
+        stage: 'page-content-rendering',
+        startedAt: startTime,
+        endedAt: commitTime,
+        durationMs: actualDuration,
+        pageNumber
+      })
+    },
+    [pageNumbers.length]
+  )
+  const pageRenderTimingHandler = renderTimingRef.current.enabled
+    ? handlePageRenderTiming
+    : undefined
 
   // ---- Selection 库受控/非受控 state ----
   // ranges 受控（prop 提供）则直接用；否则内部 state 从 defaultRanges 初始化
@@ -1612,14 +1872,64 @@ export function IntermediateDocumentViewer({
   const [internalRanges, setInternalRanges] = useState<ReaderSelectionRange[]>(
     () => defaultRanges ?? []
   )
-  const effectiveRanges = ranges ?? internalRanges
+  const effectiveRanges = isRangesControlled ? ranges : internalRanges
+  const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
+  effectiveRangesRef.current = effectiveRanges
+
+  const effectiveRects = rects ?? []
+  const effectiveRectsRef = useRef<ReaderSelectionRectangle[]>(effectiveRects)
+  effectiveRectsRef.current = effectiveRects
+
+  const pendingLinkedHighlightOperationRef =
+    useRef<PendingLinkedHighlightOperation | null>(null)
+  const emittedLinkedSelectRangeIdsRef = useRef(new Set<string>())
+  const emittedLinkedHighlightRangeIdsRef = useRef(new Set<string>())
 
   // selectedRangeId 同理
   const isSelectedRangeIdControlled = selectedRangeId !== undefined
   const [internalSelectedRangeId, setInternalSelectedRangeId] = useState<
     string | null
   >(defaultSelectedRangeId ?? null)
-  const effectiveSelectedRangeId = selectedRangeId ?? internalSelectedRangeId
+  const effectiveSelectedRangeId = isSelectedRangeIdControlled
+    ? selectedRangeId
+    : internalSelectedRangeId
+  const [runtimeLinkedTransient, setRuntimeLinkedTransient] =
+    useState<RuntimeLinkedSelectionTransient>({})
+  const runtimeLinkedData = useMemo(
+    () =>
+      buildRuntimeLinkedSelectionData({
+        scopeId: readerLinkedScopeId,
+        ranges: effectiveRanges,
+        selectedRangeId: effectiveSelectedRangeId,
+        pageNumbers,
+        overlayRectType,
+        transient: runtimeLinkedTransient
+      }),
+    [
+      effectiveRanges,
+      effectiveSelectedRangeId,
+      overlayRectType,
+      pageNumbers,
+      readerLinkedScopeId,
+      runtimeLinkedTransient
+    ]
+  )
+  const runtimeRects = useMemo(
+    () => mapPublicRectanglesToRuntime(rects, readerLinkedScopeId),
+    [readerLinkedScopeId, rects]
+  )
+  const handleCreateRect = useCallback(
+    (rect: ReaderSelectionRectangle) => {
+      onCreateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+    },
+    [onCreateRect, readerLinkedScopeId]
+  )
+  const handleUpdateRect = useCallback(
+    (rect: ReaderSelectionRectangle) => {
+      onUpdateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+    },
+    [onUpdateRect, readerLinkedScopeId]
+  )
 
   const scaleRange = useMemo(
     () => getEffectiveScaleRange(minScale, maxScale),
@@ -1675,6 +1985,10 @@ export function IntermediateDocumentViewer({
   const evictionSkippedDuringTransformRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
+  const jumpPinTokensRef = useRef(new Map<number, symbol>())
+  const jumpPinCleanupTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
   const [textsByPageNumber, setTextsByPageNumber] = useState(
     () => new Map<number, IntermediateText[]>()
   )
@@ -1687,28 +2001,208 @@ export function IntermediateDocumentViewer({
   const [baseImagesByPageNumber, setBaseImagesByPageNumber] = useState(
     () => new Map<number, string>()
   )
-  const [htmlPagesByPageNumber, setHtmlPagesByPageNumber] = useState(
-    () => new Map<number, string>()
+  // intermediate-document 模式专用：getContent() 返回的 IntermediateImage 内容项
+  const [imagesByPageNumber, setImagesByPageNumber] = useState(
+    () => new Map<number, IntermediateImage[]>()
   )
-  const htmlPagesByPageNumberRef = useRef(htmlPagesByPageNumber)
-  htmlPagesByPageNumberRef.current = htmlPagesByPageNumber
-  const [htmlPageStatusesByPageNumber, setHtmlPageStatusesByPageNumber] =
-    useState(() => new Map<number, HtmlPageStatus>())
-  const htmlPageStatusesByPageNumberRef = useRef(htmlPageStatusesByPageNumber)
-  htmlPageStatusesByPageNumberRef.current = htmlPageStatusesByPageNumber
-  const decodingPageNumbersRef = useRef(new Set<number>())
-  const decodeGenerationRef = useRef(0)
-  const decodeResetInputsRef = useRef({
-    runtimeDocument,
-    renderMode,
-    backgroundQuality
+
+  // --- debounced thumbnail refresh 所需的 refs ---
+  // 在 setTimeout 回调中读取最新 state，避免将这些 state 加入 effect deps 导致循环
+  const pageStatusesRef = useRef(pageStatuses)
+  pageStatusesRef.current = pageStatuses
+  const baseImagesByPageNumberRef = useRef(baseImagesByPageNumber)
+  baseImagesByPageNumberRef.current = baseImagesByPageNumber
+  const pageNumbersRef = useRef(pageNumbers)
+  pageNumbersRef.current = pageNumbers
+  // 记录上次刷新缩略图时的 scale，避免微小缩放变化触发不必要的重新生成
+  const lastThumbnailRefreshScaleRef = useRef(effectiveScale)
+  // intermediate-document 默认模式懒加载队列 hook。
+  // 队列项为页码，通过 generation token 忽略 stale async 结果，
+  // 并复用 loadingPagesRef 强制并发上限。callbacks 复用已有的
+  // createSet*Handler immutable updater helpers 更新状态 maps。
+  const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
+    activeDocumentRef,
+    isMountedRef,
+    loadingPagesRef,
+    getBaseImageFromPage,
+    getPageContentEntries,
+    isIntermediateText,
+    isIntermediateImage,
+    effectiveScaleRef,
+    callbacks: {
+      onPageLoaded: ({ pageNumber, baseImage, texts, images }) => {
+        const loadTimingStart = pageLoadTimingStartsRef.current.get(pageNumber)
+        if (loadTimingStart) {
+          const endedAt = getRenderTimingNow()
+          renderTimingRef.current.record({
+            stage: loadTimingStart.stage,
+            startedAt: loadTimingStart.startedAt,
+            endedAt,
+            durationMs: endedAt - loadTimingStart.startedAt,
+            pageNumber
+          })
+          renderTimingRef.current.record({
+            stage: 'content-extraction',
+            startedAt: loadTimingStart.startedAt,
+            endedAt,
+            durationMs: endedAt - loadTimingStart.startedAt,
+            pageNumber
+          })
+          pageLoadTimingStartsRef.current.delete(pageNumber)
+        }
+        lazilyEvictedPagesRef.current.delete(pageNumber)
+        setBaseImagesByPageNumber(
+          createSetBaseImageHandler(pageNumber, baseImage)
+        )
+        setTextsByPageNumber(createSetTextsHandler(pageNumber, texts))
+        setImagesByPageNumber(createSetImagesHandler(pageNumber, images))
+        setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
+      },
+      onPageError: (pageNumber) => {
+        pageLoadTimingStartsRef.current.delete(pageNumber)
+        setBaseImagesByPageNumber(
+          createSetBaseImageHandler(pageNumber, undefined)
+        )
+        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
+        setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
+        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
+      },
+      isPageLoaded: (pageNumber) =>
+        pageStatuses.get(pageNumber) === 'loaded' ||
+        textsByPageNumber.has(pageNumber) ||
+        baseImagesByPageNumber.has(pageNumber) ||
+        imagesByPageNumber.has(pageNumber) ||
+        lazilyEvictedPagesRef.current.has(pageNumber)
+    }
   })
+
+  const enqueueVisiblePageRef = useRef(lazyPageQueue.enqueuePage)
+  enqueueVisiblePageRef.current = lazyPageQueue.enqueuePage
+
+  // intermediate-document 模式下 IO 可见性防抖定时器（按页码 keyed）。
+  // 页面进入可加载窗口后启动 pageLoadEnterDelayMs 定时器，仅当页面持续
+  // 可见至定时器触发时才调用 enqueuePage；页面提前离开则取消挂起入队，
+  // 保持空外壳，从而避免快速滚动把所有路过页面都入队加载。
+  // enqueuePage 不能作为 scheduleVisibilityEnqueue 的依赖：它由 useLazyPageQueue
+  // 返回，其 callbacks 依赖每渲染新建，故 enqueuePage 每渲染变 identity；若
+  // 进入 IO effect deps 会导致观察者每渲染重建 -> markLoadableWithOverscan
+  // -> setLoadablePages 死循环。改由 ref 在定时器触发时读取最新 enqueuePage。
+  const pendingVisibilityTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
+
+  const clearAllVisibilityTimers = useCallback(() => {
+    pendingVisibilityTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    pendingVisibilityTimersRef.current.clear()
+  }, [])
+
+  const cancelVisibilityEnqueue = useCallback((pageNumber: number) => {
+    const timer = pendingVisibilityTimersRef.current.get(pageNumber)
+    if (timer) {
+      clearTimeout(timer)
+      pendingVisibilityTimersRef.current.delete(pageNumber)
+    }
+  }, [])
+
+  const scheduleVisibilityEnqueue = useCallback((pageNumber: number) => {
+    if (pendingVisibilityTimersRef.current.has(pageNumber)) {
+      return
+    }
+    const delay = lazyQueueConfigRef.current.pageLoadEnterDelayMs
+    const timer = setTimeout(() => {
+      pendingVisibilityTimersRef.current.delete(pageNumber)
+      if (!isMountedRef.current) {
+        return
+      }
+      if (renderTimingRef.current.enabled) {
+        pageLoadTimingStartsRef.current.set(pageNumber, {
+          stage: 'visibility-lazy-loading',
+          startedAt: getRenderTimingNow()
+        })
+      }
+      enqueueVisiblePageRef.current(pageNumber)
+    }, delay)
+    pendingVisibilityTimersRef.current.set(pageNumber, timer)
+  }, [])
+
+  // intermediate-document 模式下离屏页面卸载定时器（按页码 keyed）。
+  // 页面离开可加载窗口后启动 pageUnloadDelayMs 定时器，仅当页面持续
+  // 离开至定时器触发时才卸载其内容包回到空外壳；页面在定时器触发前
+  // 重新进入可见窗口则取消挂起卸载，保持内容。
+  const pendingUnloadTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
+
+  const clearUnloadTimer = useCallback((pageNumber: number) => {
+    const timer = pendingUnloadTimersRef.current.get(pageNumber)
+    if (timer) {
+      clearTimeout(timer)
+      pendingUnloadTimersRef.current.delete(pageNumber)
+    }
+  }, [])
+
+  const clearAllUnloadTimers = useCallback(() => {
+    pendingUnloadTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    pendingUnloadTimersRef.current.clear()
+  }, [])
+
+  const clearJumpPinCleanupTimer = useCallback((pageNumber: number) => {
+    const timer = jumpPinCleanupTimersRef.current.get(pageNumber)
+    if (!timer) {
+      return
+    }
+    clearTimeout(timer)
+    jumpPinCleanupTimersRef.current.delete(pageNumber)
+  }, [])
+
+  const releaseJumpPinnedPage = useCallback(
+    (pageNumber: number, token: symbol) => {
+      if (jumpPinTokensRef.current.get(pageNumber) !== token) {
+        return
+      }
+      clearJumpPinCleanupTimer(pageNumber)
+      jumpPinTokensRef.current.delete(pageNumber)
+      pinnedPagesRef.current.delete(pageNumber)
+    },
+    [clearJumpPinCleanupTimer]
+  )
+
+  const clearAllJumpPins = useCallback(() => {
+    jumpPinCleanupTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    jumpPinCleanupTimersRef.current.clear()
+    jumpPinTokensRef.current.clear()
+    pinnedPagesRef.current.clear()
+  }, [])
+
+  const pinJumpTargetPage = useCallback(
+    (pageNumber: number): symbol => {
+      const token = Symbol(`jump-target-page-${pageNumber}`)
+      clearJumpPinCleanupTimer(pageNumber)
+      jumpPinTokensRef.current.set(pageNumber, token)
+      pinnedPagesRef.current.add(pageNumber)
+
+      const timer = setTimeout(() => {
+        releaseJumpPinnedPage(pageNumber, token)
+      }, JUMP_PIN_CLEANUP_DELAY_MS)
+      jumpPinCleanupTimersRef.current.set(pageNumber, timer)
+
+      return token
+    },
+    [clearJumpPinCleanupTimer, releaseJumpPinnedPage]
+  )
+
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
   useEffect(() => {
     const currentPageNumbers = new Set(pageNumbers)
 
-    pinnedPagesRef.current.clear()
+    clearAllJumpPins()
     activePinchRef.current = false
     multiPointerLockedRef.current = false
     pageLastVisibleAtRef.current.forEach((_lastVisibleAt, pageNumber) => {
@@ -1721,7 +2215,7 @@ export function IntermediateDocumentViewer({
         lastKnownVisiblePagesRef.current.delete(pageNumber)
       }
     })
-  }, [pageNumbers])
+  }, [clearAllJumpPins, pageNumbers])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -1734,32 +2228,26 @@ export function IntermediateDocumentViewer({
 
   useEffect(() => {
     activeDocumentRef.current = runtimeDocument
-    decodeGenerationRef.current += 1
     loadingPagesRef.current.clear()
     ocrLoadingPagesRef.current.clear()
-    decodingPageNumbersRef.current.clear()
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
+    lazilyEvictedPagesRef.current.clear()
     setLoadablePages(new Set())
     setVisiblePages(new Set())
     setTextsByPageNumber(new Map())
     setOcrTextsByPageNumber(new Map())
     setPageStatuses(new Map())
     setBaseImagesByPageNumber(new Map())
-    setHtmlPagesByPageNumber(new Map())
-    setHtmlPageStatusesByPageNumber(new Map())
-  }, [runtimeDocument])
+    setImagesByPageNumber(new Map())
+    clearAllUnloadTimers()
+    clearAllJumpPins()
+  }, [runtimeDocument, clearAllUnloadTimers, clearAllJumpPins])
 
-  const bumpDecodeGeneration = useCallback(() => {
-    decodeGenerationRef.current += 1
-    decodingPageNumbersRef.current.clear()
-    return decodeGenerationRef.current
+  const bumpOcrEvictGeneration = useCallback((pageNumber: number) => {
+    const current = ocrEvictGenerationRef.current.get(pageNumber) ?? 0
+    ocrEvictGenerationRef.current.set(pageNumber, current + 1)
   }, [])
-
-  const isCurrentDecodeGeneration = useCallback(
-    (generation: number) => generation === decodeGenerationRef.current,
-    []
-  )
 
   const setViewerRootRef = useCallback((element: HTMLDivElement | null) => {
     viewerRootRef.current = element
@@ -1819,119 +2307,88 @@ export function IntermediateDocumentViewer({
     [handleVirtualPaperTransform]
   )
 
+  // 缩放结束后 debounce 300ms，按当前 effectiveScale 刷新可见已加载页面的缩略图。
+  // 传入 scale 给 getThumbnail(scale) 获取匹配实际展示尺寸的分辨率，
+  // 放大时背景图更清晰，缩小时节省内存。
+  // scale 变化 < 0.1 时不刷新，避免微小缩放触发不必要的缩略图重新生成。
   useEffect(() => {
-    const shouldResetDecode =
-      decodeResetInputsRef.current.runtimeDocument !== runtimeDocument ||
-      decodeResetInputsRef.current.renderMode !== renderMode ||
-      decodeResetInputsRef.current.backgroundQuality !== backgroundQuality
-
-    if (shouldResetDecode) {
-      const nextHtmlPages = new Map<number, string>()
-      const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()
-      decodeResetInputsRef.current = {
-        runtimeDocument,
-        renderMode,
-        backgroundQuality
-      }
-      bumpDecodeGeneration()
-      htmlPagesByPageNumberRef.current = nextHtmlPages
-      htmlPageStatusesByPageNumberRef.current = nextHtmlPageStatuses
-      setHtmlPagesByPageNumber(nextHtmlPages)
-      setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
-    }
-
-    if (!runtimeDocument || renderMode === 'direct') {
-      if (!shouldResetDecode) {
-        const nextHtmlPages = new Map<number, string>()
-        const nextHtmlPageStatuses = new Map<number, HtmlPageStatus>()
-        htmlPagesByPageNumberRef.current = nextHtmlPages
-        htmlPageStatusesByPageNumberRef.current = nextHtmlPageStatuses
-        setHtmlPagesByPageNumber(nextHtmlPages)
-        setHtmlPageStatusesByPageNumber(nextHtmlPageStatuses)
-      }
+    const prevScale = lastThumbnailRefreshScaleRef.current
+    if (Math.abs(effectiveScale - prevScale) < 0.1) {
       return
     }
 
-    const generation = decodeGenerationRef.current
-    const decodeOptions = buildHtmlParserDecodeOptions(backgroundQuality)
+    const timer = setTimeout(async () => {
+      if (!isMountedRef.current || !runtimeDocument) return
+      const activeDoc = activeDocumentRef.current
+      if (activeDoc !== runtimeDocument) return
 
-    loadablePages.forEach((pageNumber) => {
-      if (
-        htmlPagesByPageNumberRef.current.has(pageNumber) ||
-        htmlPageStatusesByPageNumberRef.current.get(pageNumber) ===
-          'fallback' ||
-        decodingPageNumbersRef.current.has(pageNumber)
-      ) {
-        return
-      }
+      // 在 setTimeout 回调中通过 ref 读取最新 state，避免将其加入 effect deps
+      const visibleSet = lastKnownVisiblePagesRef.current
+      const statuses = pageStatusesRef.current
+      const validPageNumbers = new Set(pageNumbersRef.current)
 
-      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
+      const pagesToRefresh: number[] = []
+      visibleSet.forEach((pageNumber) => {
+        if (
+          validPageNumbers.has(pageNumber) &&
+          statuses.get(pageNumber) === 'loaded'
+        ) {
+          pagesToRefresh.push(pageNumber)
+        }
+      })
 
-      try {
-        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
-      } catch {
-        setHtmlPageStatusesByPageNumber(
-          createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-        )
-        return
-      }
+      // 先记录本次刷新的 scale，即使没有可刷新的页面也更新，
+      // 避免后续相同 scale 反复进入 effect
+      lastThumbnailRefreshScaleRef.current = effectiveScale
 
-      if (!pagePromise) {
-        setHtmlPageStatusesByPageNumber(
-          createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-        )
-        return
-      }
+      if (pagesToRefresh.length === 0) return
 
-      decodingPageNumbersRef.current.add(pageNumber)
-      pagePromise
-        .then((page) => {
-          if (!page) return ''
-          return HtmlParser.decodePageToHtml(
-            page as unknown as HtmlParserPageInput,
-            decodeOptions
-          )
-        })
-        .then((html) => {
-          if (!isCurrentDecodeGeneration(generation)) {
+      // 并行获取每页按当前 scale 的缩略图
+      await Promise.all(
+        pagesToRefresh.map(async (pageNumber) => {
+          if (!isMountedRef.current || activeDocumentRef.current !== activeDoc)
             return
-          }
-
-          if (html.trim().length === 0) {
-            setHtmlPageStatusesByPageNumber(
-              createSetHtmlPageStatusHandler(pageNumber, 'fallback')
+          try {
+            const pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
+            if (!pagePromise) return
+            const page = await pagePromise
+            if (
+              !isMountedRef.current ||
+              activeDocumentRef.current !== activeDoc
             )
-            return
-          }
+              return
 
-          setHtmlPagesByPageNumber(createSetHtmlPageHandler(pageNumber, html))
-          setHtmlPageStatusesByPageNumber(
-            createSetHtmlPageStatusHandler(pageNumber, 'decoded')
-          )
-        })
-        .catch(() => {
-          if (!isCurrentDecodeGeneration(generation)) {
-            return
-          }
+            // 如果用户在 fetch 期间又缩放了，跳过此页更新（新的 debounce 会处理）
+            if (effectiveScaleRef.current !== effectiveScale) return
 
-          setHtmlPageStatusesByPageNumber(
-            createSetHtmlPageStatusHandler(pageNumber, 'fallback')
-          )
-        })
-        .finally(() => {
-          if (isCurrentDecodeGeneration(generation)) {
-            decodingPageNumbersRef.current.delete(pageNumber)
+            const newBaseImage = await getBaseImageFromPage(
+              page,
+              effectiveScale
+            )
+            if (
+              !isMountedRef.current ||
+              activeDocumentRef.current !== activeDoc
+            )
+              return
+            if (effectiveScaleRef.current !== effectiveScale) return
+
+            // 仅当新缩略图与当前不同时才更新，避免不必要的 re-render
+            const currentBaseImage =
+              baseImagesByPageNumberRef.current.get(pageNumber)
+            if (newBaseImage && newBaseImage !== currentBaseImage) {
+              setBaseImagesByPageNumber(
+                createSetBaseImageHandler(pageNumber, newBaseImage)
+              )
+            }
+          } catch {
+            // 单页刷新失败不影响其他页
           }
         })
-    })
-  }, [
-    runtimeDocument,
-    renderMode,
-    backgroundQuality,
-    loadablePages,
-    bumpDecodeGeneration,
-    isCurrentDecodeGeneration
-  ])
+      )
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [effectiveScale, runtimeDocument])
 
   const markLoadableWithOverscan = useCallback(
     (pageNumber: number) => {
@@ -1949,6 +2406,19 @@ export function IntermediateDocumentViewer({
       )
 
       setLoadablePages((currentPages) => {
+        let hasMissingPage = false
+
+        for (let index = startIndex; index <= endIndex; index += 1) {
+          if (!currentPages.has(pageNumbers[index])) {
+            hasMissingPage = true
+            break
+          }
+        }
+
+        if (!hasMissingPage) {
+          return currentPages
+        }
+
         const nextPages = new Set(currentPages)
 
         for (let index = startIndex; index <= endIndex; index += 1) {
@@ -1961,7 +2431,278 @@ export function IntermediateDocumentViewer({
     [overscan, pageNumbers]
   )
 
-  const evictPageBundle = useCallback(
+  const scrollToRange = useCallback(
+    (rangeId: string) => {
+      if (!runtimeDocument || pageNumbers.length === 0) return
+
+      const widestPageSize = getWidestKnownPageSize(
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      if (!widestPageSize) return
+
+      const initialTarget = resolveRangeJumpTarget({
+        ranges: effectiveRangesRef.current,
+        rangeId,
+        rectType: overlayRectType,
+        pageWidth: widestPageSize.width,
+        pageHeight: widestPageSize.height
+      })
+      if (!initialTarget) return
+      if (!pageNumbers.includes(initialTarget.pageNumber)) return
+
+      const targetPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        initialTarget.pageNumber
+      )
+      if (!targetPageSize) return
+
+      const target = resolveRangeJumpTarget({
+        ranges: effectiveRangesRef.current,
+        rangeId,
+        rectType: overlayRectType,
+        pageWidth: targetPageSize.width,
+        pageHeight: targetPageSize.height
+      })
+      if (!target) return
+
+      const viewportElement = viewerRootRef.current?.querySelector(
+        '.virtual-paper-wrapper'
+      )
+      if (!(viewportElement instanceof HTMLElement)) return
+
+      const viewportRect = viewportElement.getBoundingClientRect()
+      const contentWidth = widestPageSize.width
+      const lastPageNumber = pageNumbers.at(-1)
+      if (lastPageNumber === undefined) return
+      const lastPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        lastPageNumber
+      )
+      if (!lastPageSize) return
+      const contentHeight =
+        computePageOriginY(lastPageNumber, pageNumbers, pageSizesByPageNumber) +
+        lastPageSize.height
+
+      const pageOriginY = computePageOriginY(
+        target.pageNumber,
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      const targetContentX =
+        (contentWidth - targetPageSize.width) / 2 + target.centerX
+      const targetContentY = pageOriginY + target.centerY
+      const nextTransform = computeTransform({
+        viewportWidth: viewportRect.width,
+        viewportHeight: viewportRect.height,
+        contentWidth,
+        contentHeight,
+        targetContentX,
+        targetContentY,
+        scale: effectiveScaleRef.current
+      })
+      if (!nextTransform) return
+
+      const targetPageNumber = target.pageNumber
+      const alreadyLoaded = pageStatuses.get(targetPageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(targetPageNumber)
+      clearUnloadTimer(targetPageNumber)
+      lazilyEvictedPagesRef.current.delete(targetPageNumber)
+      markLoadableWithOverscan(targetPageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(targetPageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(targetPageNumber)
+      }
+
+      setPaperTransform((currentTransform) => ({
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: currentTransform.scale
+      }))
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      overlayRectType,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      releaseJumpPinnedPage,
+      runtimeDocument
+    ]
+  )
+
+  const scrollToRect = useCallback(
+    (rectId: string) => {
+      if (!runtimeDocument || pageNumbers.length === 0) return
+
+      const rect = effectiveRectsRef.current.find((r) => r.id === rectId)
+      if (!rect) return
+
+      const rawSelectionId = rect.selectionId
+      if (!rawSelectionId) return
+
+      const publicSelectionId = rawSelectionId.includes(':')
+        ? mapRuntimeSelectionIdToPublic(rawSelectionId, readerLinkedScopeId)
+        : rawSelectionId
+      if (!publicSelectionId) return
+
+      const pageNumber = parsePublicPageId(publicSelectionId)
+      if (pageNumber === null || !pageNumbers.includes(pageNumber)) return
+
+      const widestPageSize = getWidestKnownPageSize(
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      if (!widestPageSize) return
+
+      const targetPageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
+      if (!targetPageSize) return
+
+      const viewportElement = viewerRootRef.current?.querySelector(
+        '.virtual-paper-wrapper'
+      )
+      if (!(viewportElement instanceof HTMLElement)) return
+
+      const viewportRect = viewportElement.getBoundingClientRect()
+      const contentWidth = widestPageSize.width
+      const lastPageNumber = pageNumbers.at(-1)
+      if (lastPageNumber === undefined) return
+      const lastPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        lastPageNumber
+      )
+      if (!lastPageSize) return
+      const contentHeight =
+        computePageOriginY(lastPageNumber, pageNumbers, pageSizesByPageNumber) +
+        lastPageSize.height
+
+      const pageOriginY = computePageOriginY(
+        pageNumber,
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      const { centerX, centerY } = rectCenterToPagePixels(
+        rect.rect,
+        rect.overlayRectType,
+        targetPageSize.width,
+        targetPageSize.height
+      )
+      const targetContentX = (contentWidth - targetPageSize.width) / 2 + centerX
+      const targetContentY = pageOriginY + centerY
+
+      const nextTransform = computeTransform({
+        viewportWidth: viewportRect.width,
+        viewportHeight: viewportRect.height,
+        contentWidth,
+        contentHeight,
+        targetContentX,
+        targetContentY,
+        scale: effectiveScaleRef.current
+      })
+      if (!nextTransform) return
+
+      const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(pageNumber)
+      clearUnloadTimer(pageNumber)
+      lazilyEvictedPagesRef.current.delete(pageNumber)
+      markLoadableWithOverscan(pageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(pageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(pageNumber)
+      }
+
+      setPaperTransform((currentTransform) => ({
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: currentTransform.scale
+      }))
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      readerLinkedScopeId,
+      releaseJumpPinnedPage,
+      runtimeDocument
+    ]
+  )
+
+  const scrollToPosition = useCallback(
+    (position: { x: number; y: number; scale?: number }) => {
+      if (!runtimeDocument || pageNumbers.length === 0) return
+
+      const widestPageSize = getWidestKnownPageSize(
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      if (!widestPageSize) return
+
+      const viewportElement = viewerRootRef.current?.querySelector(
+        '.virtual-paper-wrapper'
+      )
+      if (!(viewportElement instanceof HTMLElement)) return
+
+      const viewportRect = viewportElement.getBoundingClientRect()
+      const contentWidth = widestPageSize.width
+      const lastPageNumber = pageNumbers.at(-1)
+      if (lastPageNumber === undefined) return
+      const lastPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        lastPageNumber
+      )
+      if (!lastPageSize) return
+      const contentHeight =
+        computePageOriginY(lastPageNumber, pageNumbers, pageSizesByPageNumber) +
+        lastPageSize.height
+
+      const nextTransform = computeTransformForOffset({
+        viewportWidth: viewportRect.width,
+        viewportHeight: viewportRect.height,
+        contentWidth,
+        contentHeight,
+        offsetX: position.x,
+        offsetY: position.y,
+        scale: position.scale ?? effectiveScaleRef.current
+      })
+      if (!nextTransform) return
+
+      setPaperTransform((currentTransform) => ({
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: nextTransform.scale ?? currentTransform.scale
+      }))
+    },
+    [pageNumbers, pageSizesByPageNumber, runtimeDocument]
+  )
+
+  useEffect(() => {
+    pageStatuses.forEach((status, pageNumber) => {
+      if (status !== 'loaded' && status !== 'error') {
+        return
+      }
+      const token = jumpPinTokensRef.current.get(pageNumber)
+      if (token) {
+        releaseJumpPinnedPage(pageNumber, token)
+      }
+    })
+  }, [pageStatuses, releaseJumpPinnedPage])
+
+  const evictLazyPageBundle = useCallback(
     (pageNumber: number) => {
       if (!runtimeDocument) {
         return false
@@ -1969,8 +2710,7 @@ export function IntermediateDocumentViewer({
 
       if (
         loadingPagesRef.current.has(pageNumber) ||
-        ocrLoadingPagesRef.current.has(pageNumber) ||
-        decodingPageNumbersRef.current.has(pageNumber)
+        ocrLoadingPagesRef.current.has(pageNumber)
       ) {
         return false
       }
@@ -1982,19 +2722,20 @@ export function IntermediateDocumentViewer({
         }
       })
       evictedOcrPagesRef.current.add(pageNumber)
+      lazilyEvictedPagesRef.current.add(pageNumber)
 
       pageLastVisibleAtRef.current.delete(pageNumber)
       lastKnownVisiblePagesRef.current.delete(pageNumber)
       setTextsByPageNumber(deletePageEntry(pageNumber))
       setOcrTextsByPageNumber(deletePageEntry(pageNumber))
       setBaseImagesByPageNumber(deletePageEntry(pageNumber))
+      setImagesByPageNumber(deletePageEntry(pageNumber))
       setPageStatuses(deletePageEntry(pageNumber))
       setLoadablePages(deletePageFromSet(pageNumber))
-      setHtmlPagesByPageNumber(deletePageEntry(pageNumber))
-      setHtmlPageStatusesByPageNumber(deletePageEntry(pageNumber))
+      bumpOcrEvictGeneration(pageNumber)
       return true
     },
-    [runtimeDocument]
+    [runtimeDocument, bumpOcrEvictGeneration]
   )
 
   const resolveProtectedPageNumberForNode = useCallback((node: Node | null) => {
@@ -2018,6 +2759,20 @@ export function IntermediateDocumentViewer({
     return null
   }, [])
 
+  // 将 Selection 库的运行时 selectionId 映射回 pageNumber，
+  // 用于保护正在拖选的跨页 activeRange 对应的页面。
+  const resolveProtectedPageNumberForRuntimeSelectionId = useCallback(
+    (selectionId: string) => {
+      for (const pageNumber of pageNumbers) {
+        if (getRuntimePageSelectionId(pageNumber) === selectionId) {
+          return pageNumber
+        }
+      }
+      return null
+    },
+    [getRuntimePageSelectionId, pageNumbers]
+  )
+
   const addProtectedPageRange = useCallback(
     (
       protectedPages: Set<number>,
@@ -2040,6 +2795,21 @@ export function IntermediateDocumentViewer({
       }
     },
     [pageNumbers]
+  )
+
+  const addResolvedProtectedPageRange = useCallback(
+    (
+      protectedPages: Set<number>,
+      startPageNumber: number | null,
+      endPageNumber: number | null
+    ) => {
+      if (startPageNumber !== null) protectedPages.add(startPageNumber)
+      if (endPageNumber !== null) protectedPages.add(endPageNumber)
+      if (startPageNumber !== null && endPageNumber !== null) {
+        addProtectedPageRange(protectedPages, startPageNumber, endPageNumber)
+      }
+    },
+    [addProtectedPageRange]
   )
 
   const getProtectedPages = useCallback(() => {
@@ -2084,21 +2854,81 @@ export function IntermediateDocumentViewer({
       const focusPageNumber = resolveProtectedPageNumberForNode(
         selection.focusNode
       )
-      if (anchorPageNumber !== null) protectedPages.add(anchorPageNumber)
-      if (focusPageNumber !== null) protectedPages.add(focusPageNumber)
-      if (anchorPageNumber !== null && focusPageNumber !== null) {
-        addProtectedPageRange(protectedPages, anchorPageNumber, focusPageNumber)
-      }
+      addResolvedProtectedPageRange(
+        protectedPages,
+        anchorPageNumber,
+        focusPageNumber
+      )
+    }
+
+    // 保护 Selection 库正在拖选的 activeRange，避免离屏卸载打断跨页选区。
+    const activeLinkedRange = runtimeLinkedData.activeRange
+    if (activeLinkedRange) {
+      const startPageNumber = resolveProtectedPageNumberForRuntimeSelectionId(
+        activeLinkedRange.start.selectionId
+      )
+      const endPageNumber = resolveProtectedPageNumberForRuntimeSelectionId(
+        activeLinkedRange.end.selectionId
+      )
+      addResolvedProtectedPageRange(
+        protectedPages,
+        startPageNumber,
+        endPageNumber
+      )
     }
 
     return protectedPages
   }, [
-    addProtectedPageRange,
+    addResolvedProtectedPageRange,
     overscan,
     pageNumbers,
     resolveProtectedPageNumberForNode,
+    resolveProtectedPageNumberForRuntimeSelectionId,
+    runtimeLinkedData.activeRange,
     visiblePages
   ])
+
+  // getProtectedPages 的 ref，供定时器回调在触发时读取最新版本。
+  // 与 enqueueVisiblePageRef 模式一致：定时器创建时捕获
+  // 的是 ref，触发时通过 ref 读取最新的 getProtectedPages，避免闭包
+  // 捕获到 stale 的 visiblePages 状态。
+  const getProtectedPagesRef = useRef(getProtectedPages)
+  getProtectedPagesRef.current = getProtectedPages
+
+  const schedulePageUnload = useCallback(
+    (pageNumber: number) => {
+      if (pendingUnloadTimersRef.current.has(pageNumber)) {
+        return
+      }
+      const delay = lazyQueueConfigRef.current.pageUnloadDelayMs
+      const timer = setTimeout(() => {
+        pendingUnloadTimersRef.current.delete(pageNumber)
+        if (!isMountedRef.current) {
+          return
+        }
+        // 通过 ref 读取最新的 getProtectedPages，确保定时器触发时
+        // 使用的是已 flush 的 visiblePages 状态而非创建时的闭包。
+        const protectedPages = getProtectedPagesRef.current()
+        if (protectedPages.has(pageNumber)) {
+          return
+        }
+        const startedAt = getRenderTimingNow()
+        const didEvict = evictLazyPageBundle(pageNumber)
+        if (didEvict) {
+          const endedAt = getRenderTimingNow()
+          renderTimingRef.current.record({
+            stage: 'offscreen-unload',
+            startedAt,
+            endedAt,
+            durationMs: endedAt - startedAt,
+            pageNumber
+          })
+        }
+      }, delay)
+      pendingUnloadTimersRef.current.set(pageNumber, timer)
+    },
+    [evictLazyPageBundle]
+  )
 
   const scheduleEviction = useCallback(
     (snapshot: { visiblePages: Set<number>; pageNumbers: number[] }) => {
@@ -2182,7 +3012,7 @@ export function IntermediateDocumentViewer({
             break
           }
 
-          if (evictPageBundle(pageNumber)) {
+          if (evictLazyPageBundle(pageNumber)) {
             loadedCount -= 1
           }
         }
@@ -2197,7 +3027,7 @@ export function IntermediateDocumentViewer({
 
       evictionTimerRef.current = window.setTimeout(run, 0)
     },
-    [evictPageBundle, getProtectedPages, maxLoadedPages, overscan]
+    [evictLazyPageBundle, getProtectedPages, maxLoadedPages, overscan]
   )
 
   useEffect(() => {
@@ -2329,16 +3159,6 @@ export function IntermediateDocumentViewer({
       const focusInViewer = viewerRoot.contains(selection.focusNode)
       if (!anchorInViewer || !focusInViewer) return null
 
-      // html-parser native ranges intentionally stop at the visual overlay
-      // layer. Public text payload contracts stay direct-render-only until the
-      // parser can provide stable text ids compatible with saved selections.
-      if (
-        isHtmlParserSelectionTarget(selection.anchorNode, viewerRoot) ||
-        isHtmlParserSelectionTarget(selection.focusNode, viewerRoot)
-      ) {
-        return null
-      }
-
       const selectedElements: HTMLElement[] = []
       textElementsRef.current.forEach((_, id) => {
         const element = viewerRoot.querySelector(`[data-text-id="${id}"]`)
@@ -2461,38 +3281,141 @@ export function IntermediateDocumentViewer({
   }, [onTextSelectionEnd, onSelectText, getSelectionDetail])
 
   // ---- Selection 库回调桥接 ----
-  // Selection.onSelect：非受控模式下内部先 append range，再回调外部
-  const handleSelectionSelect = useCallback(
-    (range: ReaderSelectionRange) => {
-      if (!isRangesControlled) {
-        setInternalRanges((prev) => [...prev, range])
+  // linked 模式下只有 onLinkedDataChange 能写入内部 uncontrolled state；
+  // 其它 linked callbacks 只负责向外层公开回调发出 public-id payload。
+  const beginLinkedHighlightOperation =
+    useCallback((): PendingLinkedHighlightOperation => {
+      const operation = new Set(
+        effectiveRangesRef.current.map((range) => range.id)
+      )
+      pendingLinkedHighlightOperationRef.current = operation
+      return operation
+    }, [])
+
+  const schedulePendingLinkedHighlightCleanup = useCallback(
+    (operation: PendingLinkedHighlightOperation) => {
+      const cleanup = () => {
+        if (pendingLinkedHighlightOperationRef.current === operation) {
+          pendingLinkedHighlightOperationRef.current = null
+        }
       }
+
+      const viewerWindow = viewerRootRef.current?.ownerDocument.defaultView
+      if (viewerWindow) {
+        viewerWindow.setTimeout(cleanup, 0)
+        return
+      }
+
+      globalThis.setTimeout(cleanup, 0)
+    },
+    []
+  )
+
+  const emitLinkedSelectOnce = useCallback(
+    (range: ReaderSelectionRange) => {
+      if (emittedLinkedSelectRangeIdsRef.current.has(range.id)) {
+        return
+      }
+
+      emittedLinkedSelectRangeIdsRef.current.add(range.id)
       onSelect?.(range)
     },
-    [isRangesControlled, onSelect]
+    [onSelect]
   )
 
-  // Selection.onSelectRange：非受控模式下内部先更新 ID，再回调外部
-  const handleSelectionSelectRange = useCallback(
-    (id: string | null) => {
-      if (!isSelectedRangeIdControlled) {
-        setInternalSelectedRangeId(id)
+  const emitPendingLinkedHighlight = useCallback(
+    (range: ReaderSelectionRange) => {
+      const pendingOperation = pendingLinkedHighlightOperationRef.current
+      if (!pendingOperation || pendingOperation.has(range.id)) {
+        return
       }
+
+      pendingLinkedHighlightOperationRef.current = null
+      if (emittedLinkedHighlightRangeIdsRef.current.has(range.id)) {
+        return
+      }
+
+      emittedLinkedHighlightRangeIdsRef.current.add(range.id)
+      onHighlight?.(range)
+    },
+    [onHighlight]
+  )
+
+  const handleLinkedDataChange = useCallback(
+    (next: LinkedSelectionData) => {
+      const publicLinkedData = mapRuntimeLinkedDataToPublic(
+        next,
+        readerLinkedScopeId
+      )
+
+      const nextTransient = extractRuntimeLinkedTransient(next)
+      setRuntimeLinkedTransient((currentTransient) =>
+        areRuntimeLinkedTransientsEqual(currentTransient, nextTransient)
+          ? currentTransient
+          : nextTransient
+      )
+      onLinkedDataChange?.(publicLinkedData)
+
+      if (!isRangesControlled) {
+        setInternalRanges(publicLinkedData.items)
+      }
+
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(publicLinkedData.selectedRangeId)
+      }
+
+      for (const range of publicLinkedData.items) {
+        emitPendingLinkedHighlight(range)
+        if (!pendingLinkedHighlightOperationRef.current) {
+          break
+        }
+      }
+    },
+    [
+      emitPendingLinkedHighlight,
+      isRangesControlled,
+      isSelectedRangeIdControlled,
+      onLinkedDataChange,
+      readerLinkedScopeId
+    ]
+  )
+
+  const handleLinkedSelect = useCallback(
+    (range: LinkedSelectionRange) => {
+      const publicRange = mapRuntimeRangeToPublic(range, readerLinkedScopeId)
+
+      if (publicRange) {
+        onLinkedSelect?.(publicRange)
+        emitLinkedSelectOnce(publicRange)
+        emitPendingLinkedHighlight(publicRange)
+      }
+    },
+    [
+      emitLinkedSelectOnce,
+      emitPendingLinkedHighlight,
+      onLinkedSelect,
+      readerLinkedScopeId
+    ]
+  )
+
+  const handleLinkedUpdateRange = useCallback(
+    (range: LinkedSelectionRange) => {
+      const publicRange = mapRuntimeRangeToPublic(range, readerLinkedScopeId)
+
+      if (publicRange) {
+        onLinkedUpdateRange?.(publicRange)
+        onUpdateRange?.(publicRange)
+      }
+    },
+    [onLinkedUpdateRange, onUpdateRange, readerLinkedScopeId]
+  )
+
+  const handleLinkedSelectRange = useCallback(
+    (id: string | null) => {
+      onLinkedSelectRange?.(id)
       onSelectRange?.(id)
     },
-    [isSelectedRangeIdControlled, onSelectRange]
-  )
-
-  const handleSelectionUpdateRange = useCallback(
-    (range: ReaderSelectionRange) => {
-      if (!isRangesControlled) {
-        setInternalRanges((prev) =>
-          prev.map((current) => (current.id === range.id ? range : current))
-        )
-      }
-      onUpdateRange?.(range)
-    },
-    [isRangesControlled, onUpdateRange]
+    [onLinkedSelectRange, onSelectRange]
   )
 
   // Selection.onSelectionStart：直接转发到外部 prop
@@ -2536,8 +3459,18 @@ export function IntermediateDocumentViewer({
 
         if (entry.isIntersecting) {
           markVisiblePage(pageNumber)
+          clearUnloadTimer(pageNumber)
+          lazilyEvictedPagesRef.current.delete(pageNumber)
+          const pageIndex = pageNumbers.indexOf(pageNumber)
+          const initialPageCount = lazyQueueConfigRef.current.initialLoadedPages
+          if (pageIndex >= 0 && pageIndex < initialPageCount) {
+            return
+          }
+          scheduleVisibilityEnqueue(pageNumber)
         } else {
           markHiddenPage(pageNumber)
+          cancelVisibilityEnqueue(pageNumber)
+          schedulePageUnload(pageNumber)
         }
       })
     })
@@ -2552,96 +3485,54 @@ export function IntermediateDocumentViewer({
 
     return () => {
       observer.disconnect()
+      // 观察者销毁时清除本效应周期内的所有挂起可见性/卸载定时器，防止
+      // 卸载/文档切换后仍触发迟到入队或卸载。
+      clearAllVisibilityTimers()
+      clearAllUnloadTimers()
     }
   }, [
     markHiddenPage,
     markLoadableWithOverscan,
     markVisiblePage,
     pageNumbers,
-    runtimeDocument
+    runtimeDocument,
+    scheduleVisibilityEnqueue,
+    cancelVisibilityEnqueue,
+    clearAllVisibilityTimers,
+    clearUnloadTimer,
+    schedulePageUnload,
+    clearAllUnloadTimers
   ])
 
   useEffect(() => {
     if (!runtimeDocument) {
       return
     }
+    if (renderTimingRef.current.enabled) {
+      const initialCount = lazyQueueConfigRef.current.initialLoadedPages
+      const targetPages = pageNumbers.slice(0, initialCount)
+      targetPages.forEach((pageNumber) => {
+        if (
+          !textsByPageNumber.has(pageNumber) &&
+          !loadingPagesRef.current.has(pageNumber) &&
+          !pageLoadTimingStartsRef.current.has(pageNumber)
+        ) {
+          pageLoadTimingStartsRef.current.set(pageNumber, {
+            stage: 'initial-page-loading',
+            startedAt: getRenderTimingNow()
+          })
+        }
+      })
+    }
+    lazyPageQueue.enqueueInitialPages(pageNumbers)
+  }, [pageNumbers, runtimeDocument, lazyPageQueue, textsByPageNumber])
 
-    loadablePages.forEach((pageNumber) => {
-      if (
-        textsByPageNumber.has(pageNumber) ||
-        loadingPagesRef.current.has(pageNumber)
-      ) {
-        return
-      }
-
-      let pagePromise: ReturnType<IntermediateDocument['getPageByPageNumber']>
-
-      try {
-        pagePromise = runtimeDocument.getPageByPageNumber(pageNumber)
-      } catch {
-        setBaseImagesByPageNumber(
-          createSetBaseImageHandler(pageNumber, undefined)
-        )
-        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        return
-      }
-
-      if (!pagePromise) {
-        setBaseImagesByPageNumber(
-          createSetBaseImageHandler(pageNumber, undefined)
-        )
-        setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-        setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        return
-      }
-
-      loadingPagesRef.current.add(pageNumber)
-      pagePromise
-        .then((page) => {
-          return Promise.all([getBaseImageFromPage(page), page.getContent()])
-        })
-        .then(([baseImage, content]) => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          const texts = content.filter(isIntermediateText)
-          setBaseImagesByPageNumber(
-            createSetBaseImageHandler(pageNumber, baseImage)
-          )
-          setTextsByPageNumber(createSetTextsHandler(pageNumber, texts))
-          setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
-        })
-        .catch(() => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          setBaseImagesByPageNumber(
-            createSetBaseImageHandler(pageNumber, undefined)
-          )
-          setTextsByPageNumber(createSetTextsHandler(pageNumber, []))
-          setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
-        })
-        .finally(() => {
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          loadingPagesRef.current.delete(pageNumber)
-        })
-    })
-  }, [loadablePages, runtimeDocument, textsByPageNumber])
+  useEffect(() => {
+    return () => {
+      clearAllVisibilityTimers()
+      clearAllUnloadTimers()
+    }
+  }, [clearAllVisibilityTimers, clearAllUnloadTimers])
 
   useEffect(() => {
     if (!ocr || !runtimeDocument) {
@@ -2649,7 +3540,7 @@ export function IntermediateDocumentViewer({
     }
 
     const isOcrEnabled =
-      ocr === true || (typeof ocr === 'object' && ocr.enabled !== false)
+      ocr === true || (typeof ocr === 'object' && ocr.enabled === true)
 
     if (!isOcrEnabled) {
       return
@@ -2687,7 +3578,11 @@ export function IntermediateDocumentViewer({
       }
 
       ocrLoadingPagesRef.current.add(pageNumber)
+      // 捕获本次 OCR 发起时该页的驱逐代际，resolve 时比对以识别 stale 结果。
+      const ocrRunGeneration =
+        ocrEvictGenerationRef.current.get(pageNumber) ?? 0
 
+      const startedAt = getRenderTimingNow()
       const runOcr = async () => {
         try {
           const { ImageParser } = await import('@hamster-note/image-parser')
@@ -2705,6 +3600,14 @@ export function IntermediateDocumentViewer({
             !isMountedRef.current ||
             activeDocumentRef.current !== runtimeDocument
           ) {
+            return
+          }
+
+          // 该页在本次 OCR 运行期间被离屏卸载过（代际已变），结果为 stale，
+          // 丢弃以免写回已卸载的空外壳；重载后会以新代际重新发起 OCR。
+          const currentGeneration =
+            ocrEvictGenerationRef.current.get(pageNumber) ?? 0
+          if (currentGeneration !== ocrRunGeneration) {
             return
           }
 
@@ -2729,6 +3632,14 @@ export function IntermediateDocumentViewer({
             isMountedRef.current &&
             activeDocumentRef.current === runtimeDocument
           ) {
+            const endedAt = getRenderTimingNow()
+            renderTimingRef.current.record({
+              stage: 'ocr-processing',
+              startedAt,
+              endedAt,
+              durationMs: endedAt - startedAt,
+              pageNumber
+            })
             ocrLoadingPagesRef.current.delete(pageNumber)
           }
         }
@@ -2814,26 +3725,32 @@ export function IntermediateDocumentViewer({
     <ViewerContent
       rootClassName={rootClassName}
       viewerRootRef={setViewerRootRef}
-      runtimeDocument={runtimeDocument}
       pageNumbers={pageNumbers}
+      pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
+      onScrollToRange={scrollToRange}
+      onScrollToRect={scrollToRect}
+      onScrollToPosition={scrollToPosition}
       handleVirtualPaperTransformChange={handleVirtualPaperTransformChange}
       handleVirtualPaperTransformChangeEnd={
         handleVirtualPaperTransformChangeEnd
       }
-      renderMode={renderMode}
-      effectiveRanges={effectiveRanges}
       effectiveSelectedRangeId={effectiveSelectedRangeId}
-      onSelect={onSelect}
-      handleSelectionSelect={handleSelectionSelect}
-      handleSelectionSelectRange={handleSelectionSelectRange}
-      handleSelectionUpdateRange={handleSelectionUpdateRange}
+      runtimePageSelectionId={getRuntimePageSelectionId}
+      runtimeLinkedData={runtimeLinkedData}
+      handleLinkedDataChange={handleLinkedDataChange}
+      handleLinkedSelect={handleLinkedSelect}
+      handleLinkedUpdateRange={handleLinkedUpdateRange}
+      handleLinkedSelectRange={handleLinkedSelectRange}
+      beginLinkedHighlightOperation={beginLinkedHighlightOperation}
+      schedulePendingLinkedHighlightCleanup={
+        schedulePendingLinkedHighlightCleanup
+      }
       onSelectionStartProp={onSelectionStartProp}
       handleSelectionStart={handleSelectionStart}
       onSelectionEndProp={onSelectionEndProp}
       handleSelectionEnd={handleSelectionEnd}
-      onHighlight={onHighlight}
       highlightColor={highlightColor}
       selectionColor={selectionColor}
       selectionPopover={selectionPopover}
@@ -2841,8 +3758,12 @@ export function IntermediateDocumentViewer({
       autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
-      htmlPageStatusesByPageNumber={htmlPageStatusesByPageNumber}
-      htmlPagesByPageNumber={htmlPagesByPageNumber}
+      tool={tool}
+      rects={runtimeRects}
+      selectedRectId={selectedRectId}
+      onCreateRect={handleCreateRect}
+      onSelectRect={onSelectRect}
+      onUpdateRect={handleUpdateRect}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
       textsByPageNumber={textsByPageNumber}
@@ -2850,6 +3771,11 @@ export function IntermediateDocumentViewer({
       pageStatuses={pageStatuses}
       loadablePages={loadablePages}
       baseImagesByPageNumber={baseImagesByPageNumber}
+      imagesByPageNumber={imagesByPageNumber}
+      onPageRenderTiming={pageRenderTimingHandler}
+      touchPanMode={touchPanMode}
+      containMarginX={containMarginX}
+      containMarginY={containMarginY}
     />
   )
 }

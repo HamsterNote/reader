@@ -6,21 +6,26 @@ import type {
 import { useCallback, useRef, useState } from 'react'
 
 import type {
-  MousePosition as ReaderMousePosition,
-  OverlayRectType as ReaderSelectionOverlayRectType,
-  SelectionRange as ReaderSelectionRange,
-  SelectionRef as ReaderSelectionRef
-} from '@hamster-note/selection'
-
-import type {
-  BackgroundQuality,
   ReaderInteractionMode,
   ReaderPageRange,
-  ReaderRenderMode,
   ReaderSelectedTextSegment,
-  ReaderTextSelectionDetail
+  ReaderTextSelectionDetail,
+  ReaderTouchPanMode
 } from './IntermediateDocumentViewer'
+import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
+import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import type {
+  ReaderLinkedSelectionData,
+  ReaderMousePosition,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool
+} from '../types/selection'
+
+export type ReaderRenderMode = 'layout' | 'text'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -29,10 +34,16 @@ export type ReaderProps = {
   onFileUpload?: (file: File) => void
   overscanPages?: number
   pageRange?: ReaderPageRange
-  renderMode?: ReaderRenderMode
-  backgroundQuality?: BackgroundQuality
   ocr?: boolean | { enabled?: boolean }
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  /**
+   * Reader 级渲染模式。
+   * - `'layout'`（默认/省略）：走现有 `IntermediateDocumentViewer` + `VirtualPaper` 的
+   *   布局渲染路径，保留全部缩放 / linked-range selection / overlay 能力。
+   * - `'text'`：走独立的 `IntermediateDocumentTextViewer` 文本模式路径，不经过
+   *   `VirtualPaper`，仅接受文本模式子集 props。
+   */
+  renderMode?: ReaderRenderMode
   onTextSelectionChange?: (
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
@@ -48,6 +59,8 @@ export type ReaderProps = {
   ) => void
   /** 交互模式，透传给 IntermediateDocumentViewer */
   interactionMode?: ReaderInteractionMode
+  /** 触摸文档平移模式，透传给 IntermediateDocumentViewer in layout mode；默认 single-finger */
+  touchPanMode?: ReaderTouchPanMode
   // ---- Zoom props (all optional, forwarded unchanged) ----
   /**
    * Controlled zoom scale. When provided, Reader never mutates zoom internally;
@@ -92,12 +105,8 @@ export type ReaderProps = {
    * to the default cap. Finite values are floored by the pages that must remain
    * protected (visible pages, overscan, in-flight work, selections, active
    * drags, and saved-selection anchors), so the runtime may keep more pages than
-   * requested. In html-parser mode, eviction releases per-page decoded HTML and
-   * fallback state; evicted pages are decoded again when they re-enter the
-   * loadable window.
    */
   maxLoadedPages?: number
-  // ---- Selection props (forwarded to IntermediateDocumentViewer; html-parser mode only) ----
   /** 受控的已高亮 range 列表 */
   ranges?: ReaderSelectionRange[]
   /** 非受控模式下 ranges 的初始值 */
@@ -108,6 +117,10 @@ export type ReaderProps = {
   defaultSelectedRangeId?: string | null
   /** 用户确认高亮时触发 */
   onSelect?: (range: ReaderSelectionRange) => void
+  onLinkedDataChange?: (next: ReaderLinkedSelectionData) => void
+  onLinkedSelect?: (range: ReaderSelectionRange) => void
+  onLinkedUpdateRange?: (range: ReaderSelectionRange) => void
+  onLinkedSelectRange?: (id: string | null) => void
   /** 用户点击或取消选中某个已高亮 range 时触发 */
   onSelectRange?: (id: string | null) => void
   /** 用户拖动已高亮 range 的首尾手柄调整范围时触发 */
@@ -131,10 +144,37 @@ export type ReaderProps = {
   highlightPopover?: React.ReactNode
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
-  /** Selection 组件的命令式 ref，暴露 highlight()/clear() */
+  /** Reader 自有命令式 ref，暴露 highlight()/confirm()/confirmRect()/clear()/scrollToRange(id) */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
+  /** 当前选择工具模式；默认 'text'，传 'rect' 启用矩形框选，透传给 selection */
+  tool?: ReaderSelectionTool
+  /** 当前已存在的矩形框选列表（受控），透传给 selection */
+  rects?: ReaderSelectionRectangle[]
+  /** 当前被选中的矩形框选 ID（受控属性），透传给 selection */
+  selectedRectId?: string | null
+  /** 当用户确认一个新矩形框选时触发，透传给 selection */
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  /** 当用户选中/取消选中某个矩形框选时触发，透传给 selection */
+  onSelectRect?: (id: string | null) => void
+  /** 当用户拖动矩形手柄调整后触发，透传给 selection */
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  // ---- intermediate-document 懒加载队列 props（转发给 IntermediateDocumentViewer）----
+  /** 初始立即加载的页数，转发给 viewer，默认 1 */
+  initialLoadedPages?: number
+  /** 并发加载页数上限，转发给 viewer，默认 3 */
+  pageLoadConcurrency?: number
+  /** 进入可加载窗口后发起加载前的延迟（毫秒），转发给 viewer，默认 500 */
+  pageLoadEnterDelayMs?: number
+  /** 离开可加载窗口后卸载内容的延迟（毫秒），转发给 viewer，默认 5000 */
+  pageUnloadDelayMs?: number
+  /** intermediate-document 渲染阶段计时回调，转发给 IntermediateDocumentViewer */
+  onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
+  /** 内容区水平留白边距，单位 px，转发给 VirtualPaper */
+  containMarginX?: number
+  /** 内容区垂直留白边距，单位 px，转发给 VirtualPaper */
+  containMarginY?: number
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -173,10 +213,9 @@ export function Reader({
   onFileUpload,
   overscanPages,
   pageRange,
-  renderMode,
-  backgroundQuality,
   ocr,
   onOcrError,
+  renderMode,
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
@@ -187,11 +226,16 @@ export function Reader({
   maxScale,
   maxLoadedPages,
   interactionMode,
+  touchPanMode,
   ranges,
   defaultRanges,
   selectedRangeId,
   defaultSelectedRangeId,
   onSelect,
+  onLinkedDataChange,
+  onLinkedSelect,
+  onLinkedUpdateRange,
+  onLinkedSelectRange,
   onSelectRange,
   onUpdateRange,
   onSelectionStart,
@@ -203,7 +247,20 @@ export function Reader({
   highlightPopover,
   autoHighlight,
   selectionRef,
-  overlayRectType = 'percent'
+  overlayRectType = 'percent',
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
+  initialLoadedPages,
+  pageLoadConcurrency,
+  pageLoadEnterDelayMs,
+  pageUnloadDelayMs,
+  onIntermediateDocumentRenderTiming,
+  containMarginX,
+  containMarginY
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -279,13 +336,34 @@ export function Reader({
 
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
+      // text 模式走独立的 IntermediateDocumentTextViewer，不经过 VirtualPaper。
+      // 仅转发文本模式支持的 props 子集，layout 独有 props（缩放/linked-range
+      // selection/overlay 等）不传入文本视图。
+      if (renderMode === 'text') {
+        return (
+          <IntermediateDocumentTextViewer
+            document={document}
+            pageRange={pageRange}
+            className={className}
+            maxLoadedPages={maxLoadedPages}
+            initialLoadedPages={initialLoadedPages}
+            pageLoadConcurrency={pageLoadConcurrency}
+            pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+            pageUnloadDelayMs={pageUnloadDelayMs}
+            onTextSelectionChange={onTextSelectionChange}
+            onTextSelectionEnd={onTextSelectionEnd}
+            onSelectText={onSelectText}
+            onIntermediateDocumentRenderTiming={
+              onIntermediateDocumentRenderTiming
+            }
+          />
+        )
+      }
       return (
         <IntermediateDocumentViewer
           document={document}
           overscan={overscanPages}
           pageRange={pageRange}
-          renderMode={renderMode}
-          backgroundQuality={backgroundQuality}
           ocr={ocr}
           onOcrError={onOcrError}
           onTextSelectionChange={onTextSelectionChange}
@@ -298,11 +376,16 @@ export function Reader({
           maxScale={maxScale}
           maxLoadedPages={maxLoadedPages}
           interactionMode={interactionMode}
+          touchPanMode={touchPanMode}
           ranges={ranges}
           defaultRanges={defaultRanges}
           selectedRangeId={selectedRangeId}
           defaultSelectedRangeId={defaultSelectedRangeId}
           onSelect={onSelect}
+          onLinkedDataChange={onLinkedDataChange}
+          onLinkedSelect={onLinkedSelect}
+          onLinkedUpdateRange={onLinkedUpdateRange}
+          onLinkedSelectRange={onLinkedSelectRange}
           onSelectRange={onSelectRange}
           onUpdateRange={onUpdateRange}
           onSelectionStart={onSelectionStart}
@@ -315,6 +398,21 @@ export function Reader({
           autoHighlight={autoHighlight}
           selectionRef={selectionRef}
           overlayRectType={overlayRectType}
+          tool={tool}
+          rects={rects}
+          selectedRectId={selectedRectId}
+          onCreateRect={onCreateRect}
+          onSelectRect={onSelectRect}
+          onUpdateRect={onUpdateRect}
+          initialLoadedPages={initialLoadedPages}
+          pageLoadConcurrency={pageLoadConcurrency}
+          pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+          pageUnloadDelayMs={pageUnloadDelayMs}
+          onIntermediateDocumentRenderTiming={
+            onIntermediateDocumentRenderTiming
+          }
+          containMarginX={containMarginX}
+          containMarginY={containMarginY}
         />
       )
     }
