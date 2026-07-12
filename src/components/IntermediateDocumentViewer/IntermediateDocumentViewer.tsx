@@ -1612,16 +1612,14 @@ export function IntermediateDocumentViewer({
   const [internalRanges, setInternalRanges] = useState<ReaderSelectionRange[]>(
     () => defaultRanges ?? []
   )
-  const effectiveRanges = isRangesControlled ? ranges! : internalRanges
+  const effectiveRanges = ranges ?? internalRanges
 
   // selectedRangeId 同理
   const isSelectedRangeIdControlled = selectedRangeId !== undefined
   const [internalSelectedRangeId, setInternalSelectedRangeId] = useState<
     string | null
   >(defaultSelectedRangeId ?? null)
-  const effectiveSelectedRangeId = isSelectedRangeIdControlled
-    ? selectedRangeId!
-    : internalSelectedRangeId
+  const effectiveSelectedRangeId = selectedRangeId ?? internalSelectedRangeId
 
   const scaleRange = useMemo(
     () => getEffectiveScaleRange(minScale, maxScale),
