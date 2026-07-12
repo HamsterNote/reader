@@ -1,0 +1,49 @@
+{
+  "active_plan": "/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/.sisyphus/plans/pdf-text-polygon-stretch.md",
+  "started_at": "2026-05-02T05:03:22.438Z",
+  "session_ids": [
+    "ses_218ee1cd9ffetZ4ltL1GEV0BzW",
+    "ses_218da0ac3ffe6TJ1kHpMVUVyXz",
+    "ses_218d9e8e1ffe4hBLmr37hiX0Mh",
+    "ses_218d94fd1ffeWtcEyzc4vC9uGN",
+    "ses_218d92df2ffeJu8tiahcOwKkKr"
+  ],
+  "session_origins": {
+    "ses_218ee1cd9ffetZ4ltL1GEV0BzW": "direct",
+    "ses_218da0ac3ffe6TJ1kHpMVUVyXz": "appended",
+    "ses_218d9e8e1ffe4hBLmr37hiX0Mh": "appended",
+    "ses_218d94fd1ffeWtcEyzc4vC9uGN": "appended",
+    "ses_218d92df2ffeJu8tiahcOwKkKr": "appended"
+  },
+  "plan_name": "pdf-text-polygon-stretch",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Implement polygon-aware text geometry in renderer",
+      "session_id": "ses_218ed095effeLLuvU24SkvQoo2",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-05-02T05:07:16.907Z"
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "Expand polygon layout regression tests",
+      "session_id": "ses_218e84d77ffes63uqhZGPHO5sm",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-05-02T05:23:11.642Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "Plan Compliance Audit — oracle",
+      "session_id": "ses_218d94fd1ffeWtcEyzc4vC9uGN",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-05-02T05:27:19.072Z"
+    }
+  }
+}

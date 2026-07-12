@@ -30,6 +30,40 @@ export function App() {
 }
 ```
 
+### How It Works
+
+`Reader` remains parser-agnostic. It accepts an intermediate document and internally renders it through `@hamster-note/html-parser`, converting the structured document data into HTML for display. Consumers (including the browser Demo) use parser packages to produce intermediate documents before passing them to `Reader`. Producers such as `@hamster-note/pdf-parser` can continue feeding the same intermediate-document contract. No consumer-side changes are required.
+
+#### Demo Upload Formats
+
+The browser Demo supports uploading and previewing the following formats:
+
+- **PDF** (`.pdf`)
+- **TXT** (`.txt`)
+- **DOCX** (`.docx`)
+- **Markdown** (`.md`, `.markdown`)
+
+EPUB (`.epub`) is **not supported** in this browser Demo because `@hamster-note/epub-parser` is Node.js-only and requires a separate server-side design.
+
+## API Notes
+
+Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
+
+> **Note**: When `Reader` successfully renders through the html-parser path, text-selection and OCR overlays rely on the html-parser output markup and may behave differently than on the legacy direct-render fallback path. If you need full text-selection or OCR fidelity, the component automatically falls back to the direct renderer when html-parser decoding fails.
+
+```tsx
+<Reader
+  document={document}
+  ocr
+  onTextSelectionChange={(text, detail) => {
+    // handle selection change
+  }}
+  onTextSelectionEnd={(text, detail) => {
+    // handle selection end
+  }}
+/>
+```
+
 ## Peer Dependencies
 
 - `react@^19.0.0`

@@ -12,7 +12,7 @@ export default defineConfig({
       cssFileName: 'style'
     },
     rollupOptions: {
-      external: ['react', 'react-dom']
+      external: ['react', 'react-dom', '@hamster-note/image-parser']
     }
   }
 })

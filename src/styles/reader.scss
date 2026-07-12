@@ -154,4 +154,388 @@
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
     }
   }
+
+  // Intermediate document viewer
+  &__intermediate-document-viewer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    // VirtualPaper 的 wrapper 负责滚动与手势捕获；外层只保留垂直方向
+    // 的 flex 布局，不再自己处理 overflow 与 touch-action。
+    overflow: hidden;
+    box-sizing: border-box;
+    // 通过 CSS 变量提供可覆盖的默认高度，避免 Transform 模式下 flex 子元素
+    // 因父元素无确定高度而塌陷（默认占满视口高度，组件库消费者可自定义）。
+    height: var(--hamster-reader-viewer-height, 100vh);
+    max-height: var(--hamster-reader-viewer-max-height, 100vh);
+    scroll-behavior: smooth;
+
+    // VirtualPaper wrapper：占满 viewer 区域并作为手势/滚动容器。
+    .virtual-paper-wrapper {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      touch-action: none;
+    }
+  }
+
+  &__html-parser-output {
+    width: 100%;
+    box-sizing: border-box;
+
+    // Page-only html-parser fragment layout rules.
+    // decodeToHtml returns .hamster-note-page fragments without injecting
+    // document/page/text/image layout CSS, so Reader must provide the scoped
+    // styles here under the html-parser output root.
+    .hamster-note-document {
+      position: relative;
+      display: block;
+      contain: layout style;
+      width: 100%;
+    }
+
+    .hamster-note-page {
+      position: relative;
+      overflow: visible;
+      background-repeat: no-repeat;
+      background-position: top center;
+      background-size: contain;
+    }
+
+    .hamster-note-text {
+      position: absolute;
+      white-space: pre;
+      transform-origin: 0 0;
+    }
+
+    .hamster-note-image {
+      position: absolute;
+    }
+
+    // Allow text selection in html-parser output even when the parent page
+    // has user-select: none. This is necessary because html-parser renders
+    // actual DOM text nodes (unlike the direct-render path which uses
+    // absolutely-positioned spans with explicit user-select: text).
+    user-select: text;
+    -webkit-user-select: text;
+
+    // Ensure text nodes inside the html-parser output are selectable.
+    .hamster-note-page,
+    .hamster-note-page * {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+  }
+
+  // Intermediate page shell
+  &__intermediate-page {
+    position: relative;
+    box-sizing: border-box;
+    background-color: #ffffff;
+    outline: 1px solid #e5e7eb;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-select: none;
+
+    // Skeleton / loading placeholder state
+    &--loading {
+      background: linear-gradient(
+        90deg,
+        #f3f4f6 25%,
+        #e5e7eb 50%,
+        #f3f4f6 75%
+      );
+      background-size: 200% 100%;
+      animation: skeleton-shimmer 1.5s ease-in-out infinite;
+    }
+  }
+
+  &__intermediate-page-status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    box-sizing: border-box;
+    color: #6b7280;
+    font-size: 14px;
+    text-align: center;
+
+    &--error {
+      color: #b91c1c;
+      background-color: #fef2f2;
+    }
+  }
+
+  // Intermediate page base image (direct-render path)
+  &__intermediate-page-base-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  // NOTE: The html-parser renders backgrounds as CSS `background-image` on
+  // `.hamster-note-page` divs, not as separate DOM elements. CSS backgrounds
+  // are inherently unselectable — they are not DOM nodes and cannot be captured
+  // by text selection or touch callout menus. The direct-render path above
+  // (base-image) covers the `<img>` background case.
+
+  // Intermediate text spans
+  &__intermediate-text {
+    position: absolute;
+    display: inline-block;
+    white-space: pre;
+    box-sizing: border-box;
+    user-select: text;
+    -webkit-user-select: text;
+    z-index: 1;
+  }
+
+  // Selection overlay container
+  &__selection-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  // Selection handle container
+  &__selection-handle {
+    position: absolute;
+    pointer-events: auto;
+    cursor: grab;
+    z-index: 3;
+    touch-action: none;
+
+    &:active {
+      cursor: grabbing;
+    }
+
+    // Start handle: anchor at boundary LEFT edge → body extends LEFT of that
+    // point (mirrored teardrop sits left of the first selected character).
+    &--start {
+      transform: translate(-100%, -100%);
+    }
+
+    // End handle: anchor at boundary RIGHT edge → body extends RIGHT of that
+    // point (teardrop sits right of the last selected character).
+    &--end {
+      transform: translate(0, -100%);
+    }
+
+    // Hidden state: keep mounted but visually hidden during active drag.
+    // pointer-events: none prevents interaction; opacity: 0 hides visually.
+    &--hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+
+  // SVG selection overlay
+  &__selection-overlay-svg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+  }
+
+  // SVG path for merged polygon selection overlay
+  &__selection-overlay-path {
+    fill: var(--hamster-reader-selection-color, #ec4899);
+    fill-opacity: var(--hamster-reader-selection-opacity, 0.3);
+    fill-rule: evenodd;
+    pointer-events: none;
+    stroke: none;
+  }
+
+  // Saved selection overlay container
+  &__saved-selection-overlay {
+    position: absolute;
+    inset: 0;
+    // pointer-events: none 允许事件透传到实时选择覆盖层和页面；
+    // 只有已保存选择的 path 自身通过 pointer-events: auto 接收点击。
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  // Saved selection handles container
+  &__saved-selection-handles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  // Saved selection SVG overlay
+  &__saved-selection-overlay-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+
+  // Saved selection SVG path
+  &__saved-selection-overlay-path {
+    fill: var(--hamster-reader-saved-selection-color, #f59e0b);
+    fill-opacity: var(--hamster-reader-saved-selection-opacity, 0.25);
+    fill-rule: evenodd;
+    pointer-events: auto;
+    stroke: none;
+    cursor: pointer;
+    transition: fill-opacity 0.15s ease;
+
+    // Active state: raise opacity so the active selection stands out.
+    &--active {
+      fill-opacity: calc(var(--hamster-reader-saved-selection-opacity, 0.25) + 0.15);
+    }
+
+    // Fallback state: use a dashed stroke to indicate the selection was
+    // restored from visual geometry rather than exact text anchors.
+    &--fallback {
+      stroke: var(--hamster-reader-saved-selection-color, #f59e0b);
+      stroke-width: 1px;
+      stroke-dasharray: 4px 3px;
+      fill-opacity: calc(var(--hamster-reader-saved-selection-opacity, 0.25) - 0.05);
+    }
+  }
+
+  // Default selection handle (2px vertical line + 4px-radius circle).
+  // The wrapper itself stays transparent and serves only as the hit target.
+  // Width/height are driven by CSS variables when provided by the viewer,
+  // falling back to the legacy 18px × 24px hit target for backward compatibility.
+  &__selection-handle--default {
+    position: absolute;
+    width: var(--hamster-reader-selection-handle-width, 18px);
+    height: var(--hamster-reader-selection-handle-height, 24px);
+    pointer-events: auto;
+    cursor: grab;
+    touch-action: none;
+    z-index: 3;
+
+    // Transparent wrapper: the visual handle is rendered by ::before/::after.
+    background: transparent;
+
+    &:active {
+      cursor: grabbing;
+    }
+
+    // Vertical 2px line. Spans the full 24px height of the wrapper; the
+    // start/end variants pin it to the appropriate edge so the line's
+    // endpoint coincides with the boundary anchor.
+    &::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 100%;
+      background-color: var(--hamster-reader-selection-color, #ec4899);
+      pointer-events: none;
+    }
+
+    // Filled circle, 8px diameter (4px radius). Its CENTER is positioned on
+    // the upper line endpoint for the start handle and the lower line endpoint
+    // for the end handle. Horizontally centered on the 2px line.
+    &::before {
+      content: '';
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--hamster-reader-selection-color, #ec4899);
+      pointer-events: none;
+    }
+
+    // Start handle wrapper: pin line to the RIGHT edge so it terminates at
+    // the anchor (selection's start boundary). Circle sits on the TOP of the
+    // line, centered on it horizontally. The transform here overrides the
+    // base `.hamster-reader__selection-handle--start` translate to keep both
+    // selectors in sync as the visual evolves.
+    //
+    // Note: we match the wrapper via the `--start` modifier from the base
+    // selector (which the JSX already adds) rather than nesting under
+    // `--default--start` (with two dashes), because the wrapper className is
+    // `... --default ... --start ... --default-start` — only the single-dash
+    // `--start` and `--default` classes form a usable compound selector here.
+    &.hamster-reader__selection-handle--start {
+      transform: translate(-100%, -100%);
+
+      &::after {
+        right: 0;
+      }
+      &::before {
+        // Center the 8px circle on the 2px line's upper endpoint.
+        // Horizontal: line center (from wrapper right) = 1px → circle.right = 1 - 4 = -3px.
+        // Vertical: endpoint y = 0 → circle.top = 0 - 4 = -4px.
+        right: -3px;
+        top: -4px;
+      }
+    }
+
+    // End handle wrapper: pin line to the LEFT edge so it terminates at the
+    // anchor (selection's end boundary). Circle sits on the BOTTOM of the
+    // line, centered on it horizontally.
+    &.hamster-reader__selection-handle--end {
+      transform: translate(0, -100%);
+
+      &::after {
+        left: 0;
+      }
+      &::before {
+        // Center the 8px circle on the 2px line's lower endpoint.
+        // Horizontal mirror of start: line center is 1px from the LEFT edge.
+        // Vertical: endpoint y = 100% → circle.bottom = 0 - 4 = -4px.
+        left: -3px;
+        bottom: -4px;
+      }
+    }
+  }
+}
+
+// Suppress native selection highlight when custom overlay is active on the
+// direct-render path and the html-parser path. Both paths now support the
+// custom selection overlay, so we hide the browser's native highlight for all
+// selectable text within the custom-selection viewer scope.
+.hamster-reader__intermediate-document-viewer--custom-selection {
+  // Direct-render path: absolutely-positioned text spans.
+  .hamster-reader__intermediate-text,
+  .hamster-reader__intermediate-text *,
+  // Html-parser path: rendered DOM text nodes.
+  .hamster-reader__html-parser-output,
+  .hamster-reader__html-parser-output *,
+  .hamster-note-page,
+  .hamster-note-page *,
+  [data-text-id],
+  [data-text-id] *,
+  span.hamster-note-text,
+  span.hamster-note-text * {
+    &::selection,
+    &::-moz-selection {
+      background-color: transparent;
+    }
+  }
+}
+
+// Skeleton shimmer animation (global, scoped to keyframes only)
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }

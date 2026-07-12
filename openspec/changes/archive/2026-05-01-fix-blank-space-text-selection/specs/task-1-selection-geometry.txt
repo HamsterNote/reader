@@ -1,0 +1,14 @@
+yarn run v1.22.22
+(node:1993142) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.json --noEmit
+src/components/IntermediateDocumentViewer.tsx(193,7): error TS6133: 'getClosestTextElement' is declared but its value is never read.
+src/components/IntermediateDocumentViewer.tsx(217,7): error TS6133: 'getPageElementForPoint' is declared but its value is never read.
+src/components/IntermediateDocumentViewer.tsx(254,7): error TS6133: 'getNearestTextElementForPoint' is declared but its value is never read.
+test/intermediate-document-viewer.test.tsx(9,10): error TS6133: 'afterAll' is declared but its value is never read.
+test/intermediate-document-viewer.test.tsx(9,31): error TS6133: 'beforeAll' is declared but its value is never read.
+test/intermediate-document-viewer.test.tsx(619,11): error TS6133: 'mockElementRect' is declared but its value is never read.
+test/intermediate-document-viewer.test.tsx(640,11): error TS6133: 'makeFourTextDocument' is declared but its value is never read.
+error Command failed with exit code 2.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.
+Exit code: 2

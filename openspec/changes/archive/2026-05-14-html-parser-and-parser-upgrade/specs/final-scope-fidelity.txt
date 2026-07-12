@@ -1,0 +1,47 @@
+Final Scope Fidelity Review (F4)
+
+Verdict: APPROVE
+
+Review Inputs:
+- Plan scope read: Core Objective at .sisyphus/plans/parser-0.6.0-upgrade.md:30, Deliverables at .sisyphus/plans/parser-0.6.0-upgrade.md:34, Must NOT Have at .sisyphus/plans/parser-0.6.0-upgrade.md:55.
+- Context notes read: .sisyphus/notepads/parser-0.6.0-upgrade/learnings.md and .sisyphus/notepads/parser-0.6.0-upgrade/issues.md.
+- Commands inspected: git diff --name-only and git diff.
+
+Allowed Upgrade Surface:
+- package.json
+- yarn.lock
+- src/types/pdf-parser.d.ts
+- test/reader.test.tsx
+- test/intermediate-document-viewer.test.tsx
+- test/demo.test.tsx
+
+Actual Changed Files:
+- package.json
+- yarn.lock
+- src/types/pdf-parser.d.ts
+- test/reader.test.tsx
+- test/intermediate-document-viewer.test.tsx
+- test/demo.test.tsx
+
+Scope Comparison:
+- Actual changed files match the expected allowed upgrade surface exactly.
+- No changes were made to vite.config.ts.
+- No files outside dependency manifests, parser shim, and existing parser integration tests were changed.
+
+Diff Findings:
+- Parser versions: package.json updates only @hamster-note/html-parser and @hamster-note/pdf-parser from ^0.5.1 to ^0.6.0.
+- Lockfile: yarn.lock refresh resolves both parser packages to 0.6.0 and includes transitive dependency changes tied to those parser upgrades.
+- Shim alignment: src/types/pdf-parser.d.ts remains parser-specific and adds 0.6.0-facing exports/signatures without touching runtime call sites.
+- Regression coverage: existing reader, intermediate viewer, and demo parser tests gain assertions around current HtmlParser.decodeToHtml and PdfParser.encode paths.
+- Build/config safety: vite.config.ts is untouched, matching the guardrail that config changes are only permitted after a proven build asset-path failure.
+
+Scope Drift Checks:
+- No parser architecture refactor found.
+- No new wrapper abstraction found.
+- No unrelated reader rendering cleanup found.
+- No runtime behavior changes at parser call sites found.
+- No broad new test suite outside existing parser integration surfaces found.
+- No new public API expectations for the reader package found; added assertions cover existing parser interactions and fallback behavior.
+
+Final Decision:
+- APPROVE: The delivered work stayed inside the exact boundaries of the parser 0.6.0 upgrade: parser versions, shim alignment, regression coverage, and build/config safety only.

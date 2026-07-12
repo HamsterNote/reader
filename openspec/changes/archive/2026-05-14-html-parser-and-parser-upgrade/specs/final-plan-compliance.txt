@@ -1,0 +1,49 @@
+# Final Plan Compliance Audit: parser-0.6.0-upgrade
+
+Verdict: APPROVE
+Date: 2026-05-13
+
+## Inputs Inspected
+
+- Plan: `.sisyphus/plans/parser-0.6.0-upgrade.md`
+- Task 4 acceptance criteria in `.sisyphus/plans/parser-0.6.0-upgrade.md`
+- Updated shim: `src/types/pdf-parser.d.ts`
+- Required verification command: `yarn typecheck`
+
+## Re-Audit Focus
+
+Previous F1 rejected because `src/types/pdf-parser.d.ts` did not include the plan-required optional encode/decode parameters or progress-related types. The updated shim was re-read directly and now declares:
+
+- `EncodeOptions` with optional `filename?: string`
+- `DecodeOptions` with optional `filename?: string`
+- `ProgressInfo` with `loaded: number` and `total: number`
+- `ProgressCallback = (info: ProgressInfo) => void`
+- `PdfParser.encode(fileOrBuffer, options?: EncodeOptions, onProgress?: ProgressCallback)`
+- `PdfParser.decode(intermediateDocument, options?: DecodeOptions, onProgress?: ProgressCallback)`
+
+## Task 4 Acceptance Recheck
+
+Result: PASS
+
+- The shim keeps existing positional calls compatible: `PdfParser.encode(file)` and `PdfParser.decode(intermediateDocument)` remain valid because both added parameters are optional.
+- The shim includes optional `options` parameters on both `encode` and `decode`.
+- The shim includes optional `onProgress` parameters on both `encode` and `decode`.
+- The shim exports the progress-related names required by the plan: `EncodeOptions`, `DecodeOptions`, `ProgressInfo`, and `ProgressCallback`.
+- The shim preserves the existing `IntermediateDocument` import style and does not introduce `any`, wrappers, or speculative unrelated exports.
+
+## Verification
+
+Command executed: `yarn typecheck`
+
+Result: PASS
+
+Relevant output:
+
+```text
+$ tsc --project tsconfig.json --noEmit
+Done in 1.93s.
+```
+
+## Final Decision
+
+APPROVE. The previous rejection concern has been addressed. `src/types/pdf-parser.d.ts` now satisfies Task 4's plan-required optional encode/decode parameters and progress-related types, and `yarn typecheck` passes with the updated shim.
