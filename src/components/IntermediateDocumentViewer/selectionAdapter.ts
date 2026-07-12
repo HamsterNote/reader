@@ -311,7 +311,7 @@ function mapRuntimeRectsToPublic(
   return publicRectsBySelectionId
 }
 
-function mapRuntimeSelectionIdToPublic(
+export function mapRuntimeSelectionIdToPublic(
   selectionId: string,
   scopeId: string
 ): string | null {

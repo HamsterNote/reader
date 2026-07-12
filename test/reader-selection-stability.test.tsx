@@ -51,6 +51,12 @@ vi.mock('@hamster-note/virtual-paper', async () => {
   const React = await import('react')
 
   return {
+    DEFAULT_ENABLED_INTERACTIONS: [
+      'trackpadScrollPan',
+      'mouseWheelCtrlZoom',
+      'touchSingleFingerPan',
+      'touchTwoFingerZoom'
+    ],
     VirtualPaper: ({ children }: { children: React.ReactNode }) =>
       React.createElement(
         'div',
@@ -60,6 +66,7 @@ vi.mock('@hamster-note/virtual-paper', async () => {
     VirtualPaperInteractionMode: {
       MouseWheelCtrlZoom: 'mouseWheelCtrlZoom',
       MouseWheelZoom: 'mouseWheelZoom',
+      TouchSingleFingerPan: 'touchSingleFingerPan',
       TouchTwoFingerPan: 'touchTwoFingerPan',
       TouchTwoFingerZoom: 'touchTwoFingerZoom'
     }

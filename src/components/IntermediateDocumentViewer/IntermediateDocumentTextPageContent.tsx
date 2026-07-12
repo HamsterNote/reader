@@ -67,9 +67,10 @@ function IntermediateDocumentTextPageContentComponent({
   return (
     <>
       {renderableTexts.map((text, index) => {
-        // key 优先用 text.id，缺失时回退到数组索引
-        const key = text.id ?? index
-        const eolKey = `${key}-eol`
+        // 文本模式的虚拟 DOM 行会随滚动复用；把页码写进 key，避免不同页
+        // 局部重复的 text.id 让 React 复用上一页的文本子树。
+        const key = `${pageNumber}:${text.id ?? index}`
+        const eolKey = `${key}:eol`
 
         // Fragment 包裹 span 与可选的 <br />，保证 <br /> 紧跟在对应
         // span 之后（DOM 顺序与文本数组顺序一致），实现文档流换行。

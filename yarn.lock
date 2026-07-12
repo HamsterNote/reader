@@ -508,10 +508,10 @@
     pdf-lib "^1.17.1"
     pdfjs-dist "5.4.530"
 
-"@hamster-note/selection@0.0.2-beta.1":
-  version "0.0.2-beta.1"
-  resolved "https://registry.yarnpkg.com/@hamster-note/selection/-/selection-0.0.2-beta.1.tgz#79660efc39f19d481af8bf61ebc7c57f5d1f4c3d"
-  integrity sha512-tu5focrR2VKlOlVkIa1xRWS560sdaF5xHkxrcUZlBOFnftWhdruIm99lqxRRgTI83LBg8W4KBGg3sUixCBp65Q==
+"@hamster-note/selection@0.1.0":
+  version "0.1.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/selection/-/selection-0.1.0.tgz#3eab3d3c642878746a80b7848961a302b4579bd8"
+  integrity sha512-5Fc+kE3VrsE8G6n92RWA6nknDdTh0Ayjrb0mNpxMc6ex2JA7TmZ0ds+9PSlGI5YlNPlBhYNZuk6WZ5/Wmu6ymg==
 
 "@hamster-note/txt-parser@^0.3.0":
   version "0.3.0"
@@ -535,10 +535,10 @@
     class-validator "^0.14.1"
     reflect-metadata "^0.2.2"
 
-"@hamster-note/virtual-paper@0.1.0-beta.2":
-  version "0.1.0-beta.2"
-  resolved "https://registry.yarnpkg.com/@hamster-note/virtual-paper/-/virtual-paper-0.1.0-beta.2.tgz#2cff4d99116c9665dc9eef94c57a3a97d7f2c580"
-  integrity sha512-x8HN06mlbwEvpOXrn/j/s5ggploDzjwfTTEnKZphrFqnif2+UYngJfQrhTyXZjiUYM0iSlctD6wl/q4KVj2aiQ==
+"@hamster-note/virtual-paper@0.2.0":
+  version "0.2.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/virtual-paper/-/virtual-paper-0.2.0.tgz#5435d5e2ee487c3b155dde587371db487c6b1283"
+  integrity sha512-JtFbBWQpZ1C7MCNXuxafhOmBWPXeUbBR8yMDtWsDN6Wp87gE/xjbZZl3MYGVPFjWrU6IonPaWZcMlQtNHz8t6A==
   dependencies:
     "@system-ui-js/multi-drag" "^0.4.0"
 

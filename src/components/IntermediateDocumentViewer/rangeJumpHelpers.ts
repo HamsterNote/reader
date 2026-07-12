@@ -303,3 +303,84 @@ export function computeTransform(
 
   return { x: tx, y: ty, scale }
 }
+
+export type ComputeTransformForOffsetParams = {
+  /** Viewport width in CSS pixels (the VirtualPaper wrapper element). */
+  readonly viewportWidth: number
+  /** Viewport height in CSS pixels. */
+  readonly viewportHeight: number
+  /** Content element total width in CSS pixels (pre-scale). */
+  readonly contentWidth: number
+  /** Content element total height in CSS pixels (pre-scale). */
+  readonly contentHeight: number
+  /** Content-space X scroll offset (0 = left edge). */
+  readonly offsetX: number
+  /** Content-space Y scroll offset (0 = top edge). */
+  readonly offsetY: number
+  /** Scale to apply. */
+  readonly scale: number
+}
+
+/**
+ * Compute a VirtualPaper transform that places content-space `(offsetX,
+ * offsetY)` at the viewport top-left, clamped to VirtualPaper contain
+ * semantics.
+ *
+ * Math:
+ *   screen = content * scale + translate
+ *   To align content point (offsetX, offsetY) with viewport top-left:
+ *     translate = -(offsetX, offsetY) * scale
+ *
+ * Contain clamping per axis:
+ *   - If scaledContentSize ≤ viewportSize → center the content.
+ *   - Otherwise → clamp so content edges stay visible:
+ *       translate ∈ [viewportSize - scaledContentSize, 0]
+ *
+ * Returns `null` when inputs are invalid (zero, negative, non-finite).
+ */
+export function computeTransformForOffset(
+  params: ComputeTransformForOffsetParams
+): VirtualPaperTransform | null {
+  const {
+    viewportWidth,
+    viewportHeight,
+    contentWidth,
+    contentHeight,
+    offsetX,
+    offsetY,
+    scale
+  } = params
+
+  if (
+    !(
+      viewportWidth > 0 &&
+      viewportHeight > 0 &&
+      contentWidth > 0 &&
+      contentHeight > 0 &&
+      scale > 0 &&
+      Number.isFinite(offsetX) &&
+      Number.isFinite(offsetY)
+    )
+  ) {
+    return null
+  }
+
+  const scaledW = contentWidth * scale
+  const scaledH = contentHeight * scale
+
+  // Raw translate: align requested content offset with viewport top-left.
+  const rawX = -offsetX * scale
+  const rawY = -offsetY * scale
+
+  // Contain clamping.
+  const tx =
+    scaledW <= viewportWidth
+      ? (viewportWidth - scaledW) / 2
+      : Math.min(0, Math.max(viewportWidth - scaledW, rawX))
+  const ty =
+    scaledH <= viewportHeight
+      ? (viewportHeight - scaledH) / 2
+      : Math.min(0, Math.max(viewportHeight - scaledH, rawY))
+
+  return { x: tx, y: ty, scale }
+}

@@ -42,11 +42,10 @@ export function MobileSafeHighlightButton({
     (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (event.pointerType === 'mouse') return
 
-      // 移动端 Selection 会在 touchend 清掉原生选区，必须早于合成 click 执行高亮。
       event.preventDefault()
       event.stopPropagation()
       markNextClickAsHandled()
-      selectionRef.current?.highlight()
+      selectionRef.current?.confirm()
     },
     [markNextClickAsHandled, selectionRef]
   )
@@ -58,7 +57,7 @@ export function MobileSafeHighlightButton({
       return
     }
 
-    selectionRef.current?.highlight()
+    selectionRef.current?.confirm()
   }, [clearResetTimer, selectionRef])
 
   return (

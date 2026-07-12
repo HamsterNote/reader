@@ -8,23 +8,23 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import {
+  buildSelectionPayload,
+  type ReaderSelectedTextSegment,
+  textElementRecords
+} from '../selection/selectionPayloadSerializer'
+import { IntermediateDocumentTextPageContent } from './IntermediateDocumentTextPageContent'
+import type {
+  ReaderPageRange,
+  ReaderTextSelectionDetail
+} from './IntermediateDocumentViewer'
+import {
   getPageContentEntries,
   getRuntimeDocument,
   getVisiblePageNumbers,
   isIntermediateText
 } from './IntermediateDocumentViewer'
-import type {
-  ReaderPageRange,
-  ReaderTextSelectionDetail
-} from './IntermediateDocumentViewer'
-import { IntermediateDocumentTextPageContent } from './IntermediateDocumentTextPageContent'
-import {
-  buildSelectionPayload,
-  textElementRecords,
-  type ReaderSelectedTextSegment
-} from '../selection/selectionPayloadSerializer'
-import { runtimePageSelectionId } from './selectionAdapter'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
+import { runtimePageSelectionId } from './selectionAdapter'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
 
@@ -579,21 +579,18 @@ export function IntermediateDocumentTextViewer(
         {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
         {virtualItems.map((virtualItem) => {
           const pageNumber = pageNumbers[virtualItem.index]
-          const texts =
-            typeof pageNumber === 'number'
-              ? textsByPageNumber.get(pageNumber)
-              : undefined
+          if (typeof pageNumber !== 'number') {
+            return null
+          }
+
+          const texts = textsByPageNumber.get(pageNumber)
           return (
             <div
-              key={virtualItem.key}
+              key={pageNumber}
               ref={virtualizer.measureElement}
               data-index={virtualItem.index}
               data-page-number={pageNumber}
-              data-selection-id={
-                typeof pageNumber === 'number'
-                  ? getRuntimePageSelectionId(pageNumber)
-                  : undefined
-              }
+              data-selection-id={getRuntimePageSelectionId(pageNumber)}
               data-testid={`intermediate-text-page-${pageNumber}`}
               // SCSS .hamster-reader__intermediate-text-page 提供
               // position:absolute / top:0 / left:0 / width:100% / padding:5px，
@@ -603,6 +600,7 @@ export function IntermediateDocumentTextViewer(
             >
               {texts ? (
                 <IntermediateDocumentTextPageContent
+                  key={pageNumber}
                   pageNumber={pageNumber}
                   texts={texts}
                   setTextRef={setTextRef}

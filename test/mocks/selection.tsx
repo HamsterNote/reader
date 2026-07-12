@@ -2,6 +2,25 @@ import * as React from 'react'
 
 export type OverlayRectType = 'px' | 'percent'
 
+export type SelectionTool = 'text' | 'rect'
+
+export interface SelectionRectPoint {
+  x: number
+  y: number
+}
+
+export interface SelectionRect {
+  id: string
+  createdAt: number
+  overlayRectType: OverlayRectType
+  start: SelectionRectPoint
+  end: SelectionRectPoint
+  rect: OverlayRect | PercentOverlayRect
+  selectionId?: string
+  markerStyle?: React.CSSProperties
+  selectionStyle?: React.CSSProperties
+}
+
 export interface SelectionRange {
   id: string
   text: string
@@ -33,6 +52,8 @@ export interface MousePosition {
 
 export interface SelectionRef {
   highlight: () => void
+  confirm: () => void
+  confirmRect: () => void
   clear: () => void
 }
 
@@ -90,6 +111,12 @@ export interface SelectionProps {
   popover?: React.ReactNode
   selectionPopover?: React.ReactNode
   overlayRectType?: OverlayRectType
+  tool?: SelectionTool
+  rects?: SelectionRect[]
+  selectedRectId?: string | null
+  onCreateRect?: (rect: SelectionRect) => void
+  onSelectRect?: (id: string | null) => void
+  onUpdateRect?: (rect: SelectionRect) => void
 }
 
 export let lastSelectionProps: SelectionProps | null = null
@@ -98,7 +125,7 @@ const selectionPropsById = new Map<string, SelectionProps>()
 const selectionRefsById = new Map<string, SelectionRef>()
 const selectionRefCallCountsById = new Map<
   string,
-  { highlight: number; clear: number }
+  { highlight: number; confirm: number; confirmRect: number; clear: number }
 >()
 
 const mockedRange: SelectionRange = {
@@ -142,19 +169,30 @@ export function clearSelectionProps(): void {
 
 export function getSelectionRefCallCounts(id: string): {
   highlight: number
+  confirm: number
+  confirmRect: number
   clear: number
 } {
-  return selectionRefCallCountsById.get(id) ?? { highlight: 0, clear: 0 }
+  return (
+    selectionRefCallCountsById.get(id) ?? {
+      highlight: 0,
+      confirm: 0,
+      confirmRect: 0,
+      clear: 0
+    }
+  )
 }
 
 function countSelectionRefCall(
   id: string | undefined,
-  method: 'highlight' | 'clear'
+  method: 'highlight' | 'confirm' | 'confirmRect' | 'clear'
 ): void {
   if (!id) return
 
   const current = selectionRefCallCountsById.get(id) ?? {
     highlight: 0,
+    confirm: 0,
+    confirmRect: 0,
     clear: 0
   }
   selectionRefCallCountsById.set(id, {
@@ -195,6 +233,14 @@ export function simulateSelectionHighlight(id: string): void {
   selectionRefsById.get(id)?.highlight()
 }
 
+export function simulateSelectionConfirm(id: string): void {
+  selectionRefsById.get(id)?.confirm()
+}
+
+export function simulateSelectionConfirmRect(id: string): void {
+  selectionRefsById.get(id)?.confirmRect()
+}
+
 export function simulateSelectionClear(id: string): void {
   selectionRefsById.get(id)?.clear()
 }
@@ -218,6 +264,26 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
           countSelectionRefCall(props.selectionId, 'highlight')
           props.onSelect?.(mockedRange)
           props.onHighlight?.(mockedRange)
+        },
+        confirm: () => {
+          countSelectionRefCall(props.selectionId, 'confirm')
+          if (props.tool === 'rect') {
+            selectionRef.confirmRect()
+          } else {
+            selectionRef.highlight()
+          }
+        },
+        confirmRect: () => {
+          countSelectionRefCall(props.selectionId, 'confirmRect')
+          const mockedRect: SelectionRect = {
+            id: 'rect-highlight-id',
+            createdAt: Date.now(),
+            overlayRectType: props.overlayRectType ?? 'percent',
+            start: { x: 0, y: 0 },
+            end: { x: 100, y: 100 },
+            rect: { x: 0, y: 0, width: 100, height: 100 }
+          }
+          props.onCreateRect?.(mockedRect)
         },
         clear: () => {
           countSelectionRefCall(props.selectionId, 'clear')

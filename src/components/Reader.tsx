@@ -9,7 +9,8 @@ import type {
   ReaderInteractionMode,
   ReaderPageRange,
   ReaderSelectedTextSegment,
-  ReaderTextSelectionDetail
+  ReaderTextSelectionDetail,
+  ReaderTouchPanMode
 } from './IntermediateDocumentViewer'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
@@ -19,7 +20,9 @@ import type {
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
   ReaderSelectionRange,
-  ReaderSelectionRef
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool
 } from '../types/selection'
 
 export type ReaderRenderMode = 'layout' | 'text'
@@ -56,6 +59,8 @@ export type ReaderProps = {
   ) => void
   /** 交互模式，透传给 IntermediateDocumentViewer */
   interactionMode?: ReaderInteractionMode
+  /** 触摸文档平移模式，透传给 IntermediateDocumentViewer in layout mode；默认 single-finger */
+  touchPanMode?: ReaderTouchPanMode
   // ---- Zoom props (all optional, forwarded unchanged) ----
   /**
    * Controlled zoom scale. When provided, Reader never mutates zoom internally;
@@ -139,10 +144,22 @@ export type ReaderProps = {
   highlightPopover?: React.ReactNode
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
-  /** Reader 自有命令式 ref，暴露 highlight()/clear()/scrollToRange(id) */
+  /** Reader 自有命令式 ref，暴露 highlight()/confirm()/confirmRect()/clear()/scrollToRange(id) */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
+  /** 当前选择工具模式；默认 'text'，传 'rect' 启用矩形框选，透传给 selection */
+  tool?: ReaderSelectionTool
+  /** 当前已存在的矩形框选列表（受控），透传给 selection */
+  rects?: ReaderSelectionRectangle[]
+  /** 当前被选中的矩形框选 ID（受控属性），透传给 selection */
+  selectedRectId?: string | null
+  /** 当用户确认一个新矩形框选时触发，透传给 selection */
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  /** 当用户选中/取消选中某个矩形框选时触发，透传给 selection */
+  onSelectRect?: (id: string | null) => void
+  /** 当用户拖动矩形手柄调整后触发，透传给 selection */
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
   // ---- intermediate-document 懒加载队列 props（转发给 IntermediateDocumentViewer）----
   /** 初始立即加载的页数，转发给 viewer，默认 1 */
   initialLoadedPages?: number
@@ -154,6 +171,10 @@ export type ReaderProps = {
   pageUnloadDelayMs?: number
   /** intermediate-document 渲染阶段计时回调，转发给 IntermediateDocumentViewer */
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
+  /** 内容区水平留白边距，单位 px，转发给 VirtualPaper */
+  containMarginX?: number
+  /** 内容区垂直留白边距，单位 px，转发给 VirtualPaper */
+  containMarginY?: number
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -205,6 +226,7 @@ export function Reader({
   maxScale,
   maxLoadedPages,
   interactionMode,
+  touchPanMode,
   ranges,
   defaultRanges,
   selectedRangeId,
@@ -226,11 +248,19 @@ export function Reader({
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
   initialLoadedPages,
   pageLoadConcurrency,
   pageLoadEnterDelayMs,
   pageUnloadDelayMs,
-  onIntermediateDocumentRenderTiming
+  onIntermediateDocumentRenderTiming,
+  containMarginX,
+  containMarginY
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -346,6 +376,7 @@ export function Reader({
           maxScale={maxScale}
           maxLoadedPages={maxLoadedPages}
           interactionMode={interactionMode}
+          touchPanMode={touchPanMode}
           ranges={ranges}
           defaultRanges={defaultRanges}
           selectedRangeId={selectedRangeId}
@@ -367,6 +398,12 @@ export function Reader({
           autoHighlight={autoHighlight}
           selectionRef={selectionRef}
           overlayRectType={overlayRectType}
+          tool={tool}
+          rects={rects}
+          selectedRectId={selectedRectId}
+          onCreateRect={onCreateRect}
+          onSelectRect={onSelectRect}
+          onUpdateRect={onUpdateRect}
           initialLoadedPages={initialLoadedPages}
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
@@ -374,6 +411,8 @@ export function Reader({
           onIntermediateDocumentRenderTiming={
             onIntermediateDocumentRenderTiming
           }
+          containMarginX={containMarginX}
+          containMarginY={containMarginY}
         />
       )
     }

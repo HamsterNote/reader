@@ -15,7 +15,8 @@ import type {
   ReaderProps,
   ReaderRenderMode,
   ReaderSelectionRange,
-  ReaderSelectionRef
+  ReaderSelectionRef,
+  ReaderTouchPanMode
 } from '../src/index'
 import { Reader } from '../src/index'
 import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
@@ -778,6 +779,12 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.interactionMode).toBe('stylus')
   })
 
+  it('forwards touchPanMode="two-finger" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} touchPanMode='two-finger' />)
+    expect(capturedViewerProps.touchPanMode).toBe('two-finger')
+  })
+
   it('defaults interactionMode to undefined when not provided (viewer defaults to "default")', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} />)
@@ -879,8 +886,12 @@ describe('Reader prop forwarding', () => {
     const publicRef = requireReaderSelectionRef(selectionRef)
     expect(publicRef).toEqual({
       highlight: expect.any(Function),
+      confirm: expect.any(Function),
+      confirmRect: expect.any(Function),
       clear: expect.any(Function),
-      scrollToRange: expect.any(Function)
+      scrollToRange: expect.any(Function),
+      scrollToRect: expect.any(Function),
+      scrollToPosition: expect.any(Function)
     })
 
     // When: callers jump through Reader's public selectionRef.
@@ -916,6 +927,92 @@ describe('Reader prop forwarding', () => {
     ).toBe(pageThreeSelectionProps?.selectionId)
   })
 
+  it('exposes scrollToPosition on the forwarded Reader ref without firing onScaleChange', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        selectionRef={selectionRef}
+        initialLoadedPages={1}
+        scale={1.5}
+        onScaleChange={onScaleChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 300
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    act(() => {
+      publicRef.scrollToPosition({ x: 120, y: 240 })
+    })
+
+    // scrollToPosition treats x/y as content-space scroll offsets.
+    // With scale=1.5 and a 200x300 wrapper, the x offset is centered
+    // because scaled content width (150px) fits; y is clamped to -360px
+    // because scaled content height (723px) is taller than the wrapper.
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      transform: 'translate3d(25px, -360px, 0) scale(1.5)'
+    })
+    expect(onScaleChange).not.toHaveBeenCalled()
+  })
+
+  it('exposes scrollToRect on the forwarded Reader ref without firing onScaleChange', async () => {
+    // Given: Reader owns the public ref and a controlled rect on page 3.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onScaleChange = vi.fn()
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        rects={[
+          {
+            id: 'reader-rect-page-3',
+            createdAt: 40,
+            overlayRectType: 'percent',
+            start: { x: 10, y: 20 },
+            end: { x: 30, y: 40 },
+            selectionId: 'page-3',
+            rect: { x: 10, y: 20, width: 20, height: 20 }
+          }
+        ]}
+        selectedRectId='reader-rect-page-3'
+        selectionRef={selectionRef}
+        initialLoadedPages={1}
+        scale={2}
+        onScaleChange={onScaleChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 100
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    act(() => {
+      publicRef.scrollToRect('reader-rect-page-3')
+    })
+
+    // Then: VirtualPaper translates to center page 3's rect, scale stays controlled.
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      transform: 'translate3d(-15px, -704px, 0) scale(2)'
+    })
+    expect(onScaleChange).not.toHaveBeenCalled()
+
+    await screen.findByText('Page 3 text')
+  })
+
   it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     const popover = <div>Test Popover</div>
@@ -940,6 +1037,14 @@ describe('Reader prop forwarding', () => {
       interactionMode: 'stylus' as ReaderInteractionMode
     }
     expect(props.interactionMode).toBe('stylus')
+  })
+
+  it('compile-time: touchPanMode satisfies ReaderProps', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      touchPanMode: 'two-finger' as ReaderTouchPanMode
+    }
+    expect(props.touchPanMode).toBe('two-finger')
   })
 
   it('forwards onIntermediateDocumentRenderTiming to IntermediateDocumentViewer', () => {
@@ -1064,5 +1169,16 @@ describe('Reader zoom props', () => {
 
     const wrapper = screen.getByTestId('virtual-paper-wrapper')
     expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
+  })
+
+  it('forwards containMarginX and containMarginY to IntermediateDocumentViewer', () => {
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader document={document} containMarginX={24} containMarginY={48} />
+    )
+
+    expect(capturedViewerProps.containMarginX).toBe(24)
+    expect(capturedViewerProps.containMarginY).toBe(48)
   })
 })

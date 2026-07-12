@@ -213,6 +213,18 @@ import type {
 } from '@hamster-note/reader'
 ```
 
+### Touch pan mode
+
+`Reader` uses single-finger document panning by default:
+
+```tsx
+<Reader document={document} touchPanMode='single-finger' />
+```
+
+Set `touchPanMode='two-finger'` when the host app needs one-finger touch gestures for something else. In this mode, one finger no longer moves the document, while two-finger pinch zoom and pinch movement keep the same behavior as the default layout reader.
+
+This prop applies to layout mode only. `renderMode='text'` does not mount `VirtualPaper`, so touch pan mode has no effect there.
+
 ### CSS
 
 `@hamster-note/reader/style.css` already bundles the Selection library CSS (`.hsn-selection-*` classes). No additional import is needed.

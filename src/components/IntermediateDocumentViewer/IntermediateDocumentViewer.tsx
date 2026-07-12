@@ -18,6 +18,7 @@ import {
   type IntermediateDocumentRenderTimingEntry
 } from './renderTiming'
 import {
+  DEFAULT_ENABLED_INTERACTIONS,
   VirtualPaper,
   VirtualPaperInteractionMode,
   type VirtualPaperTransform,
@@ -26,6 +27,9 @@ import {
 import {
   computePageOriginY,
   computeTransform,
+  computeTransformForOffset,
+  parsePublicPageId,
+  rectCenterToPagePixels,
   resolveRangeJumpTarget
 } from './rangeJumpHelpers'
 import React, {
@@ -50,7 +54,9 @@ import type {
   ReaderLinkedSelectionData,
   ReaderSelectionOverlayRectType,
   ReaderSelectionRange,
-  ReaderSelectionRef
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool
 } from '../../types/selection'
 import {
   areRuntimeLinkedTransientsEqual,
@@ -58,6 +64,7 @@ import {
   extractRuntimeLinkedTransient,
   mapRuntimeLinkedDataToPublic,
   mapRuntimeRangeToPublic,
+  mapRuntimeSelectionIdToPublic,
   runtimePageSelectionId,
   type RuntimeLinkedSelectionTransient
 } from './selectionAdapter'
@@ -332,6 +339,9 @@ export const isNonSpaceBlankText = (content: string): boolean =>
 /** 交互模式：'default' 为默认触摸/鼠标模式，'stylus' 为手写笔优化模式 */
 export type ReaderInteractionMode = 'default' | 'stylus'
 
+/** Touch/mouse pan mode for document scrolling through VirtualPaper. Default is single-finger pan. */
+export type ReaderTouchPanMode = 'single-finger' | 'two-finger'
+
 export type IntermediateDocumentViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   serializedDocument?: IntermediateDocumentSerialized | null
@@ -400,6 +410,8 @@ export type IntermediateDocumentViewerProps = {
   maxLoadedPages?: number
   /** 交互模式，影响手势处理行为 */
   interactionMode?: ReaderInteractionMode
+  /** 触摸文档平移模式：'single-finger' 为单指平移（默认），'two-finger' 为双指平移，避免与手写笔/选择操作冲突 */
+  touchPanMode?: ReaderTouchPanMode
   /** 受控的已高亮 range 列表；传入时组件不内部 mutation，缺失则用内部 state 从 defaultRanges 初始化 */
   ranges?: ReaderSelectionRange[]
   /** 非受控模式下 ranges 的初始值，默认空数组 */
@@ -437,10 +449,22 @@ export type IntermediateDocumentViewerProps = {
   highlightPopover?: React.ReactNode
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
-  /** Selection 组件的命令式 ref，暴露 highlight()/clear() 方法 */
+  /** Selection 组件的命令式 ref，暴露 highlight()/clear()/confirm()/confirmRect() 方法 */
   selectionRef?: React.Ref<ReaderSelectionRef>
   /** 选区 Overlay 矩形坐标类型；默认 'percent' */
   overlayRectType?: ReaderSelectionOverlayRectType
+  /** 当前选择工具模式；默认 'text'，传 'rect' 启用矩形框选 */
+  tool?: ReaderSelectionTool
+  /** 当前已存在的矩形框选列表（受控） */
+  rects?: ReaderSelectionRectangle[]
+  /** 当前被选中的矩形框选 ID（受控属性）；null 表示未选中任何矩形 */
+  selectedRectId?: string | null
+  /** 当用户确认一个新矩形框选时触发 */
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  /** 当用户选中/取消选中某个矩形框选时触发 */
+  onSelectRect?: (id: string | null) => void
+  /** 当用户拖动矩形手柄调整后触发 */
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
   /**
    * 初始立即加载的页数。省略时默认 `1`。
    */
@@ -459,6 +483,10 @@ export type IntermediateDocumentViewerProps = {
   pageUnloadDelayMs?: number
   /** intermediate-document 渲染阶段计时回调 */
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
+  /** VirtualPaper 水平留白边距，单位 px */
+  containMarginX?: number
+  /** VirtualPaper 垂直留白边距，单位 px */
+  containMarginY?: number
 }
 
 type PageSize = {
@@ -475,6 +503,11 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
   height: 842
 }
+
+const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS =
+  DEFAULT_ENABLED_INTERACTIONS.filter(
+    (mode) => mode !== VirtualPaperInteractionMode.TouchSingleFingerPan
+  )
 
 export const getVisiblePageNumbers = (
   allPageNumbers: number[],
@@ -889,6 +922,12 @@ type ViewerContentProps = PageResources & {
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
   onScrollToRange: (id: string) => void
+  onScrollToRect: (id: string) => void
+  onScrollToPosition: (position: {
+    x: number
+    y: number
+    scale?: number
+  }) => void
   imagesByPageNumber: Map<number, IntermediateImage[]>
   onPageRenderTiming:
     | ((
@@ -938,8 +977,17 @@ type ViewerContentProps = PageResources & {
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
   selectionRef: React.Ref<ReaderSelectionRef> | undefined
+  tool?: ReaderSelectionTool
+  rects?: ReaderSelectionRectangle[]
+  selectedRectId?: string | null
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  onSelectRect?: (id: string | null) => void
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
+  touchPanMode?: ReaderTouchPanMode
+  containMarginX?: number
+  containMarginY?: number
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1030,6 +1078,13 @@ type IntermediateDocumentPagesProps = PageResources & {
   selectionRefForRuntimeId: (
     selectionId: string
   ) => (node: SelectionRef | null) => void
+  tool?: ReaderSelectionTool
+  rects?: ReaderSelectionRectangle[]
+  selectedRectId?: string | null
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  onSelectRect?: (id: string | null) => void
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  onRectPointerUp?: (pageNumber: number) => void
   onPageRenderTiming?: (
     pageNumber: number,
     startTime: number,
@@ -1067,6 +1122,13 @@ function IntermediateDocumentPages({
   highlightPopover,
   popoverVisible,
   selectionRefForRuntimeId,
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
+  onRectPointerUp,
   onPageRenderTiming
 }: IntermediateDocumentPagesProps) {
   // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
@@ -1146,6 +1208,7 @@ function IntermediateDocumentPages({
             data-page-size-unavailable={
               shellPageSize.pageSizeUnavailable ? 'true' : undefined
             }
+            onPointerUp={() => onRectPointerUp?.(pageNumber)}
             style={{
               position: 'relative',
               width: `${shellPageSize.width}px`,
@@ -1175,6 +1238,12 @@ function IntermediateDocumentPages({
                 popover={pagePopover}
                 selectionPopover={pageSelectionPopover}
                 overlayRectType={overlayRectType}
+                tool={tool}
+                rects={rects}
+                selectedRectId={selectedRectId}
+                onCreateRect={onCreateRect}
+                onSelectRect={onSelectRect}
+                onUpdateRect={onUpdateRect}
                 ref={selectionRefForRuntimeId(shellSelectionId)}
               >
                 {pageContent}
@@ -1195,6 +1264,8 @@ function ViewerContent({
   virtualPaperTransform,
   scaleRange,
   onScrollToRange,
+  onScrollToRect,
+  onScrollToPosition,
   handleVirtualPaperTransformChange,
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
@@ -1217,6 +1288,12 @@ function ViewerContent({
   autoHighlight,
   overlayRectType,
   selectionRef,
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
   setPageRef,
   setTextRef,
   textsByPageNumber,
@@ -1225,7 +1302,10 @@ function ViewerContent({
   loadablePages,
   baseImagesByPageNumber,
   imagesByPageNumber,
-  onPageRenderTiming
+  onPageRenderTiming,
+  touchPanMode,
+  containMarginX,
+  containMarginY
 }: ViewerContentProps) {
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
@@ -1290,30 +1370,57 @@ function ViewerContent({
     return null
   }, [runtimeLinkedData.activeRange])
 
+  const getActiveSelectionRef = useCallback(() => {
+    const ownerSelectionRef = getActiveSelectionOwnerRef()
+    const linkedRangeOwnerSelectionRef =
+      ownerSelectionRef === undefined
+        ? getActiveLinkedRangeOwnerRef()
+        : ownerSelectionRef
+    return linkedRangeOwnerSelectionRef === undefined
+      ? getFirstVisibleSelectionRef()
+      : linkedRangeOwnerSelectionRef
+  }, [
+    getActiveLinkedRangeOwnerRef,
+    getActiveSelectionOwnerRef,
+    getFirstVisibleSelectionRef
+  ])
+
   const highlightSelection = useCallback(() => {
     const operation = beginLinkedHighlightOperation()
 
     try {
-      const ownerSelectionRef = getActiveSelectionOwnerRef()
-      const linkedRangeOwnerSelectionRef =
-        ownerSelectionRef === undefined
-          ? getActiveLinkedRangeOwnerRef()
-          : ownerSelectionRef
-      const selectionRef =
-        linkedRangeOwnerSelectionRef === undefined
-          ? getFirstVisibleSelectionRef()
-          : linkedRangeOwnerSelectionRef
-      selectionRef?.highlight()
+      getActiveSelectionRef()?.highlight()
     } finally {
       schedulePendingLinkedHighlightCleanup(operation)
     }
   }, [
     beginLinkedHighlightOperation,
-    getActiveLinkedRangeOwnerRef,
-    getActiveSelectionOwnerRef,
-    getFirstVisibleSelectionRef,
+    getActiveSelectionRef,
     schedulePendingLinkedHighlightCleanup
   ])
+
+  const confirmRectSelection = useCallback(() => {
+    selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
+      selectionRef.confirmRect()
+    })
+  }, [])
+
+  const handleRectPointerUp = useCallback(
+    (pageNumber: number) => {
+      if (!autoHighlight || tool !== 'rect') return
+      const selectionId = runtimePageSelectionId(pageNumber)
+      selectionRefsByRuntimeIdRef.current.get(selectionId)?.confirmRect()
+    },
+    [autoHighlight, runtimePageSelectionId, tool]
+  )
+
+  const confirmSelection = useCallback(() => {
+    if (tool === 'rect') {
+      confirmRectSelection()
+      return
+    }
+    getActiveSelectionRef()?.confirm()
+  }, [confirmRectSelection, getActiveSelectionRef, tool])
 
   const clearSelections = useCallback(() => {
     selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
@@ -1324,10 +1431,22 @@ function ViewerContent({
   const publicSelectionRef = useMemo<ReaderSelectionRef>(
     () => ({
       highlight: highlightSelection,
+      confirm: confirmSelection,
+      confirmRect: confirmRectSelection,
       clear: clearSelections,
-      scrollToRange: onScrollToRange
+      scrollToRange: onScrollToRange,
+      scrollToRect: onScrollToRect,
+      scrollToPosition: onScrollToPosition
     }),
-    [clearSelections, highlightSelection, onScrollToRange]
+    [
+      clearSelections,
+      confirmSelection,
+      confirmRectSelection,
+      highlightSelection,
+      onScrollToRange,
+      onScrollToRect,
+      onScrollToPosition
+    ]
   )
 
   const syncForwardedSelectionRef = useCallback(() => {
@@ -1483,6 +1602,13 @@ function ViewerContent({
       highlightPopover={highlightPopover}
       popoverVisible={popoverVisible}
       selectionRefForRuntimeId={selectionRefForRuntimeId}
+      tool={tool}
+      rects={rects}
+      selectedRectId={selectedRectId}
+      onCreateRect={onCreateRect}
+      onSelectRect={onSelectRect}
+      onUpdateRect={onUpdateRect}
+      onRectPointerUp={handleRectPointerUp}
       onPageRenderTiming={onPageRenderTiming}
     />
   )
@@ -1520,8 +1646,15 @@ function ViewerContent({
           transform={virtualPaperTransform}
           minScale={scaleRange.min}
           maxScale={scaleRange.max}
+          enabledInteractions={
+            touchPanMode === 'two-finger'
+              ? TWO_FINGER_TOUCH_ENABLED_INTERACTIONS
+              : DEFAULT_ENABLED_INTERACTIONS
+          }
           onTransformChange={handleTransformChangeWithPopover}
           onTransformChangeEnd={handleTransformChangeEndWithPopover}
+          containMarginX={containMarginX}
+          containMarginY={containMarginY}
         >
           {pagesNode}
         </VirtualPaper>
@@ -1548,6 +1681,7 @@ export function IntermediateDocumentViewer({
   maxScale,
   maxLoadedPages,
   interactionMode = 'default',
+  touchPanMode,
   ranges,
   defaultRanges,
   selectedRangeId,
@@ -1569,11 +1703,19 @@ export function IntermediateDocumentViewer({
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
   initialLoadedPages = 1,
   pageLoadConcurrency = 3,
   pageLoadEnterDelayMs = 500,
   pageUnloadDelayMs = 5000,
-  onIntermediateDocumentRenderTiming
+  onIntermediateDocumentRenderTiming,
+  containMarginX,
+  containMarginY
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -1730,6 +1872,11 @@ export function IntermediateDocumentViewer({
   const effectiveRanges = isRangesControlled ? ranges : internalRanges
   const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
   effectiveRangesRef.current = effectiveRanges
+
+  const effectiveRects = rects ?? []
+  const effectiveRectsRef = useRef<ReaderSelectionRectangle[]>(effectiveRects)
+  effectiveRectsRef.current = effectiveRects
+
   const pendingLinkedHighlightOperationRef =
     useRef<PendingLinkedHighlightOperation | null>(null)
   const emittedLinkedSelectRangeIdsRef = useRef(new Set<string>())
@@ -2370,6 +2517,158 @@ export function IntermediateDocumentViewer({
       releaseJumpPinnedPage,
       runtimeDocument
     ]
+  )
+
+  const scrollToRect = useCallback(
+    (rectId: string) => {
+      if (!runtimeDocument || pageNumbers.length === 0) return
+
+      const rect = effectiveRectsRef.current.find((r) => r.id === rectId)
+      if (!rect) return
+
+      const rawSelectionId = rect.selectionId
+      if (!rawSelectionId) return
+
+      const publicSelectionId = rawSelectionId.includes(':')
+        ? mapRuntimeSelectionIdToPublic(rawSelectionId, readerLinkedScopeId)
+        : rawSelectionId
+      if (!publicSelectionId) return
+
+      const pageNumber = parsePublicPageId(publicSelectionId)
+      if (pageNumber === null || !pageNumbers.includes(pageNumber)) return
+
+      const widestPageSize = getWidestKnownPageSize(
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      if (!widestPageSize) return
+
+      const targetPageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
+      if (!targetPageSize) return
+
+      const viewportElement = viewerRootRef.current?.querySelector(
+        '.virtual-paper-wrapper'
+      )
+      if (!(viewportElement instanceof HTMLElement)) return
+
+      const viewportRect = viewportElement.getBoundingClientRect()
+      const contentWidth = widestPageSize.width
+      const lastPageNumber = pageNumbers.at(-1)
+      if (lastPageNumber === undefined) return
+      const lastPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        lastPageNumber
+      )
+      if (!lastPageSize) return
+      const contentHeight =
+        computePageOriginY(lastPageNumber, pageNumbers, pageSizesByPageNumber) +
+        lastPageSize.height
+
+      const pageOriginY = computePageOriginY(
+        pageNumber,
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      const { centerX, centerY } = rectCenterToPagePixels(
+        rect.rect,
+        rect.overlayRectType,
+        targetPageSize.width,
+        targetPageSize.height
+      )
+      const targetContentX = (contentWidth - targetPageSize.width) / 2 + centerX
+      const targetContentY = pageOriginY + centerY
+
+      const nextTransform = computeTransform({
+        viewportWidth: viewportRect.width,
+        viewportHeight: viewportRect.height,
+        contentWidth,
+        contentHeight,
+        targetContentX,
+        targetContentY,
+        scale: effectiveScaleRef.current
+      })
+      if (!nextTransform) return
+
+      const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(pageNumber)
+      clearUnloadTimer(pageNumber)
+      lazilyEvictedPagesRef.current.delete(pageNumber)
+      markLoadableWithOverscan(pageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(pageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(pageNumber)
+      }
+
+      setPaperTransform((currentTransform) => ({
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: currentTransform.scale
+      }))
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      readerLinkedScopeId,
+      releaseJumpPinnedPage,
+      runtimeDocument
+    ]
+  )
+
+  const scrollToPosition = useCallback(
+    (position: { x: number; y: number; scale?: number }) => {
+      if (!runtimeDocument || pageNumbers.length === 0) return
+
+      const widestPageSize = getWidestKnownPageSize(
+        pageNumbers,
+        pageSizesByPageNumber
+      )
+      if (!widestPageSize) return
+
+      const viewportElement = viewerRootRef.current?.querySelector(
+        '.virtual-paper-wrapper'
+      )
+      if (!(viewportElement instanceof HTMLElement)) return
+
+      const viewportRect = viewportElement.getBoundingClientRect()
+      const contentWidth = widestPageSize.width
+      const lastPageNumber = pageNumbers.at(-1)
+      if (lastPageNumber === undefined) return
+      const lastPageSize = getKnownPageSize(
+        pageSizesByPageNumber,
+        lastPageNumber
+      )
+      if (!lastPageSize) return
+      const contentHeight =
+        computePageOriginY(lastPageNumber, pageNumbers, pageSizesByPageNumber) +
+        lastPageSize.height
+
+      const nextTransform = computeTransformForOffset({
+        viewportWidth: viewportRect.width,
+        viewportHeight: viewportRect.height,
+        contentWidth,
+        contentHeight,
+        offsetX: position.x,
+        offsetY: position.y,
+        scale: position.scale ?? effectiveScaleRef.current
+      })
+      if (!nextTransform) return
+
+      setPaperTransform((currentTransform) => ({
+        x: nextTransform.x,
+        y: nextTransform.y,
+        scale: nextTransform.scale ?? currentTransform.scale
+      }))
+    },
+    [pageNumbers, pageSizesByPageNumber, runtimeDocument]
   )
 
   useEffect(() => {
@@ -3412,6 +3711,8 @@ export function IntermediateDocumentViewer({
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
       onScrollToRange={scrollToRange}
+      onScrollToRect={scrollToRect}
+      onScrollToPosition={scrollToPosition}
       handleVirtualPaperTransformChange={handleVirtualPaperTransformChange}
       handleVirtualPaperTransformChangeEnd={
         handleVirtualPaperTransformChangeEnd
@@ -3438,6 +3739,12 @@ export function IntermediateDocumentViewer({
       autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
+      tool={tool}
+      rects={rects}
+      selectedRectId={selectedRectId}
+      onCreateRect={onCreateRect}
+      onSelectRect={onSelectRect}
+      onUpdateRect={onUpdateRect}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
       textsByPageNumber={textsByPageNumber}
@@ -3447,6 +3754,9 @@ export function IntermediateDocumentViewer({
       baseImagesByPageNumber={baseImagesByPageNumber}
       imagesByPageNumber={imagesByPageNumber}
       onPageRenderTiming={pageRenderTimingHandler}
+      touchPanMode={touchPanMode}
+      containMarginX={containMarginX}
+      containMarginY={containMarginY}
     />
   )
 }

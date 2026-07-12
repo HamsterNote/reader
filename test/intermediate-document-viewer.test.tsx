@@ -1,6 +1,5 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import * as sass from 'sass'
 import type {
   IntermediateContent,
   IntermediateDocument,
@@ -17,9 +16,11 @@ import {
   useCallback,
   useRef
 } from 'react'
+import * as sass from 'sass'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { buildSelectionPayload } from '../src/components/IntermediateDocumentViewer'
+import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import {
   computePageOriginY,
   computeTransform,
@@ -29,10 +30,6 @@ import {
   resolveRangeJumpTarget,
   selectTargetRect
 } from '../src/components/IntermediateDocumentViewer/rangeJumpHelpers'
-import type {
-  ReaderSelectionRange,
-  ReaderSelectionRef
-} from '../src/types/selection'
 import {
   isSelectionBackgroundTarget,
   resolveCaret
@@ -45,9 +42,16 @@ import {
   buildSelectionPayload as buildSerializedSelectionPayload,
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
-import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import { IntermediateDocumentViewer, Reader } from '../src/index'
-import type { OverlayRectType } from './mocks/selection'
+import type {
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../src/types/selection'
+import type {
+  LinkedSelectionRange,
+  OverlayRectType,
+  SelectionProps
+} from './mocks/selection'
 import {
   clearSelectionProps,
   getAllSelectionProps,
@@ -56,8 +60,10 @@ import {
   simulateLinkedSelectRange,
   simulateLinkedUpdateRange
 } from './mocks/selection'
-import type { LinkedSelectionRange, SelectionProps } from './mocks/selection'
-import { VirtualPaper } from './mocks/virtual-paper'
+import {
+  VirtualPaper,
+  VirtualPaperInteractionMode
+} from './mocks/virtual-paper'
 import {
   intersectionObserverMock,
   mockElementSize,
@@ -759,6 +765,22 @@ describe('IntermediateDocumentViewer', () => {
     expect(IntermediateDocumentViewer).toBeTypeOf('function')
   })
 
+  it('forwards containMarginX and containMarginY to VirtualPaper', async () => {
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        containMarginX={24}
+        containMarginY={48}
+      />
+    )
+
+    const container = await screen.findByTestId('virtual-paper-container')
+    expect(container).toHaveAttribute('data-contain-margin-x', '24')
+    expect(container).toHaveAttribute('data-contain-margin-y', '48')
+  })
+
   it('text mode virtualizer harness mounts with deterministic measurements', async () => {
     render(<TextModeVirtualizerHarness />)
     const scrollContainer = screen.getByTestId('text-mode-scroll-container')
@@ -884,6 +906,46 @@ describe('IntermediateDocumentViewer', () => {
     expect(
       screen.queryByTestId('intermediate-text-page-20')
     ).not.toBeInTheDocument()
+  })
+
+  it('text mode keeps virtual row content matched to the scrolled page number', async () => {
+    const { document } = makeDocument({ pageCount: 3 })
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2400
+    })
+
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    mockElementSize(page1, { width: 800, height: 800 })
+
+    await screen.findByText('Page 1 text')
+
+    act(() => {
+      scrollEl.scrollTop = 800
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    const page2 = await screen.findByTestId('intermediate-text-page-2')
+    mockElementSize(page2, { width: 800, height: 800 })
+
+    await waitFor(() => {
+      expect(page2).toHaveAttribute('data-page-number', '2')
+      expect(screen.getByText('Page 2 text')).toHaveAttribute(
+        'data-page-number',
+        '2'
+      )
+      expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+    })
   })
 
   // ---- 文本模式内容渲染（T5）----
@@ -5955,8 +6017,11 @@ describe('rangeJumpHelpers', () => {
         targetContentY: 4000
       })
       expect(t).not.toBeNull()
-      expect(t!.x).toBe(-500)
-      expect(t!.y).toBe(-2500)
+      if (t === null) {
+        throw new Error('Expected transform to be available')
+      }
+      expect(t.x).toBe(-500)
+      expect(t.y).toBe(-2500)
     })
 
     it('clamps x and y for target beyond top-left edge', () => {
@@ -5968,8 +6033,11 @@ describe('rangeJumpHelpers', () => {
         targetContentY: -100
       })
       expect(t).not.toBeNull()
-      expect(t!.x).toBe(0)
-      expect(t!.y).toBe(0)
+      if (t === null) {
+        throw new Error('Expected transform to be available')
+      }
+      expect(t.x).toBe(0)
+      expect(t.y).toBe(0)
     })
 
     it('centers axis when content is smaller than viewport', () => {
@@ -6119,5 +6187,86 @@ describe('rangeJumpHelpers', () => {
       })
       expect(t).toEqual({ x: -50, y: 50, scale: 2 })
     })
+  })
+})
+
+describe('touchPanMode', () => {
+  it('默认模式包含 TouchSingleFingerPan 和 TouchTwoFingerZoom', () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    const interactions = wrapper.dataset.enabledInteractions ?? ''
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchSingleFingerPan
+    )
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchTwoFingerZoom
+    )
+  })
+
+  it('显式 single-finger 模式与默认一致', () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        touchPanMode='single-finger'
+      />
+    )
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    const interactions = wrapper.dataset.enabledInteractions ?? ''
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchSingleFingerPan
+    )
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchTwoFingerZoom
+    )
+  })
+
+  it('two-finger 模式排除 TouchSingleFingerPan，保留其他交互', () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        touchPanMode='two-finger'
+      />
+    )
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    const interactions = wrapper.dataset.enabledInteractions ?? ''
+    expect(interactions).not.toContain(
+      VirtualPaperInteractionMode.TouchSingleFingerPan
+    )
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchTwoFingerZoom
+    )
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TrackpadScrollPan
+    )
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.MouseWheelCtrlZoom
+    )
+  })
+
+  it('从 two-finger 切换到 single-finger 后 TouchSingleFingerPan 重新出现', () => {
+    const { document } = makeDocument({ pageCount: 1 })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        touchPanMode='two-finger'
+      />
+    )
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    expect(wrapper.dataset.enabledInteractions).not.toContain(
+      VirtualPaperInteractionMode.TouchSingleFingerPan
+    )
+
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        touchPanMode='single-finger'
+      />
+    )
+    expect(wrapper.dataset.enabledInteractions).toContain(
+      VirtualPaperInteractionMode.TouchSingleFingerPan
+    )
   })
 })

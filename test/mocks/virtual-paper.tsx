@@ -60,8 +60,10 @@ export type VirtualPaperProps = {
   inertialScroll?: boolean
   /** v0.1.0-beta.1+：边缘弹性滚动 */
   edgeElasticScroll?: boolean
-  /** v0.1.0-beta.1+：阅读模式缩放防抖时间（毫秒） */
   readerModeZoomDebounceMs?: number
+  containMarginX?: number
+  containMarginY?: number
+  lazyWillChange?: number
   contentSize?: VirtualPaperContentSize
   transform?: VirtualPaperTransform
   defaultTransform?: VirtualPaperTransform
@@ -139,7 +141,10 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
     containerStyle,
     wrapperProps,
     containerProps,
-    containMode
+    containMode,
+    containMarginX,
+    containMarginY,
+    lazyWillChange
   } = props
 
   const isControlled = controlledTransform !== undefined
@@ -242,6 +247,9 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
         }}
         data-content-size-width={contentSize?.width}
         data-content-size-height={contentSize?.height}
+        data-contain-margin-x={containMarginX}
+        data-contain-margin-y={containMarginY}
+        data-lazy-will-change={lazyWillChange}
         {...restContainerProps}
       >
         {children}

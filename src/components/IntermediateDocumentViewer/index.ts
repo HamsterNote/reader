@@ -5,6 +5,7 @@ export {
   type IntermediateDocumentViewerProps,
   type ReaderInteractionMode,
   type ReaderPageRange,
+  type ReaderTouchPanMode,
   type ReaderSavedSelection,
   type ReaderSavedSelectionAnchor,
   type ReaderSavedSelectionComment,

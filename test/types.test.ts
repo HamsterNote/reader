@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import type {
+  ReaderInteractiveProps,
   ReaderLinkedSelectionRange,
   ReaderProps,
   ReaderRenderMode,
-  ReaderSelectionRange
+  ReaderSelectionRange,
+  ReaderTouchPanMode
 } from '../src'
 
 type AssertFalse<Value extends false> = Value
@@ -57,6 +59,22 @@ const _renderModeAccepted: RenderModeInReaderProps = true
 const _renderModeValue: ReaderRenderMode = 'layout'
 const _readerPropsRenderMode: ReaderProps['renderMode'] = _renderModeValue
 
+/**
+ * GREEN 合约测试：touchPanMode 是 ReaderProps 和 ReaderInteractiveProps 的已知键，
+ * 并且其值类型为 ReaderTouchPanMode。
+ */
+type TouchPanModeInReaderProps = 'touchPanMode' extends keyof ReaderProps
+  ? true
+  : false
+const _touchPanModeAccepted: TouchPanModeInReaderProps = true
+
+type TouchPanModeInInteractiveProps =
+  'touchPanMode' extends keyof ReaderInteractiveProps ? true : false
+const _touchPanModeInteractiveAccepted: TouchPanModeInInteractiveProps = true
+
+const _touchPanModeValue: ReaderTouchPanMode = 'two-finger'
+const _readerPropsTouchPanMode: ReaderProps['touchPanMode'] = _touchPanModeValue
+
 describe('Reader public selection types', () => {
   it('accepts linked ranges keyed by public page selection ids', () => {
     expect(legacyRangeRejected).toBe(false)
@@ -74,5 +92,15 @@ describe('Reader public selection types', () => {
   it('ReaderProps type accepts renderMode as ReaderRenderMode', () => {
     expect(_renderModeAccepted).toBe(true)
     expect(_readerPropsRenderMode).toBe('layout')
+  })
+
+  /**
+   * GREEN 合约测试：确认 ReaderProps 与 ReaderInteractiveProps 均接受 touchPanMode，
+   * 且其类型为 ReaderTouchPanMode。编译通过即证明契约成立。
+   */
+  it('ReaderProps type accepts touchPanMode as ReaderTouchPanMode', () => {
+    expect(_touchPanModeAccepted).toBe(true)
+    expect(_touchPanModeInteractiveAccepted).toBe(true)
+    expect(_readerPropsTouchPanMode).toBe('two-finger')
   })
 })
