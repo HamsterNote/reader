@@ -1,10 +1,19 @@
+// Selection 库类型别名直接从 @hamster-note/selection re-export，
+// 绕过 IntermediateDocumentViewer 中的 type alias 转发
+// （TS 5.9 在 bundler + isolatedModules 下 export type X = ExternalType 存在已知问题）
+export type {
+  MousePosition as ReaderMousePosition,
+  OverlayRectType as ReaderSelectionOverlayRectType,
+  SelectionRange as ReaderSelectionRange,
+  SelectionRef as ReaderSelectionRef
+} from '@hamster-note/selection'
+
 export {
   type BackgroundQuality,
   buildSavedSelection,
   buildSelectionPayload,
   denormalizePageRects,
   IntermediateDocumentViewer,
-  getSelectionOverlayRects,
   type IntermediateDocumentViewerProps,
   normalizePageRects,
   resolveSavedSelection,
@@ -19,10 +28,7 @@ export {
   type ReaderSavedSelectionRestoreStatus,
   type ReaderSavedSelectionSegment,
   type ReaderSavedSelectionVisualPage,
-  type ReaderSelectedTextDragCallback,
   type ReaderSelectedTextSegment,
-  type ReaderSelectionHandleRenderProps,
-  type ReaderSelectionOverlayOptions,
   type ReaderSelectionOverlayRect,
   type ReaderSelectionPayload,
   type ReaderTextSelectionDetail,
@@ -32,16 +38,24 @@ export {
 } from './components/IntermediateDocumentViewer'
 export { Reader, type ReaderProps } from './components/Reader'
 
-export type { ReaderSelectionOverlayPolygon } from './components/selectionGeometry'
-
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
   | 'ocr'
   | 'onSelectText'
   | 'onTextSelectionChange'
   | 'onTextSelectionEnd'
-  | 'onDragSelectedTextStart'
-  | 'onDragSelectedTextMove'
-  | 'onDragSelectedTextEnd'
   | 'interactionMode'
+  | 'ranges'
+  | 'selectedRangeId'
+  | 'onSelect'
+  | 'onSelectRange'
+  | 'onUpdateRange'
+  | 'onSelectionStart'
+  | 'onSelectionEnd'
+  | 'onHighlight'
+  | 'highlightColor'
+  | 'selectionColor'
+  | 'selectionPopover'
+  | 'selectionRef'
+  | 'overlayRectType'
 >

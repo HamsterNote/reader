@@ -64,6 +64,95 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 />
 ```
 
+## Text Selection (@hamster-note/selection)
+
+`Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features — highlighted ranges, popovers, and programmatic control — on top of the native browser `Selection` API.
+
+The `<Selection>` component wraps the html-parser output **inside** `<VirtualPaper>` and **outside** the html-parser rendered content. It is active only in `html-parser` render mode; the `direct` render path is unaffected.
+
+### Quick Start
+
+```tsx
+import { Reader } from '@hamster-note/reader'
+import type { ReaderSelectionRange } from '@hamster-note/reader'
+import '@hamster-note/reader/style.css'   // includes Selection CSS
+import { useState } from 'react'
+
+export function App() {
+  // 受控模式：Reader 不内部修改 ranges，由 onSelect 回调外部追加
+  // The Demo implements this controlled pattern, persisting ranges to localStorage keyed by filename.
+  const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+
+  return (
+    <Reader
+      document={document}
+      renderMode='html-parser'
+      ranges={ranges}
+      overlayRectType='percent'
+      onSelect={(range) => setRanges((prev) => [...prev, range])}
+    />
+  )
+}
+```
+
+### Props
+
+| Prop | Type | Description |
+|---|---|---|
+| `ranges` | `ReaderSelectionRange[]` | Controlled highlight ranges. Reader does not mutate this array. |
+| `defaultRanges` | `ReaderSelectionRange[]` | Initial ranges for uncontrolled mode (when `ranges` is omitted). |
+| `selectedRangeId` | `string \| null` | Controlled currently-selected range ID. |
+| `defaultSelectedRangeId` | `string \| null` | Initial selected range ID for uncontrolled mode. |
+| `onSelect` | `(range: ReaderSelectionRange) => void` | Fired when the user finishes a new selection. In uncontrolled mode, Reader appends the range internally before calling this. |
+| `onSelectRange` | `(id: string \| null) => void` | Fired when the user clicks an existing highlight. |
+| `onUpdateRange` | `(range: ReaderSelectionRange) => void` | Fired when the user drags a selected highlight range handle. In uncontrolled mode, Reader replaces the matching range internally before calling this; controlled callers must update their `ranges` array. |
+| `onHighlight` | `(range: ReaderSelectionRange) => void` | Fired when a range is highlighted via the ref API or via Reader's internal auto-highlight (when `autoHighlight` is enabled). |
+| `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
+| `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
+| `autoHighlight` | `boolean` | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`. |
+| `highlightColor` | `string` | CSS color for highlight overlays. In Phase 1, this applies globally to all highlights. |
+| `selectionColor` | `string` | CSS color for active selection overlay. |
+| `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
+| `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
+| `selectionRef` | `React.Ref<ReaderSelectionRef>` | Ref to the Selection component. Exposes `highlight()` and `clear()`. |
+| `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
+
+### Exported Types
+
+```ts
+import type {
+  ReaderSelectionRange,    // { id, text, start, end, createdAt, overlayRectType?, rects? }
+  ReaderSelectionOverlayRectType,  // 'px' | 'percent'
+  ReaderSelectionRef,      // { highlight(): void; clear(): void }
+  ReaderMousePosition      // { x, y } — viewport coordinates (clientX/clientY)
+} from '@hamster-note/reader'
+```
+
+### CSS
+
+`@hamster-note/reader/style.css` already bundles the Selection library CSS (`.hsn-selection-*` classes). No additional import is needed.
+
+### Legacy Selection Callbacks
+
+The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` callbacks are preserved for backward compatibility. They continue to fire through the native `mouseup`/`touchend`/`selectionchange` listeners on the viewer root element, independent of the `<Selection>` component.
+
+> **Note**: `onSelectionEnd` is **mouseup-based**. On touch devices, the selection-end signal relies on the legacy `touchend` listener (which fires `onTextSelectionEnd` / `onSelectText`), not `onSelectionEnd`.
+
+### Programmatic Control
+
+```tsx
+import { useRef } from 'react'
+import type { ReaderSelectionRef } from '@hamster-note/reader'
+
+const selectionRef = useRef<ReaderSelectionRef>(null)
+
+// Highlight the current native selection as a range
+selectionRef.current?.highlight()
+
+// Clear all highlights
+selectionRef.current?.clear()
+```
+
 ## Peer Dependencies
 
 - `react@^19.0.0`

@@ -1,13 +1,13 @@
 import { DocxParser } from '@hamster-note/docx-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
-import type { ReaderSavedSelection } from '@hamster-note/reader'
+
 import { TxtParser } from '@hamster-note/txt-parser'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
@@ -48,8 +48,7 @@ const mockCallbacks: {
 const mockReaderProps: unknown[] = []
 
 vi.mock('@hamster-note/reader', async (importOriginal) => {
-  // 部分 mock：保留库内纯函数（buildSavedSelection / getSelectionOverlayRects），
-  // 仅替换 Reader 组件，让 demo 能像生产那样调用库 API。
+  // 部分 mock：保留库内纯函数，仅替换 Reader 组件
   const actual = await importOriginal<typeof import('@hamster-note/reader')>()
   return {
     ...actual,
@@ -58,7 +57,6 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
       emptyText?: string
       onFileUpload?: (file: File) => void
       renderMode?: string
-      selectionOverlay?: unknown
       onTextSelectionChange?: (text: unknown, detail: unknown) => void
       onTextSelectionEnd?: (text: unknown, detail: unknown) => void
       onSelectText?: (
@@ -66,13 +64,6 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         segments: unknown,
         extractedText: unknown
       ) => void
-      savedSelections?: ReaderSavedSelection[]
-      onSavedSelectionEdit?: (
-        id: string,
-        nextSelection: ReaderSavedSelection
-      ) => void
-      activeSavedSelectionId?: string | null
-      onActiveSavedSelectionChange?: (id: string | null) => void
     }) => {
       mockReaderProps.push(props)
       if (props.onTextSelectionChange)
@@ -81,7 +72,16 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         mockCallbacks.onTextSelectionEnd = props.onTextSelectionEnd
       if (props.onSelectText) mockCallbacks.onSelectText = props.onSelectText
       return (
-        <div data-testid='mock-reader'>
+        <div
+          data-testid='mock-reader'
+          className='hamster-reader'
+          style={{
+            height: '100%',
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
           {props.document ? props.document.title : props.emptyText}
           {props.onFileUpload && (
             <input
@@ -96,27 +96,6 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
               }}
             />
           )}
-          {/*
-           * Mock 渲染：为每个保存选区生成一个带 data-saved-selection-id 的 path 占位元素，
-           * 让 demo 内的浮动评论按钮位置计算 useLayoutEffect 能在测试中找到 anchor。
-           * 真实 Reader 在 SVG overlay 容器中渲染同名属性的 path（IntermediateDocumentViewer.tsx）。
-           */}
-          {props.savedSelections && props.savedSelections.length > 0 ? (
-            <svg
-              data-testid='mock-saved-selection-overlay'
-              style={{ position: 'absolute', inset: 0 }}
-            >
-              <title>mock saved selection overlay</title>
-              {props.savedSelections.map((selection) => (
-                <path
-                  key={selection.id}
-                  data-saved-selection-id={selection.id}
-                  data-testid={`mock-saved-path-${selection.id}`}
-                  d='M0,0 L10,0 L10,10 L0,10 Z'
-                />
-              ))}
-            </svg>
-          ) : null}
         </div>
       )
     }
@@ -161,75 +140,6 @@ function createDeferred<T>() {
   return { promise, resolve, reject }
 }
 
-function getLatestParsedReaderProps() {
-  for (let index = mockReaderProps.length - 1; index >= 0; index -= 1) {
-    const props = mockReaderProps[index]
-    const document =
-      props && typeof props === 'object' && 'document' in props
-        ? (
-            props as {
-              document?:
-                | IntermediateDocument
-                | IntermediateDocumentSerialized
-                | null
-            }
-          ).document
-        : undefined
-
-    if (document) {
-      return props as {
-        document: IntermediateDocument | IntermediateDocumentSerialized
-        onSelectText?: (...args: unknown[]) => unknown
-        savedSelections?: ReaderSavedSelection[]
-        onSavedSelectionEdit?: (
-          id: string,
-          nextSelection: ReaderSavedSelection
-        ) => void
-        activeSavedSelectionId?: string | null
-        onActiveSavedSelectionChange?: (id: string | null) => void
-      }
-    }
-  }
-
-  return undefined
-}
-
-const SAVED_SELECTION_STORAGE_KEY = 'hamster-reader-saved-selections'
-
-/** 构造一个合法的保存选区 fixture */
-function makeValidSavedSelection(id: string, text = 'Hello World') {
-  return {
-    version: 1,
-    id,
-    text,
-    start: { pageNumber: 1, charIndex: 0 },
-    end: { pageNumber: 1, charIndex: text.length },
-    segments: [
-      {
-        pageNumber: 1,
-        startCharIndex: 0,
-        endCharIndex: text.length,
-        selectedText: text
-      }
-    ],
-    visual: [
-      {
-        pageNumber: 1,
-        pageSize: { width: 612, height: 792 },
-        rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.05 }]
-      }
-    ]
-  }
-}
-
-/** 上传文件并等待解析文档出现 */
-async function renderParsedDocument(title: string) {
-  vi.mocked(PdfParser.encode).mockResolvedValue(makeRuntimeDocument(title))
-  render(<App />)
-  upload(makeFile(`${title.toLowerCase().replaceAll(' ', '-')}.pdf`))
-  expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
-}
-
 describe('demo parser flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -246,7 +156,7 @@ describe('demo parser flow', () => {
     upload(uploadedFile)
 
     expect(screen.getByText('Parsing...')).toBeInTheDocument()
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('Success Document')).toBeInTheDocument()
     expect(screen.getByText('Name: success.pdf')).toBeInTheDocument()
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
@@ -330,7 +240,33 @@ describe('demo parser flow', () => {
       const uploadedFile = makeFile(caseData.fileName)
       upload(uploadedFile)
 
-      expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const shell = screen.getByTestId('reader-demo-root')
+      expect(shell).toHaveClass('hamster-demo-shell')
+
+      const sidebar = screen.getByTestId('demo-sidebar-settings').parentElement
+      expect(sidebar).toHaveClass('hamster-demo-sidebar')
+
+      const main = screen.getByTestId('mock-reader').parentElement
+      expect(main).toHaveClass('hamster-demo-main')
+
+      // Check Reader height fill integration
+      const readerRoot = screen.getByTestId('mock-reader')
+      expect(readerRoot).toHaveStyle({
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      })
+
+      const highlightGroup = screen.queryByTestId('demo-sidebar-highlights')
+      if (highlightGroup) {
+        expect(
+          highlightGroup.querySelectorAll('button[aria-label]')
+        ).not.toHaveLength(0)
+      }
+
       expect(screen.getByText(caseData.title)).toBeInTheDocument()
       expect(screen.getByText(`Name: ${caseData.fileName}`)).toBeInTheDocument()
       expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
@@ -354,7 +290,7 @@ describe('demo parser flow', () => {
         'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
       )
     ).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(PdfParser.encode).not.toHaveBeenCalled()
     expect(TxtParser.encode).not.toHaveBeenCalled()
     expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -370,7 +306,7 @@ describe('demo parser flow', () => {
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse TXT: bad txt')).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(TxtParser.encode).toHaveBeenCalledTimes(1)
     expect(TxtParser.encode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
@@ -387,7 +323,7 @@ describe('demo parser flow', () => {
     expect(
       screen.getByText('Failed to parse PDF: received undefined result')
     ).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
@@ -401,7 +337,7 @@ describe('demo parser flow', () => {
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse PDF: bad pdf')).toBeInTheDocument()
-    expect(screen.queryByText('Parsed Document')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
   })
@@ -413,38 +349,8 @@ describe('demo parser flow', () => {
 
     render(<App />)
     upload(makeFile('ocr.pdf'))
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
-  })
-
-  it('renders parsed document with direct render mode for custom selection demo', async () => {
-    vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Custom Selection Document')
-    )
-
-    render(<App />)
-    upload(makeFile('custom-selection.pdf'))
-
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        /Rendered through the html-parser path to demonstrate the custom selection overlay \(pink default\)/
-      )
-    ).toBeInTheDocument()
-
-    const parsedReaderProps = mockReaderProps.find(
-      (props): props is { renderMode?: string; selectionOverlay?: unknown } =>
-        typeof props === 'object' &&
-        props !== null &&
-        'renderMode' in props &&
-        'selectionOverlay' in props
-    )
-
-    expect(parsedReaderProps?.renderMode).toBe('html-parser')
-    expect(parsedReaderProps?.selectionOverlay).toMatchObject({
-      opacity: 0.28,
-      enabled: true
-    })
   })
 
   it('logs selection events when callbacks are invoked', async () => {
@@ -456,7 +362,7 @@ describe('demo parser flow', () => {
     render(<App />)
     upload(makeFile('callback.pdf'))
 
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const mockText = { id: 'text-1', content: 'Hello' }
     const mockDetail = {
@@ -484,7 +390,7 @@ describe('demo parser flow', () => {
     render(<App />)
     upload(makeFile('selecttext.pdf'))
 
-    expect(await screen.findByText('Parsed Document')).toBeInTheDocument()
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const uploadReaderProps = mockReaderProps.find(
       (
@@ -534,396 +440,463 @@ describe('demo parser flow', () => {
       expect(screen.queryByText('Parsing...')).not.toBeInTheDocument()
     })
   })
-})
 
-// ---------------------------------------------------------------------------
-// 保存选区持久化测试
-// ---------------------------------------------------------------------------
+  describe('demo highlighting interactions', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mockReaderProps.length = 0
+      localStorage.clear()
+    })
 
-describe('demo saved-selection persistence', () => {
-  const STORAGE_KEY = SAVED_SELECTION_STORAGE_KEY
+    it('provides autoHighlight toggle that updates Reader prop', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Auto Highlight Document')
+      )
+      render(<App />)
+      upload(makeFile('auto.pdf'))
 
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockReaderProps.length = 0
-    localStorage.clear()
-  })
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-  it('shows error status when localStorage contains malformed JSON', async () => {
-    // 植入损坏的 JSON
-    localStorage.setItem(STORAGE_KEY, '{bad json')
+      const toggle = screen.getByTestId('auto-highlight-toggle')
+      expect(toggle).not.toBeChecked()
 
-    await renderParsedDocument('Malformed JSON Document')
+      let uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+      expect(uploadReaderProps?.autoHighlight).toBe(false)
 
-    // 点击加载按钮
-    fireEvent.click(screen.getByTestId('load-selections-button'))
+      fireEvent.click(toggle)
+      expect(toggle).toBeChecked()
 
-    // 断言错误状态
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      '加载失败：JSON 解析错误'
-    )
+      await waitFor(() => {
+        uploadReaderProps = mockReaderProps[
+          mockReaderProps.length - 1
+        ] as Record<string, unknown>
+        expect(uploadReaderProps?.autoHighlight).toBe(true)
+      })
+    })
 
-    // 断言没有崩溃，页面仍然正常渲染
-    expect(screen.getByText('Parsed Document')).toBeInTheDocument()
-  })
+    it('renders selectionPopover with 高亮 and 背景颜色设置', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Popover Document')
+      )
+      render(<App />)
+      upload(makeFile('popover.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-  it('rejects the whole load when parsed root is not an array', async () => {
-    // 植入一个对象（非数组）
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ version: 1, id: 'not-array' })
-    )
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
 
-    await renderParsedDocument('Non-Array Document')
+      const popover = render(
+        uploadReaderProps?.selectionPopover as React.ReactElement
+      )
+      expect(popover.getByText('高亮')).toBeInTheDocument()
+      expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByTestId('load-selections-button'))
+      const colorInput = popover.container.querySelector('input[type="color"]')
+      expect(colorInput).toBeInTheDocument()
+    })
 
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      '加载失败：存储数据格式错误（非数组）'
-    )
-    expect(screen.getByText('Parsed Document')).toBeInTheDocument()
-  })
+    it('renders highlightPopover with 删除 and 背景颜色设置', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Highlight Popover Document')
+      )
+      render(<App />)
+      upload(makeFile('hpopover.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-  it('shows status and leaves localStorage unchanged when saving without a current selection', async () => {
-    await renderParsedDocument('No Selection Document')
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
 
-    // 点击保存按钮（未选择文本）
-    fireEvent.click(screen.getByTestId('save-selection-button'))
+      const popover = render(
+        uploadReaderProps?.highlightPopover as React.ReactElement
+      )
+      expect(popover.getByText('删除')).toBeInTheDocument()
+      expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
+    })
 
-    // 断言状态提示
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      '没有当前选区，无法保存'
-    )
+    it('does not store a highlight on selection end when autoHighlight is false', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('No Auto Highlight Document')
+      )
+      render(<App />)
+      upload(makeFile('no-auto.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    // 断言 localStorage 未被写入
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
-  })
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
 
-  it('loads only valid items from a mixed localStorage array', async () => {
-    const validSelection = makeValidSavedSelection('valid-id-1')
+      const onSelectionEnd = uploadReaderProps?.onSelectionEnd as () => void
+      onSelectionEnd()
 
-    // 缺少必需字段的无效项
-    const invalidItem = {
-      version: 1,
-      id: 'invalid-id'
-      // 缺少 text、start、end、segments、visual
-    }
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+    })
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify([validSelection, invalidItem])
-    )
+    it('calls selectionRef.current?.highlight() when 高亮 is clicked', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Manual Highlight Document')
+      )
+      render(<App />)
+      upload(makeFile('manual.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    await renderParsedDocument('Mixed Document')
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
 
-    fireEvent.click(screen.getByTestId('load-selections-button'))
+      const highlightSpy = vi.fn()
+      const refFromProps =
+        uploadReaderProps?.selectionRef as React.MutableRefObject<unknown>
 
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      '已加载 1 个有效选区'
-    )
+      refFromProps.current = { highlight: highlightSpy, clear: vi.fn() }
 
-    expect(getLatestParsedReaderProps()?.savedSelections).toEqual([
-      validSelection
-    ])
-  })
+      const popover = render(
+        uploadReaderProps?.selectionPopover as React.ReactElement
+      )
+      fireEvent.click(popover.getByText('高亮'))
 
-  it('loads 0 valid selections and shows status when all items are invalid', async () => {
-    const invalidItem1 = { version: 1, id: 'bad-1' }
-    const invalidItem2 = { version: 2, id: 'bad-2', text: 'wrong version' }
+      expect(highlightSpy).toHaveBeenCalledTimes(1)
+    })
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify([invalidItem1, invalidItem2])
-    )
+    it('changes the highlightColor prop when color input is changed', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Color Document')
+      )
+      render(<App />)
+      upload(makeFile('color.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    await renderParsedDocument('All Invalid Document')
+      let uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
 
-    fireEvent.click(screen.getByTestId('load-selections-button'))
+      const popover = render(
+        uploadReaderProps?.selectionPopover as React.ReactElement
+      )
+      const colorInput = popover.container.querySelector(
+        'input[type="color"]'
+      ) as HTMLInputElement
 
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      '已加载 0 个有效选区'
-    )
-  })
+      fireEvent.change(colorInput, { target: { value: '#ff0000' } })
 
-  it('saves current selection to localStorage after onSelectText fires', async () => {
-    await renderParsedDocument('Save Flow Document')
+      await waitFor(() => {
+        uploadReaderProps = mockReaderProps[
+          mockReaderProps.length - 1
+        ] as Record<string, unknown>
+        expect(uploadReaderProps?.highlightColor).toBe('#ff0000')
+      })
+    })
 
-    const onSelectText = getLatestParsedReaderProps()?.onSelectText
-    expect(onSelectText).toBeDefined()
+    it('removes range by id and clears selectedRangeId when 删除 is clicked', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Delete Document')
+      )
+      render(<App />)
+      upload(makeFile('delete.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    const mockSelection = { isCollapsed: false } as unknown as Selection
-    const mockSegments = [
-      {
-        id: 'text-3',
-        pageNumber: 3,
-        content: 'Selected text',
-        selectedText: 'Selected text',
-        startCharIndex: 0,
-        endCharIndex: 13,
-        polygon: [
-          [100, 200],
-          [200, 200],
-          [200, 220],
-          [100, 220]
-        ] as [number, number][]
+      let uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight({ id: 'del-range', text: 'text to delete' })
+
+      expect(await screen.findByText('text to delete')).toBeInTheDocument()
+
+      const onSelectRange = uploadReaderProps?.onSelectRange as (
+        id: string
+      ) => void
+
+      onSelectRange('del-range')
+
+      await waitFor(() => {
+        uploadReaderProps = mockReaderProps[
+          mockReaderProps.length - 1
+        ] as Record<string, unknown>
+        expect(uploadReaderProps?.selectedRangeId).toBe('del-range')
+      })
+
+      const popover = render(
+        uploadReaderProps?.highlightPopover as React.ReactElement
+      )
+
+      const deleteButton = popover.container.querySelector('button')
+      if (deleteButton) {
+        fireEvent.click(deleteButton)
       }
-    ]
-    const mockExtractedText = 'Selected text'
 
-    act(() => {
-      onSelectText?.(mockSelection, mockSegments, mockExtractedText)
+      await waitFor(() => {
+        const elements = screen.queryAllByText('text to delete')
+        expect(elements).toHaveLength(0)
+      })
+
+      const stored = JSON.parse(
+        localStorage.getItem('hamster-reader-demo:highlights:delete.pdf') ||
+          '[]'
+      )
+      expect(stored).toHaveLength(0)
+
+      uploadReaderProps = mockReaderProps[mockReaderProps.length - 1] as Record<
+        string,
+        unknown
+      >
+      expect(uploadReaderProps?.selectedRangeId).toBe(null)
     })
 
-    fireEvent.click(screen.getByTestId('save-selection-button'))
+    it('stores exactly one range even if both onSelect and onHighlight are triggered', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Single Store Document')
+      )
+      render(<App />)
+      upload(makeFile('single.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    // 断言 localStorage 被写入了 JSON 数组
-    const stored = localStorage.getItem(STORAGE_KEY)
-    expect(stored).toBeTruthy()
-    const parsed = JSON.parse(stored ?? '[]') as unknown[]
-    expect(Array.isArray(parsed)).toBe(true)
-    expect(parsed).toHaveLength(1)
+      const uploadReaderProps = mockReaderProps.find(
+        (props): props is Record<string, unknown> =>
+          typeof props === 'object' &&
+          props !== null &&
+          'document' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
 
-    // 断言保存的项包含正确的字段
-    const saved = parsed[0] as Record<string, unknown>
-    expect(saved.version).toBe(1)
-    expect(typeof saved.id).toBe('string')
-    expect(saved.text).toBe('Selected text')
-    expect(saved.start).toMatchObject({ pageNumber: 3, textId: 'text-3' })
-    expect(saved.end).toMatchObject({ pageNumber: 3, textId: 'text-3' })
-    expect(saved.segments).toEqual([
-      expect.objectContaining({
-        pageNumber: 3,
-        textId: 'text-3',
-        selectedText: 'Selected text'
-      })
-    ])
-    expect(saved.visual).toEqual([
-      expect.objectContaining({
-        pageNumber: 3,
-        pageSize: { width: 612, height: 792 },
-        rects: [
-          // 库的 normalizePageRects 先把 x/right 各 round 到 6 位，再 width = round(right - x)
-          expect.objectContaining({
-            x: Number((100 / 612).toFixed(6)),
-            y: Number((200 / 792).toFixed(6)),
-            width: Number(
-              (
-                Number((200 / 612).toFixed(6)) - Number((100 / 612).toFixed(6))
-              ).toFixed(6)
-            ),
-            height: Number(
-              (
-                Number((220 / 792).toFixed(6)) - Number((200 / 792).toFixed(6))
-              ).toFixed(6)
-            )
-          })
-        ]
-      })
-    ])
+      const onHighlight = uploadReaderProps?.onHighlight as (
+        range: unknown
+      ) => void
+      const onSelect = uploadReaderProps?.onSelect as (range: unknown) => void
 
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      /已标记选区/
-    )
+      const range = { id: 'single-range', text: 'single text' }
+      onHighlight(range)
+      onSelect(range)
 
-    await waitFor(() => {
-      expect(getLatestParsedReaderProps()?.savedSelections).toHaveLength(1)
+      expect(await screen.findByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getAllByText('single text')).toHaveLength(1)
     })
-    const firstSavedId = getLatestParsedReaderProps()?.savedSelections?.[0]?.id
+  })
 
-    act(() => {
-      onSelectText?.(
-        mockSelection,
-        [
+  describe('demo highlighting persistence', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mockReaderProps.length = 0
+      localStorage.clear()
+    })
+
+    it('defaults to no highlights on fresh render with empty localStorage', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Clean Document')
+      )
+
+      render(<App />)
+      upload(makeFile('clean.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+    })
+
+    it('writes a new highlight to localStorage when onHighlight is called', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Highlight Document')
+      )
+
+      render(<App />)
+      upload(makeFile('highlight.pdf'))
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const uploadReaderProps = mockReaderProps.find(
+        (
+          props
+        ): props is {
+          emptyText?: string
+          onHighlight?: (...args: unknown[]) => unknown
+          document?: unknown
+        } =>
+          typeof props === 'object' &&
+          props !== null &&
+          'onHighlight' in props &&
+          (props as Record<string, unknown>).document !== undefined
+      )
+
+      uploadReaderProps?.onHighlight?.({
+        id: 'range-1',
+        text: 'hello highlight'
+      })
+
+      expect(await screen.findByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getByText('hello highlight')).toBeInTheDocument()
+
+      const stored = JSON.parse(
+        localStorage.getItem('hamster-reader-demo:highlights:highlight.pdf') ||
+          '[]'
+      )
+      expect(stored).toHaveLength(1)
+      expect(stored[0].id).toBe('range-1')
+      expect(stored[0].text).toBe('hello highlight')
+    })
+
+    it('restores stored highlights when reloading a file', async () => {
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:restored.pdf',
+        JSON.stringify([
           {
-            id: 'text-4',
-            pageNumber: 4,
-            content: 'Next text',
-            selectedText: 'Next text',
-            startCharIndex: 0,
-            endCharIndex: 9,
-            polygon: [
-              [20, 30],
-              [80, 30],
-              [80, 46],
-              [20, 46]
-            ] as [number, number][]
+            id: 'range-1',
+            text: 'restored highlight',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
           }
-        ],
-        'Next text'
+        ])
       )
-    })
 
-    await waitFor(() => {
-      expect(getLatestParsedReaderProps()?.savedSelections).toHaveLength(1)
-      expect(getLatestParsedReaderProps()?.savedSelections?.[0]?.id).toBe(
-        firstSavedId
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Restored Document')
       )
-    })
-  })
 
-  it('persists saved-selection edits from the parsed Reader callback', async () => {
-    const originalSelection = makeValidSavedSelection('edit-id', 'Original')
-    const editedSelection = makeValidSavedSelection('edit-id', 'Edited text')
+      render(<App />)
+      upload(makeFile('restored.pdf'))
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([originalSelection]))
-    await renderParsedDocument('Edit Callback Document')
-
-    fireEvent.click(screen.getByTestId('load-selections-button'))
-    expect(getLatestParsedReaderProps()?.savedSelections).toEqual([
-      originalSelection
-    ])
-
-    const onSavedSelectionEdit =
-      getLatestParsedReaderProps()?.onSavedSelectionEdit
-    expect(onSavedSelectionEdit).toBeDefined()
-
-    act(() => {
-      onSavedSelectionEdit?.('edit-id', editedSelection as ReaderSavedSelection)
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.getByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getByText('restored highlight')).toBeInTheDocument()
     })
 
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      /已更新选区/
-    )
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')).toEqual([
-      editedSelection
-    ])
-    expect(getLatestParsedReaderProps()?.savedSelections).toEqual([
-      editedSelection
-    ])
-  })
+    it('isolates highlights per file name', async () => {
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:file-a.pdf',
+        JSON.stringify([
+          {
+            id: 'range-a',
+            text: 'file A highlight',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
 
-  it('deletes the active saved selection selected from the parsed Reader callback', async () => {
-    const firstSelection = makeValidSavedSelection('delete-id-1', 'First')
-    const secondSelection = makeValidSavedSelection('delete-id-2', 'Second')
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('File B Document')
+      )
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify([firstSelection, secondSelection])
-    )
-    await renderParsedDocument('Delete Active Document')
+      render(<App />)
+      upload(makeFile('file-b.pdf'))
 
-    fireEvent.click(screen.getByTestId('load-selections-button'))
-    expect(screen.getByTestId('delete-selection-button')).toBeDisabled()
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    const onActiveSavedSelectionChange =
-      getLatestParsedReaderProps()?.onActiveSavedSelectionChange
-    expect(onActiveSavedSelectionChange).toBeDefined()
-
-    act(() => {
-      onActiveSavedSelectionChange?.('delete-id-1')
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      expect(screen.queryByText('file A highlight')).not.toBeInTheDocument()
     })
 
-    expect(getLatestParsedReaderProps()?.activeSavedSelectionId).toBe(
-      'delete-id-1'
-    )
-    expect(screen.getByTestId('delete-selection-button')).toBeEnabled()
+    it('yields empty array for invalid JSON or wrong shape', async () => {
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:corrupt.pdf',
+        '{ not valid json ]'
+      )
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:wrong-shape.pdf',
+        JSON.stringify([{ id: 'partial' }])
+      )
 
-    fireEvent.click(screen.getByTestId('delete-selection-button'))
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Corrupt Document')
+      )
 
-    expect(screen.getByTestId('selection-status')).toHaveTextContent(
-      /已删除选区/
-    )
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')).toEqual([
-      secondSelection
-    ])
-    expect(getLatestParsedReaderProps()?.savedSelections).toEqual([
-      secondSelection
-    ])
-    expect(getLatestParsedReaderProps()?.activeSavedSelectionId).toBeNull()
-  })
-})
+      const { unmount } = render(<App />)
+      upload(makeFile('corrupt.pdf'))
 
-// ---------------------------------------------------------------------------
-// T7: 已保存选区 SVG 兼容性测试
-// 验证 localStorage 加载的 savedSelections 流入 viewer 后，
-// saved overlay path 保留 data-saved-selection-id 属性供评论浮动 UI 查询。
-// T3 将 live overlay 改为多条独立 path，但 saved overlay 仍是 union 单 path。
-// 本组测试确保 demo/评论 UI 的选择器不受 live path 多重化影响。
-// ---------------------------------------------------------------------------
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      unmount()
 
-describe('demo saved-selection SVG compatibility (T7)', () => {
-  const STORAGE_KEY = SAVED_SELECTION_STORAGE_KEY
+      render(<App />)
+      upload(makeFile('wrong-shape.pdf'))
 
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockReaderProps.length = 0
-    localStorage.clear()
-  })
-
-  it('T7-A: loaded saved selections render saved overlay path(s) with data-saved-selection-id', async () => {
-    // 准备两个合法选区
-    const selection1 = makeValidSavedSelection('t7-saved-id-1', 'First text')
-    const selection2 = makeValidSavedSelection('t7-saved-id-2', 'Second text')
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([selection1, selection2]))
-
-    await renderParsedDocument('T7 Overlay Document')
-
-    // 点击加载
-    fireEvent.click(screen.getByTestId('load-selections-button'))
-
-    // 等待 savedSelections prop 被传入 Reader
-    await waitFor(() => {
-      expect(getLatestParsedReaderProps()?.savedSelections).toHaveLength(2)
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
     })
 
-    // Mock Reader 为每个 savedSelection 渲染了带 data-saved-selection-id 的 path
-    // 真实 Reader（IntermediateDocumentViewer）的 buildSavedSelectionOverlayPath 也会输出此属性
-    const mockOverlay = screen.getByTestId('mock-saved-selection-overlay')
-    const savedPaths = mockOverlay.querySelectorAll(
-      'path[data-saved-selection-id]'
-    )
-    expect(savedPaths).toHaveLength(2)
+    it('ignores stale parser results applying older highlights to a newer file', async () => {
+      const staleRequest = createDeferred<IntermediateDocument | undefined>()
+      const freshRequest = createDeferred<IntermediateDocument | undefined>()
 
-    // 验证每个 path 都有正确的 id
-    const ids = Array.from(savedPaths).map((p) =>
-      p.getAttribute('data-saved-selection-id')
-    )
-    expect(ids).toContain('t7-saved-id-1')
-    expect(ids).toContain('t7-saved-id-2')
-  })
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:stale.pdf',
+        JSON.stringify([
+          {
+            id: 'range-stale',
+            text: 'stale text',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
+      localStorage.setItem(
+        'hamster-reader-demo:highlights:fresh.pdf',
+        JSON.stringify([
+          {
+            id: 'range-fresh',
+            text: 'fresh text',
+            start: 0,
+            end: 10,
+            createdAt: Date.now()
+          }
+        ])
+      )
 
-  it('T7-B: saved overlay paths use hamster-reader__saved-selection-overlay-path class in real viewer', async () => {
-    // 此测试验证真实 Reader 的 class 契约：
-    // saved overlay path 使用 hamster-reader__saved-selection-overlay-path class（不是 live 的 selection-overlay-path）
-    // 这是 T3 live/saved 分离的核心契约
-    // 由于 demo test mock 了 Reader，这里通过验证 mock 行为与真实 class 名称一致性来覆盖
-    await renderParsedDocument('T7 Class Document')
+      vi.mocked(PdfParser.encode)
+        .mockReturnValueOnce(staleRequest.promise)
+        .mockReturnValueOnce(freshRequest.promise)
 
-    const selection = makeValidSavedSelection('t7-class-1')
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([selection]))
-    fireEvent.click(screen.getByTestId('load-selections-button'))
+      render(<App />)
+      upload(makeFile('stale.pdf'))
+      upload(makeFile('fresh.pdf'))
 
-    await waitFor(() => {
-      expect(getLatestParsedReaderProps()?.savedSelections).toHaveLength(1)
+      freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
+      expect(await screen.findByText('Fresh Document')).toBeInTheDocument()
+
+      expect(screen.getByText('已创建高亮 (1)')).toBeInTheDocument()
+      expect(screen.getByText('fresh text')).toBeInTheDocument()
+      expect(screen.queryByText('stale text')).not.toBeInTheDocument()
+
+      staleRequest.resolve(makeRuntimeDocument('Stale Document'))
+      await new Promise((r) => setTimeout(r, 10))
+
+      expect(screen.queryByText('Stale Document')).not.toBeInTheDocument()
+      expect(screen.queryByText('stale text')).not.toBeInTheDocument()
     })
-
-    // saved overlay path 必须保留 data-saved-selection-id，
-    // 而不是使用 live overlay 的 class（hamster-reader__selection-overlay-path）
-    const savedPath = screen.getByTestId('mock-saved-path-t7-class-1')
-    expect(savedPath).toHaveAttribute('data-saved-selection-id', 't7-class-1')
-  })
-
-  it('T7-C: multiple loaded saved selections each get distinct data-saved-selection-id paths', async () => {
-    // 验证多个 saved selection 不共享同一个 path，
-    // 每个 id 对应一个独立的 saved overlay path（union 单 path per selection）
-    const selections = [
-      makeValidSavedSelection('multi-1', 'Text A'),
-      makeValidSavedSelection('multi-2', 'Text B'),
-      makeValidSavedSelection('multi-3', 'Text C')
-    ]
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(selections))
-
-    await renderParsedDocument('T7 Multi Document')
-    fireEvent.click(screen.getByTestId('load-selections-button'))
-
-    await waitFor(() => {
-      expect(getLatestParsedReaderProps()?.savedSelections).toHaveLength(3)
-    })
-
-    // 每个选区有且仅有一个 saved overlay path
-    for (const selection of selections) {
-      const path = screen.getByTestId(`mock-saved-path-${selection.id}`)
-      expect(path).toHaveAttribute('data-saved-selection-id', selection.id)
-    }
   })
 })

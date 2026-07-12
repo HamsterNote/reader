@@ -138,7 +138,8 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
     containerClassName,
     containerStyle,
     wrapperProps,
-    containerProps
+    containerProps,
+    containMode
   } = props
 
   const isControlled = controlledTransform !== undefined
@@ -219,6 +220,7 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
       data-enabled-interactions={enabledInteractions.join(',')}
       data-min-scale={minScale}
       data-max-scale={maxScale}
+      data-contain-mode={containMode}
       {...restWrapperProps}
     >
       <div

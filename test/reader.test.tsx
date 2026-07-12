@@ -299,7 +299,9 @@ describe('Reader public API', () => {
       expect(screen.getByTestId('html-parser-output')).toBeInTheDocument()
     })
 
-    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, undefined)
+    expect(HtmlParser.decodePageToHtml).toHaveBeenCalledWith(page, {
+      background: { backgroundQuality: 0.8 }
+    })
     expect(HtmlParser.decodeToHtml).not.toHaveBeenCalled()
     expect(screen.getByTestId('html-parser-output')).toContainHTML(
       'Reader HTML'
@@ -628,170 +630,6 @@ describe('Reader prop forwarding', () => {
     })
   })
 
-  it('forwards selected-text body drag lifecycle props to the viewer', async () => {
-    const onDragSelectedTextStart = vi.fn()
-    const onDragSelectedTextMove = vi.fn()
-    const onDragSelectedTextEnd = vi.fn()
-    const { document } = makeLazyDocument(1)
-    render(
-      <Reader
-        document={document}
-        selectionOverlay
-        onDragSelectedTextStart={onDragSelectedTextStart}
-        onDragSelectedTextMove={onDragSelectedTextMove}
-        onDragSelectedTextEnd={onDragSelectedTextEnd}
-      />
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('Page 1 text')).toBeInTheDocument()
-    })
-
-    const viewerRoot = screen.getByTestId('intermediate-document-viewer')
-    const page = screen.getByTestId('intermediate-page-1')
-    const textSpan = viewerRoot.querySelector(
-      '[data-text-id="text-1"]'
-    ) as HTMLElement
-    const textNode = textSpan.firstChild
-    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
-      throw new Error('Expected rendered text span to contain a text node')
-    }
-    const range = globalThis.document.createRange()
-    range.setStart(textNode, 0)
-    range.setEnd(textNode, 11)
-    const collapsedRange = {
-      getClientRects: vi.fn(() => [
-        {
-          left: 20,
-          top: 24,
-          right: 20,
-          bottom: 36,
-          x: 20,
-          y: 24,
-          width: 0,
-          height: 12,
-          toJSON: () => ({ left: 20, top: 24, width: 0, height: 12 })
-        } as DOMRect
-      ]),
-      getBoundingClientRect: vi.fn(
-        () =>
-          ({
-            left: 20,
-            top: 24,
-            right: 20,
-            bottom: 36,
-            x: 20,
-            y: 24,
-            width: 0,
-            height: 12,
-            toJSON: () => ({ left: 20, top: 24, width: 0, height: 12 })
-          }) as DOMRect
-      ),
-      collapse: vi.fn()
-    } as unknown as Range
-    Object.defineProperty(range, 'getClientRects', {
-      configurable: true,
-      value: vi.fn(() => [
-        {
-          left: 20,
-          top: 24,
-          right: 80,
-          bottom: 36,
-          x: 20,
-          y: 24,
-          width: 60,
-          height: 12,
-          toJSON: () => ({ left: 20, top: 24, width: 60, height: 12 })
-        } as DOMRect
-      ])
-    })
-    Object.defineProperty(range, 'getBoundingClientRect', {
-      configurable: true,
-      value: vi.fn(
-        () =>
-          ({
-            left: 20,
-            top: 24,
-            right: 80,
-            bottom: 36,
-            x: 20,
-            y: 24,
-            width: 60,
-            height: 12,
-            toJSON: () => ({ left: 20, top: 24, width: 60, height: 12 })
-          }) as DOMRect
-      )
-    })
-    Object.defineProperty(range, 'cloneRange', {
-      configurable: true,
-      value: vi.fn(() => collapsedRange)
-    })
-    vi.spyOn(page, 'getBoundingClientRect').mockReturnValue({
-      left: 10,
-      top: 10,
-      right: 110,
-      bottom: 160,
-      x: 10,
-      y: 10,
-      width: 100,
-      height: 150,
-      toJSON: () => ({ left: 10, top: 10, width: 100, height: 150 })
-    } as DOMRect)
-    if (!('elementFromPoint' in globalThis.document)) {
-      Object.defineProperty(globalThis.document, 'elementFromPoint', {
-        value: vi.fn(() => page),
-        writable: true,
-        configurable: true
-      })
-    }
-    vi.spyOn(globalThis.document, 'elementFromPoint').mockReturnValue(page)
-
-    const selection = {
-      isCollapsed: false,
-      anchorNode: textNode,
-      anchorOffset: 0,
-      focusNode: textNode,
-      focusOffset: 11,
-      rangeCount: 1,
-      getRangeAt: (index: number) => {
-        if (index !== 0) {
-          throw new Error('Selection mock only contains one range')
-        }
-        return range
-      },
-      toString: () => 'Page 1 text',
-      containsNode: (node: Node) => range.intersectsNode(node)
-    } as unknown as Selection
-
-    vi.spyOn(window, 'getSelection').mockReturnValue(selection)
-    globalThis.document.dispatchEvent(new Event('selectionchange'))
-
-    const overlay = page.querySelector(
-      '.hamster-reader__selection-overlay'
-    ) as HTMLElement
-    overlay.dispatchEvent(
-      new MouseEvent('pointerdown', {
-        bubbles: true,
-        button: 0,
-        clientX: 30,
-        clientY: 30
-      })
-    )
-    overlay.dispatchEvent(
-      new MouseEvent('pointercancel', {
-        bubbles: true,
-        clientX: 500,
-        clientY: 500
-      })
-    )
-
-    expect(onDragSelectedTextStart).toHaveBeenCalledTimes(1)
-    expect(onDragSelectedTextMove).not.toHaveBeenCalled()
-    expect(onDragSelectedTextEnd).toHaveBeenCalledTimes(1)
-    expect(onDragSelectedTextStart.mock.calls[0][0]).toBe(selection)
-    expect(onDragSelectedTextStart.mock.calls[0][2]).toBe('Page 1 text')
-  })
-
   it('forwards onTextSelectionChange so viewer calls it on selection', async () => {
     const onTextSelectionChange = vi.fn()
     const { document } = makeLazyDocument(1)
@@ -883,72 +721,6 @@ describe('Reader prop forwarding', () => {
     expect(screen.getByTestId('intermediate-page-3')).toBeInTheDocument()
   })
 
-  it('forwards saved-selection props unchanged to IntermediateDocumentViewer', () => {
-    const savedSelections = [
-      {
-        version: 1 as const,
-        id: 'sel-1',
-        document: 'doc-1',
-        text: 'Hello world',
-        start: { pageNumber: 1, textId: 't1', charIndex: 0 },
-        end: { pageNumber: 1, textId: 't1', charIndex: 11 },
-        segments: [
-          {
-            pageNumber: 1,
-            textId: 't1',
-            startCharIndex: 0,
-            endCharIndex: 11,
-            selectedText: 'Hello world'
-          }
-        ],
-        visual: [
-          {
-            pageNumber: 1,
-            pageSize: { width: 595, height: 842 },
-            rects: [{ x: 0.1, y: 0.2, width: 0.5, height: 0.02 }]
-          }
-        ]
-      }
-    ]
-
-    const onSavedSelectionEdit = vi.fn()
-    const onActiveSavedSelectionChange = vi.fn()
-    const onSavedSelectionRestore = vi.fn()
-
-    const doc = makeDocument({ pages: [makePage(1)] })
-    render(
-      <Reader
-        document={doc}
-        savedSelections={savedSelections}
-        activeSavedSelectionId='sel-1'
-        onSavedSelectionEdit={onSavedSelectionEdit}
-        onActiveSavedSelectionChange={onActiveSavedSelectionChange}
-        onSavedSelectionRestore={onSavedSelectionRestore}
-      />
-    )
-
-    expect(capturedViewerProps.savedSelections).toBe(savedSelections)
-    expect(capturedViewerProps.activeSavedSelectionId).toBe('sel-1')
-    expect(capturedViewerProps.onSavedSelectionEdit).toBe(onSavedSelectionEdit)
-    expect(capturedViewerProps.onActiveSavedSelectionChange).toBe(
-      onActiveSavedSelectionChange
-    )
-    expect(capturedViewerProps.onSavedSelectionRestore).toBe(
-      onSavedSelectionRestore
-    )
-  })
-
-  it('forwards undefined saved-selection props when not provided', () => {
-    const doc = makeDocument({ pages: [makePage(1)] })
-    render(<Reader document={doc} />)
-
-    expect(capturedViewerProps.savedSelections).toBeUndefined()
-    expect(capturedViewerProps.activeSavedSelectionId).toBeUndefined()
-    expect(capturedViewerProps.onSavedSelectionEdit).toBeUndefined()
-    expect(capturedViewerProps.onActiveSavedSelectionChange).toBeUndefined()
-    expect(capturedViewerProps.onSavedSelectionRestore).toBeUndefined()
-  })
-
   it('forwards interactionMode="stylus" to IntermediateDocumentViewer', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} interactionMode='stylus' />)
@@ -959,6 +731,36 @@ describe('Reader prop forwarding', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} />)
     expect(capturedViewerProps.interactionMode).toBeUndefined()
+  })
+
+  it('forwards overlayRectType="percent" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} {...{ overlayRectType: 'percent' }} />)
+    expect(capturedViewerProps.overlayRectType).toBe('percent')
+  })
+
+  it('forwards overlayRectType="px" to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(<Reader document={doc} {...{ overlayRectType: 'px' }} />)
+    expect(capturedViewerProps.overlayRectType).toBe('px')
+  })
+
+  it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const popover = <div>Test Popover</div>
+    render(
+      <Reader document={doc} autoHighlight={true} highlightPopover={popover} />
+    )
+    expect(capturedViewerProps.autoHighlight).toBe(true)
+    expect(capturedViewerProps.highlightPopover).toBe(popover)
+  })
+
+  it('compile-time: overlayRectType satisfies ReaderProps', () => {
+    const props: ReaderProps = {
+      document: makeDocument({ pages: [makePage(1)] }),
+      overlayRectType: 'percent'
+    }
+    expect(props.overlayRectType).toBe('percent')
   })
 
   it('compile-time: interactionMode satisfies ReaderProps', () => {

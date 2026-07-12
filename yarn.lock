@@ -466,10 +466,10 @@
     htmlparser2 "12.0.0"
     mammoth "1.12.0"
 
-"@hamster-note/html-parser@^0.8.0":
-  version "0.8.0"
-  resolved "https://registry.npmjs.org/@hamster-note/html-parser/-/html-parser-0.8.0.tgz#d1fea85b1e6ee6793836635fee90b915bbf689fd"
-  integrity sha512-qO9JIRkvlDbD1XfcjU+Aucx6g/5sIzR3FbmyyVwHQk9cQpgaEz7iPHj+51xcNXXPSWz66KhDFsLdpDXP04EUOw==
+"@hamster-note/html-parser@0.9.0-beta":
+  version "0.9.0-beta"
+  resolved "https://registry.yarnpkg.com/@hamster-note/html-parser/-/html-parser-0.9.0-beta.tgz#6322203f1fab2135763fb3c37d6e8c93f03f60e1"
+  integrity sha512-shwNv848s1OjtSdIvGB4jkGDNAL9CQez75VgDh8jCYm/D2DBB6pXoIBwsR5xXOm0PkdzrSZKeGOCy0kJX7j/aA==
   dependencies:
     "@chenglou/pretext" "^0.0.6"
     "@hamster-note/document-parser" "0.3.1"
@@ -497,16 +497,21 @@
     mdast-util-to-markdown "^2.1.2"
     micromark-extension-gfm "^3.0.0"
 
-"@hamster-note/pdf-parser@^0.7.0":
-  version "0.7.0"
-  resolved "https://registry.npmjs.org/@hamster-note/pdf-parser/-/pdf-parser-0.7.0.tgz#b2855e0df43a5012de6b1dd51c6ab8b7d35bc568"
-  integrity sha512-78GC106AxLDackD6Giy6PL3qbu2vwvkcLlWWrhe76Gc/Phl7S+DeCzqN1zx9h00FClFv00jMJIeeozCbSwCLog==
+"@hamster-note/pdf-parser@^1.0.0":
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/pdf-parser/-/pdf-parser-1.0.0.tgz#6adaf0037d1846d8072a385557617607a1aa8ecb"
+  integrity sha512-S8tlCPW1/pgMU8BIWjCTjTRBsQimoFmn188ud5eGmm6SBSxR5KHKW1t+Jg1pcbHb78xBmLhVlOEBsMEV/DVgBA==
   dependencies:
     "@hamster-note/document-parser" "^0.2.1"
     "@hamster-note/types" "0.8.0"
     "@pdf-lib/fontkit" "^1.1.1"
     pdf-lib "^1.17.1"
     pdfjs-dist "5.4.530"
+
+"@hamster-note/selection@0.0.2-beta.1":
+  version "0.0.2-beta.1"
+  resolved "https://registry.yarnpkg.com/@hamster-note/selection/-/selection-0.0.2-beta.1.tgz#79660efc39f19d481af8bf61ebc7c57f5d1f4c3d"
+  integrity sha512-tu5focrR2VKlOlVkIa1xRWS560sdaF5xHkxrcUZlBOFnftWhdruIm99lqxRRgTI83LBg8W4KBGg3sUixCBp65Q==
 
 "@hamster-note/txt-parser@^0.3.0":
   version "0.3.0"
@@ -530,10 +535,10 @@
     class-validator "^0.14.1"
     reflect-metadata "^0.2.2"
 
-"@hamster-note/virtual-paper@0.1.0-beta.1":
-  version "0.1.0-beta.1"
-  resolved "https://registry.yarnpkg.com/@hamster-note/virtual-paper/-/virtual-paper-0.1.0-beta.1.tgz#e2f45c4ed0d18d0d70fe7dab6f4fbbf046eab64a"
-  integrity sha512-AgFMbdRAPliOMM+NNcvDXDxLSOn0KxTCLwSY6VzC7W3FX20Sjf/XKt23WYKGJnrFdOgoyNBvzONWAsrcqc99RQ==
+"@hamster-note/virtual-paper@0.1.0-beta.2":
+  version "0.1.0-beta.2"
+  resolved "https://registry.yarnpkg.com/@hamster-note/virtual-paper/-/virtual-paper-0.1.0-beta.2.tgz#2cff4d99116c9665dc9eef94c57a3a97d7f2c580"
+  integrity sha512-x8HN06mlbwEvpOXrn/j/s5ggploDzjwfTTEnKZphrFqnif2+UYngJfQrhTyXZjiUYM0iSlctD6wl/q4KVj2aiQ==
   dependencies:
     "@system-ui-js/multi-drag" "^0.4.0"
 

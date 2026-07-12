@@ -80,7 +80,7 @@ declare module '@hamster-note/virtual-paper' {
     /**
      * Contain 模式：将内容约束在容器可视区域内。
      */
-    containMode?: boolean
+    containMode?: boolean | 'contain' | 'cover' | 'stretch'
     /**
      * 惯性滚动：手势结束后保持减速滑动。
      */

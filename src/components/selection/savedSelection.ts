@@ -432,11 +432,12 @@ const buildVisualFallback = (
   selection,
   status: selection.visual.length > 0 ? 'visual-fallback' : 'unresolved',
   rects: selection.visual.flatMap((page) =>
-    denormalizePageRects(page.rects, page.pageSize).map((rect) => ({
-      ...rect,
-      pageNumber: page.pageNumber,
-      origin: 'page-relative' as const
-    }))
+    denormalizePageRects(page.rects, page.pageSize, page.pageNumber).map(
+      (rect) => ({
+        ...rect,
+        origin: 'page-relative' as const
+      })
+    )
   ),
   rectsOrigin: 'page-relative',
   segments: [],
@@ -522,7 +523,8 @@ export const normalizePageRects = (
  */
 export const denormalizePageRects = (
   rects: NormalizedRect[],
-  pageSize: { width: number; height: number }
+  pageSize: { width: number; height: number },
+  pageNumber = 0
 ): ReaderSelectionOverlayRect[] => {
   if (!hasValidPageSize(pageSize)) return []
 
@@ -531,7 +533,7 @@ export const denormalizePageRects = (
     y: clamp01(rect.y) * pageSize.height,
     width: clamp01(rect.width) * pageSize.width,
     height: clamp01(rect.height) * pageSize.height,
-    pageNumber: 0
+    pageNumber
   }))
 }
 

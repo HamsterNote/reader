@@ -14,10 +14,6 @@ import {
   type TextElementInfo
 } from '../src/components/selection/savedSelection'
 import type { ReaderSelectedTextSegment } from '../src/components/selection/selectionPayloadSerializer'
-import {
-  polygonsToSvgPath,
-  rectsToUnionPolygons
-} from '../src/components/selectionGeometry'
 
 type DomRectInput = {
   x: number
@@ -275,11 +271,15 @@ describe('saved selection helpers', () => {
     ])
     expect(normalizePageRects(rects, { width: 0, height: 100 })).toEqual([])
     expect(
-      denormalizePageRects([{ x: -0.5, y: 0.2, width: 1.5, height: 2 }], {
-        width: 100,
-        height: 100
-      })
-    ).toEqual([{ x: 0, y: 20, width: 100, height: 100, pageNumber: 0 }])
+      denormalizePageRects(
+        [{ x: -0.5, y: 0.2, width: 1.5, height: 2 }],
+        {
+          width: 100,
+          height: 100
+        },
+        3
+      )
+    ).toEqual([{ x: 0, y: 20, width: 100, height: 100, pageNumber: 3 }])
   })
 
   it('restores exact anchors before fallback paths', () => {
@@ -885,19 +885,10 @@ describe('T2: viewer boundary convertSavedSelectionRectToPageRect respects origi
       viewportRect,
       pageEl
     )
-    // 构建 SVG path（与 buildSavedSelectionOverlayPath 使用相同流程）
-    const polygons = rectsToUnionPolygons([pageRect])
-    const d = polygonsToSvgPath(polygons)
-
-    // ClipperLib union 会重排顶点顺序，所以不假设 M 起点位置。
-    // 验证 path 包含 4 个 page-relative 角点坐标 (10,10) (90,10) (90,26) (10,26)
-    // 而不包含 viewport 坐标 (110,130)
-    expect(d).toContain('10 10')
-    expect(d).toContain('90 10')
-    expect(d).toContain('90 26')
-    expect(d).toContain('10 26')
-    expect(d).not.toContain('110')
-    expect(d).not.toContain('130')
+    expect(pageRect.x).toBe(10)
+    expect(pageRect.y).toBe(10)
+    expect(pageRect.width).toBe(80)
+    expect(pageRect.height).toBe(16)
   })
 
   it('fallback rects produce correct page-relative SVG path coordinates without double conversion', () => {
@@ -917,18 +908,10 @@ describe('T2: viewer boundary convertSavedSelectionRectToPageRect respects origi
       fallbackRect,
       pageEl
     )
-    const polygons = rectsToUnionPolygons([pageRect])
-    const d = polygonsToSvgPath(polygons)
-
-    // ClipperLib union 重排顶点，验证 4 个角点坐标存在
-    // path 应包含 page-relative 坐标 (10,20) (90,20) (90,36) (10,36)
-    // 不包含被偏移后的负坐标 (-90,-100)
-    expect(d).toContain('10 20')
-    expect(d).toContain('90 20')
-    expect(d).toContain('90 36')
-    expect(d).toContain('10 36')
-    expect(d).not.toContain('-90')
-    expect(d).not.toContain('-100')
+    expect(pageRect.x).toBe(10)
+    expect(pageRect.y).toBe(20)
+    expect(pageRect.width).toBe(80)
+    expect(pageRect.height).toBe(16)
   })
 
   it('resolved fallback bbox rects (page-relative origin) are not reconverted by viewer boundary', () => {
@@ -970,14 +953,10 @@ describe('T2: viewer boundary convertSavedSelectionRectToPageRect respects origi
       expect(converted[0].height).toBe(16)
       expect(converted[0].origin).toBe('page-relative')
 
-      // SVG path 也应该是正确的 page-relative 坐标
-      // ClipperLib union 重排顶点，验证角点坐标存在而非 M 起点格式
-      const d = polygonsToSvgPath(rectsToUnionPolygons(converted))
-      expect(d).toContain('10 20')
-      expect(d).toContain('90 20')
-      expect(d).toContain('90 36')
-      expect(d).toContain('10 36')
-      expect(d).not.toContain('-90')
+      expect(converted[0].x).toBe(10)
+      expect(converted[0].y).toBe(20)
+      expect(converted[0].width).toBe(80)
+      expect(converted[0].height).toBe(16)
     } finally {
       // 恢复 beforeEach 设置的 mock
       Object.defineProperty(Range.prototype, 'getClientRects', {
