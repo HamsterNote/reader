@@ -404,6 +404,26 @@ const restoreSelectionRange = (selection: Selection, range: Range): void => {
   selection.addRange(range)
 }
 
+const scheduleManagedTimeout = (
+  timeouts: Set<number>,
+  callback: () => void,
+  delay: number
+): number => {
+  const timeoutId = window.setTimeout(() => {
+    timeouts.delete(timeoutId)
+    callback()
+  }, delay)
+  timeouts.add(timeoutId)
+  return timeoutId
+}
+
+const clearManagedTimeouts = (timeouts: Set<number>): void => {
+  for (const timeoutId of timeouts) {
+    window.clearTimeout(timeoutId)
+  }
+  timeouts.clear()
+}
+
 const restoreTextSelectionSnapshot = (
   snapshot: TextSelectionSnapshot,
   viewerRoot: HTMLElement,
@@ -4487,6 +4507,8 @@ export function IntermediateDocumentViewer({
   }, [onTextSelectionChange, getSelectionDetail])
 
   useEffect(() => {
+    const pendingHtmlParserRefreshTimeouts = new Set<number>()
+
     const stopHtmlParserSelectionRefresh = (event: Event) => {
       const viewerRoot = viewerRootRef.current
       const selection = getSelectionForRoot(viewerRoot)
@@ -4563,11 +4585,15 @@ export function IntermediateDocumentViewer({
         }
         restoreHtmlParserTextSelection()
         for (const delay of [0, 40, 120] as const) {
-          window.setTimeout(() => {
-            if (!restoreHtmlParserTextSelection()) {
-              composeActiveMouseSelectionFromStoredBoundaries()
-            }
-          }, delay)
+          scheduleManagedTimeout(
+            pendingHtmlParserRefreshTimeouts,
+            () => {
+              if (!restoreHtmlParserTextSelection()) {
+                composeActiveMouseSelectionFromStoredBoundaries()
+              }
+            },
+            delay
+          )
         }
       }
     }
@@ -4578,6 +4604,7 @@ export function IntermediateDocumentViewer({
       { capture: true }
     )
     return () => {
+      clearManagedTimeouts(pendingHtmlParserRefreshTimeouts)
       globalThis.document.removeEventListener(
         'selectionchange',
         stopHtmlParserSelectionRefresh,
@@ -5351,6 +5378,8 @@ export function IntermediateDocumentViewer({
     const root = viewerRootElement
     if (!root || !runtimeDocument) return
 
+    const pendingSelectionTimeouts = new Set<number>()
+
     const resolveDragCaret = (clientX: number, clientY: number) => {
       const pointElement = root.ownerDocument.elementFromPoint?.(
         clientX,
@@ -5599,9 +5628,13 @@ export function IntermediateDocumentViewer({
         isStrictMouseFinalizing &&
         ignoreHtmlParserSelectionRefreshRef.current
       ) {
-        window.setTimeout(() => {
-          ignoreHtmlParserSelectionRefreshRef.current = false
-        }, 500)
+        scheduleManagedTimeout(
+          pendingSelectionTimeouts,
+          () => {
+            ignoreHtmlParserSelectionRefreshRef.current = false
+          },
+          500
+        )
         return
       }
 
@@ -5654,9 +5687,13 @@ export function IntermediateDocumentViewer({
         dragSelectionEndEmittedRef.current = true
         skipNextMouseUpSelectionEndRef.current = true
         emitSelectionEnd()
-        window.setTimeout(() => {
-          skipNextMouseUpSelectionEndRef.current = false
-        }, 0)
+        scheduleManagedTimeout(
+          pendingSelectionTimeouts,
+          () => {
+            skipNextMouseUpSelectionEndRef.current = false
+          },
+          0
+        )
       }
 
       activeMouseSelectionRef.current.active = false
@@ -5672,9 +5709,13 @@ export function IntermediateDocumentViewer({
       const shouldRecomposeStrictHtmlParserSelection =
         isStrictMouseFinalizing && ignoreHtmlParserSelectionRefreshRef.current
       if (shouldRecomposeStrictHtmlParserSelection) {
-        window.setTimeout(() => {
-          composeActiveMouseSelectionFromStoredBoundaries()
-        }, 120)
+        scheduleManagedTimeout(
+          pendingSelectionTimeouts,
+          () => {
+            composeActiveMouseSelectionFromStoredBoundaries()
+          },
+          120
+        )
       }
 
       preserveOverlayDuringMouseUpRef.current = false
@@ -6046,18 +6087,26 @@ export function IntermediateDocumentViewer({
         composeActiveMouseSelectionFromStoredBoundaries()
       }
       for (const delay of [0, 40, 120, 240, 360] as const) {
-        window.setTimeout(() => {
-          if (
-            !restoreHtmlParserSelectionSnapshot(initialSnapshot) &&
-            !restoreHtmlParserStoredSelectionRange()
-          ) {
-            composeActiveMouseSelectionFromStoredBoundaries()
-          }
-        }, delay)
+        scheduleManagedTimeout(
+          pendingSelectionTimeouts,
+          () => {
+            if (
+              !restoreHtmlParserSelectionSnapshot(initialSnapshot) &&
+              !restoreHtmlParserStoredSelectionRange()
+            ) {
+              composeActiveMouseSelectionFromStoredBoundaries()
+            }
+          },
+          delay
+        )
       }
-      window.setTimeout(() => {
-        ignoreHtmlParserSelectionRefreshRef.current = false
-      }, 700)
+      scheduleManagedTimeout(
+        pendingSelectionTimeouts,
+        () => {
+          ignoreHtmlParserSelectionRefreshRef.current = false
+        },
+        700
+      )
     }
 
     const cloneCurrentTextSelectionRange = () => {
@@ -6137,9 +6186,13 @@ export function IntermediateDocumentViewer({
 
       restoreHtmlParserStoredSelection(selectionSnapshot)
       for (const delay of [0, 80, 180] as const) {
-        window.setTimeout(() => {
-          restoreClonedTextRange(contextMenuRange)
-        }, delay)
+        scheduleManagedTimeout(
+          pendingSelectionTimeouts,
+          () => {
+            restoreClonedTextRange(contextMenuRange)
+          },
+          delay
+        )
       }
     }
 
@@ -6558,6 +6611,7 @@ export function IntermediateDocumentViewer({
     })
 
     return () => {
+      clearManagedTimeouts(pendingSelectionTimeouts)
       clearLongPressSession()
       adapter.destroy()
       root.removeEventListener('pointerdown', rememberPointerType, {
@@ -6675,6 +6729,7 @@ export function IntermediateDocumentViewer({
     const root = viewerRootRef.current
     if (!root) return
     const ownerDocument = root.ownerDocument
+    const pendingMouseRestoreTimeouts = new Set<number>()
 
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.shiftKey) {
@@ -6801,7 +6856,7 @@ export function IntermediateDocumentViewer({
 
       event.preventDefault()
       restoreSelection()
-      window.setTimeout(restoreSelection, 0)
+      scheduleManagedTimeout(pendingMouseRestoreTimeouts, restoreSelection, 0)
     }
 
     // Demoted native mouseup/touchend fallback: Drag emits selection end for
@@ -6839,9 +6894,13 @@ export function IntermediateDocumentViewer({
           // document listeners run on html-parser transformed spans. Defer the
           // final strict composition one macrotask so our text-node range wins
           // after the browser has finished its default mouseup reconciliation.
-          window.setTimeout(() => {
-            finishDragSelectionRef.current(event.clientX, event.clientY)
-          }, 50)
+          scheduleManagedTimeout(
+            pendingMouseRestoreTimeouts,
+            () => {
+              finishDragSelectionRef.current(event.clientX, event.clientY)
+            },
+            50
+          )
           return
         }
 
@@ -6857,6 +6916,7 @@ export function IntermediateDocumentViewer({
     root.addEventListener('keyup', handleKeyUp)
 
     return () => {
+      clearManagedTimeouts(pendingMouseRestoreTimeouts)
       ownerDocument.removeEventListener('mouseup', handleMouseUp)
       root.removeEventListener('touchend', emitSelectionEnd)
       root.removeEventListener('keyup', handleKeyUp)
