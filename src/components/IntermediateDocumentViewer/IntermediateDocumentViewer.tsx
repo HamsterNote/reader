@@ -933,11 +933,96 @@ type RenderableIntermediateText = IntermediateText &
   }>
 
 type PageLoadStatus = 'loaded' | 'error'
-type HtmlParserPageInput = Parameters<typeof HtmlParser.decodePageToHtml>[0]
+type ResolvedPage = NonNullable<
+  Awaited<ReturnType<IntermediateDocument['getPageByPageNumber']>>
+>
+type HtmlParserCompat = typeof HtmlParser & {
+  decodePageToHtml?: (
+    page: Awaited<ReturnType<IntermediateDocument['getPageByPageNumber']>>,
+    options?: DecodeOptions
+  ) => Promise<string>
+}
 
 const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
   height: 842
+}
+
+const pageContentPromiseCache = new WeakMap<
+  object,
+  Promise<IntermediateContent[]>
+>()
+const pageThumbnailPromiseCache = new WeakMap<object, Promise<unknown>>()
+
+const getPageContentOnce = (
+  page: Pick<ResolvedPage, 'getContent'> & object
+): Promise<IntermediateContent[]> => {
+  const cachedPromise = pageContentPromiseCache.get(page)
+  if (cachedPromise) return cachedPromise
+
+  const nextPromise = Promise.resolve(page.getContent()).catch((error) => {
+    pageContentPromiseCache.delete(page)
+    throw error
+  })
+  pageContentPromiseCache.set(page, nextPromise)
+  return nextPromise
+}
+
+const getPageThumbnailOnce = (
+  page: Pick<ResolvedPage, 'getThumbnail'> & object
+): Promise<unknown> => {
+  const cachedPromise = pageThumbnailPromiseCache.get(page)
+  if (cachedPromise) return cachedPromise
+
+  const nextPromise = Promise.resolve(page.getThumbnail()).catch((error) => {
+    pageThumbnailPromiseCache.delete(page)
+    throw error
+  })
+  pageThumbnailPromiseCache.set(page, nextPromise)
+  return nextPromise
+}
+
+const decodeSinglePageToHtml = async (
+  page: Awaited<ReturnType<IntermediateDocument['getPageByPageNumber']>>,
+  pageNumber: number,
+  options?: DecodeOptions
+): Promise<string> => {
+  if (!page) return ''
+
+  const compatParser = HtmlParser as HtmlParserCompat
+  if (typeof compatParser.decodePageToHtml === 'function') {
+    return compatParser.decodePageToHtml(page, options)
+  }
+
+  const resolvedPage = page as ResolvedPage
+
+  const serializedPage = {
+    id: resolvedPage.id ?? `page-${pageNumber}`,
+    number: resolvedPage.number ?? pageNumber,
+    width: resolvedPage.width ?? 0,
+    height: resolvedPage.height ?? 0,
+    content:
+      Array.isArray(resolvedPage.content) && resolvedPage.content.length > 0
+        ? resolvedPage.content
+        : await getPageContentOnce(resolvedPage),
+    paragraphs: Array.isArray(resolvedPage.paragraphs)
+      ? resolvedPage.paragraphs
+      : [],
+    thumbnail:
+      typeof resolvedPage.getThumbnail === 'function'
+        ? await getPageThumbnailOnce(resolvedPage)
+        : undefined
+  } as IntermediateDocumentSerialized['pages'][number]
+  const singlePageDocument = IntermediateDocument.parse({
+    id: `html-parser-page-${pageNumber}`,
+    title: '',
+    pages: [serializedPage]
+  })
+  Object.assign(singlePageDocument as object, {
+    __sourcePage: { ...resolvedPage, number: pageNumber }
+  })
+
+  return HtmlParser.decodeToHtml(singlePageDocument, options)
 }
 
 const getVisiblePageNumbers = (
@@ -1982,7 +2067,7 @@ const getOcrCacheKey = (
 type PageWithBaseImage = {
   thumbnail?: unknown
   image?: unknown
-  getThumbnail?: () => Promise<unknown> | unknown
+  getThumbnail?: (...args: unknown[]) => Promise<unknown> | unknown
 }
 
 type ImageSourceLike = {
@@ -2023,7 +2108,11 @@ const getBaseImageFromPage = async (page: unknown) => {
   }
 
   try {
-    return getStringBaseImage(await pageWithImage.getThumbnail())
+    return getStringBaseImage(
+      await getPageThumbnailOnce(
+        pageWithImage as Pick<ResolvedPage, 'getThumbnail'> & object
+      )
+    )
   } catch {
     return undefined
   }
@@ -2864,13 +2953,7 @@ export function IntermediateDocumentViewer({
 
       decodingPageNumbersRef.current.add(pageNumber)
       pagePromise
-        .then((page) => {
-          if (!page) return ''
-          return HtmlParser.decodePageToHtml(
-            page as unknown as HtmlParserPageInput,
-            decodeOptions
-          )
-        })
+        .then((page) => decodeSinglePageToHtml(page, pageNumber, decodeOptions))
         .then((html) => {
           if (!isCurrentDecodeGeneration(generation)) {
             return
@@ -2964,6 +3047,14 @@ export function IntermediateDocumentViewer({
 
       pageLastVisibleAtRef.current.delete(pageNumber)
       lastKnownVisiblePagesRef.current.delete(pageNumber)
+      runtimeDocument
+        .getPageByPageNumber(pageNumber)
+        ?.then((page) => {
+          if (!page) return
+          pageContentPromiseCache.delete(page)
+          pageThumbnailPromiseCache.delete(page)
+        })
+        .catch(() => {})
       setTextsByPageNumber(deletePageEntry(pageNumber))
       setOcrTextsByPageNumber(deletePageEntry(pageNumber))
       setBaseImagesByPageNumber(deletePageEntry(pageNumber))
@@ -4183,7 +4274,10 @@ export function IntermediateDocumentViewer({
       loadingPagesRef.current.add(pageNumber)
       pagePromise
         .then((page) => {
-          return Promise.all([getBaseImageFromPage(page), page.getContent()])
+          return Promise.all([
+            getBaseImageFromPage(page),
+            getPageContentOnce(page)
+          ])
         })
         .then(([baseImage, content]) => {
           if (
