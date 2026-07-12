@@ -1,8 +1,5 @@
 import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
-import type {
-  SelectionRange,
-  SelectionRect
-} from '@hamster-note/selection'
+import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import type { IntermediateDocumentSerialized } from '@hamster-note/types'
 import { useCallback, useRef, useState } from 'react'
 
@@ -285,7 +282,10 @@ export function Reader({
               </div>
 
               {showPages && (
-                <div className='hamster-reader__pages' data-testid='reader-pages'>
+                <div
+                  className='hamster-reader__pages'
+                  data-testid='reader-pages'
+                >
                   {pages.map((page) => (
                     <Page
                       key={page.id}

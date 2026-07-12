@@ -10,18 +10,22 @@ import {
   type SelectionRef,
   type SelectionTool
 } from '@hamster-note/selection'
-import type {
-  IntermediatePageSerialized
-} from '@hamster-note/types'
+import type { IntermediatePageSerialized } from '@hamster-note/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 export type ReaderPageTool = 'text-selection' | 'rect-selection' | 'drawing'
 
 export type ReaderPagePaintingMap = Record<string, DrawingValue>
 
-export type ReaderPageTextSelectionMap = Record<string, readonly SelectionRange[]>
+export type ReaderPageTextSelectionMap = Record<
+  string,
+  readonly SelectionRange[]
+>
 
-export type ReaderPageRectSelectionMap = Record<string, readonly SelectionRect[]>
+export type ReaderPageRectSelectionMap = Record<
+  string,
+  readonly SelectionRect[]
+>
 
 export type PageProps = {
   page: IntermediatePageSerialized
@@ -120,7 +124,10 @@ function renderTextLayer(page: IntermediatePageSerialized) {
   })
 
   return (
-    <div className='hamster-reader__text-layer' data-testid={`reader-page-text-layer-${page.id}`}>
+    <div
+      className='hamster-reader__text-layer'
+      data-testid={`reader-page-text-layer-${page.id}`}
+    >
       {textItems}
     </div>
   )
