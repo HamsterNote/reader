@@ -121,9 +121,9 @@ export function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [selectedTool, setSelectedTool] =
     useState<ReaderPageTool>('text-selection')
-  const [pagePaintings, setPagePaintings] = useState<Record<string, DrawingValue>>(
-    {}
-  )
+  const [pagePaintings, setPagePaintings] = useState<
+    Record<string, DrawingValue>
+  >({})
   const [pageTextSelections, setPageTextSelections] = useState<
     Record<string, readonly SelectionRange[]>
   >({})
@@ -182,11 +182,19 @@ export function App() {
           pageTextSelections={pageTextSelections}
           pageRectSelections={pageRectSelections}
           onPagePaintingsChange={setPagePaintings}
-          onPageTextSelectionsChange={(pageId, nextSelections, nextPageSelections) => {
+          onPageTextSelectionsChange={(
+            pageId,
+            nextSelections,
+            nextPageSelections
+          ) => {
             setPageTextSelections(nextPageSelections)
             console.log('text selections', pageId, nextSelections)
           }}
-          onPageRectSelectionsChange={(pageId, nextSelections, nextPageSelections) => {
+          onPageRectSelectionsChange={(
+            pageId,
+            nextSelections,
+            nextPageSelections
+          ) => {
             setPageRectSelections(nextPageSelections)
             console.log('rect selections', pageId, nextSelections)
           }}

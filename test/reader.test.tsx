@@ -131,9 +131,9 @@ describe('Reader public API', () => {
     expect(screen.getByText('Text Marks')).toBeInTheDocument()
     expect(screen.getByText('Rect Marks')).toBeInTheDocument()
     expect(screen.getByText('Strokes')).toBeInTheDocument()
-    expect(screen.getByTestId('reader-page-text-page-1-text-1')).toHaveTextContent(
-      'Important paragraph'
-    )
+    expect(
+      screen.getByTestId('reader-page-text-page-1-text-1')
+    ).toHaveTextContent('Important paragraph')
   })
 
   it('renders emptyText when document is null', () => {
