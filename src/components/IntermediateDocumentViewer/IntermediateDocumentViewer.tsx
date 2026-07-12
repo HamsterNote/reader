@@ -13,26 +13,15 @@ import {
   type IntermediateText
 } from '@hamster-note/types'
 import {
-  createIntermediateDocumentRenderTiming,
-  type IntermediateDocumentRenderTimingCallback,
-  type IntermediateDocumentRenderTimingEntry
-} from './renderTiming'
-import {
   DEFAULT_ENABLED_INTERACTIONS,
   VirtualPaper,
   VirtualPaperInteractionMode,
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
-import {
-  computePageOriginY,
-  computeTransform,
-  computeTransformForOffset,
-  parsePublicPageId,
-  rectCenterToPagePixels,
-  resolveRangeJumpTarget
-} from './rangeJumpHelpers'
 import React, {
+  type ReactNode,
+  type Ref,
   Profiler,
   useCallback,
   useEffect,
@@ -42,6 +31,15 @@ import React, {
   useState
 } from 'react'
 
+import type {
+  ReaderLinkedSelectionData,
+  ReaderMousePosition,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool
+} from '../../types/selection'
 import { PopoverPortal } from '../PopoverPortal'
 import {
   buildSelectionPayload,
@@ -49,27 +47,32 @@ import {
   type ReaderSelectedTextSegment,
   type ReaderSelectionPayload
 } from '../selection/selectionPayloadSerializer'
-import type {
-  ReaderMousePosition,
-  ReaderLinkedSelectionData,
-  ReaderSelectionOverlayRectType,
-  ReaderSelectionRange,
-  ReaderSelectionRectangle,
-  ReaderSelectionRef,
-  ReaderSelectionTool
-} from '../../types/selection'
+import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import {
+  computePageOriginY,
+  computeTransform,
+  computeTransformForOffset,
+  parsePublicPageId,
+  rectCenterToPagePixels,
+  resolveRangeJumpTarget
+} from './rangeJumpHelpers'
+import {
+  createIntermediateDocumentRenderTiming,
+  type IntermediateDocumentRenderTimingCallback,
+  type IntermediateDocumentRenderTimingEntry
+} from './renderTiming'
 import {
   areRuntimeLinkedTransientsEqual,
   buildRuntimeLinkedSelectionData,
   extractRuntimeLinkedTransient,
+  mapPublicRectanglesToRuntime,
   mapRuntimeLinkedDataToPublic,
+  mapRuntimeRectangleToPublic,
   mapRuntimeRangeToPublic,
   mapRuntimeSelectionIdToPublic,
   runtimePageSelectionId,
   type RuntimeLinkedSelectionTransient
 } from './selectionAdapter'
-// intermediate-document 默认模式的已加载页面内容渲染器
-import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { useLazyPageQueue, type LazyPageQueueConfig } from './useLazyPageQueue'
 
@@ -917,7 +920,7 @@ type PageResources = {
 
 type ViewerContentProps = PageResources & {
   rootClassName: string
-  viewerRootRef: React.Ref<HTMLDivElement>
+  viewerRootRef: Ref<HTMLDivElement>
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
@@ -972,11 +975,11 @@ type ViewerContentProps = PageResources & {
   ) => void
   highlightColor: string | undefined
   selectionColor: string | undefined
-  selectionPopover: React.ReactNode
-  highlightPopover: React.ReactNode
+  selectionPopover: ReactNode
+  highlightPopover: ReactNode
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
-  selectionRef: React.Ref<ReaderSelectionRef> | undefined
+  selectionRef: Ref<ReaderSelectionRef> | undefined
   tool?: ReaderSelectionTool
   rects?: ReaderSelectionRectangle[]
   selectedRectId?: string | null
@@ -1072,8 +1075,8 @@ type IntermediateDocumentPagesProps = PageResources & {
   selectionColor: string | undefined
   overlayRectType: ReaderSelectionOverlayRectType
   effectiveSelectedRangeId: string | null
-  selectionPopover: React.ReactNode
-  highlightPopover: React.ReactNode
+  selectionPopover: ReactNode
+  highlightPopover: ReactNode
   popoverVisible: boolean
   selectionRefForRuntimeId: (
     selectionId: string
@@ -1910,6 +1913,22 @@ export function IntermediateDocumentViewer({
       readerLinkedScopeId,
       runtimeLinkedTransient
     ]
+  )
+  const runtimeRects = useMemo(
+    () => mapPublicRectanglesToRuntime(rects, readerLinkedScopeId),
+    [readerLinkedScopeId, rects]
+  )
+  const handleCreateRect = useCallback(
+    (rect: ReaderSelectionRectangle) => {
+      onCreateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+    },
+    [onCreateRect, readerLinkedScopeId]
+  )
+  const handleUpdateRect = useCallback(
+    (rect: ReaderSelectionRectangle) => {
+      onUpdateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+    },
+    [onUpdateRect, readerLinkedScopeId]
   )
 
   const scaleRange = useMemo(
@@ -3740,11 +3759,11 @@ export function IntermediateDocumentViewer({
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
       tool={tool}
-      rects={rects}
+      rects={runtimeRects}
       selectedRectId={selectedRectId}
-      onCreateRect={onCreateRect}
+      onCreateRect={handleCreateRect}
       onSelectRect={onSelectRect}
-      onUpdateRect={onUpdateRect}
+      onUpdateRect={handleUpdateRect}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
       textsByPageNumber={textsByPageNumber}

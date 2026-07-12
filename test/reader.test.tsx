@@ -1013,6 +1013,52 @@ describe('Reader prop forwarding', () => {
     await screen.findByText('Page 3 text')
   })
 
+  it('maps public rect selection ids to runtime ids for Selection and back to public ids on create', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onCreateRect = vi.fn()
+    const { document } = makeLazyDocument(3)
+
+    render(
+      <Reader
+        document={document}
+        rects={[
+          {
+            id: 'reader-rect-page-1',
+            createdAt: 40,
+            overlayRectType: 'percent',
+            start: { x: 10, y: 20 },
+            end: { x: 30, y: 40 },
+            selectionId: 'page-1',
+            rect: { x: 10, y: 20, width: 20, height: 20 }
+          }
+        ]}
+        selectionRef={selectionRef}
+        tool='rect'
+        onCreateRect={onCreateRect}
+        initialLoadedPages={1}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const pageOneSelectionProps = getAllSelectionProps().find((props) =>
+      props.selectionId?.endsWith(':page-1')
+    )
+    expect(pageOneSelectionProps?.rects).toEqual([
+      expect.objectContaining({
+        selectionId: pageOneSelectionProps?.selectionId
+      })
+    ])
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    act(() => {
+      publicRef.confirmRect()
+    })
+
+    expect(onCreateRect).toHaveBeenCalledWith(
+      expect.objectContaining({ selectionId: 'page-1' })
+    )
+  })
+
   it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     const popover = <div>Test Popover</div>

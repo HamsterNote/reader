@@ -239,7 +239,7 @@
     box-sizing: border-box;
 
     // Page-only html-parser fragment layout rules.
-    // decodePageToHtml returns .hamster-note-page fragments without injecting
+    // decodeToHtml returns .hamster-note-page fragments without injecting
     // document/page/text/image layout CSS, so Reader must provide the scoped
     // styles here under the html-parser output root.
     .hamster-note-document {

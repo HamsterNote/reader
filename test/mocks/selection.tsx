@@ -281,7 +281,8 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
             overlayRectType: props.overlayRectType ?? 'percent',
             start: { x: 0, y: 0 },
             end: { x: 100, y: 100 },
-            rect: { x: 0, y: 0, width: 100, height: 100 }
+            rect: { x: 0, y: 0, width: 100, height: 100 },
+            selectionId: props.selectionId
           }
           props.onCreateRect?.(mockedRect)
         },

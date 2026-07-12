@@ -6,6 +6,7 @@ import type {
 import type {
   ReaderLinkedSelectionData,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionRectangle,
   ReaderSelectionRange,
   ReaderSelectionRect
 } from '../../types/selection'
@@ -103,6 +104,30 @@ export function buildRuntimeLinkedSelectionData({
     ),
     overlayRectType,
     ...remainingTransient
+  }
+}
+
+export function mapPublicRectanglesToRuntime(
+  rects: readonly ReaderSelectionRectangle[] | undefined,
+  scopeId: string
+): ReaderSelectionRectangle[] | undefined {
+  return rects?.map((rect) => ({
+    ...rect,
+    selectionId: rect.selectionId ? `${scopeId}:${rect.selectionId}` : undefined
+  }))
+}
+
+export function mapRuntimeRectangleToPublic(
+  rect: ReaderSelectionRectangle,
+  scopeId: string
+): ReaderSelectionRectangle {
+  const publicSelectionId = rect.selectionId
+    ? mapRuntimeSelectionIdToPublic(rect.selectionId, scopeId)
+    : undefined
+
+  return {
+    ...rect,
+    selectionId: publicSelectionId ?? rect.selectionId
   }
 }
 
