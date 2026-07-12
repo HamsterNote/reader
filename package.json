@@ -43,6 +43,8 @@
     "pack:check": "node scripts/check-pack.mjs"
   },
   "dependencies": {
+    "@hamster-note/painting": "^0.1.1-beta.2",
+    "@hamster-note/selection": "^0.1.0",
     "@hamster-note/types": "^0.5.5"
   },
   "peerDependencies": {
@@ -56,6 +58,7 @@
     "@testing-library/jest-dom": "^6.0.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.0.0",
+    "@types/node": "^26.1.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@typescript-eslint/eslint-plugin": "^8.50.0",

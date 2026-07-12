@@ -1,2 +1,9 @@
-export { Reader } from './components/Reader'
-export type { ReaderProps } from './components/Reader'
+export {
+  Page,
+  type PageProps,
+  type ReaderPagePaintingMap,
+  type ReaderPageRectSelectionMap,
+  type ReaderPageTextSelectionMap,
+  type ReaderPageTool
+} from './components/Page'
+export { Reader, type ReaderProps } from './components/Reader'

@@ -1,9 +1,38 @@
-import type { IntermediateDocumentSerialized } from '@hamster-note/types'
-import { render, screen, fireEvent } from '@testing-library/react'
+import type { DrawingValue } from '@hamster-note/painting'
+import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
+import {
+  type IntermediateDocumentSerialized,
+  type IntermediateTextSerialized,
+  TextDir
+} from '@hamster-note/types'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import { Reader } from '../src/index'
+
+function makeText(id: string, content: string): IntermediateTextSerialized {
+  return {
+    id,
+    content,
+    fontSize: 30,
+    fontFamily: 'Georgia',
+    fontWeight: 500,
+    italic: false,
+    color: '#0f172a',
+    width: 720,
+    height: 42,
+    lineHeight: 42,
+    x: 96,
+    y: 120,
+    ascent: 30,
+    descent: 12,
+    dir: TextDir.LTR,
+    rotate: 0,
+    skew: 0,
+    isEOL: true
+  }
+}
 
 function makeDocument(
   overrides?: Partial<IntermediateDocumentSerialized>
@@ -34,6 +63,77 @@ describe('Reader public API', () => {
 
     expect(root).toBeInTheDocument()
     expect(root).toHaveTextContent('Hamster Reader Title')
+  })
+
+  it('renders document pages with the selected tool and exposed data', () => {
+    const paintingValue: DrawingValue = {
+      strokes: [
+        {
+          id: 'stroke-1',
+          tool: 'pen',
+          points: [
+            { x: 10, y: 10 },
+            { x: 20, y: 20 }
+          ]
+        }
+      ]
+    }
+    const textSelections: readonly SelectionRange[] = [
+      {
+        id: 'range-1',
+        text: 'Important paragraph',
+        start: 0,
+        end: 19,
+        createdAt: 1,
+        rects: [{ x: 10, y: 10, width: 100, height: 20 }],
+        overlayRectType: 'px'
+      }
+    ]
+    const rectSelections: readonly SelectionRect[] = [
+      {
+        id: 'rect-1',
+        createdAt: 2,
+        overlayRectType: 'px',
+        start: { x: 20, y: 20 },
+        end: { x: 160, y: 120 },
+        rect: { x: 20, y: 20, width: 140, height: 100 }
+      }
+    ]
+
+    render(
+      <Reader
+        document={makeDocument({
+          pages: [
+            {
+              id: 'page-1',
+              number: 1,
+              width: 1080,
+              height: 1528,
+              texts: [makeText('page-1-text-1', 'Important paragraph')],
+              thumbnail: undefined
+            }
+          ]
+        })}
+        selectedTool='drawing'
+        pagePaintings={{ 'page-1': paintingValue }}
+        pageTextSelections={{ 'page-1': textSelections }}
+        pageRectSelections={{ 'page-1': rectSelections }}
+      />
+    )
+
+    expect(screen.getByTestId('reader-pages')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-page-page-1')).toHaveAttribute(
+      'data-tool',
+      'drawing'
+    )
+    expect(screen.getByText('Tool')).toBeInTheDocument()
+    expect(screen.getByText('Drawing')).toBeInTheDocument()
+    expect(screen.getByText('Text Marks')).toBeInTheDocument()
+    expect(screen.getByText('Rect Marks')).toBeInTheDocument()
+    expect(screen.getByText('Strokes')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-page-text-page-1-text-1')).toHaveTextContent(
+      'Important paragraph'
+    )
   })
 
   it('renders emptyText when document is null', () => {
