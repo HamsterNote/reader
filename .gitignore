@@ -1,3 +1,5 @@
+.codegraph
+
 node_modules/
 dist/
 demo-dist/
@@ -9,5 +11,12 @@ coverage/
 .DS_Store
 *.log
 
+.yalc/
+yalc.lock
+
 .idea/
 .vscode/
+
+.omo/
+test-results/
+.history/

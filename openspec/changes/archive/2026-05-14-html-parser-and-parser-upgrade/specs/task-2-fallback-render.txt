@@ -1,0 +1,8 @@
+Task 2 fallback render evidence
+
+- `HtmlParser.decodeToHtml` failures set `htmlContent` to `null` and `htmlParserError` to `true`.
+- The render branch falls back whenever `htmlContent` is unavailable or `htmlParserError` is true.
+- The existing page-based span renderer remains in place under the fallback branch, preserving `data-text-id`, OCR text merging, page image rendering, and loading/error states.
+- The `dangerouslySetInnerHTML` path is isolated to `.hamster-reader__html-parser-output` and has an explicit trust/sanitization comment.
+- Verification: changed-file LSP diagnostics reported no diagnostics.
+- Verification: `yarn test:run test/intermediate-document-viewer.test.tsx` passed with 43 tests.

@@ -1,0 +1,198 @@
+# Task 3: Parser Mock Audit Evidence
+
+**Date**: 2026-05-13
+**Task**: Audit parser-related mocks and assertions for upgrade drift (pre-0.6.0 → 0.6.0)
+**Scope**: test/reader.test.tsx, test/intermediate-document-viewer.test.tsx, test/demo.test.tsx
+
+---
+
+## Files Audited
+
+| File | Parser | Mocked Method(s) |
+|------|--------|------------------|
+| test/reader.test.tsx | HtmlParser | decodeToHtml |
+| test/intermediate-document-viewer.test.tsx | HtmlParser | decodeToHtml |
+| test/demo.test.tsx | PdfParser | encode |
+
+---
+
+## FINDING: NO CHANGE NEEDED (All Three Files)
+
+All parser mocks are **compatible with the 0.6.0 module shapes**. No test modifications are required for the upgrade.
+
+---
+
+## Detailed Analysis
+
+### 1. test/reader.test.tsx (HtmlParser)
+
+**Import** (line 1):
+```typescript
+import { HtmlParser } from '@hamster-note/html-parser'
+```
+
+**Mock Factory** (lines 13-17):
+```typescript
+vi.mock('@hamster-note/html-parser', () => ({
+  HtmlParser: {
+    decodeToHtml: vi.fn()
+  }
+}))
+```
+
+**Typed vi.mocked() calls**:
+- Line 112: `vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')`
+- Line 165: `vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)`
+
+**0.6.0 API** (from node_modules/@hamster-note/html-parser/dist/index.d.ts):
+```typescript
+declare class HtmlParser extends DocumentParser {
+  static readonly exts: readonly ["html"];
+  static readonly ext = "html";
+  static encode(fileOrBuffer: ParserInput): Promise<HtmlDocument>;
+  static decodeToHtml(intermediateDocument: IntermediateDocument): Promise<string>;
+  static decode(intermediateDocument: IntermediateDocument): Promise<File | ArrayBuffer>;
+}
+```
+
+**Source Usage** (src/components/IntermediateDocumentViewer.tsx, line 443):
+```typescript
+HtmlParser.decodeToHtml(runtimeDocument as unknown as HtmlParserDocumentInput)
+```
+
+**Analysis**: The mock correctly provides `HtmlParser.decodeToHtml` as a static method. The 0.6.0 API matches the pre-0.6.0 shape used in tests. No changes needed.
+
+**Conclusion**: ✅ NO CHANGE NEEDED
+
+---
+
+### 2. test/intermediate-document-viewer.test.tsx (HtmlParser)
+
+**Import** (line 3):
+```typescript
+import { HtmlParser } from '@hamster-note/html-parser'
+```
+
+**Mock Factory** (lines 18-22):
+```typescript
+vi.mock('@hamster-note/html-parser', () => ({
+  HtmlParser: {
+    decodeToHtml: vi.fn()
+  }
+}))
+```
+
+**Typed vi.mocked() calls**:
+- Line 89: `vi.mocked(HtmlParser.decodeToHtml).mockResolvedValue('')`
+- Line 144: `vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)`
+- Line 194: `vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce(mockHtml)`
+- Line 212: `vi.mocked(HtmlParser.decodeToHtml).mockRejectedValueOnce(new Error('Parser failed'))`
+- Line 229: `vi.mocked(HtmlParser.decodeToHtml).mockResolvedValueOnce('')`
+
+**Analysis**: Same situation as reader.test.tsx. The mock correctly provides the static method `decodeToHtml` that matches the 0.6.0 API.
+
+**Conclusion**: ✅ NO CHANGE NEEDED
+
+---
+
+### 3. test/demo.test.tsx (PdfParser)
+
+**Import** (line 1):
+```typescript
+import { PdfParser } from '@hamster-note/pdf-parser'
+```
+
+**Mock Factory** (lines 11-15):
+```typescript
+vi.mock('@hamster-note/pdf-parser', () => ({
+  PdfParser: {
+    encode: vi.fn()
+  }
+}))
+```
+
+**Typed vi.mocked() calls**:
+- Line 99: `vi.mocked(PdfParser.encode).mockResolvedValue(makeRuntimeDocument('Success Document'))`
+- Line 114: `vi.mocked(PdfParser.encode).mockResolvedValue(undefined)`
+- Line 127: `vi.mocked(PdfParser.encode).mockRejectedValue(new Error('bad pdf'))`
+- Line 138: `vi.mocked(PdfParser.encode).mockResolvedValue(makeRuntimeDocument('OCR Document'))`
+- Line 150: `vi.mocked(PdfParser.encode).mockResolvedValue(makeRuntimeDocument('Selection Document'))`
+- Line 189: `vi.mocked(PdfParser.encode).mockReturnValueOnce(...).mockReturnValueOnce(...)`
+
+**Source Usage** (demo/App.tsx, line 27):
+```typescript
+const result = await PdfParser.encode(file)
+```
+
+**Local Type Shim** (src/types/pdf-parser.d.ts):
+```typescript
+declare module '@hamster-note/pdf-parser' {
+  import type { IntermediateDocument } from '@hamster-note/types'
+  export const PdfParser: {
+    encode(fileOrBuffer: File | ArrayBuffer): Promise<IntermediateDocument | undefined>
+  }
+}
+```
+
+**Analysis**: The PdfParser is declared as a plain object with an `encode` method (not a class). The mock correctly provides `PdfParser.encode` as a function. The 0.6.0 pdf-parser package exports `PdfParser` from the bundled build (pdfParser-Da5CndzI.js) and the types entry points to `dist/index.d.ts` which doesn't exist (build artifact issue), but the actual runtime behavior matches the mock.
+
+Note: The local type shim says `Promise<IntermediateDocument | undefined>` but the document-parser base class (which PdfParser extends in 0.6.0) returns `Promise<IntermediateDocument>`. The test at line 114 that mocks `undefined` works because the mock bypasses the real implementation.
+
+**Conclusion**: ✅ NO CHANGE NEEDED (for test mocks)
+
+---
+
+## Hidden Parser Mocks Search
+
+**Search command**: `grep -r "vi\.mock.*@hamster-note/(html-parser|pdf-parser)" test/`
+
+**Results**: Found mocks only in the three known files:
+- test/reader.test.tsx
+- test/intermediate-document-viewer.test.tsx
+- test/demo.test.tsx
+
+**Other test files checked**:
+- test/smoke.test.tsx - No parser mocks (only smoke fixture)
+
+**Conclusion**: ✅ No hidden parser mocks found outside the three audited files.
+
+---
+
+## Summary by Parser Type
+
+### Html-Parser (Task 5 reference)
+
+| File | Lines | Mock Method | 0.6.0 Status |
+|------|-------|-------------|---------------|
+| test/reader.test.tsx | 13-17, 112, 165 | decodeToHtml | ✅ COMPATIBLE |
+| test/intermediate-document-viewer.test.tsx | 18-22, 89, 144, 194, 212, 229 | decodeToHtml | ✅ COMPATIBLE |
+
+**Task 5 Impact**: NO html-parser test changes required.
+
+### Pdf-Parser (Task 6 reference)
+
+| File | Lines | Mock Method | 0.6.0 Status |
+|------|-------|-------------|---------------|
+| test/demo.test.tsx | 11-15, 99, 114, 127, 138, 150, 189 | encode | ✅ COMPATIBLE |
+
+**Task 6 Impact**: NO pdf-parser test changes required.
+
+---
+
+## Additional Observations
+
+1. **Local Type Shim Drift** (NOT a test issue): The file `src/types/pdf-parser.d.ts` declares `PdfParser.encode` returning `Promise<IntermediateDocument | undefined>`, but the 0.6.0 document-parser base class returns `Promise<IntermediateDocument>`. This is a source-code type issue, not a test issue.
+
+2. **Missing Type Declarations**: The pdf-parser 0.6.0 package.json declares `"types": "dist/index.d.ts"` but that file doesn't exist in the dist folder. This is a package build issue, not relevant to tests.
+
+3. **Test Independence**: Tasks 5 (html-parser) and 6 (pdf-parser) can proceed independently since no changes are needed to either test suite.
+
+---
+
+## Final Verdict
+
+**NO CHANGES REQUIRED** to any of the three test files for the parser 0.6.0 upgrade.
+
+All mocks are correctly structured to match the 0.6.0 module shapes:
+- `HtmlParser.decodeToHtml` static method ✅
+- `PdfParser.encode` plain object method ✅

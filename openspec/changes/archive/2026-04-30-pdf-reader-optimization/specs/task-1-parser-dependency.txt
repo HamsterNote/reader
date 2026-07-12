@@ -1,0 +1,33 @@
+# Task 1: Parser Dependency Evidence
+
+## Actions Performed
+1. Added `@hamster-note/pdf-parser@latest` via `yarn add @hamster-note/pdf-parser@latest`
+2. Resolved version: `0.5.0`
+3. Discovered parser requires `@hamster-note/types@^0.7.0` (overrides field), but project had `^0.5.5`
+4. Updated `@hamster-note/types` from `^0.5.5` to `^0.7.0` via `yarn add @hamster-note/types@^0.7.0`
+5. Added `@types/node` as devDependency for `node:url` import in vite.config.ts
+
+## Package.json dependencies after task:
+- `@hamster-note/pdf-parser`: `^0.5.0` (resolved to 0.5.0)
+- `@hamster-note/types`: `^0.7.0` (resolved to 0.7.0)
+
+## Parser Package Info:
+- Version: 0.5.0
+- Peer deps: None directly declared, but overrides `@hamster-note/types` to `^0.7.0`
+- Dependencies include: pdfjs-dist@5.7.284, pdf-lib, @hamster-note/document-parser
+
+## Key Type APIs Verified:
+- IntermediateDocument.parse: ✓ static method available
+- IntermediateDocument.serialize: ✓ static method available
+- IntermediateDocument.pageCount: ✓ getter available
+- IntermediateDocument.pageNumbers: ✓ getter available
+- IntermediateDocument.getPageSizeByPageNumber: ✓ method available (returns Number2)
+- IntermediateDocument.getPageByPageNumber: ✓ method available (returns Promise<IntermediatePage>)
+- page.getTexts(): ✓ method available on IntermediatePage (returns Promise<IntermediateText[]>)
+
+## Changes Made:
+1. Updated `IntermediateDocumentViewer.tsx` to use polygon-based bounding box instead of missing x/y/width/height properties
+2. Removed rotate property (not in IntermediateText type) from getTextTransform
+3. Added @types/node to devDependencies for node:url type support
+
+## yarn.lock: Updated with new dependencies

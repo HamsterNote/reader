@@ -1,11 +1,31 @@
 import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
+import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import type {
-  SelectionRange,
-  SelectionRect
-} from '@hamster-note/selection'
-import type { IntermediateDocumentSerialized } from '@hamster-note/types'
-import { useCallback, useRef, useState } from 'react'
+  IntermediateDocument,
+  IntermediateDocumentSerialized,
+  IntermediateText
+} from '@hamster-note/types'
+import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
 
+import type {
+  ReaderLinkedSelectionData,
+  ReaderMousePosition,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool
+} from '../types/selection'
+import type {
+  ReaderInteractionMode,
+  ReaderPageRange,
+  ReaderSelectedTextSegment,
+  ReaderTextSelectionDetail,
+  ReaderTouchPanMode
+} from './IntermediateDocumentViewer'
+import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
+import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
+import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import {
   Page,
   type ReaderPagePaintingMap,
@@ -14,11 +34,79 @@ import {
   type ReaderPageTool
 } from './Page'
 
+export type ReaderRenderMode = 'layout' | 'text'
+
 export type ReaderProps = {
-  document?: IntermediateDocumentSerialized | null
+  document?: IntermediateDocument | IntermediateDocumentSerialized | null
   className?: string
   emptyText?: string
   onFileUpload?: (file: File) => void
+  overscanPages?: number
+  pageRange?: ReaderPageRange
+  ocr?: boolean | { enabled?: boolean }
+  onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  renderMode?: ReaderRenderMode
+  onTextSelectionChange?: (
+    text: IntermediateText,
+    detail: ReaderTextSelectionDetail
+  ) => void
+  onTextSelectionEnd?: (
+    text: IntermediateText,
+    detail: ReaderTextSelectionDetail
+  ) => void
+  onSelectText?: (
+    selection: Selection,
+    segments: ReaderSelectedTextSegment[],
+    extractedText: string
+  ) => void
+  interactionMode?: ReaderInteractionMode
+  touchPanMode?: ReaderTouchPanMode
+  scale?: number
+  defaultScale?: number
+  onScaleChange?: (
+    scale: number,
+    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+  ) => void
+  minScale?: number
+  maxScale?: number
+  maxLoadedPages?: number
+  ranges?: ReaderSelectionRange[]
+  defaultRanges?: ReaderSelectionRange[]
+  selectedRangeId?: string | null
+  defaultSelectedRangeId?: string | null
+  onSelect?: (range: ReaderSelectionRange) => void
+  onLinkedDataChange?: (next: ReaderLinkedSelectionData) => void
+  onLinkedSelect?: (range: ReaderSelectionRange) => void
+  onLinkedUpdateRange?: (range: ReaderSelectionRange) => void
+  onLinkedSelectRange?: (id: string | null) => void
+  onSelectRange?: (id: string | null) => void
+  onUpdateRange?: (range: ReaderSelectionRange) => void
+  onSelectionStart?: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
+  onHighlight?: (range: ReaderSelectionRange) => void
+  highlightColor?: string
+  selectionColor?: string
+  selectionPopover?: ReactNode
+  highlightPopover?: ReactNode
+  autoHighlight?: boolean
+  selectionRef?: Ref<ReaderSelectionRef>
+  overlayRectType?: ReaderSelectionOverlayRectType
+  tool?: ReaderSelectionTool
+  rects?: ReaderSelectionRectangle[]
+  selectedRectId?: string | null
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  onSelectRect?: (id: string | null) => void
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  initialLoadedPages?: number
+  pageLoadConcurrency?: number
+  pageLoadEnterDelayMs?: number
+  pageUnloadDelayMs?: number
+  onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
+  containMarginX?: number
+  containMarginY?: number
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
@@ -43,6 +131,92 @@ export type ReaderProps = {
     nextSelections: readonly SelectionRect[],
     nextPageSelections: ReaderPageRectSelectionMap
   ) => void
+}
+
+type ReaderLegacyCompatibilityProps = Pick<
+  ReaderProps,
+  | 'selectedTool'
+  | 'pagePaintings'
+  | 'defaultPagePaintings'
+  | 'pageTextSelections'
+  | 'defaultPageTextSelections'
+  | 'pageRectSelections'
+  | 'defaultPageRectSelections'
+  | 'onPagePaintingChange'
+  | 'onPagePaintingsChange'
+  | 'onPageTextSelectionsChange'
+  | 'onPageRectSelectionsChange'
+>
+
+export const SUPPORTED_UPLOAD_ACCEPT =
+  '.pdf,application/pdf,.txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,text/markdown,text/x-markdown'
+
+export const SUPPORTED_UPLOAD_COPY = 'PDF, TXT, DOCX, and Markdown'
+
+const documentHasPages = (
+  document:
+    | IntermediateDocument
+    | IntermediateDocumentSerialized
+    | null
+    | undefined
+) => {
+  if (!document) {
+    return false
+  }
+
+  if (Array.isArray((document as IntermediateDocumentSerialized).pages)) {
+    return (document as IntermediateDocumentSerialized).pages.length > 0
+  }
+
+  return (document as IntermediateDocument).pageCount > 0
+}
+
+const getSerializedPages = (
+  document:
+    | IntermediateDocument
+    | IntermediateDocumentSerialized
+    | null
+    | undefined
+) => {
+  if (!document) {
+    return null
+  }
+
+  if (Array.isArray((document as IntermediateDocumentSerialized).pages)) {
+    return (document as IntermediateDocumentSerialized).pages
+  }
+
+  return null
+}
+
+const shouldUseLegacyPageMode = ({
+  document,
+  selectedTool,
+  pagePaintings,
+  defaultPagePaintings,
+  pageTextSelections,
+  defaultPageTextSelections,
+  pageRectSelections,
+  defaultPageRectSelections,
+  onPagePaintingChange,
+  onPagePaintingsChange,
+  onPageTextSelectionsChange,
+  onPageRectSelectionsChange
+}: { document: ReaderProps['document'] } & ReaderLegacyCompatibilityProps) => {
+  const hasLegacyProp =
+    selectedTool !== undefined ||
+    pagePaintings !== undefined ||
+    defaultPagePaintings !== undefined ||
+    pageTextSelections !== undefined ||
+    defaultPageTextSelections !== undefined ||
+    pageRectSelections !== undefined ||
+    defaultPageRectSelections !== undefined ||
+    onPagePaintingChange !== undefined ||
+    onPagePaintingsChange !== undefined ||
+    onPageTextSelectionsChange !== undefined ||
+    onPageRectSelectionsChange !== undefined
+
+  return hasLegacyProp && getSerializedPages(document) !== null
 }
 
 interface UploadedFile {
@@ -73,7 +247,57 @@ export function Reader({
   className,
   emptyText = 'No document',
   onFileUpload,
-  selectedTool = 'text-selection',
+  overscanPages,
+  pageRange,
+  ocr,
+  onOcrError,
+  renderMode,
+  onTextSelectionChange,
+  onTextSelectionEnd,
+  onSelectText,
+  scale,
+  defaultScale,
+  onScaleChange,
+  minScale,
+  maxScale,
+  maxLoadedPages,
+  interactionMode,
+  touchPanMode,
+  ranges,
+  defaultRanges,
+  selectedRangeId,
+  defaultSelectedRangeId,
+  onSelect,
+  onLinkedDataChange,
+  onLinkedSelect,
+  onLinkedUpdateRange,
+  onLinkedSelectRange,
+  onSelectRange,
+  onUpdateRange,
+  onSelectionStart,
+  onSelectionEnd,
+  onHighlight,
+  highlightColor,
+  selectionColor,
+  selectionPopover,
+  highlightPopover,
+  autoHighlight,
+  selectionRef,
+  overlayRectType = 'percent',
+  tool,
+  rects,
+  selectedRectId,
+  onCreateRect,
+  onSelectRect,
+  onUpdateRect,
+  initialLoadedPages,
+  pageLoadConcurrency,
+  pageLoadEnterDelayMs,
+  pageUnloadDelayMs,
+  onIntermediateDocumentRenderTiming,
+  containMarginX,
+  containMarginY,
+  selectedTool,
   paintingTool = 'pen',
   pagePaintings,
   defaultPagePaintings,
@@ -95,6 +319,8 @@ export function Reader({
   const [internalPageRectSelections, setInternalPageRectSelections] =
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const resolvedSelectedTool = selectedTool ?? 'text-selection'
+
   const resolvedPagePaintings = pagePaintings ?? internalPagePaintings
   const resolvedPageTextSelections =
     pageTextSelections ?? internalPageTextSelections
@@ -219,10 +445,155 @@ export function Reader({
     : 'hamster-reader'
 
   const showUploadZone = !document && !uploadedFile
-  const showDocumentContent = document?.title ?? emptyText
   const showFileInfo = !document && uploadedFile
-  const pages = document?.pages ?? []
-  const showPages = pages.length > 0
+  const hasDocumentPages = documentHasPages(document)
+  const showDocumentContent = document?.title ?? emptyText
+  const serializedPages = getSerializedPages(document)
+  const useLegacyPageMode = shouldUseLegacyPageMode({
+    document,
+    selectedTool,
+    pagePaintings,
+    defaultPagePaintings,
+    pageTextSelections,
+    defaultPageTextSelections,
+    pageRectSelections,
+    defaultPageRectSelections,
+    onPagePaintingChange,
+    onPagePaintingsChange,
+    onPageTextSelectionsChange,
+    onPageRectSelectionsChange
+  })
+
+  const renderLegacyDocumentContent = () => {
+    if (!serializedPages || serializedPages.length === 0) {
+      return showUploadZone ? emptyText : showDocumentContent
+    }
+
+    return (
+      <>
+        <div className='hamster-reader__document-header'>
+          <p className='hamster-reader__document-kicker'>Document</p>
+          <h2 className='hamster-reader__document-title'>
+            {showDocumentContent}
+          </h2>
+          <p className='hamster-reader__document-hint'>
+            Tool: {getToolLabel(resolvedSelectedTool)}
+          </p>
+        </div>
+
+        <div className='hamster-reader__pages' data-testid='reader-pages'>
+          {serializedPages.map((page) => (
+            <Page
+              key={page.id}
+              page={page}
+              selectedTool={resolvedSelectedTool}
+              paintingTool={paintingTool}
+              paintingValue={resolvedPagePaintings[page.id]}
+              textSelections={resolvedPageTextSelections[page.id]}
+              rectSelections={resolvedPageRectSelections[page.id]}
+              onPaintingChange={(nextValue) => {
+                handlePagePaintingChange(page.id, nextValue)
+              }}
+              onTextSelectionsChange={(nextSelections) => {
+                handlePageTextSelectionsChange(page.id, nextSelections)
+              }}
+              onRectSelectionsChange={(nextSelections) => {
+                handlePageRectSelectionsChange(page.id, nextSelections)
+              }}
+            />
+          ))}
+        </div>
+      </>
+    )
+  }
+
+  const renderDocumentContent = () => {
+    if (useLegacyPageMode) {
+      return renderLegacyDocumentContent()
+    }
+
+    if (hasDocumentPages) {
+      if (renderMode === 'text') {
+        return (
+          <IntermediateDocumentTextViewer
+            document={document}
+            pageRange={pageRange}
+            className={className}
+            maxLoadedPages={maxLoadedPages}
+            initialLoadedPages={initialLoadedPages}
+            pageLoadConcurrency={pageLoadConcurrency}
+            pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+            pageUnloadDelayMs={pageUnloadDelayMs}
+            onTextSelectionChange={onTextSelectionChange}
+            onTextSelectionEnd={onTextSelectionEnd}
+            onSelectText={onSelectText}
+            onIntermediateDocumentRenderTiming={
+              onIntermediateDocumentRenderTiming
+            }
+          />
+        )
+      }
+
+      return (
+        <IntermediateDocumentViewer
+          document={document}
+          overscan={overscanPages}
+          pageRange={pageRange}
+          ocr={ocr}
+          onOcrError={onOcrError}
+          onTextSelectionChange={onTextSelectionChange}
+          onTextSelectionEnd={onTextSelectionEnd}
+          onSelectText={onSelectText}
+          scale={scale}
+          defaultScale={defaultScale}
+          onScaleChange={onScaleChange}
+          minScale={minScale}
+          maxScale={maxScale}
+          maxLoadedPages={maxLoadedPages}
+          interactionMode={interactionMode}
+          touchPanMode={touchPanMode}
+          ranges={ranges}
+          defaultRanges={defaultRanges}
+          selectedRangeId={selectedRangeId}
+          defaultSelectedRangeId={defaultSelectedRangeId}
+          onSelect={onSelect}
+          onLinkedDataChange={onLinkedDataChange}
+          onLinkedSelect={onLinkedSelect}
+          onLinkedUpdateRange={onLinkedUpdateRange}
+          onLinkedSelectRange={onLinkedSelectRange}
+          onSelectRange={onSelectRange}
+          onUpdateRange={onUpdateRange}
+          onSelectionStart={onSelectionStart}
+          onSelectionEnd={onSelectionEnd}
+          onHighlight={onHighlight}
+          highlightColor={highlightColor}
+          selectionColor={selectionColor}
+          selectionPopover={selectionPopover}
+          highlightPopover={highlightPopover}
+          autoHighlight={autoHighlight}
+          selectionRef={selectionRef}
+          overlayRectType={overlayRectType}
+          tool={tool}
+          rects={rects}
+          selectedRectId={selectedRectId}
+          onCreateRect={onCreateRect}
+          onSelectRect={onSelectRect}
+          onUpdateRect={onUpdateRect}
+          initialLoadedPages={initialLoadedPages}
+          pageLoadConcurrency={pageLoadConcurrency}
+          pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+          pageUnloadDelayMs={pageUnloadDelayMs}
+          onIntermediateDocumentRenderTiming={
+            onIntermediateDocumentRenderTiming
+          }
+          containMarginX={containMarginX}
+          containMarginY={containMarginY}
+        />
+      )
+    }
+
+    return showUploadZone ? emptyText : showDocumentContent
+  }
 
   return (
     <div className={rootClassName} data-testid='reader-root'>
@@ -239,7 +610,7 @@ export function Reader({
           <input
             ref={fileInputRef}
             type='file'
-            accept='.pdf,application/pdf'
+            accept={SUPPORTED_UPLOAD_ACCEPT}
             onChange={handleInputChange}
             className='hamster-reader__file-input'
             data-testid='file-input'
@@ -261,55 +632,20 @@ export function Reader({
               <line x1='12' y1='3' x2='12' y2='15' />
             </svg>
             <p className='hamster-reader__upload-text'>
-              {isDragging ? 'Drop PDF here' : 'Click or drag PDF to upload'}
+              {isDragging
+                ? 'Drop document here'
+                : 'Click or drag document to upload'}
             </p>
-            <p className='hamster-reader__upload-hint'>Supports PDF files</p>
+            <p className='hamster-reader__upload-hint'>
+              Supports PDF, TXT, DOCX, and Markdown files
+            </p>
           </div>
         </button>
       )}
 
       {showDocumentContent && !showFileInfo && (
         <div className='hamster-reader__content' data-testid='reader-content'>
-          {showUploadZone ? (
-            emptyText
-          ) : (
-            <>
-              <div className='hamster-reader__document-header'>
-                <p className='hamster-reader__document-kicker'>Document</p>
-                <h2 className='hamster-reader__document-title'>
-                  {showDocumentContent}
-                </h2>
-                <p className='hamster-reader__document-hint'>
-                  Tool: {getToolLabel(selectedTool)}
-                </p>
-              </div>
-
-              {showPages && (
-                <div className='hamster-reader__pages' data-testid='reader-pages'>
-                  {pages.map((page) => (
-                    <Page
-                      key={page.id}
-                      page={page}
-                      selectedTool={selectedTool}
-                      paintingTool={paintingTool}
-                      paintingValue={resolvedPagePaintings[page.id]}
-                      textSelections={resolvedPageTextSelections[page.id]}
-                      rectSelections={resolvedPageRectSelections[page.id]}
-                      onPaintingChange={(nextValue) => {
-                        handlePagePaintingChange(page.id, nextValue)
-                      }}
-                      onTextSelectionsChange={(nextSelections) => {
-                        handlePageTextSelectionsChange(page.id, nextSelections)
-                      }}
-                      onRectSelectionsChange={(nextSelections) => {
-                        handlePageRectSelectionsChange(page.id, nextSelections)
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
-            </>
-          )}
+          {renderDocumentContent()}
         </div>
       )}
 
@@ -333,7 +669,7 @@ export function Reader({
             <p className='hamster-reader__file-name'>{uploadedFile.name}</p>
             <p className='hamster-reader__file-meta'>
               {formatFileSize(uploadedFile.size)} •{' '}
-              {uploadedFile.type || 'application/pdf'}
+              {uploadedFile.type || 'unknown type'}
             </p>
           </div>
           <button

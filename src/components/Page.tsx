@@ -10,18 +10,22 @@ import {
   type SelectionRef,
   type SelectionTool
 } from '@hamster-note/selection'
-import type {
-  IntermediatePageSerialized
-} from '@hamster-note/types'
+import type { IntermediatePageSerialized } from '@hamster-note/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 export type ReaderPageTool = 'text-selection' | 'rect-selection' | 'drawing'
 
 export type ReaderPagePaintingMap = Record<string, DrawingValue>
 
-export type ReaderPageTextSelectionMap = Record<string, readonly SelectionRange[]>
+export type ReaderPageTextSelectionMap = Record<
+  string,
+  readonly SelectionRange[]
+>
 
-export type ReaderPageRectSelectionMap = Record<string, readonly SelectionRect[]>
+export type ReaderPageRectSelectionMap = Record<
+  string,
+  readonly SelectionRect[]
+>
 
 export type PageProps = {
   page: IntermediatePageSerialized
@@ -86,12 +90,86 @@ function getPageHint(tool: ReaderPageTool): string {
   }
 }
 
+type PageTextGeometry = {
+  width: number
+  height: number
+  left: number
+  top: number
+  rotate: number
+}
+
+type SerializedPageText = NonNullable<
+  IntermediatePageSerialized['texts']
+>[number]
+
+function getPolygonBounds(
+  polygon: readonly [number, number][]
+): PageTextGeometry | null {
+  const firstPoint = polygon[0]
+  if (!firstPoint) {
+    return null
+  }
+
+  let minX = firstPoint[0]
+  let maxX = firstPoint[0]
+  let minY = firstPoint[1]
+  let maxY = firstPoint[1]
+
+  for (const [x, y] of polygon) {
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+
+  return {
+    width: Math.max(maxX - minX, 1),
+    height: Math.max(maxY - minY, 1),
+    left: minX,
+    top: minY,
+    rotate: 0
+  }
+}
+
+function getTextGeometry(text: SerializedPageText): PageTextGeometry | null {
+  if ('polygon' in text && Array.isArray(text.polygon)) {
+    return getPolygonBounds(text.polygon)
+  }
+
+  if (
+    'width' in text &&
+    typeof text.width === 'number' &&
+    'height' in text &&
+    typeof text.height === 'number' &&
+    'x' in text &&
+    typeof text.x === 'number' &&
+    'y' in text &&
+    typeof text.y === 'number'
+  ) {
+    return {
+      width: text.width,
+      height: text.height,
+      left: text.x,
+      top: text.y,
+      rotate:
+        'rotate' in text && typeof text.rotate === 'number' ? text.rotate : 0
+    }
+  }
+
+  return null
+}
+
 function renderTextLayer(page: IntermediatePageSerialized) {
-  const textItems = page.texts.map((text) => {
-    const widthPercent = (text.width / page.width) * 100
-    const heightPercent = (text.height / page.height) * 100
-    const leftPercent = (text.x / page.width) * 100
-    const topPercent = (text.y / page.height) * 100
+  const textItems = (page.texts ?? []).map((text) => {
+    const geometry = getTextGeometry(text)
+    if (!geometry) {
+      return null
+    }
+
+    const widthPercent = (geometry.width / page.width) * 100
+    const heightPercent = (geometry.height / page.height) * 100
+    const leftPercent = (geometry.left / page.width) * 100
+    const topPercent = (geometry.top / page.height) * 100
     const fontSizePercent = (text.fontSize / page.width) * 100
     const lineHeightPercent = (text.lineHeight / page.height) * 100
 
@@ -111,7 +189,7 @@ function renderTextLayer(page: IntermediatePageSerialized) {
           fontWeight: text.fontWeight,
           fontStyle: text.italic ? 'italic' : 'normal',
           color: text.color,
-          transform: `rotate(${text.rotate}deg) skew(${text.skew}deg)`
+          transform: `rotate(${geometry.rotate}deg) skew(${text.skew}deg)`
         }}
       >
         {text.content}
@@ -120,7 +198,10 @@ function renderTextLayer(page: IntermediatePageSerialized) {
   })
 
   return (
-    <div className='hamster-reader__text-layer' data-testid={`reader-page-text-layer-${page.id}`}>
+    <div
+      className='hamster-reader__text-layer'
+      data-testid={`reader-page-text-layer-${page.id}`}
+    >
       {textItems}
     </div>
   )
@@ -140,7 +221,7 @@ export function Page({
   const selectionRef = useRef<SelectionRef>(null)
   const selectionTool = getSelectionTool(selectedTool)
   const drawingValue = paintingValue ?? EMPTY_DRAWING_VALUE
-  const contentCount = page.texts.length
+  const contentCount = page.texts?.length ?? 0
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
 

@@ -1,242 +1,1015 @@
-import type { DrawingValue } from '@hamster-note/painting'
-import { Reader, type ReaderPageTool } from '@hamster-note/reader'
-import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
-import {
-  type IntermediateDocumentSerialized,
-  type IntermediateTextSerialized,
-  TextDir
-} from '@hamster-note/types'
-import { useState } from 'react'
-
+import { DocxParser } from '@hamster-note/docx-parser'
+import { MarkdownParser } from '@hamster-note/markdown-parser'
+import { PdfParser } from '@hamster-note/pdf-parser'
+import type {
+  ReaderPageRange,
+  ReaderRenderMode,
+  ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
+  ReaderSelectionTool,
+  ReaderTouchPanMode
+} from '@hamster-note/reader'
+import { Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
-import '@hamster-note/selection/style.css'
+import { TxtParser } from '@hamster-note/txt-parser'
+import type {
+  IntermediateDocument,
+  IntermediateDocumentSerialized
+} from '@hamster-note/types'
+import { useCallback, useRef, useState } from 'react'
+import { parseHighlights, serializeHighlights } from './highlightStorage'
+import { MobileSafeHighlightButton } from './MobileSafeHighlightButton'
 
-function assertNever(value: never): never {
-  throw new Error(`Unexpected demo tool: ${value}`)
-}
+type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
-function makeText(
-  id: string,
-  content: string,
-  x: number,
-  y: number,
-  width: number
-): IntermediateTextSerialized {
-  return {
-    id,
-    content,
-    fontSize: 30,
-    fontFamily: 'Georgia',
-    fontWeight: 500,
-    italic: false,
-    color: '#0f172a',
-    width,
-    height: 42,
-    lineHeight: 42,
-    x,
-    y,
-    ascent: 30,
-    descent: 12,
-    dir: TextDir.LTR,
-    rotate: 0,
-    skew: 0,
-    isEOL: true
-  }
-}
+export const SUPPORTED_FILE_TYPE_LABEL = 'PDF, TXT, DOCX, Markdown'
 
-const demoDocument: IntermediateDocumentSerialized = {
-  id: 'demo-document',
-  title: 'Demo Document Title',
-  pages: [
-    {
-      id: 'page-1',
-      number: 1,
-      width: 1080,
-      height: 1528,
-      texts: [
-        makeText(
-          'page-1-line-1',
-          'HamsterNote lets you switch between text selection, rectangle selection, and freehand drawing.',
-          96,
-          120,
-          860
-        ),
-        makeText(
-          'page-1-line-2',
-          'Use the text tool to highlight words, then switch to the rectangle tool to mark an area.',
-          96,
-          190,
-          830
-        ),
-        makeText(
-          'page-1-line-3',
-          'Finally, switch to drawing and sketch directly on top of the page surface.',
-          96,
-          260,
-          760
-        )
-      ],
-      thumbnail: undefined
-    },
-    {
-      id: 'page-2',
-      number: 2,
-      width: 1080,
-      height: 1528,
-      texts: [
-        makeText(
-          'page-2-line-1',
-          'The page keeps each tool separated so selection and drawing do not fight for the same interaction layer.',
-          96,
-          120,
-          890
-        ),
-        makeText(
-          'page-2-line-2',
-          'This demo also exposes all captured data below so integrators can inspect and persist it.',
-          96,
-          190,
-          840
-        )
-      ],
-      thumbnail: undefined
+export const UNSUPPORTED_FILE_TYPE_MESSAGE =
+  'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
+
+export type SupportedParserLabel = 'PDF' | 'TXT' | 'DOCX' | 'Markdown'
+
+export type ParseUploadedDocumentResult =
+  | {
+      status: 'parsed'
+      label: SupportedParserLabel
+      document: ReaderDocument | undefined
     }
-  ]
+  | { status: 'failed'; label: SupportedParserLabel; error: string }
+  | { status: 'unsupported'; error: string }
+
+export function getFileExtension(fileName: string): string | null {
+  if (fileName.length === 0) return null
+
+  const lastDotIndex = fileName.lastIndexOf('.')
+  if (lastDotIndex < 0 || lastDotIndex === fileName.length - 1) return null
+
+  return fileName.slice(lastDotIndex + 1).toLowerCase()
 }
 
-function getToolLabel(tool: ReaderPageTool): string {
-  switch (tool) {
-    case 'text-selection':
-      return '文本选择'
-    case 'rect-selection':
-      return '矩形选择'
-    case 'drawing':
-      return '绘图'
+export function getParserErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export async function parseUploadedDocument(
+  file: File,
+  pages: number[] | undefined
+): Promise<ParseUploadedDocumentResult> {
+  switch (getFileExtension(file.name)) {
+    case 'pdf':
+      try {
+        const document = await PdfParser.encode(
+          file,
+          pages ? { pages } : undefined
+        )
+        return { status: 'parsed', label: 'PDF', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'PDF',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'txt':
+      try {
+        const document = await TxtParser.encode(file)
+        return { status: 'parsed', label: 'TXT', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'TXT',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'docx':
+      try {
+        const document = await DocxParser.encodeToIntermediate(file)
+        return { status: 'parsed', label: 'DOCX', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'DOCX',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'md':
+    case 'markdown':
+      try {
+        const document = await MarkdownParser.encode(file)
+        return { status: 'parsed', label: 'Markdown', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'Markdown',
+          error: getParserErrorMessage(error)
+        }
+      }
     default:
-      return assertNever(tool)
+      return { status: 'unsupported', error: UNSUPPORTED_FILE_TYPE_MESSAGE }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function persistHighlights(
+  fileName: string | undefined,
+  ranges: ReaderSelectionRange[],
+  rects: ReaderSelectionRectangle[]
+) {
+  if (!fileName) return
+  const persisted = parseHighlights(serializeHighlights(ranges, rects))
+  localStorage.setItem(
+    `hamster-reader-demo:highlights:${fileName}`,
+    serializeHighlights(
+      Array.from(persisted.ranges),
+      Array.from(persisted.rects)
+    )
+  )
+}
+
+// ---------------------------------------------------------------------------
+// App 组件
+// ---------------------------------------------------------------------------
 
 export function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
-  const [selectedTool, setSelectedTool] =
-    useState<ReaderPageTool>('text-selection')
-  const [pagePaintings, setPagePaintings] = useState<Record<string, DrawingValue>>(
-    {}
+  const [document, setDocument] = useState<
+    IntermediateDocument | IntermediateDocumentSerialized | null
+  >(null)
+  const [isParsing, setIsParsing] = useState(false)
+  const [parseError, setParseError] = useState<string | null>(null)
+  const [pageRangeStart, setPageRangeStart] = useState<number>(1)
+  const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
+  const [usePageRange, setUsePageRange] = useState<boolean>(false)
+  const [renderMode, setRenderMode] = useState<ReaderRenderMode>('layout')
+  const [touchPanMode, setTouchPanMode] =
+    useState<ReaderTouchPanMode>('single-finger')
+  const [autoHighlight, setAutoHighlight] = useState(false)
+  const [highlightColor, setHighlightColor] = useState(
+    'rgba(255, 193, 7, 0.35)'
   )
-  const [pageTextSelections, setPageTextSelections] = useState<
-    Record<string, readonly SelectionRange[]>
-  >({})
-  const [pageRectSelections, setPageRectSelections] = useState<
-    Record<string, readonly SelectionRect[]>
-  >({})
+  const [containMarginX, setContainMarginX] = useState<number>(0)
+  const [containMarginY, setContainMarginY] = useState<number>(0)
+  const [scrollX, setScrollX] = useState<number>(0)
+  const [scrollY, setScrollY] = useState<number>(0)
+  const requestIdRef = useRef(0)
 
-  const handleFileUpload = (file: File) => {
+  // --- Selection 库集成演示 state ---
+  // ranges 列表：受控模式，Reader 内部不修改，由 onSelect 回调外部追加
+  const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+  // 当前选中的 range ID（点击高亮列表项时切换）
+  const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
+  const [tool, setTool] = useState<ReaderSelectionTool>('text')
+  const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
+  const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
+  const selectionRef = useRef<ReaderSelectionRef>(null)
+
+  // onSelect 回调：highlight() 创建新 range 时触发，将 range 追加到列表
+  const handleSelectionSelect = useCallback(() => {}, [])
+
+  const handleHighlight = useCallback(
+    (range: ReaderSelectionRange) => {
+      setRanges((prev) => {
+        const newRanges = [...prev, range]
+        persistHighlights(uploadedFile?.name, newRanges, rects)
+        return newRanges
+      })
+    },
+    [rects, uploadedFile?.name]
+  )
+
+  const handleSelectionEnd = useCallback(() => {}, [])
+
+  // onSelectRange 回调：用户点击已有 range 时触发
+  const handleSelectRange = useCallback((id: string | null) => {
+    setSelectedRangeId(id)
+    // 文字选择和矩形选择互斥
+    if (id !== null) {
+      setSelectedRectId(null)
+    }
+  }, [])
+
+  const handleUpdateRange = useCallback(
+    (range: ReaderSelectionRange) => {
+      setRanges((prev) => {
+        const newRanges = prev.map((current) =>
+          current.id === range.id ? range : current
+        )
+        persistHighlights(uploadedFile?.name, newRanges, rects)
+        return newRanges
+      })
+    },
+    [rects, uploadedFile?.name]
+  )
+
+  const handleCreateRect = useCallback(
+    (rect: ReaderSelectionRectangle) => {
+      setRects((prev) => {
+        const newRects = [...prev, rect]
+        persistHighlights(uploadedFile?.name, ranges, newRects)
+        return newRects
+      })
+      setSelectedRectId(rect.id)
+      setSelectedRangeId(null)
+    },
+    [ranges, uploadedFile?.name]
+  )
+
+  const handleSelectRect = useCallback((id: string | null) => {
+    setSelectedRectId(id)
+    // 矩形选择和文字选择互斥
+    if (id !== null) {
+      setSelectedRangeId(null)
+    }
+  }, [])
+
+  const handleUpdateRect = useCallback(
+    (rect: ReaderSelectionRectangle) => {
+      setRects((prev) => {
+        const newRects = prev.map((r) => (r.id === rect.id ? rect : r))
+        persistHighlights(uploadedFile?.name, ranges, newRects)
+        return newRects
+      })
+    },
+    [ranges, uploadedFile?.name]
+  )
+
+  const handleRemoveRect = useCallback(
+    (id: string) => {
+      setRects((prev) => {
+        const newRects = prev.filter((r) => r.id !== id)
+        persistHighlights(uploadedFile?.name, ranges, newRects)
+        return newRects
+      })
+      if (selectedRectId === id) {
+        setSelectedRectId(null)
+      }
+    },
+    [ranges, selectedRectId, uploadedFile?.name]
+  )
+
+  const handleClearAllRanges = useCallback(() => {
+    setRanges([])
+    setRects([])
+    setSelectedRangeId(null)
+    setSelectedRectId(null)
+    selectionRef.current?.clear()
+    persistHighlights(uploadedFile?.name, [], [])
+  }, [uploadedFile?.name])
+
+  const handleRemoveRange = useCallback(
+    (id: string) => {
+      setRanges((prev) => {
+        const newRanges = prev.filter((r) => r.id !== id)
+        persistHighlights(uploadedFile?.name, newRanges, rects)
+        return newRanges
+      })
+      if (selectedRangeId === id) {
+        setSelectedRangeId(null)
+      }
+    },
+    [rects, selectedRangeId, uploadedFile?.name]
+  )
+
+  // 侧边栏文字高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
+  const handleHighlightSelect = useCallback((id: string) => {
+    setSelectedRangeId(id)
+    setSelectedRectId(null)
+    selectionRef.current?.scrollToRange(id)
+  }, [])
+
+  // 侧边栏矩形高亮项点击：始终选中并滚动到该 rect
+  const handleRectHighlightSelect = useCallback((id: string) => {
+    setSelectedRectId(id)
+    setSelectedRangeId(null)
+    selectionRef.current?.scrollToRect(id)
+  }, [])
+
+  const handleApplyScroll = useCallback(() => {
+    selectionRef.current?.scrollToPosition({ x: scrollX, y: scrollY })
+  }, [scrollX, scrollY])
+
+  const buildPageRange = useCallback((): ReaderPageRange | undefined => {
+    if (!usePageRange) {
+      return undefined
+    }
+    return { start: pageRangeStart, end: pageRangeEnd }
+  }, [usePageRange, pageRangeStart, pageRangeEnd])
+
+  const buildParserPages = useCallback((): number[] | undefined => {
+    if (!usePageRange) {
+      return undefined
+    }
+    const start = Math.trunc(pageRangeStart)
+    const end = Math.trunc(pageRangeEnd)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+      return undefined
+    }
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+  }, [usePageRange, pageRangeStart, pageRangeEnd])
+
+  const handleFileUpload = async (file: File) => {
     setUploadedFile(file)
-    console.log('File uploaded:', file.name, file.size, file.type)
+    setParseError(null)
+
+    const requestId = ++requestIdRef.current
+    setIsParsing(true)
+
+    try {
+      const selectedPages = buildParserPages()
+      const result = await parseUploadedDocument(file, selectedPages)
+
+      if (requestId !== requestIdRef.current) {
+        return
+      }
+
+      if (result.status === 'unsupported') {
+        setParseError(result.error)
+        setDocument(null)
+        return
+      }
+
+      if (result.status === 'failed') {
+        setParseError(`Failed to parse ${result.label}: ${result.error}`)
+        setDocument(null)
+        return
+      }
+
+      if (result.document === undefined) {
+        setParseError(
+          `Failed to parse ${result.label}: received undefined result`
+        )
+        setDocument(null)
+        return
+      }
+
+      setDocument(result.document)
+
+      const storedHighlights = localStorage.getItem(
+        `hamster-reader-demo:highlights:${file.name}`
+      )
+      const parsedHighlights = parseHighlights(storedHighlights)
+      setRanges(Array.from(parsedHighlights.ranges))
+      setRects(Array.from(parsedHighlights.rects))
+      setSelectedRangeId(null)
+      setSelectedRectId(null)
+    } catch (error) {
+      if (requestId !== requestIdRef.current) {
+        return
+      }
+
+      setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
+      setDocument(null)
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setIsParsing(false)
+      }
+    }
   }
 
   return (
-    <main data-testid='reader-demo-root' style={{ padding: '24px' }}>
-      <h1>Hamster Reader Demo</h1>
-      <section
+    <main data-testid='reader-demo-root' className='hamster-demo-shell'>
+      <div className='hamster-demo-sidebar'>
+        <div data-testid='demo-sidebar-settings'>
+          <h1>Hamster Reader Demo</h1>
+          {isParsing && (
+            <section style={{ marginBottom: '24px' }}>
+              <h2>Parsing...</h2>
+              <p>Loading PDF content...</p>
+            </section>
+          )}
+          {parseError && (
+            <section
+              data-testid='demo-error-state'
+              style={{ marginBottom: '24px', color: 'red' }}
+            >
+              <h2>Parse Error</h2>
+              <p>{parseError}</p>
+            </section>
+          )}
+
+          <section style={{ marginBottom: '24px' }}>
+            <h2>Upload {SUPPORTED_FILE_TYPE_LABEL}</h2>
+            <div style={{ marginBottom: '16px' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '12px'
+                }}
+              >
+                <input
+                  type='checkbox'
+                  checked={usePageRange}
+                  onChange={(e) => setUsePageRange(e.target.checked)}
+                  data-testid='page-range-toggle'
+                />
+                <span>Enable page range</span>
+              </label>
+              {usePageRange && (
+                <div
+                  style={{ display: 'flex', gap: '12px', alignItems: 'center' }}
+                >
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>Start:</span>
+                    <input
+                      type='number'
+                      min={1}
+                      value={pageRangeStart}
+                      onChange={(e) =>
+                        setPageRangeStart(
+                          Math.max(1, Number(e.target.value) || 1)
+                        )
+                      }
+                      style={{ width: '60px', padding: '4px' }}
+                      data-testid='page-range-start'
+                    />
+                  </label>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>End:</span>
+                    <input
+                      type='number'
+                      min={1}
+                      value={pageRangeEnd}
+                      onChange={(e) =>
+                        setPageRangeEnd(
+                          Math.max(1, Number(e.target.value) || 1)
+                        )
+                      }
+                      style={{ width: '60px', padding: '4px' }}
+                      data-testid='page-range-end'
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+            {/* The single Reader handles both upload and document rendering on the right panel */}
+          </section>
+
+          {uploadedFile && !isParsing && (
+            <section style={{ marginBottom: '24px' }}>
+              <h2>Last Uploaded File</h2>
+              <p>Name: {uploadedFile.name}</p>
+              <p>Size: {uploadedFile.size} bytes</p>
+              <p>Type: {uploadedFile.type}</p>
+            </section>
+          )}
+
+          {document && (
+            <section style={{ marginBottom: '24px' }}>
+              <h2>Reader Settings</h2>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>渲染模式 Render Mode</span>
+                  <select
+                    value={renderMode}
+                    onChange={(e) => {
+                      const nextRenderMode = e.currentTarget.value
+                      if (
+                        nextRenderMode === 'layout' ||
+                        nextRenderMode === 'text'
+                      ) {
+                        setRenderMode(nextRenderMode)
+                      }
+                    }}
+                    data-testid='render-mode-select'
+                    style={{
+                      padding: '4px 8px',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      background: '#fff'
+                    }}
+                  >
+                    <option value='layout'>Layout</option>
+                    <option value='text'>Text</option>
+                  </select>
+                </label>
+              </div>
+              {renderMode === 'layout' && (
+                <div style={{ marginBottom: '12px' }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    <span>滑动模式 Touch Pan Mode</span>
+                    <select
+                      value={touchPanMode}
+                      onChange={(e) => {
+                        const nextTouchPanMode = e.currentTarget.value
+                        if (
+                          nextTouchPanMode === 'single-finger' ||
+                          nextTouchPanMode === 'two-finger'
+                        ) {
+                          setTouchPanMode(nextTouchPanMode)
+                        }
+                      }}
+                      data-testid='touch-pan-mode-select'
+                      style={{
+                        padding: '4px 8px',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px',
+                        background: '#fff'
+                      }}
+                    >
+                      <option value='single-finger'>单指 Single-finger</option>
+                      <option value='two-finger'>双指 Two-finger</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={autoHighlight}
+                    onChange={(e) => setAutoHighlight(e.target.checked)}
+                    data-testid='auto-highlight-toggle'
+                  />
+                  <span>选中文字后自动高亮</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>水平留白 Margin X (px)</span>
+                  <input
+                    type='number'
+                    min={0}
+                    value={containMarginX}
+                    onChange={(e) =>
+                      setContainMarginX(
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                    style={{ width: '60px', padding: '4px' }}
+                    data-testid='contain-margin-x-input'
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>垂直留白 Margin Y (px)</span>
+                  <input
+                    type='number'
+                    min={0}
+                    value={containMarginY}
+                    onChange={(e) =>
+                      setContainMarginY(
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                    style={{ width: '60px', padding: '4px' }}
+                    data-testid='contain-margin-y-input'
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>选择工具 Selection Tool</span>
+                  <select
+                    value={tool}
+                    onChange={(e) => {
+                      const nextTool = e.currentTarget.value
+                      if (nextTool === 'text' || nextTool === 'rect') {
+                        setTool(nextTool)
+                      }
+                    }}
+                    data-testid='selection-tool-select'
+                    style={{
+                      padding: '4px 8px',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      background: '#fff'
+                    }}
+                  >
+                    <option value='text'>文本 Text</option>
+                    <option value='rect'>矩形 Rect</option>
+                  </select>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>滚动 X (px)</span>
+                  <input
+                    type='number'
+                    value={scrollX}
+                    onChange={(e) => setScrollX(Number(e.target.value) || 0)}
+                    style={{ width: '60px', padding: '4px' }}
+                    data-testid='scroll-x-input'
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>滚动 Y (px)</span>
+                  <input
+                    type='number'
+                    value={scrollY}
+                    onChange={(e) => setScrollY(Number(e.target.value) || 0)}
+                    style={{ width: '60px', padding: '4px' }}
+                    data-testid='scroll-y-input'
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <button
+                  type='button'
+                  onClick={handleApplyScroll}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: '#fff'
+                  }}
+                  data-testid='apply-scroll-btn'
+                >
+                  应用滚动位置
+                </button>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                {/* Highlight & Background Color Controls */}
+                <div data-testid='background-color-select' />
+                <div data-testid='highlight-color-select' />
+              </div>
+            </section>
+          )}
+        </div>
+
+        {ranges.length + rects.length > 0 && (
+          <div
+            data-testid='demo-sidebar-highlights'
+            style={{ marginTop: '12px' }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '8px'
+              }}
+            >
+              <span style={{ fontSize: '14px', fontWeight: 600 }}>
+                已创建高亮 ({ranges.length + rects.length})
+              </span>
+              <button
+                type='button'
+                onClick={handleClearAllRanges}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  border: '1px solid #ccc',
+                  borderRadius: '4px',
+                  background: '#fff'
+                }}
+              >
+                清空全部
+              </button>
+            </div>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {ranges.map((range) => (
+                <li
+                  key={`range-${range.id}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '4px 0',
+                    fontSize: '13px'
+                  }}
+                  className='hamster-demo-action-group'
+                >
+                  <button
+                    type='button'
+                    aria-label='Select highlight'
+                    onClick={() => handleHighlightSelect(range.id)}
+                    style={{
+                      flex: 1,
+                      textAlign: 'left',
+                      padding: '4px 8px',
+                      cursor: 'pointer',
+                      border:
+                        selectedRangeId === range.id
+                          ? '2px solid #2196f3'
+                          : '1px solid #ddd',
+                      borderRadius: '4px',
+                      background:
+                        selectedRangeId === range.id ? '#e3f2fd' : '#fafafa',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {range.text || '(空选区)'}
+                  </button>
+                  <button
+                    type='button'
+                    aria-label='Remove highlight'
+                    onClick={() => handleRemoveRange(range.id)}
+                    style={{
+                      padding: '4px 8px',
+                      cursor: 'pointer',
+                      border: '1px solid #f44336',
+                      borderRadius: '4px',
+                      background: '#fff',
+                      color: '#f44336',
+                      fontSize: '13px'
+                    }}
+                  >
+                    删除
+                  </button>
+                </li>
+              ))}
+              {rects.map((rect) => (
+                <li
+                  key={`rect-${rect.id}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '4px 0',
+                    fontSize: '13px'
+                  }}
+                  className='hamster-demo-action-group'
+                >
+                  <button
+                    type='button'
+                    aria-label='Select rect highlight'
+                    onClick={() => handleRectHighlightSelect(rect.id)}
+                    style={{
+                      flex: 1,
+                      textAlign: 'left',
+                      padding: '4px 8px',
+                      cursor: 'pointer',
+                      border:
+                        selectedRectId === rect.id
+                          ? '2px solid #2196f3'
+                          : '1px solid #ddd',
+                      borderRadius: '4px',
+                      background:
+                        selectedRectId === rect.id ? '#e3f2fd' : '#fafafa',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    矩形 {rect.id}
+                  </button>
+                  <button
+                    type='button'
+                    aria-label='Remove rect highlight'
+                    onClick={() => handleRemoveRect(rect.id)}
+                    style={{
+                      padding: '4px 8px',
+                      cursor: 'pointer',
+                      border: '1px solid #f44336',
+                      borderRadius: '4px',
+                      background: '#fff',
+                      color: '#f44336',
+                      fontSize: '13px'
+                    }}
+                  >
+                    删除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      <div
+        className='hamster-demo-main'
         style={{
-          marginBottom: '24px',
-          padding: '16px',
-          border: '1px solid #dbe4f0',
-          borderRadius: '12px',
-          background: '#f8fafc'
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          height: '100%',
+          minWidth: 0
         }}
       >
-        <h2>Three Tool Demo</h2>
-        <p>
-          当前工具：<strong>{getToolLabel(selectedTool)}</strong>
-        </p>
-        <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
-          <button
-            type='button'
-            onClick={() => setSelectedTool('text-selection')}
-          >
-            文本选择
-          </button>
-          <button
-            type='button'
-            onClick={() => setSelectedTool('rect-selection')}
-          >
-            矩形选择
-          </button>
-          <button type='button' onClick={() => setSelectedTool('drawing')}>
-            绘图
-          </button>
-        </div>
-        <p style={{ margin: 0, color: '#475569' }}>
-          文本选择用于高亮文字，矩形选择用于框选区域，绘图用于自由绘制和双指缩放平移。
-        </p>
-      </section>
-      <section style={{ marginBottom: '24px' }}>
-        <h2>With Document</h2>
+        {!document && !parseError && !isParsing && (
+          <div data-testid='demo-empty-state' style={{ display: 'none' }} />
+        )}
         <Reader
-          document={demoDocument}
-          selectedTool={selectedTool}
-          pagePaintings={pagePaintings}
-          pageTextSelections={pageTextSelections}
-          pageRectSelections={pageRectSelections}
-          onPagePaintingsChange={setPagePaintings}
-          onPageTextSelectionsChange={(pageId, nextSelections, nextPageSelections) => {
-            setPageTextSelections(nextPageSelections)
-            console.log('text selections', pageId, nextSelections)
-          }}
-          onPageRectSelectionsChange={(pageId, nextSelections, nextPageSelections) => {
-            setPageRectSelections(nextPageSelections)
-            console.log('rect selections', pageId, nextSelections)
-          }}
-        />
-      </section>
-      <section style={{ marginBottom: '24px' }}>
-        <h2>Upload Zone (no document)</h2>
-        <Reader
+          document={document || undefined}
+          renderMode={renderMode}
+          touchPanMode={touchPanMode}
           onFileUpload={handleFileUpload}
           emptyText='No document loaded'
+          pageRange={buildPageRange()}
+          overlayRectType='percent'
+          ocr={{ enabled: false }}
+          onTextSelectionChange={() => {}}
+          onTextSelectionEnd={() => {}}
+          onSelectText={() => {}}
+          ranges={ranges}
+          selectedRangeId={selectedRangeId}
+          onSelect={handleSelectionSelect}
+          onSelectRange={handleSelectRange}
+          onUpdateRange={handleUpdateRange}
+          onHighlight={handleHighlight}
+          onSelectionEnd={handleSelectionEnd}
+          selectionRef={selectionRef}
+          highlightColor={highlightColor}
+          selectionColor='rgba(33, 150, 243, 0.2)'
+          autoHighlight={autoHighlight}
+          containMarginX={containMarginX}
+          containMarginY={containMarginY}
+          tool={tool}
+          rects={rects}
+          selectedRectId={selectedRectId}
+          onCreateRect={handleCreateRect}
+          onSelectRect={handleSelectRect}
+          onUpdateRect={handleUpdateRect}
+          selectionPopover={
+            <div
+              className='hamster-demo-action-group'
+              style={{
+                display: 'flex',
+                gap: '8px',
+                padding: '4px 8px',
+                background: '#333',
+                color: '#fff',
+                borderRadius: '4px',
+                fontSize: '14px'
+              }}
+            >
+              <MobileSafeHighlightButton selectionRef={selectionRef} />
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                <span>背景颜色设置</span>
+                <input
+                  type='color'
+                  value={
+                    highlightColor.startsWith('#') ? highlightColor : '#ffc107'
+                  }
+                  onChange={(e) => {
+                    const newColor = e.target.value
+                    setHighlightColor(newColor)
+                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
+                    if (selectedRangeId) {
+                      const selectedRange = ranges.find(
+                        (r) => r.id === selectedRangeId
+                      )
+                      if (selectedRange) {
+                        handleUpdateRange({
+                          ...selectedRange,
+                          markerStyle: { backgroundColor: newColor }
+                        })
+                      }
+                    }
+                  }}
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    padding: 0,
+                    border: 'none'
+                  }}
+                />
+              </label>
+            </div>
+          }
+          highlightPopover={
+            <div
+              className='hamster-demo-action-group'
+              style={{
+                display: 'flex',
+                gap: '8px',
+                padding: '4px 8px',
+                background: '#333',
+                color: '#fff',
+                borderRadius: '4px',
+                fontSize: '14px'
+              }}
+            >
+              <button
+                type='button'
+                onClick={() => {
+                  if (selectedRangeId) {
+                    handleRemoveRange(selectedRangeId)
+                  }
+                }}
+                style={{
+                  cursor: 'pointer',
+                  background: 'transparent',
+                  color: '#fff',
+                  border: 'none'
+                }}
+              >
+                删除
+              </button>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                <span>背景颜色设置</span>
+                <input
+                  type='color'
+                  value={
+                    highlightColor.startsWith('#') ? highlightColor : '#ffc107'
+                  }
+                  onChange={(e) => {
+                    const newColor = e.target.value
+                    setHighlightColor(newColor)
+                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
+                    if (selectedRangeId) {
+                      const selectedRange = ranges.find(
+                        (r) => r.id === selectedRangeId
+                      )
+                      if (selectedRange) {
+                        handleUpdateRange({
+                          ...selectedRange,
+                          markerStyle: { backgroundColor: newColor }
+                        })
+                      }
+                    }
+                  }}
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    padding: 0,
+                    border: 'none'
+                  }}
+                />
+              </label>
+            </div>
+          }
         />
-      </section>
-      {uploadedFile && (
-        <section>
-          <h2>Last Uploaded File</h2>
-          <p>Name: {uploadedFile.name}</p>
-          <p>Size: {uploadedFile.size} bytes</p>
-          <p>Type: {uploadedFile.type}</p>
-        </section>
-      )}
-      <section
-        style={{
-          marginTop: '24px',
-          padding: '16px',
-          borderRadius: '12px',
-          background: '#0f172a',
-          color: '#e2e8f0'
-        }}
-      >
-        <h2>Reader Data</h2>
-        <pre
-          data-testid='reader-data-output'
-          style={{
-            margin: 0,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word'
-          }}
-        >
-          {JSON.stringify(
-            {
-              selectedTool,
-              pageTextSelections,
-              pageRectSelections,
-              pagePaintings
-            },
-            null,
-            2
-          )}
-        </pre>
-      </section>
+      </div>
     </main>
   )
 }

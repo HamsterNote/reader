@@ -1,0 +1,28 @@
+# Task 1: Dependency Wiring - Smoke Test Verification
+
+## Date: 2026-05-02
+
+## Verification: yarn test:run test/smoke.test.tsx
+
+```
+$ yarn test:run test/smoke.test.tsx
+yarn run v1.22.22
+$ vitest run test/smoke.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+  ✓ test/smoke.test.tsx (1 test) 125ms
+
+  Test Files  1 passed (1)
+       Tests  1 passed (1)
+   Start at  18:01:17
+   Duration  932ms (transform 33ms, setup 132ms, collect 11ms, tests 125ms, environment 379ms, prepare 65ms)
+
+Done in 1.33s.
+```
+
+## Result: PASS
+
+- All tests passed (1 test)
+- No regressions introduced
+- Test execution completed successfully

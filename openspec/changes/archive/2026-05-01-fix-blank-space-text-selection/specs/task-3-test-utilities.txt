@@ -1,0 +1,27 @@
+yarn run v1.22.22
+$ vitest run test/intermediate-document-viewer.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/intermediate-document-viewer.test.tsx (32 tests) 455ms
+
+ Test Files  1 passed (1)
+      Tests  32 passed (32)
+   Start at  12:39:23
+   Duration  1.40s (transform 118ms, setup 133ms, collect 105ms, tests 455ms, environment 405ms, prepare 87ms)
+
+Done in 1.84s.
+--- Run 2 ---
+yarn run v1.22.22
+$ vitest run test/intermediate-document-viewer.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/intermediate-document-viewer.test.tsx (32 tests) 489ms
+
+ Test Files  1 passed (1)
+      Tests  32 passed (32)
+   Start at  12:39:25
+   Duration  1.47s (transform 116ms, setup 132ms, collect 109ms, tests 489ms, environment 389ms, prepare 86ms)
+
+Done in 1.89s.

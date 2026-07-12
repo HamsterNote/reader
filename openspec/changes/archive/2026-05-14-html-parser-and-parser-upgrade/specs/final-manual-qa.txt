@@ -1,0 +1,199 @@
+## Final Manual QA Re-run (F3)
+
+Verdict: APPROVE
+
+Summary:
+- `yarn typecheck`: PASS
+- `yarn vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx test/demo.test.tsx`: PASS (75 tests passed)
+- `yarn build`: PASS
+- Browser smoke check: BLOCKED by environment, not by product behavior. No Chrome/Playwright browser is available; prior recovery with `npx playwright install chrome` failed because it attempted sudo authentication in this environment.
+
+Rationale:
+- The plan says browser checks are additive when needed: they supplement command verification, not replace it.
+- All mandatory command verification passed in this re-run.
+- Current context says there have been no runtime/browser-impacting code changes since the previous F3 attempt; the only change was the `src/types/pdf-parser.d.ts` type shim.
+- Therefore this QA should not reject solely because the environment cannot provide Chrome for Playwright.
+
+## yarn typecheck
+
+Command: `yarn typecheck`
+
+Result: PASS
+
+```text
+yarn run v1.22.22
+(node:1287234) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.json --noEmit
+Done in 1.88s.
+```
+
+## yarn vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx test/demo.test.tsx
+
+Command: `yarn vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx test/demo.test.tsx`
+
+Result: PASS
+
+```text
+yarn run v1.22.22
+(node:1287578) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/.bin/vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx test/demo.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+ ✓ test/demo.test.tsx (6 tests) 110ms
+stderr | test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > renders html-parser output for serialized documents
+Each child in a list should have a unique "key" prop.
+
+Check the render method of `IntermediateDocumentViewer`. See https://react.dev/link/warning-keys for more information.
+
+ ✓ test/reader.test.tsx (22 tests) 284ms
+ ✓ test/intermediate-document-viewer.test.tsx (47 tests) 571ms
+
+ Test Files  3 passed (3)
+      Tests  75 passed (75)
+   Start at  12:55:01
+   Duration  1.78s (transform 754ms, setup 360ms, collect 1.16s, tests 964ms, environment 1.21s, prepare 182ms)
+
+Done in 2.19s.
+```
+
+## yarn build
+
+Command: `yarn build`
+
+Result: PASS
+
+```text
+yarn run v1.22.22
+(node:1288168) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ yarn build:all
+(node:1288180) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ yarn build:lib && yarn build:demo
+(node:1288192) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ yarn build:lib:js && yarn build:lib:types && yarn build:lib:styles
+(node:1288204) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vite build --config vite.lib.config.ts
+vite v7.3.1 building client environment for production...
+transforming...
+✓ 14 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.js  151.67 kB │ gzip: 40.26 kB
+✓ built in 372ms
+(node:1288256) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.build.json
+(node:1288276) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ sass src/styles/index.scss dist/style.css --no-source-map
+(node:1288312) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vite build
+vite v7.3.1 building client environment for production...
+transforming...
+[plugin vite:resolve] Module "fs" has been externalized for browser compatibility, imported by "/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/@techstark/opencv-js/dist/opencv.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+[plugin vite:resolve] Module "path" has been externalized for browser compatibility, imported by "/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/@techstark/opencv-js/dist/opencv.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+[plugin vite:resolve] Module "crypto" has been externalized for browser compatibility, imported by "/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/@techstark/opencv-js/dist/opencv.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+✓ 53 modules transformed.
+rendering chunks...
+computing gzip size...
+demo-dist/index.html                                               0.44 kB │ gzip:     0.29 kB
+demo-dist/pdfjs-standard-fonts/LICENSE_FOXIT                       1.55 kB
+demo-dist/pdfjs-standard-fonts/LICENSE_LIBERATION                  4.41 kB
+demo-dist/pdfjs-standard-fonts/FoxitSymbol.pfb                    16.73 kB
+demo-dist/pdfjs-standard-fonts/FoxitFixed.pfb                     17.60 kB
+demo-dist/pdfjs-standard-fonts/FoxitFixedBold.pfb                 18.06 kB
+demo-dist/pdfjs-standard-fonts/FoxitFixedItalic.pfb               18.75 kB
+demo-dist/pdfjs-standard-fonts/FoxitFixedBoldItalic.pfb           19.15 kB
+demo-dist/pdfjs-standard-fonts/FoxitSerifBold.pfb                 19.40 kB
+demo-dist/pdfjs-standard-fonts/FoxitSerif.pfb                     19.47 kB
+demo-dist/pdfjs-standard-fonts/FoxitSerifBoldItalic.pfb           20.73 kB
+demo-dist/pdfjs-standard-fonts/FoxitSerifItalic.pfb               21.23 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.mjs                     24.18 kB
+demo-dist/pdfjs-standard-fonts/FoxitDingbats.pfb                  29.51 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.jspi.mjs                44.51 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.jsep.mjs                46.49 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.asyncify.mjs            47.39 kB
+demo-dist/pdfjs-standard-fonts/LiberationSans-BoldItalic.ttf     135.12 kB
+demo-dist/pdfjs-standard-fonts/LiberationSans-Bold.ttf           137.05 kB
+demo-dist/pdfjs-standard-fonts/LiberationSans-Regular.ttf        139.51 kB
+demo-dist/pdfjs-standard-fonts/LiberationSans-Italic.ttf         162.04 kB
+demo-dist/assets/pdf.worker.min-LyOxJPrg.mjs                   1,072.84 kB
+demo-dist/assets/worker-entry-Dtffs1su-xKUwIKQz.js            11,340.13 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.wasm                12,810.62 kB │ gzip: 3,309.32 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.jspi.wasm           14,453.46 kB │ gzip: 3,535.16 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.asyncify.wasm       23,427.85 kB │ gzip: 5,730.41 kB
+demo-dist/assets/ort-wasm-simd-threaded.jsep-B5xtfCw5.wasm    25,906.83 kB │ gzip: 6,100.29 kB
+demo-dist/ort-wasm/ort-wasm-simd-threaded.jsep.wasm           25,906.83 kB │ gzip: 6,100.29 kB
+demo-dist/assets/index-DdG027CM.css                                3.42 kB │ gzip:     1.11 kB
+demo-dist/assets/index-7TINPsq9.js                                16.71 kB │ gzip:     6.41 kB
+demo-dist/assets/ort.bundle.min-DgZaY3ky.js                      400.73 kB │ gzip:   109.82 kB
+demo-dist/assets/pdf-CdE6nnZT.js                                 407.56 kB │ gzip:   119.31 kB
+demo-dist/assets/index-DLTWjhyU.js                             1,464.70 kB │ gzip:   610.48 kB
+demo-dist/assets/index-TwzQVf4e.js                            10,476.55 kB │ gzip: 3,411.93 kB
+✓ built in 6.48s
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+Done in 10.08s.
+```
+
+## Browser Smoke Check Limitation
+
+Result: BLOCKED by environment
+
+Details:
+- Browser smoke check could not run because Chrome is not available to Playwright in this environment.
+- Previous Playwright initialization failed before navigation because Chrome was missing at `/opt/google/chrome/chrome`.
+- Previous recovery attempt with `npx playwright install chrome` failed after switching to root because sudo authentication requires an interactive terminal.
+- This is an environment limitation, not a command-verification failure.
+
+Previously captured install-blocker output:
+
+```text
+## npx playwright install chrome
+npm warn exec The following package was not found and will be installed: playwright@1.60.0
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║ WARNING: It looks like you are running 'npx playwright install' without first ║
+║ installing your project's dependencies.                                       ║
+║                                                                               ║
+║ To avoid unexpected behavior, please install your dependencies first, and     ║
+║ then run Playwright's install command:                                        ║
+║                                                                               ║
+║     npm install                                                               ║
+║     npx playwright install                                                    ║
+║                                                                               ║
+║ If your project does not yet depend on Playwright, first install the          ║
+║ applicable npm package (most commonly @playwright/test), and                  ║
+║ then run Playwright's install command to download the browsers:               ║
+║                                                                               ║
+║     npm install @playwright/test                                              ║
+║     npx playwright install                                                    ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+Switching to root user to install dependencies...
+sudo: A terminal is required to authenticate
+Failed to install browsers
+Error: Failed to install chrome
+```
+
+## Structured QA Report
+
+Required command verification:
+- `yarn typecheck`: PASS
+- `yarn vitest run test/reader.test.tsx test/intermediate-document-viewer.test.tsx test/demo.test.tsx`: PASS (75 tests passed; existing React key warning observed)
+- `yarn build`: PASS (demo built; Vite browser-compatibility and chunk-size warnings observed)
+
+Browser-assisted verification:
+- Result: BLOCKED by environment because no Chrome/Playwright browser is available and installing Chrome requires sudo authentication.
+- Impact: Non-blocking for this QA verdict because browser checks are additive, mandatory command verification passed, and the only current change is a type shim with no runtime/browser impact.
+
+Verdict: APPROVE

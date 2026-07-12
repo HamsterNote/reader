@@ -1,0 +1,26 @@
+yarn why v1.22.22
+[1/4] Why do we have the module "@hamster-note/html-parser"...?
+[2/4] Initialising dependency graph...
+[3/4] Finding dependency...
+[4/4] Calculating file sizes...
+info => Found "@hamster-note/html-parser@0.6.0"
+info Has been hoisted to "@hamster-note/html-parser"
+info This module exists because it's specified in "dependencies".
+info Disk size without dependencies: "544KB"
+info Disk size with unique dependencies: "1.68MB"
+info Disk size with transitive dependencies: "1.68MB"
+info Number of shared dependencies: 3
+Done in 0.18s.
+yarn why v1.22.22
+[1/4] Why do we have the module "@hamster-note/pdf-parser"...?
+[2/4] Initialising dependency graph...
+[3/4] Finding dependency...
+[4/4] Calculating file sizes...
+info => Found "@hamster-note/pdf-parser@0.6.0"
+info Has been hoisted to "@hamster-note/pdf-parser"
+info This module exists because it's specified in "dependencies".
+info Disk size without dependencies: "7.4MB"
+info Disk size with unique dependencies: "71.57MB"
+info Disk size with transitive dependencies: "74.09MB"
+info Number of shared dependencies: 5
+Done in 0.29s.

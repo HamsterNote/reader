@@ -1,0 +1,22 @@
+# Final Code Quality Review: Parser 0.6.0 Upgrade
+
+Verdict: APPROVE
+
+## Scope Reviewed
+- Ran `git diff --unified=0` and inspected every changed hunk.
+- Read final file state for `src/types/pdf-parser.d.ts`, `test/reader.test.tsx`, `test/intermediate-document-viewer.test.tsx`, `test/demo.test.tsx`, `package.json`, and `yarn.lock`.
+- Checked the final diff against parser-upgrade scope: dependency bump, local pdf-parser shim alignment, and focused regression assertions.
+
+## Findings
+- `package.json` changes are surgical: only `@hamster-note/html-parser` and `@hamster-note/pdf-parser` move from `^0.5.1` to `^0.6.0`; no unrelated scripts, config, peer deps, or dev deps changed.
+- `yarn.lock` changes are consistent with the parser bumps: html-parser and pdf-parser resolve to `0.6.0`, with expected parser transitive dependency updates/additions such as `@chenglou/pretext`; no unrelated package churn was found in the diff.
+- `src/types/pdf-parser.d.ts` remains narrow and purpose-built: it adds only the 0.6.0-facing `ParserInput`, `PdfParser.decode`, and `GenerationError` declarations; no broad `any` or catch-all module typing was introduced.
+- Regression test edits are focused on parser integration: Reader and IntermediateDocumentViewer assertions verify `HtmlParser.decodeToHtml` receives the expected runtime/serialized document, and demo tests verify `PdfParser.encode` is called once with the uploaded `File`.
+- No new wrapper/helper abstractions, stubs, TODOs, hardcoded production values, config churn, or `vite.config.ts` modifications were introduced.
+
+## Risk Notes
+- Existing tests already contain some `as unknown as ...` casts for mock document construction; the reviewed diff does not widen this pattern with new `any` usage.
+- Serialized-document assertion intentionally uses `expect.objectContaining({ id, pageCount })`, which is appropriate because the parser receives a runtime parsed object rather than the original serialized reference.
+
+## Approval
+APPROVE: The final diff is minimal, readable, and consistent with repository patterns for a surgical parser upgrade.

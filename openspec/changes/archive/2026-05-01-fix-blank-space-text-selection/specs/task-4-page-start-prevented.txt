@@ -1,0 +1,317 @@
+yarn run v1.22.22
+(node:2012225) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ vitest run test/intermediate-document-viewer.test.tsx
+
+ RUN  v3.2.4 /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader
+
+stderr | test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > normalizes blank-space drag endpoint to nearest text
+TypeError: document.elementFromPoint is not a function
+    at getPageElementForPoint (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:226:6)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:453:26
+    at Document.handleSelectionChange (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:811:22)
+    at Document.callTheUserObjectsOperation (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at DocumentImpl._dispatch (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+    at DocumentImpl.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17)
+    at Document.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx:1046:27
+
+stderr | test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > fires onTextSelectionEnd with normalized range on blank-space mouseup
+TypeError: document.elementFromPoint is not a function
+    at getPageElementForPoint (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:226:6)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:453:26
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:579:20
+    at HTMLDivElement.handleMouseUp (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:880:7)
+    at HTMLDivElement.callTheUserObjectsOperation (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at HTMLDivElementImpl._dispatch (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+    at HTMLDivElementImpl.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17)
+    at HTMLDivElement.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34)
+
+stderr | test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > chooses first text when pointer is in blank space above all text
+TypeError: document.elementFromPoint is not a function
+    at getPageElementForPoint (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:226:6)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:453:26
+    at Document.handleSelectionChange (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:811:22)
+    at Document.callTheUserObjectsOperation (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at DocumentImpl._dispatch (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+    at DocumentImpl.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17)
+    at Document.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx:1220:27
+
+stderr | test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > chooses last text when pointer is in blank space below all text
+TypeError: document.elementFromPoint is not a function
+    at getPageElementForPoint (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:226:6)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:453:26
+    at Document.handleSelectionChange (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:811:22)
+    at Document.callTheUserObjectsOperation (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at DocumentImpl._dispatch (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+    at DocumentImpl.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17)
+    at Document.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx:1281:27
+
+stderr | test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > tie-breaks equal distances by choosing earlier DOM order
+TypeError: document.elementFromPoint is not a function
+    at getPageElementForPoint (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:226:6)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:453:26
+    at Document.handleSelectionChange (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/src/components/IntermediateDocumentViewer.tsx:811:22)
+    at Document.callTheUserObjectsOperation (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at DocumentImpl._dispatch (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+    at DocumentImpl.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17)
+    at Document.dispatchEvent (/home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34)
+    at /home/zhangxiao/frontend/worktrees/reader/feature-pdf-reader/test/intermediate-document-viewer.test.tsx:1346:27
+
+ ❯ test/intermediate-document-viewer.test.tsx (40 tests | 5 failed) 577ms
+   ✓ IntermediateDocumentViewer > is exported from the public entrypoint 2ms
+   ✓ IntermediateDocumentViewer > renders page placeholders immediately using document dimensions 131ms
+   ✓ IntermediateDocumentViewer > falls back to default dimensions when page size is missing 10ms
+   ✓ IntermediateDocumentViewer > renders an empty viewer for an empty document 2ms
+   ✓ IntermediateDocumentViewer > loads the first page immediately and later pages after intersection with overscan 18ms
+   ✓ IntermediateDocumentViewer > protects large documents by loading only the intersecting page and overscan 42ms
+   ✓ IntermediateDocumentViewer > stops showing the loading state when a loaded page has no text 5ms
+   ✓ IntermediateDocumentViewer > renders the converted page background from getThumbnail 12ms
+   ✓ IntermediateDocumentViewer > shows a page error instead of loading forever when text loading fails 8ms
+   ✓ IntermediateDocumentViewer > shows a page error instead of loading forever when page lookup throws 4ms
+   ✓ IntermediateDocumentViewer > ignores stale getTexts callbacks after document changes 72ms
+   ✓ IntermediateDocumentViewer > disconnects the observer on unmount 5ms
+   ✓ IntermediateDocumentViewer > OCR behavior > does not call ImageParser.encode when ocr is disabled 16ms
+   ✓ IntermediateDocumentViewer > OCR behavior > calls ImageParser.encode only for visible pages when ocr is enabled 18ms
+   ✓ IntermediateDocumentViewer > OCR behavior > renders OCR text with prefixed ids 8ms
+   ✓ IntermediateDocumentViewer > OCR behavior > does not re-OCR a page that has already been processed 10ms
+   ✓ IntermediateDocumentViewer > OCR behavior > calls onOcrError when OCR fails 62ms
+   ✓ IntermediateDocumentViewer > OCR behavior > ignores stale OCR results after document changes 16ms
+   ✓ IntermediateDocumentViewer > text selection > helper utilities are available for geometry mocking 7ms
+   ✓ IntermediateDocumentViewer > text selection > does not fire onTextSelectionChange when selection is collapsed 4ms
+   ✓ IntermediateDocumentViewer > text selection > does not fire onTextSelectionChange when selection is outside viewer 3ms
+   ✓ IntermediateDocumentViewer > text selection > does not fire onTextSelectionChange when only one endpoint is inside viewer 5ms
+   ✓ IntermediateDocumentViewer > text selection > fires onTextSelectionChange when selection includes text elements 5ms
+   ✓ IntermediateDocumentViewer > text selection > fires onTextSelectionEnd on mouseup with selection 5ms
+   ✓ IntermediateDocumentViewer > text selection > fires onTextSelectionEnd on touchend with selection 5ms
+   ✓ IntermediateDocumentViewer > text selection > fires onTextSelectionEnd on keyup with shift key 5ms
+   ✓ IntermediateDocumentViewer > text selection > does not fire onTextSelectionEnd on keyup without shift key 4ms
+   ✓ IntermediateDocumentViewer > text selection > does not fire callbacks when no selection exists 2ms
+   ✓ IntermediateDocumentViewer > text selection > does not assign pointer-events: none to text spans 10ms
+   ✓ IntermediateDocumentViewer > text selection > does not define pointer-events: none in SCSS for intermediate-text 0ms
+   × IntermediateDocumentViewer > text selection > normalizes blank-space drag endpoint to nearest text 17ms
+     → expected "spy" to be called at least once
+   × IntermediateDocumentViewer > text selection > fires onTextSelectionEnd with normalized range on blank-space mouseup 9ms
+     → expected "spy" to be called at least once
+   ✓ IntermediateDocumentViewer > text selection > preserves valid text-to-text selection without normalization 8ms
+   × IntermediateDocumentViewer > text selection > chooses first text when pointer is in blank space above all text 7ms
+     → expected "spy" to be called at least once
+   × IntermediateDocumentViewer > text selection > chooses last text when pointer is in blank space below all text 9ms
+     → expected "spy" to be called at least once
+   × IntermediateDocumentViewer > text selection > tie-breaks equal distances by choosing earlier DOM order 8ms
+     → expected "spy" to be called at least once
+   ✓ IntermediateDocumentViewer > text selection > does not normalize when there is no active mouse selection 8ms
+   ✓ IntermediateDocumentViewer > base image rendering > renders base image for pages with thumbnail data 5ms
+   ✓ IntermediateDocumentViewer > base image rendering > does not render base image for pages without thumbnail data 4ms
+   ✓ IntermediateDocumentViewer > base image rendering > renders base image before text spans in DOM order 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > normalizes blank-space drag endpoint to nearest text
+AssertionError: expected "spy" to be called at least once
+ ❯ test/intermediate-document-viewer.test.tsx:1048:37
+    1046|       globalThis.document.dispatchEvent(new Event('selectionchange'))
+    1047| 
+    1048|       expect(onTextSelectionChange).toHaveBeenCalled()
+       |                                     ^
+    1049|       const [text, detail] = onTextSelectionChange.mock.calls[0]
+    1050|       expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > fires onTextSelectionEnd with normalized range on blank-space mouseup
+AssertionError: expected "spy" to be called at least once
+ ❯ test/intermediate-document-viewer.test.tsx:1121:34
+    1119|       )
+    1120| 
+    1121|       expect(onTextSelectionEnd).toHaveBeenCalled()
+       |                                  ^
+    1122|       const [text, detail] = onTextSelectionEnd.mock.calls[0]
+    1123|       expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > chooses first text when pointer is in blank space above all text
+AssertionError: expected "spy" to be called at least once
+ ❯ test/intermediate-document-viewer.test.tsx:1222:37
+    1220|       globalThis.document.dispatchEvent(new Event('selectionchange'))
+    1221| 
+    1222|       expect(onTextSelectionChange).toHaveBeenCalled()
+       |                                     ^
+    1223|       const [text, detail] = onTextSelectionChange.mock.calls[0]
+    1224|       expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual(…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > chooses last text when pointer is in blank space below all text
+AssertionError: expected "spy" to be called at least once
+ ❯ test/intermediate-document-viewer.test.tsx:1283:37
+    1281|       globalThis.document.dispatchEvent(new Event('selectionchange'))
+    1282| 
+    1283|       expect(onTextSelectionChange).toHaveBeenCalled()
+       |                                     ^
+    1284|       const [text, detail] = onTextSelectionChange.mock.calls[0]
+    1285|       expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual([
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  test/intermediate-document-viewer.test.tsx > IntermediateDocumentViewer > text selection > tie-breaks equal distances by choosing earlier DOM order
+AssertionError: expected "spy" to be called at least once
+ ❯ test/intermediate-document-viewer.test.tsx:1348:37
+    1346|       globalThis.document.dispatchEvent(new Event('selectionchange'))
+    1347| 
+    1348|       expect(onTextSelectionChange).toHaveBeenCalled()
+       |                                     ^
+    1349|       const [text, detail] = onTextSelectionChange.mock.calls[0]
+    1350|       expect(detail.texts.map((t: IntermediateText) => t.id)).toEqual(…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 5 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: document.elementFromPoint is not a function
+ ❯ getPageElementForPoint src/components/IntermediateDocumentViewer.tsx:226:6
+    224| 
+    225|   const hitElement = document
+    226|     .elementFromPoint(clientX, clientY)
+       |      ^
+    227|     ?.closest('[data-page-number]')
+    228| 
+ ❯ src/components/IntermediateDocumentViewer.tsx:453:26
+ ❯ Document.handleSelectionChange src/components/IntermediateDocumentViewer.tsx:811:22
+ ❯ Document.callTheUserObjectsOperation node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30
+ ❯ innerInvokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16
+ ❯ invokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3
+ ❯ DocumentImpl._dispatch node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9
+ ❯ DocumentImpl.dispatchEvent node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17
+ ❯ Document.dispatchEvent node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34
+ ❯ test/intermediate-document-viewer.test.tsx:1046:27
+
+This error originated in "test/intermediate-document-viewer.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "normalizes blank-space drag endpoint to nearest text". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: document.elementFromPoint is not a function
+ ❯ getPageElementForPoint src/components/IntermediateDocumentViewer.tsx:226:6
+    224| 
+    225|   const hitElement = document
+    226|     .elementFromPoint(clientX, clientY)
+       |      ^
+    227|     ?.closest('[data-page-number]')
+    228| 
+ ❯ src/components/IntermediateDocumentViewer.tsx:453:26
+ ❯ src/components/IntermediateDocumentViewer.tsx:579:20
+ ❯ HTMLDivElement.handleMouseUp src/components/IntermediateDocumentViewer.tsx:880:7
+ ❯ HTMLDivElement.callTheUserObjectsOperation node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30
+ ❯ innerInvokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16
+ ❯ invokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3
+ ❯ HTMLDivElementImpl._dispatch node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9
+ ❯ HTMLDivElementImpl.dispatchEvent node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17
+ ❯ HTMLDivElement.dispatchEvent node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34
+
+This error originated in "test/intermediate-document-viewer.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "fires onTextSelectionEnd with normalized range on blank-space mouseup". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: document.elementFromPoint is not a function
+ ❯ getPageElementForPoint src/components/IntermediateDocumentViewer.tsx:226:6
+    224| 
+    225|   const hitElement = document
+    226|     .elementFromPoint(clientX, clientY)
+       |      ^
+    227|     ?.closest('[data-page-number]')
+    228| 
+ ❯ src/components/IntermediateDocumentViewer.tsx:453:26
+ ❯ Document.handleSelectionChange src/components/IntermediateDocumentViewer.tsx:811:22
+ ❯ Document.callTheUserObjectsOperation node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30
+ ❯ innerInvokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16
+ ❯ invokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3
+ ❯ DocumentImpl._dispatch node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9
+ ❯ DocumentImpl.dispatchEvent node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17
+ ❯ Document.dispatchEvent node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34
+ ❯ test/intermediate-document-viewer.test.tsx:1220:27
+
+This error originated in "test/intermediate-document-viewer.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "chooses first text when pointer is in blank space above all text". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: document.elementFromPoint is not a function
+ ❯ getPageElementForPoint src/components/IntermediateDocumentViewer.tsx:226:6
+    224| 
+    225|   const hitElement = document
+    226|     .elementFromPoint(clientX, clientY)
+       |      ^
+    227|     ?.closest('[data-page-number]')
+    228| 
+ ❯ src/components/IntermediateDocumentViewer.tsx:453:26
+ ❯ Document.handleSelectionChange src/components/IntermediateDocumentViewer.tsx:811:22
+ ❯ Document.callTheUserObjectsOperation node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30
+ ❯ innerInvokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16
+ ❯ invokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3
+ ❯ DocumentImpl._dispatch node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9
+ ❯ DocumentImpl.dispatchEvent node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17
+ ❯ Document.dispatchEvent node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34
+ ❯ test/intermediate-document-viewer.test.tsx:1281:27
+
+This error originated in "test/intermediate-document-viewer.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "chooses last text when pointer is in blank space below all text". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: document.elementFromPoint is not a function
+ ❯ getPageElementForPoint src/components/IntermediateDocumentViewer.tsx:226:6
+    224| 
+    225|   const hitElement = document
+    226|     .elementFromPoint(clientX, clientY)
+       |      ^
+    227|     ?.closest('[data-page-number]')
+    228| 
+ ❯ src/components/IntermediateDocumentViewer.tsx:453:26
+ ❯ Document.handleSelectionChange src/components/IntermediateDocumentViewer.tsx:811:22
+ ❯ Document.callTheUserObjectsOperation node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30
+ ❯ innerInvokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16
+ ❯ invokeEventListeners node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3
+ ❯ DocumentImpl._dispatch node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9
+ ❯ DocumentImpl.dispatchEvent node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:114:17
+ ❯ Document.dispatchEvent node_modules/jsdom/lib/jsdom/living/generated/EventTarget.js:241:34
+ ❯ test/intermediate-document-viewer.test.tsx:1346:27
+
+This error originated in "test/intermediate-document-viewer.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "tie-breaks equal distances by choosing earlier DOM order". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  1 failed (1)
+      Tests  5 failed | 35 passed (40)
+     Errors  5 errors
+   Start at  12:52:28
+   Duration  1.52s (transform 129ms, setup 131ms, collect 116ms, tests 577ms, environment 397ms, prepare 78ms)
+
+error Command failed with exit code 1.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.
+EXIT_CODE=0
