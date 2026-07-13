@@ -1,6 +1,10 @@
+import type { DrawingValue } from '@hamster-note/painting'
+import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import {
   IntermediateDocument,
-  type IntermediateDocumentSerialized
+  type IntermediateDocumentSerialized,
+  type IntermediateTextSerialized,
+  TextDir
 } from '@hamster-note/types'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -152,7 +156,7 @@ function makePage(number: number) {
   }
 }
 
-function makeText(id: string, content: string) {
+function makeText(id: string, content: string): IntermediateTextSerialized {
   return {
     id,
     content,
@@ -170,7 +174,7 @@ function makeText(id: string, content: string) {
     lineHeight: 16,
     ascent: 10,
     descent: 2,
-    dir: 'ltr',
+    dir: TextDir.LTR,
     skew: 0,
     isEOL: false
   }
@@ -319,6 +323,136 @@ describe('Reader public API', () => {
     expect(
       screen.queryByTestId('intermediate-document-viewer')
     ).not.toBeInTheDocument()
+  })
+
+  it('renders legacy page drawing mode when old page tool props are used', () => {
+    const pagePaintings: Record<string, DrawingValue> = {
+      'page-1': {
+        strokes: [
+          {
+            id: 'stroke-1',
+            tool: 'pen',
+            strokeColor: '#2563eb',
+            strokeWidth: 3,
+            points: [
+              { x: 10, y: 12 },
+              { x: 40, y: 44 }
+            ]
+          }
+        ]
+      }
+    }
+    const pageTextSelections: Record<string, readonly SelectionRange[]> = {
+      'page-1': [{ id: 'text-mark-1' } as SelectionRange]
+    }
+    const pageRectSelections: Record<string, readonly SelectionRect[]> = {
+      'page-1': [{ id: 'rect-mark-1' } as SelectionRect]
+    }
+
+    render(
+      <Reader
+        document={makeDocument({
+          pages: [
+            {
+              ...makePage(1),
+              texts: [makeText('legacy-text-1', 'Legacy page content')]
+            }
+          ]
+        })}
+        selectedTool='drawing'
+        pagePaintings={pagePaintings}
+        pageTextSelections={pageTextSelections}
+        pageRectSelections={pageRectSelections}
+      />
+    )
+
+    expect(screen.getByTestId('reader-pages')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-page-page-1')).toHaveAttribute(
+      'data-tool',
+      'drawing'
+    )
+    expect(
+      screen.getByTestId('reader-page-drawing-layer-page-1')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Tool: Drawing')).toBeInTheDocument()
+    expect(screen.getByText('Text Marks')).toBeInTheDocument()
+    expect(screen.getByText('Rect Marks')).toBeInTheDocument()
+    expect(screen.getByText('Strokes')).toBeInTheDocument()
+    expect(screen.getByText('Legacy page content')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-document-viewer')
+    ).not.toBeInTheDocument()
+  })
+
+  it('lets selection modes receive pointer input through the drawing layer', () => {
+    const { rerender } = render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='text-selection'
+      />
+    )
+
+    const drawingLayer = screen.getByTestId('reader-page-drawing-layer-page-1')
+    expect(drawingLayer).toHaveStyle({ pointerEvents: 'none' })
+
+    rerender(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='drawing'
+      />
+    )
+
+    expect(drawingLayer).toHaveStyle({ pointerEvents: 'auto' })
+  })
+
+  it('bounds persisted drawing data before rendering legacy pages', () => {
+    const oversizedDrawing: DrawingValue = {
+      strokes: Array.from({ length: 501 }, (_, index) => ({
+        id: `stroke-${index}`,
+        tool: 'pen',
+        points: [{ x: index, y: index }]
+      }))
+    }
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='drawing'
+        pagePaintings={{ 'page-1': oversizedDrawing }}
+      />
+    )
+
+    expect(screen.getByText('Strokes').nextElementSibling).toHaveTextContent(
+      '500'
+    )
+  })
+
+  it('renders current serialized page content with container-scaled text geometry', () => {
+    render(
+      <Reader
+        document={{
+          ...makeDocument({ pages: [makePage(1)] }),
+          pages: [
+            {
+              ...makePage(1),
+              content: [makeText('content-text-1', 'Current page content')],
+              texts: undefined
+            }
+          ]
+        }}
+        selectedTool='text-selection'
+      />
+    )
+
+    const text = screen.getByTestId('reader-page-text-content-text-1')
+    expect(text).toHaveTextContent('Current page content')
+    expect(text.getAttribute('style')).toContain('font-size: 12%')
+    expect(text.getAttribute('style')).toContain(
+      'line-height: 133.33333333333331%'
+    )
+    expect(screen.getByText('Content').nextElementSibling).toHaveTextContent(
+      '1'
+    )
   })
 })
 

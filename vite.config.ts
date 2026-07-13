@@ -283,6 +283,11 @@ export default defineConfig(({ mode }) => ({
     setupFiles: './test/setup.ts',
     include: ['test/**/*.test.{ts,tsx}'],
     exclude: ['dist/**', 'demo-dist/**'],
+    server: {
+      deps: {
+        inline: [/@hamster-note\/painting/, /@system-ui-js\/multi-drag-core/]
+      }
+    },
     coverage: {
       provider: 'v8'
     }

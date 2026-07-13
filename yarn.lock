@@ -497,6 +497,13 @@
     mdast-util-to-markdown "^2.1.2"
     micromark-extension-gfm "^3.0.0"
 
+"@hamster-note/painting@0.1.1-beta.2":
+  version "0.1.1-beta.2"
+  resolved "https://registry.yarnpkg.com/@hamster-note/painting/-/painting-0.1.1-beta.2.tgz#5603f6b538898760f8f464f57357a0f383f7e946"
+  integrity sha512-eVmMcJJ1thdYzzBa1tYw/k05RD3+B8PA7SjNOrVqi2ehMmepaQH2SuKspyf/2xgUC/B0FGoQPhlLlhsShBepJQ==
+  dependencies:
+    "@system-ui-js/multi-drag-core" "0.4.0"
+
 "@hamster-note/pdf-parser@^1.0.0":
   version "1.0.0"
   resolved "https://registry.yarnpkg.com/@hamster-note/pdf-parser/-/pdf-parser-1.0.0.tgz#6adaf0037d1846d8072a385557617607a1aa8ecb"
@@ -528,7 +535,7 @@
 
 "@hamster-note/types@^0.5.1":
   version "0.5.5"
-  resolved "https://registry.npmmirror.com/@hamster-note/types/-/types-0.5.5.tgz#7131d33bce2a92a2e14769f58f523f644d2b5970"
+  resolved "https://registry.yarnpkg.com/@hamster-note/types/-/types-0.5.5.tgz#7131d33bce2a92a2e14769f58f523f644d2b5970"
   integrity sha512-cuSmkhOnF6UGg73WLO82kS6Hpn3qQE3MUPpEPx6H+Ht7laTq1jbMzbuxln1TZ5nBw2h+WOhJ7F63Ovvy/vn8XQ==
   dependencies:
     class-transformer "^0.5.1"
@@ -984,7 +991,7 @@
   resolved "https://registry.npmmirror.com/@system-ui-js/development-base/-/development-base-0.1.3.tgz#d40977a77344811928d1839c317f77cd5a2ed5f3"
   integrity sha512-/SPkWsJGi2bfD5CF5TDvpm0swfEp4TYMaBrtYuGP2dZXLmE8S+fr8ClEjdbwvNIXHzQyt96KDBvEHdLNSOJipg==
 
-"@system-ui-js/multi-drag-core@*":
+"@system-ui-js/multi-drag-core@*", "@system-ui-js/multi-drag-core@0.4.0":
   version "0.4.0"
   resolved "https://registry.yarnpkg.com/@system-ui-js/multi-drag-core/-/multi-drag-core-0.4.0.tgz#68dd401af22691ca55f840e0fd4b7818794473d6"
   integrity sha512-7V366jAmK8hUjPJi9yYngabhuE+ixnRxZS7lw/1uNbxEYLaR/Mh5XtxMvY/gGHcL7tdJtYzE5lF1i786jKbKIA==
@@ -1165,7 +1172,7 @@
 
 "@types/validator@^13.15.3":
   version "13.15.10"
-  resolved "https://registry.npmmirror.com/@types/validator/-/validator-13.15.10.tgz#742b77ec34d58554b94a76a14cef30d59e3c16b9"
+  resolved "https://registry.yarnpkg.com/@types/validator/-/validator-13.15.10.tgz#742b77ec34d58554b94a76a14cef30d59e3c16b9"
   integrity sha512-T8L6i7wCuyoK8A/ZeLYt1+q0ty3Zb9+qbSSvrIVitzT3YjZqkTZ40IbRsPanlB4h1QB3JVL1SYCdR6ngtFYcuA==
 
 "@typescript-eslint/eslint-plugin@8.57.2", "@typescript-eslint/eslint-plugin@^8.50.0":
@@ -1682,12 +1689,12 @@ chokidar@^4.0.0:
 
 class-transformer@^0.5.1:
   version "0.5.1"
-  resolved "https://registry.npmmirror.com/class-transformer/-/class-transformer-0.5.1.tgz#24147d5dffd2a6cea930a3250a677addf96ab336"
+  resolved "https://registry.yarnpkg.com/class-transformer/-/class-transformer-0.5.1.tgz#24147d5dffd2a6cea930a3250a677addf96ab336"
   integrity sha512-SQa1Ws6hUbfC98vKGxZH3KFY0Y1lm5Zm0SY8XX9zbK7FJCyVEac3ATW0RIpwzW+oOfmHE5PMPufDG9hCfoEOMw==
 
 class-validator@^0.14.1:
   version "0.14.4"
-  resolved "https://registry.npmmirror.com/class-validator/-/class-validator-0.14.4.tgz#d0084ae847a96264ad5158451a4e66c1c544de96"
+  resolved "https://registry.yarnpkg.com/class-validator/-/class-validator-0.14.4.tgz#d0084ae847a96264ad5158451a4e66c1c544de96"
   integrity sha512-AwNusCCam51q703dW82x95tOqQp6oC9HNUl724KxJJOfnKscI8dOloXFgyez7LbTTKWuRBA37FScqVbJEoq8Yw==
   dependencies:
     "@types/validator" "^13.15.3"
@@ -3014,9 +3021,9 @@ levn@^0.4.1:
     type-check "~0.4.0"
 
 libphonenumber-js@^1.11.1:
-  version "1.12.40"
-  resolved "https://registry.npmmirror.com/libphonenumber-js/-/libphonenumber-js-1.12.40.tgz#4b743571462a0f3fdafab7a941d89ee842aa25e0"
-  integrity sha512-HKGs7GowShNls3Zh+7DTr6wYpPk5jC78l508yQQY3e8ZgJChM3A9JZghmMJZuK+5bogSfuTafpjksGSR3aMIEg==
+  version "1.13.8"
+  resolved "https://registry.yarnpkg.com/libphonenumber-js/-/libphonenumber-js-1.13.8.tgz#4250f92798e64ffc6556aae2894058861e878ea5"
+  integrity sha512-80xal1m93rADejw2pMp2MSzFhHCPLEspjHxnH2UtqI+DgAmElsbmLMiqk9niwH9NWAfjsRtaJI+qBrOEmRx9nQ==
 
 lie@~3.3.0:
   version "3.3.0"
@@ -3934,7 +3941,7 @@ refa@^0.12.0, refa@^0.12.1:
 
 reflect-metadata@^0.2.2:
   version "0.2.2"
-  resolved "https://registry.npmmirror.com/reflect-metadata/-/reflect-metadata-0.2.2.tgz#400c845b6cba87a21f2c65c4aeb158f4fa4d9c5b"
+  resolved "https://registry.yarnpkg.com/reflect-metadata/-/reflect-metadata-0.2.2.tgz#400c845b6cba87a21f2c65c4aeb158f4fa4d9c5b"
   integrity sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==
 
 reflect.getprototypeof@^1.0.6, reflect.getprototypeof@^1.0.9:
@@ -4583,9 +4590,9 @@ utrie@^1.0.2:
     base64-arraybuffer "^1.0.2"
 
 validator@^13.15.22:
-  version "13.15.26"
-  resolved "https://registry.npmmirror.com/validator/-/validator-13.15.26.tgz#36c3deeab30e97806a658728a155c66fcaa5b944"
-  integrity sha512-spH26xU080ydGggxRyR1Yhcbgx+j3y5jbNXk/8L+iRvdIEQ4uTRH2Sgf2dokud6Q4oAtsbNvJ1Ft+9xmm6IZcA==
+  version "13.15.35"
+  resolved "https://registry.yarnpkg.com/validator/-/validator-13.15.35.tgz#81cf455c51f15b69d8d340be5914f3fab00dbf7f"
+  integrity sha512-TQ5pAGhd5whStmqWvYF4OjQROlmv9SMFVt37qoCBdqRffuuklWYQlCNnEs2ZaIBD1kZRNnikiZOS1eqgkar0iw==
 
 vite-node@3.2.4:
   version "3.2.4"

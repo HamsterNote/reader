@@ -89,6 +89,173 @@
     box-sizing: border-box;
   }
 
+  &__document-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+
+  &__document-kicker {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #2563eb;
+  }
+
+  &__document-title {
+    margin: 0;
+    font-size: 24px;
+    line-height: 1.2;
+    color: #111827;
+  }
+
+  &__document-hint {
+    margin: 0;
+    font-size: 14px;
+    color: #6b7280;
+  }
+
+  &__pages {
+    display: grid;
+    gap: 20px;
+  }
+
+  &__page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 1));
+    box-shadow: 0 14px 40px rgba(15, 23, 42, 0.06);
+  }
+
+  &__page-header {
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  &__page-kicker {
+    margin: 0 0 4px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+
+  &__page-title {
+    margin: 0;
+    font-size: 20px;
+    color: #0f172a;
+  }
+
+  &__page-meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, auto));
+    gap: 12px;
+    margin: 0;
+
+    div {
+      min-width: 72px;
+    }
+
+    dt {
+      margin: 0 0 4px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #94a3b8;
+    }
+
+    dd {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+  }
+
+  &__page-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__page-surface {
+    position: relative;
+    container-type: inline-size;
+    width: min(100%, 720px);
+    min-height: 320px;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(241, 245, 249, 1));
+
+    // 直接约束第三方绘图组件的宿主节点尺寸，让每页都有稳定可绘制区域。
+    > div {
+      width: 100%;
+      height: 100%;
+      min-height: 320px;
+    }
+
+    svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+  }
+
+  &__selection-layer,
+  &__text-layer,
+  &__drawing-layer {
+    position: absolute;
+    inset: 0;
+  }
+
+  &__selection-layer {
+    z-index: 2;
+  }
+
+  &__text-layer {
+    z-index: 1;
+  }
+
+  &__drawing-layer {
+    z-index: 3;
+
+    > div {
+      width: 100%;
+      height: 100%;
+      min-height: 320px;
+    }
+  }
+
+  &__text-item {
+    position: absolute;
+    display: block;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: inherit;
+    transform-origin: top left;
+  }
+
+  &__page-hint {
+    margin: 0;
+    font-size: 13px;
+    color: #475569;
+  }
+
   // File info section
   &__file-info {
     display: flex;
