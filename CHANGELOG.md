@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-13
+
+### Added
+- 新增纯文本阅读模式（`renderMode='text'`），支持虚拟滚动。
+- 新增矩形选区模式和绘图工具，与已有文本选择共存。
+- 新增 `scrollToRect` API，支持程序化矩形定位导航。
+- 离屏页面支持缩放感知的懒加载缩略图。
+- 矩形选区模式新增选择弹窗。
+- 支持在文本选择、矩形选区、绘图模式间切换。
+
+### Fixed
+- 修复选择生命周期中 managed timeout 未清理导致的跨实例内存/资源泄漏。
+- 修复 HTML 解析器页面解码兼容性问题。
+- 将本地 `html-parser` 依赖替换为已发布的 npm 版本。
+- 处理 PR #4 审查意见，解决源码、演示和测试文件的 lint 问题。
+
 ## [0.2.0-beta.1] - 2026-07-03
 
 ### Added
