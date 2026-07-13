@@ -1,5 +1,7 @@
 import {
   DrawingSurface,
+  type DrawingPoint,
+  type DrawingStroke,
   type DrawingTool,
   type DrawingValue
 } from '@hamster-note/painting'
@@ -10,7 +12,10 @@ import {
   type SelectionRef,
   type SelectionTool
 } from '@hamster-note/selection'
-import type { IntermediatePageSerialized } from '@hamster-note/types'
+import type {
+  IntermediatePageSerialized,
+  IntermediateTextSerialized
+} from '@hamster-note/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 export type ReaderPageTool = 'text-selection' | 'rect-selection' | 'drawing'
@@ -42,6 +47,11 @@ export type PageProps = {
 const EMPTY_DRAWING_VALUE: DrawingValue = {
   strokes: []
 }
+
+// Persisted annotations can originate outside this package. Keep rendering work
+// bounded so a malformed or hostile document cannot lock up the browser.
+const MAX_DRAWING_STROKES = 500
+const MAX_DRAWING_POINTS = 20_000
 
 const EMPTY_TEXT_SELECTIONS: readonly SelectionRange[] = []
 const EMPTY_RECT_SELECTIONS: readonly SelectionRect[] = []
@@ -98,9 +108,80 @@ type PageTextGeometry = {
   rotate: number
 }
 
-type SerializedPageText = NonNullable<
-  IntermediatePageSerialized['texts']
->[number]
+type SerializedPageText = IntermediateTextSerialized
+
+function getPageTexts(
+  page: IntermediatePageSerialized
+): readonly SerializedPageText[] {
+  if (page.content) {
+    return page.content.filter(
+      (item): item is IntermediateTextSerialized => !('src' in item)
+    )
+  }
+
+  return page.texts ?? []
+}
+
+function getSafeDrawingPoint(point: unknown): DrawingPoint | null {
+  if (
+    typeof point !== 'object' ||
+    point === null ||
+    !('x' in point) ||
+    typeof point.x !== 'number' ||
+    !Number.isFinite(point.x) ||
+    !('y' in point) ||
+    typeof point.y !== 'number' ||
+    !Number.isFinite(point.y)
+  ) {
+    return null
+  }
+
+  return {
+    x: point.x,
+    y: point.y,
+    ...('pressure' in point &&
+    typeof point.pressure === 'number' &&
+    Number.isFinite(point.pressure)
+      ? { pressure: point.pressure }
+      : {})
+  }
+}
+
+function getSafeDrawingPoints(
+  points: readonly unknown[],
+  maxPointChecks: number
+): DrawingPoint[] {
+  return points
+    .slice(0, maxPointChecks)
+    .flatMap((point) => getSafeDrawingPoint(point) ?? [])
+}
+
+function getSafeDrawingValue(value: DrawingValue | undefined): DrawingValue {
+  if (!value || !Array.isArray(value.strokes)) {
+    return EMPTY_DRAWING_VALUE
+  }
+
+  let inspectedPointCount = 0
+  const strokes: DrawingStroke[] = []
+
+  for (const stroke of value.strokes.slice(0, MAX_DRAWING_STROKES)) {
+    const remainingPointChecks = MAX_DRAWING_POINTS - inspectedPointCount
+    if (
+      typeof stroke.id !== 'string' ||
+      !Array.isArray(stroke.points) ||
+      remainingPointChecks === 0
+    ) {
+      continue
+    }
+
+    const inspectedPoints = stroke.points.slice(0, remainingPointChecks)
+    const points = getSafeDrawingPoints(inspectedPoints, remainingPointChecks)
+    inspectedPointCount += inspectedPoints.length
+    strokes.push({ ...stroke, points })
+  }
+
+  return { strokes }
+}
 
 function getPolygonBounds(
   polygon: readonly [number, number][]
@@ -160,7 +241,7 @@ function getTextGeometry(text: SerializedPageText): PageTextGeometry | null {
 }
 
 function renderTextLayer(page: IntermediatePageSerialized) {
-  const textItems = (page.texts ?? []).map((text) => {
+  const textItems = getPageTexts(page).map((text) => {
     const geometry = getTextGeometry(text)
     if (!geometry) {
       return null
@@ -171,7 +252,7 @@ function renderTextLayer(page: IntermediatePageSerialized) {
     const leftPercent = (geometry.left / page.width) * 100
     const topPercent = (geometry.top / page.height) * 100
     const fontSizePercent = (text.fontSize / page.width) * 100
-    const lineHeightPercent = (text.lineHeight / page.height) * 100
+    const lineHeightPercent = (text.lineHeight / text.fontSize) * 100
 
     return (
       <span
@@ -184,7 +265,7 @@ function renderTextLayer(page: IntermediatePageSerialized) {
           left: `${leftPercent}%`,
           top: `${topPercent}%`,
           fontSize: `${fontSizePercent}%`,
-          lineHeight: `${Math.max(lineHeightPercent, fontSizePercent)}%`,
+          lineHeight: `${Math.max(lineHeightPercent, 100)}%`,
           fontFamily: text.fontFamily,
           fontWeight: text.fontWeight,
           fontStyle: text.italic ? 'italic' : 'normal',
@@ -201,6 +282,7 @@ function renderTextLayer(page: IntermediatePageSerialized) {
     <div
       className='hamster-reader__text-layer'
       data-testid={`reader-page-text-layer-${page.id}`}
+      style={{ fontSize: '100cqw' }}
     >
       {textItems}
     </div>
@@ -220,8 +302,11 @@ export function Page({
 }: PageProps) {
   const selectionRef = useRef<SelectionRef>(null)
   const selectionTool = getSelectionTool(selectedTool)
-  const drawingValue = paintingValue ?? EMPTY_DRAWING_VALUE
-  const contentCount = page.texts?.length ?? 0
+  const drawingValue = useMemo(
+    () => getSafeDrawingValue(paintingValue),
+    [paintingValue]
+  )
+  const contentCount = getPageTexts(page).length
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
 
@@ -341,6 +426,9 @@ export function Page({
           <div
             className='hamster-reader__drawing-layer'
             data-testid={`reader-page-drawing-layer-${page.id}`}
+            style={{
+              pointerEvents: selectedTool === 'drawing' ? 'auto' : 'none'
+            }}
           >
             <DrawingSurface
               value={drawingValue}

@@ -497,7 +497,7 @@
     mdast-util-to-markdown "^2.1.2"
     micromark-extension-gfm "^3.0.0"
 
-"@hamster-note/painting@^0.1.1-beta.2":
+"@hamster-note/painting@0.1.1-beta.2":
   version "0.1.1-beta.2"
   resolved "https://registry.yarnpkg.com/@hamster-note/painting/-/painting-0.1.1-beta.2.tgz#5603f6b538898760f8f464f57357a0f383f7e946"
   integrity sha512-eVmMcJJ1thdYzzBa1tYw/k05RD3+B8PA7SjNOrVqi2ehMmepaQH2SuKspyf/2xgUC/B0FGoQPhlLlhsShBepJQ==
@@ -532,6 +532,15 @@
   version "0.8.0"
   resolved "https://registry.npmjs.org/@hamster-note/types/-/types-0.8.0.tgz#fb8b318985fcaec28a8665526539a5e2ab84f233"
   integrity sha512-NNcKdcCchBU4x/gFksXUzFZ1WV37HzBzRk6MEFWhVyHBOk5G7niuXRuP8frPdboQkWVQrRtnZFuvXeniWjphrg==
+
+"@hamster-note/types@^0.5.1":
+  version "0.5.5"
+  resolved "https://registry.yarnpkg.com/@hamster-note/types/-/types-0.5.5.tgz#7131d33bce2a92a2e14769f58f523f644d2b5970"
+  integrity sha512-cuSmkhOnF6UGg73WLO82kS6Hpn3qQE3MUPpEPx6H+Ht7laTq1jbMzbuxln1TZ5nBw2h+WOhJ7F63Ovvy/vn8XQ==
+  dependencies:
+    class-transformer "^0.5.1"
+    class-validator "^0.14.1"
+    reflect-metadata "^0.2.2"
 
 "@hamster-note/virtual-paper@0.2.0":
   version "0.2.0"
@@ -1161,6 +1170,11 @@
   resolved "https://registry.yarnpkg.com/@types/unist/-/unist-3.0.3.tgz#acaab0f919ce69cce629c2d4ed2eb4adc1b6c20c"
   integrity sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==
 
+"@types/validator@^13.15.3":
+  version "13.15.10"
+  resolved "https://registry.yarnpkg.com/@types/validator/-/validator-13.15.10.tgz#742b77ec34d58554b94a76a14cef30d59e3c16b9"
+  integrity sha512-T8L6i7wCuyoK8A/ZeLYt1+q0ty3Zb9+qbSSvrIVitzT3YjZqkTZ40IbRsPanlB4h1QB3JVL1SYCdR6ngtFYcuA==
+
 "@typescript-eslint/eslint-plugin@8.57.2", "@typescript-eslint/eslint-plugin@^8.50.0":
   version "8.57.2"
   resolved "https://registry.npmmirror.com/@typescript-eslint/eslint-plugin/-/eslint-plugin-8.57.2.tgz#ad0dcefeca9c2ecbe09f730d478063666aee010b"
@@ -1672,6 +1686,20 @@ chokidar@^4.0.0:
   integrity sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA==
   dependencies:
     readdirp "^4.0.1"
+
+class-transformer@^0.5.1:
+  version "0.5.1"
+  resolved "https://registry.yarnpkg.com/class-transformer/-/class-transformer-0.5.1.tgz#24147d5dffd2a6cea930a3250a677addf96ab336"
+  integrity sha512-SQa1Ws6hUbfC98vKGxZH3KFY0Y1lm5Zm0SY8XX9zbK7FJCyVEac3ATW0RIpwzW+oOfmHE5PMPufDG9hCfoEOMw==
+
+class-validator@^0.14.1:
+  version "0.14.4"
+  resolved "https://registry.yarnpkg.com/class-validator/-/class-validator-0.14.4.tgz#d0084ae847a96264ad5158451a4e66c1c544de96"
+  integrity sha512-AwNusCCam51q703dW82x95tOqQp6oC9HNUl724KxJJOfnKscI8dOloXFgyez7LbTTKWuRBA37FScqVbJEoq8Yw==
+  dependencies:
+    "@types/validator" "^13.15.3"
+    libphonenumber-js "^1.11.1"
+    validator "^13.15.22"
 
 clipper-lib@^6.4.2:
   version "6.4.2"
@@ -2992,6 +3020,11 @@ levn@^0.4.1:
     prelude-ls "^1.2.1"
     type-check "~0.4.0"
 
+libphonenumber-js@^1.11.1:
+  version "1.13.8"
+  resolved "https://registry.yarnpkg.com/libphonenumber-js/-/libphonenumber-js-1.13.8.tgz#4250f92798e64ffc6556aae2894058861e878ea5"
+  integrity sha512-80xal1m93rADejw2pMp2MSzFhHCPLEspjHxnH2UtqI+DgAmElsbmLMiqk9niwH9NWAfjsRtaJI+qBrOEmRx9nQ==
+
 lie@~3.3.0:
   version "3.3.0"
   resolved "https://registry.yarnpkg.com/lie/-/lie-3.3.0.tgz#dcf82dee545f46074daf200c7c1c5a08e0f40f6a"
@@ -3906,6 +3939,11 @@ refa@^0.12.0, refa@^0.12.1:
   dependencies:
     "@eslint-community/regexpp" "^4.8.0"
 
+reflect-metadata@^0.2.2:
+  version "0.2.2"
+  resolved "https://registry.yarnpkg.com/reflect-metadata/-/reflect-metadata-0.2.2.tgz#400c845b6cba87a21f2c65c4aeb158f4fa4d9c5b"
+  integrity sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==
+
 reflect.getprototypeof@^1.0.6, reflect.getprototypeof@^1.0.9:
   version "1.0.10"
   resolved "https://registry.npmmirror.com/reflect.getprototypeof/-/reflect.getprototypeof-1.0.10.tgz#c629219e78a3316d8b604c765ef68996964e7bf9"
@@ -4550,6 +4588,11 @@ utrie@^1.0.2:
   integrity sha512-1MLa5ouZiOmQzUbjbu9VmjLzn1QLXBhwpUa7kdLUQK+KQ5KA9I1vk5U4YHe/X2Ch7PYnJfWuWT+VbuxbGwljhw==
   dependencies:
     base64-arraybuffer "^1.0.2"
+
+validator@^13.15.22:
+  version "13.15.35"
+  resolved "https://registry.yarnpkg.com/validator/-/validator-13.15.35.tgz#81cf455c51f15b69d8d340be5914f3fab00dbf7f"
+  integrity sha512-TQ5pAGhd5whStmqWvYF4OjQROlmv9SMFVt37qoCBdqRffuuklWYQlCNnEs2ZaIBD1kZRNnikiZOS1eqgkar0iw==
 
 vite-node@3.2.4:
   version "3.2.4"

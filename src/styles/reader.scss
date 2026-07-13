@@ -193,6 +193,7 @@
 
   &__page-surface {
     position: relative;
+    container-type: inline-size;
     width: min(100%, 720px);
     min-height: 320px;
     border-radius: 14px;

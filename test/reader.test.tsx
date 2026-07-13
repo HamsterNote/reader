@@ -156,7 +156,7 @@ function makePage(number: number) {
   }
 }
 
-function makeText(id: string, content: string) {
+function makeText(id: string, content: string): IntermediateTextSerialized {
   return {
     id,
     content,
@@ -174,35 +174,9 @@ function makeText(id: string, content: string) {
     lineHeight: 16,
     ascent: 10,
     descent: 2,
-    dir: 'ltr',
+    dir: TextDir.LTR,
     skew: 0,
     isEOL: false
-  }
-}
-
-function makeLegacyText(
-  id: string,
-  content: string
-): IntermediateTextSerialized {
-  return {
-    id,
-    content,
-    fontSize: 30,
-    fontFamily: 'Georgia',
-    fontWeight: 500,
-    italic: false,
-    color: '#0f172a',
-    width: 720,
-    height: 42,
-    lineHeight: 42,
-    x: 96,
-    y: 120,
-    ascent: 30,
-    descent: 12,
-    dir: TextDir.LTR,
-    rotate: 0,
-    skew: 0,
-    isEOL: true
   }
 }
 
@@ -357,8 +331,9 @@ describe('Reader public API', () => {
         strokes: [
           {
             id: 'stroke-1',
-            color: '#2563eb',
-            width: 3,
+            tool: 'pen',
+            strokeColor: '#2563eb',
+            strokeWidth: 3,
             points: [
               { x: 10, y: 12 },
               { x: 40, y: 44 }
@@ -380,7 +355,7 @@ describe('Reader public API', () => {
           pages: [
             {
               ...makePage(1),
-              texts: [makeLegacyText('legacy-text-1', 'Legacy page content')]
+              texts: [makeText('legacy-text-1', 'Legacy page content')]
             }
           ]
         })}
@@ -407,6 +382,77 @@ describe('Reader public API', () => {
     expect(
       screen.queryByTestId('intermediate-document-viewer')
     ).not.toBeInTheDocument()
+  })
+
+  it('lets selection modes receive pointer input through the drawing layer', () => {
+    const { rerender } = render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='text-selection'
+      />
+    )
+
+    const drawingLayer = screen.getByTestId('reader-page-drawing-layer-page-1')
+    expect(drawingLayer).toHaveStyle({ pointerEvents: 'none' })
+
+    rerender(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='drawing'
+      />
+    )
+
+    expect(drawingLayer).toHaveStyle({ pointerEvents: 'auto' })
+  })
+
+  it('bounds persisted drawing data before rendering legacy pages', () => {
+    const oversizedDrawing: DrawingValue = {
+      strokes: Array.from({ length: 501 }, (_, index) => ({
+        id: `stroke-${index}`,
+        tool: 'pen',
+        points: [{ x: index, y: index }]
+      }))
+    }
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='drawing'
+        pagePaintings={{ 'page-1': oversizedDrawing }}
+      />
+    )
+
+    expect(screen.getByText('Strokes').nextElementSibling).toHaveTextContent(
+      '500'
+    )
+  })
+
+  it('renders current serialized page content with container-scaled text geometry', () => {
+    render(
+      <Reader
+        document={{
+          ...makeDocument({ pages: [makePage(1)] }),
+          pages: [
+            {
+              ...makePage(1),
+              content: [makeText('content-text-1', 'Current page content')],
+              texts: undefined
+            }
+          ]
+        }}
+        selectedTool='text-selection'
+      />
+    )
+
+    const text = screen.getByTestId('reader-page-text-content-text-1')
+    expect(text).toHaveTextContent('Current page content')
+    expect(text.getAttribute('style')).toContain('font-size: 12%')
+    expect(text.getAttribute('style')).toContain(
+      'line-height: 133.33333333333331%'
+    )
+    expect(screen.getByText('Content').nextElementSibling).toHaveTextContent(
+      '1'
+    )
   })
 })
 
