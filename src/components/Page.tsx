@@ -1,10 +1,4 @@
-import {
-  DrawingSurface,
-  type DrawingPoint,
-  type DrawingStroke,
-  type DrawingTool,
-  type DrawingValue
-} from '@hamster-note/painting'
+import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
 import {
   Selection,
   type SelectionRange,
@@ -17,6 +11,13 @@ import type {
   IntermediateTextSerialized
 } from '@hamster-note/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
+
+import { PageDrawingLayer, sanitizeDrawingValue } from './PageDrawingLayer'
+
+const STANDALONE_DRAWING_GESTURES = [
+  'TouchDoublePan',
+  'TouchDoubleZoom'
+] as const
 
 export type ReaderPageTool = 'text-selection' | 'rect-selection' | 'drawing'
 
@@ -42,20 +43,13 @@ export type PageProps = {
   onPaintingChange?: (nextValue: DrawingValue) => void
   onTextSelectionsChange?: (nextSelections: readonly SelectionRange[]) => void
   onRectSelectionsChange?: (nextSelections: readonly SelectionRect[]) => void
+  onTextSelectionUpdate?: (nextSelection: SelectionRange) => void
+  onRectSelectionUpdate?: (nextSelection: SelectionRect) => void
+  autoConfirm?: boolean
 }
-
-const EMPTY_DRAWING_VALUE: DrawingValue = {
-  strokes: []
-}
-
-// Persisted annotations can originate outside this package. Keep rendering work
-// bounded so a malformed or hostile document cannot lock up the browser.
-const MAX_DRAWING_STROKES = 500
-const MAX_DRAWING_POINTS = 20_000
 
 const EMPTY_TEXT_SELECTIONS: readonly SelectionRange[] = []
 const EMPTY_RECT_SELECTIONS: readonly SelectionRect[] = []
-const PAINTING_GESTURES = ['TouchDoublePan', 'TouchDoubleZoom'] as const
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected reader page tool: ${value}`)
@@ -120,67 +114,6 @@ function getPageTexts(
   }
 
   return page.texts ?? []
-}
-
-function getSafeDrawingPoint(point: unknown): DrawingPoint | null {
-  if (
-    typeof point !== 'object' ||
-    point === null ||
-    !('x' in point) ||
-    typeof point.x !== 'number' ||
-    !Number.isFinite(point.x) ||
-    !('y' in point) ||
-    typeof point.y !== 'number' ||
-    !Number.isFinite(point.y)
-  ) {
-    return null
-  }
-
-  return {
-    x: point.x,
-    y: point.y,
-    ...('pressure' in point &&
-    typeof point.pressure === 'number' &&
-    Number.isFinite(point.pressure)
-      ? { pressure: point.pressure }
-      : {})
-  }
-}
-
-function getSafeDrawingPoints(
-  points: readonly unknown[],
-  maxPointChecks: number
-): DrawingPoint[] {
-  return points
-    .slice(0, maxPointChecks)
-    .flatMap((point) => getSafeDrawingPoint(point) ?? [])
-}
-
-function getSafeDrawingValue(value: DrawingValue | undefined): DrawingValue {
-  if (!value || !Array.isArray(value.strokes)) {
-    return EMPTY_DRAWING_VALUE
-  }
-
-  let inspectedPointCount = 0
-  const strokes: DrawingStroke[] = []
-
-  for (const stroke of value.strokes.slice(0, MAX_DRAWING_STROKES)) {
-    const remainingPointChecks = MAX_DRAWING_POINTS - inspectedPointCount
-    if (
-      typeof stroke.id !== 'string' ||
-      !Array.isArray(stroke.points) ||
-      remainingPointChecks === 0
-    ) {
-      continue
-    }
-
-    const inspectedPoints = stroke.points.slice(0, remainingPointChecks)
-    const points = getSafeDrawingPoints(inspectedPoints, remainingPointChecks)
-    inspectedPointCount += inspectedPoints.length
-    strokes.push({ ...stroke, points })
-  }
-
-  return { strokes }
 }
 
 function getPolygonBounds(
@@ -298,12 +231,16 @@ export function Page({
   rectSelections = EMPTY_RECT_SELECTIONS,
   onPaintingChange,
   onTextSelectionsChange,
-  onRectSelectionsChange
+  onRectSelectionsChange,
+  onTextSelectionUpdate,
+  onRectSelectionUpdate,
+  autoConfirm = false
 }: PageProps) {
   const selectionRef = useRef<SelectionRef>(null)
+  const confirmationTimerRef = useRef<number | null>(null)
   const selectionTool = getSelectionTool(selectedTool)
   const drawingValue = useMemo(
-    () => getSafeDrawingValue(paintingValue),
+    () => sanitizeDrawingValue(paintingValue),
     [paintingValue]
   )
   const contentCount = getPageTexts(page).length
@@ -332,10 +269,23 @@ export function Page({
     })
   }, [rectSelections])
 
+  useEffect(
+    () => () => {
+      if (confirmationTimerRef.current !== null) {
+        window.clearTimeout(confirmationTimerRef.current)
+      }
+    },
+    []
+  )
+
   const textLayer = useMemo(() => renderTextLayer(page), [page])
   const showSelectionLayer = selectedTool !== 'drawing'
   const handleSelectionEnd = () => {
-    window.setTimeout(() => {
+    if (confirmationTimerRef.current !== null) {
+      window.clearTimeout(confirmationTimerRef.current)
+    }
+    confirmationTimerRef.current = window.setTimeout(() => {
+      confirmationTimerRef.current = null
       if (selectedTool === 'rect-selection') {
         selectionRef.current?.confirmRect()
         return
@@ -413,7 +363,10 @@ export function Page({
                 setSelectedRectId(rect.id)
               }}
               onSelectRect={setSelectedRectId}
-              onSelectionEnd={handleSelectionEnd}
+              onUpdateRange={onTextSelectionUpdate}
+              onUpdateRect={onRectSelectionUpdate}
+              onSelectionEnd={autoConfirm ? handleSelectionEnd : undefined}
+              overlayRectType='percent'
               selectionStyle={{ backgroundColor: 'rgba(236, 72, 153, 0.28)' }}
               markerStyle={{ backgroundColor: 'rgba(250, 204, 21, 0.36)' }}
             >
@@ -423,26 +376,15 @@ export function Page({
             textLayer
           )}
 
-          <div
-            className='hamster-reader__drawing-layer'
-            data-testid={`reader-page-drawing-layer-${page.id}`}
-            style={{
-              pointerEvents: selectedTool === 'drawing' ? 'auto' : 'none'
-            }}
-          >
-            <DrawingSurface
-              value={drawingValue}
-              onChange={onPaintingChange}
-              tool={paintingTool}
-              inputMethods={selectedTool === 'drawing' ? undefined : []}
-              gestures={selectedTool === 'drawing' ? PAINTING_GESTURES : []}
-              gestureScaleBounds={{ minScale: 0.5, maxScale: 4 }}
-              cursor={selectedTool === 'drawing' ? undefined : false}
-              strokeColor='#2563eb'
-              strokeWidth={3}
-              testID={`reader-painting-${page.id}`}
-            />
-          </div>
+          <PageDrawingLayer
+            enabled={selectedTool === 'drawing'}
+            pageId={page.id}
+            tool={paintingTool}
+            value={paintingValue}
+            onChange={onPaintingChange}
+            gestures={STANDALONE_DRAWING_GESTURES}
+            gestureScaleBounds={{ minScale: 0.5, maxScale: 4 }}
+          />
         </div>
 
         <p className='hamster-reader__page-hint'>{getPageHint(selectedTool)}</p>

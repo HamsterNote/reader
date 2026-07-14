@@ -462,6 +462,31 @@ describe('demo parser flow', () => {
     })
   })
 
+  it('provides drawing in the tool selector and forwards it to Reader', async () => {
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Drawing Tool Document')
+    )
+
+    render(<App />)
+    upload(makeFile('drawing-tool.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const select = screen.getByTestId('selection-tool-select')
+    expect(select).toHaveValue('text-selection')
+    expect(select).toHaveTextContent('绘图 Drawing')
+
+    fireEvent.change(select, { target: { value: 'drawing' } })
+
+    await waitFor(() => {
+      expect(select).toHaveValue('drawing')
+      expect(findDocumentReaderProps()?.selectedTool).toBe('drawing')
+      expect(findDocumentReaderProps()?.pagePaintings).toEqual({})
+      expect(findDocumentReaderProps()?.onPagePaintingsChange).toBeTypeOf(
+        'function'
+      )
+    })
+  })
+
   it('hides touch pan mode select when render mode is text', async () => {
     vi.mocked(PdfParser.encode).mockResolvedValue(
       makeRuntimeDocument('Text Mode Touch Pan Document')
@@ -1039,7 +1064,11 @@ describe('demo parser flow', () => {
       onSelectRange('no-scroll-del')
 
       await waitFor(() => {
-        uploadReaderProps = findDocumentReaderProps()!
+        const nextReaderProps = findDocumentReaderProps()
+        if (!nextReaderProps) {
+          throw new Error('Expected document Reader props')
+        }
+        uploadReaderProps = nextReaderProps
         expect(uploadReaderProps?.selectedRangeId).toBe('no-scroll-del')
       })
 

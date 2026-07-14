@@ -1,3 +1,4 @@
+import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
 import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
@@ -41,6 +42,7 @@ import type {
   ReaderSelectionTool
 } from '../../types/selection'
 import { PopoverPortal } from '../PopoverPortal'
+import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
 import {
   buildSelectionPayload,
   textElementRecords,
@@ -490,6 +492,10 @@ export type IntermediateDocumentViewerProps = {
   containMarginX?: number
   /** VirtualPaper 垂直留白边距，单位 px */
   containMarginY?: number
+  selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
+  paintingTool?: DrawingTool
+  pagePaintings?: Record<string, DrawingValue>
+  onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
 }
 
 type PageSize = {
@@ -991,6 +997,11 @@ type ViewerContentProps = PageResources & {
   touchPanMode?: ReaderTouchPanMode
   containMarginX?: number
   containMarginY?: number
+  selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
+  paintingTool?: DrawingTool
+  pagePaintings?: Record<string, DrawingValue>
+  onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
+  drawingScale: number
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1094,6 +1105,11 @@ type IntermediateDocumentPagesProps = PageResources & {
     commitTime: number,
     actualDuration: number
   ) => void
+  selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
+  paintingTool?: DrawingTool
+  pagePaintings?: Record<string, DrawingValue>
+  onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
+  drawingScale: number
 }
 
 function IntermediateDocumentPages({
@@ -1132,7 +1148,12 @@ function IntermediateDocumentPages({
   onSelectRect,
   onUpdateRect,
   onRectPointerUp,
-  onPageRenderTiming
+  onPageRenderTiming,
+  selectedTool,
+  paintingTool,
+  pagePaintings,
+  onPagePaintingChange,
+  drawingScale
 }: IntermediateDocumentPagesProps) {
   // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
   // 实例可以渲染 popover，其余页面传入 undefined。
@@ -1163,6 +1184,7 @@ function IntermediateDocumentPages({
           pageNumber
         )
         const shellSelectionId = runtimePageSelectionId(pageNumber)
+        const publicPageId = `page-${pageNumber}`
 
         const pageTexts = textsByPageNumber.get(pageNumber)
         const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
@@ -1207,6 +1229,7 @@ function IntermediateDocumentPages({
             className='hamster-reader__intermediate-page'
             data-testid={`intermediate-page-${pageNumber}`}
             data-page-number={pageNumber}
+            data-tool={selectedTool}
             data-selection-id={shellSelectionId}
             data-page-size-unavailable={
               shellPageSize.pageSizeUnavailable ? 'true' : undefined
@@ -1252,6 +1275,23 @@ function IntermediateDocumentPages({
                 {pageContent}
               </HamsterSelection>
             ) : null}
+            {isPageContentLoaded &&
+              (selectedTool === 'drawing' ||
+                hasDrawingStrokes(pagePaintings?.[publicPageId])) && (
+                <PageDrawingLayer
+                  enabled={selectedTool === 'drawing'}
+                  pageId={publicPageId}
+                  tool={paintingTool}
+                  value={pagePaintings?.[publicPageId]}
+                  canvasScale={drawingScale}
+                  onChange={
+                    onPagePaintingChange
+                      ? (nextValue) =>
+                          onPagePaintingChange(publicPageId, nextValue)
+                      : undefined
+                  }
+                />
+              )}
           </div>
         )
       })}
@@ -1308,7 +1348,12 @@ function ViewerContent({
   onPageRenderTiming,
   touchPanMode,
   containMarginX,
-  containMarginY
+  containMarginY,
+  selectedTool,
+  paintingTool,
+  pagePaintings,
+  onPagePaintingChange,
+  drawingScale
 }: ViewerContentProps) {
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
@@ -1613,6 +1658,11 @@ function ViewerContent({
       onUpdateRect={onUpdateRect}
       onRectPointerUp={handleRectPointerUp}
       onPageRenderTiming={onPageRenderTiming}
+      selectedTool={selectedTool}
+      paintingTool={paintingTool}
+      pagePaintings={pagePaintings}
+      onPagePaintingChange={onPagePaintingChange}
+      drawingScale={drawingScale}
     />
   )
 
@@ -1650,7 +1700,7 @@ function ViewerContent({
           minScale={scaleRange.min}
           maxScale={scaleRange.max}
           enabledInteractions={
-            touchPanMode === 'two-finger'
+            selectedTool === 'drawing' || touchPanMode === 'two-finger'
               ? TWO_FINGER_TOUCH_ENABLED_INTERACTIONS
               : DEFAULT_ENABLED_INTERACTIONS
           }
@@ -1718,7 +1768,11 @@ export function IntermediateDocumentViewer({
   pageUnloadDelayMs = 5000,
   onIntermediateDocumentRenderTiming,
   containMarginX,
-  containMarginY
+  containMarginY,
+  selectedTool,
+  paintingTool,
+  pagePaintings,
+  onPagePaintingChange
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -3776,6 +3830,11 @@ export function IntermediateDocumentViewer({
       touchPanMode={touchPanMode}
       containMarginX={containMarginX}
       containMarginY={containMarginY}
+      selectedTool={selectedTool}
+      paintingTool={paintingTool}
+      pagePaintings={pagePaintings}
+      onPagePaintingChange={onPagePaintingChange}
+      drawingScale={virtualPaperTransform.scale}
     />
   )
 }
