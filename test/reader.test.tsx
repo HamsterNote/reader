@@ -13,6 +13,7 @@ import {
   SUPPORTED_UPLOAD_ACCEPT,
   SUPPORTED_UPLOAD_COPY
 } from '../src/components/Reader'
+import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import type {
   ReaderInteractionMode,
   ReaderProps,
@@ -443,6 +444,28 @@ describe('Reader public API', () => {
     expect(await screen.findByTestId('reader-painting-page-1')).toHaveAttribute(
       'data-stroke-count',
       '0'
+    )
+  })
+
+  it('bounds persisted drawing dash arrays before rendering', () => {
+    // Given: one otherwise-valid stroke contains an attacker-controlled style array.
+    const drawing: DrawingValue = {
+      strokes: [
+        {
+          id: 'oversized-dash-array',
+          tool: 'pen',
+          points: [{ x: 10, y: 20 }],
+          dashArray: Array.from({ length: 10_000 }, (_, index) => index + 1)
+        }
+      ]
+    }
+
+    // When: persisted page data crosses the drawing boundary.
+    const sanitized = sanitizeDrawingValue(drawing)
+
+    // Then: only a small, fixed prefix is retained for rendering.
+    expect(sanitized.strokes[0]?.dashArray).toEqual(
+      Array.from({ length: 32 }, (_, index) => index + 1)
     )
   })
 
