@@ -48,6 +48,7 @@ import {
   type ReaderSelectionPayload
 } from '../selection/selectionPayloadSerializer'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import { PageBrowser } from './PageBrowser'
 import {
   computePageOriginY,
   computeTransform,
@@ -490,6 +491,8 @@ export type IntermediateDocumentViewerProps = {
   containMarginX?: number
   /** VirtualPaper 垂直留白边距，单位 px */
   containMarginY?: number
+  /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
+  showPageBrowser?: boolean
 }
 
 type PageSize = {
@@ -991,6 +994,12 @@ type ViewerContentProps = PageResources & {
   touchPanMode?: ReaderTouchPanMode
   containMarginX?: number
   containMarginY?: number
+  showPageBrowser: boolean
+  onPageBrowserVisibilityChange: (
+    pageNumber: number,
+    isVisible: boolean
+  ) => void
+  onNavigateToPage: (pageNumber: number) => void
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1308,7 +1317,10 @@ function ViewerContent({
   onPageRenderTiming,
   touchPanMode,
   containMarginX,
-  containMarginY
+  containMarginY,
+  showPageBrowser,
+  onPageBrowserVisibilityChange,
+  onNavigateToPage
 }: ViewerContentProps) {
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
@@ -1644,6 +1656,16 @@ function ViewerContent({
       data-testid='intermediate-document-viewer'
     >
       {pageNumbers.length > 0 ? (
+        <PageBrowser
+          isOpen={showPageBrowser}
+          pageNumbers={pageNumbers}
+          pageSizesByPageNumber={pageSizesByPageNumber}
+          baseImagesByPageNumber={baseImagesByPageNumber}
+          onPageVisibilityChange={onPageBrowserVisibilityChange}
+          onNavigateToPage={onNavigateToPage}
+        />
+      ) : null}
+      {pageNumbers.length > 0 ? (
         <VirtualPaper
           containMode={true}
           transform={virtualPaperTransform}
@@ -1718,7 +1740,8 @@ export function IntermediateDocumentViewer({
   pageUnloadDelayMs = 5000,
   onIntermediateDocumentRenderTiming,
   containMarginX,
-  containMarginY
+  containMarginY,
+  showPageBrowser = false
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -1984,6 +2007,7 @@ export function IntermediateDocumentViewer({
   // 标记活动 transform 期间是否有 eviction 被跳过，仅在确实跳过时才在 transform 结束后补偿
   const evictionSkippedDuringTransformRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
+  const pageBrowserVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
   const jumpPinTokensRef = useRef(new Map<number, symbol>())
   const jumpPinCleanupTimersRef = useRef(
@@ -2215,6 +2239,11 @@ export function IntermediateDocumentViewer({
         lastKnownVisiblePagesRef.current.delete(pageNumber)
       }
     })
+    pageBrowserVisiblePagesRef.current.forEach((pageNumber) => {
+      if (!currentPageNumbers.has(pageNumber)) {
+        pageBrowserVisiblePagesRef.current.delete(pageNumber)
+      }
+    })
   }, [clearAllJumpPins, pageNumbers])
 
   useEffect(() => {
@@ -2233,6 +2262,7 @@ export function IntermediateDocumentViewer({
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
     lazilyEvictedPagesRef.current.clear()
+    pageBrowserVisiblePagesRef.current.clear()
     setLoadablePages(new Set())
     setVisiblePages(new Set())
     setTextsByPageNumber(new Map())
@@ -2845,6 +2875,9 @@ export function IntermediateDocumentViewer({
     pinnedPagesRef.current.forEach((pageNumber) => {
       protectedPages.add(pageNumber)
     })
+    pageBrowserVisiblePagesRef.current.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
 
     const selection = getSelectionForRoot(viewerRootRef.current)
     if (selection && !selection.isCollapsed) {
@@ -2928,6 +2961,71 @@ export function IntermediateDocumentViewer({
       pendingUnloadTimersRef.current.set(pageNumber, timer)
     },
     [evictLazyPageBundle]
+  )
+
+  const handlePageBrowserVisibilityChange = useCallback(
+    (pageNumber: number, isVisible: boolean) => {
+      if (!pageNumbers.includes(pageNumber)) return
+
+      if (isVisible) {
+        pageBrowserVisiblePagesRef.current.add(pageNumber)
+        clearUnloadTimer(pageNumber)
+        lazilyEvictedPagesRef.current.delete(pageNumber)
+        markLoadableWithOverscan(pageNumber)
+        scheduleVisibilityEnqueue(pageNumber)
+        return
+      }
+
+      pageBrowserVisiblePagesRef.current.delete(pageNumber)
+      if (!lastKnownVisiblePagesRef.current.has(pageNumber)) {
+        cancelVisibilityEnqueue(pageNumber)
+      }
+      schedulePageUnload(pageNumber)
+    },
+    [
+      cancelVisibilityEnqueue,
+      clearUnloadTimer,
+      markLoadableWithOverscan,
+      pageNumbers,
+      schedulePageUnload,
+      scheduleVisibilityEnqueue
+    ]
+  )
+
+  const navigateToPage = useCallback(
+    (pageNumber: number) => {
+      if (!pageNumbers.includes(pageNumber)) return
+
+      const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(pageNumber)
+      clearUnloadTimer(pageNumber)
+      lazilyEvictedPagesRef.current.delete(pageNumber)
+      markLoadableWithOverscan(pageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(pageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(pageNumber)
+      }
+
+      scrollToPosition({
+        x: 0,
+        y: computePageOriginY(pageNumber, pageNumbers, pageSizesByPageNumber)
+      })
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      releaseJumpPinnedPage,
+      scrollToPosition
+    ]
   )
 
   const scheduleEviction = useCallback(
@@ -3776,6 +3874,9 @@ export function IntermediateDocumentViewer({
       touchPanMode={touchPanMode}
       containMarginX={containMarginX}
       containMarginY={containMarginY}
+      showPageBrowser={showPageBrowser}
+      onPageBrowserVisibilityChange={handlePageBrowserVisibilityChange}
+      onNavigateToPage={navigateToPage}
     />
   )
 }

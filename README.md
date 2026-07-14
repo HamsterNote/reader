@@ -201,6 +201,7 @@ export function App() {
 | `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
 | `selectionRef` | `React.Ref<ReaderSelectionRef>` | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range. |
 | `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
+| `showPageBrowser` | `boolean` | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`. |
 
 ### Exported Types
 

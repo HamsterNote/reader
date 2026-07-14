@@ -148,6 +148,7 @@ export function App() {
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
+  const [showPageBrowser, setShowPageBrowser] = useState(false)
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
@@ -508,39 +509,62 @@ export function App() {
                 </label>
               </div>
               {renderMode === 'layout' && (
-                <div style={{ marginBottom: '12px' }}>
-                  <label
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}
-                  >
-                    <span>滑动模式 Touch Pan Mode</span>
-                    <select
-                      value={touchPanMode}
-                      onChange={(e) => {
-                        const nextTouchPanMode = e.currentTarget.value
-                        if (
-                          nextTouchPanMode === 'single-finger' ||
-                          nextTouchPanMode === 'two-finger'
-                        ) {
-                          setTouchPanMode(nextTouchPanMode)
-                        }
-                      }}
-                      data-testid='touch-pan-mode-select'
+                <>
+                  <div style={{ marginBottom: '12px' }}>
+                    <label
                       style={{
-                        padding: '4px 8px',
-                        border: '1px solid #ccc',
-                        borderRadius: '4px',
-                        background: '#fff'
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
                       }}
                     >
-                      <option value='single-finger'>单指 Single-finger</option>
-                      <option value='two-finger'>双指 Two-finger</option>
-                    </select>
-                  </label>
-                </div>
+                      <span>滑动模式 Touch Pan Mode</span>
+                      <select
+                        value={touchPanMode}
+                        onChange={(e) => {
+                          const nextTouchPanMode = e.currentTarget.value
+                          if (
+                            nextTouchPanMode === 'single-finger' ||
+                            nextTouchPanMode === 'two-finger'
+                          ) {
+                            setTouchPanMode(nextTouchPanMode)
+                          }
+                        }}
+                        data-testid='touch-pan-mode-select'
+                        style={{
+                          padding: '4px 8px',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          background: '#fff'
+                        }}
+                      >
+                        <option value='single-finger'>
+                          单指 Single-finger
+                        </option>
+                        <option value='two-finger'>双指 Two-finger</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div style={{ marginBottom: '12px' }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      <input
+                        type='checkbox'
+                        checked={showPageBrowser}
+                        onChange={(event) =>
+                          setShowPageBrowser(event.currentTarget.checked)
+                        }
+                        data-testid='page-browser-toggle'
+                      />
+                      <span>显示页面浏览栏 Page Browser</span>
+                    </label>
+                  </div>
+                </>
               )}
               <div style={{ marginBottom: '12px' }}>
                 <label
@@ -879,6 +903,7 @@ export function App() {
           autoHighlight={autoHighlight}
           containMarginX={containMarginX}
           containMarginY={containMarginY}
+          showPageBrowser={showPageBrowser}
           tool={tool}
           rects={rects}
           selectedRectId={selectedRectId}

@@ -107,6 +107,8 @@ export type ReaderProps = {
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   containMarginX?: number
   containMarginY?: number
+  /** 是否显示布局模式的页面浏览侧栏，默认 false */
+  showPageBrowser?: boolean
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
@@ -297,6 +299,7 @@ export function Reader({
   onIntermediateDocumentRenderTiming,
   containMarginX,
   containMarginY,
+  showPageBrowser,
   selectedTool,
   paintingTool = 'pen',
   pagePaintings,
@@ -588,6 +591,7 @@ export function Reader({
           }
           containMarginX={containMarginX}
           containMarginY={containMarginY}
+          showPageBrowser={showPageBrowser}
         />
       )
     }

@@ -6269,4 +6269,67 @@ describe('touchPanMode', () => {
       VirtualPaperInteractionMode.TouchSingleFingerPan
     )
   })
+
+  describe('page browser', () => {
+    it('is hidden by default and slides open through the public prop', () => {
+      const { document } = makeDocument({ pageCount: 3 })
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={document} />
+      )
+      const browser = screen.getByTestId('page-browser')
+
+      expect(browser).toHaveAttribute('aria-hidden', 'true')
+      expect(browser).not.toHaveClass('hamster-reader__page-browser--open')
+
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+        />
+      )
+
+      expect(browser).toHaveAttribute('aria-hidden', 'false')
+      expect(browser).toHaveClass('hamster-reader__page-browser--open')
+      expect(
+        screen.getAllByRole('button', { name: /Go to page/ })
+      ).toHaveLength(3)
+    })
+
+    it('loads a sustained visible thumbnail through the shared lazy queue', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+      const pageThree = pages.get(3)
+      if (!pageThree) {
+        throw new Error('Expected page 3 fixture')
+      }
+      pageThree.getThumbnail = vi.fn(async () => 'page-3-thumbnail')
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+        />
+      )
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('page-browser-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(500)
+        })
+        for (let index = 0; index < 20; index += 1) {
+          await Promise.resolve()
+        }
+
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
+        expect(pages.get(3)?.getThumbnail).toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
 })

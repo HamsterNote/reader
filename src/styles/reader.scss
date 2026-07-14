@@ -357,6 +357,132 @@
     }
   }
 
+  &__page-browser {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 10;
+    display: flex;
+    width: min(240px, 78vw);
+    flex-direction: column;
+    box-sizing: border-box;
+    color: #111827;
+    background: rgba(249, 250, 251, 0.98);
+    border-right: 1px solid #e5e7eb;
+    box-shadow: 12px 0 32px rgba(17, 24, 39, 0.12);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(-100%);
+    transition:
+      transform 220ms ease,
+      opacity 180ms ease,
+      visibility 0s linear 220ms;
+
+    &--open {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateX(0);
+      transition-delay: 0s;
+    }
+  }
+
+  &__page-browser-header {
+    flex: 0 0 auto;
+    padding: 16px 18px 12px;
+    color: #374151;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  &__page-browser-list {
+    min-height: 0;
+    padding: 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  &__page-browser-item {
+    display: block;
+    width: 100%;
+    margin: 0 0 16px;
+    padding: 0;
+    color: #4b5563;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    &:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 4px;
+      border-radius: 2px;
+    }
+  }
+
+  &__page-browser-preview {
+    position: relative;
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    box-shadow: 0 2px 8px rgba(17, 24, 39, 0.08);
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  &__page-browser-item:hover &__page-browser-preview {
+    border-color: #9ca3af;
+    box-shadow: 0 4px 14px rgba(17, 24, 39, 0.14);
+  }
+
+  &__page-browser-image,
+  &__page-browser-placeholder {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  &__page-browser-image {
+    object-fit: fill;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  &__page-browser-placeholder {
+    background: linear-gradient(110deg, #ffffff 20%, #f3f4f6 45%, #ffffff 70%);
+    background-size: 220% 100%;
+    animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  }
+
+  &__page-browser-page-number {
+    display: block;
+    padding-top: 7px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &__page-browser {
+      transition: none;
+    }
+
+    &__page-browser-placeholder {
+      animation: none;
+    }
+  }
+
   // ---- 文本渲染模式（renderMode="text"）scoped styles (T7) ----
   // 文本模式使用独立的 class 体系，与 layout 模式
   // (.hamster-reader__intermediate-page / .hamster-reader__intermediate-text)

@@ -1361,4 +1361,15 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.containMarginX).toBe(24)
     expect(capturedViewerProps.containMarginY).toBe(48)
   })
+
+  it('defaults the page browser to closed and forwards an explicit open state', () => {
+    const { document } = makeLazyDocument(2)
+    const { rerender } = render(<Reader document={document} />)
+
+    expect(capturedViewerProps.showPageBrowser).toBeUndefined()
+
+    rerender(<Reader document={document} showPageBrowser={true} />)
+
+    expect(capturedViewerProps.showPageBrowser).toBe(true)
+  })
 })
