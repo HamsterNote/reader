@@ -113,6 +113,28 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 
 Text mode renders document text as normal flow content. It does not render page images, intermediate images, or OCR output, and it does not convert existing layout-mode highlight geometry into text-flow highlight geometry.
 
+### Text, rectangle, and drawing tools
+
+In layout mode, `selectedTool` switches the active page interaction without replacing the virtualized reader. Existing zoom, page-range, OCR, lazy loading, and linked-selection behavior therefore remains available in every tool mode.
+
+```tsx
+const [selectedTool, setSelectedTool] = useState<ReaderPageTool>('text-selection')
+const [pagePaintings, setPagePaintings] = useState<ReaderPagePaintingMap>({})
+
+<Reader
+  document={document}
+  selectedTool={selectedTool}
+  pagePaintings={pagePaintings}
+  onPagePaintingsChange={setPagePaintings}
+/>
+```
+
+- `text-selection` uses the existing linked text-selection API (`ranges`, `onSelect`, `onUpdateRange`).
+- `rect-selection` uses the existing rectangle API (`rects`, `onCreateRect`, `onUpdateRect`).
+- `drawing` enables a per-page `DrawingSurface`; painting map keys use stable public IDs such as `page-1` and `page-2`.
+- An explicitly supplied legacy `tool` prop takes precedence over the text/rectangle mapping from `selectedTool`.
+- `renderMode='text'` remains text-only and does not mount drawing or rectangle overlays.
+
 ## Text Selection (@hamster-note/selection)
 
 `Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features, highlighted ranges, popovers, and programmatic control on top of the native browser `Selection` API.

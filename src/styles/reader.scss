@@ -241,6 +241,13 @@
     }
   }
 
+  // VirtualPaper 已负责整份文档的缩放和平移。绘图层只填满当前页面，
+  // 不继承 painting 组件为独立画布准备的最小高度和边框。
+  &__intermediate-page > &__drawing-layer > div {
+    min-height: 0 !important;
+    border: 0 !important;
+  }
+
   &__text-item {
     position: absolute;
     display: block;

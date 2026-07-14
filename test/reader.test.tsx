@@ -1,5 +1,4 @@
 import type { DrawingValue } from '@hamster-note/painting'
-import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized,
@@ -22,7 +21,7 @@ import type {
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '../src/index'
-import { Reader } from '../src/index'
+import { Page, Reader } from '../src/index'
 import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
 import { intersectionObserverMock } from './setup'
 
@@ -325,7 +324,7 @@ describe('Reader public API', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('renders legacy page drawing mode when old page tool props are used', () => {
+  it('keeps the full layout viewer when drawing mode is enabled', async () => {
     const pagePaintings: Record<string, DrawingValue> = {
       'page-1': {
         strokes: [
@@ -342,13 +341,6 @@ describe('Reader public API', () => {
         ]
       }
     }
-    const pageTextSelections: Record<string, readonly SelectionRange[]> = {
-      'page-1': [{ id: 'text-mark-1' } as SelectionRange]
-    }
-    const pageRectSelections: Record<string, readonly SelectionRect[]> = {
-      'page-1': [{ id: 'rect-mark-1' } as SelectionRect]
-    }
-
     render(
       <Reader
         document={makeDocument({
@@ -361,30 +353,34 @@ describe('Reader public API', () => {
         })}
         selectedTool='drawing'
         pagePaintings={pagePaintings}
-        pageTextSelections={pageTextSelections}
-        pageRectSelections={pageRectSelections}
+        pageRange={{ start: 1, end: 1 }}
+        scale={2}
       />
     )
 
-    expect(screen.getByTestId('reader-pages')).toBeInTheDocument()
-    expect(screen.getByTestId('reader-page-page-1')).toHaveAttribute(
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-page-1')).toHaveAttribute(
       'data-tool',
       'drawing'
     )
     expect(
-      screen.getByTestId('reader-page-drawing-layer-page-1')
+      await screen.findByTestId('reader-painting-page-1')
     ).toBeInTheDocument()
-    expect(screen.getByText('Tool: Drawing')).toBeInTheDocument()
-    expect(screen.getByText('Text Marks')).toBeInTheDocument()
-    expect(screen.getByText('Rect Marks')).toBeInTheDocument()
-    expect(screen.getByText('Strokes')).toBeInTheDocument()
-    expect(screen.getByText('Legacy page content')).toBeInTheDocument()
+    expect(capturedViewerProps.pageRange).toEqual({ start: 1, end: 1 })
+    expect(capturedViewerProps.scale).toBe(2)
+    expect(screen.getByTestId('reader-page-drawing-layer-page-1')).toHaveStyle({
+      width: '200%',
+      height: '200%',
+      transform: 'scale(0.5)'
+    })
     expect(
-      screen.queryByTestId('intermediate-document-viewer')
-    ).not.toBeInTheDocument()
+      screen.getByTestId('reader-painting-page-1').querySelector('path')
+    ).toHaveAttribute('d', 'M 20 24 L 80 88')
   })
 
-  it('lets selection modes receive pointer input through the drawing layer', () => {
+  it('lets selection modes receive pointer input through the drawing layer', async () => {
     const { rerender } = render(
       <Reader
         document={makeDocument({ pages: [makePage(1)] })}
@@ -392,8 +388,9 @@ describe('Reader public API', () => {
       />
     )
 
-    const drawingLayer = screen.getByTestId('reader-page-drawing-layer-page-1')
-    expect(drawingLayer).toHaveStyle({ pointerEvents: 'none' })
+    expect(
+      screen.queryByTestId('reader-page-drawing-layer-page-1')
+    ).not.toBeInTheDocument()
 
     rerender(
       <Reader
@@ -402,10 +399,12 @@ describe('Reader public API', () => {
       />
     )
 
-    expect(drawingLayer).toHaveStyle({ pointerEvents: 'auto' })
+    expect(
+      await screen.findByTestId('reader-page-drawing-layer-page-1')
+    ).toHaveStyle({ pointerEvents: 'auto' })
   })
 
-  it('bounds persisted drawing data before rendering legacy pages', () => {
+  it('bounds persisted drawing data before rendering viewer pages', async () => {
     const oversizedDrawing: DrawingValue = {
       strokes: Array.from({ length: 501 }, (_, index) => ({
         id: `stroke-${index}`,
@@ -422,23 +421,38 @@ describe('Reader public API', () => {
       />
     )
 
-    expect(screen.getByText('Strokes').nextElementSibling).toHaveTextContent(
+    expect(await screen.findByTestId('reader-painting-page-1')).toHaveAttribute(
+      'data-stroke-count',
       '500'
+    )
+  })
+
+  it('ignores malformed persisted drawing entries without crashing', async () => {
+    const malformedDrawing = JSON.parse(
+      '{"strokes":[null,{"id":"broken","points":null}]}'
+    ) as DrawingValue
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='drawing'
+        pagePaintings={{ 'page-1': malformedDrawing }}
+      />
+    )
+
+    expect(await screen.findByTestId('reader-painting-page-1')).toHaveAttribute(
+      'data-stroke-count',
+      '0'
     )
   })
 
   it('renders current serialized page content with container-scaled text geometry', () => {
     render(
-      <Reader
-        document={{
-          ...makeDocument({ pages: [makePage(1)] }),
-          pages: [
-            {
-              ...makePage(1),
-              content: [makeText('content-text-1', 'Current page content')],
-              texts: undefined
-            }
-          ]
+      <Page
+        page={{
+          ...makePage(1),
+          content: [makeText('content-text-1', 'Current page content')],
+          texts: undefined
         }}
         selectedTool='text-selection'
       />
@@ -453,6 +467,34 @@ describe('Reader public API', () => {
     expect(screen.getByText('Content').nextElementSibling).toHaveTextContent(
       '1'
     )
+  })
+
+  it('preserves rapid uncontrolled painting updates across pages', () => {
+    const onPagePaintingsChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1), makePage(2)] })}
+        selectedTool='drawing'
+        onPagePaintingsChange={onPagePaintingsChange}
+      />
+    )
+
+    const updatePainting = capturedViewerProps.onPagePaintingChange
+    if (typeof updatePainting !== 'function') {
+      throw new Error('Expected viewer painting update callback')
+    }
+
+    const pageOneValue: DrawingValue = { strokes: [] }
+    const pageTwoValue: DrawingValue = { strokes: [] }
+    act(() => {
+      updatePainting('page-1', pageOneValue)
+      updatePainting('page-2', pageTwoValue)
+    })
+
+    expect(onPagePaintingsChange).toHaveBeenLastCalledWith({
+      'page-1': pageOneValue,
+      'page-2': pageTwoValue
+    })
   })
 })
 

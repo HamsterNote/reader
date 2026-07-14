@@ -1,13 +1,14 @@
 import { DocxParser } from '@hamster-note/docx-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
+import type { DrawingValue } from '@hamster-note/painting'
 import type {
   ReaderPageRange,
+  ReaderPageTool,
   ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
-  ReaderSelectionTool,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
 import { Reader } from '@hamster-note/reader'
@@ -162,7 +163,11 @@ export function App() {
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
   // 当前选中的 range ID（点击高亮列表项时切换）
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
-  const [tool, setTool] = useState<ReaderSelectionTool>('text')
+  const [selectedTool, setSelectedTool] =
+    useState<ReaderPageTool>('text-selection')
+  const [pagePaintings, setPagePaintings] = useState<
+    Record<string, DrawingValue>
+  >({})
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
@@ -613,13 +618,17 @@ export function App() {
                     gap: '8px'
                   }}
                 >
-                  <span>选择工具 Selection Tool</span>
+                  <span>工具 Tool</span>
                   <select
-                    value={tool}
+                    value={selectedTool}
                     onChange={(e) => {
                       const nextTool = e.currentTarget.value
-                      if (nextTool === 'text' || nextTool === 'rect') {
-                        setTool(nextTool)
+                      if (
+                        nextTool === 'text-selection' ||
+                        nextTool === 'rect-selection' ||
+                        nextTool === 'drawing'
+                      ) {
+                        setSelectedTool(nextTool)
                       }
                     }}
                     data-testid='selection-tool-select'
@@ -630,8 +639,9 @@ export function App() {
                       background: '#fff'
                     }}
                   >
-                    <option value='text'>文本 Text</option>
-                    <option value='rect'>矩形 Rect</option>
+                    <option value='text-selection'>文本选择 Text</option>
+                    <option value='rect-selection'>矩形选择 Rect</option>
+                    <option value='drawing'>绘图 Drawing</option>
                   </select>
                 </label>
               </div>
@@ -879,7 +889,9 @@ export function App() {
           autoHighlight={autoHighlight}
           containMarginX={containMarginX}
           containMarginY={containMarginY}
-          tool={tool}
+          selectedTool={selectedTool}
+          pagePaintings={pagePaintings}
+          onPagePaintingsChange={setPagePaintings}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}

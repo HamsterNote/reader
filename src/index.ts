@@ -98,4 +98,10 @@ export type ReaderInteractiveProps = Pick<
   | 'onCreateRect'
   | 'onSelectRect'
   | 'onUpdateRect'
+  | 'selectedTool'
+  | 'paintingTool'
+  | 'pagePaintings'
+  | 'defaultPagePaintings'
+  | 'onPagePaintingChange'
+  | 'onPagePaintingsChange'
 >
