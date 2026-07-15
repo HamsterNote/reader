@@ -8,6 +8,7 @@ import type {
 import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
 
 import type {
+  ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
@@ -89,7 +90,10 @@ export type ReaderProps = {
   highlightColor?: string
   selectionColor?: string
   selectionPopover?: ReactNode
-  highlightPopover?: ReactNode
+  highlightPopover?: ReaderHighlightPopover
+  onCommentHighlight?: (
+    highlight: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
   autoHighlight?: boolean
   selectionRef?: Ref<ReaderSelectionRef>
   overlayRectType?: ReaderSelectionOverlayRectType
@@ -105,6 +109,9 @@ export type ReaderProps = {
   pageUnloadDelayMs?: number
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   containMarginX?: number
+  containMarginTop?: number
+  containMarginBottom?: number
+  /** @deprecated Use `containMarginTop` and `containMarginBottom`. */
   containMarginY?: number
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
@@ -247,6 +254,7 @@ export function Reader({
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
@@ -262,6 +270,8 @@ export function Reader({
   pageUnloadDelayMs,
   onIntermediateDocumentRenderTiming,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
   selectedTool,
   paintingTool = 'pen',
@@ -588,6 +598,7 @@ export function Reader({
           selectionColor={selectionColor}
           selectionPopover={selectionPopover}
           highlightPopover={highlightPopover}
+          onCommentHighlight={onCommentHighlight}
           autoHighlight={autoHighlight}
           selectionRef={selectionRef}
           overlayRectType={overlayRectType}
@@ -605,6 +616,8 @@ export function Reader({
             onIntermediateDocumentRenderTiming
           }
           containMarginX={containMarginX}
+          containMarginTop={containMarginTop}
+          containMarginBottom={containMarginBottom}
           containMarginY={containMarginY}
           selectedTool={selectedTool}
           paintingTool={paintingTool}

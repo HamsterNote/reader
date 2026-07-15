@@ -217,12 +217,37 @@ export function App() {
 | `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
 | `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
 | `autoHighlight` | `boolean` | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`. |
-| `highlightColor` | `string` | CSS color for highlight overlays. In Phase 1, this applies globally to all highlights. |
+| `highlightColor` | `string` | Default CSS color for highlight overlays. A range-specific `markerStyle.backgroundColor` takes precedence. |
 | `selectionColor` | `string` | CSS color for active selection overlay. |
 | `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
-| `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
+| `highlightPopover` | `React.ReactNode \| ((highlight: ReaderSelectionRange) => React.ReactNode)` | Custom popover content shown when an existing highlight is clicked. The renderer receives the original range object, so range-specific color and metadata can be displayed. |
+| `onCommentHighlight` | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>` | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
 | `selectionRef` | `React.Ref<ReaderSelectionRef>` | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range. |
 | `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
+| `containMarginX` | `number` | Horizontal whitespace around the virtual paper. |
+| `containMarginTop` | `number` | Independent top whitespace around the virtual paper. |
+| `containMarginBottom` | `number` | Independent bottom whitespace around the virtual paper. |
+| `containMarginY` | `number` | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied. |
+
+The existing-highlight popover can use range-specific data and delegate the comment lifecycle to the host:
+
+```tsx
+<Reader
+  ranges={ranges}
+  selectedRangeId={selectedRangeId}
+  highlightPopover={(highlight) => (
+    <input
+      type='color'
+      value={String(highlight.markerStyle?.backgroundColor ?? '#ffc107')}
+    />
+  )}
+  onCommentHighlight={(highlight) =>
+    new Promise((resolve) => {
+      openCommentEditor(highlight, () => resolve(highlight))
+    })
+  }
+/>
+```
 
 ### Exported Types
 

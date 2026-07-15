@@ -8,6 +8,7 @@ import type {
   SelectionRect,
   SelectionTool
 } from '@hamster-note/selection'
+import type { ReactNode } from 'react'
 
 /**
  * Reader 公开 linked selection 端点。
@@ -40,6 +41,11 @@ export type ReaderLinkedSelectionRange = Omit<
 export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
   readonly __readerSelectionRangeBrand?: never
 }
+
+/** 已确认高亮 Popover：静态内容，或基于当前高亮原始对象渲染的内容。 */
+export type ReaderHighlightPopover =
+  | ReactNode
+  | ((highlight: ReaderSelectionRange) => ReactNode)
 
 export type ReaderLinkedSelectionData = Omit<
   LinkedSelectionData,

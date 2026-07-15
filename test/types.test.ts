@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import type {
+  ReaderInteractiveProps,
   ReaderPageRectSelectionMap,
   ReaderPageTextSelectionMap,
-  ReaderInteractiveProps,
   ReaderLinkedSelectionRange,
   ReaderProps,
   ReaderRenderMode,
@@ -90,6 +90,13 @@ const _drawingInteractiveProps: ReaderInteractiveProps = {
   onPagePaintingsChange: () => {}
 }
 
+const _highlightCommentProps: ReaderInteractiveProps = {
+  containMarginTop: 24,
+  containMarginBottom: 48,
+  highlightPopover: (highlight) => highlight.text,
+  onCommentHighlight: async (highlight) => highlight
+}
+
 describe('Reader public selection types', () => {
   it('accepts linked ranges keyed by public page selection ids', () => {
     expect(legacyRangeRejected).toBe(false)
@@ -123,5 +130,7 @@ describe('Reader public selection types', () => {
     expect(_legacyPageSelectionProps.pageTextSelections).toEqual({})
     expect(_legacyPageSelectionProps.pageRectSelections).toEqual({})
     expect(_drawingInteractiveProps.selectedTool).toBe('drawing')
+    expect(_highlightCommentProps.containMarginTop).toBe(24)
+    expect(_highlightCommentProps.containMarginBottom).toBe(48)
   })
 })

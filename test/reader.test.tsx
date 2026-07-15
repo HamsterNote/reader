@@ -46,6 +46,16 @@ vi.mock(
   }
 )
 
+vi.mock('../src/components/PopoverPortal', () => ({
+  PopoverPortal: ({
+    children,
+    visible
+  }: {
+    children: React.ReactNode
+    visible: boolean
+  }) => (visible ? children : null)
+}))
+
 vi.mock('@system-ui-js/multi-drag', () => {
   const DragOperationType = {
     Start: 'start',
@@ -1235,14 +1245,124 @@ describe('Reader prop forwarding', () => {
     )
   })
 
-  it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
+  it('forwards autoHighlight, highlightPopover, and highlight comments to IntermediateDocumentViewer', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     const popover = <div>Test Popover</div>
+    const onCommentHighlight = vi.fn(
+      async (highlight: ReaderSelectionRange) => highlight
+    )
     render(
-      <Reader document={doc} autoHighlight={true} highlightPopover={popover} />
+      <Reader
+        document={doc}
+        autoHighlight={true}
+        highlightPopover={popover}
+        onCommentHighlight={onCommentHighlight}
+      />
     )
     expect(capturedViewerProps.autoHighlight).toBe(true)
     expect(capturedViewerProps.highlightPopover).toBe(popover)
+    expect(capturedViewerProps.onCommentHighlight).toBe(onCommentHighlight)
+  })
+
+  it('renders an existing highlight popover from the original range reference', async () => {
+    // Given: the selected highlight has its own color, which differs from the
+    // current global color used for newly-created highlights.
+    const range: ReaderSelectionRange = {
+      id: 'colored-highlight',
+      text: 'Colored highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 8 },
+      createdAt: 10,
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+      },
+      markerStyle: { backgroundColor: '#ff3366' }
+    }
+    const highlightPopover = vi.fn((highlight: ReaderSelectionRange) => (
+      <input
+        aria-label='Existing highlight color'
+        value={String(highlight.markerStyle?.backgroundColor ?? '#ffee00')}
+        readOnly
+      />
+    ))
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        highlightColor='#ffee00'
+        highlightPopover={highlightPopover}
+      />
+    )
+
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+
+    // When: Selection mounts the existing-highlight popover.
+    render(selectionProps?.popover)
+
+    // Then: the render function receives the exact public range object and can
+    // prioritize that highlight's persisted color over the global picker color.
+    expect(highlightPopover).toHaveBeenCalledWith(range)
+    expect(screen.getByLabelText('Existing highlight color')).toHaveValue(
+      '#ff3366'
+    )
+  })
+
+  it('closes an existing highlight popover after its comment promise resolves', async () => {
+    // Given: a selected public highlight and a host-controlled comment flow.
+    const user = userEvent.setup()
+    const range: ReaderSelectionRange = {
+      id: 'commented-highlight',
+      text: 'Commented highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 8 },
+      createdAt: 11,
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+      }
+    }
+    let finishComment: ((highlight: ReaderSelectionRange) => void) | undefined
+    const onCommentHighlight = vi.fn(
+      (_highlight: ReaderSelectionRange) =>
+        new Promise<ReaderSelectionRange>((resolve) => {
+          finishComment = resolve
+        })
+    )
+    const onSelectRange = vi.fn()
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        highlightPopover={<span>Highlight actions</span>}
+        onCommentHighlight={onCommentHighlight}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // When: the user starts commenting, the original range reference is passed
+    // to the host and the popover stays open while the promise is pending.
+    const commentButton = screen.getByRole('button', { name: '评论' })
+    await user.click(commentButton)
+    expect(onCommentHighlight).toHaveBeenCalledWith(range)
+    const [pendingSelectionProps] = getAllSelectionProps()
+    popoverView.rerender(pendingSelectionProps?.popover)
+    expect(screen.getByRole('button', { name: '评论' })).toBeDisabled()
+    expect(onSelectRange).not.toHaveBeenCalled()
+
+    // Then: resolving with that same reference marks commenting as finished and
+    // clears the selected range, which closes the existing-highlight popover.
+    await act(async () => {
+      finishComment?.(range)
+      await Promise.resolve()
+    })
+    expect(onSelectRange).toHaveBeenCalledWith(null)
   })
 
   it('compile-time: overlayRectType satisfies ReaderProps', () => {
@@ -1393,14 +1513,24 @@ describe('Reader zoom props', () => {
     expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
   })
 
-  it('forwards containMarginX and containMarginY to IntermediateDocumentViewer', () => {
+  it('forwards horizontal and independent vertical margins to IntermediateDocumentViewer', () => {
     const { document } = makeLazyDocument(1)
 
     render(
-      <Reader document={document} containMarginX={24} containMarginY={48} />
+      <Reader
+        document={document}
+        containMarginX={24}
+        containMarginTop={32}
+        containMarginBottom={64}
+      />
     )
 
     expect(capturedViewerProps.containMarginX).toBe(24)
-    expect(capturedViewerProps.containMarginY).toBe(48)
+    expect(capturedViewerProps.containMarginTop).toBe(32)
+    expect(capturedViewerProps.containMarginBottom).toBe(64)
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      paddingTop: '32px',
+      paddingBottom: '64px'
+    })
   })
 })

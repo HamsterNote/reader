@@ -33,6 +33,7 @@ import React, {
 } from 'react'
 
 import type {
+  ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
@@ -450,8 +451,12 @@ export type IntermediateDocumentViewerProps = {
   selectionColor?: string
   /** 当某个高亮被选中时，在其上方弹出的 Popover 内容（ReactNode），由调用方完全控制 */
   selectionPopover?: React.ReactNode
-  /** 被高亮的片段上方弹出的 Popover 内容，未提供时 fallback 到 selectionPopover */
-  highlightPopover?: React.ReactNode
+  /** 被高亮的片段上方弹出的 Popover 内容；renderer 接收当前高亮的原始公开对象。 */
+  highlightPopover?: ReaderHighlightPopover
+  /** 启动当前高亮的评论流程；Promise 完成后关闭该高亮的 Popover。 */
+  onCommentHighlight?: (
+    highlight: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
   /** Selection 组件的命令式 ref，暴露 highlight()/clear()/confirm()/confirmRect() 方法 */
@@ -490,7 +495,11 @@ export type IntermediateDocumentViewerProps = {
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   /** VirtualPaper 水平留白边距，单位 px */
   containMarginX?: number
-  /** VirtualPaper 垂直留白边距，单位 px */
+  /** VirtualPaper 顶部留白，单位 px */
+  containMarginTop?: number
+  /** VirtualPaper 底部留白，单位 px */
+  containMarginBottom?: number
+  /** @deprecated 使用 containMarginTop 和 containMarginBottom */
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
@@ -955,6 +964,7 @@ type ViewerContentProps = PageResources & {
     meta: VirtualPaperTransformMeta
   ) => void
   effectiveSelectedRangeId: string | null
+  selectedHighlight: ReaderSelectionRange | null
   runtimePageSelectionId: (pageNumber: number) => string
   runtimeLinkedData: LinkedSelectionData
   handleLinkedDataChange: (next: LinkedSelectionData) => void
@@ -982,7 +992,10 @@ type ViewerContentProps = PageResources & {
   highlightColor: string | undefined
   selectionColor: string | undefined
   selectionPopover: ReactNode
-  highlightPopover: ReactNode
+  highlightPopover: ReaderHighlightPopover
+  onCommentHighlight:
+    | ((highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>)
+    | undefined
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
   selectionRef: Ref<ReaderSelectionRef> | undefined
@@ -996,6 +1009,8 @@ type ViewerContentProps = PageResources & {
   setTextRef: SetTextRef
   touchPanMode?: ReaderTouchPanMode
   containMarginX?: number
+  containMarginTop?: number
+  containMarginBottom?: number
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
@@ -1312,6 +1327,7 @@ function ViewerContent({
   handleVirtualPaperTransformChange,
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
+  selectedHighlight,
   runtimePageSelectionId,
   runtimeLinkedData,
   handleLinkedDataChange,
@@ -1328,6 +1344,7 @@ function ViewerContent({
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   overlayRectType,
   selectionRef,
@@ -1348,6 +1365,8 @@ function ViewerContent({
   onPageRenderTiming,
   touchPanMode,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
   selectedTool,
   paintingTool,
@@ -1364,6 +1383,9 @@ function ViewerContent({
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
   const [popoverVisible, setPopoverVisible] = useState(true)
+  const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
+    null
+  )
   const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const getFirstVisibleSelectionRef = useCallback(() => {
@@ -1582,6 +1604,54 @@ function ViewerContent({
     [handleLinkedSelectRange, handlePageLinkedDataChange]
   )
 
+  const handleCommentHighlight = useCallback(() => {
+    if (!selectedHighlight || !onCommentHighlight || commentingRangeId) return
+
+    const highlight = selectedHighlight
+    setCommentingRangeId(highlight.id)
+    onCommentHighlight(highlight).then(
+      () => {
+        if (runtimeLinkedDataRef.current.selectedRangeId === highlight.id) {
+          handlePageLinkedSelectRange(null)
+        }
+        setCommentingRangeId(null)
+      },
+      () => {
+        setCommentingRangeId(null)
+      }
+    )
+  }, [
+    commentingRangeId,
+    handlePageLinkedSelectRange,
+    onCommentHighlight,
+    selectedHighlight
+  ])
+
+  let resolvedHighlightPopover: ReactNode
+  if (typeof highlightPopover === 'function') {
+    resolvedHighlightPopover = selectedHighlight
+      ? highlightPopover(selectedHighlight)
+      : selectionPopover
+  } else {
+    resolvedHighlightPopover = highlightPopover ?? selectionPopover
+  }
+  const existingHighlightPopover =
+    selectedHighlight && onCommentHighlight ? (
+      <div className='hamster-reader__highlight-popover'>
+        {resolvedHighlightPopover}
+        <button
+          type='button'
+          className='hamster-reader__highlight-comment-button'
+          disabled={commentingRangeId !== null}
+          onClick={handleCommentHighlight}
+        >
+          评论
+        </button>
+      </div>
+    ) : (
+      resolvedHighlightPopover
+    )
+
   // 包装 VirtualPaper 的 transform 回调：
   // transform 进行中时立即隐藏 portal popover，结束后 debounce 500ms 再显示
   const handleTransformChangeWithPopover = useCallback(
@@ -1647,7 +1717,7 @@ function ViewerContent({
       overlayRectType={overlayRectType}
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       selectionPopover={selectionPopover}
-      highlightPopover={highlightPopover}
+      highlightPopover={existingHighlightPopover}
       popoverVisible={popoverVisible}
       selectionRefForRuntimeId={selectionRefForRuntimeId}
       tool={tool}
@@ -1707,7 +1777,15 @@ function ViewerContent({
           onTransformChange={handleTransformChangeWithPopover}
           onTransformChangeEnd={handleTransformChangeEndWithPopover}
           containMarginX={containMarginX}
-          containMarginY={containMarginY}
+          containMarginY={
+            containMarginTop === undefined && containMarginBottom === undefined
+              ? containMarginY
+              : undefined
+          }
+          containerStyle={{
+            paddingTop: containMarginTop,
+            paddingBottom: containMarginBottom
+          }}
         >
           {pagesNode}
         </VirtualPaper>
@@ -1753,6 +1831,7 @@ export function IntermediateDocumentViewer({
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
@@ -1768,6 +1847,8 @@ export function IntermediateDocumentViewer({
   pageUnloadDelayMs = 5000,
   onIntermediateDocumentRenderTiming,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
   selectedTool,
   paintingTool,
@@ -1947,6 +2028,15 @@ export function IntermediateDocumentViewer({
   const effectiveSelectedRangeId = isSelectedRangeIdControlled
     ? selectedRangeId
     : internalSelectedRangeId
+  const selectedHighlight = useMemo(
+    () =>
+      effectiveSelectedRangeId
+        ? (effectiveRanges.find(
+            (range) => range.id === effectiveSelectedRangeId
+          ) ?? null)
+        : null,
+    [effectiveRanges, effectiveSelectedRangeId]
+  )
   const [runtimeLinkedTransient, setRuntimeLinkedTransient] =
     useState<RuntimeLinkedSelectionTransient>({})
   const runtimeLinkedData = useMemo(
@@ -3791,6 +3881,7 @@ export function IntermediateDocumentViewer({
         handleVirtualPaperTransformChangeEnd
       }
       effectiveSelectedRangeId={effectiveSelectedRangeId}
+      selectedHighlight={selectedHighlight}
       runtimePageSelectionId={getRuntimePageSelectionId}
       runtimeLinkedData={runtimeLinkedData}
       handleLinkedDataChange={handleLinkedDataChange}
@@ -3809,6 +3900,7 @@ export function IntermediateDocumentViewer({
       selectionColor={selectionColor}
       selectionPopover={selectionPopover}
       highlightPopover={highlightPopover}
+      onCommentHighlight={onCommentHighlight}
       autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
@@ -3829,6 +3921,8 @@ export function IntermediateDocumentViewer({
       onPageRenderTiming={pageRenderTimingHandler}
       touchPanMode={touchPanMode}
       containMarginX={containMarginX}
+      containMarginTop={containMarginTop}
+      containMarginBottom={containMarginBottom}
       containMarginY={containMarginY}
       selectedTool={selectedTool}
       paintingTool={paintingTool}

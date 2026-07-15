@@ -89,6 +89,42 @@
     box-sizing: border-box;
   }
 
+  &__highlight-popover {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: calc(100vw - 16px);
+  }
+
+  &__highlight-comment-button {
+    min-height: 32px;
+    padding: 6px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #334155;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-color: #94a3b8;
+      background: #f8fafc;
+    }
+
+    &:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+  }
+
   &__document-header {
     display: flex;
     flex-direction: column;
@@ -651,6 +687,35 @@
     &:focus-visible {
       outline: none;
       box-shadow: 0 0 0 2px #3b82f6;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  // 小屏改为上下分区，避免固定侧栏把阅读器和高亮操作压缩到不可用宽度。
+  .hamster-demo-shell {
+    flex-direction: column;
+  }
+
+  .hamster-demo-sidebar {
+    width: 100%;
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .hamster-demo-main {
+    min-height: 58vh;
+  }
+
+  // 高亮 Popover 的视觉控件保持紧凑，但移动端触控区域至少为 44px。
+  .hamster-reader__highlight-popover {
+    align-items: stretch;
+
+    .hamster-demo-action-group > button,
+    .hamster-demo-action-group > label,
+    .hamster-reader__highlight-comment-button {
+      min-height: 44px;
     }
   }
 }
