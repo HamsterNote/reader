@@ -1,9 +1,9 @@
+import type { PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../types/selection'
-import type { PointerEvent as ReactPointerEvent } from 'react'
-import { useCallback, useEffect, useRef } from 'react'
 
 /**
  * 默认 Popover 组件
@@ -154,7 +154,7 @@ function HighlightColorPicker({
 
   return (
     <label className='hamster-reader-popover-color'>
-      <span className='hamster-reader-popover-color-label'>背景颜色</span>
+      <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
       <input
         type='color'
         className='hamster-reader-popover-color-input'

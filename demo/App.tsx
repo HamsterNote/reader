@@ -10,7 +10,11 @@ import type {
   ReaderSelectionTool,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
-import { Reader } from '@hamster-note/reader'
+import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover,
+  Reader
+} from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
@@ -899,6 +903,28 @@ export function App() {
           onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
           selectionRef={selectionRef}
+          selectionPopover={
+            <DefaultSelectionPopover
+              selectionRef={selectionRef}
+              highlightColor={highlightColor}
+              onHighlightColorChange={setHighlightColor}
+              selectedRangeId={selectedRangeId}
+              ranges={ranges}
+              onUpdateRange={handleUpdateRange}
+              onRemoveRange={handleRemoveRange}
+            />
+          }
+          highlightPopover={
+            <DefaultHighlightPopover
+              selectionRef={selectionRef}
+              highlightColor={highlightColor}
+              onHighlightColorChange={setHighlightColor}
+              selectedRangeId={selectedRangeId}
+              ranges={ranges}
+              onUpdateRange={handleUpdateRange}
+              onRemoveRange={handleRemoveRange}
+            />
+          }
           highlightColor={highlightColor}
           selectionColor='rgba(33, 150, 243, 0.2)'
           autoHighlight={autoHighlight}
