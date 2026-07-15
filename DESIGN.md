@@ -50,4 +50,16 @@ If no document is loaded, or if parsing fails, the UI should gracefully present 
 - **Empty State Container:** `data-testid="demo-empty-state"`
 - **Error State Container:** `data-testid="demo-error-state"`
 
+## 7. Reader Page Browser
+
+Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
+
+- **Container:** `.hamster-reader__page-browser`, anchored to the reader's left edge without resizing the document viewport.
+- **Width:** `min(240px, 78vw)` so the document remains partially visible on narrow screens.
+- **Surface:** `rgba(249, 250, 251, 0.98)`, right border `#e5e7eb`, and a restrained right-facing shadow.
+- **Motion:** enter and exit with horizontal `transform` and `opacity` only; reduced-motion users receive an immediate state change.
+- **Scrolling:** the thumbnail list owns vertical scrolling and contains overscroll within the panel.
+- **Accessibility:** the closed panel is hidden from assistive technology and keyboard focus; open page buttons have visible `#2563eb` focus outlines.
+- **Loading:** thumbnail visibility must route through the layout viewer's existing lazy page queue and cache rather than introducing a second loader.
+
 *(End of minimal design contract)*

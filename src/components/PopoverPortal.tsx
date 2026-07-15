@@ -1,15 +1,30 @@
-import React, { useEffect, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
+
+import {
+  calculatePopoverPosition,
+  getSelectionBounds,
+  type PopoverPosition,
+  type PopoverSelectionKind
+} from './popoverPosition'
+
+const POPOVER_GAP = 8
 
 /**
  * PopoverPortal —— 将 popover 内容通过 React Portal 渲染到 document.body，
  * 使其脱离 VirtualPaper 的 CSS transform（scale / translate）影响。
  *
  * 核心思路：
- * 1. 在 .hsn-selection-popover 内部渲染一个 0x0 的隐藏 anchor div
- * 2. 通过 rAF 循环持续读取 anchor 的 getBoundingClientRect()（视口坐标）
- * 3. 将实际内容以 position:fixed 渲染到 body，位置与 anchor 对齐
- * 4. transform: translate(-50%,-100%) 与 .hsn-selection-popover 原有定位逻辑一致
+ * 1. 聚合 container 内当前选区的全部矩形，得到视口坐标中的外包围盒
+ * 2. 按“包围盒顶部 → 底部 → container 中央”的优先级计算位置
+ * 3. 将实际内容以 position:fixed 渲染到 body，并钳制在 container 的安全间距内
+ * 4. Selection 内的 0x0 anchor 只作为渲染时序与旧版 DOM 的兼容回退
  *
  * 这样 popover 的屏幕尺寸不会随 zoom 缩放，始终保持原始大小。
  *
@@ -18,19 +33,20 @@ import { createPortal } from 'react-dom'
  */
 export function PopoverPortal({
   children,
+  containerRef,
+  selectionKind,
   visible
 }: {
-  children: React.ReactNode
+  children: ReactNode
+  containerRef: RefObject<HTMLElement | null>
+  selectionKind: PopoverSelectionKind
   visible: boolean
 }) {
   // anchor div 引用——它被渲染在 .hsn-selection-popover 内部，作为定位基准
   const anchorRef = useRef<HTMLDivElement>(null)
 
-  // portal 内容的视口坐标（null 表示尚未计算或不可见）
-  const [position, setPosition] = useState<{
-    left: number
-    top: number
-  } | null>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState<PopoverPosition | null>(null)
 
   useEffect(() => {
     // 不可见时清除位置，隐藏 portal 内容
@@ -47,23 +63,38 @@ export function PopoverPortal({
      * 仅在坐标变化超过 0.5px 时更新 state，避免不必要的 re-render。
      */
     const updatePosition = () => {
+      const container = containerRef.current
+      const popover = popoverRef.current
       const anchor = anchorRef.current
-      if (anchor) {
-        const rect = anchor.getBoundingClientRect()
+      if (container && popover && anchor) {
+        const anchorRect = anchor.getBoundingClientRect()
+        const selectionBounds =
+          getSelectionBounds(container, selectionKind) ??
+          (anchorRect.left !== 0 || anchorRect.top !== 0 ? anchorRect : null)
 
-        // 过滤无效坐标（anchor 不可见时 rect 全为 0）
-        if (rect.left !== 0 || rect.top !== 0) {
-          setPosition((prev) => {
+        if (selectionBounds) {
+          const nextPosition = calculatePopoverPosition(
+            container.getBoundingClientRect(),
+            selectionBounds,
+            popover.getBoundingClientRect(),
+            POPOVER_GAP
+          )
+          setPosition((previousPosition) => {
             if (
-              prev &&
-              Math.abs(prev.left - rect.left) < 0.5 &&
-              Math.abs(prev.top - rect.top) < 0.5
+              previousPosition &&
+              Math.abs(previousPosition.left - nextPosition.left) < 0.5 &&
+              Math.abs(previousPosition.top - nextPosition.top) < 0.5 &&
+              Math.abs(previousPosition.maxWidth - nextPosition.maxWidth) <
+                0.5 &&
+              Math.abs(previousPosition.maxHeight - nextPosition.maxHeight) <
+                0.5
             ) {
-              // 坐标变化不足 0.5px，跳过更新
-              return prev
+              return previousPosition
             }
-            return { left: rect.left, top: rect.top }
+            return nextPosition
           })
+        } else {
+          setPosition(null)
         }
       }
       rafId = requestAnimationFrame(updatePosition)
@@ -72,7 +103,7 @@ export function PopoverPortal({
     rafId = requestAnimationFrame(updatePosition)
 
     return () => cancelAnimationFrame(rafId)
-  }, [visible])
+  }, [containerRef, selectionKind, visible])
 
   return (
     <>
@@ -95,20 +126,22 @@ export function PopoverPortal({
 
       {/* Portal 内容：渲染到 document.body，脱离 VirtualPaper transform */}
       {visible &&
-        position &&
         createPortal(
           <div
+            ref={popoverRef}
             // 添加 hsn-selection-popover class，使 Selection 库的 click-outside
             // 检测（e.target.closest('.hsn-selection-popover')）能识别 portal 内容，
             // 防止点击删除按钮/取色器时触发 deselect 关闭 popover
             className='hamster-reader-popover-portal hsn-selection-popover'
             style={{
               position: 'fixed',
-              left: `${position.left}px`,
-              top: `${position.top}px`,
-              // 与 .hsn-selection-popover 原有 transform 一致：
-              // 水平居中、垂直向上
-              transform: 'translate(-50%, -100%)',
+              left: `${position?.left ?? 0}px`,
+              top: `${position?.top ?? 0}px`,
+              maxWidth: position ? `${position.maxWidth}px` : undefined,
+              maxHeight: position ? `${position.maxHeight}px` : undefined,
+              visibility: position ? 'visible' : 'hidden',
+              overflow: 'auto',
+              transform: 'none',
               // 覆盖 .hsn-selection-popover 的 margin-top:-6px，
               // 因为 portal 使用 fixed 定位，坐标已精确计算
               margin: 0,

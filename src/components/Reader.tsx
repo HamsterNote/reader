@@ -27,6 +27,10 @@ import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDoc
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover
+} from './DefaultPopover'
+import {
   Page,
   type ReaderPagePaintingMap,
   type ReaderPageRectSelectionMap,
@@ -87,6 +91,10 @@ export type ReaderProps = {
   ) => void
   onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   onHighlight?: (range: ReaderSelectionRange) => void
+  /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
+  onRemoveRange?: (id: string) => void
+  /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
+  onHighlightColorChange?: (color: string) => void
   highlightColor?: string
   selectionColor?: string
   selectionPopover?: ReactNode
@@ -107,6 +115,8 @@ export type ReaderProps = {
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   containMarginX?: number
   containMarginY?: number
+  /** 是否显示布局模式的页面浏览侧栏，默认 false */
+  showPageBrowser?: boolean
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
@@ -277,6 +287,8 @@ export function Reader({
   onSelectionStart,
   onSelectionEnd,
   onHighlight,
+  onRemoveRange,
+  onHighlightColorChange,
   highlightColor,
   selectionColor,
   selectionPopover,
@@ -297,6 +309,7 @@ export function Reader({
   onIntermediateDocumentRenderTiming,
   containMarginX,
   containMarginY,
+  showPageBrowser,
   selectedTool,
   paintingTool = 'pen',
   pagePaintings,
@@ -568,8 +581,36 @@ export function Reader({
           onHighlight={onHighlight}
           highlightColor={highlightColor}
           selectionColor={selectionColor}
-          selectionPopover={selectionPopover}
-          highlightPopover={highlightPopover}
+          selectionPopover={
+            selectionPopover ?? (
+              <DefaultSelectionPopover
+                selectionRef={
+                  selectionRef as React.RefObject<ReaderSelectionRef | null>
+                }
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                selectedRangeId={selectedRangeId}
+                ranges={ranges}
+                onUpdateRange={onUpdateRange}
+                onRemoveRange={onRemoveRange}
+              />
+            )
+          }
+          highlightPopover={
+            highlightPopover ?? (
+              <DefaultHighlightPopover
+                selectionRef={
+                  selectionRef as React.RefObject<ReaderSelectionRef | null>
+                }
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                selectedRangeId={selectedRangeId}
+                ranges={ranges}
+                onUpdateRange={onUpdateRange}
+                onRemoveRange={onRemoveRange}
+              />
+            )
+          }
           autoHighlight={autoHighlight}
           selectionRef={selectionRef}
           overlayRectType={overlayRectType}
@@ -588,6 +629,7 @@ export function Reader({
           }
           containMarginX={containMarginX}
           containMarginY={containMarginY}
+          showPageBrowser={showPageBrowser}
         />
       )
     }
