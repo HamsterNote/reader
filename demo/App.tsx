@@ -19,7 +19,6 @@ import type {
 } from '@hamster-note/types'
 import { useCallback, useRef, useState } from 'react'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
-import { MobileSafeHighlightButton } from './MobileSafeHighlightButton'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -896,6 +895,8 @@ export function App() {
           onSelectRange={handleSelectRange}
           onUpdateRange={handleUpdateRange}
           onHighlight={handleHighlight}
+          onRemoveRange={handleRemoveRange}
+          onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
           selectionRef={selectionRef}
           highlightColor={highlightColor}
@@ -910,129 +911,6 @@ export function App() {
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
           onUpdateRect={handleUpdateRect}
-          selectionPopover={
-            <div
-              className='hamster-demo-action-group'
-              style={{
-                display: 'flex',
-                gap: '8px',
-                padding: '4px 8px',
-                background: '#333',
-                color: '#fff',
-                borderRadius: '4px',
-                fontSize: '14px'
-              }}
-            >
-              <MobileSafeHighlightButton selectionRef={selectionRef} />
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                <span>背景颜色设置</span>
-                <input
-                  type='color'
-                  value={
-                    highlightColor.startsWith('#') ? highlightColor : '#ffc107'
-                  }
-                  onChange={(e) => {
-                    const newColor = e.target.value
-                    setHighlightColor(newColor)
-                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
-                    if (selectedRangeId) {
-                      const selectedRange = ranges.find(
-                        (r) => r.id === selectedRangeId
-                      )
-                      if (selectedRange) {
-                        handleUpdateRange({
-                          ...selectedRange,
-                          markerStyle: { backgroundColor: newColor }
-                        })
-                      }
-                    }
-                  }}
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    padding: 0,
-                    border: 'none'
-                  }}
-                />
-              </label>
-            </div>
-          }
-          highlightPopover={
-            <div
-              className='hamster-demo-action-group'
-              style={{
-                display: 'flex',
-                gap: '8px',
-                padding: '4px 8px',
-                background: '#333',
-                color: '#fff',
-                borderRadius: '4px',
-                fontSize: '14px'
-              }}
-            >
-              <button
-                type='button'
-                onClick={() => {
-                  if (selectedRangeId) {
-                    handleRemoveRange(selectedRangeId)
-                  }
-                }}
-                style={{
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: '#fff',
-                  border: 'none'
-                }}
-              >
-                删除
-              </button>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                <span>背景颜色设置</span>
-                <input
-                  type='color'
-                  value={
-                    highlightColor.startsWith('#') ? highlightColor : '#ffc107'
-                  }
-                  onChange={(e) => {
-                    const newColor = e.target.value
-                    setHighlightColor(newColor)
-                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
-                    if (selectedRangeId) {
-                      const selectedRange = ranges.find(
-                        (r) => r.id === selectedRangeId
-                      )
-                      if (selectedRange) {
-                        handleUpdateRange({
-                          ...selectedRange,
-                          markerStyle: { backgroundColor: newColor }
-                        })
-                      }
-                    }
-                  }}
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    padding: 0,
-                    border: 'none'
-                  }}
-                />
-              </label>
-            </div>
-          }
         />
       </div>
     </main>

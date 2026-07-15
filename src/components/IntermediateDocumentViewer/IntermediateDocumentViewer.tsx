@@ -1,13 +1,13 @@
-import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
   SelectionRange,
   SelectionRef
 } from '@hamster-note/selection'
+import { Selection as HamsterSelection } from '@hamster-note/selection'
 import {
-  IntermediateDocument,
   type IntermediateContent,
+  IntermediateDocument,
   type IntermediateDocumentSerialized,
   type IntermediateImage,
   type IntermediateText
@@ -20,9 +20,9 @@ import {
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
 import React, {
+  Profiler,
   type ReactNode,
   type Ref,
-  Profiler,
   useCallback,
   useEffect,
   useId,
@@ -43,9 +43,9 @@ import type {
 import { PopoverPortal } from '../PopoverPortal'
 import {
   buildSelectionPayload,
-  textElementRecords,
   type ReaderSelectedTextSegment,
-  type ReaderSelectionPayload
+  type ReaderSelectionPayload,
+  textElementRecords
 } from '../selection/selectionPayloadSerializer'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { PageBrowser } from './PageBrowser'
@@ -68,14 +68,14 @@ import {
   extractRuntimeLinkedTransient,
   mapPublicRectanglesToRuntime,
   mapRuntimeLinkedDataToPublic,
-  mapRuntimeRectangleToPublic,
   mapRuntimeRangeToPublic,
+  mapRuntimeRectangleToPublic,
   mapRuntimeSelectionIdToPublic,
-  runtimePageSelectionId,
-  type RuntimeLinkedSelectionTransient
+  type RuntimeLinkedSelectionTransient,
+  runtimePageSelectionId
 } from './selectionAdapter'
 // intermediate-document 默认模式的懒加载页面队列 hook
-import { useLazyPageQueue, type LazyPageQueueConfig } from './useLazyPageQueue'
+import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
 
 export {
   getNearestTextElementForPoint,
@@ -83,6 +83,15 @@ export {
   getPageElementForPoint,
   resolveCaret
 } from '../selection/caretResolver'
+export {
+  buildSavedSelection,
+  denormalizePageRects,
+  type NormalizedRect,
+  normalizePageRects,
+  resolveSavedSelection,
+  type TextElementInfo,
+  textHash
+} from '../selection/savedSelection'
 export {
   composeSelection,
   createOrderedRange
@@ -94,15 +103,6 @@ export {
   type ReaderSelectionPayload,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
-export {
-  buildSavedSelection,
-  denormalizePageRects,
-  normalizePageRects,
-  resolveSavedSelection,
-  textHash,
-  type NormalizedRect,
-  type TextElementInfo
-} from '../selection/savedSelection'
 
 const getSelectionForRoot = (
   viewerRoot: HTMLElement | null
@@ -509,6 +509,8 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
   height: 842
 }
+// 与 reader.scss 中 intermediate page 的 12px 左右 margin 保持同步。
+const INTERMEDIATE_PAGE_HORIZONTAL_MARGIN = 24
 
 const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS =
   DEFAULT_ENABLED_INTERACTIONS.filter(
@@ -668,6 +670,22 @@ const getWidestKnownPageSize = (
   for (const pageNumber of pageNumbers) {
     const pageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
     if (!pageSize) return null
+    if (!widestPageSize || pageSize.width > widestPageSize.width) {
+      widestPageSize = pageSize
+    }
+  }
+
+  return widestPageSize
+}
+
+const getWidestRenderedPageSize = (
+  pageNumbers: number[],
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
+): NormalizedPageSize | null => {
+  let widestPageSize: NormalizedPageSize | null = null
+
+  for (const pageNumber of pageNumbers) {
+    const pageSize = getCachedPageSize(pageSizesByPageNumber, pageNumber)
     if (!widestPageSize || pageSize.width > widestPageSize.width) {
       widestPageSize = pageSize
     }
@@ -923,10 +941,11 @@ type PageResources = {
 
 type ViewerContentProps = PageResources & {
   rootClassName: string
-  viewerRootRef: Ref<HTMLDivElement>
+  viewerRootRef: (element: HTMLDivElement | null) => void
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
+  onInitialFitScale: (fitScale: number) => void
   onScrollToRange: (id: string) => void
   onScrollToRect: (id: string) => void
   onScrollToPosition: (position: {
@@ -1052,6 +1071,7 @@ const getRuntimeSelectionIdFromSelectionNode = (
  * `dangerouslySetInnerHTML`；内容由独立渲染器以 React 元素绘制。
  */
 type IntermediateDocumentPagesProps = PageResources & {
+  popoverContainerRef: React.RefObject<HTMLElement | null>
   pageNumbers: number[]
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
@@ -1106,6 +1126,7 @@ type IntermediateDocumentPagesProps = PageResources & {
 }
 
 function IntermediateDocumentPages({
+  popoverContainerRef,
   pageNumbers,
   setPageRef,
   setTextRef,
@@ -1183,12 +1204,20 @@ function IntermediateDocumentPages({
           popoverOwnerRuntimeId === null ||
           popoverOwnerRuntimeId === shellSelectionId
         const pagePopover = isPopoverOwner ? (
-          <PopoverPortal visible={popoverVisible}>
+          <PopoverPortal
+            containerRef={popoverContainerRef}
+            selectionKind='selected'
+            visible={popoverVisible}
+          >
             {highlightPopover ?? selectionPopover}
           </PopoverPortal>
         ) : undefined
         const pageSelectionPopover = isPopoverOwner ? (
-          <PopoverPortal visible={popoverVisible}>
+          <PopoverPortal
+            containerRef={popoverContainerRef}
+            selectionKind='active'
+            visible={popoverVisible}
+          >
             {selectionPopover}
           </PopoverPortal>
         ) : undefined
@@ -1275,6 +1304,7 @@ function ViewerContent({
   pageSizesByPageNumber,
   virtualPaperTransform,
   scaleRange,
+  onInitialFitScale,
   onScrollToRange,
   onScrollToRect,
   onScrollToPosition,
@@ -1322,6 +1352,9 @@ function ViewerContent({
   onPageBrowserVisibilityChange,
   onNavigateToPage
 }: ViewerContentProps) {
+  const [viewerRootElement, setViewerRootElement] =
+    useState<HTMLDivElement | null>(null)
+  const popoverContainerRef = useRef<HTMLElement | null>(null)
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
@@ -1332,6 +1365,54 @@ function ViewerContent({
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
   const [popoverVisible, setPopoverVisible] = useState(true)
   const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const setRootRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      setViewerRootElement(element)
+      viewerRootRef(element)
+    },
+    [viewerRootRef]
+  )
+
+  useEffect(() => {
+    const container =
+      viewerRootElement?.querySelector<HTMLElement>('.virtual-paper-wrapper') ??
+      null
+    popoverContainerRef.current = container
+    if (!container) return
+
+    const widestPageSize = getWidestRenderedPageSize(
+      pageNumbers,
+      pageSizesByPageNumber
+    )
+    const applyInitialFit = (width: number) => {
+      if (!widestPageSize || width <= 0) return false
+
+      onInitialFitScale(
+        width / (widestPageSize.width + INTERMEDIATE_PAGE_HORIZONTAL_MARGIN)
+      )
+      return true
+    }
+
+    if (applyInitialFit(container.getBoundingClientRect().width)) {
+      return () => {
+        popoverContainerRef.current = null
+      }
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry && applyInitialFit(entry.contentRect.width)) {
+        observer.disconnect()
+      }
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      popoverContainerRef.current = null
+    }
+  }, [onInitialFitScale, pageNumbers, pageSizesByPageNumber, viewerRootElement])
 
   const getFirstVisibleSelectionRef = useCallback(() => {
     for (const pageNumber of pageNumbers) {
@@ -1434,8 +1515,8 @@ function ViewerContent({
       confirmRectSelection()
       return
     }
-    getActiveSelectionRef()?.confirm()
-  }, [confirmRectSelection, getActiveSelectionRef, tool])
+    highlightSelection()
+  }, [confirmRectSelection, highlightSelection, tool])
 
   const clearSelections = useCallback(() => {
     selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
@@ -1588,6 +1669,7 @@ function ViewerContent({
 
   const intermediateDocumentPages = (
     <IntermediateDocumentPages
+      popoverContainerRef={popoverContainerRef}
       pageNumbers={pageNumbers}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
@@ -1650,7 +1732,7 @@ function ViewerContent({
 
   return (
     <div
-      ref={viewerRootRef}
+      ref={setRootRef}
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
@@ -1975,6 +2057,27 @@ export function IntermediateDocumentViewer({
   )
   const effectiveScaleRef = useRef(effectiveScale)
   effectiveScaleRef.current = effectiveScale
+  const initialFitDocumentRef = useRef<IntermediateDocument | null>(null)
+
+  const handleInitialFitScale = useCallback(
+    (fitScale: number) => {
+      if (
+        !runtimeDocument ||
+        initialFitDocumentRef.current === runtimeDocument
+      ) {
+        return
+      }
+
+      initialFitDocumentRef.current = runtimeDocument
+      if (scale !== undefined) return
+
+      setPaperTransform((currentTransform) => ({
+        ...currentTransform,
+        scale: clampScale(fitScale, scaleRange)
+      }))
+    },
+    [runtimeDocument, scale, scaleRange]
+  )
 
   const virtualPaperTransform = useMemo<VirtualPaperTransform>(
     () => ({
@@ -3827,6 +3930,7 @@ export function IntermediateDocumentViewer({
       pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
+      onInitialFitScale={handleInitialFitScale}
       onScrollToRange={scrollToRange}
       onScrollToRect={scrollToRect}
       onScrollToPosition={scrollToPosition}
