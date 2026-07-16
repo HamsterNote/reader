@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-16
+
+### Added
+- 新增 annotation history（撤销/重做）支持，提供受控和非受控模式。
+- 新增 `DefaultPopover` 组件，支持初始化 fit scale。
+- 新增独立的垂直边距 props（`containMarginTop`/`containMarginBottom`）和高亮专属颜色。
+- 新增 `onCommentHighlight` 异步注释生命周期回调。
+- 新增 prop 控制的页面浏览器，支持懒加载缩略图。
+
+### Fixed
+- 修复工具切换时 viewer 特性的保持问题。
+- Demo 中正确接入默认 popover。
+
 ## [0.3.0] - 2026-07-13
 
 ### Added
