@@ -1200,7 +1200,7 @@ describe('demo parser flow', () => {
       const stored = JSON.parse(
         localStorage.getItem(highlightStorageKey('delete.pdf')) || '{}'
       )
-      expect(stored).toEqual({ version: 3, ranges: [], rects: [] })
+      expect(stored).toEqual({ version: 4, ranges: [], rects: [], paintings: {} })
 
       uploadReaderProps = mockReaderProps[mockReaderProps.length - 1] as Record<
         string,
@@ -1523,9 +1523,10 @@ describe('demo parser flow', () => {
         localStorage.getItem(highlightStorageKey('highlight.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 3,
+        version: 4,
         ranges: [makeLinkedRange('range-1', 'hello highlight')],
-        rects: []
+        rects: [],
+        paintings: {}
       })
     })
 
@@ -1620,13 +1621,14 @@ describe('demo parser flow', () => {
         localStorage.getItem(highlightStorageKey('update.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 3,
+        version: 4,
         ranges: [updatedRange],
-        rects: []
+        rects: [],
+        paintings: {}
       })
     })
 
-    it('clears all highlights and persists an empty v3 envelope', async () => {
+    it('clears all highlights and persists an empty v4 envelope', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Clear Document')
       )
@@ -1650,7 +1652,7 @@ describe('demo parser flow', () => {
       const stored = JSON.parse(
         localStorage.getItem(highlightStorageKey('clear.pdf')) || '{}'
       )
-      expect(stored).toEqual({ version: 3, ranges: [], rects: [] })
+      expect(stored).toEqual({ version: 4, ranges: [], rects: [], paintings: {} })
     })
 
     it('does not persist runtime-scoped selection ids', async () => {
@@ -1683,9 +1685,10 @@ describe('demo parser flow', () => {
       const storedRaw = localStorage.getItem(highlightStorageKey('runtime.pdf'))
       expect(storedRaw).not.toContain('reader-linked-1')
       expect(JSON.parse(storedRaw || '{}')).toEqual({
-        version: 3,
+        version: 4,
         ranges: [],
-        rects: []
+        rects: [],
+        paintings: {}
       })
     })
 
@@ -1855,7 +1858,7 @@ describe('demo parser flow', () => {
       const stored = JSON.parse(
         localStorage.getItem(highlightStorageKey('undo-remove.pdf')) || '{}'
       )
-      expect(stored).toEqual({ version: 3, ranges: [], rects: [] })
+      expect(stored).toEqual({ version: 4, ranges: [], rects: [], paintings: {} })
 
       expect(screen.getByTestId('undo-btn')).toBeDisabled()
       expect(screen.getByTestId('redo-btn')).not.toBeDisabled()
@@ -1891,7 +1894,7 @@ describe('demo parser flow', () => {
         JSON.parse(
           localStorage.getItem(highlightStorageKey('redo-restore.pdf')) || '{}'
         )
-      ).toEqual({ version: 3, ranges: [], rects: [] })
+      ).toEqual({ version: 4, ranges: [], rects: [], paintings: {} })
 
       fireEvent.click(screen.getByTestId('redo-btn'))
 
@@ -1905,9 +1908,10 @@ describe('demo parser flow', () => {
         localStorage.getItem(highlightStorageKey('redo-restore.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 3,
+        version: 4,
         ranges: [makeLinkedRange('redo-range', 'redo text')],
-        rects: []
+        rects: [],
+        paintings: {}
       })
     })
 

@@ -134,6 +134,8 @@ export type ReaderProps = {
   containMarginY?: number
   /** 是否显示布局模式的页面浏览侧栏，默认 false */
   showPageBrowser?: boolean
+  /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
+  themeColor?: string
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
@@ -316,6 +318,7 @@ export function Reader({
   containMarginBottom,
   containMarginY,
   showPageBrowser,
+  themeColor,
   selectedTool,
   paintingTool = 'pen',
   pagePaintings,
@@ -718,6 +721,7 @@ export function Reader({
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
+          themeColor={themeColor}
         />
       )
     }

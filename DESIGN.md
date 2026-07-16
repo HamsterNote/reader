@@ -55,7 +55,7 @@ If no document is loaded, or if parsing fails, the UI should gracefully present 
 Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
 
 - **Container:** `.hamster-reader__page-browser`, anchored to the reader's left edge without resizing the document viewport.
-- **Width:** `min(240px, 78vw)` so the document remains partially visible on narrow screens.
+- **Width:** `min(200px, 25vw)` so the document remains partially visible on narrow screens.
 - **Surface:** `rgba(249, 250, 251, 0.98)`, right border `#e5e7eb`, and a restrained right-facing shadow.
 - **Motion:** enter and exit with horizontal `transform` and `opacity` only; reduced-motion users receive an immediate state change.
 - **Scrolling:** the thumbnail list owns vertical scrolling and contains overscroll within the panel.

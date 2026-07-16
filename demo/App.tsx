@@ -120,15 +120,17 @@ export async function parseUploadedDocument(
 function persistHighlights(
   fileName: string | undefined,
   ranges: ReaderSelectionRange[],
-  rects: ReaderSelectionRectangle[]
+  rects: ReaderSelectionRectangle[],
+  paintings: Record<string, DrawingValue>
 ) {
   if (!fileName) return
-  const persisted = parseHighlights(serializeHighlights(ranges, rects))
+  const persisted = parseHighlights(serializeHighlights(ranges, rects, paintings))
   localStorage.setItem(
     `hamster-reader-demo:highlights:${fileName}`,
     serializeHighlights(
       Array.from(persisted.ranges),
-      Array.from(persisted.rects)
+      Array.from(persisted.rects),
+      persisted.paintings
     )
   )
 }
@@ -179,6 +181,7 @@ export function App() {
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
   const [showPageBrowser, setShowPageBrowser] = useState(false)
+  const [themeColor, setThemeColor] = useState('#2563eb')
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
@@ -240,11 +243,12 @@ export function App() {
         persistHighlights(
           uploadedFile?.name,
           next.ranges as ReaderSelectionRange[],
-          next.rects as ReaderSelectionRectangle[]
+          next.rects as ReaderSelectionRectangle[],
+          pagePaintings
         )
       }
     },
-    [uploadedFile?.name]
+    [uploadedFile?.name, pagePaintings]
   )
 
   // onSelect 回调：history 启用后，onAnnotationHistoryChange 是正规路径，
@@ -276,11 +280,11 @@ export function App() {
         const newRanges = prev.map((current) =>
           current.id === range.id ? range : current
         )
-        persistHighlights(uploadedFile?.name, newRanges, rects)
+        persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
     },
-    [rects, uploadedFile?.name]
+    [rects, pagePaintings, uploadedFile?.name]
   )
 
   const handleCommentHighlight = useCallback(
@@ -320,14 +324,14 @@ export function App() {
     (id: string) => {
       setRects((prev) => {
         const newRects = prev.filter((r) => r.id !== id)
-        persistHighlights(uploadedFile?.name, ranges, newRects)
+        persistHighlights(uploadedFile?.name, ranges, newRects, pagePaintings)
         return newRects
       })
       if (selectedRectId === id) {
         setSelectedRectId(null)
       }
     },
-    [ranges, selectedRectId, uploadedFile?.name]
+    [ranges, pagePaintings, selectedRectId, uploadedFile?.name]
   )
 
   // 清空全部：通过 selectionRef.current?.clear() 触发 library 的 clear 命令，
@@ -340,14 +344,23 @@ export function App() {
     (id: string) => {
       setRanges((prev) => {
         const newRanges = prev.filter((r) => r.id !== id)
-        persistHighlights(uploadedFile?.name, newRanges, rects)
+        persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
       if (selectedRangeId === id) {
         setSelectedRangeId(null)
       }
     },
-    [rects, selectedRangeId, uploadedFile?.name]
+    [rects, pagePaintings, selectedRangeId, uploadedFile?.name]
+  )
+
+  // 包装 setPagePaintings：pagePaintings 不走 annotation history，需独立持久化。
+  const handlePagePaintingsChange = useCallback(
+    (next: Record<string, DrawingValue>) => {
+      setPagePaintings(next)
+      persistHighlights(uploadedFile?.name, ranges, rects, next)
+    },
+    [ranges, rects, uploadedFile?.name]
   )
 
   // 侧边栏文字高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
@@ -472,6 +485,7 @@ export function App() {
       const parsedHighlights = parseHighlights(storedHighlights)
       setRanges(Array.from(parsedHighlights.ranges))
       setRects(Array.from(parsedHighlights.rects))
+      setPagePaintings(parsedHighlights.paintings)
       setSelectedRangeId(null)
       setSelectedRectId(null)
     } catch (error) {
@@ -681,6 +695,25 @@ export function App() {
                       <span>显示页面浏览栏 Page Browser</span>
                     </label>
                   </div>
+                  <div style={{ marginBottom: '12px' }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      <input
+                        type='color'
+                        value={themeColor}
+                        onChange={(event) =>
+                          setThemeColor(event.currentTarget.value)
+                        }
+                        data-testid='theme-color-picker'
+                      />
+                      <span>主题色 (Page Browser 选中项)</span>
+                    </label>
+                  </div>
                 </>
               )}
               <div style={{ marginBottom: '12px' }}>
@@ -788,6 +821,10 @@ export function App() {
                         nextTool === 'drawing'
                       ) {
                         setSelectedTool(nextTool)
+                        // 切换工具时取消所有选中状态（不清除数据本身，
+                        // 仅重置 selectedRangeId/selectedRectId 高亮选中）。
+                        setSelectedRangeId(null)
+                        setSelectedRectId(null)
                       }
                     }}
                     data-testid='selection-tool-select'
@@ -1106,8 +1143,9 @@ export function App() {
           containMarginBottom={containMarginBottom}
           selectedTool={selectedTool}
           pagePaintings={pagePaintings}
-          onPagePaintingsChange={setPagePaintings}
+          onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
+          themeColor={themeColor}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}

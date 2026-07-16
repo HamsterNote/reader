@@ -405,7 +405,7 @@
     inset: 0 auto 0 0;
     z-index: 10;
     display: flex;
-    width: min(240px, 78vw);
+    width: min(200px, 25vw);
     flex-direction: column;
     box-sizing: border-box;
     color: #111827;
@@ -465,10 +465,16 @@
     }
 
     &:focus-visible {
-      outline: 2px solid #2563eb;
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
       outline-offset: 4px;
       border-radius: 2px;
     }
+  }
+
+  // 选中态：当前在主视图中可见的页面，使用主题色 outline 2px 突出显示
+  &__page-browser-item--selected &__page-browser-preview {
+    outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+    outline-offset: 2px;
   }
 
   &__page-browser-preview {

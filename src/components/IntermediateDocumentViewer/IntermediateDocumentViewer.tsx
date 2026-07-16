@@ -521,6 +521,8 @@ export type IntermediateDocumentViewerProps = {
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
   showPageBrowser?: boolean
+  /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
+  themeColor?: string
 }
 
 type PageSize = {
@@ -1061,6 +1063,8 @@ type ViewerContentProps = PageResources & {
     isVisible: boolean
   ) => void
   onNavigateToPage: (pageNumber: number) => void
+  themeColor?: string
+  visiblePageNumbers: ReadonlySet<number>
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1491,7 +1495,9 @@ function ViewerContent({
   drawingScale,
   showPageBrowser,
   onPageBrowserVisibilityChange,
-  onNavigateToPage
+  onNavigateToPage,
+  themeColor,
+  visiblePageNumbers
 }: ViewerContentProps) {
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -1953,6 +1959,10 @@ function ViewerContent({
           baseImagesByPageNumber={baseImagesByPageNumber}
           onPageVisibilityChange={onPageBrowserVisibilityChange}
           onNavigateToPage={onNavigateToPage}
+          themeColor={themeColor}
+          visiblePageNumbers={visiblePageNumbers}
+          containMarginTop={containMarginTop}
+          containMarginBottom={containMarginBottom}
         />
       ) : null}
       {pageNumbers.length > 0 ? (
@@ -2048,7 +2058,8 @@ export function IntermediateDocumentViewer({
   paintingTool,
   pagePaintings,
   onPagePaintingChange,
-  showPageBrowser = false
+  showPageBrowser = false,
+  themeColor
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -4488,6 +4499,8 @@ export function IntermediateDocumentViewer({
       showPageBrowser={showPageBrowser}
       onPageBrowserVisibilityChange={handlePageBrowserVisibilityChange}
       onNavigateToPage={navigateToPage}
+      themeColor={themeColor}
+      visiblePageNumbers={visiblePages}
     />
   )
 }
