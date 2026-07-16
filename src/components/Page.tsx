@@ -38,6 +38,8 @@ export type PageProps = {
   selectedTool?: ReaderPageTool
   paintingValue?: DrawingValue
   paintingTool?: DrawingTool
+  /** 绘制图形的描边颜色，默认 '#2563eb' */
+  drawingStrokeColor?: string
   textSelections?: readonly SelectionRange[]
   rectSelections?: readonly SelectionRect[]
   onPaintingChange?: (nextValue: DrawingValue) => void
@@ -227,6 +229,7 @@ export function Page({
   selectedTool = 'text-selection',
   paintingValue,
   paintingTool = 'pen',
+  drawingStrokeColor = '#2563eb',
   textSelections = EMPTY_TEXT_SELECTIONS,
   rectSelections = EMPTY_RECT_SELECTIONS,
   onPaintingChange,
@@ -380,6 +383,7 @@ export function Page({
             enabled={selectedTool === 'drawing'}
             pageId={page.id}
             tool={paintingTool}
+            strokeColor={drawingStrokeColor}
             value={paintingValue}
             onChange={onPaintingChange}
             gestures={STANDALONE_DRAWING_GESTURES}
