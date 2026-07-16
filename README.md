@@ -228,6 +228,7 @@ export function App() {
 | `containMarginTop` | `number` | Independent top whitespace around the virtual paper. |
 | `containMarginBottom` | `number` | Independent bottom whitespace around the virtual paper. |
 | `containMarginY` | `number` | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied. |
+| `showPageBrowser` | `boolean` | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`. |
 
 The existing-highlight popover can use range-specific data and delegate the comment lifecycle to the host:
 

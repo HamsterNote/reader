@@ -1,14 +1,14 @@
 import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
-import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
   SelectionRange,
   SelectionRef
 } from '@hamster-note/selection'
+import { Selection as HamsterSelection } from '@hamster-note/selection'
 import {
-  IntermediateDocument,
   type IntermediateContent,
+  IntermediateDocument,
   type IntermediateDocumentSerialized,
   type IntermediateImage,
   type IntermediateText
@@ -21,9 +21,9 @@ import {
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
 import React, {
+  Profiler,
   type ReactNode,
   type Ref,
-  Profiler,
   useCallback,
   useEffect,
   useId,
@@ -46,11 +46,12 @@ import { PopoverPortal } from '../PopoverPortal'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
 import {
   buildSelectionPayload,
-  textElementRecords,
   type ReaderSelectedTextSegment,
-  type ReaderSelectionPayload
+  type ReaderSelectionPayload,
+  textElementRecords
 } from '../selection/selectionPayloadSerializer'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import { PageBrowser } from './PageBrowser'
 import {
   computePageOriginY,
   computeTransform,
@@ -70,14 +71,14 @@ import {
   extractRuntimeLinkedTransient,
   mapPublicRectanglesToRuntime,
   mapRuntimeLinkedDataToPublic,
-  mapRuntimeRectangleToPublic,
   mapRuntimeRangeToPublic,
+  mapRuntimeRectangleToPublic,
   mapRuntimeSelectionIdToPublic,
-  runtimePageSelectionId,
-  type RuntimeLinkedSelectionTransient
+  type RuntimeLinkedSelectionTransient,
+  runtimePageSelectionId
 } from './selectionAdapter'
 // intermediate-document 默认模式的懒加载页面队列 hook
-import { useLazyPageQueue, type LazyPageQueueConfig } from './useLazyPageQueue'
+import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
 
 export {
   getNearestTextElementForPoint,
@@ -85,6 +86,15 @@ export {
   getPageElementForPoint,
   resolveCaret
 } from '../selection/caretResolver'
+export {
+  buildSavedSelection,
+  denormalizePageRects,
+  type NormalizedRect,
+  normalizePageRects,
+  resolveSavedSelection,
+  type TextElementInfo,
+  textHash
+} from '../selection/savedSelection'
 export {
   composeSelection,
   createOrderedRange
@@ -96,15 +106,6 @@ export {
   type ReaderSelectionPayload,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
-export {
-  buildSavedSelection,
-  denormalizePageRects,
-  normalizePageRects,
-  resolveSavedSelection,
-  textHash,
-  type NormalizedRect,
-  type TextElementInfo
-} from '../selection/savedSelection'
 
 const getSelectionForRoot = (
   viewerRoot: HTMLElement | null
@@ -505,6 +506,8 @@ export type IntermediateDocumentViewerProps = {
   paintingTool?: DrawingTool
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
+  /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
+  showPageBrowser?: boolean
 }
 
 type PageSize = {
@@ -521,6 +524,8 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
   height: 842
 }
+// 与 reader.scss 中 intermediate page 的 12px 左右 margin 保持同步。
+const INTERMEDIATE_PAGE_HORIZONTAL_MARGIN = 24
 
 const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS =
   DEFAULT_ENABLED_INTERACTIONS.filter(
@@ -680,6 +685,22 @@ const getWidestKnownPageSize = (
   for (const pageNumber of pageNumbers) {
     const pageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
     if (!pageSize) return null
+    if (!widestPageSize || pageSize.width > widestPageSize.width) {
+      widestPageSize = pageSize
+    }
+  }
+
+  return widestPageSize
+}
+
+const getWidestRenderedPageSize = (
+  pageNumbers: number[],
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
+): NormalizedPageSize | null => {
+  let widestPageSize: NormalizedPageSize | null = null
+
+  for (const pageNumber of pageNumbers) {
+    const pageSize = getCachedPageSize(pageSizesByPageNumber, pageNumber)
     if (!widestPageSize || pageSize.width > widestPageSize.width) {
       widestPageSize = pageSize
     }
@@ -935,10 +956,11 @@ type PageResources = {
 
 type ViewerContentProps = PageResources & {
   rootClassName: string
-  viewerRootRef: Ref<HTMLDivElement>
+  viewerRootRef: (element: HTMLDivElement | null) => void
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
+  onInitialFitScale: (fitScale: number) => void
   onScrollToRange: (id: string) => void
   onScrollToRect: (id: string) => void
   onScrollToPosition: (position: {
@@ -1017,6 +1039,12 @@ type ViewerContentProps = PageResources & {
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
+  showPageBrowser: boolean
+  onPageBrowserVisibilityChange: (
+    pageNumber: number,
+    isVisible: boolean
+  ) => void
+  onNavigateToPage: (pageNumber: number) => void
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1069,6 +1097,7 @@ const getRuntimeSelectionIdFromSelectionNode = (
  * `dangerouslySetInnerHTML`；内容由独立渲染器以 React 元素绘制。
  */
 type IntermediateDocumentPagesProps = PageResources & {
+  popoverContainerRef: React.RefObject<HTMLElement | null>
   pageNumbers: number[]
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
@@ -1128,6 +1157,7 @@ type IntermediateDocumentPagesProps = PageResources & {
 }
 
 function IntermediateDocumentPages({
+  popoverContainerRef,
   pageNumbers,
   setPageRef,
   setTextRef,
@@ -1211,12 +1241,20 @@ function IntermediateDocumentPages({
           popoverOwnerRuntimeId === null ||
           popoverOwnerRuntimeId === shellSelectionId
         const pagePopover = isPopoverOwner ? (
-          <PopoverPortal visible={popoverVisible}>
+          <PopoverPortal
+            containerRef={popoverContainerRef}
+            selectionKind='selected'
+            visible={popoverVisible}
+          >
             {highlightPopover ?? selectionPopover}
           </PopoverPortal>
         ) : undefined
         const pageSelectionPopover = isPopoverOwner ? (
-          <PopoverPortal visible={popoverVisible}>
+          <PopoverPortal
+            containerRef={popoverContainerRef}
+            selectionKind='active'
+            visible={popoverVisible}
+          >
             {selectionPopover}
           </PopoverPortal>
         ) : undefined
@@ -1321,6 +1359,7 @@ function ViewerContent({
   pageSizesByPageNumber,
   virtualPaperTransform,
   scaleRange,
+  onInitialFitScale,
   onScrollToRange,
   onScrollToRect,
   onScrollToPosition,
@@ -1372,8 +1411,14 @@ function ViewerContent({
   paintingTool,
   pagePaintings,
   onPagePaintingChange,
-  drawingScale
+  drawingScale,
+  showPageBrowser,
+  onPageBrowserVisibilityChange,
+  onNavigateToPage
 }: ViewerContentProps) {
+  const [viewerRootElement, setViewerRootElement] =
+    useState<HTMLDivElement | null>(null)
+  const popoverContainerRef = useRef<HTMLElement | null>(null)
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
@@ -1387,6 +1432,54 @@ function ViewerContent({
     null
   )
   const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const setRootRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      setViewerRootElement(element)
+      viewerRootRef(element)
+    },
+    [viewerRootRef]
+  )
+
+  useEffect(() => {
+    const container =
+      viewerRootElement?.querySelector<HTMLElement>('.virtual-paper-wrapper') ??
+      null
+    popoverContainerRef.current = container
+    if (!container) return
+
+    const widestPageSize = getWidestRenderedPageSize(
+      pageNumbers,
+      pageSizesByPageNumber
+    )
+    const applyInitialFit = (width: number) => {
+      if (!widestPageSize || width <= 0) return false
+
+      onInitialFitScale(
+        width / (widestPageSize.width + INTERMEDIATE_PAGE_HORIZONTAL_MARGIN)
+      )
+      return true
+    }
+
+    if (applyInitialFit(container.getBoundingClientRect().width)) {
+      return () => {
+        popoverContainerRef.current = null
+      }
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry && applyInitialFit(entry.contentRect.width)) {
+        observer.disconnect()
+      }
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      popoverContainerRef.current = null
+    }
+  }, [onInitialFitScale, pageNumbers, pageSizesByPageNumber, viewerRootElement])
 
   const getFirstVisibleSelectionRef = useCallback(() => {
     for (const pageNumber of pageNumbers) {
@@ -1489,8 +1582,8 @@ function ViewerContent({
       confirmRectSelection()
       return
     }
-    getActiveSelectionRef()?.confirm()
-  }, [confirmRectSelection, getActiveSelectionRef, tool])
+    highlightSelection()
+  }, [confirmRectSelection, highlightSelection, tool])
 
   const clearSelections = useCallback(() => {
     selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
@@ -1691,6 +1784,7 @@ function ViewerContent({
 
   const intermediateDocumentPages = (
     <IntermediateDocumentPages
+      popoverContainerRef={popoverContainerRef}
       pageNumbers={pageNumbers}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
@@ -1758,11 +1852,21 @@ function ViewerContent({
 
   return (
     <div
-      ref={viewerRootRef}
+      ref={setRootRef}
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
     >
+      {pageNumbers.length > 0 ? (
+        <PageBrowser
+          isOpen={showPageBrowser}
+          pageNumbers={pageNumbers}
+          pageSizesByPageNumber={pageSizesByPageNumber}
+          baseImagesByPageNumber={baseImagesByPageNumber}
+          onPageVisibilityChange={onPageBrowserVisibilityChange}
+          onNavigateToPage={onNavigateToPage}
+        />
+      ) : null}
       {pageNumbers.length > 0 ? (
         <VirtualPaper
           containMode={true}
@@ -1853,7 +1957,8 @@ export function IntermediateDocumentViewer({
   selectedTool,
   paintingTool,
   pagePaintings,
-  onPagePaintingChange
+  onPagePaintingChange,
+  showPageBrowser = false
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -2096,6 +2201,27 @@ export function IntermediateDocumentViewer({
   )
   const effectiveScaleRef = useRef(effectiveScale)
   effectiveScaleRef.current = effectiveScale
+  const initialFitDocumentRef = useRef<IntermediateDocument | null>(null)
+
+  const handleInitialFitScale = useCallback(
+    (fitScale: number) => {
+      if (
+        !runtimeDocument ||
+        initialFitDocumentRef.current === runtimeDocument
+      ) {
+        return
+      }
+
+      initialFitDocumentRef.current = runtimeDocument
+      if (scale !== undefined) return
+
+      setPaperTransform((currentTransform) => ({
+        ...currentTransform,
+        scale: clampScale(fitScale, scaleRange)
+      }))
+    },
+    [runtimeDocument, scale, scaleRange]
+  )
 
   const virtualPaperTransform = useMemo<VirtualPaperTransform>(
     () => ({
@@ -2128,6 +2254,7 @@ export function IntermediateDocumentViewer({
   // 标记活动 transform 期间是否有 eviction 被跳过，仅在确实跳过时才在 transform 结束后补偿
   const evictionSkippedDuringTransformRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
+  const pageBrowserVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
   const jumpPinTokensRef = useRef(new Map<number, symbol>())
   const jumpPinCleanupTimersRef = useRef(
@@ -2359,6 +2486,11 @@ export function IntermediateDocumentViewer({
         lastKnownVisiblePagesRef.current.delete(pageNumber)
       }
     })
+    pageBrowserVisiblePagesRef.current.forEach((pageNumber) => {
+      if (!currentPageNumbers.has(pageNumber)) {
+        pageBrowserVisiblePagesRef.current.delete(pageNumber)
+      }
+    })
   }, [clearAllJumpPins, pageNumbers])
 
   useEffect(() => {
@@ -2377,6 +2509,7 @@ export function IntermediateDocumentViewer({
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
     lazilyEvictedPagesRef.current.clear()
+    pageBrowserVisiblePagesRef.current.clear()
     setLoadablePages(new Set())
     setVisiblePages(new Set())
     setTextsByPageNumber(new Map())
@@ -2989,6 +3122,9 @@ export function IntermediateDocumentViewer({
     pinnedPagesRef.current.forEach((pageNumber) => {
       protectedPages.add(pageNumber)
     })
+    pageBrowserVisiblePagesRef.current.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
 
     const selection = getSelectionForRoot(viewerRootRef.current)
     if (selection && !selection.isCollapsed) {
@@ -3072,6 +3208,71 @@ export function IntermediateDocumentViewer({
       pendingUnloadTimersRef.current.set(pageNumber, timer)
     },
     [evictLazyPageBundle]
+  )
+
+  const handlePageBrowserVisibilityChange = useCallback(
+    (pageNumber: number, isVisible: boolean) => {
+      if (!pageNumbers.includes(pageNumber)) return
+
+      if (isVisible) {
+        pageBrowserVisiblePagesRef.current.add(pageNumber)
+        clearUnloadTimer(pageNumber)
+        lazilyEvictedPagesRef.current.delete(pageNumber)
+        markLoadableWithOverscan(pageNumber)
+        scheduleVisibilityEnqueue(pageNumber)
+        return
+      }
+
+      pageBrowserVisiblePagesRef.current.delete(pageNumber)
+      if (!lastKnownVisiblePagesRef.current.has(pageNumber)) {
+        cancelVisibilityEnqueue(pageNumber)
+      }
+      schedulePageUnload(pageNumber)
+    },
+    [
+      cancelVisibilityEnqueue,
+      clearUnloadTimer,
+      markLoadableWithOverscan,
+      pageNumbers,
+      schedulePageUnload,
+      scheduleVisibilityEnqueue
+    ]
+  )
+
+  const navigateToPage = useCallback(
+    (pageNumber: number) => {
+      if (!pageNumbers.includes(pageNumber)) return
+
+      const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(pageNumber)
+      clearUnloadTimer(pageNumber)
+      lazilyEvictedPagesRef.current.delete(pageNumber)
+      markLoadableWithOverscan(pageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(pageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(pageNumber)
+      }
+
+      scrollToPosition({
+        x: 0,
+        y: computePageOriginY(pageNumber, pageNumbers, pageSizesByPageNumber)
+      })
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      releaseJumpPinnedPage,
+      scrollToPosition
+    ]
   )
 
   const scheduleEviction = useCallback(
@@ -3873,6 +4074,7 @@ export function IntermediateDocumentViewer({
       pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
+      onInitialFitScale={handleInitialFitScale}
       onScrollToRange={scrollToRange}
       onScrollToRect={scrollToRect}
       onScrollToPosition={scrollToPosition}
@@ -3929,6 +4131,9 @@ export function IntermediateDocumentViewer({
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={virtualPaperTransform.scale}
+      showPageBrowser={showPageBrowser}
+      onPageBrowserVisibilityChange={handlePageBrowserVisibilityChange}
+      onNavigateToPage={navigateToPage}
     />
   )
 }

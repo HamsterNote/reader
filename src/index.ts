@@ -68,6 +68,12 @@ export {
   type ReaderRenderMode
 } from './components/Reader'
 
+export {
+  DefaultSelectionPopover,
+  DefaultHighlightPopover,
+  type DefaultPopoverContext
+} from './components/DefaultPopover'
+
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
   | 'ocr'
@@ -88,6 +94,8 @@ export type ReaderInteractiveProps = Pick<
   | 'onSelectionStart'
   | 'onSelectionEnd'
   | 'onHighlight'
+  | 'onRemoveRange'
+  | 'onHighlightColorChange'
   | 'highlightColor'
   | 'selectionColor'
   | 'selectionPopover'
@@ -105,6 +113,7 @@ export type ReaderInteractiveProps = Pick<
   | 'containMarginTop'
   | 'containMarginBottom'
   | 'containMarginY'
+  | 'showPageBrowser'
   | 'selectedTool'
   | 'paintingTool'
   | 'pagePaintings'

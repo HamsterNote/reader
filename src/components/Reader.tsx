@@ -27,6 +27,10 @@ import type {
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover
+} from './DefaultPopover'
 import type {
   ReaderPagePaintingMap,
   ReaderPageRectSelectionMap,
@@ -87,6 +91,10 @@ export type ReaderProps = {
   ) => void
   onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   onHighlight?: (range: ReaderSelectionRange) => void
+  /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
+  onRemoveRange?: (id: string) => void
+  /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
+  onHighlightColorChange?: (color: string) => void
   highlightColor?: string
   selectionColor?: string
   selectionPopover?: ReactNode
@@ -113,6 +121,8 @@ export type ReaderProps = {
   containMarginBottom?: number
   /** @deprecated Use `containMarginTop` and `containMarginBottom`. */
   containMarginY?: number
+  /** 是否显示布局模式的页面浏览侧栏，默认 false */
+  showPageBrowser?: boolean
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
@@ -250,6 +260,8 @@ export function Reader({
   onSelectionStart,
   onSelectionEnd,
   onHighlight,
+  onRemoveRange,
+  onHighlightColorChange,
   highlightColor,
   selectionColor,
   selectionPopover,
@@ -273,6 +285,7 @@ export function Reader({
   containMarginTop,
   containMarginBottom,
   containMarginY,
+  showPageBrowser,
   selectedTool,
   paintingTool = 'pen',
   pagePaintings,
@@ -295,6 +308,7 @@ export function Reader({
   const [internalPageRectSelections, setInternalPageRectSelections] =
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
   const resolvedPagePaintings = pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
   pagePaintingsRef.current = resolvedPagePaintings
@@ -326,6 +340,27 @@ export function Reader({
     pageRectSelections !== undefined ||
     defaultPageRectSelections !== undefined ||
     onPageRectSelectionsChange !== undefined
+
+  const handleSelectionRef = useCallback(
+    (value: ReaderSelectionRef | null) => {
+      defaultSelectionRef.current = value
+
+      if (typeof selectionRef === 'function') {
+        selectionRef(value)
+      } else if (selectionRef) {
+        selectionRef.current = value
+      }
+    },
+    [selectionRef]
+  )
+  const popoverSelectionRef =
+    selectionRef && typeof selectionRef !== 'function'
+      ? selectionRef
+      : defaultSelectionRef
+  const resolvedSelectionRef =
+    typeof selectionRef === 'function'
+      ? handleSelectionRef
+      : (selectionRef ?? defaultSelectionRef)
 
   const handleFile = useCallback(
     (file: File) => {
@@ -596,11 +631,36 @@ export function Reader({
           onHighlight={onHighlight}
           highlightColor={highlightColor}
           selectionColor={selectionColor}
-          selectionPopover={selectionPopover}
-          highlightPopover={highlightPopover}
+          selectionPopover={
+            selectionPopover ?? (
+              <DefaultSelectionPopover
+                selectionRef={popoverSelectionRef}
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                selectedRangeId={selectedRangeId}
+                ranges={resolvedRanges}
+                onUpdateRange={handleUpdateRange}
+                onRemoveRange={onRemoveRange}
+              />
+            )
+          }
+          highlightPopover={
+            highlightPopover ??
+            ((highlight) => (
+              <DefaultHighlightPopover
+                selectionRef={popoverSelectionRef}
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                selectedRangeId={highlight.id}
+                ranges={resolvedRanges}
+                onUpdateRange={handleUpdateRange}
+                onRemoveRange={onRemoveRange}
+              />
+            ))
+          }
           onCommentHighlight={onCommentHighlight}
           autoHighlight={autoHighlight}
-          selectionRef={selectionRef}
+          selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}
           tool={resolvedSelectionTool}
           rects={resolvedRects}
@@ -623,6 +683,7 @@ export function Reader({
           paintingTool={paintingTool}
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
+          showPageBrowser={showPageBrowser}
         />
       )
     }
