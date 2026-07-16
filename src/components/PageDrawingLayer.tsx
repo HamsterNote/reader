@@ -11,6 +11,7 @@ import { useMemo } from 'react'
 const EMPTY_DRAWING_VALUE: DrawingValue = { strokes: [] }
 const MAX_DRAWING_STROKES = 500
 const MAX_DRAWING_POINTS = 20_000
+const MAX_DASH_ARRAY_VALUES = 32
 
 export type PageDrawingLayerProps = {
   readonly enabled: boolean
@@ -93,10 +94,15 @@ function getOptionalString(value: unknown): string | undefined {
 
 function getDashArray(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const values = value.filter(
-    (item): item is number => typeof item === 'number' && Number.isFinite(item)
-  )
-  return values.length === value.length ? values : undefined
+  const values = value
+    .slice(0, MAX_DASH_ARRAY_VALUES)
+    .filter(
+      (item): item is number =>
+        typeof item === 'number' && Number.isFinite(item)
+    )
+  return values.length === Math.min(value.length, MAX_DASH_ARRAY_VALUES)
+    ? values
+    : undefined
 }
 
 function parseDrawingStroke(
