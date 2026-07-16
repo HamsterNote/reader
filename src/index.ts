@@ -122,6 +122,7 @@ export type ReaderInteractiveProps = Pick<
   | 'showPageBrowser'
   | 'selectedTool'
   | 'paintingTool'
+  | 'drawingStrokeColor'
   | 'pagePaintings'
   | 'defaultPagePaintings'
   | 'onPagePaintingChange'

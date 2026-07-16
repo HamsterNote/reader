@@ -517,6 +517,7 @@ export type IntermediateDocumentViewerProps = {
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
+  drawingStrokeColor?: string
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
@@ -1052,6 +1053,7 @@ type ViewerContentProps = PageResources & {
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
+  drawingStrokeColor?: string
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
@@ -1167,6 +1169,7 @@ type IntermediateDocumentPagesProps = PageResources & {
   ) => void
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
+  drawingStrokeColor?: string
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
@@ -1270,6 +1273,7 @@ function IntermediateDocumentPages({
   onPageRenderTiming,
   selectedTool,
   paintingTool,
+  drawingStrokeColor,
   pagePaintings,
   onPagePaintingChange,
   drawingScale
@@ -1409,6 +1413,7 @@ function IntermediateDocumentPages({
                   enabled={selectedTool === 'drawing'}
                   pageId={publicPageId}
                   tool={paintingTool}
+                  strokeColor={drawingStrokeColor}
                   value={pagePaintings?.[publicPageId]}
                   canvasScale={drawingScale}
                   onChange={
@@ -1486,6 +1491,7 @@ function ViewerContent({
   containMarginY,
   selectedTool,
   paintingTool,
+  drawingStrokeColor,
   pagePaintings,
   onPagePaintingChange,
   drawingScale,
@@ -1912,6 +1918,7 @@ function ViewerContent({
       onPageRenderTiming={onPageRenderTiming}
       selectedTool={selectedTool}
       paintingTool={paintingTool}
+      drawingStrokeColor={drawingStrokeColor}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={drawingScale}
@@ -2046,6 +2053,7 @@ export function IntermediateDocumentViewer({
   containMarginY,
   selectedTool,
   paintingTool,
+  drawingStrokeColor,
   pagePaintings,
   onPagePaintingChange,
   showPageBrowser = false
@@ -4482,6 +4490,7 @@ export function IntermediateDocumentViewer({
       containMarginY={containMarginY}
       selectedTool={selectedTool}
       paintingTool={paintingTool}
+      drawingStrokeColor={drawingStrokeColor}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={virtualPaperTransform.scale}

@@ -136,6 +136,8 @@ export type ReaderProps = {
   showPageBrowser?: boolean
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
+  /** 绘制图形的描边颜色，默认 '#2563eb' */
+  drawingStrokeColor?: string
   pagePaintings?: ReaderPagePaintingMap
   defaultPagePaintings?: ReaderPagePaintingMap
   /** @deprecated Use the linked `ranges` API. */
@@ -318,6 +320,7 @@ export function Reader({
   showPageBrowser,
   selectedTool,
   paintingTool = 'pen',
+  drawingStrokeColor = '#2563eb',
   pagePaintings,
   defaultPagePaintings,
   pageTextSelections,
@@ -715,6 +718,7 @@ export function Reader({
           containMarginY={containMarginY}
           selectedTool={selectedTool}
           paintingTool={paintingTool}
+          drawingStrokeColor={drawingStrokeColor}
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}

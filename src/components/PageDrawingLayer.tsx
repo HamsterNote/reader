@@ -17,6 +17,8 @@ export type PageDrawingLayerProps = {
   readonly enabled: boolean
   readonly pageId: string
   readonly tool?: DrawingTool
+  /** 绘制图形的描边颜色，默认 '#2563eb' */
+  readonly strokeColor?: string
   readonly value?: DrawingValue
   readonly onChange?: (nextValue: DrawingValue) => void
   readonly gestures?: readonly DrawingGesture[]
@@ -211,6 +213,7 @@ export function PageDrawingLayer({
   enabled,
   pageId,
   tool = 'pen',
+  strokeColor = '#2563eb',
   value,
   onChange,
   gestures = [],
@@ -249,7 +252,7 @@ export function PageDrawingLayer({
         gestures={gestures}
         gestureScaleBounds={gestureScaleBounds}
         cursor={enabled ? undefined : false}
-        strokeColor='#2563eb'
+        strokeColor={strokeColor}
         strokeWidth={3}
         testID={`reader-painting-${pageId}`}
       />
