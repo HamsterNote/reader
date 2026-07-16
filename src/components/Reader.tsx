@@ -8,6 +8,10 @@ import type {
 import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
 
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryValue,
+  ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
@@ -23,9 +27,13 @@ import type {
   ReaderTextSelectionDetail,
   ReaderTouchPanMode
 } from './IntermediateDocumentViewer'
-import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover
+} from './DefaultPopover'
+import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import type {
   ReaderPagePaintingMap,
   ReaderPageRectSelectionMap,
@@ -64,7 +72,10 @@ export type ReaderProps = {
   defaultScale?: number
   onScaleChange?: (
     scale: number,
-    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+    detail: {
+      source: 'wheel' | 'pinch'
+      focalPoint?: { x: number; y: number }
+    }
   ) => void
   minScale?: number
   maxScale?: number
@@ -86,10 +97,17 @@ export type ReaderProps = {
   ) => void
   onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   onHighlight?: (range: ReaderSelectionRange) => void
+  /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
+  onRemoveRange?: (id: string) => void
+  /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
+  onHighlightColorChange?: (color: string) => void
   highlightColor?: string
   selectionColor?: string
   selectionPopover?: ReactNode
-  highlightPopover?: ReactNode
+  highlightPopover?: ReaderHighlightPopover
+  onCommentHighlight?: (
+    highlight: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
   autoHighlight?: boolean
   selectionRef?: Ref<ReaderSelectionRef>
   overlayRectType?: ReaderSelectionOverlayRectType
@@ -99,13 +117,23 @@ export type ReaderProps = {
   onCreateRect?: (rect: ReaderSelectionRectangle) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  annotationHistory?: boolean | ReaderAnnotationHistoryOptions
+  onAnnotationHistoryChange?: (
+    next: ReaderAnnotationHistoryValue,
+    detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
   initialLoadedPages?: number
   pageLoadConcurrency?: number
   pageLoadEnterDelayMs?: number
   pageUnloadDelayMs?: number
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   containMarginX?: number
+  containMarginTop?: number
+  containMarginBottom?: number
+  /** @deprecated Use `containMarginTop` and `containMarginBottom`. */
   containMarginY?: number
+  /** 是否显示布局模式的页面浏览侧栏，默认 false */
+  showPageBrowser?: boolean
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
@@ -208,6 +236,23 @@ function getPageRects(
   )
 }
 
+function normalizeAnnotationHistoryOptions(
+  annotationHistory: boolean | ReaderAnnotationHistoryOptions | undefined
+): ReaderAnnotationHistoryOptions {
+  if (annotationHistory === true) {
+    return { enabled: true }
+  }
+
+  if (annotationHistory === false || annotationHistory === undefined) {
+    return { enabled: false }
+  }
+
+  return {
+    enabled: annotationHistory.enabled ?? true,
+    resetKey: annotationHistory.resetKey
+  }
+}
+
 export function Reader({
   document,
   className,
@@ -243,10 +288,13 @@ export function Reader({
   onSelectionStart,
   onSelectionEnd,
   onHighlight,
+  onRemoveRange,
+  onHighlightColorChange,
   highlightColor,
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
@@ -256,13 +304,18 @@ export function Reader({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  annotationHistory,
+  onAnnotationHistoryChange,
   initialLoadedPages,
   pageLoadConcurrency,
   pageLoadEnterDelayMs,
   pageUnloadDelayMs,
   onIntermediateDocumentRenderTiming,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
+  showPageBrowser,
   selectedTool,
   paintingTool = 'pen',
   pagePaintings,
@@ -285,6 +338,7 @@ export function Reader({
   const [internalPageRectSelections, setInternalPageRectSelections] =
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
   const resolvedPagePaintings = pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
   pagePaintingsRef.current = resolvedPagePaintings
@@ -308,6 +362,8 @@ export function Reader({
       : undefined)
   const resolvedSelectionTool =
     tool ?? (selectedTool === 'rect-selection' ? 'rect' : 'text')
+  const normalizedAnnotationHistory =
+    normalizeAnnotationHistoryOptions(annotationHistory)
   const usesPageTextSelectionCompatibility =
     pageTextSelections !== undefined ||
     defaultPageTextSelections !== undefined ||
@@ -316,6 +372,27 @@ export function Reader({
     pageRectSelections !== undefined ||
     defaultPageRectSelections !== undefined ||
     onPageRectSelectionsChange !== undefined
+
+  const handleSelectionRef = useCallback(
+    (value: ReaderSelectionRef | null) => {
+      defaultSelectionRef.current = value
+
+      if (typeof selectionRef === 'function') {
+        selectionRef(value)
+      } else if (selectionRef) {
+        selectionRef.current = value
+      }
+    },
+    [selectionRef]
+  )
+  const popoverSelectionRef =
+    selectionRef && typeof selectionRef !== 'function'
+      ? selectionRef
+      : defaultSelectionRef
+  const resolvedSelectionRef =
+    typeof selectionRef === 'function'
+      ? handleSelectionRef
+      : (selectionRef ?? defaultSelectionRef)
 
   const handleFile = useCallback(
     (file: File) => {
@@ -586,10 +663,36 @@ export function Reader({
           onHighlight={onHighlight}
           highlightColor={highlightColor}
           selectionColor={selectionColor}
-          selectionPopover={selectionPopover}
-          highlightPopover={highlightPopover}
+          selectionPopover={
+            selectionPopover ?? (
+              <DefaultSelectionPopover
+                selectionRef={popoverSelectionRef}
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                selectedRangeId={selectedRangeId}
+                ranges={resolvedRanges}
+                onUpdateRange={handleUpdateRange}
+                onRemoveRange={onRemoveRange}
+              />
+            )
+          }
+          highlightPopover={
+            highlightPopover ??
+            ((highlight) => (
+              <DefaultHighlightPopover
+                selectionRef={popoverSelectionRef}
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                selectedRangeId={highlight.id}
+                ranges={resolvedRanges}
+                onUpdateRange={handleUpdateRange}
+                onRemoveRange={onRemoveRange}
+              />
+            ))
+          }
+          onCommentHighlight={onCommentHighlight}
           autoHighlight={autoHighlight}
-          selectionRef={selectionRef}
+          selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}
           tool={resolvedSelectionTool}
           rects={resolvedRects}
@@ -597,6 +700,8 @@ export function Reader({
           onCreateRect={handleCreateRect}
           onSelectRect={onSelectRect}
           onUpdateRect={handleUpdateRect}
+          annotationHistory={normalizedAnnotationHistory}
+          onAnnotationHistoryChange={onAnnotationHistoryChange}
           initialLoadedPages={initialLoadedPages}
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
@@ -605,11 +710,14 @@ export function Reader({
             onIntermediateDocumentRenderTiming
           }
           containMarginX={containMarginX}
+          containMarginTop={containMarginTop}
+          containMarginBottom={containMarginBottom}
           containMarginY={containMarginY}
           selectedTool={selectedTool}
           paintingTool={paintingTool}
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
+          showPageBrowser={showPageBrowser}
         />
       )
     }

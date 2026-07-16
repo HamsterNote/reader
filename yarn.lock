@@ -4577,6 +4577,11 @@ uri-js@^4.2.2:
   dependencies:
     punycode "^2.1.0"
 
+use-undo@^1.2.0:
+  version "1.2.0"
+  resolved "https://registry.yarnpkg.com/use-undo/-/use-undo-1.2.0.tgz#fed1ed5e698b07acaa3e6ea828fd1ea989682914"
+  integrity sha512-ZzrdoHH67DCMuWbTQ14MKX2YRhzzCZMd9dtiaSu3mLzxd/iXfvKY6m6qCIAlU/Psmq328o2o4PvM/keGijXCIA==
+
 util-deprecate@~1.0.1:
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/util-deprecate/-/util-deprecate-1.0.2.tgz#450d4dc9fa70de732762fbd2d4a28981419a0ccf"

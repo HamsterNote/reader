@@ -8,6 +8,7 @@ import type {
   SelectionRect,
   SelectionTool
 } from '@hamster-note/selection'
+import type { ReactNode } from 'react'
 
 /**
  * Reader 公开 linked selection 端点。
@@ -41,12 +42,55 @@ export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
   readonly __readerSelectionRangeBrand?: never
 }
 
+/** 已确认高亮 Popover：静态内容，或基于当前高亮原始对象渲染的内容。 */
+export type ReaderHighlightPopover =
+  | ReactNode
+  | ((highlight: ReaderSelectionRange) => ReactNode)
+
 export type ReaderLinkedSelectionData = Omit<
   LinkedSelectionData,
   'items' | 'activeRange'
 > & {
   items: ReaderLinkedSelectionRange[]
   activeRange?: ReaderLinkedSelectionRange | null
+}
+
+/** Reader annotation history tracks text ranges, rectangles, and active IDs only. */
+export type ReaderAnnotationHistoryValue = {
+  readonly ranges: ReaderSelectionRange[]
+  readonly rects: ReaderSelectionRectangle[]
+  readonly selectedRangeId: string | null
+  readonly selectedRectId: string | null
+}
+
+export type ReaderAnnotationHistoryChangeSource =
+  | 'select'
+  | 'highlight'
+  | 'update-range'
+  | 'create-rect'
+  | 'update-rect'
+  | 'clear'
+  | 'undo'
+  | 'redo'
+  | 'reset'
+  | 'external-sync'
+
+export type ReaderAnnotationHistoryStatus = {
+  readonly enabled: boolean
+  readonly canUndo: boolean
+  readonly canRedo: boolean
+  readonly pastCount: number
+  readonly futureCount: number
+}
+
+export type ReaderAnnotationHistoryChangeDetail = {
+  readonly source: ReaderAnnotationHistoryChangeSource
+  readonly status: ReaderAnnotationHistoryStatus
+}
+
+export type ReaderAnnotationHistoryOptions = {
+  readonly enabled?: boolean
+  readonly resetKey?: string | number
 }
 
 /**
@@ -77,6 +121,16 @@ export interface ReaderSelectionRef {
   scrollToRange: (id: string) => void
   /** 滚动视图到指定矩形框选（按 rect id 查找）。实现细节留给 Reader 内部。 */
   scrollToRect: (id: string) => void
+  /** 回退最近一次 annotation history 变更；无可回退记录时返回 false。 */
+  undo: () => boolean
+  /** 重做最近一次被回退的 annotation history 变更；无可重做记录时返回 false。 */
+  redo: () => boolean
+  /** 当前 annotation history 是否可以回退。 */
+  canUndo: () => boolean
+  /** 当前 annotation history 是否可以重做。 */
+  canRedo: () => boolean
+  /** 获取当前 annotation history 栈状态。 */
+  getAnnotationHistoryState: () => ReaderAnnotationHistoryStatus
   /**
    * 滚动 VirtualPaper 到指定坐标位置。
    * - `x`/`y` 为内容区滚动偏移（单位 px），(0,0) 表示内容左上角。

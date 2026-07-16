@@ -7,26 +7,6 @@ export type {
   SelectionRect as ReaderSelectionRectangle,
   SelectionTool as ReaderSelectionTool
 } from '@hamster-note/selection'
-
-export type {
-  ReaderLinkedSelectionData,
-  ReaderLinkedSelectionRange,
-  ReaderSelectionEndpoint,
-  ReaderSelectionRange,
-  ReaderSelectionRect,
-  ReaderSelectionRef
-} from './types/selection'
-
-export {
-  buildSavedSelection,
-  buildSelectionPayload,
-  createIntermediateDocumentRenderTiming,
-  denormalizePageRects,
-  IntermediateDocumentViewer,
-  normalizePageRects,
-  resolveSavedSelection,
-  textHash
-} from './components/IntermediateDocumentViewer'
 export type {
   CreateIntermediateDocumentRenderTimingOptions,
   IntermediateDocumentRenderTiming,
@@ -53,6 +33,17 @@ export type {
   ReaderTouchPanMode,
   TextElementInfo
 } from './components/IntermediateDocumentViewer'
+
+export {
+  buildSavedSelection,
+  buildSelectionPayload,
+  createIntermediateDocumentRenderTiming,
+  denormalizePageRects,
+  IntermediateDocumentViewer,
+  normalizePageRects,
+  resolveSavedSelection,
+  textHash
+} from './components/IntermediateDocumentViewer'
 export {
   Page,
   type PageProps,
@@ -66,6 +57,26 @@ export {
   type ReaderProps,
   type ReaderRenderMode
 } from './components/Reader'
+export type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryChangeSource,
+  ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryStatus,
+  ReaderAnnotationHistoryValue,
+  ReaderHighlightPopover,
+  ReaderLinkedSelectionData,
+  ReaderLinkedSelectionRange,
+  ReaderSelectionEndpoint,
+  ReaderSelectionRange,
+  ReaderSelectionRect,
+  ReaderSelectionRef
+} from './types/selection'
+
+export {
+  DefaultSelectionPopover,
+  DefaultHighlightPopover,
+  type DefaultPopoverContext
+} from './components/DefaultPopover'
 
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
@@ -87,9 +98,13 @@ export type ReaderInteractiveProps = Pick<
   | 'onSelectionStart'
   | 'onSelectionEnd'
   | 'onHighlight'
+  | 'onRemoveRange'
+  | 'onHighlightColorChange'
   | 'highlightColor'
   | 'selectionColor'
   | 'selectionPopover'
+  | 'highlightPopover'
+  | 'onCommentHighlight'
   | 'selectionRef'
   | 'overlayRectType'
   | 'tool'
@@ -98,6 +113,13 @@ export type ReaderInteractiveProps = Pick<
   | 'onCreateRect'
   | 'onSelectRect'
   | 'onUpdateRect'
+  | 'annotationHistory'
+  | 'onAnnotationHistoryChange'
+  | 'containMarginX'
+  | 'containMarginTop'
+  | 'containMarginBottom'
+  | 'containMarginY'
+  | 'showPageBrowser'
   | 'selectedTool'
   | 'paintingTool'
   | 'pagePaintings'

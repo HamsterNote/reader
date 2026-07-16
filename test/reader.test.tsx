@@ -7,7 +7,7 @@ import {
 } from '@hamster-note/types'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createRef, type RefObject } from 'react'
+import { createRef, type RefObject, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
@@ -19,11 +19,24 @@ import type {
   ReaderProps,
   ReaderRenderMode,
   ReaderSelectionRange,
+  ReaderSelectionRectangle,
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '../src/index'
 import { Page, Reader } from '../src/index'
-import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
+import type {
+  LinkedSelectionData,
+  LinkedSelectionRange
+} from './mocks/selection'
+import {
+  clearSelectionProps,
+  getAllSelectionProps,
+  getSelectionPropsById,
+  simulateLinkedDataChange,
+  simulateLinkedSelect,
+  simulateLinkedSelectRange,
+  simulateSelectionConfirmRect
+} from './mocks/selection'
 import { intersectionObserverMock } from './setup'
 
 let capturedViewerProps: Record<string, unknown> = {}
@@ -46,6 +59,16 @@ vi.mock(
     }
   }
 )
+
+vi.mock('../src/components/PopoverPortal', () => ({
+  PopoverPortal: ({
+    children,
+    visible
+  }: {
+    children: React.ReactNode
+    visible: boolean
+  }) => (visible ? children : null)
+}))
 
 vi.mock('@system-ui-js/multi-drag', () => {
   const DragOperationType = {
@@ -257,6 +280,74 @@ function requireReaderSelectionRef(
   }
 
   return ref.current
+}
+
+function requireRuntimeSelectionId(pageSuffix = ':page-1'): string {
+  const selectionId = getAllSelectionProps().find((props) =>
+    props.selectionId?.endsWith(pageSuffix)
+  )?.selectionId
+
+  if (!selectionId) {
+    throw new Error(`Expected runtime selection id ending with ${pageSuffix}`)
+  }
+
+  return selectionId
+}
+
+function requireLinkedData(selectionId: string): LinkedSelectionData {
+  const linkedData = getAllSelectionProps().find(
+    (props) => props.selectionId === selectionId
+  )?.linkedData
+
+  if (!linkedData) {
+    throw new Error(`Expected linked data for ${selectionId}`)
+  }
+
+  return linkedData
+}
+
+function makeReaderRange(id: string, text: string): ReaderSelectionRange {
+  return {
+    id,
+    text,
+    start: { selectionId: 'page-1', offset: 0 },
+    end: { selectionId: 'page-1', offset: text.length },
+    createdAt: id.length,
+    overlayRectType: 'percent',
+    rectsBySelectionId: {
+      'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+    }
+  }
+}
+
+function makeRuntimeRange(
+  runtimeSelectionId: string,
+  id: string,
+  text: string
+): LinkedSelectionRange {
+  return {
+    id,
+    text,
+    start: { selectionId: runtimeSelectionId, offset: 0 },
+    end: { selectionId: runtimeSelectionId, offset: text.length },
+    createdAt: id.length,
+    overlayRectType: 'percent',
+    rectsBySelectionId: {
+      [runtimeSelectionId]: [{ x: 10, y: 20, width: 30, height: 10 }]
+    }
+  }
+}
+
+function makeReaderRect(id: string): ReaderSelectionRectangle {
+  return {
+    id,
+    createdAt: id.length,
+    overlayRectType: 'percent',
+    start: { x: 10, y: 20 },
+    end: { x: 40, y: 60 },
+    selectionId: 'page-1',
+    rect: { x: 10, y: 20, width: 30, height: 40 }
+  }
 }
 
 function createMockFile(
@@ -1090,6 +1181,11 @@ describe('Reader prop forwarding', () => {
       clear: expect.any(Function),
       scrollToRange: expect.any(Function),
       scrollToRect: expect.any(Function),
+      undo: expect.any(Function),
+      redo: expect.any(Function),
+      canUndo: expect.any(Function),
+      canRedo: expect.any(Function),
+      getAnnotationHistoryState: expect.any(Function),
       scrollToPosition: expect.any(Function)
     })
 
@@ -1239,14 +1335,19 @@ describe('Reader prop forwarding', () => {
     )
 
     await screen.findByText('Page 1 text')
-    const pageOneSelectionProps = getAllSelectionProps().find((props) =>
+    let pageOneSelectionProps = getAllSelectionProps().find((props) =>
       props.selectionId?.endsWith(':page-1')
     )
-    expect(pageOneSelectionProps?.rects).toEqual([
-      expect.objectContaining({
-        selectionId: pageOneSelectionProps?.selectionId
-      })
-    ])
+    await waitFor(() => {
+      pageOneSelectionProps = getAllSelectionProps().find((props) =>
+        props.selectionId?.endsWith(':page-1')
+      )
+      expect(pageOneSelectionProps?.rects).toEqual([
+        expect.objectContaining({
+          selectionId: pageOneSelectionProps?.selectionId
+        })
+      ])
+    })
 
     const publicRef = requireReaderSelectionRef(selectionRef)
     act(() => {
@@ -1258,14 +1359,124 @@ describe('Reader prop forwarding', () => {
     )
   })
 
-  it('forwards autoHighlight and highlightPopover to IntermediateDocumentViewer', () => {
+  it('forwards autoHighlight, highlightPopover, and highlight comments to IntermediateDocumentViewer', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     const popover = <div>Test Popover</div>
+    const onCommentHighlight = vi.fn(
+      async (highlight: ReaderSelectionRange) => highlight
+    )
     render(
-      <Reader document={doc} autoHighlight={true} highlightPopover={popover} />
+      <Reader
+        document={doc}
+        autoHighlight={true}
+        highlightPopover={popover}
+        onCommentHighlight={onCommentHighlight}
+      />
     )
     expect(capturedViewerProps.autoHighlight).toBe(true)
     expect(capturedViewerProps.highlightPopover).toBe(popover)
+    expect(capturedViewerProps.onCommentHighlight).toBe(onCommentHighlight)
+  })
+
+  it('renders an existing highlight popover from the original range reference', async () => {
+    // Given: the selected highlight has its own color, which differs from the
+    // current global color used for newly-created highlights.
+    const range: ReaderSelectionRange = {
+      id: 'colored-highlight',
+      text: 'Colored highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 8 },
+      createdAt: 10,
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+      },
+      markerStyle: { backgroundColor: '#ff3366' }
+    }
+    const highlightPopover = vi.fn((highlight: ReaderSelectionRange) => (
+      <input
+        aria-label='Existing highlight color'
+        value={String(highlight.markerStyle?.backgroundColor ?? '#ffee00')}
+        readOnly
+      />
+    ))
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        highlightColor='#ffee00'
+        highlightPopover={highlightPopover}
+      />
+    )
+
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+
+    // When: Selection mounts the existing-highlight popover.
+    render(selectionProps?.popover)
+
+    // Then: the render function receives the exact public range object and can
+    // prioritize that highlight's persisted color over the global picker color.
+    expect(highlightPopover).toHaveBeenCalledWith(range)
+    expect(screen.getByLabelText('Existing highlight color')).toHaveValue(
+      '#ff3366'
+    )
+  })
+
+  it('closes an existing highlight popover after its comment promise resolves', async () => {
+    // Given: a selected public highlight and a host-controlled comment flow.
+    const user = userEvent.setup()
+    const range: ReaderSelectionRange = {
+      id: 'commented-highlight',
+      text: 'Commented highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 8 },
+      createdAt: 11,
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+      }
+    }
+    let finishComment: ((highlight: ReaderSelectionRange) => void) | undefined
+    const onCommentHighlight = vi.fn(
+      (_highlight: ReaderSelectionRange) =>
+        new Promise<ReaderSelectionRange>((resolve) => {
+          finishComment = resolve
+        })
+    )
+    const onSelectRange = vi.fn()
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        highlightPopover={<span>Highlight actions</span>}
+        onCommentHighlight={onCommentHighlight}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // When: the user starts commenting, the original range reference is passed
+    // to the host and the popover stays open while the promise is pending.
+    const commentButton = screen.getByRole('button', { name: '评论' })
+    await user.click(commentButton)
+    expect(onCommentHighlight).toHaveBeenCalledWith(range)
+    const [pendingSelectionProps] = getAllSelectionProps()
+    popoverView.rerender(pendingSelectionProps?.popover)
+    expect(screen.getByRole('button', { name: '评论' })).toBeDisabled()
+    expect(onSelectRange).not.toHaveBeenCalled()
+
+    // Then: resolving with that same reference marks commenting as finished and
+    // clears the selected range, which closes the existing-highlight popover.
+    await act(async () => {
+      finishComment?.(range)
+      await Promise.resolve()
+    })
+    expect(onSelectRange).toHaveBeenCalledWith(null)
   })
 
   it('compile-time: overlayRectType satisfies ReaderProps', () => {
@@ -1314,6 +1525,680 @@ describe('Reader prop forwarding', () => {
       }
     }
     expect(props.onIntermediateDocumentRenderTiming).toBeTypeOf('function')
+  })
+
+  it('normalizes and forwards annotationHistory options to IntermediateDocumentViewer', () => {
+    const onAnnotationHistoryChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        annotationHistory={{ resetKey: 'doc-1' }}
+        onAnnotationHistoryChange={onAnnotationHistoryChange}
+      />
+    )
+
+    expect(capturedViewerProps.annotationHistory).toEqual({
+      enabled: true,
+      resetKey: 'doc-1'
+    })
+    expect(capturedViewerProps.onAnnotationHistoryChange).toBe(
+      onAnnotationHistoryChange
+    )
+  })
+})
+
+describe('Reader annotation history', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  it('undoes controlled ranges and rects by proposing the previous full snapshot', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const initialRect = makeReaderRect('rect-1')
+    const onAnnotationHistoryChange = vi.fn()
+    const { document } = makeLazyDocument(1)
+
+    function ControlledReader() {
+      const [controlledRanges, setControlledRanges] = useState([initialRange])
+      const [controlledRects, setControlledRects] = useState([initialRect])
+      const [selectedRangeId, setSelectedRangeId] = useState<string | null>(
+        initialRange.id
+      )
+      const [selectedRectId, setSelectedRectId] = useState<string | null>(
+        initialRect.id
+      )
+
+      return (
+        <Reader
+          document={document}
+          ranges={controlledRanges}
+          rects={controlledRects}
+          selectedRangeId={selectedRangeId}
+          selectedRectId={selectedRectId}
+          annotationHistory
+          selectionRef={selectionRef}
+          onAnnotationHistoryChange={(next, detail) => {
+            onAnnotationHistoryChange(next, detail)
+            setControlledRanges(next.ranges)
+            setControlledRects(next.rects)
+            setSelectedRangeId(next.selectedRangeId)
+            setSelectedRectId(next.selectedRectId)
+          }}
+        />
+      )
+    }
+
+    render(<ControlledReader />)
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    const updatedRange = makeRuntimeRange(
+      runtimeSelectionId,
+      initialRange.id,
+      'After'
+    )
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [updatedRange],
+        selectedRangeId: initialRange.id
+      })
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          ranges: [expect.objectContaining({ text: 'After' })]
+        }),
+        expect.objectContaining({ source: 'update-range' })
+      )
+    })
+
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+
+    expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+      {
+        ranges: [initialRange],
+        rects: [initialRect],
+        selectedRangeId: initialRange.id,
+        selectedRectId: initialRect.id
+      },
+      expect.objectContaining({ source: 'undo' })
+    )
+  })
+
+  it('returns false for controlled undo and redo without onAnnotationHistoryChange', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        ranges={[initialRange]}
+        annotationHistory
+        selectionRef={selectionRef}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, initialRange.id, 'After')],
+        selectedRangeId: initialRange.id
+      })
+    })
+
+    expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('Before')
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(false)
+      expect(requireReaderSelectionRef(selectionRef).redo()).toBe(false)
+    })
+    expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('Before')
+  })
+
+  it('does not call single-item mutation callbacks during undo or redo replay', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onAnnotationHistoryChange = vi.fn()
+    const onCreateRect = vi.fn()
+    const onUpdateRect = vi.fn()
+    const onSelect = vi.fn()
+    const onUpdateRange = vi.fn()
+    const { document } = makeLazyDocument(1)
+
+    function ControlledReader() {
+      const [controlledRects, setControlledRects] = useState<
+        ReaderSelectionRectangle[]
+      >([])
+
+      return (
+        <Reader
+          document={document}
+          rects={controlledRects}
+          annotationHistory
+          selectionRef={selectionRef}
+          onAnnotationHistoryChange={(next, detail) => {
+            onAnnotationHistoryChange(next, detail)
+            setControlledRects(next.rects)
+          }}
+          onCreateRect={onCreateRect}
+          onUpdateRect={onUpdateRect}
+          onSelect={onSelect}
+          onUpdateRange={onUpdateRange}
+          tool='rect'
+        />
+      )
+    }
+
+    render(<ControlledReader />)
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+
+    act(() => {
+      simulateSelectionConfirmRect(runtimeSelectionId)
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          rects: [expect.objectContaining({ id: 'rect-highlight-id' })]
+        }),
+        expect.objectContaining({ source: 'create-rect' })
+      )
+    })
+    expect(onCreateRect).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).redo()).toBe(true)
+    })
+
+    expect(onCreateRect).toHaveBeenCalledTimes(1)
+    expect(onUpdateRect).not.toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onUpdateRange).not.toHaveBeenCalled()
+  })
+
+  it('calls onAnnotationHistoryChange for direct annotation mutations', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onAnnotationHistoryChange = vi.fn()
+    const { document } = makeLazyDocument(1)
+
+    function ControlledReader() {
+      const [controlledRanges, setControlledRanges] = useState<
+        ReaderSelectionRange[]
+      >([])
+      const [controlledRects, setControlledRects] = useState<
+        ReaderSelectionRectangle[]
+      >([])
+      const [selectedRangeId, setSelectedRangeId] = useState<string | null>(
+        null
+      )
+      const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
+
+      return (
+        <Reader
+          document={document}
+          ranges={controlledRanges}
+          rects={controlledRects}
+          selectedRangeId={selectedRangeId}
+          selectedRectId={selectedRectId}
+          annotationHistory
+          selectionRef={selectionRef}
+          onAnnotationHistoryChange={(next, detail) => {
+            onAnnotationHistoryChange(next, detail)
+            setControlledRanges(next.ranges)
+            setControlledRects(next.rects)
+            setSelectedRangeId(next.selectedRangeId)
+            setSelectedRectId(next.selectedRectId)
+          }}
+        />
+      )
+    }
+
+    render(<ControlledReader />)
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    const createdRange = makeRuntimeRange(
+      runtimeSelectionId,
+      'range-1',
+      'Before'
+    )
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [createdRange],
+        selectedRangeId: createdRange.id
+      })
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          ranges: [expect.objectContaining({ id: createdRange.id })]
+        }),
+        expect.objectContaining({ source: 'select' })
+      )
+    })
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, createdRange.id, 'After')],
+        selectedRangeId: createdRange.id
+      })
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          ranges: [expect.objectContaining({ text: 'After' })]
+        }),
+        expect.objectContaining({ source: 'update-range' })
+      )
+    })
+
+    act(() => {
+      getSelectionPropsById(runtimeSelectionId)?.onCreateRect?.({
+        ...makeReaderRect('rect-1'),
+        selectionId: runtimeSelectionId
+      })
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          rects: [expect.objectContaining({ id: 'rect-1' })]
+        }),
+        expect.objectContaining({ source: 'create-rect' })
+      )
+    })
+
+    act(() => {
+      getSelectionPropsById(runtimeSelectionId)?.onUpdateRect?.({
+        ...makeReaderRect('rect-1'),
+        end: { x: 80, y: 90 },
+        rect: { x: 10, y: 20, width: 70, height: 70 },
+        selectionId: runtimeSelectionId
+      })
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          rects: [expect.objectContaining({ end: { x: 80, y: 90 } })]
+        }),
+        expect.objectContaining({ source: 'update-rect' })
+      )
+    })
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      removeAllRanges: vi.fn()
+    } as unknown as Selection)
+
+    act(() => {
+      requireReaderSelectionRef(selectionRef).clear()
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        { ranges: [], rects: [], selectedRangeId: null, selectedRectId: null },
+        expect.objectContaining({ source: 'clear' })
+      )
+    })
+  })
+
+  it('does not create a checkpoint for selection-only clicks', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onAnnotationHistoryChange = vi.fn()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        defaultRanges={[initialRange]}
+        annotationHistory
+        selectionRef={selectionRef}
+        onAnnotationHistoryChange={onAnnotationHistoryChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+
+    act(() => {
+      simulateLinkedSelectRange(runtimeSelectionId, initialRange.id)
+    })
+
+    expect(onAnnotationHistoryChange).not.toHaveBeenCalled()
+    expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(false)
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(false)
+    })
+  })
+
+  it('creates one highlight checkpoint when a new range surfaces through select and highlight callbacks', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onAnnotationHistoryChange = vi.fn()
+    const onSelect = vi.fn()
+    const onHighlight = vi.fn()
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        annotationHistory
+        selectionRef={selectionRef}
+        onAnnotationHistoryChange={onAnnotationHistoryChange}
+        onSelect={onSelect}
+        onHighlight={onHighlight}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    const createdRange = makeRuntimeRange(
+      runtimeSelectionId,
+      'range-1',
+      'Created'
+    )
+
+    act(() => {
+      requireReaderSelectionRef(selectionRef).highlight()
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [createdRange],
+        selectedRangeId: createdRange.id
+      })
+      simulateLinkedSelect(runtimeSelectionId, createdRange)
+    })
+
+    expect(onAnnotationHistoryChange).toHaveBeenCalledTimes(1)
+    expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        ranges: [expect.objectContaining({ id: createdRange.id })]
+      }),
+      expect.objectContaining({ source: 'highlight' })
+    )
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    expect(
+      requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+    ).toEqual(expect.objectContaining({ canUndo: true, pastCount: 1 }))
+  })
+
+  it('excludes pagePaintings from history entries and undo replay', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onAnnotationHistoryChange = vi.fn()
+    const onPagePaintingsChange = vi.fn()
+    const pagePaintings: Record<string, DrawingValue> = {
+      'page-1': { strokes: [] }
+    }
+    const nextPaintings: Record<string, DrawingValue> = {
+      'page-1': {
+        strokes: [
+          {
+            id: 'stroke-1',
+            tool: 'pen',
+            points: [{ x: 1, y: 2 }]
+          }
+        ]
+      }
+    }
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        annotationHistory
+        selectionRef={selectionRef}
+        pagePaintings={pagePaintings}
+        onPagePaintingsChange={onPagePaintingsChange}
+        onAnnotationHistoryChange={onAnnotationHistoryChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const updatePainting = capturedViewerProps.onPagePaintingChange
+    if (typeof updatePainting !== 'function') {
+      throw new Error('Expected viewer painting update callback')
+    }
+
+    act(() => {
+      updatePainting('page-1', nextPaintings['page-1'])
+    })
+
+    expect(onPagePaintingsChange).toHaveBeenCalledTimes(1)
+    expect(onPagePaintingsChange).toHaveBeenLastCalledWith(nextPaintings)
+    expect(onAnnotationHistoryChange).not.toHaveBeenCalled()
+    expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(false)
+
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, 'range-1', 'Paint safe')],
+        selectedRangeId: 'range-1'
+      })
+    })
+    await waitFor(() => {
+      expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({ pagePaintings: expect.anything() }),
+        expect.objectContaining({ source: 'select' })
+      )
+    })
+
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+
+    expect(onPagePaintingsChange).toHaveBeenCalledTimes(1)
+    expect(capturedViewerProps.pagePaintings).toBe(pagePaintings)
+  })
+
+  it('undoes and redoes an uncontrolled text range mutation through selectionRef', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        defaultRanges={[initialRange]}
+        annotationHistory
+        selectionRef={selectionRef}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    const updatedRange = makeRuntimeRange(
+      runtimeSelectionId,
+      'range-1',
+      'After'
+    )
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [updatedRange],
+        selectedRangeId: 'range-1'
+      })
+    })
+
+    const publicRef = requireReaderSelectionRef(selectionRef)
+    expect(publicRef.canUndo()).toBe(true)
+
+    act(() => {
+      expect(publicRef.undo()).toBe(true)
+    })
+    await waitFor(() => {
+      expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe(
+        'Before'
+      )
+    })
+
+    act(() => {
+      expect(publicRef.redo()).toBe(true)
+    })
+    await waitFor(() => {
+      expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('After')
+    })
+  })
+
+  it('emits the previous snapshot when controlled text history is undone', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const onAnnotationHistoryChange = vi.fn()
+    const { document } = makeLazyDocument(1)
+
+    function ControlledReader() {
+      const [controlledRanges, setControlledRanges] = useState([initialRange])
+
+      return (
+        <Reader
+          document={document}
+          ranges={controlledRanges}
+          annotationHistory
+          selectionRef={selectionRef}
+          onAnnotationHistoryChange={(next, detail) => {
+            onAnnotationHistoryChange(next, detail)
+            setControlledRanges(next.ranges)
+          }}
+        />
+      )
+    }
+
+    render(<ControlledReader />)
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, 'range-1', 'After')],
+        selectedRangeId: 'range-1'
+      })
+    })
+    await waitFor(() => {
+      expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('After')
+    })
+
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+
+    expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ranges: [initialRange] }),
+      expect.objectContaining({ source: 'undo' })
+    )
+  })
+
+  it('syncs selection-only changes without adding an undo checkpoint', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onAnnotationHistoryChange = vi.fn()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        defaultRanges={[initialRange]}
+        annotationHistory
+        selectionRef={selectionRef}
+        onAnnotationHistoryChange={onAnnotationHistoryChange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, 'range-1', 'After')],
+        selectedRangeId: null
+      })
+    })
+    const mutationCallCount = onAnnotationHistoryChange.mock.calls.length
+
+    act(() => {
+      simulateLinkedSelectRange(runtimeSelectionId, 'range-1')
+    })
+
+    expect(onAnnotationHistoryChange).toHaveBeenCalledTimes(mutationCallCount)
+
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+    await waitFor(() => {
+      expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe(
+        'Before'
+      )
+    })
+  })
+
+  it('returns false when redo would apply unsupported uncontrolled rectangle history', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const { document } = makeLazyDocument(1)
+
+    render(
+      <Reader
+        document={document}
+        annotationHistory
+        selectionRef={selectionRef}
+        tool='rect'
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    const publicRef = requireReaderSelectionRef(selectionRef)
+
+    act(() => {
+      simulateSelectionConfirmRect(runtimeSelectionId)
+    })
+    act(() => {
+      expect(publicRef.undo()).toBe(true)
+    })
+    act(() => {
+      expect(publicRef.redo()).toBe(false)
+    })
+  })
+
+  it('clears undo and redo stacks when resetKey changes', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const initialRange = makeReaderRange('range-1', 'Before')
+    const { document } = makeLazyDocument(1)
+    const { rerender } = render(
+      <Reader
+        document={document}
+        defaultRanges={[initialRange]}
+        annotationHistory={{ enabled: true, resetKey: 1 }}
+        selectionRef={selectionRef}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const runtimeSelectionId = requireRuntimeSelectionId()
+
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, 'range-1', 'After')],
+        selectedRangeId: 'range-1'
+      })
+    })
+    expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(true)
+
+    rerender(
+      <Reader
+        document={document}
+        defaultRanges={[initialRange]}
+        annotationHistory={{ enabled: true, resetKey: 2 }}
+        selectionRef={selectionRef}
+      />
+    )
+
+    await waitFor(() => {
+      expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(false)
+      expect(requireReaderSelectionRef(selectionRef).canRedo()).toBe(false)
+    })
   })
 })
 
@@ -1416,14 +2301,35 @@ describe('Reader zoom props', () => {
     expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
   })
 
-  it('forwards containMarginX and containMarginY to IntermediateDocumentViewer', () => {
+  it('forwards horizontal and independent vertical margins to IntermediateDocumentViewer', () => {
     const { document } = makeLazyDocument(1)
 
     render(
-      <Reader document={document} containMarginX={24} containMarginY={48} />
+      <Reader
+        document={document}
+        containMarginX={24}
+        containMarginTop={32}
+        containMarginBottom={64}
+      />
     )
 
     expect(capturedViewerProps.containMarginX).toBe(24)
-    expect(capturedViewerProps.containMarginY).toBe(48)
+    expect(capturedViewerProps.containMarginTop).toBe(32)
+    expect(capturedViewerProps.containMarginBottom).toBe(64)
+    expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+      paddingTop: '32px',
+      paddingBottom: '64px'
+    })
+  })
+
+  it('defaults the page browser to closed and forwards an explicit open state', () => {
+    const { document } = makeLazyDocument(2)
+    const { rerender } = render(<Reader document={document} />)
+
+    expect(capturedViewerProps.showPageBrowser).toBeUndefined()
+
+    rerender(<Reader document={document} showPageBrowser={true} />)
+
+    expect(capturedViewerProps.showPageBrowser).toBe(true)
   })
 })

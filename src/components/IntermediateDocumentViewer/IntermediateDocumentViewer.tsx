@@ -1,14 +1,14 @@
 import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
-import { Selection as HamsterSelection } from '@hamster-note/selection'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
   SelectionRange,
   SelectionRef
 } from '@hamster-note/selection'
+import { Selection as HamsterSelection } from '@hamster-note/selection'
 import {
-  IntermediateDocument,
   type IntermediateContent,
+  IntermediateDocument,
   type IntermediateDocumentSerialized,
   type IntermediateImage,
   type IntermediateText
@@ -21,9 +21,9 @@ import {
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
 import React, {
+  Profiler,
   type ReactNode,
   type Ref,
-  Profiler,
   useCallback,
   useEffect,
   useId,
@@ -33,6 +33,11 @@ import React, {
 } from 'react'
 
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryChangeSource,
+  ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryValue,
+  ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
@@ -41,15 +46,17 @@ import type {
   ReaderSelectionRef,
   ReaderSelectionTool
 } from '../../types/selection'
-import { PopoverPortal } from '../PopoverPortal'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
+import { PopoverPortal } from '../PopoverPortal'
+import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
 import {
   buildSelectionPayload,
-  textElementRecords,
   type ReaderSelectedTextSegment,
-  type ReaderSelectionPayload
+  type ReaderSelectionPayload,
+  textElementRecords
 } from '../selection/selectionPayloadSerializer'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import { PageBrowser } from './PageBrowser'
 import {
   computePageOriginY,
   computeTransform,
@@ -69,14 +76,14 @@ import {
   extractRuntimeLinkedTransient,
   mapPublicRectanglesToRuntime,
   mapRuntimeLinkedDataToPublic,
-  mapRuntimeRectangleToPublic,
   mapRuntimeRangeToPublic,
+  mapRuntimeRectangleToPublic,
   mapRuntimeSelectionIdToPublic,
-  runtimePageSelectionId,
-  type RuntimeLinkedSelectionTransient
+  type RuntimeLinkedSelectionTransient,
+  runtimePageSelectionId
 } from './selectionAdapter'
 // intermediate-document 默认模式的懒加载页面队列 hook
-import { useLazyPageQueue, type LazyPageQueueConfig } from './useLazyPageQueue'
+import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
 
 export {
   getNearestTextElementForPoint,
@@ -84,6 +91,15 @@ export {
   getPageElementForPoint,
   resolveCaret
 } from '../selection/caretResolver'
+export {
+  buildSavedSelection,
+  denormalizePageRects,
+  type NormalizedRect,
+  normalizePageRects,
+  resolveSavedSelection,
+  type TextElementInfo,
+  textHash
+} from '../selection/savedSelection'
 export {
   composeSelection,
   createOrderedRange
@@ -95,15 +111,6 @@ export {
   type ReaderSelectionPayload,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
-export {
-  buildSavedSelection,
-  denormalizePageRects,
-  normalizePageRects,
-  resolveSavedSelection,
-  textHash,
-  type NormalizedRect,
-  type TextElementInfo
-} from '../selection/savedSelection'
 
 const getSelectionForRoot = (
   viewerRoot: HTMLElement | null
@@ -390,7 +397,10 @@ export type IntermediateDocumentViewerProps = {
    */
   onScaleChange?: (
     scale: number,
-    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+    detail: {
+      source: 'wheel' | 'pinch'
+      focalPoint?: { x: number; y: number }
+    }
   ) => void
   /**
    * Lower zoom bound. Defaults to `0.25`; invalid or non-positive values fall
@@ -450,8 +460,12 @@ export type IntermediateDocumentViewerProps = {
   selectionColor?: string
   /** 当某个高亮被选中时，在其上方弹出的 Popover 内容（ReactNode），由调用方完全控制 */
   selectionPopover?: React.ReactNode
-  /** 被高亮的片段上方弹出的 Popover 内容，未提供时 fallback 到 selectionPopover */
-  highlightPopover?: React.ReactNode
+  /** 被高亮的片段上方弹出的 Popover 内容；renderer 接收当前高亮的原始公开对象。 */
+  highlightPopover?: ReaderHighlightPopover
+  /** 启动当前高亮的评论流程；Promise 完成后关闭该高亮的 Popover。 */
+  onCommentHighlight?: (
+    highlight: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
   /** 是否在选区结束时自动触发高亮，默认为 false */
   autoHighlight?: boolean
   /** Selection 组件的命令式 ref，暴露 highlight()/clear()/confirm()/confirmRect() 方法 */
@@ -470,6 +484,11 @@ export type IntermediateDocumentViewerProps = {
   onSelectRect?: (id: string | null) => void
   /** 当用户拖动矩形手柄调整后触发 */
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  annotationHistory?: ReaderAnnotationHistoryOptions
+  onAnnotationHistoryChange?: (
+    next: ReaderAnnotationHistoryValue,
+    detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
   /**
    * 初始立即加载的页数。省略时默认 `1`。
    */
@@ -490,12 +509,18 @@ export type IntermediateDocumentViewerProps = {
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   /** VirtualPaper 水平留白边距，单位 px */
   containMarginX?: number
-  /** VirtualPaper 垂直留白边距，单位 px */
+  /** VirtualPaper 顶部留白，单位 px */
+  containMarginTop?: number
+  /** VirtualPaper 底部留白，单位 px */
+  containMarginBottom?: number
+  /** @deprecated 使用 containMarginTop 和 containMarginBottom */
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
+  /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
+  showPageBrowser?: boolean
 }
 
 type PageSize = {
@@ -512,6 +537,8 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   width: 595,
   height: 842
 }
+// 与 reader.scss 中 intermediate page 的 12px 左右 margin 保持同步。
+const INTERMEDIATE_PAGE_HORIZONTAL_MARGIN = 24
 
 const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS =
   DEFAULT_ENABLED_INTERACTIONS.filter(
@@ -671,6 +698,22 @@ const getWidestKnownPageSize = (
   for (const pageNumber of pageNumbers) {
     const pageSize = getKnownPageSize(pageSizesByPageNumber, pageNumber)
     if (!pageSize) return null
+    if (!widestPageSize || pageSize.width > widestPageSize.width) {
+      widestPageSize = pageSize
+    }
+  }
+
+  return widestPageSize
+}
+
+const getWidestRenderedPageSize = (
+  pageNumbers: number[],
+  pageSizesByPageNumber: Map<number, NormalizedPageSize>
+): NormalizedPageSize | null => {
+  let widestPageSize: NormalizedPageSize | null = null
+
+  for (const pageNumber of pageNumbers) {
+    const pageSize = getCachedPageSize(pageSizesByPageNumber, pageNumber)
     if (!widestPageSize || pageSize.width > widestPageSize.width) {
       widestPageSize = pageSize
     }
@@ -926,10 +969,11 @@ type PageResources = {
 
 type ViewerContentProps = PageResources & {
   rootClassName: string
-  viewerRootRef: Ref<HTMLDivElement>
+  viewerRootRef: (element: HTMLDivElement | null) => void
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
+  onInitialFitScale: (fitScale: number) => void
   onScrollToRange: (id: string) => void
   onScrollToRect: (id: string) => void
   onScrollToPosition: (position: {
@@ -955,6 +999,7 @@ type ViewerContentProps = PageResources & {
     meta: VirtualPaperTransformMeta
   ) => void
   effectiveSelectedRangeId: string | null
+  selectedHighlight: ReaderSelectionRange | null
   runtimePageSelectionId: (pageNumber: number) => string
   runtimeLinkedData: LinkedSelectionData
   handleLinkedDataChange: (next: LinkedSelectionData) => void
@@ -982,7 +1027,10 @@ type ViewerContentProps = PageResources & {
   highlightColor: string | undefined
   selectionColor: string | undefined
   selectionPopover: ReactNode
-  highlightPopover: ReactNode
+  highlightPopover: ReaderHighlightPopover
+  onCommentHighlight:
+    | ((highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>)
+    | undefined
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
   selectionRef: Ref<ReaderSelectionRef> | undefined
@@ -992,16 +1040,27 @@ type ViewerContentProps = PageResources & {
   onCreateRect?: (rect: ReaderSelectionRectangle) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  annotationHistoryController: ReturnType<typeof useAnnotationHistory>
+  onClearAnnotationHistory: () => void
+  onRunAnnotationHistory: (source: 'undo' | 'redo') => boolean
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
   touchPanMode?: ReaderTouchPanMode
   containMarginX?: number
+  containMarginTop?: number
+  containMarginBottom?: number
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
+  showPageBrowser: boolean
+  onPageBrowserVisibilityChange: (
+    pageNumber: number,
+    isVisible: boolean
+  ) => void
+  onNavigateToPage: (pageNumber: number) => void
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1054,6 +1113,7 @@ const getRuntimeSelectionIdFromSelectionNode = (
  * `dangerouslySetInnerHTML`；内容由独立渲染器以 React 元素绘制。
  */
 type IntermediateDocumentPagesProps = PageResources & {
+  popoverContainerRef: React.RefObject<HTMLElement | null>
   pageNumbers: number[]
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
@@ -1112,7 +1172,66 @@ type IntermediateDocumentPagesProps = PageResources & {
   drawingScale: number
 }
 
+const areAnnotationHistorySnapshotsEqual = (
+  left: ReaderAnnotationHistoryValue,
+  right: ReaderAnnotationHistoryValue
+): boolean => JSON.stringify(left) === JSON.stringify(right)
+
+const makeAnnotationHistorySnapshot = (
+  ranges: ReaderSelectionRange[],
+  rects: ReaderSelectionRectangle[],
+  selectedRangeId: string | null,
+  selectedRectId: string | null
+): ReaderAnnotationHistoryValue => ({
+  ranges,
+  rects,
+  selectedRangeId,
+  selectedRectId
+})
+
+const normalizeAnnotationHistorySnapshot = (
+  snapshot: ReaderAnnotationHistoryValue
+): ReaderAnnotationHistoryValue => {
+  const selectedRangeExists = snapshot.selectedRangeId
+    ? snapshot.ranges.some((range) => range.id === snapshot.selectedRangeId)
+    : false
+  const selectedRectExists = snapshot.selectedRectId
+    ? snapshot.rects.some((rect) => rect.id === snapshot.selectedRectId)
+    : false
+
+  return {
+    ...snapshot,
+    selectedRangeId: selectedRangeExists ? snapshot.selectedRangeId : null,
+    selectedRectId: selectedRectExists ? snapshot.selectedRectId : null
+  }
+}
+
+const getLinkedDataChangeSource = (
+  current: ReaderAnnotationHistoryValue,
+  next: ReaderAnnotationHistoryValue
+): ReaderAnnotationHistoryChangeSource | null => {
+  if (areAnnotationHistorySnapshotsEqual(current, next)) return null
+  if (
+    JSON.stringify(current.ranges) === JSON.stringify(next.ranges) &&
+    JSON.stringify(current.rects) === JSON.stringify(next.rects)
+  ) {
+    return null
+  }
+
+  if (next.ranges.length > current.ranges.length) return 'select'
+  if (next.ranges.length < current.ranges.length) return 'clear'
+  return 'update-range'
+}
+
+const hasUnsupportedUncontrolledRectTarget = (
+  currentRects: ReaderSelectionRectangle[],
+  targetRects: ReaderSelectionRectangle[]
+): boolean =>
+  !(currentRects.length === 0 && targetRects.length === 0) &&
+  JSON.stringify(currentRects) !== JSON.stringify(targetRects)
+
 function IntermediateDocumentPages({
+  popoverContainerRef,
   pageNumbers,
   setPageRef,
   setTextRef,
@@ -1196,12 +1315,20 @@ function IntermediateDocumentPages({
           popoverOwnerRuntimeId === null ||
           popoverOwnerRuntimeId === shellSelectionId
         const pagePopover = isPopoverOwner ? (
-          <PopoverPortal visible={popoverVisible}>
+          <PopoverPortal
+            containerRef={popoverContainerRef}
+            selectionKind='selected'
+            visible={popoverVisible}
+          >
             {highlightPopover ?? selectionPopover}
           </PopoverPortal>
         ) : undefined
         const pageSelectionPopover = isPopoverOwner ? (
-          <PopoverPortal visible={popoverVisible}>
+          <PopoverPortal
+            containerRef={popoverContainerRef}
+            selectionKind='active'
+            visible={popoverVisible}
+          >
             {selectionPopover}
           </PopoverPortal>
         ) : undefined
@@ -1306,12 +1433,14 @@ function ViewerContent({
   pageSizesByPageNumber,
   virtualPaperTransform,
   scaleRange,
+  onInitialFitScale,
   onScrollToRange,
   onScrollToRect,
   onScrollToPosition,
   handleVirtualPaperTransformChange,
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
+  selectedHighlight,
   runtimePageSelectionId,
   runtimeLinkedData,
   handleLinkedDataChange,
@@ -1328,6 +1457,7 @@ function ViewerContent({
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   overlayRectType,
   selectionRef,
@@ -1337,6 +1467,9 @@ function ViewerContent({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  annotationHistoryController,
+  onClearAnnotationHistory,
+  onRunAnnotationHistory,
   setPageRef,
   setTextRef,
   textsByPageNumber,
@@ -1348,13 +1481,21 @@ function ViewerContent({
   onPageRenderTiming,
   touchPanMode,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
   selectedTool,
   paintingTool,
   pagePaintings,
   onPagePaintingChange,
-  drawingScale
+  drawingScale,
+  showPageBrowser,
+  onPageBrowserVisibilityChange,
+  onNavigateToPage
 }: ViewerContentProps) {
+  const [viewerRootElement, setViewerRootElement] =
+    useState<HTMLDivElement | null>(null)
+  const popoverContainerRef = useRef<HTMLElement | null>(null)
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
@@ -1364,7 +1505,62 @@ function ViewerContent({
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
   const [popoverVisible, setPopoverVisible] = useState(true)
+  const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
+    null
+  )
   const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const annotationHistoryControllerRef = useRef(annotationHistoryController)
+  annotationHistoryControllerRef.current = annotationHistoryController
+  const runAnnotationHistoryRef = useRef(onRunAnnotationHistory)
+  runAnnotationHistoryRef.current = onRunAnnotationHistory
+
+  const setRootRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      setViewerRootElement(element)
+      viewerRootRef(element)
+    },
+    [viewerRootRef]
+  )
+
+  useEffect(() => {
+    const container =
+      viewerRootElement?.querySelector<HTMLElement>('.virtual-paper-wrapper') ??
+      null
+    popoverContainerRef.current = container
+    if (!container) return
+
+    const widestPageSize = getWidestRenderedPageSize(
+      pageNumbers,
+      pageSizesByPageNumber
+    )
+    const applyInitialFit = (width: number) => {
+      if (!widestPageSize || width <= 0) return false
+
+      onInitialFitScale(
+        width / (widestPageSize.width + INTERMEDIATE_PAGE_HORIZONTAL_MARGIN)
+      )
+      return true
+    }
+
+    if (applyInitialFit(container.getBoundingClientRect().width)) {
+      return () => {
+        popoverContainerRef.current = null
+      }
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry && applyInitialFit(entry.contentRect.width)) {
+        observer.disconnect()
+      }
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      popoverContainerRef.current = null
+    }
+  }, [onInitialFitScale, pageNumbers, pageSizesByPageNumber, viewerRootElement])
 
   const getFirstVisibleSelectionRef = useCallback(() => {
     for (const pageNumber of pageNumbers) {
@@ -1467,14 +1663,15 @@ function ViewerContent({
       confirmRectSelection()
       return
     }
-    getActiveSelectionRef()?.confirm()
-  }, [confirmRectSelection, getActiveSelectionRef, tool])
+    highlightSelection()
+  }, [confirmRectSelection, highlightSelection, tool])
 
   const clearSelections = useCallback(() => {
     selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
       selectionRef.clear()
     })
-  }, [])
+    onClearAnnotationHistory()
+  }, [onClearAnnotationHistory])
 
   const publicSelectionRef = useMemo<ReaderSelectionRef>(
     () => ({
@@ -1484,7 +1681,13 @@ function ViewerContent({
       clear: clearSelections,
       scrollToRange: onScrollToRange,
       scrollToRect: onScrollToRect,
-      scrollToPosition: onScrollToPosition
+      scrollToPosition: onScrollToPosition,
+      undo: () => runAnnotationHistoryRef.current('undo'),
+      redo: () => runAnnotationHistoryRef.current('redo'),
+      canUndo: () => annotationHistoryControllerRef.current.getStatus().canUndo,
+      canRedo: () => annotationHistoryControllerRef.current.getStatus().canRedo,
+      getAnnotationHistoryState: () =>
+        annotationHistoryControllerRef.current.getStatus()
     }),
     [
       clearSelections,
@@ -1582,6 +1785,54 @@ function ViewerContent({
     [handleLinkedSelectRange, handlePageLinkedDataChange]
   )
 
+  const handleCommentHighlight = useCallback(() => {
+    if (!selectedHighlight || !onCommentHighlight || commentingRangeId) return
+
+    const highlight = selectedHighlight
+    setCommentingRangeId(highlight.id)
+    onCommentHighlight(highlight).then(
+      () => {
+        if (runtimeLinkedDataRef.current.selectedRangeId === highlight.id) {
+          handlePageLinkedSelectRange(null)
+        }
+        setCommentingRangeId(null)
+      },
+      () => {
+        setCommentingRangeId(null)
+      }
+    )
+  }, [
+    commentingRangeId,
+    handlePageLinkedSelectRange,
+    onCommentHighlight,
+    selectedHighlight
+  ])
+
+  let resolvedHighlightPopover: ReactNode
+  if (typeof highlightPopover === 'function') {
+    resolvedHighlightPopover = selectedHighlight
+      ? highlightPopover(selectedHighlight)
+      : selectionPopover
+  } else {
+    resolvedHighlightPopover = highlightPopover ?? selectionPopover
+  }
+  const existingHighlightPopover =
+    selectedHighlight && onCommentHighlight ? (
+      <div className='hamster-reader__highlight-popover'>
+        {resolvedHighlightPopover}
+        <button
+          type='button'
+          className='hamster-reader__highlight-comment-button'
+          disabled={commentingRangeId !== null}
+          onClick={handleCommentHighlight}
+        >
+          评论
+        </button>
+      </div>
+    ) : (
+      resolvedHighlightPopover
+    )
+
   // 包装 VirtualPaper 的 transform 回调：
   // transform 进行中时立即隐藏 portal popover，结束后 debounce 500ms 再显示
   const handleTransformChangeWithPopover = useCallback(
@@ -1621,6 +1872,7 @@ function ViewerContent({
 
   const intermediateDocumentPages = (
     <IntermediateDocumentPages
+      popoverContainerRef={popoverContainerRef}
       pageNumbers={pageNumbers}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
@@ -1647,7 +1899,7 @@ function ViewerContent({
       overlayRectType={overlayRectType}
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       selectionPopover={selectionPopover}
-      highlightPopover={highlightPopover}
+      highlightPopover={existingHighlightPopover}
       popoverVisible={popoverVisible}
       selectionRefForRuntimeId={selectionRefForRuntimeId}
       tool={tool}
@@ -1688,11 +1940,21 @@ function ViewerContent({
 
   return (
     <div
-      ref={viewerRootRef}
+      ref={setRootRef}
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
     >
+      {pageNumbers.length > 0 ? (
+        <PageBrowser
+          isOpen={showPageBrowser}
+          pageNumbers={pageNumbers}
+          pageSizesByPageNumber={pageSizesByPageNumber}
+          baseImagesByPageNumber={baseImagesByPageNumber}
+          onPageVisibilityChange={onPageBrowserVisibilityChange}
+          onNavigateToPage={onNavigateToPage}
+        />
+      ) : null}
       {pageNumbers.length > 0 ? (
         <VirtualPaper
           containMode={true}
@@ -1707,7 +1969,15 @@ function ViewerContent({
           onTransformChange={handleTransformChangeWithPopover}
           onTransformChangeEnd={handleTransformChangeEndWithPopover}
           containMarginX={containMarginX}
-          containMarginY={containMarginY}
+          containMarginY={
+            containMarginTop === undefined && containMarginBottom === undefined
+              ? containMarginY
+              : undefined
+          }
+          containerStyle={{
+            paddingTop: containMarginTop,
+            paddingBottom: containMarginBottom
+          }}
         >
           {pagesNode}
         </VirtualPaper>
@@ -1753,6 +2023,7 @@ export function IntermediateDocumentViewer({
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
@@ -1762,17 +2033,22 @@ export function IntermediateDocumentViewer({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  annotationHistory,
+  onAnnotationHistoryChange,
   initialLoadedPages = 1,
   pageLoadConcurrency = 3,
   pageLoadEnterDelayMs = 500,
   pageUnloadDelayMs = 5000,
   onIntermediateDocumentRenderTiming,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
   selectedTool,
   paintingTool,
   pagePaintings,
-  onPagePaintingChange
+  onPagePaintingChange,
+  showPageBrowser = false
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -1933,6 +2209,17 @@ export function IntermediateDocumentViewer({
   const effectiveRects = rects ?? []
   const effectiveRectsRef = useRef<ReaderSelectionRectangle[]>(effectiveRects)
   effectiveRectsRef.current = effectiveRects
+  const isRectsControlled = rects !== undefined
+
+  const isSelectedRectIdControlled = selectedRectId !== undefined
+  const [internalSelectedRectId, setInternalSelectedRectId] = useState<
+    string | null
+  >(null)
+  const effectiveSelectedRectId = isSelectedRectIdControlled
+    ? selectedRectId
+    : internalSelectedRectId
+  const effectiveSelectedRectIdRef = useRef(effectiveSelectedRectId)
+  effectiveSelectedRectIdRef.current = effectiveSelectedRectId
 
   const pendingLinkedHighlightOperationRef =
     useRef<PendingLinkedHighlightOperation | null>(null)
@@ -1947,6 +2234,17 @@ export function IntermediateDocumentViewer({
   const effectiveSelectedRangeId = isSelectedRangeIdControlled
     ? selectedRangeId
     : internalSelectedRangeId
+  const effectiveSelectedRangeIdRef = useRef(effectiveSelectedRangeId)
+  effectiveSelectedRangeIdRef.current = effectiveSelectedRangeId
+  const selectedHighlight = useMemo(
+    () =>
+      effectiveSelectedRangeId
+        ? (effectiveRanges.find(
+            (range) => range.id === effectiveSelectedRangeId
+          ) ?? null)
+        : null,
+    [effectiveRanges, effectiveSelectedRangeId]
+  )
   const [runtimeLinkedTransient, setRuntimeLinkedTransient] =
     useState<RuntimeLinkedSelectionTransient>({})
   const runtimeLinkedData = useMemo(
@@ -1969,20 +2267,223 @@ export function IntermediateDocumentViewer({
     ]
   )
   const runtimeRects = useMemo(
-    () => mapPublicRectanglesToRuntime(rects, readerLinkedScopeId),
-    [readerLinkedScopeId, rects]
+    () => mapPublicRectanglesToRuntime(effectiveRects, readerLinkedScopeId),
+    [effectiveRects, readerLinkedScopeId]
   )
+
+  const annotationHistoryEnabled = annotationHistory?.enabled === true
+  const currentAnnotationHistorySnapshot = useCallback(
+    () =>
+      normalizeAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          effectiveRectsRef.current,
+          effectiveSelectedRangeIdRef.current,
+          effectiveSelectedRectIdRef.current
+        )
+      ),
+    []
+  )
+  const annotationHistoryController = useAnnotationHistory({
+    enabled: annotationHistoryEnabled,
+    initialValue: currentAnnotationHistorySnapshot(),
+    onChange: onAnnotationHistoryChange
+  })
+  const lastAnnotationHistoryResetKeyRef = useRef(annotationHistory?.resetKey)
+
+  const syncAnnotationHistorySnapshot = useCallback(
+    (next: ReaderAnnotationHistoryValue) => {
+      annotationHistoryController.syncSilent(
+        normalizeAnnotationHistorySnapshot(next)
+      )
+    },
+    [annotationHistoryController]
+  )
+
+  const commitAnnotationCheckpoint = useCallback(
+    (
+      next: ReaderAnnotationHistoryValue,
+      source: ReaderAnnotationHistoryChangeSource
+    ) => {
+      annotationHistoryController.setCheckpoint(
+        normalizeAnnotationHistorySnapshot(next),
+        source
+      )
+    },
+    [annotationHistoryController]
+  )
+
+  const applyAnnotationHistoryTarget = useCallback(
+    (target: ReaderAnnotationHistoryValue) => {
+      const normalizedTarget = normalizeAnnotationHistorySnapshot(target)
+
+      if (!isRangesControlled) {
+        setInternalRanges(normalizedTarget.ranges)
+      }
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(normalizedTarget.selectedRangeId)
+      }
+      if (!isSelectedRectIdControlled) {
+        setInternalSelectedRectId(normalizedTarget.selectedRectId)
+      }
+    },
+    [
+      isRangesControlled,
+      isSelectedRangeIdControlled,
+      isSelectedRectIdControlled
+    ]
+  )
+
+  const runAnnotationHistory = useCallback(
+    (source: 'undo' | 'redo') => {
+      const target = annotationHistoryController.getTarget(source)
+      if (!target) return false
+
+      const normalizedTarget = normalizeAnnotationHistorySnapshot(target)
+      if (isRangesControlled && !onAnnotationHistoryChange) return false
+      if (isRectsControlled && !onAnnotationHistoryChange) return false
+      if (
+        !isRectsControlled &&
+        hasUnsupportedUncontrolledRectTarget(
+          effectiveRectsRef.current,
+          normalizedTarget.rects
+        )
+      ) {
+        return false
+      }
+
+      const result = annotationHistoryController.applyTargetSilently(source)
+      if (!result.applied) return false
+
+      applyAnnotationHistoryTarget(normalizedTarget)
+      onAnnotationHistoryChange?.(normalizedTarget, result.detail)
+      return true
+    },
+    [
+      annotationHistoryController,
+      applyAnnotationHistoryTarget,
+      isRangesControlled,
+      isRectsControlled,
+      onAnnotationHistoryChange
+    ]
+  )
+
+  const clearAnnotationHistory = useCallback(() => {
+    const nextSnapshot = makeAnnotationHistorySnapshot([], [], null, null)
+    commitAnnotationCheckpoint(nextSnapshot, 'clear')
+    if (!isRangesControlled) {
+      setInternalRanges([])
+    }
+    if (!isSelectedRangeIdControlled) {
+      setInternalSelectedRangeId(null)
+    }
+    if (!isSelectedRectIdControlled) {
+      setInternalSelectedRectId(null)
+    }
+  }, [
+    commitAnnotationCheckpoint,
+    isRangesControlled,
+    isSelectedRangeIdControlled,
+    isSelectedRectIdControlled
+  ])
+
+  useEffect(() => {
+    const historyRects = isRectsControlled
+      ? effectiveRects
+      : annotationHistoryController.getPresent().rects
+    syncAnnotationHistorySnapshot(
+      makeAnnotationHistorySnapshot(
+        effectiveRanges,
+        historyRects,
+        effectiveSelectedRangeId,
+        effectiveSelectedRectId
+      )
+    )
+  }, [
+    effectiveRanges,
+    effectiveRects,
+    effectiveSelectedRangeId,
+    effectiveSelectedRectId,
+    annotationHistoryController,
+    isRectsControlled,
+    syncAnnotationHistorySnapshot
+  ])
+
+  useEffect(() => {
+    if (
+      lastAnnotationHistoryResetKeyRef.current === annotationHistory?.resetKey
+    ) {
+      return
+    }
+    lastAnnotationHistoryResetKeyRef.current = annotationHistory?.resetKey
+    annotationHistoryController.reset(
+      currentAnnotationHistorySnapshot(),
+      'reset'
+    )
+  }, [
+    annotationHistory?.resetKey,
+    annotationHistoryController,
+    currentAnnotationHistorySnapshot
+  ])
   const handleCreateRect = useCallback(
     (rect: ReaderSelectionRectangle) => {
-      onCreateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+      const publicRect = mapRuntimeRectangleToPublic(rect, readerLinkedScopeId)
+      if (!isSelectedRectIdControlled) {
+        setInternalSelectedRectId(publicRect.id)
+      }
+      commitAnnotationCheckpoint(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          [...effectiveRectsRef.current, publicRect],
+          effectiveSelectedRangeIdRef.current,
+          publicRect.id
+        ),
+        'create-rect'
+      )
+      onCreateRect?.(publicRect)
     },
-    [onCreateRect, readerLinkedScopeId]
+    [
+      commitAnnotationCheckpoint,
+      isSelectedRectIdControlled,
+      onCreateRect,
+      readerLinkedScopeId
+    ]
   )
   const handleUpdateRect = useCallback(
     (rect: ReaderSelectionRectangle) => {
-      onUpdateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+      const publicRect = mapRuntimeRectangleToPublic(rect, readerLinkedScopeId)
+      const nextRects = effectiveRectsRef.current.map((currentRect) =>
+        currentRect.id === publicRect.id ? publicRect : currentRect
+      )
+      commitAnnotationCheckpoint(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          nextRects,
+          effectiveSelectedRangeIdRef.current,
+          effectiveSelectedRectIdRef.current
+        ),
+        'update-rect'
+      )
+      onUpdateRect?.(publicRect)
     },
-    [onUpdateRect, readerLinkedScopeId]
+    [commitAnnotationCheckpoint, onUpdateRect, readerLinkedScopeId]
+  )
+  const handleSelectRect = useCallback(
+    (id: string | null) => {
+      if (!isSelectedRectIdControlled) {
+        setInternalSelectedRectId(id)
+      }
+      syncAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          effectiveRectsRef.current,
+          effectiveSelectedRangeIdRef.current,
+          id
+        )
+      )
+      onSelectRect?.(id)
+    },
+    [isSelectedRectIdControlled, onSelectRect, syncAnnotationHistorySnapshot]
   )
 
   const scaleRange = useMemo(
@@ -2006,6 +2507,27 @@ export function IntermediateDocumentViewer({
   )
   const effectiveScaleRef = useRef(effectiveScale)
   effectiveScaleRef.current = effectiveScale
+  const initialFitDocumentRef = useRef<IntermediateDocument | null>(null)
+
+  const handleInitialFitScale = useCallback(
+    (fitScale: number) => {
+      if (
+        !runtimeDocument ||
+        initialFitDocumentRef.current === runtimeDocument
+      ) {
+        return
+      }
+
+      initialFitDocumentRef.current = runtimeDocument
+      if (scale !== undefined) return
+
+      setPaperTransform((currentTransform) => ({
+        ...currentTransform,
+        scale: clampScale(fitScale, scaleRange)
+      }))
+    },
+    [runtimeDocument, scale, scaleRange]
+  )
 
   const virtualPaperTransform = useMemo<VirtualPaperTransform>(
     () => ({
@@ -2038,6 +2560,7 @@ export function IntermediateDocumentViewer({
   // 标记活动 transform 期间是否有 eviction 被跳过，仅在确实跳过时才在 transform 结束后补偿
   const evictionSkippedDuringTransformRef = useRef(false)
   const lastKnownVisiblePagesRef = useRef(new Set<number>())
+  const pageBrowserVisiblePagesRef = useRef(new Set<number>())
   const pinnedPagesRef = useRef(new Set<number>())
   const jumpPinTokensRef = useRef(new Map<number, symbol>())
   const jumpPinCleanupTimersRef = useRef(
@@ -2269,6 +2792,11 @@ export function IntermediateDocumentViewer({
         lastKnownVisiblePagesRef.current.delete(pageNumber)
       }
     })
+    pageBrowserVisiblePagesRef.current.forEach((pageNumber) => {
+      if (!currentPageNumbers.has(pageNumber)) {
+        pageBrowserVisiblePagesRef.current.delete(pageNumber)
+      }
+    })
   }, [clearAllJumpPins, pageNumbers])
 
   useEffect(() => {
@@ -2287,6 +2815,7 @@ export function IntermediateDocumentViewer({
     ocrCacheRef.current.clear()
     evictedOcrPagesRef.current.clear()
     lazilyEvictedPagesRef.current.clear()
+    pageBrowserVisiblePagesRef.current.clear()
     setLoadablePages(new Set())
     setVisiblePages(new Set())
     setTextsByPageNumber(new Map())
@@ -2899,6 +3428,9 @@ export function IntermediateDocumentViewer({
     pinnedPagesRef.current.forEach((pageNumber) => {
       protectedPages.add(pageNumber)
     })
+    pageBrowserVisiblePagesRef.current.forEach((pageNumber) => {
+      protectedPages.add(pageNumber)
+    })
 
     const selection = getSelectionForRoot(viewerRootRef.current)
     if (selection && !selection.isCollapsed) {
@@ -2982,6 +3514,71 @@ export function IntermediateDocumentViewer({
       pendingUnloadTimersRef.current.set(pageNumber, timer)
     },
     [evictLazyPageBundle]
+  )
+
+  const handlePageBrowserVisibilityChange = useCallback(
+    (pageNumber: number, isVisible: boolean) => {
+      if (!pageNumbers.includes(pageNumber)) return
+
+      if (isVisible) {
+        pageBrowserVisiblePagesRef.current.add(pageNumber)
+        clearUnloadTimer(pageNumber)
+        lazilyEvictedPagesRef.current.delete(pageNumber)
+        markLoadableWithOverscan(pageNumber)
+        scheduleVisibilityEnqueue(pageNumber)
+        return
+      }
+
+      pageBrowserVisiblePagesRef.current.delete(pageNumber)
+      if (!lastKnownVisiblePagesRef.current.has(pageNumber)) {
+        cancelVisibilityEnqueue(pageNumber)
+      }
+      schedulePageUnload(pageNumber)
+    },
+    [
+      cancelVisibilityEnqueue,
+      clearUnloadTimer,
+      markLoadableWithOverscan,
+      pageNumbers,
+      schedulePageUnload,
+      scheduleVisibilityEnqueue
+    ]
+  )
+
+  const navigateToPage = useCallback(
+    (pageNumber: number) => {
+      if (!pageNumbers.includes(pageNumber)) return
+
+      const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
+      const pinToken = pinJumpTargetPage(pageNumber)
+      clearUnloadTimer(pageNumber)
+      lazilyEvictedPagesRef.current.delete(pageNumber)
+      markLoadableWithOverscan(pageNumber)
+
+      if (alreadyLoaded) {
+        queueMicrotask(() => {
+          releaseJumpPinnedPage(pageNumber, pinToken)
+        })
+      } else {
+        lazyPageQueue.enqueuePage(pageNumber)
+      }
+
+      scrollToPosition({
+        x: 0,
+        y: computePageOriginY(pageNumber, pageNumbers, pageSizesByPageNumber)
+      })
+    },
+    [
+      clearUnloadTimer,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      pageNumbers,
+      pageSizesByPageNumber,
+      pageStatuses,
+      pinJumpTargetPage,
+      releaseJumpPinnedPage,
+      scrollToPosition
+    ]
   )
 
   const scheduleEviction = useCallback(
@@ -3410,6 +4007,32 @@ export function IntermediateDocumentViewer({
       )
       onLinkedDataChange?.(publicLinkedData)
 
+      const currentSnapshot = currentAnnotationHistorySnapshot()
+      const nextSnapshot = normalizeAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          publicLinkedData.items,
+          effectiveRectsRef.current,
+          publicLinkedData.selectedRangeId,
+          effectiveSelectedRectIdRef.current
+        )
+      )
+      const pendingHighlightOperation =
+        pendingLinkedHighlightOperationRef.current
+      const hasPendingHighlightRangeAddition =
+        nextSnapshot.ranges.length > currentSnapshot.ranges.length &&
+        Boolean(pendingHighlightOperation) &&
+        nextSnapshot.ranges.some(
+          (range) => !pendingHighlightOperation?.has(range.id)
+        )
+      const historySource = hasPendingHighlightRangeAddition
+        ? 'highlight'
+        : getLinkedDataChangeSource(currentSnapshot, nextSnapshot)
+      if (historySource) {
+        commitAnnotationCheckpoint(nextSnapshot, historySource)
+      } else {
+        syncAnnotationHistorySnapshot(nextSnapshot)
+      }
+
       if (!isRangesControlled) {
         setInternalRanges(publicLinkedData.items)
       }
@@ -3426,7 +4049,10 @@ export function IntermediateDocumentViewer({
       }
     },
     [
+      commitAnnotationCheckpoint,
+      currentAnnotationHistorySnapshot,
       emitPendingLinkedHighlight,
+      syncAnnotationHistorySnapshot,
       isRangesControlled,
       isSelectedRangeIdControlled,
       onLinkedDataChange,
@@ -3466,10 +4092,26 @@ export function IntermediateDocumentViewer({
 
   const handleLinkedSelectRange = useCallback(
     (id: string | null) => {
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(id)
+      }
+      syncAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          effectiveRectsRef.current,
+          id,
+          effectiveSelectedRectIdRef.current
+        )
+      )
       onLinkedSelectRange?.(id)
       onSelectRange?.(id)
     },
-    [onLinkedSelectRange, onSelectRange]
+    [
+      isSelectedRangeIdControlled,
+      onLinkedSelectRange,
+      onSelectRange,
+      syncAnnotationHistorySnapshot
+    ]
   )
 
   // Selection.onSelectionStart：直接转发到外部 prop
@@ -3783,6 +4425,7 @@ export function IntermediateDocumentViewer({
       pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       scaleRange={scaleRange}
+      onInitialFitScale={handleInitialFitScale}
       onScrollToRange={scrollToRange}
       onScrollToRect={scrollToRect}
       onScrollToPosition={scrollToPosition}
@@ -3791,6 +4434,7 @@ export function IntermediateDocumentViewer({
         handleVirtualPaperTransformChangeEnd
       }
       effectiveSelectedRangeId={effectiveSelectedRangeId}
+      selectedHighlight={selectedHighlight}
       runtimePageSelectionId={getRuntimePageSelectionId}
       runtimeLinkedData={runtimeLinkedData}
       handleLinkedDataChange={handleLinkedDataChange}
@@ -3809,15 +4453,19 @@ export function IntermediateDocumentViewer({
       selectionColor={selectionColor}
       selectionPopover={selectionPopover}
       highlightPopover={highlightPopover}
+      onCommentHighlight={onCommentHighlight}
       autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}
       selectionRef={selectionRef}
       tool={tool}
       rects={runtimeRects}
-      selectedRectId={selectedRectId}
+      selectedRectId={effectiveSelectedRectId}
       onCreateRect={handleCreateRect}
-      onSelectRect={onSelectRect}
+      onSelectRect={handleSelectRect}
       onUpdateRect={handleUpdateRect}
+      annotationHistoryController={annotationHistoryController}
+      onClearAnnotationHistory={clearAnnotationHistory}
+      onRunAnnotationHistory={runAnnotationHistory}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
       textsByPageNumber={textsByPageNumber}
@@ -3829,12 +4477,17 @@ export function IntermediateDocumentViewer({
       onPageRenderTiming={pageRenderTimingHandler}
       touchPanMode={touchPanMode}
       containMarginX={containMarginX}
+      containMarginTop={containMarginTop}
+      containMarginBottom={containMarginBottom}
       containMarginY={containMarginY}
       selectedTool={selectedTool}
       paintingTool={paintingTool}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={virtualPaperTransform.scale}
+      showPageBrowser={showPageBrowser}
+      onPageBrowserVisibilityChange={handlePageBrowserVisibilityChange}
+      onNavigateToPage={navigateToPage}
     />
   )
 }

@@ -1,8 +1,11 @@
 import { DocxParser } from '@hamster-note/docx-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
-import { PdfParser } from '@hamster-note/pdf-parser'
 import type { DrawingValue } from '@hamster-note/painting'
+import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryStatus,
+  ReaderAnnotationHistoryValue,
   ReaderPageRange,
   ReaderPageTool,
   ReaderRenderMode,
@@ -11,16 +14,15 @@ import type {
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
-import { Reader } from '@hamster-note/reader'
+import { DefaultSelectionPopover, Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
   IntermediateDocument,
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
-import { MobileSafeHighlightButton } from './MobileSafeHighlightButton'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -131,6 +133,33 @@ function persistHighlights(
   )
 }
 
+function toColorInputValue(
+  color: React.CSSProperties['backgroundColor'] | undefined,
+  fallback: string
+): string {
+  const value = color ?? fallback
+  const hexMatch = /^#([\da-f]{3}|[\da-f]{6})(?:[\da-f]{2})?$/i.exec(value)
+  if (hexMatch?.[1]) {
+    const hex = hexMatch[1]
+    return hex.length === 3
+      ? `#${Array.from(hex, (digit) => digit.repeat(2)).join('')}`
+      : `#${hex}`
+  }
+
+  const rgbMatch = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(
+    value
+  )
+  if (rgbMatch?.[1] && rgbMatch[2] && rgbMatch[3]) {
+    return `#${[rgbMatch[1], rgbMatch[2], rgbMatch[3]]
+      .map((channel) =>
+        Math.min(255, Number(channel)).toString(16).padStart(2, '0')
+      )
+      .join('')}`
+  }
+
+  return '#ffc107'
+}
+
 // ---------------------------------------------------------------------------
 // App 组件
 // ---------------------------------------------------------------------------
@@ -149,11 +178,13 @@ export function App() {
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
+  const [showPageBrowser, setShowPageBrowser] = useState(false)
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
   const [containMarginX, setContainMarginX] = useState<number>(0)
-  const [containMarginY, setContainMarginY] = useState<number>(0)
+  const [containMarginTop, setContainMarginTop] = useState<number>(0)
+  const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
   const requestIdRef = useRef(0)
@@ -170,25 +201,62 @@ export function App() {
   >({})
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
+  const [commentingHighlight, setCommentingHighlight] =
+    useState<ReaderSelectionRange | null>(null)
+  const [commentDraft, setCommentDraft] = useState('')
+  const commentResolverRef = useRef<
+    ((highlight: ReaderSelectionRange) => void) | null
+  >(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
 
-  // onSelect 回调：highlight() 创建新 range 时触发，将 range 追加到列表
+  // --- Annotation history (undo/redo) state ---
+  // 从 onAnnotationHistoryChange 的 detail.status 中获取响应式状态，
+  // 用于驱动 Undo/Redo 按钮的 disabled 状态。不能仅靠 selectionRef.current?.canUndo()
+  // 因为 ref 查询不会触发 React 重渲染。
+  const [historyStatus, setHistoryStatus] =
+    useState<ReaderAnnotationHistoryStatus>({
+      enabled: false,
+      canUndo: false,
+      canRedo: false,
+      pastCount: 0,
+      futureCount: 0
+    })
+
+  // onAnnotationHistoryChange 是 undo/redo 以及所有 history-managed 变更的
+  // 唯一正规状态更新路径。从此快照中更新 ranges/rects/selectedRangeId/selectedRectId，
+  // 并通过 localStorage v3 helpers 持久化。
+  // reset 源（文件切换）不持久化，因为文件上传处理器会从 localStorage 加载数据。
+  const handleAnnotationHistoryChange = useCallback(
+    (
+      next: ReaderAnnotationHistoryValue,
+      detail: ReaderAnnotationHistoryChangeDetail
+    ) => {
+      setRanges(next.ranges as ReaderSelectionRange[])
+      setRects(next.rects as ReaderSelectionRectangle[])
+      setSelectedRangeId(next.selectedRangeId)
+      setSelectedRectId(next.selectedRectId)
+      setHistoryStatus(detail.status)
+      if (detail.source !== 'reset') {
+        persistHighlights(
+          uploadedFile?.name,
+          next.ranges as ReaderSelectionRange[],
+          next.rects as ReaderSelectionRectangle[]
+        )
+      }
+    },
+    [uploadedFile?.name]
+  )
+
+  // onSelect 回调：history 启用后，onAnnotationHistoryChange 是正规路径，
+  // 此回调保持为 no-op。
   const handleSelectionSelect = useCallback(() => {}, [])
 
-  const handleHighlight = useCallback(
-    (range: ReaderSelectionRange) => {
-      setRanges((prev) => {
-        const newRanges = [...prev, range]
-        persistHighlights(uploadedFile?.name, newRanges, rects)
-        return newRanges
-      })
-    },
-    [rects, uploadedFile?.name]
-  )
+  // onHighlight 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleHighlight = useCallback(() => {}, [])
 
   const handleSelectionEnd = useCallback(() => {}, [])
 
-  // onSelectRange 回调：用户点击已有 range 时触发
+  // onSelectRange 回调：用户点击已有 range 时触发（selection-only，不创建 checkpoint）
   const handleSelectRange = useCallback((id: string | null) => {
     setSelectedRangeId(id)
     // 文字选择和矩形选择互斥
@@ -197,7 +265,12 @@ export function App() {
     }
   }, [])
 
-  const handleUpdateRange = useCallback(
+  // onUpdateRange 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleUpdateRange = useCallback(() => {}, [])
+
+  // Demo 内部直接受控变更（如颜色输入），不经过 library history 路径。
+  // 此函数保留直接 setRanges + persistHighlights 行为。
+  const handleUpdateRangeDirect = useCallback(
     (range: ReaderSelectionRange) => {
       setRanges((prev) => {
         const newRanges = prev.map((current) =>
@@ -210,18 +283,27 @@ export function App() {
     [rects, uploadedFile?.name]
   )
 
-  const handleCreateRect = useCallback(
-    (rect: ReaderSelectionRectangle) => {
-      setRects((prev) => {
-        const newRects = [...prev, rect]
-        persistHighlights(uploadedFile?.name, ranges, newRects)
-        return newRects
-      })
-      setSelectedRectId(rect.id)
-      setSelectedRangeId(null)
-    },
-    [ranges, uploadedFile?.name]
+  const handleCommentHighlight = useCallback(
+    (highlight: ReaderSelectionRange) =>
+      new Promise<ReaderSelectionRange>((resolve) => {
+        commentResolverRef.current = resolve
+        setCommentingHighlight(highlight)
+      }),
+    []
   )
+
+  const handleFinishComment = useCallback(() => {
+    if (!commentingHighlight || !commentResolverRef.current) return
+
+    const resolve = commentResolverRef.current
+    commentResolverRef.current = null
+    setCommentingHighlight(null)
+    setCommentDraft('')
+    resolve(commentingHighlight)
+  }, [commentingHighlight])
+
+  // onCreateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleCreateRect = useCallback(() => {}, [])
 
   const handleSelectRect = useCallback((id: string | null) => {
     setSelectedRectId(id)
@@ -231,16 +313,8 @@ export function App() {
     }
   }, [])
 
-  const handleUpdateRect = useCallback(
-    (rect: ReaderSelectionRectangle) => {
-      setRects((prev) => {
-        const newRects = prev.map((r) => (r.id === rect.id ? rect : r))
-        persistHighlights(uploadedFile?.name, ranges, newRects)
-        return newRects
-      })
-    },
-    [ranges, uploadedFile?.name]
-  )
+  // onUpdateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleUpdateRect = useCallback(() => {}, [])
 
   const handleRemoveRect = useCallback(
     (id: string) => {
@@ -256,14 +330,11 @@ export function App() {
     [ranges, selectedRectId, uploadedFile?.name]
   )
 
+  // 清空全部：通过 selectionRef.current?.clear() 触发 library 的 clear 命令，
+  // library 会创建 checkpoint 并通过 onAnnotationHistoryChange 回传空快照。
   const handleClearAllRanges = useCallback(() => {
-    setRanges([])
-    setRects([])
-    setSelectedRangeId(null)
-    setSelectedRectId(null)
     selectionRef.current?.clear()
-    persistHighlights(uploadedFile?.name, [], [])
-  }, [uploadedFile?.name])
+  }, [])
 
   const handleRemoveRange = useCallback(
     (id: string) => {
@@ -296,6 +367,48 @@ export function App() {
   const handleApplyScroll = useCallback(() => {
     selectionRef.current?.scrollToPosition({ x: scrollX, y: scrollY })
   }, [scrollX, scrollY])
+
+  // Demo-only 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做。
+  // 必须忽略 input/textarea/contenteditable 中的按键，避免与文本编辑冲突。
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable === true
+      ) {
+        return
+      }
+
+      const isMac = navigator.platform.toLowerCase().includes('mac')
+      const modifier = isMac ? event.metaKey : event.ctrlKey
+      if (!modifier) return
+
+      const key = event.key.toLowerCase()
+      const isUndo = key === 'z' && !event.shiftKey
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y'
+
+      if (isUndo) {
+        event.preventDefault()
+        selectionRef.current?.undo()
+      } else if (isRedo) {
+        event.preventDefault()
+        selectionRef.current?.redo()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  const handleUndo = useCallback(() => {
+    selectionRef.current?.undo()
+  }, [])
+
+  const handleRedo = useCallback(() => {
+    selectionRef.current?.redo()
+  }, [])
 
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
@@ -513,39 +626,62 @@ export function App() {
                 </label>
               </div>
               {renderMode === 'layout' && (
-                <div style={{ marginBottom: '12px' }}>
-                  <label
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}
-                  >
-                    <span>滑动模式 Touch Pan Mode</span>
-                    <select
-                      value={touchPanMode}
-                      onChange={(e) => {
-                        const nextTouchPanMode = e.currentTarget.value
-                        if (
-                          nextTouchPanMode === 'single-finger' ||
-                          nextTouchPanMode === 'two-finger'
-                        ) {
-                          setTouchPanMode(nextTouchPanMode)
-                        }
-                      }}
-                      data-testid='touch-pan-mode-select'
+                <>
+                  <div style={{ marginBottom: '12px' }}>
+                    <label
                       style={{
-                        padding: '4px 8px',
-                        border: '1px solid #ccc',
-                        borderRadius: '4px',
-                        background: '#fff'
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
                       }}
                     >
-                      <option value='single-finger'>单指 Single-finger</option>
-                      <option value='two-finger'>双指 Two-finger</option>
-                    </select>
-                  </label>
-                </div>
+                      <span>滑动模式 Touch Pan Mode</span>
+                      <select
+                        value={touchPanMode}
+                        onChange={(e) => {
+                          const nextTouchPanMode = e.currentTarget.value
+                          if (
+                            nextTouchPanMode === 'single-finger' ||
+                            nextTouchPanMode === 'two-finger'
+                          ) {
+                            setTouchPanMode(nextTouchPanMode)
+                          }
+                        }}
+                        data-testid='touch-pan-mode-select'
+                        style={{
+                          padding: '4px 8px',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          background: '#fff'
+                        }}
+                      >
+                        <option value='single-finger'>
+                          单指 Single-finger
+                        </option>
+                        <option value='two-finger'>双指 Two-finger</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div style={{ marginBottom: '12px' }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      <input
+                        type='checkbox'
+                        checked={showPageBrowser}
+                        onChange={(event) =>
+                          setShowPageBrowser(event.currentTarget.checked)
+                        }
+                        data-testid='page-browser-toggle'
+                      />
+                      <span>显示页面浏览栏 Page Browser</span>
+                    </label>
+                  </div>
+                </>
               )}
               <div style={{ marginBottom: '12px' }}>
                 <label
@@ -595,18 +731,41 @@ export function App() {
                     gap: '8px'
                   }}
                 >
-                  <span>垂直留白 Margin Y (px)</span>
+                  <span>顶部留白 Margin Top (px)</span>
                   <input
                     type='number'
                     min={0}
-                    value={containMarginY}
+                    value={containMarginTop}
                     onChange={(e) =>
-                      setContainMarginY(
+                      setContainMarginTop(
                         Math.max(0, Number(e.target.value) || 0)
                       )
                     }
                     style={{ width: '60px', padding: '4px' }}
-                    data-testid='contain-margin-y-input'
+                    data-testid='contain-margin-top-input'
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>底部留白 Margin Bottom (px)</span>
+                  <input
+                    type='number'
+                    min={0}
+                    value={containMarginBottom}
+                    onChange={(e) =>
+                      setContainMarginBottom(
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                    style={{ width: '60px', padding: '4px' }}
+                    data-testid='contain-margin-bottom-input'
                   />
                 </label>
               </div>
@@ -702,6 +861,48 @@ export function App() {
                 {/* Highlight & Background Color Controls */}
                 <div data-testid='background-color-select' />
                 <div data-testid='highlight-color-select' />
+              </div>
+            </section>
+          )}
+
+          {document && (
+            <section style={{ marginBottom: '24px' }}>
+              <h2>Undo / Redo</h2>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type='button'
+                  onClick={handleUndo}
+                  disabled={!historyStatus.canUndo}
+                  data-testid='undo-btn'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: historyStatus.canUndo ? 'pointer' : 'not-allowed',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: historyStatus.canUndo ? '#fff' : '#f5f5f5',
+                    opacity: historyStatus.canUndo ? 1 : 0.6
+                  }}
+                >
+                  撤销 Undo
+                </button>
+                <button
+                  type='button'
+                  onClick={handleRedo}
+                  disabled={!historyStatus.canRedo}
+                  data-testid='redo-btn'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: historyStatus.canRedo ? 'pointer' : 'not-allowed',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: historyStatus.canRedo ? '#fff' : '#f5f5f5',
+                    opacity: historyStatus.canRedo ? 1 : 0.6
+                  }}
+                >
+                  重做 Redo
+                </button>
               </div>
             </section>
           )}
@@ -882,76 +1083,43 @@ export function App() {
           onSelectRange={handleSelectRange}
           onUpdateRange={handleUpdateRange}
           onHighlight={handleHighlight}
+          onRemoveRange={handleRemoveRange}
+          onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
           selectionRef={selectionRef}
+          selectionPopover={
+            <DefaultSelectionPopover
+              selectionRef={selectionRef}
+              highlightColor={highlightColor}
+              onHighlightColorChange={setHighlightColor}
+              selectedRangeId={selectedRangeId}
+              ranges={ranges}
+              onUpdateRange={handleUpdateRange}
+              onRemoveRange={handleRemoveRange}
+            />
+          }
           highlightColor={highlightColor}
           selectionColor='rgba(33, 150, 243, 0.2)'
           autoHighlight={autoHighlight}
           containMarginX={containMarginX}
-          containMarginY={containMarginY}
+          containMarginTop={containMarginTop}
+          containMarginBottom={containMarginBottom}
           selectedTool={selectedTool}
           pagePaintings={pagePaintings}
           onPagePaintingsChange={setPagePaintings}
+          showPageBrowser={showPageBrowser}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
           onUpdateRect={handleUpdateRect}
-          selectionPopover={
-            <div
-              className='hamster-demo-action-group'
-              style={{
-                display: 'flex',
-                gap: '8px',
-                padding: '4px 8px',
-                background: '#333',
-                color: '#fff',
-                borderRadius: '4px',
-                fontSize: '14px'
-              }}
-            >
-              <MobileSafeHighlightButton selectionRef={selectionRef} />
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                <span>背景颜色设置</span>
-                <input
-                  type='color'
-                  value={
-                    highlightColor.startsWith('#') ? highlightColor : '#ffc107'
-                  }
-                  onChange={(e) => {
-                    const newColor = e.target.value
-                    setHighlightColor(newColor)
-                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
-                    if (selectedRangeId) {
-                      const selectedRange = ranges.find(
-                        (r) => r.id === selectedRangeId
-                      )
-                      if (selectedRange) {
-                        handleUpdateRange({
-                          ...selectedRange,
-                          markerStyle: { backgroundColor: newColor }
-                        })
-                      }
-                    }
-                  }}
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    padding: 0,
-                    border: 'none'
-                  }}
-                />
-              </label>
-            </div>
-          }
-          highlightPopover={
+          annotationHistory={{
+            enabled: true,
+            resetKey: uploadedFile?.name ?? 'none'
+          }}
+          onAnnotationHistoryChange={handleAnnotationHistoryChange}
+          onCommentHighlight={handleCommentHighlight}
+          highlightPopover={(highlight) => (
             <div
               className='hamster-demo-action-group'
               style={{
@@ -966,11 +1134,7 @@ export function App() {
             >
               <button
                 type='button'
-                onClick={() => {
-                  if (selectedRangeId) {
-                    handleRemoveRange(selectedRangeId)
-                  }
-                }}
+                onClick={() => handleRemoveRange(highlight.id)}
                 style={{
                   cursor: 'pointer',
                   background: 'transparent',
@@ -991,24 +1155,21 @@ export function App() {
                 <span>背景颜色设置</span>
                 <input
                   type='color'
-                  value={
-                    highlightColor.startsWith('#') ? highlightColor : '#ffc107'
-                  }
+                  value={toColorInputValue(
+                    highlight.markerStyle?.backgroundColor,
+                    highlightColor
+                  )}
+                  aria-label='Highlight color'
                   onChange={(e) => {
                     const newColor = e.target.value
                     setHighlightColor(newColor)
-                    // 同步更新当前选中 range 的 markerStyle，使颜色立即生效
-                    if (selectedRangeId) {
-                      const selectedRange = ranges.find(
-                        (r) => r.id === selectedRangeId
-                      )
-                      if (selectedRange) {
-                        handleUpdateRange({
-                          ...selectedRange,
-                          markerStyle: { backgroundColor: newColor }
-                        })
+                    handleUpdateRangeDirect({
+                      ...highlight,
+                      markerStyle: {
+                        ...highlight.markerStyle,
+                        backgroundColor: newColor
                       }
-                    }
+                    })
                   }}
                   style={{
                     width: '20px',
@@ -1019,9 +1180,73 @@ export function App() {
                 />
               </label>
             </div>
-          }
+          )}
         />
       </div>
+      {commentingHighlight && (
+        <aside
+          role='dialog'
+          aria-modal='true'
+          aria-labelledby='highlight-comment-title'
+          data-testid='highlight-comment-panel'
+          style={{
+            position: 'fixed',
+            right: '24px',
+            bottom: '24px',
+            zIndex: 1000,
+            width: 'min(360px, calc(100vw - 48px))',
+            boxSizing: 'border-box',
+            padding: '20px',
+            border: '1px solid #cbd5e1',
+            borderRadius: '12px',
+            background: '#fff',
+            boxShadow: '0 20px 48px rgba(15, 23, 42, 0.2)'
+          }}
+        >
+          <h2
+            id='highlight-comment-title'
+            style={{ margin: '0 0 8px', fontSize: '18px' }}
+          >
+            评论高亮
+          </h2>
+          <p style={{ margin: '0 0 12px', color: '#64748b' }}>
+            {commentingHighlight.text || '(空选区)'}
+          </p>
+          <textarea
+            aria-label='评论内容'
+            value={commentDraft}
+            onChange={(event) => setCommentDraft(event.currentTarget.value)}
+            style={{
+              boxSizing: 'border-box',
+              width: '100%',
+              minHeight: '96px',
+              marginBottom: '12px',
+              padding: '10px',
+              border: '1px solid #cbd5e1',
+              borderRadius: '8px',
+              resize: 'vertical',
+              font: 'inherit'
+            }}
+          />
+          <button
+            type='button'
+            onClick={handleFinishComment}
+            style={{
+              width: '100%',
+              minHeight: '44px',
+              border: 0,
+              borderRadius: '8px',
+              background: '#2563eb',
+              color: '#fff',
+              font: 'inherit',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            完成评论
+          </button>
+        </aside>
+      )}
     </main>
   )
 }

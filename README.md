@@ -217,12 +217,38 @@ export function App() {
 | `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
 | `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
 | `autoHighlight` | `boolean` | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`. |
-| `highlightColor` | `string` | CSS color for highlight overlays. In Phase 1, this applies globally to all highlights. |
+| `highlightColor` | `string` | Default CSS color for highlight overlays. A range-specific `markerStyle.backgroundColor` takes precedence. |
 | `selectionColor` | `string` | CSS color for active selection overlay. |
 | `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
-| `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
+| `highlightPopover` | `React.ReactNode \| ((highlight: ReaderSelectionRange) => React.ReactNode)` | Custom popover content shown when an existing highlight is clicked. The renderer receives the original range object, so range-specific color and metadata can be displayed. |
+| `onCommentHighlight` | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>` | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
 | `selectionRef` | `React.Ref<ReaderSelectionRef>` | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range. |
 | `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
+| `containMarginX` | `number` | Horizontal whitespace around the virtual paper. |
+| `containMarginTop` | `number` | Independent top whitespace around the virtual paper. |
+| `containMarginBottom` | `number` | Independent bottom whitespace around the virtual paper. |
+| `containMarginY` | `number` | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied. |
+| `showPageBrowser` | `boolean` | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`. |
+
+The existing-highlight popover can use range-specific data and delegate the comment lifecycle to the host:
+
+```tsx
+<Reader
+  ranges={ranges}
+  selectedRangeId={selectedRangeId}
+  highlightPopover={(highlight) => (
+    <input
+      type='color'
+      value={String(highlight.markerStyle?.backgroundColor ?? '#ffc107')}
+    />
+  )}
+  onCommentHighlight={(highlight) =>
+    new Promise((resolve) => {
+      openCommentEditor(highlight, () => resolve(highlight))
+    })
+  }
+/>
+```
 
 ### Exported Types
 
@@ -259,7 +285,7 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 ### Demo localStorage Migration
 
-The browser Demo persists highlights to localStorage keyed by filename. The stored shape is now `{ version: 2, ranges: ReaderSelectionRange[] }`. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the highlights instead.
+The browser Demo persists annotations to localStorage keyed by filename. The stored shape is now `{ version: 3, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[] }`. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
 
 ### Programmatic Control
 
@@ -280,6 +306,147 @@ selectionRef.current?.clear()
 // Scroll the viewer to a specific range by id
 selectionRef.current?.scrollToRange('highlight-1')
 ```
+
+## Annotation History (undo/redo)
+
+`Reader` can track undoable snapshots of annotation state. This is an opt-in feature; it is disabled by default.
+
+The snapshot only includes text ranges, rectangle selections, and their active IDs:
+
+```ts
+{
+  ranges: ReaderSelectionRange[]
+  rects: ReaderSelectionRectangle[]
+  selectedRangeId: string | null
+  selectedRectId: string | null
+}
+```
+
+Drawing state and `pagePaintings` are intentionally excluded and are not affected by undo/redo.
+
+### Props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `annotationHistory` | `boolean \| ReaderAnnotationHistoryOptions` | `false` | Enable annotation history. Passing `true` is equivalent to `{ enabled: true }`. |
+| `onAnnotationHistoryChange` | `(next: ReaderAnnotationHistoryValue, detail: ReaderAnnotationHistoryChangeDetail) => void` | — | Fired after the history present state changes. Required for controlled mode. |
+
+```ts
+type ReaderAnnotationHistoryOptions = {
+  enabled?: boolean
+  resetKey?: string | number
+}
+```
+
+`onAnnotationHistoryChange` receives the new snapshot and a detail object:
+
+```ts
+type ReaderAnnotationHistoryChangeDetail = {
+  source: ReaderAnnotationHistoryChangeSource
+  status: ReaderAnnotationHistoryStatus
+}
+```
+
+`source` is one of:
+
+- `'select'` — a new text range was selected
+- `'highlight'` — a range was confirmed via the ref API or auto-highlight
+- `'update-range'` — an existing range was updated (for example, by dragging a handle)
+- `'create-rect'` — a new rectangle selection was created
+- `'update-rect'` — an existing rectangle was updated
+- `'clear'` — all annotations were cleared
+- `'undo'` — the host or UI called `undo()`
+- `'redo'` — the host or UI called `redo()`
+- `'reset'` — history was reset, usually because `resetKey` changed
+- `'external-sync'` — the snapshot was synced from an external controlled update
+
+`status` contains:
+
+```ts
+{
+  enabled: boolean
+  canUndo: boolean
+  canRedo: boolean
+  pastCount: number
+  futureCount: number
+}
+```
+
+### Ref commands
+
+When history is enabled, `selectionRef` exposes undo/redo commands:
+
+| Command | Return | Description |
+|---|---|---|
+| `undo()` | `boolean` | Reverts to the previous snapshot. Returns `false` when there is nothing to undo. |
+| `redo()` | `boolean` | Reapplies the next snapshot. Returns `false` when there is nothing to redo. |
+| `canUndo()` | `boolean` | Whether at least one past snapshot exists. |
+| `canRedo()` | `boolean` | Whether at least one future snapshot exists. |
+| `getAnnotationHistoryState()` | `ReaderAnnotationHistoryStatus` | Returns the full status object. |
+
+### `resetKey`
+
+Use `resetKey` to clear the undo/redo stacks when the user opens a different file or document. This is safer than comparing `annotationHistory` props deeply because it keeps the prop reference stable and lets `Reader` reset history explicitly.
+
+```tsx
+<Reader
+  document={document}
+  annotationHistory={{ enabled: true, resetKey: document.id }}
+/>
+```
+
+A change to `resetKey` drops `past` and `future`, sets `present` to the current ranges/rects/selections, and fires `onAnnotationHistoryChange` with source `'reset'`.
+
+### Controlled mode
+
+In controlled mode, the host keeps the `ranges` and `rects` state and echoes it back through props. `onAnnotationHistoryChange` is the canonical update path when history is enabled.
+
+```tsx
+import { useRef, useState } from 'react'
+import { Reader } from '@hamster-note/reader'
+import type {
+  ReaderAnnotationHistoryValue,
+  ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef
+} from '@hamster-note/reader'
+
+export function App({ document }) {
+  const selectionRef = useRef<ReaderSelectionRef>(null)
+  const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+  const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
+
+  return (
+    <Reader
+      document={document}
+      ranges={ranges}
+      rects={rects}
+      annotationHistory={{ enabled: true, resetKey: document.id }}
+      onAnnotationHistoryChange={(next: ReaderAnnotationHistoryValue) => {
+        setRanges(next.ranges)
+        setRects(next.rects)
+      }}
+    />
+  )
+}
+
+// Later:
+selectionRef.current?.undo()
+selectionRef.current?.redo()
+```
+
+Undo and redo return `false` when `onAnnotationHistoryChange` is not provided, because `Reader` has no way to apply the recovered snapshot in controlled mode.
+
+### Demo controls
+
+The browser Demo shows Undo and Redo buttons in the toolbar when history is enabled. Their disabled states are driven by `historyStatus` from `onAnnotationHistoryChange`, not by ref queries, so React rerenders correctly.
+
+The Demo also attaches demo-only keyboard shortcuts:
+
+- `Ctrl/Cmd+Z` — undo
+- `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` — redo
+
+These shortcuts are ignored when the active element is an `input`, `textarea`, or `[contenteditable]`, so they do not interfere with editable UI. These shortcuts are part of the Demo, not the library; hosts should wire their own shortcut logic and call `selectionRef.current?.undo()` / `redo()`.
 
 ## Peer Dependencies
 

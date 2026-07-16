@@ -781,6 +781,80 @@ describe('IntermediateDocumentViewer', () => {
     expect(container).toHaveAttribute('data-contain-margin-y', '48')
   })
 
+  it('only fits the page during initialization and preserves later zoom', async () => {
+    // Given: the 100px-wide page uses the Reader's 12px margin on both sides.
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 150 }
+    })
+    await act(async () => {
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={0}
+        />
+      )
+    })
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+
+    // When: the visible container is narrower than the page margin box.
+    mockElementSize(wrapper, { width: 120, height: 300 })
+
+    // Then: the complete 124px margin box is scaled to the container width.
+    await waitFor(() => {
+      expect(container.style.transform).toContain(`scale(${String(120 / 124)})`)
+    })
+
+    // When: the user zooms beyond the initial fit scale.
+    await act(async () => {
+      VirtualPaper.__triggerTransform(container, { x: 0, y: 0, scale: 2 })
+    })
+
+    // Then: fitting does not become a runtime maximum-scale restriction.
+    await waitFor(() => {
+      expect(container.style.transform).toContain('scale(2)')
+    })
+  })
+
+  it('upscales the page to fill a wider container during initialization', async () => {
+    // Given: the page and its horizontal margins form a 124px-wide box.
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 150 }
+    })
+    render(
+      <IntermediateDocumentViewer document={document} initialLoadedPages={0} />
+    )
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+
+    // When: the visible container is exactly twice as wide as that margin box.
+    mockElementSize(wrapper, { width: 248, height: 300 })
+
+    // Then: initialization scales the Page up so the complete box fills the width.
+    await waitFor(() => {
+      expect(container.style.transform).toContain('scale(2)')
+    })
+  })
+
+  it('fits the rendered fallback page when the document size is unavailable', async () => {
+    // Given: the document has no usable page size, so the shell renders at 595px.
+    const { document } = makeDocument({ pageCount: 1, pageSize: {} })
+    render(<IntermediateDocumentViewer document={document} />)
+    await screen.findByText('Page 1 text')
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+
+    // When: the visible container is narrower than the fallback page margin box.
+    mockElementSize(wrapper, { width: 200, height: 300 })
+
+    // Then: fitting uses the same fallback width that the rendered page shell uses.
+    await waitFor(() => {
+      expect(container.style.transform).toContain(`scale(${String(200 / 619)})`)
+    })
+  })
+
   it('text mode virtualizer harness mounts with deterministic measurements', async () => {
     render(<TextModeVirtualizerHarness />)
     const scrollContainer = screen.getByTestId('text-mode-scroll-container')
@@ -4666,6 +4740,63 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     })
   })
 
+  it('emits onHighlight when the public text confirm commits a linked range', async () => {
+    // Given: a controlled Reader with a mounted text-selection ref.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const linkedRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'highlight-id',
+      text: 'Mocked highlight',
+      end: { selectionId: runtimePageId, offset: 10 }
+    })
+
+    // When: the default popover path confirms the current text selection.
+    act(() => {
+      requireReaderSelectionRef(selectionRef).confirm()
+      // 真实 Selection 会在 confirm() 返回前同步提交 linked callbacks。
+      simulateLinkedDataChange(runtimePageId, {
+        ...currentLinkedData,
+        items: [...currentLinkedData.items, linkedRange],
+        selectedRangeId: linkedRange.id,
+        selectionOrder: [...currentLinkedData.selectionOrder, linkedRange.id],
+        activeRange: null
+      })
+      simulateLinkedSelect(runtimePageId, linkedRange)
+    })
+
+    // Then: the linked range crosses the public controlled onHighlight boundary.
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'highlight-id',
+        text: 'Mocked highlight',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 10 }
+      })
+    )
+  })
+
   it('popovers are forwarded to the HamsterSelection wrapper for loaded pages', async () => {
     const selectionPopover = <div data-testid='sel-popover'>SP</div>
     const highlightPopover = <div data-testid='hl-popover'>HP</div>
@@ -6268,5 +6399,68 @@ describe('touchPanMode', () => {
     expect(wrapper.dataset.enabledInteractions).toContain(
       VirtualPaperInteractionMode.TouchSingleFingerPan
     )
+  })
+
+  describe('page browser', () => {
+    it('is hidden by default and slides open through the public prop', () => {
+      const { document } = makeDocument({ pageCount: 3 })
+      const { rerender } = render(
+        <IntermediateDocumentViewer document={document} />
+      )
+      const browser = screen.getByTestId('page-browser')
+
+      expect(browser).toHaveAttribute('aria-hidden', 'true')
+      expect(browser).not.toHaveClass('hamster-reader__page-browser--open')
+
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+        />
+      )
+
+      expect(browser).toHaveAttribute('aria-hidden', 'false')
+      expect(browser).toHaveClass('hamster-reader__page-browser--open')
+      expect(
+        screen.getAllByRole('button', { name: /Go to page/ })
+      ).toHaveLength(3)
+    })
+
+    it('loads a sustained visible thumbnail through the shared lazy queue', async () => {
+      const { document, pages } = makeDocument({ pageCount: 3 })
+      const pageThree = pages.get(3)
+      if (!pageThree) {
+        throw new Error('Expected page 3 fixture')
+      }
+      pageThree.getThumbnail = vi.fn(async () => 'page-3-thumbnail')
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+        />
+      )
+      await waitFor(() => {
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      vi.useFakeTimers()
+      try {
+        intersectionObserverMock.trigger(
+          screen.getByTestId('page-browser-page-3')
+        )
+        act(() => {
+          vi.advanceTimersByTime(500)
+        })
+        for (let index = 0; index < 20; index += 1) {
+          await Promise.resolve()
+        }
+
+        expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
+        expect(pages.get(3)?.getThumbnail).toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })
