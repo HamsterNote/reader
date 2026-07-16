@@ -18,7 +18,18 @@ function makeSelectionRef(confirm: () => void): {
       clear: vi.fn(),
       scrollToRange: vi.fn(),
       scrollToRect: vi.fn(),
-      scrollToPosition: vi.fn()
+      scrollToPosition: vi.fn(),
+      undo: () => false,
+      redo: () => false,
+      canUndo: () => false,
+      canRedo: () => false,
+      getAnnotationHistoryState: () => ({
+        enabled: false,
+        canUndo: false,
+        canRedo: false,
+        pastCount: 0,
+        futureCount: 0
+      })
     }
   }
 }

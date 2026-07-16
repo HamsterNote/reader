@@ -2,8 +2,12 @@ import { DocxParser } from '@hamster-note/docx-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryStatus,
+  ReaderAnnotationHistoryValue,
   ReaderRenderMode,
   ReaderSelectionRange,
+  ReaderSelectionRectangle,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
 
@@ -53,9 +57,126 @@ const mockCallbacks: {
 const mockReaderProps: unknown[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 
+// --- Mock annotation history state ---
+// 模拟 library 内部的 undo/redo 栈，让 mock Reader 能在测试中
+// 通过 onAnnotationHistoryChange 驱动 App 的受控状态更新。
+type MockHistorySnapshot = {
+  ranges: ReaderSelectionRange[]
+  rects: ReaderSelectionRectangle[]
+  selectedRangeId: string | null
+  selectedRectId: string | null
+}
+
+const mockHistoryState: {
+  past: MockHistorySnapshot[]
+  present: MockHistorySnapshot
+  future: MockHistorySnapshot[]
+} = {
+  past: [],
+  present: {
+    ranges: [],
+    rects: [],
+    selectedRangeId: null,
+    selectedRectId: null
+  },
+  future: []
+}
+
+let lastMockResetKey: string | number | undefined
+
+// 始终保持最新的 onAnnotationHistoryChange 引用，
+// 避免被 selectionRef.current spread 覆盖后使用过期的闭包。
+let latestOnAHC:
+  | ((
+      next: ReaderAnnotationHistoryValue,
+      detail: ReaderAnnotationHistoryChangeDetail
+    ) => void)
+  | undefined
+
+function resetMockHistory() {
+  mockHistoryState.past = []
+  mockHistoryState.future = []
+  mockHistoryState.present = {
+    ranges: [],
+    rects: [],
+    selectedRangeId: null,
+    selectedRectId: null
+  }
+  lastMockResetKey = undefined
+  latestOnAHC = undefined
+}
+
+function getMockHistoryStatus(): ReaderAnnotationHistoryStatus {
+  return {
+    enabled: true,
+    canUndo: mockHistoryState.past.length > 0,
+    canRedo: mockHistoryState.future.length > 0,
+    pastCount: mockHistoryState.past.length,
+    futureCount: mockHistoryState.future.length
+  }
+}
+
+function createCheckpoint(
+  next: MockHistorySnapshot,
+  source: ReaderAnnotationHistoryChangeDetail['source'],
+  onAnnotationHistoryChange?: (
+    next: ReaderAnnotationHistoryValue,
+    detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
+) {
+  mockHistoryState.past.push(mockHistoryState.present)
+  mockHistoryState.future = []
+  mockHistoryState.present = next
+  onAnnotationHistoryChange?.(next, { source, status: getMockHistoryStatus() })
+}
+
+function mockUndo(): boolean {
+  const target = mockHistoryState.past.pop()
+  if (!target) return false
+  mockHistoryState.future.unshift(mockHistoryState.present)
+  mockHistoryState.present = target
+  latestOnAHC?.(target, { source: 'undo', status: getMockHistoryStatus() })
+  return true
+}
+
+function mockRedo(): boolean {
+  const target = mockHistoryState.future.shift()
+  if (!target) return false
+  mockHistoryState.past.push(mockHistoryState.present)
+  mockHistoryState.present = target
+  latestOnAHC?.(target, { source: 'redo', status: getMockHistoryStatus() })
+  return true
+}
+
+function mockClear(): void {
+  const next: MockHistorySnapshot = {
+    ranges: [],
+    rects: [],
+    selectedRangeId: null,
+    selectedRectId: null
+  }
+  createCheckpoint(next, 'clear', latestOnAHC)
+}
+
+function wrapMutationCallback<
+  T extends ReaderSelectionRange | ReaderSelectionRectangle
+>(
+  callback: ((item: T) => void) | undefined,
+  source: ReaderAnnotationHistoryChangeDetail['source'],
+  computeNext: (present: MockHistorySnapshot, item: T) => MockHistorySnapshot
+): ((item: T) => void) | undefined {
+  if (!callback) return undefined
+  return (item: T) => {
+    const next = computeNext(mockHistoryState.present, item)
+    createCheckpoint(next, source, latestOnAHC)
+    callback(item)
+  }
+}
+
 vi.mock('@hamster-note/reader', async (importOriginal) => {
   // 部分 mock：保留库内纯函数，仅替换 Reader 组件
   const actual = await importOriginal<typeof import('@hamster-note/reader')>()
+  const { useEffect } = await import('react')
   return {
     ...actual,
     Reader: (props: {
@@ -72,8 +193,92 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         extractedText: unknown
       ) => void
       selectionRef?: React.MutableRefObject<unknown>
+      ranges?: ReaderSelectionRange[]
+      rects?: ReaderSelectionRectangle[]
+      selectedRangeId?: string | null
+      selectedRectId?: string | null
+      annotationHistory?: { enabled?: boolean; resetKey?: string | number }
+      onAnnotationHistoryChange?: (
+        next: ReaderAnnotationHistoryValue,
+        detail: ReaderAnnotationHistoryChangeDetail
+      ) => void
+      onHighlight?: (range: ReaderSelectionRange) => void
+      onUpdateRange?: (range: ReaderSelectionRange) => void
+      onCreateRect?: (rect: ReaderSelectionRectangle) => void
+      onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+      pagePaintings?: unknown
+      onPagePaintingsChange?: (paintings: unknown) => void
     }) => {
-      mockReaderProps.push(props)
+      // 从受控 props 同步 present 快照（不创建 checkpoint）
+      mockHistoryState.present = {
+        ranges: props.ranges ?? [],
+        rects: props.rects ?? [],
+        selectedRangeId: props.selectedRangeId ?? null,
+        selectedRectId: props.selectedRectId ?? null
+      }
+
+      // 始终更新 latestOnAHC，避免 selectionRef.current spread 导致闭包过期
+      latestOnAHC = props.onAnnotationHistoryChange
+
+      // resetKey 变化时在 useEffect 中清空 undo/redo 栈并通知 host
+      useEffect(() => {
+        const currentResetKey = props.annotationHistory?.resetKey
+        if (currentResetKey === lastMockResetKey) return
+        lastMockResetKey = currentResetKey
+        mockHistoryState.past = []
+        mockHistoryState.future = []
+        latestOnAHC?.(mockHistoryState.present, {
+          source: 'reset',
+          status: getMockHistoryStatus()
+        })
+      }, [props.annotationHistory?.resetKey])
+
+      // 包装 mutation callbacks：创建 checkpoint 并通过 onAnnotationHistoryChange 回传
+      const wrappedOnHighlight = wrapMutationCallback(
+        props.onHighlight,
+        'highlight',
+        (present, range: ReaderSelectionRange) => ({
+          ...present,
+          ranges: [...present.ranges, range]
+        })
+      )
+
+      const wrappedOnUpdateRange = wrapMutationCallback(
+        props.onUpdateRange,
+        'update-range',
+        (present, range: ReaderSelectionRange) => ({
+          ...present,
+          ranges: present.ranges.map((r) => (r.id === range.id ? range : r))
+        })
+      )
+
+      const wrappedOnCreateRect = wrapMutationCallback(
+        props.onCreateRect,
+        'create-rect',
+        (present, rect: ReaderSelectionRectangle) => ({
+          ...present,
+          rects: [...present.rects, rect]
+        })
+      )
+
+      const wrappedOnUpdateRect = wrapMutationCallback(
+        props.onUpdateRect,
+        'update-rect',
+        (present, rect: ReaderSelectionRectangle) => ({
+          ...present,
+          rects: present.rects.map((r) => (r.id === rect.id ? rect : r))
+        })
+      )
+
+      const wrappedProps = {
+        ...props,
+        onHighlight: wrappedOnHighlight,
+        onUpdateRange: wrappedOnUpdateRange,
+        onCreateRect: wrappedOnCreateRect,
+        onUpdateRect: wrappedOnUpdateRect
+      }
+      mockReaderProps.push(wrappedProps)
+
       if (props.onTextSelectionChange)
         mockCallbacks.onTextSelectionChange = props.onTextSelectionChange
       if (props.onTextSelectionEnd)
@@ -84,10 +289,15 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
           highlight: vi.fn(),
           confirm: vi.fn(),
           confirmRect: vi.fn(),
-          clear: vi.fn(),
+          clear: mockClear,
           scrollToRange: vi.fn(),
           scrollToRect: vi.fn(),
           scrollToPosition: vi.fn(),
+          undo: mockUndo,
+          redo: mockRedo,
+          canUndo: () => mockHistoryState.past.length > 0,
+          canRedo: () => mockHistoryState.future.length > 0,
+          getAnnotationHistoryState: () => getMockHistoryStatus(),
           ...((props.selectionRef.current as Record<string, unknown>) || {})
         }
       }
@@ -229,6 +439,7 @@ describe('demo parser flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockReaderProps.length = 0
+    resetMockHistory()
   })
 
   it('renders the parsed document and uploaded file details on success', async () => {
@@ -629,6 +840,7 @@ describe('demo parser flow', () => {
       vi.clearAllMocks()
       mockReaderProps.length = 0
       localStorage.clear()
+      resetMockHistory()
     })
 
     it('provides autoHighlight toggle that updates Reader prop', async () => {
@@ -1261,6 +1473,7 @@ describe('demo parser flow', () => {
       vi.clearAllMocks()
       mockReaderProps.length = 0
       localStorage.clear()
+      resetMockHistory()
     })
 
     it('defaults to no highlights on fresh render with empty localStorage', async () => {
@@ -1586,6 +1799,223 @@ describe('demo parser flow', () => {
 
       expect(screen.queryByText('Stale Document')).not.toBeInTheDocument()
       expect(screen.queryByText('stale text')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('demo undo/redo', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mockReaderProps.length = 0
+      localStorage.clear()
+      resetMockHistory()
+    })
+
+    it('enables Undo button after creating a highlight', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Undo Enable Document')
+      )
+      render(<App />)
+      upload(makeFile('undo-enable.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const undoBtn = screen.getByTestId('undo-btn')
+      expect(undoBtn).toBeDisabled()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('undo-range', 'undo text'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      })
+    })
+
+    it('Undo removes highlight and persists empty localStorage', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Undo Remove Document')
+      )
+      render(<App />)
+      upload(makeFile('undo-remove.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('undo-rm', 'undo remove text'))
+
+      expect(await screen.findByText('undo remove text')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByTestId('undo-btn'))
+
+      await waitFor(() => {
+        expect(screen.queryByText('undo remove text')).not.toBeInTheDocument()
+      })
+
+      const stored = JSON.parse(
+        localStorage.getItem(highlightStorageKey('undo-remove.pdf')) || '{}'
+      )
+      expect(stored).toEqual({ version: 3, ranges: [], rects: [] })
+
+      expect(screen.getByTestId('undo-btn')).toBeDisabled()
+      expect(screen.getByTestId('redo-btn')).not.toBeDisabled()
+    })
+
+    it('Redo restores highlight after Undo', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Redo Restore Document')
+      )
+      render(<App />)
+      upload(makeFile('redo-restore.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(screen.getByTestId('undo-btn')).toBeDisabled()
+      expect(screen.getByTestId('redo-btn')).toBeDisabled()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('redo-range', 'redo text'))
+
+      expect(await screen.findByText('redo text')).toBeInTheDocument()
+      expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      expect(screen.getByTestId('redo-btn')).toBeDisabled()
+
+      fireEvent.click(screen.getByTestId('undo-btn'))
+
+      await waitFor(() => {
+        expect(screen.queryByText('redo text')).not.toBeInTheDocument()
+      })
+      expect(screen.getByTestId('undo-btn')).toBeDisabled()
+      expect(screen.getByTestId('redo-btn')).not.toBeDisabled()
+      expect(
+        JSON.parse(
+          localStorage.getItem(highlightStorageKey('redo-restore.pdf')) || '{}'
+        )
+      ).toEqual({ version: 3, ranges: [], rects: [] })
+
+      fireEvent.click(screen.getByTestId('redo-btn'))
+
+      await waitFor(() => {
+        expect(screen.getByText('redo text')).toBeInTheDocument()
+      })
+      expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      expect(screen.getByTestId('redo-btn')).toBeDisabled()
+
+      const stored = JSON.parse(
+        localStorage.getItem(highlightStorageKey('redo-restore.pdf')) || '{}'
+      )
+      expect(stored).toEqual({
+        version: 3,
+        ranges: [makeLinkedRange('redo-range', 'redo text')],
+        rects: []
+      })
+    })
+
+    it('rectangle create can be undone and redone', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Rect Undo Redo Document')
+      )
+      render(<App />)
+      upload(makeFile('rect-undo.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onCreateRect = findDocumentReaderProps()?.onCreateRect as (
+        rect: unknown
+      ) => void
+      onCreateRect({
+        id: 'rect-undo-1',
+        createdAt: 1,
+        overlayRectType: 'percent',
+        start: { x: 0, y: 0 },
+        end: { x: 100, y: 100 },
+        selectionId: 'page-1',
+        rect: { x: 10, y: 20, width: 30, height: 40 }
+      })
+
+      expect(await screen.findByText('矩形 rect-undo-1')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByTestId('undo-btn'))
+
+      await waitFor(() => {
+        expect(screen.queryByText('矩形 rect-undo-1')).not.toBeInTheDocument()
+      })
+
+      fireEvent.click(screen.getByTestId('redo-btn'))
+
+      await waitFor(() => {
+        expect(screen.getByText('矩形 rect-undo-1')).toBeInTheDocument()
+      })
+    })
+
+    it('switching to a different file resets undo history', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('File A Document')
+      )
+      render(<App />)
+      upload(makeFile('file-a-reset.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('reset-range', 'reset text'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      })
+
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('File B Document')
+      )
+      upload(makeFile('file-b-reset.pdf'))
+
+      expect(await screen.findByText('File B Document')).toBeInTheDocument()
+
+      await waitFor(() => {
+        expect(screen.getByTestId('undo-btn')).toBeDisabled()
+        expect(screen.getByTestId('redo-btn')).toBeDisabled()
+      })
+    })
+
+    it('pagePaintings stay unaffected by undo/redo', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Painting Undo Document')
+      )
+      render(<App />)
+      upload(makeFile('painting-undo.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const onPagePaintingsChange = findDocumentReaderProps()
+        ?.onPagePaintingsChange as (paintings: unknown) => void
+      const mockPaintings = { 'page-1': { shapes: [] } }
+      onPagePaintingsChange(mockPaintings)
+
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.pagePaintings).toEqual(mockPaintings)
+      })
+
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(makeLinkedRange('paint-range', 'painting undo text'))
+
+      expect(await screen.findByText('painting undo text')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByTestId('undo-btn'))
+
+      await waitFor(() => {
+        expect(screen.queryByText('painting undo text')).not.toBeInTheDocument()
+      })
+
+      expect(findDocumentReaderProps()?.pagePaintings).toEqual(mockPaintings)
+
+      fireEvent.click(screen.getByTestId('redo-btn'))
+
+      await waitFor(() => {
+        expect(screen.getByText('painting undo text')).toBeInTheDocument()
+      })
+
+      expect(findDocumentReaderProps()?.pagePaintings).toEqual(mockPaintings)
     })
   })
 })

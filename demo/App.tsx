@@ -3,6 +3,9 @@ import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryStatus,
+  ReaderAnnotationHistoryValue,
   ReaderPageRange,
   ReaderPageTool,
   ReaderRenderMode,
@@ -18,7 +21,7 @@ import type {
   IntermediateDocument,
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
@@ -206,23 +209,54 @@ export function App() {
   >(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
 
-  // onSelect 回调：highlight() 创建新 range 时触发，将 range 追加到列表
+  // --- Annotation history (undo/redo) state ---
+  // 从 onAnnotationHistoryChange 的 detail.status 中获取响应式状态，
+  // 用于驱动 Undo/Redo 按钮的 disabled 状态。不能仅靠 selectionRef.current?.canUndo()
+  // 因为 ref 查询不会触发 React 重渲染。
+  const [historyStatus, setHistoryStatus] =
+    useState<ReaderAnnotationHistoryStatus>({
+      enabled: false,
+      canUndo: false,
+      canRedo: false,
+      pastCount: 0,
+      futureCount: 0
+    })
+
+  // onAnnotationHistoryChange 是 undo/redo 以及所有 history-managed 变更的
+  // 唯一正规状态更新路径。从此快照中更新 ranges/rects/selectedRangeId/selectedRectId，
+  // 并通过 localStorage v3 helpers 持久化。
+  // reset 源（文件切换）不持久化，因为文件上传处理器会从 localStorage 加载数据。
+  const handleAnnotationHistoryChange = useCallback(
+    (
+      next: ReaderAnnotationHistoryValue,
+      detail: ReaderAnnotationHistoryChangeDetail
+    ) => {
+      setRanges(next.ranges as ReaderSelectionRange[])
+      setRects(next.rects as ReaderSelectionRectangle[])
+      setSelectedRangeId(next.selectedRangeId)
+      setSelectedRectId(next.selectedRectId)
+      setHistoryStatus(detail.status)
+      if (detail.source !== 'reset') {
+        persistHighlights(
+          uploadedFile?.name,
+          next.ranges as ReaderSelectionRange[],
+          next.rects as ReaderSelectionRectangle[]
+        )
+      }
+    },
+    [uploadedFile?.name]
+  )
+
+  // onSelect 回调：history 启用后，onAnnotationHistoryChange 是正规路径，
+  // 此回调保持为 no-op。
   const handleSelectionSelect = useCallback(() => {}, [])
 
-  const handleHighlight = useCallback(
-    (range: ReaderSelectionRange) => {
-      setRanges((prev) => {
-        const newRanges = [...prev, range]
-        persistHighlights(uploadedFile?.name, newRanges, rects)
-        return newRanges
-      })
-    },
-    [rects, uploadedFile?.name]
-  )
+  // onHighlight 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleHighlight = useCallback(() => {}, [])
 
   const handleSelectionEnd = useCallback(() => {}, [])
 
-  // onSelectRange 回调：用户点击已有 range 时触发
+  // onSelectRange 回调：用户点击已有 range 时触发（selection-only，不创建 checkpoint）
   const handleSelectRange = useCallback((id: string | null) => {
     setSelectedRangeId(id)
     // 文字选择和矩形选择互斥
@@ -231,7 +265,12 @@ export function App() {
     }
   }, [])
 
-  const handleUpdateRange = useCallback(
+  // onUpdateRange 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleUpdateRange = useCallback(() => {}, [])
+
+  // Demo 内部直接受控变更（如颜色输入），不经过 library history 路径。
+  // 此函数保留直接 setRanges + persistHighlights 行为。
+  const handleUpdateRangeDirect = useCallback(
     (range: ReaderSelectionRange) => {
       setRanges((prev) => {
         const newRanges = prev.map((current) =>
@@ -263,18 +302,8 @@ export function App() {
     resolve(commentingHighlight)
   }, [commentingHighlight])
 
-  const handleCreateRect = useCallback(
-    (rect: ReaderSelectionRectangle) => {
-      setRects((prev) => {
-        const newRects = [...prev, rect]
-        persistHighlights(uploadedFile?.name, ranges, newRects)
-        return newRects
-      })
-      setSelectedRectId(rect.id)
-      setSelectedRangeId(null)
-    },
-    [ranges, uploadedFile?.name]
-  )
+  // onCreateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleCreateRect = useCallback(() => {}, [])
 
   const handleSelectRect = useCallback((id: string | null) => {
     setSelectedRectId(id)
@@ -284,16 +313,8 @@ export function App() {
     }
   }, [])
 
-  const handleUpdateRect = useCallback(
-    (rect: ReaderSelectionRectangle) => {
-      setRects((prev) => {
-        const newRects = prev.map((r) => (r.id === rect.id ? rect : r))
-        persistHighlights(uploadedFile?.name, ranges, newRects)
-        return newRects
-      })
-    },
-    [ranges, uploadedFile?.name]
-  )
+  // onUpdateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
+  const handleUpdateRect = useCallback(() => {}, [])
 
   const handleRemoveRect = useCallback(
     (id: string) => {
@@ -309,14 +330,11 @@ export function App() {
     [ranges, selectedRectId, uploadedFile?.name]
   )
 
+  // 清空全部：通过 selectionRef.current?.clear() 触发 library 的 clear 命令，
+  // library 会创建 checkpoint 并通过 onAnnotationHistoryChange 回传空快照。
   const handleClearAllRanges = useCallback(() => {
-    setRanges([])
-    setRects([])
-    setSelectedRangeId(null)
-    setSelectedRectId(null)
     selectionRef.current?.clear()
-    persistHighlights(uploadedFile?.name, [], [])
-  }, [uploadedFile?.name])
+  }, [])
 
   const handleRemoveRange = useCallback(
     (id: string) => {
@@ -349,6 +367,48 @@ export function App() {
   const handleApplyScroll = useCallback(() => {
     selectionRef.current?.scrollToPosition({ x: scrollX, y: scrollY })
   }, [scrollX, scrollY])
+
+  // Demo-only 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做。
+  // 必须忽略 input/textarea/contenteditable 中的按键，避免与文本编辑冲突。
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable === true
+      ) {
+        return
+      }
+
+      const isMac = navigator.platform.toLowerCase().includes('mac')
+      const modifier = isMac ? event.metaKey : event.ctrlKey
+      if (!modifier) return
+
+      const key = event.key.toLowerCase()
+      const isUndo = key === 'z' && !event.shiftKey
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y'
+
+      if (isUndo) {
+        event.preventDefault()
+        selectionRef.current?.undo()
+      } else if (isRedo) {
+        event.preventDefault()
+        selectionRef.current?.redo()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  const handleUndo = useCallback(() => {
+    selectionRef.current?.undo()
+  }, [])
+
+  const handleRedo = useCallback(() => {
+    selectionRef.current?.redo()
+  }, [])
 
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
@@ -804,6 +864,48 @@ export function App() {
               </div>
             </section>
           )}
+
+          {document && (
+            <section style={{ marginBottom: '24px' }}>
+              <h2>Undo / Redo</h2>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type='button'
+                  onClick={handleUndo}
+                  disabled={!historyStatus.canUndo}
+                  data-testid='undo-btn'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: historyStatus.canUndo ? 'pointer' : 'not-allowed',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: historyStatus.canUndo ? '#fff' : '#f5f5f5',
+                    opacity: historyStatus.canUndo ? 1 : 0.6
+                  }}
+                >
+                  撤销 Undo
+                </button>
+                <button
+                  type='button'
+                  onClick={handleRedo}
+                  disabled={!historyStatus.canRedo}
+                  data-testid='redo-btn'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: historyStatus.canRedo ? 'pointer' : 'not-allowed',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: historyStatus.canRedo ? '#fff' : '#f5f5f5',
+                    opacity: historyStatus.canRedo ? 1 : 0.6
+                  }}
+                >
+                  重做 Redo
+                </button>
+              </div>
+            </section>
+          )}
         </div>
 
         {ranges.length + rects.length > 0 && (
@@ -1011,6 +1113,11 @@ export function App() {
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
           onUpdateRect={handleUpdateRect}
+          annotationHistory={{
+            enabled: true,
+            resetKey: uploadedFile?.name ?? 'none'
+          }}
+          onAnnotationHistoryChange={handleAnnotationHistoryChange}
           onCommentHighlight={handleCommentHighlight}
           highlightPopover={(highlight) => (
             <div
@@ -1056,7 +1163,7 @@ export function App() {
                   onChange={(e) => {
                     const newColor = e.target.value
                     setHighlightColor(newColor)
-                    handleUpdateRange({
+                    handleUpdateRangeDirect({
                       ...highlight,
                       markerStyle: {
                         ...highlight.markerStyle,
