@@ -8,6 +8,7 @@ import type {
 import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
 
 import type {
+  ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
@@ -30,12 +31,11 @@ import {
   DefaultHighlightPopover,
   DefaultSelectionPopover
 } from './DefaultPopover'
-import {
-  Page,
-  type ReaderPagePaintingMap,
-  type ReaderPageRectSelectionMap,
-  type ReaderPageTextSelectionMap,
-  type ReaderPageTool
+import type {
+  ReaderPagePaintingMap,
+  ReaderPageRectSelectionMap,
+  ReaderPageTextSelectionMap,
+  ReaderPageTool
 } from './Page'
 
 export type ReaderRenderMode = 'layout' | 'text'
@@ -98,7 +98,10 @@ export type ReaderProps = {
   highlightColor?: string
   selectionColor?: string
   selectionPopover?: ReactNode
-  highlightPopover?: ReactNode
+  highlightPopover?: ReaderHighlightPopover
+  onCommentHighlight?: (
+    highlight: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
   autoHighlight?: boolean
   selectionRef?: Ref<ReaderSelectionRef>
   overlayRectType?: ReaderSelectionOverlayRectType
@@ -114,6 +117,9 @@ export type ReaderProps = {
   pageUnloadDelayMs?: number
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   containMarginX?: number
+  containMarginTop?: number
+  containMarginBottom?: number
+  /** @deprecated Use `containMarginTop` and `containMarginBottom`. */
   containMarginY?: number
   /** 是否显示布局模式的页面浏览侧栏，默认 false */
   showPageBrowser?: boolean
@@ -121,9 +127,13 @@ export type ReaderProps = {
   paintingTool?: DrawingTool
   pagePaintings?: ReaderPagePaintingMap
   defaultPagePaintings?: ReaderPagePaintingMap
+  /** @deprecated Use the linked `ranges` API. */
   pageTextSelections?: ReaderPageTextSelectionMap
+  /** @deprecated Use `defaultRanges`. */
   defaultPageTextSelections?: ReaderPageTextSelectionMap
+  /** @deprecated Use the page-scoped `rects` API. */
   pageRectSelections?: ReaderPageRectSelectionMap
+  /** @deprecated Initialize `rects` in the host. */
   defaultPageRectSelections?: ReaderPageRectSelectionMap
   onPagePaintingChange?: (
     pageId: string,
@@ -131,32 +141,19 @@ export type ReaderProps = {
     nextPaintings: ReaderPagePaintingMap
   ) => void
   onPagePaintingsChange?: (nextPaintings: ReaderPagePaintingMap) => void
+  /** @deprecated Use `onSelect` and `onUpdateRange`. */
   onPageTextSelectionsChange?: (
     pageId: string,
     nextSelections: readonly SelectionRange[],
     nextPageSelections: ReaderPageTextSelectionMap
   ) => void
+  /** @deprecated Use `onCreateRect` and `onUpdateRect`. */
   onPageRectSelectionsChange?: (
     pageId: string,
     nextSelections: readonly SelectionRect[],
     nextPageSelections: ReaderPageRectSelectionMap
   ) => void
 }
-
-type ReaderLegacyCompatibilityProps = Pick<
-  ReaderProps,
-  | 'selectedTool'
-  | 'pagePaintings'
-  | 'defaultPagePaintings'
-  | 'pageTextSelections'
-  | 'defaultPageTextSelections'
-  | 'pageRectSelections'
-  | 'defaultPageRectSelections'
-  | 'onPagePaintingChange'
-  | 'onPagePaintingsChange'
-  | 'onPageTextSelectionsChange'
-  | 'onPageRectSelectionsChange'
->
 
 export const SUPPORTED_UPLOAD_ACCEPT =
   '.pdf,application/pdf,.txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,text/markdown,text/x-markdown'
@@ -181,75 +178,51 @@ const documentHasPages = (
   return (document as IntermediateDocument).pageCount > 0
 }
 
-const getSerializedPages = (
-  document:
-    | IntermediateDocument
-    | IntermediateDocumentSerialized
-    | null
-    | undefined
-) => {
-  if (!document) {
-    return null
-  }
-
-  if (Array.isArray((document as IntermediateDocumentSerialized).pages)) {
-    return (document as IntermediateDocumentSerialized).pages
-  }
-
-  return null
-}
-
-const shouldUseLegacyPageMode = ({
-  document,
-  selectedTool,
-  pagePaintings,
-  defaultPagePaintings,
-  pageTextSelections,
-  defaultPageTextSelections,
-  pageRectSelections,
-  defaultPageRectSelections,
-  onPagePaintingChange,
-  onPagePaintingsChange,
-  onPageTextSelectionsChange,
-  onPageRectSelectionsChange
-}: { document: ReaderProps['document'] } & ReaderLegacyCompatibilityProps) => {
-  const hasLegacyProp =
-    selectedTool !== undefined ||
-    pagePaintings !== undefined ||
-    defaultPagePaintings !== undefined ||
-    pageTextSelections !== undefined ||
-    defaultPageTextSelections !== undefined ||
-    pageRectSelections !== undefined ||
-    defaultPageRectSelections !== undefined ||
-    onPagePaintingChange !== undefined ||
-    onPagePaintingsChange !== undefined ||
-    onPageTextSelectionsChange !== undefined ||
-    onPageRectSelectionsChange !== undefined
-
-  return hasLegacyProp && getSerializedPages(document) !== null
-}
-
 interface UploadedFile {
   name: string
   size: number
   type: string
 }
 
-function assertNever(value: never): never {
-  throw new Error(`Unexpected reader page tool: ${value}`)
+function getLinkedRanges(
+  selectionsByPage: ReaderPageTextSelectionMap
+): ReaderSelectionRange[] {
+  return Object.entries(selectionsByPage).flatMap(([pageId, selections]) =>
+    selections.map((selection) => ({
+      id: selection.id,
+      text: selection.text,
+      start: { selectionId: pageId, offset: selection.start },
+      end: { selectionId: pageId, offset: selection.end },
+      createdAt: selection.createdAt,
+      overlayRectType: selection.overlayRectType,
+      rectsBySelectionId: { [pageId]: [...(selection.rects ?? [])] },
+      markerStyle: selection.markerStyle,
+      selectionStyle: selection.selectionStyle
+    }))
+  )
 }
 
-function getToolLabel(tool: ReaderPageTool): string {
-  switch (tool) {
-    case 'text-selection':
-      return 'Text selection'
-    case 'rect-selection':
-      return 'Rect selection'
-    case 'drawing':
-      return 'Drawing'
-    default:
-      return assertNever(tool)
+function getPageTextSelection(range: ReaderSelectionRange): SelectionRange {
+  const pageId = range.start.selectionId
+  return {
+    id: range.id,
+    text: range.text,
+    start: range.start.offset,
+    end: range.end.offset,
+    createdAt: range.createdAt,
+    overlayRectType: range.overlayRectType,
+    rects: [...(range.rectsBySelectionId[pageId] ?? [])],
+    markerStyle: range.markerStyle,
+    selectionStyle: range.selectionStyle
   }
+}
+
+function getPageRects(
+  selectionsByPage: ReaderPageRectSelectionMap
+): ReaderSelectionRectangle[] {
+  return Object.entries(selectionsByPage).flatMap(([pageId, selections]) =>
+    selections.map((selection) => ({ ...selection, selectionId: pageId }))
+  )
 }
 
 export function Reader({
@@ -293,6 +266,7 @@ export function Reader({
   selectionColor,
   selectionPopover,
   highlightPopover,
+  onCommentHighlight,
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
@@ -308,6 +282,8 @@ export function Reader({
   pageUnloadDelayMs,
   onIntermediateDocumentRenderTiming,
   containMarginX,
+  containMarginTop,
+  containMarginBottom,
   containMarginY,
   showPageBrowser,
   selectedTool,
@@ -332,13 +308,59 @@ export function Reader({
   const [internalPageRectSelections, setInternalPageRectSelections] =
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const resolvedSelectedTool = selectedTool ?? 'text-selection'
-
+  const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
   const resolvedPagePaintings = pagePaintings ?? internalPagePaintings
+  const pagePaintingsRef = useRef(resolvedPagePaintings)
+  pagePaintingsRef.current = resolvedPagePaintings
   const resolvedPageTextSelections =
     pageTextSelections ?? internalPageTextSelections
   const resolvedPageRectSelections =
     pageRectSelections ?? internalPageRectSelections
+  const pageTextSelectionsRef = useRef(resolvedPageTextSelections)
+  pageTextSelectionsRef.current = resolvedPageTextSelections
+  const pageRectSelectionsRef = useRef(resolvedPageRectSelections)
+  pageRectSelectionsRef.current = resolvedPageRectSelections
+  const resolvedRanges =
+    ranges ??
+    (Object.keys(resolvedPageTextSelections).length > 0
+      ? getLinkedRanges(resolvedPageTextSelections)
+      : undefined)
+  const resolvedRects =
+    rects ??
+    (Object.keys(resolvedPageRectSelections).length > 0
+      ? getPageRects(resolvedPageRectSelections)
+      : undefined)
+  const resolvedSelectionTool =
+    tool ?? (selectedTool === 'rect-selection' ? 'rect' : 'text')
+  const usesPageTextSelectionCompatibility =
+    pageTextSelections !== undefined ||
+    defaultPageTextSelections !== undefined ||
+    onPageTextSelectionsChange !== undefined
+  const usesPageRectSelectionCompatibility =
+    pageRectSelections !== undefined ||
+    defaultPageRectSelections !== undefined ||
+    onPageRectSelectionsChange !== undefined
+
+  const handleSelectionRef = useCallback(
+    (value: ReaderSelectionRef | null) => {
+      defaultSelectionRef.current = value
+
+      if (typeof selectionRef === 'function') {
+        selectionRef(value)
+      } else if (selectionRef) {
+        selectionRef.current = value
+      }
+    },
+    [selectionRef]
+  )
+  const popoverSelectionRef =
+    selectionRef && typeof selectionRef !== 'function'
+      ? selectionRef
+      : defaultSelectionRef
+  const resolvedSelectionRef =
+    typeof selectionRef === 'function'
+      ? handleSelectionRef
+      : (selectionRef ?? defaultSelectionRef)
 
   const handleFile = useCallback(
     (file: File) => {
@@ -396,9 +418,10 @@ export function Reader({
   const handlePagePaintingChange = useCallback(
     (pageId: string, nextValue: DrawingValue) => {
       const nextPaintings: ReaderPagePaintingMap = {
-        ...resolvedPagePaintings,
+        ...pagePaintingsRef.current,
         [pageId]: nextValue
       }
+      pagePaintingsRef.current = nextPaintings
 
       if (pagePaintings === undefined) {
         setInternalPagePaintings(nextPaintings)
@@ -407,44 +430,134 @@ export function Reader({
       onPagePaintingChange?.(pageId, nextValue, nextPaintings)
       onPagePaintingsChange?.(nextPaintings)
     },
-    [
-      onPagePaintingChange,
-      onPagePaintingsChange,
-      pagePaintings,
-      resolvedPagePaintings
-    ]
+    [onPagePaintingChange, onPagePaintingsChange, pagePaintings]
   )
 
-  const handlePageTextSelectionsChange = useCallback(
-    (pageId: string, nextSelections: readonly SelectionRange[]) => {
-      const nextPageSelections: ReaderPageTextSelectionMap = {
-        ...resolvedPageTextSelections,
-        [pageId]: nextSelections
+  const handleSelect = useCallback(
+    (range: ReaderSelectionRange) => {
+      onSelect?.(range)
+      if (
+        !usesPageTextSelectionCompatibility ||
+        range.start.selectionId !== range.end.selectionId
+      ) {
+        return
       }
-
+      const pageId = range.start.selectionId
+      const nextPageSelections = {
+        ...pageTextSelectionsRef.current,
+        [pageId]: [
+          ...(pageTextSelectionsRef.current[pageId] ?? []),
+          getPageTextSelection(range)
+        ]
+      }
+      pageTextSelectionsRef.current = nextPageSelections
       if (pageTextSelections === undefined) {
         setInternalPageTextSelections(nextPageSelections)
       }
-
-      onPageTextSelectionsChange?.(pageId, nextSelections, nextPageSelections)
+      onPageTextSelectionsChange?.(
+        pageId,
+        nextPageSelections[pageId],
+        nextPageSelections
+      )
     },
-    [onPageTextSelectionsChange, pageTextSelections, resolvedPageTextSelections]
+    [
+      onPageTextSelectionsChange,
+      onSelect,
+      pageTextSelections,
+      usesPageTextSelectionCompatibility
+    ]
   )
 
-  const handlePageRectSelectionsChange = useCallback(
-    (pageId: string, nextSelections: readonly SelectionRect[]) => {
-      const nextPageSelections: ReaderPageRectSelectionMap = {
-        ...resolvedPageRectSelections,
-        [pageId]: nextSelections
+  const handleUpdateRange = useCallback(
+    (range: ReaderSelectionRange) => {
+      onUpdateRange?.(range)
+      if (
+        !usesPageTextSelectionCompatibility ||
+        range.start.selectionId !== range.end.selectionId
+      ) {
+        return
       }
+      const pageId = range.start.selectionId
+      const nextSelection = getPageTextSelection(range)
+      const nextPageSelections = {
+        ...pageTextSelectionsRef.current,
+        [pageId]: (pageTextSelectionsRef.current[pageId] ?? []).map(
+          (selection) =>
+            selection.id === nextSelection.id ? nextSelection : selection
+        )
+      }
+      pageTextSelectionsRef.current = nextPageSelections
+      if (pageTextSelections === undefined) {
+        setInternalPageTextSelections(nextPageSelections)
+      }
+      onPageTextSelectionsChange?.(
+        pageId,
+        nextPageSelections[pageId],
+        nextPageSelections
+      )
+    },
+    [
+      onPageTextSelectionsChange,
+      onUpdateRange,
+      pageTextSelections,
+      usesPageTextSelectionCompatibility
+    ]
+  )
 
+  const handleCreateRect = useCallback(
+    (rectangle: ReaderSelectionRectangle) => {
+      onCreateRect?.(rectangle)
+      if (!usesPageRectSelectionCompatibility || !rectangle.selectionId) return
+      const pageId = rectangle.selectionId
+      const nextPageSelections = {
+        ...pageRectSelectionsRef.current,
+        [pageId]: [...(pageRectSelectionsRef.current[pageId] ?? []), rectangle]
+      }
+      pageRectSelectionsRef.current = nextPageSelections
       if (pageRectSelections === undefined) {
         setInternalPageRectSelections(nextPageSelections)
       }
-
-      onPageRectSelectionsChange?.(pageId, nextSelections, nextPageSelections)
+      onPageRectSelectionsChange?.(
+        pageId,
+        nextPageSelections[pageId],
+        nextPageSelections
+      )
     },
-    [onPageRectSelectionsChange, pageRectSelections, resolvedPageRectSelections]
+    [
+      onCreateRect,
+      onPageRectSelectionsChange,
+      pageRectSelections,
+      usesPageRectSelectionCompatibility
+    ]
+  )
+
+  const handleUpdateRect = useCallback(
+    (rectangle: ReaderSelectionRectangle) => {
+      onUpdateRect?.(rectangle)
+      if (!usesPageRectSelectionCompatibility || !rectangle.selectionId) return
+      const pageId = rectangle.selectionId
+      const nextPageSelections = {
+        ...pageRectSelectionsRef.current,
+        [pageId]: (pageRectSelectionsRef.current[pageId] ?? []).map(
+          (selection) => (selection.id === rectangle.id ? rectangle : selection)
+        )
+      }
+      pageRectSelectionsRef.current = nextPageSelections
+      if (pageRectSelections === undefined) {
+        setInternalPageRectSelections(nextPageSelections)
+      }
+      onPageRectSelectionsChange?.(
+        pageId,
+        nextPageSelections[pageId],
+        nextPageSelections
+      )
+    },
+    [
+      onPageRectSelectionsChange,
+      onUpdateRect,
+      pageRectSelections,
+      usesPageRectSelectionCompatibility
+    ]
   )
 
   const formatFileSize = (bytes: number): string => {
@@ -461,70 +574,7 @@ export function Reader({
   const showFileInfo = !document && uploadedFile
   const hasDocumentPages = documentHasPages(document)
   const showDocumentContent = document?.title ?? emptyText
-  const serializedPages = getSerializedPages(document)
-  const useLegacyPageMode = shouldUseLegacyPageMode({
-    document,
-    selectedTool,
-    pagePaintings,
-    defaultPagePaintings,
-    pageTextSelections,
-    defaultPageTextSelections,
-    pageRectSelections,
-    defaultPageRectSelections,
-    onPagePaintingChange,
-    onPagePaintingsChange,
-    onPageTextSelectionsChange,
-    onPageRectSelectionsChange
-  })
-
-  const renderLegacyDocumentContent = () => {
-    if (!serializedPages || serializedPages.length === 0) {
-      return showUploadZone ? emptyText : showDocumentContent
-    }
-
-    return (
-      <>
-        <div className='hamster-reader__document-header'>
-          <p className='hamster-reader__document-kicker'>Document</p>
-          <h2 className='hamster-reader__document-title'>
-            {showDocumentContent}
-          </h2>
-          <p className='hamster-reader__document-hint'>
-            Tool: {getToolLabel(resolvedSelectedTool)}
-          </p>
-        </div>
-
-        <div className='hamster-reader__pages' data-testid='reader-pages'>
-          {serializedPages.map((page) => (
-            <Page
-              key={page.id}
-              page={page}
-              selectedTool={resolvedSelectedTool}
-              paintingTool={paintingTool}
-              paintingValue={resolvedPagePaintings[page.id]}
-              textSelections={resolvedPageTextSelections[page.id]}
-              rectSelections={resolvedPageRectSelections[page.id]}
-              onPaintingChange={(nextValue) => {
-                handlePagePaintingChange(page.id, nextValue)
-              }}
-              onTextSelectionsChange={(nextSelections) => {
-                handlePageTextSelectionsChange(page.id, nextSelections)
-              }}
-              onRectSelectionsChange={(nextSelections) => {
-                handlePageRectSelectionsChange(page.id, nextSelections)
-              }}
-            />
-          ))}
-        </div>
-      </>
-    )
-  }
-
   const renderDocumentContent = () => {
-    if (useLegacyPageMode) {
-      return renderLegacyDocumentContent()
-    }
-
     if (hasDocumentPages) {
       if (renderMode === 'text') {
         return (
@@ -565,17 +615,17 @@ export function Reader({
           maxLoadedPages={maxLoadedPages}
           interactionMode={interactionMode}
           touchPanMode={touchPanMode}
-          ranges={ranges}
+          ranges={resolvedRanges}
           defaultRanges={defaultRanges}
           selectedRangeId={selectedRangeId}
           defaultSelectedRangeId={defaultSelectedRangeId}
-          onSelect={onSelect}
+          onSelect={handleSelect}
           onLinkedDataChange={onLinkedDataChange}
           onLinkedSelect={onLinkedSelect}
           onLinkedUpdateRange={onLinkedUpdateRange}
           onLinkedSelectRange={onLinkedSelectRange}
           onSelectRange={onSelectRange}
-          onUpdateRange={onUpdateRange}
+          onUpdateRange={handleUpdateRange}
           onSelectionStart={onSelectionStart}
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
@@ -584,42 +634,40 @@ export function Reader({
           selectionPopover={
             selectionPopover ?? (
               <DefaultSelectionPopover
-                selectionRef={
-                  selectionRef as React.RefObject<ReaderSelectionRef | null>
-                }
+                selectionRef={popoverSelectionRef}
                 highlightColor={highlightColor}
                 onHighlightColorChange={onHighlightColorChange}
                 selectedRangeId={selectedRangeId}
-                ranges={ranges}
-                onUpdateRange={onUpdateRange}
+                ranges={resolvedRanges}
+                onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
               />
             )
           }
           highlightPopover={
-            highlightPopover ?? (
+            highlightPopover ??
+            ((highlight) => (
               <DefaultHighlightPopover
-                selectionRef={
-                  selectionRef as React.RefObject<ReaderSelectionRef | null>
-                }
+                selectionRef={popoverSelectionRef}
                 highlightColor={highlightColor}
                 onHighlightColorChange={onHighlightColorChange}
-                selectedRangeId={selectedRangeId}
-                ranges={ranges}
-                onUpdateRange={onUpdateRange}
+                selectedRangeId={highlight.id}
+                ranges={resolvedRanges}
+                onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
               />
-            )
+            ))
           }
+          onCommentHighlight={onCommentHighlight}
           autoHighlight={autoHighlight}
-          selectionRef={selectionRef}
+          selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}
-          tool={tool}
-          rects={rects}
+          tool={resolvedSelectionTool}
+          rects={resolvedRects}
           selectedRectId={selectedRectId}
-          onCreateRect={onCreateRect}
+          onCreateRect={handleCreateRect}
           onSelectRect={onSelectRect}
-          onUpdateRect={onUpdateRect}
+          onUpdateRect={handleUpdateRect}
           initialLoadedPages={initialLoadedPages}
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
@@ -628,7 +676,13 @@ export function Reader({
             onIntermediateDocumentRenderTiming
           }
           containMarginX={containMarginX}
+          containMarginTop={containMarginTop}
+          containMarginBottom={containMarginBottom}
           containMarginY={containMarginY}
+          selectedTool={selectedTool}
+          paintingTool={paintingTool}
+          pagePaintings={resolvedPagePaintings}
+          onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
         />
       )

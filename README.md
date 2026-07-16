@@ -113,6 +113,28 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 
 Text mode renders document text as normal flow content. It does not render page images, intermediate images, or OCR output, and it does not convert existing layout-mode highlight geometry into text-flow highlight geometry.
 
+### Text, rectangle, and drawing tools
+
+In layout mode, `selectedTool` switches the active page interaction without replacing the virtualized reader. Existing zoom, page-range, OCR, lazy loading, and linked-selection behavior therefore remains available in every tool mode.
+
+```tsx
+const [selectedTool, setSelectedTool] = useState<ReaderPageTool>('text-selection')
+const [pagePaintings, setPagePaintings] = useState<ReaderPagePaintingMap>({})
+
+<Reader
+  document={document}
+  selectedTool={selectedTool}
+  pagePaintings={pagePaintings}
+  onPagePaintingsChange={setPagePaintings}
+/>
+```
+
+- `text-selection` uses the existing linked text-selection API (`ranges`, `onSelect`, `onUpdateRange`).
+- `rect-selection` uses the existing rectangle API (`rects`, `onCreateRect`, `onUpdateRect`).
+- `drawing` enables a per-page `DrawingSurface`; painting map keys use stable public IDs such as `page-1` and `page-2`.
+- An explicitly supplied legacy `tool` prop takes precedence over the text/rectangle mapping from `selectedTool`.
+- `renderMode='text'` remains text-only and does not mount drawing or rectangle overlays.
+
 ## Text Selection (@hamster-note/selection)
 
 `Reader` integrates [`@hamster-note/selection`](https://www.npmjs.com/package/@hamster-note/selection) to provide rich text-selection features, highlighted ranges, popovers, and programmatic control on top of the native browser `Selection` API.
@@ -195,13 +217,38 @@ export function App() {
 | `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
 | `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
 | `autoHighlight` | `boolean` | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`. |
-| `highlightColor` | `string` | CSS color for highlight overlays. In Phase 1, this applies globally to all highlights. |
+| `highlightColor` | `string` | Default CSS color for highlight overlays. A range-specific `markerStyle.backgroundColor` takes precedence. |
 | `selectionColor` | `string` | CSS color for active selection overlay. |
 | `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
-| `highlightPopover` | `React.ReactNode` | Custom popover content shown when an existing highlight is clicked. |
+| `highlightPopover` | `React.ReactNode \| ((highlight: ReaderSelectionRange) => React.ReactNode)` | Custom popover content shown when an existing highlight is clicked. The renderer receives the original range object, so range-specific color and metadata can be displayed. |
+| `onCommentHighlight` | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>` | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
 | `selectionRef` | `React.Ref<ReaderSelectionRef>` | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range. |
 | `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
+| `containMarginX` | `number` | Horizontal whitespace around the virtual paper. |
+| `containMarginTop` | `number` | Independent top whitespace around the virtual paper. |
+| `containMarginBottom` | `number` | Independent bottom whitespace around the virtual paper. |
+| `containMarginY` | `number` | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied. |
 | `showPageBrowser` | `boolean` | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`. |
+
+The existing-highlight popover can use range-specific data and delegate the comment lifecycle to the host:
+
+```tsx
+<Reader
+  ranges={ranges}
+  selectedRangeId={selectedRangeId}
+  highlightPopover={(highlight) => (
+    <input
+      type='color'
+      value={String(highlight.markerStyle?.backgroundColor ?? '#ffc107')}
+    />
+  )}
+  onCommentHighlight={(highlight) =>
+    new Promise((resolve) => {
+      openCommentEditor(highlight, () => resolve(highlight))
+    })
+  }
+/>
+```
 
 ### Exported Types
 

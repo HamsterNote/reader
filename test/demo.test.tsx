@@ -180,6 +180,34 @@ function findDocumentReaderProps(): Record<string, unknown> | undefined {
   return undefined
 }
 
+type HighlightPopoverRenderer = (
+  highlight: ReaderSelectionRange
+) => React.ReactNode
+
+function isHighlightPopoverRenderer(
+  value: unknown
+): value is HighlightPopoverRenderer {
+  return typeof value === 'function'
+}
+
+function renderHighlightPopover(
+  props: Record<string, unknown> | undefined,
+  range: ReaderSelectionRange
+) {
+  const renderer = props?.highlightPopover
+  if (!isHighlightPopoverRenderer(renderer)) {
+    throw new Error('Expected highlightPopover to be a range renderer')
+  }
+
+  return render(renderer(range))
+}
+
+function isCommentHighlightCallback(
+  value: unknown
+): value is (highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange> {
+  return typeof value === 'function'
+}
+
 function upload(file: File) {
   fireEvent.change(screen.getByTestId('file-input'), {
     target: { files: [file] }
@@ -462,6 +490,31 @@ describe('demo parser flow', () => {
     })
   })
 
+  it('provides drawing in the tool selector and forwards it to Reader', async () => {
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Drawing Tool Document')
+    )
+
+    render(<App />)
+    upload(makeFile('drawing-tool.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const select = screen.getByTestId('selection-tool-select')
+    expect(select).toHaveValue('text-selection')
+    expect(select).toHaveTextContent('绘图 Drawing')
+
+    fireEvent.change(select, { target: { value: 'drawing' } })
+
+    await waitFor(() => {
+      expect(select).toHaveValue('drawing')
+      expect(findDocumentReaderProps()?.selectedTool).toBe('drawing')
+      expect(findDocumentReaderProps()?.pagePaintings).toEqual({})
+      expect(findDocumentReaderProps()?.onPagePaintingsChange).toBeTypeOf(
+        'function'
+      )
+    })
+  })
+
   it('hides touch pan mode select when render mode is text', async () => {
     vi.mocked(PdfParser.encode).mockResolvedValue(
       makeRuntimeDocument('Text Mode Touch Pan Document')
@@ -652,11 +705,88 @@ describe('demo parser flow', () => {
           (props as Record<string, unknown>).document !== undefined
       )
 
-      const popover = render(
-        uploadReaderProps?.highlightPopover as React.ReactElement
-      )
+      const range = makeLinkedRange('popover-range', 'popover highlight')
+      const popover = renderHighlightPopover(uploadReaderProps, range)
       expect(popover.getByText('删除')).toBeInTheDocument()
       expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
+    })
+
+    it('uses the existing highlight color in highlightPopover', async () => {
+      // Given: 全局颜色保持默认值，但已有高亮保存了自己的颜色。
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Own Highlight Color Document')
+      )
+      render(<App />)
+      upload(makeFile('own-highlight-color.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range: ReaderSelectionRange = {
+        ...makeLinkedRange('own-color-range', 'own color text'),
+        markerStyle: { backgroundColor: '#ff3366' }
+      }
+
+      // When: 宿主使用 Reader 提供的原始高亮数据渲染 Popover。
+      const popover = renderHighlightPopover(findDocumentReaderProps(), range)
+
+      // Then: 颜色输入优先显示该高亮自身颜色，而不是全局颜色。
+      expect(popover.getByLabelText('Highlight color')).toHaveValue('#ff3366')
+    })
+
+    it('forwards independent top and bottom margins from the settings', async () => {
+      // Given: Demo 已加载可配置 Reader。
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Independent Margins Document')
+      )
+      render(<App />)
+      upload(makeFile('independent-margins.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      // When: 分别设置顶部和底部留白。
+      fireEvent.change(screen.getByTestId('contain-margin-top-input'), {
+        target: { value: '32' }
+      })
+      fireEvent.change(screen.getByTestId('contain-margin-bottom-input'), {
+        target: { value: '64' }
+      })
+
+      // Then: Reader 接收两个独立值，Demo 不再传旧的统一垂直留白。
+      await waitFor(() => {
+        const readerProps = findDocumentReaderProps()
+        expect(readerProps?.containMarginTop).toBe(32)
+        expect(readerProps?.containMarginBottom).toBe(64)
+        expect(readerProps).not.toHaveProperty('containMarginY')
+      })
+    })
+
+    it('resolves highlight comments with the original range reference', async () => {
+      // Given: Reader 请求宿主为一个已有高亮开启评论流程。
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Highlight Comment Document')
+      )
+      render(<App />)
+      upload(makeFile('highlight-comment.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('comment-range', 'comment target text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      // When: 评论面板打开，用户填写内容并结束评论。
+      const resultPromise = callback(range)
+      expect(
+        await screen.findByTestId('highlight-comment-panel')
+      ).toHaveTextContent('comment target text')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'A useful note' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '完成评论' }))
+      const result = await resultPromise
+
+      // Then: Promise 返回同一个 range 引用，评论面板也已关闭。
+      expect(result).toBe(range)
+      expect(
+        screen.queryByTestId('highlight-comment-panel')
+      ).not.toBeInTheDocument()
     })
 
     it('does not store a highlight on selection end when autoHighlight is false', async () => {
@@ -768,7 +898,8 @@ describe('demo parser flow', () => {
       const onHighlight = uploadReaderProps?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('highlight-color-range', 'highlight text'))
+      const range = makeLinkedRange('highlight-color-range', 'highlight text')
+      onHighlight(range)
 
       expect(await screen.findByText('highlight text')).toBeInTheDocument()
 
@@ -784,9 +915,7 @@ describe('demo parser flow', () => {
         expect(uploadReaderProps?.selectedRangeId).toBe('highlight-color-range')
       })
 
-      const popover = render(
-        uploadReaderProps?.highlightPopover as React.ReactElement
-      )
+      const popover = renderHighlightPopover(uploadReaderProps, range)
       const colorInput = popover.container.querySelector(
         'input[type="color"]'
       ) as HTMLInputElement
@@ -826,7 +955,8 @@ describe('demo parser flow', () => {
       const onHighlight = uploadReaderProps?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('del-range', 'text to delete'))
+      const range = makeLinkedRange('del-range', 'text to delete')
+      onHighlight(range)
 
       expect(await screen.findByText('text to delete')).toBeInTheDocument()
 
@@ -843,9 +973,7 @@ describe('demo parser flow', () => {
         expect(uploadReaderProps?.selectedRangeId).toBe('del-range')
       })
 
-      const popover = render(
-        uploadReaderProps?.highlightPopover as React.ReactElement
-      )
+      const popover = renderHighlightPopover(uploadReaderProps, range)
 
       const deleteButton = popover.container.querySelector('button')
       if (deleteButton) {
@@ -1023,7 +1151,11 @@ describe('demo parser flow', () => {
       const onHighlight = uploadReaderProps?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('no-scroll-del', 'text for no scroll delete'))
+      const range = makeLinkedRange(
+        'no-scroll-del',
+        'text for no scroll delete'
+      )
+      onHighlight(range)
 
       expect(
         await screen.findByText('text for no scroll delete')
@@ -1039,13 +1171,15 @@ describe('demo parser flow', () => {
       onSelectRange('no-scroll-del')
 
       await waitFor(() => {
-        uploadReaderProps = findDocumentReaderProps()!
+        const nextReaderProps = findDocumentReaderProps()
+        if (!nextReaderProps) {
+          throw new Error('Expected document Reader props')
+        }
+        uploadReaderProps = nextReaderProps
         expect(uploadReaderProps?.selectedRangeId).toBe('no-scroll-del')
       })
 
-      const popover = render(
-        uploadReaderProps?.highlightPopover as React.ReactElement
-      )
+      const popover = renderHighlightPopover(uploadReaderProps, range)
       const deleteButton = popover.container.querySelector('button')
       if (deleteButton) {
         fireEvent.click(deleteButton)

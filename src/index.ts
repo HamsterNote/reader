@@ -9,6 +9,7 @@ export type {
 } from '@hamster-note/selection'
 
 export type {
+  ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderLinkedSelectionRange,
   ReaderSelectionEndpoint,
@@ -99,6 +100,7 @@ export type ReaderInteractiveProps = Pick<
   | 'selectionColor'
   | 'selectionPopover'
   | 'highlightPopover'
+  | 'onCommentHighlight'
   | 'selectionRef'
   | 'overlayRectType'
   | 'tool'
@@ -107,4 +109,15 @@ export type ReaderInteractiveProps = Pick<
   | 'onCreateRect'
   | 'onSelectRect'
   | 'onUpdateRect'
+  | 'containMarginX'
+  | 'containMarginTop'
+  | 'containMarginBottom'
+  | 'containMarginY'
+  | 'showPageBrowser'
+  | 'selectedTool'
+  | 'paintingTool'
+  | 'pagePaintings'
+  | 'defaultPagePaintings'
+  | 'onPagePaintingChange'
+  | 'onPagePaintingsChange'
 >

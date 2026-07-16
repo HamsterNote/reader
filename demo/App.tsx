@@ -1,20 +1,17 @@
 import { DocxParser } from '@hamster-note/docx-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
+import type { DrawingValue } from '@hamster-note/painting'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
   ReaderPageRange,
+  ReaderPageTool,
   ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
-  ReaderSelectionTool,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
-import {
-  DefaultHighlightPopover,
-  DefaultSelectionPopover,
-  Reader
-} from '@hamster-note/reader'
+import { DefaultSelectionPopover, Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
@@ -133,6 +130,33 @@ function persistHighlights(
   )
 }
 
+function toColorInputValue(
+  color: React.CSSProperties['backgroundColor'] | undefined,
+  fallback: string
+): string {
+  const value = color ?? fallback
+  const hexMatch = /^#([\da-f]{3}|[\da-f]{6})(?:[\da-f]{2})?$/i.exec(value)
+  if (hexMatch?.[1]) {
+    const hex = hexMatch[1]
+    return hex.length === 3
+      ? `#${Array.from(hex, (digit) => digit.repeat(2)).join('')}`
+      : `#${hex}`
+  }
+
+  const rgbMatch = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(
+    value
+  )
+  if (rgbMatch?.[1] && rgbMatch[2] && rgbMatch[3]) {
+    return `#${[rgbMatch[1], rgbMatch[2], rgbMatch[3]]
+      .map((channel) =>
+        Math.min(255, Number(channel)).toString(16).padStart(2, '0')
+      )
+      .join('')}`
+  }
+
+  return '#ffc107'
+}
+
 // ---------------------------------------------------------------------------
 // App 组件
 // ---------------------------------------------------------------------------
@@ -156,7 +180,8 @@ export function App() {
     'rgba(255, 193, 7, 0.35)'
   )
   const [containMarginX, setContainMarginX] = useState<number>(0)
-  const [containMarginY, setContainMarginY] = useState<number>(0)
+  const [containMarginTop, setContainMarginTop] = useState<number>(0)
+  const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
   const requestIdRef = useRef(0)
@@ -166,9 +191,19 @@ export function App() {
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
   // 当前选中的 range ID（点击高亮列表项时切换）
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
-  const [tool, setTool] = useState<ReaderSelectionTool>('text')
+  const [selectedTool, setSelectedTool] =
+    useState<ReaderPageTool>('text-selection')
+  const [pagePaintings, setPagePaintings] = useState<
+    Record<string, DrawingValue>
+  >({})
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
+  const [commentingHighlight, setCommentingHighlight] =
+    useState<ReaderSelectionRange | null>(null)
+  const [commentDraft, setCommentDraft] = useState('')
+  const commentResolverRef = useRef<
+    ((highlight: ReaderSelectionRange) => void) | null
+  >(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
 
   // onSelect 回调：highlight() 创建新 range 时触发，将 range 追加到列表
@@ -208,6 +243,25 @@ export function App() {
     },
     [rects, uploadedFile?.name]
   )
+
+  const handleCommentHighlight = useCallback(
+    (highlight: ReaderSelectionRange) =>
+      new Promise<ReaderSelectionRange>((resolve) => {
+        commentResolverRef.current = resolve
+        setCommentingHighlight(highlight)
+      }),
+    []
+  )
+
+  const handleFinishComment = useCallback(() => {
+    if (!commentingHighlight || !commentResolverRef.current) return
+
+    const resolve = commentResolverRef.current
+    commentResolverRef.current = null
+    setCommentingHighlight(null)
+    setCommentDraft('')
+    resolve(commentingHighlight)
+  }, [commentingHighlight])
 
   const handleCreateRect = useCallback(
     (rect: ReaderSelectionRectangle) => {
@@ -617,18 +671,18 @@ export function App() {
                     gap: '8px'
                   }}
                 >
-                  <span>垂直留白 Margin Y (px)</span>
+                  <span>顶部留白 Margin Top (px)</span>
                   <input
                     type='number'
                     min={0}
-                    value={containMarginY}
+                    value={containMarginTop}
                     onChange={(e) =>
-                      setContainMarginY(
+                      setContainMarginTop(
                         Math.max(0, Number(e.target.value) || 0)
                       )
                     }
                     style={{ width: '60px', padding: '4px' }}
-                    data-testid='contain-margin-y-input'
+                    data-testid='contain-margin-top-input'
                   />
                 </label>
               </div>
@@ -640,13 +694,40 @@ export function App() {
                     gap: '8px'
                   }}
                 >
-                  <span>选择工具 Selection Tool</span>
+                  <span>底部留白 Margin Bottom (px)</span>
+                  <input
+                    type='number'
+                    min={0}
+                    value={containMarginBottom}
+                    onChange={(e) =>
+                      setContainMarginBottom(
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                    style={{ width: '60px', padding: '4px' }}
+                    data-testid='contain-margin-bottom-input'
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>工具 Tool</span>
                   <select
-                    value={tool}
+                    value={selectedTool}
                     onChange={(e) => {
                       const nextTool = e.currentTarget.value
-                      if (nextTool === 'text' || nextTool === 'rect') {
-                        setTool(nextTool)
+                      if (
+                        nextTool === 'text-selection' ||
+                        nextTool === 'rect-selection' ||
+                        nextTool === 'drawing'
+                      ) {
+                        setSelectedTool(nextTool)
                       }
                     }}
                     data-testid='selection-tool-select'
@@ -657,8 +738,9 @@ export function App() {
                       background: '#fff'
                     }}
                   >
-                    <option value='text'>文本 Text</option>
-                    <option value='rect'>矩形 Rect</option>
+                    <option value='text-selection'>文本选择 Text</option>
+                    <option value='rect-selection'>矩形选择 Rect</option>
+                    <option value='drawing'>绘图 Drawing</option>
                   </select>
                 </label>
               </div>
@@ -914,31 +996,150 @@ export function App() {
               onRemoveRange={handleRemoveRange}
             />
           }
-          highlightPopover={
-            <DefaultHighlightPopover
-              selectionRef={selectionRef}
-              highlightColor={highlightColor}
-              onHighlightColorChange={setHighlightColor}
-              selectedRangeId={selectedRangeId}
-              ranges={ranges}
-              onUpdateRange={handleUpdateRange}
-              onRemoveRange={handleRemoveRange}
-            />
-          }
           highlightColor={highlightColor}
           selectionColor='rgba(33, 150, 243, 0.2)'
           autoHighlight={autoHighlight}
           containMarginX={containMarginX}
-          containMarginY={containMarginY}
+          containMarginTop={containMarginTop}
+          containMarginBottom={containMarginBottom}
+          selectedTool={selectedTool}
+          pagePaintings={pagePaintings}
+          onPagePaintingsChange={setPagePaintings}
           showPageBrowser={showPageBrowser}
-          tool={tool}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
           onUpdateRect={handleUpdateRect}
+          onCommentHighlight={handleCommentHighlight}
+          highlightPopover={(highlight) => (
+            <div
+              className='hamster-demo-action-group'
+              style={{
+                display: 'flex',
+                gap: '8px',
+                padding: '4px 8px',
+                background: '#333',
+                color: '#fff',
+                borderRadius: '4px',
+                fontSize: '14px'
+              }}
+            >
+              <button
+                type='button'
+                onClick={() => handleRemoveRange(highlight.id)}
+                style={{
+                  cursor: 'pointer',
+                  background: 'transparent',
+                  color: '#fff',
+                  border: 'none'
+                }}
+              >
+                删除
+              </button>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                <span>背景颜色设置</span>
+                <input
+                  type='color'
+                  value={toColorInputValue(
+                    highlight.markerStyle?.backgroundColor,
+                    highlightColor
+                  )}
+                  aria-label='Highlight color'
+                  onChange={(e) => {
+                    const newColor = e.target.value
+                    setHighlightColor(newColor)
+                    handleUpdateRange({
+                      ...highlight,
+                      markerStyle: {
+                        ...highlight.markerStyle,
+                        backgroundColor: newColor
+                      }
+                    })
+                  }}
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    padding: 0,
+                    border: 'none'
+                  }}
+                />
+              </label>
+            </div>
+          )}
         />
       </div>
+      {commentingHighlight && (
+        <aside
+          role='dialog'
+          aria-modal='true'
+          aria-labelledby='highlight-comment-title'
+          data-testid='highlight-comment-panel'
+          style={{
+            position: 'fixed',
+            right: '24px',
+            bottom: '24px',
+            zIndex: 1000,
+            width: 'min(360px, calc(100vw - 48px))',
+            boxSizing: 'border-box',
+            padding: '20px',
+            border: '1px solid #cbd5e1',
+            borderRadius: '12px',
+            background: '#fff',
+            boxShadow: '0 20px 48px rgba(15, 23, 42, 0.2)'
+          }}
+        >
+          <h2
+            id='highlight-comment-title'
+            style={{ margin: '0 0 8px', fontSize: '18px' }}
+          >
+            评论高亮
+          </h2>
+          <p style={{ margin: '0 0 12px', color: '#64748b' }}>
+            {commentingHighlight.text || '(空选区)'}
+          </p>
+          <textarea
+            aria-label='评论内容'
+            value={commentDraft}
+            onChange={(event) => setCommentDraft(event.currentTarget.value)}
+            style={{
+              boxSizing: 'border-box',
+              width: '100%',
+              minHeight: '96px',
+              marginBottom: '12px',
+              padding: '10px',
+              border: '1px solid #cbd5e1',
+              borderRadius: '8px',
+              resize: 'vertical',
+              font: 'inherit'
+            }}
+          />
+          <button
+            type='button'
+            onClick={handleFinishComment}
+            style={{
+              width: '100%',
+              minHeight: '44px',
+              border: 0,
+              borderRadius: '8px',
+              background: '#2563eb',
+              color: '#fff',
+              font: 'inherit',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            完成评论
+          </button>
+        </aside>
+      )}
     </main>
   )
 }
