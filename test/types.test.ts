@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest'
 
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryChangeSource,
+  ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryStatus,
+  ReaderAnnotationHistoryValue,
   ReaderInteractiveProps,
+  ReaderLinkedSelectionRange,
   ReaderPageRectSelectionMap,
   ReaderPageTextSelectionMap,
-  ReaderLinkedSelectionRange,
   ReaderProps,
   ReaderRenderMode,
   ReaderSelectionRange,
+  ReaderSelectionRectangle,
+  ReaderSelectionRef,
   ReaderTouchPanMode
 } from '../src'
 
 type AssertFalse<Value extends false> = Value
+type AssertTrue<Value extends true> = Value
 
 type LegacySelectionRangeFixture = {
   readonly id: string
@@ -97,6 +105,103 @@ const _highlightCommentProps: ReaderInteractiveProps = {
   onCommentHighlight: async (highlight) => highlight
 }
 
+type AnnotationHistoryKeys = keyof ReaderAnnotationHistoryValue
+type AnnotationHistoryExpectedKeys =
+  | 'ranges'
+  | 'rects'
+  | 'selectedRangeId'
+  | 'selectedRectId'
+type AnnotationHistoryHasOnlyExpectedKeys =
+  Exclude<AnnotationHistoryKeys, AnnotationHistoryExpectedKeys> extends never
+    ? true
+    : false
+type AnnotationHistoryHasExpectedKeys =
+  Exclude<AnnotationHistoryExpectedKeys, AnnotationHistoryKeys> extends never
+    ? true
+    : false
+type AnnotationHistoryHasNoPagePaintings =
+  'pagePaintings' extends AnnotationHistoryKeys ? false : true
+
+const _annotationHistoryOnlyExpectedKeys: AssertTrue<AnnotationHistoryHasOnlyExpectedKeys> = true
+const _annotationHistoryExpectedKeys: AssertTrue<AnnotationHistoryHasExpectedKeys> = true
+const _annotationHistoryHasNoPagePaintings: AssertTrue<AnnotationHistoryHasNoPagePaintings> = true
+
+const _annotationHistoryValue: ReaderAnnotationHistoryValue = {
+  ranges: [linkedRange],
+  rects: [
+    {
+      id: 'rect-1',
+      createdAt: 2,
+      overlayRectType: 'percent',
+      start: { x: 1, y: 2 },
+      end: { x: 5, y: 6 },
+      rect: { x: 1, y: 2, width: 4, height: 4 },
+      selectionId: 'page-2'
+    } satisfies ReaderSelectionRectangle
+  ],
+  selectedRangeId: 'r1',
+  selectedRectId: 'rect-1'
+}
+
+const _annotationHistoryStatus: ReaderAnnotationHistoryStatus = {
+  enabled: true,
+  canUndo: false,
+  canRedo: true,
+  pastCount: 0,
+  futureCount: 1
+}
+
+const _annotationHistoryOptions: ReaderAnnotationHistoryOptions = {
+  enabled: true,
+  resetKey: 'document-1'
+}
+
+const _annotationHistorySource: ReaderAnnotationHistoryChangeSource =
+  'external-sync'
+
+const _annotationHistorySources = [
+  'select',
+  'highlight',
+  'update-range',
+  'create-rect',
+  'update-rect',
+  'clear',
+  'undo',
+  'redo',
+  'reset',
+  'external-sync'
+] satisfies ReaderAnnotationHistoryChangeSource[]
+
+const _annotationHistoryDetail: ReaderAnnotationHistoryChangeDetail = {
+  source: _annotationHistorySource,
+  status: _annotationHistoryStatus
+}
+
+const _annotationHistoryProps: ReaderProps = {
+  annotationHistory: _annotationHistoryOptions,
+  onAnnotationHistoryChange: (next, detail) => {
+    const _next: ReaderAnnotationHistoryValue = next
+    const _detail: ReaderAnnotationHistoryChangeDetail = detail
+    expect(_next.selectedRangeId).toBe('r1')
+    expect(_detail.status.enabled).toBe(true)
+  }
+}
+
+const _annotationHistoryRef: ReaderSelectionRef = {
+  highlight: () => {},
+  confirm: () => {},
+  confirmRect: () => {},
+  clear: () => {},
+  scrollToRange: () => {},
+  scrollToRect: () => {},
+  scrollToPosition: () => {},
+  undo: () => true,
+  redo: () => false,
+  canUndo: () => true,
+  canRedo: () => false,
+  getAnnotationHistoryState: () => _annotationHistoryStatus
+}
+
 describe('Reader public selection types', () => {
   it('accepts linked ranges keyed by public page selection ids', () => {
     expect(legacyRangeRejected).toBe(false)
@@ -132,5 +237,27 @@ describe('Reader public selection types', () => {
     expect(_drawingInteractiveProps.selectedTool).toBe('drawing')
     expect(_highlightCommentProps.containMarginTop).toBe(24)
     expect(_highlightCommentProps.containMarginBottom).toBe(48)
+  })
+
+  it('exposes annotation history value, props, detail, and ref command types', () => {
+    expect(_annotationHistoryOnlyExpectedKeys).toBe(true)
+    expect(_annotationHistoryExpectedKeys).toBe(true)
+    expect(_annotationHistoryHasNoPagePaintings).toBe(true)
+    expect(_annotationHistoryValue.ranges).toEqual([linkedRange])
+    expect(_annotationHistoryValue.rects[0]?.selectionId).toBe('page-2')
+    expect(_annotationHistoryValue.selectedRangeId).toBe('r1')
+    expect(_annotationHistorySources).toContain('highlight')
+    expect(_annotationHistorySources).toContain('undo')
+    expect(_annotationHistorySources).toContain('redo')
+    expect(_annotationHistoryDetail.source).toBe('external-sync')
+    expect(_annotationHistoryDetail.status.futureCount).toBe(1)
+    expect(_annotationHistoryProps.annotationHistory).toEqual(
+      _annotationHistoryOptions
+    )
+    expect(_annotationHistoryRef.undo()).toBe(true)
+    expect(_annotationHistoryRef.redo()).toBe(false)
+    expect(_annotationHistoryRef.canUndo()).toBe(true)
+    expect(_annotationHistoryRef.canRedo()).toBe(false)
+    expect(_annotationHistoryRef.getAnnotationHistoryState().enabled).toBe(true)
   })
 })

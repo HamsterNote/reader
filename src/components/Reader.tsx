@@ -8,6 +8,9 @@ import type {
 import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
 
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryValue,
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
@@ -24,13 +27,13 @@ import type {
   ReaderTextSelectionDetail,
   ReaderTouchPanMode
 } from './IntermediateDocumentViewer'
-import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import {
   DefaultHighlightPopover,
   DefaultSelectionPopover
 } from './DefaultPopover'
+import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import type {
   ReaderPagePaintingMap,
   ReaderPageRectSelectionMap,
@@ -69,7 +72,10 @@ export type ReaderProps = {
   defaultScale?: number
   onScaleChange?: (
     scale: number,
-    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+    detail: {
+      source: 'wheel' | 'pinch'
+      focalPoint?: { x: number; y: number }
+    }
   ) => void
   minScale?: number
   maxScale?: number
@@ -111,6 +117,11 @@ export type ReaderProps = {
   onCreateRect?: (rect: ReaderSelectionRectangle) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  annotationHistory?: boolean | ReaderAnnotationHistoryOptions
+  onAnnotationHistoryChange?: (
+    next: ReaderAnnotationHistoryValue,
+    detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
   initialLoadedPages?: number
   pageLoadConcurrency?: number
   pageLoadEnterDelayMs?: number
@@ -225,6 +236,23 @@ function getPageRects(
   )
 }
 
+function normalizeAnnotationHistoryOptions(
+  annotationHistory: boolean | ReaderAnnotationHistoryOptions | undefined
+): ReaderAnnotationHistoryOptions {
+  if (annotationHistory === true) {
+    return { enabled: true }
+  }
+
+  if (annotationHistory === false || annotationHistory === undefined) {
+    return { enabled: false }
+  }
+
+  return {
+    enabled: annotationHistory.enabled ?? true,
+    resetKey: annotationHistory.resetKey
+  }
+}
+
 export function Reader({
   document,
   className,
@@ -276,6 +304,8 @@ export function Reader({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  annotationHistory,
+  onAnnotationHistoryChange,
   initialLoadedPages,
   pageLoadConcurrency,
   pageLoadEnterDelayMs,
@@ -332,6 +362,8 @@ export function Reader({
       : undefined)
   const resolvedSelectionTool =
     tool ?? (selectedTool === 'rect-selection' ? 'rect' : 'text')
+  const normalizedAnnotationHistory =
+    normalizeAnnotationHistoryOptions(annotationHistory)
   const usesPageTextSelectionCompatibility =
     pageTextSelections !== undefined ||
     defaultPageTextSelections !== undefined ||
@@ -668,6 +700,8 @@ export function Reader({
           onCreateRect={handleCreateRect}
           onSelectRect={onSelectRect}
           onUpdateRect={handleUpdateRect}
+          annotationHistory={normalizedAnnotationHistory}
+          onAnnotationHistoryChange={onAnnotationHistoryChange}
           initialLoadedPages={initialLoadedPages}
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}

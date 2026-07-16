@@ -33,6 +33,10 @@ import React, {
 } from 'react'
 
 import type {
+  ReaderAnnotationHistoryChangeDetail,
+  ReaderAnnotationHistoryChangeSource,
+  ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryValue,
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
@@ -42,8 +46,9 @@ import type {
   ReaderSelectionRef,
   ReaderSelectionTool
 } from '../../types/selection'
-import { PopoverPortal } from '../PopoverPortal'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
+import { PopoverPortal } from '../PopoverPortal'
+import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
 import {
   buildSelectionPayload,
   type ReaderSelectedTextSegment,
@@ -392,7 +397,10 @@ export type IntermediateDocumentViewerProps = {
    */
   onScaleChange?: (
     scale: number,
-    detail: { source: 'wheel' | 'pinch'; focalPoint?: { x: number; y: number } }
+    detail: {
+      source: 'wheel' | 'pinch'
+      focalPoint?: { x: number; y: number }
+    }
   ) => void
   /**
    * Lower zoom bound. Defaults to `0.25`; invalid or non-positive values fall
@@ -476,6 +484,11 @@ export type IntermediateDocumentViewerProps = {
   onSelectRect?: (id: string | null) => void
   /** 当用户拖动矩形手柄调整后触发 */
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  annotationHistory?: ReaderAnnotationHistoryOptions
+  onAnnotationHistoryChange?: (
+    next: ReaderAnnotationHistoryValue,
+    detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
   /**
    * 初始立即加载的页数。省略时默认 `1`。
    */
@@ -1027,6 +1040,9 @@ type ViewerContentProps = PageResources & {
   onCreateRect?: (rect: ReaderSelectionRectangle) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  annotationHistoryController: ReturnType<typeof useAnnotationHistory>
+  onClearAnnotationHistory: () => void
+  onRunAnnotationHistory: (source: 'undo' | 'redo') => boolean
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
   touchPanMode?: ReaderTouchPanMode
@@ -1155,6 +1171,64 @@ type IntermediateDocumentPagesProps = PageResources & {
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
 }
+
+const areAnnotationHistorySnapshotsEqual = (
+  left: ReaderAnnotationHistoryValue,
+  right: ReaderAnnotationHistoryValue
+): boolean => JSON.stringify(left) === JSON.stringify(right)
+
+const makeAnnotationHistorySnapshot = (
+  ranges: ReaderSelectionRange[],
+  rects: ReaderSelectionRectangle[],
+  selectedRangeId: string | null,
+  selectedRectId: string | null
+): ReaderAnnotationHistoryValue => ({
+  ranges,
+  rects,
+  selectedRangeId,
+  selectedRectId
+})
+
+const normalizeAnnotationHistorySnapshot = (
+  snapshot: ReaderAnnotationHistoryValue
+): ReaderAnnotationHistoryValue => {
+  const selectedRangeExists = snapshot.selectedRangeId
+    ? snapshot.ranges.some((range) => range.id === snapshot.selectedRangeId)
+    : false
+  const selectedRectExists = snapshot.selectedRectId
+    ? snapshot.rects.some((rect) => rect.id === snapshot.selectedRectId)
+    : false
+
+  return {
+    ...snapshot,
+    selectedRangeId: selectedRangeExists ? snapshot.selectedRangeId : null,
+    selectedRectId: selectedRectExists ? snapshot.selectedRectId : null
+  }
+}
+
+const getLinkedDataChangeSource = (
+  current: ReaderAnnotationHistoryValue,
+  next: ReaderAnnotationHistoryValue
+): ReaderAnnotationHistoryChangeSource | null => {
+  if (areAnnotationHistorySnapshotsEqual(current, next)) return null
+  if (
+    JSON.stringify(current.ranges) === JSON.stringify(next.ranges) &&
+    JSON.stringify(current.rects) === JSON.stringify(next.rects)
+  ) {
+    return null
+  }
+
+  if (next.ranges.length > current.ranges.length) return 'select'
+  if (next.ranges.length < current.ranges.length) return 'clear'
+  return 'update-range'
+}
+
+const hasUnsupportedUncontrolledRectTarget = (
+  currentRects: ReaderSelectionRectangle[],
+  targetRects: ReaderSelectionRectangle[]
+): boolean =>
+  !(currentRects.length === 0 && targetRects.length === 0) &&
+  JSON.stringify(currentRects) !== JSON.stringify(targetRects)
 
 function IntermediateDocumentPages({
   popoverContainerRef,
@@ -1393,6 +1467,9 @@ function ViewerContent({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  annotationHistoryController,
+  onClearAnnotationHistory,
+  onRunAnnotationHistory,
   setPageRef,
   setTextRef,
   textsByPageNumber,
@@ -1432,6 +1509,10 @@ function ViewerContent({
     null
   )
   const popoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const annotationHistoryControllerRef = useRef(annotationHistoryController)
+  annotationHistoryControllerRef.current = annotationHistoryController
+  const runAnnotationHistoryRef = useRef(onRunAnnotationHistory)
+  runAnnotationHistoryRef.current = onRunAnnotationHistory
 
   const setRootRef = useCallback(
     (element: HTMLDivElement | null) => {
@@ -1589,7 +1670,8 @@ function ViewerContent({
     selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
       selectionRef.clear()
     })
-  }, [])
+    onClearAnnotationHistory()
+  }, [onClearAnnotationHistory])
 
   const publicSelectionRef = useMemo<ReaderSelectionRef>(
     () => ({
@@ -1599,7 +1681,13 @@ function ViewerContent({
       clear: clearSelections,
       scrollToRange: onScrollToRange,
       scrollToRect: onScrollToRect,
-      scrollToPosition: onScrollToPosition
+      scrollToPosition: onScrollToPosition,
+      undo: () => runAnnotationHistoryRef.current('undo'),
+      redo: () => runAnnotationHistoryRef.current('redo'),
+      canUndo: () => annotationHistoryControllerRef.current.getStatus().canUndo,
+      canRedo: () => annotationHistoryControllerRef.current.getStatus().canRedo,
+      getAnnotationHistoryState: () =>
+        annotationHistoryControllerRef.current.getStatus()
     }),
     [
       clearSelections,
@@ -1945,6 +2033,8 @@ export function IntermediateDocumentViewer({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  annotationHistory,
+  onAnnotationHistoryChange,
   initialLoadedPages = 1,
   pageLoadConcurrency = 3,
   pageLoadEnterDelayMs = 500,
@@ -2119,6 +2209,17 @@ export function IntermediateDocumentViewer({
   const effectiveRects = rects ?? []
   const effectiveRectsRef = useRef<ReaderSelectionRectangle[]>(effectiveRects)
   effectiveRectsRef.current = effectiveRects
+  const isRectsControlled = rects !== undefined
+
+  const isSelectedRectIdControlled = selectedRectId !== undefined
+  const [internalSelectedRectId, setInternalSelectedRectId] = useState<
+    string | null
+  >(null)
+  const effectiveSelectedRectId = isSelectedRectIdControlled
+    ? selectedRectId
+    : internalSelectedRectId
+  const effectiveSelectedRectIdRef = useRef(effectiveSelectedRectId)
+  effectiveSelectedRectIdRef.current = effectiveSelectedRectId
 
   const pendingLinkedHighlightOperationRef =
     useRef<PendingLinkedHighlightOperation | null>(null)
@@ -2133,6 +2234,8 @@ export function IntermediateDocumentViewer({
   const effectiveSelectedRangeId = isSelectedRangeIdControlled
     ? selectedRangeId
     : internalSelectedRangeId
+  const effectiveSelectedRangeIdRef = useRef(effectiveSelectedRangeId)
+  effectiveSelectedRangeIdRef.current = effectiveSelectedRangeId
   const selectedHighlight = useMemo(
     () =>
       effectiveSelectedRangeId
@@ -2164,20 +2267,223 @@ export function IntermediateDocumentViewer({
     ]
   )
   const runtimeRects = useMemo(
-    () => mapPublicRectanglesToRuntime(rects, readerLinkedScopeId),
-    [readerLinkedScopeId, rects]
+    () => mapPublicRectanglesToRuntime(effectiveRects, readerLinkedScopeId),
+    [effectiveRects, readerLinkedScopeId]
   )
+
+  const annotationHistoryEnabled = annotationHistory?.enabled === true
+  const currentAnnotationHistorySnapshot = useCallback(
+    () =>
+      normalizeAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          effectiveRectsRef.current,
+          effectiveSelectedRangeIdRef.current,
+          effectiveSelectedRectIdRef.current
+        )
+      ),
+    []
+  )
+  const annotationHistoryController = useAnnotationHistory({
+    enabled: annotationHistoryEnabled,
+    initialValue: currentAnnotationHistorySnapshot(),
+    onChange: onAnnotationHistoryChange
+  })
+  const lastAnnotationHistoryResetKeyRef = useRef(annotationHistory?.resetKey)
+
+  const syncAnnotationHistorySnapshot = useCallback(
+    (next: ReaderAnnotationHistoryValue) => {
+      annotationHistoryController.syncSilent(
+        normalizeAnnotationHistorySnapshot(next)
+      )
+    },
+    [annotationHistoryController]
+  )
+
+  const commitAnnotationCheckpoint = useCallback(
+    (
+      next: ReaderAnnotationHistoryValue,
+      source: ReaderAnnotationHistoryChangeSource
+    ) => {
+      annotationHistoryController.setCheckpoint(
+        normalizeAnnotationHistorySnapshot(next),
+        source
+      )
+    },
+    [annotationHistoryController]
+  )
+
+  const applyAnnotationHistoryTarget = useCallback(
+    (target: ReaderAnnotationHistoryValue) => {
+      const normalizedTarget = normalizeAnnotationHistorySnapshot(target)
+
+      if (!isRangesControlled) {
+        setInternalRanges(normalizedTarget.ranges)
+      }
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(normalizedTarget.selectedRangeId)
+      }
+      if (!isSelectedRectIdControlled) {
+        setInternalSelectedRectId(normalizedTarget.selectedRectId)
+      }
+    },
+    [
+      isRangesControlled,
+      isSelectedRangeIdControlled,
+      isSelectedRectIdControlled
+    ]
+  )
+
+  const runAnnotationHistory = useCallback(
+    (source: 'undo' | 'redo') => {
+      const target = annotationHistoryController.getTarget(source)
+      if (!target) return false
+
+      const normalizedTarget = normalizeAnnotationHistorySnapshot(target)
+      if (isRangesControlled && !onAnnotationHistoryChange) return false
+      if (isRectsControlled && !onAnnotationHistoryChange) return false
+      if (
+        !isRectsControlled &&
+        hasUnsupportedUncontrolledRectTarget(
+          effectiveRectsRef.current,
+          normalizedTarget.rects
+        )
+      ) {
+        return false
+      }
+
+      const result = annotationHistoryController.applyTargetSilently(source)
+      if (!result.applied) return false
+
+      applyAnnotationHistoryTarget(normalizedTarget)
+      onAnnotationHistoryChange?.(normalizedTarget, result.detail)
+      return true
+    },
+    [
+      annotationHistoryController,
+      applyAnnotationHistoryTarget,
+      isRangesControlled,
+      isRectsControlled,
+      onAnnotationHistoryChange
+    ]
+  )
+
+  const clearAnnotationHistory = useCallback(() => {
+    const nextSnapshot = makeAnnotationHistorySnapshot([], [], null, null)
+    commitAnnotationCheckpoint(nextSnapshot, 'clear')
+    if (!isRangesControlled) {
+      setInternalRanges([])
+    }
+    if (!isSelectedRangeIdControlled) {
+      setInternalSelectedRangeId(null)
+    }
+    if (!isSelectedRectIdControlled) {
+      setInternalSelectedRectId(null)
+    }
+  }, [
+    commitAnnotationCheckpoint,
+    isRangesControlled,
+    isSelectedRangeIdControlled,
+    isSelectedRectIdControlled
+  ])
+
+  useEffect(() => {
+    const historyRects = isRectsControlled
+      ? effectiveRects
+      : annotationHistoryController.getPresent().rects
+    syncAnnotationHistorySnapshot(
+      makeAnnotationHistorySnapshot(
+        effectiveRanges,
+        historyRects,
+        effectiveSelectedRangeId,
+        effectiveSelectedRectId
+      )
+    )
+  }, [
+    effectiveRanges,
+    effectiveRects,
+    effectiveSelectedRangeId,
+    effectiveSelectedRectId,
+    annotationHistoryController,
+    isRectsControlled,
+    syncAnnotationHistorySnapshot
+  ])
+
+  useEffect(() => {
+    if (
+      lastAnnotationHistoryResetKeyRef.current === annotationHistory?.resetKey
+    ) {
+      return
+    }
+    lastAnnotationHistoryResetKeyRef.current = annotationHistory?.resetKey
+    annotationHistoryController.reset(
+      currentAnnotationHistorySnapshot(),
+      'reset'
+    )
+  }, [
+    annotationHistory?.resetKey,
+    annotationHistoryController,
+    currentAnnotationHistorySnapshot
+  ])
   const handleCreateRect = useCallback(
     (rect: ReaderSelectionRectangle) => {
-      onCreateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+      const publicRect = mapRuntimeRectangleToPublic(rect, readerLinkedScopeId)
+      if (!isSelectedRectIdControlled) {
+        setInternalSelectedRectId(publicRect.id)
+      }
+      commitAnnotationCheckpoint(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          [...effectiveRectsRef.current, publicRect],
+          effectiveSelectedRangeIdRef.current,
+          publicRect.id
+        ),
+        'create-rect'
+      )
+      onCreateRect?.(publicRect)
     },
-    [onCreateRect, readerLinkedScopeId]
+    [
+      commitAnnotationCheckpoint,
+      isSelectedRectIdControlled,
+      onCreateRect,
+      readerLinkedScopeId
+    ]
   )
   const handleUpdateRect = useCallback(
     (rect: ReaderSelectionRectangle) => {
-      onUpdateRect?.(mapRuntimeRectangleToPublic(rect, readerLinkedScopeId))
+      const publicRect = mapRuntimeRectangleToPublic(rect, readerLinkedScopeId)
+      const nextRects = effectiveRectsRef.current.map((currentRect) =>
+        currentRect.id === publicRect.id ? publicRect : currentRect
+      )
+      commitAnnotationCheckpoint(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          nextRects,
+          effectiveSelectedRangeIdRef.current,
+          effectiveSelectedRectIdRef.current
+        ),
+        'update-rect'
+      )
+      onUpdateRect?.(publicRect)
     },
-    [onUpdateRect, readerLinkedScopeId]
+    [commitAnnotationCheckpoint, onUpdateRect, readerLinkedScopeId]
+  )
+  const handleSelectRect = useCallback(
+    (id: string | null) => {
+      if (!isSelectedRectIdControlled) {
+        setInternalSelectedRectId(id)
+      }
+      syncAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          effectiveRectsRef.current,
+          effectiveSelectedRangeIdRef.current,
+          id
+        )
+      )
+      onSelectRect?.(id)
+    },
+    [isSelectedRectIdControlled, onSelectRect, syncAnnotationHistorySnapshot]
   )
 
   const scaleRange = useMemo(
@@ -3701,6 +4007,32 @@ export function IntermediateDocumentViewer({
       )
       onLinkedDataChange?.(publicLinkedData)
 
+      const currentSnapshot = currentAnnotationHistorySnapshot()
+      const nextSnapshot = normalizeAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          publicLinkedData.items,
+          effectiveRectsRef.current,
+          publicLinkedData.selectedRangeId,
+          effectiveSelectedRectIdRef.current
+        )
+      )
+      const pendingHighlightOperation =
+        pendingLinkedHighlightOperationRef.current
+      const hasPendingHighlightRangeAddition =
+        nextSnapshot.ranges.length > currentSnapshot.ranges.length &&
+        Boolean(pendingHighlightOperation) &&
+        nextSnapshot.ranges.some(
+          (range) => !pendingHighlightOperation?.has(range.id)
+        )
+      const historySource = hasPendingHighlightRangeAddition
+        ? 'highlight'
+        : getLinkedDataChangeSource(currentSnapshot, nextSnapshot)
+      if (historySource) {
+        commitAnnotationCheckpoint(nextSnapshot, historySource)
+      } else {
+        syncAnnotationHistorySnapshot(nextSnapshot)
+      }
+
       if (!isRangesControlled) {
         setInternalRanges(publicLinkedData.items)
       }
@@ -3717,7 +4049,10 @@ export function IntermediateDocumentViewer({
       }
     },
     [
+      commitAnnotationCheckpoint,
+      currentAnnotationHistorySnapshot,
       emitPendingLinkedHighlight,
+      syncAnnotationHistorySnapshot,
       isRangesControlled,
       isSelectedRangeIdControlled,
       onLinkedDataChange,
@@ -3757,10 +4092,26 @@ export function IntermediateDocumentViewer({
 
   const handleLinkedSelectRange = useCallback(
     (id: string | null) => {
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(id)
+      }
+      syncAnnotationHistorySnapshot(
+        makeAnnotationHistorySnapshot(
+          effectiveRangesRef.current,
+          effectiveRectsRef.current,
+          id,
+          effectiveSelectedRectIdRef.current
+        )
+      )
       onLinkedSelectRange?.(id)
       onSelectRange?.(id)
     },
-    [onLinkedSelectRange, onSelectRange]
+    [
+      isSelectedRangeIdControlled,
+      onLinkedSelectRange,
+      onSelectRange,
+      syncAnnotationHistorySnapshot
+    ]
   )
 
   // Selection.onSelectionStart：直接转发到外部 prop
@@ -4108,10 +4459,13 @@ export function IntermediateDocumentViewer({
       selectionRef={selectionRef}
       tool={tool}
       rects={runtimeRects}
-      selectedRectId={selectedRectId}
+      selectedRectId={effectiveSelectedRectId}
       onCreateRect={handleCreateRect}
-      onSelectRect={onSelectRect}
+      onSelectRect={handleSelectRect}
       onUpdateRect={handleUpdateRect}
+      annotationHistoryController={annotationHistoryController}
+      onClearAnnotationHistory={clearAnnotationHistory}
+      onRunAnnotationHistory={runAnnotationHistory}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
       textsByPageNumber={textsByPageNumber}

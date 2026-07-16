@@ -119,14 +119,48 @@ export interface SelectionProps {
   onUpdateRect?: (rect: SelectionRect) => void
 }
 
-export let lastSelectionProps: SelectionProps | null = null
+// ---------------------------------------------------------------------------
+// Worker-isolated registries
+//
+// Vitest 默认使用线程池并行运行测试文件。module-level Map 会被同一进程内的
+// 多个 worker 共享，导致一个 worker 的 selection ID 泄漏到另一个 worker。
+// 使用 VITEST_WORKER_ID 作为外层 key，确保每个 worker 拥有独立的 registry。
+// ---------------------------------------------------------------------------
 
-const selectionPropsById = new Map<string, SelectionProps>()
-const selectionRefsById = new Map<string, SelectionRef>()
-const selectionRefCallCountsById = new Map<
-  string,
-  { highlight: number; confirm: number; confirmRect: number; clear: number }
->()
+type SelectionRefCallCounts = {
+  highlight: number
+  confirm: number
+  confirmRect: number
+  clear: number
+}
+
+type WorkerRegistry = {
+  lastSelectionProps: SelectionProps | null
+  selectionPropsById: Map<string, SelectionProps>
+  selectionRefsById: Map<string, SelectionRef>
+  selectionRefCallCountsById: Map<string, SelectionRefCallCounts>
+}
+
+const workerRegistries = new Map<string, WorkerRegistry>()
+
+function getWorkerId(): string {
+  return process.env.VITEST_WORKER_ID ?? 'main'
+}
+
+function getWorkerRegistry(): WorkerRegistry {
+  const id = getWorkerId()
+  let registry = workerRegistries.get(id)
+  if (!registry) {
+    registry = {
+      lastSelectionProps: null,
+      selectionPropsById: new Map(),
+      selectionRefsById: new Map(),
+      selectionRefCallCountsById: new Map()
+    }
+    workerRegistries.set(id, registry)
+  }
+  return registry
+}
 
 const mockedRange: SelectionRange = {
   id: 'highlight-id',
@@ -145,26 +179,27 @@ function shouldTrackLinkedProps(
 }
 
 export function getLastSelectionProps(): SelectionProps | null {
-  return lastSelectionProps
+  return getWorkerRegistry().lastSelectionProps
 }
 
 export function clearLastSelectionProps(): void {
-  lastSelectionProps = null
+  getWorkerRegistry().lastSelectionProps = null
 }
 
 export function getSelectionPropsById(id: string): SelectionProps | undefined {
-  return selectionPropsById.get(id)
+  return getWorkerRegistry().selectionPropsById.get(id)
 }
 
 export function getAllSelectionProps(): SelectionProps[] {
-  return Array.from(selectionPropsById.values())
+  return Array.from(getWorkerRegistry().selectionPropsById.values())
 }
 
 export function clearSelectionProps(): void {
-  selectionPropsById.clear()
-  selectionRefsById.clear()
-  selectionRefCallCountsById.clear()
-  clearLastSelectionProps()
+  const registry = getWorkerRegistry()
+  registry.selectionPropsById.clear()
+  registry.selectionRefsById.clear()
+  registry.selectionRefCallCountsById.clear()
+  registry.lastSelectionProps = null
 }
 
 export function getSelectionRefCallCounts(id: string): {
@@ -173,8 +208,9 @@ export function getSelectionRefCallCounts(id: string): {
   confirmRect: number
   clear: number
 } {
+  const registry = getWorkerRegistry()
   return (
-    selectionRefCallCountsById.get(id) ?? {
+    registry.selectionRefCallCountsById.get(id) ?? {
       highlight: 0,
       confirm: 0,
       confirmRect: 0,
@@ -189,13 +225,14 @@ function countSelectionRefCall(
 ): void {
   if (!id) return
 
-  const current = selectionRefCallCountsById.get(id) ?? {
+  const registry = getWorkerRegistry()
+  const current = registry.selectionRefCallCountsById.get(id) ?? {
     highlight: 0,
     confirm: 0,
     confirmRect: 0,
     clear: 0
   }
-  selectionRefCallCountsById.set(id, {
+  registry.selectionRefCallCountsById.set(id, {
     ...current,
     [method]: current[method] + 1
   })
@@ -205,44 +242,44 @@ export function simulateLinkedDataChange(
   id: string,
   next: LinkedSelectionData
 ): void {
-  selectionPropsById.get(id)?.onLinkedDataChange?.(next)
+  getWorkerRegistry().selectionPropsById.get(id)?.onLinkedDataChange?.(next)
 }
 
 export function simulateLinkedSelect(
   id: string,
   range: LinkedSelectionRange
 ): void {
-  selectionPropsById.get(id)?.onLinkedSelect?.(range)
+  getWorkerRegistry().selectionPropsById.get(id)?.onLinkedSelect?.(range)
 }
 
 export function simulateLinkedUpdateRange(
   id: string,
   range: LinkedSelectionRange
 ): void {
-  selectionPropsById.get(id)?.onLinkedUpdateRange?.(range)
+  getWorkerRegistry().selectionPropsById.get(id)?.onLinkedUpdateRange?.(range)
 }
 
 export function simulateLinkedSelectRange(
   id: string,
   rangeId: string | null
 ): void {
-  selectionPropsById.get(id)?.onLinkedSelectRange?.(rangeId)
+  getWorkerRegistry().selectionPropsById.get(id)?.onLinkedSelectRange?.(rangeId)
 }
 
 export function simulateSelectionHighlight(id: string): void {
-  selectionRefsById.get(id)?.highlight()
+  getWorkerRegistry().selectionRefsById.get(id)?.highlight()
 }
 
 export function simulateSelectionConfirm(id: string): void {
-  selectionRefsById.get(id)?.confirm()
+  getWorkerRegistry().selectionRefsById.get(id)?.confirm()
 }
 
 export function simulateSelectionConfirmRect(id: string): void {
-  selectionRefsById.get(id)?.confirmRect()
+  getWorkerRegistry().selectionRefsById.get(id)?.confirmRect()
 }
 
 export function simulateSelectionClear(id: string): void {
-  selectionRefsById.get(id)?.clear()
+  getWorkerRegistry().selectionRefsById.get(id)?.clear()
 }
 
 export interface UseTextSelectionResult {
@@ -257,7 +294,7 @@ const noop = () => {}
 
 export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
   (props, ref) => {
-    lastSelectionProps = props
+    getWorkerRegistry().lastSelectionProps = props
     const selectionRef = React.useMemo<SelectionRef>(
       () => ({
         highlight: () => {
@@ -298,12 +335,14 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
     React.useEffect(() => {
       if (!shouldTrackLinkedProps(props)) return undefined
 
-      selectionPropsById.set(props.selectionId, props)
-      selectionRefsById.set(props.selectionId, selectionRef)
+      const registry = getWorkerRegistry()
+      registry.selectionPropsById.set(props.selectionId, props)
+      registry.selectionRefsById.set(props.selectionId, selectionRef)
 
       return () => {
-        selectionPropsById.delete(props.selectionId)
-        selectionRefsById.delete(props.selectionId)
+        const reg = getWorkerRegistry()
+        reg.selectionPropsById.delete(props.selectionId)
+        reg.selectionRefsById.delete(props.selectionId)
       }
     }, [props, selectionRef])
 
