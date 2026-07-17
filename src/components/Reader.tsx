@@ -605,6 +605,17 @@ export function Reader({
     ? `hamster-reader ${className}`
     : 'hamster-reader'
 
+  const handleDefaultCommentHighlight = useCallback(
+    async (range: ReaderSelectionRange) => {
+      const result = await onCommentHighlight?.(range)
+      if (selectedRangeId === range.id) {
+        onSelectRange?.(null)
+      }
+      return result ?? range
+    },
+    [onCommentHighlight, selectedRangeId, onSelectRange]
+  )
+
   const showUploadZone = !document && !uploadedFile
   const showFileInfo = !document && uploadedFile
   const hasDocumentPages = documentHasPages(document)
@@ -690,10 +701,13 @@ export function Reader({
                 ranges={resolvedRanges}
                 onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
+                onCommentHighlight={
+                  onCommentHighlight ? handleDefaultCommentHighlight : undefined
+                }
               />
             ))
           }
-          onCommentHighlight={onCommentHighlight}
+          onCommentHighlight={highlightPopover ? onCommentHighlight : undefined}
           autoHighlight={autoHighlight}
           selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}

@@ -1,4 +1,5 @@
 # Design Tokens & Layout Contract
+
 # (Feature: PDF Reader Demo Shell & Highlight Integration)
 
 This document defines the minimal layout tokens and component class contracts required for the Hamster Reader two-column demo shell.
@@ -47,6 +48,7 @@ For Chinese UI text, ensure proper grouping. If mixing Chinese and English (or n
 ## 6. Empty / Error States
 
 If no document is loaded, or if parsing fails, the UI should gracefully present empty/error states:
+
 - **Empty State Container:** `data-testid="demo-empty-state"`
 - **Error State Container:** `data-testid="demo-error-state"`
 
@@ -62,4 +64,24 @@ Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
 - **Accessibility:** the closed panel is hidden from assistive technology and keyboard focus; open page buttons have visible `#2563eb` focus outlines.
 - **Loading:** thumbnail visibility must route through the layout viewer's existing lazy page queue and cache rather than introducing a second loader.
 
-*(End of minimal design contract)*
+## 8. Text Selection Range Handles
+
+Text range handles use the mobile selection convention while retaining the
+existing circular handle appearance supplied by `@hamster-note/selection`.
+
+- **Stem:** `2px` wide, the same height as the corresponding first or last
+  selection rectangle, and separated from that rectangle by a `2px`
+  horizontal gap.
+- **Start endpoint:** the circle center coincides with the stem's top endpoint.
+- **End endpoint:** the circle center coincides with the stem's bottom endpoint.
+- **Document order:** the document-front endpoint always uses the start
+  treatment and the document-back endpoint always uses the end treatment,
+  including selections created in the reverse gesture direction.
+- **Interaction:** the stem is presentation-only (`pointer-events: none`); only
+  the existing circular handle starts a drag.
+- **Drag coordinate:** dragging resolves the caret from the stem midpoint. The
+  initial grab position inside the circle must not offset the resolved caret.
+- **Rectangle selection:** rectangle-tool handles retain the dependency's
+  existing circular rendering and drag behavior.
+
+_(End of minimal design contract)_

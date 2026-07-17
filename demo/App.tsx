@@ -14,7 +14,7 @@ import type {
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
-import { DefaultSelectionPopover, Reader } from '@hamster-note/reader'
+import { Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
@@ -124,7 +124,9 @@ function persistHighlights(
   paintings: Record<string, DrawingValue>
 ) {
   if (!fileName) return
-  const persisted = parseHighlights(serializeHighlights(ranges, rects, paintings))
+  const persisted = parseHighlights(
+    serializeHighlights(ranges, rects, paintings)
+  )
   localStorage.setItem(
     `hamster-reader-demo:highlights:${fileName}`,
     serializeHighlights(
@@ -133,33 +135,6 @@ function persistHighlights(
       persisted.paintings
     )
   )
-}
-
-function toColorInputValue(
-  color: React.CSSProperties['backgroundColor'] | undefined,
-  fallback: string
-): string {
-  const value = color ?? fallback
-  const hexMatch = /^#([\da-f]{3}|[\da-f]{6})(?:[\da-f]{2})?$/i.exec(value)
-  if (hexMatch?.[1]) {
-    const hex = hexMatch[1]
-    return hex.length === 3
-      ? `#${Array.from(hex, (digit) => digit.repeat(2)).join('')}`
-      : `#${hex}`
-  }
-
-  const rgbMatch = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(
-    value
-  )
-  if (rgbMatch?.[1] && rgbMatch[2] && rgbMatch[3]) {
-    return `#${[rgbMatch[1], rgbMatch[2], rgbMatch[3]]
-      .map((channel) =>
-        Math.min(255, Number(channel)).toString(16).padStart(2, '0')
-      )
-      .join('')}`
-  }
-
-  return '#ffc107'
 }
 
 // ---------------------------------------------------------------------------
@@ -269,17 +244,12 @@ export function App() {
     }
   }, [])
 
-  // onUpdateRange 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
-  const handleUpdateRange = useCallback(() => {}, [])
-
-  // Demo 内部直接受控变更（如颜色输入），不经过 library history 路径。
-  // 此函数保留直接 setRanges + persistHighlights 行为。
-  const handleUpdateRangeDirect = useCallback(
+  // onUpdateRange 回调：默认 Popover 的颜色选择器会直接调用此回调更新当前 range。
+  // 由于该调用不经过 library history 路径，这里直接更新 ranges 并持久化。
+  const handleUpdateRange = useCallback(
     (range: ReaderSelectionRange) => {
       setRanges((prev) => {
-        const newRanges = prev.map((current) =>
-          current.id === range.id ? range : current
-        )
+        const newRanges = prev.map((r) => (r.id === range.id ? range : r))
         persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
@@ -1124,17 +1094,6 @@ export function App() {
           onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
           selectionRef={selectionRef}
-          selectionPopover={
-            <DefaultSelectionPopover
-              selectionRef={selectionRef}
-              highlightColor={highlightColor}
-              onHighlightColorChange={setHighlightColor}
-              selectedRangeId={selectedRangeId}
-              ranges={ranges}
-              onUpdateRange={handleUpdateRange}
-              onRemoveRange={handleRemoveRange}
-            />
-          }
           highlightColor={highlightColor}
           selectionColor='rgba(33, 150, 243, 0.2)'
           autoHighlight={autoHighlight}
@@ -1157,68 +1116,6 @@ export function App() {
           }}
           onAnnotationHistoryChange={handleAnnotationHistoryChange}
           onCommentHighlight={handleCommentHighlight}
-          highlightPopover={(highlight) => (
-            <div
-              className='hamster-demo-action-group'
-              style={{
-                display: 'flex',
-                gap: '8px',
-                padding: '4px 8px',
-                background: '#333',
-                color: '#fff',
-                borderRadius: '4px',
-                fontSize: '14px'
-              }}
-            >
-              <button
-                type='button'
-                onClick={() => handleRemoveRange(highlight.id)}
-                style={{
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: '#fff',
-                  border: 'none'
-                }}
-              >
-                删除
-              </button>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                <span>背景颜色设置</span>
-                <input
-                  type='color'
-                  value={toColorInputValue(
-                    highlight.markerStyle?.backgroundColor,
-                    highlightColor
-                  )}
-                  aria-label='Highlight color'
-                  onChange={(e) => {
-                    const newColor = e.target.value
-                    setHighlightColor(newColor)
-                    handleUpdateRangeDirect({
-                      ...highlight,
-                      markerStyle: {
-                        ...highlight.markerStyle,
-                        backgroundColor: newColor
-                      }
-                    })
-                  }}
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    padding: 0,
-                    border: 'none'
-                  }}
-                />
-              </label>
-            </div>
-          )}
         />
       </div>
       {commentingHighlight && (

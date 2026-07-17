@@ -57,6 +57,7 @@ import {
 } from '../selection/selectionPayloadSerializer'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { PageBrowser } from './PageBrowser'
+import { RangeHandle } from './RangeHandle'
 import {
   computePageOriginY,
   computeTransform,
@@ -1401,6 +1402,14 @@ function IntermediateDocumentPages({
                 onCreateRect={onCreateRect}
                 onSelectRect={onSelectRect}
                 onUpdateRect={onUpdateRect}
+                renderHandle={(handle) => (
+                  <RangeHandle
+                    handle={handle}
+                    linkedData={runtimeLinkedData}
+                    scale={drawingScale}
+                    selectionId={shellSelectionId}
+                  />
+                )}
                 ref={selectionRefForRuntimeId(shellSelectionId)}
               >
                 {pageContent}
@@ -1507,6 +1516,14 @@ function ViewerContent({
     new Map<string, (node: SelectionRef | null) => void>()
   )
   const syncForwardedSelectionRefRef = useRef<() => void>(() => {})
+  const runtimeLinkedDataRef = useRef(runtimeLinkedData)
+  runtimeLinkedDataRef.current = runtimeLinkedData
+  const touchTapStartRef = useRef<{
+    pointerId: number
+    clientX: number
+    clientY: number
+    moved: boolean
+  } | null>(null)
 
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
@@ -1604,7 +1621,7 @@ function ViewerContent({
   }, [runtimePageSelectionId])
 
   const getActiveLinkedRangeOwnerRef = useCallback(() => {
-    const activeRange = runtimeLinkedData.activeRange
+    const activeRange = runtimeLinkedDataRef.current.activeRange
     if (!activeRange) return undefined
 
     const ownerSelectionIds = [
@@ -1618,7 +1635,7 @@ function ViewerContent({
     }
 
     return null
-  }, [runtimeLinkedData.activeRange])
+  }, [])
 
   const getActiveSelectionRef = useCallback(() => {
     const ownerSelectionRef = getActiveSelectionOwnerRef()
@@ -1637,15 +1654,40 @@ function ViewerContent({
 
   const highlightSelection = useCallback(() => {
     const operation = beginLinkedHighlightOperation()
+    const activeRange = runtimeLinkedDataRef.current.activeRange
+    const activeSelectionRef = getActiveSelectionRef()
+    const nativeSelectionText = window.getSelection()?.toString() ?? ''
 
     try {
-      getActiveSelectionRef()?.highlight()
+      if (
+        nativeSelectionText.length === 0 &&
+        activeRange &&
+        activeRange !== runtimeLinkedData.activeRange
+      ) {
+        const nextLinkedData = {
+          ...runtimeLinkedDataRef.current,
+          items: [...runtimeLinkedDataRef.current.items, activeRange],
+          selectedRangeId: activeRange.id,
+          activeRange: null
+        }
+        runtimeLinkedDataRef.current = nextLinkedData
+        handleLinkedDataChange(nextLinkedData)
+        handleLinkedSelect(activeRange)
+        handleLinkedSelectRange(activeRange.id)
+        return
+      }
+
+      activeSelectionRef?.highlight()
     } finally {
       schedulePendingLinkedHighlightCleanup(operation)
     }
   }, [
     beginLinkedHighlightOperation,
     getActiveSelectionRef,
+    handleLinkedDataChange,
+    handleLinkedSelect,
+    handleLinkedSelectRange,
+    runtimeLinkedData.activeRange,
     schedulePendingLinkedHighlightCleanup
   ])
 
@@ -1766,9 +1808,6 @@ function ViewerContent({
     [autoHighlight, handleSelectionEnd, highlightSelection]
   )
 
-  const runtimeLinkedDataRef = useRef(runtimeLinkedData)
-  runtimeLinkedDataRef.current = runtimeLinkedData
-
   const handlePageLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
       runtimeLinkedDataRef.current = next
@@ -1789,6 +1828,142 @@ function ViewerContent({
       handleLinkedSelectRange(id)
     },
     [handleLinkedSelectRange, handlePageLinkedDataChange]
+  )
+
+  const handleTouchPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        event.pointerType !== 'touch' ||
+        !event.isPrimary ||
+        selectedTool === 'drawing'
+      ) {
+        touchTapStartRef.current = null
+        return
+      }
+
+      touchTapStartRef.current = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        moved: false
+      }
+    },
+    [selectedTool]
+  )
+
+  const handleTouchPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const touchStart = touchTapStartRef.current
+      if (
+        touchStart &&
+        event.pointerId === touchStart.pointerId &&
+        (Math.abs(event.clientX - touchStart.clientX) > 4 ||
+          Math.abs(event.clientY - touchStart.clientY) > 4)
+      ) {
+        touchStart.moved = true
+      }
+    },
+    []
+  )
+
+  const handleTouchPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const touchStart = touchTapStartRef.current
+      touchTapStartRef.current = null
+      if (
+        !touchStart ||
+        touchStart.moved ||
+        event.pointerType !== 'touch' ||
+        event.pointerId !== touchStart.pointerId ||
+        Math.abs(event.clientX - touchStart.clientX) > 4 ||
+        Math.abs(event.clientY - touchStart.clientY) > 4 ||
+        runtimeLinkedDataRef.current.selectedRangeId === null ||
+        runtimeLinkedDataRef.current.activeRange ||
+        runtimeLinkedDataRef.current.draggingRange ||
+        runtimeLinkedDataRef.current.selectingText
+      ) {
+        return
+      }
+
+      const target = event.target
+      if (
+        target instanceof Element &&
+        target.closest(
+          '.hsn-selection-popover, .hsn-selection-handle, button, a, input, textarea, select, option, label, summary, details, [role="button"], [contenteditable="true"]'
+        )
+      ) {
+        return
+      }
+
+      const linkedData = runtimeLinkedDataRef.current
+      const selectionContainers = Array.from(
+        event.currentTarget.querySelectorAll<HTMLElement>(
+          '.hamster-reader__intermediate-page[data-selection-id]'
+        )
+      )
+      let touchedRangeId: string | null = null
+      for (const range of linkedData.items) {
+        const rectType =
+          range.overlayRectType ?? linkedData.overlayRectType ?? 'percent'
+        const touchedRange = Object.entries(range.rectsBySelectionId).some(
+          ([selectionId, rects]) => {
+            const container = selectionContainers.find(
+              (element) => element.dataset.selectionId === selectionId
+            )
+            if (!container) return false
+
+            const bounds = container.getBoundingClientRect()
+            if (bounds.width <= 0 || bounds.height <= 0) return false
+
+            const localX =
+              rectType === 'percent'
+                ? ((event.clientX - bounds.left) / bounds.width) * 100
+                : ((event.clientX - bounds.left) / bounds.width) *
+                  (container.clientWidth || bounds.width)
+            const localY =
+              rectType === 'percent'
+                ? ((event.clientY - bounds.top) / bounds.height) * 100
+                : ((event.clientY - bounds.top) / bounds.height) *
+                  (container.clientHeight || bounds.height)
+            return rects.some(
+              (rect) =>
+                localX >= rect.x &&
+                localX <= rect.x + rect.width &&
+                localY >= rect.y &&
+                localY <= rect.y + rect.height
+            )
+          }
+        )
+        if (touchedRange) {
+          touchedRangeId = range.id
+          break
+        }
+      }
+      if (touchedRangeId) {
+        if (touchedRangeId !== linkedData.selectedRangeId) {
+          handlePageLinkedSelectRange(touchedRangeId)
+        }
+        return
+      }
+
+      const touchedHighlight = Array.from(
+        event.currentTarget.querySelectorAll(
+          '.hsn-selection-rect--highlight, .hsn-selection-rect--selected, .hsn-selection-percent-rect-highlight'
+        )
+      ).some((element) => {
+        const rect = element.getBoundingClientRect()
+        return (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        )
+      })
+      if (!touchedHighlight) {
+        handlePageLinkedSelectRange(null)
+      }
+    },
+    [handlePageLinkedSelectRange]
   )
 
   const handleCommentHighlight = useCallback(() => {
@@ -1950,6 +2125,12 @@ function ViewerContent({
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
+      onPointerDown={handleTouchPointerDown}
+      onPointerMove={handleTouchPointerMove}
+      onPointerUp={handleTouchPointerUp}
+      onPointerCancel={() => {
+        touchTapStartRef.current = null
+      }}
     >
       {pageNumbers.length > 0 ? (
         <PageBrowser
@@ -1985,8 +2166,17 @@ function ViewerContent({
               : undefined
           }
           containerStyle={{
-            paddingTop: containMarginTop,
-            paddingBottom: containMarginBottom
+            // container div 被 VirtualPaper 的 transform: scale(s) 缩放，
+            // 直接设置 padding 会被 zoom 放大/缩小。
+            // 除以 scale 补偿：视觉 padding = (margin / scale) * scale = margin（恒定）
+            paddingTop:
+              containMarginTop !== undefined
+                ? containMarginTop / virtualPaperTransform.scale
+                : undefined,
+            paddingBottom:
+              containMarginBottom !== undefined
+                ? containMarginBottom / virtualPaperTransform.scale
+                : undefined
           }}
         >
           {pagesNode}

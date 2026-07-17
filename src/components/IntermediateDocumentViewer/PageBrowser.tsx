@@ -78,17 +78,17 @@ export function PageBrowser({
     .filter(Boolean)
     .join(' ')
 
-  // 主题色通过 CSS 变量传递，SCSS 中通过 var(--hamster-reader-theme-color) 消费
-  const themeStyle = {
-    '--hamster-reader-theme-color': themeColor ?? '#2563eb'
-  } as React.CSSProperties
-
-  // 侧栏列表的顶部/底部留白，与主视图 containMarginTop/Bottom 保持一致
-  const listStyle: React.CSSProperties = {
+  // 主题色通过 CSS 变量传递，SCSS 中通过 var(--hamster-reader-theme-color) 消费。
+  // 顶部留白作用在侧栏容器上，使 header 与 list 一起下移。
+  const containerStyle = {
+    '--hamster-reader-theme-color': themeColor ?? '#2563eb',
     paddingTop:
       typeof containMarginTop === 'number'
         ? `${containMarginTop}px`
-        : undefined,
+        : undefined
+  } as React.CSSProperties
+
+  const listStyle: React.CSSProperties = {
     paddingBottom:
       typeof containMarginBottom === 'number'
         ? `${containMarginBottom}px`
@@ -101,7 +101,7 @@ export function PageBrowser({
       aria-label='Page browser'
       aria-hidden={!isOpen}
       data-testid='page-browser'
-      style={themeStyle}
+      style={containerStyle}
     >
       <div className='hamster-reader__page-browser-header'>Pages</div>
       <div

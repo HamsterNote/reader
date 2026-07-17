@@ -5,7 +5,14 @@ import {
   type IntermediateTextSerialized,
   TextDir
 } from '@hamster-note/types'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef, type RefObject, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1477,6 +1484,54 @@ describe('Reader prop forwarding', () => {
       await Promise.resolve()
     })
     expect(onSelectRange).toHaveBeenCalledWith(null)
+  })
+
+  it('renders a comment button inside the default highlight popover', async () => {
+    // Given: a selected public highlight and the default popover renderer.
+    const user = userEvent.setup()
+    const range: ReaderSelectionRange = {
+      id: 'default-highlight-comment',
+      text: 'Default highlight comment',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 8 },
+      createdAt: 12,
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 10 }]
+      }
+    }
+    const onCommentHighlight = vi.fn(
+      async (highlight: ReaderSelectionRange) => highlight
+    )
+    const onSelectRange = vi.fn()
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        onCommentHighlight={onCommentHighlight}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // Then: the default popover uses the same toolbar container as the active
+    // selection popover and contains a comment button inside it.
+    const toolbar = popoverView.container.querySelector(
+      '.hamster-reader-popover'
+    )
+    expect(toolbar).toBeInTheDocument()
+    const commentButton = within(toolbar as HTMLElement).getByRole('button', {
+      name: '评论'
+    })
+    expect(commentButton).toBeInTheDocument()
+
+    // When: the user clicks the comment button.
+    await user.click(commentButton)
+    expect(onCommentHighlight).toHaveBeenCalledWith(range)
+    await waitFor(() => expect(onSelectRange).toHaveBeenCalledWith(null))
   })
 
   it('compile-time: overlayRectType satisfies ReaderProps', () => {

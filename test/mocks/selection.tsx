@@ -50,6 +50,23 @@ export interface MousePosition {
   y: number
 }
 
+export type SelectionHandleType = 'start' | 'end'
+
+export interface HandleRenderProps {
+  type: SelectionHandleType
+  owner: 'active-selection' | 'persisted-range'
+  rangeId: string | null
+  target: 'text' | 'rect'
+  rectId: string | null
+  position: { x: number; y: number }
+  positionUnit: OverlayRectType
+  isDragging: boolean
+  onPointerDown: (event: React.PointerEvent<HTMLElement>) => void
+  ariaLabel: string
+  className: string
+  style: React.CSSProperties
+}
+
 export interface SelectionRef {
   highlight: () => void
   confirm: () => void
@@ -117,6 +134,7 @@ export interface SelectionProps {
   onCreateRect?: (rect: SelectionRect) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: SelectionRect) => void
+  renderHandle?: (props: HandleRenderProps) => React.ReactNode
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +317,23 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
       () => ({
         highlight: () => {
           countSelectionRefCall(props.selectionId, 'highlight')
+
+          if (props.linkedMode) {
+            const linkedData = props.linkedData
+            const activeRange = linkedData?.activeRange
+            if (!linkedData || !activeRange) return
+
+            props.onLinkedDataChange?.({
+              ...linkedData,
+              items: [...linkedData.items, activeRange],
+              selectedRangeId: activeRange.id,
+              activeRange: null
+            })
+            props.onLinkedSelect?.(activeRange)
+            props.onLinkedSelectRange?.(activeRange.id)
+            return
+          }
+
           props.onSelect?.(mockedRange)
           props.onHighlight?.(mockedRange)
         },
