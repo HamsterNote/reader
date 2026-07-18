@@ -149,7 +149,7 @@ describe('range magnifier', () => {
     portalHost.remove()
   })
 
-  it('stays visible when the selection layer removes the handle during drag', async () => {
+  it('ends the drag when the selection layer removes its handle', async () => {
     // Given: a live drag whose selection DOM removes its handle after pointer down.
     html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))
     const portalHost = document.createElement('div')
@@ -190,9 +190,9 @@ describe('range magnifier', () => {
       buttons: 1
     })
 
-    // Then: the active drag owns the lens until the real pointer-up boundary.
-    expect(magnifier).not.toHaveAttribute('hidden')
-    expect(magnifier).toHaveStyle({ left: '90px', top: '122px' })
+    // Then: unmounting the drag owner releases the lens and document listeners.
+    expect(magnifier).toHaveAttribute('hidden')
+    expect(magnifier).toHaveStyle({ left: '80px', top: '112px' })
     fireEvent.pointerUp(document, { pointerId: 9 })
     expect(magnifier).toHaveAttribute('hidden')
 

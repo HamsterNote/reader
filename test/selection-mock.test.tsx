@@ -2,10 +2,10 @@ import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  Selection,
   clearSelectionProps,
   getAllSelectionProps,
   getSelectionPropsById,
+  Selection,
   simulateLinkedDataChange,
   simulateLinkedSelect,
   simulateLinkedSelectRange,
@@ -97,7 +97,8 @@ describe('@hamster-note/selection test mock', () => {
       items: [linkedRange],
       selectedRangeId: 'range-1',
       selectionOrder: ['reader-1:page-1', 'reader-1:page-2'],
-      overlayRectType: 'percent' as const
+      overlayRectType: 'percent' as const,
+      activeRange: linkedRange
     }
 
     simulateLinkedDataChange('reader-1:page-1', linkedData)
@@ -111,7 +112,7 @@ describe('@hamster-note/selection test mock', () => {
     expect(onLinkedSelect).toHaveBeenCalledWith(linkedRange)
     expect(onLinkedUpdateRange).toHaveBeenCalledWith(linkedRange)
     expect(onLinkedSelectRange).toHaveBeenCalledWith('range-1')
-    expect(onSelect).toHaveBeenCalled()
-    expect(onHighlight).toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onHighlight).not.toHaveBeenCalled()
   })
 })

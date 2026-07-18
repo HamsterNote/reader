@@ -154,16 +154,19 @@ function HighlightColorPicker({
   ranges,
   onUpdateRange
 }: DefaultPopoverContext) {
-  // 非 # 开头的颜色值 fallback 到 #ffc107（与 Demo 逻辑一致）
-  const colorValue = highlightColor?.startsWith('#')
+  const selectedRange = ranges?.find((range) => range.id === selectedRangeId)
+  const rangeColor = selectedRange?.markerStyle?.backgroundColor
+  const fallbackColor = highlightColor?.startsWith('#')
     ? highlightColor
     : '#ffc107'
+  const colorValue = rangeColor?.startsWith('#') ? rangeColor : fallbackColor
 
   return (
     <label className='hamster-reader-popover-color'>
       <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
       <input
         type='color'
+        aria-label='Highlight color'
         className='hamster-reader-popover-color-input'
         value={colorValue}
         onChange={(e) => {

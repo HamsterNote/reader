@@ -1453,6 +1453,28 @@ function IntermediateDocumentPages({
   )
 }
 
+function getValidSelectionRange(
+  selection: Selection | null,
+  viewerRootElement: HTMLElement
+): Range | null {
+  if (
+    !selection ||
+    typeof selection.getRangeAt !== 'function' ||
+    selection.rangeCount === 0 ||
+    selection.isCollapsed
+  ) {
+    return null
+  }
+  const range = selection.getRangeAt(0)
+  if (
+    !viewerRootElement.contains(range.startContainer) ||
+    !viewerRootElement.contains(range.endContainer)
+  ) {
+    return null
+  }
+  return range
+}
+
 function ViewerContent({
   rootClassName,
   viewerRootRef,
@@ -1573,23 +1595,6 @@ function ViewerContent({
 
     const ownerDocument = viewerRootElement.ownerDocument
 
-    const getValidSelectionRange = (): Range | null => {
-      const selection = ownerDocument.defaultView?.getSelection()
-      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-        return null
-      }
-
-      const range = selection.getRangeAt(0)
-      if (
-        !viewerRootElement.contains(range.startContainer) ||
-        !viewerRootElement.contains(range.endContainer)
-      ) {
-        return null
-      }
-
-      return range
-    }
-
     const restoreLastValidSelection = (): void => {
       const range = lastValidSelectionRangeRef.current
       const selection = ownerDocument.defaultView?.getSelection()
@@ -1616,7 +1621,10 @@ function ViewerContent({
         return
       }
 
-      const range = getValidSelectionRange()
+      const range = getValidSelectionRange(
+        ownerDocument.defaultView?.getSelection() ?? null,
+        viewerRootElement
+      )
       if (range) {
         lastValidSelectionRangeRef.current = range.cloneRange()
       }

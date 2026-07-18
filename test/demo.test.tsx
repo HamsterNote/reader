@@ -8,6 +8,7 @@ import type {
   ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
+  ReaderSelectionRef,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
 
@@ -17,6 +18,7 @@ import {
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
@@ -192,11 +194,16 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         segments: unknown,
         extractedText: unknown
       ) => void
-      selectionRef?: React.MutableRefObject<unknown>
+      selectionRef?: React.MutableRefObject<ReaderSelectionRef | null>
       ranges?: ReaderSelectionRange[]
       rects?: ReaderSelectionRectangle[]
       selectedRangeId?: string | null
       selectedRectId?: string | null
+      selectionPopover?: ReactNode
+      highlightPopover?: unknown
+      highlightColor?: string
+      onHighlightColorChange?: (color: string) => void
+      onRemoveRange?: (id: string) => void
       annotationHistory?: { enabled?: boolean; resetKey?: string | number }
       onAnnotationHistoryChange?: (
         next: ReaderAnnotationHistoryValue,
@@ -277,6 +284,33 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         onCreateRect: wrappedOnCreateRect,
         onUpdateRect: wrappedOnUpdateRect
       }
+      const popoverContext = {
+        selectionRef: props.selectionRef ?? { current: null },
+        highlightColor: props.highlightColor,
+        onHighlightColorChange: props.onHighlightColorChange,
+        selectedRangeId: props.selectedRangeId,
+        ranges: props.ranges,
+        onUpdateRange: wrappedOnUpdateRange,
+        onRemoveRange: props.onRemoveRange
+      }
+      Object.assign(wrappedProps, {
+        selectionPopover:
+          props.selectionPopover ??
+          createElement(actual.DefaultSelectionPopover, popoverContext),
+        highlightPopover:
+          props.highlightPopover ??
+          ((highlight: ReaderSelectionRange) =>
+            createElement(actual.DefaultHighlightPopover, {
+              ...popoverContext,
+              selectedRangeId: highlight.id,
+              ranges: [
+                ...(props.ranges ?? []).filter(
+                  (range) => range.id !== highlight.id
+                ),
+                highlight
+              ]
+            }))
+      })
       mockReaderProps.push(wrappedProps)
 
       if (props.onTextSelectionChange)
@@ -298,7 +332,7 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
           canUndo: () => mockHistoryState.past.length > 0,
           canRedo: () => mockHistoryState.future.length > 0,
           getAnnotationHistoryState: () => getMockHistoryStatus(),
-          ...((props.selectionRef.current as Record<string, unknown>) || {})
+          ...(props.selectionRef.current ?? {})
         }
       }
       return (

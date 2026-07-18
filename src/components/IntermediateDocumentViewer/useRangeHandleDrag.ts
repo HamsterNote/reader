@@ -208,7 +208,8 @@ export const useRangeHandleDrag = ({
   }, [startHandleDrag])
 
   useEffect(() => {
-    const ownerDocument = circleRef.current?.ownerDocument ?? document
+    const sourceElement = circleRef.current
+    const ownerDocument = sourceElement?.ownerDocument ?? document
     const capturePointerDown = (event: PointerEvent) => {
       const circle = circleRef.current
       const target = event.target
@@ -230,11 +231,12 @@ export const useRangeHandleDrag = ({
     return () => {
       ownerDocument.removeEventListener('pointerdown', capturePointerDown, true)
       const activeSession = activeDragSessions.get(ownerDocument)
-      if (!activeSession) return
-      if (magnifier) activeSession.stopPointerCorrection()
-      else activeSession.finishDrag()
+      if (!activeSession || activeSession.sourceElement !== sourceElement) {
+        return
+      }
+      activeSession.finishDrag()
     }
-  }, [circleRef, magnifier])
+  }, [circleRef])
 
   return startHandleDrag
 }
