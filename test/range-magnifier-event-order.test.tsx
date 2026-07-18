@@ -67,11 +67,21 @@ describe('range magnifier event ordering', () => {
     if (!page) throw new Error('missing page')
     mockElementSize(portalHost, { left: 10, top: 20, width: 320, height: 480 })
     mockElementSize(page, { left: 10, top: 20, width: 320, height: 480 })
-    mockElementSize(originalHandle, { left: 140, top: 260, width: 20, height: 20 })
+    mockElementSize(originalHandle, {
+      left: 140,
+      top: 260,
+      width: 20,
+      height: 20
+    })
 
     const currentHandle = originalHandle.cloneNode(true) as HTMLButtonElement
     page.replaceChild(currentHandle, originalHandle)
-    mockElementSize(currentHandle, { left: 140, top: 260, width: 20, height: 20 })
+    mockElementSize(currentHandle, {
+      left: 140,
+      top: 260,
+      width: 20,
+      height: 20
+    })
 
     fireEvent.pointerDown(currentHandle, {
       pointerId: 17,

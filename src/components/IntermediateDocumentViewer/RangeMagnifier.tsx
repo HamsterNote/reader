@@ -118,7 +118,11 @@ const drawSnapshot = (
   point: MagnifierPoint
 ): void => {
   const context = output.getContext('2d')
-  if (!context || snapshot.sourceRect.width <= 0 || snapshot.sourceRect.height <= 0)
+  if (
+    !context ||
+    snapshot.sourceRect.width <= 0 ||
+    snapshot.sourceRect.height <= 0
+  )
     return
 
   const deviceScale = output.ownerDocument.defaultView?.devicePixelRatio ?? 1
@@ -224,7 +228,8 @@ export const RangeMagnifierProvider = ({
           snapshotRef.current = { canvas, sourceRect }
           const currentPoint = pointRef.current
           const output = canvasRef.current
-          if (currentPoint && output) drawSnapshot(output, snapshotRef.current, currentPoint)
+          if (currentPoint && output)
+            drawSnapshot(output, snapshotRef.current, currentPoint)
         },
         () => {
           if (captureGenerationRef.current === captureGeneration) end()

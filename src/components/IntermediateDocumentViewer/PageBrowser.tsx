@@ -83,9 +83,7 @@ export function PageBrowser({
   const containerStyle = {
     '--hamster-reader-theme-color': themeColor ?? '#2563eb',
     paddingTop:
-      typeof containMarginTop === 'number'
-        ? `${containMarginTop}px`
-        : undefined
+      typeof containMarginTop === 'number' ? `${containMarginTop}px` : undefined
   } as React.CSSProperties
 
   const listStyle: React.CSSProperties = {
