@@ -125,6 +125,45 @@
     }
   }
 
+  // Range handle magnifier is portaled directly into the reader viewport,
+  // outside VirtualPaper's transformed container, so these are screen pixels.
+  &__range-magnifier {
+    position: absolute;
+    z-index: 30;
+    width: 120px;
+    height: 120px;
+    overflow: hidden;
+    box-sizing: border-box;
+    border: 3px solid #ffffff;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow:
+      0 0 0 1px rgba(15, 23, 42, 0.18),
+      0 12px 28px rgba(15, 23, 42, 0.24);
+    contain: strict;
+    pointer-events: none;
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  }
+
+  &__range-magnifier-marker {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    box-sizing: border-box;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    background: #2563eb;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4);
+    transform: translate(-50%, -50%);
+  }
+
   &__document-header {
     display: flex;
     flex-direction: column;

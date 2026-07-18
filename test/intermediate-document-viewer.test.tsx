@@ -31,6 +31,7 @@ import {
   selectTargetRect
 } from '../src/components/IntermediateDocumentViewer/rangeJumpHelpers'
 import {
+  isPointOnSelectionText,
   isSelectionBackgroundTarget,
   resolveCaret
 } from '../src/components/selection/caretResolver'
@@ -635,6 +636,28 @@ describe('selection primitive modules', () => {
     expect(result?.range.startContainer).toBe(getRequiredTextNode(textA))
     expect(result?.range.startOffset).toBe(1)
     expect(result?.range.startContainer).not.toBe(baseImage)
+  })
+
+  it('accepts only actual text hits for selection pointer movement', () => {
+    const viewerRoot = document.createElement('div')
+    const page = document.createElement('div')
+    const textElement = document.createElement('span')
+    const pageBackground = document.createElement('div')
+    textElement.dataset.textId = 'text-1'
+    pageBackground.className =
+      'hamster-reader__intermediate-page-background-wrapper'
+    page.append(textElement, pageBackground)
+    viewerRoot.appendChild(page)
+    document.body.appendChild(viewerRoot)
+
+    mockElementFromPoint(textElement)
+    expect(isPointOnSelectionText(10, 10, viewerRoot)).toBe(true)
+
+    mockElementFromPoint(page)
+    expect(isPointOnSelectionText(10, 10, viewerRoot)).toBe(false)
+
+    mockElementFromPoint(pageBackground)
+    expect(isPointOnSelectionText(10, 10, viewerRoot)).toBe(false)
   })
 
   it('calls native document caret APIs with the document receiver', () => {
@@ -4560,6 +4583,126 @@ describe('selection overlayRectType integration', () => {
   })
 })
 
+describe('selection pointer move guard', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('blocks touch selection updates when the pointer leaves the text', async () => {
+    // Given: an active linked text selection and a pointer currently over page blank space.
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={readerDocument} />)
+    const text = await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const linkedData = requireSelectionPropsById(pageId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...linkedData,
+        selectingText: true
+      })
+    })
+
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementFromPoint(page)
+    const observedMoves = vi.fn()
+    globalThis.document.addEventListener('pointermove', observedMoves)
+
+    // When: a touch pointer moves into the page shell rather than text.
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 31,
+      pointerType: 'touch',
+      clientX: 50,
+      clientY: 50,
+      buttons: 1
+    })
+
+    // Then: the downstream Selection document listener receives no update.
+    expect(observedMoves).not.toHaveBeenCalled()
+
+    mockElementFromPoint(text)
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 31,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+      buttons: 1
+    })
+    expect(observedMoves).toHaveBeenCalledTimes(1)
+    globalThis.document.removeEventListener('pointermove', observedMoves)
+  })
+
+  it('keeps the native selection stable across page blank space and resumes on text', async () => {
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={readerDocument} />)
+    const text = await screen.findByText('Page 1 text')
+    const textNode = getRequiredTextNode(text)
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const linkedData = requireSelectionPropsById(pageId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    const selection = window.getSelection()
+    if (!selection) throw new Error('Expected native Selection')
+
+    const initialRange = document.createRange()
+    initialRange.setStart(textNode, 2)
+    initialRange.setEnd(textNode, 6)
+    selection.removeAllRanges()
+    selection.addRange(initialRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...linkedData,
+        selectingText: true
+      })
+    })
+
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementFromPoint(page)
+    fireEvent.pointerMove(document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 90,
+      clientY: 90,
+      buttons: 1
+    })
+
+    const pageStartRange = document.createRange()
+    pageStartRange.setStart(textNode, 0)
+    pageStartRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(pageStartRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    expect(selection.isCollapsed).toBe(false)
+    expect(selection.toString()).toBe('ge 1')
+
+    mockElementFromPoint(text)
+    fireEvent.pointerMove(document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 20,
+      clientY: 25,
+      buttons: 1
+    })
+
+    const resumedRange = document.createRange()
+    resumedRange.setStart(textNode, 1)
+    resumedRange.setEnd(textNode, 4)
+    selection.removeAllRanges()
+    selection.addRange(resumedRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    expect(selection.toString()).toBe('age')
+  })
+})
+
 describe('linked data adapter integration', () => {
   beforeEach(() => {
     clearSelectionProps()
@@ -4732,6 +4875,7 @@ describe('text range handle integration', () => {
       width: 12,
       height: 12
     })
+    mockElementFromPoint(screen.getByText('Page 1 text'))
     const observedMoves: Array<{ x: number; y: number }> = []
     const observeMove = (event: PointerEvent) => {
       observedMoves.push({ x: event.clientX, y: event.clientY })
@@ -4764,6 +4908,94 @@ describe('text range handle integration', () => {
     // grab offset.
     expect(onPointerDown).not.toHaveBeenCalled()
     expect(observedMoves).toEqual([{ x: 204, y: 300 }])
+  })
+
+  it('blocks a persisted text handle while the pointer is over page blank space', async () => {
+    // Given: an existing highlighted range rendered with a text endpoint handle.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const text = await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
+    if (!initialLinkedData) {
+      throw new Error('Expected linked data for persisted handle test')
+    }
+
+    const range = makeRuntimeLinkedRange(pageId, {
+      id: 'persisted-range-1',
+      rectsBySelectionId: {
+        [pageId]: [{ x: 10, y: 20, width: 30, height: 8 }]
+      }
+    })
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...initialLinkedData,
+        items: [range],
+        selectedRangeId: range.id
+      })
+    })
+
+    const renderHandle = requireSelectionPropsById(pageId).renderHandle
+    if (!renderHandle) {
+      throw new Error('Expected persisted linked handle renderer')
+    }
+    const { unmount } = render(
+      renderHandle({
+        type: 'start',
+        owner: 'persisted-range',
+        rangeId: range.id,
+        target: 'text',
+        rectId: null,
+        position: { x: 10, y: 24 },
+        positionUnit: 'percent',
+        isDragging: false,
+        onPointerDown: vi.fn(),
+        ariaLabel: 'persisted start',
+        className: 'hsn-selection-handle hsn-selection-handle--start',
+        style: { background: '#ff4fa3' }
+      })
+    )
+    const circle = screen.getByRole('button', { name: 'persisted start' })
+    mockElementRect(circle, { left: 98, top: 96, width: 12, height: 12 })
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementFromPoint(page)
+    const observedMoves: Array<{ x: number; y: number }> = []
+    const observeMove = (event: PointerEvent) => {
+      observedMoves.push({ x: event.clientX, y: event.clientY })
+    }
+    globalThis.document.addEventListener('pointermove', observeMove)
+
+    // When: a mouse drags the persisted handle into the page shell.
+    fireEvent.pointerDown(circle, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 100,
+      clientY: 102,
+      buttons: 1
+    })
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 200,
+      clientY: 300,
+      buttons: 1
+    })
+
+    // Then: no dependency-facing move is emitted outside actual text.
+    expect(observedMoves).toEqual([])
+
+    mockElementFromPoint(text)
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 200,
+      clientY: 300,
+      buttons: 1
+    })
+    expect(observedMoves).toEqual([{ x: 204, y: 300 }])
+
+    globalThis.document.removeEventListener('pointermove', observeMove)
+    unmount()
   })
 
   it('removes pointer correction when the dragged handle is not replaced', async () => {
@@ -5037,8 +5269,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
 
     await screen.findByText('Page 1 text')
     await waitFor(() => {
-      expect(requireSelectionPropsById(requireRuntimeSelectionId()).linkedData)
-        .toMatchObject({ selectedRangeId: selectedRange.id })
+      expect(
+        requireSelectionPropsById(requireRuntimeSelectionId()).linkedData
+      ).toMatchObject({ selectedRangeId: selectedRange.id })
     })
 
     // When: a primary touch taps the blank VirtualPaper viewport.

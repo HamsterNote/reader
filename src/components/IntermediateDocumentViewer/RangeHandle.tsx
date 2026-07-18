@@ -5,10 +5,10 @@ import type {
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
-  useCallback,
-  useEffect,
   useRef
 } from 'react'
+
+import { useRangeHandleDrag } from './useRangeHandleDrag'
 
 // 圆圈手柄的目标视觉直径（屏幕像素）。
 // CSS 尺寸固定为此值，再通过 transform: scale(1/scale) 抵消
@@ -74,21 +74,12 @@ const withOpaqueBackground = (style: CSSProperties): CSSProperties => {
   return next
 }
 
-interface ActivePointerCorrection {
-  cleanup: () => void
-  container: ParentNode
-}
-
-const activePointerCorrections = new WeakMap<
-  Document,
-  ActivePointerCorrection
->()
-
 interface RangeHandleProps {
   handle: HandleRenderProps
   linkedData: LinkedSelectionData
   scale: number
   selectionId: string
+  viewerRoot?: HTMLElement | null
 }
 
 const axisPosition = (
@@ -122,144 +113,31 @@ const findLineHeight = (
   return endpointRect?.height ?? null
 }
 
-const copyPointerEvent = (
-  event: PointerEvent,
-  clientX: number,
-  clientY: number
-): PointerEvent =>
-  new PointerEvent(event.type, {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    view: event.view,
-    detail: event.detail,
-    screenX: event.screenX,
-    screenY: event.screenY,
-    clientX,
-    clientY,
-    ctrlKey: event.ctrlKey,
-    shiftKey: event.shiftKey,
-    altKey: event.altKey,
-    metaKey: event.metaKey,
-    button: event.button,
-    buttons: event.buttons,
-    relatedTarget: event.relatedTarget,
-    pointerId: event.pointerId,
-    width: event.width,
-    height: event.height,
-    pressure: event.pressure,
-    tangentialPressure: event.tangentialPressure,
-    tiltX: event.tiltX,
-    tiltY: event.tiltY,
-    twist: event.twist,
-    pointerType: event.pointerType,
-    isPrimary: event.isPrimary
-  })
-
 export const RangeHandle = ({
   handle,
   linkedData,
   scale,
-  selectionId
+  selectionId,
+  viewerRoot
 }: RangeHandleProps) => {
   const circleRef = useRef<HTMLButtonElement>(null)
   const lineHeight = findLineHeight(handle, linkedData, selectionId)
+  const startHandleDrag = useRangeHandleDrag({
+    circleRef,
+    correctPointerCoordinates: lineHeight !== null,
+    viewerRoot
+  })
 
-  const startPointerCorrection = useCallback((event: PointerEvent) => {
-    const circle = circleRef.current
-    if (!circle) return
-
-    const ownerDocument = circle.ownerDocument
-    activePointerCorrections.get(ownerDocument)?.cleanup()
-
-    // 圆圈圆心即 range 端点位置；拖拽时把指针纠正到圆心，
-    // 使选区边界始终跟随圆圈中心（无论用户在圆内何处抓取）。
-    const circleRect = circle.getBoundingClientRect()
-    const offsetX = circleRect.left + circleRect.width / 2 - event.clientX
-    const offsetY = circleRect.top + circleRect.height / 2 - event.clientY
-    const forwardedEvents = new WeakSet<PointerEvent>()
-
-    const cleanup = () => {
-      ownerDocument.removeEventListener('pointermove', correctPointerMove, true)
-      ownerDocument.removeEventListener('pointerup', cleanup, true)
-      ownerDocument.removeEventListener('pointercancel', cleanup, true)
-      ownerDocument.defaultView?.removeEventListener('blur', cleanup)
-      if (activePointerCorrections.get(ownerDocument)?.cleanup === cleanup) {
-        activePointerCorrections.delete(ownerDocument)
-      }
-    }
-    const correctPointerMove = (moveEvent: PointerEvent) => {
-      if (
-        forwardedEvents.has(moveEvent) ||
-        moveEvent.pointerId !== event.pointerId
-      ) {
-        return
-      }
-
-      moveEvent.preventDefault()
-      moveEvent.stopImmediatePropagation()
-      const correctedEvent = copyPointerEvent(
-        moveEvent,
-        moveEvent.clientX + offsetX,
-        moveEvent.clientY + offsetY
-      )
-      forwardedEvents.add(correctedEvent)
-      ownerDocument.dispatchEvent(correctedEvent)
-    }
-
-    ownerDocument.addEventListener('pointermove', correctPointerMove, true)
-    ownerDocument.addEventListener('pointerup', cleanup, true)
-    ownerDocument.addEventListener('pointercancel', cleanup, true)
-    ownerDocument.defaultView?.addEventListener('blur', cleanup)
-    activePointerCorrections.set(ownerDocument, {
-      cleanup,
-      container: circle.parentNode ?? ownerDocument
-    })
-  }, [])
-
-  useEffect(() => {
-    const circle = circleRef.current
-    if (!circle || lineHeight === null) return
-
-    const ownerDocument = circle.ownerDocument
-    const capturePointerDown = (event: PointerEvent) => {
-      if (event.target === circle) startPointerCorrection(event)
-    }
-    ownerDocument.addEventListener('pointerdown', capturePointerDown, true)
-
-    return () => {
-      ownerDocument.removeEventListener('pointerdown', capturePointerDown, true)
-      ownerDocument.defaultView?.setTimeout(() => {
-        const activeCorrection = activePointerCorrections.get(ownerDocument)
-        const replacementSelector = `[data-range-handle-circle="${handle.type}"]`
-        if (
-          activeCorrection &&
-          !activeCorrection.container.querySelector(replacementSelector)
-        ) {
-          activeCorrection.cleanup()
-        }
-      }, 0)
-    }
-  }, [handle.type, lineHeight, startPointerCorrection])
-
-  if (lineHeight === null) {
-    return (
-      <button
-        ref={circleRef}
-        type='button'
-        className={handle.className}
-        tabIndex={-1}
-        aria-label={handle.ariaLabel}
-        style={withOpaqueBackground(handle.style)}
-        data-rect-id={handle.rectId ?? ''}
-        data-range-id={handle.rangeId ?? ''}
-        onPointerDown={handle.onPointerDown}
-      />
-    )
+  const handlePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    startHandleDrag(event.nativeEvent)
+    handle.onPointerDown(event)
   }
 
   // 圆圈 CSS 尺寸固定 20px，通过反向 scale(1/scale) 抵消
   // VirtualPaper 容器的 transform: scale(s)，使视觉直径恒为 20px。
+  // 文字 selection 与矩形 selection 共用同一套圆形 handle 渲染：
+  // 矩形 handle 与文字 handle 视觉大小完全一致，避免依赖库默认 12px
+  // 与本组件自定义 20px 之间出现大小不一致。
   // translate(-50%, -50%) 写在 scale 左侧（先于 scale 应用），
   // 其百分比基于元素 border box（20px），不受 scale 影响，
   // 保证圆心精确对齐 range 端点位置。
@@ -275,11 +153,6 @@ export const RangeHandle = ({
     borderRadius: '50%',
     // 先平移居中（圆心对齐端点），再反向缩放抵消父容器缩放
     transform: `translate(-50%, -50%) scale(${inverseScale})`
-  }
-
-  const handlePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    startPointerCorrection(event.nativeEvent)
-    handle.onPointerDown(event)
   }
 
   return (

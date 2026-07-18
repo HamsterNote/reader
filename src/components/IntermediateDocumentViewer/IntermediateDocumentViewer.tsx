@@ -49,15 +49,18 @@ import type {
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
 import { PopoverPortal } from '../PopoverPortal'
 import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
+import { isPointOnSelectionText } from '../selection/caretResolver'
 import {
   buildSelectionPayload,
   type ReaderSelectedTextSegment,
   type ReaderSelectionPayload,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
+import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuard'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { PageBrowser } from './PageBrowser'
 import { RangeHandle } from './RangeHandle'
+import { RangeMagnifierProvider } from './RangeMagnifier'
 import {
   computePageOriginY,
   computeTransform,
@@ -1119,6 +1122,7 @@ const getRuntimeSelectionIdFromSelectionNode = (
  */
 type IntermediateDocumentPagesProps = PageResources & {
   popoverContainerRef: React.RefObject<HTMLElement | null>
+  viewerRootElement: HTMLElement | null
   pageNumbers: number[]
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
@@ -1235,8 +1239,17 @@ const hasUnsupportedUncontrolledRectTarget = (
   !(currentRects.length === 0 && targetRects.length === 0) &&
   JSON.stringify(currentRects) !== JSON.stringify(targetRects)
 
+const shouldBlockSelectionPointerMove = (
+  event: PointerEvent,
+  linkedData: LinkedSelectionData,
+  viewerRootElement: HTMLElement
+): boolean =>
+  (linkedData.selectingText || Boolean(linkedData.draggingRange)) &&
+  !isPointOnSelectionText(event.clientX, event.clientY, viewerRootElement)
+
 function IntermediateDocumentPages({
   popoverContainerRef,
+  viewerRootElement,
   pageNumbers,
   setPageRef,
   setTextRef,
@@ -1408,6 +1421,7 @@ function IntermediateDocumentPages({
                     linkedData={runtimeLinkedData}
                     scale={drawingScale}
                     selectionId={shellSelectionId}
+                    viewerRoot={viewerRootElement}
                   />
                 )}
                 ref={selectionRefForRuntimeId(shellSelectionId)}
@@ -1524,6 +1538,9 @@ function ViewerContent({
     clientY: number
     moved: boolean
   } | null>(null)
+  const lastValidSelectionRangeRef = useRef<Range | null>(null)
+  const selectionFrozenRef = useRef(false)
+  const restoringSelectionRef = useRef(false)
 
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
@@ -1544,6 +1561,141 @@ function ViewerContent({
     },
     [viewerRootRef]
   )
+
+  useEffect(() => {
+    if (
+      !viewerRootElement ||
+      selectedTool === 'rect-selection' ||
+      selectedTool === 'drawing'
+    ) {
+      return
+    }
+
+    const ownerDocument = viewerRootElement.ownerDocument
+
+    const getValidSelectionRange = (): Range | null => {
+      const selection = ownerDocument.defaultView?.getSelection()
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        return null
+      }
+
+      const range = selection.getRangeAt(0)
+      if (
+        !viewerRootElement.contains(range.startContainer) ||
+        !viewerRootElement.contains(range.endContainer)
+      ) {
+        return null
+      }
+
+      return range
+    }
+
+    const restoreLastValidSelection = (): void => {
+      const range = lastValidSelectionRangeRef.current
+      const selection = ownerDocument.defaultView?.getSelection()
+      if (!range || !selection) return
+
+      try {
+        restoringSelectionRef.current = true
+        selection.removeAllRanges()
+        selection.addRange(range.cloneRange())
+      } catch {
+        lastValidSelectionRangeRef.current = null
+      } finally {
+        restoringSelectionRef.current = false
+      }
+    }
+
+    // Native selection can emit selectionchange after an off-text pointermove.
+    // Restore the last real text range instead of accepting the page-start caret.
+    const handleSelectionChange = () => {
+      if (restoringSelectionRef.current) return
+
+      if (selectionFrozenRef.current) {
+        restoreLastValidSelection()
+        return
+      }
+
+      const range = getValidSelectionRange()
+      if (range) {
+        lastValidSelectionRangeRef.current = range.cloneRange()
+      }
+    }
+
+    const guardPointerMove = (event: PointerEvent) => {
+      if (isSelectionPointerMoveTextHit(event)) return
+
+      const linkedData = runtimeLinkedDataRef.current
+      if (!linkedData.selectingText) {
+        if (!linkedData.draggingRange) return
+      }
+
+      const pointerOnText = isPointOnSelectionText(
+        event.clientX,
+        event.clientY,
+        viewerRootElement
+      )
+      if (linkedData.selectingText && pointerOnText) {
+        selectionFrozenRef.current = false
+        return
+      }
+
+      if (
+        !shouldBlockSelectionPointerMove(event, linkedData, viewerRootElement)
+      ) {
+        return
+      }
+
+      if (linkedData.selectingText) {
+        selectionFrozenRef.current = true
+        restoreLastValidSelection()
+      }
+
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+
+    const finishSelectionDrag = () => {
+      if (selectionFrozenRef.current) {
+        restoreLastValidSelection()
+      }
+      selectionFrozenRef.current = false
+      lastValidSelectionRangeRef.current = null
+    }
+
+    ownerDocument.addEventListener(
+      'selectionchange',
+      handleSelectionChange,
+      true
+    )
+    ownerDocument.addEventListener('pointermove', guardPointerMove, true)
+    ownerDocument.addEventListener('pointerup', finishSelectionDrag, true)
+    ownerDocument.addEventListener('pointercancel', finishSelectionDrag, true)
+    ownerDocument.addEventListener('touchend', finishSelectionDrag, true)
+    ownerDocument.addEventListener('touchcancel', finishSelectionDrag, true)
+    return () => {
+      ownerDocument.removeEventListener(
+        'selectionchange',
+        handleSelectionChange,
+        true
+      )
+      ownerDocument.removeEventListener('pointermove', guardPointerMove, true)
+      ownerDocument.removeEventListener('pointerup', finishSelectionDrag, true)
+      ownerDocument.removeEventListener(
+        'pointercancel',
+        finishSelectionDrag,
+        true
+      )
+      ownerDocument.removeEventListener('touchend', finishSelectionDrag, true)
+      ownerDocument.removeEventListener(
+        'touchcancel',
+        finishSelectionDrag,
+        true
+      )
+      selectionFrozenRef.current = false
+      lastValidSelectionRangeRef.current = null
+    }
+  }, [selectedTool, viewerRootElement])
 
   useEffect(() => {
     const container =
@@ -2054,6 +2206,7 @@ function ViewerContent({
   const intermediateDocumentPages = (
     <IntermediateDocumentPages
       popoverContainerRef={popoverContainerRef}
+      viewerRootElement={viewerRootElement}
       pageNumbers={pageNumbers}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
@@ -2133,54 +2286,55 @@ function ViewerContent({
       }}
     >
       {pageNumbers.length > 0 ? (
-        <PageBrowser
-          isOpen={showPageBrowser}
-          pageNumbers={pageNumbers}
-          pageSizesByPageNumber={pageSizesByPageNumber}
-          baseImagesByPageNumber={baseImagesByPageNumber}
-          onPageVisibilityChange={onPageBrowserVisibilityChange}
-          onNavigateToPage={onNavigateToPage}
-          themeColor={themeColor}
-          visiblePageNumbers={visiblePageNumbers}
-          containMarginTop={containMarginTop}
-          containMarginBottom={containMarginBottom}
-        />
-      ) : null}
-      {pageNumbers.length > 0 ? (
-        <VirtualPaper
-          containMode={true}
-          transform={virtualPaperTransform}
-          minScale={scaleRange.min}
-          maxScale={scaleRange.max}
-          enabledInteractions={
-            selectedTool === 'drawing' || touchPanMode === 'two-finger'
-              ? TWO_FINGER_TOUCH_ENABLED_INTERACTIONS
-              : DEFAULT_ENABLED_INTERACTIONS
-          }
-          onTransformChange={handleTransformChangeWithPopover}
-          onTransformChangeEnd={handleTransformChangeEndWithPopover}
-          containMarginX={containMarginX}
-          containMarginY={
-            containMarginTop === undefined && containMarginBottom === undefined
-              ? containMarginY
-              : undefined
-          }
-          containerStyle={{
-            // container div 被 VirtualPaper 的 transform: scale(s) 缩放，
-            // 直接设置 padding 会被 zoom 放大/缩小。
-            // 除以 scale 补偿：视觉 padding = (margin / scale) * scale = margin（恒定）
-            paddingTop:
-              containMarginTop !== undefined
-                ? containMarginTop / virtualPaperTransform.scale
-                : undefined,
-            paddingBottom:
-              containMarginBottom !== undefined
-                ? containMarginBottom / virtualPaperTransform.scale
+        <RangeMagnifierProvider rootElement={viewerRootElement}>
+          <PageBrowser
+            isOpen={showPageBrowser}
+            pageNumbers={pageNumbers}
+            pageSizesByPageNumber={pageSizesByPageNumber}
+            baseImagesByPageNumber={baseImagesByPageNumber}
+            onPageVisibilityChange={onPageBrowserVisibilityChange}
+            onNavigateToPage={onNavigateToPage}
+            themeColor={themeColor}
+            visiblePageNumbers={visiblePageNumbers}
+            containMarginTop={containMarginTop}
+            containMarginBottom={containMarginBottom}
+          />
+          <VirtualPaper
+            containMode={true}
+            transform={virtualPaperTransform}
+            minScale={scaleRange.min}
+            maxScale={scaleRange.max}
+            enabledInteractions={
+              selectedTool === 'drawing' || touchPanMode === 'two-finger'
+                ? TWO_FINGER_TOUCH_ENABLED_INTERACTIONS
+                : DEFAULT_ENABLED_INTERACTIONS
+            }
+            onTransformChange={handleTransformChangeWithPopover}
+            onTransformChangeEnd={handleTransformChangeEndWithPopover}
+            containMarginX={containMarginX}
+            containMarginY={
+              containMarginTop === undefined &&
+              containMarginBottom === undefined
+                ? containMarginY
                 : undefined
-          }}
-        >
-          {pagesNode}
-        </VirtualPaper>
+            }
+            containerStyle={{
+              // container div 被 VirtualPaper 的 transform: scale(s) 缩放，
+              // 直接设置 padding 会被 zoom 放大/缩小。
+              // 除以 scale 补偿：视觉 padding = (margin / scale) * scale = margin（恒定）
+              paddingTop:
+                containMarginTop !== undefined
+                  ? containMarginTop / virtualPaperTransform.scale
+                  : undefined,
+              paddingBottom:
+                containMarginBottom !== undefined
+                  ? containMarginBottom / virtualPaperTransform.scale
+                  : undefined
+            }}
+          >
+            {pagesNode}
+          </VirtualPaper>
+        </RangeMagnifierProvider>
       ) : null}
     </div>
   )

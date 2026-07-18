@@ -84,4 +84,26 @@ existing circular handle appearance supplied by `@hamster-note/selection`.
 - **Rectangle selection:** rectangle-tool handles retain the dependency's
   existing circular rendering and drag behavior.
 
+## 9. Range Handle Magnifier
+
+Dragging a range handle exposes a compact view of the page directly under the
+handle's visual center, so the selection endpoint remains visible beneath the
+user's pointer. Text handles use their corrected drag coordinate; rectangle
+handles retain the dependency's original coordinate behavior.
+
+- **Portal:** `.hamster-reader__range-magnifier` is rendered as a direct child
+  of `.hamster-reader__intermediate-document-viewer`, never inside
+  `.virtual-paper-container`; its dimensions therefore remain screen-fixed at
+  every document zoom level.
+- **Geometry:** a `120px` circular lens with `3px` white border, restrained
+  neutral shadow, and an `8px` blue center marker.
+- **Magnification:** page content is rendered at `2x` around the corrected range
+  endpoint. The handle itself is excluded from the captured page image.
+- **Placement:** center above the handle with an `18px` gap. If the reader has
+  less than `8px` of clearance above, place it below; clamp both axes to an
+  `8px` viewport inset.
+- **Interaction:** show during text or rectangle handle dragging, ignore pointer
+  input, update from the active handle center, and hide on pointer up, pointer
+  cancel, window blur, or capture failure.
+
 _(End of minimal design contract)_
