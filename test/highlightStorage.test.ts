@@ -7,6 +7,34 @@ import {
   type ReaderSelectionRectangle
 } from '../demo/highlightStorage'
 
+// 使用 DrawingValue 形状：含 strokes 数组，模拟 painting 持久化场景
+// 这里不 import 真 DrawingValue 类型（仅作测试值），用满足 sanitizeDrawingValue 宽松校验的结构即可
+const paintingPage1 = {
+  strokes: [
+    {
+      id: 'stroke-1',
+      tool: 'pen' as const,
+      points: [
+        { x: 1, y: 2 },
+        { x: 3, y: 4 }
+      ],
+      color: '#000000',
+      width: 2
+    }
+  ]
+}
+const paintingPage2 = {
+  strokes: [
+    {
+      id: 'stroke-2',
+      tool: 'line' as const,
+      points: [{ x: 10, y: 20 }],
+      color: '#ff0000',
+      width: 5
+    }
+  ]
+}
+
 const linkedRangeA: ReaderSelectionRange = {
   id: 'range-a',
   text: 'hello',
@@ -60,22 +88,27 @@ describe('highlight storage helpers', () => {
 
     const parsed = parseHighlights(raw)
 
+    // v3 输入无 paintings 字段，向后兼容时默认为空对象
     expect(parsed).toEqual({
       ranges: [linkedRangeA, linkedRangeB],
-      rects: [rectA, rectB]
+      rects: [rectA, rectB],
+      paintings: {}
     })
   })
 
-  it('serializes ranges and rects with the exact v3 envelope', () => {
+  it('serializes ranges and rects with the exact v4 envelope', () => {
     const ranges = [linkedRangeA, linkedRangeB]
     const rects = [rectA, rectB]
+    const paintings = {}
 
-    const serialized = serializeHighlights(ranges, rects)
+    // serializeHighlights 现在签名 3 参，第三参 paintings 默认 {} 即可
+    const serialized = serializeHighlights(ranges, rects, paintings)
 
     expect(JSON.parse(serialized)).toEqual({
-      version: 3,
+      version: 4,
       ranges,
-      rects
+      rects,
+      paintings
     })
   })
 
@@ -87,7 +120,8 @@ describe('highlight storage helpers', () => {
 
     const parsed = parseHighlights(raw)
 
-    expect(parsed).toEqual({ ranges: [linkedRangeA], rects: [] })
+    // v2 向后兼容：rects 默认 []，paintings 默认 {}
+    expect(parsed).toEqual({ ranges: [linkedRangeA], rects: [], paintings: {} })
   })
 
   it('returns empty arrays when storage is missing or empty', () => {
@@ -96,9 +130,9 @@ describe('highlight storage helpers', () => {
     const parsedValues = rawValues.map((raw) => parseHighlights(raw))
 
     expect(parsedValues).toEqual([
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] }
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} }
     ])
   })
 
@@ -107,7 +141,7 @@ describe('highlight storage helpers', () => {
 
     const parsed = parseHighlights(raw)
 
-    expect(parsed).toEqual({ ranges: [], rects: [] })
+    expect(parsed).toEqual({ ranges: [], rects: [], paintings: {} })
   })
 
   it('returns empty arrays when storage has the wrong shape', () => {
@@ -122,11 +156,11 @@ describe('highlight storage helpers', () => {
     const parsedValues = wrongShapes.map((raw) => parseHighlights(raw))
 
     expect(parsedValues).toEqual([
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] }
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} }
     ])
   })
 
@@ -154,7 +188,8 @@ describe('highlight storage helpers', () => {
 
     expect(parsed).toEqual({
       ranges: [linkedRangeA, linkedRangeB],
-      rects: [rectA, rectB]
+      rects: [rectA, rectB],
+      paintings: {}
     })
   })
 
@@ -184,8 +219,8 @@ describe('highlight storage helpers', () => {
     ]
 
     expect(parsedValues).toEqual([
-      { ranges: [], rects: [] },
-      { ranges: [], rects: [] }
+      { ranges: [], rects: [], paintings: {} },
+      { ranges: [], rects: [], paintings: {} }
     ])
   })
 
@@ -208,6 +243,89 @@ describe('highlight storage helpers', () => {
 
     const parsed = parseHighlights(raw)
 
-    expect(parsed).toEqual({ ranges: [linkedRangeA], rects: [] })
+    expect(parsed).toEqual({ ranges: [linkedRangeA], rects: [], paintings: {} })
+  })
+
+  it('parses v4 envelopes and reads paintings alongside ranges and rects', () => {
+    // v4 是持久化 Drawing 数据后的新格式：paintings 字段携带每页的 DrawingValue
+    const paintings = {
+      'page-1': paintingPage1,
+      'page-2': paintingPage2
+    }
+    const raw = JSON.stringify({
+      version: 4,
+      ranges: [linkedRangeA],
+      rects: [rectA],
+      paintings
+    })
+
+    const parsed = parseHighlights(raw)
+
+    expect(parsed).toEqual({
+      ranges: [linkedRangeA],
+      rects: [rectA],
+      paintings
+    })
+  })
+
+  it('drops invalid paintings entries but keeps valid ones when storage is v4', () => {
+    // parsePaintings 只过滤明显损坏条目（非 plain object value），
+    // 深度结构校验交给 library 的 sanitizeDrawingValue
+    const raw = JSON.stringify({
+      version: 4,
+      ranges: [],
+      rects: [],
+      paintings: {
+        'page-1': paintingPage1, // 有效 plain object -> 保留
+        'page-2': null, // 非对象 -> 丢弃
+        'page-3': 42, // 非对象 -> 丢弃
+        'page-4': 'not-an-object', // 非对象 -> 丢弃
+        'page-5': paintingPage2 // 有效 -> 保留
+      }
+    })
+
+    const parsed = parseHighlights(raw)
+
+    expect(parsed).toEqual({
+      ranges: [],
+      rects: [],
+      paintings: {
+        'page-1': paintingPage1,
+        'page-5': paintingPage2
+      }
+    })
+  })
+
+  it('serializes ranges, rects and paintings with the v4 envelope', () => {
+    // serializeHighlights 接收 paintings 第三参，输出 v4 envelope
+    const ranges = [linkedRangeA]
+    const rects = [rectA]
+    const paintings = {
+      'page-1': paintingPage1
+    }
+
+    const serialized = serializeHighlights(ranges, rects, paintings)
+
+    expect(JSON.parse(serialized)).toEqual({
+      version: 4,
+      ranges,
+      rects,
+      paintings
+    })
+  })
+
+  it('round-trips paintings through serializeHighlights then parseHighlights', () => {
+    // 端到端：序列化再解析，paintings 字段应保持一致
+    const paintings = {
+      'page-1': paintingPage1,
+      'page-2': paintingPage2
+    }
+    const ranges = [linkedRangeA, linkedRangeB]
+    const rects = [rectA, rectB]
+
+    const serialized = serializeHighlights(ranges, rects, paintings)
+    const parsed = parseHighlights(serialized)
+
+    expect(parsed).toEqual({ ranges, rects, paintings })
   })
 })

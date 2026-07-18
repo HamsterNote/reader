@@ -7,7 +7,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   createRef,
   isValidElement,
@@ -31,6 +31,7 @@ import {
   selectTargetRect
 } from '../src/components/IntermediateDocumentViewer/rangeJumpHelpers'
 import {
+  isPointOnSelectionText,
   isSelectionBackgroundTarget,
   resolveCaret
 } from '../src/components/selection/caretResolver'
@@ -48,6 +49,7 @@ import type {
   ReaderSelectionRef
 } from '../src/types/selection'
 import type {
+  HandleRenderProps,
   LinkedSelectionRange,
   OverlayRectType,
   SelectionProps
@@ -55,6 +57,7 @@ import type {
 import {
   clearSelectionProps,
   getAllSelectionProps,
+  getSelectionRefCallCounts,
   simulateLinkedDataChange,
   simulateLinkedSelect,
   simulateLinkedSelectRange,
@@ -633,6 +636,28 @@ describe('selection primitive modules', () => {
     expect(result?.range.startContainer).toBe(getRequiredTextNode(textA))
     expect(result?.range.startOffset).toBe(1)
     expect(result?.range.startContainer).not.toBe(baseImage)
+  })
+
+  it('accepts only actual text hits for selection pointer movement', () => {
+    const viewerRoot = document.createElement('div')
+    const page = document.createElement('div')
+    const textElement = document.createElement('span')
+    const pageBackground = document.createElement('div')
+    textElement.dataset.textId = 'text-1'
+    pageBackground.className =
+      'hamster-reader__intermediate-page-background-wrapper'
+    page.append(textElement, pageBackground)
+    viewerRoot.appendChild(page)
+    document.body.appendChild(viewerRoot)
+
+    mockElementFromPoint(textElement)
+    expect(isPointOnSelectionText(10, 10, viewerRoot)).toBe(true)
+
+    mockElementFromPoint(page)
+    expect(isPointOnSelectionText(10, 10, viewerRoot)).toBe(false)
+
+    mockElementFromPoint(pageBackground)
+    expect(isPointOnSelectionText(10, 10, viewerRoot)).toBe(false)
   })
 
   it('calls native document caret APIs with the document receiver', () => {
@@ -4558,6 +4583,126 @@ describe('selection overlayRectType integration', () => {
   })
 })
 
+describe('selection pointer move guard', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('blocks touch selection updates when the pointer leaves the text', async () => {
+    // Given: an active linked text selection and a pointer currently over page blank space.
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={readerDocument} />)
+    const text = await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const linkedData = requireSelectionPropsById(pageId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...linkedData,
+        selectingText: true
+      })
+    })
+
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementFromPoint(page)
+    const observedMoves = vi.fn()
+    globalThis.document.addEventListener('pointermove', observedMoves)
+
+    // When: a touch pointer moves into the page shell rather than text.
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 31,
+      pointerType: 'touch',
+      clientX: 50,
+      clientY: 50,
+      buttons: 1
+    })
+
+    // Then: the downstream Selection document listener receives no update.
+    expect(observedMoves).not.toHaveBeenCalled()
+
+    mockElementFromPoint(text)
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 31,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+      buttons: 1
+    })
+    expect(observedMoves).toHaveBeenCalledTimes(1)
+    globalThis.document.removeEventListener('pointermove', observedMoves)
+  })
+
+  it('keeps the native selection stable across page blank space and resumes on text', async () => {
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={readerDocument} />)
+    const text = await screen.findByText('Page 1 text')
+    const textNode = getRequiredTextNode(text)
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const linkedData = requireSelectionPropsById(pageId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    const selection = window.getSelection()
+    if (!selection) throw new Error('Expected native Selection')
+
+    const initialRange = document.createRange()
+    initialRange.setStart(textNode, 2)
+    initialRange.setEnd(textNode, 6)
+    selection.removeAllRanges()
+    selection.addRange(initialRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...linkedData,
+        selectingText: true
+      })
+    })
+
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementFromPoint(page)
+    fireEvent.pointerMove(document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 90,
+      clientY: 90,
+      buttons: 1
+    })
+
+    const pageStartRange = document.createRange()
+    pageStartRange.setStart(textNode, 0)
+    pageStartRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(pageStartRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    expect(selection.isCollapsed).toBe(false)
+    expect(selection.toString()).toBe('ge 1')
+
+    mockElementFromPoint(text)
+    fireEvent.pointerMove(document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 20,
+      clientY: 25,
+      buttons: 1
+    })
+
+    const resumedRange = document.createRange()
+    resumedRange.setStart(textNode, 1)
+    resumedRange.setEnd(textNode, 4)
+    selection.removeAllRanges()
+    selection.addRange(resumedRange)
+    document.dispatchEvent(new Event('selectionchange'))
+
+    expect(selection.toString()).toBe('age')
+  })
+})
+
 describe('linked data adapter integration', () => {
   beforeEach(() => {
     clearSelectionProps()
@@ -4607,6 +4752,363 @@ describe('linked data adapter integration', () => {
         requireSelectionPropsById(runtimePage1Id).linkedData?.selectionOrder
       ).toEqual([runtimePage1Id])
     })
+  })
+})
+
+describe('text range handle integration', () => {
+  beforeEach(() => {
+    clearSelectionProps()
+  })
+
+  afterEach(() => {
+    clearSelectionProps()
+  })
+
+  it('renders document-order endpoint circles at range ends and drags from the circle center', async () => {
+    // Given: a linked active range whose first and last rectangles have
+    // different heights, making each endpoint geometry independently visible.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} scale={4} />)
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
+    if (!initialLinkedData) {
+      throw new Error('Expected linked data for range handle test')
+    }
+
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...initialLinkedData,
+        activeRange: makeRuntimeLinkedRange(pageId, {
+          rectsBySelectionId: {
+            [pageId]: [
+              { x: 10, y: 20, width: 30, height: 8 },
+              { x: 12, y: 40, width: 20, height: 12 }
+            ]
+          }
+        })
+      })
+    })
+
+    await waitFor(() => {
+      expect(requireSelectionPropsById(pageId).renderHandle).toBeTypeOf(
+        'function'
+      )
+    })
+    const renderHandle = requireSelectionPropsById(pageId).renderHandle
+    if (!renderHandle) {
+      throw new Error('Expected custom range handle renderer')
+    }
+
+    const onPointerDown = vi.fn()
+    const commonHandle = {
+      owner: 'active-selection',
+      rangeId: null,
+      target: 'text',
+      rectId: null,
+      positionUnit: 'percent',
+      isDragging: false,
+      onPointerDown,
+      className: 'hsn-selection-handle',
+      style: { background: '#ff4fa3' }
+    } satisfies Omit<HandleRenderProps, 'ariaLabel' | 'position' | 'type'>
+
+    // When: the dependency asks the reader to render both document-order ends.
+    const stopAtDocumentCapture = (event: PointerEvent) => {
+      event.stopPropagation()
+    }
+    globalThis.document.addEventListener(
+      'pointerdown',
+      stopAtDocumentCapture,
+      true
+    )
+    const { container } = render(
+      <>
+        {renderHandle({
+          ...commonHandle,
+          type: 'start',
+          position: { x: 10, y: 24 },
+          ariaLabel: 'start'
+        })}
+        {renderHandle({
+          ...commonHandle,
+          type: 'end',
+          position: { x: 32, y: 46 },
+          ariaLabel: 'end'
+        })}
+      </>
+    )
+
+    // Then: no stems are rendered; circles sit directly at the range
+    // endpoints (handle.position) with a fixed 20px CSS diameter and a
+    // reverse scale(1/scale = 0.25 at scale 4) that cancels the parent
+    // transform, keeping the visual diameter at 20px; centered via
+    // translate(-50%, -50%).
+    expect(container.querySelector('[data-range-handle-stem]')).toBeNull()
+    const startCircle = screen.getByRole('button', { name: 'start' })
+    const endCircle = screen.getByRole('button', { name: 'end' })
+
+    expect(startCircle).toHaveStyle({
+      left: '10%',
+      top: '24%',
+      width: '20px',
+      height: '20px',
+      borderRadius: '50%',
+      transform: 'translate(-50%, -50%) scale(0.25)'
+    })
+    expect(endCircle).toHaveStyle({
+      left: '32%',
+      top: '46%',
+      width: '20px',
+      height: '20px',
+      borderRadius: '50%',
+      transform: 'translate(-50%, -50%) scale(0.25)'
+    })
+
+    mockElementRect(startCircle, {
+      left: 98,
+      top: 96,
+      width: 12,
+      height: 12
+    })
+    mockElementFromPoint(screen.getByText('Page 1 text'))
+    const observedMoves: Array<{ x: number; y: number }> = []
+    const observeMove = (event: PointerEvent) => {
+      observedMoves.push({ x: event.clientX, y: event.clientY })
+    }
+    globalThis.document.addEventListener('pointermove', observeMove)
+
+    // When: the user grabs off-center inside the circle and moves it.
+    fireEvent.pointerDown(startCircle, {
+      pointerId: 7,
+      clientX: 100,
+      clientY: 102,
+      buttons: 1
+    })
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 7,
+      clientX: 200,
+      clientY: 300,
+      buttons: 1
+    })
+    fireEvent.pointerUp(globalThis.document, { pointerId: 7 })
+    globalThis.document.removeEventListener(
+      'pointerdown',
+      stopAtDocumentCapture,
+      true
+    )
+    globalThis.document.removeEventListener('pointermove', observeMove)
+
+    // Then: the dependency-facing event follows the circle center
+    // (104, 102) for the start handle, preserving the 4px horizontal
+    // grab offset.
+    expect(onPointerDown).not.toHaveBeenCalled()
+    expect(observedMoves).toEqual([{ x: 204, y: 300 }])
+  })
+
+  it('blocks a persisted text handle while the pointer is over page blank space', async () => {
+    // Given: an existing highlighted range rendered with a text endpoint handle.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const text = await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
+    if (!initialLinkedData) {
+      throw new Error('Expected linked data for persisted handle test')
+    }
+
+    const range = makeRuntimeLinkedRange(pageId, {
+      id: 'persisted-range-1',
+      rectsBySelectionId: {
+        [pageId]: [{ x: 10, y: 20, width: 30, height: 8 }]
+      }
+    })
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...initialLinkedData,
+        items: [range],
+        selectedRangeId: range.id
+      })
+    })
+
+    const renderHandle = requireSelectionPropsById(pageId).renderHandle
+    if (!renderHandle) {
+      throw new Error('Expected persisted linked handle renderer')
+    }
+    const { unmount } = render(
+      renderHandle({
+        type: 'start',
+        owner: 'persisted-range',
+        rangeId: range.id,
+        target: 'text',
+        rectId: null,
+        position: { x: 10, y: 24 },
+        positionUnit: 'percent',
+        isDragging: false,
+        onPointerDown: vi.fn(),
+        ariaLabel: 'persisted start',
+        className: 'hsn-selection-handle hsn-selection-handle--start',
+        style: { background: '#ff4fa3' }
+      })
+    )
+    const circle = screen.getByRole('button', { name: 'persisted start' })
+    mockElementRect(circle, { left: 98, top: 96, width: 12, height: 12 })
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementFromPoint(page)
+    const observedMoves: Array<{ x: number; y: number }> = []
+    const observeMove = (event: PointerEvent) => {
+      observedMoves.push({ x: event.clientX, y: event.clientY })
+    }
+    globalThis.document.addEventListener('pointermove', observeMove)
+
+    // When: a mouse drags the persisted handle into the page shell.
+    fireEvent.pointerDown(circle, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 100,
+      clientY: 102,
+      buttons: 1
+    })
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 200,
+      clientY: 300,
+      buttons: 1
+    })
+
+    // Then: no dependency-facing move is emitted outside actual text.
+    expect(observedMoves).toEqual([])
+
+    mockElementFromPoint(text)
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 41,
+      pointerType: 'mouse',
+      clientX: 200,
+      clientY: 300,
+      buttons: 1
+    })
+    expect(observedMoves).toEqual([{ x: 204, y: 300 }])
+
+    globalThis.document.removeEventListener('pointermove', observeMove)
+    unmount()
+  })
+
+  it('removes pointer correction when the dragged handle is not replaced', async () => {
+    // Given: a text handle with an active correction session.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} />)
+    await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
+    const renderHandle = requireSelectionPropsById(pageId).renderHandle
+    if (!initialLinkedData || !renderHandle) {
+      throw new Error('Expected linked handle renderer')
+    }
+
+    await act(async () => {
+      simulateLinkedDataChange(pageId, {
+        ...initialLinkedData,
+        activeRange: makeRuntimeLinkedRange(pageId, {
+          rectsBySelectionId: {
+            [pageId]: [{ x: 10, y: 20, width: 30, height: 8 }]
+          }
+        })
+      })
+    })
+    const activeRenderHandle = requireSelectionPropsById(pageId).renderHandle
+    if (!activeRenderHandle) {
+      throw new Error('Expected active linked handle renderer')
+    }
+
+    const { unmount } = render(
+      activeRenderHandle({
+        type: 'start',
+        owner: 'active-selection',
+        rangeId: null,
+        target: 'text',
+        rectId: null,
+        position: { x: 10, y: 24 },
+        positionUnit: 'percent',
+        isDragging: false,
+        onPointerDown: vi.fn(),
+        ariaLabel: 'temporary start',
+        className: 'hsn-selection-handle hsn-selection-handle--start',
+        style: { background: '#ff4fa3' }
+      })
+    )
+    const circle = screen.getByRole('button', { name: 'temporary start' })
+    mockElementRect(circle, { left: 98, top: 96, width: 12, height: 12 })
+    fireEvent.pointerDown(circle, {
+      pointerId: 8,
+      clientX: 100,
+      clientY: 102,
+      buttons: 1
+    })
+
+    // When: selection removal unmounts the handle without a replacement.
+    unmount()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const observedMoves: Array<{ x: number; y: number }> = []
+    const observeMove = (event: PointerEvent) => {
+      observedMoves.push({ x: event.clientX, y: event.clientY })
+    }
+    globalThis.document.addEventListener('pointermove', observeMove)
+    fireEvent.pointerMove(globalThis.document, {
+      pointerId: 8,
+      clientX: 200,
+      clientY: 300,
+      buttons: 1
+    })
+    globalThis.document.removeEventListener('pointermove', observeMove)
+
+    // Then: the stale session no longer rewrites subsequent pointer events.
+    expect(observedMoves).toEqual([{ x: 200, y: 300 }])
+  })
+
+  it('keeps rectangle handles on the dependency default circle path', async () => {
+    // Given: a loaded page with the custom renderer wired into Selection.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={document} />)
+    await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const renderHandle = requireSelectionPropsById(pageId).renderHandle
+    if (!renderHandle) {
+      throw new Error('Expected custom range handle renderer')
+    }
+
+    // When: the selection dependency requests a rectangle handle.
+    const { container } = render(
+      renderHandle({
+        type: 'start',
+        owner: 'persisted-range',
+        rangeId: 'rect-range',
+        target: 'rect',
+        rectId: 'rect-1',
+        position: { x: 20, y: 30 },
+        positionUnit: 'px',
+        isDragging: false,
+        onPointerDown: vi.fn(),
+        ariaLabel: 'rectangle start',
+        className: 'hsn-selection-handle hsn-selection-handle-rect',
+        style: { left: 20, top: 30 }
+      })
+    )
+
+    // Then: no text stem is introduced and the dependency position is intact.
+    expect(container.querySelector('[data-range-handle-stem]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'rectangle start' })).toHaveStyle(
+      {
+        left: '20px',
+        top: '30px'
+      }
+    )
   })
 })
 
@@ -4740,6 +5242,244 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     })
   })
 
+  it('clears the selected highlight when a touch taps blank viewer space', async () => {
+    // Given: a persisted highlight is selected in an uncontrolled viewer.
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const selectedRange: ReaderSelectionRange = {
+      id: 'touch-highlight-id',
+      text: 'Touch highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 5 },
+      createdAt: 10,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    }
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[selectedRange]}
+        defaultSelectedRangeId={selectedRange.id}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(
+        requireSelectionPropsById(requireRuntimeSelectionId()).linkedData
+      ).toMatchObject({ selectedRangeId: selectedRange.id })
+    })
+
+    // When: a primary touch taps the blank VirtualPaper viewport.
+    const blankViewerSpace = screen.getByTestId('virtual-paper-wrapper')
+    fireEvent.pointerDown(blankViewerSpace, {
+      pointerType: 'touch',
+      pointerId: 1,
+      isPrimary: true,
+      clientX: 200,
+      clientY: 200
+    })
+    fireEvent.pointerUp(blankViewerSpace, {
+      pointerType: 'touch',
+      pointerId: 1,
+      isPrimary: true,
+      clientX: 200,
+      clientY: 200
+    })
+
+    // Then: touch has the same blank-space deselection behavior as mouse click.
+    expect(onSelectRange).toHaveBeenCalledWith(null)
+  })
+
+  it('keeps the selected highlight when a touch pan returns to its start point', async () => {
+    // Given: a persisted highlight is selected in an uncontrolled viewer.
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const selectedRange: ReaderSelectionRange = {
+      id: 'touch-pan-highlight-id',
+      text: 'Touch pan highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 5 },
+      createdAt: 10,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    }
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[selectedRange]}
+        defaultSelectedRangeId={selectedRange.id}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const blankViewerSpace = screen.getByTestId('virtual-paper-wrapper')
+
+    // When: the pointer moves beyond tap tolerance before returning to start.
+    fireEvent.pointerDown(blankViewerSpace, {
+      pointerType: 'touch',
+      pointerId: 2,
+      isPrimary: true,
+      clientX: 200,
+      clientY: 200
+    })
+    fireEvent.pointerMove(blankViewerSpace, {
+      pointerType: 'touch',
+      pointerId: 2,
+      isPrimary: true,
+      clientX: 220,
+      clientY: 220
+    })
+    fireEvent.pointerUp(blankViewerSpace, {
+      pointerType: 'touch',
+      pointerId: 2,
+      isPrimary: true,
+      clientX: 200,
+      clientY: 200
+    })
+
+    // Then: a completed pan does not clear the selected highlight.
+    expect(onSelectRange).not.toHaveBeenCalledWith(null)
+  })
+
+  it('keeps the selected highlight when touch lands inside its overlay', async () => {
+    // Given: a selected highlight has a rendered overlay rectangle.
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const selectedRange: ReaderSelectionRange = {
+      id: 'touch-overlay-highlight-id',
+      text: 'Touch overlay highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 5 },
+      createdAt: 10,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    }
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[selectedRange]}
+        defaultSelectedRangeId={selectedRange.id}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const viewer = screen.getByTestId('intermediate-document-viewer')
+    const highlightOverlay = window.document.createElement('div')
+    highlightOverlay.className = 'hsn-selection-percent-rect-highlight'
+    viewer.append(highlightOverlay)
+    mockElementRect(highlightOverlay, {
+      left: 100,
+      top: 100,
+      width: 100,
+      height: 40
+    })
+
+    // When: a primary touch taps within that overlay's visual bounds.
+    const viewerSpace = screen.getByTestId('virtual-paper-wrapper')
+    fireEvent.pointerDown(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 3,
+      isPrimary: true,
+      clientX: 120,
+      clientY: 120
+    })
+    fireEvent.pointerUp(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 3,
+      isPrimary: true,
+      clientX: 120,
+      clientY: 120
+    })
+
+    // Then: touching the highlight itself does not run blank-space deselection.
+    expect(onSelectRange).not.toHaveBeenCalledWith(null)
+  })
+
+  it('switches the selected highlight when touch lands on another persisted range', async () => {
+    // Given: two percent-based highlights share a page and the first is selected.
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const firstRange: ReaderSelectionRange = {
+      id: 'touch-switch-first-id',
+      text: 'First touch highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 5 },
+      createdAt: 10,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 10, width: 20, height: 10 }]
+      }
+    }
+    const secondRange: ReaderSelectionRange = {
+      id: 'touch-switch-second-id',
+      text: 'Second touch highlight',
+      start: { selectionId: 'page-1', offset: 6 },
+      end: { selectionId: 'page-1', offset: 11 },
+      createdAt: 20,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 50, y: 40, width: 20, height: 10 }]
+      }
+    }
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[firstRange, secondRange]}
+        defaultSelectedRangeId={firstRange.id}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const page = screen.getByTestId('intermediate-page-1')
+    const selectionContainer = page.querySelector('.hsn-selection-container')
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('Expected the page selection container')
+    }
+    // The real selection dependency keeps the scoped ID on the Reader page shell.
+    selectionContainer.removeAttribute('data-selection-id')
+    mockElementRect(page, {
+      left: 100,
+      top: 100,
+      width: 400,
+      height: 600
+    })
+
+    // When: the primary touch lands inside the second range's visual bounds.
+    const viewerSpace = screen.getByTestId('virtual-paper-wrapper')
+    fireEvent.pointerDown(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 4,
+      isPrimary: true,
+      clientX: 340,
+      clientY: 370
+    })
+    fireEvent.pointerUp(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 4,
+      isPrimary: true,
+      clientX: 340,
+      clientY: 370
+    })
+
+    // Then: touch switches selection with the same public range ID as mouse.
+    expect(onSelectRange).toHaveBeenCalledWith(secondRange.id)
+  })
+
   it('emits onHighlight when the public text confirm commits a linked range', async () => {
     // Given: a controlled Reader with a mounted text-selection ref.
     const selectionRef = createRef<ReaderSelectionRef>()
@@ -4794,6 +5534,120 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
         start: { selectionId: 'page-1', offset: 0 },
         end: { selectionId: 'page-1', offset: 10 }
       })
+    )
+  })
+
+  it('commits an immediate public confirm to the page owning the latest active range', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onLinkedDataChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 2 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 2 text')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const page1Id = requireRuntimeSelectionId(':page-1')
+    const page2Id = requireRuntimeSelectionId(':page-2')
+    const currentLinkedData = requireSelectionPropsById(page2Id).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted pages')
+    }
+
+    await act(async () => {
+      simulateLinkedDataChange(page2Id, {
+        ...currentLinkedData,
+        activeRange: makeRuntimeLinkedRange(page2Id)
+      })
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+
+    expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            start: expect.objectContaining({ selectionId: 'page-2' }),
+            end: expect.objectContaining({ selectionId: 'page-2' })
+          })
+        ],
+        activeRange: null
+      })
+    )
+    expect(getSelectionRefCallCounts(page1Id).highlight).toBe(0)
+    expect(getSelectionRefCallCounts(page2Id).highlight).toBe(0)
+  })
+
+  it('commits the latest linked active range when touch confirm has no native selection text', async () => {
+    // Given: touch selection has synchronously published an active range, while
+    // the browser-native Selection is already empty before the popover press.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'touch-highlight-id',
+      text: 'Touch highlight'
+    })
+    globalThis.window.getSelection()?.removeAllRanges()
+    expect(globalThis.window.getSelection()?.toString()).toBe('')
+
+    // When: activeRange publication and public confirm happen in one event turn.
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, {
+        ...currentLinkedData,
+        activeRange
+      })
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+
+    // Then: Reader persists the linked range even though the Selection instance
+    // has not rendered the newly published activeRange yet.
+    expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            id: 'touch-highlight-id',
+            text: 'Touch highlight'
+          })
+        ],
+        selectedRangeId: 'touch-highlight-id',
+        activeRange: null
+      })
+    )
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'touch-highlight-id' })
     )
   })
 

@@ -14,7 +14,7 @@ import type {
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '@hamster-note/reader'
-import { DefaultSelectionPopover, Reader } from '@hamster-note/reader'
+import { Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
@@ -120,44 +120,21 @@ export async function parseUploadedDocument(
 function persistHighlights(
   fileName: string | undefined,
   ranges: ReaderSelectionRange[],
-  rects: ReaderSelectionRectangle[]
+  rects: ReaderSelectionRectangle[],
+  paintings: Record<string, DrawingValue>
 ) {
   if (!fileName) return
-  const persisted = parseHighlights(serializeHighlights(ranges, rects))
+  const persisted = parseHighlights(
+    serializeHighlights(ranges, rects, paintings)
+  )
   localStorage.setItem(
     `hamster-reader-demo:highlights:${fileName}`,
     serializeHighlights(
       Array.from(persisted.ranges),
-      Array.from(persisted.rects)
+      Array.from(persisted.rects),
+      persisted.paintings
     )
   )
-}
-
-function toColorInputValue(
-  color: React.CSSProperties['backgroundColor'] | undefined,
-  fallback: string
-): string {
-  const value = color ?? fallback
-  const hexMatch = /^#([\da-f]{3}|[\da-f]{6})(?:[\da-f]{2})?$/i.exec(value)
-  if (hexMatch?.[1]) {
-    const hex = hexMatch[1]
-    return hex.length === 3
-      ? `#${Array.from(hex, (digit) => digit.repeat(2)).join('')}`
-      : `#${hex}`
-  }
-
-  const rgbMatch = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i.exec(
-    value
-  )
-  if (rgbMatch?.[1] && rgbMatch[2] && rgbMatch[3]) {
-    return `#${[rgbMatch[1], rgbMatch[2], rgbMatch[3]]
-      .map((channel) =>
-        Math.min(255, Number(channel)).toString(16).padStart(2, '0')
-      )
-      .join('')}`
-  }
-
-  return '#ffc107'
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +156,7 @@ export function App() {
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
   const [showPageBrowser, setShowPageBrowser] = useState(false)
+  const [themeColor, setThemeColor] = useState('#2563eb')
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
@@ -240,11 +218,12 @@ export function App() {
         persistHighlights(
           uploadedFile?.name,
           next.ranges as ReaderSelectionRange[],
-          next.rects as ReaderSelectionRectangle[]
+          next.rects as ReaderSelectionRectangle[],
+          pagePaintings
         )
       }
     },
-    [uploadedFile?.name]
+    [uploadedFile?.name, pagePaintings]
   )
 
   // onSelect 回调：history 启用后，onAnnotationHistoryChange 是正规路径，
@@ -265,22 +244,17 @@ export function App() {
     }
   }, [])
 
-  // onUpdateRange 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
-  const handleUpdateRange = useCallback(() => {}, [])
-
-  // Demo 内部直接受控变更（如颜色输入），不经过 library history 路径。
-  // 此函数保留直接 setRanges + persistHighlights 行为。
-  const handleUpdateRangeDirect = useCallback(
+  // onUpdateRange 回调：默认 Popover 的颜色选择器会直接调用此回调更新当前 range。
+  // 由于该调用不经过 library history 路径，这里直接更新 ranges 并持久化。
+  const handleUpdateRange = useCallback(
     (range: ReaderSelectionRange) => {
       setRanges((prev) => {
-        const newRanges = prev.map((current) =>
-          current.id === range.id ? range : current
-        )
-        persistHighlights(uploadedFile?.name, newRanges, rects)
+        const newRanges = prev.map((r) => (r.id === range.id ? range : r))
+        persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
     },
-    [rects, uploadedFile?.name]
+    [rects, pagePaintings, uploadedFile?.name]
   )
 
   const handleCommentHighlight = useCallback(
@@ -320,14 +294,14 @@ export function App() {
     (id: string) => {
       setRects((prev) => {
         const newRects = prev.filter((r) => r.id !== id)
-        persistHighlights(uploadedFile?.name, ranges, newRects)
+        persistHighlights(uploadedFile?.name, ranges, newRects, pagePaintings)
         return newRects
       })
       if (selectedRectId === id) {
         setSelectedRectId(null)
       }
     },
-    [ranges, selectedRectId, uploadedFile?.name]
+    [ranges, pagePaintings, selectedRectId, uploadedFile?.name]
   )
 
   // 清空全部：通过 selectionRef.current?.clear() 触发 library 的 clear 命令，
@@ -340,14 +314,23 @@ export function App() {
     (id: string) => {
       setRanges((prev) => {
         const newRanges = prev.filter((r) => r.id !== id)
-        persistHighlights(uploadedFile?.name, newRanges, rects)
+        persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
       if (selectedRangeId === id) {
         setSelectedRangeId(null)
       }
     },
-    [rects, selectedRangeId, uploadedFile?.name]
+    [rects, pagePaintings, selectedRangeId, uploadedFile?.name]
+  )
+
+  // 包装 setPagePaintings：pagePaintings 不走 annotation history，需独立持久化。
+  const handlePagePaintingsChange = useCallback(
+    (next: Record<string, DrawingValue>) => {
+      setPagePaintings(next)
+      persistHighlights(uploadedFile?.name, ranges, rects, next)
+    },
+    [ranges, rects, uploadedFile?.name]
   )
 
   // 侧边栏文字高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
@@ -472,6 +455,7 @@ export function App() {
       const parsedHighlights = parseHighlights(storedHighlights)
       setRanges(Array.from(parsedHighlights.ranges))
       setRects(Array.from(parsedHighlights.rects))
+      setPagePaintings(parsedHighlights.paintings)
       setSelectedRangeId(null)
       setSelectedRectId(null)
     } catch (error) {
@@ -681,6 +665,25 @@ export function App() {
                       <span>显示页面浏览栏 Page Browser</span>
                     </label>
                   </div>
+                  <div style={{ marginBottom: '12px' }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      <input
+                        type='color'
+                        value={themeColor}
+                        onChange={(event) =>
+                          setThemeColor(event.currentTarget.value)
+                        }
+                        data-testid='theme-color-picker'
+                      />
+                      <span>主题色 (Page Browser 选中项)</span>
+                    </label>
+                  </div>
                 </>
               )}
               <div style={{ marginBottom: '12px' }}>
@@ -788,6 +791,10 @@ export function App() {
                         nextTool === 'drawing'
                       ) {
                         setSelectedTool(nextTool)
+                        // 切换工具时取消所有选中状态（不清除数据本身，
+                        // 仅重置 selectedRangeId/selectedRectId 高亮选中）。
+                        setSelectedRangeId(null)
+                        setSelectedRectId(null)
                       }
                     }}
                     data-testid='selection-tool-select'
@@ -1087,17 +1094,6 @@ export function App() {
           onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
           selectionRef={selectionRef}
-          selectionPopover={
-            <DefaultSelectionPopover
-              selectionRef={selectionRef}
-              highlightColor={highlightColor}
-              onHighlightColorChange={setHighlightColor}
-              selectedRangeId={selectedRangeId}
-              ranges={ranges}
-              onUpdateRange={handleUpdateRange}
-              onRemoveRange={handleRemoveRange}
-            />
-          }
           highlightColor={highlightColor}
           selectionColor='rgba(33, 150, 243, 0.2)'
           autoHighlight={autoHighlight}
@@ -1106,8 +1102,9 @@ export function App() {
           containMarginBottom={containMarginBottom}
           selectedTool={selectedTool}
           pagePaintings={pagePaintings}
-          onPagePaintingsChange={setPagePaintings}
+          onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
+          themeColor={themeColor}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
@@ -1119,68 +1116,6 @@ export function App() {
           }}
           onAnnotationHistoryChange={handleAnnotationHistoryChange}
           onCommentHighlight={handleCommentHighlight}
-          highlightPopover={(highlight) => (
-            <div
-              className='hamster-demo-action-group'
-              style={{
-                display: 'flex',
-                gap: '8px',
-                padding: '4px 8px',
-                background: '#333',
-                color: '#fff',
-                borderRadius: '4px',
-                fontSize: '14px'
-              }}
-            >
-              <button
-                type='button'
-                onClick={() => handleRemoveRange(highlight.id)}
-                style={{
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: '#fff',
-                  border: 'none'
-                }}
-              >
-                删除
-              </button>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                <span>背景颜色设置</span>
-                <input
-                  type='color'
-                  value={toColorInputValue(
-                    highlight.markerStyle?.backgroundColor,
-                    highlightColor
-                  )}
-                  aria-label='Highlight color'
-                  onChange={(e) => {
-                    const newColor = e.target.value
-                    setHighlightColor(newColor)
-                    handleUpdateRangeDirect({
-                      ...highlight,
-                      markerStyle: {
-                        ...highlight.markerStyle,
-                        backgroundColor: newColor
-                      }
-                    })
-                  }}
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    padding: 0,
-                    border: 'none'
-                  }}
-                />
-              </label>
-            </div>
-          )}
         />
       </div>
       {commentingHighlight && (

@@ -547,6 +547,22 @@ const isPointDirectlyOnTextElement = (
   return true
 }
 
+export const isPointOnSelectionText = (
+  clientX: number,
+  clientY: number,
+  viewerRoot: HTMLElement,
+  ownerDocument: Document = viewerRoot.ownerDocument
+): boolean => {
+  const pointElement = ownerDocument.elementFromPoint?.(clientX, clientY)
+  if (!pointElement || !viewerRoot.contains(pointElement)) return false
+  if (isSelectionBackgroundTarget(pointElement)) return false
+
+  const directTextElement = pointElement.closest('[data-text-id]')
+  if (directTextElement && viewerRoot.contains(directTextElement)) return true
+
+  return isHtmlParserSelectionTarget(pointElement, viewerRoot)
+}
+
 // 校验 caret API 返回的 range 是否落在指定的 nearest text 元素内。
 // 浏览器在 Y-clamp 后可能仍把光标解析到相邻文本元素（例如 ascender 重叠区域），
 // 此时拒绝该结果，避免选区跨到错误的文本项。

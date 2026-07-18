@@ -1,5 +1,5 @@
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRef
@@ -47,6 +47,13 @@ export type DefaultPopoverContext = {
   readonly onUpdateRange?: (range: ReaderSelectionRange) => void
   /** range 删除回调（对应 Reader 的 onRemoveRange），用于删除高亮 */
   readonly onRemoveRange?: (id: string) => void
+  /**
+   * 已有高亮评论回调。
+   * 提供时 DefaultHighlightPopover 会渲染评论按钮，点击后调用并传入当前选中的 range。
+   */
+  readonly onCommentHighlight?: (
+    range: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
 }
 
 // ---------------------------------------------------------------------------
@@ -147,16 +154,19 @@ function HighlightColorPicker({
   ranges,
   onUpdateRange
 }: DefaultPopoverContext) {
-  // 非 # 开头的颜色值 fallback 到 #ffc107（与 Demo 逻辑一致）
-  const colorValue = highlightColor?.startsWith('#')
+  const selectedRange = ranges?.find((range) => range.id === selectedRangeId)
+  const rangeColor = selectedRange?.markerStyle?.backgroundColor
+  const fallbackColor = highlightColor?.startsWith('#')
     ? highlightColor
     : '#ffc107'
+  const colorValue = rangeColor?.startsWith('#') ? rangeColor : fallbackColor
 
   return (
     <label className='hamster-reader-popover-color'>
       <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
       <input
         type='color'
+        aria-label='Highlight color'
         className='hamster-reader-popover-color-input'
         value={colorValue}
         onChange={(e) => {
@@ -224,6 +234,33 @@ export function DefaultHighlightPopover(props: DefaultPopoverContext) {
     }
   }, [props.selectedRangeId, props.onRemoveRange])
 
+  const [commenting, setCommenting] = useState(false)
+
+  const selectedRange = useMemo(() => {
+    if (!props.selectedRangeId || !props.ranges) return undefined
+    return props.ranges.find((range) => range.id === props.selectedRangeId)
+  }, [props.selectedRangeId, props.ranges])
+
+  const handleComment = useCallback(() => {
+    if (
+      commenting ||
+      !selectedRange ||
+      typeof props.onCommentHighlight !== 'function'
+    ) {
+      return
+    }
+    setCommenting(true)
+    const result = props.onCommentHighlight(selectedRange)
+    if (result && typeof result.then === 'function') {
+      result.then(
+        () => setCommenting(false),
+        () => setCommenting(false)
+      )
+    } else {
+      setCommenting(false)
+    }
+  }, [commenting, selectedRange, props.onCommentHighlight])
+
   return (
     <div
       className='hamster-reader-popover'
@@ -231,6 +268,16 @@ export function DefaultHighlightPopover(props: DefaultPopoverContext) {
       aria-label='高亮操作'
       onMouseDown={(e) => e.preventDefault()}
     >
+      {typeof props.onCommentHighlight === 'function' && (
+        <button
+          type='button'
+          className='hamster-reader-popover-btn'
+          onClick={handleComment}
+          disabled={commenting || !selectedRange}
+        >
+          评论
+        </button>
+      )}
       <button
         type='button'
         className='hamster-reader-popover-btn hamster-reader-popover-btn--danger'

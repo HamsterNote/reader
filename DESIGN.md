@@ -1,4 +1,5 @@
 # Design Tokens & Layout Contract
+
 # (Feature: PDF Reader Demo Shell & Highlight Integration)
 
 This document defines the minimal layout tokens and component class contracts required for the Hamster Reader two-column demo shell.
@@ -47,6 +48,7 @@ For Chinese UI text, ensure proper grouping. If mixing Chinese and English (or n
 ## 6. Empty / Error States
 
 If no document is loaded, or if parsing fails, the UI should gracefully present empty/error states:
+
 - **Empty State Container:** `data-testid="demo-empty-state"`
 - **Error State Container:** `data-testid="demo-error-state"`
 
@@ -55,11 +57,53 @@ If no document is loaded, or if parsing fails, the UI should gracefully present 
 Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
 
 - **Container:** `.hamster-reader__page-browser`, anchored to the reader's left edge without resizing the document viewport.
-- **Width:** `min(240px, 78vw)` so the document remains partially visible on narrow screens.
+- **Width:** `min(200px, 25vw)` so the document remains partially visible on narrow screens.
 - **Surface:** `rgba(249, 250, 251, 0.98)`, right border `#e5e7eb`, and a restrained right-facing shadow.
 - **Motion:** enter and exit with horizontal `transform` and `opacity` only; reduced-motion users receive an immediate state change.
 - **Scrolling:** the thumbnail list owns vertical scrolling and contains overscroll within the panel.
 - **Accessibility:** the closed panel is hidden from assistive technology and keyboard focus; open page buttons have visible `#2563eb` focus outlines.
 - **Loading:** thumbnail visibility must route through the layout viewer's existing lazy page queue and cache rather than introducing a second loader.
 
-*(End of minimal design contract)*
+## 8. Text Selection Range Handles
+
+Text range handles use the mobile selection convention while retaining the
+existing circular handle appearance supplied by `@hamster-note/selection`.
+
+- **Stem:** `2px` wide, the same height as the corresponding first or last
+  selection rectangle, and separated from that rectangle by a `2px`
+  horizontal gap.
+- **Start endpoint:** the circle center coincides with the stem's top endpoint.
+- **End endpoint:** the circle center coincides with the stem's bottom endpoint.
+- **Document order:** the document-front endpoint always uses the start
+  treatment and the document-back endpoint always uses the end treatment,
+  including selections created in the reverse gesture direction.
+- **Interaction:** the stem is presentation-only (`pointer-events: none`); only
+  the existing circular handle starts a drag.
+- **Drag coordinate:** dragging resolves the caret from the stem midpoint. The
+  initial grab position inside the circle must not offset the resolved caret.
+- **Rectangle selection:** rectangle-tool handles retain the dependency's
+  existing circular rendering and drag behavior.
+
+## 9. Range Handle Magnifier
+
+Dragging a range handle exposes a compact view of the page directly under the
+handle's visual center, so the selection endpoint remains visible beneath the
+user's pointer. Text handles use their corrected drag coordinate; rectangle
+handles retain the dependency's original coordinate behavior.
+
+- **Portal:** `.hamster-reader__range-magnifier` is rendered as a direct child
+  of `.hamster-reader__intermediate-document-viewer`, never inside
+  `.virtual-paper-container`; its dimensions therefore remain screen-fixed at
+  every document zoom level.
+- **Geometry:** a `120px` circular lens with `3px` white border, restrained
+  neutral shadow, and an `8px` blue center marker.
+- **Magnification:** page content is rendered at `2x` around the corrected range
+  endpoint. The handle itself is excluded from the captured page image.
+- **Placement:** center above the handle with an `18px` gap. If the reader has
+  less than `8px` of clearance above, place it below; clamp both axes to an
+  `8px` viewport inset.
+- **Interaction:** show during text or rectangle handle dragging, ignore pointer
+  input, update from the active handle center, and hide on pointer up, pointer
+  cancel, window blur, or capture failure.
+
+_(End of minimal design contract)_

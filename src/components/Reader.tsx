@@ -134,6 +134,8 @@ export type ReaderProps = {
   containMarginY?: number
   /** 是否显示布局模式的页面浏览侧栏，默认 false */
   showPageBrowser?: boolean
+  /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
+  themeColor?: string
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   /** 绘制图形的描边颜色，默认 '#2563eb' */
@@ -318,6 +320,7 @@ export function Reader({
   containMarginBottom,
   containMarginY,
   showPageBrowser,
+  themeColor,
   selectedTool,
   paintingTool = 'pen',
   drawingStrokeColor = '#2563eb',
@@ -605,6 +608,17 @@ export function Reader({
     ? `hamster-reader ${className}`
     : 'hamster-reader'
 
+  const handleDefaultCommentHighlight = useCallback(
+    async (range: ReaderSelectionRange) => {
+      const result = await onCommentHighlight?.(range)
+      if (selectedRangeId === range.id) {
+        onSelectRange?.(null)
+      }
+      return result ?? range
+    },
+    [onCommentHighlight, selectedRangeId, onSelectRange]
+  )
+
   const showUploadZone = !document && !uploadedFile
   const showFileInfo = !document && uploadedFile
   const hasDocumentPages = documentHasPages(document)
@@ -690,10 +704,13 @@ export function Reader({
                 ranges={resolvedRanges}
                 onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
+                onCommentHighlight={
+                  onCommentHighlight ? handleDefaultCommentHighlight : undefined
+                }
               />
             ))
           }
-          onCommentHighlight={onCommentHighlight}
+          onCommentHighlight={highlightPopover ? onCommentHighlight : undefined}
           autoHighlight={autoHighlight}
           selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}
@@ -722,6 +739,7 @@ export function Reader({
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
+          themeColor={themeColor}
         />
       )
     }

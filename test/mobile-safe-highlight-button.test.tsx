@@ -81,9 +81,24 @@ describe('DefaultSelectionPopover (contains MobileSafeHighlightButton)', () => {
     const button = screen.getByRole('button', { name: '高亮' })
 
     fireEvent.pointerDown(button, { pointerType: 'touch' })
+    fireEvent.touchStart(button)
     expect(confirm).toHaveBeenCalledTimes(1)
 
     fireEvent.click(button)
+    expect(confirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('confirms on touchstart when the browser does not dispatch pointer events', () => {
+    const confirm = vi.fn()
+    const selectionRef = makeSelectionRef(confirm)
+    render(
+      <DefaultSelectionPopover selectionRef={selectionRef} {...noopContext} />
+    )
+    const button = screen.getByRole('button', { name: '高亮' })
+
+    fireEvent.touchStart(button)
+    fireEvent.click(button)
+
     expect(confirm).toHaveBeenCalledTimes(1)
   })
 })
