@@ -122,6 +122,28 @@ export async function parseUploadedDocument(
 // Helpers
 // ---------------------------------------------------------------------------
 
+const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
+
+function parseStoredBookmarks(raw: string | null): number[] {
+  if (raw === null || raw.trim() === '') return []
+
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+
+    return Array.from(
+      new Set(
+        parsed.filter(
+          (value): value is number =>
+            typeof value === 'number' && Number.isInteger(value) && value > 0
+        )
+      )
+    ).sort((left, right) => left - right)
+  } catch {
+    return []
+  }
+}
+
 function persistHighlights(
   fileName: string | undefined,
   ranges: ReaderSelectionRange[],
@@ -256,6 +278,9 @@ export function App() {
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
   const [showPageBrowser, setShowPageBrowser] = useState(false)
+  const [bookmarkedPageNumbers, setBookmarkedPageNumbers] = useState<number[]>(
+    []
+  )
   const [themeColor, setThemeColor] = useState('#2563eb')
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
@@ -499,6 +524,28 @@ export function App() {
     [ranges, rects, uploadedFile?.name]
   )
 
+  const handleTogglePageBookmark = useCallback(
+    (pageNumber: number) => {
+      if (!uploadedFile || !Number.isInteger(pageNumber) || pageNumber <= 0) {
+        return
+      }
+
+      setBookmarkedPageNumbers((currentPageNumbers) => {
+        const nextPageNumbers = currentPageNumbers.includes(pageNumber)
+          ? currentPageNumbers.filter((current) => current !== pageNumber)
+          : [...currentPageNumbers, pageNumber].sort(
+              (left, right) => left - right
+            )
+        localStorage.setItem(
+          `${BOOKMARK_STORAGE_PREFIX}${uploadedFile.name}`,
+          JSON.stringify(nextPageNumbers)
+        )
+        return nextPageNumbers
+      })
+    },
+    [uploadedFile]
+  )
+
   // 侧边栏文字高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
   const handleHighlightSelect = useCallback((id: string) => {
     setSelectedRangeId(id)
@@ -636,6 +683,12 @@ export function App() {
         setRanges(Array.from(parsedHighlights.ranges))
         setRects(Array.from(parsedHighlights.rects))
         setPagePaintings(parsedHighlights.paintings)
+
+        setBookmarkedPageNumbers(
+          parseStoredBookmarks(
+            localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
+          )
+        )
 
         const storedComments = localStorage.getItem(
           `hamster-reader-demo:comments:${file.name}`
@@ -1463,6 +1516,8 @@ export function App() {
           themeColor={themeColor}
           commentCountByRangeId={commentCountByRangeId}
           commentCountByRectId={commentCountByRangeId}
+          bookmarkedPageNumbers={bookmarkedPageNumbers}
+          onTogglePageBookmark={handleTogglePageBookmark}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}

@@ -1,16 +1,19 @@
 import type { DrawingValue } from '@hamster-note/painting'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle
 } from '../../types/selection'
 import { hasDrawingStrokes } from '../PageDrawingLayer'
+import {
+  PageBookmarkButton,
+  PageBrowserBookmarksPanel
+} from './PageBrowserBookmarks'
 import { PageBrowserDrawingPreview } from './PageBrowserDrawingPreview'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import { usePageBrowserDrag } from './usePageBrowserDrag'
 
-/** 侧栏可切换的面板类型：页面缩略图列表 / 高亮列表 */
-type PageBrowserTab = 'pages' | 'highlights'
+type PageBrowserTab = 'pages' | 'highlights' | 'bookmarks'
 
 type PageBrowserProps = {
   readonly isOpen: boolean
@@ -54,6 +57,8 @@ type PageBrowserProps = {
   readonly onNavigateToRect?: (id: string) => void
   /** 每个 rectId 对应的评论数量，用于在矩形框选项上展示评论计数徽章。 */
   readonly commentCountByRectId?: Readonly<Record<string, number>>
+  readonly bookmarkedPageNumbers?: readonly number[]
+  readonly onTogglePageBookmark?: (pageNumber: number) => void
   /** 侧栏被手势关闭时通知受控宿主同步开关状态。 */
   readonly onClose?: () => void
 }
@@ -160,6 +165,8 @@ export function PageBrowser({
   onSelectRect,
   onNavigateToRect,
   commentCountByRectId,
+  bookmarkedPageNumbers,
+  onTogglePageBookmark,
   onClose
 }: PageBrowserProps) {
   // 默认展示页面 tab，保证 page-browser-page-N 按钮处于 a11y 树中
@@ -167,16 +174,28 @@ export function PageBrowser({
   const [activeTab, setActiveTab] = useState<PageBrowserTab>('pages')
   const highlightRanges = ranges ?? []
   const highlightRects = rects ?? []
-  const observableItemsKey =
-    activeTab === 'pages'
-      ? pageNumbers.join(',')
-      : highlightRects
+  const bookmarkedPages = useMemo(() => {
+    const bookmarkSet = new Set(bookmarkedPageNumbers ?? [])
+    return pageNumbers.filter((pageNumber) => bookmarkSet.has(pageNumber))
+  }, [bookmarkedPageNumbers, pageNumbers])
+  const bookmarkSet = useMemo(() => new Set(bookmarkedPages), [bookmarkedPages])
+  const observableItemsKey = (() => {
+    switch (activeTab) {
+      case 'pages':
+        return pageNumbers.join(',')
+      case 'highlights':
+        return highlightRects
           .map((rect) => `${rect.id}:${rect.selectionId ?? ''}`)
           .join(',')
+      case 'bookmarks':
+        return bookmarkedPages.join(',')
+    }
+  })()
 
   const navRef = useRef<HTMLElement>(null)
   const pagesScrollRootRef = useRef<HTMLDivElement>(null)
   const highlightsScrollRootRef = useRef<HTMLDivElement>(null)
+  const bookmarksScrollRootRef = useRef<HTMLDivElement>(null)
   const [dismissedByGesture, setDismissedByGesture] = useState(false)
   const effectiveOpen = isOpen && !dismissedByGesture
 
@@ -195,10 +214,16 @@ export function PageBrowser({
   })
 
   useEffect(() => {
-    const scrollRoot =
-      activeTab === 'pages'
-        ? pagesScrollRootRef.current
-        : highlightsScrollRootRef.current
+    const scrollRoot = (() => {
+      switch (activeTab) {
+        case 'pages':
+          return pagesScrollRootRef.current
+        case 'highlights':
+          return highlightsScrollRootRef.current
+        case 'bookmarks':
+          return bookmarksScrollRootRef.current
+      }
+    })()
     if (
       !effectiveOpen ||
       !scrollRoot ||
@@ -251,6 +276,27 @@ export function PageBrowser({
       })
     }
   }, [activeTab, effectiveOpen, onPageVisibilityChange, observableItemsKey])
+
+  // 主视图滚动到新页面时，侧栏自动滚动到第一个可见页面
+  useEffect(() => {
+    if (
+      !effectiveOpen ||
+      activeTab !== 'pages' ||
+      !pagesScrollRootRef.current ||
+      !visiblePageNumbers ||
+      visiblePageNumbers.size === 0
+    ) {
+      return
+    }
+
+    const firstVisiblePage = Math.min(...visiblePageNumbers)
+    const targetButton = pagesScrollRootRef.current.querySelector<HTMLElement>(
+      `[data-page-number="${firstVisiblePage}"]`
+    )
+    if (targetButton) {
+      targetButton.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [activeTab, effectiveOpen, visiblePageNumbers])
 
   const className = [
     'hamster-reader__page-browser',
@@ -333,6 +379,23 @@ export function PageBrowser({
         >
           高亮
         </button>
+        <button
+          type='button'
+          role='tab'
+          aria-selected={activeTab === 'bookmarks'}
+          className={[
+            'hamster-reader__page-browser-tab',
+            activeTab === 'bookmarks'
+              ? 'hamster-reader__page-browser-tab--active'
+              : ''
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          tabIndex={effectiveOpen ? 0 : -1}
+          onClick={() => setActiveTab('bookmarks')}
+        >
+          书签
+        </button>
       </div>
 
       {/* 页面缩略图面板 */}
@@ -362,39 +425,50 @@ export function PageBrowser({
               .join(' ')
 
             return (
-              <button
+              <div
                 key={pageNumber}
-                type='button'
-                className={itemClassName}
-                aria-label={`Go to page ${pageNumber}`}
-                aria-current={isSelected ? 'page' : undefined}
-                tabIndex={effectiveOpen ? 0 : -1}
-                data-page-number={pageNumber}
-                data-testid={`page-browser-page-${pageNumber}`}
-                onClick={() => onNavigateToPage(pageNumber)}
+                className='hamster-reader__page-browser-page'
               >
-                <span
-                  className='hamster-reader__page-browser-preview'
-                  style={{ aspectRatio }}
+                <button
+                  type='button'
+                  className={itemClassName}
+                  aria-label={`Go to page ${pageNumber}`}
+                  aria-current={isSelected ? 'page' : undefined}
+                  tabIndex={effectiveOpen ? 0 : -1}
+                  data-page-number={pageNumber}
+                  data-testid={`page-browser-page-${pageNumber}`}
+                  onClick={() => onNavigateToPage(pageNumber)}
                 >
-                  {baseImage ? (
-                    <img
-                      src={baseImage}
-                      alt=''
-                      className='hamster-reader__page-browser-image'
-                      draggable={false}
-                    />
-                  ) : (
-                    <span
-                      className='hamster-reader__page-browser-placeholder'
-                      aria-hidden='true'
-                    />
-                  )}
-                </span>
-                <span className='hamster-reader__page-browser-page-number'>
-                  {pageNumber}
-                </span>
-              </button>
+                  <span
+                    className='hamster-reader__page-browser-preview'
+                    style={{ aspectRatio }}
+                  >
+                    {baseImage ? (
+                      <img
+                        src={baseImage}
+                        alt=''
+                        className='hamster-reader__page-browser-image'
+                        draggable={false}
+                      />
+                    ) : (
+                      <span
+                        className='hamster-reader__page-browser-placeholder'
+                        aria-hidden='true'
+                      />
+                    )}
+                  </span>
+                  <span className='hamster-reader__page-browser-page-number'>
+                    {pageNumber}
+                  </span>
+                </button>
+                <PageBookmarkButton
+                  pageNumber={pageNumber}
+                  isBookmarked={bookmarkSet.has(pageNumber)}
+                  isOpen={effectiveOpen}
+                  isEnabled={onTogglePageBookmark !== undefined}
+                  onToggle={onTogglePageBookmark}
+                />
+              </div>
             )
           })}
         </div>
@@ -552,6 +626,22 @@ export function PageBrowser({
             </>
           )}
         </div>
+      </div>
+
+      <div
+        className='hamster-reader__page-browser-panel'
+        role='tabpanel'
+        hidden={activeTab !== 'bookmarks'}
+      >
+        <PageBrowserBookmarksPanel
+          bookmarkedPageNumbers={bookmarkedPages}
+          isOpen={effectiveOpen}
+          isEnabled={onTogglePageBookmark !== undefined}
+          scrollRootRef={bookmarksScrollRootRef}
+          listStyle={listStyle}
+          onNavigateToPage={onNavigateToPage}
+          onTogglePageBookmark={onTogglePageBookmark}
+        />
       </div>
     </nav>
   )

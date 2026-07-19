@@ -20,6 +20,10 @@ import type {
   ReaderSelectionRef,
   ReaderSelectionTool
 } from '../types/selection'
+import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover
+} from './DefaultPopover'
 import type {
   ReaderInteractionMode,
   ReaderPageRange,
@@ -29,10 +33,6 @@ import type {
 } from './IntermediateDocumentViewer'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
-import {
-  DefaultHighlightPopover,
-  DefaultSelectionPopover
-} from './DefaultPopover'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import type {
   ReaderPagePaintingMap,
@@ -142,6 +142,10 @@ export type ReaderProps = {
   commentCountByRangeId?: Readonly<Record<string, number>>
   /** 每个 rectId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
   commentCountByRectId?: Readonly<Record<string, number>>
+  /** 由宿主控制的书签页码，在 page-browser 的页面与书签面板中展示。 */
+  bookmarkedPageNumbers?: readonly number[]
+  /** 添加或删除指定页书签。 */
+  onTogglePageBookmark?: (pageNumber: number) => void
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
@@ -331,6 +335,8 @@ export function Reader({
   themeColor,
   commentCountByRangeId,
   commentCountByRectId,
+  bookmarkedPageNumbers,
+  onTogglePageBookmark,
   selectedTool,
   paintingTool = 'pen',
   drawingStrokeColor = '#2563eb',
@@ -754,6 +760,8 @@ export function Reader({
           themeColor={themeColor}
           commentCountByRangeId={commentCountByRangeId}
           commentCountByRectId={commentCountByRectId}
+          bookmarkedPageNumbers={bookmarkedPageNumbers}
+          onTogglePageBookmark={onTogglePageBookmark}
           onPageLoadStatusChange={onPageLoadStatusChange}
         />
       )

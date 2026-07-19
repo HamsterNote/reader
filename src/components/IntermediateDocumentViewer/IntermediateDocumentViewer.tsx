@@ -536,6 +536,10 @@ export type IntermediateDocumentViewerProps = {
   commentCountByRangeId?: Readonly<Record<string, number>>
   /** 每个 rectId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
   commentCountByRectId?: Readonly<Record<string, number>>
+  /** 由宿主控制的书签页码。 */
+  bookmarkedPageNumbers?: readonly number[]
+  /** 添加或删除指定页书签。 */
+  onTogglePageBookmark?: (pageNumber: number) => void
   /** 页面加载状态变化时的回调，报告当前已加载的页码列表 */
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
 }
@@ -1086,6 +1090,8 @@ type ViewerContentProps = PageResources & {
   visiblePageNumbers: ReadonlySet<number>
   commentCountByRangeId?: Readonly<Record<string, number>>
   commentCountByRectId?: Readonly<Record<string, number>>
+  bookmarkedPageNumbers?: readonly number[]
+  onTogglePageBookmark?: (pageNumber: number) => void
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -2170,7 +2176,9 @@ function ViewerContent({
   themeColor,
   visiblePageNumbers,
   commentCountByRangeId,
-  commentCountByRectId
+  commentCountByRectId,
+  bookmarkedPageNumbers,
+  onTogglePageBookmark
 }: ViewerContentProps) {
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -2635,6 +2643,8 @@ function ViewerContent({
             onSelectRect={onSelectRect}
             onNavigateToRect={onScrollToRect}
             commentCountByRectId={commentCountByRectId}
+            bookmarkedPageNumbers={bookmarkedPageNumbers}
+            onTogglePageBookmark={onTogglePageBookmark}
             onClose={onPageBrowserClose}
           />
           <VirtualPaper
@@ -2736,6 +2746,8 @@ export function IntermediateDocumentViewer({
   themeColor,
   commentCountByRangeId,
   commentCountByRectId,
+  bookmarkedPageNumbers,
+  onTogglePageBookmark,
   onPageLoadStatusChange
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
@@ -5227,6 +5239,8 @@ export function IntermediateDocumentViewer({
       visiblePageNumbers={visiblePages}
       commentCountByRangeId={commentCountByRangeId}
       commentCountByRectId={commentCountByRectId}
+      bookmarkedPageNumbers={bookmarkedPageNumbers}
+      onTogglePageBookmark={onTogglePageBookmark}
     />
   )
 }

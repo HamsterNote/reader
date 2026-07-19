@@ -17,7 +17,7 @@ import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -76,6 +76,7 @@ const mockCallbacks: {
 const mockReaderProps: unknown[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 const COMMENT_STORAGE_PREFIX = 'hamster-reader-demo:comments:'
+const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
 
 // --- Mock annotation history state ---
 // 模拟 library 内部的 undo/redo 栈，让 mock Reader 能在测试中
@@ -233,6 +234,8 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
       onUpdateRect?: (rect: ReaderSelectionRectangle) => void
       pagePaintings?: unknown
       onPagePaintingsChange?: (paintings: unknown) => void
+      bookmarkedPageNumbers?: readonly number[]
+      onTogglePageBookmark?: (pageNumber: number) => void
     }) => {
       // 从受控 props 同步 present 快照（不创建 checkpoint）
       mockHistoryState.present = {
@@ -429,6 +432,10 @@ function highlightStorageKey(fileName: string): string {
 
 function commentStorageKey(fileName: string): string {
   return `${COMMENT_STORAGE_PREFIX}${fileName}`
+}
+
+function bookmarkStorageKey(fileName: string): string {
+  return `${BOOKMARK_STORAGE_PREFIX}${fileName}`
 }
 
 function findDocumentReaderProps(): Record<string, unknown> | undefined {
@@ -2066,6 +2073,83 @@ describe('demo parser flow', () => {
 
       expect(screen.queryByText('Stale Document')).not.toBeInTheDocument()
       expect(screen.queryByText('stale text')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('demo bookmark persistence', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      mockReaderProps.length = 0
+      localStorage.clear()
+      resetMockHistory()
+    })
+
+    it('restores sorted unique valid bookmarks for the parsed file', async () => {
+      // Given: persisted data contains duplicates and invalid page values.
+      localStorage.setItem(
+        bookmarkStorageKey('bookmarked.pdf'),
+        JSON.stringify([3, 1, 3, 'bad', 0, 2.5])
+      )
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Bookmarked Document')
+      )
+
+      // When: that file is parsed by the demo.
+      render(<App />)
+      upload(makeFile('bookmarked.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      // Then: Reader receives only canonical bookmark page numbers.
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([1, 3])
+      })
+    })
+
+    it('persists bookmark additions and removals through the Reader callback', async () => {
+      // Given: a freshly parsed file has no saved bookmarks.
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Bookmark Toggle Document')
+      )
+      render(<App />)
+      upload(makeFile('bookmark-toggle.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([])
+
+      // When: page 2 is bookmarked from Reader.
+      act(() => {
+        const onTogglePageBookmark = findDocumentReaderProps()
+          ?.onTogglePageBookmark as (pageNumber: number) => void
+        onTogglePageBookmark(2)
+      })
+
+      // Then: both controlled props and per-file storage contain page 2.
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([2])
+      })
+      expect(
+        JSON.parse(
+          localStorage.getItem(bookmarkStorageKey('bookmark-toggle.pdf')) ||
+            '[]'
+        )
+      ).toEqual([2])
+
+      // When: page 2 is toggled again from the latest controlled callback.
+      act(() => {
+        const onTogglePageBookmark = findDocumentReaderProps()
+          ?.onTogglePageBookmark as (pageNumber: number) => void
+        onTogglePageBookmark(2)
+      })
+
+      // Then: the bookmark is removed from props and persistence.
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([])
+      })
+      expect(
+        JSON.parse(
+          localStorage.getItem(bookmarkStorageKey('bookmark-toggle.pdf')) ||
+            '[]'
+        )
+      ).toEqual([])
     })
   })
 

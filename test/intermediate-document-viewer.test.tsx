@@ -7810,6 +7810,88 @@ describe('touchPanMode', () => {
       }
     })
 
+    it('toggles page bookmarks from the pages tab', () => {
+      // Given: page 2 is already bookmarked in the controlled Reader state.
+      const onTogglePageBookmark = vi.fn()
+      const { document } = makeDocument({ pageCount: 3 })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+          bookmarkedPageNumbers={[2]}
+          onTogglePageBookmark={onTogglePageBookmark}
+        />
+      )
+
+      // When: the user adds page 1 and removes page 2 from the pages tab.
+      fireEvent.click(screen.getByRole('button', { name: '添加第 1 页书签' }))
+      fireEvent.click(screen.getByRole('button', { name: '删除第 2 页书签' }))
+
+      // Then: the controlled callback receives each affected page number.
+      expect(screen.getByRole('tab', { name: '书签' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: '添加第 1 页书签' })
+      ).toHaveAttribute('aria-pressed', 'false')
+      expect(
+        screen.getByRole('button', { name: '删除第 2 页书签' })
+      ).toHaveAttribute('aria-pressed', 'true')
+      expect(onTogglePageBookmark).toHaveBeenNthCalledWith(1, 1)
+      expect(onTogglePageBookmark).toHaveBeenNthCalledWith(2, 2)
+    })
+
+    it('removes bookmark actions from keyboard focus when the page browser is closed', () => {
+      // Given: bookmark controls are enabled while the page browser is closed.
+      const { document } = makeDocument({ pageCount: 2 })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          bookmarkedPageNumbers={[2]}
+          onTogglePageBookmark={vi.fn()}
+        />
+      )
+
+      // When: the closed page browser remains mounted for its slide transition.
+      const addBookmarkButton = screen.getByLabelText('添加第 1 页书签')
+      const removeBookmarkButtons = screen.getAllByLabelText('删除第 2 页书签')
+
+      // Then: its bookmark actions cannot receive keyboard focus.
+      expect(addBookmarkButton).toHaveAttribute('tabindex', '-1')
+      for (const removeBookmarkButton of removeBookmarkButtons) {
+        expect(removeBookmarkButton).toHaveAttribute('tabindex', '-1')
+      }
+    })
+
+    it('navigates to and removes a bookmarked page from the bookmarks tab', async () => {
+      // Given: only page 2 is bookmarked and the page browser is open.
+      const onTogglePageBookmark = vi.fn()
+      const { document } = makeDocument({ pageCount: 3 })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+          bookmarkedPageNumbers={[2]}
+          onTogglePageBookmark={onTogglePageBookmark}
+          initialLoadedPages={1}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      vi.mocked(document.getPageByPageNumber).mockClear()
+
+      // When: the user opens bookmarks, navigates to page 2, then removes it.
+      fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: '跳转到书签：第 2 页' })
+      )
+      fireEvent.click(screen.getByRole('button', { name: '删除第 2 页书签' }))
+
+      // Then: navigation uses the viewer page loader and removal stays controlled.
+      expect(document.getPageByPageNumber).toHaveBeenCalledWith(2)
+      expect(
+        screen.queryByRole('button', { name: '跳转到书签：第 1 页' })
+      ).not.toBeInTheDocument()
+      expect(onTogglePageBookmark).toHaveBeenCalledWith(2)
+    })
+
     it('renders a rectangle highlight as an image-only crop of its page thumbnail', async () => {
       const { document, pages } = makeDocument({
         pageCount: 1,

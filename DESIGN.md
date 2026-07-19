@@ -57,12 +57,16 @@ If no document is loaded, or if parsing fails, the UI should gracefully present 
 Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
 
 - **Container:** `.hamster-reader__page-browser`, anchored to the reader's left edge without resizing the document viewport.
-- **Width:** `min(200px, 25vw)` so the document remains partially visible on narrow screens.
+- **Width:** `min(240px, 78vw)` so the panel remains usable on narrow screens while leaving part of the document visible.
 - **Surface:** `rgba(249, 250, 251, 0.98)`, right border `#e5e7eb`, and a restrained right-facing shadow.
 - **Motion:** enter and exit with horizontal `transform` and `opacity` only; reduced-motion users receive an immediate state change.
 - **Scrolling:** the thumbnail list owns vertical scrolling and contains overscroll within the panel.
 - **Accessibility:** the closed panel is hidden from assistive technology and keyboard focus; open page buttons have visible `#2563eb` focus outlines.
 - **Loading:** thumbnail visibility must route through the layout viewer's existing lazy page queue and cache rather than introducing a second loader.
+- **Tabs:** the panel groups `页面`, `高亮`, and `书签` as peer tabs without changing the panel width or visual hierarchy.
+- **Bookmark action:** every page thumbnail exposes a separate SVG bookmark toggle with an explicit add/remove label and `aria-pressed` state; interactive controls must never be nested.
+- **Bookmark list:** bookmarked pages appear in page order, support page navigation and removal, and show `暂无书签` when empty.
+- **Ownership:** bookmark data is controlled by the Reader host. The demo persists only valid positive integer page numbers per file and restores them when that file is reopened.
 
 ## 8. Text Selection Range Handles
 
