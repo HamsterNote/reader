@@ -1,6 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReaderSelectionRange, ReaderSelectionRectangle } from '../../types/selection'
+import type { DrawingValue } from '@hamster-note/painting'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type {
+  ReaderSelectionRange,
+  ReaderSelectionRectangle
+} from '../../types/selection'
+import { hasDrawingStrokes } from '../PageDrawingLayer'
+import { PageBrowserDrawingPreview } from './PageBrowserDrawingPreview'
 import { parsePublicPageId } from './rangeJumpHelpers'
+import { usePageBrowserDrag } from './usePageBrowserDrag'
 
 /** 侧栏可切换的面板类型：页面缩略图列表 / 高亮列表 */
 type PageBrowserTab = 'pages' | 'highlights'
@@ -13,6 +20,7 @@ type PageBrowserProps = {
     { readonly width: number; readonly height: number }
   >
   readonly baseImagesByPageNumber: ReadonlyMap<number, string>
+  readonly pagePaintings?: Readonly<Record<string, DrawingValue>>
   readonly onPageVisibilityChange: (
     pageNumber: number,
     isVisible: boolean
@@ -46,6 +54,8 @@ type PageBrowserProps = {
   readonly onNavigateToRect?: (id: string) => void
   /** 每个 rectId 对应的评论数量，用于在矩形框选项上展示评论计数徽章。 */
   readonly commentCountByRectId?: Readonly<Record<string, number>>
+  /** 侧栏被手势关闭时通知受控宿主同步开关状态。 */
+  readonly onClose?: () => void
 }
 
 /** 聊天气泡 SVG 图标，用于评论计数徽章 */
@@ -66,155 +76,66 @@ function CommentBubbleIcon() {
   )
 }
 
-// ── Rect 选区截图（运行时现场计算，不存入持久化数据）─────────────────
+type RectPreviewGeometry = {
+  readonly aspectRatio: string
+  readonly imageStyle: React.CSSProperties
+}
 
-/**
- * 从页面底图中裁剪 rect 选区对应的区域，返回 data URL。
- *
- * 坐标转换：
- * - 'percent': rect 坐标为 0-100 百分比，按图片自然尺寸换算
- * - 'px': rect 坐标为页面 CSS 像素，按底图/页面尺寸比换算
- */
-async function cropRectFromBaseImage(
-  baseImageSrc: string,
-  rect: { x: number; y: number; width: number; height: number },
-  overlayRectType: 'px' | 'percent',
-  pageSize: { width: number; height: number }
-): Promise<string> {
-  const img = new Image()
-  img.crossOrigin = 'anonymous'
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve()
-    img.onerror = () => reject(new Error('base image load failed'))
-    img.src = baseImageSrc
-  })
-
-  const naturalWidth = img.naturalWidth
-  const naturalHeight = img.naturalHeight
-
-  let srcX: number, srcY: number, srcW: number, srcH: number
-  if (overlayRectType === 'percent') {
-    srcX = (rect.x / 100) * naturalWidth
-    srcY = (rect.y / 100) * naturalHeight
-    srcW = (rect.width / 100) * naturalWidth
-    srcH = (rect.height / 100) * naturalHeight
-  } else {
-    const scaleX = naturalWidth / pageSize.width
-    const scaleY = naturalHeight / pageSize.height
-    srcX = rect.x * scaleX
-    srcY = rect.y * scaleY
-    srcW = rect.width * scaleX
-    srcH = rect.height * scaleY
-  }
-
-  // 防御性 clamp：确保裁剪区域不越界
-  const clampedX = Math.max(0, Math.min(srcX, naturalWidth))
-  const clampedY = Math.max(0, Math.min(srcY, naturalHeight))
-  const clampedW = Math.max(1, Math.min(srcW, naturalWidth - clampedX))
-  const clampedH = Math.max(1, Math.min(srcH, naturalHeight - clampedY))
-
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(clampedW)
-  canvas.height = Math.round(clampedH)
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Canvas 2D context unavailable')
-
-  ctx.drawImage(
-    img,
-    clampedX, clampedY, clampedW, clampedH,
-    0, 0, clampedW, clampedH
-  )
-
-  return canvas.toDataURL('image/png')
+/** PageBrowser 接收运行时 rect，其 selectionId 可能带 reader scope 前缀。 */
+function parseRectPageNumber(selectionId: string | undefined): number | null {
+  if (!selectionId) return null
+  const publicPageId = selectionId.slice(selectionId.lastIndexOf(':') + 1)
+  return parsePublicPageId(publicPageId)
 }
 
 /**
- * 运行时为每个 rect 选区计算截图 data URL。
- * 仅在 enabled=true（高亮 tab 激活且侧栏打开）时计算，关闭时清空以释放内存。
- * 图片不存入持久化数据，每次需要时现场重算。
+ * 把 rect 转成页面像素，再用一个 overflow:hidden 容器直接裁切整页缩略图。
+ * 该方案不生成 Canvas/data URL，避免异步加载、跨域污染及额外内存占用。
  */
-function useRectScreenshots(
-  rects: readonly ReaderSelectionRectangle[],
-  baseImagesByPageNumber: ReadonlyMap<number, string>,
-  pageSizesByPageNumber: ReadonlyMap<
-    number,
-    { readonly width: number; readonly height: number }
-  >,
-  enabled: boolean
-): ReadonlyMap<string, string> {
-  const [screenshots, setScreenshots] = useState<
-    ReadonlyMap<string, string>
-  >(new Map())
+function getRectPreviewGeometry(
+  selectionRect: ReaderSelectionRectangle,
+  pageSize: { readonly width: number; readonly height: number }
+): RectPreviewGeometry | null {
+  const { width: pageWidth, height: pageHeight } = pageSize
+  const { x, y, width, height } = selectionRect.rect
+  if (
+    ![pageWidth, pageHeight, x, y, width, height].every(Number.isFinite) ||
+    pageWidth <= 0 ||
+    pageHeight <= 0 ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null
+  }
 
-  // 用 ref 保存最新值，effect 依赖仅靠 inputsKey + enabled 控制
-  const rectsRef = useRef(rects)
-  rectsRef.current = rects
-  const baseImagesRef = useRef(baseImagesByPageNumber)
-  baseImagesRef.current = baseImagesByPageNumber
-  const pageSizesRef = useRef(pageSizesByPageNumber)
-  pageSizesRef.current = pageSizesByPageNumber
-
-  // 用序列化 key 捕获实际输入变化，避免 Map 引用频繁变更触发重算
-  const inputsKey = useMemo(
-    () =>
-      rects
-        .map((r) => {
-          const pageNumber = r.selectionId
-            ? parsePublicPageId(r.selectionId)
-            : null
-          const baseImage =
-            pageNumber !== null
-              ? baseImagesByPageNumber.get(pageNumber)
-              : undefined
-          return `${r.id}:${r.selectionId ?? ''}:${r.rect.x},${r.rect.y},${r.rect.width},${r.rect.height}:${r.overlayRectType}:${baseImage ?? ''}`
-        })
-        .join('|'),
-    [rects, baseImagesByPageNumber]
+  const coordinateScale =
+    selectionRect.overlayRectType === 'px'
+      ? { x: 1, y: 1 }
+      : { x: pageWidth / 100, y: pageHeight / 100 }
+  const left = Math.max(0, Math.min(pageWidth, x * coordinateScale.x))
+  const top = Math.max(0, Math.min(pageHeight, y * coordinateScale.y))
+  const right = Math.max(
+    left,
+    Math.min(pageWidth, (x + width) * coordinateScale.x)
   )
+  const bottom = Math.max(
+    top,
+    Math.min(pageHeight, (y + height) * coordinateScale.y)
+  )
+  const cropWidth = right - left
+  const cropHeight = bottom - top
+  if (cropWidth <= 0 || cropHeight <= 0) return null
 
-  useEffect(() => {
-    // inputsKey 为空串 => 无 rect，直接清空
-    if (!enabled || !inputsKey) {
-      setScreenshots((prev) => (prev.size > 0 ? new Map() : prev))
-      return
+  return {
+    aspectRatio: `${cropWidth} / ${cropHeight}`,
+    imageStyle: {
+      width: `${(pageWidth / cropWidth) * 100}%`,
+      height: `${(pageHeight / cropHeight) * 100}%`,
+      left: `${(-left / cropWidth) * 100}%`,
+      top: `${(-top / cropHeight) * 100}%`,
+      maxWidth: 'none'
     }
-
-    let cancelled = false
-
-    async function compute() {
-      const results = new Map<string, string>()
-      for (const rect of rectsRef.current) {
-        if (cancelled) return
-        const pageNumber = rect.selectionId
-          ? parsePublicPageId(rect.selectionId)
-          : null
-        if (pageNumber === null) continue
-        const baseImage = baseImagesRef.current.get(pageNumber)
-        const pageSize = pageSizesRef.current.get(pageNumber)
-        if (!baseImage || !pageSize) continue
-        try {
-          const dataUrl = await cropRectFromBaseImage(
-            baseImage,
-            rect.rect,
-            rect.overlayRectType,
-            pageSize
-          )
-          if (cancelled) return
-          results.set(rect.id, dataUrl)
-        } catch {
-          // 图片加载失败或 canvas 不可用 -> 跳过，显示占位
-        }
-      }
-      if (!cancelled) setScreenshots(results)
-    }
-
-    compute()
-    return () => {
-      cancelled = true
-    }
-  }, [inputsKey, enabled])
-
-  return screenshots
+  }
 }
 
 export function PageBrowser({
@@ -222,6 +143,7 @@ export function PageBrowser({
   pageNumbers,
   pageSizesByPageNumber,
   baseImagesByPageNumber,
+  pagePaintings,
   onPageVisibilityChange,
   onNavigateToPage,
   themeColor,
@@ -237,30 +159,81 @@ export function PageBrowser({
   selectedRectId,
   onSelectRect,
   onNavigateToRect,
-  commentCountByRectId
+  commentCountByRectId,
+  onClose
 }: PageBrowserProps) {
   // 默认展示页面 tab，保证 page-browser-page-N 按钮处于 a11y 树中
   // （测试依赖 getAllByRole('button', { name: /Go to page/ }) 能查到全部页面按钮）。
   const [activeTab, setActiveTab] = useState<PageBrowserTab>('pages')
+  const highlightRanges = ranges ?? []
+  const highlightRects = rects ?? []
+  const observableItemsKey =
+    activeTab === 'pages'
+      ? pageNumbers.join(',')
+      : highlightRects
+          .map((rect) => `${rect.id}:${rect.selectionId ?? ''}`)
+          .join(',')
 
-  const scrollRootRef = useRef<HTMLDivElement>(null)
+  const navRef = useRef<HTMLElement>(null)
+  const pagesScrollRootRef = useRef<HTMLDivElement>(null)
+  const highlightsScrollRootRef = useRef<HTMLDivElement>(null)
+  const [dismissedByGesture, setDismissedByGesture] = useState(false)
+  const effectiveOpen = isOpen && !dismissedByGesture
 
   useEffect(() => {
-    const scrollRoot = scrollRootRef.current
-    if (!isOpen || !scrollRoot || typeof IntersectionObserver === 'undefined') {
+    if (!isOpen) setDismissedByGesture(false)
+  }, [isOpen])
+
+  const handleDismiss = useCallback(() => {
+    setDismissedByGesture(true)
+    onClose?.()
+  }, [onClose])
+  const isDragging = usePageBrowserDrag({
+    elementRef: navRef,
+    isOpen: effectiveOpen,
+    onDismiss: handleDismiss
+  })
+
+  useEffect(() => {
+    const scrollRoot =
+      activeTab === 'pages'
+        ? pagesScrollRootRef.current
+        : highlightsScrollRootRef.current
+    if (
+      !effectiveOpen ||
+      !scrollRoot ||
+      observableItemsKey.length === 0 ||
+      typeof IntersectionObserver === 'undefined'
+    ) {
       return
     }
+
+    const elementVisibility = new Map<Element, boolean>()
+    let reportedPages = new Set<number>()
 
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          const pageNumber = Number(
-            (entry.target as HTMLElement).dataset.pageNumber
-          )
-          if (Number.isFinite(pageNumber)) {
-            onPageVisibilityChange(pageNumber, entry.isIntersecting)
+          elementVisibility.set(entry.target, entry.isIntersecting)
+        })
+
+        // 同一页面可能有多个矩形。只要其中任意一个仍在视口，就继续保护该页。
+        const nextPages = new Set<number>()
+        elementVisibility.forEach((visible, element) => {
+          const pageNumber = Number((element as HTMLElement).dataset.pageNumber)
+          if (visible && Number.isFinite(pageNumber)) nextPages.add(pageNumber)
+        })
+        nextPages.forEach((pageNumber) => {
+          if (!reportedPages.has(pageNumber)) {
+            onPageVisibilityChange(pageNumber, true)
           }
         })
+        reportedPages.forEach((pageNumber) => {
+          if (!nextPages.has(pageNumber)) {
+            onPageVisibilityChange(pageNumber, false)
+          }
+        })
+        reportedPages = nextPages
       },
       { root: scrollRoot }
     )
@@ -273,15 +246,16 @@ export function PageBrowser({
 
     return () => {
       observer.disconnect()
-      pageNumbers.forEach((pageNumber) => {
+      reportedPages.forEach((pageNumber) => {
         onPageVisibilityChange(pageNumber, false)
       })
     }
-  }, [isOpen, onPageVisibilityChange, pageNumbers])
+  }, [activeTab, effectiveOpen, onPageVisibilityChange, observableItemsKey])
 
   const className = [
     'hamster-reader__page-browser',
-    isOpen ? 'hamster-reader__page-browser--open' : ''
+    effectiveOpen ? 'hamster-reader__page-browser--open' : '',
+    isDragging ? 'hamster-reader__page-browser--dragging' : ''
   ]
     .filter(Boolean)
     .join(' ')
@@ -301,18 +275,6 @@ export function PageBrowser({
         : undefined
   }
 
-  // 高亮列表数据：从 props 读取，无数据时为空数组
-  const highlightRanges = ranges ?? []
-  const highlightRects = rects ?? []
-
-  // 运行时计算 rect 选区截图（仅在高亮 tab 激活且侧栏打开时）
-  const rectScreenshots = useRectScreenshots(
-    highlightRects,
-    baseImagesByPageNumber,
-    pageSizesByPageNumber,
-    isOpen && activeTab === 'highlights'
-  )
-
   // 点击高亮项：先选中再滚动定位
   const handleHighlightClick = (rangeId: string) => {
     onSelectRange?.(rangeId)
@@ -327,18 +289,16 @@ export function PageBrowser({
 
   return (
     <nav
+      ref={navRef}
       className={className}
       aria-label='Page browser'
-      aria-hidden={!isOpen}
+      aria-hidden={!effectiveOpen}
       data-testid='page-browser'
       style={containerStyle}
     >
       {/* 跑道型 tab 切换器：外层 shell padding=4px + border-radius=18px，
           内层 tab border-radius=14px，形成同心圆弧 (R_outer = R_inner + padding) */}
-      <div
-        className='hamster-reader__page-browser-tabs'
-        role='tablist'
-      >
+      <div className='hamster-reader__page-browser-tabs' role='tablist'>
         <button
           type='button'
           role='tab'
@@ -351,7 +311,7 @@ export function PageBrowser({
           ]
             .filter(Boolean)
             .join(' ')}
-          tabIndex={isOpen ? 0 : -1}
+          tabIndex={effectiveOpen ? 0 : -1}
           onClick={() => setActiveTab('pages')}
         >
           页面
@@ -368,7 +328,7 @@ export function PageBrowser({
           ]
             .filter(Boolean)
             .join(' ')}
-          tabIndex={isOpen ? 0 : -1}
+          tabIndex={effectiveOpen ? 0 : -1}
           onClick={() => setActiveTab('highlights')}
         >
           高亮
@@ -382,7 +342,7 @@ export function PageBrowser({
         hidden={activeTab !== 'pages'}
       >
         <div
-          ref={scrollRootRef}
+          ref={pagesScrollRootRef}
           className='hamster-reader__page-browser-list'
           style={listStyle}
         >
@@ -392,9 +352,7 @@ export function PageBrowser({
             const aspectRatio = pageSize
               ? `${pageSize.width} / ${pageSize.height}`
               : undefined
-            const isSelected =
-              visiblePageNumbers !== undefined &&
-              visiblePageNumbers.has(pageNumber)
+            const isSelected = visiblePageNumbers?.has(pageNumber) ?? false
 
             const itemClassName = [
               'hamster-reader__page-browser-item',
@@ -410,7 +368,7 @@ export function PageBrowser({
                 className={itemClassName}
                 aria-label={`Go to page ${pageNumber}`}
                 aria-current={isSelected ? 'page' : undefined}
-                tabIndex={isOpen ? 0 : -1}
+                tabIndex={effectiveOpen ? 0 : -1}
                 data-page-number={pageNumber}
                 data-testid={`page-browser-page-${pageNumber}`}
                 onClick={() => onNavigateToPage(pageNumber)}
@@ -449,20 +407,18 @@ export function PageBrowser({
         hidden={activeTab !== 'highlights'}
       >
         <div
+          ref={highlightsScrollRootRef}
           className='hamster-reader__highlight-list'
           style={listStyle}
         >
           {highlightRanges.length === 0 && highlightRects.length === 0 ? (
-            <p className='hamster-reader__highlight-empty'>
-              暂无高亮
-            </p>
+            <p className='hamster-reader__highlight-empty'>暂无高亮</p>
           ) : (
             <>
               {highlightRanges.map((range) => {
                 const isSelected = selectedRangeId === range.id
                 // 评论计数：从外部传入的映射中读取，缺省为 0
-                const commentCount =
-                  commentCountByRangeId?.[range.id] ?? 0
+                const commentCount = commentCountByRangeId?.[range.id] ?? 0
 
                 const itemClassName = [
                   'hamster-reader__highlight-item',
@@ -478,7 +434,7 @@ export function PageBrowser({
                     className={itemClassName}
                     aria-label={`跳转到高亮：${range.text || '(空选区)'}`}
                     aria-current={isSelected ? 'true' : undefined}
-                    tabIndex={isOpen ? 0 : -1}
+                    tabIndex={effectiveOpen ? 0 : -1}
                     data-range-id={range.id}
                     data-testid={`page-browser-highlight-${range.id}`}
                     onClick={() => handleHighlightClick(range.id)}
@@ -503,12 +459,24 @@ export function PageBrowser({
               })}
               {highlightRects.map((rect) => {
                 const isSelected = selectedRectId === rect.id
-                const commentCount =
-                  commentCountByRectId?.[rect.id] ?? 0
-                const screenshot = rectScreenshots.get(rect.id)
-                const pageNumber = rect.selectionId
-                  ? parsePublicPageId(rect.selectionId)
+                const commentCount = commentCountByRectId?.[rect.id] ?? 0
+                const pageNumber = parseRectPageNumber(rect.selectionId)
+                const baseImage =
+                  pageNumber === null
+                    ? undefined
+                    : baseImagesByPageNumber.get(pageNumber)
+                const pageSize =
+                  pageNumber === null
+                    ? undefined
+                    : pageSizesByPageNumber.get(pageNumber)
+                const previewGeometry = pageSize
+                  ? getRectPreviewGeometry(rect, pageSize)
                   : null
+                const publicPageId =
+                  pageNumber === null ? null : `page-${pageNumber}`
+                const drawingValue = publicPageId
+                  ? pagePaintings?.[publicPageId]
+                  : undefined
                 const ariaLabel =
                   pageNumber !== null
                     ? `跳转到矩形选区：第${pageNumber}页`
@@ -529,29 +497,43 @@ export function PageBrowser({
                     className={itemClassName}
                     aria-label={ariaLabel}
                     aria-current={isSelected ? 'true' : undefined}
-                    tabIndex={isOpen ? 0 : -1}
+                    tabIndex={effectiveOpen ? 0 : -1}
                     data-rect-id={rect.id}
+                    data-page-number={pageNumber ?? undefined}
                     data-testid={`page-browser-rect-${rect.id}`}
                     onClick={() => handleRectClick(rect.id)}
                   >
-                    {screenshot ? (
-                      <img
-                        src={screenshot}
-                        alt=''
-                        className='hamster-reader__highlight-rect-screenshot'
-                        draggable={false}
-                      />
+                    {baseImage && previewGeometry ? (
+                      <span
+                        className='hamster-reader__highlight-rect-preview'
+                        data-testid={`page-browser-rect-preview-${rect.id}`}
+                        style={{ aspectRatio: previewGeometry.aspectRatio }}
+                      >
+                        <img
+                          src={baseImage}
+                          alt=''
+                          className='hamster-reader__highlight-rect-screenshot'
+                          draggable={false}
+                          style={previewGeometry.imageStyle}
+                        />
+                        {publicPageId &&
+                          pageSize &&
+                          drawingValue &&
+                          hasDrawingStrokes(drawingValue) && (
+                            <PageBrowserDrawingPreview
+                              pageId={`${publicPageId}-${rect.id}`}
+                              pageSize={pageSize}
+                              value={drawingValue}
+                              style={previewGeometry.imageStyle}
+                            />
+                          )}
+                      </span>
                     ) : (
                       <span
                         className='hamster-reader__highlight-rect-placeholder'
                         aria-hidden='true'
                       />
                     )}
-                    <span className='hamster-reader__highlight-text'>
-                      {pageNumber !== null
-                        ? `矩形选区 · 第${pageNumber}页`
-                        : '矩形选区'}
-                    </span>
                     {commentCount > 0 && (
                       <span
                         className='hamster-reader__highlight-comment-badge'

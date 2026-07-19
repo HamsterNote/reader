@@ -455,6 +455,7 @@
     visibility: hidden;
     pointer-events: none;
     transform: translateX(-100%);
+    touch-action: pan-y;
     transition:
       transform 220ms ease,
       opacity 180ms ease,
@@ -464,8 +465,13 @@
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      transform: translateX(0);
+      transform: translateX(var(--hamster-reader-page-browser-drag-x, 0px));
       transition-delay: 0s;
+    }
+
+    &--dragging {
+      transition: none;
+      user-select: none;
     }
   }
 
@@ -679,6 +685,13 @@
     );
   }
 
+  &__highlight-item--rect {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    padding: 0;
+  }
+
   &__highlight-text {
     flex: 1 1 0;
     overflow: hidden;
@@ -718,24 +731,47 @@
     text-align: center;
   }
 
-  &__highlight-rect-screenshot {
-    flex: 0 0 auto;
-    width: 48px;
-    height: 36px;
-    border-radius: 4px;
-    border: 1px solid #e5e7eb;
-    object-fit: cover;
+  &__highlight-rect-preview {
+    position: relative;
+    display: block;
+    width: 100%;
+    overflow: hidden;
     background: #f3f4f6;
   }
 
+  &__highlight-rect-screenshot {
+    position: absolute;
+    display: block;
+    object-fit: fill;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  &__highlight-rect-drawing {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+
+    > .hamster-reader__drawing-layer > div {
+      min-height: 0 !important;
+      border: 0 !important;
+    }
+  }
+
   &__highlight-rect-placeholder {
-    flex: 0 0 auto;
-    width: 48px;
-    height: 36px;
-    border-radius: 4px;
-    border: 1px solid #e5e7eb;
+    display: block;
+    width: 100%;
+    aspect-ratio: 4 / 3;
     background: #f3f4f6;
     animation: hamster-reader-rect-placeholder-pulse 1.5s ease-in-out infinite;
+  }
+
+  &__highlight-item--rect &__highlight-comment-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 1;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
   }
 
   @keyframes hamster-reader-rect-placeholder-pulse {

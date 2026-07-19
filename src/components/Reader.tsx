@@ -134,6 +134,8 @@ export type ReaderProps = {
   containMarginY?: number
   /** 是否显示布局模式的页面浏览侧栏，默认 false */
   showPageBrowser?: boolean
+  /** 页面浏览侧栏被左滑关闭时触发。 */
+  onPageBrowserClose?: () => void
   /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
   themeColor?: string
   /** 每个 rangeId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
@@ -325,6 +327,7 @@ export function Reader({
   containMarginBottom,
   containMarginY,
   showPageBrowser,
+  onPageBrowserClose,
   themeColor,
   commentCountByRangeId,
   commentCountByRectId,
@@ -747,6 +750,7 @@ export function Reader({
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
+          onPageBrowserClose={onPageBrowserClose}
           themeColor={themeColor}
           commentCountByRangeId={commentCountByRangeId}
           commentCountByRectId={commentCountByRectId}

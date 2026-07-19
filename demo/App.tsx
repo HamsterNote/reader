@@ -1459,6 +1459,7 @@ export function App() {
           pagePaintings={pagePaintings}
           onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
+          onPageBrowserClose={() => setShowPageBrowser(false)}
           themeColor={themeColor}
           commentCountByRangeId={commentCountByRangeId}
           commentCountByRectId={commentCountByRangeId}

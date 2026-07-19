@@ -120,6 +120,7 @@ export type ReaderInteractiveProps = Pick<
   | 'containMarginBottom'
   | 'containMarginY'
   | 'showPageBrowser'
+  | 'onPageBrowserClose'
   | 'selectedTool'
   | 'paintingTool'
   | 'drawingStrokeColor'
