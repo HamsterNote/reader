@@ -105,6 +105,11 @@ const _highlightCommentProps: ReaderInteractiveProps = {
   onCommentHighlight: async (highlight) => highlight
 }
 
+const _bookmarkInteractiveProps: ReaderInteractiveProps = {
+  bookmarkedPageNumbers: [1, 3],
+  onTogglePageBookmark: () => {}
+}
+
 type AnnotationHistoryKeys = keyof ReaderAnnotationHistoryValue
 type AnnotationHistoryExpectedKeys =
   | 'ranges'
@@ -237,6 +242,7 @@ describe('Reader public selection types', () => {
     expect(_drawingInteractiveProps.selectedTool).toBe('drawing')
     expect(_highlightCommentProps.containMarginTop).toBe(24)
     expect(_highlightCommentProps.containMarginBottom).toBe(48)
+    expect(_bookmarkInteractiveProps.bookmarkedPageNumbers).toEqual([1, 3])
   })
 
   it('exposes annotation history value, props, detail, and ref command types', () => {

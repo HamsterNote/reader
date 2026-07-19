@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1-beta.0] - 2026-07-19
+
+### Added
+- Page browser bookmarks tab with controlled bookmark state.
+- Page browser drag-to-dismiss with CSS-cropped rect preview and drawing overlay.
+- Magnifier when dragging text range handles for fine-grained boundary adjustment.
+- Page browser highlights tab with comment display.
+
+## [0.5.0] - 2026-07-18
+
+### Added
+- 新增选区手柄（RangeHandle）组件，支持反向缩放圆形和触摸点击取消选中。
+- 新增手柄放大镜（RangeMagnifier）组件，提升选区边界微调精度。
+- 新增 `selectionPointerGuard` 选区指针守卫。
+- 新增 `drawingStrokeColor` prop，支持绘图工具描边颜色。
+- 新增 page-browser 选中状态样式和 `themeColor` prop。
+- 新增 drawing persistence（绘图持久化）支持。
+
+### Fixed
+- 修复 popover 选区颜色和拖拽手柄清理问题。
+- 修复 lint 错误，降低 ViewerContent 认知复杂度。
+
 ## [0.4.0] - 2026-07-16
 
 ### Added

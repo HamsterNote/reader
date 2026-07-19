@@ -20,6 +20,10 @@ import type {
   ReaderSelectionRef,
   ReaderSelectionTool
 } from '../types/selection'
+import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover
+} from './DefaultPopover'
 import type {
   ReaderInteractionMode,
   ReaderPageRange,
@@ -29,10 +33,6 @@ import type {
 } from './IntermediateDocumentViewer'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
-import {
-  DefaultHighlightPopover,
-  DefaultSelectionPopover
-} from './DefaultPopover'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import type {
   ReaderPagePaintingMap,
@@ -134,8 +134,19 @@ export type ReaderProps = {
   containMarginY?: number
   /** 是否显示布局模式的页面浏览侧栏，默认 false */
   showPageBrowser?: boolean
+  /** 页面浏览侧栏被左滑关闭时触发。 */
+  onPageBrowserClose?: () => void
   /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
   themeColor?: string
+  /** 每个 rangeId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
+  commentCountByRangeId?: Readonly<Record<string, number>>
+  /** 每个 rectId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
+  commentCountByRectId?: Readonly<Record<string, number>>
+  /** 由宿主控制的书签页码，在 page-browser 的页面与书签面板中展示。 */
+  bookmarkedPageNumbers?: readonly number[]
+  /** 添加或删除指定页书签。 */
+  onTogglePageBookmark?: (pageNumber: number) => void
+  onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   /** 绘制图形的描边颜色，默认 '#2563eb' */
@@ -320,7 +331,12 @@ export function Reader({
   containMarginBottom,
   containMarginY,
   showPageBrowser,
+  onPageBrowserClose,
   themeColor,
+  commentCountByRangeId,
+  commentCountByRectId,
+  bookmarkedPageNumbers,
+  onTogglePageBookmark,
   selectedTool,
   paintingTool = 'pen',
   drawingStrokeColor = '#2563eb',
@@ -333,7 +349,8 @@ export function Reader({
   onPagePaintingChange,
   onPagePaintingsChange,
   onPageTextSelectionsChange,
-  onPageRectSelectionsChange
+  onPageRectSelectionsChange,
+  onPageLoadStatusChange
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -739,7 +756,13 @@ export function Reader({
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
+          onPageBrowserClose={onPageBrowserClose}
           themeColor={themeColor}
+          commentCountByRangeId={commentCountByRangeId}
+          commentCountByRectId={commentCountByRectId}
+          bookmarkedPageNumbers={bookmarkedPageNumbers}
+          onTogglePageBookmark={onTogglePageBookmark}
+          onPageLoadStatusChange={onPageLoadStatusChange}
         />
       )
     }

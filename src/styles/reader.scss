@@ -455,6 +455,7 @@
     visibility: hidden;
     pointer-events: none;
     transform: translateX(-100%);
+    touch-action: pan-y;
     transition:
       transform 220ms ease,
       opacity 180ms ease,
@@ -464,8 +465,70 @@
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      transform: translateX(0);
+      transform: translateX(var(--hamster-reader-page-browser-drag-x, 0px));
       transition-delay: 0s;
+    }
+
+    &--dragging {
+      transition: none;
+      user-select: none;
+    }
+  }
+
+  // ---- Tab switcher (跑道型 / track-shaped pill) ----
+  // 外层 shell: padding 4px, border-radius 18px (= 14 + 4, 同心圆弧)
+  // 内层 tab: border-radius 14px, 激活态实心主题色背景 + 白字
+  &__page-browser-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 0;
+    padding: 4px;
+    margin: 12px 12px 0;
+    border-radius: 18px;
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 12%,
+      #ffffff
+    );
+  }
+
+  &__page-browser-tab {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--hamster-reader-theme-color, #2563eb);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
+
+    &--active {
+      background: var(--hamster-reader-theme-color, #2563eb);
+      color: #ffffff;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
+
+  &__page-browser-panel {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+
+    &[hidden] {
+      display: none;
     }
   }
 
@@ -481,6 +544,104 @@
   }
 
   &__page-browser-list {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scroll-padding: 16px;
+  }
+
+  &__page-browser-item {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    color: #4b5563;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 4px;
+      border-radius: 2px;
+    }
+  }
+
+  &__page-browser-page {
+    position: relative;
+    margin: 0 0 16px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  &__bookmark-toggle {
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: #6b7280;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      color 160ms ease,
+      border-color 160ms ease,
+      background-color 160ms ease;
+
+    &--overlay {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      box-shadow: 0 2px 8px rgba(17, 24, 39, 0.12);
+    }
+
+    &--inline {
+      flex: 0 0 auto;
+    }
+
+    &[aria-pressed='true'] {
+      color: var(--hamster-reader-theme-color, #2563eb);
+      border-color: var(--hamster-reader-theme-color, #2563eb);
+      background: color-mix(
+        in srgb,
+        var(--hamster-reader-theme-color, #2563eb) 10%,
+        #ffffff
+      );
+    }
+
+    &:hover:not(:disabled) {
+      color: var(--hamster-reader-theme-color, #2563eb);
+      border-color: var(--hamster-reader-theme-color, #2563eb);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+
+    svg {
+      width: 15px;
+      height: 15px;
+    }
+  }
+
+  &__bookmark-list {
+    flex: 1 1 0;
     min-height: 0;
     padding: 16px;
     overflow-x: hidden;
@@ -489,24 +650,40 @@
     scrollbar-gutter: stable;
   }
 
-  &__page-browser-item {
-    display: block;
-    width: 100%;
-    margin: 0 0 16px;
-    padding: 0;
-    color: #4b5563;
-    background: transparent;
-    border: 0;
-    cursor: pointer;
+  &__bookmark-item {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin: 0 0 8px;
 
     &:last-child {
       margin-bottom: 0;
     }
+  }
+
+  &__bookmark-link {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 10px;
+    color: #374151;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
+
+    &:hover {
+      border-color: #9ca3af;
+      background: #f9fafb;
+    }
 
     &:focus-visible {
       outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
-      outline-offset: 4px;
-      border-radius: 2px;
+      outline-offset: 2px;
     }
   }
 
@@ -561,12 +738,177 @@
     text-align: center;
   }
 
+  // ---- Highlight list panel ----
+  &__highlight-list {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  &__highlight-empty {
+    margin: 0;
+    padding: 24px 12px;
+    color: #9ca3af;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  &__highlight-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin: 0 0 8px;
+    padding: 8px 10px;
+    color: #374151;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    &:hover {
+      border-color: #9ca3af;
+      background: #f9fafb;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
+
+  &__highlight-item--selected {
+    border-color: var(--hamster-reader-theme-color, #2563eb);
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 8%,
+      #ffffff
+    );
+  }
+
+  &__highlight-item--rect {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  &__highlight-text {
+    flex: 1 1 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  &__highlight-comment-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 15%,
+      #ffffff
+    );
+    color: var(--hamster-reader-theme-color, #2563eb);
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+
+    svg {
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
+    }
+  }
+
+  &__highlight-comment-count {
+    min-width: 8px;
+    text-align: center;
+  }
+
+  &__highlight-rect-preview {
+    position: relative;
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    background: #f3f4f6;
+  }
+
+  &__highlight-rect-screenshot {
+    position: absolute;
+    display: block;
+    object-fit: fill;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  &__highlight-rect-drawing {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+
+    > .hamster-reader__drawing-layer > div {
+      min-height: 0 !important;
+      border: 0 !important;
+    }
+  }
+
+  &__highlight-rect-placeholder {
+    display: block;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #f3f4f6;
+    animation: hamster-reader-rect-placeholder-pulse 1.5s ease-in-out infinite;
+  }
+
+  &__highlight-item--rect &__highlight-comment-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 1;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
+  }
+
+  @keyframes hamster-reader-rect-placeholder-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     &__page-browser {
       transition: none;
     }
 
     &__page-browser-placeholder {
+      animation: none;
+    }
+
+    &__page-browser-tab,
+    &__highlight-item,
+    &__bookmark-toggle,
+    &__bookmark-link {
+      transition: none;
+    }
+
+    &__highlight-rect-placeholder {
       animation: none;
     }
   }
@@ -752,6 +1094,15 @@
     .hsn-selection-percent-overlay {
       mix-blend-mode: multiply;
       opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
+    }
+
+    // 修复：selection 库的 .hsn-selection-percent-rect 默认 box-sizing: content-box，
+    // 选中态（-selected）会附加 border: 1.5px，该 border 被加到 width 百分比之外，
+    // 导致 rect 的 box 右边缘超出 handle 位置（handle 的 left% 对齐的是
+    // selection 库计算的选区终点 = content 右边缘）。使用 border-box 让 width
+    // 百分比包含 border，使 rect box 右边缘与 handle 中心精确对齐。
+    .hsn-selection-percent-rect {
+      box-sizing: border-box;
     }
 
     // pixel 模式（SVG rect）保持 blend 在 rect 本身

@@ -77,6 +77,7 @@ const withOpaqueBackground = (style: CSSProperties): CSSProperties => {
 interface RangeHandleProps {
   handle: HandleRenderProps
   linkedData: LinkedSelectionData
+  magnifierEnabled?: boolean
   scale: number
   selectionId: string
   viewerRoot?: HTMLElement | null
@@ -116,6 +117,7 @@ const findLineHeight = (
 export const RangeHandle = ({
   handle,
   linkedData,
+  magnifierEnabled = true,
   scale,
   selectionId,
   viewerRoot
@@ -125,6 +127,7 @@ export const RangeHandle = ({
   const startHandleDrag = useRangeHandleDrag({
     circleRef,
     correctPointerCoordinates: lineHeight !== null,
+    magnifierEnabled,
     viewerRoot
   })
 
