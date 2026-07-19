@@ -2072,7 +2072,11 @@ function useSelectionPointerGuard(
     ownerDocument.addEventListener('pointerup', finishSelectionDrag, true)
     ownerDocument.addEventListener('pointercancel', finishSelectionDrag, true)
     ownerDocument.addEventListener('touchend', finishTouchSelectionDrag, true)
-    ownerDocument.addEventListener('touchcancel', cancelTouchSelectionDrag, true)
+    ownerDocument.addEventListener(
+      'touchcancel',
+      cancelTouchSelectionDrag,
+      true
+    )
     return () => {
       ownerDocument.removeEventListener(
         'selectionchange',
@@ -2618,9 +2622,7 @@ function ViewerContent({
     >
       {pageNumbers.length > 0 ? (
         <RangeMagnifierProvider rootElement={viewerRootElement}>
-          <TextSelectionMagnifier
-            viewerRootElement={viewerRootElement}
-          />
+          <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
           <PageBrowser
             isOpen={showPageBrowser}
             pageNumbers={pageNumbers}

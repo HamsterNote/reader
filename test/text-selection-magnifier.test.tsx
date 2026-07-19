@@ -35,8 +35,7 @@ const TextHandle = ({ className }: TextHandleProps) => (
   <button type='button' className={className} aria-label='Text range handle' />
 )
 
-const renderHarness = (handle: ReactNode) =>
-  render(<Harness>{handle}</Harness>)
+const renderHarness = (handle: ReactNode) => render(<Harness>{handle}</Harness>)
 
 const prepareGeometry = () => {
   const viewerRoot = screen.getByTestId('viewer-root')

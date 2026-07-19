@@ -1,10 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuard'
-import {
-  type MagnifierPoint,
-  useRangeMagnifier
-} from './RangeMagnifier'
+import { type MagnifierPoint, useRangeMagnifier } from './RangeMagnifier'
 
 interface ActiveTextHandleDrag {
   readonly pointerId: number

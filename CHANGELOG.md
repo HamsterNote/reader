@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1-beta.0] - 2026-07-19
+
+### Added
+- Page browser bookmarks tab with controlled bookmark state.
+- Page browser drag-to-dismiss with CSS-cropped rect preview and drawing overlay.
+- Magnifier when dragging text range handles for fine-grained boundary adjustment.
+- Page browser highlights tab with comment display.
+
 ## [0.5.0] - 2026-07-18
 
 ### Added
