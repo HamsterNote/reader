@@ -46,6 +46,7 @@ import type {
   ReaderSelectionRef,
   ReaderSelectionTool
 } from '../../types/selection'
+import type { ReaderPageTool } from '../Page'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
 import { PopoverPortal } from '../PopoverPortal'
 import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
@@ -59,7 +60,6 @@ import {
 import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuard'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { PageBrowser } from './PageBrowser'
-import { type ReaderPageTool } from '../Page'
 import { RangeHandle } from './RangeHandle'
 import { RangeMagnifierProvider } from './RangeMagnifier'
 import {
@@ -529,6 +529,12 @@ export type IntermediateDocumentViewerProps = {
   showPageBrowser?: boolean
   /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
   themeColor?: string
+  /** 每个 rangeId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
+  commentCountByRangeId?: Readonly<Record<string, number>>
+  /** 每个 rectId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
+  commentCountByRectId?: Readonly<Record<string, number>>
+  /** 页面加载状态变化时的回调，报告当前已加载的页码列表 */
+  onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
 }
 
 type PageSize = {
@@ -978,6 +984,7 @@ type PageResources = {
 type ViewerContentProps = PageResources & {
   rootClassName: string
   viewerRootRef: (element: HTMLDivElement | null) => void
+  selectionScope: symbol
   pageNumbers: number[]
   virtualPaperTransform: VirtualPaperTransform
   scaleRange: { min: number; max: number }
@@ -1008,6 +1015,7 @@ type ViewerContentProps = PageResources & {
   ) => void
   effectiveSelectedRangeId: string | null
   selectedHighlight: ReaderSelectionRange | null
+  effectiveRanges: ReaderSelectionRange[]
   runtimePageSelectionId: (pageNumber: number) => string
   runtimeLinkedData: LinkedSelectionData
   handleLinkedDataChange: (next: LinkedSelectionData) => void
@@ -1072,6 +1080,8 @@ type ViewerContentProps = PageResources & {
   onNavigateToPage: (pageNumber: number) => void
   themeColor?: string
   visiblePageNumbers: ReadonlySet<number>
+  commentCountByRangeId?: Readonly<Record<string, number>>
+  commentCountByRectId?: Readonly<Record<string, number>>
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1587,10 +1597,6 @@ function shouldIgnoreTouchPointerUp(
  * 封装高亮相关逻辑：定位当前活跃选区对应的 upstream Selection ref，
  * 以及将原生选区/活跃 range 确认为持久高亮。抽出为独立 hook 以降低 ViewerContent 的认知复杂度。
  */
-/**
- * 封装高亮相关逻辑：定位当前活跃选区对应的 upstream Selection ref，
- * 以及将原生选区/活跃 range 确认为持久高亮。抽出为独立 hook 以降低 ViewerContent 的认知复杂度。
- */
 function useSelectionHighlight(
   pageNumbers: number[],
   runtimePageSelectionId: (pageNumber: number) => string,
@@ -1598,6 +1604,7 @@ function useSelectionHighlight(
     Map<string, SelectionRef>
   >,
   runtimeLinkedDataRef: React.MutableRefObject<ReaderLinkedSelectionData>,
+  lastActiveRangeRef: React.MutableRefObject<ReaderSelectionRange | null>,
   beginLinkedHighlightOperation: () => PendingLinkedHighlightOperation,
   handleLinkedDataChange: (data: ReaderLinkedSelectionData) => void,
   handleLinkedSelect: (range: ReaderSelectionRange) => void,
@@ -1676,22 +1683,41 @@ function useSelectionHighlight(
 
   const highlightSelection = useCallback(() => {
     const operation = beginLinkedHighlightOperation()
-    const activeRange = runtimeLinkedDataRef.current.activeRange
+    const currentActiveRange = runtimeLinkedDataRef.current.activeRange
+    const activeRange = currentActiveRange ?? lastActiveRangeRef.current
     const activeSelectionRef = getActiveSelectionRef()
     const nativeSelectionText = window.getSelection()?.toString() ?? ''
-
+    const directActiveRange =
+      nativeSelectionText.length === 0 &&
+      Boolean(activeRange) &&
+      (currentActiveRange === null || activeRange !== activeRangeProp)
     try {
-      if (
-        nativeSelectionText.length === 0 &&
-        activeRange &&
-        activeRange !== activeRangeProp
-      ) {
+      if (directActiveRange && activeRange) {
+        if (
+          runtimeLinkedDataRef.current.items.some(
+            (item) => item.id === activeRange.id
+          )
+        ) {
+          lastActiveRangeRef.current = null
+          if (currentActiveRange) {
+            const nextLinkedData = {
+              ...runtimeLinkedDataRef.current,
+              selectedRangeId: activeRange.id,
+              activeRange: null
+            }
+            runtimeLinkedDataRef.current = nextLinkedData
+            handleLinkedDataChange(nextLinkedData)
+          }
+          return
+        }
+
         const nextLinkedData = {
           ...runtimeLinkedDataRef.current,
           items: [...runtimeLinkedDataRef.current.items, activeRange],
           selectedRangeId: activeRange.id,
           activeRange: null
         }
+        lastActiveRangeRef.current = null
         runtimeLinkedDataRef.current = nextLinkedData
         handleLinkedDataChange(nextLinkedData)
         handleLinkedSelect(activeRange)
@@ -1699,6 +1725,9 @@ function useSelectionHighlight(
         return
       }
 
+      if (nativeSelectionText.length > 0) {
+        lastActiveRangeRef.current = null
+      }
       activeSelectionRef?.highlight()
     } finally {
       schedulePendingLinkedHighlightCleanup(operation)
@@ -1710,6 +1739,7 @@ function useSelectionHighlight(
     handleLinkedDataChange,
     handleLinkedSelect,
     handleLinkedSelectRange,
+    lastActiveRangeRef,
     runtimeLinkedDataRef,
     schedulePendingLinkedHighlightCleanup
   ])
@@ -1899,6 +1929,9 @@ function useSelectionPointerGuard(
   const lastValidSelectionRangeRef = useRef<Range | null>(null)
   const selectionFrozenRef = useRef(false)
   const restoringSelectionRef = useRef(false)
+  const delayedPointerUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
 
   useEffect(() => {
     if (
@@ -1985,6 +2018,38 @@ function useSelectionPointerGuard(
       lastValidSelectionRangeRef.current = null
     }
 
+    const cancelDelayedPointerUp = () => {
+      if (delayedPointerUpTimerRef.current === null) return
+      clearTimeout(delayedPointerUpTimerRef.current)
+      delayedPointerUpTimerRef.current = null
+    }
+
+    const finishTouchSelectionDrag = () => {
+      finishSelectionDrag()
+      cancelDelayedPointerUp()
+      delayedPointerUpTimerRef.current = setTimeout(() => {
+        delayedPointerUpTimerRef.current = null
+        const shouldDispatchPointerUp =
+          runtimeLinkedDataRef.current.draggingRange?.type ===
+          'active-selection'
+        const PointerEventConstructor = ownerDocument.defaultView?.PointerEvent
+        if (shouldDispatchPointerUp && PointerEventConstructor) {
+          ownerDocument.dispatchEvent(
+            new PointerEventConstructor('pointerup', {
+              bubbles: true,
+              isPrimary: true,
+              pointerType: 'touch'
+            })
+          )
+        }
+      }, 0)
+    }
+
+    const cancelTouchSelectionDrag = () => {
+      finishSelectionDrag()
+      cancelDelayedPointerUp()
+    }
+
     ownerDocument.addEventListener(
       'selectionchange',
       handleSelectionChange,
@@ -1993,8 +2058,8 @@ function useSelectionPointerGuard(
     ownerDocument.addEventListener('pointermove', guardPointerMove, true)
     ownerDocument.addEventListener('pointerup', finishSelectionDrag, true)
     ownerDocument.addEventListener('pointercancel', finishSelectionDrag, true)
-    ownerDocument.addEventListener('touchend', finishSelectionDrag, true)
-    ownerDocument.addEventListener('touchcancel', finishSelectionDrag, true)
+    ownerDocument.addEventListener('touchend', finishTouchSelectionDrag, true)
+    ownerDocument.addEventListener('touchcancel', cancelTouchSelectionDrag, true)
     return () => {
       ownerDocument.removeEventListener(
         'selectionchange',
@@ -2008,21 +2073,27 @@ function useSelectionPointerGuard(
         finishSelectionDrag,
         true
       )
-      ownerDocument.removeEventListener('touchend', finishSelectionDrag, true)
+      ownerDocument.removeEventListener(
+        'touchend',
+        finishTouchSelectionDrag,
+        true
+      )
       ownerDocument.removeEventListener(
         'touchcancel',
-        finishSelectionDrag,
+        cancelTouchSelectionDrag,
         true
       )
       selectionFrozenRef.current = false
       lastValidSelectionRangeRef.current = null
+      cancelDelayedPointerUp()
     }
-  }, [selectedTool, viewerRootElement, runtimeLinkedDataRef])
+  }, [runtimeLinkedDataRef, selectedTool, viewerRootElement])
 }
 
 function ViewerContent({
   rootClassName,
   viewerRootRef,
+  selectionScope,
   pageNumbers,
   pageSizesByPageNumber,
   virtualPaperTransform,
@@ -2035,6 +2106,7 @@ function ViewerContent({
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
   selectedHighlight,
+  effectiveRanges,
   runtimePageSelectionId,
   runtimeLinkedData,
   handleLinkedDataChange,
@@ -2088,7 +2160,9 @@ function ViewerContent({
   onPageBrowserVisibilityChange,
   onNavigateToPage,
   themeColor,
-  visiblePageNumbers
+  visiblePageNumbers,
+  commentCountByRangeId,
+  commentCountByRectId
 }: ViewerContentProps) {
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -2100,6 +2174,16 @@ function ViewerContent({
   const syncForwardedSelectionRefRef = useRef<() => void>(() => {})
   const runtimeLinkedDataRef = useRef(runtimeLinkedData)
   runtimeLinkedDataRef.current = runtimeLinkedData
+  const lastActiveRangeRef = useRef<ReaderSelectionRange | null>(
+    runtimeLinkedData.activeRange ?? null
+  )
+  const lastActiveRangeScopeRef = useRef(selectionScope)
+  if (lastActiveRangeScopeRef.current !== selectionScope) {
+    lastActiveRangeScopeRef.current = selectionScope
+    lastActiveRangeRef.current = runtimeLinkedData.activeRange ?? null
+  } else if (runtimeLinkedData.activeRange) {
+    lastActiveRangeRef.current = runtimeLinkedData.activeRange
+  }
 
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
@@ -2121,17 +2205,12 @@ function ViewerContent({
     [viewerRootRef]
   )
 
-  useSelectionPointerGuard(
-    viewerRootElement,
-    selectedTool,
-    runtimeLinkedDataRef
-  )
-
   const { highlightSelection } = useSelectionHighlight(
     pageNumbers,
     runtimePageSelectionId,
     selectionRefsByRuntimeIdRef,
     runtimeLinkedDataRef,
+    lastActiveRangeRef,
     beginLinkedHighlightOperation,
     handleLinkedDataChange,
     handleLinkedSelect,
@@ -2204,6 +2283,7 @@ function ViewerContent({
   }, [confirmRectSelection, highlightSelection, tool])
 
   const clearSelections = useCallback(() => {
+    lastActiveRangeRef.current = null
     selectionRefsByRuntimeIdRef.current.forEach((selectionRef) => {
       selectionRef.clear()
     })
@@ -2300,9 +2380,23 @@ function ViewerContent({
   const handlePageLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
       runtimeLinkedDataRef.current = next
+      if (next.activeRange) {
+        lastActiveRangeRef.current = next.activeRange
+      } else if (
+        lastActiveRangeRef.current &&
+        next.items.some((item) => item.id === lastActiveRangeRef.current?.id)
+      ) {
+        lastActiveRangeRef.current = null
+      }
       handleLinkedDataChange(next)
     },
     [handleLinkedDataChange]
+  )
+
+  useSelectionPointerGuard(
+    viewerRootElement,
+    selectedTool,
+    runtimeLinkedDataRef
   )
 
   const handlePageLinkedSelectRange = useCallback(
@@ -2328,6 +2422,16 @@ function ViewerContent({
     selectedTool,
     runtimeLinkedDataRef,
     handlePageLinkedSelectRange
+  )
+
+  const handleViewerPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // Viewer 内的新交互代表用户已离开旧的临时选区。高亮按钮通过 portal
+      // 渲染在根节点之外，因此点击确认不会经过这里并误删待提交缓存。
+      lastActiveRangeRef.current = null
+      handleTouchPointerDown(event)
+    },
+    [handleTouchPointerDown]
   )
 
   const handleCommentHighlight = useCallback(() => {
@@ -2491,7 +2595,7 @@ function ViewerContent({
       role='document'
       className={rootClassName}
       data-testid='intermediate-document-viewer'
-      onPointerDown={handleTouchPointerDown}
+      onPointerDown={handleViewerPointerDown}
       onPointerMove={handleTouchPointerMove}
       onPointerUp={handleTouchPointerUp}
       onPointerCancel={handleTouchPointerCancel}
@@ -2509,6 +2613,16 @@ function ViewerContent({
             visiblePageNumbers={visiblePageNumbers}
             containMarginTop={containMarginTop}
             containMarginBottom={containMarginBottom}
+            ranges={effectiveRanges}
+            selectedRangeId={effectiveSelectedRangeId}
+            onSelectRange={handleLinkedSelectRange}
+            onNavigateToRange={onScrollToRange}
+            commentCountByRangeId={commentCountByRangeId}
+            rects={rects}
+            selectedRectId={selectedRectId}
+            onSelectRect={onSelectRect}
+            onNavigateToRect={onScrollToRect}
+            commentCountByRectId={commentCountByRectId}
           />
           <VirtualPaper
             containMode={true}
@@ -2605,7 +2719,10 @@ export function IntermediateDocumentViewer({
   pagePaintings,
   onPagePaintingChange,
   showPageBrowser = false,
-  themeColor
+  themeColor,
+  commentCountByRangeId,
+  commentCountByRectId,
+  onPageLoadStatusChange
 }: IntermediateDocumentViewerProps) {
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
@@ -2673,6 +2790,23 @@ export function IntermediateDocumentViewer({
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
     return getVisiblePageNumbers(allPageNumbers, pageRange)
   }, [runtimeDocument, pageRange])
+  const pageNumbersKey = pageNumbers.join(',')
+  const selectionScopeRef = useRef({
+    runtimeDocument,
+    pageNumbersKey,
+    value: Symbol('intermediate-document-selection-scope')
+  })
+  if (
+    selectionScopeRef.current.runtimeDocument !== runtimeDocument ||
+    selectionScopeRef.current.pageNumbersKey !== pageNumbersKey
+  ) {
+    selectionScopeRef.current = {
+      runtimeDocument,
+      pageNumbersKey,
+      value: Symbol('intermediate-document-selection-scope')
+    }
+  }
+  const selectionScope = selectionScopeRef.current.value
   const pageSizesByPageNumber = useMemo(() => {
     const nextPageSizes = new Map<number, NormalizedPageSize>()
     if (!runtimeDocument) return nextPageSizes
@@ -2782,6 +2916,13 @@ export function IntermediateDocumentViewer({
     useRef<PendingLinkedHighlightOperation | null>(null)
   const emittedLinkedSelectRangeIdsRef = useRef(new Set<string>())
   const emittedLinkedHighlightRangeIdsRef = useRef(new Set<string>())
+  const pendingLinkedHighlightScopeRef = useRef(selectionScope)
+  if (pendingLinkedHighlightScopeRef.current !== selectionScope) {
+    pendingLinkedHighlightScopeRef.current = selectionScope
+    pendingLinkedHighlightOperationRef.current = null
+    emittedLinkedSelectRangeIdsRef.current.clear()
+    emittedLinkedHighlightRangeIdsRef.current.clear()
+  }
 
   // selectedRangeId 同理
   const isSelectedRangeIdControlled = selectedRangeId !== undefined
@@ -2802,8 +2943,15 @@ export function IntermediateDocumentViewer({
         : null,
     [effectiveRanges, effectiveSelectedRangeId]
   )
-  const [runtimeLinkedTransient, setRuntimeLinkedTransient] =
-    useState<RuntimeLinkedSelectionTransient>({})
+  const [runtimeLinkedTransientState, setRuntimeLinkedTransientState] =
+    useState<{
+      readonly scope: symbol
+      readonly transient: RuntimeLinkedSelectionTransient
+    }>(() => ({ scope: selectionScope, transient: {} }))
+  const runtimeLinkedTransient =
+    runtimeLinkedTransientState.scope === selectionScope
+      ? runtimeLinkedTransientState.transient
+      : {}
   const runtimeLinkedData = useMemo(
     () =>
       buildRuntimeLinkedSelectionData({
@@ -3144,6 +3292,13 @@ export function IntermediateDocumentViewer({
   // 在 setTimeout 回调中读取最新 state，避免将这些 state 加入 effect deps 导致循环
   const pageStatusesRef = useRef(pageStatuses)
   pageStatusesRef.current = pageStatuses
+  useEffect(() => {
+    const loaded = Array.from(pageStatuses.entries())
+      .filter(([, status]) => status === 'loaded')
+      .map(([pageNumber]) => pageNumber)
+      .sort((a, b) => a - b)
+    onPageLoadStatusChange?.(loaded)
+  }, [pageStatuses, onPageLoadStatusChange])
   const baseImagesByPageNumberRef = useRef(baseImagesByPageNumber)
   baseImagesByPageNumberRef.current = baseImagesByPageNumber
   const pageNumbersRef = useRef(pageNumbers)
@@ -4557,11 +4712,15 @@ export function IntermediateDocumentViewer({
       )
 
       const nextTransient = extractRuntimeLinkedTransient(next)
-      setRuntimeLinkedTransient((currentTransient) =>
-        areRuntimeLinkedTransientsEqual(currentTransient, nextTransient)
-          ? currentTransient
-          : nextTransient
-      )
+      setRuntimeLinkedTransientState((currentState) => {
+        if (
+          currentState.scope === selectionScope &&
+          areRuntimeLinkedTransientsEqual(currentState.transient, nextTransient)
+        ) {
+          return currentState
+        }
+        return { scope: selectionScope, transient: nextTransient }
+      })
       onLinkedDataChange?.(publicLinkedData)
 
       const currentSnapshot = currentAnnotationHistorySnapshot()
@@ -4613,7 +4772,8 @@ export function IntermediateDocumentViewer({
       isRangesControlled,
       isSelectedRangeIdControlled,
       onLinkedDataChange,
-      readerLinkedScopeId
+      readerLinkedScopeId,
+      selectionScope
     ]
   )
 
@@ -4978,6 +5138,7 @@ export function IntermediateDocumentViewer({
     <ViewerContent
       rootClassName={rootClassName}
       viewerRootRef={setViewerRootRef}
+      selectionScope={selectionScope}
       pageNumbers={pageNumbers}
       pageSizesByPageNumber={pageSizesByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
@@ -4992,6 +5153,7 @@ export function IntermediateDocumentViewer({
       }
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       selectedHighlight={selectedHighlight}
+      effectiveRanges={effectiveRanges}
       runtimePageSelectionId={getRuntimePageSelectionId}
       runtimeLinkedData={runtimeLinkedData}
       handleLinkedDataChange={handleLinkedDataChange}
@@ -5048,6 +5210,8 @@ export function IntermediateDocumentViewer({
       onNavigateToPage={navigateToPage}
       themeColor={themeColor}
       visiblePageNumbers={visiblePages}
+      commentCountByRangeId={commentCountByRangeId}
+      commentCountByRectId={commentCountByRectId}
     />
   )
 }

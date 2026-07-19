@@ -469,6 +469,63 @@
     }
   }
 
+  // ---- Tab switcher (跑道型 / track-shaped pill) ----
+  // 外层 shell: padding 4px, border-radius 18px (= 14 + 4, 同心圆弧)
+  // 内层 tab: border-radius 14px, 激活态实心主题色背景 + 白字
+  &__page-browser-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 0;
+    padding: 4px;
+    margin: 12px 12px 0;
+    border-radius: 18px;
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 12%,
+      #ffffff
+    );
+  }
+
+  &__page-browser-tab {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--hamster-reader-theme-color, #2563eb);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
+
+    &--active {
+      background: var(--hamster-reader-theme-color, #2563eb);
+      color: #ffffff;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
+
+  &__page-browser-panel {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+
+    &[hidden] {
+      display: none;
+    }
+  }
+
   &__page-browser-header {
     flex: 0 0 auto;
     padding: 16px 18px 12px;
@@ -481,6 +538,7 @@
   }
 
   &__page-browser-list {
+    flex: 1 1 0;
     min-height: 0;
     padding: 16px;
     overflow-x: hidden;
@@ -561,12 +619,145 @@
     text-align: center;
   }
 
+  // ---- Highlight list panel ----
+  &__highlight-list {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  &__highlight-empty {
+    margin: 0;
+    padding: 24px 12px;
+    color: #9ca3af;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  &__highlight-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin: 0 0 8px;
+    padding: 8px 10px;
+    color: #374151;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    &:hover {
+      border-color: #9ca3af;
+      background: #f9fafb;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
+
+  &__highlight-item--selected {
+    border-color: var(--hamster-reader-theme-color, #2563eb);
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 8%,
+      #ffffff
+    );
+  }
+
+  &__highlight-text {
+    flex: 1 1 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  &__highlight-comment-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 15%,
+      #ffffff
+    );
+    color: var(--hamster-reader-theme-color, #2563eb);
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+
+    svg {
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
+    }
+  }
+
+  &__highlight-comment-count {
+    min-width: 8px;
+    text-align: center;
+  }
+
+  &__highlight-rect-screenshot {
+    flex: 0 0 auto;
+    width: 48px;
+    height: 36px;
+    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    object-fit: cover;
+    background: #f3f4f6;
+  }
+
+  &__highlight-rect-placeholder {
+    flex: 0 0 auto;
+    width: 48px;
+    height: 36px;
+    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    background: #f3f4f6;
+    animation: hamster-reader-rect-placeholder-pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes hamster-reader-rect-placeholder-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     &__page-browser {
       transition: none;
     }
 
     &__page-browser-placeholder {
+      animation: none;
+    }
+
+    &__page-browser-tab,
+    &__highlight-item {
+      transition: none;
+    }
+
+    &__highlight-rect-placeholder {
       animation: none;
     }
   }
@@ -752,6 +943,15 @@
     .hsn-selection-percent-overlay {
       mix-blend-mode: multiply;
       opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
+    }
+
+    // 修复：selection 库的 .hsn-selection-percent-rect 默认 box-sizing: content-box，
+    // 选中态（-selected）会附加 border: 1.5px，该 border 被加到 width 百分比之外，
+    // 导致 rect 的 box 右边缘超出 handle 位置（handle 的 left% 对齐的是
+    // selection 库计算的选区终点 = content 右边缘）。使用 border-box 让 width
+    // 百分比包含 border，使 rect box 右边缘与 handle 中心精确对齐。
+    .hsn-selection-percent-rect {
+      box-sizing: border-box;
     }
 
     // pixel 模式（SVG rect）保持 blend 在 rect 本身

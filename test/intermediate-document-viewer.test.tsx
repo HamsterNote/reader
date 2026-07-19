@@ -4701,6 +4701,73 @@ describe('selection pointer move guard', () => {
 
     expect(selection.toString()).toBe('age')
   })
+
+  it('finishes a handle drag that starts after the long-touch pointerup', async () => {
+    // Given: the browser has ended the original pointer before the selection
+    // package exposes the handle drag created under the held finger.
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={readerDocument} />)
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const linkedData = requireSelectionPropsById(pageId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    const observedPointerUps = vi.fn()
+    globalThis.document.addEventListener('pointerup', observedPointerUps)
+
+    // When: touchend is followed by the dependency's delayed drag update.
+    await act(async () => {
+      fireEvent.touchEnd(globalThis.document)
+      simulateLinkedDataChange(pageId, {
+        ...linkedData,
+        draggingRange: { type: 'active-selection' }
+      })
+    })
+
+    // Then: Reader supplies the missing terminal pointer event so the real
+    // dependency can release both its local handle state and linked transient.
+    await waitFor(() => {
+      expect(observedPointerUps).toHaveBeenCalledTimes(1)
+    })
+    globalThis.document.removeEventListener('pointerup', observedPointerUps)
+  })
+
+  it('does not finish a cancelled touch as a successful pointerup', async () => {
+    // Given: the browser cancels the touch before the dependency publishes its
+    // delayed handle-drag state.
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(<IntermediateDocumentViewer document={readerDocument} />)
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const pageId = requireRuntimeSelectionId(':page-1')
+    const linkedData = requireSelectionPropsById(pageId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    const observedPointerUps = vi.fn()
+    globalThis.document.addEventListener('pointerup', observedPointerUps)
+
+    // When: touchcancel is followed by that delayed dependency update.
+    await act(async () => {
+      fireEvent.touchCancel(globalThis.document)
+      simulateLinkedDataChange(pageId, {
+        ...linkedData,
+        draggingRange: { type: 'active-selection' }
+      })
+    })
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0)
+    })
+
+    // Then: Reader preserves cancellation semantics instead of manufacturing a
+    // successful pointer release.
+    expect(observedPointerUps).not.toHaveBeenCalled()
+    globalThis.document.removeEventListener('pointerup', observedPointerUps)
+  })
 })
 
 describe('linked data adapter integration', () => {
@@ -5649,6 +5716,409 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     expect(onHighlight).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'touch-highlight-id' })
     )
+  })
+
+  it('commits the last touch active range when transient cleanup clears it before confirm', async () => {
+    // Given: touch selection published a complete linked range, then browser
+    // cleanup removed both native Selection and the transient activeRange.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeRange = makeRuntimeLinkedRange(runtimePageId, {
+      id: 'cleaned-touch-highlight-id',
+      text: 'Cleaned touch highlight'
+    })
+    const activeLinkedData = {
+      ...currentLinkedData,
+      activeRange
+    }
+    globalThis.window.getSelection()?.removeAllRanges()
+
+    // When: transient cleanup clears activeRange before the popover confirms it.
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, activeLinkedData)
+      simulateLinkedDataChange(runtimePageId, {
+        ...activeLinkedData,
+        activeRange: null
+      })
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+
+    // Then: Reader still commits exactly that latest complete touch range.
+    expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            id: 'cleaned-touch-highlight-id',
+            text: 'Cleaned touch highlight'
+          })
+        ],
+        selectedRangeId: 'cleaned-touch-highlight-id',
+        activeRange: null
+      })
+    )
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'cleaned-touch-highlight-id' })
+    )
+  })
+
+  it('keeps the last touch active range across an equivalent page range rerender', async () => {
+    // Given: touch cleanup leaves a cached range while the host controls one
+    // visible page with an inline pageRange value.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 2 })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        pageRange={{ start: 1, end: 1 }}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeLinkedData = {
+      ...currentLinkedData,
+      activeRange: makeRuntimeLinkedRange(runtimePageId, {
+        id: 'equivalent-page-range-touch-highlight-id'
+      })
+    }
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, activeLinkedData)
+      simulateLinkedDataChange(runtimePageId, {
+        ...activeLinkedData,
+        activeRange: null
+      })
+    })
+
+    // When: the host rerenders with a new pageRange object containing the same
+    // semantic bounds, then confirms the pending touch selection.
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        pageRange={{ start: 1, end: 1 }}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+    await act(async () => {
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+
+    // Then: an identity-only prop change does not discard the pending range.
+    expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            id: 'equivalent-page-range-touch-highlight-id'
+          })
+        ],
+        selectedRangeId: 'equivalent-page-range-touch-highlight-id',
+        activeRange: null
+      })
+    )
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not revive a cached touch range after a native selection supersedes it', async () => {
+    // Given: browser cleanup leaves a cached touch range, then a native text
+    // selection becomes the user's current selection.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const { document: readerDocument } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={readerDocument}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    const pageText = await screen.findByText('Page 1 text')
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeLinkedData = {
+      ...currentLinkedData,
+      activeRange: makeRuntimeLinkedRange(runtimePageId, {
+        id: 'superseded-touch-highlight-id'
+      })
+    }
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, activeLinkedData)
+      simulateLinkedDataChange(runtimePageId, {
+        ...activeLinkedData,
+        activeRange: null
+      })
+    })
+    const nativeRange = globalThis.document.createRange()
+    nativeRange.selectNodeContents(pageText)
+    const nativeSelection = globalThis.window.getSelection()
+    nativeSelection?.removeAllRanges()
+    nativeSelection?.addRange(nativeRange)
+
+    // When: confirm delegates the newer native selection to the dependency,
+    // then another confirm arrives after that native selection disappears.
+    await act(async () => {
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+    nativeSelection?.removeAllRanges()
+    onHighlight.mockClear()
+    onLinkedDataChange.mockClear()
+    await act(async () => {
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+
+    // Then: the older touch range is no longer eligible for persistence.
+    expect(onLinkedDataChange).not.toHaveBeenCalled()
+    expect(onHighlight).not.toHaveBeenCalled()
+  })
+
+  it('does not commit a cached touch range twice after controlled ranges synchronize it', async () => {
+    // Given: touch cleanup left a cached range, then the controlled host persisted
+    // the same range before the delayed popover confirmation arrived.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const persistedRange: ReaderSelectionRange = {
+      id: 'synchronized-touch-highlight-id',
+      text: 'Synchronized touch highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 11 },
+      createdAt: 10,
+      rectsBySelectionId: {
+        'page-1': [{ x: 1, y: 2, width: 3, height: 4 }]
+      }
+    }
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    const currentSelectionRef = await waitFor(() =>
+      requireReaderSelectionRef(selectionRef)
+    )
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeLinkedData = {
+      ...currentLinkedData,
+      activeRange: makeRuntimeLinkedRange(runtimePageId, {
+        id: persistedRange.id,
+        text: persistedRange.text
+      })
+    }
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, activeLinkedData)
+      simulateLinkedDataChange(runtimePageId, {
+        ...activeLinkedData,
+        activeRange: null
+      })
+    })
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[persistedRange]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+    await waitFor(() => {
+      expect(
+        requireSelectionPropsById(runtimePageId).linkedData?.items
+      ).toHaveLength(1)
+    })
+
+    // When: the delayed public confirm runs after controlled state synchronization.
+    onHighlight.mockClear()
+    onLinkedDataChange.mockClear()
+    await act(async () => {
+      currentSelectionRef.confirm()
+    })
+
+    // Then: the synchronized range is neither appended nor emitted again.
+    expect(onLinkedDataChange).not.toHaveBeenCalled()
+    expect(onHighlight).not.toHaveBeenCalled()
+  })
+
+  it('discards the last touch active range when a new outside interaction starts', async () => {
+    // Given: a touch active range was transiently cleared without being committed.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeLinkedData = {
+      ...currentLinkedData,
+      activeRange: makeRuntimeLinkedRange(runtimePageId, {
+        id: 'discarded-touch-highlight-id'
+      })
+    }
+
+    // When: the range clears, then the user starts a new interaction outside the popover.
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, activeLinkedData)
+      simulateLinkedDataChange(runtimePageId, {
+        ...activeLinkedData,
+        activeRange: null
+      })
+      fireEvent.pointerDown(screen.getByTestId('virtual-paper-wrapper'), {
+        pointerType: 'touch',
+        pointerId: 8,
+        isPrimary: true
+      })
+      requireReaderSelectionRef(selectionRef).confirm()
+    })
+
+    // Then: the cancelled range is not resurrected as a highlight.
+    expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ items: [], activeRange: null })
+    )
+    expect(onHighlight).not.toHaveBeenCalled()
+  })
+
+  it('discards the last touch active range when the document changes', async () => {
+    // Given: the first document left behind a touch range that browser cleanup
+    // removed from linkedData before the user confirmed it.
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const firstDocument = makeDocument({ pageCount: 1 }).document
+    const secondDocument = makeDocument({ pageCount: 1 }).document
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={firstDocument}
+        ranges={[]}
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+    const runtimePageId = requireRuntimeSelectionId(':page-1')
+    const currentLinkedData =
+      requireSelectionPropsById(runtimePageId).linkedData
+    if (!currentLinkedData) {
+      throw new Error('Expected linked data for mounted page')
+    }
+    const activeLinkedData = {
+      ...currentLinkedData,
+      activeRange: makeRuntimeLinkedRange(runtimePageId, {
+        id: 'previous-document-touch-highlight-id'
+      })
+    }
+    await act(async () => {
+      simulateLinkedDataChange(runtimePageId, activeLinkedData)
+      simulateLinkedDataChange(runtimePageId, {
+        ...activeLinkedData,
+        activeRange: null
+      })
+    })
+
+    // When: the host replaces the document without another viewer pointerdown,
+    // then invokes the public confirm command.
+    await act(async () => {
+      rerender(
+        <IntermediateDocumentViewer
+          document={secondDocument}
+          ranges={[]}
+          selectionRef={selectionRef}
+          onHighlight={onHighlight}
+          onLinkedDataChange={onLinkedDataChange}
+        />
+      )
+    })
+    const currentSelectionRef = await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+      return requireReaderSelectionRef(selectionRef)
+    })
+    onHighlight.mockClear()
+    onLinkedDataChange.mockClear()
+    await act(async () => {
+      currentSelectionRef.confirm()
+    })
+
+    // Then: no range owned by the previous document is persisted or emitted.
+    expect(onLinkedDataChange).not.toHaveBeenCalled()
+    expect(onHighlight).not.toHaveBeenCalled()
   })
 
   it('popovers are forwarded to the HamsterSelection wrapper for loaded pages', async () => {

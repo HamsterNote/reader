@@ -136,6 +136,11 @@ export type ReaderProps = {
   showPageBrowser?: boolean
   /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
   themeColor?: string
+  /** 每个 rangeId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
+  commentCountByRangeId?: Readonly<Record<string, number>>
+  /** 每个 rectId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
+  commentCountByRectId?: Readonly<Record<string, number>>
+  onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   selectedTool?: ReaderPageTool
   paintingTool?: DrawingTool
   /** 绘制图形的描边颜色，默认 '#2563eb' */
@@ -321,6 +326,8 @@ export function Reader({
   containMarginY,
   showPageBrowser,
   themeColor,
+  commentCountByRangeId,
+  commentCountByRectId,
   selectedTool,
   paintingTool = 'pen',
   drawingStrokeColor = '#2563eb',
@@ -333,7 +340,8 @@ export function Reader({
   onPagePaintingChange,
   onPagePaintingsChange,
   onPageTextSelectionsChange,
-  onPageRectSelectionsChange
+  onPageRectSelectionsChange,
+  onPageLoadStatusChange
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -740,6 +748,9 @@ export function Reader({
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
           themeColor={themeColor}
+          commentCountByRangeId={commentCountByRangeId}
+          commentCountByRectId={commentCountByRectId}
+          onPageLoadStatusChange={onPageLoadStatusChange}
         />
       )
     }

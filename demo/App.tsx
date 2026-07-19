@@ -21,8 +21,13 @@ import type {
   IntermediateDocument,
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
+import {
+  clearRecentFile,
+  loadRecentFile,
+  saveRecentFile
+} from './recentFileStorage'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -138,6 +143,100 @@ function persistHighlights(
 }
 
 // ---------------------------------------------------------------------------
+// 评论数据模型与存储 helpers
+// ---------------------------------------------------------------------------
+
+/** 单条评论条目：唯一 ID、评论内容、创建时间戳 */
+type CommentItem = {
+  id: string
+  content: string
+  createdAt: number
+}
+
+/** 高亮 ID -> 评论列表 */
+type CommentMap = Record<string, CommentItem[]>
+
+let fallbackCommentIdCounter = 0
+
+function generateCommentId(): string {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
+    return crypto.randomUUID()
+  }
+  fallbackCommentIdCounter += 1
+  return `comment-${Date.now()}-${fallbackCommentIdCounter}`
+}
+
+function createCommentItem(content: string): CommentItem {
+  return {
+    id: generateCommentId(),
+    content: content.trim(),
+    createdAt: Date.now()
+  }
+}
+
+function formatCommentTime(timestamp: number): string {
+  const date = new Date(timestamp)
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function isCommentItem(item: unknown): item is CommentItem {
+  return (
+    typeof item === 'object' &&
+    item !== null &&
+    typeof (item as CommentItem).id === 'string' &&
+    typeof (item as CommentItem).content === 'string' &&
+    typeof (item as CommentItem).createdAt === 'number'
+  )
+}
+
+function parseCommentEntry(value: unknown): CommentItem[] | null {
+  // 兼容旧格式：value 为字符串时转换为单条评论数组
+  if (typeof value === 'string') {
+    return [createCommentItem(value)]
+  }
+  if (!Array.isArray(value)) return null
+  const items = value.filter(isCommentItem)
+  return items.length > 0 ? items : null
+}
+
+/**
+ * 安全解析 localStorage 中保存的评论数据。
+ * 兼容旧版 Record<string, string>（单条评论），自动转换为单元素数组。
+ */
+function parseStoredComments(raw: string | null): CommentMap {
+  if (raw === null || raw.trim() === '') return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return {}
+    }
+
+    const result: CommentMap = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      const items = parseCommentEntry(value)
+      if (items !== null) {
+        result[key] = items
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+// ---------------------------------------------------------------------------
 // App 组件
 // ---------------------------------------------------------------------------
 
@@ -148,6 +247,7 @@ export function App() {
   >(null)
   const [isParsing, setIsParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
+  const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
@@ -166,6 +266,7 @@ export function App() {
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
   const requestIdRef = useRef(0)
+  const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
 
   // --- Selection 库集成演示 state ---
   // ranges 列表：受控模式，Reader 内部不修改，由 onSelect 回调外部追加
@@ -177,11 +278,16 @@ export function App() {
   const [pagePaintings, setPagePaintings] = useState<
     Record<string, DrawingValue>
   >({})
+  const [loadedPages, setLoadedPages] = useState<number[]>([])
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
   const [commentingHighlight, setCommentingHighlight] =
     useState<ReaderSelectionRange | null>(null)
   const [commentDraft, setCommentDraft] = useState('')
+  // comments: 高亮 ID -> 评论列表；与 highlights 独立存储以避免污染 Reader range 类型
+  const [comments, setComments] = useState<CommentMap>({})
+  // 只有当前文件成功恢复评论后，持久化 effect 才允许写入，避免解析期间覆盖旧数据。
+  const loadedCommentsFileNameRef = useRef<string | null>(null)
   const commentResolverRef = useRef<
     ((highlight: ReaderSelectionRange) => void) | null
   >(null)
@@ -262,6 +368,8 @@ export function App() {
       new Promise<ReaderSelectionRange>((resolve) => {
         commentResolverRef.current = resolve
         setCommentingHighlight(highlight)
+        // 每次打开评论面板都是新增一条评论，因此使用空草稿
+        setCommentDraft('')
       }),
     []
   )
@@ -269,12 +377,63 @@ export function App() {
   const handleFinishComment = useCallback(() => {
     if (!commentingHighlight || !commentResolverRef.current) return
 
+    const trimmed = commentDraft.trim()
+    if (trimmed !== '') {
+      // 将新评论追加到该高亮的评论列表末尾
+      setComments((prev) => {
+        const existing = prev[commentingHighlight.id] ?? []
+        return {
+          ...prev,
+          [commentingHighlight.id]: [...existing, createCommentItem(trimmed)]
+        }
+      })
+    }
+
     const resolve = commentResolverRef.current
     commentResolverRef.current = null
     setCommentingHighlight(null)
     setCommentDraft('')
     resolve(commentingHighlight)
-  }, [commentingHighlight])
+  }, [commentingHighlight, commentDraft])
+
+  // 删除某条高亮下的单条评论
+  const handleDeleteComment = useCallback(
+    (highlightId: string, commentId: string) => {
+      setComments((prev) => {
+        const items = prev[highlightId]
+        if (!items) return prev
+        const filtered = items.filter((item) => item.id !== commentId)
+        if (filtered.length === items.length) return prev
+        const next = { ...prev }
+        if (filtered.length === 0) {
+          delete next[highlightId]
+        } else {
+          next[highlightId] = filtered
+        }
+        return next
+      })
+    },
+    []
+  )
+
+  // 评论数据持久化：随 comments 变化写入 localStorage
+  useEffect(() => {
+    const loadedFileName = loadedCommentsFileNameRef.current
+    if (!loadedFileName) return
+
+    localStorage.setItem(
+      `hamster-reader-demo:comments:${loadedFileName}`,
+      JSON.stringify(comments)
+    )
+  }, [comments])
+
+  const commentCountByRangeId = useMemo(() => {
+    const result: Record<string, number> = {}
+    for (const [highlightId, items] of Object.entries(comments)) {
+      result[highlightId] = items.length
+    }
+    return result
+  }, [comments])
 
   // onCreateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
   const handleCreateRect = useCallback(() => {}, [])
@@ -308,6 +467,7 @@ export function App() {
   // library 会创建 checkpoint 并通过 onAnnotationHistoryChange 回传空快照。
   const handleClearAllRanges = useCallback(() => {
     selectionRef.current?.clear()
+    setComments({})
   }, [])
 
   const handleRemoveRange = useCallback(
@@ -316,6 +476,12 @@ export function App() {
         const newRanges = prev.filter((r) => r.id !== id)
         persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
+      })
+      setComments((prev) => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
       })
       if (selectedRangeId === id) {
         setSelectedRangeId(null)
@@ -412,65 +578,111 @@ export function App() {
     return Array.from({ length: end - start + 1 }, (_, index) => start + index)
   }, [usePageRange, pageRangeStart, pageRangeEnd])
 
-  const handleFileUpload = async (file: File) => {
-    setUploadedFile(file)
-    setParseError(null)
+  const handleFileUpload = useCallback(
+    async (file: File) => {
+      setParseError(null)
 
-    const requestId = ++requestIdRef.current
-    setIsParsing(true)
+      const requestId = ++requestIdRef.current
+      setIsParsing(true)
 
-    try {
-      const selectedPages = buildParserPages()
-      const result = await parseUploadedDocument(file, selectedPages)
+      try {
+        const selectedPages = buildParserPages()
+        const result = await parseUploadedDocument(file, selectedPages)
 
-      if (requestId !== requestIdRef.current) {
-        return
-      }
+        if (requestId !== requestIdRef.current) {
+          return
+        }
 
-      if (result.status === 'unsupported') {
-        setParseError(result.error)
-        setDocument(null)
-        return
-      }
+        if (result.status === 'unsupported') {
+          setParseError(result.error)
+          setDocument(null)
+          return
+        }
 
-      if (result.status === 'failed') {
-        setParseError(`Failed to parse ${result.label}: ${result.error}`)
-        setDocument(null)
-        return
-      }
+        if (result.status === 'failed') {
+          setParseError(`Failed to parse ${result.label}: ${result.error}`)
+          setDocument(null)
+          return
+        }
 
-      if (result.document === undefined) {
-        setParseError(
-          `Failed to parse ${result.label}: received undefined result`
+        if (result.document === undefined) {
+          setParseError(
+            `Failed to parse ${result.label}: received undefined result`
+          )
+          setDocument(null)
+          return
+        }
+
+        const saveTask = recentFileSaveChainRef.current.then(async () => {
+          if (requestId !== requestIdRef.current) return
+
+          const saved = await saveRecentFile(file)
+          if (requestId === requestIdRef.current) {
+            setHasSavedRecentFile(saved)
+          }
+        })
+        recentFileSaveChainRef.current = saveTask.catch(() => undefined)
+        await saveTask
+        if (requestId !== requestIdRef.current) {
+          return
+        }
+        setUploadedFile(file)
+        setDocument(result.document)
+
+        const storedHighlights = localStorage.getItem(
+          `hamster-reader-demo:highlights:${file.name}`
         )
+        const parsedHighlights = parseHighlights(storedHighlights)
+        setRanges(Array.from(parsedHighlights.ranges))
+        setRects(Array.from(parsedHighlights.rects))
+        setPagePaintings(parsedHighlights.paintings)
+
+        const storedComments = localStorage.getItem(
+          `hamster-reader-demo:comments:${file.name}`
+        )
+        loadedCommentsFileNameRef.current = file.name
+        setComments(parseStoredComments(storedComments))
+
+        setSelectedRangeId(null)
+        setSelectedRectId(null)
+      } catch (error) {
+        if (requestId !== requestIdRef.current) {
+          return
+        }
+
+        setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
         setDocument(null)
-        return
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setIsParsing(false)
+        }
+      }
+    },
+    [buildParserPages]
+  )
+
+  const handleFileUploadRef = useRef(handleFileUpload)
+
+  useEffect(() => {
+    handleFileUploadRef.current = handleFileUpload
+  }, [handleFileUpload])
+
+  useEffect(() => {
+    let active = true
+
+    loadRecentFile().then((file) => {
+      if (active && file) {
+        setHasSavedRecentFile(true)
+        return handleFileUploadRef.current(file)
       }
 
-      setDocument(result.document)
+      return undefined
+    })
 
-      const storedHighlights = localStorage.getItem(
-        `hamster-reader-demo:highlights:${file.name}`
-      )
-      const parsedHighlights = parseHighlights(storedHighlights)
-      setRanges(Array.from(parsedHighlights.ranges))
-      setRects(Array.from(parsedHighlights.rects))
-      setPagePaintings(parsedHighlights.paintings)
-      setSelectedRangeId(null)
-      setSelectedRectId(null)
-    } catch (error) {
-      if (requestId !== requestIdRef.current) {
-        return
-      }
-
-      setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
-      setDocument(null)
-    } finally {
-      if (requestId === requestIdRef.current) {
-        setIsParsing(false)
-      }
+    return () => {
+      active = false
     }
-  }
+  }, [])
 
   return (
     <main data-testid='reader-demo-root' className='hamster-demo-shell'>
@@ -561,8 +773,42 @@ export function App() {
                 </div>
               )}
             </div>
+            {uploadedFile && (
+              <label
+                style={{
+                  display: 'block',
+                  marginBottom: '12px',
+                  fontSize: '13px'
+                }}
+              >
+                <span>Choose another file</span>
+                <input
+                  type='file'
+                  aria-label='Choose another file'
+                  accept='.pdf,.txt,.docx,.md,.markdown'
+                  disabled={isParsing}
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0]
+                    if (file) {
+                      void handleFileUpload(file)
+                    }
+                    event.currentTarget.value = ''
+                  }}
+                  style={{ display: 'block', marginTop: '6px', width: '100%' }}
+                />
+              </label>
+            )}
             {/* The single Reader handles both upload and document rendering on the right panel */}
           </section>
+
+          {document && (
+            <section style={{ marginBottom: '24px' }}>
+              <h2>已加载页面 ({loadedPages.length})</h2>
+              <div style={{ fontSize: '12px', color: '#64748b' }}>
+                已加载: {loadedPages.length > 0 ? loadedPages.join(', ') : '无'}
+              </div>
+            </section>
+          )}
 
           {uploadedFile && !isParsing && (
             <section style={{ marginBottom: '24px' }}>
@@ -570,6 +816,25 @@ export function App() {
               <p>Name: {uploadedFile.name}</p>
               <p>Size: {uploadedFile.size} bytes</p>
               <p>Type: {uploadedFile.type}</p>
+              <p style={{ fontSize: '12px', color: '#64748b' }}>
+                The last successful file is stored in this browser.
+              </p>
+              <button
+                type='button'
+                disabled={!hasSavedRecentFile}
+                onClick={() => {
+                  clearRecentFile().then((cleared) => {
+                    if (cleared) setHasSavedRecentFile(false)
+                  })
+                }}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '12px',
+                  cursor: hasSavedRecentFile ? 'pointer' : 'not-allowed'
+                }}
+              >
+                Forget saved file
+              </button>
             </section>
           )}
 
@@ -952,6 +1217,7 @@ export function App() {
                   key={`range-${range.id}`}
                   style={{
                     display: 'flex',
+                    flexWrap: 'wrap',
                     alignItems: 'center',
                     gap: '8px',
                     padding: '4px 0',
@@ -998,6 +1264,95 @@ export function App() {
                   >
                     删除
                   </button>
+                  {(comments[range.id] ?? []).length > 0 && (
+                    <ul
+                      style={{
+                        flexBasis: '100%',
+                        listStyle: 'none',
+                        padding: '8px',
+                        margin: '4px 0 0',
+                        borderRadius: '6px',
+                        background: '#f1f5f9'
+                      }}
+                    >
+                      {comments[range.id]?.map((item, index) => (
+                        <li
+                          key={item.id}
+                          style={{
+                            padding:
+                              index < (comments[range.id]?.length ?? 0) - 1
+                                ? '0 0 8px'
+                                : 0,
+                            marginBottom:
+                              index < (comments[range.id]?.length ?? 0) - 1
+                                ? '8px'
+                                : 0,
+                            borderBottom:
+                              index < (comments[range.id]?.length ?? 0) - 1
+                                ? '1px solid #e2e8f0'
+                                : 'none'
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              marginBottom: '4px'
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                color: '#64748b',
+                                fontWeight: 600
+                              }}
+                            >
+                              #{index + 1}
+                            </span>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <span
+                                style={{ fontSize: '11px', color: '#94a3b8' }}
+                              >
+                                {formatCommentTime(item.createdAt)}
+                              </span>
+                              <button
+                                type='button'
+                                aria-label='Delete comment'
+                                onClick={() =>
+                                  handleDeleteComment(range.id, item.id)
+                                }
+                                style={{
+                                  padding: '0 4px',
+                                  fontSize: '11px',
+                                  lineHeight: 1,
+                                  cursor: 'pointer',
+                                  border: 'none',
+                                  borderRadius: '3px',
+                                  background: 'transparent',
+                                  color: '#ef4444'
+                                }}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </div>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: '12px',
+                              lineHeight: 1.5,
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              color: '#334155'
+                            }}
+                          >
+                            {item.content}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               ))}
               {rects.map((rect) => (
@@ -1105,6 +1460,8 @@ export function App() {
           onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
           themeColor={themeColor}
+          commentCountByRangeId={commentCountByRangeId}
+          commentCountByRectId={commentCountByRangeId}
           rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
@@ -1116,6 +1473,7 @@ export function App() {
           }}
           onAnnotationHistoryChange={handleAnnotationHistoryChange}
           onCommentHighlight={handleCommentHighlight}
+          onPageLoadStatusChange={setLoadedPages}
         />
       </div>
       {commentingHighlight && (
@@ -1147,10 +1505,74 @@ export function App() {
           <p style={{ margin: '0 0 12px', color: '#64748b' }}>
             {commentingHighlight.text || '(空选区)'}
           </p>
+          {(comments[commentingHighlight.id] ?? []).length > 0 && (
+            <div
+              style={{
+                maxHeight: '160px',
+                overflowY: 'auto',
+                marginBottom: '12px',
+                padding: '10px',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                background: '#f8fafc'
+              }}
+            >
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {comments[commentingHighlight.id]?.map((item, index) => (
+                  <li
+                    key={item.id}
+                    style={{
+                      padding: '8px 0',
+                      borderBottom:
+                        index <
+                        (comments[commentingHighlight.id]?.length ?? 0) - 1
+                          ? '1px solid #e2e8f0'
+                          : 'none'
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '4px'
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          color: '#64748b',
+                          fontWeight: 600
+                        }}
+                      >
+                        #{index + 1}
+                      </span>
+                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                        {formatCommentTime(item.createdAt)}
+                      </span>
+                    </div>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: '13px',
+                        lineHeight: 1.5,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        color: '#334155'
+                      }}
+                    >
+                      {item.content}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <textarea
             aria-label='评论内容'
             value={commentDraft}
             onChange={(event) => setCommentDraft(event.currentTarget.value)}
+            placeholder='输入新评论…'
             style={{
               boxSizing: 'border-box',
               width: '100%',

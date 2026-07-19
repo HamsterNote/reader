@@ -22,6 +22,11 @@ import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
+import {
+  clearRecentFile,
+  loadRecentFile,
+  saveRecentFile
+} from '../demo/recentFileStorage'
 
 vi.mock('@hamster-note/pdf-parser', () => ({
   PdfParser: {
@@ -47,6 +52,18 @@ vi.mock('@hamster-note/markdown-parser', () => ({
   }
 }))
 
+vi.mock('../demo/recentFileStorage', () => ({
+  clearRecentFile: vi.fn(),
+  loadRecentFile: vi.fn(),
+  saveRecentFile: vi.fn()
+}))
+
+beforeEach(() => {
+  vi.mocked(clearRecentFile).mockResolvedValue(true)
+  vi.mocked(loadRecentFile).mockResolvedValue(null)
+  vi.mocked(saveRecentFile).mockResolvedValue(true)
+})
+
 const mockCallbacks: {
   onTextSelectionChange?: (text: unknown, detail: unknown) => void
   onTextSelectionEnd?: (text: unknown, detail: unknown) => void
@@ -58,6 +75,7 @@ const mockCallbacks: {
 } = {}
 const mockReaderProps: unknown[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
+const COMMENT_STORAGE_PREFIX = 'hamster-reader-demo:comments:'
 
 // --- Mock annotation history state ---
 // 模拟 library 内部的 undo/redo 栈，让 mock Reader 能在测试中
@@ -407,6 +425,10 @@ function makeLinkedRange(
 
 function highlightStorageKey(fileName: string): string {
   return `${HIGHLIGHT_STORAGE_PREFIX}${fileName}`
+}
+
+function commentStorageKey(fileName: string): string {
+  return `${COMMENT_STORAGE_PREFIX}${fileName}`
 }
 
 function findDocumentReaderProps(): Record<string, unknown> | undefined {
@@ -1525,6 +1547,204 @@ describe('demo parser flow', () => {
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+    })
+
+    it('restores the most recently parsed file when the demo mounts after a reload', async () => {
+      const recentFile = new File(['restored'], 'recent.txt', {
+        type: 'text/plain'
+      })
+      const range = makeLinkedRange('recent-range', 'restored highlight')
+      localStorage.setItem(
+        highlightStorageKey(recentFile.name),
+        JSON.stringify({
+          version: 4,
+          ranges: [range],
+          rects: [],
+          paintings: {}
+        })
+      )
+      localStorage.setItem(
+        commentStorageKey(recentFile.name),
+        JSON.stringify({
+          [range.id]: [
+            {
+              id: 'recent-comment',
+              content: 'restored comment after reload',
+              createdAt: 1000
+            }
+          ]
+        })
+      )
+      vi.mocked(loadRecentFile).mockResolvedValue(recentFile)
+      vi.mocked(TxtParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Restored After Reload')
+      )
+
+      render(<App />)
+
+      expect(
+        await screen.findByText('Restored After Reload')
+      ).toBeInTheDocument()
+      expect(await screen.findByText('restored highlight')).toBeInTheDocument()
+      expect(
+        await screen.findByText('restored comment after reload')
+      ).toBeInTheDocument()
+      expect(TxtParser.encode).toHaveBeenCalledWith(recentFile)
+    })
+
+    it('keeps a replacement file control available after restoring a recent file', async () => {
+      const recentFile = new File(['restored'], 'recent.txt', {
+        type: 'text/plain'
+      })
+      vi.mocked(loadRecentFile).mockResolvedValue(recentFile)
+      vi.mocked(TxtParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Restored Document')
+      )
+
+      render(<App />)
+
+      expect(await screen.findByText('Restored Document')).toBeInTheDocument()
+      expect(screen.getByLabelText('Choose another file')).toBeInTheDocument()
+    })
+
+    it('discloses local file persistence and lets the user clear it', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Cached Document')
+      )
+
+      render(<App />)
+      upload(makeFile('cached.pdf'))
+
+      expect(await screen.findByText('Cached Document')).toBeInTheDocument()
+      expect(
+        screen.getByText('The last successful file is stored in this browser.')
+      ).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Forget saved file' }))
+
+      await waitFor(() => {
+        expect(clearRecentFile).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it('serializes recent file saves so the latest upload remains cached', async () => {
+      const firstSave = createDeferred<boolean>()
+      vi.mocked(PdfParser.encode)
+        .mockResolvedValueOnce(makeRuntimeDocument('First Document'))
+        .mockResolvedValueOnce(makeRuntimeDocument('Second Document'))
+      vi.mocked(saveRecentFile)
+        .mockReturnValueOnce(firstSave.promise)
+        .mockResolvedValueOnce(true)
+
+      render(<App />)
+      const firstFile = makeFile('first.pdf')
+      const secondFile = makeFile('second.pdf')
+
+      upload(firstFile)
+      await waitFor(() => {
+        expect(saveRecentFile).toHaveBeenCalledWith(firstFile)
+      })
+
+      upload(secondFile)
+      await waitFor(() => {
+        expect(PdfParser.encode).toHaveBeenCalledTimes(2)
+      })
+      expect(saveRecentFile).toHaveBeenCalledTimes(1)
+
+      firstSave.resolve(true)
+
+      await waitFor(() => {
+        expect(saveRecentFile).toHaveBeenNthCalledWith(2, secondFile)
+      })
+      expect(await screen.findByText('Second Document')).toBeInTheDocument()
+    })
+
+    it('preserves stored comments while a newly uploaded file is still parsing', async () => {
+      const fileName = 'comment-restore.pdf'
+      const range = makeLinkedRange('comment-restore-range', 'restored text')
+      const storedComments = {
+        [range.id]: [
+          { id: 'comment-1', content: 'persisted note', createdAt: 1000 }
+        ]
+      }
+      const pendingParse = createDeferred<IntermediateDocument | undefined>()
+
+      localStorage.setItem(
+        highlightStorageKey(fileName),
+        JSON.stringify({
+          version: 4,
+          ranges: [range],
+          rects: [],
+          paintings: {}
+        })
+      )
+      localStorage.setItem(
+        commentStorageKey(fileName),
+        JSON.stringify(storedComments)
+      )
+      vi.mocked(PdfParser.encode).mockReturnValue(pendingParse.promise)
+
+      render(<App />)
+      upload(makeFile(fileName))
+
+      expect(localStorage.getItem(commentStorageKey(fileName))).toBe(
+        JSON.stringify(storedComments)
+      )
+
+      pendingParse.resolve(makeRuntimeDocument('Comment Restore Document'))
+
+      expect(
+        await screen.findByText('Comment Restore Document')
+      ).toBeInTheDocument()
+      expect(await screen.findByText('persisted note')).toBeInTheDocument()
+      expect(localStorage.getItem(commentStorageKey(fileName))).toBe(
+        JSON.stringify(storedComments)
+      )
+    })
+
+    it('persists comment edits while the same file is being parsed again', async () => {
+      const fileName = 'comment-reupload.pdf'
+      const range = makeLinkedRange('comment-reupload-range', 'reupload text')
+      const pendingParse = createDeferred<IntermediateDocument | undefined>()
+
+      vi.mocked(PdfParser.encode).mockResolvedValueOnce(
+        makeRuntimeDocument('Initial Comment Document')
+      )
+
+      render(<App />)
+      upload(makeFile(fileName))
+      expect(
+        await screen.findByText('Initial Comment Document')
+      ).toBeInTheDocument()
+
+      vi.mocked(PdfParser.encode).mockReturnValueOnce(pendingParse.promise)
+      upload(makeFile(fileName))
+
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      const resultPromise = callback(range)
+      fireEvent.change(await screen.findByLabelText('评论内容'), {
+        target: { value: 'note added during reupload' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '完成评论' }))
+      await resultPromise
+
+      await waitFor(() => {
+        const stored = JSON.parse(
+          localStorage.getItem(commentStorageKey(fileName)) || '{}'
+        )
+        expect(stored[range.id]?.[0]?.content).toBe(
+          'note added during reupload'
+        )
+      })
+
+      pendingParse.resolve(makeRuntimeDocument('Reloaded Comment Document'))
+      expect(
+        await screen.findByText('Reloaded Comment Document')
+      ).toBeInTheDocument()
     })
 
     it('writes a new highlight to localStorage when onHighlight is called', async () => {

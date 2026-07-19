@@ -58,13 +58,13 @@
     "use-undo": "^1.2.0"
   },
   "peerDependencies": {
-    "@hamster-note/selection": "0.1.0",
+    "@hamster-note/selection": "0.1.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "@hamster-note/selection": "0.1.0",
+    "@hamster-note/selection": "0.1.2",
     "@system-ui-js/development-base": "^0.1.2",
     "@testing-library/dom": "^10.0.0",
     "@testing-library/jest-dom": "^6.0.0",

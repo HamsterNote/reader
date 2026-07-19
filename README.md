@@ -283,9 +283,11 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 > **Note**: `onSelectionEnd` is **mouseup-based**. On touch devices, the selection-end signal relies on the legacy `touchend` listener (which fires `onTextSelectionEnd` / `onSelectText`), not `onSelectionEnd`.
 
-### Demo localStorage Migration
+### Demo Browser Storage
 
-The browser Demo persists annotations to localStorage keyed by filename. The stored shape is now `{ version: 3, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[] }`. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
+The browser Demo persists annotation metadata to localStorage keyed by filename. The stored highlight shape is `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }`; comments are stored separately under the same filename. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
+
+After a file parses successfully, the Demo also stores that source `File` in browser-local IndexedDB. On reload, it reopens and reparses the most recent successful file so its annotations and comments can be displayed without another upload. The Demo labels this behavior beside the uploaded-file details and provides a **Forget saved file** button. Clearing the saved file does not delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all Demo storage.
 
 ### Programmatic Control
 
