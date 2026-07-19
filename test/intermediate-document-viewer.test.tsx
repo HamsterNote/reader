@@ -46,6 +46,7 @@ import {
 import { IntermediateDocumentViewer, Reader } from '../src/index'
 import type {
   ReaderSelectionRange,
+  ReaderSelectionRectangle,
   ReaderSelectionRef
 } from '../src/types/selection'
 import type {
@@ -7646,6 +7647,28 @@ describe('rangeJumpHelpers', () => {
 })
 
 describe('touchPanMode', () => {
+  it('矩形选区排除 TouchSingleFingerPan，保留双指缩放', () => {
+    // Given / When: 阅读器进入矩形选区工具。
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        selectedTool='rect-selection'
+      />
+    )
+
+    // Then: 单指交给矩形框选，文档只保留双指触控交互。
+    const interactions =
+      screen.getByTestId('virtual-paper-wrapper').dataset.enabledInteractions ??
+      ''
+    expect(interactions).not.toContain(
+      VirtualPaperInteractionMode.TouchSingleFingerPan
+    )
+    expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchTwoFingerZoom
+    )
+  })
+
   it('默认模式包含 TouchSingleFingerPan 和 TouchTwoFingerZoom', () => {
     const { document } = makeDocument({ pageCount: 1 })
     render(<IntermediateDocumentViewer document={document} />)
@@ -7785,6 +7808,49 @@ describe('touchPanMode', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('renders a rectangle highlight as an image-only crop of its page thumbnail', async () => {
+      const { document, pages } = makeDocument({
+        pageCount: 1,
+        pageSize: { x: 100, y: 200 }
+      })
+      const pageOne = pages.get(1)
+      if (!pageOne) {
+        throw new Error('Expected page 1 fixture')
+      }
+      const thumbnail =
+        'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E'
+      pageOne.getThumbnail = vi.fn(async () => thumbnail)
+      const rect: ReaderSelectionRectangle = {
+        id: 'rect-1',
+        createdAt: 10,
+        selectionId: 'page-1',
+        start: { x: 10, y: 20 },
+        end: { x: 60, y: 45 },
+        rect: { x: 10, y: 20, width: 50, height: 25 },
+        overlayRectType: 'percent'
+      }
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+          rects={[rect]}
+        />
+      )
+      await waitFor(() => {
+        expect(pageOne.getThumbnail).toHaveBeenCalled()
+      })
+
+      fireEvent.click(screen.getByRole('tab', { name: '高亮' }))
+
+      const item = screen.getByTestId('page-browser-rect-rect-1')
+      const preview = screen.getByTestId('page-browser-rect-preview-rect-1')
+      const image = preview.querySelector('img')
+      expect(item).not.toHaveTextContent('矩形选区')
+      expect(image).not.toBeNull()
+      expect(image).toHaveAttribute('src', thumbnail)
     })
   })
 })

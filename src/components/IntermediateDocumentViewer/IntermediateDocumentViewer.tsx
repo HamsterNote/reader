@@ -87,6 +87,7 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
+import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
 
@@ -527,6 +528,8 @@ export type IntermediateDocumentViewerProps = {
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
   showPageBrowser?: boolean
+  /** 页面浏览纵栏被左滑关闭时触发。 */
+  onPageBrowserClose?: () => void
   /** 主题色（CSS color），用于 page-browser 选中项的 outline。默认 '#2563eb'。 */
   themeColor?: string
   /** 每个 rangeId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
@@ -1073,6 +1076,7 @@ type ViewerContentProps = PageResources & {
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
   showPageBrowser: boolean
+  onPageBrowserClose?: () => void
   onPageBrowserVisibilityChange: (
     pageNumber: number,
     isVisible: boolean
@@ -1434,6 +1438,7 @@ function IntermediateDocumentPages({
                   <RangeHandle
                     handle={handle}
                     linkedData={runtimeLinkedData}
+                    magnifierEnabled={handle.target === 'rect'}
                     scale={drawingScale}
                     selectionId={shellSelectionId}
                     viewerRoot={viewerRootElement}
@@ -1754,7 +1759,9 @@ function resolveEnabledInteractions(
   selectedTool: ReaderPageTool | undefined,
   touchPanMode: 'single-finger' | 'two-finger' | undefined
 ): VirtualPaperInteractionMode[] {
-  return selectedTool === 'drawing' || touchPanMode === 'two-finger'
+  return selectedTool === 'drawing' ||
+    selectedTool === 'rect-selection' ||
+    touchPanMode === 'two-finger'
     ? TWO_FINGER_TOUCH_ENABLED_INTERACTIONS
     : DEFAULT_ENABLED_INTERACTIONS
 }
@@ -2157,6 +2164,7 @@ function ViewerContent({
   onPagePaintingChange,
   drawingScale,
   showPageBrowser,
+  onPageBrowserClose,
   onPageBrowserVisibilityChange,
   onNavigateToPage,
   themeColor,
@@ -2602,11 +2610,15 @@ function ViewerContent({
     >
       {pageNumbers.length > 0 ? (
         <RangeMagnifierProvider rootElement={viewerRootElement}>
+          <TextSelectionMagnifier
+            viewerRootElement={viewerRootElement}
+          />
           <PageBrowser
             isOpen={showPageBrowser}
             pageNumbers={pageNumbers}
             pageSizesByPageNumber={pageSizesByPageNumber}
             baseImagesByPageNumber={baseImagesByPageNumber}
+            pagePaintings={pagePaintings}
             onPageVisibilityChange={onPageBrowserVisibilityChange}
             onNavigateToPage={onNavigateToPage}
             themeColor={themeColor}
@@ -2623,6 +2635,7 @@ function ViewerContent({
             onSelectRect={onSelectRect}
             onNavigateToRect={onScrollToRect}
             commentCountByRectId={commentCountByRectId}
+            onClose={onPageBrowserClose}
           />
           <VirtualPaper
             containMode={true}
@@ -2719,6 +2732,7 @@ export function IntermediateDocumentViewer({
   pagePaintings,
   onPagePaintingChange,
   showPageBrowser = false,
+  onPageBrowserClose,
   themeColor,
   commentCountByRangeId,
   commentCountByRectId,
@@ -5206,6 +5220,7 @@ export function IntermediateDocumentViewer({
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={virtualPaperTransform.scale}
       showPageBrowser={showPageBrowser}
+      onPageBrowserClose={onPageBrowserClose}
       onPageBrowserVisibilityChange={handlePageBrowserVisibilityChange}
       onNavigateToPage={navigateToPage}
       themeColor={themeColor}

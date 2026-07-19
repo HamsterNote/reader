@@ -19,6 +19,7 @@ interface ActiveRangeHandleDragSession {
 interface RangeHandleDragOptions {
   readonly circleRef: RefObject<HTMLButtonElement | null>
   readonly correctPointerCoordinates: boolean
+  readonly magnifierEnabled: boolean
   readonly viewerRoot?: HTMLElement | null
 }
 
@@ -62,9 +63,11 @@ const copyPointerEvent = (
 export const useRangeHandleDrag = ({
   circleRef,
   correctPointerCoordinates,
+  magnifierEnabled,
   viewerRoot
 }: RangeHandleDragOptions): ((event: PointerEvent) => void) => {
   const magnifier = useRangeMagnifier()
+  const activeMagnifier = magnifierEnabled ? magnifier : null
   const latestStartHandleDragRef = useRef<
     ((event: PointerEvent) => void) | null
   >(null)
@@ -92,7 +95,7 @@ export const useRangeHandleDrag = ({
       let pointerCorrectionActive = correctPointerCoordinates
       let dragFinished = false
       let unregisterMagnifierCleanup: (() => void) | null = null
-      magnifier?.start(circle, {
+      activeMagnifier?.start(circle, {
         clientX: event.clientX + offsetX,
         clientY: event.clientY + offsetY
       })
@@ -105,7 +108,7 @@ export const useRangeHandleDrag = ({
           return
         }
 
-        magnifier?.move({
+        activeMagnifier?.move({
           clientX: moveEvent.clientX + offsetX,
           clientY: moveEvent.clientY + offsetY
         })
@@ -137,7 +140,7 @@ export const useRangeHandleDrag = ({
         ownerDocument.defaultView?.removeEventListener('blur', finishDrag)
         unregisterMagnifierCleanup?.()
         unregisterMagnifierCleanup = null
-        magnifier?.end()
+        activeMagnifier?.end()
         if (activeDragSessions.get(ownerDocument)?.finishDrag === finishDrag) {
           activeDragSessions.delete(ownerDocument)
         }
@@ -188,8 +191,9 @@ export const useRangeHandleDrag = ({
         stopPointerCorrection,
         finishDrag
       }
-      if (magnifier) {
-        unregisterMagnifierCleanup = magnifier.registerDragCleanup(finishDrag)
+      if (activeMagnifier) {
+        unregisterMagnifierCleanup =
+          activeMagnifier.registerDragCleanup(finishDrag)
         ownerDocument.addEventListener('pointermove', trackMagnifierMove, true)
       }
       if (correctPointerCoordinates) {
@@ -200,7 +204,7 @@ export const useRangeHandleDrag = ({
       ownerDocument.defaultView?.addEventListener('blur', finishDrag)
       activeDragSessions.set(ownerDocument, session)
     },
-    [circleRef, correctPointerCoordinates, magnifier, viewerRoot]
+    [activeMagnifier, circleRef, correctPointerCoordinates, viewerRoot]
   )
 
   useLayoutEffect(() => {
