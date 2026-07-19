@@ -50,12 +50,7 @@ export class Drag {
 
   private readonly handlePointerDown = (event: PointerEvent) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return
-    if (
-      this.options?.maxFingerCount !== -1 &&
-      this.fingers.size >= (this.options?.maxFingerCount ?? 1)
-    ) {
-      return
-    }
+    // Drag 会覆盖 maxFingerCount 为 -1，因此这里必须接受多个指针。
     const finger = new Finger(event)
     this.fingers.set(event.pointerId, finger)
     this.trigger(DragOperationType.Start)
@@ -76,8 +71,12 @@ export class Drag {
     const finger = this.fingers.get(event.pointerId)
     if (!finger) return
     finger.record(FingerOperationType.End, event)
-    this.trigger(DragOperationType.End)
+    // 真实 multi-drag 会在 End 回调前销毁并移除 finger。
     this.fingers.delete(event.pointerId)
+    if (this.fingers.size === 0) {
+      this.trigger(DragOperationType.AllEnd)
+    }
+    this.trigger(DragOperationType.End)
   }
 
   private readonly handlePointerUp = (event: PointerEvent) => {

@@ -40,10 +40,14 @@ export function usePageBrowserDrag({
 
     let direction: DragDirection = 'pending'
     let offsetX = 0
+    let activePointerId: number | null = null
+    let wasPointerCanceled = false
 
     const reset = () => {
       direction = 'pending'
       offsetX = 0
+      activePointerId = null
+      wasPointerCanceled = false
       element.style.removeProperty('--hamster-reader-page-browser-drag-x')
       setIsDragging(false)
     }
@@ -61,13 +65,24 @@ export function usePageBrowserDrag({
 
     element.style.touchAction = 'pan-y'
 
-    const handleStart = () => {
+    const handleStart = (fingers: Finger[]) => {
+      if (activePointerId !== null) return
       direction = 'pending'
       offsetX = 0
+      activePointerId = fingers[0]?.pointerId ?? null
+      wasPointerCanceled = false
+    }
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (event.pointerId === activePointerId) {
+        wasPointerCanceled = true
+      }
     }
 
     const handleMove = (fingers: Finger[]) => {
-      const finger = fingers[0]
+      const finger = fingers.find(
+        (candidate) => candidate.pointerId === activePointerId
+      )
       if (!finger) return
 
       const delta = getFingerDelta(finger)
@@ -91,11 +106,10 @@ export function usePageBrowserDrag({
       setIsDragging(true)
     }
 
-    const handleEnd = (fingers: Finger[]) => {
-      const eventType = fingers[0]?.getLastOperation()?.event?.type
+    const handleEnd = () => {
       const width = element.getBoundingClientRect().width || element.offsetWidth
       const shouldDismiss =
-        eventType !== 'pointercancel' &&
+        !wasPointerCanceled &&
         direction === 'horizontal' &&
         Math.abs(offsetX) > width / 2
 
@@ -109,9 +123,11 @@ export function usePageBrowserDrag({
 
     drag.addEventListener(DragOperationType.Start, handleStart)
     drag.addEventListener(DragOperationType.Move, handleMove)
-    drag.addEventListener(DragOperationType.End, handleEnd)
+    drag.addEventListener(DragOperationType.AllEnd, handleEnd)
+    document.addEventListener('pointercancel', handlePointerCancel, true)
 
     return () => {
+      document.removeEventListener('pointercancel', handlePointerCancel, true)
       drag.destroy()
       element.style.removeProperty('touch-action')
       reset()

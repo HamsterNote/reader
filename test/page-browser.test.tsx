@@ -155,4 +155,77 @@ describe('PageBrowser', () => {
     expect(onClose).toHaveBeenCalledOnce()
     expect(browser).toHaveAttribute('aria-hidden', 'true')
   })
+
+  it('rebounds instead of dismissing when a long left drag is canceled', () => {
+    // Given：侧栏已被向左拖动超过关闭阈值。
+    const onClose = vi.fn()
+    renderPageBrowser({ onClose })
+    const browser = screen.getByTestId('page-browser')
+    mockElementSize(browser, { width: 300, height: 600 })
+    fireEvent.pointerDown(browser, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 250,
+      clientY: 100
+    })
+    fireEvent.pointerMove(document, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 80,
+      clientY: 102
+    })
+
+    // When：浏览器取消该指针手势，而非正常抬起。
+    fireEvent.pointerCancel(document, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 80,
+      clientY: 102
+    })
+
+    // Then：取消手势只复位拖动状态，不关闭侧栏。
+    expect(onClose).not.toHaveBeenCalled()
+    expect(browser).toHaveAttribute('aria-hidden', 'false')
+    expect(
+      browser.style.getPropertyValue('--hamster-reader-page-browser-drag-x')
+    ).toBe('')
+  })
+
+  it('waits for the active pointer when another pointer is canceled', () => {
+    // Given：主指针正在执行超过关闭阈值的左拖，第二个指针随后加入。
+    const onClose = vi.fn()
+    renderPageBrowser({ onClose })
+    const browser = screen.getByTestId('page-browser')
+    mockElementSize(browser, { width: 300, height: 600 })
+    fireEvent.pointerDown(browser, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 250,
+      clientY: 100
+    })
+    fireEvent.pointerDown(browser, {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 240,
+      clientY: 120
+    })
+    fireEvent.pointerMove(document, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 70,
+      clientY: 102
+    })
+
+    // When：非活动的第二个指针被浏览器取消。
+    fireEvent.pointerCancel(document, {
+      pointerId: 2,
+      pointerType: 'touch',
+      clientX: 240,
+      clientY: 120
+    })
+
+    // Then：主指针仍未结束，侧栏不能提前关闭。
+    expect(onClose).not.toHaveBeenCalled()
+    expect(browser).toHaveAttribute('aria-hidden', 'false')
+  })
 })

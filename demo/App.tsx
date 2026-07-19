@@ -291,6 +291,7 @@ export function App() {
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
   const requestIdRef = useRef(0)
+  const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
 
   // --- Selection 库集成演示 state ---
@@ -714,6 +715,14 @@ export function App() {
     [buildParserPages]
   )
 
+  const handleManualFileUpload = useCallback(
+    (file: File) => {
+      manualFileUploadStartedRef.current = true
+      return handleFileUpload(file)
+    },
+    [handleFileUpload]
+  )
+
   const handleFileUploadRef = useRef(handleFileUpload)
 
   useEffect(() => {
@@ -724,7 +733,7 @@ export function App() {
     let active = true
 
     loadRecentFile().then((file) => {
-      if (active && file) {
+      if (active && file && !manualFileUploadStartedRef.current) {
         setHasSavedRecentFile(true)
         return handleFileUploadRef.current(file)
       }
@@ -843,7 +852,7 @@ export function App() {
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0]
                     if (file) {
-                      void handleFileUpload(file)
+                      void handleManualFileUpload(file)
                     }
                     event.currentTarget.value = ''
                   }}
@@ -1484,7 +1493,7 @@ export function App() {
           document={document || undefined}
           renderMode={renderMode}
           touchPanMode={touchPanMode}
-          onFileUpload={handleFileUpload}
+          onFileUpload={handleManualFileUpload}
           emptyText='No document loaded'
           pageRange={buildPageRange()}
           overlayRectType='percent'

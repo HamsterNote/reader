@@ -1614,6 +1614,42 @@ describe('demo parser flow', () => {
       expect(screen.getByLabelText('Choose another file')).toBeInTheDocument()
     })
 
+    it('keeps a manually selected file when recent-file loading finishes later', async () => {
+      // Given：最近文件仍在异步读取，而用户选择的文件可以立即解析。
+      const recentFileLoad = createDeferred<File | null>()
+      const recentFile = new File(['restored'], 'recent.txt', {
+        type: 'text/plain'
+      })
+      const selectedFile = makeFile('selected.pdf')
+      vi.mocked(loadRecentFile).mockReturnValue(recentFileLoad.promise)
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Manually Selected Document')
+      )
+      vi.mocked(TxtParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Delayed Recent Document')
+      )
+
+      render(<App />)
+
+      // When：用户先完成手动选择，随后 IndexedDB 才返回旧文件。
+      upload(selectedFile)
+      expect(
+        await screen.findByText('Manually Selected Document')
+      ).toBeInTheDocument()
+      await act(async () => {
+        recentFileLoad.resolve(recentFile)
+      })
+
+      // Then：延迟恢复不能覆盖用户主动选择，也不能重新解析或保存旧文件。
+      expect(screen.getByText('Manually Selected Document')).toBeInTheDocument()
+      expect(
+        screen.queryByText('Delayed Recent Document')
+      ).not.toBeInTheDocument()
+      expect(TxtParser.encode).not.toHaveBeenCalled()
+      expect(saveRecentFile).toHaveBeenCalledOnce()
+      expect(saveRecentFile).toHaveBeenCalledWith(selectedFile)
+    })
+
     it('discloses local file persistence and lets the user clear it', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Cached Document')

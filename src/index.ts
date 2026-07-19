@@ -121,6 +121,8 @@ export type ReaderInteractiveProps = Pick<
   | 'containMarginY'
   | 'showPageBrowser'
   | 'onPageBrowserClose'
+  | 'bookmarkedPageNumbers'
+  | 'onTogglePageBookmark'
   | 'selectedTool'
   | 'paintingTool'
   | 'drawingStrokeColor'
