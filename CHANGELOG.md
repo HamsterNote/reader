@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-19
+
+### Added
+- 在 `ReaderInteractiveProps` 中新增 `bookmarkedPageNumbers` 和 `onTogglePageBookmark` 属性导出。
+
+### Fixed
+- 修复 `pointercancel` 导致页面浏览器被意外关闭的问题：通过追踪主指针并忽略非主指针的取消事件来解决。
+- 修复手动上传文件与自动恢复最近文件之间的竞态条件：手动选择的文件不会再被延迟完成的自动文件恢复覆盖。
+
 ## [0.5.1-beta.0] - 2026-07-19
 
 ### Added
