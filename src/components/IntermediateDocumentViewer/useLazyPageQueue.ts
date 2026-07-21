@@ -37,6 +37,7 @@ export interface LazyPageQueueCallbacks {
   onPageLoaded: (params: {
     pageNumber: number
     baseImage: string | undefined
+    thumbnailScale: number | undefined
     texts: IntermediateText[]
     images: IntermediateImage[]
   }) => void
@@ -81,9 +82,6 @@ export function useLazyPageQueue(
     activeDocumentRef: React.MutableRefObject<IntermediateDocument | null>
     isMountedRef: React.MutableRefObject<boolean>
     loadingPagesRef: React.MutableRefObject<Set<number>>
-    // scale 可选参数用于按当前缩放比例请求更高/更低分辨率的缩略图，
-    // 使放大后的背景图更清晰。初始加载时不传 scale（使用默认值），
-    // 仅在 debounced thumbnail refresh effect 中按 effectiveScale 传入。
     getBaseImageFromPage?: (
       page: unknown,
       scale?: number
@@ -96,8 +94,7 @@ export function useLazyPageQueue(
       content: IntermediateContent
     ) => content is IntermediateImage
     callbacks: LazyPageQueueCallbacks
-    // 当前 effectiveScale 的 ref，用于懒加载时按当前缩放比例请求合适分辨率的缩略图
-    effectiveScaleRef: React.MutableRefObject<number>
+    getThumbnailScale?: (pageNumber: number) => number
   }
 ): LazyPageQueueApi {
   const {
@@ -110,7 +107,7 @@ export function useLazyPageQueue(
     isIntermediateText,
     isIntermediateImage,
     callbacks,
-    effectiveScaleRef
+    getThumbnailScale
   } = options
 
   // 待加载页码队列（保持插入顺序，不去重存储层，enqueuePage 内去重）
@@ -202,17 +199,20 @@ export function useLazyPageQueue(
           if (mode === 'text') {
             return Promise.all([
               Promise.resolve(undefined),
-              getPageContentEntries(page)
+              getPageContentEntries(page),
+              Promise.resolve(undefined)
             ])
           }
 
+          const thumbnailScale = getThumbnailScale?.(pageNumber)
           return Promise.all([
-            getBaseImageFromPage?.(page, effectiveScaleRef.current) ??
+            getBaseImageFromPage?.(page, thumbnailScale) ??
               Promise.resolve(undefined),
-            getPageContentEntries(page)
+            getPageContentEntries(page),
+            Promise.resolve(thumbnailScale)
           ])
         })
-        .then(([baseImage, content]) => {
+        .then(([baseImage, content, thumbnailScale]) => {
           // stale 守卫：unmount / document 切换 / generation 过期
           if (
             !isMountedRef.current ||
@@ -227,7 +227,13 @@ export function useLazyPageQueue(
             mode === 'text' || !isIntermediateImage
               ? []
               : content.filter(isIntermediateImage)
-          callbacks.onPageLoaded({ pageNumber, baseImage, texts, images })
+          callbacks.onPageLoaded({
+            pageNumber,
+            baseImage,
+            thumbnailScale,
+            texts,
+            images
+          })
         })
         .catch(() => {
           if (
@@ -271,7 +277,7 @@ export function useLazyPageQueue(
       getPageContentEntries,
       isIntermediateText,
       isIntermediateImage,
-      effectiveScaleRef
+      getThumbnailScale
     ]
   )
 

@@ -951,59 +951,22 @@
     width: 100%;
     padding: 5px;
     box-sizing: border-box;
+
+    .hsn-selection-container {
+      position: relative;
+      min-height: 100%;
+    }
+
+    .hsn-selection-content {
+      position: relative;
+      min-height: 100%;
+      height: auto;
+    }
   }
 
   // 注意：&__intermediate-text--flow 修饰符定义在 &__intermediate-text
   // 之后（见文件下方），以确保 CSS 源码顺序覆盖 layout 模式的
   // position:absolute / display:inline-block / white-space:pre。
-
-  &__html-parser-output {
-    width: 100%;
-    box-sizing: border-box;
-
-    // Page-only html-parser fragment layout rules.
-    // decodeToHtml returns .hamster-note-page fragments without injecting
-    // document/page/text/image layout CSS, so Reader must provide the scoped
-    // styles here under the html-parser output root.
-    .hamster-note-document {
-      position: relative;
-      display: block;
-      contain: layout style;
-      width: 100%;
-    }
-
-    .hamster-note-page {
-      position: relative;
-      overflow: visible;
-      background-repeat: no-repeat;
-      background-position: top center;
-      background-size: contain;
-    }
-
-    .hamster-note-text {
-      position: absolute;
-      white-space: pre;
-      transform-origin: 0 0;
-    }
-
-    .hamster-note-image {
-      position: absolute;
-    }
-
-    // Allow text selection in html-parser output even when the parent page
-    // has user-select: none. This is necessary because html-parser renders
-    // actual DOM text nodes (unlike the direct-render path which uses
-    // absolutely-positioned spans with explicit user-select: text).
-    user-select: text;
-    -webkit-user-select: text;
-
-    // Ensure text nodes inside the html-parser output are selectable.
-    .hamster-note-page,
-    .hamster-note-page * {
-      user-select: text;
-      -webkit-user-select: text;
-    }
-  }
 
   // Intermediate page shell
   &__intermediate-page {
@@ -1062,11 +1025,8 @@
     z-index: 0;
   }
 
-  // NOTE: The html-parser renders backgrounds as CSS `background-image` on
-  // `.hamster-note-page` divs, not as separate DOM elements. CSS backgrounds
-  // are inherently unselectable — they are not DOM nodes and cannot be captured
-  // by text selection or touch callout menus. The direct-render path above
-  // (base-image) covers the `<img>` background case.
+  // 底图通过 pointer-events: none + user-select: none 保证不可选中，
+  // 直渲染路径的 <img> 背景由上面的 base-image 规则覆盖。
 
     // Intermediate text spans
     &__intermediate-text {
@@ -1110,10 +1070,10 @@
       mix-blend-mode: multiply;
     }
 
-    // Selection 容器与内容区高度占满页面外壳，避免嵌套 flex/absolute
+    // Selection 容器与内容区高度占满 layout 页面外壳，避免嵌套 flex/absolute
     // 布局中因高度未显式声明而导致的选择 overlay 偏移或空白。
-    .hsn-selection-container,
-    .hsn-selection-content {
+    &__intermediate-page .hsn-selection-container,
+    &__intermediate-page .hsn-selection-content {
       height: 100%;
     }
 
@@ -1122,10 +1082,7 @@
     // 仍保留 text selection，供 selection 包读取 Range 并绘制自定义高亮。
     @media (pointer: coarse) {
       &__intermediate-text,
-      .hsn-selection-content &__intermediate-text,
-      &__html-parser-output,
-      &__html-parser-output .hamster-note-page,
-      &__html-parser-output .hamster-note-page * {
+      .hsn-selection-content &__intermediate-text {
         user-select: none;
         -webkit-user-select: none;
         -webkit-touch-callout: none;

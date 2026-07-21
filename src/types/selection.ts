@@ -37,7 +37,7 @@ export type ReaderLinkedSelectionRange = Omit<
   rectsBySelectionId: Record<string, ReaderSelectionRect[]>
 }
 
-/** html-parser highlight API 的公开 range 契约：只接受 linked/page-scoped 形状。 */
+/** highlight API 的公开 range 契约：只接受 linked/page-scoped 形状。 */
 export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
   readonly __readerSelectionRangeBrand?: never
 }
@@ -46,6 +46,11 @@ export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
 export type ReaderHighlightPopover =
   | ReactNode
   | ((highlight: ReaderSelectionRange) => ReactNode)
+
+/** 已确认矩形 Popover：静态内容，或基于当前矩形原始对象渲染的内容。 */
+export type ReaderRectanglePopover =
+  | ReactNode
+  | ((rectangle: ReaderSelectionRectangle) => ReactNode)
 
 export type ReaderLinkedSelectionData = Omit<
   LinkedSelectionData,

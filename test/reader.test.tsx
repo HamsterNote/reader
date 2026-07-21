@@ -22,6 +22,8 @@ import {
 } from '../src/components/Reader'
 import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import type {
+  ReaderComment,
+  ReaderCommentChangeDetail,
   ReaderInteractionMode,
   ReaderProps,
   ReaderRenderMode,
@@ -47,6 +49,7 @@ import {
 import { intersectionObserverMock } from './setup'
 
 let capturedViewerProps: Record<string, unknown> = {}
+let capturedTextViewerProps: Record<string, unknown> = {}
 
 vi.mock(
   '../src/components/IntermediateDocumentViewer',
@@ -61,6 +64,25 @@ vi.mock(
         capturedViewerProps = props
         return actual.IntermediateDocumentViewer(
           props as Parameters<typeof actual.IntermediateDocumentViewer>[0]
+        )
+      }
+    }
+  }
+)
+
+vi.mock(
+  '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer')
+      >()
+    return {
+      ...actual,
+      IntermediateDocumentTextViewer: (props: Record<string, unknown>) => {
+        capturedTextViewerProps = props
+        return actual.IntermediateDocumentTextViewer(
+          props as Parameters<typeof actual.IntermediateDocumentTextViewer>[0]
         )
       }
     }
@@ -370,6 +392,7 @@ function createMockFile(
 describe('Reader public API', () => {
   beforeEach(() => {
     capturedViewerProps = {}
+    capturedTextViewerProps = {}
   })
 
   it('renders the provided document title on the public entry', () => {
@@ -694,6 +717,181 @@ describe('Reader renderMode', () => {
     expect(screen.getByTestId('reader-content')).toContainElement(textViewer)
   })
 
+  it('renderMode text forwards linked selection props without VirtualPaper', () => {
+    const ranges = [makeReaderRange('text-mode-range', 'Text mode range')]
+    const defaultRanges = [
+      makeReaderRange('text-mode-default-range', 'Default range')
+    ]
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const selectionPopover = <div>Custom selection popover</div>
+    const highlightPopover = vi.fn((highlight: ReaderSelectionRange) => (
+      <div>{highlight.id}</div>
+    ))
+    const onSelect = vi.fn()
+    const onLinkedDataChange = vi.fn()
+    const onLinkedSelect = vi.fn()
+    const onLinkedUpdateRange = vi.fn()
+    const onLinkedSelectRange = vi.fn()
+    const onSelectRange = vi.fn()
+    const onUpdateRange = vi.fn()
+    const onSelectionStart = vi.fn()
+    const onSelectionEnd = vi.fn()
+    const onHighlight = vi.fn()
+    const onCommentHighlight = vi.fn(
+      async (highlight: ReaderSelectionRange) => highlight
+    )
+    const onScaleChange = vi.fn()
+    const onCreateRect = vi.fn()
+    const onSelectRect = vi.fn()
+    const onUpdateRect = vi.fn()
+    const onPagePaintingChange = vi.fn()
+    const onPageBrowserClose = vi.fn()
+    const rects = [makeReaderRect('text-mode-rect')]
+    const pagePaintings: Record<string, DrawingValue> = {
+      'page-1': { strokes: [] }
+    }
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        ranges={ranges}
+        defaultRanges={defaultRanges}
+        selectedRangeId='text-mode-range'
+        defaultSelectedRangeId='text-mode-default-range'
+        onSelect={onSelect}
+        onLinkedDataChange={onLinkedDataChange}
+        onLinkedSelect={onLinkedSelect}
+        onLinkedUpdateRange={onLinkedUpdateRange}
+        onLinkedSelectRange={onLinkedSelectRange}
+        onSelectRange={onSelectRange}
+        onUpdateRange={onUpdateRange}
+        onSelectionStart={onSelectionStart}
+        onSelectionEnd={onSelectionEnd}
+        onHighlight={onHighlight}
+        highlightColor='#ffcc00'
+        selectionColor='#0066ff'
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+        onCommentHighlight={onCommentHighlight}
+        autoHighlight={true}
+        selectionRef={selectionRef}
+        overlayRectType='percent'
+        scale={2}
+        defaultScale={1.5}
+        onScaleChange={onScaleChange}
+        minScale={0.25}
+        maxScale={4}
+        tool='rect'
+        selectedTool='rect-selection'
+        rects={rects}
+        selectedRectId='text-mode-rect'
+        onCreateRect={onCreateRect}
+        onSelectRect={onSelectRect}
+        onUpdateRect={onUpdateRect}
+        showPageBrowser={true}
+        onPageBrowserClose={onPageBrowserClose}
+        themeColor='#123456'
+        paintingTool='pen'
+        drawingStrokeColor='#654321'
+        pagePaintings={pagePaintings}
+        onPagePaintingChange={onPagePaintingChange}
+      />
+    )
+
+    expect(capturedTextViewerProps.ranges).toBe(ranges)
+    expect(capturedTextViewerProps.defaultRanges).toBe(defaultRanges)
+    expect(capturedTextViewerProps.selectedRangeId).toBe('text-mode-range')
+    expect(capturedTextViewerProps.defaultSelectedRangeId).toBe(
+      'text-mode-default-range'
+    )
+    expect(capturedTextViewerProps.onSelect).toEqual(expect.any(Function))
+    expect(capturedTextViewerProps.onLinkedDataChange).toBe(
+      onLinkedDataChange
+    )
+    expect(capturedTextViewerProps.onLinkedSelect).toBe(onLinkedSelect)
+    expect(capturedTextViewerProps.onLinkedUpdateRange).toBe(
+      onLinkedUpdateRange
+    )
+    expect(capturedTextViewerProps.onLinkedSelectRange).toBe(
+      onLinkedSelectRange
+    )
+    expect(capturedTextViewerProps.onSelectRange).toBe(onSelectRange)
+    expect(capturedTextViewerProps.onUpdateRange).toEqual(expect.any(Function))
+    expect(capturedTextViewerProps.onSelectionStart).toBe(onSelectionStart)
+    expect(capturedTextViewerProps.onSelectionEnd).toBe(onSelectionEnd)
+    expect(capturedTextViewerProps.onHighlight).toBe(onHighlight)
+    expect(capturedTextViewerProps.highlightColor).toBe('#ffcc00')
+    expect(capturedTextViewerProps.selectionColor).toBe('#0066ff')
+    expect(capturedTextViewerProps.selectionPopover).toBe(selectionPopover)
+    expect(capturedTextViewerProps.highlightPopover).toBe(highlightPopover)
+    expect(capturedTextViewerProps.onCommentHighlight).toBe(onCommentHighlight)
+    expect(capturedTextViewerProps.autoHighlight).toBe(true)
+    expect(capturedTextViewerProps.selectionRef).toBe(selectionRef)
+    expect(capturedTextViewerProps.overlayRectType).toBe('percent')
+    expect(capturedTextViewerProps).not.toHaveProperty('scale')
+    expect(capturedTextViewerProps).not.toHaveProperty('defaultScale')
+    expect(capturedTextViewerProps).not.toHaveProperty('onScaleChange')
+    expect(capturedTextViewerProps).not.toHaveProperty('minScale')
+    expect(capturedTextViewerProps).not.toHaveProperty('maxScale')
+    expect(capturedTextViewerProps).not.toHaveProperty('tool')
+    expect(capturedTextViewerProps).not.toHaveProperty('selectedTool')
+    expect(capturedTextViewerProps).not.toHaveProperty('rects')
+    expect(capturedTextViewerProps).not.toHaveProperty('selectedRectId')
+    expect(capturedTextViewerProps).not.toHaveProperty('onCreateRect')
+    expect(capturedTextViewerProps).not.toHaveProperty('onSelectRect')
+    expect(capturedTextViewerProps).not.toHaveProperty('onUpdateRect')
+    expect(capturedTextViewerProps).not.toHaveProperty('showPageBrowser')
+    expect(capturedTextViewerProps).not.toHaveProperty('onPageBrowserClose')
+    expect(capturedTextViewerProps).not.toHaveProperty('themeColor')
+    expect(capturedTextViewerProps).not.toHaveProperty('paintingTool')
+    expect(capturedTextViewerProps).not.toHaveProperty('drawingStrokeColor')
+    expect(capturedTextViewerProps).not.toHaveProperty('pagePaintings')
+    expect(capturedTextViewerProps).not.toHaveProperty('onPagePaintingChange')
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+
+    const forwardedOnSelect = capturedTextViewerProps.onSelect
+    const forwardedOnUpdateRange = capturedTextViewerProps.onUpdateRange
+    if (typeof forwardedOnSelect !== 'function') {
+      throw new Error('Expected text viewer onSelect to be a function')
+    }
+    if (typeof forwardedOnUpdateRange !== 'function') {
+      throw new Error('Expected text viewer onUpdateRange to be a function')
+    }
+
+    forwardedOnSelect(ranges[0])
+    forwardedOnUpdateRange(ranges[0])
+
+    expect(onSelect).toHaveBeenCalledWith(ranges[0])
+    expect(onUpdateRange).toHaveBeenCalledWith(ranges[0])
+  })
+
+  it('renderMode text provides default selection popovers like layout mode', () => {
+    const onCommentHighlight = vi.fn(
+      async (highlight: ReaderSelectionRange) => highlight
+    )
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        onCommentHighlight={onCommentHighlight}
+      />
+    )
+
+    expect(capturedTextViewerProps.selectionPopover).toEqual(
+      expect.objectContaining({ type: expect.any(Function) })
+    )
+    expect(capturedTextViewerProps.highlightPopover).toEqual(
+      expect.any(Function)
+    )
+    expect(capturedTextViewerProps.onCommentHighlight).toBeUndefined()
+  })
+
   it('renderMode text renders for a runtime (lazy) document', () => {
     const { document } = makeLazyDocument(1)
 
@@ -726,7 +924,7 @@ describe('Reader file upload', () => {
     expect(uploadZone).toBeInTheDocument()
     expect(uploadZone).toHaveTextContent('Click or drag document to upload')
     expect(uploadZone).toHaveTextContent(
-      'Supports PDF, TXT, DOCX, and Markdown files'
+      'Supports PDF, TXT, DOCX, Markdown, and image files'
     )
     expect(fileInput.getAttribute('accept')).toBe(SUPPORTED_UPLOAD_ACCEPT)
   })
@@ -839,7 +1037,9 @@ describe('Reader file upload', () => {
   })
 
   it('exports SUPPORTED_UPLOAD_COPY with expected value', () => {
-    expect(SUPPORTED_UPLOAD_COPY).toBe('PDF, TXT, DOCX, and Markdown')
+    expect(SUPPORTED_UPLOAD_COPY).toBe(
+      'PDF, TXT, DOCX, Markdown, and image'
+    )
   })
 
   it('hides file info when document is provided', () => {
@@ -1429,6 +1629,33 @@ describe('Reader prop forwarding', () => {
     expect(screen.getByLabelText('Existing highlight color')).toHaveValue(
       '#ff3366'
     )
+  })
+
+  it('renders a delete action for the selected rectangle', async () => {
+    // Given: an existing rectangle is selected through the public Reader API.
+    const user = userEvent.setup()
+    const rect = makeReaderRect('selected-rect')
+    const onRemoveRect = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        rects={[rect]}
+        selectedRectId={rect.id}
+        onRemoveRect={onRemoveRect}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // When: the user clicks the selected rectangle's delete action.
+    const deleteButton = within(popoverView.container).getByRole('button', {
+      name: '删除'
+    })
+    await user.click(deleteButton)
+
+    // Then: Reader removes the rectangle ID, not a text range ID.
+    expect(onRemoveRect).toHaveBeenCalledWith(rect.id)
   })
 
   it('closes an existing highlight popover after its comment promise resolves', async () => {
@@ -2386,5 +2613,40 @@ describe('Reader zoom props', () => {
     rerender(<Reader document={document} showPageBrowser={true} />)
 
     expect(capturedViewerProps.showPageBrowser).toBe(true)
+  })
+
+  it('forwards controlled comment props to IntermediateDocumentViewer', () => {
+    // Given：宿主以纯受控方式持有评论数据与统一变更回调。
+    const { document } = makeLazyDocument(1)
+    const comments: readonly ReaderComment[] = [
+      {
+        id: 'comment-1',
+        highlightIds: ['range-1'],
+        content: '第一条评论',
+        createdAt: 1,
+        parentId: null
+      }
+    ]
+    const onCommentsChange =
+      vi.fn<
+        (
+          nextComments: readonly ReaderComment[],
+          detail: ReaderCommentChangeDetail
+        ) => void
+      >()
+
+    // When：Reader 渲染布局 viewer。
+    render(
+      <Reader
+        document={document}
+        comments={comments}
+        onCommentsChange={onCommentsChange}
+      />
+    )
+
+    // Then：Reader 只透传受控评论 props，本身不修改评论数据。
+    expect(capturedViewerProps.comments).toBe(comments)
+    expect(capturedViewerProps.onCommentsChange).toBe(onCommentsChange)
+    expect(onCommentsChange).not.toHaveBeenCalled()
   })
 })

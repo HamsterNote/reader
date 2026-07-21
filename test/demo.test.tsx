@@ -1,10 +1,12 @@
 import { DocxParser } from '@hamster-note/docx-parser'
+import { ImageParser } from '@hamster-note/image-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
+  ReaderComment,
   ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -17,11 +19,19 @@ import {
   IntermediateDocument,
   type IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
+import { createImagePreviewDocument } from '../demo/imagePreview'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -46,10 +56,20 @@ vi.mock('@hamster-note/docx-parser', () => ({
   }
 }))
 
+vi.mock('@hamster-note/image-parser', () => ({
+  ImageParser: {
+    encode: vi.fn()
+  }
+}))
+
 vi.mock('@hamster-note/markdown-parser', () => ({
   MarkdownParser: {
     encode: vi.fn()
   }
+}))
+
+vi.mock('../demo/imagePreview', () => ({
+  createImagePreviewDocument: vi.fn()
 }))
 
 vi.mock('../demo/recentFileStorage', () => ({
@@ -236,6 +256,10 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
       onPagePaintingsChange?: (paintings: unknown) => void
       bookmarkedPageNumbers?: readonly number[]
       onTogglePageBookmark?: (pageNumber: number) => void
+      comments?: readonly ReaderComment[]
+      onCommentsChange?: (next: readonly ReaderComment[]) => void
+      commentCountByRangeId?: Record<string, number>
+      commentCountByRectId?: Record<string, number>
     }) => {
       // 从受控 props 同步 present 快照（不创建 checkpoint）
       mockHistoryState.present = {
@@ -633,6 +657,26 @@ describe('demo parser flow', () => {
     }
   )
 
+  it.each(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])(
+    'routes .%s uploads to the image preview parser without starting OCR',
+    async (extension) => {
+      const document = makeRuntimeDocument('Image Preview Document')
+      vi.mocked(createImagePreviewDocument).mockResolvedValue(document)
+
+      render(<App />)
+      const uploadedFile = makeFile(`scan.${extension}`)
+      upload(uploadedFile)
+
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(createImagePreviewDocument).toHaveBeenCalledWith(uploadedFile)
+      expect(findDocumentReaderProps()?.ocr).toBe(false)
+      expect(PdfParser.encode).not.toHaveBeenCalled()
+      expect(TxtParser.encode).not.toHaveBeenCalled()
+      expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+      expect(MarkdownParser.encode).not.toHaveBeenCalled()
+    }
+  )
+
   it.each([
     'book.epub',
     'legacy.doc',
@@ -646,7 +690,7 @@ describe('demo parser flow', () => {
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(
       screen.getByText(
-        'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
+        'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown, and images.'
       )
     ).toBeInTheDocument()
     expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
@@ -710,6 +754,67 @@ describe('demo parser flow', () => {
     upload(makeFile('ocr.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
+  })
+
+  it('replaces the image preview document with the OCR document when OCR is enabled', async () => {
+    // Given: 图片已完成轻量预览，OCR 解析器准备返回带文本的完整文档。
+    vi.mocked(createImagePreviewDocument).mockResolvedValue(
+      makeRuntimeDocument('Image Preview Document')
+    )
+    const ocrDocument = makeRuntimeDocument('OCR Image Document')
+    vi.mocked(ImageParser.encode).mockResolvedValue(ocrDocument)
+
+    render(<App />)
+    const uploadedFile = makeFile('scan.png')
+    upload(uploadedFile)
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    expect(screen.getByText('Image Preview Document')).toBeInTheDocument()
+
+    // When: 用户开启 OCR。
+    const toggle = screen.getByTestId('ocr-toggle')
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+
+    // Then: ImageParser 接收当前图片，Reader 的 document 被 OCR 结果替换。
+    await waitFor(() => {
+      expect(toggle).toBeChecked()
+      expect(ImageParser.encode).toHaveBeenCalledWith(uploadedFile)
+      expect(findDocumentReaderProps()?.document).toBe(ocrDocument)
+    })
+    expect(screen.getByText('OCR Image Document')).toBeInTheDocument()
+    expect(screen.queryByText('Image Preview Document')).not.toBeInTheDocument()
+  })
+
+  it('keeps the image preview when OCR is disabled before recognition finishes', async () => {
+    // Given: 图片预览已显示，但 OCR 任务仍在运行。
+    const previewDocument = makeRuntimeDocument('Cancelable Image Preview')
+    vi.mocked(createImagePreviewDocument).mockResolvedValue(previewDocument)
+    const pendingOcr = createDeferred<IntermediateDocument>()
+    vi.mocked(ImageParser.encode).mockReturnValue(pendingOcr.promise)
+
+    render(<App />)
+    const uploadedFile = makeFile('cancel-ocr.png')
+    upload(uploadedFile)
+    expect(
+      await screen.findByText('Cancelable Image Preview')
+    ).toBeInTheDocument()
+    const toggle = screen.getByTestId('ocr-toggle')
+    fireEvent.click(toggle)
+    await waitFor(() => {
+      expect(ImageParser.encode).toHaveBeenCalledWith(uploadedFile)
+    })
+
+    // When: 用户在识别结束前关闭 OCR。
+    fireEvent.click(toggle)
+    await act(async () => {
+      pendingOcr.resolve(makeRuntimeDocument('Stale OCR Document'))
+      await pendingOcr.promise
+    })
+
+    // Then: 过期结果被忽略，当前文档仍是原图片预览。
+    expect(toggle).not.toBeChecked()
+    expect(findDocumentReaderProps()?.document).toBe(previewDocument)
+    expect(screen.queryByText('Stale OCR Document')).not.toBeInTheDocument()
   })
 
   it('provides render mode select that updates Reader prop', async () => {
@@ -1046,22 +1151,12 @@ describe('demo parser flow', () => {
         throw new Error('Expected onCommentHighlight callback')
       }
 
-      // When: 评论面板打开，用户填写内容并结束评论。
-      const resultPromise = callback(range)
-      expect(
-        await screen.findByTestId('highlight-comment-panel')
-      ).toHaveTextContent('comment target text')
-      fireEvent.change(screen.getByLabelText('评论内容'), {
-        target: { value: 'A useful note' }
-      })
-      fireEvent.click(screen.getByRole('button', { name: '完成评论' }))
-      const result = await resultPromise
+      // When: 回调立即 resolve 并打开 CommentPanel。
+      const result = await callback(range)
 
-      // Then: Promise 返回同一个 range 引用，评论面板也已关闭。
+      // Then: Promise 返回同一个 range 引用，CommentPanel 可见。
       expect(result).toBe(range)
-      expect(
-        screen.queryByTestId('highlight-comment-panel')
-      ).not.toBeInTheDocument()
+      expect(await screen.findByTestId('comment-panel')).toBeInTheDocument()
     })
 
     it('does not store a highlight on selection end when autoHighlight is false', async () => {
@@ -1573,11 +1668,14 @@ describe('demo parser flow', () => {
       localStorage.setItem(
         commentStorageKey(recentFile.name),
         JSON.stringify({
-          [range.id]: [
+          version: 2,
+          comments: [
             {
               id: 'recent-comment',
+              highlightIds: [range.id],
               content: 'restored comment after reload',
-              createdAt: 1000
+              createdAt: 1000,
+              parentId: null
             }
           ]
         })
@@ -1593,9 +1691,18 @@ describe('demo parser flow', () => {
         await screen.findByText('Restored After Reload')
       ).toBeInTheDocument()
       expect(await screen.findByText('restored highlight')).toBeInTheDocument()
-      expect(
-        await screen.findByText('restored comment after reload')
-      ).toBeInTheDocument()
+      // 内联评论展示已移除，改为检查 Reader 接收的 comments prop
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.comments).toMatchObject([
+          {
+            id: 'recent-comment',
+            highlightIds: [range.id],
+            content: 'restored comment after reload',
+            createdAt: 1000,
+            parentId: null
+          }
+        ])
+      })
       expect(TxtParser.encode).toHaveBeenCalledWith(recentFile)
     })
 
@@ -1706,8 +1813,15 @@ describe('demo parser flow', () => {
       const fileName = 'comment-restore.pdf'
       const range = makeLinkedRange('comment-restore-range', 'restored text')
       const storedComments = {
-        [range.id]: [
-          { id: 'comment-1', content: 'persisted note', createdAt: 1000 }
+        version: 2,
+        comments: [
+          {
+            id: 'comment-1',
+            highlightIds: [range.id],
+            content: 'persisted note',
+            createdAt: 1000,
+            parentId: null
+          }
         ]
       }
       const pendingParse = createDeferred<IntermediateDocument | undefined>()
@@ -1739,7 +1853,17 @@ describe('demo parser flow', () => {
       expect(
         await screen.findByText('Comment Restore Document')
       ).toBeInTheDocument()
-      expect(await screen.findByText('persisted note')).toBeInTheDocument()
+      // 评论已从 localStorage 恢复并传递给 Reader（CommentPanel 仅在打开时显示）
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.comments).toMatchObject([
+          {
+            id: 'comment-1',
+            highlightIds: [range.id],
+            content: 'persisted note',
+            parentId: null
+          }
+        ])
+      })
       expect(localStorage.getItem(commentStorageKey(fileName))).toBe(
         JSON.stringify(storedComments)
       )
@@ -1768,26 +1892,390 @@ describe('demo parser flow', () => {
         throw new Error('Expected onCommentHighlight callback')
       }
 
-      const resultPromise = callback(range)
+      // When: CommentPanel 打开，用户填写内容并添加评论。
+      await callback(range)
       fireEvent.change(await screen.findByLabelText('评论内容'), {
         target: { value: 'note added during reupload' }
       })
-      fireEvent.click(screen.getByRole('button', { name: '完成评论' }))
-      await resultPromise
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+      fireEvent.click(screen.getByRole('button', { name: '关闭评论' }))
 
       await waitFor(() => {
         const stored = JSON.parse(
           localStorage.getItem(commentStorageKey(fileName)) || '{}'
         )
-        expect(stored[range.id]?.[0]?.content).toBe(
-          'note added during reupload'
-        )
+        expect(stored).toMatchObject({
+          version: 2,
+          comments: [
+            {
+              highlightIds: [range.id],
+              content: 'note added during reupload',
+              parentId: null
+            }
+          ]
+        })
       })
 
       pendingParse.resolve(makeRuntimeDocument('Reloaded Comment Document'))
       expect(
         await screen.findByText('Reloaded Comment Document')
       ).toBeInTheDocument()
+    })
+
+    it('adds highlight comments through the flat controlled Reader model and persists v2', async () => {
+      // Given: Demo 已加载一个文件，Reader 请求打开评论面板。
+      const fileName = 'flat-comments.pdf'
+      const range = makeLinkedRange('flat-comment-range', 'flat comment text')
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Flat Comment Document')
+      )
+      render(<App />)
+      upload(makeFile(fileName))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(range)
+      expect(await screen.findByText('flat comment text')).toBeInTheDocument()
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      // When: 用户新增一条评论。
+      await callback(range)
+      fireEvent.change(await screen.findByLabelText('评论内容'), {
+        target: { value: 'flat note' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+      fireEvent.click(screen.getByRole('button', { name: '关闭评论' }))
+
+      // Then: Reader 只收到 flat comments，不再收到显式 badge map。
+      await waitFor(() => {
+        const readerProps = findDocumentReaderProps()
+        expect(readerProps?.comments).toMatchObject([
+          {
+            highlightIds: [range.id],
+            content: 'flat note',
+            parentId: null
+          }
+        ])
+        expect(readerProps).not.toHaveProperty('commentCountByRangeId')
+        expect(readerProps).not.toHaveProperty('commentCountByRectId')
+      })
+      const stored = JSON.parse(
+        localStorage.getItem(commentStorageKey(fileName)) || '{}'
+      )
+      expect(stored).toMatchObject({
+        version: 2,
+        comments: [
+          {
+            highlightIds: [range.id],
+            content: 'flat note',
+            parentId: null
+          }
+        ]
+      })
+    })
+
+    it('shows an empty state when the comment panel has no comments', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Empty Comment Document')
+      )
+      render(<App />)
+      upload(makeFile('empty-comments.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('empty-range', 'empty range text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+
+      expect(screen.getByTestId('comment-panel')).toHaveTextContent('暂无评论')
+      expect(screen.getByText('评论 (0)')).toBeInTheDocument()
+    })
+
+    it('shows the comment count in the panel header', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Comment Count Document')
+      )
+      render(<App />)
+      upload(makeFile('count-comments.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('count-range', 'count range text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'first comment' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+
+      expect(screen.getByText('评论 (1)')).toBeInTheDocument()
+    })
+
+    it('renders replies nested under their parent comment', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Reply Nesting Document')
+      )
+      render(<App />)
+      upload(makeFile('reply-nesting.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('reply-range', 'reply range text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'parent comment' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+
+      // 回复父评论
+      fireEvent.click(screen.getByRole('button', { name: '回复' }))
+      fireEvent.change(screen.getByLabelText('回复内容'), {
+        target: { value: 'a nested reply' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '发送回复' }))
+
+      // 子评论嵌套在父评论容器内
+      const commentItems = screen.getAllByTestId(/^comment-item-/)
+      expect(commentItems).toHaveLength(2)
+      expect(commentItems[0]).toHaveTextContent('parent comment')
+      expect(commentItems[0]).toHaveTextContent('a nested reply')
+      expect(commentItems[1]).toHaveTextContent('a nested reply')
+      expect(commentItems[1]).not.toHaveTextContent('parent comment')
+    })
+
+    it('updates comment content and sets updatedAt when editing', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Edit Comment Document')
+      )
+      render(<App />)
+      upload(makeFile('edit-comment.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('edit-range', 'edit range text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'original content' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+
+      // 编辑评论
+      fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+      fireEvent.change(screen.getByLabelText('编辑内容'), {
+        target: { value: 'edited content' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+      expect(screen.getByText('edited content')).toBeInTheDocument()
+      expect(screen.queryByText('original content')).not.toBeInTheDocument()
+
+      // Reader 收到的评论应包含 updatedAt
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.comments).toMatchObject([
+          {
+            content: 'edited content',
+            updatedAt: expect.any(Number)
+          }
+        ])
+      })
+    })
+
+    it('deletes only the reply when deleting a reply comment', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Delete Reply Document')
+      )
+      render(<App />)
+      upload(makeFile('delete-reply.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('delete-reply-range', 'delete reply text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'parent keeps' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+      fireEvent.click(screen.getByRole('button', { name: '回复' }))
+      fireEvent.change(screen.getByLabelText('回复内容'), {
+        target: { value: 'reply gets deleted' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '发送回复' }))
+
+      // 删除回复：定位第二个评论项的删除按钮
+      const replyItem = screen.getAllByTestId(/^comment-item-/)[1]
+      fireEvent.click(within(replyItem).getByRole('button', { name: '删除' }))
+
+      expect(screen.queryByText('reply gets deleted')).not.toBeInTheDocument()
+      expect(screen.getByText('parent keeps')).toBeInTheDocument()
+    })
+
+    it('deletes a parent comment and all its replies', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Cascade Delete Document')
+      )
+      render(<App />)
+      upload(makeFile('cascade-delete.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('cascade-range', 'cascade text')
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'parent to delete' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+      fireEvent.click(screen.getByRole('button', { name: '回复' }))
+      fireEvent.change(screen.getByLabelText('回复内容'), {
+        target: { value: 'child will cascade' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '发送回复' }))
+
+      // 删除父评论：定位第一个评论项自身的删除按钮
+      // （父 div 包含子评论的嵌套 div，因此用 getAllByRole 取第一个）
+      const parentItem = screen.getAllByTestId(/^comment-item-/)[0]
+      fireEvent.click(
+        within(parentItem).getAllByRole('button', { name: '删除' })[0]
+      )
+
+      expect(screen.queryByText('parent to delete')).not.toBeInTheDocument()
+      expect(screen.queryByText('child will cascade')).not.toBeInTheDocument()
+    })
+
+    it('binds a comment to multiple highlights via the checklist', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Multi Bind Document')
+      )
+      render(<App />)
+      upload(makeFile('multi-bind.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const rangeA = makeLinkedRange('multi-a', 'multi range a')
+      const rangeB = makeLinkedRange('multi-b', 'multi range b')
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(rangeA)
+      onHighlight(rangeB)
+
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(rangeA)
+      await screen.findByTestId('comment-panel')
+      // 勾选第二个高亮
+      fireEvent.click(screen.getByRole('checkbox', { name: 'multi range b' }))
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'multi-bound comment' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.comments).toMatchObject([
+          {
+            content: 'multi-bound comment',
+            highlightIds: expect.arrayContaining(['multi-a', 'multi-b'])
+          }
+        ])
+      })
+    })
+
+    it('renders a chip for each bound highlight on a comment', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Chips Document')
+      )
+      render(<App />)
+      upload(makeFile('chips.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const rangeA = makeLinkedRange('chip-a', 'chip range a')
+      const rangeB = makeLinkedRange('chip-b', 'chip range b')
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(rangeA)
+      onHighlight(rangeB)
+
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(rangeA)
+      await screen.findByTestId('comment-panel')
+      fireEvent.click(screen.getByRole('checkbox', { name: 'chip range b' }))
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'chipped comment' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+
+      expect(screen.getByTestId('comment-chip-chip-a')).toHaveTextContent(
+        'chip range a'
+      )
+      expect(screen.getByTestId('comment-chip-chip-b')).toHaveTextContent(
+        'chip range b'
+      )
+    })
+
+    it('calls scrollToRange when a highlight chip is clicked', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Chip Click Document')
+      )
+      render(<App />)
+      upload(makeFile('chip-click.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const range = makeLinkedRange('chip-click-range', 'chip click text')
+      const onHighlight = findDocumentReaderProps()?.onHighlight as (
+        range: unknown
+      ) => void
+      onHighlight(range)
+
+      const callback = findDocumentReaderProps()?.onCommentHighlight
+      if (!isCommentHighlightCallback(callback)) {
+        throw new Error('Expected onCommentHighlight callback')
+      }
+
+      await callback(range)
+      await screen.findByTestId('comment-panel')
+      fireEvent.change(screen.getByLabelText('评论内容'), {
+        target: { value: 'clickable chip comment' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: '添加评论' }))
+
+      const refObj = findDocumentReaderProps()
+        ?.selectionRef as React.MutableRefObject<{
+        scrollToRange: ReturnType<typeof vi.fn>
+      } | null>
+
+      fireEvent.click(screen.getByTestId('comment-chip-chip-click-range'))
+      expect(refObj.current?.scrollToRange).toHaveBeenCalledWith(
+        'chip-click-range'
+      )
     })
 
     it('writes a new highlight to localStorage when onHighlight is called', async () => {

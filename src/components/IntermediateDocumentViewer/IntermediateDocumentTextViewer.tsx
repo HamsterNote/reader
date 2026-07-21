@@ -1,4 +1,11 @@
 import type {
+  LinkedSelectionData,
+  LinkedSelectionRange,
+  SelectionRange,
+  SelectionRef
+} from '@hamster-note/selection'
+import { Selection as HamsterSelection } from '@hamster-note/selection'
+import type {
   IntermediateContent,
   IntermediateDocument,
   IntermediateDocumentSerialized,
@@ -6,13 +13,28 @@ import type {
 } from '@hamster-note/types'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode, Ref } from 'react'
 
+import type {
+  ReaderHighlightPopover,
+  ReaderLinkedSelectionData,
+  ReaderMousePosition,
+  ReaderSelectionOverlayRectType,
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../../types/selection'
+
+import { PopoverPortal } from '../PopoverPortal'
 import {
   buildSelectionPayload,
   type ReaderSelectedTextSegment,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
 import { IntermediateDocumentTextPageContent } from './IntermediateDocumentTextPageContent'
+import { RangeHandle } from './RangeHandle'
+import { RangeMagnifierProvider } from './RangeMagnifier'
+import { parsePublicPageId } from './rangeJumpHelpers'
+import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import type {
   ReaderPageRange,
   ReaderTextSelectionDetail
@@ -24,7 +46,15 @@ import {
   isIntermediateText
 } from './IntermediateDocumentViewer'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
-import { runtimePageSelectionId } from './selectionAdapter'
+import {
+  areRuntimeLinkedTransientsEqual,
+  buildRuntimeLinkedSelectionData,
+  extractRuntimeLinkedTransient,
+  mapRuntimeLinkedDataToPublic,
+  mapRuntimeRangeToPublic,
+  runtimePageSelectionId,
+  type RuntimeLinkedSelectionTransient
+} from './selectionAdapter'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
 
@@ -39,6 +69,18 @@ import { useLazyPageQueue } from './useLazyPageQueue'
 const TEXT_PAGE_ESTIMATED_HEIGHT = 800
 
 const DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS = 5000
+
+const EMPTY_SELECTION_RANGES: SelectionRange[] = []
+
+const DISABLED_ANNOTATION_HISTORY_STATUS = {
+  enabled: false,
+  canUndo: false,
+  canRedo: false,
+  pastCount: 0,
+  futureCount: 0
+} as const
+
+type PendingLinkedHighlightOperation = ReadonlySet<string>
 
 const getEffectiveTextMaxLoadedPages = (
   configuredMaxLoadedPages: number | undefined,
@@ -60,6 +102,395 @@ const getTextContentEntries = async (
   page: unknown
 ): Promise<IntermediateContent[]> => getPageContentEntries(page)
 
+const getElementFromSelectionNode = (node: Node | null): Element | null => {
+  if (!node) return null
+  return node instanceof Element ? node : node.parentElement
+}
+
+const getRuntimeSelectionIdFromSelectionNode = (
+  node: Node | null,
+  runtimePageSelectionId: (pageNumber: number) => string
+): string | null => {
+  const element = getElementFromSelectionNode(node)
+  if (!element) return null
+
+  const selectionContainer = element.closest('.hsn-selection-container')
+  if (selectionContainer instanceof HTMLElement) {
+    const selectionId = selectionContainer.dataset.selectionId
+    if (selectionId) return selectionId
+  }
+
+  const pageContainer = element.closest(
+    '.hamster-reader__intermediate-text-page'
+  )
+  if (!(pageContainer instanceof HTMLElement)) return null
+
+  const pageSelectionId = pageContainer.dataset.selectionId
+  if (pageSelectionId) return pageSelectionId
+
+  const pageNumber = Number(pageContainer.dataset.pageNumber)
+  return Number.isFinite(pageNumber) ? runtimePageSelectionId(pageNumber) : null
+}
+
+function findTouchedRangeIdByPoint(
+  linkedData: LinkedSelectionData,
+  clientX: number,
+  clientY: number,
+  selectionContainers: HTMLElement[]
+): string | null {
+  for (const range of linkedData.items) {
+    const rectType =
+      range.overlayRectType ?? linkedData.overlayRectType ?? 'percent'
+    const touchedRange = Object.entries(range.rectsBySelectionId).some(
+      ([selectionId, rects]) => {
+        const container = selectionContainers.find(
+          (element) => element.dataset.selectionId === selectionId
+        )
+        if (!container) return false
+
+        const bounds = container.getBoundingClientRect()
+        if (bounds.width <= 0 || bounds.height <= 0) return false
+
+        const localX =
+          rectType === 'percent'
+            ? ((clientX - bounds.left) / bounds.width) * 100
+            : ((clientX - bounds.left) / bounds.width) *
+              (container.clientWidth || bounds.width)
+        const localY =
+          rectType === 'percent'
+            ? ((clientY - bounds.top) / bounds.height) * 100
+            : ((clientY - bounds.top) / bounds.height) *
+              (container.clientHeight || bounds.height)
+        return rects.some(
+          (rect) =>
+            localX >= rect.x &&
+            localX <= rect.x + rect.width &&
+            localY >= rect.y &&
+            localY <= rect.y + rect.height
+        )
+      }
+    )
+    if (touchedRange) return range.id
+  }
+
+  return null
+}
+
+function isPointOnHighlightElement(
+  rootElement: Element,
+  clientX: number,
+  clientY: number
+): boolean {
+  return Array.from(
+    rootElement.querySelectorAll(
+      '.hsn-selection-rect--highlight, .hsn-selection-rect--selected, .hsn-selection-percent-rect-highlight'
+    )
+  ).some((element) => {
+    const rect = element.getBoundingClientRect()
+    return (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    )
+  })
+}
+
+interface TouchTapStart {
+  pointerId: number
+  clientX: number
+  clientY: number
+  moved: boolean
+}
+
+function shouldIgnoreTouchPointerUp(
+  touchStart: TouchTapStart | null,
+  event: ReactPointerEvent<HTMLDivElement>,
+  linkedData: LinkedSelectionData
+): boolean {
+  return (
+    !touchStart ||
+    touchStart.moved ||
+    event.pointerType !== 'touch' ||
+    event.pointerId !== touchStart.pointerId ||
+    Math.abs(event.clientX - touchStart.clientX) > 4 ||
+    Math.abs(event.clientY - touchStart.clientY) > 4 ||
+    linkedData.selectedRangeId === null ||
+    Boolean(linkedData.activeRange) ||
+    Boolean(linkedData.draggingRange) ||
+    Boolean(linkedData.selectingText)
+  )
+}
+
+function shouldIgnoreTouchPointerDown(
+  event: ReactPointerEvent<HTMLDivElement>
+): boolean {
+  return event.pointerType !== 'touch' || !event.isPrimary
+}
+
+function resolveTextRangeTargetPageNumber(
+  range: ReaderSelectionRange
+): number | null {
+  const startPageNumber = parsePublicPageId(range.start.selectionId)
+  if (startPageNumber !== null) return startPageNumber
+
+  for (const selectionId of Object.keys(range.rectsBySelectionId)) {
+    const rectPageNumber = parsePublicPageId(selectionId)
+    if (rectPageNumber !== null) return rectPageNumber
+  }
+
+  return parsePublicPageId(range.end.selectionId)
+}
+
+function useTouchTapSelection(
+  runtimeLinkedDataRef: React.MutableRefObject<LinkedSelectionData>,
+  handlePageLinkedSelectRange: (id: string | null) => void
+) {
+  const touchTapStartRef = useRef<TouchTapStart | null>(null)
+
+  const handleTouchPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (shouldIgnoreTouchPointerDown(event)) {
+        touchTapStartRef.current = null
+        return
+      }
+
+      touchTapStartRef.current = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        moved: false
+      }
+    },
+    []
+  )
+
+  const handleTouchPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const touchStart = touchTapStartRef.current
+      if (
+        touchStart &&
+        event.pointerId === touchStart.pointerId &&
+        (Math.abs(event.clientX - touchStart.clientX) > 4 ||
+          Math.abs(event.clientY - touchStart.clientY) > 4)
+      ) {
+        touchStart.moved = true
+      }
+    },
+    []
+  )
+
+  const handleTouchPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const touchStart = touchTapStartRef.current
+      touchTapStartRef.current = null
+      if (
+        shouldIgnoreTouchPointerUp(
+          touchStart,
+          event,
+          runtimeLinkedDataRef.current
+        )
+      ) {
+        return
+      }
+
+      const target = event.target
+      if (
+        target instanceof Element &&
+        target.closest(
+          '.hsn-selection-popover, .hsn-selection-handle, button, a, input, textarea, select, option, label, summary, details, [role="button"], [contenteditable="true"]'
+        )
+      ) {
+        return
+      }
+
+      const linkedData = runtimeLinkedDataRef.current
+      const selectionContainers = Array.from(
+        event.currentTarget.querySelectorAll<HTMLElement>(
+          '.hamster-reader__intermediate-text-page[data-selection-id], .hsn-selection-container[data-selection-id]'
+        )
+      )
+      const touchedRangeId = findTouchedRangeIdByPoint(
+        linkedData,
+        event.clientX,
+        event.clientY,
+        selectionContainers
+      )
+      if (touchedRangeId) {
+        if (touchedRangeId !== linkedData.selectedRangeId) {
+          handlePageLinkedSelectRange(touchedRangeId)
+        }
+        return
+      }
+
+      const touchedHighlight = isPointOnHighlightElement(
+        event.currentTarget,
+        event.clientX,
+        event.clientY
+      )
+      if (!touchedHighlight) {
+        handlePageLinkedSelectRange(null)
+      }
+    },
+    [handlePageLinkedSelectRange, runtimeLinkedDataRef]
+  )
+
+  const handleTouchPointerCancel = useCallback(() => {
+    touchTapStartRef.current = null
+  }, [])
+
+  return {
+    handleTouchPointerDown,
+    handleTouchPointerMove,
+    handleTouchPointerUp,
+    handleTouchPointerCancel
+  }
+}
+
+function useSelectionHighlight(
+  pageNumbers: number[],
+  runtimePageSelectionId: (pageNumber: number) => string,
+  selectionRefsByRuntimeIdRef: React.MutableRefObject<Map<string, SelectionRef>>,
+  runtimeLinkedDataRef: React.MutableRefObject<LinkedSelectionData>,
+  lastActiveRangeRef: React.MutableRefObject<LinkedSelectionRange | null>,
+  beginLinkedHighlightOperation: () => PendingLinkedHighlightOperation,
+  handleLinkedDataChange: (data: LinkedSelectionData) => void,
+  handleLinkedSelect: (range: LinkedSelectionRange) => void,
+  handleLinkedSelectRange: (id: string | null) => void,
+  schedulePendingLinkedHighlightCleanup: (
+    operation: PendingLinkedHighlightOperation
+  ) => void
+) {
+  const getFirstVisibleSelectionRef = useCallback(() => {
+    for (const pageNumber of pageNumbers) {
+      const selectionId = runtimePageSelectionId(pageNumber)
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return undefined
+  }, [pageNumbers, runtimePageSelectionId, selectionRefsByRuntimeIdRef])
+
+  const getActiveSelectionOwnerRef = useCallback(() => {
+    const activeSelection = window.getSelection()
+    if (!activeSelection || activeSelection.isCollapsed) return undefined
+
+    const ownerSelectionIds = [
+      getRuntimeSelectionIdFromSelectionNode(
+        activeSelection.anchorNode,
+        runtimePageSelectionId
+      ),
+      getRuntimeSelectionIdFromSelectionNode(
+        activeSelection.focusNode,
+        runtimePageSelectionId
+      )
+    ]
+
+    for (const selectionId of ownerSelectionIds) {
+      if (!selectionId) continue
+
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return ownerSelectionIds.some(Boolean) ? null : undefined
+  }, [runtimePageSelectionId, selectionRefsByRuntimeIdRef])
+
+  const getActiveLinkedRangeOwnerRef = useCallback(() => {
+    const activeRange = runtimeLinkedDataRef.current.activeRange
+    if (!activeRange) return undefined
+
+    const ownerSelectionIds = [
+      activeRange.start.selectionId,
+      activeRange.end.selectionId
+    ]
+
+    for (const selectionId of ownerSelectionIds) {
+      const selectionRef = selectionRefsByRuntimeIdRef.current.get(selectionId)
+      if (selectionRef) return selectionRef
+    }
+
+    return null
+  }, [runtimeLinkedDataRef, selectionRefsByRuntimeIdRef])
+
+  const getActiveSelectionRef = useCallback(() => {
+    const ownerSelectionRef = getActiveSelectionOwnerRef()
+    const linkedRangeOwnerSelectionRef =
+      ownerSelectionRef === undefined
+        ? getActiveLinkedRangeOwnerRef()
+        : ownerSelectionRef
+    return linkedRangeOwnerSelectionRef === undefined
+      ? getFirstVisibleSelectionRef()
+      : linkedRangeOwnerSelectionRef
+  }, [
+    getActiveLinkedRangeOwnerRef,
+    getActiveSelectionOwnerRef,
+    getFirstVisibleSelectionRef
+  ])
+
+  const highlightSelection = useCallback(() => {
+    const operation = beginLinkedHighlightOperation()
+    const currentActiveRange = runtimeLinkedDataRef.current.activeRange ?? null
+    const activeRange = currentActiveRange ?? lastActiveRangeRef.current
+    const activeSelectionRef = getActiveSelectionRef()
+    const nativeSelectionText = window.getSelection()?.toString() ?? ''
+    const directActiveRange = nativeSelectionText.length === 0 && Boolean(activeRange)
+
+    try {
+      if (directActiveRange && activeRange) {
+        if (
+          runtimeLinkedDataRef.current.items.some(
+            (item) => item.id === activeRange.id
+          )
+        ) {
+          lastActiveRangeRef.current = null
+          if (currentActiveRange) {
+            const nextLinkedData = {
+              ...runtimeLinkedDataRef.current,
+              selectedRangeId: activeRange.id,
+              activeRange: null
+            }
+            runtimeLinkedDataRef.current = nextLinkedData
+            handleLinkedDataChange(nextLinkedData)
+          }
+          return
+        }
+
+        const nextLinkedData = {
+          ...runtimeLinkedDataRef.current,
+          items: [...runtimeLinkedDataRef.current.items, activeRange],
+          selectedRangeId: activeRange.id,
+          activeRange: null
+        }
+        lastActiveRangeRef.current = null
+        runtimeLinkedDataRef.current = nextLinkedData
+        handleLinkedDataChange(nextLinkedData)
+        handleLinkedSelect(activeRange)
+        handleLinkedSelectRange(activeRange.id)
+        return
+      }
+
+      if (nativeSelectionText.length > 0) {
+        lastActiveRangeRef.current = null
+      }
+      activeSelectionRef?.highlight()
+    } finally {
+      schedulePendingLinkedHighlightCleanup(operation)
+    }
+  }, [
+    beginLinkedHighlightOperation,
+    getActiveSelectionRef,
+    handleLinkedDataChange,
+    handleLinkedSelect,
+    handleLinkedSelectRange,
+    lastActiveRangeRef,
+    runtimeLinkedDataRef,
+    schedulePendingLinkedHighlightCleanup
+  ])
+
+  return { highlightSelection }
+}
+
 /**
  * 文本渲染模式下 `IntermediateDocumentTextViewer` 的 props。
  *
@@ -71,9 +502,11 @@ const getTextContentEntries = async (
  * - 旧版文本选择回调：`onTextSelectionChange`、`onTextSelectionEnd`、
  *   `onSelectText`
  * - 渲染计时回调：`onIntermediateDocumentRenderTiming`
+ * - linked selection 公开 props：当前由 Reader text branch 透传到此边界，
+ *   后续文本 viewer 的 linked selection 状态机接入时会消费这些值。
  *
- * 文本模式不经过 `VirtualPaper`，因此不接受任何缩放、交互模式、
- * linked-range selection 或 overlay 相关 props。
+ * 文本模式不经过 `VirtualPaper`，因此不接受任何缩放、交互模式、矩形框选、
+ * 绘制或 PageBrowser 相关 props。
  */
 export type IntermediateDocumentTextViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -106,6 +539,53 @@ export type IntermediateDocumentTextViewerProps = {
   ) => void
   /** intermediate-document 渲染阶段计时回调。 */
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
+  /** 受控 linked selection ranges；文本模式状态机接入后用于渲染已有高亮。 */
+  ranges?: ReaderSelectionRange[]
+  /** 非受控 linked selection 初始 ranges；文本模式状态机接入后用于初始化内部高亮。 */
+  defaultRanges?: ReaderSelectionRange[]
+  /** 受控选中 range id；文本模式状态机接入后用于高亮选中态与 popover ownership。 */
+  selectedRangeId?: string | null
+  /** 非受控初始选中 range id；文本模式状态机接入后用于初始化选中态。 */
+  defaultSelectedRangeId?: string | null
+  /** 用户确认新文本 range 时触发；文本模式状态机接入后会发送公开 page-N range。 */
+  onSelect?: (range: ReaderSelectionRange) => void
+  /** linked selection 数据变化时触发；文本模式状态机接入后会发送公开 page-N 数据。 */
+  onLinkedDataChange?: (next: ReaderLinkedSelectionData) => void
+  /** linked selection 选中新 range 时触发；文本模式状态机接入后会发送公开 page-N range。 */
+  onLinkedSelect?: (range: ReaderSelectionRange) => void
+  /** linked range 被拖拽更新时触发；文本模式状态机接入后会发送公开 page-N range。 */
+  onLinkedUpdateRange?: (range: ReaderSelectionRange) => void
+  /** linked selected range id 变化时触发；文本模式状态机接入后会发送公开 range id。 */
+  onLinkedSelectRange?: (id: string | null) => void
+  /** 公开 selected range id 变化回调；文本模式状态机接入后与 linked 选择同步触发。 */
+  onSelectRange?: (id: string | null) => void
+  /** 公开 range 更新回调；文本模式状态机接入后与 linked 更新同步触发。 */
+  onUpdateRange?: (range: ReaderSelectionRange) => void
+  /** linked selection 手势开始回调；文本模式状态机接入后由 Selection 包装层触发。 */
+  onSelectionStart?: (
+    mousePos: ReaderMousePosition,
+    selection: Selection
+  ) => void
+  /** linked selection 手势结束回调；文本模式状态机接入后由 Selection 包装层触发。 */
+  onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
+  /** 高亮确认回调；文本模式状态机接入后由 highlight/autoHighlight 触发。 */
+  onHighlight?: (range: ReaderSelectionRange) => void
+  /** linked selection 高亮颜色；文本模式状态机接入后传给 Selection 包装层。 */
+  highlightColor?: string
+  /** linked selection 活跃选区颜色；文本模式状态机接入后传给 Selection 包装层。 */
+  selectionColor?: string
+  /** 活跃选区 popover；文本模式状态机接入后传给 Selection 包装层。 */
+  selectionPopover?: ReactNode
+  /** 已存在高亮 popover；文本模式状态机接入后按当前高亮解析。 */
+  highlightPopover?: ReaderHighlightPopover
+  /** 默认高亮 popover 的评论入口；文本模式状态机接入后由 popover 按需调用。 */
+  onCommentHighlight?: (highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>
+  /** 自动确认高亮开关；文本模式状态机接入后在 selection end 时消费。 */
+  autoHighlight?: boolean
+  /** Reader 公开 selection ref；文本模式状态机接入后暴露 highlight/clear/scrollToRange。 */
+  selectionRef?: Ref<ReaderSelectionRef>
+  /** overlay 矩形坐标类型；文本模式状态机接入后传给 Selection 包装层。 */
+  overlayRectType?: ReaderSelectionOverlayRectType
 }
 
 /**
@@ -136,11 +616,36 @@ export function IntermediateDocumentTextViewer(
     pageLoadConcurrency = 3,
     pageLoadEnterDelayMs = 500,
     pageUnloadDelayMs = DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS,
-    maxLoadedPages
+    maxLoadedPages,
+    ranges,
+    defaultRanges,
+    selectedRangeId,
+    defaultSelectedRangeId,
+    onSelect,
+    onLinkedDataChange,
+    onLinkedSelect,
+    onLinkedUpdateRange,
+    onLinkedSelectRange,
+    onSelectRange,
+    onUpdateRange,
+    onSelectionStart,
+    onSelectionEnd,
+    onHighlight,
+    highlightColor,
+    selectionColor,
+    selectionPopover,
+    highlightPopover,
+    onCommentHighlight,
+    autoHighlight,
+    selectionRef,
+    overlayRectType = 'percent'
   } = props
 
   // 原生滚动容器 ref —— useVirtualizer 通过 getScrollElement 读取其几何尺寸。
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [viewerRootElement, setViewerRootElement] =
+    useState<HTMLDivElement | null>(null)
+  const popoverContainerRef = useRef<HTMLElement | null>(null)
   const activeDocumentRef = useRef<IntermediateDocument | null>(null)
   const activePageNumbersKeyRef = useRef('')
   const isMountedRef = useRef(false)
@@ -150,10 +655,14 @@ export function IntermediateDocumentTextViewer(
   )
   const previousVisiblePageNumbersRef = useRef(new Set<number>())
   const textsByPageNumberRef = useRef(new Map<number, IntermediateText[]>())
-  const effectiveScaleRef = useRef(1)
 
   // 选择追踪：镜像 layout 模式 — scrollContainer 既做滚动又做 viewer root
   const viewerRootRef = scrollContainerRef
+
+  const setScrollRootRef = useCallback((element: HTMLDivElement | null) => {
+    scrollContainerRef.current = element
+    setViewerRootElement(element)
+  }, [])
 
   // textElementsRef: key = text.id — 仅注册已挂载的可见文本 span
   const textElementsRef = useRef<
@@ -199,6 +708,114 @@ export function IntermediateDocumentTextViewer(
     return getVisiblePageNumbers(allPageNumbers, pageRange)
   }, [runtimeDocument, pageRange])
   const pageNumbersKey = useMemo(() => pageNumbers.join(','), [pageNumbers])
+
+  const selectionScopeRef = useRef({
+    runtimeDocument,
+    pageNumbersKey,
+    value: Symbol('intermediate-document-text-selection-scope')
+  })
+  if (
+    selectionScopeRef.current.runtimeDocument !== runtimeDocument ||
+    selectionScopeRef.current.pageNumbersKey !== pageNumbersKey
+  ) {
+    selectionScopeRef.current = {
+      runtimeDocument,
+      pageNumbersKey,
+      value: Symbol('intermediate-document-text-selection-scope')
+    }
+  }
+  const selectionScope = selectionScopeRef.current.value
+
+  const isRangesControlled = ranges !== undefined
+  const [internalRanges, setInternalRanges] = useState<ReaderSelectionRange[]>(
+    () => defaultRanges ?? []
+  )
+  const effectiveRanges = isRangesControlled ? ranges : internalRanges
+  const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
+  effectiveRangesRef.current = effectiveRanges
+
+  const pendingLinkedHighlightOperationRef =
+    useRef<PendingLinkedHighlightOperation | null>(null)
+  const emittedLinkedSelectRangeIdsRef = useRef(new Set<string>())
+  const emittedLinkedHighlightRangeIdsRef = useRef(new Set<string>())
+  const pendingLinkedHighlightScopeRef = useRef(selectionScope)
+  if (pendingLinkedHighlightScopeRef.current !== selectionScope) {
+    pendingLinkedHighlightScopeRef.current = selectionScope
+    pendingLinkedHighlightOperationRef.current = null
+    emittedLinkedSelectRangeIdsRef.current.clear()
+    emittedLinkedHighlightRangeIdsRef.current.clear()
+  }
+
+  const isSelectedRangeIdControlled = selectedRangeId !== undefined
+  const [internalSelectedRangeId, setInternalSelectedRangeId] = useState<
+    string | null
+  >(defaultSelectedRangeId ?? null)
+  const effectiveSelectedRangeId = isSelectedRangeIdControlled
+    ? selectedRangeId
+    : internalSelectedRangeId
+  const selectedHighlight = useMemo(
+    () =>
+      effectiveSelectedRangeId
+        ? (effectiveRanges.find(
+            (range) => range.id === effectiveSelectedRangeId
+          ) ?? null)
+        : null,
+    [effectiveRanges, effectiveSelectedRangeId]
+  )
+  const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
+    null
+  )
+
+  const [runtimeLinkedTransientState, setRuntimeLinkedTransientState] =
+    useState<{
+      readonly scope: symbol
+      readonly transient: RuntimeLinkedSelectionTransient
+    }>(() => ({ scope: selectionScope, transient: {} }))
+  const runtimeLinkedTransient =
+    runtimeLinkedTransientState.scope === selectionScope
+      ? runtimeLinkedTransientState.transient
+      : {}
+  const runtimeLinkedData = useMemo(
+    () =>
+      buildRuntimeLinkedSelectionData({
+        scopeId,
+        ranges: effectiveRanges,
+        selectedRangeId: effectiveSelectedRangeId,
+        pageNumbers,
+        overlayRectType,
+        transient: runtimeLinkedTransient
+      }),
+    [
+      effectiveRanges,
+      effectiveSelectedRangeId,
+      overlayRectType,
+      pageNumbers,
+      runtimeLinkedTransient,
+      scopeId
+    ]
+  )
+  const runtimeLinkedDataRef = useRef(runtimeLinkedData)
+  runtimeLinkedDataRef.current = runtimeLinkedData
+  const lastActiveRangeRef = useRef<LinkedSelectionRange | null>(
+    runtimeLinkedData.activeRange ?? null
+  )
+  const lastActiveRangeScopeRef = useRef(selectionScope)
+  if (lastActiveRangeScopeRef.current !== selectionScope) {
+    lastActiveRangeScopeRef.current = selectionScope
+    lastActiveRangeRef.current = runtimeLinkedData.activeRange ?? null
+  } else if (runtimeLinkedData.activeRange) {
+    lastActiveRangeRef.current = runtimeLinkedData.activeRange
+  }
+  const popoverOwnerRuntimeId = useMemo(() => {
+    if (!selectedHighlight || !runtimeLinkedData.selectedRangeId) {
+      return null
+    }
+
+    const selectedRuntimeRange = runtimeLinkedData.items.find(
+      (range) => range.id === selectedHighlight.id
+    )
+    return selectedRuntimeRange ? selectedRuntimeRange.start.selectionId : null
+  }, [runtimeLinkedData.items, runtimeLinkedData.selectedRangeId, selectedHighlight])
 
   // TanStack Virtual 虚拟化器：count = pageNumbers.length，
   // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
@@ -300,8 +917,7 @@ export function IntermediateDocumentTextViewer(
         })
       },
       isPageLoaded: (pageNumber) => textsByPageNumberRef.current.has(pageNumber)
-    },
-    effectiveScaleRef
+    }
   })
 
   const lazyPageQueueRef = useRef(lazyPageQueue)
@@ -424,6 +1040,422 @@ export function IntermediateDocumentTextViewer(
       }
     }
   }, [onTextSelectionEnd, onSelectText, getSelectionDetail])
+
+  const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
+  const selectionRefSettersByRuntimeIdRef = useRef(
+    new Map<string, (node: SelectionRef | null) => void>()
+  )
+  const syncForwardedSelectionRefRef = useRef<() => void>(() => {})
+
+  const selectionRefForRuntimeId = useCallback((selectionId: string) => {
+    let setSelectionRef =
+      selectionRefSettersByRuntimeIdRef.current.get(selectionId)
+    if (!setSelectionRef) {
+      setSelectionRef = (node: SelectionRef | null) => {
+        if (node) {
+          selectionRefsByRuntimeIdRef.current.set(selectionId, node)
+        } else {
+          selectionRefsByRuntimeIdRef.current.delete(selectionId)
+        }
+
+        syncForwardedSelectionRefRef.current()
+      }
+      selectionRefSettersByRuntimeIdRef.current.set(
+        selectionId,
+        setSelectionRef
+      )
+    }
+
+    return setSelectionRef
+  }, [])
+
+  const beginLinkedHighlightOperation =
+    useCallback((): PendingLinkedHighlightOperation => {
+      const operation = new Set(
+        effectiveRangesRef.current.map((range) => range.id)
+      )
+      pendingLinkedHighlightOperationRef.current = operation
+      return operation
+    }, [])
+
+  const schedulePendingLinkedHighlightCleanup = useCallback(
+    (operation: PendingLinkedHighlightOperation) => {
+      const cleanup = () => {
+        if (pendingLinkedHighlightOperationRef.current === operation) {
+          pendingLinkedHighlightOperationRef.current = null
+        }
+      }
+
+      const viewerWindow = viewerRootRef.current?.ownerDocument.defaultView
+      if (viewerWindow) {
+        viewerWindow.setTimeout(cleanup, 0)
+        return
+      }
+
+      globalThis.setTimeout(cleanup, 0)
+    },
+    []
+  )
+
+  const emitLinkedSelectOnce = useCallback(
+    (range: ReaderSelectionRange) => {
+      if (emittedLinkedSelectRangeIdsRef.current.has(range.id)) {
+        return
+      }
+
+      emittedLinkedSelectRangeIdsRef.current.add(range.id)
+      onSelect?.(range)
+    },
+    [onSelect]
+  )
+
+  const emitPendingLinkedHighlight = useCallback(
+    (range: ReaderSelectionRange) => {
+      const pendingOperation = pendingLinkedHighlightOperationRef.current
+      if (!pendingOperation || pendingOperation.has(range.id)) {
+        return
+      }
+
+      pendingLinkedHighlightOperationRef.current = null
+      if (emittedLinkedHighlightRangeIdsRef.current.has(range.id)) {
+        return
+      }
+
+      emittedLinkedHighlightRangeIdsRef.current.add(range.id)
+      onHighlight?.(range)
+    },
+    [onHighlight]
+  )
+
+  const handleLinkedDataChange = useCallback(
+    (next: LinkedSelectionData) => {
+      const publicLinkedData = mapRuntimeLinkedDataToPublic(next, scopeId)
+
+      const nextTransient = extractRuntimeLinkedTransient(next)
+      setRuntimeLinkedTransientState((currentState) => {
+        if (
+          currentState.scope === selectionScope &&
+          areRuntimeLinkedTransientsEqual(currentState.transient, nextTransient)
+        ) {
+          return currentState
+        }
+        return { scope: selectionScope, transient: nextTransient }
+      })
+      onLinkedDataChange?.(publicLinkedData)
+
+      if (!isRangesControlled) {
+        setInternalRanges(publicLinkedData.items)
+      }
+
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(publicLinkedData.selectedRangeId)
+      }
+
+      for (const range of publicLinkedData.items) {
+        emitPendingLinkedHighlight(range)
+        if (!pendingLinkedHighlightOperationRef.current) {
+          break
+        }
+      }
+    },
+    [
+      emitPendingLinkedHighlight,
+      isRangesControlled,
+      isSelectedRangeIdControlled,
+      onLinkedDataChange,
+      scopeId,
+      selectionScope
+    ]
+  )
+
+  const handleLinkedSelect = useCallback(
+    (range: LinkedSelectionRange) => {
+      const publicRange = mapRuntimeRangeToPublic(range, scopeId)
+
+      if (publicRange) {
+        onLinkedSelect?.(publicRange)
+        emitLinkedSelectOnce(publicRange)
+        emitPendingLinkedHighlight(publicRange)
+      }
+    },
+    [emitLinkedSelectOnce, emitPendingLinkedHighlight, onLinkedSelect, scopeId]
+  )
+
+  const handleLinkedUpdateRange = useCallback(
+    (range: LinkedSelectionRange) => {
+      const publicRange = mapRuntimeRangeToPublic(range, scopeId)
+
+      if (publicRange) {
+        onLinkedUpdateRange?.(publicRange)
+        onUpdateRange?.(publicRange)
+      }
+    },
+    [onLinkedUpdateRange, onUpdateRange, scopeId]
+  )
+
+  const handleLinkedSelectRange = useCallback(
+    (id: string | null) => {
+      if (!isSelectedRangeIdControlled) {
+        setInternalSelectedRangeId(id)
+      }
+      onLinkedSelectRange?.(id)
+      onSelectRange?.(id)
+    },
+    [isSelectedRangeIdControlled, onLinkedSelectRange, onSelectRange]
+  )
+
+  const handlePageLinkedDataChange = useCallback(
+    (next: LinkedSelectionData) => {
+      runtimeLinkedDataRef.current = next
+      if (next.activeRange) {
+        lastActiveRangeRef.current = next.activeRange
+      } else if (
+        lastActiveRangeRef.current &&
+        next.items.some((item) => item.id === lastActiveRangeRef.current?.id)
+      ) {
+        lastActiveRangeRef.current = null
+      }
+      handleLinkedDataChange(next)
+    },
+    [handleLinkedDataChange]
+  )
+
+  const handlePageLinkedSelectRange = useCallback(
+    (id: string | null) => {
+      const currentData = runtimeLinkedDataRef.current
+      if (currentData.selectedRangeId !== id) {
+        handlePageLinkedDataChange({
+          ...currentData,
+          selectedRangeId: id
+        })
+      }
+      handleLinkedSelectRange(id)
+    },
+    [handleLinkedSelectRange, handlePageLinkedDataChange]
+  )
+
+  const {
+    handleTouchPointerDown,
+    handleTouchPointerMove,
+    handleTouchPointerUp,
+    handleTouchPointerCancel
+  } = useTouchTapSelection(runtimeLinkedDataRef, handlePageLinkedSelectRange)
+
+  const { highlightSelection } = useSelectionHighlight(
+    pageNumbers,
+    getRuntimePageSelectionId,
+    selectionRefsByRuntimeIdRef,
+    runtimeLinkedDataRef,
+    lastActiveRangeRef,
+    beginLinkedHighlightOperation,
+    handlePageLinkedDataChange,
+    handleLinkedSelect,
+    handlePageLinkedSelectRange,
+    schedulePendingLinkedHighlightCleanup
+  )
+
+  const scrollMountedTextPageIntoView = useCallback((pageNumber: number) => {
+    const scrollIntoView = () => {
+      const pageElement = scrollContainerRef.current?.querySelector<HTMLElement>(
+        `[data-testid="intermediate-text-page-${pageNumber}"]`
+      )
+      pageElement?.scrollIntoView?.({ block: 'center', inline: 'nearest' })
+    }
+
+    const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
+    if (viewerWindow) {
+      viewerWindow.requestAnimationFrame(() => {
+        viewerWindow.requestAnimationFrame(scrollIntoView)
+        viewerWindow.setTimeout(scrollIntoView, 0)
+      })
+      return
+    }
+
+    globalThis.setTimeout(scrollIntoView, 0)
+  }, [])
+
+  const scrollToRange = useCallback(
+    (rangeId: string) => {
+      const range = effectiveRangesRef.current.find(
+        (candidate) => candidate.id === rangeId
+      )
+      if (!range) return
+
+      const pageNumber = resolveTextRangeTargetPageNumber(range)
+      if (pageNumber === null) return
+
+      const pageIndex = pageNumbers.indexOf(pageNumber)
+      if (pageIndex === -1) return
+
+      clearUnloadTimer(pageNumber)
+      if (!textsByPageNumberRef.current.has(pageNumber)) {
+        lazyPageQueueRef.current.enqueuePage(pageNumber)
+      }
+
+      virtualizer.scrollToIndex(pageIndex, { align: 'center' })
+      scrollMountedTextPageIntoView(pageNumber)
+    },
+    [clearUnloadTimer, pageNumbers, scrollMountedTextPageIntoView, virtualizer]
+  )
+
+  const clearSelections = useCallback(() => {
+    lastActiveRangeRef.current = null
+    selectionRefsByRuntimeIdRef.current.forEach((selectionRefEntry) => {
+      selectionRefEntry.clear()
+    })
+
+    if (!isRangesControlled) {
+      setInternalRanges([])
+    }
+
+    if (!isSelectedRangeIdControlled) {
+      setInternalSelectedRangeId(null)
+    }
+
+    const nextLinkedData: LinkedSelectionData = {
+      ...runtimeLinkedDataRef.current,
+      items: [],
+      selectedRangeId: null,
+      activeRange: null
+    }
+    runtimeLinkedDataRef.current = nextLinkedData
+    handleLinkedDataChange(nextLinkedData)
+  }, [handleLinkedDataChange, isRangesControlled, isSelectedRangeIdControlled])
+
+  const publicSelectionRef = useMemo<ReaderSelectionRef>(
+    () => ({
+      highlight: highlightSelection,
+      confirm: highlightSelection,
+      confirmRect: () => {},
+      clear: clearSelections,
+      scrollToRange,
+      scrollToRect: () => {},
+      undo: () => false,
+      redo: () => false,
+      canUndo: () => false,
+      canRedo: () => false,
+      getAnnotationHistoryState: () => DISABLED_ANNOTATION_HISTORY_STATUS,
+      scrollToPosition: ({ y }) => {
+        scrollContainerRef.current?.scrollTo?.({ top: y, behavior: 'auto' })
+      }
+    }),
+    [clearSelections, highlightSelection, scrollToRange]
+  )
+
+  const syncForwardedSelectionRef = useCallback(() => {
+    const forwardedRef =
+      selectionRefsByRuntimeIdRef.current.size > 0 ? publicSelectionRef : null
+
+    if (typeof selectionRef === 'function') {
+      selectionRef(forwardedRef)
+    } else if (selectionRef) {
+      selectionRef.current = forwardedRef
+    }
+  }, [publicSelectionRef, selectionRef])
+
+  syncForwardedSelectionRefRef.current = syncForwardedSelectionRef
+
+  useEffect(() => {
+    syncForwardedSelectionRef()
+    return () => {
+      if (typeof selectionRef === 'function') {
+        selectionRef(null)
+      } else if (selectionRef) {
+        selectionRef.current = null
+      }
+    }
+  }, [selectionRef, syncForwardedSelectionRef])
+
+  const handleSelectionStart = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      onSelectionStart?.(mousePos, selection)
+    },
+    [onSelectionStart]
+  )
+
+  const handleSelectionEnd = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      onSelectionEnd?.(mousePos, selection)
+    },
+    [onSelectionEnd]
+  )
+
+  const handleSelectionEndWrap = useCallback(
+    (mousePos: ReaderMousePosition, selection: Selection) => {
+      if (autoHighlight) {
+        highlightSelection()
+      }
+      handleSelectionEnd(mousePos, selection)
+    },
+    [autoHighlight, handleSelectionEnd, highlightSelection]
+  )
+
+  const selectionStartHandler = onSelectionStart ? handleSelectionStart : undefined
+  const selectionEndHandler =
+    onSelectionEnd || autoHighlight ? handleSelectionEndWrap : undefined
+
+  const handleViewerPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      lastActiveRangeRef.current = null
+      handleTouchPointerDown(event)
+    },
+    [handleTouchPointerDown]
+  )
+
+  const handleCommentHighlight = useCallback(() => {
+    if (!selectedHighlight || !onCommentHighlight || commentingRangeId) return
+
+    const highlight = selectedHighlight
+    setCommentingRangeId(highlight.id)
+    onCommentHighlight(highlight).then(
+      () => {
+        if (runtimeLinkedDataRef.current.selectedRangeId === highlight.id) {
+          handlePageLinkedSelectRange(null)
+        }
+        setCommentingRangeId(null)
+      },
+      () => {
+        setCommentingRangeId(null)
+      }
+    )
+  }, [
+    commentingRangeId,
+    handlePageLinkedSelectRange,
+    onCommentHighlight,
+    selectedHighlight
+  ])
+
+  let resolvedHighlightPopover: ReactNode
+  if (typeof highlightPopover === 'function') {
+    resolvedHighlightPopover = selectedHighlight
+      ? highlightPopover(selectedHighlight)
+      : selectionPopover
+  } else {
+    resolvedHighlightPopover = highlightPopover ?? selectionPopover
+  }
+  const existingHighlightPopover =
+    selectedHighlight && onCommentHighlight ? (
+      <div className='hamster-reader__highlight-popover'>
+        {resolvedHighlightPopover}
+        <button
+          type='button'
+          className='hamster-reader__highlight-comment-button'
+          disabled={commentingRangeId !== null}
+          onClick={handleCommentHighlight}
+        >
+          评论
+        </button>
+      </div>
+    ) : (
+      resolvedHighlightPopover
+    )
+
+  useEffect(() => {
+    popoverContainerRef.current = viewerRootElement
+    return () => {
+      popoverContainerRef.current = null
+    }
+  }, [viewerRootElement])
 
   // selectionchange → onTextSelectionChange
   useEffect(() => {
@@ -551,7 +1583,7 @@ export function IntermediateDocumentTextViewer(
 
   return (
     <div
-      ref={scrollContainerRef}
+      ref={setScrollRootRef}
       role='document'
       className={[
         // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
@@ -570,48 +1602,112 @@ export function IntermediateDocumentTextViewer(
         .join(' ')}
       data-testid='intermediate-document-text-viewer'
       data-title={title}
+      onPointerDown={handleViewerPointerDown}
+      onPointerMove={handleTouchPointerMove}
+      onPointerUp={handleTouchPointerUp}
+      onPointerCancel={handleTouchPointerCancel}
     >
-      {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
-      <div
-        className='hamster-reader__intermediate-text-spacer'
-        style={{ height: virtualizer.getTotalSize() }}
-      >
-        {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
-        {virtualItems.map((virtualItem) => {
-          const pageNumber = pageNumbers[virtualItem.index]
-          if (typeof pageNumber !== 'number') {
-            return null
-          }
+      <RangeMagnifierProvider rootElement={viewerRootElement}>
+        <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
+        {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
+        <div
+          className='hamster-reader__intermediate-text-spacer'
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
+          {virtualItems.map((virtualItem) => {
+            const pageNumber = pageNumbers[virtualItem.index]
+            if (typeof pageNumber !== 'number') {
+              return null
+            }
 
-          const texts = textsByPageNumber.get(pageNumber)
-          return (
-            <div
-              key={pageNumber}
-              ref={virtualizer.measureElement}
-              data-index={virtualItem.index}
-              data-page-number={pageNumber}
-              data-selection-id={getRuntimePageSelectionId(pageNumber)}
-              data-testid={`intermediate-text-page-${pageNumber}`}
-              // SCSS .hamster-reader__intermediate-text-page 提供
-              // position:absolute / top:0 / left:0 / width:100% / padding:5px，
-              // 仅保留动态 transform（由 TanStack Virtual 计算）
-              className='hamster-reader__intermediate-text-page'
-              style={{ transform: `translateY(${virtualItem.start}px)` }}
-            >
-              {texts ? (
-                <IntermediateDocumentTextPageContent
-                  key={pageNumber}
-                  pageNumber={pageNumber}
-                  texts={texts}
-                  setTextRef={setTextRef}
-                />
-              ) : (
-                <>Page {pageNumber}</>
-              )}
-            </div>
-          )
-        })}
-      </div>
+            const texts = textsByPageNumber.get(pageNumber)
+            const pageSelectionId = getRuntimePageSelectionId(pageNumber)
+            const isPopoverOwner =
+              popoverOwnerRuntimeId === null ||
+              popoverOwnerRuntimeId === pageSelectionId
+            const pagePopover = isPopoverOwner ? (
+              <PopoverPortal
+                containerRef={popoverContainerRef}
+                selectionKind='selected'
+                visible={true}
+              >
+                {existingHighlightPopover}
+              </PopoverPortal>
+            ) : undefined
+            const pageSelectionPopover = isPopoverOwner ? (
+              <PopoverPortal
+                containerRef={popoverContainerRef}
+                selectionKind='active'
+                visible={true}
+              >
+                {selectionPopover}
+              </PopoverPortal>
+            ) : undefined
+            return (
+              <div
+                key={pageNumber}
+                ref={virtualizer.measureElement}
+                data-index={virtualItem.index}
+                data-page-number={pageNumber}
+                data-selection-id={pageSelectionId}
+                data-testid={`intermediate-text-page-${pageNumber}`}
+                // SCSS .hamster-reader__intermediate-text-page 提供
+                // position:absolute / top:0 / left:0 / width:100% / padding:5px，
+                // 仅保留动态 transform（由 TanStack Virtual 计算）
+                className='hamster-reader__intermediate-text-page'
+                style={{ transform: `translateY(${virtualItem.start}px)` }}
+              >
+                {texts ? (
+                  <HamsterSelection
+                    selectionId={pageSelectionId}
+                    linkedMode
+                    linkedData={runtimeLinkedData}
+                    onLinkedDataChange={handlePageLinkedDataChange}
+                    onLinkedSelect={handleLinkedSelect}
+                    onLinkedUpdateRange={handleLinkedUpdateRange}
+                    onLinkedSelectRange={handlePageLinkedSelectRange}
+                    ranges={EMPTY_SELECTION_RANGES}
+                    selectedRangeId={effectiveSelectedRangeId}
+                    onSelect={undefined}
+                    onSelectRange={undefined}
+                    onUpdateRange={undefined}
+                    onSelectionStart={selectionStartHandler}
+                    onSelectionEnd={selectionEndHandler}
+                    onHighlight={undefined}
+                    highlightColor={highlightColor}
+                    selectionColor={selectionColor}
+                    popover={pagePopover}
+                    selectionPopover={pageSelectionPopover}
+                    overlayRectType={overlayRectType}
+                    tool='text'
+                    renderHandle={(handle) => (
+                      <RangeHandle
+                        handle={handle}
+                        linkedData={runtimeLinkedData}
+                        magnifierEnabled={handle.target === 'rect'}
+                        scale={1}
+                        selectionId={pageSelectionId}
+                        viewerRoot={viewerRootElement}
+                      />
+                    )}
+                    ref={selectionRefForRuntimeId(pageSelectionId)}
+                  >
+                    <IntermediateDocumentTextPageContent
+                      key={pageNumber}
+                      pageNumber={pageNumber}
+                      texts={texts}
+                      setTextRef={setTextRef}
+                    />
+                  </HamsterSelection>
+                ) : (
+                  <>Page {pageNumber}</>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </RangeMagnifierProvider>
     </div>
   )
 }

@@ -6,6 +6,10 @@ import type {
   ReaderAnnotationHistoryOptions,
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
+  ReaderComment,
+  ReaderCommentChangeDetail,
+  ReaderCommentChangeSource,
+  ReaderCommentThreadNode,
   ReaderInteractiveProps,
   ReaderLinkedSelectionRange,
   ReaderPageRectSelectionMap,
@@ -20,6 +24,121 @@ import type {
 
 type AssertFalse<Value extends false> = Value
 type AssertTrue<Value extends true> = Value
+type IsEqual<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <
+    Value
+  >() => Value extends Right ? 1 : 2
+    ? true
+    : false
+type WritableKeys<Value> = {
+  [Key in keyof Value]-?: IsEqual<
+    { [NestedKey in Key]: Value[Key] },
+    { -readonly [NestedKey in Key]: Value[Key] }
+  > extends true
+    ? Key
+    : never
+}[keyof Value]
+type AllFieldsReadonly<Value> = WritableKeys<Value> extends never ? true : false
+
+type ExpectedReaderComment = {
+  readonly id: string
+  readonly highlightIds: readonly string[]
+  readonly content: string
+  readonly createdAt: number
+  readonly updatedAt?: number
+  readonly parentId: string | null
+}
+
+type ReaderCommentMatchesExpected = IsEqual<
+  ReaderComment,
+  ExpectedReaderComment
+>
+type ReaderCommentAllReadonly = AllFieldsReadonly<ReaderComment>
+type ReaderCommentParentIdMatches = IsEqual<
+  ReaderComment['parentId'],
+  string | null
+>
+type CommentsInReaderProps = 'comments' extends keyof ReaderProps ? true : false
+type OnCommentsChangeInReaderProps =
+  'onCommentsChange' extends keyof ReaderProps ? true : false
+type CommentsInInteractiveProps =
+  'comments' extends keyof ReaderInteractiveProps ? true : false
+type OnCommentsChangeInInteractiveProps =
+  'onCommentsChange' extends keyof ReaderInteractiveProps ? true : false
+
+const _readerCommentShape: AssertTrue<ReaderCommentMatchesExpected> = true
+const _readerCommentReadonly: AssertTrue<ReaderCommentAllReadonly> = true
+const _readerCommentParentId: AssertTrue<ReaderCommentParentIdMatches> = true
+const _commentsReaderPropAccepted: AssertTrue<CommentsInReaderProps> = true
+const _onCommentsChangeReaderPropAccepted: AssertTrue<OnCommentsChangeInReaderProps> = true
+const _commentsInteractivePropAccepted: AssertTrue<CommentsInInteractiveProps> = true
+const _onCommentsChangeInteractivePropAccepted: AssertTrue<OnCommentsChangeInInteractiveProps> = true
+
+const _readerComment: ReaderComment = {
+  id: 'comment-1',
+  highlightIds: ['range-1', 'range-2'],
+  content: '评论内容',
+  createdAt: 1,
+  updatedAt: 2,
+  parentId: null
+}
+
+const _readerCommentSources = [
+  'add',
+  'reply',
+  'update',
+  'delete',
+  'bind-highlights',
+  'external-sync'
+] satisfies readonly ReaderCommentChangeSource[]
+
+type ExpectedReaderCommentChangeDetail = {
+  readonly source: ReaderCommentChangeSource
+  readonly commentId?: string
+  readonly parentId?: string | null
+  readonly highlightIds?: readonly string[]
+}
+type ReaderCommentChangeDetailMatchesExpected = IsEqual<
+  ReaderCommentChangeDetail,
+  ExpectedReaderCommentChangeDetail
+>
+type ReaderCommentChangeDetailAllReadonly =
+  AllFieldsReadonly<ReaderCommentChangeDetail>
+
+const _readerCommentDetailShape: AssertTrue<ReaderCommentChangeDetailMatchesExpected> = true
+const _readerCommentDetailReadonly: AssertTrue<ReaderCommentChangeDetailAllReadonly> = true
+
+const _readerCommentDetail: ReaderCommentChangeDetail = {
+  source: 'bind-highlights',
+  commentId: 'comment-1',
+  parentId: null,
+  highlightIds: ['range-1']
+}
+
+const _controlledCommentProps: ReaderProps = {
+  comments: [_readerComment],
+  onCommentsChange: (nextComments, detail) => {
+    const _nextComments: readonly ReaderComment[] = nextComments
+    const _detail: ReaderCommentChangeDetail = detail
+    expect(_nextComments[0]?.id).toBe('comment-1')
+    expect(_detail.source).toBe('external-sync')
+  }
+}
+
+type ReaderCommentThreadNodeExtendsComment =
+  ReaderCommentThreadNode extends ReaderComment ? true : false
+type ReaderCommentThreadNodeRepliesReadonly = IsEqual<
+  ReaderCommentThreadNode['replies'],
+  readonly ReaderCommentThreadNode[]
+>
+
+const _readerCommentThreadNodeExtendsComment: AssertTrue<ReaderCommentThreadNodeExtendsComment> = true
+const _readerCommentThreadNodeReplies: AssertTrue<ReaderCommentThreadNodeRepliesReadonly> = true
+
+const _readerCommentThreadNode: ReaderCommentThreadNode = {
+  ..._readerComment,
+  replies: []
+}
 
 type LegacySelectionRangeFixture = {
   readonly id: string
@@ -208,6 +327,29 @@ const _annotationHistoryRef: ReaderSelectionRef = {
 }
 
 describe('Reader public selection types', () => {
+  it('exposes public reader comment types from the package entry', () => {
+    expect(_readerCommentShape).toBe(true)
+    expect(_readerCommentReadonly).toBe(true)
+    expect(_readerCommentParentId).toBe(true)
+    expect(_readerComment.id).toBe('comment-1')
+    expect(_readerComment.highlightIds).toEqual(['range-1', 'range-2'])
+    expect(_readerComment.parentId).toBeNull()
+    expect(_readerCommentSources).toContain('reply')
+    expect(_readerCommentSources).toContain('bind-highlights')
+    expect(_commentsReaderPropAccepted).toBe(true)
+    expect(_onCommentsChangeReaderPropAccepted).toBe(true)
+    expect(_commentsInteractivePropAccepted).toBe(true)
+    expect(_onCommentsChangeInteractivePropAccepted).toBe(true)
+    expect(_controlledCommentProps.comments).toEqual([_readerComment])
+    expect(_readerCommentDetailShape).toBe(true)
+    expect(_readerCommentDetailReadonly).toBe(true)
+    expect(_readerCommentDetail.source).toBe('bind-highlights')
+    expect(_readerCommentDetail.highlightIds).toEqual(['range-1'])
+    expect(_readerCommentThreadNodeExtendsComment).toBe(true)
+    expect(_readerCommentThreadNodeReplies).toBe(true)
+    expect(_readerCommentThreadNode.replies).toEqual([])
+  })
+
   it('accepts linked ranges keyed by public page selection ids', () => {
     expect(legacyRangeRejected).toBe(false)
     expect(linkedRangeAlias.start.selectionId).toBe('page-2')
