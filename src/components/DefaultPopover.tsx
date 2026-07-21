@@ -289,3 +289,36 @@ export function DefaultHighlightPopover(props: DefaultPopoverContext) {
     </div>
   )
 }
+
+export type DefaultRectanglePopoverProps = {
+  readonly selectedRectId?: string | null
+  readonly onRemoveRect?: (id: string) => void
+}
+
+export function DefaultRectanglePopover({
+  selectedRectId,
+  onRemoveRect
+}: DefaultRectanglePopoverProps) {
+  const handleRemove = useCallback(() => {
+    if (selectedRectId && onRemoveRect) {
+      onRemoveRect(selectedRectId)
+    }
+  }, [onRemoveRect, selectedRectId])
+
+  return (
+    <div
+      className='hamster-reader-popover'
+      role='toolbar'
+      aria-label='矩形高亮操作'
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <button
+        type='button'
+        className='hamster-reader-popover-btn hamster-reader-popover-btn--danger'
+        onClick={handleRemove}
+      >
+        删除
+      </button>
+    </div>
+  )
+}

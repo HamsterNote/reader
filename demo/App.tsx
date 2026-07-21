@@ -6,6 +6,7 @@ import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
+  ReaderComment,
   ReaderPageRange,
   ReaderPageTool,
   ReaderRenderMode,
@@ -21,8 +22,15 @@ import type {
   IntermediateDocument,
   IntermediateDocumentSerialized
 } from '@hamster-note/types'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { CommentPanel } from './CommentPanel'
+import {
+  parseComments,
+  removeHighlightFromComments,
+  serializeComments
+} from './commentStorage'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
+import { createImagePreviewDocument } from './imagePreview'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -31,12 +39,22 @@ import {
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
-export const SUPPORTED_FILE_TYPE_LABEL = 'PDF, TXT, DOCX, Markdown'
+export const SUPPORTED_FILE_TYPE_LABEL = 'PDF, TXT, DOCX, Markdown, Images'
 
 export const UNSUPPORTED_FILE_TYPE_MESSAGE =
-  'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
+  'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown, and images.'
 
-export type SupportedParserLabel = 'PDF' | 'TXT' | 'DOCX' | 'Markdown'
+const IMAGE_FILE_EXTENSIONS: readonly string[] = [
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'bmp',
+  'svg'
+]
+
+export type SupportedParserLabel = 'PDF' | 'TXT' | 'DOCX' | 'Markdown' | 'Image'
 
 export type ParseUploadedDocumentResult =
   | {
@@ -58,6 +76,11 @@ export function getFileExtension(fileName: string): string | null {
 
 export function getParserErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isImageFile(file: File): boolean {
+  const extension = getFileExtension(file.name)
+  return extension !== null && IMAGE_FILE_EXTENSIONS.includes(extension)
 }
 
 export async function parseUploadedDocument(
@@ -113,6 +136,23 @@ export async function parseUploadedDocument(
           error: getParserErrorMessage(error)
         }
       }
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'webp':
+    case 'bmp':
+    case 'svg':
+      try {
+        const document = await createImagePreviewDocument(file)
+        return { status: 'parsed', label: 'Image', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'Image',
+          error: getParserErrorMessage(error)
+        }
+      }
     default:
       return { status: 'unsupported', error: UNSUPPORTED_FILE_TYPE_MESSAGE }
   }
@@ -165,100 +205,6 @@ function persistHighlights(
 }
 
 // ---------------------------------------------------------------------------
-// 评论数据模型与存储 helpers
-// ---------------------------------------------------------------------------
-
-/** 单条评论条目：唯一 ID、评论内容、创建时间戳 */
-type CommentItem = {
-  id: string
-  content: string
-  createdAt: number
-}
-
-/** 高亮 ID -> 评论列表 */
-type CommentMap = Record<string, CommentItem[]>
-
-let fallbackCommentIdCounter = 0
-
-function generateCommentId(): string {
-  if (
-    typeof crypto !== 'undefined' &&
-    typeof crypto.randomUUID === 'function'
-  ) {
-    return crypto.randomUUID()
-  }
-  fallbackCommentIdCounter += 1
-  return `comment-${Date.now()}-${fallbackCommentIdCounter}`
-}
-
-function createCommentItem(content: string): CommentItem {
-  return {
-    id: generateCommentId(),
-    content: content.trim(),
-    createdAt: Date.now()
-  }
-}
-
-function formatCommentTime(timestamp: number): string {
-  const date = new Date(timestamp)
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
-
-function isCommentItem(item: unknown): item is CommentItem {
-  return (
-    typeof item === 'object' &&
-    item !== null &&
-    typeof (item as CommentItem).id === 'string' &&
-    typeof (item as CommentItem).content === 'string' &&
-    typeof (item as CommentItem).createdAt === 'number'
-  )
-}
-
-function parseCommentEntry(value: unknown): CommentItem[] | null {
-  // 兼容旧格式：value 为字符串时转换为单条评论数组
-  if (typeof value === 'string') {
-    return [createCommentItem(value)]
-  }
-  if (!Array.isArray(value)) return null
-  const items = value.filter(isCommentItem)
-  return items.length > 0 ? items : null
-}
-
-/**
- * 安全解析 localStorage 中保存的评论数据。
- * 兼容旧版 Record<string, string>（单条评论），自动转换为单元素数组。
- */
-function parseStoredComments(raw: string | null): CommentMap {
-  if (raw === null || raw.trim() === '') return {}
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return {}
-    }
-
-    const result: CommentMap = {}
-    for (const [key, value] of Object.entries(parsed)) {
-      const items = parseCommentEntry(value)
-      if (items !== null) {
-        result[key] = items
-      }
-    }
-    return result
-  } catch {
-    return {}
-  }
-}
-
-// ---------------------------------------------------------------------------
 // App 组件
 // ---------------------------------------------------------------------------
 
@@ -268,11 +214,13 @@ export function App() {
     IntermediateDocument | IntermediateDocumentSerialized | null
   >(null)
   const [isParsing, setIsParsing] = useState(false)
+  const [isOcrParsing, setIsOcrParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
+  const [ocrEnabled, setOcrEnabled] = useState<boolean>(false)
   const [renderMode, setRenderMode] = useState<ReaderRenderMode>('layout')
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
@@ -291,6 +239,7 @@ export function App() {
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
   const requestIdRef = useRef(0)
+  const ocrRequestIdRef = useRef(0)
   const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
 
@@ -307,16 +256,14 @@ export function App() {
   const [loadedPages, setLoadedPages] = useState<number[]>([])
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
-  const [commentingHighlight, setCommentingHighlight] =
-    useState<ReaderSelectionRange | null>(null)
-  const [commentDraft, setCommentDraft] = useState('')
-  // comments: 高亮 ID -> 评论列表；与 highlights 独立存储以避免污染 Reader range 类型
-  const [comments, setComments] = useState<CommentMap>({})
+  const [comments, setComments] = useState<ReaderComment[]>([])
+  // 评论面板开关状态 + 当前激活的高亮 ID（用于自动勾选评论绑定）
+  const [isCommentPanelOpen, setIsCommentPanelOpen] = useState(false)
+  const [activeHighlightId, setActiveHighlightId] = useState<string | null>(
+    null
+  )
   // 只有当前文件成功恢复评论后，持久化 effect 才允许写入，避免解析期间覆盖旧数据。
   const loadedCommentsFileNameRef = useRef<string | null>(null)
-  const commentResolverRef = useRef<
-    ((highlight: ReaderSelectionRange) => void) | null
-  >(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
 
   // --- Annotation history (undo/redo) state ---
@@ -389,58 +336,31 @@ export function App() {
     [rects, pagePaintings, uploadedFile?.name]
   )
 
+  // onCommentHighlight：立即 resolve Promise 让 Reader 关闭 popover，
+  // 同时打开 CommentPanel 并设置 activeHighlightId（自动勾选评论绑定）
   const handleCommentHighlight = useCallback(
-    (highlight: ReaderSelectionRange) =>
-      new Promise<ReaderSelectionRange>((resolve) => {
-        commentResolverRef.current = resolve
-        setCommentingHighlight(highlight)
-        // 每次打开评论面板都是新增一条评论，因此使用空草稿
-        setCommentDraft('')
-      }),
-    []
-  )
-
-  const handleFinishComment = useCallback(() => {
-    if (!commentingHighlight || !commentResolverRef.current) return
-
-    const trimmed = commentDraft.trim()
-    if (trimmed !== '') {
-      // 将新评论追加到该高亮的评论列表末尾
-      setComments((prev) => {
-        const existing = prev[commentingHighlight.id] ?? []
-        return {
-          ...prev,
-          [commentingHighlight.id]: [...existing, createCommentItem(trimmed)]
-        }
-      })
-    }
-
-    const resolve = commentResolverRef.current
-    commentResolverRef.current = null
-    setCommentingHighlight(null)
-    setCommentDraft('')
-    resolve(commentingHighlight)
-  }, [commentingHighlight, commentDraft])
-
-  // 删除某条高亮下的单条评论
-  const handleDeleteComment = useCallback(
-    (highlightId: string, commentId: string) => {
-      setComments((prev) => {
-        const items = prev[highlightId]
-        if (!items) return prev
-        const filtered = items.filter((item) => item.id !== commentId)
-        if (filtered.length === items.length) return prev
-        const next = { ...prev }
-        if (filtered.length === 0) {
-          delete next[highlightId]
-        } else {
-          next[highlightId] = filtered
-        }
-        return next
-      })
+    (highlight: ReaderSelectionRange) => {
+      setActiveHighlightId(highlight.id)
+      setIsCommentPanelOpen(true)
+      return Promise.resolve(highlight)
     },
     []
   )
+
+  // CommentPanel 的高亮跳转回调：滚动到指定 range
+  const handleJumpToHighlight = useCallback((highlightId: string) => {
+    selectionRef.current?.scrollToRange(highlightId)
+  }, [])
+
+  // CommentPanel 关闭回调
+  const handleCloseCommentPanel = useCallback(() => {
+    setIsCommentPanelOpen(false)
+    setActiveHighlightId(null)
+  }, [])
+
+  const handleCommentsChange = useCallback((next: readonly ReaderComment[]) => {
+    setComments(Array.from(next))
+  }, [])
 
   // 评论数据持久化：随 comments 变化写入 localStorage
   useEffect(() => {
@@ -449,16 +369,8 @@ export function App() {
 
     localStorage.setItem(
       `hamster-reader-demo:comments:${loadedFileName}`,
-      JSON.stringify(comments)
+      serializeComments(comments)
     )
-  }, [comments])
-
-  const commentCountByRangeId = useMemo(() => {
-    const result: Record<string, number> = {}
-    for (const [highlightId, items] of Object.entries(comments)) {
-      result[highlightId] = items.length
-    }
-    return result
   }, [comments])
 
   // onCreateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
@@ -493,7 +405,9 @@ export function App() {
   // library 会创建 checkpoint 并通过 onAnnotationHistoryChange 回传空快照。
   const handleClearAllRanges = useCallback(() => {
     selectionRef.current?.clear()
-    setComments({})
+    setComments([])
+    setIsCommentPanelOpen(false)
+    setActiveHighlightId(null)
   }, [])
 
   const handleRemoveRange = useCallback(
@@ -503,17 +417,21 @@ export function App() {
         persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
-      setComments((prev) => {
-        if (!(id in prev)) return prev
-        const next = { ...prev }
-        delete next[id]
-        return next
-      })
+      setComments((prev) => removeHighlightFromComments(prev, id))
       if (selectedRangeId === id) {
         setSelectedRangeId(null)
       }
+      if (activeHighlightId === id) {
+        setActiveHighlightId(null)
+      }
     },
-    [rects, pagePaintings, selectedRangeId, uploadedFile?.name]
+    [
+      rects,
+      pagePaintings,
+      selectedRangeId,
+      activeHighlightId,
+      uploadedFile?.name
+    ]
   )
 
   // 包装 setPagePaintings：pagePaintings 不走 annotation history，需独立持久化。
@@ -628,6 +546,8 @@ export function App() {
 
   const handleFileUpload = useCallback(
     async (file: File) => {
+      ++ocrRequestIdRef.current
+      setIsOcrParsing(false)
       setParseError(null)
 
       const requestId = ++requestIdRef.current
@@ -695,7 +615,7 @@ export function App() {
           `hamster-reader-demo:comments:${file.name}`
         )
         loadedCommentsFileNameRef.current = file.name
-        setComments(parseStoredComments(storedComments))
+        setComments(parseComments(storedComments))
 
         setSelectedRangeId(null)
         setSelectedRectId(null)
@@ -746,15 +666,55 @@ export function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!ocrEnabled || uploadedFile === null || !isImageFile(uploadedFile)) {
+      ++ocrRequestIdRef.current
+      setIsOcrParsing(false)
+      return
+    }
+
+    const requestId = ++ocrRequestIdRef.current
+    setIsOcrParsing(true)
+    setParseError(null)
+
+    import('@hamster-note/image-parser')
+      .then(({ ImageParser }) => ImageParser.encode(uploadedFile))
+      .then((ocrDocument) => {
+        if (requestId === ocrRequestIdRef.current) {
+          setDocument(ocrDocument)
+        }
+      })
+      .catch((error: unknown) => {
+        if (requestId === ocrRequestIdRef.current) {
+          setParseError(`Failed to OCR image: ${getParserErrorMessage(error)}`)
+        }
+      })
+      .finally(() => {
+        if (requestId === ocrRequestIdRef.current) {
+          setIsOcrParsing(false)
+        }
+      })
+
+    return () => {
+      if (requestId === ocrRequestIdRef.current) {
+        ++ocrRequestIdRef.current
+      }
+    }
+  }, [ocrEnabled, uploadedFile])
+
   return (
     <main data-testid='reader-demo-root' className='hamster-demo-shell'>
       <div className='hamster-demo-sidebar'>
         <div data-testid='demo-sidebar-settings'>
           <h1>Hamster Reader Demo</h1>
-          {isParsing && (
+          {(isParsing || isOcrParsing) && (
             <section style={{ marginBottom: '24px' }}>
               <h2>Parsing...</h2>
-              <p>Loading PDF content...</p>
+              <p>
+                {isOcrParsing
+                  ? 'Recognizing image text...'
+                  : 'Loading file content...'}
+              </p>
             </section>
           )}
           {parseError && (
@@ -785,6 +745,24 @@ export function App() {
                   data-testid='page-range-toggle'
                 />
                 <span>Enable page range</span>
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '12px'
+                }}
+              >
+                <input
+                  type='checkbox'
+                  checked={ocrEnabled}
+                  onChange={(event) =>
+                    setOcrEnabled(event.currentTarget.checked)
+                  }
+                  data-testid='ocr-toggle'
+                />
+                <span>Enable OCR</span>
               </label>
               {usePageRange && (
                 <div
@@ -847,7 +825,7 @@ export function App() {
                 <input
                   type='file'
                   aria-label='Choose another file'
-                  accept='.pdf,.txt,.docx,.md,.markdown'
+                  accept='.pdf,.txt,.docx,.md,.markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/*'
                   disabled={isParsing}
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0]
@@ -1274,149 +1252,62 @@ export function App() {
               </button>
             </div>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {ranges.map((range) => (
-                <li
-                  key={`range-${range.id}`}
-                  style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '4px 0',
-                    fontSize: '13px'
-                  }}
-                  className='hamster-demo-action-group'
-                >
-                  <button
-                    type='button'
-                    aria-label='Select highlight'
-                    onClick={() => handleHighlightSelect(range.id)}
+              {ranges.map((range) => {
+                return (
+                  <li
+                    key={`range-${range.id}`}
                     style={{
-                      flex: 1,
-                      textAlign: 'left',
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      border:
-                        selectedRangeId === range.id
-                          ? '2px solid #2196f3'
-                          : '1px solid #ddd',
-                      borderRadius: '4px',
-                      background:
-                        selectedRangeId === range.id ? '#e3f2fd' : '#fafafa',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {range.text || '(空选区)'}
-                  </button>
-                  <button
-                    type='button'
-                    aria-label='Remove highlight'
-                    onClick={() => handleRemoveRange(range.id)}
-                    style={{
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      border: '1px solid #f44336',
-                      borderRadius: '4px',
-                      background: '#fff',
-                      color: '#f44336',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '4px 0',
                       fontSize: '13px'
                     }}
+                    className='hamster-demo-action-group'
                   >
-                    删除
-                  </button>
-                  {(comments[range.id] ?? []).length > 0 && (
-                    <ul
+                    <button
+                      type='button'
+                      aria-label='Select highlight'
+                      onClick={() => handleHighlightSelect(range.id)}
                       style={{
-                        flexBasis: '100%',
-                        listStyle: 'none',
-                        padding: '8px',
-                        margin: '4px 0 0',
-                        borderRadius: '6px',
-                        background: '#f1f5f9'
+                        flex: 1,
+                        textAlign: 'left',
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        border:
+                          selectedRangeId === range.id
+                            ? '2px solid #2196f3'
+                            : '1px solid #ddd',
+                        borderRadius: '4px',
+                        background:
+                          selectedRangeId === range.id ? '#e3f2fd' : '#fafafa',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
                       }}
                     >
-                      {comments[range.id]?.map((item, index) => (
-                        <li
-                          key={item.id}
-                          style={{
-                            padding:
-                              index < (comments[range.id]?.length ?? 0) - 1
-                                ? '0 0 8px'
-                                : 0,
-                            marginBottom:
-                              index < (comments[range.id]?.length ?? 0) - 1
-                                ? '8px'
-                                : 0,
-                            borderBottom:
-                              index < (comments[range.id]?.length ?? 0) - 1
-                                ? '1px solid #e2e8f0'
-                                : 'none'
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              marginBottom: '4px'
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                color: '#64748b',
-                                fontWeight: 600
-                              }}
-                            >
-                              #{index + 1}
-                            </span>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <span
-                                style={{ fontSize: '11px', color: '#94a3b8' }}
-                              >
-                                {formatCommentTime(item.createdAt)}
-                              </span>
-                              <button
-                                type='button'
-                                aria-label='Delete comment'
-                                onClick={() =>
-                                  handleDeleteComment(range.id, item.id)
-                                }
-                                style={{
-                                  padding: '0 4px',
-                                  fontSize: '11px',
-                                  lineHeight: 1,
-                                  cursor: 'pointer',
-                                  border: 'none',
-                                  borderRadius: '3px',
-                                  background: 'transparent',
-                                  color: '#ef4444'
-                                }}
-                              >
-                                删除
-                              </button>
-                            </div>
-                          </div>
-                          <p
-                            style={{
-                              margin: 0,
-                              fontSize: '12px',
-                              lineHeight: 1.5,
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                              color: '#334155'
-                            }}
-                          >
-                            {item.content}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
+                      {range.text || '(空选区)'}
+                    </button>
+                    <button
+                      type='button'
+                      aria-label='Remove highlight'
+                      onClick={() => handleRemoveRange(range.id)}
+                      style={{
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        border: '1px solid #f44336',
+                        borderRadius: '4px',
+                        background: '#fff',
+                        color: '#f44336',
+                        fontSize: '13px'
+                      }}
+                    >
+                      删除
+                    </button>
+                  </li>
+                )
+              })}
               {rects.map((rect) => (
                 <li
                   key={`rect-${rect.id}`}
@@ -1497,7 +1388,9 @@ export function App() {
           emptyText='No document loaded'
           pageRange={buildPageRange()}
           overlayRectType='percent'
-          ocr={{ enabled: false }}
+          ocr={
+            ocrEnabled && (uploadedFile === null || !isImageFile(uploadedFile))
+          }
           onTextSelectionChange={() => {}}
           onTextSelectionEnd={() => {}}
           onSelectText={() => {}}
@@ -1523,8 +1416,8 @@ export function App() {
           showPageBrowser={showPageBrowser}
           onPageBrowserClose={() => setShowPageBrowser(false)}
           themeColor={themeColor}
-          commentCountByRangeId={commentCountByRangeId}
-          commentCountByRectId={commentCountByRangeId}
+          comments={comments}
+          onCommentsChange={handleCommentsChange}
           bookmarkedPageNumbers={bookmarkedPageNumbers}
           onTogglePageBookmark={handleTogglePageBookmark}
           rects={rects}
@@ -1532,6 +1425,7 @@ export function App() {
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
           onUpdateRect={handleUpdateRect}
+          onRemoveRect={handleRemoveRect}
           annotationHistory={{
             enabled: true,
             resetKey: uploadedFile?.name ?? 'none'
@@ -1541,133 +1435,15 @@ export function App() {
           onPageLoadStatusChange={setLoadedPages}
         />
       </div>
-      {commentingHighlight && (
-        <aside
-          role='dialog'
-          aria-modal='true'
-          aria-labelledby='highlight-comment-title'
-          data-testid='highlight-comment-panel'
-          style={{
-            position: 'fixed',
-            right: '24px',
-            bottom: '24px',
-            zIndex: 1000,
-            width: 'min(360px, calc(100vw - 48px))',
-            boxSizing: 'border-box',
-            padding: '20px',
-            border: '1px solid #cbd5e1',
-            borderRadius: '12px',
-            background: '#fff',
-            boxShadow: '0 20px 48px rgba(15, 23, 42, 0.2)'
-          }}
-        >
-          <h2
-            id='highlight-comment-title'
-            style={{ margin: '0 0 8px', fontSize: '18px' }}
-          >
-            评论高亮
-          </h2>
-          <p style={{ margin: '0 0 12px', color: '#64748b' }}>
-            {commentingHighlight.text || '(空选区)'}
-          </p>
-          {(comments[commentingHighlight.id] ?? []).length > 0 && (
-            <div
-              style={{
-                maxHeight: '160px',
-                overflowY: 'auto',
-                marginBottom: '12px',
-                padding: '10px',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-                background: '#f8fafc'
-              }}
-            >
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                {comments[commentingHighlight.id]?.map((item, index) => (
-                  <li
-                    key={item.id}
-                    style={{
-                      padding: '8px 0',
-                      borderBottom:
-                        index <
-                        (comments[commentingHighlight.id]?.length ?? 0) - 1
-                          ? '1px solid #e2e8f0'
-                          : 'none'
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: '4px'
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          color: '#64748b',
-                          fontWeight: 600
-                        }}
-                      >
-                        #{index + 1}
-                      </span>
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                        {formatCommentTime(item.createdAt)}
-                      </span>
-                    </div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: '13px',
-                        lineHeight: 1.5,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        color: '#334155'
-                      }}
-                    >
-                      {item.content}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <textarea
-            aria-label='评论内容'
-            value={commentDraft}
-            onChange={(event) => setCommentDraft(event.currentTarget.value)}
-            placeholder='输入新评论…'
-            style={{
-              boxSizing: 'border-box',
-              width: '100%',
-              minHeight: '96px',
-              marginBottom: '12px',
-              padding: '10px',
-              border: '1px solid #cbd5e1',
-              borderRadius: '8px',
-              resize: 'vertical',
-              font: 'inherit'
-            }}
-          />
-          <button
-            type='button'
-            onClick={handleFinishComment}
-            style={{
-              width: '100%',
-              minHeight: '44px',
-              border: 0,
-              borderRadius: '8px',
-              background: '#2563eb',
-              color: '#fff',
-              font: 'inherit',
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
-          >
-            完成评论
-          </button>
-        </aside>
+      {isCommentPanelOpen && (
+        <CommentPanel
+          comments={comments}
+          ranges={ranges}
+          activeHighlightId={activeHighlightId}
+          onCommentsChange={handleCommentsChange}
+          onJumpToHighlight={handleJumpToHighlight}
+          onClose={handleCloseCommentPanel}
+        />
       )}
     </main>
   )

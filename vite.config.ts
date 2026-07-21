@@ -269,11 +269,15 @@ export default defineConfig(({ mode }) => ({
   },
   optimizeDeps: {
     include: [
-      '@paddleocr/paddleocr-js',
       '@hamster-note/document-parser',
-      '@hamster-note/types'
+      '@hamster-note/types',
+      '@techstark/opencv-js'
     ],
-    exclude: ['@hamster-note/pdf-parser', '@hamster-note/image-parser']
+    exclude: [
+      '@hamster-note/pdf-parser',
+      '@hamster-note/image-parser',
+      '@paddleocr/paddleocr-js'
+    ]
   },
   build: {
     outDir: 'demo-dist'

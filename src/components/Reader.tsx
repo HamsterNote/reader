@@ -8,12 +8,17 @@ import type {
 import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
 
 import type {
+  ReaderComment,
+  ReaderCommentChangeDetail
+} from '../types/comments'
+import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryOptions,
   ReaderAnnotationHistoryValue,
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderMousePosition,
+  ReaderRectanglePopover,
   ReaderSelectionOverlayRectType,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -22,6 +27,7 @@ import type {
 } from '../types/selection'
 import {
   DefaultHighlightPopover,
+  DefaultRectanglePopover,
   DefaultSelectionPopover
 } from './DefaultPopover'
 import type {
@@ -114,9 +120,12 @@ export type ReaderProps = {
   tool?: ReaderSelectionTool
   rects?: ReaderSelectionRectangle[]
   selectedRectId?: string | null
+  rectPopover?: ReaderRectanglePopover
   onCreateRect?: (rect: ReaderSelectionRectangle) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  /** 删除指定矩形的回调（供默认 rectPopover 的删除按钮使用） */
+  onRemoveRect?: (id: string) => void
   annotationHistory?: boolean | ReaderAnnotationHistoryOptions
   onAnnotationHistoryChange?: (
     next: ReaderAnnotationHistoryValue,
@@ -142,6 +151,13 @@ export type ReaderProps = {
   commentCountByRangeId?: Readonly<Record<string, number>>
   /** 每个 rectId 对应的评论数量，传入 page-browser 高亮列表展示评论计数徽章。 */
   commentCountByRectId?: Readonly<Record<string, number>>
+  /** 受控评论数据；Reader 不内部修改，由 onCommentsChange 通知宿主更新。 */
+  comments?: readonly ReaderComment[]
+  /** 评论数据变更回调（库本身不修改评论；为宿主层预留的统一变更通道）。 */
+  onCommentsChange?: (
+    nextComments: readonly ReaderComment[],
+    detail: ReaderCommentChangeDetail
+  ) => void
   /** 由宿主控制的书签页码，在 page-browser 的页面与书签面板中展示。 */
   bookmarkedPageNumbers?: readonly number[]
   /** 添加或删除指定页书签。 */
@@ -182,9 +198,9 @@ export type ReaderProps = {
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
-  '.pdf,application/pdf,.txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,text/markdown,text/x-markdown'
+  '.pdf,application/pdf,.txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,text/markdown,text/x-markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/png,image/jpeg,image/gif,image/webp,image/bmp,image/svg+xml'
 
-export const SUPPORTED_UPLOAD_COPY = 'PDF, TXT, DOCX, and Markdown'
+export const SUPPORTED_UPLOAD_COPY = 'PDF, TXT, DOCX, Markdown, and image'
 
 const documentHasPages = (
   document:
@@ -316,9 +332,11 @@ export function Reader({
   tool,
   rects,
   selectedRectId,
+  rectPopover,
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  onRemoveRect,
   annotationHistory,
   onAnnotationHistoryChange,
   initialLoadedPages,
@@ -335,6 +353,8 @@ export function Reader({
   themeColor,
   commentCountByRangeId,
   commentCountByRectId,
+  comments,
+  onCommentsChange,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   selectedTool,
@@ -649,6 +669,56 @@ export function Reader({
             pageRange={pageRange}
             className={className}
             maxLoadedPages={maxLoadedPages}
+            ranges={resolvedRanges}
+            defaultRanges={defaultRanges}
+            selectedRangeId={selectedRangeId}
+            defaultSelectedRangeId={defaultSelectedRangeId}
+            onSelect={handleSelect}
+            onLinkedDataChange={onLinkedDataChange}
+            onLinkedSelect={onLinkedSelect}
+            onLinkedUpdateRange={onLinkedUpdateRange}
+            onLinkedSelectRange={onLinkedSelectRange}
+            onSelectRange={onSelectRange}
+            onUpdateRange={handleUpdateRange}
+            onSelectionStart={onSelectionStart}
+            onSelectionEnd={onSelectionEnd}
+            onHighlight={onHighlight}
+            highlightColor={highlightColor}
+            selectionColor={selectionColor}
+            selectionPopover={
+              selectionPopover ?? (
+                <DefaultSelectionPopover
+                  selectionRef={popoverSelectionRef}
+                  highlightColor={highlightColor}
+                  onHighlightColorChange={onHighlightColorChange}
+                  selectedRangeId={selectedRangeId}
+                  ranges={resolvedRanges}
+                  onUpdateRange={handleUpdateRange}
+                  onRemoveRange={onRemoveRange}
+                />
+              )
+            }
+            highlightPopover={
+              highlightPopover ??
+              ((highlight) => (
+                <DefaultHighlightPopover
+                  selectionRef={popoverSelectionRef}
+                  highlightColor={highlightColor}
+                  onHighlightColorChange={onHighlightColorChange}
+                  selectedRangeId={highlight.id}
+                  ranges={resolvedRanges}
+                  onUpdateRange={handleUpdateRange}
+                  onRemoveRange={onRemoveRange}
+                  onCommentHighlight={
+                    onCommentHighlight ? handleDefaultCommentHighlight : undefined
+                  }
+                />
+              ))
+            }
+            onCommentHighlight={highlightPopover ? onCommentHighlight : undefined}
+            autoHighlight={autoHighlight}
+            selectionRef={resolvedSelectionRef}
+            overlayRectType={overlayRectType}
             initialLoadedPages={initialLoadedPages}
             pageLoadConcurrency={pageLoadConcurrency}
             pageLoadEnterDelayMs={pageLoadEnterDelayMs}
@@ -734,6 +804,15 @@ export function Reader({
           tool={resolvedSelectionTool}
           rects={resolvedRects}
           selectedRectId={selectedRectId}
+          rectPopover={
+            rectPopover ??
+            ((rectangle) => (
+              <DefaultRectanglePopover
+                selectedRectId={rectangle.id}
+                onRemoveRect={onRemoveRect}
+              />
+            ))
+          }
           onCreateRect={handleCreateRect}
           onSelectRect={onSelectRect}
           onUpdateRect={handleUpdateRect}
@@ -760,6 +839,8 @@ export function Reader({
           themeColor={themeColor}
           commentCountByRangeId={commentCountByRangeId}
           commentCountByRectId={commentCountByRectId}
+          comments={comments}
+          onCommentsChange={onCommentsChange}
           bookmarkedPageNumbers={bookmarkedPageNumbers}
           onTogglePageBookmark={onTogglePageBookmark}
           onPageLoadStatusChange={onPageLoadStatusChange}
@@ -812,7 +893,7 @@ export function Reader({
                 : 'Click or drag document to upload'}
             </p>
             <p className='hamster-reader__upload-hint'>
-              Supports PDF, TXT, DOCX, and Markdown files
+              Supports {SUPPORTED_UPLOAD_COPY} files
             </p>
           </div>
         </button>

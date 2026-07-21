@@ -40,12 +40,12 @@ The renderer lazily loads page content on demand via a visibility-debounced queu
 
 The following optional props control the lazy loading queue:
 
-| Prop | Type | Default | Description |
-|---|---|---|---|
-| `initialLoadedPages` | `number` | `1` | Number of pages to load immediately on mount (before visibility-based queue kicks in). |
-| `pageLoadConcurrency` | `number` | `3` | Maximum number of pages loaded concurrently. |
-| `pageLoadEnterDelayMs` | `number` | `500` | A non-initial page must remain continuously visible for this duration (ms) before its content load is enqueued. Prevents fast-scroll from triggering loads. |
-| `pageUnloadDelayMs` | `number` | `5000` | After a loaded page leaves the visible window, wait this duration (ms) before unloading its content back to an empty shell. Re-entering before the delay cancels the unload. |
+| Prop                   | Type     | Default | Description                                                                                                                                                                  |
+| ---------------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initialLoadedPages`   | `number` | `1`     | Number of pages to load immediately on mount (before visibility-based queue kicks in).                                                                                       |
+| `pageLoadConcurrency`  | `number` | `3`     | Maximum number of pages loaded concurrently.                                                                                                                                 |
+| `pageLoadEnterDelayMs` | `number` | `500`   | A non-initial page must remain continuously visible for this duration (ms) before its content load is enqueued. Prevents fast-scroll from triggering loads.                  |
+| `pageUnloadDelayMs`    | `number` | `5000`  | After a loaded page leaves the visible window, wait this duration (ms) before unloading its content back to an empty shell. Re-entering before the delay cancels the unload. |
 
 #### Render Timing
 
@@ -54,6 +54,7 @@ To diagnose bottlenecks in the render pipeline, you can opt in to stage-by-stage
 **Activation paths:**
 
 1. **Callback prop** — receive every timing entry in code:
+
    ```tsx
    <Reader
      document={document}
@@ -70,14 +71,14 @@ To diagnose bottlenecks in the render pipeline, you can opt in to stage-by-stage
 
 Each entry has the following shape:
 
-| Field | Type | Description |
-|---|---|---|
-| `stage` | `string` | One of `document-resolution`, `shell-rendering`, `initial-page-loading`, `content-extraction`, `page-content-rendering`, `visibility-lazy-loading`, `offscreen-unload`, `ocr-processing`. |
-| `startedAt` | `number` | Start timestamp (ms). |
-| `endedAt` | `number` | End timestamp (ms). |
-| `durationMs` | `number` | `endedAt - startedAt`. |
-| `pageNumber` | `number` *(optional)* | Present for page-scoped stages. |
-| `detail` | `object` *(optional)* | Stage-specific context such as `pageCount`, `textCount`, `imageCount`, or `status`. |
+| Field        | Type                  | Description                                                                                                                                                                               |
+| ------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stage`      | `string`              | One of `document-resolution`, `shell-rendering`, `initial-page-loading`, `content-extraction`, `page-content-rendering`, `visibility-lazy-loading`, `offscreen-unload`, `ocr-processing`. |
+| `startedAt`  | `number`              | Start timestamp (ms).                                                                                                                                                                     |
+| `endedAt`    | `number`              | End timestamp (ms).                                                                                                                                                                       |
+| `durationMs` | `number`              | `endedAt - startedAt`.                                                                                                                                                                    |
+| `pageNumber` | `number` _(optional)_ | Present for page-scoped stages.                                                                                                                                                           |
+| `detail`     | `object` _(optional)_ | Stage-specific context such as `pageCount`, `textCount`, `imageCount`, or `status`.                                                                                                       |
 
 #### Demo Upload Formats
 
@@ -167,7 +168,7 @@ Public page ids are always `page-${pageNumber}` (for example, `page-1`, `page-2`
 ```tsx
 import { Reader } from '@hamster-note/reader'
 import type { ReaderSelectionRange } from '@hamster-note/reader'
-import '@hamster-note/reader/style.css'   // includes Selection CSS
+import '@hamster-note/reader/style.css' // includes Selection CSS
 import { useState } from 'react'
 
 const initialRanges: ReaderSelectionRange[] = [
@@ -204,31 +205,31 @@ export function App() {
 
 ### Props
 
-| Prop | Type | Description |
-|---|---|---|
-| `ranges` | `ReaderSelectionRange[]` | Controlled highlight ranges in the linked shape. Reader does not mutate this array. |
-| `defaultRanges` | `ReaderSelectionRange[]` | Initial ranges for uncontrolled mode (when `ranges` is omitted). |
-| `selectedRangeId` | `string \| null` | Controlled currently-selected range ID. |
-| `defaultSelectedRangeId` | `string \| null` | Initial selected range ID for uncontrolled mode. |
-| `onSelect` | `(range: ReaderSelectionRange) => void` | Fired when the user finishes a new selection. In uncontrolled mode, Reader appends the range internally before calling this. |
-| `onSelectRange` | `(id: string \| null) => void` | Fired when the user clicks an existing highlight. |
-| `onUpdateRange` | `(range: ReaderSelectionRange) => void` | Fired when the user drags a selected highlight range handle. In uncontrolled mode, Reader replaces the matching range internally before calling this; controlled callers must update their `ranges` array. |
-| `onHighlight` | `(range: ReaderSelectionRange) => void` | Fired when a range is highlighted via the ref API or via Reader's internal auto-highlight (when `autoHighlight` is enabled). |
-| `onSelectionStart` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture begins. |
-| `onSelectionEnd` | `(mousePos: ReaderMousePosition, selection: Selection) => void` | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this). |
-| `autoHighlight` | `boolean` | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`. |
-| `highlightColor` | `string` | Default CSS color for highlight overlays. A range-specific `markerStyle.backgroundColor` takes precedence. |
-| `selectionColor` | `string` | CSS color for active selection overlay. |
-| `selectionPopover` | `React.ReactNode` | Custom popover content shown during active selection (before it becomes a highlight). |
-| `highlightPopover` | `React.ReactNode \| ((highlight: ReaderSelectionRange) => React.ReactNode)` | Custom popover content shown when an existing highlight is clicked. The renderer receives the original range object, so range-specific color and metadata can be displayed. |
-| `onCommentHighlight` | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>` | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
-| `selectionRef` | `React.Ref<ReaderSelectionRef>` | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range. |
-| `overlayRectType` | `ReaderSelectionOverlayRectType` | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`. |
-| `containMarginX` | `number` | Horizontal whitespace around the virtual paper. |
-| `containMarginTop` | `number` | Independent top whitespace around the virtual paper. |
-| `containMarginBottom` | `number` | Independent bottom whitespace around the virtual paper. |
-| `containMarginY` | `number` | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied. |
-| `showPageBrowser` | `boolean` | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`. |
+| Prop                     | Type                                                                        | Description                                                                                                                                                                                                |
+| ------------------------ | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ranges`                 | `ReaderSelectionRange[]`                                                    | Controlled highlight ranges in the linked shape. Reader does not mutate this array.                                                                                                                        |
+| `defaultRanges`          | `ReaderSelectionRange[]`                                                    | Initial ranges for uncontrolled mode (when `ranges` is omitted).                                                                                                                                           |
+| `selectedRangeId`        | `string \| null`                                                            | Controlled currently-selected range ID.                                                                                                                                                                    |
+| `defaultSelectedRangeId` | `string \| null`                                                            | Initial selected range ID for uncontrolled mode.                                                                                                                                                           |
+| `onSelect`               | `(range: ReaderSelectionRange) => void`                                     | Fired when the user finishes a new selection. In uncontrolled mode, Reader appends the range internally before calling this.                                                                               |
+| `onSelectRange`          | `(id: string \| null) => void`                                              | Fired when the user clicks an existing highlight.                                                                                                                                                          |
+| `onUpdateRange`          | `(range: ReaderSelectionRange) => void`                                     | Fired when the user drags a selected highlight range handle. In uncontrolled mode, Reader replaces the matching range internally before calling this; controlled callers must update their `ranges` array. |
+| `onHighlight`            | `(range: ReaderSelectionRange) => void`                                     | Fired when a range is highlighted via the ref API or via Reader's internal auto-highlight (when `autoHighlight` is enabled).                                                                               |
+| `onSelectionStart`       | `(mousePos: ReaderMousePosition, selection: Selection) => void`             | Fired when a selection gesture begins.                                                                                                                                                                     |
+| `onSelectionEnd`         | `(mousePos: ReaderMousePosition, selection: Selection) => void`             | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this).                                                                                                                 |
+| `autoHighlight`          | `boolean`                                                                   | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`.                                             |
+| `highlightColor`         | `string`                                                                    | Default CSS color for highlight overlays. A range-specific `markerStyle.backgroundColor` takes precedence.                                                                                                 |
+| `selectionColor`         | `string`                                                                    | CSS color for active selection overlay.                                                                                                                                                                    |
+| `selectionPopover`       | `React.ReactNode`                                                           | Custom popover content shown during active selection (before it becomes a highlight).                                                                                                                      |
+| `highlightPopover`       | `React.ReactNode \| ((highlight: ReaderSelectionRange) => React.ReactNode)` | Custom popover content shown when an existing highlight is clicked. The renderer receives the original range object, so range-specific color and metadata can be displayed.                                |
+| `onCommentHighlight`     | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>`        | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
+| `selectionRef`           | `React.Ref<ReaderSelectionRef>`                                             | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range.                         |
+| `overlayRectType`        | `ReaderSelectionOverlayRectType`                                            | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`.                  |
+| `containMarginX`         | `number`                                                                    | Horizontal whitespace around the virtual paper.                                                                                                                                                            |
+| `containMarginTop`       | `number`                                                                    | Independent top whitespace around the virtual paper.                                                                                                                                                       |
+| `containMarginBottom`    | `number`                                                                    | Independent bottom whitespace around the virtual paper.                                                                                                                                                    |
+| `containMarginY`         | `number`                                                                    | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied.                                                                                      |
+| `showPageBrowser`        | `boolean`                                                                   | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`.                                      |
 
 The existing-highlight popover can use range-specific data and delegate the comment lifecycle to the host:
 
@@ -254,10 +255,10 @@ The existing-highlight popover can use range-specific data and delegate the comm
 
 ```ts
 import type {
-  ReaderSelectionRange,    // linked: { id, text, start, end, rectsBySelectionId, overlayRectType? }
-  ReaderSelectionOverlayRectType,  // 'px' | 'percent'
-  ReaderSelectionRef,      // { highlight(): void; clear(): void; scrollToRange(id: string): void }
-  ReaderMousePosition      // { x, y }, viewport coordinates (clientX/clientY)
+  ReaderSelectionRange, // linked: { id, text, start, end, rectsBySelectionId, overlayRectType? }
+  ReaderSelectionOverlayRectType, // 'px' | 'percent'
+  ReaderSelectionRef, // { highlight(): void; clear(): void; scrollToRange(id: string): void }
+  ReaderMousePosition // { x, y }, viewport coordinates (clientX/clientY)
 } from '@hamster-note/reader'
 ```
 
@@ -285,7 +286,7 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 ### Demo Browser Storage
 
-The browser Demo persists annotation metadata to localStorage keyed by filename. The stored highlight shape is `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }`; comments are stored separately under the same filename. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
+The browser Demo persists annotation metadata to localStorage keyed by filename. The stored highlight shape is `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }`, unchanged from previous versions. Comments are stored separately under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
 
 After a file parses successfully, the Demo also stores that source `File` in browser-local IndexedDB. On reload, it reopens and reparses the most recent successful file so its annotations and comments can be displayed without another upload. The Demo labels this behavior beside the uploaded-file details and provides a **Forget saved file** button. Clearing the saved file does not delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all Demo storage.
 
@@ -309,6 +310,73 @@ selectionRef.current?.clear()
 selectionRef.current?.scrollToRange('highlight-1')
 ```
 
+## Comments
+
+`Reader` exposes a purely controlled comments API. There is no `defaultComments` prop and no uncontrolled mode: the host owns the comment list and `Reader` never mutates it. The library ships no comment UI; the host owns presentation (panel, editor, badges). The existing `onCommentHighlight` prop is unchanged and remains the popover 评论 entry point for creating a comment from a highlight.
+
+```ts
+type ReaderComment = {
+  id: string
+  highlightIds: readonly string[] // one comment can bind multiple highlights (M:N)
+  content: string
+  createdAt: number
+  updatedAt?: number
+  parentId: string | null // null for root comments; set for replies
+}
+```
+
+### Props
+
+| Prop               | Type                                                                          | Description                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `comments`         | `readonly ReaderComment[]`                                                    | Controlled comment list. Reader does not mutate this array.                                     |
+| `onCommentsChange` | `(next: readonly ReaderComment[], detail: ReaderCommentChangeDetail) => void` | Fired with the next comment list and a change detail. The host applies `next` to its own state. |
+
+`detail.source` is one of `'add'`, `'reply'`, `'update'`, `'delete'`, `'bind-highlights'`, or `'external-sync'`. The detail may also carry `commentId`, `parentId`, and `highlightIds` for the affected entities.
+
+```tsx
+import { useState } from 'react'
+import { Reader } from '@hamster-note/reader'
+import type { ReaderComment } from '@hamster-note/reader'
+
+export function App({ document }) {
+  // 受控模式：Reader 不内部修改 comments，由 onCommentsChange 回调外部更新
+  const [comments, setComments] = useState<readonly ReaderComment[]>([])
+
+  return (
+    <Reader
+      document={document}
+      comments={comments}
+      onCommentsChange={(next) => setComments(next)}
+    />
+  )
+}
+```
+
+### Helpers
+
+The package exports pure helpers for deriving views over the comment list:
+
+| Helper                         | Signature                                    | Description                                                                                                                                                          |
+| ------------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getCommentsByHighlightId`     | `(comments, highlightId) => ReaderComment[]` | Comments bound to one highlight, ordered by `createdAt` (ties keep input order).                                                                                     |
+| `getCommentCountByHighlightId` | `(comments) => Record<string, number>`       | Comment count per bound highlight ID. Binding is M:N, so one comment increments the count of every ID in its `highlightIds`; replies are counted too.                |
+| `buildReaderCommentTree`       | `(comments) => ReaderCommentThreadNode[]`    | Builds a reply tree. A comment whose `parentId` is missing from the list is treated as a root. Roots and replies are ordered by `createdAt` (ties keep input order). |
+
+`ReaderCommentThreadNode` is `ReaderComment` plus a recursive `replies: readonly ReaderCommentThreadNode[]`.
+
+### Highlight badge counts
+
+`IntermediateDocumentViewer` derives range badge counts as `commentCountByRangeId ?? (comments ? getCommentCountByHighlightId(comments) : undefined)`. An explicitly supplied `commentCountByRangeId` always wins. `commentCountByRectId` is never derived from `comments`.
+
+### Undo/redo
+
+Comments are excluded from `ReaderAnnotationHistoryValue`; undo/redo does not touch comments.
+
+### Demo behavior
+
+The browser Demo persists comments in localStorage (see Demo Browser Storage) and prunes bindings when a highlight is deleted: removing a highlight removes it from every comment's `highlightIds`, and comments left with zero bindings are deleted together with their reply subtree.
+
 ## Annotation History (undo/redo)
 
 `Reader` can track undoable snapshots of annotation state. This is an opt-in feature; it is disabled by default.
@@ -324,14 +392,14 @@ The snapshot only includes text ranges, rectangle selections, and their active I
 }
 ```
 
-Drawing state and `pagePaintings` are intentionally excluded and are not affected by undo/redo.
+Drawing state, `pagePaintings`, and comments are intentionally excluded and are not affected by undo/redo.
 
 ### Props
 
-| Prop | Type | Default | Description |
-|---|---|---|---|
-| `annotationHistory` | `boolean \| ReaderAnnotationHistoryOptions` | `false` | Enable annotation history. Passing `true` is equivalent to `{ enabled: true }`. |
-| `onAnnotationHistoryChange` | `(next: ReaderAnnotationHistoryValue, detail: ReaderAnnotationHistoryChangeDetail) => void` | — | Fired after the history present state changes. Required for controlled mode. |
+| Prop                        | Type                                                                                        | Default | Description                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------- |
+| `annotationHistory`         | `boolean \| ReaderAnnotationHistoryOptions`                                                 | `false` | Enable annotation history. Passing `true` is equivalent to `{ enabled: true }`. |
+| `onAnnotationHistoryChange` | `(next: ReaderAnnotationHistoryValue, detail: ReaderAnnotationHistoryChangeDetail) => void` | —       | Fired after the history present state changes. Required for controlled mode.    |
 
 ```ts
 type ReaderAnnotationHistoryOptions = {
@@ -378,13 +446,13 @@ type ReaderAnnotationHistoryChangeDetail = {
 
 When history is enabled, `selectionRef` exposes undo/redo commands:
 
-| Command | Return | Description |
-|---|---|---|
-| `undo()` | `boolean` | Reverts to the previous snapshot. Returns `false` when there is nothing to undo. |
-| `redo()` | `boolean` | Reapplies the next snapshot. Returns `false` when there is nothing to redo. |
-| `canUndo()` | `boolean` | Whether at least one past snapshot exists. |
-| `canRedo()` | `boolean` | Whether at least one future snapshot exists. |
-| `getAnnotationHistoryState()` | `ReaderAnnotationHistoryStatus` | Returns the full status object. |
+| Command                       | Return                          | Description                                                                      |
+| ----------------------------- | ------------------------------- | -------------------------------------------------------------------------------- |
+| `undo()`                      | `boolean`                       | Reverts to the previous snapshot. Returns `false` when there is nothing to undo. |
+| `redo()`                      | `boolean`                       | Reapplies the next snapshot. Returns `false` when there is nothing to redo.      |
+| `canUndo()`                   | `boolean`                       | Whether at least one past snapshot exists.                                       |
+| `canRedo()`                   | `boolean`                       | Whether at least one future snapshot exists.                                     |
+| `getAnnotationHistoryState()` | `ReaderAnnotationHistoryStatus` | Returns the full status object.                                                  |
 
 ### `resetKey`
 

@@ -23,7 +23,6 @@ export type ResolveCaretOptions = {
   // 把 Y 钳制到最近文本行 rect 内再调用浏览器 caret API，
   // 从而保留 X 携带的字符级精度，避免被浏览器吸附到行首/行末。
   snapToNearestLine?: boolean
-  allowHtmlParserRange?: boolean
 }
 
 type CaretPointDocument = Document & {
@@ -36,18 +35,13 @@ type ClientPoint = {
   readonly y: number
 }
 
-// The html-parser renders backgrounds as CSS `background-image` on
-// `.hamster-note-page` divs, not as separate DOM elements, so those are
-// inherently unselectable. This selector covers the direct-render `<img>`
-// path and any future html-parser elements that may use these classes.
+// 直渲染路径的底图元素（img / background 容器）本身不可选择，
+// 命中它们时不应被当作文本选择目标。
 const BACKGROUND_TARGET_SELECTOR = [
   '.hamster-reader__intermediate-page-base-image',
   '.hamster-reader__intermediate-page-background',
   '.hamster-reader__intermediate-page-background-wrapper'
 ].join(', ')
-
-const HTML_PARSER_TEXT_ROOT_SELECTOR =
-  '.hamster-reader__html-parser-output .hamster-note-page'
 
 const getElementFromNode = (node: Node | null): Element | null =>
   node instanceof Element ? node : (node?.parentElement ?? null)
@@ -81,107 +75,13 @@ const getNumberFromDataPageNumber = (element: HTMLElement): number | null => {
   return Number.isFinite(pageNumber) ? pageNumber : null
 }
 
-const getHtmlParserPageElementByPageNumber = (
-  pageNumber: number,
-  viewerRoot: HTMLElement
-): HTMLElement | null => {
-  const pageElements = Array.from(
-    viewerRoot.querySelectorAll('.hamster-note-page')
-  ) as HTMLElement[]
-
-  return (
-    pageElements.find((element) => {
-      const elementPageNumber = getNumberFromDataPageNumber(element)
-      return elementPageNumber === pageNumber
-    }) ??
-    pageElements[pageNumber - 1] ??
-    null
-  )
-}
-
-const getHtmlParserPageElementFromSlot = (
-  slotElement: HTMLDivElement
-): HTMLElement | null =>
-  slotElement.querySelector<HTMLElement>(':scope .hamster-note-page')
-
 export const getPageElementByPageNumber = (
   pageNumber: number,
   viewerRoot: HTMLElement,
   pageRefs: Map<number, HTMLDivElement>
 ): HTMLElement | null => {
   const slotElement = pageRefs.get(pageNumber)
-  const htmlParserPageElement = slotElement
-    ? getHtmlParserPageElementFromSlot(slotElement)
-    : null
-
-  return (
-    htmlParserPageElement ??
-    slotElement ??
-    getHtmlParserPageElementByPageNumber(pageNumber, viewerRoot)
-  )
-}
-
-const resolveHtmlParserPageElement = (
-  htmlParserPageElement: Element,
-  viewerRoot: HTMLElement
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  if (!viewerRoot.contains(htmlParserPageElement)) return null
-
-  const pageElement = htmlParserPageElement as HTMLElement
-  const explicitPageNumber = getNumberFromDataPageNumber(pageElement)
-  if (explicitPageNumber !== null) {
-    return { pageElement, pageNumber: explicitPageNumber }
-  }
-
-  const pageElements = Array.from(
-    viewerRoot.querySelectorAll('.hamster-note-page')
-  )
-  const pageIndex = pageElements.indexOf(htmlParserPageElement)
-  return pageIndex === -1 ? null : { pageElement, pageNumber: pageIndex + 1 }
-}
-
-const getNearestHtmlParserPageForPoint = (
-  point: ClientPoint,
-  viewerRoot: HTMLElement
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  const pageElements = Array.from(
-    viewerRoot.querySelectorAll(HTML_PARSER_TEXT_ROOT_SELECTOR)
-  )
-
-  let nearestPageElement: Element | null = null
-  let minDistance = Infinity
-
-  for (const pageElement of pageElements) {
-    const distance = getPointToRectDistanceSquared(
-      point,
-      pageElement.getBoundingClientRect()
-    )
-    if (distance < minDistance) {
-      minDistance = distance
-      nearestPageElement = pageElement
-    }
-  }
-
-  return nearestPageElement
-    ? resolveHtmlParserPageElement(nearestPageElement, viewerRoot)
-    : null
-}
-
-const getHtmlParserPageForPoint = (
-  pointElement: Element | null,
-  viewerRoot: HTMLElement,
-  point: ClientPoint
-): { pageElement: HTMLElement; pageNumber: number } | null => {
-  if (!pointElement) {
-    return getNearestHtmlParserPageForPoint(point, viewerRoot)
-  }
-
-  const htmlParserPageElement = pointElement?.closest('.hamster-note-page')
-  if (!htmlParserPageElement) {
-    return null
-  }
-
-  return resolveHtmlParserPageElement(htmlParserPageElement, viewerRoot)
+  return slotElement && viewerRoot.contains(slotElement) ? slotElement : null
 }
 
 const getMarkedPageForPoint = (
@@ -242,9 +142,7 @@ export const getPageElementForPoint = (
   if (!viewerRoot) return null
 
   const pointElement = ownerDocument.elementFromPoint(clientX, clientY)
-  const point = { x: clientX, y: clientY }
   return (
-    getHtmlParserPageForPoint(pointElement, viewerRoot, point) ??
     getMarkedPageForPoint(pointElement, viewerRoot, pageRefs) ??
     getNearestPageForPoint(clientX, clientY, pageRefs)
   )
@@ -316,39 +214,6 @@ const getClosestTextElement = (
 
 const isValidCaretRange = (range: Range, viewerRoot: HTMLElement): boolean =>
   Boolean(getClosestTextElement(range.startContainer, viewerRoot))
-
-const getHtmlParserTextRoot = (
-  node: Node,
-  viewerRoot: HTMLElement
-): HTMLElement | null => {
-  if (node.nodeType !== Node.TEXT_NODE) return null
-
-  const element = getElementFromNode(node)
-  const htmlParserTextRoot = element?.closest(HTML_PARSER_TEXT_ROOT_SELECTOR)
-  if (!(htmlParserTextRoot instanceof HTMLElement)) return null
-  if (!viewerRoot.contains(htmlParserTextRoot)) return null
-  return htmlParserTextRoot
-}
-
-export const isHtmlParserSelectionTarget = (
-  node: Node | null,
-  viewerRoot: HTMLElement
-): boolean => {
-  const element = getElementFromNode(node)
-  if (!element || !viewerRoot.contains(element)) return false
-  if (element.matches('.hamster-note-page')) return false
-  if (isSelectionBackgroundTarget(element)) return false
-  return Boolean(element.closest(HTML_PARSER_TEXT_ROOT_SELECTOR))
-}
-
-const isValidHtmlParserCaretRange = (
-  range: Range,
-  viewerRoot: HTMLElement
-): boolean => {
-  const startRoot = getHtmlParserTextRoot(range.startContainer, viewerRoot)
-  const endRoot = getHtmlParserTextRoot(range.endContainer, viewerRoot)
-  return Boolean(startRoot && endRoot)
-}
 
 const buildSnapRange = (
   nearestElement: HTMLElement,
@@ -491,13 +356,6 @@ const resolveValidCaretRange = (
     return { range, pageNumber: pageInfo.pageNumber }
   }
 
-  if (
-    options.allowHtmlParserRange === true &&
-    isValidHtmlParserCaretRange(range, options.viewerRoot)
-  ) {
-    return { range, pageNumber: pageInfo.pageNumber }
-  }
-
   range.detach()
   return null
 }
@@ -558,9 +416,9 @@ export const isPointOnSelectionText = (
   if (isSelectionBackgroundTarget(pointElement)) return false
 
   const directTextElement = pointElement.closest('[data-text-id]')
-  if (directTextElement && viewerRoot.contains(directTextElement)) return true
-
-  return isHtmlParserSelectionTarget(pointElement, viewerRoot)
+  return Boolean(
+    directTextElement && viewerRoot.contains(directTextElement)
+  )
 }
 
 // 校验 caret API 返回的 range 是否落在指定的 nearest text 元素内。

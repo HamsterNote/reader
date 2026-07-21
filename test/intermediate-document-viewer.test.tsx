@@ -1,13 +1,24 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type {
-  IntermediateContent,
+import {
+  type IntermediateContent,
   IntermediateDocument,
-  IntermediateImage,
-  IntermediateText
+  type IntermediateImage,
+  IntermediatePage,
+  IntermediatePageMap,
+  IntermediateParagraph,
+  IntermediateText,
+  TextDir
 } from '@hamster-note/types'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react'
 import {
   createRef,
   isValidElement,
@@ -44,6 +55,7 @@ import {
   textElementRecords as serializerTextElementRecords
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer, Reader } from '../src/index'
+import type { ReaderComment } from '../src/types/comments'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -144,7 +156,9 @@ function requireReaderSelectionRef(
 type MockPage = {
   getContent: ReturnType<typeof vi.fn<() => Promise<IntermediateText[]>>>
   getThumbnail?: ReturnType<
-    typeof vi.fn<() => Promise<string | { src: string } | undefined>>
+    typeof vi.fn<
+      (scale?: number) => Promise<string | { src: string } | undefined>
+    >
   >
   thumbnail?: string | { src: string }
   image?: string
@@ -176,10 +190,12 @@ function makeText(id: string, content: string): IntermediateText {
 
 function makeDocument({
   pageCount = 3,
-  pageSize = { x: 100, y: 150 }
+  pageSize = { x: 100, y: 150 },
+  pageSizes
 }: {
   pageCount?: number
   pageSize?: { x?: number; y?: number }
+  pageSizes?: Readonly<Record<number, { x?: number; y?: number }>>
 } = {}) {
   const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1)
   const pages = new Map<number, MockPage>()
@@ -197,13 +213,47 @@ function makeDocument({
     title: 'Lazy Document',
     pageCount,
     pageNumbers,
-    getPageSizeByPageNumber: vi.fn(() => pageSize),
+    getPageSizeByPageNumber: vi.fn(
+      (pageNumber: number) => pageSizes?.[pageNumber] ?? pageSize
+    ),
     getPageByPageNumber: vi.fn((pageNumber: number) =>
       Promise.resolve(pages.get(pageNumber))
     )
   } as unknown as IntermediateDocument
 
   return { document, pages }
+}
+
+function makeReaderRange(
+  id: string,
+  text: string,
+  pageNumber = 1
+): ReaderSelectionRange {
+  const pageId = `page-${pageNumber}`
+
+  return {
+    id,
+    text,
+    start: { selectionId: pageId, offset: 0 },
+    end: { selectionId: pageId, offset: text.length },
+    createdAt: id.length,
+    overlayRectType: 'percent',
+    rectsBySelectionId: {
+      [pageId]: [{ x: 10, y: 20, width: 30, height: 10 }]
+    }
+  }
+}
+
+function makeReaderRect(id: string, pageNumber = 1): ReaderSelectionRectangle {
+  return {
+    id,
+    createdAt: id.length,
+    overlayRectType: 'percent',
+    start: { x: 10, y: 20 },
+    end: { x: 40, y: 60 },
+    selectionId: `page-${pageNumber}`,
+    rect: { x: 10, y: 20, width: 30, height: 40 }
+  }
 }
 
 type RectInput = {
@@ -402,52 +452,75 @@ const makeTextMetrics = (width: number): TextMetrics => ({
   ideographicBaseline: 0
 })
 
-const makeCollapsedRange = (node: Node, offset: number) => {
-  const range = document.createRange()
-  range.setStart(node, offset)
-  range.collapse(true)
-  return range
+const makeTxtLineText = (lineNumber: number, content: string) => {
+  const y = lineNumber - 1
+  return new IntermediateText({
+    id: `txt-parser-text-${lineNumber}`,
+    content,
+    fontSize: 1,
+    fontFamily: 'monospace',
+    fontWeight: 400,
+    italic: false,
+    color: '#000000',
+    polygon: [
+      [0, y],
+      [content.length, y],
+      [content.length, y + 1],
+      [0, y + 1]
+    ],
+    lineHeight: 1,
+    ascent: 0.8,
+    descent: 0.2,
+    dir: TextDir.LTR,
+    skew: 0,
+    isEOL: true
+  })
 }
 
-const makeHtmlParserCaretFixture = () => {
-  const viewerRoot = document.createElement('div')
-  viewerRoot.className = 'hamster-reader__intermediate-document-viewer'
+const makeTxtLineParagraph = (lineNumber: number, width: number) => {
+  const y = lineNumber - 1
+  return new IntermediateParagraph({
+    id: `txt-parser-paragraph-${lineNumber}`,
+    x: 0,
+    y,
+    width,
+    height: 1,
+    textIds: [`txt-parser-text-${lineNumber}`]
+  })
+}
 
-  const output = document.createElement('div')
-  output.className = 'hamster-reader__html-parser-output'
+function makePerLineTxtDocument(
+  lines: readonly string[]
+): IntermediateDocument {
+  const texts = lines.map((line, index) => makeTxtLineText(index + 1, line))
+  const paragraphs = texts.map((text, index) =>
+    makeTxtLineParagraph(index + 1, text.content.length)
+  )
+  const width = Math.max(...texts.map((text) => text.content.length), 1)
+  const height = Math.max(texts.length, 1)
+  const sourcePage = new IntermediatePage({
+    id: 'txt-parser-page-1',
+    number: 1,
+    width,
+    height,
+    content: [],
+    paragraphs,
+    getContentFn: async () => texts
+  })
 
-  const page = document.createElement('div')
-  page.className = 'hamster-note-page'
-  page.dataset.pageNumber = '1'
-
-  const paragraph = document.createElement('p')
-  paragraph.textContent = 'Native parsed text'
-  page.appendChild(paragraph)
-  output.appendChild(page)
-
-  viewerRoot.append(output)
-  document.body.appendChild(viewerRoot)
-
-  const outsideViewerRoot = document.createElement('div')
-  outsideViewerRoot.className = 'hamster-reader__intermediate-document-viewer'
-  const outsideOutput = document.createElement('div')
-  outsideOutput.className = 'hamster-reader__html-parser-output'
-  const outsidePage = document.createElement('div')
-  outsidePage.className = 'hamster-note-page'
-  const outsideParagraph = document.createElement('p')
-  outsideParagraph.textContent = 'Outside parsed text'
-  outsidePage.appendChild(outsideParagraph)
-  outsideOutput.appendChild(outsidePage)
-  outsideViewerRoot.appendChild(outsideOutput)
-  document.body.appendChild(outsideViewerRoot)
-
-  return {
-    viewerRoot,
-    page,
-    paragraph,
-    htmlTextNode: getRequiredTextNode(paragraph),
-    outsideTextNode: getRequiredTextNode(outsideParagraph)
-  }
+  return new IntermediateDocument({
+    id: 'txt-parser-document',
+    title: 'TXT Document',
+    outline: undefined,
+    pagesMap: IntermediatePageMap.makeByInfoList([
+      {
+        id: 'txt-parser-page-1',
+        pageNumber: 1,
+        size: { x: width, y: height },
+        getData: async () => sourcePage
+      }
+    ])
+  })
 }
 
 const makeSelectionFromRange = (range: Range) =>
@@ -723,36 +796,6 @@ describe('selection primitive modules', () => {
     }
   })
 
-  it('accepts native html-parser text ranges only when explicitly enabled', () => {
-    const { viewerRoot, page, paragraph, htmlTextNode } =
-      makeHtmlParserCaretFixture()
-    mockElementFromPoint(paragraph)
-
-    const result = resolveCaret(30, 15, {
-      viewerRoot,
-      pageRefs: new Map(),
-      textElements: new Map(),
-      allowHtmlParserRange: true,
-      caretPositionFromPoint: () => null,
-      caretRangeFromPoint: () => makeCollapsedRange(htmlTextNode, 6)
-    })
-
-    expect(result?.pageNumber).toBe(1)
-    expect(result?.range.startContainer).toBe(htmlTextNode)
-    expect(result?.range.startOffset).toBe(6)
-
-    const directModeResult = resolveCaret(30, 15, {
-      viewerRoot,
-      pageRefs: new Map(),
-      textElements: new Map(),
-      caretPositionFromPoint: () => null,
-      caretRangeFromPoint: () => makeCollapsedRange(htmlTextNode, 6)
-    })
-
-    expect(directModeResult).toBeNull()
-    expect(page.dataset.pageNumber).toBe('1')
-  })
-
   it('composes a real DOM Selection and orders reversed endpoints', () => {
     const host = document.createElement('div')
     host.textContent = 'abcdef'
@@ -791,6 +834,117 @@ describe('IntermediateDocumentViewer', () => {
     expect(IntermediateDocumentViewer).toBeTypeOf('function')
   })
 
+  it('derives PageBrowser range comment badges from controlled comments when no explicit range count map is provided', async () => {
+    // Given：两个受控评论绑定到同一个文本高亮 ID，宿主没有传显式 range 计数 map。
+    const { document } = makeDocument({ pageCount: 1 })
+    const comments: readonly ReaderComment[] = [
+      {
+        id: 'comment-1',
+        highlightIds: ['range-1'],
+        content: '第一条评论',
+        createdAt: 1,
+        parentId: null
+      },
+      {
+        id: 'comment-2',
+        highlightIds: ['range-1'],
+        content: '第二条评论',
+        createdAt: 2,
+        parentId: null
+      }
+    ]
+
+    // When：打开 page-browser 的高亮面板。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        ranges={[makeReaderRange('range-1', '带评论的高亮')]}
+        comments={comments}
+      />
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '高亮' }))
+
+    // Then：高亮项展示由 comments 推导出的评论数量。
+    const highlightItem = await screen.findByTestId(
+      'page-browser-highlight-range-1'
+    )
+    expect(within(highlightItem).getByLabelText('2 条评论')).toBeInTheDocument()
+  })
+
+  it('keeps explicit PageBrowser range comment count map above controlled comments', async () => {
+    // Given：comments 中有 2 条评论，但宿主显式传入 range 计数为 7。
+    const { document } = makeDocument({ pageCount: 1 })
+    const comments: readonly ReaderComment[] = [
+      {
+        id: 'comment-1',
+        highlightIds: ['range-1'],
+        content: '第一条评论',
+        createdAt: 1,
+        parentId: null
+      },
+      {
+        id: 'comment-2',
+        highlightIds: ['range-1'],
+        content: '第二条评论',
+        createdAt: 2,
+        parentId: null
+      }
+    ]
+
+    // When：同时传入 comments 和显式 commentCountByRangeId。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        ranges={[makeReaderRange('range-1', '显式计数优先')]}
+        comments={comments}
+        commentCountByRangeId={{ 'range-1': 7 }}
+      />
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '高亮' }))
+
+    // Then：PageBrowser 展示显式计数，证明兼容旧的计数 prop 优先级。
+    const highlightItem = await screen.findByTestId(
+      'page-browser-highlight-range-1'
+    )
+    expect(within(highlightItem).getByLabelText('7 条评论')).toBeInTheDocument()
+    expect(
+      within(highlightItem).queryByLabelText('2 条评论')
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not derive PageBrowser rect comment badges from controlled comments', async () => {
+    // Given：受控评论绑定到一个矩形 ID，但没有显式 rect 计数 map。
+    const { document } = makeDocument({ pageCount: 1 })
+    const comments: readonly ReaderComment[] = [
+      {
+        id: 'comment-1',
+        highlightIds: ['rect-1'],
+        content: '矩形评论不自动推导',
+        createdAt: 1,
+        parentId: null
+      }
+    ]
+
+    // When：打开包含矩形项的高亮面板。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        rects={[makeReaderRect('rect-1')]}
+        comments={comments}
+      />
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '高亮' }))
+
+    // Then：矩形项不会展示由 comments 推导出的徽章。
+    const rectItem = await screen.findByTestId('page-browser-rect-rect-1')
+    expect(
+      within(rectItem).queryByLabelText('1 条评论')
+    ).not.toBeInTheDocument()
+  })
+
   it('forwards containMarginX and containMarginY to VirtualPaper', async () => {
     const { document } = makeDocument({ pageCount: 1 })
 
@@ -805,6 +959,48 @@ describe('IntermediateDocumentViewer', () => {
     const container = await screen.findByTestId('virtual-paper-container')
     expect(container).toHaveAttribute('data-contain-margin-x', '24')
     expect(container).toHaveAttribute('data-contain-margin-y', '48')
+  })
+
+  it('stretches pages with different source sizes to the same preview width', async () => {
+    // Given：两页源尺寸不同，第一页比第二页窄，但都具有有效纵横比。
+    const { document } = makeDocument({
+      pageCount: 2,
+      pageSizes: {
+        1: { x: 100, y: 200 },
+        2: { x: 200, y: 300 }
+      }
+    })
+
+    // When：在 layout 预览中渲染两个页面外壳。
+    render(
+      <IntermediateDocumentViewer document={document} initialLoadedPages={2} />
+    )
+
+    await screen.findByText('Page 2 text')
+
+    // Then：两页均采用最宽页面的 200px 视觉宽度，并按各自纵横比调整高度。
+    expect(screen.getByTestId('intermediate-page-1')).toHaveStyle({
+      width: '200px',
+      height: '400px'
+    })
+    expect(screen.getByTestId('intermediate-page-2')).toHaveStyle({
+      width: '200px',
+      height: '300px'
+    })
+    expect(screen.getByTestId('intermediate-page-content-scale-1')).toHaveStyle(
+      {
+        width: '100px',
+        height: '200px',
+        transform: 'scale(2)'
+      }
+    )
+    expect(screen.getByTestId('intermediate-page-content-scale-2')).toHaveStyle(
+      {
+        width: '200px',
+        height: '300px',
+        transform: 'scale(1)'
+      }
+    )
   })
 
   it('only fits the page during initialization and preserves later zoom', async () => {
@@ -1122,6 +1318,154 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
+  it('text mode preserves txt empty lines as bare br elements', async () => {
+    const document = makePerLineTxtDocument(['A', '', 'B'])
+
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+    const page = await screen.findByTestId('intermediate-text-page-1')
+
+    expect(screen.getByText('A')).toHaveAttribute(
+      'data-text-id',
+      'txt-parser-text-1'
+    )
+    expect(screen.getByText('B')).toHaveAttribute(
+      'data-text-id',
+      'txt-parser-text-3'
+    )
+    expect(
+      page.querySelector('[data-text-id="txt-parser-text-2"]')
+    ).not.toBeInTheDocument()
+    expect(page.querySelectorAll('br')).toHaveLength(3)
+  })
+
+  it('layout mode paginates large txt documents into visible synthetic pages', async () => {
+    const document = makePerLineTxtDocument(
+      Array.from({ length: 501 }, (_, index) => `Line ${index + 1}`)
+    )
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        pageLoadConcurrency={2}
+      />
+    )
+
+    const page1 = screen.getByTestId('intermediate-page-1')
+    const page2 = screen.getByTestId('intermediate-page-2')
+    expect(page1).toHaveAttribute('data-page-number', '1')
+    expect(page2).toHaveAttribute('data-page-number', '2')
+    expect(page1.getAttribute('data-selection-id')).toMatch(/:page-1$/)
+    expect(page2.getAttribute('data-selection-id')).toMatch(/:page-2$/)
+
+    await screen.findByText('Line 501')
+
+    expect(screen.getByText('Line 1')).toHaveAttribute(
+      'data-text-id',
+      'txt-parser-text-1'
+    )
+    expect(screen.getByText('Line 501')).toHaveAttribute(
+      'data-text-id',
+      'txt-parser-text-501'
+    )
+    expect(screen.getByText('Line 501')).toHaveAttribute(
+      'data-page-number',
+      '2'
+    )
+  })
+
+  it('text mode paginates large txt documents into virtual synthetic pages', async () => {
+    const document = makePerLineTxtDocument(
+      Array.from({ length: 501 }, (_, index) => `Line ${index + 1}`)
+    )
+
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 800,
+      scrollHeight: 1600
+    })
+
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    mockElementSize(page1, { width: 800, height: 800 })
+
+    act(() => {
+      scrollEl.scrollTop = 800
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    const page2 = await screen.findByTestId('intermediate-text-page-2')
+    mockElementSize(page2, { width: 800, height: 800 })
+
+    await screen.findByText('Line 501')
+
+    expect(page1).toHaveAttribute('data-page-number', '1')
+    expect(page2).toHaveAttribute('data-page-number', '2')
+    expect(screen.getByText('Line 501')).toHaveAttribute(
+      'data-text-id',
+      'txt-parser-text-501'
+    )
+    expect(screen.getByText('Line 501')).toHaveAttribute(
+      'data-page-number',
+      '2'
+    )
+  })
+
+  it('selection payload on a synthetic txt page keeps page number stable', async () => {
+    const onTextSelectionEnd = vi.fn()
+    const document = makePerLineTxtDocument(
+      Array.from({ length: 501 }, (_, index) => `Line ${index + 1}`)
+    )
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        pageLoadConcurrency={2}
+        onTextSelectionEnd={onTextSelectionEnd}
+      />
+    )
+
+    const textSpan = await screen.findByText('Line 501')
+    expect(textSpan).toHaveAttribute('data-text-id', 'txt-parser-text-501')
+    expect(textSpan).toHaveAttribute('data-page-number', '2')
+
+    const page2 = screen.getByTestId('intermediate-page-2')
+    expect(page2.getAttribute('data-selection-id')).toMatch(/:page-2$/)
+
+    const textNode = textSpan.firstChild
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Expected text span to contain a text node')
+    }
+    const range = globalThis.document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, 'Line 501'.length)
+    const selection = makeSelectionFromRange(range)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(selection)
+
+    try {
+      screen
+        .getByTestId('intermediate-document-viewer')
+        .dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+
+      expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+      const [selectedText, detail] = onTextSelectionEnd.mock.calls[0]
+      expect(selectedText.id).toBe('txt-parser-text-501')
+      expect(detail.selectedText).toBe('Line 501')
+      expect(detail.pageNumber).toBe(2)
+    } finally {
+      getSelectionSpy.mockRestore()
+    }
+  })
+
   it('text mode mounted selection callbacks', async () => {
     const onTextSelectionChange = vi.fn()
     const onTextSelectionEnd = vi.fn()
@@ -1236,6 +1580,671 @@ describe('IntermediateDocumentViewer', () => {
     }
   })
 
+  it('text mode mounts linked Selection only for loaded virtual pages', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 2 })
+    const range = makeReaderRange(
+      'text-mode-mounted-range',
+      'Text mode mounted range'
+    )
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        highlightColor='#ffe066'
+        selectionColor='#4dabf7'
+        overlayRectType='percent'
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    mockElementSize(page1, { width: 800, height: 800 })
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+    const selectionProps = requireSelectionPropsById(runtimeSelectionId)
+
+    expect(selectionProps.linkedMode).toBe(true)
+    expect(selectionProps.linkedData?.items[0]?.id).toBe(range.id)
+    expect(selectionProps.linkedData?.items[0]?.start.selectionId).toBe(
+      runtimeSelectionId
+    )
+    expect(selectionProps.selectedRangeId).toBe(range.id)
+    expect(selectionProps.highlightColor).toBe('#ffe066')
+    expect(selectionProps.selectionColor).toBe('#4dabf7')
+    expect(selectionProps.overlayRectType).toBe('percent')
+    expect(selectionProps.tool).toBe('text')
+    expect(selectionProps.ranges).toEqual([])
+    expect(selectionProps.onSelect).toBeUndefined()
+    expect(selectionProps.onSelectRange).toBeUndefined()
+    expect(selectionProps.onUpdateRange).toBeUndefined()
+    expect(selectionProps.onHighlight).toBeUndefined()
+    expect(selectionProps.rects).toBeUndefined()
+    expect(selectionProps.onCreateRect).toBeUndefined()
+    expect(screen.queryByTestId('intermediate-text-page-2')).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+    clearSelectionProps()
+  })
+
+  it('text mode forwards popovers and comment wrapper to loaded Selection pages', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+    const range = makeReaderRange('text-mode-popover-range', 'Popover range')
+    const selectionPopover = <div data-testid='text-selection-popover'>SP</div>
+    const resolvedHighlightPopover = (
+      <div data-testid='text-highlight-popover'>HP</div>
+    )
+    const highlightPopover = vi.fn(() => resolvedHighlightPopover)
+    const onCommentHighlight = vi.fn(async (highlight: ReaderSelectionRange) =>
+      highlight
+    )
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+        onCommentHighlight={onCommentHighlight}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+    const props = requireSelectionPropsById(runtimeSelectionId)
+
+    expect(highlightPopover).toHaveBeenCalledWith(range)
+    if (!isValidElement<{ children?: ReactNode }>(props.popover)) {
+      throw new Error('Expected selected popover portal')
+    }
+    const selectedPopoverContent = props.popover.props.children
+    if (!isValidElement<{ children?: ReactNode }>(selectedPopoverContent)) {
+      throw new Error('Expected selected highlight wrapper')
+    }
+    expect(selectedPopoverContent.props.children).toEqual(
+      expect.arrayContaining([resolvedHighlightPopover])
+    )
+    expectPopoverToContain(props.selectionPopover, selectionPopover)
+    clearSelectionProps()
+  })
+
+  it('text mode renders custom RangeHandle with scale 1', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+    const renderHandle = requireSelectionPropsById(runtimeSelectionId).renderHandle
+    if (!renderHandle) {
+      throw new Error('Expected text mode renderHandle')
+    }
+
+    const handle = {
+      owner: 'active-selection',
+      rangeId: null,
+      target: 'text',
+      rectId: null,
+      positionUnit: 'percent',
+      isDragging: false,
+      onPointerDown: vi.fn(),
+      className: 'hsn-selection-handle',
+      style: { background: '#ff4fa3' },
+      type: 'start',
+      position: { x: 10, y: 24 },
+      ariaLabel: 'text mode start handle'
+    } satisfies HandleRenderProps
+
+    render(<>{renderHandle(handle)}</>)
+
+    expect(
+      screen.getByRole('button', { name: 'text mode start handle' })
+    ).toHaveStyle({ transform: 'translate(-50%, -50%) scale(1)' })
+    clearSelectionProps()
+  })
+
+  it('text mode selectionRef highlight and clear target mounted page Selection refs', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const range = makeReaderRange('text-mode-clear-range', 'Clear range')
+    const onLinkedDataChange = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        defaultRanges={[range]}
+        defaultSelectedRangeId={range.id}
+        selectionRef={selectionRef}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+
+    act(() => {
+      selectionRef.current?.highlight()
+    })
+    expect(getSelectionRefCallCounts(runtimeSelectionId).highlight).toBe(1)
+
+    act(() => {
+      selectionRef.current?.clear()
+    })
+
+    expect(getSelectionRefCallCounts(runtimeSelectionId).clear).toBe(1)
+    expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: [],
+        selectedRangeId: null,
+        activeRange: null
+      })
+    )
+    await waitFor(() => {
+      expect(requireSelectionPropsById(runtimeSelectionId).selectedRangeId).toBe(
+        null
+      )
+      expect(requireSelectionPropsById(runtimeSelectionId).linkedData?.items).toEqual(
+        []
+      )
+    })
+    clearSelectionProps()
+  })
+
+  it('text mode selectionRef scrollToRange uses native virtual scrolling', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 3 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const targetRange = makeReaderRange(
+      'text-mode-scroll-range',
+      'Scroll target',
+      3
+    )
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        ranges={[targetRange]}
+        selectionRef={selectionRef}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2400
+    })
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => {
+      expect(selectionRef.current).not.toBeNull()
+    })
+
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView
+    })
+    const scrollTo = vi.fn((options?: ScrollToOptions) => {
+      scrollEl.scrollTop = options?.top ?? 0
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+
+    try {
+      act(() => {
+        selectionRef.current?.scrollToRange(targetRange.id)
+      })
+
+      const page3 = await screen.findByTestId('intermediate-text-page-3')
+      mockElementSize(page3, { width: 800, height: 800, top: 1600 })
+
+      await waitFor(() => {
+        expect(scrollTo).toHaveBeenCalled()
+        expect(scrollIntoView).toHaveBeenCalledWith({
+          block: 'center',
+          inline: 'nearest'
+        })
+      })
+    } finally {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          'scrollIntoView',
+          scrollIntoViewDescriptor
+        )
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+      }
+    }
+
+    clearSelectionProps()
+  })
+
+  it('text mode bridges linked Selection callbacks to public page ids', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+    const onLinkedDataChange = vi.fn()
+    const onLinkedSelect = vi.fn()
+    const onLinkedUpdateRange = vi.fn()
+    const onLinkedSelectRange = vi.fn()
+    const onSelect = vi.fn()
+    const onUpdateRange = vi.fn()
+    const onSelectRange = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onLinkedDataChange={onLinkedDataChange}
+        onLinkedSelect={onLinkedSelect}
+        onLinkedUpdateRange={onLinkedUpdateRange}
+        onLinkedSelectRange={onLinkedSelectRange}
+        onSelect={onSelect}
+        onUpdateRange={onUpdateRange}
+        onSelectRange={onSelectRange}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    mockElementSize(page1, { width: 800, height: 800 })
+
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+    const runtimeRange = makeRuntimeLinkedRange(runtimeSelectionId, {
+      id: 'text-mode-linked-range'
+    })
+    const linkedData = requireSelectionPropsById(runtimeSelectionId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    await act(async () => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...linkedData,
+        items: [runtimeRange],
+        selectedRangeId: runtimeRange.id
+      })
+      simulateLinkedSelect(runtimeSelectionId, runtimeRange)
+      simulateLinkedUpdateRange(runtimeSelectionId, runtimeRange)
+      simulateLinkedSelectRange(runtimeSelectionId, runtimeRange.id)
+    })
+
+    expect(onLinkedDataChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedRangeId: runtimeRange.id,
+        items: [
+          expect.objectContaining({
+            start: { selectionId: 'page-1', offset: 0 }
+          })
+        ]
+      })
+    )
+    expect(onLinkedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ start: { selectionId: 'page-1', offset: 0 } })
+    )
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ start: { selectionId: 'page-1', offset: 0 } })
+    )
+    expect(onLinkedUpdateRange).toHaveBeenCalledWith(
+      expect.objectContaining({ start: { selectionId: 'page-1', offset: 0 } })
+    )
+    expect(onUpdateRange).toHaveBeenCalledWith(
+      expect.objectContaining({ start: { selectionId: 'page-1', offset: 0 } })
+    )
+    expect(onLinkedSelectRange).toHaveBeenCalledWith(runtimeRange.id)
+    expect(onSelectRange).toHaveBeenCalledWith(runtimeRange.id)
+    clearSelectionProps()
+  })
+
+  it('text mode supports controlled and uncontrolled ranges', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+    const uncontrolledRange = makeReaderRange(
+      'text-mode-uncontrolled-range',
+      'Uncontrolled text range'
+    )
+
+    const { unmount } = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        defaultRanges={[uncontrolledRange]}
+        defaultSelectedRangeId={uncontrolledRange.id}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    await screen.findByTestId('intermediate-text-page-1')
+    const uncontrolledRuntimeId = await waitFor(() =>
+      requireRuntimeSelectionId(':page-1')
+    )
+    const uncontrolledLinkedData =
+      requireSelectionPropsById(uncontrolledRuntimeId).linkedData
+    if (!uncontrolledLinkedData) {
+      throw new Error('Expected uncontrolled linkedData')
+    }
+
+    expect(uncontrolledLinkedData.selectedRangeId).toBe(uncontrolledRange.id)
+    expect(uncontrolledLinkedData.items).toEqual([
+      expect.objectContaining({
+        id: uncontrolledRange.id,
+        start: { selectionId: uncontrolledRuntimeId, offset: 0 },
+        end: {
+          selectionId: uncontrolledRuntimeId,
+          offset: uncontrolledRange.text.length
+        },
+        rectsBySelectionId: {
+          [uncontrolledRuntimeId]: uncontrolledRange.rectsBySelectionId['page-1']
+        }
+      })
+    ])
+
+    unmount()
+    clearSelectionProps()
+
+    const controlledRange = makeReaderRange(
+      'text-mode-controlled-range',
+      'Controlled text range'
+    )
+    const onLinkedDataChange = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        ranges={[controlledRange]}
+        selectedRangeId={controlledRange.id}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    const controlledScrollEl = screen.getByTestId(
+      'intermediate-document-text-viewer'
+    )
+    setScrollContainerSize(controlledScrollEl, { width: 800, height: 600 })
+    await screen.findByTestId('intermediate-text-page-1')
+    const controlledRuntimeId = await waitFor(() =>
+      requireRuntimeSelectionId(':page-1')
+    )
+    const controlledLinkedData =
+      requireSelectionPropsById(controlledRuntimeId).linkedData
+    if (!controlledLinkedData) {
+      throw new Error('Expected controlled linkedData')
+    }
+    const nextRuntimeRange = makeRuntimeLinkedRange(controlledRuntimeId, {
+      id: 'text-mode-controlled-next-range',
+      text: 'Next controlled range'
+    })
+
+    act(() => {
+      simulateLinkedDataChange(controlledRuntimeId, {
+        ...controlledLinkedData,
+        items: [...controlledLinkedData.items, nextRuntimeRange],
+        selectedRangeId: nextRuntimeRange.id
+      })
+    })
+
+    expect(onLinkedDataChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedRangeId: nextRuntimeRange.id,
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: nextRuntimeRange.id,
+            start: { selectionId: 'page-1', offset: 0 }
+          })
+        ])
+      })
+    )
+    const controlledPropsAfterChange = requireSelectionPropsById(controlledRuntimeId)
+    expect(controlledPropsAfterChange.linkedData?.selectedRangeId).toBe(
+      controlledRange.id
+    )
+    expect(controlledPropsAfterChange.linkedData?.items).toEqual([
+      expect.objectContaining({
+        id: controlledRange.id,
+        start: { selectionId: controlledRuntimeId, offset: 0 }
+      })
+    ])
+    clearSelectionProps()
+  })
+
+  it('text mode autoHighlight emits onHighlight for new range', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+    const onHighlight = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        autoHighlight
+        onHighlight={onHighlight}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    const textSpan = await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+    const selectionProps = requireSelectionPropsById(runtimeSelectionId)
+    const linkedData = selectionProps.linkedData
+    if (!linkedData) {
+      throw new Error('Expected text mode linkedData')
+    }
+    if (!selectionProps.onSelectionEnd) {
+      throw new Error('Expected text mode onSelectionEnd handler')
+    }
+    const range = globalThis.document.createRange()
+    range.setStart(getRequiredTextNode(textSpan), 0)
+    range.setEnd(getRequiredTextNode(textSpan), 'Page 1 text'.length)
+    const selection = makeSelectionFromRange(range)
+    const newRuntimeRange = makeRuntimeLinkedRange(runtimeSelectionId, {
+      id: 'text-mode-auto-highlight-range',
+      text: 'Page 1 text',
+      end: { selectionId: runtimeSelectionId, offset: 'Page 1 text'.length }
+    })
+
+    act(() => {
+      selectionProps.onSelectionEnd?.({ x: 16, y: 24 }, selection)
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...linkedData,
+        items: [...linkedData.items, newRuntimeRange],
+        selectedRangeId: newRuntimeRange.id,
+        activeRange: null
+      })
+    })
+
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    expect(onHighlight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: newRuntimeRange.id,
+        text: 'Page 1 text',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 'Page 1 text'.length },
+        rectsBySelectionId: {
+          'page-1': newRuntimeRange.rectsBySelectionId[runtimeSelectionId]
+        }
+      })
+    )
+    clearSelectionProps()
+  })
+
+  it('text mode maps multi-page linked ranges to public page ids', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 2 })
+    const onLinkedDataChange = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        initialLoadedPages={2}
+        pageLoadConcurrency={2}
+        pageLoadEnterDelayMs={0}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 1600,
+      scrollHeight: 1600
+    })
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    const page2 = await screen.findByTestId('intermediate-text-page-2')
+    mockElementSize(page1, { width: 800, height: 800 })
+    mockElementSize(page2, { width: 800, height: 800, top: 800 })
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(2)
+    })
+    const runtimePage1Id = requireRuntimeSelectionId(':page-1')
+    const runtimePage2Id = requireRuntimeSelectionId(':page-2')
+    const linkedData = requireSelectionPropsById(runtimePage1Id).linkedData
+    if (!linkedData) {
+      throw new Error('Expected page 1 linkedData')
+    }
+    const spanningRange = makeRuntimeLinkedRange(runtimePage1Id, {
+      id: 'text-mode-multi-page-range',
+      text: 'Page 1 to page 2',
+      end: { selectionId: runtimePage2Id, offset: 11 },
+      rectsBySelectionId: {
+        [runtimePage1Id]: [{ x: 1, y: 2, width: 3, height: 4 }],
+        [runtimePage2Id]: [{ x: 5, y: 6, width: 7, height: 8 }]
+      }
+    })
+
+    act(() => {
+      simulateLinkedDataChange(runtimePage1Id, {
+        ...linkedData,
+        items: [spanningRange],
+        selectedRangeId: spanningRange.id
+      })
+    })
+
+    expect(onLinkedDataChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            id: spanningRange.id,
+            start: { selectionId: 'page-1', offset: 0 },
+            end: { selectionId: 'page-2', offset: 11 },
+            rectsBySelectionId: {
+              'page-1': spanningRange.rectsBySelectionId[runtimePage1Id],
+              'page-2': spanningRange.rectsBySelectionId[runtimePage2Id]
+            }
+          })
+        ]
+      })
+    )
+    clearSelectionProps()
+  })
+
+  it('text mode legacy callbacks fire alongside linked selection without duplication', async () => {
+    clearSelectionProps()
+    const { document } = makeDocument({ pageCount: 1 })
+    const onTextSelectionEnd = vi.fn()
+    const onSelectText = vi.fn()
+    const onSelectionEnd = vi.fn()
+    const onSelect = vi.fn()
+    const onHighlight = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onTextSelectionEnd={onTextSelectionEnd}
+        onSelectText={onSelectText}
+        onSelectionEnd={onSelectionEnd}
+        onSelect={onSelect}
+        onHighlight={onHighlight}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    const textSpan = await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const range = globalThis.document.createRange()
+    range.setStart(getRequiredTextNode(textSpan), 0)
+    range.setEnd(getRequiredTextNode(textSpan), 'Page 1 text'.length)
+    const selection = makeSelectionFromRange(range)
+    const getSelectionSpy = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue(selection)
+
+    try {
+      fireEvent.mouseUp(scrollEl)
+
+      expect(onTextSelectionEnd).toHaveBeenCalledTimes(1)
+      expect(onTextSelectionEnd).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'text-1' }),
+        expect.objectContaining({
+          selectedText: 'Page 1 text',
+          pageNumber: 1,
+          selection
+        })
+      )
+      expect(onSelectText).toHaveBeenCalledTimes(1)
+      expect(onSelectText).toHaveBeenCalledWith(
+        selection,
+        [
+          expect.objectContaining({
+            id: 'text-1',
+            selectedText: 'Page 1 text',
+            pageNumber: 1
+          })
+        ],
+        'Page 1 text'
+      )
+      expect(onSelectionEnd).not.toHaveBeenCalled()
+      expect(onSelect).not.toHaveBeenCalled()
+      expect(onHighlight).not.toHaveBeenCalled()
+    } finally {
+      getSelectionSpy.mockRestore()
+      clearSelectionProps()
+    }
+  })
+
   // ---- T7: text-mode scoped SCSS styles ----
   // 验证文本模式的静态布局样式已从 inline 迁移到 SCSS class，
   // 且 layout 模式不受影响。注入 reader.scss 编译后的 CSS 使
@@ -1319,6 +2328,32 @@ describe('IntermediateDocumentViewer', () => {
       expect(inlineStyle).not.toContain('width')
     })
 
+    it('text mode selection wrappers stay content-height driven', async () => {
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} />)
+
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+      const page = await screen.findByTestId('intermediate-text-page-1')
+      const selectionContainer = page.querySelector('.hsn-selection-container')
+      const selectionContent = page.querySelector('.hsn-selection-content')
+      if (!(selectionContainer instanceof HTMLElement)) {
+        throw new Error('Expected text page Selection container')
+      }
+      if (!(selectionContent instanceof HTMLElement)) {
+        throw new Error('Expected text page Selection content')
+      }
+
+      expect(window.getComputedStyle(selectionContainer).position).toBe(
+        'relative'
+      )
+      expect(window.getComputedStyle(selectionContainer).minHeight).toBe('100%')
+      expect(window.getComputedStyle(selectionContent).position).toBe('relative')
+      expect(window.getComputedStyle(selectionContent).minHeight).toBe('100%')
+      expect(window.getComputedStyle(selectionContent).height).toBe('auto')
+    })
+
     it('text mode regression: layout mode renders VirtualPaper without text-mode classes', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       render(<IntermediateDocumentViewer document={document} />)
@@ -1351,8 +2386,6 @@ describe('IntermediateDocumentViewer', () => {
 
       // intermediate-document 默认分支仅渲染空外壳，不触发任何页面/内容加载
       expect(pages.get(1)?.getContent).not.toHaveBeenCalled()
-      // 外壳分支不渲染 html-parser-output
-      expect(screen.queryByTestId('html-parser-output')).not.toBeInTheDocument()
       expect(screen.getByTestId('intermediate-page-1')).toBeInTheDocument()
     })
 
@@ -1464,7 +2497,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(page1).toHaveAttribute('data-page-number', '1')
       expect(page1).toHaveAttribute('data-selection-id')
       expect(page1.getAttribute('data-selection-id')).toMatch(/:page-1$/)
-      expect(page1).toHaveStyle({ width: '100px', height: '150px' })
+      expect(page1).toHaveStyle({ width: '200px', height: '300px' })
 
       // 第二页返回了不同尺寸
       const page2 = screen.getByTestId('intermediate-page-2')
@@ -1473,7 +2506,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(page2.getAttribute('data-selection-id')).toMatch(/:page-2$/)
 
       const page3 = screen.getByTestId('intermediate-page-3')
-      expect(page3).toHaveStyle({ width: '100px', height: '150px' })
+      expect(page3).toHaveStyle({ width: '200px', height: '300px' })
     })
 
     it('shell uses the default intermediate path', () => {
@@ -1530,6 +2563,23 @@ describe('IntermediateDocumentViewer', () => {
 
       render(<IntermediateDocumentViewer document={document} />)
 
+      const page1 = screen.getByTestId('intermediate-page-1')
+      expect(page1).toHaveStyle({ width: '595px', height: '842px' })
+      expect(page1).toHaveAttribute('data-page-size-unavailable', 'true')
+    })
+
+    it('shell falls back to DEFAULT_PAGE_SIZE when page dimensions are not finite', () => {
+      // Given: 文档边界返回无法安全用于 CSS 与缩放计算的非有限尺寸。
+      const { document } = makeStrictLazyDocument({ pageCount: 1 })
+      vi.mocked(document.getPageSizeByPageNumber).mockReturnValue({
+        x: Number.POSITIVE_INFINITY,
+        y: Number.NaN
+      })
+
+      // When: Reader 创建页面预览外壳。
+      render(<IntermediateDocumentViewer document={document} />)
+
+      // Then: 非有限值被视为不可用，并统一回退到默认页面尺寸。
       const page1 = screen.getByTestId('intermediate-page-1')
       expect(page1).toHaveStyle({ width: '595px', height: '842px' })
       expect(page1).toHaveAttribute('data-page-size-unavailable', 'true')
@@ -1726,6 +2776,276 @@ describe('IntermediateDocumentViewer', () => {
         )
       })
       expect(page.getThumbnail).toHaveBeenCalledTimes(1)
+    })
+
+    it('requests thumbnails at device-pixel resolution initially and after zoom', async () => {
+      // Given: a mobile display with a non-integer DPR and a scalable PDF page.
+      const devicePixelRatioDescriptor = Object.getOwnPropertyDescriptor(
+        window,
+        'devicePixelRatio'
+      )
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        value: 2.625
+      })
+      const getThumbnail = vi.fn(
+        async (thumbnailScale: number) =>
+          `data:image/png;base64,thumb-${thumbnailScale}`
+      )
+      const document = makeContentTestDocument({
+        getContent: vi.fn(async () => []),
+        getThumbnail
+      })
+
+      try {
+        render(
+          <IntermediateDocumentViewer document={document} defaultScale={1} />
+        )
+
+        // When: the initial page loads at CSS scale 1.
+        await waitFor(() => {
+          expect(getThumbnail).toHaveBeenCalled()
+        })
+
+        // Then: the requested bitmap covers every physical display pixel.
+        expect(getThumbnail).toHaveBeenLastCalledWith(2.625)
+
+        await act(async () => {
+          intersectionObserverMock.trigger(
+            screen.getByTestId('intermediate-page-1')
+          )
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 0, y: 0, scale: 2 }
+          )
+        })
+        await waitFor(() => {
+          expect(getThumbnail).toHaveBeenLastCalledWith(5.25)
+        })
+
+        // Then: zoom refresh preserves the same physical-pixel coverage.
+        expect(getThumbnail).toHaveBeenLastCalledWith(5.25)
+      } finally {
+        if (devicePixelRatioDescriptor) {
+          Object.defineProperty(
+            window,
+            'devicePixelRatio',
+            devicePixelRatioDescriptor
+          )
+        } else {
+          Reflect.deleteProperty(window, 'devicePixelRatio')
+        }
+      }
+    })
+
+    it('requests a stretched page thumbnail from its transformed DOM width after zoom', async () => {
+      // Given: page 1 is stretched from 100px to the shared 200px preview width.
+      const devicePixelRatioDescriptor = Object.getOwnPropertyDescriptor(
+        window,
+        'devicePixelRatio'
+      )
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        value: 1
+      })
+      const { document, pages } = makeDocument({
+        pageCount: 2,
+        pageSizes: {
+          1: { x: 100, y: 200 },
+          2: { x: 200, y: 300 }
+        }
+      })
+      const firstPage = pages.get(1)
+      if (!firstPage) {
+        throw new Error('Expected page 1 fixture')
+      }
+      const getThumbnail = vi.fn(
+        async (thumbnailScale?: number) =>
+          `data:image/png;base64,thumb-${String(thumbnailScale)}`
+      )
+      firstPage.getThumbnail = getThumbnail
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={1}
+            initialLoadedPages={2}
+          />
+        )
+        await waitFor(() => {
+          expect(getThumbnail).toHaveBeenCalled()
+        })
+        expect(getThumbnail).toHaveBeenLastCalledWith(2)
+        const firstPageElement = screen.getByTestId('intermediate-page-1')
+
+        // When: VirtualPaper doubles the page again, yielding a 400px DOM width.
+        mockElementRect(firstPageElement, {
+          left: 0,
+          top: 0,
+          width: 400,
+          height: 800
+        })
+        await act(async () => {
+          intersectionObserverMock.trigger(firstPageElement)
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 0, y: 0, scale: 2 }
+          )
+        })
+
+        // Then: getThumbnail receives DOM width / PDF source width = 400 / 100.
+        await waitFor(() => {
+          expect(getThumbnail).toHaveBeenLastCalledWith(4)
+        })
+      } finally {
+        if (devicePixelRatioDescriptor) {
+          Object.defineProperty(
+            window,
+            'devicePixelRatio',
+            devicePixelRatioDescriptor
+          )
+        } else {
+          Reflect.deleteProperty(window, 'devicePixelRatio')
+        }
+      }
+    })
+
+    it('requests the final enlarged thumbnail immediately when zoom ends', async () => {
+      // Given: a loaded page currently has a scale-2 thumbnail.
+      const { document, pages } = makeDocument({
+        pageCount: 2,
+        pageSizes: {
+          1: { x: 100, y: 200 },
+          2: { x: 200, y: 300 }
+        }
+      })
+      const firstPage = pages.get(1)
+      if (!firstPage) {
+        throw new Error('Expected page 1 fixture')
+      }
+      const getThumbnail = vi.fn(
+        async (thumbnailScale?: number) =>
+          `data:image/png;base64,thumb-${String(thumbnailScale)}`
+      )
+      firstPage.getThumbnail = getThumbnail
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          defaultScale={1}
+          initialLoadedPages={2}
+        />
+      )
+      await waitFor(() => {
+        expect(getThumbnail).toHaveBeenLastCalledWith(2)
+      })
+      const firstPageElement = screen.getByTestId('intermediate-page-1')
+      const virtualPaperContainer = screen.getByTestId(
+        'virtual-paper-container'
+      )
+      mockElementRect(firstPageElement, {
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800
+      })
+      intersectionObserverMock.trigger(firstPageElement)
+
+      vi.useFakeTimers()
+      try {
+        // When: the zoom gesture reaches scale 2 and emits its end event.
+        await act(async () => {
+          VirtualPaper.__triggerTransform(virtualPaperContainer, {
+            x: 0,
+            y: 0,
+            scale: 2
+          })
+          VirtualPaper.__triggerTransformEnd(virtualPaperContainer, {
+            x: 0,
+            y: 0,
+            scale: 2
+          })
+          await Promise.resolve()
+        })
+        await act(async () => {
+          vi.advanceTimersByTime(0)
+          await flushIntermediateDocumentMicrotasks()
+        })
+
+        // Then: the scale-4 bitmap request starts without the old 300ms wait.
+        expect(getThumbnail).toHaveBeenLastCalledWith(4)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('refreshes a page at its latest DOM scale when the initial thumbnail resolves after zoom', async () => {
+      // Given: the initial scale-2 thumbnail remains in flight while the page is zoomed.
+      const initialThumbnailDeferred = {
+        resolve: (_src: string) => {}
+      }
+      const initialThumbnail = new Promise<string>((resolve) => {
+        initialThumbnailDeferred.resolve = resolve
+      })
+      const { document, pages } = makeDocument({
+        pageCount: 2,
+        pageSizes: {
+          1: { x: 100, y: 200 },
+          2: { x: 200, y: 300 }
+        }
+      })
+      const firstPage = pages.get(1)
+      if (!firstPage) {
+        throw new Error('Expected page 1 fixture')
+      }
+      const getThumbnail = vi.fn((thumbnailScale?: number) => {
+        if (thumbnailScale === 2) {
+          return initialThumbnail
+        }
+        return Promise.resolve(
+          `data:image/png;base64,thumb-${String(thumbnailScale)}`
+        )
+      })
+      firstPage.getThumbnail = getThumbnail
+
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          defaultScale={1}
+          initialLoadedPages={2}
+        />
+      )
+      await waitFor(() => {
+        expect(getThumbnail).toHaveBeenCalledWith(2)
+      })
+      const firstPageElement = screen.getByTestId('intermediate-page-1')
+      mockElementRect(firstPageElement, {
+        left: 0,
+        top: 0,
+        width: 400,
+        height: 800
+      })
+
+      // When: zoom debounce finishes before the old thumbnail request resolves.
+      await act(async () => {
+        intersectionObserverMock.trigger(firstPageElement)
+        VirtualPaper.__triggerTransform(
+          screen.getByTestId('virtual-paper-container'),
+          { x: 0, y: 0, scale: 2 }
+        )
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 350))
+      })
+      await act(async () => {
+        initialThumbnailDeferred.resolve('data:image/png;base64,thumb-2')
+      })
+
+      // Then: loading completion rechecks the page and requests its current scale 4.
+      await waitFor(() => {
+        expect(getThumbnail).toHaveBeenLastCalledWith(4)
+      })
     })
 
     it('renders IntermediateText spans from getContent() with correct text and geometry', async () => {
@@ -4454,48 +5774,9 @@ describe('IntermediateDocumentViewer', () => {
       const block = coarsePointerBlockMatch[1]
       expect(block).toContain('&__intermediate-text')
       expect(block).toContain('.hsn-selection-content &__intermediate-text')
-      expect(block).toContain('&__html-parser-output')
-      expect(block).toContain('&__html-parser-output .hamster-note-page')
-      expect(block).toContain('&__html-parser-output .hamster-note-page *')
       expect(block).toContain('user-select: none')
       expect(block).toContain('-webkit-user-select: none')
       expect(block).toContain('-webkit-touch-callout: none')
-    })
-
-    it('SCSS documents that html-parser backgrounds are CSS background-image and inherently unselectable', () => {
-      const scssSource = fs.readFileSync(
-        path.resolve(__dirname, '../src/styles/reader.scss'),
-        'utf-8'
-      )
-      // The html-parser renders backgrounds as CSS `background-image` on
-      // `.hamster-note-page` divs, not as separate DOM elements. CSS backgrounds
-      // are inherently unselectable — they are not DOM nodes.
-      expect(scssSource).toContain('background-image')
-      expect(scssSource).toContain('inherently unselectable')
-    })
-
-    it('SCSS enables text selection in html-parser output while keeping page shell non-selectable', () => {
-      const scssSource = fs.readFileSync(
-        path.resolve(__dirname, '../src/styles/reader.scss'),
-        'utf-8'
-      )
-      const htmlParserBlockStart = scssSource.indexOf('&__html-parser-output')
-      const htmlParserBlockEnd = scssSource.indexOf(
-        '&__intermediate-page',
-        htmlParserBlockStart
-      )
-      const htmlParserBlockMatch =
-        htmlParserBlockStart !== -1 && htmlParserBlockEnd !== -1
-          ? [scssSource.slice(htmlParserBlockStart, htmlParserBlockEnd)]
-          : null
-      expect(htmlParserBlockMatch).toBeTruthy()
-      if (!htmlParserBlockMatch) {
-        throw new Error('Expected html-parser-output SCSS block to exist')
-      }
-
-      const block = htmlParserBlockMatch[0]
-      expect(block).toContain('user-select: text')
-      expect(block).toContain('-webkit-user-select: text')
     })
 
     it('isSelectionBackgroundTarget returns true for base-image, background, and background-wrapper nodes', () => {
@@ -4598,7 +5879,7 @@ describe('selection pointer move guard', () => {
     const { document: readerDocument } = makeDocument({ pageCount: 1 })
     render(<IntermediateDocumentViewer document={readerDocument} />)
     const text = await screen.findByText('Page 1 text')
-    const pageId = requireRuntimeSelectionId(':page-1')
+    const pageId = await waitFor(() => requireRuntimeSelectionId(':page-1'))
     const linkedData = requireSelectionPropsById(pageId).linkedData
     if (!linkedData) throw new Error('Expected linked selection data')
 
@@ -5071,7 +6352,7 @@ describe('text range handle integration', () => {
     const { document } = makeDocument({ pageCount: 1 })
     render(<IntermediateDocumentViewer document={document} />)
     await screen.findByText('Page 1 text')
-    const pageId = requireRuntimeSelectionId(':page-1')
+    const pageId = await waitFor(() => requireRuntimeSelectionId(':page-1'))
     const initialLinkedData = requireSelectionPropsById(pageId).linkedData
     const renderHandle = requireSelectionPropsById(pageId).renderHandle
     if (!initialLinkedData || !renderHandle) {
@@ -5184,7 +6465,7 @@ describe('text range handle integration', () => {
 // 校验：实例数量、runtime id、共享 linkedData、popover gating、legacy 回调禁止通道。
 
 // ---- intermediate-document selection 与 OCR 回归测试（任务 7）----
-// 验证新增默认模式下 selection 行为与 html-parser 一致：
+// 验证默认 intermediate-document 模式下的 selection 行为：
 // - 已加载页面由 HamsterSelection linked-mode 包裹
 // - selection create/update/delete 回调正确桥接到公共 API
 // - popover 在包裹器内渲染
@@ -5361,6 +6642,131 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
 
     // Then: touch has the same blank-space deselection behavior as mouse click.
     expect(onSelectRange).toHaveBeenCalledWith(null)
+  })
+
+  it('selects an existing rectangle without starting a new rectangle in rect tool mode', async () => {
+    // Given: rect 工具处于激活状态，页面内已有一个持久矩形。
+    const onSelectRect = vi.fn()
+    const existingRect = makeReaderRect('existing-rect')
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        tool='rect'
+        rects={[existingRect]}
+        onSelectRect={onSelectRect}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    const page = screen.getByTestId('intermediate-page-1')
+    const selectionContainer = page.querySelector('.hsn-selection-container')
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('Expected the page selection container')
+    }
+    mockElementRect(page, { left: 0, top: 0, width: 100, height: 150 })
+    const dependencyPointerDown = vi.fn()
+    const dependencyClick = vi.fn()
+    selectionContainer.addEventListener('pointerdown', dependencyPointerDown)
+    selectionContainer.addEventListener('click', dependencyClick)
+
+    // When: 浏览器在已有矩形内依次派发 pointerdown 与 click。
+    fireEvent.pointerDown(selectionContainer, {
+      pointerType: 'mouse',
+      pointerId: 11,
+      button: 0,
+      clientX: 25,
+      clientY: 45
+    })
+    fireEvent.click(selectionContainer, {
+      button: 0,
+      clientX: 25,
+      clientY: 45
+    })
+
+    // Then: viewer 选中已有矩形，并拦截上游创建与二次 toggle 处理。
+    expect(onSelectRect).toHaveBeenCalledWith(existingRect.id)
+    expect(dependencyPointerDown).not.toHaveBeenCalled()
+    expect(dependencyClick).not.toHaveBeenCalled()
+  })
+
+  it('selects an existing px rectangle while the viewer defaults to percent coordinates', async () => {
+    // Given: 历史矩形使用 px 坐标，而 viewer 仍使用默认的 percent 新建坐标。
+    const onSelectRect = vi.fn()
+    const existingRect = {
+      ...makeReaderRect('existing-px-rect'),
+      overlayRectType: 'px' as const,
+      rect: { x: 100, y: 200, width: 300, height: 400 }
+    }
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 1000, y: 1500 }
+    })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        tool='rect'
+        rects={[existingRect]}
+        onSelectRect={onSelectRect}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    const page = screen.getByTestId('intermediate-page-1')
+    const selectionContainer = page.querySelector('.hsn-selection-container')
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('Expected the page selection container')
+    }
+    mockElementRect(page, { left: 0, top: 0, width: 100, height: 150 })
+
+    // When: pointerdown 落在按源页面尺寸换算后的 px 矩形内部。
+    fireEvent.pointerDown(selectionContainer, {
+      pointerType: 'mouse',
+      pointerId: 13,
+      button: 0,
+      clientX: 25,
+      clientY: 45
+    })
+
+    // Then: 命中使用矩形自身的坐标类型，而不是 viewer 的新建默认值。
+    expect(onSelectRect).toHaveBeenCalledWith(existingRect.id)
+  })
+
+  it('clears a selected rectangle when pointerdown lands on another page', async () => {
+    // Given: page 1 的矩形已选中，page 2 也已加载。
+    const onSelectRect = vi.fn()
+    const selectedRect = makeReaderRect('page-one-rect', 1)
+    const { document } = makeDocument({ pageCount: 2 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        tool='rect'
+        rects={[selectedRect]}
+        selectedRectId={selectedRect.id}
+        onSelectRect={onSelectRect}
+        initialLoadedPages={2}
+      />
+    )
+    await screen.findByText('Page 2 text')
+
+    const pageTwo = screen.getByTestId('intermediate-page-2')
+    const pageTwoSelection = pageTwo.querySelector('.hsn-selection-container')
+    if (!(pageTwoSelection instanceof HTMLElement)) {
+      throw new Error('Expected the page 2 selection container')
+    }
+    mockElementRect(pageTwo, { left: 0, top: 200, width: 100, height: 150 })
+
+    // When: the user starts an interaction on blank space in page 2.
+    fireEvent.pointerDown(pageTwoSelection, {
+      pointerType: 'mouse',
+      pointerId: 12,
+      button: 0,
+      clientX: 80,
+      clientY: 320
+    })
+
+    // Then: the selected rectangle owned by page 1 is cleared immediately.
+    expect(onSelectRect).toHaveBeenCalledWith(null)
   })
 
   it('keeps the selected highlight when a touch pan returns to its start point', async () => {
@@ -5545,6 +6951,77 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     })
 
     // Then: touch switches selection with the same public range ID as mouse.
+    expect(onSelectRange).toHaveBeenCalledWith(secondRange.id)
+  })
+
+  it('maps touch coordinates back to px ranges on a stretched narrow page', async () => {
+    // Given: 第一页从 100px 放大到共同预览宽度 200px，两个高亮使用源页面 px 坐标。
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({
+      pageCount: 2,
+      pageSizes: {
+        1: { x: 100, y: 150 },
+        2: { x: 200, y: 300 }
+      }
+    })
+    const firstRange: ReaderSelectionRange = {
+      id: 'touch-px-first-id',
+      text: 'First px highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 5 },
+      createdAt: 10,
+      overlayRectType: 'px',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 10, width: 10, height: 10 }]
+      }
+    }
+    const secondRange: ReaderSelectionRange = {
+      id: 'touch-px-second-id',
+      text: 'Second px highlight',
+      start: { selectionId: 'page-1', offset: 6 },
+      end: { selectionId: 'page-1', offset: 11 },
+      createdAt: 20,
+      overlayRectType: 'px',
+      rectsBySelectionId: {
+        'page-1': [{ x: 45, y: 40, width: 10, height: 10 }]
+      }
+    }
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[firstRange, secondRange]}
+        defaultSelectedRangeId={firstRange.id}
+        onSelectRange={onSelectRange}
+        initialLoadedPages={2}
+      />
+    )
+    await screen.findByText('Page 2 text')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementRect(page, {
+      left: 100,
+      top: 100,
+      width: 200,
+      height: 300
+    })
+
+    // When: 触点位于视觉 x=100/y=90，对应源页面 x=50/y=45。
+    const viewerSpace = screen.getByTestId('virtual-paper-wrapper')
+    fireEvent.pointerDown(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 5,
+      isPrimary: true,
+      clientX: 200,
+      clientY: 190
+    })
+    fireEvent.pointerUp(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 5,
+      isPrimary: true,
+      clientX: 200,
+      clientY: 190
+    })
+
+    // Then: 命中使用源 px 坐标定义的第二个高亮，而不是按视觉像素误判。
     expect(onSelectRange).toHaveBeenCalledWith(secondRange.id)
   })
 
@@ -6837,6 +8314,80 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       // Then: the VirtualPaper container receives the computed translate.
       expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
         transform: 'translate3d(0px, -327px, 0) scale(1)'
+      })
+    })
+
+    it('uses stretched preview coordinates when jumping to a narrow page', async () => {
+      // Given：第三页源宽度较窄，预览时会放大两倍；前两页的预览高度也不相同。
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSizes: {
+          1: { x: 100, y: 100 },
+          2: { x: 200, y: 100 },
+          3: { x: 100, y: 200 }
+        }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When：通过公开 selection ref 跳转到第三页的 range。
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then：平移量使用拉伸后的前置页高度和第三页内部坐标。
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(-15px, -402px, 0) scale(1)'
+      })
+    })
+
+    it('scrolls through rendered fallback dimensions when source page size is unavailable', async () => {
+      // Given: 页面尺寸不可用，但预览已按默认尺寸渲染并暴露公开滚动引用。
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 1,
+        pageSize: { x: undefined, y: undefined }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      mockElementRect(screen.getByTestId('virtual-paper-wrapper'), {
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 100
+      })
+
+      // When: 调用方在已渲染的 fallback 内容坐标中滚动。
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToPosition({
+          x: 0,
+          y: 100
+        })
+      })
+
+      // Then: 使用默认预览边界计算平移，而不是因源尺寸未知而静默返回。
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(0px, -100px, 0) scale(1)'
       })
     })
 

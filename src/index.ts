@@ -7,6 +7,18 @@ export type {
   SelectionRect as ReaderSelectionRectangle,
   SelectionTool as ReaderSelectionTool
 } from '@hamster-note/selection'
+export {
+  buildReaderCommentTree,
+  getCommentCountByHighlightId,
+  getCommentsByHighlightId
+} from './comments'
+export {
+  DefaultHighlightPopover,
+  DefaultRectanglePopover,
+  DefaultSelectionPopover,
+  type DefaultPopoverContext,
+  type DefaultRectanglePopoverProps
+} from './components/DefaultPopover'
 export type {
   CreateIntermediateDocumentRenderTimingOptions,
   IntermediateDocumentRenderTiming,
@@ -33,7 +45,6 @@ export type {
   ReaderTouchPanMode,
   TextElementInfo
 } from './components/IntermediateDocumentViewer'
-
 export {
   buildSavedSelection,
   buildSelectionPayload,
@@ -58,6 +69,12 @@ export {
   type ReaderRenderMode
 } from './components/Reader'
 export type {
+  ReaderComment,
+  ReaderCommentChangeDetail,
+  ReaderCommentChangeSource,
+  ReaderCommentThreadNode
+} from './types/comments'
+export type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
   ReaderAnnotationHistoryOptions,
@@ -66,17 +83,12 @@ export type {
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderLinkedSelectionRange,
+  ReaderRectanglePopover,
   ReaderSelectionEndpoint,
   ReaderSelectionRange,
   ReaderSelectionRect,
   ReaderSelectionRef
 } from './types/selection'
-
-export {
-  DefaultSelectionPopover,
-  DefaultHighlightPopover,
-  type DefaultPopoverContext
-} from './components/DefaultPopover'
 
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
@@ -105,14 +117,18 @@ export type ReaderInteractiveProps = Pick<
   | 'selectionPopover'
   | 'highlightPopover'
   | 'onCommentHighlight'
+  | 'comments'
+  | 'onCommentsChange'
   | 'selectionRef'
   | 'overlayRectType'
   | 'tool'
   | 'rects'
   | 'selectedRectId'
+  | 'rectPopover'
   | 'onCreateRect'
   | 'onSelectRect'
   | 'onUpdateRect'
+  | 'onRemoveRect'
   | 'annotationHistory'
   | 'onAnnotationHistoryChange'
   | 'containMarginX'
