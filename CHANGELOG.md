@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1-beta.0] - 2026-07-23
+
+### Added
+- Direct TXT rendering mode with automatic pagination and page splitting.
+- Comment system with M:N highlight-to-comment binding and reply tree support.
+- Image preview support in TXT render mode with click-to-open overlay.
+- Export `comments.ts` helpers: `getCommentsByHighlightId`, `getCommentCountByHighlightId`, `buildReaderCommentTree`.
+
+### Changed
+- `IntermediateDocumentViewer` refactored for shared layout/text renderer architecture.
+- `caretResolver` updated to handle cross-page text selection for TXT content.
+- README documentation expanded with comments API section.
+
 ## [0.6.0] - 2026-07-19
 
 ### Added

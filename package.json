@@ -1,6 +1,6 @@
 {
   "name": "@hamster-note/reader",
-  "version": "0.6.0",
+  "version": "0.6.1-beta.0",
   "description": "",
   "type": "module",
   "main": "dist/index.js",
@@ -43,7 +43,9 @@
     "pack:check": "node scripts/check-pack.mjs"
   },
   "dependencies": {
+    "@hamster-note/components": "0.2.1-beta.2",
     "@hamster-note/docx-parser": "^0.1.0",
+    "@hamster-note/epub-parser": "0.3.0-beta",
     "@hamster-note/image-parser": "^0.3.0",
     "@hamster-note/markdown-parser": "0.1.2-beta.2",
     "@hamster-note/painting": "0.1.1-beta.2",
