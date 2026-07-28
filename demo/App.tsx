@@ -2114,6 +2114,193 @@ export function App() {
           onCommentHighlight={handleCommentHighlight}
           onPageLoadStatusChange={setLoadedPages}
         />
+        {document && (
+          <Popover
+            edge='bottom'
+            edgeOffset={16}
+            relative
+            theme={popoverTheme}
+            aria-label='工具栏'
+            data-testid='tool-bottom-bar'
+            style={{
+              boxSizing: 'border-box',
+              maxWidth: 'calc(100% - 16px)',
+              overflowX: 'auto',
+              // .hn-button 未设置 white-space，nowrap 继承进按钮使 label 无法换行、min-content 不再收缩，配合 overflowX:auto 改为滚动。
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <Button
+              type='button'
+              size='small'
+              variant='ghost'
+              disabled={!historyStatus.canUndo}
+              aria-label='撤销'
+              data-testid='tool-bottom-bar-undo'
+              onClick={handleUndo}
+            >
+              <Icon name='undo' />
+            </Button>
+            <Button
+              type='button'
+              size='small'
+              variant='ghost'
+              disabled={!historyStatus.canRedo}
+              aria-label='恢复'
+              data-testid='tool-bottom-bar-redo'
+              onClick={handleRedo}
+            >
+              <Icon name='redo' />
+            </Button>
+            <PopoverSeparator />
+            <Button
+              type='button'
+              size='small'
+              variant={renderMode === 'text' ? 'primary' : 'ghost'}
+              aria-label={
+                renderMode === 'layout'
+                  ? '切换到文字渲染模式'
+                  : '切换到布局渲染模式'
+              }
+              aria-pressed={renderMode === 'text'}
+              data-testid='tool-bottom-bar-render-mode'
+              onClick={() =>
+                handleRenderModeChange(
+                  renderMode === 'layout' ? 'text' : 'layout'
+                )
+              }
+            >
+              <Icon name='switch' />
+            </Button>
+            <Button
+              type='button'
+              size='small'
+              variant={touchPanMode === 'two-finger' ? 'primary' : 'ghost'}
+              disabled={renderMode === 'text'}
+              aria-label={
+                touchPanMode === 'single-finger'
+                  ? '切换到双指滑动模式'
+                  : '切换到单指滑动模式'
+              }
+              aria-pressed={touchPanMode === 'two-finger'}
+              data-testid='tool-bottom-bar-touch-pan-mode'
+              onClick={() =>
+                setTouchPanMode((currentMode) =>
+                  currentMode === 'single-finger'
+                    ? 'two-finger'
+                    : 'single-finger'
+                )
+              }
+            >
+              <Icon name='touch' />
+            </Button>
+            <Button
+              type='button'
+              size='small'
+              variant={edgeCropEditing ? 'primary' : 'ghost'}
+              disabled={renderMode === 'text'}
+              aria-label='边缘裁切'
+              aria-pressed={edgeCropEditing}
+              data-testid='tool-bottom-bar-edge-crop'
+              onClick={() => setEdgeCropEditing((isEditing) => !isEditing)}
+            >
+              <Icon name='rectangle' />
+            </Button>
+            <PopoverSeparator />
+            {windowWidth < 768 ? (
+              // 窄屏：折叠为下拉菜单触发按钮
+              <Button
+                type='button'
+                size='small'
+                variant='primary'
+                aria-label='工具菜单'
+                aria-haspopup='menu'
+                aria-expanded={toolMenuAnchor !== null}
+                data-testid='tool-bottom-bar-tool-menu'
+                onClick={(event) => {
+                  const el = event.currentTarget
+                  setFontMenuAnchor(null)
+                  setToolMenuAnchor((prev) => (prev ? null : el))
+                }}
+              >
+                <Icon
+                  name={
+                    BOTTOM_BAR_TOOLS.find((t) => t.tool === selectedTool)
+                      ?.icon ?? 'type'
+                  }
+                />
+              </Button>
+            ) : (
+              // 中宽/宽屏：直接渲染工具按钮（<1280 仅图标，>=1280 图标+文字）
+              BOTTOM_BAR_TOOLS.map(({ tool, icon, label }) => (
+                <Button
+                  key={tool}
+                  type='button'
+                  size='small'
+                  variant={selectedTool === tool ? 'primary' : 'ghost'}
+                  aria-pressed={selectedTool === tool}
+                  aria-label={`${label}工具`}
+                  data-testid={`tool-bottom-bar-${tool}`}
+                  onClick={() => handleToolChange(tool)}
+                >
+                  <Icon name={icon} />
+                  {windowWidth >= 1280 && label}
+                </Button>
+              ))
+            )}
+            <PopoverSeparator />
+            {BOTTOM_BAR_COLORS.map(({ name, label, value }) => (
+              <button
+                key={name}
+                type='button'
+                aria-label={`${label}工具颜色`}
+                aria-pressed={toolColor === value}
+                data-testid={`tool-bottom-bar-color-${name}`}
+                onClick={() => {
+                  setToolColor(value)
+                  setHighlightColor(hexToRgba(value, 0.35))
+                }}
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: '50%',
+                  backgroundColor: value,
+                  border:
+                    toolColor === value
+                      ? '2px solid currentColor'
+                      : '2px solid transparent',
+                  padding: 0,
+                  cursor: 'pointer',
+                  // 防止 flex 收缩把 20x20 色圆压成椭圆。
+                  flexShrink: 0
+                }}
+              />
+            ))}
+            {supportsFontScale && (
+              <>
+                <PopoverSeparator />
+                <Button
+                  type='button'
+                  size='small'
+                  variant='secondary'
+                  aria-haspopup='menu'
+                  aria-expanded={fontMenuAnchor !== null}
+                  aria-controls='tool-bottom-bar-font-scale-menu'
+                  data-testid='tool-bottom-bar-font-scale'
+                  onClick={(event) => {
+                    const element = event.currentTarget
+                    setToolMenuAnchor(null)
+                    setFontMenuAnchor((previous) =>
+                      previous === null ? element : null
+                    )
+                  }}
+                >
+                  字体：{selectedFontScaleLabel}
+                </Button>
+              </>
+            )}
+          </Popover>
+        )}
       </div>
       {highlightDragPreview !== null ? (
         <div
@@ -2136,190 +2323,6 @@ export function App() {
           onJumpToHighlight={handleJumpToHighlight}
           onClose={handleCloseCommentPanel}
         />
-      )}
-      {document && (
-        <Popover
-          edge='bottom'
-          edgeOffset={16}
-          theme={popoverTheme}
-          aria-label='工具栏'
-          data-testid='tool-bottom-bar'
-          style={{
-            boxSizing: 'border-box',
-            maxWidth: 'calc(100vw - 16px)',
-            overflowX: 'auto',
-            // .hn-button 未设置 white-space，nowrap 继承进按钮使 label 无法换行、min-content 不再收缩，配合 overflowX:auto 改为滚动。
-            whiteSpace: 'nowrap'
-          }}
-        >
-          <Button
-            type='button'
-            size='small'
-            variant='ghost'
-            disabled={!historyStatus.canUndo}
-            aria-label='撤销'
-            data-testid='tool-bottom-bar-undo'
-            onClick={handleUndo}
-          >
-            <Icon name='undo' />
-          </Button>
-          <Button
-            type='button'
-            size='small'
-            variant='ghost'
-            disabled={!historyStatus.canRedo}
-            aria-label='恢复'
-            data-testid='tool-bottom-bar-redo'
-            onClick={handleRedo}
-          >
-            <Icon name='redo' />
-          </Button>
-          <PopoverSeparator />
-          <Button
-            type='button'
-            size='small'
-            variant={renderMode === 'text' ? 'primary' : 'ghost'}
-            aria-label={
-              renderMode === 'layout'
-                ? '切换到文字渲染模式'
-                : '切换到布局渲染模式'
-            }
-            aria-pressed={renderMode === 'text'}
-            data-testid='tool-bottom-bar-render-mode'
-            onClick={() =>
-              handleRenderModeChange(
-                renderMode === 'layout' ? 'text' : 'layout'
-              )
-            }
-          >
-            <Icon name='switch' />
-          </Button>
-          <Button
-            type='button'
-            size='small'
-            variant={touchPanMode === 'two-finger' ? 'primary' : 'ghost'}
-            disabled={renderMode === 'text'}
-            aria-label={
-              touchPanMode === 'single-finger'
-                ? '切换到双指滑动模式'
-                : '切换到单指滑动模式'
-            }
-            aria-pressed={touchPanMode === 'two-finger'}
-            data-testid='tool-bottom-bar-touch-pan-mode'
-            onClick={() =>
-              setTouchPanMode((currentMode) =>
-                currentMode === 'single-finger' ? 'two-finger' : 'single-finger'
-              )
-            }
-          >
-            <Icon name='touch' />
-          </Button>
-          <Button
-            type='button'
-            size='small'
-            variant={edgeCropEditing ? 'primary' : 'ghost'}
-            disabled={renderMode === 'text'}
-            aria-label='边缘裁切'
-            aria-pressed={edgeCropEditing}
-            data-testid='tool-bottom-bar-edge-crop'
-            onClick={() => setEdgeCropEditing((isEditing) => !isEditing)}
-          >
-            <Icon name='rectangle' />
-          </Button>
-          <PopoverSeparator />
-          {windowWidth < 768 ? (
-            // 窄屏：折叠为下拉菜单触发按钮
-            <Button
-              type='button'
-              size='small'
-              variant='primary'
-              aria-label='工具菜单'
-              aria-haspopup='menu'
-              aria-expanded={toolMenuAnchor !== null}
-              data-testid='tool-bottom-bar-tool-menu'
-              onClick={(event) => {
-                const el = event.currentTarget
-                setFontMenuAnchor(null)
-                setToolMenuAnchor((prev) => (prev ? null : el))
-              }}
-            >
-              <Icon
-                name={
-                  BOTTOM_BAR_TOOLS.find((t) => t.tool === selectedTool)?.icon ??
-                  'type'
-                }
-              />
-            </Button>
-          ) : (
-            // 中宽/宽屏：直接渲染工具按钮（<1280 仅图标，>=1280 图标+文字）
-            BOTTOM_BAR_TOOLS.map(({ tool, icon, label }) => (
-              <Button
-                key={tool}
-                type='button'
-                size='small'
-                variant={selectedTool === tool ? 'primary' : 'ghost'}
-                aria-pressed={selectedTool === tool}
-                aria-label={`${label}工具`}
-                data-testid={`tool-bottom-bar-${tool}`}
-                onClick={() => handleToolChange(tool)}
-              >
-                <Icon name={icon} />
-                {windowWidth >= 1280 && label}
-              </Button>
-            ))
-          )}
-          <PopoverSeparator />
-          {BOTTOM_BAR_COLORS.map(({ name, label, value }) => (
-            <button
-              key={name}
-              type='button'
-              aria-label={`${label}工具颜色`}
-              aria-pressed={toolColor === value}
-              data-testid={`tool-bottom-bar-color-${name}`}
-              onClick={() => {
-                setToolColor(value)
-                setHighlightColor(hexToRgba(value, 0.35))
-              }}
-              style={{
-                width: 20,
-                height: 20,
-                borderRadius: '50%',
-                backgroundColor: value,
-                border:
-                  toolColor === value
-                    ? '2px solid currentColor'
-                    : '2px solid transparent',
-                padding: 0,
-                cursor: 'pointer',
-                // 防止 flex 收缩把 20x20 色圆压成椭圆。
-                flexShrink: 0
-              }}
-            />
-          ))}
-          {supportsFontScale && (
-            <>
-              <PopoverSeparator />
-              <Button
-                type='button'
-                size='small'
-                variant='secondary'
-                aria-haspopup='menu'
-                aria-expanded={fontMenuAnchor !== null}
-                aria-controls='tool-bottom-bar-font-scale-menu'
-                data-testid='tool-bottom-bar-font-scale'
-                onClick={(event) => {
-                  const element = event.currentTarget
-                  setToolMenuAnchor(null)
-                  setFontMenuAnchor((previous) =>
-                    previous === null ? element : null
-                  )
-                }}
-              >
-                字体：{selectedFontScaleLabel}
-              </Button>
-            </>
-          )}
-        </Popover>
       )}
       {/* 窄屏菜单浮层：anchor 非空时展开，含三个工具选项 */}
       {document && toolMenuAnchor && (

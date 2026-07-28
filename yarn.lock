@@ -438,10 +438,10 @@
   resolved "https://registry.npmmirror.com/@exodus/bytes/-/bytes-1.15.0.tgz#54479e0f406cbad024d6fe1c3190ecca4468df3b"
   integrity sha512-UY0nlA+feH81UGSHv92sLEPLCeZFjXOuHhrIo0HQydScuQc8s0A7kL/UdgwgDq8g8ilksmuoF35YVTNphV2aBQ==
 
-"@hamster-note/components@0.2.1-beta.2":
-  version "0.2.1-beta.2"
-  resolved "https://registry.yarnpkg.com/@hamster-note/components/-/components-0.2.1-beta.2.tgz#c13b2b61f74d0478f59d0807245ba30641ff6170"
-  integrity sha512-H19JuwVMIvX7aETd1rkvLvDS8YnGCgY0n8Hv9O8mLv/HHcn5CrPAJyKKBBQ02jrCFMnVCg1e1vNDbN4bDr65eA==
+"@hamster-note/components@0.2.1-beta.3":
+  version "0.2.1-beta.3"
+  resolved "https://registry.yarnpkg.com/@hamster-note/components/-/components-0.2.1-beta.3.tgz#99f7c315ca72433754ac9dec56097a0d66fb8831"
+  integrity sha512-HLCIR9AAZjN6L6vjzqnTxGrj32D8KvVHTwg6J1SKRo17eI5972x/ZEOaLUMqoV4sc1diWM1mbwbSp5DwvcqXcQ==
 
 "@hamster-note/document-parser@0.3.1", "@hamster-note/document-parser@^0.3.0", "@hamster-note/document-parser@^0.3.1":
   version "0.3.1"

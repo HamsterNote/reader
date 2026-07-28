@@ -43,7 +43,7 @@
     "pack:check": "node scripts/check-pack.mjs"
   },
   "dependencies": {
-    "@hamster-note/components": "0.2.1-beta.2",
+    "@hamster-note/components": "0.2.1-beta.3",
     "@hamster-note/docx-parser": "^0.1.0",
     "@hamster-note/epub-parser": "0.3.0-beta.2",
     "@hamster-note/image-parser": "^0.3.0",

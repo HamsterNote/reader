@@ -1337,7 +1337,7 @@ describe('demo parser flow', () => {
     })
   })
 
-  it('prevents bottom bar wrapping and color circle shrinking via inline styles', async () => {
+  it('positions the bottom bar relative to the Reader container without wrapping', async () => {
     // Given: 已加载文档，底部栏渲染。
     vi.mocked(PdfParser.encode).mockResolvedValue(
       makeRuntimeDocument('Bottom Bar No Wrap Document')
@@ -1349,6 +1349,8 @@ describe('demo parser flow', () => {
     // Then: 底部栏容器行内样式应含 whiteSpace: 'nowrap'。
     const bottomBar = screen.getByTestId('tool-bottom-bar')
     expect(bottomBar).toBeInTheDocument()
+    expect(bottomBar.parentElement).toHaveClass('hamster-demo-main')
+    expect(bottomBar).toHaveStyle('position: absolute')
     expect(bottomBar).toHaveStyle('white-space: nowrap')
 
     // Then: 每个颜色按钮的行内样式应含 flexShrink: 0。
