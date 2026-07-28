@@ -4662,7 +4662,11 @@ export function IntermediateDocumentViewer({
     (pageNumber: number) => {
       const sourcePageSize = pageSizesByPageNumber.get(pageNumber)
       const pageElement = pageRefs.current.get(pageNumber)
+      const contentScaleElement = pageElement?.querySelector<HTMLElement>(
+        '.hamster-reader__intermediate-page-content-scale'
+      )
       const viewerWindow =
+        contentScaleElement?.ownerDocument.defaultView ??
         pageElement?.ownerDocument.defaultView ??
         viewerRootRef.current?.ownerDocument.defaultView
       const deviceScale =
@@ -4673,7 +4677,12 @@ export function IntermediateDocumentViewer({
         return effectiveScaleRef.current * deviceScale
       }
 
-      const renderedWidth = pageElement?.getBoundingClientRect().width ?? 0
+      const contentRenderedWidth =
+        contentScaleElement?.getBoundingClientRect().width ?? 0
+      const renderedWidth =
+        contentRenderedWidth > 0
+          ? contentRenderedWidth
+          : (pageElement?.getBoundingClientRect().width ?? 0)
       if (renderedWidth > 0) {
         return (renderedWidth / sourcePageSize.width) * deviceScale
       }

@@ -3862,6 +3862,84 @@ describe('IntermediateDocumentViewer', () => {
       }
     })
 
+    it('requests a cropped page thumbnail from the full content DOM width after zoom', async () => {
+      // Given: the visible shell hides the left quarter of a 100px-wide source page.
+      const devicePixelRatioDescriptor = Object.getOwnPropertyDescriptor(
+        window,
+        'devicePixelRatio'
+      )
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        value: 1
+      })
+      const { document, pages } = makeDocument({
+        pageCount: 1,
+        pageSize: { x: 100, y: 200 }
+      })
+      const firstPage = pages.get(1)
+      if (!firstPage) {
+        throw new Error('Expected page 1 fixture')
+      }
+      const getThumbnail = vi.fn(
+        async (thumbnailScale?: number) =>
+          `data:image/png;base64,thumb-${String(thumbnailScale)}`
+      )
+      firstPage.getThumbnail = getThumbnail
+
+      try {
+        render(
+          <IntermediateDocumentViewer
+            document={document}
+            defaultScale={1}
+            edgeCrop={{ all: { left: 0.25 } }}
+          />
+        )
+        await waitFor(() => {
+          expect(getThumbnail).toHaveBeenLastCalledWith(0.75)
+        })
+        const firstPageElement = screen.getByTestId('intermediate-page-1')
+        const contentScaleElement = await screen.findByTestId(
+          'intermediate-page-content-scale-1'
+        )
+
+        // When: zoom makes the full content 200px wide, while its cropped shell is 150px.
+        mockElementRect(firstPageElement, {
+          left: 0,
+          top: 0,
+          width: 150,
+          height: 400
+        })
+        mockElementRect(contentScaleElement, {
+          left: -50,
+          top: 0,
+          width: 200,
+          height: 400
+        })
+        await act(async () => {
+          intersectionObserverMock.trigger(firstPageElement)
+          VirtualPaper.__triggerTransform(
+            screen.getByTestId('virtual-paper-container'),
+            { x: 0, y: 0, scale: 2 }
+          )
+        })
+
+        // Then: the bitmap scale follows the displayed full content, not the clipped shell.
+        await waitFor(() => {
+          expect(getThumbnail).toHaveBeenLastCalledWith(2)
+        })
+      } finally {
+        if (devicePixelRatioDescriptor) {
+          Object.defineProperty(
+            window,
+            'devicePixelRatio',
+            devicePixelRatioDescriptor
+          )
+        } else {
+          Reflect.deleteProperty(window, 'devicePixelRatio')
+        }
+      }
+    })
+
     it('requests the final enlarged thumbnail immediately when zoom ends', async () => {
       // Given: a loaded page currently has a scale-2 thumbnail.
       const { document, pages } = makeDocument({
