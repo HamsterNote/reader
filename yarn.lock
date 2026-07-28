@@ -548,8 +548,10 @@
     class-validator "^0.14.1"
     reflect-metadata "^0.2.2"
 
-"@hamster-note/virtual-paper@file:../../../../../../frontend/HamsterNote/virtual-paper":
-  version "1.0.0"
+"@hamster-note/virtual-paper@1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/virtual-paper/-/virtual-paper-1.1.0.tgz#5a4ef316996de63d90bfa868648118b5327cddab"
+  integrity sha512-9GF9igmHmBC0j2+dGfGqVJ82fWWzxL7SyicZaB47jg2Nar7KcC6vN1HXxTQzdaO6InkKAUANglMcLS26j9Qk4A==
   dependencies:
     "@system-ui-js/multi-drag" "^0.4.0"
 

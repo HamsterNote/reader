@@ -52,7 +52,7 @@
     "@hamster-note/pdf-parser": "^1.0.0",
     "@hamster-note/txt-parser": "^0.3.0",
     "@hamster-note/types": "^0.8.0",
-    "@hamster-note/virtual-paper": "file:/home/zhangxiao/frontend/HamsterNote/virtual-paper",
+    "@hamster-note/virtual-paper": "1.1.0",
     "@system-ui-js/multi-drag": "^0.4.0",
     "@tanstack/react-virtual": "^3.14.5",
     "html2canvas": "^1.4.1",
