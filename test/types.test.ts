@@ -204,6 +204,15 @@ const _touchPanModeInteractiveAccepted: TouchPanModeInInteractiveProps = true
 const _touchPanModeValue: ReaderTouchPanMode = 'two-finger'
 const _readerPropsTouchPanMode: ReaderProps['touchPanMode'] = _touchPanModeValue
 
+type SelectionMagnifierInReaderProps =
+  'showSelectionMagnifier' extends keyof ReaderProps ? true : false
+const _selectionMagnifierAccepted: SelectionMagnifierInReaderProps = true
+
+type SelectionMagnifierInInteractiveProps =
+  'showSelectionMagnifier' extends keyof ReaderInteractiveProps ? true : false
+const _selectionMagnifierInteractiveAccepted: SelectionMagnifierInInteractiveProps =
+  true
+
 const _legacyPageSelectionProps: ReaderProps = {
   pageTextSelections: {} satisfies ReaderPageTextSelectionMap,
   pageRectSelections: {} satisfies ReaderPageRectSelectionMap,
@@ -376,6 +385,11 @@ describe('Reader public selection types', () => {
     expect(_touchPanModeAccepted).toBe(true)
     expect(_touchPanModeInteractiveAccepted).toBe(true)
     expect(_readerPropsTouchPanMode).toBe('two-finger')
+  })
+
+  it('exposes the selection magnifier switch through public Reader types', () => {
+    expect(_selectionMagnifierAccepted).toBe(true)
+    expect(_selectionMagnifierInteractiveAccepted).toBe(true)
   })
 
   it('preserves page selection compatibility and drawing wrapper props', () => {

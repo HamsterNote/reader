@@ -58,30 +58,33 @@ export function calculatePopoverPosition(
   container: DOMRectReadOnly,
   selection: DOMRectReadOnly,
   popover: DOMRectReadOnly,
-  gap: number
+  gap: number,
+  relative = false
 ): PopoverPosition {
+  const containerLeft = relative ? container.left : 0
+  const containerTop = relative ? container.top : 0
   const maxWidth = Math.max(0, container.width - gap * 2)
   const maxHeight = Math.max(0, container.height - gap * 2)
   const popoverWidth = Math.min(popover.width, maxWidth)
   const popoverHeight = Math.min(popover.height, maxHeight)
-  const minimumLeft = container.left + gap
-  const maximumLeft = container.right - gap - popoverWidth
-  const minimumTop = container.top + gap
-  const maximumTop = container.bottom - gap - popoverHeight
+  const minimumLeft = container.left + gap - containerLeft
+  const maximumLeft = container.right - gap - popoverWidth - containerLeft
+  const minimumTop = container.top + gap - containerTop
+  const maximumTop = container.bottom - gap - popoverHeight - containerTop
   const selectionCenterLeft =
-    selection.left + (selection.width - popoverWidth) / 2
+    selection.left + (selection.width - popoverWidth) / 2 - containerLeft
   const topIsVisible =
     selection.top >= container.top && selection.top <= container.bottom
   const bottomIsVisible =
     selection.bottom >= container.top && selection.bottom <= container.bottom
 
   let preferredLeft = selectionCenterLeft
-  let preferredTop = selection.top - gap - popoverHeight
+  let preferredTop = selection.top - gap - popoverHeight - containerTop
   if (!topIsVisible && bottomIsVisible) {
-    preferredTop = selection.bottom + gap
+    preferredTop = selection.bottom + gap - containerTop
   } else if (!topIsVisible) {
-    preferredLeft = container.left + (container.width - popoverWidth) / 2
-    preferredTop = container.top + (container.height - popoverHeight) / 2
+    preferredLeft = container.left + (container.width - popoverWidth) / 2 - containerLeft
+    preferredTop = container.top + (container.height - popoverHeight) / 2 - containerTop
   }
 
   return {

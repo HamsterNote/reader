@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react'
-
 import type {
   IntermediateContent,
   IntermediateDocument,
   IntermediateImage,
+  IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
+import { useCallback, useEffect, useRef } from 'react'
 
 /**
  * 懒加载页面队列的参数配置。由 `IntermediateDocumentViewer` 通过
@@ -36,9 +36,11 @@ export interface LazyPageQueueCallbacks {
   /** 页面加载成功后，更新底图/文本/图片/状态 */
   onPageLoaded: (params: {
     pageNumber: number
+    useFlowLayout: boolean
     baseImage: string | undefined
     thumbnailScale: number | undefined
     texts: IntermediateText[]
+    paragraphs: IntermediateParagraph[]
     images: IntermediateImage[]
   }) => void
   /** 页面加载失败后，清空该页的状态并标记为 'error' */
@@ -60,6 +62,12 @@ export interface LazyPageQueueApi {
 }
 
 type LazyPageQueueMode = 'layout' | 'text'
+
+const pageUsesFlowLayout = (page: unknown): boolean =>
+  typeof page === 'object' &&
+  page !== null &&
+  'useFlowLayout' in page &&
+  page.useFlowLayout === true
 
 /**
  * intermediate-document 默认模式的懒加载页面队列 hook。
@@ -200,7 +208,9 @@ export function useLazyPageQueue(
             return Promise.all([
               Promise.resolve(undefined),
               getPageContentEntries(page),
-              Promise.resolve(undefined)
+              Promise.resolve(undefined),
+              Promise.resolve(pageUsesFlowLayout(page)),
+              Promise.resolve(Array.isArray(page.paragraphs) ? page.paragraphs : [])
             ])
           }
 
@@ -209,10 +219,13 @@ export function useLazyPageQueue(
             getBaseImageFromPage?.(page, thumbnailScale) ??
               Promise.resolve(undefined),
             getPageContentEntries(page),
-            Promise.resolve(thumbnailScale)
+            Promise.resolve(thumbnailScale),
+            Promise.resolve(pageUsesFlowLayout(page)),
+            Promise.resolve(Array.isArray(page.paragraphs) ? page.paragraphs : [])
           ])
         })
-        .then(([baseImage, content, thumbnailScale]) => {
+        .then(
+          ([baseImage, content, thumbnailScale, useFlowLayout, paragraphs]) => {
           // stale 守卫：unmount / document 切换 / generation 过期
           if (
             !isMountedRef.current ||
@@ -229,12 +242,15 @@ export function useLazyPageQueue(
               : content.filter(isIntermediateImage)
           callbacks.onPageLoaded({
             pageNumber,
+            useFlowLayout,
             baseImage,
             thumbnailScale,
             texts,
+            paragraphs,
             images
           })
-        })
+          }
+        )
         .catch(() => {
           if (
             !isMountedRef.current ||

@@ -14,7 +14,10 @@ import {
   TXT_DOCUMENT_LINES_PER_PAGE
 } from '../src/components/IntermediateDocumentViewer/paginateTxtDocument'
 
-const [TXT_DOCUMENT_ID, TXT_PAGE_ID] = ['txt-parser-document', 'txt-parser-page-1']
+const [TXT_DOCUMENT_ID, TXT_PAGE_ID] = [
+  'txt-parser-document',
+  'txt-parser-page-1'
+]
 
 type TxtDocumentFixture = {
   readonly document: IntermediateDocument

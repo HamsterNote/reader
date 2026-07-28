@@ -1,5 +1,5 @@
 import { DocxParser } from '@hamster-note/docx-parser'
-import { ImageParser } from '@hamster-note/image-parser'
+import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
@@ -7,6 +7,9 @@ import type {
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
   ReaderComment,
+  ReaderData,
+  ReaderEdgeCrop,
+  ReaderLinkedSelectionData,
   ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -56,8 +59,8 @@ vi.mock('@hamster-note/docx-parser', () => ({
   }
 }))
 
-vi.mock('@hamster-note/image-parser', () => ({
-  ImageParser: {
+vi.mock('@hamster-note/epub-parser', () => ({
+  EpubParser: {
     encode: vi.fn()
   }
 }))
@@ -93,7 +96,51 @@ const mockCallbacks: {
     extractedText: unknown
   ) => void
 } = {}
-const mockReaderProps: unknown[] = []
+type MockReaderProps = Record<string, unknown> & {
+  document?: IntermediateDocument | IntermediateDocumentSerialized | null
+  emptyText?: string
+  renderMode?: ReaderRenderMode
+  fontScale?: number
+  touchPanMode?: ReaderTouchPanMode
+  data?: ReaderData
+  onDataChange?: (nextData: ReaderData) => void
+  onFileUpload?: (file: File) => void
+  onTextSelectionChange?: (text: unknown, detail: unknown) => void
+  onTextSelectionEnd?: (text: unknown, detail: unknown) => void
+  onSelectText?: (
+    selection: unknown,
+    segments: unknown,
+    extractedText: unknown
+  ) => void
+  selectionRef?: React.MutableRefObject<ReaderSelectionRef | null>
+  selectedRangeId?: string | null
+  selectedRectId?: string | null
+  selectionPopover?: ReactNode
+  highlightPopover?: unknown
+  highlightColor?: string
+  onHighlightColorChange?: (color: string) => void
+  onRemoveRange?: (id: string) => void
+  annotationHistory?: { enabled?: boolean; resetKey?: string | number }
+  onAnnotationHistoryChange?: (
+    next: ReaderAnnotationHistoryValue,
+    detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
+  onHighlight?: (range: ReaderSelectionRange) => void
+  onLinkedDataChange?: (next: ReaderLinkedSelectionData) => void
+  onUpdateRange?: (range: ReaderSelectionRange) => void
+  onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  onPagePaintingsChange?: (paintings: unknown) => void
+  onTogglePageBookmark?: (pageNumber: number) => void
+  comments?: readonly ReaderComment[]
+  onCommentsChange?: (next: readonly ReaderComment[]) => void
+  commentCountByRangeId?: Record<string, number>
+  commentCountByRectId?: Record<string, number>
+  edgeCropEditing?: boolean
+  onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+}
+
+const mockReaderProps: MockReaderProps[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 const COMMENT_STORAGE_PREFIX = 'hamster-reader-demo:comments:'
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
@@ -220,51 +267,13 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
   const { useEffect } = await import('react')
   return {
     ...actual,
-    Reader: (props: {
-      document?: IntermediateDocument | IntermediateDocumentSerialized | null
-      emptyText?: string
-      renderMode?: ReaderRenderMode
-      touchPanMode?: ReaderTouchPanMode
-      onFileUpload?: (file: File) => void
-      onTextSelectionChange?: (text: unknown, detail: unknown) => void
-      onTextSelectionEnd?: (text: unknown, detail: unknown) => void
-      onSelectText?: (
-        selection: unknown,
-        segments: unknown,
-        extractedText: unknown
-      ) => void
-      selectionRef?: React.MutableRefObject<ReaderSelectionRef | null>
-      ranges?: ReaderSelectionRange[]
-      rects?: ReaderSelectionRectangle[]
-      selectedRangeId?: string | null
-      selectedRectId?: string | null
-      selectionPopover?: ReactNode
-      highlightPopover?: unknown
-      highlightColor?: string
-      onHighlightColorChange?: (color: string) => void
-      onRemoveRange?: (id: string) => void
-      annotationHistory?: { enabled?: boolean; resetKey?: string | number }
-      onAnnotationHistoryChange?: (
-        next: ReaderAnnotationHistoryValue,
-        detail: ReaderAnnotationHistoryChangeDetail
-      ) => void
-      onHighlight?: (range: ReaderSelectionRange) => void
-      onUpdateRange?: (range: ReaderSelectionRange) => void
-      onCreateRect?: (rect: ReaderSelectionRectangle) => void
-      onUpdateRect?: (rect: ReaderSelectionRectangle) => void
-      pagePaintings?: unknown
-      onPagePaintingsChange?: (paintings: unknown) => void
-      bookmarkedPageNumbers?: readonly number[]
-      onTogglePageBookmark?: (pageNumber: number) => void
-      comments?: readonly ReaderComment[]
-      onCommentsChange?: (next: readonly ReaderComment[]) => void
-      commentCountByRangeId?: Record<string, number>
-      commentCountByRectId?: Record<string, number>
-    }) => {
+    Reader: (props: MockReaderProps) => {
       // 从受控 props 同步 present 快照（不创建 checkpoint）
+      const ranges = props.data?.ranges ?? []
+      const rects = props.data?.rects ?? []
       mockHistoryState.present = {
-        ranges: props.ranges ?? [],
-        rects: props.rects ?? [],
+        ranges,
+        rects,
         selectedRangeId: props.selectedRangeId ?? null,
         selectedRectId: props.selectedRectId ?? null
       }
@@ -334,7 +343,7 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         highlightColor: props.highlightColor,
         onHighlightColorChange: props.onHighlightColorChange,
         selectedRangeId: props.selectedRangeId,
-        ranges: props.ranges,
+        ranges,
         onUpdateRange: wrappedOnUpdateRange,
         onRemoveRange: props.onRemoveRange
       }
@@ -349,9 +358,7 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
               ...popoverContext,
               selectedRangeId: highlight.id,
               ranges: [
-                ...(props.ranges ?? []).filter(
-                  (range) => range.id !== highlight.id
-                ),
+                ...ranges.filter((range) => range.id !== highlight.id),
                 highlight
               ]
             }))
@@ -426,6 +433,16 @@ function makeRuntimeDocument(title: string) {
   return IntermediateDocument.parse(makeSerializedDocument(title))
 }
 
+function mockEpubParserSuccess(document: IntermediateDocument) {
+  const wrapper = Object.create(null) as Awaited<
+    ReturnType<typeof EpubParser.encode>
+  >
+  Object.defineProperty(wrapper, 'getIntermediateDocument', {
+    value: () => document
+  })
+  vi.mocked(EpubParser.encode).mockResolvedValue(wrapper)
+}
+
 function makeFile(name: string) {
   const file = new File(['pdf'], name, { type: 'application/pdf' })
   Object.defineProperty(file, 'size', { value: 3 })
@@ -462,15 +479,10 @@ function bookmarkStorageKey(fileName: string): string {
   return `${BOOKMARK_STORAGE_PREFIX}${fileName}`
 }
 
-function findDocumentReaderProps(): Record<string, unknown> | undefined {
+function findDocumentReaderProps(): MockReaderProps | undefined {
   for (let index = mockReaderProps.length - 1; index >= 0; index -= 1) {
     const props = mockReaderProps[index]
-    if (
-      typeof props === 'object' &&
-      props !== null &&
-      'document' in props &&
-      props.document !== undefined
-    ) {
+    if (props.document !== undefined) {
       return props
     }
   }
@@ -545,6 +557,7 @@ describe('demo parser flow', () => {
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
+    expect(EpubParser.encode).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -556,6 +569,7 @@ describe('demo parser flow', () => {
         vi.mocked(PdfParser.encode).mockResolvedValue(document),
       assertParserCall: (file: File) => {
         expect(PdfParser.encode).toHaveBeenCalledWith(file, undefined)
+        expect(EpubParser.encode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -570,6 +584,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(TxtParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(EpubParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
       }
@@ -583,7 +598,22 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(DocxParser.encodeToIntermediate).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(EpubParser.encode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
+        expect(MarkdownParser.encode).not.toHaveBeenCalled()
+      }
+    },
+    {
+      fileName: 'BOOK.EPUB',
+      label: 'EPUB',
+      title: 'EPUB Routed Document',
+      arrange: (document: IntermediateDocument) =>
+        mockEpubParserSuccess(document),
+      assertParserCall: (file: File) => {
+        expect(EpubParser.encode).toHaveBeenCalledWith(file)
+        expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(TxtParser.encode).not.toHaveBeenCalled()
+        expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
       }
     },
@@ -596,6 +626,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(EpubParser.encode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       }
@@ -609,6 +640,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
+        expect(EpubParser.encode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       }
@@ -652,6 +684,10 @@ describe('demo parser flow', () => {
 
       expect(screen.getByText(caseData.title)).toBeInTheDocument()
       expect(screen.getByText(`Name: ${caseData.fileName}`)).toBeInTheDocument()
+      expect(screen.getByLabelText('Choose another file')).toHaveAttribute(
+        'accept',
+        '.pdf,.txt,.docx,.epub,.md,.markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/*'
+      )
       expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
       caseData.assertParserCall(uploadedFile)
     }
@@ -669,31 +705,146 @@ describe('demo parser flow', () => {
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(createImagePreviewDocument).toHaveBeenCalledWith(uploadedFile)
-      expect(findDocumentReaderProps()?.ocr).toBe(false)
+      // 未输入页码前不开启任何页的 OCR（pages 为空）
+      expect(findDocumentReaderProps()?.ocr).toEqual({
+        enabled: true,
+        pages: []
+      })
       expect(PdfParser.encode).not.toHaveBeenCalled()
+      expect(EpubParser.encode).not.toHaveBeenCalled()
       expect(TxtParser.encode).not.toHaveBeenCalled()
       expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       expect(MarkdownParser.encode).not.toHaveBeenCalled()
     }
   )
 
-  it.each([
-    'book.epub',
-    'legacy.doc',
-    'component.mdx',
-    'README',
-    'archive.zip'
-  ])('rejects unsupported upload %s by extension', async (fileName) => {
+  it('loads and persists EPUB highlights as canonical Layout-shaped ranges', async () => {
+    // Given: EPUB 文件已有统一存储的 Layout 形态 range。
+    const fileName = 'stable-anchors.epub'
+    const storedHighlight = makeLinkedRange(
+      'stored-epub-highlight',
+      'Stored EPUB text'
+    )
+    localStorage.setItem(
+      highlightStorageKey(fileName),
+      JSON.stringify({
+        version: 4,
+        ranges: [storedHighlight],
+        rects: [],
+        paintings: {}
+      })
+    )
+    mockEpubParserSuccess(makeRuntimeDocument('Stable EPUB Document'))
+
+    // When: 文件加载完成，并由 Text Reader 创建一条新的 canonical range。
     render(<App />)
     upload(makeFile(fileName))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    expect(findDocumentReaderProps()?.renderMode).toBe('text')
+    expect(findDocumentReaderProps()?.data?.ranges).toEqual([storedHighlight])
+    const nextHighlight = makeLinkedRange(
+      'new-epub-highlight',
+      'New EPUB text',
+      'page-2'
+    )
+    act(() => {
+      findDocumentReaderProps()?.onHighlight?.(nextHighlight)
+    })
+
+    // Then: ReaderData 与统一 localStorage 都保存完整的 Layout 形态 range。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.data?.ranges).toEqual([
+        storedHighlight,
+        nextHighlight
+      ])
+    })
+    const persisted = localStorage.getItem(highlightStorageKey(fileName))
+    expect(persisted).toContain('"selectionId":"page-2"')
+    expect(persisted).toContain('"rectsBySelectionId"')
+    expect(persisted).toContain('"overlayRectType":"percent"')
+  })
+
+  it('reports annotation history as the EPUB Layout highlight state owner', async () => {
+    // Given: EPUB 已切换到 Layout，并显式开启高亮诊断日志。
+    const fileName = 'layout-history-owner.epub'
+    localStorage.setItem('hamster-reader:debug-highlights', '1')
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    mockEpubParserSuccess(makeRuntimeDocument('Layout History Owner'))
+    render(<App />)
+    upload(makeFile(fileName))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    fireEvent.change(screen.getByTestId('render-mode-select'), {
+      target: { value: 'layout' }
+    })
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.renderMode).toBe('layout')
+    })
+    const range: ReaderSelectionRange = {
+      ...makeLinkedRange('layout-history-range', 'Layout history text'),
+      rectsBySelectionId: {}
+    }
+
+    // When: Layout Reader 提交一条仅含字符锚点的 EPUB 高亮。
+    act(() => {
+      findDocumentReaderProps()?.onHighlight?.(range)
+    })
+
+    // Then: history 是唯一状态写入路径，普通 callback 只作为通知被记录。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.data?.ranges).toEqual([range])
+    })
+    expect(info).toHaveBeenCalledWith(
+      '[hamster-reader:highlight]',
+      expect.objectContaining({
+        event: 'demo.history.change',
+        source: 'highlight',
+        stateOwner: true
+      })
+    )
+    expect(info).toHaveBeenCalledWith(
+      '[hamster-reader:highlight]',
+      expect.objectContaining({
+        event: 'demo.callback.highlight',
+        stateOwner: false
+      })
+    )
+  })
+
+  it.each(['legacy.doc', 'component.mdx', 'README', 'archive.zip'])(
+    'rejects unsupported upload %s by extension',
+    async (fileName) => {
+      render(<App />)
+      upload(makeFile(fileName))
+
+      expect(await screen.findByText('Parse Error')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Unsupported file type. Supported: PDF, TXT, DOCX, EPUB, Markdown, and images.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
+      expect(PdfParser.encode).not.toHaveBeenCalled()
+      expect(EpubParser.encode).not.toHaveBeenCalled()
+      expect(TxtParser.encode).not.toHaveBeenCalled()
+      expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
+      expect(MarkdownParser.encode).not.toHaveBeenCalled()
+    }
+  )
+
+  it('shows an EPUB parse error when the EPUB parser rejects', async () => {
+    vi.mocked(EpubParser.encode).mockRejectedValue(new Error('bad epub'))
+
+    render(<App />)
+    const uploadedFile = makeFile('broken.epub')
+    upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(
-      screen.getByText(
-        'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown, and images.'
-      )
+      screen.getByText('Failed to parse EPUB: bad epub')
     ).toBeInTheDocument()
     expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
+    expect(EpubParser.encode).toHaveBeenCalledTimes(1)
+    expect(EpubParser.encode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
     expect(TxtParser.encode).not.toHaveBeenCalled()
     expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -713,6 +864,7 @@ describe('demo parser flow', () => {
     expect(TxtParser.encode).toHaveBeenCalledTimes(1)
     expect(TxtParser.encode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
+    expect(EpubParser.encode).not.toHaveBeenCalled()
   })
 
   it('shows a parse error when the parser returns undefined', async () => {
@@ -756,65 +908,222 @@ describe('demo parser flow', () => {
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
   })
 
-  it('replaces the image preview document with the OCR document when OCR is enabled', async () => {
-    // Given: 图片已完成轻量预览，OCR 解析器准备返回带文本的完整文档。
-    vi.mocked(createImagePreviewDocument).mockResolvedValue(
-      makeRuntimeDocument('Image Preview Document')
+  it('starts OCR for the entered page and echoes recognized texts back as controlled data', async () => {
+    // Given: PDF 解析成功，文档已加载。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('OCR Target Document')
     )
-    const ocrDocument = makeRuntimeDocument('OCR Image Document')
-    vi.mocked(ImageParser.encode).mockResolvedValue(ocrDocument)
 
     render(<App />)
-    const uploadedFile = makeFile('scan.png')
-    upload(uploadedFile)
+    upload(makeFile('ocr-target.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-    expect(screen.getByText('Image Preview Document')).toBeInTheDocument()
-
-    // When: 用户开启 OCR。
-    const toggle = screen.getByTestId('ocr-toggle')
-    expect(toggle).not.toBeChecked()
-    fireEvent.click(toggle)
-
-    // Then: ImageParser 接收当前图片，Reader 的 document 被 OCR 结果替换。
-    await waitFor(() => {
-      expect(toggle).toBeChecked()
-      expect(ImageParser.encode).toHaveBeenCalledWith(uploadedFile)
-      expect(findDocumentReaderProps()?.document).toBe(ocrDocument)
+    expect(findDocumentReaderProps()?.ocr).toEqual({
+      enabled: true,
+      pages: []
     })
-    expect(screen.getByText('OCR Image Document')).toBeInTheDocument()
-    expect(screen.queryByText('Image Preview Document')).not.toBeInTheDocument()
+
+    // When: 用户输入页码并点击 OCR 按钮。
+    fireEvent.change(screen.getByTestId('ocr-page-input'), {
+      target: { value: '2' }
+    })
+    fireEvent.click(screen.getByTestId('ocr-start-btn'))
+
+    // Then: Reader 收到手动模式 OCR 页码列表，侧栏出现该页标识。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toEqual({
+        enabled: true,
+        pages: [2]
+      })
+    })
+    expect(screen.getByTestId('ocr-active-page-2')).toBeInTheDocument()
+
+    // When: Reader 完成识别并通过 onOcrTextsChange 回传结果。
+    const recognizedTexts = [
+      {
+        id: 'ocr-2-text-1',
+        content: 'recognized text',
+        polygon: [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [0, 10]
+        ]
+      }
+    ]
+    act(() => {
+      const onOcrTextsChange = findDocumentReaderProps()?.onOcrTextsChange as (
+        pageNumber: number,
+        texts: unknown[]
+      ) => void
+      onOcrTextsChange(2, recognizedTexts)
+    })
+
+    // Then: 受控 OCR 数据回传给 Reader，且按文件名持久化到 localStorage。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocrTexts).toEqual({
+        2: recognizedTexts
+      })
+    })
+    const stored = localStorage.getItem(
+      'hamster-reader-demo:ocr:ocr-target.pdf'
+    )
+    expect(stored).not.toBeNull()
+    const parsed = JSON.parse(stored ?? '{}') as {
+      pages: number[]
+      textsByPage: Record<string, unknown[]>
+    }
+    expect(parsed.pages).toEqual([2])
+    expect(parsed.textsByPage['2']).toHaveLength(1)
   })
 
-  it('keeps the image preview when OCR is disabled before recognition finishes', async () => {
-    // Given: 图片预览已显示，但 OCR 任务仍在运行。
-    const previewDocument = makeRuntimeDocument('Cancelable Image Preview')
-    vi.mocked(createImagePreviewDocument).mockResolvedValue(previewDocument)
-    const pendingOcr = createDeferred<IntermediateDocument>()
-    vi.mocked(ImageParser.encode).mockReturnValue(pendingOcr.promise)
+  it('closes OCR per page and globally for the current document', async () => {
+    // Given: 文档已加载，且第 1、2 页均已开启 OCR。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('OCR Close Document')
+    )
 
     render(<App />)
-    const uploadedFile = makeFile('cancel-ocr.png')
-    upload(uploadedFile)
-    expect(
-      await screen.findByText('Cancelable Image Preview')
-    ).toBeInTheDocument()
-    const toggle = screen.getByTestId('ocr-toggle')
-    fireEvent.click(toggle)
+    upload(makeFile('ocr-close.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const pageInput = screen.getByTestId('ocr-page-input')
+    fireEvent.change(pageInput, { target: { value: '1' } })
+    fireEvent.click(screen.getByTestId('ocr-start-btn'))
+    fireEvent.change(pageInput, { target: { value: '2' } })
+    fireEvent.click(screen.getByTestId('ocr-start-btn'))
     await waitFor(() => {
-      expect(ImageParser.encode).toHaveBeenCalledWith(uploadedFile)
+      expect(findDocumentReaderProps()?.ocr).toEqual({
+        enabled: true,
+        pages: [1, 2]
+      })
     })
 
-    // When: 用户在识别结束前关闭 OCR。
-    fireEvent.click(toggle)
-    await act(async () => {
-      pendingOcr.resolve(makeRuntimeDocument('Stale OCR Document'))
-      await pendingOcr.promise
-    })
+    // When: 用户按页关闭第 1 页 OCR。
+    fireEvent.click(screen.getByTestId('ocr-close-page-1'))
 
-    // Then: 过期结果被忽略，当前文档仍是原图片预览。
+    // Then: 仅第 2 页保持开启。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toEqual({
+        enabled: true,
+        pages: [2]
+      })
+    })
+    expect(screen.queryByTestId('ocr-active-page-1')).not.toBeInTheDocument()
+
+    // When: 用户点击「全部关闭」全局关闭 OCR。
+    fireEvent.click(screen.getByTestId('ocr-close-all-btn'))
+
+    // Then: 开启列表清空，侧栏不再展示任何 OCR 页标识。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toEqual({
+        enabled: true,
+        pages: []
+      })
+    })
+    expect(screen.queryByTestId('ocr-active-pages')).not.toBeInTheDocument()
+  })
+
+  it('rejects an OCR page number beyond the document page count', async () => {
+    // Given: 单页文档已加载。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      IntermediateDocument.parse(
+        makeSerializedDocument('Single Page Document', [
+          {
+            id: 'single-page-1',
+            number: 1,
+            width: 100,
+            height: 200,
+            content: []
+          }
+        ])
+      )
+    )
+
+    render(<App />)
+    upload(makeFile('single-page.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // When: 用户输入超出页数范围的页码并点击 OCR。
+    fireEvent.change(screen.getByTestId('ocr-page-input'), {
+      target: { value: '99' }
+    })
+    fireEvent.click(screen.getByTestId('ocr-start-btn'))
+
+    // Then: 展示错误提示，OCR 开启列表保持不变。
+    expect(await screen.findByTestId('ocr-error')).toHaveTextContent(
+      '页码超出范围'
+    )
+    expect(findDocumentReaderProps()?.ocr).toEqual({
+      enabled: true,
+      pages: []
+    })
+  })
+
+  it('restores persisted OCR pages and texts when the file is uploaded again', async () => {
+    // Given: localStorage 中已有该文件的 OCR 持久化数据。
+    const persistedTexts = [
+      {
+        id: 'ocr-1-text-1',
+        content: 'persisted ocr text',
+        polygon: [
+          [0, 0],
+          [5, 0],
+          [5, 5],
+          [0, 5]
+        ]
+      }
+    ]
+    localStorage.setItem(
+      'hamster-reader-demo:ocr:restore-ocr.pdf',
+      JSON.stringify({
+        version: 1,
+        pages: [1],
+        textsByPage: { 1: persistedTexts }
+      })
+    )
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Restored OCR Document')
+    )
+
+    // When: 用户重新上传该文件。
+    render(<App />)
+    upload(makeFile('restore-ocr.pdf'))
+
+    // Then: OCR 开启列表与受控识别数据被恢复，无需重复 OCR。
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toEqual({
+        enabled: true,
+        pages: [1]
+      })
+      expect(findDocumentReaderProps()?.ocrTexts).toEqual({
+        1: persistedTexts
+      })
+    })
+    expect(screen.getByTestId('ocr-active-page-1')).toBeInTheDocument()
+  })
+
+  it('toggles OCR dev mode and forwards ocrDebug to Reader', async () => {
+    // Given: 已上传并解析文档，OCR 控制区可见。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('OCR Dev Mode Document')
+    )
+    render(<App />)
+    upload(makeFile('ocr-dev-mode.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // Then: 开发模式默认关闭，Reader 收到 ocrDebug=false。
+    const toggle = screen.getByTestId('ocr-dev-mode-toggle')
     expect(toggle).not.toBeChecked()
-    expect(findDocumentReaderProps()?.document).toBe(previewDocument)
-    expect(screen.queryByText('Stale OCR Document')).not.toBeInTheDocument()
+    expect(findDocumentReaderProps()?.ocrDebug).toBe(false)
+
+    // When: 用户打开开发模式开关。
+    fireEvent.click(toggle)
+
+    // Then: Reader 收到 ocrDebug=true（OCR 文字可见并加红色外框）。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocrDebug).toBe(true)
+    })
   })
 
   it('provides render mode select that updates Reader prop', async () => {
@@ -840,6 +1149,91 @@ describe('demo parser flow', () => {
       readerProps = findDocumentReaderProps()
       expect(select).toHaveValue('text')
       expect(readerProps?.renderMode).toBe('text')
+    })
+  })
+
+  it('keeps Text mode linked highlights when switching back to Layout', async () => {
+    // Given: 已加载文档并切换到 Text 模式。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Text Highlight Roundtrip Document')
+    )
+    render(<App />)
+    upload(makeFile('text-highlight-roundtrip.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    const renderModeSelect = screen.getByTestId('render-mode-select')
+    fireEvent.change(renderModeSelect, { target: { value: 'text' } })
+
+    const canonicalRange: ReaderSelectionRange = {
+      id: 'text-highlight-1',
+      text: 'Text highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 4 },
+      createdAt: 1,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 4 }]
+      }
+    }
+
+    // When: Text viewer 发布 canonical linked-data 快照，随后用户切回 Layout。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.renderMode).toBe('text')
+    })
+    act(() => {
+      findDocumentReaderProps()?.onLinkedDataChange?.({
+        items: [canonicalRange],
+        selectionOrder: [canonicalRange.id],
+        selectedRangeId: canonicalRange.id,
+        activeRange: null
+      })
+    })
+    fireEvent.change(renderModeSelect, { target: { value: 'layout' } })
+
+    // Then: Layout Reader 继续收到同一条 canonical range。
+    await waitFor(() => {
+      const readerProps = findDocumentReaderProps()
+      expect(readerProps?.renderMode).toBe('layout')
+      expect(readerProps?.data?.ranges).toEqual([canonicalRange])
+    })
+  })
+
+  it('keeps a manually committed Text highlight when switching back to Layout', async () => {
+    // Given: 已加载文档并切换到 Text 模式。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Manual Text Highlight Roundtrip Document')
+    )
+    render(<App />)
+    upload(makeFile('manual-text-highlight-roundtrip.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    const renderModeSelect = screen.getByTestId('render-mode-select')
+    fireEvent.change(renderModeSelect, { target: { value: 'text' } })
+
+    const canonicalRange: ReaderSelectionRange = {
+      id: 'manual-text-highlight-1',
+      text: 'Manual text highlight',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 4 },
+      createdAt: 1,
+      overlayRectType: 'percent',
+      rectsBySelectionId: {
+        'page-1': [{ x: 10, y: 20, width: 30, height: 4 }]
+      }
+    }
+
+    // When: 用户通过 Text popover 手动提交高亮，随后切回 Layout。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.renderMode).toBe('text')
+    })
+    act(() => {
+      findDocumentReaderProps()?.onHighlight?.(canonicalRange)
+    })
+    fireEvent.change(renderModeSelect, { target: { value: 'layout' } })
+
+    // Then: Layout Reader 继续收到手动提交的 canonical range。
+    await waitFor(() => {
+      const readerProps = findDocumentReaderProps()
+      expect(readerProps?.renderMode).toBe('layout')
+      expect(readerProps?.data?.ranges).toEqual([canonicalRange])
     })
   })
 
@@ -887,10 +1281,428 @@ describe('demo parser flow', () => {
     await waitFor(() => {
       expect(select).toHaveValue('drawing')
       expect(findDocumentReaderProps()?.selectedTool).toBe('drawing')
-      expect(findDocumentReaderProps()?.pagePaintings).toEqual({})
+      expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual({})
       expect(findDocumentReaderProps()?.onPagePaintingsChange).toBeTypeOf(
         'function'
       )
+    })
+  })
+
+  it('switches tools from the bottom bar and forwards them to Reader', async () => {
+    // Given: a parsed document is rendered, so the bottom bar is visible.
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Bottom Bar Tool Document')
+    )
+
+    render(<App />)
+    upload(makeFile('bottom-bar-tool.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+    expect(bottomBar).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('tool-bottom-bar-font-scale')
+    ).not.toBeInTheDocument()
+
+    // Given: 默认选中文字工具。
+    const textButton = screen.getByTestId('tool-bottom-bar-text-selection')
+    const rectButton = screen.getByTestId('tool-bottom-bar-rect-selection')
+    const drawingButton = screen.getByTestId('tool-bottom-bar-drawing')
+    expect(textButton).toHaveAttribute('aria-pressed', 'true')
+    expect(rectButton).toHaveAttribute('aria-pressed', 'false')
+    expect(drawingButton).toHaveAttribute('aria-pressed', 'false')
+    expect(findDocumentReaderProps()?.selectedTool).toBe('text-selection')
+
+    // When: 点击底部栏的矩形工具。
+    fireEvent.click(rectButton)
+
+    // Then: Reader 收到 rect-selection，且设置面板 select 同步。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.selectedTool).toBe('rect-selection')
+      expect(rectButton).toHaveAttribute('aria-pressed', 'true')
+      expect(textButton).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByTestId('selection-tool-select')).toHaveValue(
+        'rect-selection'
+      )
+    })
+
+    // When: 点击底部栏的绘图工具。
+    fireEvent.click(drawingButton)
+
+    // Then: Reader 收到 drawing。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.selectedTool).toBe('drawing')
+      expect(drawingButton).toHaveAttribute('aria-pressed', 'true')
+      expect(rectButton).toHaveAttribute('aria-pressed', 'false')
+    })
+  })
+
+  it('prevents bottom bar wrapping and color circle shrinking via inline styles', async () => {
+    // Given: 已加载文档，底部栏渲染。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Bottom Bar No Wrap Document')
+    )
+    render(<App />)
+    upload(makeFile('bottom-bar-nowrap.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // Then: 底部栏容器行内样式应含 whiteSpace: 'nowrap'。
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+    expect(bottomBar).toBeInTheDocument()
+    expect(bottomBar).toHaveStyle('white-space: nowrap')
+
+    // Then: 每个颜色按钮的行内样式应含 flexShrink: 0。
+    const colorNames = [
+      'blue',
+      'green',
+      'sand',
+      'rose',
+      'lavender',
+      'black'
+    ] as const
+    for (const name of colorNames) {
+      const colorButton = screen.getByTestId(`tool-bottom-bar-color-${name}`)
+      expect(colorButton).toHaveStyle('flex-shrink: 0')
+    }
+  })
+
+  it('undoes and redoes annotation changes from the bottom bar', async () => {
+    // Given: 已加载文档，但历史记录仍为空。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Bottom Bar History Document')
+    )
+    render(<App />)
+    upload(makeFile('bottom-bar-history.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const undoButton = screen.getByTestId('tool-bottom-bar-undo')
+    const redoButton = screen.getByTestId('tool-bottom-bar-redo')
+    expect(undoButton).toHaveAccessibleName('撤销')
+    expect(redoButton).toHaveAccessibleName('恢复')
+    expect(undoButton).toBeDisabled()
+    expect(redoButton).toBeDisabled()
+
+    // When: Reader 创建一个可撤销的高亮。
+    act(() => {
+      findDocumentReaderProps()?.onHighlight?.(
+        makeLinkedRange('toolbar-history-range', 'toolbar history text')
+      )
+    })
+
+    // Then: 工具栏撤销可用，并可驱动同一套 Reader 历史状态。
+    await waitFor(() => expect(undoButton).not.toBeDisabled())
+    fireEvent.click(undoButton)
+    await waitFor(() => {
+      expect(undoButton).toBeDisabled()
+      expect(redoButton).not.toBeDisabled()
+      expect(screen.queryByText('toolbar history text')).not.toBeInTheDocument()
+    })
+
+    // When: 用户从工具栏恢复刚撤销的高亮。
+    fireEvent.click(redoButton)
+
+    // Then: 高亮和两枚按钮的可用状态都同步恢复。
+    await waitFor(() => {
+      expect(screen.getByText('toolbar history text')).toBeInTheDocument()
+      expect(undoButton).not.toBeDisabled()
+      expect(redoButton).toBeDisabled()
+    })
+  })
+
+  it('switches reader modes and edge crop editing from the bottom bar', async () => {
+    // Given: Layout 模式下的工具栏控制均可用，且默认采用单指滑动。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Bottom Bar Reader Modes Document')
+    )
+    render(<App />)
+    upload(makeFile('bottom-bar-reader-modes.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const renderModeButton = screen.getByTestId('tool-bottom-bar-render-mode')
+    const touchPanModeButton = screen.getByTestId(
+      'tool-bottom-bar-touch-pan-mode'
+    )
+    const edgeCropButton = screen.getByTestId('tool-bottom-bar-edge-crop')
+    expect(renderModeButton).toHaveAccessibleName('切换到文字渲染模式')
+    expect(renderModeButton).toHaveAttribute('aria-pressed', 'false')
+    expect(touchPanModeButton).toHaveAccessibleName('切换到双指滑动模式')
+    expect(touchPanModeButton).toHaveAttribute('aria-pressed', 'false')
+    expect(edgeCropButton).toHaveAccessibleName('边缘裁切')
+    expect(edgeCropButton).toHaveAttribute('aria-pressed', 'false')
+
+    // When: 用户依次启用双指滑动与边缘裁切编辑。
+    fireEvent.click(touchPanModeButton)
+    fireEvent.click(edgeCropButton)
+
+    // Then: Reader 与侧栏设置同步到工具栏状态。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.touchPanMode).toBe('two-finger')
+      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(true)
+      expect(screen.getByTestId('touch-pan-mode-select')).toHaveValue(
+        'two-finger'
+      )
+      expect(touchPanModeButton).toHaveAttribute('aria-pressed', 'true')
+      expect(edgeCropButton).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    // When: 用户从工具栏切换到 Text 模式。
+    fireEvent.click(renderModeButton)
+
+    // Then: Layout 专属控制禁用，隐藏的裁切编辑状态自动退出。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.renderMode).toBe('text')
+      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(false)
+      expect(screen.getByTestId('render-mode-select')).toHaveValue('text')
+      expect(renderModeButton).toHaveAccessibleName('切换到布局渲染模式')
+      expect(renderModeButton).toHaveAttribute('aria-pressed', 'true')
+      expect(touchPanModeButton).toBeDisabled()
+      expect(edgeCropButton).toBeDisabled()
+    })
+
+    // When: 用户切回 Layout 模式。
+    fireEvent.click(renderModeButton)
+
+    // Then: Layout 专属控制重新可用，并保留用户选择的双指模式。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.renderMode).toBe('layout')
+      expect(findDocumentReaderProps()?.touchPanMode).toBe('two-finger')
+      expect(touchPanModeButton).not.toBeDisabled()
+      expect(edgeCropButton).not.toBeDisabled()
+    })
+  })
+
+  it('highlights the selected tool trigger when the bottom bar is collapsed', async () => {
+    // Given: 视口进入最窄断点，三个工具合并为一个菜单入口。
+    const originalWindowWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 767
+    })
+
+    try {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Collapsed Bottom Bar Tool Document')
+      )
+
+      render(<App />)
+      upload(makeFile('collapsed-bottom-bar-tool.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      // Then: 合并入口代表当前选中的文字工具，并使用 primary 视觉层级。
+      const toolMenuButton = screen.getByTestId('tool-bottom-bar-tool-menu')
+      expect(toolMenuButton).toHaveClass('hn-button--primary')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: originalWindowWidth
+      })
+      fireEvent(window, new Event('resize'))
+    }
+  })
+
+  it('highlights the selected tool inside the collapsed bottom bar menu', async () => {
+    // Given: 最窄断点下，文字工具是当前选中的工具。
+    const originalWindowWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 767
+    })
+
+    try {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Collapsed Tool Menu Selection Document')
+      )
+
+      render(<App />)
+      upload(makeFile('collapsed-tool-menu-selection.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      // When: 用户打开工具菜单。
+      const toolMenuButton = screen.getByTestId('tool-bottom-bar-tool-menu')
+      fireEvent.click(toolMenuButton)
+      const toolMenu = await screen.findByTestId(
+        'tool-bottom-bar-tool-menu-popover'
+      )
+      const textTool = within(toolMenu).getByRole('menuitem', {
+        name: '文字工具'
+      })
+      const rectangleTool = within(toolMenu).getByRole('menuitem', {
+        name: '矩形工具'
+      })
+
+      // Then: 当前工具具有可访问状态和可供视觉样式使用的选中标记。
+      expect(textTool).toHaveAttribute('aria-pressed', 'true')
+      expect(textTool).toHaveAttribute('data-selected', 'true')
+      expect(rectangleTool).toHaveAttribute('aria-pressed', 'false')
+      expect(rectangleTool).toHaveAttribute('data-selected', 'false')
+
+      // When: 用户切换到矩形工具后重新打开菜单。
+      fireEvent.click(rectangleTool)
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.selectedTool).toBe('rect-selection')
+        expect(
+          screen.queryByTestId('tool-bottom-bar-tool-menu-popover')
+        ).not.toBeInTheDocument()
+      })
+      fireEvent.click(toolMenuButton)
+      const reopenedToolMenu = await screen.findByTestId(
+        'tool-bottom-bar-tool-menu-popover'
+      )
+
+      // Then: 高亮随当前工具同步更新。
+      expect(
+        within(reopenedToolMenu).getByRole('menuitem', { name: '矩形工具' })
+      ).toHaveAttribute('data-selected', 'true')
+      expect(
+        within(reopenedToolMenu).getByRole('menuitem', { name: '文字工具' })
+      ).toHaveAttribute('data-selected', 'false')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: originalWindowWidth
+      })
+      fireEvent(window, new Event('resize'))
+    }
+  })
+
+  it('switches font size for TXT documents from the bottom bar', async () => {
+    // Given: TXT 是支持字号切换的可重排格式。
+    vi.mocked(TxtParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Font Scale Document')
+    )
+
+    render(<App />)
+    upload(makeFile('font-scale.txt'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    const fontButton = screen.getByTestId('tool-bottom-bar-font-scale')
+    expect(fontButton).toHaveTextContent('字体：大')
+    expect(fontButton).toHaveAttribute(
+      'aria-controls',
+      'tool-bottom-bar-font-scale-menu'
+    )
+    expect(findDocumentReaderProps()?.fontScale).toBe(1.5)
+
+    // When: 用户打开菜单并选择“特小”。
+    fireEvent.click(fontButton)
+    const fontMenu = await screen.findByTestId(
+      'tool-bottom-bar-font-scale-popover'
+    )
+    expect(
+      within(fontMenu).getByRole('menu', { name: '字号菜单' })
+    ).toHaveAttribute('id', 'tool-bottom-bar-font-scale-menu')
+    const extraSmall = within(fontMenu).getByRole('menuitem', {
+      name: '特小'
+    })
+    expect(extraSmall).toHaveAttribute('aria-pressed', 'false')
+    expect(extraSmall).toHaveAttribute('data-selected', 'false')
+    expect(
+      within(fontMenu).getByRole('menuitem', { name: '大' })
+    ).toHaveAttribute('data-selected', 'true')
+    fireEvent.click(extraSmall)
+
+    // Then: 按钮文案与 Reader 倍率同步更新，菜单关闭。
+    await waitFor(() => {
+      expect(fontButton).toHaveTextContent('字体：特小')
+      expect(findDocumentReaderProps()?.fontScale).toBe(0.5)
+      expect(
+        screen.queryByTestId('tool-bottom-bar-font-scale-popover')
+      ).not.toBeInTheDocument()
+    })
+  })
+
+  it('hides the bottom bar before a document is loaded', () => {
+    render(<App />)
+    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+  })
+
+  it('exposes edge crop and hidden-page data controls', async () => {
+    // Given: a parsed document is rendered with the unified data model.
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Page Display Data Document')
+    )
+    render(<App />)
+    upload(makeFile('page-display-data.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // When: the demo enables global crop, a page override, and page hiding.
+    fireEvent.click(screen.getByTestId('global-edge-crop-toggle'))
+    fireEvent.click(screen.getByTestId('special-edge-crop-toggle'))
+    fireEvent.click(screen.getByTestId('hide-second-page-toggle'))
+
+    // Then: Reader receives every setting through props.data.
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.data).toMatchObject({
+        edgeCrop: {
+          all: { top: 0.1, right: 0.2, bottom: 0.05, left: 0.15 },
+          pages: {
+            'page-1': { top: 0.02, right: 0.05, bottom: 0.2, left: 0.25 }
+          }
+        },
+        hiddenPages: [2]
+      })
+    })
+  })
+
+  it('toggles edge crop editing mode and applies crop via onEdgeCropApply', async () => {
+    // Given: 已解析的文档已渲染
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Edge Crop Edit Document')
+    )
+    render(<App />)
+    upload(makeFile('edge-crop-edit.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // 初始状态：编辑模式关闭
+    expect(findDocumentReaderProps()?.edgeCropEditing).toBe(false)
+
+    // When: 勾选编辑模式开关
+    fireEvent.click(screen.getByTestId('edge-crop-edit-toggle'))
+
+    // Then: Reader 收到 edgeCropEditing=true
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(true)
+    })
+
+    // When: 调用 onEdgeCropApply 应用到第 1 页
+    const pageCrop: ReaderEdgeCrop = {
+      top: 0.1,
+      right: 0.1,
+      bottom: 0.1,
+      left: 0.1
+    }
+    await act(async () => {
+      findDocumentReaderProps()?.onEdgeCropApply?.(1, pageCrop)
+    })
+
+    // Then: 裁切值写入 data.edgeCrop.pages['page-1']，且编辑模式退出
+    await waitFor(() => {
+      expect(
+        findDocumentReaderProps()?.data?.edgeCrop?.pages?.['page-1']
+      ).toEqual(pageCrop)
+      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(false)
+    })
+
+    // When: 再次开启编辑模式，调用 onEdgeCropApply(null, crop) 应用到所有页
+    fireEvent.click(screen.getByTestId('edge-crop-edit-toggle'))
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(true)
+    })
+
+    const allCrop: ReaderEdgeCrop = {
+      top: 0.2,
+      right: 0.05,
+      bottom: 0.1,
+      left: 0.05
+    }
+    await act(async () => {
+      findDocumentReaderProps()?.onEdgeCropApply?.(null, allCrop)
+    })
+
+    // Then: 裁切值写入 data.edgeCrop.all，且编辑模式退出
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.data?.edgeCrop?.all).toEqual(allCrop)
+      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(false)
     })
   })
 
@@ -1023,22 +1835,14 @@ describe('demo parser flow', () => {
       const toggle = screen.getByTestId('auto-highlight-toggle')
       expect(toggle).not.toBeChecked()
 
-      let uploadReaderProps = mockReaderProps.find(
-        (props): props is Record<string, unknown> =>
-          typeof props === 'object' &&
-          props !== null &&
-          'document' in props &&
-          (props as Record<string, unknown>).document !== undefined
-      )
+      let uploadReaderProps = findDocumentReaderProps()
       expect(uploadReaderProps?.autoHighlight).toBe(false)
 
       fireEvent.click(toggle)
       expect(toggle).toBeChecked()
 
       await waitFor(() => {
-        uploadReaderProps = mockReaderProps[
-          mockReaderProps.length - 1
-        ] as Record<string, unknown>
+        uploadReaderProps = findDocumentReaderProps()
         expect(uploadReaderProps?.autoHighlight).toBe(true)
       })
     })
@@ -1224,13 +2028,7 @@ describe('demo parser flow', () => {
       upload(makeFile('color.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-      let uploadReaderProps = mockReaderProps.find(
-        (props): props is Record<string, unknown> =>
-          typeof props === 'object' &&
-          props !== null &&
-          'document' in props &&
-          (props as Record<string, unknown>).document !== undefined
-      )
+      let uploadReaderProps = findDocumentReaderProps()
 
       const popover = render(
         uploadReaderProps?.selectionPopover as React.ReactElement
@@ -1242,9 +2040,7 @@ describe('demo parser flow', () => {
       fireEvent.change(colorInput, { target: { value: '#ff0000' } })
 
       await waitFor(() => {
-        uploadReaderProps = mockReaderProps[
-          mockReaderProps.length - 1
-        ] as Record<string, unknown>
+        uploadReaderProps = findDocumentReaderProps()
         expect(uploadReaderProps?.highlightColor).toBe('#ff0000')
       })
     })
@@ -1257,13 +2053,7 @@ describe('demo parser flow', () => {
       upload(makeFile('highlight-color.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-      let uploadReaderProps = mockReaderProps.find(
-        (props): props is Record<string, unknown> =>
-          typeof props === 'object' &&
-          props !== null &&
-          'document' in props &&
-          (props as Record<string, unknown>).document !== undefined
-      )
+      let uploadReaderProps = findDocumentReaderProps()
 
       const onHighlight = uploadReaderProps?.onHighlight as (
         range: unknown
@@ -1279,9 +2069,7 @@ describe('demo parser flow', () => {
       onSelectRange('highlight-color-range')
 
       await waitFor(() => {
-        uploadReaderProps = mockReaderProps[
-          mockReaderProps.length - 1
-        ] as Record<string, unknown>
+        uploadReaderProps = findDocumentReaderProps()
         expect(uploadReaderProps?.selectedRangeId).toBe('highlight-color-range')
       })
 
@@ -1293,12 +2081,8 @@ describe('demo parser flow', () => {
       fireEvent.change(colorInput, { target: { value: '#ff0000' } })
 
       await waitFor(() => {
-        uploadReaderProps = mockReaderProps[
-          mockReaderProps.length - 1
-        ] as Record<string, unknown>
-        const ranges = uploadReaderProps?.ranges as
-          | Array<{ markerStyle?: { backgroundColor?: string } }>
-          | undefined
+        uploadReaderProps = findDocumentReaderProps()
+        const ranges = uploadReaderProps?.data?.ranges
         const selectedRange = ranges?.find(
           (range) => range?.markerStyle?.backgroundColor === '#ff0000'
         )
@@ -2289,17 +3073,8 @@ describe('demo parser flow', () => {
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = mockReaderProps.find(
-        (
-          props
-        ): props is {
-          emptyText?: string
-          onHighlight?: (...args: unknown[]) => unknown
-          document?: unknown
-        } =>
-          typeof props === 'object' &&
-          props !== null &&
-          'onHighlight' in props &&
-          (props as Record<string, unknown>).document !== undefined
+        (props) =>
+          props.onHighlight !== undefined && props.document !== undefined
       )
 
       uploadReaderProps?.onHighlight?.({
@@ -2625,7 +3400,9 @@ describe('demo parser flow', () => {
 
       // Then: Reader receives only canonical bookmark page numbers.
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([1, 3])
+        expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual([
+          1, 3
+        ])
       })
     })
 
@@ -2637,7 +3414,7 @@ describe('demo parser flow', () => {
       render(<App />)
       upload(makeFile('bookmark-toggle.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-      expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([])
+      expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual([])
 
       // When: page 2 is bookmarked from Reader.
       act(() => {
@@ -2648,7 +3425,9 @@ describe('demo parser flow', () => {
 
       // Then: both controlled props and per-file storage contain page 2.
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([2])
+        expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual([
+          2
+        ])
       })
       expect(
         JSON.parse(
@@ -2666,7 +3445,9 @@ describe('demo parser flow', () => {
 
       // Then: the bookmark is removed from props and persistence.
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.bookmarkedPageNumbers).toEqual([])
+        expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual(
+          []
+        )
       })
       expect(
         JSON.parse(
@@ -2872,7 +3653,9 @@ describe('demo parser flow', () => {
       onPagePaintingsChange(mockPaintings)
 
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.pagePaintings).toEqual(mockPaintings)
+        expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual(
+          mockPaintings
+        )
       })
 
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
@@ -2888,7 +3671,9 @@ describe('demo parser flow', () => {
         expect(screen.queryByText('painting undo text')).not.toBeInTheDocument()
       })
 
-      expect(findDocumentReaderProps()?.pagePaintings).toEqual(mockPaintings)
+      expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual(
+        mockPaintings
+      )
 
       fireEvent.click(screen.getByTestId('redo-btn'))
 
@@ -2896,7 +3681,9 @@ describe('demo parser flow', () => {
         expect(screen.getByText('painting undo text')).toBeInTheDocument()
       })
 
-      expect(findDocumentReaderProps()?.pagePaintings).toEqual(mockPaintings)
+      expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual(
+        mockPaintings
+      )
     })
   })
 })

@@ -217,11 +217,20 @@ export const useRangeHandleDrag = ({
     const capturePointerDown = (event: PointerEvent) => {
       const circle = circleRef.current
       const target = event.target
+      const circleRoot = circle?.closest(
+        '.hamster-reader__intermediate-document-viewer'
+      )
+      const targetRoot =
+        target instanceof HTMLButtonElement
+          ? target.closest('.hamster-reader__intermediate-document-viewer')
+          : null
       if (
         circle &&
         target instanceof HTMLButtonElement &&
         (target === circle ||
-          (target.className === circle.className &&
+          (targetRoot !== null &&
+            targetRoot === circleRoot &&
+            target.className === circle.className &&
             target.dataset.rangeHandleCircle ===
               circle.dataset.rangeHandleCircle &&
             target.dataset.rangeId === circle.dataset.rangeId &&

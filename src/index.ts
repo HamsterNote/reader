@@ -14,10 +14,10 @@ export {
 } from './comments'
 export {
   DefaultHighlightPopover,
-  DefaultRectanglePopover,
-  DefaultSelectionPopover,
   type DefaultPopoverContext,
-  type DefaultRectanglePopoverProps
+  DefaultRectanglePopover,
+  type DefaultRectanglePopoverProps,
+  DefaultSelectionPopover
 } from './components/DefaultPopover'
 export type {
   CreateIntermediateDocumentRenderTimingOptions,
@@ -28,7 +28,9 @@ export type {
   IntermediateDocumentRenderTimingStage,
   IntermediateDocumentViewerProps,
   NormalizedRect,
+  ReaderExtraOcr,
   ReaderInteractionMode,
+  ReaderOcrOptions,
   ReaderPageRange,
   ReaderSavedSelection,
   ReaderSavedSelectionAnchor,
@@ -56,8 +58,16 @@ export {
   textHash
 } from './components/IntermediateDocumentViewer'
 export {
+  HIGHLIGHT_DEBUG_STORAGE_KEY,
+  type HighlightDebugEvent,
+  summarizeHighlightRanges,
+  traceHighlight
+} from './components/IntermediateDocumentViewer/highlightDebug'
+export {
+  FLOW_LAYOUT_PAGE_WIDTH,
   Page,
   type PageProps,
+  type ReaderFlowLayoutPage,
   type ReaderPagePaintingMap,
   type ReaderPageRectSelectionMap,
   type ReaderPageTextSelectionMap,
@@ -74,6 +84,13 @@ export type {
   ReaderCommentChangeSource,
   ReaderCommentThreadNode
 } from './types/comments'
+export type { ReaderFontScale } from './types/fontScale'
+export type {
+  ReaderData,
+  ReaderEdgeCrop,
+  ReaderPageEdgeCrop,
+  ReaderVirtualPaperState
+} from './types/readerData'
 export type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
@@ -92,7 +109,10 @@ export type {
 
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
+  | 'data'
+  | 'onDataChange'
   | 'ocr'
+  | 'extraOCR'
   | 'onSelectText'
   | 'onTextSelectionChange'
   | 'onTextSelectionEnd'
@@ -110,10 +130,12 @@ export type ReaderInteractiveProps = Pick<
   | 'onSelectionStart'
   | 'onSelectionEnd'
   | 'onHighlight'
+  | 'onDragHighlight'
   | 'onRemoveRange'
   | 'onHighlightColorChange'
   | 'highlightColor'
   | 'selectionColor'
+  | 'showSelectionMagnifier'
   | 'selectionPopover'
   | 'highlightPopover'
   | 'onCommentHighlight'

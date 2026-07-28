@@ -194,12 +194,12 @@ const PAGE_GAP_PX = 16
 
 /**
  * Compute the content-space origin (top-left) of a page by summing the
- * heights of preceding pages and inter-page gaps.  X is 0 because the
- * `.hamster-note-document` flex-column centers pages horizontally
- * relative to the widest page (content coordinate 0 = left edge of the
- * widest page, not necessarily the target page — but for transform
- * clamping we only need the vertical origin; horizontal centering is
- * handled by the page-local `targetCenterX`).
+ * heights of preceding pages and inter-page gaps.  X note:
+ * `.hamster-note-document` is a plain block container (NOT a flex-column);
+ * every page renders at the uniform widest-page width, and the horizontal
+ * gutter lives on the document's inline scaled padding, so a page's x
+ * offset in content coordinates stays at 12 (unchanged by the gutter fix).
+ * For transform clamping we only need the vertical origin here.
  *
  * This is the deterministic fallback for jsdom and zero-layout cases
  * where real DOM measurement is unavailable.

@@ -416,9 +416,7 @@ export const isPointOnSelectionText = (
   if (isSelectionBackgroundTarget(pointElement)) return false
 
   const directTextElement = pointElement.closest('[data-text-id]')
-  return Boolean(
-    directTextElement && viewerRoot.contains(directTextElement)
-  )
+  return Boolean(directTextElement && viewerRoot.contains(directTextElement))
 }
 
 // 校验 caret API 返回的 range 是否落在指定的 nearest text 元素内。

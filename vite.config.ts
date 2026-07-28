@@ -220,6 +220,8 @@ export default defineConfig(({ mode }) => ({
     host: '0.0.0.0'
   },
   resolve: {
+    // 本地 file: 引用 @hamster-note/virtual-paper 时防止 React 双实例。
+    dedupe: ['react', 'react-dom'],
     alias: [
       {
         find: /^@hamster-note\/reader\/style\.css$/,

@@ -61,6 +61,8 @@ export type VirtualPaperProps = {
   /** v0.1.0-beta.1+：边缘弹性滚动 */
   edgeElasticScroll?: boolean
   readerModeZoomDebounceMs?: number
+  /** 本地 file: 版本新增：受控外部缩放的阅读模式预览 */
+  readerModeExternalZoomPreview?: boolean
   containMarginX?: number
   containMarginY?: number
   lazyWillChange?: number
@@ -141,6 +143,8 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
     containerStyle,
     wrapperProps,
     containerProps,
+    readerMode,
+    readerModeExternalZoomPreview,
     containMode,
     containMarginX,
     containMarginY,
@@ -225,7 +229,11 @@ function VirtualPaperComponent(props: VirtualPaperProps): React.JSX.Element {
       data-enabled-interactions={enabledInteractions.join(',')}
       data-min-scale={minScale}
       data-max-scale={maxScale}
+      data-reader-mode={readerMode}
+      data-reader-mode-external-zoom-preview={readerModeExternalZoomPreview}
       data-contain-mode={containMode}
+      data-content-width={contentSize?.width}
+      data-content-height={contentSize?.height}
       {...restWrapperProps}
     >
       <div

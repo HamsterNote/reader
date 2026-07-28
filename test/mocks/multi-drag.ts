@@ -42,6 +42,10 @@ export class Drag {
     return 'allEnd'
   }
 
+  getFingers() {
+    return [...this.fingers.values()]
+  }
+
   private trigger(type: string, fingers = [...this.fingers.values()]) {
     this.callbacks.get(type)?.forEach((callback) => {
       callback(fingers)

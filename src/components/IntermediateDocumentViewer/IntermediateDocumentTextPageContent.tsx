@@ -1,7 +1,10 @@
-import type { IntermediateText } from '@hamster-note/types'
-import { Fragment, memo } from 'react'
+import type { IntermediateParagraph, IntermediateText } from '@hamster-note/types'
+import { memo } from 'react'
 
+import type { ReaderFontScale } from '../../types/fontScale'
+import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
+import { PdfTextContent } from './PdfTextContent'
 
 /**
  * `intermediate-document` 文本渲染模式（`renderMode="text"`）单页内容渲染器。
@@ -27,8 +30,12 @@ export type IntermediateDocumentTextPageContentProps = {
   pageNumber: number
   /** 已加载的文本内容列表（由 useLazyPageQueue text 模式过滤后传入） */
   texts: IntermediateText[]
+  paragraphs: IntermediateParagraph[]
+  /** PDF 文本模式按文字 box 重建视觉行、段落和相对字号。 */
+  isPdf?: boolean
   /** 文本 span ref 注册回调（与 layout 模式同型）；可选 */
   setTextRef?: IntermediateDocumentSetTextRef
+  fontScale?: ReaderFontScale
   /**
    * 渲染计时回调（预留）；与 layout 模式 onRenderTiming 语义不同，
    * 此处接收页码与已挂载的页面 DOM 元素，供未来 Profiler 集成使用。
@@ -43,12 +50,6 @@ export type IntermediateDocumentTextPageContentProps = {
  * 非 EOL 空文本被过滤，EOL 空文本转成裸 `<br />` 表达空行。
  * 额外处理 undefined/null 以防御外部数据。
  */
-const shouldRenderTextSpan = (text: IntermediateText): boolean =>
-  text.content.length > 0
-
-const shouldRenderLineBreakOnly = (text: IntermediateText): boolean =>
-  text.content.length === 0 && text.isEOL
-
 /**
  * 文本模式单页内容渲染组件。
  *
@@ -62,44 +63,32 @@ const shouldRenderLineBreakOnly = (text: IntermediateText): boolean =>
 function IntermediateDocumentTextPageContentComponent({
   pageNumber,
   texts,
-  setTextRef
+  paragraphs,
+  isPdf = false,
+  setTextRef,
+  fontScale
 }: IntermediateDocumentTextPageContentProps) {
+  if (isPdf) {
+    return (
+      <PdfTextContent
+        pageNumber={pageNumber}
+        texts={texts}
+        paragraphs={paragraphs}
+        setTextRef={setTextRef}
+        fontScale={fontScale}
+      />
+    )
+  }
+
   return (
-    <>
-      {texts.map((text, index) => {
-        // 文本模式的虚拟 DOM 行会随滚动复用；把页码写进 key，避免不同页
-        // 局部重复的 text.id 让 React 复用上一页的文本子树。
-        const key = `${pageNumber}:${text.id ?? index}`
-        const eolKey = `${key}:eol`
-
-        if (shouldRenderLineBreakOnly(text)) {
-          return <br key={eolKey} />
-        }
-
-        if (!shouldRenderTextSpan(text)) {
-          return null
-        }
-
-        // Fragment 包裹 span 与可选的 <br />，保证 <br /> 紧跟在对应
-        // span 之后（DOM 顺序与文本数组顺序一致），实现文档流换行。
-        return (
-          <Fragment key={key}>
-            <span
-              // setTextRef 签名为 (text, pageNumber) => (element) => void，
-              // 与 layout 模式完全兼容；未提供时不设置 ref。
-              ref={setTextRef ? setTextRef(text, pageNumber) : undefined}
-              className='hamster-reader__intermediate-text hamster-reader__intermediate-text--flow'
-              data-text-id={text.id}
-              data-page-number={pageNumber}
-            >
-              {text.content}
-            </span>
-            {/* isEOL: 在该 span 之后立即换行 */}
-            {text.isEOL ? <br key={eolKey} /> : null}
-          </Fragment>
-        )
-      })}
-    </>
+    <IntermediateDocumentFlowTextContent
+      pageNumber={pageNumber}
+      texts={texts}
+      paragraphs={paragraphs}
+      setTextRef={setTextRef}
+      fontScale={fontScale}
+      preserveSourceFontSize={false}
+    />
   )
 }
 

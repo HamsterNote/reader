@@ -54,7 +54,9 @@ function getPositiveLinesPerPage(linesPerPage: number | undefined): number {
   return TXT_DOCUMENT_LINES_PER_PAGE
 }
 
-function isTextContent(content: IntermediateContent): content is IntermediateText {
+function isTextContent(
+  content: IntermediateContent
+): content is IntermediateText {
   return content instanceof IntermediateText
 }
 
@@ -110,7 +112,7 @@ function cloneShiftedText(
 ): IntermediateText {
   return new IntermediateText({
     ...IntermediateText.serialize(text),
-    polygon: shiftPolygonY(text.polygon, lineOffset),
+    polygon: shiftPolygonY(text.polygon, lineOffset)
   })
 }
 
@@ -120,7 +122,7 @@ function cloneShiftedParagraph(
 ): IntermediateParagraph {
   return new IntermediateParagraph({
     ...IntermediateParagraph.serialize(paragraph),
-    y: paragraph.y - lineOffset,
+    y: paragraph.y - lineOffset
   })
 }
 

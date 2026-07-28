@@ -613,6 +613,48 @@ describe('Reader public API', () => {
     )
   })
 
+  it('renders useFlowLayout page in document flow without positioning', () => {
+    render(
+      <Page
+        page={{
+          ...makePage(1),
+          useFlowLayout: true,
+          content: [
+            { ...makeText('flow-text-1', '第一行'), isEOL: true },
+            { ...makeText('flow-text-2', '第二行'), isEOL: true }
+          ],
+          texts: undefined
+        }}
+        selectedTool='text-selection'
+      />
+    )
+
+    // 文档流模式：surface 不再按 width/height 固定纵横比
+    const surface = screen.getByTestId('reader-page-surface-page-1')
+    expect(surface.className).toContain('hamster-reader__page-surface--flow')
+    expect(surface.getAttribute('style') ?? '').not.toContain('aspect-ratio')
+
+    // 文本条目不做绝对定位，fontSize 按 A4 宽度（595）缩放：12/595*100
+    const firstLine = screen.getByTestId('reader-page-text-flow-text-1')
+    expect(firstLine.className).toContain('hamster-reader__text-item--flow')
+    const firstLineStyle = firstLine.getAttribute('style') ?? ''
+    expect(firstLineStyle).toContain('font-size: 2.0168067226890756%')
+    expect(firstLineStyle).not.toContain('left:')
+    expect(firstLineStyle).not.toContain('top:')
+    expect(firstLineStyle).not.toContain('transform:')
+
+    // isEOL 条目后紧跟 <br> 换行
+    const textLayer = screen.getByTestId('reader-page-text-layer-page-1')
+    expect(textLayer.className).toContain('hamster-reader__text-layer--flow')
+    expect(textLayer.querySelectorAll('br')).toHaveLength(2)
+    expect(firstLine.nextElementSibling?.tagName).toBe('BR')
+
+    // 页面元信息不再展示固定 height
+    expect(screen.getByText('Size').nextElementSibling).toHaveTextContent(
+      '595 × auto'
+    )
+  })
+
   it('preserves rapid uncontrolled painting updates across pages', () => {
     const onPagePaintingsChange = vi.fn()
     render(
@@ -717,29 +759,19 @@ describe('Reader renderMode', () => {
     expect(screen.getByTestId('reader-content')).toContainElement(textViewer)
   })
 
-  it('renderMode text forwards linked selection props without VirtualPaper', () => {
-    const ranges = [makeReaderRange('text-mode-range', 'Text mode range')]
-    const defaultRanges = [
-      makeReaderRange('text-mode-default-range', 'Default range')
-    ]
+  it('renderMode text forwards canonical range props without VirtualPaper', () => {
+    const ranges = [makeReaderRange('text-highlight', 'Text mode range')]
+    const defaultRanges: ReaderSelectionRange[] = []
     const selectionRef = createRef<ReaderSelectionRef>()
-    const selectionPopover = <div>Custom selection popover</div>
+    const selectionPopover = <div>Custom text selection popover</div>
     const highlightPopover = vi.fn((highlight: ReaderSelectionRange) => (
       <div>{highlight.id}</div>
     ))
-    const onSelect = vi.fn()
-    const onLinkedDataChange = vi.fn()
-    const onLinkedSelect = vi.fn()
-    const onLinkedUpdateRange = vi.fn()
-    const onLinkedSelectRange = vi.fn()
-    const onSelectRange = vi.fn()
+    const onHighlight = vi.fn()
     const onUpdateRange = vi.fn()
+    const onSelectRange = vi.fn()
     const onSelectionStart = vi.fn()
     const onSelectionEnd = vi.fn()
-    const onHighlight = vi.fn()
-    const onCommentHighlight = vi.fn(
-      async (highlight: ReaderSelectionRange) => highlight
-    )
     const onScaleChange = vi.fn()
     const onCreateRect = vi.fn()
     const onSelectRect = vi.fn()
@@ -758,23 +790,18 @@ describe('Reader renderMode', () => {
         renderMode='text'
         ranges={ranges}
         defaultRanges={defaultRanges}
-        selectedRangeId='text-mode-range'
-        defaultSelectedRangeId='text-mode-default-range'
-        onSelect={onSelect}
-        onLinkedDataChange={onLinkedDataChange}
-        onLinkedSelect={onLinkedSelect}
-        onLinkedUpdateRange={onLinkedUpdateRange}
-        onLinkedSelectRange={onLinkedSelectRange}
-        onSelectRange={onSelectRange}
+        selectedRangeId='text-highlight'
+        defaultSelectedRangeId='default-text-highlight'
+        onHighlight={onHighlight}
         onUpdateRange={onUpdateRange}
+        onSelectRange={onSelectRange}
         onSelectionStart={onSelectionStart}
         onSelectionEnd={onSelectionEnd}
-        onHighlight={onHighlight}
         highlightColor='#ffcc00'
         selectionColor='#0066ff'
+        showSelectionMagnifier={true}
         selectionPopover={selectionPopover}
         highlightPopover={highlightPopover}
-        onCommentHighlight={onCommentHighlight}
         autoHighlight={true}
         selectionRef={selectionRef}
         overlayRectType='percent'
@@ -802,31 +829,25 @@ describe('Reader renderMode', () => {
 
     expect(capturedTextViewerProps.ranges).toBe(ranges)
     expect(capturedTextViewerProps.defaultRanges).toBe(defaultRanges)
-    expect(capturedTextViewerProps.selectedRangeId).toBe('text-mode-range')
+    expect(capturedTextViewerProps.selectedRangeId).toBe('text-highlight')
     expect(capturedTextViewerProps.defaultSelectedRangeId).toBe(
-      'text-mode-default-range'
+      'default-text-highlight'
     )
-    expect(capturedTextViewerProps.onSelect).toEqual(expect.any(Function))
-    expect(capturedTextViewerProps.onLinkedDataChange).toBe(
-      onLinkedDataChange
-    )
-    expect(capturedTextViewerProps.onLinkedSelect).toBe(onLinkedSelect)
-    expect(capturedTextViewerProps.onLinkedUpdateRange).toBe(
-      onLinkedUpdateRange
-    )
-    expect(capturedTextViewerProps.onLinkedSelectRange).toBe(
-      onLinkedSelectRange
-    )
+    expect(capturedTextViewerProps.onHighlight).toBe(onHighlight)
+    const capturedOnUpdateRange = capturedTextViewerProps.onUpdateRange
+    if (typeof capturedOnUpdateRange !== 'function') {
+      throw new TypeError('Expected text viewer onUpdateRange callback')
+    }
+    capturedOnUpdateRange(ranges[0])
+    expect(onUpdateRange).toHaveBeenCalledWith(ranges[0])
     expect(capturedTextViewerProps.onSelectRange).toBe(onSelectRange)
-    expect(capturedTextViewerProps.onUpdateRange).toEqual(expect.any(Function))
     expect(capturedTextViewerProps.onSelectionStart).toBe(onSelectionStart)
     expect(capturedTextViewerProps.onSelectionEnd).toBe(onSelectionEnd)
-    expect(capturedTextViewerProps.onHighlight).toBe(onHighlight)
     expect(capturedTextViewerProps.highlightColor).toBe('#ffcc00')
     expect(capturedTextViewerProps.selectionColor).toBe('#0066ff')
+    expect(capturedTextViewerProps.showSelectionMagnifier).toBe(true)
     expect(capturedTextViewerProps.selectionPopover).toBe(selectionPopover)
     expect(capturedTextViewerProps.highlightPopover).toBe(highlightPopover)
-    expect(capturedTextViewerProps.onCommentHighlight).toBe(onCommentHighlight)
     expect(capturedTextViewerProps.autoHighlight).toBe(true)
     expect(capturedTextViewerProps.selectionRef).toBe(selectionRef)
     expect(capturedTextViewerProps.overlayRectType).toBe('percent')
@@ -852,44 +873,36 @@ describe('Reader renderMode', () => {
     expect(
       screen.queryByTestId('virtual-paper-wrapper')
     ).not.toBeInTheDocument()
-
-    const forwardedOnSelect = capturedTextViewerProps.onSelect
-    const forwardedOnUpdateRange = capturedTextViewerProps.onUpdateRange
-    if (typeof forwardedOnSelect !== 'function') {
-      throw new Error('Expected text viewer onSelect to be a function')
-    }
-    if (typeof forwardedOnUpdateRange !== 'function') {
-      throw new Error('Expected text viewer onUpdateRange to be a function')
-    }
-
-    forwardedOnSelect(ranges[0])
-    forwardedOnUpdateRange(ranges[0])
-
-    expect(onSelect).toHaveBeenCalledWith(ranges[0])
-    expect(onUpdateRange).toHaveBeenCalledWith(ranges[0])
   })
 
-  it('renderMode text provides default selection popovers like layout mode', () => {
-    const onCommentHighlight = vi.fn(
-      async (highlight: ReaderSelectionRange) => highlight
-    )
+  it('renderMode text prefers canonical ranges from ReaderData', () => {
+    const flatRange = makeReaderRange('flat-highlight', 'flat')
+    const dataRange = makeReaderRange('data-highlight', 'data')
     const doc = makeDocument({ pages: [makePage(1)] })
 
     render(
       <Reader
         document={doc}
         renderMode='text'
-        onCommentHighlight={onCommentHighlight}
+        data={{ ranges: [dataRange] }}
+        ranges={[flatRange]}
       />
     )
 
-    expect(capturedTextViewerProps.selectionPopover).toEqual(
-      expect.objectContaining({ type: expect.any(Function) })
-    )
-    expect(capturedTextViewerProps.highlightPopover).toEqual(
-      expect.any(Function)
-    )
-    expect(capturedTextViewerProps.onCommentHighlight).toBeUndefined()
+    expect(capturedTextViewerProps.ranges).toEqual([dataRange])
+  })
+
+  it('renderMode text provides the default selection confirmation popover', () => {
+    // Given: 文本模式没有传入自定义 selection popover。
+    const { document } = makeLazyDocument(1)
+    render(<Reader document={document} renderMode='text' />)
+
+    // When: Reader 创建默认 selection popover。
+    render(<>{capturedTextViewerProps.selectionPopover as React.ReactNode}</>)
+
+    // Then: 用户能够看到确认高亮和颜色设置入口。
+    expect(screen.getByRole('button', { name: '高亮' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Highlight color')).toBeInTheDocument()
   })
 
   it('renderMode text renders for a runtime (lazy) document', () => {
@@ -1037,9 +1050,7 @@ describe('Reader file upload', () => {
   })
 
   it('exports SUPPORTED_UPLOAD_COPY with expected value', () => {
-    expect(SUPPORTED_UPLOAD_COPY).toBe(
-      'PDF, TXT, DOCX, Markdown, and image'
-    )
+    expect(SUPPORTED_UPLOAD_COPY).toBe('PDF, TXT, DOCX, Markdown, and image')
   })
 
   it('hides file info when document is provided', () => {
@@ -1063,6 +1074,15 @@ describe('Reader prop forwarding', () => {
     expect(
       screen.getByTestId('intermediate-document-viewer')
     ).toBeInTheDocument()
+  })
+
+  it('forwards extraOCR to the layout viewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const extraOCR = vi.fn()
+
+    render(<Reader document={doc} extraOCR={extraOCR} />)
+
+    expect(capturedViewerProps.extraOCR).toBe(extraOCR)
   })
 
   it('renders IntermediateDocumentViewer when onTextSelectionEnd is passed', () => {
@@ -1329,6 +1349,7 @@ describe('Reader prop forwarding', () => {
         pageLoadConcurrency={4}
         pageLoadEnterDelayMs={250}
         pageUnloadDelayMs={3000}
+        showSelectionMagnifier={true}
         onScaleChange={onScaleChange}
       />
     )
@@ -1341,7 +1362,76 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.pageLoadConcurrency).toBe(4)
     expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
     expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
+    expect(capturedViewerProps.showSelectionMagnifier).toBe(true)
     expect(capturedViewerProps.onScaleChange).toBe(onScaleChange)
+  })
+
+  it('prefers unified data fields over legacy flat props', () => {
+    // Given: unified data and legacy flat props intentionally contain different values.
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const dataRange = makeReaderRange('data-range', 'Data range')
+    const legacyRange = makeReaderRange('legacy-range', 'Legacy range')
+    const dataRect: ReaderSelectionRectangle = {
+      id: 'data-rect',
+      createdAt: 1,
+      overlayRectType: 'percent',
+      start: { x: 10, y: 20 },
+      end: { x: 30, y: 40 },
+      selectionId: 'page-1',
+      rect: { x: 10, y: 20, width: 20, height: 20 }
+    }
+    const dataPaintings: Record<string, DrawingValue> = {
+      'page-1': { strokes: [] }
+    }
+    const edgeCrop = {
+      all: { top: 0.1, right: 0.2, bottom: 0.3, left: 0.05 },
+      pages: { 'page-2': { left: 0.25 } }
+    }
+    const virtualPaper = { x: 24, y: -36, scale: 1.5 }
+
+    // When: Reader receives the new unified data prop.
+    render(
+      <Reader
+        document={doc}
+        data={{
+          edgeCrop,
+          hiddenPages: [2, 'page-3'],
+          ranges: [dataRange],
+          rects: [dataRect],
+          pagePaintings: dataPaintings,
+          virtualPaper,
+          bookmarkedPageNumbers: [2]
+        }}
+        ranges={[legacyRange]}
+        rects={[]}
+        pagePaintings={{}}
+        scale={3}
+        bookmarkedPageNumbers={[1]}
+      />
+    )
+
+    // Then: every migrated field forwarded to the layout viewer comes from data.
+    expect(capturedViewerProps.ranges).toEqual([dataRange])
+    expect(capturedViewerProps.rects).toEqual([dataRect])
+    expect(capturedViewerProps.pagePaintings).toBe(dataPaintings)
+    expect(capturedViewerProps.bookmarkedPageNumbers).toEqual([2])
+    expect(capturedViewerProps.hiddenPages).toEqual([2, 'page-3'])
+    expect(capturedViewerProps.edgeCrop).toBe(edgeCrop)
+    expect(capturedViewerProps.defaultVirtualPaperTransform).toBe(virtualPaper)
+    expect(capturedViewerProps.scale).toBeUndefined()
+  })
+
+  it('forwards unified hidden pages to text mode', () => {
+    // Given: text mode uses the same unified document data as layout mode.
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+
+    // When: page 2 is hidden through Reader data.
+    render(
+      <Reader document={doc} renderMode='text' data={{ hiddenPages: [2] }} />
+    )
+
+    // Then: the text viewer receives the same hidden-page contract.
+    expect(capturedTextViewerProps.hiddenPages).toEqual([2])
   })
 
   it('exposes scrollToRange on the forwarded Reader ref without firing onScaleChange', async () => {
@@ -1656,6 +1746,70 @@ describe('Reader prop forwarding', () => {
 
     // Then: Reader removes the rectangle ID, not a text range ID.
     expect(onRemoveRect).toHaveBeenCalledWith(rect.id)
+  })
+
+  it('updates the selected rectangle color from the default popover', async () => {
+    // Given: a selected rectangle has its own persisted marker color.
+    const rect: ReaderSelectionRectangle = {
+      ...makeReaderRect('colored-rect'),
+      markerStyle: { backgroundColor: '#ff3366' }
+    }
+    const onUpdateRect = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        rects={[rect]}
+        selectedRectId={rect.id}
+        onUpdateRect={onUpdateRect}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+    const colorInput = within(popoverView.container).getByLabelText(
+      'Highlight color'
+    )
+    expect(colorInput).toHaveValue('#ff3366')
+
+    // When: the user changes the rectangle color.
+    fireEvent.change(colorInput, { target: { value: '#00aa88' } })
+
+    // Then: Reader proposes the same rectangle with its updated marker style.
+    expect(onUpdateRect).toHaveBeenCalledWith({
+      ...rect,
+      markerStyle: { backgroundColor: '#00aa88' }
+    })
+  })
+
+  it('opens comments from the default rectangle popover', async () => {
+    // Given: a selected rectangle and a host-controlled comment flow.
+    const user = userEvent.setup()
+    const rect = makeReaderRect('commented-rect')
+    const onCommentHighlight = vi.fn(
+      async (rectangle: ReaderSelectionRange) => rectangle
+    )
+    const onSelectRect = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        rects={[rect]}
+        selectedRectId={rect.id}
+        onCommentHighlight={onCommentHighlight}
+        onSelectRect={onSelectRect}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // When: the user clicks the rectangle comment action.
+    await user.click(
+      within(popoverView.container).getByRole('button', { name: '评论' })
+    )
+
+    // Then: the original rectangle is passed to the host and selection clears.
+    expect(onCommentHighlight).toHaveBeenCalledWith(rect)
+    await waitFor(() => expect(onSelectRect).toHaveBeenCalledWith(null))
   })
 
   it('closes an existing highlight popover after its comment promise resolves', async () => {
@@ -2552,6 +2706,7 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.initialLoadedPages).toBeUndefined()
     expect(capturedViewerProps.pageLoadConcurrency).toBeUndefined()
     expect(capturedViewerProps.pageLoadEnterDelayMs).toBeUndefined()
+    expect(capturedViewerProps.pagePreloadRadius).toBeUndefined()
     expect(capturedViewerProps.pageUnloadDelayMs).toBeUndefined()
   })
 
@@ -2564,6 +2719,7 @@ describe('Reader zoom props', () => {
         initialLoadedPages={2}
         pageLoadConcurrency={5}
         pageLoadEnterDelayMs={250}
+        pagePreloadRadius={4}
         pageUnloadDelayMs={3000}
       />
     )
@@ -2571,16 +2727,20 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.initialLoadedPages).toBe(2)
     expect(capturedViewerProps.pageLoadConcurrency).toBe(5)
     expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
+    expect(capturedViewerProps.pagePreloadRadius).toBe(4)
     expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
   })
 
-  it('VirtualPaper receives containMode={true} via IntermediateDocumentViewer', () => {
+  it('configures VirtualPaper for reading mode without contain mode', () => {
     const { document } = makeLazyDocument(1)
 
     render(<Reader document={document} />)
 
     const wrapper = screen.getByTestId('virtual-paper-wrapper')
-    expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
+    expect(wrapper).toHaveAttribute('data-reader-mode', 'true')
+    expect(wrapper).toHaveAttribute('data-contain-mode', 'false')
+    expect(Number(wrapper.getAttribute('data-content-width'))).toBeGreaterThan(0)
+    expect(Number(wrapper.getAttribute('data-content-height'))).toBeGreaterThan(0)
   })
 
   it('forwards horizontal and independent vertical margins to IntermediateDocumentViewer', () => {

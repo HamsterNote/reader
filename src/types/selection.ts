@@ -34,6 +34,7 @@ export type ReaderLinkedSelectionRange = Omit<
 > & {
   start: ReaderSelectionEndpoint
   end: ReaderSelectionEndpoint
+  /** Layout 模式可持久化的页面坐标；Text 与 EPUB 可保持为空并按字符锚点实时计算。 */
   rectsBySelectionId: Record<string, ReaderSelectionRect[]>
 }
 

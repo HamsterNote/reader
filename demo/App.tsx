@@ -1,28 +1,48 @@
+import {
+  Button,
+  Icon,
+  type IconName,
+  Menu,
+  MenuItem,
+  Popover,
+  PopoverSeparator,
+  type PopoverTheme
+} from '@hamster-note/components'
+import '@hamster-note/components/styles.css'
 import { DocxParser } from '@hamster-note/docx-parser'
+import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
 import { PdfParser } from '@hamster-note/pdf-parser'
-import type {
-  ReaderAnnotationHistoryChangeDetail,
-  ReaderAnnotationHistoryStatus,
-  ReaderAnnotationHistoryValue,
-  ReaderComment,
-  ReaderPageRange,
-  ReaderPageTool,
-  ReaderRenderMode,
-  ReaderSelectionRange,
-  ReaderSelectionRectangle,
-  ReaderSelectionRef,
-  ReaderTouchPanMode
+import {
+  type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
+  Reader,
+  type ReaderAnnotationHistoryStatus,
+  type ReaderAnnotationHistoryValue,
+  type ReaderComment,
+  type ReaderData,
+  type ReaderEdgeCrop,
+  type ReaderFontScale,
+  type ReaderLinkedSelectionData,
+  type ReaderPageRange,
+  type ReaderPageTool,
+  type ReaderRenderMode,
+  type ReaderSelectionRange,
+  type ReaderSelectionRectangle,
+  type ReaderSelectionRef,
+  type ReaderTouchPanMode,
+  type ReaderVirtualPaperState,
+  summarizeHighlightRanges,
+  traceHighlight
 } from '@hamster-note/reader'
-import { Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
   IntermediateDocument,
-  IntermediateDocumentSerialized
+  IntermediateDocumentSerialized,
+  IntermediateText
 } from '@hamster-note/types'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CommentPanel } from './CommentPanel'
 import {
   parseComments,
@@ -31,6 +51,7 @@ import {
 } from './commentStorage'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 import { createImagePreviewDocument } from './imagePreview'
+import { parseOcrStorage, serializeOcrStorage } from './ocrStorage'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -39,22 +60,118 @@ import {
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
-export const SUPPORTED_FILE_TYPE_LABEL = 'PDF, TXT, DOCX, Markdown, Images'
+type HighlightDragPreview = {
+  readonly highlight: ReaderSelectionRange
+  readonly pointerId: number
+  readonly x: number
+  readonly y: number
+}
+
+export const SUPPORTED_FILE_TYPE_LABEL =
+  'PDF, TXT, DOCX, EPUB, Markdown, Images'
 
 export const UNSUPPORTED_FILE_TYPE_MESSAGE =
-  'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown, and images.'
+  'Unsupported file type. Supported: PDF, TXT, DOCX, EPUB, Markdown, and images.'
 
-const IMAGE_FILE_EXTENSIONS: readonly string[] = [
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'bmp',
-  'svg'
+export type SupportedParserLabel =
+  | 'PDF'
+  | 'TXT'
+  | 'DOCX'
+  | 'EPUB'
+  | 'Markdown'
+  | 'Image'
+
+// 底部栏第一期：工具切换配置（文字 / 矩形 / Drawing）
+// 单一数据源：底部栏按钮由该数组渲染，新增工具只需追加一项。
+export const BOTTOM_BAR_TOOLS: ReadonlyArray<{
+  tool: ReaderPageTool
+  icon: IconName
+  label: string
+}> = [
+  { tool: 'text-selection', icon: 'type', label: '文字' },
+  { tool: 'rect-selection', icon: 'rectangle', label: '矩形' },
+  { tool: 'drawing', icon: 'pen', label: '绘图' }
 ]
 
-export type SupportedParserLabel = 'PDF' | 'TXT' | 'DOCX' | 'Markdown' | 'Image'
+// 底部栏颜色选择：5 种低饱和色 + 黑色，覆盖文字高亮 / 矩形快照 / 绘图描边。
+// name 用作 data-testid 的 ascii 键，label 用作中文 aria-label。
+export const BOTTOM_BAR_COLORS: ReadonlyArray<{
+  name: 'blue' | 'green' | 'sand' | 'rose' | 'lavender' | 'black'
+  label: string
+  value: string
+}> = [
+  { name: 'blue', label: '蓝色', value: '#7d9ec0' },
+  { name: 'green', label: '绿色', value: '#8eba8e' },
+  { name: 'sand', label: '沙色', value: '#d1b88a' },
+  { name: 'rose', label: '玫瑰色', value: '#cf9cab' },
+  { name: 'lavender', label: '紫色', value: '#a99fc4' },
+  { name: 'black', label: '黑色', value: '#2a2a2a' }
+]
+
+const FONT_SCALE_OPTIONS: ReadonlyArray<{
+  label: '特小' | '小' | '中' | '大' | '特大'
+  scale: ReaderFontScale
+}> = [
+  { label: '特小', scale: 0.5 },
+  { label: '小', scale: 0.75 },
+  { label: '中', scale: 1 },
+  { label: '大', scale: 1.5 },
+  { label: '特大', scale: 2 }
+]
+
+const FONT_SCALABLE_PARSER_LABELS: ReadonlySet<SupportedParserLabel> = new Set([
+  'PDF',
+  'TXT',
+  'EPUB',
+  'Markdown'
+])
+
+// 将 #rrggbb 十六进制颜色解析为带透明度的 rgba() 字符串，非法输入原样返回。
+export function hexToRgba(hex: string, alpha: number): string {
+  const match = /^#([0-9a-fA-F]{6})$/.exec(hex)
+  if (!match) return hex
+  const value = match[1]
+  const r = parseInt(value.slice(0, 2), 16)
+  const g = parseInt(value.slice(2, 4), 16)
+  const b = parseInt(value.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+// 监听系统明暗模式：jsdom 等无 matchMedia 的环境回退到 'dark'，保留既有行为与测试。
+// 初始值通过 useState 初始化器同步读取，随后订阅 change 事件保持跟随。
+function usePrefersColorScheme(): PopoverTheme {
+  const [scheme, setScheme] = useState<PopoverTheme>(() => {
+    if (typeof window.matchMedia !== 'function') return 'dark'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light'
+  })
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (event: MediaQueryListEvent) => {
+      setScheme(event.matches ? 'dark' : 'light')
+    }
+    mql.addEventListener('change', handleChange)
+    return () => mql.removeEventListener('change', handleChange)
+  }, [])
+
+  return scheme
+}
+
+// 监听视口宽度：用于底部栏响应式（<1280 仅图标，<768 折叠为下拉菜单）。
+function useWindowWidth(): number {
+  const [width, setWidth] = useState(() => window.innerWidth)
+
+  useEffect(() => {
+    const handleResize = () => setWidth(window.innerWidth)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  return width
+}
 
 export type ParseUploadedDocumentResult =
   | {
@@ -78,9 +195,37 @@ export function getParserErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function isImageFile(file: File): boolean {
-  const extension = getFileExtension(file.name)
-  return extension !== null && IMAGE_FILE_EXTENSIONS.includes(extension)
+type EpubParserDocument = Awaited<ReturnType<typeof EpubParser.encode>>
+type EpubRuntimeDocument = ReturnType<
+  EpubParserDocument['getIntermediateDocument']
+>
+type EpubDocumentSerializer = {
+  readonly serialize: (
+    document: EpubRuntimeDocument
+  ) => Promise<IntermediateDocumentSerialized>
+}
+
+function isEpubDocumentSerializer(
+  value: unknown
+): value is EpubDocumentSerializer {
+  if ((typeof value !== 'object' && typeof value !== 'function') || !value) {
+    return false
+  }
+
+  return typeof Reflect.get(value, 'serialize') === 'function'
+}
+
+export async function convertEpubDocumentForReader(
+  epubDocument: EpubParserDocument
+): Promise<ReaderDocument> {
+  const document = epubDocument.getIntermediateDocument()
+  // EPUB parser 内部携带 @hamster-note/types@0.10；先用它自己的 serialize 转成纯数据，再交给 reader 的 0.8 runtime parse。
+  const documentClass = document.constructor
+  if (!isEpubDocumentSerializer(documentClass)) {
+    throw new Error('EPUB document serializer is unavailable')
+  }
+
+  return documentClass.serialize(document)
 }
 
 export async function parseUploadedDocument(
@@ -110,6 +255,18 @@ export async function parseUploadedDocument(
         return {
           status: 'failed',
           label: 'TXT',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'epub':
+      try {
+        const epubDocument = await EpubParser.encode(file)
+        const document = await convertEpubDocumentForReader(epubDocument)
+        return { status: 'parsed', label: 'EPUB', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'EPUB',
           error: getParserErrorMessage(error)
         }
       }
@@ -163,6 +320,9 @@ export async function parseUploadedDocument(
 // ---------------------------------------------------------------------------
 
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
+const OCR_STORAGE_PREFIX = 'hamster-reader-demo:ocr:'
+
+type OcrTextsByPage = Record<number, IntermediateText[]>
 
 function parseStoredBookmarks(raw: string | null): number[] {
   if (raw === null || raw.trim() === '') return []
@@ -194,6 +354,10 @@ function persistHighlights(
   const persisted = parseHighlights(
     serializeHighlights(ranges, rects, paintings)
   )
+  traceHighlight('demo.storage.write', {
+    fileName,
+    ranges: summarizeHighlightRanges(Array.from(persisted.ranges))
+  })
   localStorage.setItem(
     `hamster-reader-demo:highlights:${fileName}`,
     serializeHighlights(
@@ -213,14 +377,24 @@ export function App() {
   const [document, setDocument] = useState<
     IntermediateDocument | IntermediateDocumentSerialized | null
   >(null)
+  const [loadedParserLabel, setLoadedParserLabel] =
+    useState<SupportedParserLabel | null>(null)
+  const [fontScale, setFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
-  const [isOcrParsing, setIsOcrParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
-  const [ocrEnabled, setOcrEnabled] = useState<boolean>(false)
+  // --- OCR 受控演示 state ---
+  // ocrPages：已开启 OCR 的页码列表（传给 Reader 的 ocr.pages，移除即按页关闭）
+  const [ocrPages, setOcrPages] = useState<number[]>([])
+  // ocrTextsByPage：受控 OCR 数据，OCR 完成后由 onOcrTextsChange 回传并持久化
+  const [ocrTextsByPage, setOcrTextsByPage] = useState<OcrTextsByPage>({})
+  const [ocrPageInput, setOcrPageInput] = useState<string>('1')
+  const [ocrError, setOcrError] = useState<string | null>(null)
+  // ocrDevMode：OCR 开发调试模式开关，开启后 OCR 文字可见（黑色 50%）并加红色外框
+  const [ocrDevMode, setOcrDevMode] = useState<boolean>(false)
   const [renderMode, setRenderMode] = useState<ReaderRenderMode>('layout')
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
@@ -233,19 +407,89 @@ export function App() {
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
+  // 底部栏：跟随系统明暗模式、响应式宽度、工具颜色选择
+  const popoverTheme = usePrefersColorScheme()
+  const windowWidth = useWindowWidth()
+  const [toolColor, setToolColor] = useState(BOTTOM_BAR_COLORS[0].value)
+  const [toolMenuAnchor, setToolMenuAnchor] = useState<HTMLElement | null>(null)
+  const [fontMenuAnchor, setFontMenuAnchor] = useState<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!toolMenuAnchor && !fontMenuAnchor) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node
+      // 点击在触发按钮上：由按钮自身 onClick 处理切换
+      if (
+        toolMenuAnchor?.contains(target) ||
+        fontMenuAnchor?.contains(target)
+      ) {
+        return
+      }
+      // 点击在菜单浮层内：由菜单项 onClick 处理选择
+      const popoverEl = window.document.querySelector(
+        '[data-testid="tool-bottom-bar-tool-menu-popover"]'
+      )
+      if (popoverEl?.contains(target)) return
+      const fontPopoverEl = window.document.querySelector(
+        '[data-testid="tool-bottom-bar-font-scale-popover"]'
+      )
+      if (fontPopoverEl?.contains(target)) return
+      setToolMenuAnchor(null)
+      setFontMenuAnchor(null)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setToolMenuAnchor(null)
+        setFontMenuAnchor(null)
+      }
+    }
+    window.document.addEventListener('pointerdown', handlePointerDown)
+    window.document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.document.removeEventListener('pointerdown', handlePointerDown)
+      window.document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [fontMenuAnchor, toolMenuAnchor])
   const [containMarginX, setContainMarginX] = useState<number>(0)
   const [containMarginTop, setContainMarginTop] = useState<number>(0)
   const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
+  const [edgeCropAll, setEdgeCropAll] = useState<ReaderEdgeCrop | undefined>(
+    undefined
+  )
+  const [edgeCropPages, setEdgeCropPages] = useState<
+    Record<string, ReaderEdgeCrop> | undefined
+  >(undefined)
+  const [edgeCropEditing, setEdgeCropEditing] = useState(false)
+  const [hideSecondPage, setHideSecondPage] = useState(false)
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
+  const [virtualPaper, setVirtualPaper] = useState<ReaderVirtualPaperState>({
+    x: 0,
+    y: 0,
+    scale: 1
+  })
   const requestIdRef = useRef(0)
-  const ocrRequestIdRef = useRef(0)
   const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
 
   // --- Selection 库集成演示 state ---
   // ranges 列表：受控模式，Reader 内部不修改，由 onSelect 回调外部追加
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+  useEffect(() => {
+    traceHighlight('mode.render', {
+      mode: renderMode,
+      isEpub: loadedParserLabel === 'EPUB',
+      fileName: uploadedFile?.name ?? null,
+      ranges: summarizeHighlightRanges(ranges)
+    })
+  }, [loadedParserLabel, ranges, renderMode, uploadedFile?.name])
+  const [highlightDragPreview, setHighlightDragPreview] =
+    useState<HighlightDragPreview | null>(null)
+  const latestPrimaryPointerRef = useRef<{
+    readonly pointerId: number
+    readonly x: number
+    readonly y: number
+  } | null>(null)
   // 当前选中的 range ID（点击高亮列表项时切换）
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedTool, setSelectedTool] =
@@ -257,6 +501,49 @@ export function App() {
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
   const [comments, setComments] = useState<ReaderComment[]>([])
+  const readerData = useMemo<ReaderData>(
+    () => ({
+      edgeCrop: {
+        all: edgeCropAll,
+        pages: edgeCropPages
+      },
+      hiddenPages: hideSecondPage ? [2] : [],
+      ranges,
+      rects,
+      pagePaintings,
+      virtualPaper,
+      bookmarkedPageNumbers
+    }),
+    [
+      bookmarkedPageNumbers,
+      edgeCropAll,
+      edgeCropPages,
+      hideSecondPage,
+      pagePaintings,
+      ranges,
+      rects,
+      virtualPaper
+    ]
+  )
+  const handleReaderDataChange = useCallback((nextData: ReaderData) => {
+    if (nextData.virtualPaper) {
+      setVirtualPaper(nextData.virtualPaper)
+    }
+  }, [])
+  const handleEdgeCropApply = useCallback(
+    (pageNumber: number | null, crop: ReaderEdgeCrop) => {
+      if (pageNumber === null) {
+        setEdgeCropAll(crop)
+      } else {
+        setEdgeCropPages((prev) => ({
+          ...prev,
+          [`page-${pageNumber}`]: crop
+        }))
+      }
+      setEdgeCropEditing(false)
+    },
+    []
+  )
   // 评论面板开关状态 + 当前激活的高亮 ID（用于自动勾选评论绑定）
   const [isCommentPanelOpen, setIsCommentPanelOpen] = useState(false)
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(
@@ -264,6 +551,8 @@ export function App() {
   )
   // 只有当前文件成功恢复评论后，持久化 effect 才允许写入，避免解析期间覆盖旧数据。
   const loadedCommentsFileNameRef = useRef<string | null>(null)
+  // OCR 持久化同理：仅当当前文件的 OCR 数据完成恢复后才允许写回
+  const loadedOcrFileNameRef = useRef<string | null>(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
 
   // --- Annotation history (undo/redo) state ---
@@ -286,8 +575,16 @@ export function App() {
   const handleAnnotationHistoryChange = useCallback(
     (
       next: ReaderAnnotationHistoryValue,
-      detail: ReaderAnnotationHistoryChangeDetail
+      detail: AnnotationHistoryChangeDetail
     ) => {
+      traceHighlight('demo.history.change', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        source: detail.source,
+        stateOwner: true,
+        selectedRangeId: next.selectedRangeId,
+        ranges: summarizeHighlightRanges(next.ranges)
+      })
       setRanges(next.ranges as ReaderSelectionRange[])
       setRects(next.rects as ReaderSelectionRectangle[])
       setSelectedRangeId(next.selectedRangeId)
@@ -302,17 +599,116 @@ export function App() {
         )
       }
     },
-    [uploadedFile?.name, pagePaintings]
+    [loadedParserLabel, pagePaintings, renderMode, uploadedFile?.name]
   )
 
-  // onSelect 回调：history 启用后，onAnnotationHistoryChange 是正规路径，
-  // 此回调保持为 no-op。
-  const handleSelectionSelect = useCallback(() => {}, [])
+  // onSelect 回调：点击高亮按钮后输出高亮数据到控制台
+  const handleSelectionSelect = useCallback(
+    (range: ReaderSelectionRange) => {
+      traceHighlight('demo.callback.select', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        ranges: summarizeHighlightRanges([range])
+      })
+    },
+    [loadedParserLabel, renderMode]
+  )
 
-  // onHighlight 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
-  const handleHighlight = useCallback(() => {}, [])
+  const handleHighlight = useCallback(
+    (range: ReaderSelectionRange) => {
+      traceHighlight('demo.callback.highlight', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        stateOwner: renderMode === 'text',
+        ranges: summarizeHighlightRanges([range])
+      })
+      if (renderMode !== 'text') return
+
+      setRanges((prev) => {
+        const existingIndex = prev.findIndex((item) => item.id === range.id)
+        const nextRanges =
+          existingIndex === -1
+            ? [...prev, range]
+            : prev.map((item) => (item.id === range.id ? range : item))
+        persistHighlights(
+          uploadedFile?.name,
+          nextRanges,
+          rects,
+          pagePaintings
+        )
+        return nextRanges
+      })
+      setSelectedRangeId(range.id)
+    },
+    [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
+  )
+
+  const handleLinkedDataChange = useCallback(
+    (next: ReaderLinkedSelectionData) => {
+      traceHighlight('demo.callback.linked-data', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        stateOwner: renderMode === 'text',
+        selectedRangeId: next.selectedRangeId,
+        ranges: summarizeHighlightRanges(next.items)
+      })
+      if (renderMode !== 'text') return
+
+      setRanges(next.items)
+      setSelectedRangeId(next.selectedRangeId)
+      persistHighlights(
+        uploadedFile?.name,
+        next.items,
+        rects,
+        pagePaintings
+      )
+    },
+    [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
+  )
+
+  const handleDragHighlight = useCallback((highlight: ReaderSelectionRange) => {
+    const pointer = latestPrimaryPointerRef.current
+    if (pointer === null) return
+
+    setHighlightDragPreview({ highlight, ...pointer })
+  }, [])
+
+  const isHighlightDragging = highlightDragPreview !== null
+  useEffect(() => {
+    if (!isHighlightDragging) return
+
+    const handlePointerMove = (event: PointerEvent) => {
+      setHighlightDragPreview((current) =>
+        current?.pointerId === event.pointerId
+          ? { ...current, x: event.clientX, y: event.clientY }
+          : current
+      )
+    }
+    const handlePointerEnd = (event: PointerEvent) => {
+      setHighlightDragPreview((current) =>
+        current?.pointerId === event.pointerId ? null : current
+      )
+    }
+
+    window.addEventListener('pointermove', handlePointerMove, true)
+    window.addEventListener('pointerup', handlePointerEnd, true)
+    window.addEventListener('pointercancel', handlePointerEnd, true)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove, true)
+      window.removeEventListener('pointerup', handlePointerEnd, true)
+      window.removeEventListener('pointercancel', handlePointerEnd, true)
+    }
+  }, [isHighlightDragging])
 
   const handleSelectionEnd = useCallback(() => {}, [])
+
+  // 工具切换：底部栏与设置面板 select 共用；
+  // 切换工具时仅重置 selectedRangeId/selectedRectId 选中态，不清除标注数据本身。
+  const handleToolChange = useCallback((nextTool: ReaderPageTool) => {
+    setSelectedTool(nextTool)
+    setSelectedRangeId(null)
+    setSelectedRectId(null)
+  }, [])
 
   // onSelectRange 回调：用户点击已有 range 时触发（selection-only，不创建 checkpoint）
   const handleSelectRange = useCallback((id: string | null) => {
@@ -483,6 +879,71 @@ export function App() {
     selectionRef.current?.scrollToPosition({ x: scrollX, y: scrollY })
   }, [scrollX, scrollY])
 
+  // 当前文档页数（兼容 serialized pages 数组与运行时 pageCount）
+  const documentPageCount = (() => {
+    if (!document) return 0
+    const serialized = document as IntermediateDocumentSerialized
+    if (Array.isArray(serialized.pages)) return serialized.pages.length
+    return (document as IntermediateDocument).pageCount
+  })()
+
+  // 点击「OCR」按钮：校验页码后加入 ocrPages，Reader 会对该页发起识别
+  const handleStartOcr = useCallback(() => {
+    const page = Number(ocrPageInput)
+    if (!Number.isInteger(page) || page <= 0) {
+      setOcrError('请输入有效的页码（正整数）')
+      return
+    }
+    if (documentPageCount > 0 && page > documentPageCount) {
+      setOcrError(`页码超出范围（当前文档共 ${documentPageCount} 页）`)
+      return
+    }
+    setOcrError(null)
+    setOcrPages((current) =>
+      current.includes(page)
+        ? current
+        : [...current, page].sort((left, right) => left - right)
+    )
+  }, [ocrPageInput, documentPageCount])
+
+  // 按页关闭 OCR：仅从开启列表移除；已识别数据保留，重新开启时无需重复 OCR
+  const handleCloseOcrPage = useCallback((page: number) => {
+    setOcrPages((current) => current.filter((item) => item !== page))
+  }, [])
+
+  // 全局关闭：清空开启列表，文档内所有 OCR 文本层隐藏（数据同样保留）
+  const handleCloseAllOcr = useCallback(() => {
+    setOcrPages([])
+  }, [])
+
+  // Reader OCR 完成回调：写入受控 state（持久化 effect 会同步到 localStorage）
+  const handleOcrTextsChange = useCallback(
+    (pageNumber: number, texts: IntermediateText[]) => {
+      setOcrTextsByPage((current) => ({ ...current, [pageNumber]: texts }))
+    },
+    []
+  )
+
+  const handleOcrError = useCallback(
+    (error: unknown, detail: { pageNumber: number }) => {
+      setOcrError(
+        `第 ${detail.pageNumber} 页 OCR 失败：${getParserErrorMessage(error)}`
+      )
+    },
+    []
+  )
+
+  // OCR 数据持久化：开启列表 + 识别结果随状态变化写入 localStorage
+  useEffect(() => {
+    const loadedFileName = loadedOcrFileNameRef.current
+    if (!loadedFileName) return
+
+    localStorage.setItem(
+      `${OCR_STORAGE_PREFIX}${loadedFileName}`,
+      serializeOcrStorage({ pages: ocrPages, textsByPage: ocrTextsByPage })
+    )
+  }, [ocrPages, ocrTextsByPage])
+
   // Demo-only 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做。
   // 必须忽略 input/textarea/contenteditable 中的按键，避免与文本编辑冲突。
   useEffect(() => {
@@ -525,6 +986,16 @@ export function App() {
     selectionRef.current?.redo()
   }, [])
 
+  const handleRenderModeChange = useCallback(
+    (nextRenderMode: ReaderRenderMode) => {
+      setRenderMode(nextRenderMode)
+      if (nextRenderMode === 'text') {
+        setEdgeCropEditing(false)
+      }
+    },
+    []
+  )
+
   const buildPageRange = useCallback((): ReaderPageRange | undefined => {
     if (!usePageRange) {
       return undefined
@@ -546,8 +1017,7 @@ export function App() {
 
   const handleFileUpload = useCallback(
     async (file: File) => {
-      ++ocrRequestIdRef.current
-      setIsOcrParsing(false)
+      setOcrError(null)
       setParseError(null)
 
       const requestId = ++requestIdRef.current
@@ -564,12 +1034,14 @@ export function App() {
         if (result.status === 'unsupported') {
           setParseError(result.error)
           setDocument(null)
+          setLoadedParserLabel(null)
           return
         }
 
         if (result.status === 'failed') {
           setParseError(`Failed to parse ${result.label}: ${result.error}`)
           setDocument(null)
+          setLoadedParserLabel(null)
           return
         }
 
@@ -578,6 +1050,7 @@ export function App() {
             `Failed to parse ${result.label}: received undefined result`
           )
           setDocument(null)
+          setLoadedParserLabel(null)
           return
         }
 
@@ -596,6 +1069,11 @@ export function App() {
         }
         setUploadedFile(file)
         setDocument(result.document)
+        setLoadedParserLabel(result.label)
+        setRenderMode(result.label === 'EPUB' ? 'text' : 'layout')
+        setFontScale(1.5)
+        setFontMenuAnchor(null)
+        setVirtualPaper({ x: 0, y: 0, scale: 1 })
 
         const storedHighlights = localStorage.getItem(
           `hamster-reader-demo:highlights:${file.name}`
@@ -604,7 +1082,6 @@ export function App() {
         setRanges(Array.from(parsedHighlights.ranges))
         setRects(Array.from(parsedHighlights.rects))
         setPagePaintings(parsedHighlights.paintings)
-
         setBookmarkedPageNumbers(
           parseStoredBookmarks(
             localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
@@ -617,6 +1094,14 @@ export function App() {
         loadedCommentsFileNameRef.current = file.name
         setComments(parseComments(storedComments))
 
+        // 恢复该文件持久化的 OCR 开启列表与识别数据（受控回传给 Reader）
+        const parsedOcr = parseOcrStorage(
+          localStorage.getItem(`${OCR_STORAGE_PREFIX}${file.name}`)
+        )
+        loadedOcrFileNameRef.current = file.name
+        setOcrPages(parsedOcr.pages)
+        setOcrTextsByPage(parsedOcr.textsByPage)
+
         setSelectedRangeId(null)
         setSelectedRectId(null)
       } catch (error) {
@@ -626,6 +1111,7 @@ export function App() {
 
         setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
         setDocument(null)
+        setLoadedParserLabel(null)
       } finally {
         if (requestId === requestIdRef.current) {
           setIsParsing(false)
@@ -666,55 +1152,41 @@ export function App() {
     }
   }, [])
 
-  useEffect(() => {
-    if (!ocrEnabled || uploadedFile === null || !isImageFile(uploadedFile)) {
-      ++ocrRequestIdRef.current
-      setIsOcrParsing(false)
-      return
-    }
-
-    const requestId = ++ocrRequestIdRef.current
-    setIsOcrParsing(true)
-    setParseError(null)
-
-    import('@hamster-note/image-parser')
-      .then(({ ImageParser }) => ImageParser.encode(uploadedFile))
-      .then((ocrDocument) => {
-        if (requestId === ocrRequestIdRef.current) {
-          setDocument(ocrDocument)
-        }
-      })
-      .catch((error: unknown) => {
-        if (requestId === ocrRequestIdRef.current) {
-          setParseError(`Failed to OCR image: ${getParserErrorMessage(error)}`)
-        }
-      })
-      .finally(() => {
-        if (requestId === ocrRequestIdRef.current) {
-          setIsOcrParsing(false)
-        }
-      })
-
-    return () => {
-      if (requestId === ocrRequestIdRef.current) {
-        ++ocrRequestIdRef.current
-      }
-    }
-  }, [ocrEnabled, uploadedFile])
+  const supportsFontScale =
+    loadedParserLabel !== null &&
+    FONT_SCALABLE_PARSER_LABELS.has(loadedParserLabel)
+  const selectedFontScaleLabel =
+    FONT_SCALE_OPTIONS.find((option) => option.scale === fontScale)?.label ??
+    '大'
 
   return (
-    <main data-testid='reader-demo-root' className='hamster-demo-shell'>
+    <main
+      data-testid='reader-demo-root'
+      className='hamster-demo-shell'
+      onPointerDownCapture={(event) => {
+        if (!event.isPrimary) return
+        latestPrimaryPointerRef.current = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY
+        }
+      }}
+      onPointerMoveCapture={(event) => {
+        if (!event.isPrimary) return
+        latestPrimaryPointerRef.current = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY
+        }
+      }}
+    >
       <div className='hamster-demo-sidebar'>
         <div data-testid='demo-sidebar-settings'>
           <h1>Hamster Reader Demo</h1>
-          {(isParsing || isOcrParsing) && (
+          {isParsing && (
             <section style={{ marginBottom: '24px' }}>
               <h2>Parsing...</h2>
-              <p>
-                {isOcrParsing
-                  ? 'Recognizing image text...'
-                  : 'Loading file content...'}
-              </p>
+              <p>Loading file content...</p>
             </section>
           )}
           {parseError && (
@@ -745,24 +1217,6 @@ export function App() {
                   data-testid='page-range-toggle'
                 />
                 <span>Enable page range</span>
-              </label>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  marginBottom: '12px'
-                }}
-              >
-                <input
-                  type='checkbox'
-                  checked={ocrEnabled}
-                  onChange={(event) =>
-                    setOcrEnabled(event.currentTarget.checked)
-                  }
-                  data-testid='ocr-toggle'
-                />
-                <span>Enable OCR</span>
               </label>
               {usePageRange && (
                 <div
@@ -825,7 +1279,7 @@ export function App() {
                 <input
                   type='file'
                   aria-label='Choose another file'
-                  accept='.pdf,.txt,.docx,.md,.markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/*'
+                  accept='.pdf,.txt,.docx,.epub,.md,.markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/*'
                   disabled={isParsing}
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0]
@@ -847,6 +1301,136 @@ export function App() {
               <div style={{ fontSize: '12px', color: '#64748b' }}>
                 已加载: {loadedPages.length > 0 ? loadedPages.join(', ') : '无'}
               </div>
+            </section>
+          )}
+
+          {document && (
+            <section
+              style={{ marginBottom: '24px' }}
+              data-testid='ocr-controls'
+            >
+              <h2>OCR 文字识别</h2>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  alignItems: 'center',
+                  marginBottom: '8px'
+                }}
+              >
+                <input
+                  type='number'
+                  min={1}
+                  value={ocrPageInput}
+                  onChange={(event) => setOcrPageInput(event.target.value)}
+                  style={{ width: '70px', padding: '4px' }}
+                  data-testid='ocr-page-input'
+                  aria-label='OCR 页码'
+                />
+                <button
+                  type='button'
+                  onClick={handleStartOcr}
+                  data-testid='ocr-start-btn'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: '#fff'
+                  }}
+                >
+                  OCR
+                </button>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={ocrDevMode}
+                    onChange={(event) => setOcrDevMode(event.target.checked)}
+                    data-testid='ocr-dev-mode-toggle'
+                  />
+                  开发模式（红框标注 OCR 文字）
+                </label>
+              </div>
+              {ocrError && (
+                <p
+                  data-testid='ocr-error'
+                  style={{ color: '#b91c1c', fontSize: '12px' }}
+                >
+                  {ocrError}
+                </p>
+              )}
+              {ocrPages.length > 0 && (
+                <div data-testid='ocr-active-pages'>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '6px',
+                      marginBottom: '8px'
+                    }}
+                  >
+                    {ocrPages.map((page) => (
+                      <span
+                        key={`ocr-page-${page}`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '2px 6px',
+                          fontSize: '12px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          background: '#fafafa'
+                        }}
+                        data-testid={`ocr-active-page-${page}`}
+                      >
+                        第 {page} 页
+                        {ocrTextsByPage[page] ? '（已识别）' : '（识别中）'}
+                        <button
+                          type='button'
+                          aria-label={`关闭第 ${page} 页 OCR`}
+                          onClick={() => handleCloseOcrPage(page)}
+                          data-testid={`ocr-close-page-${page}`}
+                          style={{
+                            padding: '0 4px',
+                            cursor: 'pointer',
+                            border: 'none',
+                            background: 'transparent',
+                            color: '#f44336',
+                            fontSize: '13px'
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <button
+                    type='button'
+                    onClick={handleCloseAllOcr}
+                    data-testid='ocr-close-all-btn'
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      background: '#fff'
+                    }}
+                  >
+                    全部关闭
+                  </button>
+                </div>
+              )}
             </section>
           )}
 
@@ -898,7 +1482,7 @@ export function App() {
                         nextRenderMode === 'layout' ||
                         nextRenderMode === 'text'
                       ) {
-                        setRenderMode(nextRenderMode)
+                        handleRenderModeChange(nextRenderMode)
                       }
                     }}
                     data-testid='render-mode-select'
@@ -1016,6 +1600,98 @@ export function App() {
                     gap: '8px'
                   }}
                 >
+                  <input
+                    type='checkbox'
+                    checked={edgeCropAll !== undefined}
+                    onChange={(event) =>
+                      setEdgeCropAll(
+                        event.currentTarget.checked
+                          ? { top: 0.1, right: 0.2, bottom: 0.05, left: 0.15 }
+                          : undefined
+                      )
+                    }
+                    data-testid='global-edge-crop-toggle'
+                  />
+                  <span>全局四边裁切 Global edge crop</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={edgeCropPages !== undefined}
+                    onChange={(event) =>
+                      setEdgeCropPages(
+                        event.currentTarget.checked
+                          ? {
+                              'page-1': {
+                                top: 0.02,
+                                right: 0.05,
+                                bottom: 0.2,
+                                left: 0.25
+                              }
+                            }
+                          : undefined
+                      )
+                    }
+                    data-testid='special-edge-crop-toggle'
+                  />
+                  <span>第 1 页特殊裁切 Page 1 override</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                {/* 边缘裁切编辑模式开关：点击后已加载页面显示 4 条可拖拽虚线，
+                    点击页内「应用到当前页/应用到全部」后自动退出该模式 */}
+                <button
+                  type='button'
+                  onClick={() => setEdgeCropEditing((prev) => !prev)}
+                  data-testid='edge-crop-edit-toggle'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: edgeCropEditing ? '#2563eb' : '#fff',
+                    color: edgeCropEditing ? '#fff' : '#333'
+                  }}
+                >
+                  边缘裁切 Edge Crop
+                </button>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={hideSecondPage}
+                    onChange={(event) =>
+                      setHideSecondPage(event.currentTarget.checked)
+                    }
+                    data-testid='hide-second-page-toggle'
+                  />
+                  <span>隐藏第 2 页 Hide page 2</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
                   <span>水平留白 Margin X (px)</span>
                   <input
                     type='number'
@@ -1095,11 +1771,7 @@ export function App() {
                         nextTool === 'rect-selection' ||
                         nextTool === 'drawing'
                       ) {
-                        setSelectedTool(nextTool)
-                        // 切换工具时取消所有选中状态（不清除数据本身，
-                        // 仅重置 selectedRangeId/selectedRectId 高亮选中）。
-                        setSelectedRangeId(null)
-                        setSelectedRectId(null)
+                        handleToolChange(nextTool)
                       }
                     }}
                     data-testid='selection-tool-select'
@@ -1382,24 +2054,34 @@ export function App() {
         )}
         <Reader
           document={document || undefined}
+          isEpub={loadedParserLabel === 'EPUB'}
+          isPdf={loadedParserLabel === 'PDF'}
+          data={readerData}
+          onDataChange={handleReaderDataChange}
+          edgeCropEditing={edgeCropEditing}
+          onEdgeCropApply={handleEdgeCropApply}
           renderMode={renderMode}
+          fontScale={supportsFontScale ? fontScale : undefined}
           touchPanMode={touchPanMode}
           onFileUpload={handleManualFileUpload}
           emptyText='No document loaded'
           pageRange={buildPageRange()}
           overlayRectType='percent'
-          ocr={
-            ocrEnabled && (uploadedFile === null || !isImageFile(uploadedFile))
-          }
+          ocr={{ enabled: true, pages: ocrPages }}
+          ocrTexts={ocrTextsByPage}
+          onOcrTextsChange={handleOcrTextsChange}
+          onOcrError={handleOcrError}
+          ocrDebug={ocrDevMode}
           onTextSelectionChange={() => {}}
           onTextSelectionEnd={() => {}}
           onSelectText={() => {}}
-          ranges={ranges}
           selectedRangeId={selectedRangeId}
           onSelect={handleSelectionSelect}
+          onLinkedDataChange={handleLinkedDataChange}
           onSelectRange={handleSelectRange}
           onUpdateRange={handleUpdateRange}
           onHighlight={handleHighlight}
+          onDragHighlight={handleDragHighlight}
           onRemoveRange={handleRemoveRange}
           onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
@@ -1411,16 +2093,14 @@ export function App() {
           containMarginTop={containMarginTop}
           containMarginBottom={containMarginBottom}
           selectedTool={selectedTool}
-          pagePaintings={pagePaintings}
           onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
           onPageBrowserClose={() => setShowPageBrowser(false)}
           themeColor={themeColor}
+          drawingStrokeColor={toolColor}
           comments={comments}
           onCommentsChange={handleCommentsChange}
-          bookmarkedPageNumbers={bookmarkedPageNumbers}
           onTogglePageBookmark={handleTogglePageBookmark}
-          rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
@@ -1435,6 +2115,18 @@ export function App() {
           onPageLoadStatusChange={setLoadedPages}
         />
       </div>
+      {highlightDragPreview !== null ? (
+        <div
+          aria-hidden='true'
+          className='hamster-demo-highlight-drag-preview'
+          data-testid='highlight-drag-preview'
+          style={{
+            transform: `translate3d(${highlightDragPreview.x + 14}px, ${highlightDragPreview.y + 14}px, 0)`
+          }}
+        >
+          {highlightDragPreview.highlight.text.trim() || '高亮内容'}
+        </div>
+      ) : null}
       {isCommentPanelOpen && (
         <CommentPanel
           comments={comments}
@@ -1444,6 +2136,283 @@ export function App() {
           onJumpToHighlight={handleJumpToHighlight}
           onClose={handleCloseCommentPanel}
         />
+      )}
+      {document && (
+        <Popover
+          edge='bottom'
+          edgeOffset={16}
+          theme={popoverTheme}
+          aria-label='工具栏'
+          data-testid='tool-bottom-bar'
+          style={{
+            boxSizing: 'border-box',
+            maxWidth: 'calc(100vw - 16px)',
+            overflowX: 'auto',
+            // .hn-button 未设置 white-space，nowrap 继承进按钮使 label 无法换行、min-content 不再收缩，配合 overflowX:auto 改为滚动。
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <Button
+            type='button'
+            size='small'
+            variant='ghost'
+            disabled={!historyStatus.canUndo}
+            aria-label='撤销'
+            data-testid='tool-bottom-bar-undo'
+            onClick={handleUndo}
+          >
+            <Icon name='undo' />
+          </Button>
+          <Button
+            type='button'
+            size='small'
+            variant='ghost'
+            disabled={!historyStatus.canRedo}
+            aria-label='恢复'
+            data-testid='tool-bottom-bar-redo'
+            onClick={handleRedo}
+          >
+            <Icon name='redo' />
+          </Button>
+          <PopoverSeparator />
+          <Button
+            type='button'
+            size='small'
+            variant={renderMode === 'text' ? 'primary' : 'ghost'}
+            aria-label={
+              renderMode === 'layout'
+                ? '切换到文字渲染模式'
+                : '切换到布局渲染模式'
+            }
+            aria-pressed={renderMode === 'text'}
+            data-testid='tool-bottom-bar-render-mode'
+            onClick={() =>
+              handleRenderModeChange(
+                renderMode === 'layout' ? 'text' : 'layout'
+              )
+            }
+          >
+            <Icon name='switch' />
+          </Button>
+          <Button
+            type='button'
+            size='small'
+            variant={touchPanMode === 'two-finger' ? 'primary' : 'ghost'}
+            disabled={renderMode === 'text'}
+            aria-label={
+              touchPanMode === 'single-finger'
+                ? '切换到双指滑动模式'
+                : '切换到单指滑动模式'
+            }
+            aria-pressed={touchPanMode === 'two-finger'}
+            data-testid='tool-bottom-bar-touch-pan-mode'
+            onClick={() =>
+              setTouchPanMode((currentMode) =>
+                currentMode === 'single-finger' ? 'two-finger' : 'single-finger'
+              )
+            }
+          >
+            <Icon name='touch' />
+          </Button>
+          <Button
+            type='button'
+            size='small'
+            variant={edgeCropEditing ? 'primary' : 'ghost'}
+            disabled={renderMode === 'text'}
+            aria-label='边缘裁切'
+            aria-pressed={edgeCropEditing}
+            data-testid='tool-bottom-bar-edge-crop'
+            onClick={() => setEdgeCropEditing((isEditing) => !isEditing)}
+          >
+            <Icon name='rectangle' />
+          </Button>
+          <PopoverSeparator />
+          {windowWidth < 768 ? (
+            // 窄屏：折叠为下拉菜单触发按钮
+            <Button
+              type='button'
+              size='small'
+              variant='primary'
+              aria-label='工具菜单'
+              aria-haspopup='menu'
+              aria-expanded={toolMenuAnchor !== null}
+              data-testid='tool-bottom-bar-tool-menu'
+              onClick={(event) => {
+                const el = event.currentTarget
+                setFontMenuAnchor(null)
+                setToolMenuAnchor((prev) => (prev ? null : el))
+              }}
+            >
+              <Icon
+                name={
+                  BOTTOM_BAR_TOOLS.find((t) => t.tool === selectedTool)?.icon ??
+                  'type'
+                }
+              />
+            </Button>
+          ) : (
+            // 中宽/宽屏：直接渲染工具按钮（<1280 仅图标，>=1280 图标+文字）
+            BOTTOM_BAR_TOOLS.map(({ tool, icon, label }) => (
+              <Button
+                key={tool}
+                type='button'
+                size='small'
+                variant={selectedTool === tool ? 'primary' : 'ghost'}
+                aria-pressed={selectedTool === tool}
+                aria-label={`${label}工具`}
+                data-testid={`tool-bottom-bar-${tool}`}
+                onClick={() => handleToolChange(tool)}
+              >
+                <Icon name={icon} />
+                {windowWidth >= 1280 && label}
+              </Button>
+            ))
+          )}
+          <PopoverSeparator />
+          {BOTTOM_BAR_COLORS.map(({ name, label, value }) => (
+            <button
+              key={name}
+              type='button'
+              aria-label={`${label}工具颜色`}
+              aria-pressed={toolColor === value}
+              data-testid={`tool-bottom-bar-color-${name}`}
+              onClick={() => {
+                setToolColor(value)
+                setHighlightColor(hexToRgba(value, 0.35))
+              }}
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                backgroundColor: value,
+                border:
+                  toolColor === value
+                    ? '2px solid currentColor'
+                    : '2px solid transparent',
+                padding: 0,
+                cursor: 'pointer',
+                // 防止 flex 收缩把 20x20 色圆压成椭圆。
+                flexShrink: 0
+              }}
+            />
+          ))}
+          {supportsFontScale && (
+            <>
+              <PopoverSeparator />
+              <Button
+                type='button'
+                size='small'
+                variant='secondary'
+                aria-haspopup='menu'
+                aria-expanded={fontMenuAnchor !== null}
+                aria-controls='tool-bottom-bar-font-scale-menu'
+                data-testid='tool-bottom-bar-font-scale'
+                onClick={(event) => {
+                  const element = event.currentTarget
+                  setToolMenuAnchor(null)
+                  setFontMenuAnchor((previous) =>
+                    previous === null ? element : null
+                  )
+                }}
+              >
+                字体：{selectedFontScaleLabel}
+              </Button>
+            </>
+          )}
+        </Popover>
+      )}
+      {/* 窄屏菜单浮层：anchor 非空时展开，含三个工具选项 */}
+      {document && toolMenuAnchor && (
+        <Popover
+          anchor={toolMenuAnchor}
+          placement='top-start'
+          theme={popoverTheme}
+          data-testid='tool-bottom-bar-tool-menu-popover'
+        >
+          <Menu>
+            {BOTTOM_BAR_TOOLS.map(({ tool, icon, label }) => {
+              const isSelected = selectedTool === tool
+
+              return (
+                <MenuItem
+                  key={tool}
+                  aria-pressed={isSelected}
+                  aria-label={`${label}工具`}
+                  data-selected={isSelected}
+                  data-testid={`tool-bottom-bar-${tool}`}
+                  style={
+                    isSelected
+                      ? {
+                          backgroundColor:
+                            'color-mix(in srgb, var(--hn-color-accent) 14%, transparent)',
+                          color: 'var(--hn-color-accent)'
+                        }
+                      : undefined
+                  }
+                  onClick={() => {
+                    handleToolChange(tool)
+                    setToolMenuAnchor(null)
+                  }}
+                >
+                  <span
+                    aria-hidden='true'
+                    style={{
+                      display: 'inline-flex',
+                      visibility: isSelected ? 'visible' : 'hidden'
+                    }}
+                  >
+                    <Icon name='check' />
+                  </span>
+                  <Icon name={icon} />
+                  {label}
+                </MenuItem>
+              )
+            })}
+          </Menu>
+        </Popover>
+      )}
+      {document && supportsFontScale && fontMenuAnchor && (
+        <Popover
+          anchor={fontMenuAnchor}
+          placement='top-start'
+          theme={popoverTheme}
+          data-testid='tool-bottom-bar-font-scale-popover'
+        >
+          <Menu id='tool-bottom-bar-font-scale-menu' aria-label='字号菜单'>
+            {FONT_SCALE_OPTIONS.map(({ label, scale: optionScale }) => (
+              <MenuItem
+                key={label}
+                aria-pressed={fontScale === optionScale}
+                aria-label={label}
+                data-selected={fontScale === optionScale}
+                style={
+                  fontScale === optionScale
+                    ? {
+                        backgroundColor:
+                          'color-mix(in srgb, var(--hn-color-accent) 14%, transparent)',
+                        color: 'var(--hn-color-accent)'
+                      }
+                    : undefined
+                }
+                onClick={() => {
+                  setFontScale(optionScale)
+                  setFontMenuAnchor(null)
+                }}
+              >
+                <span
+                  aria-hidden='true'
+                  style={{
+                    display: 'inline-flex',
+                    visibility: fontScale === optionScale ? 'visible' : 'hidden'
+                  }}
+                >
+                  <Icon name='check' />
+                </span>
+                {label}
+              </MenuItem>
+            ))}
+          </Menu>
+        </Popover>
       )}
     </main>
   )

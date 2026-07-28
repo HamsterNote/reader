@@ -3,13 +3,13 @@
  * dist/index.d.ts（仅 `export {}`）。声明基于该版本运行时
  * 实际导出的公开 API，随版本变化时需同步更新。
  *
- * 该版本（npm 0.2.0）的运行时导出：
+ * 该版本（npm 1.0.0）的运行时导出：
  * - DEFAULT_ENABLED_INTERACTIONS（常量）
  * - VirtualPaper（组件）
  * - VirtualPaperInitialPlacement（枚举）
  * - VirtualPaperInteractionMode（枚举）
  *
- * 新增：containMarginX / containMarginY / lazyWillChange props。
+ * npm 1.0.0 的声明文件仍为空，因此这里继续补齐运行时 API。
  */
 
 import type { CSSProperties, HTMLAttributes, ReactNode } from 'react'
@@ -91,6 +91,12 @@ declare module '@hamster-note/virtual-paper' {
      * Reader 模式下滚轮缩放的防抖毫秒数。
      */
     readerModeZoomDebounceMs?: number
+    /**
+     * 为受控 `transform` 的外部缩放启用阅读模式预览；默认 false。
+     * 仅在 readerMode 与受控 transform 同时启用时生效，提交延迟复用
+     * readerModeZoomDebounceMs。（本地 file: 版本新增，npm 1.0.0 无此 prop）
+     */
+    readerModeExternalZoomPreview?: boolean
     /**
      * contain 模式下内容区在 X 方向保留的额外边距（像素），默认 0。
      */

@@ -33,6 +33,7 @@ interface RangeMagnifierController {
 
 interface RangeMagnifierProviderProps {
   readonly children: ReactNode
+  readonly enabled?: boolean
   readonly rootElement: HTMLElement | null
 }
 
@@ -45,6 +46,7 @@ export const useRangeMagnifier = (): RangeMagnifierController | null =>
 
 export const RangeMagnifierProvider = ({
   children,
+  enabled = true,
   rootElement
 }: RangeMagnifierProviderProps) => {
   const lensRef = useRef<HTMLDivElement>(null)
@@ -148,7 +150,7 @@ export const RangeMagnifierProvider = ({
     (source: HTMLElement, point: MagnifierPoint) => {
       const lens = lensRef.current
       const page = source.closest<HTMLElement>(
-        '.hamster-reader__intermediate-page'
+        '.hamster-reader__intermediate-page, .hamster-reader__intermediate-text-page'
       )
       if (!lens || !page) return
 
@@ -176,7 +178,7 @@ export const RangeMagnifierProvider = ({
     [end, move, registerDragCleanup, start]
   )
 
-  return (
+  return enabled ? (
     <RangeMagnifierContext.Provider value={controller}>
       {children}
       {rootElement
@@ -195,5 +197,7 @@ export const RangeMagnifierProvider = ({
           )
         : null}
     </RangeMagnifierContext.Provider>
+  ) : (
+    children
   )
 }

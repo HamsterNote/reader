@@ -9,12 +9,15 @@ import type {
   IntermediateContent,
   IntermediateDocument,
   IntermediateDocumentSerialized,
+  IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
+import type { Virtualizer } from '@tanstack/react-virtual'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import type { ReactNode, PointerEvent as ReactPointerEvent, Ref } from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent, ReactNode, Ref } from 'react'
 
+import type { ReaderFontScale } from '../../types/fontScale'
 import type {
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
@@ -30,11 +33,11 @@ import {
   type ReaderSelectedTextSegment,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
+import {
+  summarizeHighlightRanges,
+  traceHighlight
+} from './highlightDebug'
 import { IntermediateDocumentTextPageContent } from './IntermediateDocumentTextPageContent'
-import { RangeHandle } from './RangeHandle'
-import { RangeMagnifierProvider } from './RangeMagnifier'
-import { parsePublicPageId } from './rangeJumpHelpers'
-import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import type {
   ReaderPageRange,
   ReaderTextSelectionDetail
@@ -45,6 +48,11 @@ import {
   getVisiblePageNumbers,
   isIntermediateText
 } from './IntermediateDocumentViewer'
+import { resolveHiddenPageNumbers } from './pageDisplay'
+import { getPagePreloadWindow } from './pagePreloadWindow'
+import { RangeHandle } from './RangeHandle'
+import { RangeMagnifierProvider } from './RangeMagnifier'
+import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
   areRuntimeLinkedTransientsEqual,
@@ -52,9 +60,12 @@ import {
   extractRuntimeLinkedTransient,
   mapRuntimeLinkedDataToPublic,
   mapRuntimeRangeToPublic,
-  runtimePageSelectionId,
-  type RuntimeLinkedSelectionTransient
+  type RuntimeLinkedSelectionTransient,
+  runtimePageSelectionId
 } from './selectionAdapter'
+import { TextReadingProgress } from './TextReadingProgress'
+import { TextSelectionMagnifier } from './TextSelectionMagnifier'
+import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
 
@@ -72,6 +83,12 @@ const DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS = 5000
 
 const EMPTY_SELECTION_RANGES: SelectionRange[] = []
 
+type TextReadingProgressSnapshot = {
+  readonly currentPageNumber: number
+  readonly isScrolling: boolean
+  readonly progress: number
+}
+
 const DISABLED_ANNOTATION_HISTORY_STATUS = {
   enabled: false,
   canUndo: false,
@@ -84,7 +101,7 @@ type PendingLinkedHighlightOperation = ReadonlySet<string>
 
 const getEffectiveTextMaxLoadedPages = (
   configuredMaxLoadedPages: number | undefined,
-  visibleCount: number
+  protectedPageCount: number
 ) => {
   if (configuredMaxLoadedPages === Infinity) return Infinity
   if (
@@ -92,10 +109,10 @@ const getEffectiveTextMaxLoadedPages = (
     Number.isFinite(configuredMaxLoadedPages) &&
     configuredMaxLoadedPages > 0
   ) {
-    return configuredMaxLoadedPages
+    return Math.max(configuredMaxLoadedPages, protectedPageCount)
   }
 
-  return Math.max(5, visibleCount + 2)
+  return Math.max(5, protectedPageCount)
 }
 
 const getTextContentEntries = async (
@@ -350,7 +367,9 @@ function useTouchTapSelection(
 function useSelectionHighlight(
   pageNumbers: number[],
   runtimePageSelectionId: (pageNumber: number) => string,
-  selectionRefsByRuntimeIdRef: React.MutableRefObject<Map<string, SelectionRef>>,
+  selectionRefsByRuntimeIdRef: React.MutableRefObject<
+    Map<string, SelectionRef>
+  >,
   runtimeLinkedDataRef: React.MutableRefObject<LinkedSelectionData>,
   lastActiveRangeRef: React.MutableRefObject<LinkedSelectionRange | null>,
   beginLinkedHighlightOperation: () => PendingLinkedHighlightOperation,
@@ -434,7 +453,8 @@ function useSelectionHighlight(
     const activeRange = currentActiveRange ?? lastActiveRangeRef.current
     const activeSelectionRef = getActiveSelectionRef()
     const nativeSelectionText = window.getSelection()?.toString() ?? ''
-    const directActiveRange = nativeSelectionText.length === 0 && Boolean(activeRange)
+    const directActiveRange =
+      nativeSelectionText.length === 0 && Boolean(activeRange)
 
     try {
       if (directActiveRange && activeRange) {
@@ -497,7 +517,7 @@ function useSelectionHighlight(
  * 与 {@link IntermediateDocumentViewerProps} 相比，文本模式只接受以下子集：
  * - 文档输入：`document` / `serializedDocument` / `className`
  * - 页面范围与懒加载队列：`pageRange`、`initialLoadedPages`、
- *   `pageLoadConcurrency`、`pageLoadEnterDelayMs`、`pageUnloadDelayMs`、
+ *   `pageLoadConcurrency`、`pageLoadEnterDelayMs`、`pagePreloadRadius`、`pageUnloadDelayMs`、
  *   `maxLoadedPages`
  * - 旧版文本选择回调：`onTextSelectionChange`、`onTextSelectionEnd`、
  *   `onSelectText`
@@ -510,16 +530,24 @@ function useSelectionHighlight(
  */
 export type IntermediateDocumentTextViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
+  isEpub?: boolean
+  /** 当前文档是否为 PDF；文本模式据此启用基于 box 的段落重建。 */
+  isPdf?: boolean
   /** 已序列化的中间文档；与 `document` 二选一，文本模式同样支持。 */
   serializedDocument?: IntermediateDocumentSerialized | null
   className?: string
+  fontScale?: ReaderFontScale
   pageRange?: ReaderPageRange
+  /** 需要从文本阅读流中排除的 1-based 页码或公开 PageId。 */
+  hiddenPages?: readonly (number | string)[]
   /** 初始立即加载的页数，默认 `1`。 */
   initialLoadedPages?: number
   /** 并发加载页数上限，默认 `3`。 */
   pageLoadConcurrency?: number
   /** 页面进入可加载窗口后、发起加载前的延迟（毫秒），默认 `500`。 */
   pageLoadEnterDelayMs?: number
+  /** 可见页前后预加载的页数，默认前后各 `3` 页。 */
+  pagePreloadRadius?: number
   /** 页面离开可加载窗口后、卸载内容的延迟（毫秒），默认 `5000`。 */
   pageUnloadDelayMs?: number
   /** 最大并发已加载页数，超出后触发懒淘汰。 */
@@ -574,18 +602,24 @@ export type IntermediateDocumentTextViewerProps = {
   highlightColor?: string
   /** linked selection 活跃选区颜色；文本模式状态机接入后传给 Selection 包装层。 */
   selectionColor?: string
+  /** 是否启用选区端点放大镜，默认 false。 */
+  showSelectionMagnifier?: boolean
   /** 活跃选区 popover；文本模式状态机接入后传给 Selection 包装层。 */
   selectionPopover?: ReactNode
   /** 已存在高亮 popover；文本模式状态机接入后按当前高亮解析。 */
   highlightPopover?: ReaderHighlightPopover
   /** 默认高亮 popover 的评论入口；文本模式状态机接入后由 popover 按需调用。 */
-  onCommentHighlight?: (highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>
+  onCommentHighlight?: (
+    highlight: ReaderSelectionRange
+  ) => Promise<ReaderSelectionRange>
   /** 自动确认高亮开关；文本模式状态机接入后在 selection end 时消费。 */
   autoHighlight?: boolean
   /** Reader 公开 selection ref；文本模式状态机接入后暴露 highlight/clear/scrollToRange。 */
   selectionRef?: Ref<ReaderSelectionRef>
   /** overlay 矩形坐标类型；文本模式状态机接入后传给 Selection 包装层。 */
   overlayRectType?: ReaderSelectionOverlayRectType
+  /** Popover 使用相对定位（absolute）相对于容器，而非 fixed 相对于 window */
+  popoverRelative?: boolean
 }
 
 /**
@@ -609,12 +643,17 @@ export function IntermediateDocumentTextViewer(
 ) {
   const {
     document,
+    isEpub = false,
+    isPdf = false,
     serializedDocument,
     className,
+    fontScale,
     pageRange,
+    hiddenPages,
     initialLoadedPages = 1,
     pageLoadConcurrency = 3,
     pageLoadEnterDelayMs = 500,
+    pagePreloadRadius = 3,
     pageUnloadDelayMs = DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS,
     maxLoadedPages,
     ranges,
@@ -633,12 +672,14 @@ export function IntermediateDocumentTextViewer(
     onHighlight,
     highlightColor,
     selectionColor,
+    showSelectionMagnifier = false,
     selectionPopover,
     highlightPopover,
     onCommentHighlight,
     autoHighlight,
     selectionRef,
-    overlayRectType = 'percent'
+    overlayRectType = 'percent',
+    popoverRelative
   } = props
 
   // 原生滚动容器 ref —— useVirtualizer 通过 getScrollElement 读取其几何尺寸。
@@ -653,7 +694,10 @@ export function IntermediateDocumentTextViewer(
   const unloadTimersRef = useRef(
     new Map<number, ReturnType<typeof setTimeout>>()
   )
-  const previousVisiblePageNumbersRef = useRef(new Set<number>())
+  const preloadEnterTimersRef = useRef(
+    new Map<number, ReturnType<typeof setTimeout>>()
+  )
+  const previousPreloadPageNumbersRef = useRef(new Set<number>())
   const textsByPageNumberRef = useRef(new Map<number, IntermediateText[]>())
 
   // 选择追踪：镜像 layout 模式 — scrollContainer 既做滚动又做 viewer root
@@ -692,6 +736,9 @@ export function IntermediateDocumentTextViewer(
   const [textsByPageNumber, setTextsByPageNumber] = useState(
     () => new Map<number, IntermediateText[]>()
   )
+  const [paragraphsByPageNumber, setParagraphsByPageNumber] = useState(
+    () => new Map<number, IntermediateParagraph[]>()
+  )
   textsByPageNumberRef.current = textsByPageNumber
 
   // 解析 runtime document，复用 layout 模式的同一份纯函数。
@@ -705,8 +752,11 @@ export function IntermediateDocumentTextViewer(
   // getVisiblePageNumbers 对无效 range 返回 []，与 layout 模式语义一致。
   const pageNumbers = useMemo(() => {
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
-    return getVisiblePageNumbers(allPageNumbers, pageRange)
-  }, [runtimeDocument, pageRange])
+    const hiddenPageNumbers = resolveHiddenPageNumbers(hiddenPages)
+    return getVisiblePageNumbers(allPageNumbers, pageRange).filter(
+      (pageNumber) => !hiddenPageNumbers.has(pageNumber)
+    )
+  }, [hiddenPages, runtimeDocument, pageRange])
   const pageNumbersKey = useMemo(() => pageNumbers.join(','), [pageNumbers])
 
   const selectionScopeRef = useRef({
@@ -730,10 +780,128 @@ export function IntermediateDocumentTextViewer(
   const [internalRanges, setInternalRanges] = useState<ReaderSelectionRange[]>(
     () => defaultRanges ?? []
   )
-  const effectiveRanges = isRangesControlled ? ranges : internalRanges
+  const [readingProgress, setReadingProgress] =
+    useState<TextReadingProgressSnapshot>(() => ({
+      currentPageNumber: pageNumbers[0] ?? 0,
+      isScrolling: false,
+      progress: 0
+    }))
+  const handleVirtualizerChange = useCallback(
+    (instance: Virtualizer<HTMLDivElement, HTMLElement>, sync: boolean) => {
+      const scrollOffset = instance.scrollOffset ?? 0
+      const viewportHeight =
+        instance.scrollRect?.height ?? instance.scrollElement?.clientHeight ?? 0
+      const maximumScrollOffset = Math.max(
+        0,
+        instance.getTotalSize() - viewportHeight
+      )
+      const currentItem = instance.getVirtualItemForOffset(scrollOffset)
+      const currentPageNumber =
+        pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
+      const progress =
+        maximumScrollOffset > 0 ? scrollOffset / maximumScrollOffset : 0
+
+      setReadingProgress((current) => {
+        if (
+          current.currentPageNumber === currentPageNumber &&
+          current.isScrolling === sync &&
+          current.progress === progress
+        ) {
+          return current
+        }
+        return { currentPageNumber, isScrolling: sync, progress }
+      })
+    },
+    [pageNumbers]
+  )
+  // TanStack Virtual 虚拟化器：count = pageNumbers.length，
+  // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
+  // getItemKey 直接用真实页码（稳定 key，避免页码/索引错位），
+  // overscan: 0 严格保证只渲染可见视口内的页面 DOM。
+  // measureElement 选项：无文本页只渲染很矮的 "Page N" 占位内容，不能把
+  // 这个临时高度写回虚拟化器，否则累计总高度会持续塌缩并把全部页面拉进
+  // 可视范围。有文本内容后 ResizeObserver 会再次测量并写入真实高度。
+  const virtualizer = useVirtualizer({
+    count: pageNumbers.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => TEXT_PAGE_ESTIMATED_HEIGHT,
+    getItemKey: (index) => pageNumbers[index],
+    overscan: 0,
+    onChange: handleVirtualizerChange,
+    measureElement: (el) => {
+      if (el.getAttribute('data-page-measurable') !== 'true') {
+        return TEXT_PAGE_ESTIMATED_HEIGHT
+      }
+      const measured = el.getBoundingClientRect().height
+      return measured > 0 ? measured : TEXT_PAGE_ESTIMATED_HEIGHT
+    }
+  })
+
+  const virtualItems = virtualizer.getVirtualItems()
+  const handleReadingProgressSeek = useCallback(
+    (progress: number) => {
+      const viewportHeight =
+        virtualizer.scrollRect?.height ??
+        scrollContainerRef.current?.clientHeight ??
+        0
+      const maximumScrollOffset = Math.max(
+        0,
+        virtualizer.getTotalSize() - viewportHeight
+      )
+      virtualizer.scrollToOffset(progress * maximumScrollOffset, {
+        align: 'start',
+        behavior: 'auto'
+      })
+    },
+    [virtualizer]
+  )
+  const visiblePageNumbers = useMemo(
+    () =>
+      virtualItems
+        .map((item) => pageNumbers[item.index])
+        .filter(
+          (pageNumber): pageNumber is number => typeof pageNumber === 'number'
+        ),
+    [virtualItems, pageNumbers]
+  )
+  const textLayoutKey = `${fontScale ?? 'default'}:${Array.from(
+    textsByPageNumber.keys()
+  ).join(',')}:${visiblePageNumbers.join(',')}`
+  const storedRanges = isRangesControlled ? ranges : internalRanges
+  const effectiveRanges = useDerivedTextSelectionRanges({
+    ranges: storedRanges,
+    root: viewerRootElement,
+    pageNumbers,
+    overlayRectType,
+    layoutKey: textLayoutKey
+  })
   const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
   effectiveRangesRef.current = effectiveRanges
-
+  const lastTextGeometryTraceRef = useRef('')
+  useEffect(() => {
+    const detail = {
+      mode: 'text',
+      isEpub,
+      layoutKey: textLayoutKey,
+      hasRoot: viewerRootElement !== null,
+      pageNumbers,
+      visiblePageNumbers,
+      storedRanges: summarizeHighlightRanges(storedRanges),
+      effectiveRanges: summarizeHighlightRanges(effectiveRanges)
+    }
+    const signature = JSON.stringify(detail)
+    if (lastTextGeometryTraceRef.current === signature) return
+    lastTextGeometryTraceRef.current = signature
+    traceHighlight('text.geometry', detail)
+  }, [
+    effectiveRanges,
+    isEpub,
+    pageNumbers,
+    storedRanges,
+    textLayoutKey,
+    viewerRootElement,
+    visiblePageNumbers
+  ])
   const pendingLinkedHighlightOperationRef =
     useRef<PendingLinkedHighlightOperation | null>(null)
   const emittedLinkedSelectRangeIdsRef = useRef(new Set<string>())
@@ -751,16 +919,16 @@ export function IntermediateDocumentTextViewer(
     string | null
   >(defaultSelectedRangeId ?? null)
   const effectiveSelectedRangeId = isSelectedRangeIdControlled
-    ? selectedRangeId
+    ? (selectedRangeId ?? null)
     : internalSelectedRangeId
   const selectedHighlight = useMemo(
     () =>
       effectiveSelectedRangeId
-        ? (effectiveRanges.find(
+        ? (storedRanges.find(
             (range) => range.id === effectiveSelectedRangeId
           ) ?? null)
         : null,
-    [effectiveRanges, effectiveSelectedRangeId]
+    [effectiveSelectedRangeId, storedRanges]
   )
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
@@ -815,41 +983,51 @@ export function IntermediateDocumentTextViewer(
       (range) => range.id === selectedHighlight.id
     )
     return selectedRuntimeRange ? selectedRuntimeRange.start.selectionId : null
-  }, [runtimeLinkedData.items, runtimeLinkedData.selectedRangeId, selectedHighlight])
+  }, [
+    runtimeLinkedData.items,
+    runtimeLinkedData.selectedRangeId,
+    selectedHighlight
+  ])
 
-  // TanStack Virtual 虚拟化器：count = pageNumbers.length，
-  // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
-  // getItemKey 直接用真实页码（稳定 key，避免页码/索引错位），
-  // overscan: 0 严格保证只渲染可见视口内的页面 DOM。
-  // measureElement 选项：当 getBoundingClientRect().height 为 0（退化场景，
-  // 如 jsdom 环境或空内容页）时回退到估计值，防止全部页面塌缩为 0 高度
-  // 导致虚拟范围爆炸。
-  const virtualizer = useVirtualizer({
-    count: pageNumbers.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => TEXT_PAGE_ESTIMATED_HEIGHT,
-    getItemKey: (index) => pageNumbers[index],
-    overscan: 0,
-    measureElement: (el) => {
-      const measured = el.getBoundingClientRect().height
-      return measured > 0 ? measured : TEXT_PAGE_ESTIMATED_HEIGHT
-    }
-  })
-
-  const virtualItems = virtualizer.getVirtualItems()
-  const visiblePageNumbers = useMemo(
+  const preloadPageNumbers = useMemo(
     () =>
-      virtualItems
-        .map((item) => pageNumbers[item.index])
-        .filter(
-          (pageNumber): pageNumber is number => typeof pageNumber === 'number'
-        ),
-    [virtualItems, pageNumbers]
+      getPagePreloadWindow(pageNumbers, visiblePageNumbers, pagePreloadRadius),
+    [pageNumbers, pagePreloadRadius, visiblePageNumbers]
   )
-  const visiblePageNumberSet = useMemo(
-    () => new Set(visiblePageNumbers),
-    [visiblePageNumbers]
+  const preloadPageNumberSet = useMemo(
+    () => new Set(preloadPageNumbers),
+    [preloadPageNumbers]
   )
+
+  const cancelPreloadEnter = useCallback((pageNumber: number) => {
+    const timer = preloadEnterTimersRef.current.get(pageNumber)
+    if (!timer) {
+      return
+    }
+    clearTimeout(timer)
+    preloadEnterTimersRef.current.delete(pageNumber)
+  }, [])
+
+  const clearAllPreloadEnterTimers = useCallback(() => {
+    preloadEnterTimersRef.current.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    preloadEnterTimersRef.current.clear()
+  }, [])
+
+  const schedulePreloadEnter = useCallback((pageNumber: number) => {
+    if (preloadEnterTimersRef.current.has(pageNumber)) {
+      return
+    }
+    const timer = setTimeout(() => {
+      preloadEnterTimersRef.current.delete(pageNumber)
+      if (!isMountedRef.current) {
+        return
+      }
+      lazyPageQueueRef.current.enqueuePage(pageNumber)
+    }, lazyQueueConfigRef.current.pageLoadEnterDelayMs)
+    preloadEnterTimersRef.current.set(pageNumber, timer)
+  }, [])
 
   const clearUnloadTimer = useCallback((pageNumber: number) => {
     const timer = unloadTimersRef.current.get(pageNumber)
@@ -871,7 +1049,7 @@ export function IntermediateDocumentTextViewer(
     (loadedTexts: Map<number, IntermediateText[]>) => {
       const cap = getEffectiveTextMaxLoadedPages(
         maxLoadedPages,
-        visiblePageNumberSet.size
+        preloadPageNumberSet.size
       )
       if (!Number.isFinite(cap) || loadedTexts.size <= cap) {
         return loadedTexts
@@ -882,14 +1060,14 @@ export function IntermediateDocumentTextViewer(
         if (nextTexts.size <= cap) {
           break
         }
-        if (!visiblePageNumberSet.has(pageNumber)) {
+        if (!preloadPageNumberSet.has(pageNumber)) {
           nextTexts.delete(pageNumber)
           clearUnloadTimer(pageNumber)
         }
       }
       return nextTexts
     },
-    [clearUnloadTimer, maxLoadedPages, visiblePageNumberSet]
+    [clearUnloadTimer, maxLoadedPages, preloadPageNumberSet]
   )
 
   const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
@@ -900,8 +1078,13 @@ export function IntermediateDocumentTextViewer(
     getPageContentEntries: getTextContentEntries,
     isIntermediateText,
     callbacks: {
-      onPageLoaded: ({ pageNumber, texts }) => {
+      onPageLoaded: ({ pageNumber, texts, paragraphs }) => {
         clearUnloadTimer(pageNumber)
+        setParagraphsByPageNumber((currentParagraphs) => {
+          const nextParagraphs = new Map(currentParagraphs)
+          nextParagraphs.set(pageNumber, paragraphs)
+          return nextParagraphs
+        })
         setTextsByPageNumber((currentTexts) => {
           const nextTexts = new Map(currentTexts)
           nextTexts.set(pageNumber, texts)
@@ -910,6 +1093,11 @@ export function IntermediateDocumentTextViewer(
       },
       onPageError: (pageNumber) => {
         clearUnloadTimer(pageNumber)
+        setParagraphsByPageNumber((currentParagraphs) => {
+          const nextParagraphs = new Map(currentParagraphs)
+          nextParagraphs.set(pageNumber, [])
+          return nextParagraphs
+        })
         setTextsByPageNumber((currentTexts) => {
           const nextTexts = new Map(currentTexts)
           nextTexts.set(pageNumber, [])
@@ -941,6 +1129,14 @@ export function IntermediateDocumentTextViewer(
   )
 
   const removeLoadedTextPage = useCallback((pageNumber: number) => {
+    setParagraphsByPageNumber((currentParagraphs) => {
+      if (!currentParagraphs.has(pageNumber)) {
+        return currentParagraphs
+      }
+      const nextParagraphs = new Map(currentParagraphs)
+      nextParagraphs.delete(pageNumber)
+      return nextParagraphs
+    })
     setTextsByPageNumber((currentTexts) => {
       if (!currentTexts.has(pageNumber)) {
         return currentTexts
@@ -1127,9 +1323,30 @@ export function IntermediateDocumentTextViewer(
     [onHighlight]
   )
 
+  const toTextRange = useCallback(
+    (range: ReaderSelectionRange): ReaderSelectionRange => ({
+      ...range,
+      rectsBySelectionId: {}
+    }),
+    []
+  )
+
   const handleLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
-      const publicLinkedData = mapRuntimeLinkedDataToPublic(next, scopeId)
+      const runtimePublicLinkedData = mapRuntimeLinkedDataToPublic(next, scopeId)
+      const publicLinkedData: ReaderLinkedSelectionData = {
+        ...runtimePublicLinkedData,
+        items: runtimePublicLinkedData.items.map(toTextRange),
+        activeRange: runtimePublicLinkedData.activeRange
+          ? toTextRange(runtimePublicLinkedData.activeRange)
+          : runtimePublicLinkedData.activeRange
+      }
+      traceHighlight('text.callback.linked-data', {
+        mode: 'text',
+        isEpub,
+        selectedRangeId: publicLinkedData.selectedRangeId,
+        ranges: summarizeHighlightRanges(publicLinkedData.items)
+      })
 
       const nextTransient = extractRuntimeLinkedTransient(next)
       setRuntimeLinkedTransientState((currentState) => {
@@ -1163,8 +1380,10 @@ export function IntermediateDocumentTextViewer(
       isRangesControlled,
       isSelectedRangeIdControlled,
       onLinkedDataChange,
+      isEpub,
       scopeId,
-      selectionScope
+      selectionScope,
+      toTextRange
     ]
   )
 
@@ -1173,12 +1392,25 @@ export function IntermediateDocumentTextViewer(
       const publicRange = mapRuntimeRangeToPublic(range, scopeId)
 
       if (publicRange) {
-        onLinkedSelect?.(publicRange)
-        emitLinkedSelectOnce(publicRange)
-        emitPendingLinkedHighlight(publicRange)
+        const textRange = toTextRange(publicRange)
+        traceHighlight('text.callback.select', {
+          mode: 'text',
+          isEpub,
+          ranges: summarizeHighlightRanges([textRange])
+        })
+        onLinkedSelect?.(textRange)
+        emitLinkedSelectOnce(textRange)
+        emitPendingLinkedHighlight(textRange)
       }
     },
-    [emitLinkedSelectOnce, emitPendingLinkedHighlight, onLinkedSelect, scopeId]
+    [
+      emitLinkedSelectOnce,
+      emitPendingLinkedHighlight,
+      onLinkedSelect,
+      isEpub,
+      scopeId,
+      toTextRange
+    ]
   )
 
   const handleLinkedUpdateRange = useCallback(
@@ -1186,11 +1418,31 @@ export function IntermediateDocumentTextViewer(
       const publicRange = mapRuntimeRangeToPublic(range, scopeId)
 
       if (publicRange) {
-        onLinkedUpdateRange?.(publicRange)
-        onUpdateRange?.(publicRange)
+        const textRange = toTextRange(publicRange)
+        traceHighlight('text.callback.update', {
+          mode: 'text',
+          isEpub,
+          ranges: summarizeHighlightRanges([textRange])
+        })
+        if (!isRangesControlled) {
+          setInternalRanges((currentRanges) =>
+            currentRanges.map((currentRange) =>
+              currentRange.id === textRange.id ? textRange : currentRange
+            )
+          )
+        }
+        onLinkedUpdateRange?.(textRange)
+        onUpdateRange?.(textRange)
       }
     },
-    [onLinkedUpdateRange, onUpdateRange, scopeId]
+    [
+      isRangesControlled,
+      isEpub,
+      onLinkedUpdateRange,
+      onUpdateRange,
+      scopeId,
+      toTextRange
+    ]
   )
 
   const handleLinkedSelectRange = useCallback(
@@ -1256,9 +1508,10 @@ export function IntermediateDocumentTextViewer(
 
   const scrollMountedTextPageIntoView = useCallback((pageNumber: number) => {
     const scrollIntoView = () => {
-      const pageElement = scrollContainerRef.current?.querySelector<HTMLElement>(
-        `[data-testid="intermediate-text-page-${pageNumber}"]`
-      )
+      const pageElement =
+        scrollContainerRef.current?.querySelector<HTMLElement>(
+          `[data-testid="intermediate-text-page-${pageNumber}"]`
+        )
       pageElement?.scrollIntoView?.({ block: 'center', inline: 'nearest' })
     }
 
@@ -1343,13 +1596,10 @@ export function IntermediateDocumentTextViewer(
   )
 
   const syncForwardedSelectionRef = useCallback(() => {
-    const forwardedRef =
-      selectionRefsByRuntimeIdRef.current.size > 0 ? publicSelectionRef : null
-
     if (typeof selectionRef === 'function') {
-      selectionRef(forwardedRef)
+      selectionRef(publicSelectionRef)
     } else if (selectionRef) {
-      selectionRef.current = forwardedRef
+      selectionRef.current = publicSelectionRef
     }
   }, [publicSelectionRef, selectionRef])
 
@@ -1390,7 +1640,9 @@ export function IntermediateDocumentTextViewer(
     [autoHighlight, handleSelectionEnd, highlightSelection]
   )
 
-  const selectionStartHandler = onSelectionStart ? handleSelectionStart : undefined
+  const selectionStartHandler = onSelectionStart
+    ? handleSelectionStart
+    : undefined
   const selectionEndHandler =
     onSelectionEnd || autoHighlight ? handleSelectionEndWrap : undefined
 
@@ -1503,50 +1755,62 @@ export function IntermediateDocumentTextViewer(
     isMountedRef.current = true
     return () => {
       isMountedRef.current = false
+      clearAllPreloadEnterTimers()
       clearAllUnloadTimers()
       lazyPageQueueRef.current.cancelAll()
     }
-  }, [clearAllUnloadTimers])
+  }, [clearAllPreloadEnterTimers, clearAllUnloadTimers])
 
   useEffect(() => {
     activeDocumentRef.current = runtimeDocument
     activePageNumbersKeyRef.current = pageNumbersKey
-    previousVisiblePageNumbersRef.current = new Set()
+    previousPreloadPageNumbersRef.current = new Set()
     textsByPageNumberRef.current = new Map()
     textElementsRef.current.clear()
     setTextsByPageNumber(new Map())
+    setParagraphsByPageNumber(new Map())
+    clearAllPreloadEnterTimers()
     clearAllUnloadTimers()
     lazyPageQueueRef.current.cancelAll()
-  }, [runtimeDocument, pageNumbersKey, clearAllUnloadTimers])
+  }, [
+    runtimeDocument,
+    pageNumbersKey,
+    clearAllPreloadEnterTimers,
+    clearAllUnloadTimers
+  ])
 
   useEffect(() => {
-    if (!runtimeDocument || visiblePageNumbers.length === 0) {
+    if (!runtimeDocument || preloadPageNumbers.length === 0) {
       return
     }
 
-    const previousVisiblePages = previousVisiblePageNumbersRef.current
-    const currentVisiblePages = new Set(visiblePageNumbers)
-    const isInitialVisibleSet = previousVisiblePages.size === 0
+    const previousPreloadPages = previousPreloadPageNumbersRef.current
+    const currentPreloadPages = new Set(preloadPageNumbers)
+    const isInitialPreloadSet = previousPreloadPages.size === 0
 
-    currentVisiblePages.forEach((pageNumber) => {
+    currentPreloadPages.forEach((pageNumber) => {
       clearUnloadTimer(pageNumber)
     })
 
-    if (isInitialVisibleSet) {
+    if (isInitialPreloadSet) {
       lazyPageQueueRef.current.cancelAll()
-      lazyPageQueueRef.current.enqueueInitialPages(visiblePageNumbers)
+      lazyPageQueueRef.current.enqueueInitialPages(preloadPageNumbers)
+      preloadPageNumbers.forEach((pageNumber) => {
+        lazyPageQueueRef.current.enqueuePage(pageNumber)
+      })
     } else {
-      currentVisiblePages.forEach((pageNumber) => {
-        if (!previousVisiblePages.has(pageNumber)) {
-          lazyPageQueueRef.current.enqueuePage(pageNumber)
+      currentPreloadPages.forEach((pageNumber) => {
+        if (!previousPreloadPages.has(pageNumber)) {
+          schedulePreloadEnter(pageNumber)
         }
       })
     }
 
-    previousVisiblePages.forEach((pageNumber) => {
-      if (currentVisiblePages.has(pageNumber)) {
+    previousPreloadPages.forEach((pageNumber) => {
+      if (currentPreloadPages.has(pageNumber)) {
         return
       }
+      cancelPreloadEnter(pageNumber)
       if (!textsByPageNumberRef.current.has(pageNumber)) {
         return
       }
@@ -1566,148 +1830,200 @@ export function IntermediateDocumentTextViewer(
       unloadTimersRef.current.set(pageNumber, timer)
     })
 
-    previousVisiblePageNumbersRef.current = currentVisiblePages
+    previousPreloadPageNumbersRef.current = currentPreloadPages
   }, [
     clearUnloadTimer,
+    cancelPreloadEnter,
     removeLoadedTextPage,
     runtimeDocument,
-    visiblePageNumbers
+    preloadPageNumbers,
+    schedulePreloadEnter
   ])
 
   useEffect(() => {
     setTextsByPageNumber((currentTexts) => applyLoadedPageLimit(currentTexts))
   }, [applyLoadedPageLimit])
 
+  useEffect(() => {
+    setParagraphsByPageNumber((currentParagraphs) => {
+      const hasEvictedPage = Array.from(currentParagraphs.keys()).some(
+        (pageNumber) => !textsByPageNumber.has(pageNumber)
+      )
+      if (!hasEvictedPage) {
+        return currentParagraphs
+      }
+
+      return new Map(
+        Array.from(currentParagraphs.entries()).filter(([pageNumber]) =>
+          textsByPageNumber.has(pageNumber)
+        )
+      )
+    })
+  }, [textsByPageNumber])
+
   // 文档标题用于无障碍标签；缺失时回退到静态文案。
   const title = runtimeDocument?.title
 
   return (
-    <div
-      ref={setScrollRootRef}
-      role='document'
-      className={[
-        // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
-        // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）
-        'hamster-reader__intermediate-text-viewer',
-        'hamster-reader__intermediate-text-scroll',
-        // 添加 layout 模式的 viewer class，使 buildSelectionPayload 的
-        // getSelectionViewerRoot 能在文本模式下找到 viewer root — 不影响布局
-        // 因为 SCSS .hamster-reader__intermediate-text-viewer / -text-scroll
-        // 的 display:block / overflow:auto 在源码顺序上后于该 class，覆盖其
-        // display:flex / overflow:hidden
-        'hamster-reader__intermediate-document-viewer',
-        className
-      ]
-        .filter(Boolean)
-        .join(' ')}
-      data-testid='intermediate-document-text-viewer'
-      data-title={title}
-      onPointerDown={handleViewerPointerDown}
-      onPointerMove={handleTouchPointerMove}
-      onPointerUp={handleTouchPointerUp}
-      onPointerCancel={handleTouchPointerCancel}
-    >
-      <RangeMagnifierProvider rootElement={viewerRootElement}>
-        <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
-        {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
-        <div
-          className='hamster-reader__intermediate-text-spacer'
-          style={{ height: virtualizer.getTotalSize() }}
+    <div className='hamster-reader__intermediate-text-shell'>
+      {pageNumbers.length > 0 ? (
+        <TextReadingProgress
+          currentPageNumber={readingProgress.currentPageNumber}
+          isScrolling={readingProgress.isScrolling}
+          maximumPageNumber={pageNumbers.at(-1) ?? 0}
+          minimumPageNumber={pageNumbers[0] ?? 0}
+          pageCount={pageNumbers.length}
+          progress={readingProgress.progress}
+          onSeek={handleReadingProgressSeek}
+        />
+      ) : null}
+      <div
+        ref={setScrollRootRef}
+        role='document'
+        className={[
+          // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
+          // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）
+          'hamster-reader__intermediate-text-viewer',
+          'hamster-reader__intermediate-text-scroll',
+          // 添加 layout 模式的 viewer class，使 buildSelectionPayload 的
+          // getSelectionViewerRoot 能在文本模式下找到 viewer root — 不影响布局
+          // 因为 SCSS .hamster-reader__intermediate-text-viewer / -text-scroll
+          // 的 display:block / overflow:auto 在源码顺序上后于该 class，覆盖其
+          // display:flex / overflow:hidden
+          'hamster-reader__intermediate-document-viewer',
+          className
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        data-testid='intermediate-document-text-viewer'
+        data-title={title}
+        onPointerDown={handleViewerPointerDown}
+        onPointerMove={handleTouchPointerMove}
+        onPointerUp={handleTouchPointerUp}
+        onPointerCancel={handleTouchPointerCancel}
+      >
+        <RangeMagnifierProvider
+          enabled={showSelectionMagnifier}
+          rootElement={viewerRootElement}
         >
-          {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
-          {virtualItems.map((virtualItem) => {
-            const pageNumber = pageNumbers[virtualItem.index]
-            if (typeof pageNumber !== 'number') {
-              return null
-            }
+          {showSelectionMagnifier ? (
+            <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
+          ) : null}
+          {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
+          <div
+            className='hamster-reader__intermediate-text-spacer'
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
+            {virtualItems.map((virtualItem) => {
+              const pageNumber = pageNumbers[virtualItem.index]
+              if (typeof pageNumber !== 'number') {
+                return null
+              }
 
-            const texts = textsByPageNumber.get(pageNumber)
-            const pageSelectionId = getRuntimePageSelectionId(pageNumber)
-            const isPopoverOwner =
-              popoverOwnerRuntimeId === null ||
-              popoverOwnerRuntimeId === pageSelectionId
-            const pagePopover = isPopoverOwner ? (
-              <PopoverPortal
-                containerRef={popoverContainerRef}
-                selectionKind='selected'
-                visible={true}
-              >
-                {existingHighlightPopover}
-              </PopoverPortal>
-            ) : undefined
-            const pageSelectionPopover = isPopoverOwner ? (
-              <PopoverPortal
-                containerRef={popoverContainerRef}
-                selectionKind='active'
-                visible={true}
-              >
-                {selectionPopover}
-              </PopoverPortal>
-            ) : undefined
-            return (
-              <div
-                key={pageNumber}
-                ref={virtualizer.measureElement}
-                data-index={virtualItem.index}
-                data-page-number={pageNumber}
-                data-selection-id={pageSelectionId}
-                data-testid={`intermediate-text-page-${pageNumber}`}
-                // SCSS .hamster-reader__intermediate-text-page 提供
-                // position:absolute / top:0 / left:0 / width:100% / padding:5px，
-                // 仅保留动态 transform（由 TanStack Virtual 计算）
-                className='hamster-reader__intermediate-text-page'
-                style={{ transform: `translateY(${virtualItem.start}px)` }}
-              >
-                {texts ? (
-                  <HamsterSelection
-                    selectionId={pageSelectionId}
-                    linkedMode
-                    linkedData={runtimeLinkedData}
-                    onLinkedDataChange={handlePageLinkedDataChange}
-                    onLinkedSelect={handleLinkedSelect}
-                    onLinkedUpdateRange={handleLinkedUpdateRange}
-                    onLinkedSelectRange={handlePageLinkedSelectRange}
-                    ranges={EMPTY_SELECTION_RANGES}
-                    selectedRangeId={effectiveSelectedRangeId}
-                    onSelect={undefined}
-                    onSelectRange={undefined}
-                    onUpdateRange={undefined}
-                    onSelectionStart={selectionStartHandler}
-                    onSelectionEnd={selectionEndHandler}
-                    onHighlight={undefined}
-                    highlightColor={highlightColor}
-                    selectionColor={selectionColor}
-                    popover={pagePopover}
-                    selectionPopover={pageSelectionPopover}
-                    overlayRectType={overlayRectType}
-                    tool='text'
-                    renderHandle={(handle) => (
-                      <RangeHandle
-                        handle={handle}
-                        linkedData={runtimeLinkedData}
-                        magnifierEnabled={handle.target === 'rect'}
-                        scale={1}
-                        selectionId={pageSelectionId}
-                        viewerRoot={viewerRootElement}
+              const texts = textsByPageNumber.get(pageNumber)
+              const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
+              const pageSelectionId = getRuntimePageSelectionId(pageNumber)
+              const isPopoverOwner =
+                popoverOwnerRuntimeId === null ||
+                popoverOwnerRuntimeId === pageSelectionId
+              const pagePopover = isPopoverOwner ? (
+                <PopoverPortal
+                  containerRef={popoverContainerRef}
+                  selectionKind='selected'
+                  visible={true}
+                  relative={popoverRelative}
+                >
+                  {existingHighlightPopover}
+                </PopoverPortal>
+              ) : undefined
+              const pageSelectionPopover = isPopoverOwner ? (
+                <PopoverPortal
+                  containerRef={popoverContainerRef}
+                  selectionKind='active'
+                  visible={true}
+                  relative={popoverRelative}
+                >
+                  {selectionPopover}
+                </PopoverPortal>
+              ) : undefined
+              return (
+                <div
+                  key={pageNumber}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualItem.index}
+                  data-page-measurable={
+                    texts !== undefined && texts.length > 0
+                  }
+                  data-page-number={pageNumber}
+                  data-selection-id={pageSelectionId}
+                  data-testid={`intermediate-text-page-${pageNumber}`}
+                  // SCSS .hamster-reader__intermediate-text-page 提供
+                  // position:absolute / top:0 / left:0 / width:100% / padding:5px，
+                  // 仅保留动态 transform（由 TanStack Virtual 计算）
+                  className={`hamster-reader__intermediate-text-page${
+                    virtualItem.index > 0
+                      ? ' hamster-reader__intermediate-text-page--following'
+                      : ''
+                  }`}
+                  style={{ transform: `translateY(${virtualItem.start}px)` }}
+                >
+                  {texts ? (
+                    <HamsterSelection
+                      selectionId={pageSelectionId}
+                      linkedMode
+                      linkedData={runtimeLinkedData}
+                      onLinkedDataChange={handlePageLinkedDataChange}
+                      onLinkedSelect={handleLinkedSelect}
+                      onLinkedUpdateRange={handleLinkedUpdateRange}
+                      onLinkedSelectRange={handlePageLinkedSelectRange}
+                      ranges={EMPTY_SELECTION_RANGES}
+                      selectedRangeId={effectiveSelectedRangeId}
+                      onSelect={undefined}
+                      onSelectRange={undefined}
+                      onUpdateRange={undefined}
+                      onSelectionStart={selectionStartHandler}
+                      onSelectionEnd={selectionEndHandler}
+                      onHighlight={undefined}
+                      highlightColor={highlightColor}
+                      selectionColor={selectionColor}
+                      popover={pagePopover}
+                      selectionPopover={pageSelectionPopover}
+                      overlayRectType={overlayRectType}
+                      tool='text'
+                      renderHandle={(handle) => (
+                        <RangeHandle
+                          handle={handle}
+                          linkedData={runtimeLinkedData}
+                          magnifierEnabled={
+                            showSelectionMagnifier && handle.target === 'rect'
+                          }
+                          scale={1}
+                          selectionId={pageSelectionId}
+                          viewerRoot={viewerRootElement}
+                        />
+                      )}
+                      ref={selectionRefForRuntimeId(pageSelectionId)}
+                    >
+                      <IntermediateDocumentTextPageContent
+                        key={pageNumber}
+                        pageNumber={pageNumber}
+                        texts={texts}
+                        paragraphs={paragraphs}
+                        isPdf={isPdf}
+                        setTextRef={setTextRef}
+                        fontScale={fontScale}
                       />
-                    )}
-                    ref={selectionRefForRuntimeId(pageSelectionId)}
-                  >
-                    <IntermediateDocumentTextPageContent
-                      key={pageNumber}
-                      pageNumber={pageNumber}
-                      texts={texts}
-                      setTextRef={setTextRef}
-                    />
-                  </HamsterSelection>
-                ) : (
-                  <>Page {pageNumber}</>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </RangeMagnifierProvider>
+                    </HamsterSelection>
+                  ) : (
+                    <>Page {pageNumber}</>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </RangeMagnifierProvider>
+      </div>
     </div>
   )
 }

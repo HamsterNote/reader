@@ -32,9 +32,73 @@ export function App() {
 
 ### How It Works
 
-`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Pages are rendered in `contain` fit mode by default (hardcoded inside `IntermediateDocumentViewer`).
+`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
 
 The renderer lazily loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release, designed for long documents without blocking the main thread.
+
+#### Unified Reader data
+
+Use `data` as the single persistence-friendly entry point for page crop, hidden pages, text and rectangle highlights, page drawings, the last VirtualPaper position/scale, and bookmarks. A field supplied through `data` takes precedence over its legacy flat prop; the flat props remain supported for compatibility.
+
+```tsx
+import { Reader } from '@hamster-note/reader'
+import type { ReaderData } from '@hamster-note/reader'
+import { useState } from 'react'
+
+export function PersistedReader() {
+  const [data, setData] = useState<ReaderData>({
+    edgeCrop: {
+      // Ratios use the original page size and may differ on every edge.
+      all: { top: 0.05, right: 0.08, bottom: 0.04, left: 0.08 },
+      // A page-specific crop replaces, rather than adds to, the global crop.
+      pages: {
+        'page-3': { top: 0.12, right: 0.03, bottom: 0.1, left: 0.03 }
+      }
+    },
+    // Numbers are 1-based page numbers; strings are public page IDs.
+    hiddenPages: [2, 'page-7'],
+    ranges: [],
+    rects: [],
+    pagePaintings: {},
+    virtualPaper: { x: 0, y: 0, scale: 1 },
+    bookmarkedPageNumbers: [1, 3]
+  })
+
+  return (
+    <Reader
+      document={document}
+      data={data}
+      // Fired after a VirtualPaper pan/zoom gesture ends.
+      onDataChange={setData}
+      onSelect={(range) =>
+        setData((current) => ({
+          ...current,
+          ranges: [...(current.ranges ?? []), range]
+        }))
+      }
+      onPagePaintingsChange={(pagePaintings) =>
+        setData((current) => ({ ...current, pagePaintings }))
+      }
+      onTogglePageBookmark={(pageNumber) =>
+        setData((current) => {
+          const bookmarks = current.bookmarkedPageNumbers ?? []
+          const containsPage = bookmarks.includes(pageNumber)
+          return {
+            ...current,
+            bookmarkedPageNumbers: containsPage
+              ? bookmarks.filter((value) => value !== pageNumber)
+              : [...bookmarks, pageNumber]
+          }
+        })
+      }
+    />
+  )
+}
+```
+
+`edgeCrop` ratios are clamped to the valid page area. `edgeCrop.all` applies globally, while `edgeCrop.pages['page-N']` fully overrides it for that page. Visual edge crop is layout-mode only; `hiddenPages` applies to both layout and text modes. Invalid hidden-page values are ignored. Public page IDs always use `page-${pageNumber}`.
+
+`onDataChange` reports the final `{ x, y, scale }` after a VirtualPaper gesture. Highlight, rectangle, drawing, and bookmark edits continue to use their existing typed callbacks; update the corresponding `data` field from those callbacks as shown above.
 
 #### Lazy Page Loading Props
 
@@ -45,6 +109,7 @@ The following optional props control the lazy loading queue:
 | `initialLoadedPages`   | `number` | `1`     | Number of pages to load immediately on mount (before visibility-based queue kicks in).                                                                                       |
 | `pageLoadConcurrency`  | `number` | `3`     | Maximum number of pages loaded concurrently.                                                                                                                                 |
 | `pageLoadEnterDelayMs` | `number` | `500`   | A non-initial page must remain continuously visible for this duration (ms) before its content load is enqueued. Prevents fast-scroll from triggering loads.                  |
+| `pagePreloadRadius`    | `number` | `3`     | Number of adjacent pages to preload on each side of every visible page. The window is clipped safely at the beginning and end of the document.                            |
 | `pageUnloadDelayMs`    | `number` | `5000`  | After a loaded page leaves the visible window, wait this duration (ms) before unloading its content back to an empty shell. Re-entering before the delay cancels the unload. |
 
 #### Render Timing
@@ -87,11 +152,15 @@ The browser Demo supports uploading and previewing the following formats:
 - **PDF** (`.pdf`)
 - **TXT** (`.txt`)
 - **DOCX** (`.docx`)
+- **EPUB** (`.epub`)
 - **Markdown** (`.md`, `.markdown`)
+- **Images** (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.svg`)
 
-EPUB (`.epub`) is **not supported** in this browser Demo because `@hamster-note/epub-parser` is Node.js-only and requires a separate server-side design.
+EPUB support uses `@hamster-note/epub-parser` and targets Reader text render mode. Fixed-layout fidelity and layout-mode EPUB rendering are out of scope for this Demo integration.
 
 ## API Notes
+
+### OCR
 
 Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
 
@@ -108,11 +177,48 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 />
 ```
 
+`ocr` accepts two shapes:
+
+| Value                             | Behavior                                                                                                                                                                                                 |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `true` / `{ enabled: true }`      | Auto mode: OCR runs for visible pages.                                                                                                                                                                   |
+| `{ enabled: true, pages: [...] }` | Manual mode: only the listed page numbers (1-based) are recognized and displayed. Removing a page from the list closes OCR for that page (in-flight results are discarded and the cache is invalidated). |
+| `false` / `{ enabled: false }`    | Global off: all OCR text layers are cleared for the current document.                                                                                                                                    |
+
+Recognized text is rendered as a transparent, selectable text layer on top of the page image. While a page is being recognized, the page shows an in-page loading badge that disappears on success or failure.
+
+OCR always runs on the original-size page image (`IntermediatePage.getThumbnail(1)`), re-requested from the parser — never on the zoom-dependent display thumbnail. Recognition resolution is therefore stable across zoom levels, and the returned polygons align with the page coordinate space. Pages whose only image is an inline `thumbnail`/`image` property fall back to that inline image.
+
+OCR results can be controlled by the host to avoid repeated recognition (for example, when restoring persisted data):
+
+| Prop               | Type                                                                     | Description                                                                                                                                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extraOCR`         | `(imageBase64: string) => IntermediatePage \| Promise<IntermediatePage>` | Optional external OCR provider. It receives the original-size page image and replaces the built-in image parser for recognition. Defaults to `undefined`.                                                                                             |
+| `ocrTexts`         | `Readonly<Record<number, readonly IntermediateText[]>>`                  | Controlled OCR text per page (1-based). Pages with data are rendered directly and never re-recognized; in manual mode only pages listed in `ocr.pages` are displayed.                                                                                 |
+| `onOcrTextsChange` | `(pageNumber: number, texts: IntermediateText[]) => void`                | Fired when a page finishes OCR. Persist the result and pass it back via `ocrTexts`.                                                                                                                                                                   |
+| `onOcrError`       | `(error: unknown, detail: { pageNumber: number }) => void`               | Fired when a page's OCR fails. A failed page is not retried until it is closed and reopened.                                                                                                                                                          |
+| `ocrDebug`         | `boolean`                                                                | Dev/debug mode: OCR text is rendered visibly (black at 50% opacity) with a red outline instead of transparent, so you can verify recognition position and content. Rendering-only; stored/`onOcrTextsChange` data is unaffected. Defaults to `false`. |
+
+```tsx
+const [ocrPages, setOcrPages] = useState<number[]>([])
+const [ocrTexts, setOcrTexts] = useState<Record<number, IntermediateText[]>>({})
+
+<Reader
+  document={document}
+  ocr={{ enabled: true, pages: ocrPages }}
+  extraOCR={async (imageBase64) => externalOcrService.recognize(imageBase64)}
+  ocrTexts={ocrTexts}
+  onOcrTextsChange={(pageNumber, texts) =>
+    setOcrTexts((current) => ({ ...current, [pageNumber]: texts }))
+  }
+/>
+```
+
 ### Text render mode
 
 `Reader` uses `renderMode='layout'` by default. Set `renderMode='text'` to render a text-only reading view that mounts and loads only the virtual pages currently visible in the scroll viewport.
 
-Text mode renders document text as normal flow content. It does not render page images, intermediate images, or OCR output, and it does not convert existing layout-mode highlight geometry into text-flow highlight geometry.
+Text mode renders document text as normal flow content. It does not render page images, intermediate images, or OCR output. It uses the same linked ranges as layout mode, but derives current text-flow rectangles from each range's `selectionId + offset` anchors instead of rendering the persisted layout rectangles.
 
 ### Text, rectangle, and drawing tools
 
@@ -130,7 +236,7 @@ const [pagePaintings, setPagePaintings] = useState<ReaderPagePaintingMap>({})
 />
 ```
 
-- `text-selection` uses the existing linked text-selection API (`ranges`, `onSelect`, `onUpdateRange`).
+- `text-selection` uses the same linked ranges in layout and text modes (`ranges`, `onHighlight`, `onUpdateRange`).
 - `rect-selection` uses the existing rectangle API (`rects`, `onCreateRect`, `onUpdateRect`).
 - `drawing` enables a per-page `DrawingSurface`; painting map keys use stable public IDs such as `page-1` and `page-2`.
 - An explicitly supplied legacy `tool` prop takes precedence over the text/rectangle mapping from `selectedTool`.
@@ -142,9 +248,9 @@ const [pagePaintings, setPagePaintings] = useState<ReaderPagePaintingMap>({})
 
 The `<Selection>` component wraps page content inside `<VirtualPaper>` and is active by default. The legacy native callbacks (`onTextSelectionChange`, `onTextSelectionEnd`, `onSelectText`) continue to fire alongside the linked-range Selection component.
 
-### Linked range shape
+### Canonical linked range shape
 
-`Reader` uses a linked range shape. Each endpoint carries a public page `selectionId`, and overlay rectangles are grouped by that page id in `rectsBySelectionId`.
+Both render modes persist the Layout-compatible linked range shape. Each endpoint carries a public page `selectionId`, and overlay rectangles are grouped by that page id in `rectsBySelectionId`.
 
 ```ts
 {
@@ -162,6 +268,10 @@ The `<Selection>` component wraps page content inside `<VirtualPaper>` and is ac
 ```
 
 Public page ids are always `page-${pageNumber}` (for example, `page-1`, `page-2`). Internally, each `Reader` instance scopes runtime Selection ids so two Readers on the same page cannot collide, but public callbacks and stored data stay unscoped. You should only read and write the public `page-${pageNumber}` ids.
+
+### Text-mode highlight geometry
+
+`ReaderSelectionRange` is the only persisted highlight shape in both render modes. In text mode, `start.selectionId + start.offset` and `end.selectionId + end.offset` act as stable character anchors. The mounted text pages derive runtime rectangles again whenever font scale, line wrapping, page content, or container size changes. Persisted `rectsBySelectionId` remains available to layout mode and is never treated as current text-flow geometry.
 
 ### Quick Start (linked selection)
 
@@ -215,11 +325,13 @@ export function App() {
 | `onSelectRange`          | `(id: string \| null) => void`                                              | Fired when the user clicks an existing highlight.                                                                                                                                                          |
 | `onUpdateRange`          | `(range: ReaderSelectionRange) => void`                                     | Fired when the user drags a selected highlight range handle. In uncontrolled mode, Reader replaces the matching range internally before calling this; controlled callers must update their `ranges` array. |
 | `onHighlight`            | `(range: ReaderSelectionRange) => void`                                     | Fired when a range is highlighted via the ref API or via Reader's internal auto-highlight (when `autoHighlight` is enabled).                                                                               |
+| `onDragHighlight`        | `(highlight: ReaderSelectionRange) => void`                                 | Fired once when primary-button mouse movement over an existing highlight exceeds 4px, or when a stationary primary touch is held for 500ms. The callback receives the original public range object.        |
 | `onSelectionStart`       | `(mousePos: ReaderMousePosition, selection: Selection) => void`             | Fired when a selection gesture begins.                                                                                                                                                                     |
 | `onSelectionEnd`         | `(mousePos: ReaderMousePosition, selection: Selection) => void`             | Fired when a selection gesture ends (mouseup-based; touch selection may not trigger this).                                                                                                                 |
 | `autoHighlight`          | `boolean`                                                                   | When true, completing a text selection automatically creates a highlight. Reader fires `onHighlight` but does not append to ranges array. Defaults to `false`.                                             |
 | `highlightColor`         | `string`                                                                    | Default CSS color for highlight overlays. A range-specific `markerStyle.backgroundColor` takes precedence.                                                                                                 |
-| `selectionColor`         | `string`                                                                    | CSS color for active selection overlay.                                                                                                                                                                    |
+| `selectionColor`         | `string`                                                                    | CSS color for the browser-native active text selection.                                                                                                                                                     |
+| `showSelectionMagnifier` | `boolean`                                                                   | Shows the endpoint magnifier while dragging custom range handles. Defaults to `false`.                                                                                                                      |
 | `selectionPopover`       | `React.ReactNode`                                                           | Custom popover content shown during active selection (before it becomes a highlight).                                                                                                                      |
 | `highlightPopover`       | `React.ReactNode \| ((highlight: ReaderSelectionRange) => React.ReactNode)` | Custom popover content shown when an existing highlight is clicked. The renderer receives the original range object, so range-specific color and metadata can be displayed.                                |
 | `onCommentHighlight`     | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>`        | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
@@ -286,7 +398,7 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 ### Demo Browser Storage
 
-The browser Demo persists annotation metadata to localStorage keyed by filename. The stored highlight shape is `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }`, unchanged from previous versions. Comments are stored separately under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
+The browser Demo persists annotation metadata to localStorage keyed by filename. Layout and text-mode annotations share `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }` under `hamster-reader-demo:highlights:{filename}`. Comments are stored under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
 
 After a file parses successfully, the Demo also stores that source `File` in browser-local IndexedDB. On reload, it reopens and reparses the most recent successful file so its annotations and comments can be displayed without another upload. The Demo labels this behavior beside the uploaded-file details and provides a **Forget saved file** button. Clearing the saved file does not delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all Demo storage.
 

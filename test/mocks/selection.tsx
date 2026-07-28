@@ -384,6 +384,16 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
     const className = props.className
       ? `hsn-selection-container ${props.className}`
       : 'hsn-selection-container'
+    const activeRange = props.linkedData?.activeRange
+    const activeRects =
+      activeRange && props.selectionId
+        ? (activeRange.rectsBySelectionId[props.selectionId] ?? [])
+        : []
+    const showSelectionPopover =
+      props.tool !== 'rect' &&
+      props.linkedData?.selectingText !== true &&
+      activeRects.length > 0 &&
+      props.selectionPopover
 
     return (
       <div
@@ -392,6 +402,22 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
         data-selection-id={props.selectionId}
       >
         <div className='hsn-selection-content'>{props.children}</div>
+        {activeRects.map((rect) => (
+          <div
+            key={`${activeRange?.id ?? 'active'}-${rect.x}-${rect.y}-${rect.width}-${rect.height}`}
+            className='hsn-selection-percent-rect-active'
+            style={{
+              position: 'absolute',
+              left: `${rect.x}%`,
+              top: `${rect.y}%`,
+              width: `${rect.width}%`,
+              height: `${rect.height}%`
+            }}
+          />
+        ))}
+        {showSelectionPopover ? (
+          <div className='hsn-selection-popover'>{props.selectionPopover}</div>
+        ) : null}
       </div>
     )
   }

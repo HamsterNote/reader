@@ -28,19 +28,27 @@ const POPOVER_GAP = 8
  *
  * 这样 popover 的屏幕尺寸不会随 zoom 缩放，始终保持原始大小。
  *
+ * 当 relative 为 true 时（参考 @hamster-note/components Popover 的 relative 属性）：
+ * - 不通过 Portal 渲染到 body，而是直接在组件树中渲染
+ * - 使用 position: absolute 相对于最近的定位祖先（容器需要 position: relative）
+ * - 坐标从视口坐标转换为容器相对坐标
+ *
  * @param visible  控制 portal 内容是否显示（用于 VirtualPaper transform debounce）
+ * @param relative 使用相对定位（absolute）而非固定定位（fixed），从容器基准定位
  * @param children 实际 popover 内容（按钮、颜色选择器等）
  */
 export function PopoverPortal({
   children,
   containerRef,
   selectionKind,
-  visible
+  visible,
+  relative = false
 }: {
   children: ReactNode
   containerRef: RefObject<HTMLElement | null>
   selectionKind: PopoverSelectionKind
   visible: boolean
+  relative?: boolean
 }) {
   // anchor div 引用——它被渲染在 .hsn-selection-popover 内部，作为定位基准
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -77,7 +85,8 @@ export function PopoverPortal({
             container.getBoundingClientRect(),
             selectionBounds,
             popover.getBoundingClientRect(),
-            POPOVER_GAP
+            POPOVER_GAP,
+            relative
           )
           setPosition((previousPosition) => {
             if (
@@ -103,7 +112,7 @@ export function PopoverPortal({
     rafId = requestAnimationFrame(updatePosition)
 
     return () => cancelAnimationFrame(rafId)
-  }, [containerRef, selectionKind, visible])
+  }, [containerRef, selectionKind, visible, relative])
 
   return (
     <>
@@ -124,36 +133,78 @@ export function PopoverPortal({
         }}
       />
 
-      {/* Portal 内容：渲染到 document.body，脱离 VirtualPaper transform */}
-      {visible &&
-        createPortal(
-          <div
-            ref={popoverRef}
-            // 添加 hsn-selection-popover class，使 Selection 库的 click-outside
-            // 检测（e.target.closest('.hsn-selection-popover')）能识别 portal 内容，
-            // 防止点击删除按钮/取色器时触发 deselect 关闭 popover
-            className='hamster-reader-popover-portal hsn-selection-popover'
-            style={{
-              position: 'fixed',
-              left: `${position?.left ?? 0}px`,
-              top: `${position?.top ?? 0}px`,
-              maxWidth: position ? `${position.maxWidth}px` : undefined,
-              maxHeight: position ? `${position.maxHeight}px` : undefined,
-              visibility: position ? 'visible' : 'hidden',
-              overflow: 'auto',
-              transform: 'none',
-              // 覆盖 .hsn-selection-popover 的 margin-top:-6px，
-              // 因为 portal 使用 fixed 定位，坐标已精确计算
-              margin: 0,
-              zIndex: 10000,
-              pointerEvents: 'auto',
-              userSelect: 'none'
-            }}
-          >
-            {children}
-          </div>,
-          document.body
-        )}
+      {/* Portal / 内联内容 */}
+      {visible && (
+        <PopoverContent
+          relative={relative}
+          position={position}
+          popoverRef={popoverRef}
+        >
+          {children}
+        </PopoverContent>
+      )}
     </>
+  )
+}
+
+/**
+ * 根据 relative 模式决定渲染方式：
+ * - relative=false（默认）：createPortal 到 document.body，position: fixed
+ * - relative=true：在组件树中直接渲染，position: absolute
+ */
+function PopoverContent({
+  children,
+  relative,
+  position,
+  popoverRef
+}: {
+  children: ReactNode
+  relative: boolean
+  position: PopoverPosition | null
+  popoverRef: RefObject<HTMLDivElement | null>
+}) {
+  const style: React.CSSProperties = {
+    left: `${position?.left ?? 0}px`,
+    top: `${position?.top ?? 0}px`,
+    maxWidth: position ? `${position.maxWidth}px` : undefined,
+    maxHeight: position ? `${position.maxHeight}px` : undefined,
+    visibility: position ? 'visible' : 'hidden',
+    overflow: 'auto',
+    transform: 'none',
+    margin: 0,
+    zIndex: 10000,
+    pointerEvents: 'auto',
+    userSelect: 'none'
+  }
+
+  if (relative) {
+    // 相对模式：直接渲染在组件树中，position: absolute 相对父容器
+    return (
+      <div
+        ref={popoverRef}
+        className='hamster-reader-popover-portal hsn-selection-popover'
+        style={{
+          ...style,
+          position: 'absolute'
+        }}
+      >
+        {children}
+      </div>
+    )
+  }
+
+  // 默认模式：Portal 到 document.body，position: fixed 脱离 VirtualPaper transform
+  return createPortal(
+    <div
+      ref={popoverRef}
+      className='hamster-reader-popover-portal hsn-selection-popover'
+      style={{
+        ...style,
+        position: 'fixed'
+      }}
+    >
+      {children}
+    </div>,
+    document.body
   )
 }

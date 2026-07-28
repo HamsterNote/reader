@@ -11,6 +11,12 @@ import type {
   ReaderComment,
   ReaderCommentChangeDetail
 } from '../types/comments'
+import type { ReaderFontScale } from '../types/fontScale'
+import type {
+  ReaderData,
+  ReaderEdgeCrop,
+  ReaderVirtualPaperState
+} from '../types/readerData'
 import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryOptions,
@@ -31,7 +37,9 @@ import {
   DefaultSelectionPopover
 } from './DefaultPopover'
 import type {
+  ReaderExtraOcr,
   ReaderInteractionMode,
+  ReaderOcrOptions,
   ReaderPageRange,
   ReaderSelectedTextSegment,
   ReaderTextSelectionDetail,
@@ -51,14 +59,46 @@ export type ReaderRenderMode = 'layout' | 'text'
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
+  /** 可持久化阅读数据的统一入口；其中字段优先于对应的旧版扁平 props。 */
+  data?: ReaderData
+  /** 阅读数据变化回调；目前在 VirtualPaper 手势结束后回传最终位置和缩放。 */
+  onDataChange?: (nextData: ReaderData) => void
+  /** 边缘裁切编辑模式开关；开启后页面以未裁剪尺寸显示并展示可拖拽虚线。 */
+  edgeCropEditing?: boolean
+  /**
+   * 用户点击"应用裁切"时触发。
+   * pageNumber 为 null 表示应用到所有页面（更新 edgeCrop.all），
+   * 非 null 表示仅应用到该页（更新 edgeCrop.pages[page-N]）。
+   */
+  onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
   className?: string
   emptyText?: string
   onFileUpload?: (file: File) => void
   overscanPages?: number
   pageRange?: ReaderPageRange
-  ocr?: boolean | { enabled?: boolean }
+  ocr?: boolean | ReaderOcrOptions
+  /** 自定义 OCR 实现；接收页面原尺寸 base64 图片并返回 IntermediatePage。 */
+  extraOCR?: ReaderExtraOcr
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  /**
+   * 受控 OCR 文本数据（pageNumber -> 文本列表，1-based）。
+   * 已有数据的页不会重复发起 OCR；手动模式（ocr.pages）下仅展示列表内的页。
+   */
+  ocrTexts?: Readonly<Record<number, readonly IntermediateText[]>>
+  /** 单页 OCR 完成回调，输出识别结果供宿主持久化 / 受控回传。 */
+  onOcrTextsChange?: (pageNumber: number, texts: IntermediateText[]) => void
+  /**
+   * OCR 开发调试模式：开启后 OCR 文本以黑色 50% 透明度显示并加红色外框，
+   * 便于核对识别位置与内容。仅影响渲染，不影响存储/回传的文本数据。
+   */
+  ocrDebug?: boolean
   renderMode?: ReaderRenderMode
+  /** 当前文档是否为 EPUB；EPUB 的 Layout 高亮矩形只实时计算，不写入持久化数据。 */
+  isEpub?: boolean
+  /** 当前文档是否为 PDF；Text 模式会据此按文字 box 重建行与段落。 */
+  isPdf?: boolean
+  /** 可重排文档字号倍率；提供时按 `(原字号 / 16) * 倍率` rem 渲染。 */
+  fontScale?: ReaderFontScale
   onTextSelectionChange?: (
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
@@ -103,12 +143,16 @@ export type ReaderProps = {
   ) => void
   onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   onHighlight?: (range: ReaderSelectionRange) => void
+  /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
+  onDragHighlight?: (highlight: ReaderSelectionRange) => void
   /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
   onRemoveRange?: (id: string) => void
   /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
   onHighlightColorChange?: (color: string) => void
   highlightColor?: string
   selectionColor?: string
+  /** 是否启用选区端点放大镜，默认 false。 */
+  showSelectionMagnifier?: boolean
   selectionPopover?: ReactNode
   highlightPopover?: ReaderHighlightPopover
   onCommentHighlight?: (
@@ -134,6 +178,8 @@ export type ReaderProps = {
   initialLoadedPages?: number
   pageLoadConcurrency?: number
   pageLoadEnterDelayMs?: number
+  /** 当前可见页前后预加载的页数，默认前后各 3 页。 */
+  pagePreloadRadius?: number
   pageUnloadDelayMs?: number
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
   containMarginX?: number
@@ -195,6 +241,8 @@ export type ReaderProps = {
     nextSelections: readonly SelectionRect[],
     nextPageSelections: ReaderPageRectSelectionMap
   ) => void
+  /** Popover 使用相对定位（absolute）相对于容器，而非 fixed 相对于 window */
+  popoverRelative?: boolean
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -286,14 +334,25 @@ function normalizeAnnotationHistoryOptions(
 
 export function Reader({
   document,
+  data,
+  onDataChange,
+  edgeCropEditing,
+  onEdgeCropApply,
   className,
   emptyText = 'No document',
   onFileUpload,
   overscanPages,
   pageRange,
   ocr,
+  extraOCR,
   onOcrError,
+  ocrTexts,
+  onOcrTextsChange,
+  ocrDebug,
   renderMode,
+  isEpub,
+  isPdf,
+  fontScale,
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
@@ -319,10 +378,12 @@ export function Reader({
   onSelectionStart,
   onSelectionEnd,
   onHighlight,
+  onDragHighlight,
   onRemoveRange,
   onHighlightColorChange,
   highlightColor,
   selectionColor,
+  showSelectionMagnifier = false,
   selectionPopover,
   highlightPopover,
   onCommentHighlight,
@@ -342,6 +403,7 @@ export function Reader({
   initialLoadedPages,
   pageLoadConcurrency,
   pageLoadEnterDelayMs,
+  pagePreloadRadius,
   pageUnloadDelayMs,
   onIntermediateDocumentRenderTiming,
   containMarginX,
@@ -370,7 +432,8 @@ export function Reader({
   onPagePaintingsChange,
   onPageTextSelectionsChange,
   onPageRectSelectionsChange,
-  onPageLoadStatusChange
+  onPageLoadStatusChange,
+  popoverRelative
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -382,7 +445,8 @@ export function Reader({
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const fileInputRef = useRef<HTMLInputElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
-  const resolvedPagePaintings = pagePaintings ?? internalPagePaintings
+  const resolvedPagePaintings =
+    data?.pagePaintings ?? pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
   pagePaintingsRef.current = resolvedPagePaintings
   const resolvedPageTextSelections =
@@ -394,11 +458,13 @@ export function Reader({
   const pageRectSelectionsRef = useRef(resolvedPageRectSelections)
   pageRectSelectionsRef.current = resolvedPageRectSelections
   const resolvedRanges =
+    data?.ranges ??
     ranges ??
     (Object.keys(resolvedPageTextSelections).length > 0
       ? getLinkedRanges(resolvedPageTextSelections)
       : undefined)
   const resolvedRects =
+    data?.rects ??
     rects ??
     (Object.keys(resolvedPageRectSelections).length > 0
       ? getPageRects(resolvedPageRectSelections)
@@ -407,6 +473,8 @@ export function Reader({
     tool ?? (selectedTool === 'rect-selection' ? 'rect' : 'text')
   const normalizedAnnotationHistory =
     normalizeAnnotationHistoryOptions(annotationHistory)
+  const resolvedBookmarkedPageNumbers =
+    data?.bookmarkedPageNumbers ?? bookmarkedPageNumbers
   const usesPageTextSelectionCompatibility =
     pageTextSelections !== undefined ||
     defaultPageTextSelections !== undefined ||
@@ -436,6 +504,13 @@ export function Reader({
     typeof selectionRef === 'function'
       ? handleSelectionRef
       : (selectionRef ?? defaultSelectionRef)
+
+  const handleVirtualPaperTransformChangeEnd = useCallback(
+    (virtualPaper: ReaderVirtualPaperState) => {
+      onDataChange?.({ ...data, virtualPaper })
+    },
+    [data, onDataChange]
+  )
 
   const handleFile = useCallback(
     (file: File) => {
@@ -498,14 +573,19 @@ export function Reader({
       }
       pagePaintingsRef.current = nextPaintings
 
-      if (pagePaintings === undefined) {
+      if (data?.pagePaintings === undefined && pagePaintings === undefined) {
         setInternalPagePaintings(nextPaintings)
       }
 
       onPagePaintingChange?.(pageId, nextValue, nextPaintings)
       onPagePaintingsChange?.(nextPaintings)
     },
-    [onPagePaintingChange, onPagePaintingsChange, pagePaintings]
+    [
+      data?.pagePaintings,
+      onPagePaintingChange,
+      onPagePaintingsChange,
+      pagePaintings
+    ]
   )
 
   const handleSelect = useCallback(
@@ -666,7 +746,11 @@ export function Reader({
         return (
           <IntermediateDocumentTextViewer
             document={document}
+            isEpub={isEpub}
+            isPdf={isPdf}
+            fontScale={fontScale}
             pageRange={pageRange}
+            hiddenPages={data?.hiddenPages}
             className={className}
             maxLoadedPages={maxLoadedPages}
             ranges={resolvedRanges}
@@ -685,6 +769,7 @@ export function Reader({
             onHighlight={onHighlight}
             highlightColor={highlightColor}
             selectionColor={selectionColor}
+            showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               selectionPopover ?? (
                 <DefaultSelectionPopover
@@ -710,18 +795,23 @@ export function Reader({
                   onUpdateRange={handleUpdateRange}
                   onRemoveRange={onRemoveRange}
                   onCommentHighlight={
-                    onCommentHighlight ? handleDefaultCommentHighlight : undefined
+                    onCommentHighlight
+                      ? handleDefaultCommentHighlight
+                      : undefined
                   }
                 />
               ))
             }
-            onCommentHighlight={highlightPopover ? onCommentHighlight : undefined}
+            onCommentHighlight={
+              highlightPopover ? onCommentHighlight : undefined
+            }
             autoHighlight={autoHighlight}
             selectionRef={resolvedSelectionRef}
             overlayRectType={overlayRectType}
             initialLoadedPages={initialLoadedPages}
             pageLoadConcurrency={pageLoadConcurrency}
             pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+            pagePreloadRadius={pagePreloadRadius}
             pageUnloadDelayMs={pageUnloadDelayMs}
             onTextSelectionChange={onTextSelectionChange}
             onTextSelectionEnd={onTextSelectionEnd}
@@ -729,6 +819,7 @@ export function Reader({
             onIntermediateDocumentRenderTiming={
               onIntermediateDocumentRenderTiming
             }
+            popoverRelative={popoverRelative}
           />
         )
       }
@@ -736,15 +827,29 @@ export function Reader({
       return (
         <IntermediateDocumentViewer
           document={document}
+          isEpub={isEpub}
+          fontScale={fontScale}
           overscan={overscanPages}
           pageRange={pageRange}
+          hiddenPages={data?.hiddenPages}
+          edgeCrop={data?.edgeCrop}
+          edgeCropEditing={edgeCropEditing}
+          onEdgeCropApply={onEdgeCropApply}
           ocr={ocr}
+          extraOCR={extraOCR}
           onOcrError={onOcrError}
+          ocrTexts={ocrTexts}
+          onOcrTextsChange={onOcrTextsChange}
+          ocrDebug={ocrDebug}
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
-          scale={scale}
-          defaultScale={defaultScale}
+          scale={data?.virtualPaper ? undefined : scale}
+          defaultScale={data?.virtualPaper ? undefined : defaultScale}
+          defaultVirtualPaperTransform={data?.virtualPaper}
+          onVirtualPaperTransformChangeEnd={
+            handleVirtualPaperTransformChangeEnd
+          }
           onScaleChange={onScaleChange}
           minScale={minScale}
           maxScale={maxScale}
@@ -765,8 +870,10 @@ export function Reader({
           onSelectionStart={onSelectionStart}
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
+          onDragHighlight={onDragHighlight}
           highlightColor={highlightColor}
           selectionColor={selectionColor}
+          showSelectionMagnifier={showSelectionMagnifier}
           selectionPopover={
             selectionPopover ?? (
               <DefaultSelectionPopover
@@ -821,6 +928,7 @@ export function Reader({
           initialLoadedPages={initialLoadedPages}
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+          pagePreloadRadius={pagePreloadRadius}
           pageUnloadDelayMs={pageUnloadDelayMs}
           onIntermediateDocumentRenderTiming={
             onIntermediateDocumentRenderTiming
@@ -841,9 +949,10 @@ export function Reader({
           commentCountByRectId={commentCountByRectId}
           comments={comments}
           onCommentsChange={onCommentsChange}
-          bookmarkedPageNumbers={bookmarkedPageNumbers}
+          bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
           onTogglePageBookmark={onTogglePageBookmark}
           onPageLoadStatusChange={onPageLoadStatusChange}
+          popoverRelative={popoverRelative}
         />
       )
     }

@@ -207,7 +207,7 @@ function parseRectsBySelectionId(
   if (!isPlainRecord(value)) return null
 
   const entries = Object.entries(value)
-  if (entries.length === 0) return null
+  if (entries.length === 0) return {}
 
   const parsedEntries = entries.flatMap(([selectionId, rects]) => {
     if (!isPublicPageSelectionId(selectionId) || !Array.isArray(rects))
