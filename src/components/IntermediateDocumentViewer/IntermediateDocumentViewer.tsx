@@ -1723,14 +1723,29 @@ function IntermediateDocumentPages({
           clientX: number,
           clientY: number
         ) => {
-          const bounds = pageElement.getBoundingClientRect()
+          const pageContentScale = pageElement.querySelector<HTMLElement>(
+            '.hamster-reader__intermediate-page-content-scale'
+          )
+          const contentBounds = pageContentScale?.getBoundingClientRect()
+          const pageBounds = pageElement.getBoundingClientRect()
+          const hasContentBounds =
+            contentBounds !== undefined &&
+            contentBounds.width > 0 &&
+            contentBounds.height > 0
+          const bounds = hasContentBounds ? contentBounds : pageBounds
           if (bounds.width <= 0 || bounds.height <= 0) return undefined
+          const sourceLeft = hasContentBounds ? 0 : cropGeometry.left
+          const sourceTop = hasContentBounds ? 0 : cropGeometry.top
+          const sourceWidth = hasContentBounds
+            ? shellPageSize.width
+            : cropGeometry.width
+          const sourceHeight = hasContentBounds
+            ? shellPageSize.height
+            : cropGeometry.height
           const pixelX =
-            cropGeometry.left +
-            (clientX - bounds.left) / (pagePreviewScale * readerScale)
+            sourceLeft + ((clientX - bounds.left) / bounds.width) * sourceWidth
           const pixelY =
-            cropGeometry.top +
-            (clientY - bounds.top) / (pagePreviewScale * readerScale)
+            sourceTop + ((clientY - bounds.top) / bounds.height) * sourceHeight
           const percentX = (pixelX / shellPageSize.width) * 100
           const percentY = (pixelY / shellPageSize.height) * 100
           return rects?.find((rect) => {
@@ -1834,6 +1849,26 @@ function IntermediateDocumentPages({
                 return
               }
 
+              const touchedRangeId = findTouchedRangeIdByPoint(
+                runtimeLinkedData,
+                event.clientX,
+                event.clientY,
+                [event.currentTarget]
+              )
+              if (touchedRangeId) {
+                event.preventDefault()
+                event.stopPropagation()
+                if (selectedRectId !== null) {
+                  onSelectRect?.(null)
+                }
+                handleLinkedSelectRange(
+                  touchedRangeId === runtimeLinkedData.selectedRangeId
+                    ? null
+                    : touchedRangeId
+                )
+                return
+              }
+
               const touchedRect = findTouchedRect(
                 event.currentTarget,
                 event.clientX,
@@ -1862,6 +1897,12 @@ function IntermediateDocumentPages({
             onClickCapture={(event) => {
               if (tool !== 'rect' || event.button !== 0) return
               if (
+                findTouchedRangeIdByPoint(
+                  runtimeLinkedData,
+                  event.clientX,
+                  event.clientY,
+                  [event.currentTarget]
+                ) ||
                 findTouchedRect(
                   event.currentTarget,
                   event.clientX,

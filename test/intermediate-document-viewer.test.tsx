@@ -8048,6 +8048,61 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     expect(onSelectRect).toHaveBeenCalledWith(existingRect.id)
   })
 
+  it('selects a full-page px rectangle through cropped content bounds', async () => {
+    // Given: 页面裁掉左上边缘，但持久化矩形仍使用完整源页面的 px 坐标。
+    const onSelectRect = vi.fn()
+    const existingRect = {
+      ...makeReaderRect('cropped-px-rect'),
+      overlayRectType: 'px' as const,
+      rect: { x: 45, y: 75, width: 10, height: 10 }
+    }
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 200 }
+    })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        tool='rect'
+        rects={[existingRect]}
+        onSelectRect={onSelectRect}
+        edgeCrop={{ all: { left: 0.25, top: 0.25 } }}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    const page = screen.getByTestId('intermediate-page-1')
+    const contentScale = screen.getByTestId('intermediate-page-content-scale-1')
+    const selectionContainer = page.querySelector('.hsn-selection-container')
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('Expected the page selection container')
+    }
+    mockElementRect(page, {
+      left: 100,
+      top: 100,
+      width: 75,
+      height: 150
+    })
+    mockElementRect(contentScale, {
+      left: 75,
+      top: 50,
+      width: 100,
+      height: 200
+    })
+
+    // When: 点击通过完整内容层换算后位于源坐标 x=50/y=80 的点。
+    fireEvent.pointerDown(selectionContainer, {
+      pointerType: 'mouse',
+      pointerId: 15,
+      button: 0,
+      clientX: 125,
+      clientY: 130
+    })
+
+    // Then: 裁切偏移不会被重复叠加，完整源页面中的矩形被选中。
+    expect(onSelectRect).toHaveBeenCalledWith(existingRect.id)
+  })
+
   it('clears a selected rectangle when pointerdown lands on another page', async () => {
     // Given: page 1 的矩形已选中，page 2 也已加载。
     const onSelectRect = vi.fn()

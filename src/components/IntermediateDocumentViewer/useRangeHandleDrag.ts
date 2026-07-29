@@ -217,19 +217,19 @@ export const useRangeHandleDrag = ({
     const capturePointerDown = (event: PointerEvent) => {
       const circle = circleRef.current
       const target = event.target
-      const circleRoot = circle?.closest(
-        '.hamster-reader__intermediate-document-viewer'
-      )
+      const circleRoot =
+        viewerRoot ??
+        circle?.closest('.hamster-reader__intermediate-document-viewer')
       const targetRoot =
         target instanceof HTMLButtonElement
           ? target.closest('.hamster-reader__intermediate-document-viewer')
           : null
+      const isSameViewer = circleRoot ? targetRoot === circleRoot : !targetRoot
       if (
         circle &&
         target instanceof HTMLButtonElement &&
         (target === circle ||
-          (targetRoot !== null &&
-            targetRoot === circleRoot &&
+          (isSameViewer &&
             target.className === circle.className &&
             target.dataset.rangeHandleCircle ===
               circle.dataset.rangeHandleCircle &&
@@ -249,7 +249,7 @@ export const useRangeHandleDrag = ({
       }
       activeSession.finishDrag()
     }
-  }, [circleRef])
+  }, [circleRef, viewerRoot])
 
   return startHandleDrag
 }

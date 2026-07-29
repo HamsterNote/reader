@@ -139,6 +139,7 @@ export type ReaderInteractiveProps = Pick<
   | 'selectionPopover'
   | 'highlightPopover'
   | 'onCommentHighlight'
+  | 'onCommentRect'
   | 'comments'
   | 'onCommentsChange'
   | 'selectionRef'

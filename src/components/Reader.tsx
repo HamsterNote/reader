@@ -158,6 +158,9 @@ export type ReaderProps = {
   onCommentHighlight?: (
     highlight: ReaderSelectionRange
   ) => Promise<ReaderSelectionRange>
+  onCommentRect?: (
+    rectangle: ReaderSelectionRectangle
+  ) => Promise<ReaderSelectionRectangle>
   autoHighlight?: boolean
   selectionRef?: Ref<ReaderSelectionRef>
   overlayRectType?: ReaderSelectionOverlayRectType
@@ -387,6 +390,7 @@ export function Reader({
   selectionPopover,
   highlightPopover,
   onCommentHighlight,
+  onCommentRect,
   autoHighlight,
   selectionRef,
   overlayRectType = 'percent',
@@ -736,6 +740,17 @@ export function Reader({
     [onCommentHighlight, selectedRangeId, onSelectRange]
   )
 
+  const handleDefaultCommentRect = useCallback(
+    async (rectangle: ReaderSelectionRectangle) => {
+      await onCommentRect?.(rectangle)
+      if (selectedRectId === rectangle.id) {
+        onSelectRect?.(null)
+      }
+      return rectangle
+    },
+    [onCommentRect, onSelectRect, selectedRectId]
+  )
+
   const showUploadZone = !document && !uploadedFile
   const showFileInfo = !document && uploadedFile
   const hasDocumentPages = documentHasPages(document)
@@ -915,8 +930,14 @@ export function Reader({
             rectPopover ??
             ((rectangle) => (
               <DefaultRectanglePopover
-                selectedRectId={rectangle.id}
+                rectangle={rectangle}
+                highlightColor={highlightColor}
+                onHighlightColorChange={onHighlightColorChange}
+                onUpdateRect={handleUpdateRect}
                 onRemoveRect={onRemoveRect}
+                onCommentRect={
+                  onCommentRect ? handleDefaultCommentRect : undefined
+                }
               />
             ))
           }

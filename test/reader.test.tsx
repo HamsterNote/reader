@@ -16,15 +16,17 @@ import {
 import userEvent from '@testing-library/user-event'
 import { createRef, type RefObject, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
   SUPPORTED_UPLOAD_COPY
 } from '../src/components/Reader'
-import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import type {
+  DefaultRectanglePopoverProps,
   ReaderComment,
   ReaderCommentChangeDetail,
   ReaderInteractionMode,
+  ReaderInteractiveProps,
   ReaderProps,
   ReaderRenderMode,
   ReaderSelectionRange,
@@ -32,7 +34,7 @@ import type {
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '../src/index'
-import { Page, Reader } from '../src/index'
+import { DefaultRectanglePopover, Page, Reader } from '../src/index'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange
@@ -1749,10 +1751,10 @@ describe('Reader prop forwarding', () => {
   })
 
   it('updates the selected rectangle color from the default popover', async () => {
-    // Given: a selected rectangle has its own persisted marker color.
+    // Given: a selected rectangle has its own persisted marker color and opacity.
     const rect: ReaderSelectionRectangle = {
       ...makeReaderRect('colored-rect'),
-      markerStyle: { backgroundColor: '#ff3366' }
+      markerStyle: { backgroundColor: '#ff3366', opacity: 0.5 }
     }
     const onUpdateRect = vi.fn()
     render(
@@ -1774,10 +1776,10 @@ describe('Reader prop forwarding', () => {
     // When: the user changes the rectangle color.
     fireEvent.change(colorInput, { target: { value: '#00aa88' } })
 
-    // Then: Reader proposes the same rectangle with its updated marker style.
+    // Then: Reader updates only the color and preserves the remaining marker style.
     expect(onUpdateRect).toHaveBeenCalledWith({
       ...rect,
-      markerStyle: { backgroundColor: '#00aa88' }
+      markerStyle: { backgroundColor: '#00aa88', opacity: 0.5 }
     })
   })
 
@@ -1785,8 +1787,8 @@ describe('Reader prop forwarding', () => {
     // Given: a selected rectangle and a host-controlled comment flow.
     const user = userEvent.setup()
     const rect = makeReaderRect('commented-rect')
-    const onCommentHighlight = vi.fn(
-      async (rectangle: ReaderSelectionRange) => rectangle
+    const onCommentRect = vi.fn(
+      async (rectangle: ReaderSelectionRectangle) => rectangle
     )
     const onSelectRect = vi.fn()
     render(
@@ -1794,7 +1796,7 @@ describe('Reader prop forwarding', () => {
         document={makeDocument({ pages: [makePage(1)] })}
         rects={[rect]}
         selectedRectId={rect.id}
-        onCommentHighlight={onCommentHighlight}
+        onCommentRect={onCommentRect}
         onSelectRect={onSelectRect}
       />
     )
@@ -1808,7 +1810,7 @@ describe('Reader prop forwarding', () => {
     )
 
     // Then: the original rectangle is passed to the host and selection clears.
-    expect(onCommentHighlight).toHaveBeenCalledWith(rect)
+    expect(onCommentRect).toHaveBeenCalledWith(rect)
     await waitFor(() => expect(onSelectRect).toHaveBeenCalledWith(null))
   })
 
@@ -1921,6 +1923,28 @@ describe('Reader prop forwarding', () => {
       overlayRectType: 'percent'
     }
     expect(props.overlayRectType).toBe('percent')
+  })
+
+  it('keeps the legacy default rectangle popover delete contract', async () => {
+    const user = userEvent.setup()
+    const onRemoveRect = vi.fn()
+    const props: DefaultRectanglePopoverProps = {
+      selectedRectId: 'legacy-rect',
+      onRemoveRect
+    }
+
+    render(<DefaultRectanglePopover {...props} />)
+    await user.click(screen.getByRole('button', { name: '删除' }))
+
+    expect(onRemoveRect).toHaveBeenCalledWith('legacy-rect')
+    expect(screen.queryByLabelText('Highlight color')).not.toBeInTheDocument()
+  })
+
+  it('compile-time: onCommentRect satisfies ReaderInteractiveProps', () => {
+    const props: ReaderInteractiveProps = {
+      onCommentRect: async (rectangle) => rectangle
+    }
+    expect(props.onCommentRect).toBeTypeOf('function')
   })
 
   it('compile-time: interactionMode satisfies ReaderProps', () => {
