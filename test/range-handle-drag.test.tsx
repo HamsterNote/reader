@@ -9,10 +9,9 @@ const magnifier = {
   start: vi.fn()
 }
 
-vi.mock(
-  '../src/components/IntermediateDocumentViewer/RangeMagnifier',
-  () => ({ useRangeMagnifier: () => magnifier })
-)
+vi.mock('../src/components/IntermediateDocumentViewer/RangeMagnifier', () => ({
+  useRangeMagnifier: () => magnifier
+}))
 
 import { useRangeHandleDrag } from '../src/components/IntermediateDocumentViewer/useRangeHandleDrag'
 

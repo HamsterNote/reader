@@ -71,7 +71,9 @@ describe('PdfTextContent', () => {
       '.hamster-reader__pdf-text-paragraph'
     )
     expect(paragraphs).toHaveLength(1)
-    expect(container.querySelectorAll('.hamster-reader__pdf-text-line')).toHaveLength(0)
+    expect(
+      container.querySelectorAll('.hamster-reader__pdf-text-line')
+    ).toHaveLength(0)
     expect(paragraphs[0]?.textContent).toBe('Hello world')
     expect(container.querySelectorAll('[data-text-id]')).toHaveLength(2)
   })
@@ -116,8 +118,14 @@ describe('PdfTextContent', () => {
     )
     expect(paragraphs).toHaveLength(2)
     expect(paragraphs[1]?.textContent).toBe('你好')
-    expect(screen.getByText('你')).toHaveAttribute('data-text-id', firstGlyph.id)
-    expect(screen.getByText('好')).toHaveAttribute('data-text-id', secondGlyph.id)
+    expect(screen.getByText('你')).toHaveAttribute(
+      'data-text-id',
+      firstGlyph.id
+    )
+    expect(screen.getByText('好')).toHaveAttribute(
+      'data-text-id',
+      secondGlyph.id
+    )
     const titleElement = screen.getByText('题')
     expect(titleElement.style.fontSize).toBe('3rem')
     expect(titleElement.style.fontFamily).toContain('PDF Sans')
@@ -138,13 +146,7 @@ describe('PdfTextContent', () => {
     })
 
     // When: PDF Text 模式渲染该字形。
-    render(
-      <PdfTextContent
-        pageNumber={1}
-        texts={[glyph]}
-        paragraphs={[]}
-      />
-    )
+    render(<PdfTextContent pageNumber={1} texts={[glyph]} paragraphs={[]} />)
 
     // Then: 可见正文不继承透明色，而由 Reader 的正文色统一控制。
     expect(screen.getByText('Visible text').style.color).toBe('')

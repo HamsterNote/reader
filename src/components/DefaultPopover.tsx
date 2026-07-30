@@ -362,7 +362,9 @@ export function DefaultRectanglePopover({
       </button>
       {rectangle && (
         <label className='hamster-reader-popover-color'>
-          <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
+          <span className='hamster-reader-popover-color-label'>
+            背景颜色设置
+          </span>
           <input
             type='color'
             aria-label='Highlight color'

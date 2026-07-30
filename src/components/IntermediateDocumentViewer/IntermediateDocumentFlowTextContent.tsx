@@ -1,4 +1,7 @@
-import type { IntermediateParagraph, IntermediateText } from '@hamster-note/types'
+import type {
+  IntermediateParagraph,
+  IntermediateText
+} from '@hamster-note/types'
 import { Fragment } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
@@ -67,7 +70,8 @@ export function IntermediateDocumentFlowTextContent({
           ) : null
         }
 
-        const shouldSetFontSize = preserveSourceFontSize || fontScale !== undefined
+        const shouldSetFontSize =
+          preserveSourceFontSize || fontScale !== undefined
         return (
           <Fragment key={key}>
             <span

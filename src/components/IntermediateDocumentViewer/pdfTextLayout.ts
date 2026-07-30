@@ -128,7 +128,8 @@ const shouldInsertSpace = (
   const previousLength = Math.max(1, [...previousContent].length)
   const currentLength = Math.max(1, [...currentContent].length)
   const averageCharacterWidth =
-    (previous.box.width / previousLength + current.box.width / currentLength) / 2
+    (previous.box.width / previousLength + current.box.width / currentLength) /
+    2
   const averageFontSize = (previous.text.fontSize + current.text.fontSize) / 2
   return gap > Math.max(averageCharacterWidth * 0.35, averageFontSize * 0.18)
 }
@@ -167,10 +168,14 @@ const createLine = (
   }
 }
 
-const startsParagraph = (previous: PdfTextLine, current: PdfTextLine): boolean => {
+const startsParagraph = (
+  previous: PdfTextLine,
+  current: PdfTextLine
+): boolean => {
   const verticalGap = current.top - previous.bottom
   const gapThreshold = Math.max(previous.height, current.height) * 1.25
-  const fontRatio = Math.max(previous.fontSize, current.fontSize) /
+  const fontRatio =
+    Math.max(previous.fontSize, current.fontSize) /
     Math.max(1, Math.min(previous.fontSize, current.fontSize))
   return verticalGap > gapThreshold || fontRatio > 1.45
 }
@@ -193,13 +198,16 @@ export const reconstructPdfTextLayout = (
 
   const mutableLines: MutableLine[] = []
   const sortedTexts = [...positionedTexts].sort(
-    (left, right) => left.box.centerY - right.box.centerY || left.box.left - right.box.left
+    (left, right) =>
+      left.box.centerY - right.box.centerY || left.box.left - right.box.left
   )
   for (const glyph of sortedTexts) {
     const matchingLine = mutableLines.find((line) => {
       const lineHeight = median(line.glyphs.map((item) => item.box.height))
-      return Math.abs(line.centerY - glyph.box.centerY) <=
+      return (
+        Math.abs(line.centerY - glyph.box.centerY) <=
         Math.max(lineHeight, glyph.box.height) * 0.55
+      )
     })
     if (matchingLine) {
       matchingLine.glyphs.push(glyph)
@@ -218,7 +226,11 @@ export const reconstructPdfTextLayout = (
   for (const line of lines) {
     const currentParagraph = paragraphs.at(-1)
     const previousLine = currentParagraph?.lines.at(-1)
-    if (!currentParagraph || !previousLine || startsParagraph(previousLine, line)) {
+    if (
+      !currentParagraph ||
+      !previousLine ||
+      startsParagraph(previousLine, line)
+    ) {
       paragraphs.push({ lines: [line] })
     } else {
       paragraphs[paragraphs.length - 1] = {

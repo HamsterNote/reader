@@ -2536,7 +2536,8 @@ describe('IntermediateDocumentViewer', () => {
 
     // Then: the browser selection stays inactive and the custom handle remains.
     expect(window.getSelection()?.toString()).toBe('')
-    const renderHandle = requireSelectionPropsById(runtimeSelectionId).renderHandle
+    const renderHandle =
+      requireSelectionPropsById(runtimeSelectionId).renderHandle
     expect(
       renderHandle?.({
         type: 'start',
@@ -2984,7 +2985,9 @@ describe('IntermediateDocumentViewer', () => {
     )
 
     // Then: Layout mode lazily derives its page rect under the runtime id.
-    expect(requireSelectionPropsById(layoutSelectionId).linkedData?.items).toEqual([
+    expect(
+      requireSelectionPropsById(layoutSelectionId).linkedData?.items
+    ).toEqual([
       expect.objectContaining({
         id: canonicalRange.id,
         rectsBySelectionId: {
@@ -3027,7 +3030,9 @@ describe('IntermediateDocumentViewer', () => {
     )
 
     // Then: Viewer 先渲染派生坐标，再仅对非 EPUB 数据源回写公开 page ID 坐标。
-    expect(requireSelectionPropsById(runtimeSelectionId).linkedData?.items).toEqual([
+    expect(
+      requireSelectionPropsById(runtimeSelectionId).linkedData?.items
+    ).toEqual([
       expect.objectContaining({
         id: range.id,
         rectsBySelectionId: {
@@ -3047,7 +3052,10 @@ describe('IntermediateDocumentViewer', () => {
             id: range.id,
             rectsBySelectionId: {
               'page-1': expect.arrayContaining([
-                expect.objectContaining({ width: 40, height: 10.666666666666668 })
+                expect.objectContaining({
+                  width: 40,
+                  height: 10.666666666666668
+                })
               ])
             }
           })
@@ -6974,15 +6982,13 @@ describe('IntermediateDocumentViewer', () => {
         path.resolve(__dirname, '../src/styles/reader.scss'),
         'utf-8'
       )
-      const coarsePointerBlock = scssSource.match(
-        /@media\s*\(pointer:\s*coarse\)\s*\{([\s\S]*?)\n\s*\}/
-      )
-      expect(coarsePointerBlock).toBeTruthy()
-      if (!coarsePointerBlock) {
+      const coarsePointerStart = scssSource.indexOf('@media (pointer: coarse)')
+      const coarsePointerEnd = scssSource.indexOf('\n    }', coarsePointerStart)
+      if (coarsePointerStart === -1 || coarsePointerEnd === -1) {
         throw new Error('Expected coarse-pointer SCSS block to exist')
       }
 
-      const block = coarsePointerBlock[1]
+      const block = scssSource.slice(coarsePointerStart, coarsePointerEnd)
       expect(block).toContain('&__intermediate-text')
       expect(block).toContain('.hsn-selection-content &__intermediate-text')
       expect(block).toContain('user-select: none')
@@ -7716,10 +7722,7 @@ describe('text range handle integration', () => {
 
     // When: its first page finishes loading.
     render(
-      <IntermediateDocumentViewer
-        document={document}
-        showSelectionMagnifier
-      />
+      <IntermediateDocumentViewer document={document} showSelectionMagnifier />
     )
     await screen.findByText('Page 1 text')
 
@@ -9470,10 +9473,12 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     // Then: only the transient drag flag is cleared, preserving the active range
     // that the upstream Selection uses to position and display the popover.
     await waitFor(() => {
-      expect(requireSelectionPropsById(runtimePageId).linkedData).toMatchObject({
-        selectingText: false,
-        activeRange: { id: activeRange.id }
-      })
+      expect(requireSelectionPropsById(runtimePageId).linkedData).toMatchObject(
+        {
+          selectingText: false,
+          activeRange: { id: activeRange.id }
+        }
+      )
     })
   })
 
@@ -10910,8 +10915,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       vi.useFakeTimers()
       try {
         intersectionObserverMock.trigger(page3, false)
-        act(() => {
+        await act(async () => {
           vi.advanceTimersByTime(5000)
+          await Promise.resolve()
         })
         expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
       } finally {
@@ -10944,8 +10950,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       })
 
       // When: jumping directly to page 3.
-      act(() => {
+      await act(async () => {
         requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+        await Promise.resolve()
       })
       await screen.findByText('Page 3 text')
 
@@ -10979,8 +10986,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       vi.useFakeTimers()
       try {
         intersectionObserverMock.trigger(page3, false)
-        act(() => {
+        await act(async () => {
           vi.advanceTimersByTime(5000)
+          await Promise.resolve()
         })
         expect(screen.queryByText('Page 3 text')).not.toBeInTheDocument()
       } finally {

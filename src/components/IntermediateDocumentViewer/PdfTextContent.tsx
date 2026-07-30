@@ -1,4 +1,7 @@
-import type { IntermediateParagraph, IntermediateText } from '@hamster-note/types'
+import type {
+  IntermediateParagraph,
+  IntermediateText
+} from '@hamster-note/types'
 import { Fragment, useMemo } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
@@ -51,38 +54,39 @@ export function PdfTextContent({
             const currentContent = line.glyphs[0]?.text.content
             return (
               <Fragment key={`${pageNumber}:line:${line.glyphs[0]?.text.id}`}>
-                {previousContent && currentContent &&
+                {previousContent &&
+                currentContent &&
                 shouldSeparatePdfText(previousContent, currentContent)
                   ? ' '
                   : null}
-              {line.glyphs.map((glyph) => (
-                <Fragment key={`${pageNumber}:${glyph.text.id}`}>
-                  {glyph.spaceBefore ? ' ' : null}
-                  <span
-                    ref={
-                      setTextRef
-                        ? setTextRef(glyph.text, pageNumber)
-                        : undefined
-                    }
-                    className='hamster-reader__intermediate-text hamster-reader__intermediate-text--flow hamster-reader__intermediate-text--pdf-flow'
-                    data-text-id={glyph.text.id}
-                    data-page-number={pageNumber}
-                    style={{
-                      fontSize: `${glyph.fontSizeRatio * baseFontScale}rem`,
-                      fontFamily: glyph.text.fontFamily || undefined,
-                      fontWeight: glyph.text.fontWeight || undefined,
-                      fontStyle: glyph.text.italic ? 'italic' : undefined,
-                      color:
-                        glyph.text.color === 'transparent'
-                          ? undefined
-                          : glyph.text.color || undefined,
-                      lineHeight: 1.5
-                    }}
-                  >
-                    {glyph.text.content}
-                  </span>
-                </Fragment>
-              ))}
+                {line.glyphs.map((glyph) => (
+                  <Fragment key={`${pageNumber}:${glyph.text.id}`}>
+                    {glyph.spaceBefore ? ' ' : null}
+                    <span
+                      ref={
+                        setTextRef
+                          ? setTextRef(glyph.text, pageNumber)
+                          : undefined
+                      }
+                      className='hamster-reader__intermediate-text hamster-reader__intermediate-text--flow hamster-reader__intermediate-text--pdf-flow'
+                      data-text-id={glyph.text.id}
+                      data-page-number={pageNumber}
+                      style={{
+                        fontSize: `${glyph.fontSizeRatio * baseFontScale}rem`,
+                        fontFamily: glyph.text.fontFamily || undefined,
+                        fontWeight: glyph.text.fontWeight || undefined,
+                        fontStyle: glyph.text.italic ? 'italic' : undefined,
+                        color:
+                          glyph.text.color === 'transparent'
+                            ? undefined
+                            : glyph.text.color || undefined,
+                        lineHeight: 1.5
+                      }}
+                    >
+                      {glyph.text.content}
+                    </span>
+                  </Fragment>
+                ))}
               </Fragment>
             )
           })}

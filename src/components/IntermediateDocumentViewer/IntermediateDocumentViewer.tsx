@@ -81,10 +81,7 @@ import {
 } from '../selection/selectionPayloadSerializer'
 import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuard'
 import { EdgeCropOverlay } from './EdgeCropOverlay'
-import {
-  summarizeHighlightRanges,
-  traceHighlight
-} from './highlightDebug'
+import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { hasHighlightRects } from './highlightRectModes'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
@@ -3151,7 +3148,8 @@ function ViewerContent({
       width: contentWidth,
       height: Math.max(
         1,
-        pagesHeight + Math.max(0, pageNumbers.length - 1) * INTERMEDIATE_PAGE_GAP
+        pagesHeight +
+          Math.max(0, pageNumbers.length - 1) * INTERMEDIATE_PAGE_GAP
       )
     }
   }, [effectiveEdgeCrop, flowLayoutPages, pageNumbers, pageSizesByPageNumber])
@@ -3188,8 +3186,9 @@ function ViewerContent({
 
     const resizeObserver = new ResizeObserver(measureContent)
     const bindDocumentElement = () => {
-      const nextDocumentElement =
-        viewerRootElement.querySelector<HTMLElement>('.hamster-note-document')
+      const nextDocumentElement = viewerRootElement.querySelector<HTMLElement>(
+        '.hamster-note-document'
+      )
       if (nextDocumentElement !== documentElement) {
         resizeObserver.disconnect()
         documentElement = nextDocumentElement
@@ -3201,7 +3200,10 @@ function ViewerContent({
 
     bindDocumentElement()
     const mutationObserver = new MutationObserver(bindDocumentElement)
-    mutationObserver.observe(viewerRootElement, { childList: true, subtree: true })
+    mutationObserver.observe(viewerRootElement, {
+      childList: true,
+      subtree: true
+    })
     return () => {
       mutationObserver.disconnect()
       resizeObserver.disconnect()
@@ -3342,15 +3344,12 @@ function ViewerContent({
   )
 
   const syncForwardedSelectionRef = useCallback(() => {
-    const forwardedRef =
-      selectionRefsByRuntimeIdRef.current.size > 0 ? publicSelectionRef : null
-
     if (typeof selectionRef === 'function') {
-      selectionRef(forwardedRef)
+      selectionRef(publicSelectionRef)
     } else if (selectionRef) {
       ;(
         selectionRef as React.MutableRefObject<ReaderSelectionRef | null>
-      ).current = forwardedRef
+      ).current = publicSelectionRef
     }
   }, [publicSelectionRef, selectionRef])
 
@@ -4079,7 +4078,7 @@ export function IntermediateDocumentViewer({
   const [flowLayoutPages, setFlowLayoutPages] = useState(
     () => new Set<number>()
   )
-  const flowLayoutGeometryRevision = useSelectionGeometryRevision(
+  useSelectionGeometryRevision(
     viewerRootElement,
     `${Array.from(flowLayoutPages).join(',')}:${Array.from(
       textsByPageNumber,
@@ -4089,33 +4088,19 @@ export function IntermediateDocumentViewer({
   const storedRanges = isRangesControlled ? ranges : internalRanges
   const storedRangesRef = useRef<ReaderSelectionRange[]>(storedRanges)
   storedRangesRef.current = storedRanges
-  const effectiveRanges = useMemo(
-    () => {
-      void flowLayoutGeometryRevision
-      return storedRanges.map((range) => {
-        if (hasHighlightRects(range.rectsBySelectionId)) {
-          return range
-        }
-        return deriveLayoutSelectionRange({
-          range,
-          root: viewerRootElement,
-          flowLayoutPages,
-          textsByPageNumber,
-          pageSizesByPageNumber,
-          overlayRectType
-        })
-      })
-    },
-    [
-      flowLayoutGeometryRevision,
+  const effectiveRanges = storedRanges.map((range) => {
+    if (hasHighlightRects(range.rectsBySelectionId)) {
+      return range
+    }
+    return deriveLayoutSelectionRange({
+      range,
+      root: viewerRootElement,
       flowLayoutPages,
-      overlayRectType,
-      pageSizesByPageNumber,
-      storedRanges,
       textsByPageNumber,
-      viewerRootElement
-    ]
-  )
+      pageSizesByPageNumber,
+      overlayRectType
+    })
+  })
   const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
   effectiveRangesRef.current = effectiveRanges
   const lastLayoutGeometryTraceRef = useRef('')
@@ -4255,12 +4240,17 @@ export function IntermediateDocumentViewer({
     const nextRanges = storedRanges.map((storedRange, index) => {
       if (hasHighlightRects(storedRange.rectsBySelectionId)) return storedRange
       const effectiveRange = effectiveRanges[index]
-      if (!effectiveRange || !hasHighlightRects(effectiveRange.rectsBySelectionId)) {
+      if (
+        !effectiveRange ||
+        !hasHighlightRects(effectiveRange.rectsBySelectionId)
+      ) {
         return storedRange
       }
 
       const signature = JSON.stringify(effectiveRange.rectsBySelectionId)
-      if (emittedDerivedLayoutRectsRef.current.get(storedRange.id) === signature) {
+      if (
+        emittedDerivedLayoutRectsRef.current.get(storedRange.id) === signature
+      ) {
         return storedRange
       }
       emittedDerivedLayoutRectsRef.current.set(storedRange.id, signature)
@@ -4555,7 +4545,10 @@ export function IntermediateDocumentViewer({
   const isTransformingRef = useRef(false)
   const [committedReaderScale, setCommittedReaderScale] = useState(() =>
     clampScale(
-      scale ?? normalizedDefaultVirtualPaperTransform?.scale ?? defaultScale ?? 1,
+      scale ??
+        normalizedDefaultVirtualPaperTransform?.scale ??
+        defaultScale ??
+        1,
       scaleRange
     )
   )
@@ -6478,14 +6471,15 @@ export function IntermediateDocumentViewer({
 
         if (entry.isIntersecting) {
           markVisiblePage(pageNumber)
-          getPagePreloadWindow(
+          const preloadPageNumbers = getPagePreloadWindow(
             pageNumbers,
             [pageNumber],
             pagePreloadRadius
-          ).forEach((preloadPageNumber) => {
+          )
+          for (const preloadPageNumber of preloadPageNumbers) {
             clearUnloadTimer(preloadPageNumber)
             lazilyEvictedPagesRef.current.delete(preloadPageNumber)
-          })
+          }
           scheduleVisibilityEnqueue(pageNumber)
         } else {
           markHiddenPage(pageNumber)

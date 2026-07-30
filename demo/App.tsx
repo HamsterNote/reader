@@ -67,6 +67,8 @@ type HighlightDragPreview = {
   readonly y: number
 }
 
+type PrimaryPointer = Omit<HighlightDragPreview, 'highlight'>
+
 export const SUPPORTED_FILE_TYPE_LABEL =
   'PDF, TXT, DOCX, EPUB, Markdown, Images'
 
@@ -368,6 +370,347 @@ function persistHighlights(
   )
 }
 
+function useBottomBarMenuDismissal(
+  toolMenuAnchor: HTMLElement | null,
+  fontMenuAnchor: HTMLElement | null,
+  closeMenus: () => void
+) {
+  useEffect(() => {
+    if (!toolMenuAnchor && !fontMenuAnchor) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node
+      const toolPopover = window.document.querySelector(
+        '[data-testid="tool-bottom-bar-tool-menu-popover"]'
+      )
+      const fontPopover = window.document.querySelector(
+        '[data-testid="tool-bottom-bar-font-scale-popover"]'
+      )
+      if (
+        toolMenuAnchor?.contains(target) ||
+        fontMenuAnchor?.contains(target) ||
+        toolPopover?.contains(target) ||
+        fontPopover?.contains(target)
+      ) {
+        return
+      }
+      closeMenus()
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenus()
+    }
+
+    window.document.addEventListener('pointerdown', handlePointerDown)
+    window.document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.document.removeEventListener('pointerdown', handlePointerDown)
+      window.document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [closeMenus, fontMenuAnchor, toolMenuAnchor])
+}
+
+function useAnnotationHistoryShortcuts(
+  selectionRef: React.RefObject<ReaderSelectionRef | null>
+) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable === true
+      ) {
+        return
+      }
+
+      const isMac = navigator.platform.toLowerCase().includes('mac')
+      const modifier = isMac ? event.metaKey : event.ctrlKey
+      if (!modifier) return
+
+      const key = event.key.toLowerCase()
+      const isUndo = key === 'z' && !event.shiftKey
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y'
+      if (!isUndo && !isRedo) return
+
+      event.preventDefault()
+      if (isUndo) selectionRef.current?.undo()
+      else selectionRef.current?.redo()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectionRef])
+}
+
+function useHighlightDragTracking(
+  isHighlightDragging: boolean,
+  setHighlightDragPreview: React.Dispatch<
+    React.SetStateAction<HighlightDragPreview | null>
+  >
+) {
+  useEffect(() => {
+    if (!isHighlightDragging) return
+
+    const handlePointerMove = (event: PointerEvent) => {
+      setHighlightDragPreview((current) =>
+        current?.pointerId === event.pointerId
+          ? { ...current, x: event.clientX, y: event.clientY }
+          : current
+      )
+    }
+    const handlePointerEnd = (event: PointerEvent) => {
+      setHighlightDragPreview((current) =>
+        current?.pointerId === event.pointerId ? null : current
+      )
+    }
+
+    window.addEventListener('pointermove', handlePointerMove, true)
+    window.addEventListener('pointerup', handlePointerEnd, true)
+    window.addEventListener('pointercancel', handlePointerEnd, true)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove, true)
+      window.removeEventListener('pointerup', handlePointerEnd, true)
+      window.removeEventListener('pointercancel', handlePointerEnd, true)
+    }
+  }, [isHighlightDragging, setHighlightDragPreview])
+}
+
+function trackPrimaryPointer(
+  event: React.PointerEvent<HTMLElement>,
+  pointerRef: React.MutableRefObject<PrimaryPointer | null>
+) {
+  if (!event.isPrimary) return
+  pointerRef.current = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY
+  }
+}
+
+function ParseStatus({
+  isParsing,
+  parseError
+}: {
+  readonly isParsing: boolean
+  readonly parseError: string | null
+}) {
+  return (
+    <>
+      {isParsing && (
+        <section style={{ marginBottom: '24px' }}>
+          <h2>Parsing...</h2>
+          <p>Loading file content...</p>
+        </section>
+      )}
+      {parseError && (
+        <section
+          data-testid='demo-error-state'
+          style={{ marginBottom: '24px', color: 'red' }}
+        >
+          <h2>Parse Error</h2>
+          <p>{parseError}</p>
+        </section>
+      )}
+    </>
+  )
+}
+
+function EmptyState({
+  document,
+  parseError,
+  isParsing
+}: {
+  readonly document: ReaderDocument | null
+  readonly parseError: string | null
+  readonly isParsing: boolean
+}) {
+  if (document || parseError || isParsing) return null
+  return <div data-testid='demo-empty-state' style={{ display: 'none' }} />
+}
+
+function LoadedPagesStatus({
+  document,
+  pageNumbers
+}: {
+  readonly document: ReaderDocument | null
+  readonly pageNumbers: readonly number[]
+}) {
+  if (!document) return null
+
+  return (
+    <section style={{ marginBottom: '24px' }}>
+      <h2>已加载页面 ({pageNumbers.length})</h2>
+      <div style={{ fontSize: '12px', color: '#64748b' }}>
+        已加载: {pageNumbers.length > 0 ? pageNumbers.join(', ') : '无'}
+      </div>
+    </section>
+  )
+}
+
+function RecentFileStatus({
+  file,
+  isParsing,
+  isSaved,
+  setIsSaved
+}: {
+  readonly file: File | null
+  readonly isParsing: boolean
+  readonly isSaved: boolean
+  readonly setIsSaved: (isSaved: boolean) => void
+}) {
+  if (!file || isParsing) return null
+
+  return (
+    <section style={{ marginBottom: '24px' }}>
+      <h2>Last Uploaded File</h2>
+      <p>Name: {file.name}</p>
+      <p>Size: {file.size} bytes</p>
+      <p>Type: {file.type}</p>
+      <p style={{ fontSize: '12px', color: '#64748b' }}>
+        The last successful file is stored in this browser.
+      </p>
+      <button
+        type='button'
+        disabled={!isSaved}
+        onClick={() => {
+          clearRecentFile().then((cleared) => {
+            if (cleared) setIsSaved(false)
+          })
+        }}
+        style={{
+          padding: '4px 8px',
+          fontSize: '12px',
+          cursor: isSaved ? 'pointer' : 'not-allowed'
+        }}
+      >
+        Forget saved file
+      </button>
+    </section>
+  )
+}
+
+function AnnotationHistoryControls({
+  document,
+  status,
+  onUndo,
+  onRedo
+}: {
+  readonly document: ReaderDocument | null
+  readonly status: ReaderAnnotationHistoryStatus
+  readonly onUndo: () => void
+  readonly onRedo: () => void
+}) {
+  if (!document) return null
+
+  return (
+    <section style={{ marginBottom: '24px' }}>
+      <h2>Undo / Redo</h2>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button
+          type='button'
+          onClick={onUndo}
+          disabled={!status.canUndo}
+          data-testid='undo-btn'
+          style={{
+            padding: '4px 12px',
+            fontSize: '13px',
+            cursor: status.canUndo ? 'pointer' : 'not-allowed',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            background: status.canUndo ? '#fff' : '#f5f5f5',
+            opacity: status.canUndo ? 1 : 0.6
+          }}
+        >
+          撤销 Undo
+        </button>
+        <button
+          type='button'
+          onClick={onRedo}
+          disabled={!status.canRedo}
+          data-testid='redo-btn'
+          style={{
+            padding: '4px 12px',
+            fontSize: '13px',
+            cursor: status.canRedo ? 'pointer' : 'not-allowed',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            background: status.canRedo ? '#fff' : '#f5f5f5',
+            opacity: status.canRedo ? 1 : 0.6
+          }}
+        >
+          重做 Redo
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function getDocumentPageCount(document: ReaderDocument | null): number {
+  if (!document) return 0
+  const serialized = document as IntermediateDocumentSerialized
+  if (Array.isArray(serialized.pages)) return serialized.pages.length
+  return (document as IntermediateDocument).pageCount
+}
+
+function parserSupportsFontScale(
+  parserLabel: SupportedParserLabel | null
+): boolean {
+  return parserLabel !== null && FONT_SCALABLE_PARSER_LABELS.has(parserLabel)
+}
+
+function getFontScaleLabel(fontScale: ReaderFontScale): string {
+  return (
+    FONT_SCALE_OPTIONS.find((option) => option.scale === fontScale)?.label ??
+    '大'
+  )
+}
+
+function getPageRange(
+  enabled: boolean,
+  start: number,
+  end: number
+): ReaderPageRange | undefined {
+  return enabled ? { start, end } : undefined
+}
+
+function getParserPages(
+  range: ReaderPageRange | undefined
+): number[] | undefined {
+  if (!range) return undefined
+
+  const start = Math.trunc(range.start)
+  const end = Math.trunc(range.end)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+    return undefined
+  }
+
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+}
+
+function useEdgeCropState() {
+  const [all, setAll] = useState<ReaderEdgeCrop | undefined>(undefined)
+  const [pages, setPages] = useState<
+    Record<string, ReaderEdgeCrop> | undefined
+  >(undefined)
+  const [isEditing, setIsEditing] = useState(false)
+  const apply = useCallback(
+    (pageNumber: number | null, crop: ReaderEdgeCrop) => {
+      if (pageNumber === null) {
+        setAll(crop)
+      } else {
+        setPages((current) => ({
+          ...current,
+          [`page-${pageNumber}`]: crop
+        }))
+      }
+      setIsEditing(false)
+    },
+    []
+  )
+
+  return { all, pages, isEditing, setAll, setPages, setIsEditing, apply }
+}
+
 // ---------------------------------------------------------------------------
 // App 组件
 // ---------------------------------------------------------------------------
@@ -413,53 +756,23 @@ export function App() {
   const [toolColor, setToolColor] = useState(BOTTOM_BAR_COLORS[0].value)
   const [toolMenuAnchor, setToolMenuAnchor] = useState<HTMLElement | null>(null)
   const [fontMenuAnchor, setFontMenuAnchor] = useState<HTMLElement | null>(null)
-
-  useEffect(() => {
-    if (!toolMenuAnchor && !fontMenuAnchor) return
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node
-      // 点击在触发按钮上：由按钮自身 onClick 处理切换
-      if (
-        toolMenuAnchor?.contains(target) ||
-        fontMenuAnchor?.contains(target)
-      ) {
-        return
-      }
-      // 点击在菜单浮层内：由菜单项 onClick 处理选择
-      const popoverEl = window.document.querySelector(
-        '[data-testid="tool-bottom-bar-tool-menu-popover"]'
-      )
-      if (popoverEl?.contains(target)) return
-      const fontPopoverEl = window.document.querySelector(
-        '[data-testid="tool-bottom-bar-font-scale-popover"]'
-      )
-      if (fontPopoverEl?.contains(target)) return
-      setToolMenuAnchor(null)
-      setFontMenuAnchor(null)
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setToolMenuAnchor(null)
-        setFontMenuAnchor(null)
-      }
-    }
-    window.document.addEventListener('pointerdown', handlePointerDown)
-    window.document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.document.removeEventListener('pointerdown', handlePointerDown)
-      window.document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [fontMenuAnchor, toolMenuAnchor])
+  const closeBottomBarMenus = useCallback(() => {
+    setToolMenuAnchor(null)
+    setFontMenuAnchor(null)
+  }, [])
+  useBottomBarMenuDismissal(toolMenuAnchor, fontMenuAnchor, closeBottomBarMenus)
   const [containMarginX, setContainMarginX] = useState<number>(0)
   const [containMarginTop, setContainMarginTop] = useState<number>(0)
   const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
-  const [edgeCropAll, setEdgeCropAll] = useState<ReaderEdgeCrop | undefined>(
-    undefined
-  )
-  const [edgeCropPages, setEdgeCropPages] = useState<
-    Record<string, ReaderEdgeCrop> | undefined
-  >(undefined)
-  const [edgeCropEditing, setEdgeCropEditing] = useState(false)
+  const {
+    all: edgeCropAll,
+    pages: edgeCropPages,
+    isEditing: edgeCropEditing,
+    setAll: setEdgeCropAll,
+    setPages: setEdgeCropPages,
+    setIsEditing: setEdgeCropEditing,
+    apply: handleEdgeCropApply
+  } = useEdgeCropState()
   const [hideSecondPage, setHideSecondPage] = useState(false)
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
@@ -485,11 +798,7 @@ export function App() {
   }, [loadedParserLabel, ranges, renderMode, uploadedFile?.name])
   const [highlightDragPreview, setHighlightDragPreview] =
     useState<HighlightDragPreview | null>(null)
-  const latestPrimaryPointerRef = useRef<{
-    readonly pointerId: number
-    readonly x: number
-    readonly y: number
-  } | null>(null)
+  const latestPrimaryPointerRef = useRef<PrimaryPointer | null>(null)
   // 当前选中的 range ID（点击高亮列表项时切换）
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedTool, setSelectedTool] =
@@ -530,20 +839,6 @@ export function App() {
       setVirtualPaper(nextData.virtualPaper)
     }
   }, [])
-  const handleEdgeCropApply = useCallback(
-    (pageNumber: number | null, crop: ReaderEdgeCrop) => {
-      if (pageNumber === null) {
-        setEdgeCropAll(crop)
-      } else {
-        setEdgeCropPages((prev) => ({
-          ...prev,
-          [`page-${pageNumber}`]: crop
-        }))
-      }
-      setEdgeCropEditing(false)
-    },
-    []
-  )
   // 评论面板开关状态 + 当前激活的高亮 ID（用于自动勾选评论绑定）
   const [isCommentPanelOpen, setIsCommentPanelOpen] = useState(false)
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(
@@ -554,6 +849,7 @@ export function App() {
   // OCR 持久化同理：仅当当前文件的 OCR 数据完成恢复后才允许写回
   const loadedOcrFileNameRef = useRef<string | null>(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
+  useAnnotationHistoryShortcuts(selectionRef)
 
   // --- Annotation history (undo/redo) state ---
   // 从 onAnnotationHistoryChange 的 detail.status 中获取响应式状态，
@@ -630,12 +926,7 @@ export function App() {
           existingIndex === -1
             ? [...prev, range]
             : prev.map((item) => (item.id === range.id ? range : item))
-        persistHighlights(
-          uploadedFile?.name,
-          nextRanges,
-          rects,
-          pagePaintings
-        )
+        persistHighlights(uploadedFile?.name, nextRanges, rects, pagePaintings)
         return nextRanges
       })
       setSelectedRangeId(range.id)
@@ -656,12 +947,7 @@ export function App() {
 
       setRanges(next.items)
       setSelectedRangeId(next.selectedRangeId)
-      persistHighlights(
-        uploadedFile?.name,
-        next.items,
-        rects,
-        pagePaintings
-      )
+      persistHighlights(uploadedFile?.name, next.items, rects, pagePaintings)
     },
     [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
   )
@@ -674,31 +960,7 @@ export function App() {
   }, [])
 
   const isHighlightDragging = highlightDragPreview !== null
-  useEffect(() => {
-    if (!isHighlightDragging) return
-
-    const handlePointerMove = (event: PointerEvent) => {
-      setHighlightDragPreview((current) =>
-        current?.pointerId === event.pointerId
-          ? { ...current, x: event.clientX, y: event.clientY }
-          : current
-      )
-    }
-    const handlePointerEnd = (event: PointerEvent) => {
-      setHighlightDragPreview((current) =>
-        current?.pointerId === event.pointerId ? null : current
-      )
-    }
-
-    window.addEventListener('pointermove', handlePointerMove, true)
-    window.addEventListener('pointerup', handlePointerEnd, true)
-    window.addEventListener('pointercancel', handlePointerEnd, true)
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove, true)
-      window.removeEventListener('pointerup', handlePointerEnd, true)
-      window.removeEventListener('pointercancel', handlePointerEnd, true)
-    }
-  }, [isHighlightDragging])
+  useHighlightDragTracking(isHighlightDragging, setHighlightDragPreview)
 
   const handleSelectionEnd = useCallback(() => {}, [])
 
@@ -880,12 +1142,7 @@ export function App() {
   }, [scrollX, scrollY])
 
   // 当前文档页数（兼容 serialized pages 数组与运行时 pageCount）
-  const documentPageCount = (() => {
-    if (!document) return 0
-    const serialized = document as IntermediateDocumentSerialized
-    if (Array.isArray(serialized.pages)) return serialized.pages.length
-    return (document as IntermediateDocument).pageCount
-  })()
+  const documentPageCount = getDocumentPageCount(document)
 
   // 点击「OCR」按钮：校验页码后加入 ocrPages，Reader 会对该页发起识别
   const handleStartOcr = useCallback(() => {
@@ -944,40 +1201,6 @@ export function App() {
     )
   }, [ocrPages, ocrTextsByPage])
 
-  // Demo-only 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做。
-  // 必须忽略 input/textarea/contenteditable 中的按键，避免与文本编辑冲突。
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null
-      if (
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA' ||
-        target?.isContentEditable === true
-      ) {
-        return
-      }
-
-      const isMac = navigator.platform.toLowerCase().includes('mac')
-      const modifier = isMac ? event.metaKey : event.ctrlKey
-      if (!modifier) return
-
-      const key = event.key.toLowerCase()
-      const isUndo = key === 'z' && !event.shiftKey
-      const isRedo = (key === 'z' && event.shiftKey) || key === 'y'
-
-      if (isUndo) {
-        event.preventDefault()
-        selectionRef.current?.undo()
-      } else if (isRedo) {
-        event.preventDefault()
-        selectionRef.current?.redo()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
   }, [])
@@ -993,27 +1216,8 @@ export function App() {
         setEdgeCropEditing(false)
       }
     },
-    []
+    [setEdgeCropEditing]
   )
-
-  const buildPageRange = useCallback((): ReaderPageRange | undefined => {
-    if (!usePageRange) {
-      return undefined
-    }
-    return { start: pageRangeStart, end: pageRangeEnd }
-  }, [usePageRange, pageRangeStart, pageRangeEnd])
-
-  const buildParserPages = useCallback((): number[] | undefined => {
-    if (!usePageRange) {
-      return undefined
-    }
-    const start = Math.trunc(pageRangeStart)
-    const end = Math.trunc(pageRangeEnd)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
-      return undefined
-    }
-    return Array.from({ length: end - start + 1 }, (_, index) => start + index)
-  }, [usePageRange, pageRangeStart, pageRangeEnd])
 
   const handleFileUpload = useCallback(
     async (file: File) => {
@@ -1024,7 +1228,9 @@ export function App() {
       setIsParsing(true)
 
       try {
-        const selectedPages = buildParserPages()
+        const selectedPages = getParserPages(
+          getPageRange(usePageRange, pageRangeStart, pageRangeEnd)
+        )
         const result = await parseUploadedDocument(file, selectedPages)
 
         if (requestId !== requestIdRef.current) {
@@ -1118,7 +1324,7 @@ export function App() {
         }
       }
     },
-    [buildParserPages]
+    [pageRangeEnd, pageRangeStart, usePageRange]
   )
 
   const handleManualFileUpload = useCallback(
@@ -1152,52 +1358,24 @@ export function App() {
     }
   }, [])
 
-  const supportsFontScale =
-    loadedParserLabel !== null &&
-    FONT_SCALABLE_PARSER_LABELS.has(loadedParserLabel)
-  const selectedFontScaleLabel =
-    FONT_SCALE_OPTIONS.find((option) => option.scale === fontScale)?.label ??
-    '大'
+  const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
+  const selectedFontScaleLabel = getFontScaleLabel(fontScale)
 
   return (
     <main
       data-testid='reader-demo-root'
       className='hamster-demo-shell'
-      onPointerDownCapture={(event) => {
-        if (!event.isPrimary) return
-        latestPrimaryPointerRef.current = {
-          pointerId: event.pointerId,
-          x: event.clientX,
-          y: event.clientY
-        }
-      }}
-      onPointerMoveCapture={(event) => {
-        if (!event.isPrimary) return
-        latestPrimaryPointerRef.current = {
-          pointerId: event.pointerId,
-          x: event.clientX,
-          y: event.clientY
-        }
-      }}
+      onPointerDownCapture={(event) =>
+        trackPrimaryPointer(event, latestPrimaryPointerRef)
+      }
+      onPointerMoveCapture={(event) =>
+        trackPrimaryPointer(event, latestPrimaryPointerRef)
+      }
     >
       <div className='hamster-demo-sidebar'>
         <div data-testid='demo-sidebar-settings'>
           <h1>Hamster Reader Demo</h1>
-          {isParsing && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>Parsing...</h2>
-              <p>Loading file content...</p>
-            </section>
-          )}
-          {parseError && (
-            <section
-              data-testid='demo-error-state'
-              style={{ marginBottom: '24px', color: 'red' }}
-            >
-              <h2>Parse Error</h2>
-              <p>{parseError}</p>
-            </section>
-          )}
+          <ParseStatus isParsing={isParsing} parseError={parseError} />
 
           <section style={{ marginBottom: '24px' }}>
             <h2>Upload {SUPPORTED_FILE_TYPE_LABEL}</h2>
@@ -1295,14 +1473,7 @@ export function App() {
             {/* The single Reader handles both upload and document rendering on the right panel */}
           </section>
 
-          {document && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>已加载页面 ({loadedPages.length})</h2>
-              <div style={{ fontSize: '12px', color: '#64748b' }}>
-                已加载: {loadedPages.length > 0 ? loadedPages.join(', ') : '无'}
-              </div>
-            </section>
-          )}
+          <LoadedPagesStatus document={document} pageNumbers={loadedPages} />
 
           {document && (
             <section
@@ -1434,33 +1605,12 @@ export function App() {
             </section>
           )}
 
-          {uploadedFile && !isParsing && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>Last Uploaded File</h2>
-              <p>Name: {uploadedFile.name}</p>
-              <p>Size: {uploadedFile.size} bytes</p>
-              <p>Type: {uploadedFile.type}</p>
-              <p style={{ fontSize: '12px', color: '#64748b' }}>
-                The last successful file is stored in this browser.
-              </p>
-              <button
-                type='button'
-                disabled={!hasSavedRecentFile}
-                onClick={() => {
-                  clearRecentFile().then((cleared) => {
-                    if (cleared) setHasSavedRecentFile(false)
-                  })
-                }}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  cursor: hasSavedRecentFile ? 'pointer' : 'not-allowed'
-                }}
-              >
-                Forget saved file
-              </button>
-            </section>
-          )}
+          <RecentFileStatus
+            file={uploadedFile}
+            isParsing={isParsing}
+            isSaved={hasSavedRecentFile}
+            setIsSaved={setHasSavedRecentFile}
+          />
 
           {document && (
             <section style={{ marginBottom: '24px' }}>
@@ -1849,47 +1999,12 @@ export function App() {
             </section>
           )}
 
-          {document && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>Undo / Redo</h2>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type='button'
-                  onClick={handleUndo}
-                  disabled={!historyStatus.canUndo}
-                  data-testid='undo-btn'
-                  style={{
-                    padding: '4px 12px',
-                    fontSize: '13px',
-                    cursor: historyStatus.canUndo ? 'pointer' : 'not-allowed',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    background: historyStatus.canUndo ? '#fff' : '#f5f5f5',
-                    opacity: historyStatus.canUndo ? 1 : 0.6
-                  }}
-                >
-                  撤销 Undo
-                </button>
-                <button
-                  type='button'
-                  onClick={handleRedo}
-                  disabled={!historyStatus.canRedo}
-                  data-testid='redo-btn'
-                  style={{
-                    padding: '4px 12px',
-                    fontSize: '13px',
-                    cursor: historyStatus.canRedo ? 'pointer' : 'not-allowed',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    background: historyStatus.canRedo ? '#fff' : '#f5f5f5',
-                    opacity: historyStatus.canRedo ? 1 : 0.6
-                  }}
-                >
-                  重做 Redo
-                </button>
-              </div>
-            </section>
-          )}
+          <AnnotationHistoryControls
+            document={document}
+            status={historyStatus}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+          />
         </div>
 
         {ranges.length + rects.length > 0 && (
@@ -2049,9 +2164,11 @@ export function App() {
           minWidth: 0
         }}
       >
-        {!document && !parseError && !isParsing && (
-          <div data-testid='demo-empty-state' style={{ display: 'none' }} />
-        )}
+        <EmptyState
+          document={document}
+          parseError={parseError}
+          isParsing={isParsing}
+        />
         <Reader
           document={document || undefined}
           isEpub={loadedParserLabel === 'EPUB'}
@@ -2065,7 +2182,7 @@ export function App() {
           touchPanMode={touchPanMode}
           onFileUpload={handleManualFileUpload}
           emptyText='No document loaded'
-          pageRange={buildPageRange()}
+          pageRange={getPageRange(usePageRange, pageRangeStart, pageRangeEnd)}
           overlayRectType='percent'
           ocr={{ enabled: true, pages: ocrPages }}
           ocrTexts={ocrTextsByPage}

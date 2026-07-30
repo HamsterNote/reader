@@ -77,8 +77,7 @@ function deriveRectsByPage({
       const pageId = `page-${pageNumber}`
       const pageIndex = startPageIndex + offset
       const startIndex = pageIndex === startPageIndex ? range.start.offset : 0
-      const endIndex =
-        pageIndex === endPageIndex ? range.end.offset : undefined
+      const endIndex = pageIndex === endPageIndex ? range.end.offset : undefined
       const rects = deriveDomSelectionPageRects({
         root,
         pageSelector: `[data-testid="intermediate-text-page-${pageNumber}"]`,

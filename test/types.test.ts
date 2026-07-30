@@ -210,8 +210,7 @@ const _selectionMagnifierAccepted: SelectionMagnifierInReaderProps = true
 
 type SelectionMagnifierInInteractiveProps =
   'showSelectionMagnifier' extends keyof ReaderInteractiveProps ? true : false
-const _selectionMagnifierInteractiveAccepted: SelectionMagnifierInInteractiveProps =
-  true
+const _selectionMagnifierInteractiveAccepted: SelectionMagnifierInInteractiveProps = true
 
 const _legacyPageSelectionProps: ReaderProps = {
   pageTextSelections: {} satisfies ReaderPageTextSelectionMap,

@@ -1,4 +1,7 @@
-import type { IntermediateParagraph, IntermediateText } from '@hamster-note/types'
+import type {
+  IntermediateParagraph,
+  IntermediateText
+} from '@hamster-note/types'
 import { memo } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'

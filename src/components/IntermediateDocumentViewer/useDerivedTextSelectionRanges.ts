@@ -35,19 +35,30 @@ export function useSelectionGeometryRevision(
   root: HTMLElement | null,
   layoutDependency: unknown
 ): number {
-  const [geometryRevision, setGeometryRevision] = useState(0)
+  const [geometryState, setGeometryState] = useState({
+    layoutDependency,
+    revision: 0
+  })
 
   useLayoutEffect(() => {
-    void layoutDependency
-    setGeometryRevision((revision) => revision + 1)
+    setGeometryState((current) =>
+      Object.is(current.layoutDependency, layoutDependency)
+        ? current
+        : {
+            layoutDependency,
+            revision: current.revision + 1
+          }
+    )
   }, [layoutDependency])
 
   useEffect(() => {
-    void layoutDependency
     if (!root) return
 
     const observer = new ResizeObserver(() => {
-      setGeometryRevision((revision) => revision + 1)
+      setGeometryState((current) => ({
+        ...current,
+        revision: current.revision + 1
+      }))
     })
     observer.observe(root)
     root
@@ -58,7 +69,7 @@ export function useSelectionGeometryRevision(
     return () => {
       observer.disconnect()
     }
-  }, [layoutDependency, root])
+  }, [root])
 
-  return geometryRevision
+  return geometryState.revision
 }

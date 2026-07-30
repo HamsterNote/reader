@@ -79,9 +79,9 @@ describe('reconstructPdfTextLayout', () => {
     const layout = reconstructPdfTextLayout(texts)
 
     // Then: 正常行距形成同段，大间距形成新段。
-    expect(layout.paragraphs.map((paragraph) => paragraph.lines.length)).toEqual([
-      2, 1
-    ])
+    expect(
+      layout.paragraphs.map((paragraph) => paragraph.lines.length)
+    ).toEqual([2, 1])
   })
 
   it('inserts a space between Latin words when their boxes have a word-sized gap', () => {
@@ -102,7 +102,14 @@ describe('reconstructPdfTextLayout', () => {
     // Given: PDF parser 在有效正文之间输出一个零高度空格辅助条目。
     const texts = [
       makePdfText({ id: 'cjk', content: '正文', x: 10, y: 20, width: 24 }),
-      makePdfText({ id: 'space', content: ' ', x: 34, y: 32, width: 5, fontSize: 0 }),
+      makePdfText({
+        id: 'space',
+        content: ' ',
+        x: 34,
+        y: 32,
+        width: 5,
+        fontSize: 0
+      }),
       makePdfText({ id: 'latin', content: 'PDF', x: 39, y: 20, width: 20 })
     ]
 
@@ -111,10 +118,12 @@ describe('reconstructPdfTextLayout', () => {
 
     // Then: 辅助空格不会触发旧 flow 回退，正文仍组成一行并恢复词间空格。
     expect(layout.hasPositionedText).toBe(true)
-    expect(layout.paragraphs[0]?.lines[0]?.glyphs.map((glyph) => ({
-      content: glyph.text.content,
-      spaceBefore: glyph.spaceBefore
-    }))).toEqual([
+    expect(
+      layout.paragraphs[0]?.lines[0]?.glyphs.map((glyph) => ({
+        content: glyph.text.content,
+        spaceBefore: glyph.spaceBefore
+      }))
+    ).toEqual([
       { content: '正文', spaceBefore: false },
       { content: 'PDF', spaceBefore: true }
     ])
@@ -123,9 +132,28 @@ describe('reconstructPdfTextLayout', () => {
   it('uses weighted body text as the font baseline and preserves title scale', () => {
     // Given: 一个 24px 标题和两个 12px 正文条目。
     const texts = [
-      makePdfText({ id: 'title', content: 'Title', x: 10, y: 10, width: 60, fontSize: 24 }),
-      makePdfText({ id: 'body-1', content: 'Body text', x: 10, y: 50, width: 54 }),
-      makePdfText({ id: 'body-2', content: 'More body', x: 10, y: 68, width: 54 })
+      makePdfText({
+        id: 'title',
+        content: 'Title',
+        x: 10,
+        y: 10,
+        width: 60,
+        fontSize: 24
+      }),
+      makePdfText({
+        id: 'body-1',
+        content: 'Body text',
+        x: 10,
+        y: 50,
+        width: 54
+      }),
+      makePdfText({
+        id: 'body-2',
+        content: 'More body',
+        x: 10,
+        y: 68,
+        width: 54
+      })
     ]
 
     // When: 计算 PDF 文本字号层级。

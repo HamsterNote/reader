@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-beta.0] - 2026-07-30
+
+### Added
+- Flow-text rendering with PDF text extraction, OCR diagnostics, and unified `ReaderData` support.
+- Configurable edge cropping for document pages.
+
+### Changed
+- Updated `@hamster-note/virtual-paper` to the published `1.1.0` package.
+
+### Fixed
+- Positioned the bottom toolbar within the Reader container and corrected zoom-aware thumbnail resolution.
+- Restored rectangle selection, coordinate mapping, popover controls, and range-handle dragging after synchronized content replacement.
+- Kept the public selection ref available while lazily evicted pages reload for programmatic navigation.
+- Stabilized demo annotation-history and lazy-page regression coverage and resolved the release lint violations.
+
 ## [0.6.1-beta.0] - 2026-07-23
 
 ### Added

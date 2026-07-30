@@ -83,8 +83,10 @@ export function calculatePopoverPosition(
   if (!topIsVisible && bottomIsVisible) {
     preferredTop = selection.bottom + gap - containerTop
   } else if (!topIsVisible) {
-    preferredLeft = container.left + (container.width - popoverWidth) / 2 - containerLeft
-    preferredTop = container.top + (container.height - popoverHeight) / 2 - containerTop
+    preferredLeft =
+      container.left + (container.width - popoverWidth) / 2 - containerLeft
+    preferredTop =
+      container.top + (container.height - popoverHeight) / 2 - containerTop
   }
 
   return {

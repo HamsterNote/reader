@@ -1300,9 +1300,7 @@ describe('demo parser flow', () => {
 
     const bottomBar = screen.getByTestId('tool-bottom-bar')
     expect(bottomBar).toBeInTheDocument()
-    expect(
-      screen.queryByTestId('tool-bottom-bar-font-scale')
-    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('tool-bottom-bar-font-scale')).toBeInTheDocument()
 
     // Given: 默认选中文字工具。
     const textButton = screen.getByTestId('tool-bottom-bar-text-selection')
@@ -1375,7 +1373,9 @@ describe('demo parser flow', () => {
     )
     render(<App />)
     upload(makeFile('bottom-bar-history.pdf'))
-    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Bottom Bar History Document')
+    ).toBeInTheDocument()
 
     const undoButton = screen.getByTestId('tool-bottom-bar-undo')
     const redoButton = screen.getByTestId('tool-bottom-bar-redo')
@@ -3482,7 +3482,9 @@ describe('demo parser flow', () => {
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('undo-range', 'undo text'))
+      act(() => {
+        onHighlight(makeLinkedRange('undo-range', 'undo text'))
+      })
 
       await waitFor(() => {
         expect(screen.getByTestId('undo-btn')).not.toBeDisabled()

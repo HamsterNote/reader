@@ -210,7 +210,9 @@ export function useLazyPageQueue(
               getPageContentEntries(page),
               Promise.resolve(undefined),
               Promise.resolve(pageUsesFlowLayout(page)),
-              Promise.resolve(Array.isArray(page.paragraphs) ? page.paragraphs : [])
+              Promise.resolve(
+                Array.isArray(page.paragraphs) ? page.paragraphs : []
+              )
             ])
           }
 
@@ -221,34 +223,36 @@ export function useLazyPageQueue(
             getPageContentEntries(page),
             Promise.resolve(thumbnailScale),
             Promise.resolve(pageUsesFlowLayout(page)),
-            Promise.resolve(Array.isArray(page.paragraphs) ? page.paragraphs : [])
+            Promise.resolve(
+              Array.isArray(page.paragraphs) ? page.paragraphs : []
+            )
           ])
         })
         .then(
           ([baseImage, content, thumbnailScale, useFlowLayout, paragraphs]) => {
-          // stale 守卫：unmount / document 切换 / generation 过期
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== document ||
-            generationRef.current !== generation
-          ) {
-            return
-          }
+            // stale 守卫：unmount / document 切换 / generation 过期
+            if (
+              !isMountedRef.current ||
+              activeDocumentRef.current !== document ||
+              generationRef.current !== generation
+            ) {
+              return
+            }
 
-          const texts = content.filter(isIntermediateText)
-          const images =
-            mode === 'text' || !isIntermediateImage
-              ? []
-              : content.filter(isIntermediateImage)
-          callbacks.onPageLoaded({
-            pageNumber,
-            useFlowLayout,
-            baseImage,
-            thumbnailScale,
-            texts,
-            paragraphs,
-            images
-          })
+            const texts = content.filter(isIntermediateText)
+            const images =
+              mode === 'text' || !isIntermediateImage
+                ? []
+                : content.filter(isIntermediateImage)
+            callbacks.onPageLoaded({
+              pageNumber,
+              useFlowLayout,
+              baseImage,
+              thumbnailScale,
+              texts,
+              paragraphs,
+              images
+            })
           }
         )
         .catch(() => {

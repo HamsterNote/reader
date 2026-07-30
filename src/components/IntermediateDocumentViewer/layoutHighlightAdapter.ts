@@ -29,6 +29,62 @@ export type DeriveLayoutSelectionRangeInput = {
   readonly overlayRectType: ReaderSelectionOverlayRectType
 }
 
+function parsePageRange(
+  range: ReaderSelectionRange
+): readonly [startPageNumber: number, endPageNumber: number] | null {
+  const startPageNumber = parsePublicPageId(range.start.selectionId)
+  const endPageNumber = parsePublicPageId(range.end.selectionId)
+  if (
+    startPageNumber === null ||
+    endPageNumber === null ||
+    endPageNumber < startPageNumber
+  ) {
+    return null
+  }
+  return [startPageNumber, endPageNumber]
+}
+
+function deriveLayoutPageRects({
+  pageNumber,
+  startPageNumber,
+  endPageNumber,
+  range,
+  root,
+  flowLayoutPages,
+  textsByPageNumber,
+  pageSizesByPageNumber,
+  overlayRectType
+}: DeriveLayoutSelectionRangeInput & {
+  readonly pageNumber: number
+  readonly startPageNumber: number
+  readonly endPageNumber: number
+}): ReaderSelectionRect[] | null {
+  const startOffset = pageNumber === startPageNumber ? range.start.offset : 0
+  const endOffset = pageNumber === endPageNumber ? range.end.offset : undefined
+  if (root && flowLayoutPages?.has(pageNumber)) {
+    return (
+      deriveDomSelectionPageRects({
+        root,
+        pageSelector: `[data-testid="intermediate-page-${pageNumber}"]`,
+        startOffset,
+        endOffset,
+        overlayRectType
+      }) ?? null
+    )
+  }
+
+  const texts = textsByPageNumber.get(pageNumber)
+  const pageSize = pageSizesByPageNumber.get(pageNumber)
+  if (!texts || !pageSize) return null
+
+  const fixedLayoutEndOffset =
+    endOffset ?? texts.reduce((length, text) => length + text.content.length, 0)
+  const pixelRects = derivePageRects(texts, startOffset, fixedLayoutEndOffset)
+  return overlayRectType === 'percent'
+    ? pixelRects.map((rect) => toPercentRect(rect, pageSize))
+    : pixelRects
+}
+
 export function deriveLayoutSelectionRange({
   range,
   root,
@@ -37,15 +93,9 @@ export function deriveLayoutSelectionRange({
   pageSizesByPageNumber,
   overlayRectType
 }: DeriveLayoutSelectionRangeInput): ReaderSelectionRange {
-  const startPageNumber = parsePublicPageId(range.start.selectionId)
-  const endPageNumber = parsePublicPageId(range.end.selectionId)
-  if (
-    startPageNumber === null ||
-    endPageNumber === null ||
-    endPageNumber < startPageNumber
-  ) {
-    return range
-  }
+  const pageRange = parsePageRange(range)
+  if (!pageRange) return range
+  const [startPageNumber, endPageNumber] = pageRange
 
   const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] = {}
   for (
@@ -53,40 +103,19 @@ export function deriveLayoutSelectionRange({
     pageNumber <= endPageNumber;
     pageNumber += 1
   ) {
-    const texts = textsByPageNumber.get(pageNumber)
-    const pageSize = pageSizesByPageNumber.get(pageNumber)
-
     const pageId = `page-${pageNumber}`
-    const startOffset = pageNumber === startPageNumber ? range.start.offset : 0
-    const endOffset =
-      pageNumber === endPageNumber
-        ? range.end.offset
-        : undefined
-    if (root && flowLayoutPages?.has(pageNumber)) {
-      const domRects = deriveDomSelectionPageRects({
-        root,
-        pageSelector: `[data-testid="intermediate-page-${pageNumber}"]`,
-        startOffset,
-        endOffset,
-        overlayRectType
-      })
-      if (domRects) rectsBySelectionId[pageId] = domRects
-      continue
-    }
-    if (!texts || !pageSize) continue
-
-    const fixedLayoutEndOffset =
-      endOffset ??
-      texts.reduce((length, text) => length + text.content.length, 0)
-    const pixelRects = derivePageRects(
-      texts,
-      startOffset,
-      fixedLayoutEndOffset
-    )
-    rectsBySelectionId[pageId] =
-      overlayRectType === 'percent'
-        ? pixelRects.map((rect) => toPercentRect(rect, pageSize))
-        : pixelRects
+    const pageRects = deriveLayoutPageRects({
+      pageNumber,
+      startPageNumber,
+      endPageNumber,
+      range,
+      root,
+      flowLayoutPages,
+      textsByPageNumber,
+      pageSizesByPageNumber,
+      overlayRectType
+    })
+    if (pageRects) rectsBySelectionId[pageId] = pageRects
   }
 
   return {

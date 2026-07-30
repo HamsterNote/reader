@@ -33,10 +33,7 @@ import {
   type ReaderSelectedTextSegment,
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
-import {
-  summarizeHighlightRanges,
-  traceHighlight
-} from './highlightDebug'
+import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { IntermediateDocumentTextPageContent } from './IntermediateDocumentTextPageContent'
 import type {
   ReaderPageRange,
@@ -98,6 +95,42 @@ const DISABLED_ANNOTATION_HISTORY_STATUS = {
 } as const
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
+
+function useSelectionScope(
+  runtimeDocument: IntermediateDocument | null,
+  pageNumbersKey: string
+): symbol {
+  const scopeRef = useRef({
+    runtimeDocument,
+    pageNumbersKey,
+    value: Symbol('intermediate-document-text-selection-scope')
+  })
+  if (
+    scopeRef.current.runtimeDocument !== runtimeDocument ||
+    scopeRef.current.pageNumbersKey !== pageNumbersKey
+  ) {
+    scopeRef.current = {
+      runtimeDocument,
+      pageNumbersKey,
+      value: Symbol('intermediate-document-text-selection-scope')
+    }
+  }
+  return scopeRef.current.value
+}
+
+function syncLastActiveRange(
+  lastActiveRangeRef: React.MutableRefObject<LinkedSelectionRange | null>,
+  scopeRef: React.MutableRefObject<symbol>,
+  selectionScope: symbol,
+  activeRange: LinkedSelectionRange | null | undefined
+): void {
+  if (scopeRef.current !== selectionScope) {
+    scopeRef.current = selectionScope
+    lastActiveRangeRef.current = activeRange ?? null
+  } else if (activeRange) {
+    lastActiveRangeRef.current = activeRange
+  }
+}
 
 const getEffectiveTextMaxLoadedPages = (
   configuredMaxLoadedPages: number | undefined,
@@ -759,22 +792,7 @@ export function IntermediateDocumentTextViewer(
   }, [hiddenPages, runtimeDocument, pageRange])
   const pageNumbersKey = useMemo(() => pageNumbers.join(','), [pageNumbers])
 
-  const selectionScopeRef = useRef({
-    runtimeDocument,
-    pageNumbersKey,
-    value: Symbol('intermediate-document-text-selection-scope')
-  })
-  if (
-    selectionScopeRef.current.runtimeDocument !== runtimeDocument ||
-    selectionScopeRef.current.pageNumbersKey !== pageNumbersKey
-  ) {
-    selectionScopeRef.current = {
-      runtimeDocument,
-      pageNumbersKey,
-      value: Symbol('intermediate-document-text-selection-scope')
-    }
-  }
-  const selectionScope = selectionScopeRef.current.value
+  const selectionScope = useSelectionScope(runtimeDocument, pageNumbersKey)
 
   const isRangesControlled = ranges !== undefined
   const [internalRanges, setInternalRanges] = useState<ReaderSelectionRange[]>(
@@ -968,12 +986,12 @@ export function IntermediateDocumentTextViewer(
     runtimeLinkedData.activeRange ?? null
   )
   const lastActiveRangeScopeRef = useRef(selectionScope)
-  if (lastActiveRangeScopeRef.current !== selectionScope) {
-    lastActiveRangeScopeRef.current = selectionScope
-    lastActiveRangeRef.current = runtimeLinkedData.activeRange ?? null
-  } else if (runtimeLinkedData.activeRange) {
-    lastActiveRangeRef.current = runtimeLinkedData.activeRange
-  }
+  syncLastActiveRange(
+    lastActiveRangeRef,
+    lastActiveRangeScopeRef,
+    selectionScope,
+    runtimeLinkedData.activeRange
+  )
   const popoverOwnerRuntimeId = useMemo(() => {
     if (!selectedHighlight || !runtimeLinkedData.selectedRangeId) {
       return null
@@ -1333,7 +1351,10 @@ export function IntermediateDocumentTextViewer(
 
   const handleLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
-      const runtimePublicLinkedData = mapRuntimeLinkedDataToPublic(next, scopeId)
+      const runtimePublicLinkedData = mapRuntimeLinkedDataToPublic(
+        next,
+        scopeId
+      )
       const publicLinkedData: ReaderLinkedSelectionData = {
         ...runtimePublicLinkedData,
         items: runtimePublicLinkedData.items.map(toTextRange),
@@ -1952,9 +1973,7 @@ export function IntermediateDocumentTextViewer(
                   key={pageNumber}
                   ref={virtualizer.measureElement}
                   data-index={virtualItem.index}
-                  data-page-measurable={
-                    texts !== undefined && texts.length > 0
-                  }
+                  data-page-measurable={texts !== undefined && texts.length > 0}
                   data-page-number={pageNumber}
                   data-selection-id={pageSelectionId}
                   data-testid={`intermediate-text-page-${pageNumber}`}

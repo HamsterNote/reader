@@ -2763,8 +2763,12 @@ describe('Reader zoom props', () => {
     const wrapper = screen.getByTestId('virtual-paper-wrapper')
     expect(wrapper).toHaveAttribute('data-reader-mode', 'true')
     expect(wrapper).toHaveAttribute('data-contain-mode', 'false')
-    expect(Number(wrapper.getAttribute('data-content-width'))).toBeGreaterThan(0)
-    expect(Number(wrapper.getAttribute('data-content-height'))).toBeGreaterThan(0)
+    expect(Number(wrapper.getAttribute('data-content-width'))).toBeGreaterThan(
+      0
+    )
+    expect(Number(wrapper.getAttribute('data-content-height'))).toBeGreaterThan(
+      0
+    )
   })
 
   it('forwards horizontal and independent vertical margins to IntermediateDocumentViewer', () => {
