@@ -29,8 +29,8 @@ const POPOVER_GAP = 8
  * 这样 popover 的屏幕尺寸不会随 zoom 缩放，始终保持原始大小。
  *
  * 当 relative 为 true 时（参考 @hamster-note/components Popover 的 relative 属性）：
- * - 不通过 Portal 渲染到 body，而是直接在组件树中渲染
- * - 使用 position: absolute 相对于最近的定位祖先（容器需要 position: relative）
+ * - 通过 Portal 渲染到 containerRef 指向的定位容器
+ * - 使用 position: absolute 相对于该容器定位（容器需要 position: relative）
  * - 坐标从视口坐标转换为容器相对坐标
  *
  * @param visible  控制 portal 内容是否显示（用于 VirtualPaper transform debounce）
@@ -55,6 +55,11 @@ export function PopoverPortal({
 
   const popoverRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<PopoverPosition | null>(null)
+  const initialPortalContainer = relative ? containerRef.current : document.body
+  const portalContainerRef = useRef<HTMLElement | null>(initialPortalContainer)
+  const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(
+    initialPortalContainer
+  )
 
   useEffect(() => {
     // 不可见时清除位置，隐藏 portal 内容
@@ -65,12 +70,31 @@ export function PopoverPortal({
 
     let rafId: number
 
+    const syncPortalContainer = (): boolean => {
+      const nextPortalContainer = relative
+        ? containerRef.current
+        : document.body
+      if (portalContainerRef.current === nextPortalContainer) return false
+
+      portalContainerRef.current = nextPortalContainer
+      setPortalContainer(nextPortalContainer)
+      setPosition(null)
+      return true
+    }
+
+    syncPortalContainer()
+
     /**
      * rAF 循环：持续读取 anchor 的视口坐标并更新 portal 位置。
      * 这样在滚动、内容变化等场景下 portal 都能跟随锚点。
      * 仅在坐标变化超过 0.5px 时更新 state，避免不必要的 re-render。
      */
     const updatePosition = () => {
+      if (syncPortalContainer()) {
+        rafId = requestAnimationFrame(updatePosition)
+        return
+      }
+
       const container = containerRef.current
       const popover = popoverRef.current
       const anchor = anchorRef.current
@@ -136,6 +160,7 @@ export function PopoverPortal({
       {/* Portal / 内联内容 */}
       {visible && (
         <PopoverContent
+          portalContainer={portalContainer}
           relative={relative}
           position={position}
           popoverRef={popoverRef}
@@ -150,15 +175,17 @@ export function PopoverPortal({
 /**
  * 根据 relative 模式决定渲染方式：
  * - relative=false（默认）：createPortal 到 document.body，position: fixed
- * - relative=true：在组件树中直接渲染，position: absolute
+ * - relative=true：createPortal 到 containerRef，position: absolute
  */
 function PopoverContent({
   children,
+  portalContainer,
   relative,
   position,
   popoverRef
 }: {
   children: ReactNode
+  portalContainer: HTMLElement | null
   relative: boolean
   position: PopoverPosition | null
   popoverRef: RefObject<HTMLDivElement | null>
@@ -177,34 +204,21 @@ function PopoverContent({
     userSelect: 'none'
   }
 
-  if (relative) {
-    // 相对模式：直接渲染在组件树中，position: absolute 相对父容器
-    return (
-      <div
-        ref={popoverRef}
-        className='hamster-reader-popover-portal hsn-selection-popover'
-        style={{
-          ...style,
-          position: 'absolute'
-        }}
-      >
-        {children}
-      </div>
-    )
+  if (!portalContainer) {
+    return null
   }
 
-  // 默认模式：Portal 到 document.body，position: fixed 脱离 VirtualPaper transform
   return createPortal(
     <div
       ref={popoverRef}
       className='hamster-reader-popover-portal hsn-selection-popover'
       style={{
         ...style,
-        position: 'fixed'
+        position: relative ? 'absolute' : 'fixed'
       }}
     >
       {children}
     </div>,
-    document.body
+    portalContainer
   )
 }

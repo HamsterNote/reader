@@ -154,4 +154,90 @@ describe('reader comment helpers', () => {
     // Then: 返回空数组。
     expect(result).toEqual([])
   })
+
+  it('keeps duplicate-id comments exactly once without recursive replies', () => {
+    // Given: malformed input reuses one ID for a root and its apparent child.
+    const input = [
+      {
+        id: 'duplicate',
+        highlightIds: ['h1'],
+        content: 'first occurrence',
+        createdAt: 10,
+        parentId: null
+      },
+      {
+        id: 'duplicate',
+        highlightIds: ['h1'],
+        content: 'second occurrence',
+        createdAt: 20,
+        parentId: 'duplicate'
+      }
+    ] satisfies readonly ReaderComment[]
+
+    // When: the public helper builds a tree from the malformed records.
+    const result = buildReaderCommentTree(input)
+
+    // Then: both records become finite roots in stable order.
+    expect(
+      result.map(({ content, replies }) => [content, replies.length])
+    ).toEqual([
+      ['first occurrence', 0],
+      ['second occurrence', 0]
+    ])
+  })
+
+  it('breaks parent cycles without losing comments', () => {
+    // Given: two unique comments reference each other as parents.
+    const input = [
+      {
+        id: 'cycle-a',
+        highlightIds: ['h1'],
+        content: 'cycle a',
+        createdAt: 10,
+        parentId: 'cycle-b'
+      },
+      {
+        id: 'cycle-b',
+        highlightIds: ['h1'],
+        content: 'cycle b',
+        createdAt: 20,
+        parentId: 'cycle-a'
+      }
+    ] satisfies readonly ReaderComment[]
+
+    // When: the public helper builds a tree from the cyclic graph.
+    const result = buildReaderCommentTree(input)
+
+    // Then: the earliest input is promoted to a root and every record appears once.
+    expect(result.map((comment) => comment.id)).toEqual(['cycle-a'])
+    expect(result[0]?.replies.map((comment) => comment.id)).toEqual(['cycle-b'])
+    expect(result[0]?.replies[0]?.replies).toEqual([])
+  })
+
+  it('builds a long cyclic comment graph without exhausting the call stack', () => {
+    // Given: an untrusted parent graph contains a cycle thousands of records deep.
+    const commentCount = 3_000
+    const input = Array.from({ length: commentCount }, (_, index) => ({
+      id: `comment-${index}`,
+      highlightIds: ['h1'],
+      content: `comment ${index}`,
+      createdAt: index,
+      parentId: `comment-${(index + 1) % commentCount}`
+    })) satisfies readonly ReaderComment[]
+
+    // When: the public helper materializes the malformed graph.
+    const result = buildReaderCommentTree(input)
+
+    // Then: every record remains reachable exactly once without recursive overflow.
+    const pending = [...result]
+    const visitedIds: string[] = []
+    while (pending.length > 0) {
+      const node = pending.pop()
+      if (!node) continue
+      visitedIds.push(node.id)
+      pending.push(...node.replies)
+    }
+    expect(visitedIds).toHaveLength(commentCount)
+    expect(new Set(visitedIds).size).toBe(commentCount)
+  })
 })

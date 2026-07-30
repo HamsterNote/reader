@@ -78,10 +78,18 @@ function parseCommentStorageV2(
   const comments = value.comments
   if (!Array.isArray(comments)) return []
 
-  return comments.flatMap((comment) => {
+  const parsedComments = comments.flatMap((comment) => {
     const parsedComment = parseReaderComment(comment)
     return parsedComment === null ? [] : [parsedComment]
   })
+  const commentIds = new Set<string>()
+
+  for (const comment of parsedComments) {
+    if (commentIds.has(comment.id)) return []
+    commentIds.add(comment.id)
+  }
+
+  return parsedComments
 }
 
 function parseLegacyCommentRecord(

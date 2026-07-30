@@ -107,6 +107,27 @@ describe('demo comment storage', () => {
     expect(parseComments(raw)).toEqual([])
   })
 
+  it('rejects v2 storage containing duplicate comment IDs', () => {
+    // Given: persisted v2 data contains two structurally valid records with one ID.
+    const raw = JSON.stringify({
+      version: HAMSTER_DEMO_COMMENT_STORAGE_VERSION,
+      comments: [
+        baseComment,
+        {
+          ...baseComment,
+          content: 'duplicate record',
+          parentId: 'comment-1'
+        }
+      ]
+    })
+
+    // When: the localStorage boundary parses the untrusted payload.
+    const result = parseComments(raw)
+
+    // Then: the ambiguous payload is rejected before reaching the UI tree builder.
+    expect(result).toEqual([])
+  })
+
   it('removes a deleted highlight binding and cascades zero-bound comment replies', () => {
     // Given: 一个单绑定根评论有回复；另一个评论同时绑定两个高亮。
     const comments: readonly ReaderComment[] = [

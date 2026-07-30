@@ -38,24 +38,23 @@ type EdgeCropOverlayProps = {
  * - 「应用到全部」：将当前裁切值应用到所有页（onApply(null, crop)）。
  *
  * 使用 setPointerCapture 捕获指针，避免拖拽过程中 VirtualPaper 接收事件。
- * 本地状态由 resolvePageEdgeCrop(edgeCrop, pageNumber) 初始化，
- * 各页之间互不影响。
+ * 本地状态跟随 resolvePageEdgeCrop(edgeCrop, pageNumber)；拖拽期间到达的受控更新
+ * 会延迟到指针释放后应用，避免覆盖正在编辑的草稿。
  */
 export function EdgeCropOverlay({
   pageNumber,
   edgeCrop,
   onApply
 }: EdgeCropOverlayProps) {
-  // 从真实 edgeCrop 解析当前页的裁切值，作为本地编辑初始状态
-  const [localCrop, setLocalCrop] = useState<ReaderEdgeCrop>(
-    () =>
-      resolvePageEdgeCrop(edgeCrop, pageNumber) ?? {
-        top: 0,
-        right: 0,
-        bottom: 0,
-        left: 0
-      }
-  )
+  const controlledCrop = resolvePageEdgeCrop(edgeCrop, pageNumber) ?? {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0
+  }
+  const controlledCropVersion = `${pageNumber}:${controlledCrop.top ?? 0}:${controlledCrop.right ?? 0}:${controlledCrop.bottom ?? 0}:${controlledCrop.left ?? 0}`
+
+  const [localCrop, setLocalCrop] = useState<ReaderEdgeCrop>(controlledCrop)
 
   // 容器引用，用于计算指针相对位置
   const containerRef = useRef<HTMLDivElement>(null)
@@ -65,6 +64,21 @@ export function EdgeCropOverlay({
     pointerId: number
     rect: DOMRect
   } | null>(null)
+  const controlledCropVersionRef = useRef(controlledCropVersion)
+  const pendingControlledCropRef = useRef<ReaderEdgeCrop | null>(null)
+
+  useEffect(() => {
+    if (controlledCropVersionRef.current === controlledCropVersion) return
+    controlledCropVersionRef.current = controlledCropVersion
+
+    if (dragRef.current) {
+      pendingControlledCropRef.current = controlledCrop
+      return
+    }
+
+    pendingControlledCropRef.current = null
+    setLocalCrop(controlledCrop)
+  }, [controlledCrop, controlledCropVersion])
 
   /**
    * 裁切比例约束：
@@ -153,15 +167,22 @@ export function EdgeCropOverlay({
     [localCrop, clampRatio]
   )
 
-  // 指针抬起：释放捕获，清除拖拽状态
-  const handlePointerUp = useCallback(
+  const handlePointerEnd = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       const drag = dragRef.current
       if (!drag) return
       if (e.pointerId !== drag.pointerId) return
       e.stopPropagation()
-      e.currentTarget.releasePointerCapture(e.pointerId)
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
       dragRef.current = null
+
+      const pendingControlledCrop = pendingControlledCropRef.current
+      if (pendingControlledCrop) {
+        pendingControlledCropRef.current = null
+        setLocalCrop(pendingControlledCrop)
+      }
     },
     []
   )
@@ -191,7 +212,8 @@ export function EdgeCropOverlay({
         data-edge='top'
         style={{ top: `${topPct}%` }}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
       />
       {/* 下边裁切线（水平） */}
       <div
@@ -200,7 +222,8 @@ export function EdgeCropOverlay({
         data-edge='bottom'
         style={{ top: `${bottomPct}%` }}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
       />
       {/* 左边裁切线（垂直） */}
       <div
@@ -209,7 +232,8 @@ export function EdgeCropOverlay({
         data-edge='left'
         style={{ left: `${leftPct}%` }}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
       />
       {/* 右边裁切线（垂直） */}
       <div
@@ -218,7 +242,8 @@ export function EdgeCropOverlay({
         data-edge='right'
         style={{ left: `${rightPct}%` }}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
       />
       {/* 每页操作按钮区域 */}
       <div className='hamster-reader__edge-crop-actions'>
