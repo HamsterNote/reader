@@ -183,9 +183,14 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Layout-only controls:** touch-panning and edge-crop editing remain visible
   but disabled in Text mode. Entering Text mode also exits edge-crop editing so
   a hidden edit session cannot survive the mode transition.
+- **OCR:** the OCR toggle is off by default and is available only in Layout
+  mode. Turning it on immediately recognizes every currently loaded page and
+  automatically recognizes each page loaded afterward while it remains on.
+  Text mode disables the toggle without discarding its state.
 - **State feedback:** two-finger panning and active edge-crop editing use the
-  existing primary button treatment and expose `aria-pressed=true`; inactive
-  controls use the existing ghost treatment.
+  existing primary button treatment and expose `aria-pressed=true`; OCR follows
+  the same primary/ghost and pressed-state convention. Inactive controls use
+  the existing ghost treatment.
 - **Responsive behavior:** these reader-level controls stay directly available
   as icon buttons on narrow screens. Only the three selection tools collapse
   into the existing anchored menu below `768px`. The toolbar is constrained to

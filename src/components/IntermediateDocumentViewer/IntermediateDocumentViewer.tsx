@@ -57,6 +57,7 @@ import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
   ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
@@ -436,7 +437,7 @@ export type IntermediateDocumentViewerProps = {
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
   /**
    * OCR 配置。
-   * - `true` / `{ enabled: true }`：自动模式，识别可见页；
+   * - `true` / `{ enabled: true }`：自动模式，识别当前与后续加载完成的页面；
    * - `{ enabled: true, pages: [...] }`：手动模式，仅识别并展示列出的页码，
    *   从列表中移除某页即按页关闭该页 OCR（丢弃在途结果与缓存）；
    * - `false` / `{ enabled: false }`：全局关闭，清空所有 OCR 展示。
@@ -597,6 +598,9 @@ export type IntermediateDocumentViewerProps = {
   onAnnotationHistoryChange?: (
     next: ReaderAnnotationHistoryValue,
     detail: ReaderAnnotationHistoryChangeDetail
+  ) => void
+  onAnnotationHistoryStatusChange?: (
+    status: ReaderAnnotationHistoryStatus
   ) => void
   /**
    * 初始立即加载的页数。省略时默认 `1`。
@@ -3829,6 +3833,7 @@ export function IntermediateDocumentViewer({
   onUpdateRect,
   annotationHistory,
   onAnnotationHistoryChange,
+  onAnnotationHistoryStatusChange,
   initialLoadedPages = 1,
   pageLoadConcurrency = 3,
   pageLoadEnterDelayMs = 500,
@@ -4312,6 +4317,29 @@ export function IntermediateDocumentViewer({
     initialValue: currentAnnotationHistorySnapshot(),
     onChange: onAnnotationHistoryChange
   })
+  const {
+    enabled: annotationHistoryStatusEnabled,
+    canUndo: annotationHistoryCanUndo,
+    canRedo: annotationHistoryCanRedo,
+    pastCount: annotationHistoryPastCount,
+    futureCount: annotationHistoryFutureCount
+  } = annotationHistoryController.getStatus()
+  useEffect(() => {
+    onAnnotationHistoryStatusChange?.({
+      enabled: annotationHistoryStatusEnabled,
+      canUndo: annotationHistoryCanUndo,
+      canRedo: annotationHistoryCanRedo,
+      pastCount: annotationHistoryPastCount,
+      futureCount: annotationHistoryFutureCount
+    })
+  }, [
+    annotationHistoryCanRedo,
+    annotationHistoryCanUndo,
+    annotationHistoryFutureCount,
+    annotationHistoryPastCount,
+    annotationHistoryStatusEnabled,
+    onAnnotationHistoryStatusChange
+  ])
   const lastAnnotationHistoryResetKeyRef = useRef(annotationHistory?.resetKey)
 
   const syncAnnotationHistorySnapshot = useCallback(
@@ -6560,6 +6588,14 @@ export function IntermediateDocumentViewer({
     typeof ocr === 'object' && ocr !== null && Array.isArray(ocr.pages)
       ? ocr.pages.filter((page) => Number.isInteger(page) && page > 0)
       : undefined
+  const loadedOcrPages = useMemo(
+    () =>
+      Array.from(pageStatuses.entries())
+        .filter(([, status]) => status === 'loaded')
+        .map(([pageNumber]) => pageNumber)
+        .sort((a, b) => a - b),
+    [pageStatuses]
+  )
 
   // 合并受控 OCR 数据与内部识别结果：受控数据优先；
   // 手动模式仅保留 pages 列表内的页面；全局关闭时不渲染任何 OCR 文本。
@@ -6670,8 +6706,7 @@ export function IntermediateDocumentViewer({
     const isRunAborted = () =>
       !isMountedRef.current || activeDocumentRef.current !== runtimeDocument
 
-    // 手动模式识别指定页；自动模式保持原有行为识别可见页
-    const targetPages = manualOcrPages ?? visiblePages
+    const targetPages = manualOcrPages ?? loadedOcrPages
 
     targetPages.forEach((pageNumber) => {
       if (
@@ -6789,7 +6824,7 @@ export function IntermediateDocumentViewer({
   }, [
     isOcrEnabled,
     manualOcrPages,
-    visiblePages,
+    loadedOcrPages,
     runtimeDocument,
     extraOCR,
     onOcrError,

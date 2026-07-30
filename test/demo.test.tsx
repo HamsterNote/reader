@@ -9,7 +9,10 @@ import type {
   ReaderComment,
   ReaderData,
   ReaderEdgeCrop,
+  ReaderFontScale,
   ReaderLinkedSelectionData,
+  ReaderOcrOptions,
+  ReaderPageTool,
   ReaderRenderMode,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -100,8 +103,17 @@ type MockReaderProps = Record<string, unknown> & {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   emptyText?: string
   renderMode?: ReaderRenderMode
-  fontScale?: number
+  onRenderModeChange?: (mode: ReaderRenderMode) => void
+  fontScale?: ReaderFontScale
+  onFontScaleChange?: (scale: ReaderFontScale) => void
   touchPanMode?: ReaderTouchPanMode
+  onTouchPanModeChange?: (mode: ReaderTouchPanMode) => void
+  ocr?: boolean | ReaderOcrOptions
+  onOcrChange?: (enabled: boolean) => void
+  selectedTool?: ReaderPageTool
+  onSelectedToolChange?: (tool: ReaderPageTool) => void
+  drawingStrokeColor?: string
+  onDrawingStrokeColorChange?: (color: string) => void
   data?: ReaderData
   onDataChange?: (nextData: ReaderData) => void
   onFileUpload?: (file: File) => void
@@ -137,6 +149,7 @@ type MockReaderProps = Record<string, unknown> & {
   commentCountByRangeId?: Record<string, number>
   commentCountByRectId?: Record<string, number>
   edgeCropEditing?: boolean
+  onEdgeCropEditingChange?: (editing: boolean) => void
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
 }
 
@@ -705,11 +718,7 @@ describe('demo parser flow', () => {
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(createImagePreviewDocument).toHaveBeenCalledWith(uploadedFile)
-      // 未输入页码前不开启任何页的 OCR（pages 为空）
-      expect(findDocumentReaderProps()?.ocr).toEqual({
-        enabled: true,
-        pages: []
-      })
+      expect(findDocumentReaderProps()?.ocr).toBe(false)
       expect(PdfParser.encode).not.toHaveBeenCalled()
       expect(EpubParser.encode).not.toHaveBeenCalled()
       expect(TxtParser.encode).not.toHaveBeenCalled()
@@ -908,6 +917,37 @@ describe('demo parser flow', () => {
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
   })
 
+  it('controls automatic OCR through the Reader toolbar callback', async () => {
+    // Given: 文档已加载，OCR 默认关闭。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Automatic OCR Document')
+    )
+    render(<App />)
+    upload(makeFile('automatic-ocr.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    expect(findDocumentReaderProps()?.ocr).toBe(false)
+
+    // When: Reader 底栏请求开启 OCR。
+    act(() => {
+      findDocumentReaderProps()?.onOcrChange?.(true)
+    })
+
+    // Then: Reader 进入自动模式，覆盖当前及后续加载页。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toBe(true)
+    })
+
+    // When: Reader 底栏请求关闭 OCR。
+    act(() => {
+      findDocumentReaderProps()?.onOcrChange?.(false)
+    })
+
+    // Then: OCR 返回关闭状态。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toBe(false)
+    })
+  })
+
   it('starts OCR for the entered page and echoes recognized texts back as controlled data', async () => {
     // Given: PDF 解析成功，文档已加载。
     vi.mocked(PdfParser.encode).mockResolvedValue(
@@ -917,10 +957,7 @@ describe('demo parser flow', () => {
     render(<App />)
     upload(makeFile('ocr-target.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-    expect(findDocumentReaderProps()?.ocr).toEqual({
-      enabled: true,
-      pages: []
-    })
+    expect(findDocumentReaderProps()?.ocr).toBe(false)
 
     // When: 用户输入页码并点击 OCR 按钮。
     fireEvent.change(screen.getByTestId('ocr-page-input'), {
@@ -1013,12 +1050,9 @@ describe('demo parser flow', () => {
     // When: 用户点击「全部关闭」全局关闭 OCR。
     fireEvent.click(screen.getByTestId('ocr-close-all-btn'))
 
-    // Then: 开启列表清空，侧栏不再展示任何 OCR 页标识。
+    // Then: 开启列表清空，OCR 全局关闭，侧栏不再展示任何页标识。
     await waitFor(() => {
-      expect(findDocumentReaderProps()?.ocr).toEqual({
-        enabled: true,
-        pages: []
-      })
+      expect(findDocumentReaderProps()?.ocr).toBe(false)
     })
     expect(screen.queryByTestId('ocr-active-pages')).not.toBeInTheDocument()
   })
@@ -1053,10 +1087,7 @@ describe('demo parser flow', () => {
     expect(await screen.findByTestId('ocr-error')).toHaveTextContent(
       '页码超出范围'
     )
-    expect(findDocumentReaderProps()?.ocr).toEqual({
-      enabled: true,
-      pages: []
-    })
+    expect(findDocumentReaderProps()?.ocr).toBe(false)
   })
 
   it('restores persisted OCR pages and texts when the file is uploaded again', async () => {
@@ -1288,334 +1319,68 @@ describe('demo parser flow', () => {
     })
   })
 
-  it('switches tools from the bottom bar and forwards them to Reader', async () => {
-    // Given: a parsed document is rendered, so the bottom bar is visible.
+  it('forwards default bottom bar state and callbacks to Reader', async () => {
+    // Given: Demo 已加载支持字号控制的 PDF，并由 Reader 自己渲染默认底栏。
     vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Bottom Bar Tool Document')
+      makeRuntimeDocument('Reader Bottom Bar Contract')
     )
-
     render(<App />)
-    upload(makeFile('bottom-bar-tool.pdf'))
+    upload(makeFile('reader-bottom-bar-contract.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-    const bottomBar = screen.getByTestId('tool-bottom-bar')
-    expect(bottomBar).toBeInTheDocument()
-    expect(screen.getByTestId('tool-bottom-bar-font-scale')).toBeInTheDocument()
-
-    // Given: 默认选中文字工具。
-    const textButton = screen.getByTestId('tool-bottom-bar-text-selection')
-    const rectButton = screen.getByTestId('tool-bottom-bar-rect-selection')
-    const drawingButton = screen.getByTestId('tool-bottom-bar-drawing')
-    expect(textButton).toHaveAttribute('aria-pressed', 'true')
-    expect(rectButton).toHaveAttribute('aria-pressed', 'false')
-    expect(drawingButton).toHaveAttribute('aria-pressed', 'false')
-    expect(findDocumentReaderProps()?.selectedTool).toBe('text-selection')
-
-    // When: 点击底部栏的矩形工具。
-    fireEvent.click(rectButton)
-
-    // Then: Reader 收到 rect-selection，且设置面板 select 同步。
-    await waitFor(() => {
-      expect(findDocumentReaderProps()?.selectedTool).toBe('rect-selection')
-      expect(rectButton).toHaveAttribute('aria-pressed', 'true')
-      expect(textButton).toHaveAttribute('aria-pressed', 'false')
-      expect(screen.getByTestId('selection-tool-select')).toHaveValue(
-        'rect-selection'
-      )
+    const initialProps = findDocumentReaderProps()
+    expect(initialProps).toMatchObject({
+      renderMode: 'layout',
+      fontScale: 1.5,
+      touchPanMode: 'single-finger',
+      edgeCropEditing: false,
+      selectedTool: 'text-selection',
+      drawingStrokeColor: '#7d9ec0'
     })
+    expect(initialProps?.onRenderModeChange).toBeTypeOf('function')
+    expect(initialProps?.onFontScaleChange).toBeTypeOf('function')
+    expect(initialProps?.onTouchPanModeChange).toBeTypeOf('function')
+    expect(initialProps?.onEdgeCropEditingChange).toBeTypeOf('function')
+    expect(initialProps?.onSelectedToolChange).toBeTypeOf('function')
+    expect(initialProps?.onDrawingStrokeColorChange).toBeTypeOf('function')
 
-    // When: 点击底部栏的绘图工具。
-    fireEvent.click(drawingButton)
-
-    // Then: Reader 收到 drawing。
-    await waitFor(() => {
-      expect(findDocumentReaderProps()?.selectedTool).toBe('drawing')
-      expect(drawingButton).toHaveAttribute('aria-pressed', 'true')
-      expect(rectButton).toHaveAttribute('aria-pressed', 'false')
-    })
-  })
-
-  it('positions the bottom bar relative to the Reader container without wrapping', async () => {
-    // Given: 已加载文档，底部栏渲染。
-    vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Bottom Bar No Wrap Document')
-    )
-    render(<App />)
-    upload(makeFile('bottom-bar-nowrap.pdf'))
-    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-
-    // Then: 底部栏容器行内样式应含 whiteSpace: 'nowrap'。
-    const bottomBar = screen.getByTestId('tool-bottom-bar')
-    expect(bottomBar).toBeInTheDocument()
-    expect(bottomBar.parentElement).toHaveClass('hamster-demo-main')
-    expect(bottomBar).toHaveStyle('position: absolute')
-    expect(bottomBar).toHaveStyle('white-space: nowrap')
-
-    // Then: 每个颜色按钮的行内样式应含 flexShrink: 0。
-    const colorNames = [
-      'blue',
-      'green',
-      'sand',
-      'rose',
-      'lavender',
-      'black'
-    ] as const
-    for (const name of colorNames) {
-      const colorButton = screen.getByTestId(`tool-bottom-bar-color-${name}`)
-      expect(colorButton).toHaveStyle('flex-shrink: 0')
-    }
-  })
-
-  it('undoes and redoes annotation changes from the bottom bar', async () => {
-    // Given: 已加载文档，但历史记录仍为空。
-    vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Bottom Bar History Document')
-    )
-    render(<App />)
-    upload(makeFile('bottom-bar-history.pdf'))
-    expect(
-      await screen.findByText('Bottom Bar History Document')
-    ).toBeInTheDocument()
-
-    const undoButton = screen.getByTestId('tool-bottom-bar-undo')
-    const redoButton = screen.getByTestId('tool-bottom-bar-redo')
-    expect(undoButton).toHaveAccessibleName('撤销')
-    expect(redoButton).toHaveAccessibleName('恢复')
-    expect(undoButton).toBeDisabled()
-    expect(redoButton).toBeDisabled()
-
-    // When: Reader 创建一个可撤销的高亮。
+    // When: Reader 默认底栏通过回调修改所有受控值。
     act(() => {
-      findDocumentReaderProps()?.onHighlight?.(
-        makeLinkedRange('toolbar-history-range', 'toolbar history text')
-      )
+      initialProps?.onFontScaleChange?.(0.5)
+      initialProps?.onTouchPanModeChange?.('two-finger')
+      initialProps?.onEdgeCropEditingChange?.(true)
+      initialProps?.onSelectedToolChange?.('drawing')
+      initialProps?.onDrawingStrokeColorChange?.('#8eba8e')
     })
 
-    // Then: 工具栏撤销可用，并可驱动同一套 Reader 历史状态。
-    await waitFor(() => expect(undoButton).not.toBeDisabled())
-    fireEvent.click(undoButton)
+    // Then: Demo 将新值回传给 Reader，设置面板也与同一状态同步。
     await waitFor(() => {
-      expect(undoButton).toBeDisabled()
-      expect(redoButton).not.toBeDisabled()
-      expect(screen.queryByText('toolbar history text')).not.toBeInTheDocument()
-    })
-
-    // When: 用户从工具栏恢复刚撤销的高亮。
-    fireEvent.click(redoButton)
-
-    // Then: 高亮和两枚按钮的可用状态都同步恢复。
-    await waitFor(() => {
-      expect(screen.getByText('toolbar history text')).toBeInTheDocument()
-      expect(undoButton).not.toBeDisabled()
-      expect(redoButton).toBeDisabled()
-    })
-  })
-
-  it('switches reader modes and edge crop editing from the bottom bar', async () => {
-    // Given: Layout 模式下的工具栏控制均可用，且默认采用单指滑动。
-    vi.mocked(PdfParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Bottom Bar Reader Modes Document')
-    )
-    render(<App />)
-    upload(makeFile('bottom-bar-reader-modes.pdf'))
-    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-
-    const renderModeButton = screen.getByTestId('tool-bottom-bar-render-mode')
-    const touchPanModeButton = screen.getByTestId(
-      'tool-bottom-bar-touch-pan-mode'
-    )
-    const edgeCropButton = screen.getByTestId('tool-bottom-bar-edge-crop')
-    expect(renderModeButton).toHaveAccessibleName('切换到文字渲染模式')
-    expect(renderModeButton).toHaveAttribute('aria-pressed', 'false')
-    expect(touchPanModeButton).toHaveAccessibleName('切换到双指滑动模式')
-    expect(touchPanModeButton).toHaveAttribute('aria-pressed', 'false')
-    expect(edgeCropButton).toHaveAccessibleName('边缘裁切')
-    expect(edgeCropButton).toHaveAttribute('aria-pressed', 'false')
-
-    // When: 用户依次启用双指滑动与边缘裁切编辑。
-    fireEvent.click(touchPanModeButton)
-    fireEvent.click(edgeCropButton)
-
-    // Then: Reader 与侧栏设置同步到工具栏状态。
-    await waitFor(() => {
-      expect(findDocumentReaderProps()?.touchPanMode).toBe('two-finger')
-      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(true)
+      expect(findDocumentReaderProps()).toMatchObject({
+        fontScale: 0.5,
+        touchPanMode: 'two-finger',
+        edgeCropEditing: true,
+        selectedTool: 'drawing',
+        drawingStrokeColor: '#8eba8e'
+      })
+      expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
       expect(screen.getByTestId('touch-pan-mode-select')).toHaveValue(
         'two-finger'
       )
-      expect(touchPanModeButton).toHaveAttribute('aria-pressed', 'true')
-      expect(edgeCropButton).toHaveAttribute('aria-pressed', 'true')
     })
 
-    // When: 用户从工具栏切换到 Text 模式。
-    fireEvent.click(renderModeButton)
+    // When: 默认底栏切换到 Text 模式。
+    act(() => {
+      findDocumentReaderProps()?.onRenderModeChange?.('text')
+    })
 
-    // Then: Layout 专属控制禁用，隐藏的裁切编辑状态自动退出。
+    // Then: Demo 同步模式，并退出仅 Layout 可用的裁边编辑。
     await waitFor(() => {
-      expect(findDocumentReaderProps()?.renderMode).toBe('text')
-      expect(findDocumentReaderProps()?.edgeCropEditing).toBe(false)
+      expect(findDocumentReaderProps()).toMatchObject({
+        renderMode: 'text',
+        edgeCropEditing: false
+      })
       expect(screen.getByTestId('render-mode-select')).toHaveValue('text')
-      expect(renderModeButton).toHaveAccessibleName('切换到布局渲染模式')
-      expect(renderModeButton).toHaveAttribute('aria-pressed', 'true')
-      expect(touchPanModeButton).toBeDisabled()
-      expect(edgeCropButton).toBeDisabled()
     })
-
-    // When: 用户切回 Layout 模式。
-    fireEvent.click(renderModeButton)
-
-    // Then: Layout 专属控制重新可用，并保留用户选择的双指模式。
-    await waitFor(() => {
-      expect(findDocumentReaderProps()?.renderMode).toBe('layout')
-      expect(findDocumentReaderProps()?.touchPanMode).toBe('two-finger')
-      expect(touchPanModeButton).not.toBeDisabled()
-      expect(edgeCropButton).not.toBeDisabled()
-    })
-  })
-
-  it('highlights the selected tool trigger when the bottom bar is collapsed', async () => {
-    // Given: 视口进入最窄断点，三个工具合并为一个菜单入口。
-    const originalWindowWidth = window.innerWidth
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: 767
-    })
-
-    try {
-      vi.mocked(PdfParser.encode).mockResolvedValue(
-        makeRuntimeDocument('Collapsed Bottom Bar Tool Document')
-      )
-
-      render(<App />)
-      upload(makeFile('collapsed-bottom-bar-tool.pdf'))
-      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-
-      // Then: 合并入口代表当前选中的文字工具，并使用 primary 视觉层级。
-      const toolMenuButton = screen.getByTestId('tool-bottom-bar-tool-menu')
-      expect(toolMenuButton).toHaveClass('hn-button--primary')
-    } finally {
-      Object.defineProperty(window, 'innerWidth', {
-        configurable: true,
-        value: originalWindowWidth
-      })
-      fireEvent(window, new Event('resize'))
-    }
-  })
-
-  it('highlights the selected tool inside the collapsed bottom bar menu', async () => {
-    // Given: 最窄断点下，文字工具是当前选中的工具。
-    const originalWindowWidth = window.innerWidth
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: 767
-    })
-
-    try {
-      vi.mocked(PdfParser.encode).mockResolvedValue(
-        makeRuntimeDocument('Collapsed Tool Menu Selection Document')
-      )
-
-      render(<App />)
-      upload(makeFile('collapsed-tool-menu-selection.pdf'))
-      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-
-      // When: 用户打开工具菜单。
-      const toolMenuButton = screen.getByTestId('tool-bottom-bar-tool-menu')
-      fireEvent.click(toolMenuButton)
-      const toolMenu = await screen.findByTestId(
-        'tool-bottom-bar-tool-menu-popover'
-      )
-      const textTool = within(toolMenu).getByRole('menuitem', {
-        name: '文字工具'
-      })
-      const rectangleTool = within(toolMenu).getByRole('menuitem', {
-        name: '矩形工具'
-      })
-
-      // Then: 当前工具具有可访问状态和可供视觉样式使用的选中标记。
-      expect(textTool).toHaveAttribute('aria-pressed', 'true')
-      expect(textTool).toHaveAttribute('data-selected', 'true')
-      expect(rectangleTool).toHaveAttribute('aria-pressed', 'false')
-      expect(rectangleTool).toHaveAttribute('data-selected', 'false')
-
-      // When: 用户切换到矩形工具后重新打开菜单。
-      fireEvent.click(rectangleTool)
-      await waitFor(() => {
-        expect(findDocumentReaderProps()?.selectedTool).toBe('rect-selection')
-        expect(
-          screen.queryByTestId('tool-bottom-bar-tool-menu-popover')
-        ).not.toBeInTheDocument()
-      })
-      fireEvent.click(toolMenuButton)
-      const reopenedToolMenu = await screen.findByTestId(
-        'tool-bottom-bar-tool-menu-popover'
-      )
-
-      // Then: 高亮随当前工具同步更新。
-      expect(
-        within(reopenedToolMenu).getByRole('menuitem', { name: '矩形工具' })
-      ).toHaveAttribute('data-selected', 'true')
-      expect(
-        within(reopenedToolMenu).getByRole('menuitem', { name: '文字工具' })
-      ).toHaveAttribute('data-selected', 'false')
-    } finally {
-      Object.defineProperty(window, 'innerWidth', {
-        configurable: true,
-        value: originalWindowWidth
-      })
-      fireEvent(window, new Event('resize'))
-    }
-  })
-
-  it('switches font size for TXT documents from the bottom bar', async () => {
-    // Given: TXT 是支持字号切换的可重排格式。
-    vi.mocked(TxtParser.encode).mockResolvedValue(
-      makeRuntimeDocument('Font Scale Document')
-    )
-
-    render(<App />)
-    upload(makeFile('font-scale.txt'))
-    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-
-    const fontButton = screen.getByTestId('tool-bottom-bar-font-scale')
-    expect(fontButton).toHaveTextContent('字体：大')
-    expect(fontButton).toHaveAttribute(
-      'aria-controls',
-      'tool-bottom-bar-font-scale-menu'
-    )
-    expect(findDocumentReaderProps()?.fontScale).toBe(1.5)
-
-    // When: 用户打开菜单并选择“特小”。
-    fireEvent.click(fontButton)
-    const fontMenu = await screen.findByTestId(
-      'tool-bottom-bar-font-scale-popover'
-    )
-    expect(
-      within(fontMenu).getByRole('menu', { name: '字号菜单' })
-    ).toHaveAttribute('id', 'tool-bottom-bar-font-scale-menu')
-    const extraSmall = within(fontMenu).getByRole('menuitem', {
-      name: '特小'
-    })
-    expect(extraSmall).toHaveAttribute('aria-pressed', 'false')
-    expect(extraSmall).toHaveAttribute('data-selected', 'false')
-    expect(
-      within(fontMenu).getByRole('menuitem', { name: '大' })
-    ).toHaveAttribute('data-selected', 'true')
-    fireEvent.click(extraSmall)
-
-    // Then: 按钮文案与 Reader 倍率同步更新，菜单关闭。
-    await waitFor(() => {
-      expect(fontButton).toHaveTextContent('字体：特小')
-      expect(findDocumentReaderProps()?.fontScale).toBe(0.5)
-      expect(
-        screen.queryByTestId('tool-bottom-bar-font-scale-popover')
-      ).not.toBeInTheDocument()
-    })
-  })
-
-  it('hides the bottom bar before a document is loaded', () => {
-    render(<App />)
-    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
   })
 
   it('exposes edge crop and hidden-page data controls', async () => {

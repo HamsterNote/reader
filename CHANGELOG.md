@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-beta.1] - 2026-07-30
+
+### Fixed
+- Fixed CI workflow to use Node 22 for PR checks.
+- Fixed comment parent cycles, duplicate IDs, dynamic portal containers, and deferred crop updates in Reader component.
+
 ## [0.7.0-beta.0] - 2026-07-30
 
 ### Added

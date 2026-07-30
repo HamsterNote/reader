@@ -162,7 +162,7 @@ EPUB support uses `@hamster-note/epub-parser` and targets Reader text render mod
 
 ### OCR
 
-Enable OCR for visible pages with the `ocr` prop, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
+The default Reader toolbar includes an OCR toggle that starts off. Turn it on to recognize every loaded page immediately and automatically recognize pages loaded afterward. Hosts can control the same behavior with the `ocr` prop and `onOcrChange`, and listen for text selection updates with `onTextSelectionChange` and `onTextSelectionEnd`.
 
 ```tsx
 <Reader
@@ -181,7 +181,7 @@ Enable OCR for visible pages with the `ocr` prop, and listen for text selection 
 
 | Value                             | Behavior                                                                                                                                                                                                 |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `true` / `{ enabled: true }`      | Auto mode: OCR runs for visible pages.                                                                                                                                                                   |
+| `true` / `{ enabled: true }`      | Auto mode: OCR runs for every currently loaded page and each page loaded afterward.                                                                                                                      |
 | `{ enabled: true, pages: [...] }` | Manual mode: only the listed page numbers (1-based) are recognized and displayed. Removing a page from the list closes OCR for that page (in-flight results are discarded and the cache is invalidated). |
 | `false` / `{ enabled: false }`    | Global off: all OCR text layers are cleared for the current document.                                                                                                                                    |
 
@@ -194,6 +194,7 @@ OCR results can be controlled by the host to avoid repeated recognition (for exa
 | Prop               | Type                                                                     | Description                                                                                                                                                                                                                                           |
 | ------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `extraOCR`         | `(imageBase64: string) => IntermediatePage \| Promise<IntermediatePage>` | Optional external OCR provider. It receives the original-size page image and replaces the built-in image parser for recognition. Defaults to `undefined`.                                                                                             |
+| `onOcrChange`      | `(enabled: boolean) => void`                                              | Fired when the default toolbar OCR toggle changes. When `ocr` is controlled, update the host value from this callback.                                                                                                                                |
 | `ocrTexts`         | `Readonly<Record<number, readonly IntermediateText[]>>`                  | Controlled OCR text per page (1-based). Pages with data are rendered directly and never re-recognized; in manual mode only pages listed in `ocr.pages` are displayed.                                                                                 |
 | `onOcrTextsChange` | `(pageNumber: number, texts: IntermediateText[]) => void`                | Fired when a page finishes OCR. Persist the result and pass it back via `ocrTexts`.                                                                                                                                                                   |
 | `onOcrError`       | `(error: unknown, detail: { pageNumber: number }) => void`               | Fired when a page's OCR fails. A failed page is not retried until it is closed and reopened.                                                                                                                                                          |
@@ -223,6 +224,10 @@ Text mode renders document text as normal flow content. It does not render page 
 ### Text, rectangle, and drawing tools
 
 In layout mode, `selectedTool` switches the active page interaction without replacing the virtualized reader. Existing zoom, page-range, OCR, lazy loading, and linked-selection behavior therefore remains available in every tool mode.
+
+For documents with pages, `Reader` renders a built-in bottom toolbar by default. It includes undo/redo, Layout/Text mode, touch pan, edge crop, selection tools, drawing/highlight colors, and the font-scale menu when `fontScale` is provided. Omit the value props to let Reader manage toolbar state internally, or pair them with their `on...Change` callbacks for controlled state.
+
+Pass a React node through `bottomBar` to replace the built-in toolbar. Pass `bottomBar={null}` to disable it explicitly.
 
 ```tsx
 const [selectedTool, setSelectedTool] = useState<ReaderPageTool>('text-selection')
@@ -619,11 +624,11 @@ selectionRef.current?.redo()
 
 Undo and redo return `false` when `onAnnotationHistoryChange` is not provided, because `Reader` has no way to apply the recovered snapshot in controlled mode.
 
-### Demo controls
+### Default toolbar and Demo shortcuts
 
-The browser Demo shows Undo and Redo buttons in the toolbar when history is enabled. Their disabled states are driven by `historyStatus` from `onAnnotationHistoryChange`, not by ref queries, so React rerenders correctly.
+Reader's built-in bottom toolbar always shows Undo and Redo buttons. Their disabled states follow Reader's internal annotation-history status; when annotation history is disabled, both commands remain disabled.
 
-The Demo also attaches demo-only keyboard shortcuts:
+The browser Demo additionally attaches demo-only keyboard shortcuts:
 
 - `Ctrl/Cmd+Z` — undo
 - `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` — redo

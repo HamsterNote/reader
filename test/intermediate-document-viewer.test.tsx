@@ -9541,7 +9541,7 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     }
   })
 
-  it('OCR runs only for visible loaded pages with base images, not for empty shells', async () => {
+  it('OCR processes every loaded page when enabled and each page loaded afterward', async () => {
     const { ImageParser } = await import('@hamster-note/image-parser')
     const encodeSpy = vi.mocked(ImageParser.encode)
     encodeSpy.mockClear()
@@ -9556,58 +9556,59 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     })
 
     try {
-      render(
+      // Given: 前两页已加载但 OCR 仍处于默认关闭状态，第三页是空外壳。
+      const { rerender } = render(
         <IntermediateDocumentViewer
           document={document}
+          initialLoadedPages={2}
+          ocr={false}
+          pageLoadEnterDelayMs={0}
+        />
+      )
+
+      const page1 = screen.getByTestId('intermediate-page-1')
+      const page2 = screen.getByTestId('intermediate-page-2')
+      const page3 = screen.getByTestId('intermediate-page-3')
+      await waitFor(() => {
+        expect(
+          page1.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+        expect(
+          page2.querySelector('.hamster-reader__intermediate-page-base-image')
+        ).toBeInTheDocument()
+      })
+      expect(encodeSpy).not.toHaveBeenCalled()
+
+      // When: OCR 在两页均已加载后开启。
+      rerender(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={2}
           ocr
           pageLoadEnterDelayMs={0}
         />
       )
 
-      // 等待页 1加载并出现底图
-      const page1 = screen.getByTestId('intermediate-page-1')
+      // Then: 无需页面进入可见区，两张已加载页面都会立即识别。
       await waitFor(() => {
-        expect(
-          page1.querySelector('.hamster-reader__intermediate-page-base-image')
-        ).toBeInTheDocument()
-      })
-
-      // 触发页 1 可见 → OCR 运行
-      intersectionObserverMock.trigger(page1)
-
-      await waitFor(() => {
-        expect(encodeSpy).toHaveBeenCalledTimes(1)
+        expect(encodeSpy).toHaveBeenCalledTimes(2)
         expect(
           page1.querySelector('[data-text-id^="ocr-"]')
         ).toBeInTheDocument()
-      })
-
-      // 页 2、3 为空外壳 → 不应有 OCR 文本
-      const page2 = screen.getByTestId('intermediate-page-2')
-      expect(
-        page2.querySelector('[data-text-id^="ocr-"]')
-      ).not.toBeInTheDocument()
-      const page3 = screen.getByTestId('intermediate-page-3')
-      expect(
-        page3.querySelector('[data-text-id^="ocr-"]')
-      ).not.toBeInTheDocument()
-
-      // 加载页 2 并使其可见 → OCR 应在页 2 上运行
-      intersectionObserverMock.trigger(page2)
-      await waitFor(() => {
-        expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
-      })
-      await waitFor(() => {
-        expect(
-          page2.querySelector('.hamster-reader__intermediate-page-base-image')
-        ).toBeInTheDocument()
-      })
-      intersectionObserverMock.trigger(page2)
-
-      await waitFor(() => {
-        expect(encodeSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
         expect(
           page2.querySelector('[data-text-id^="ocr-"]')
+        ).toBeInTheDocument()
+      })
+
+      // When: OCR 保持开启时，第三页进入加载范围。
+      intersectionObserverMock.trigger(page3)
+
+      // Then: 第三页完成加载后会自动识别，不需要再次切换 OCR。
+      await waitFor(() => {
+        expect(pages.get(3)?.getContent).toHaveBeenCalledTimes(1)
+        expect(encodeSpy).toHaveBeenCalledTimes(3)
+        expect(
+          page3.querySelector('[data-text-id^="ocr-"]')
         ).toBeInTheDocument()
       })
     } finally {

@@ -437,6 +437,308 @@ describe('Reader public API', () => {
     expect(screen.getByTestId('reader-content')).toBeInTheDocument()
   })
 
+  it('renders a working default bottom bar for paged documents', async () => {
+    // Given: 宿主只提供文档，所有底栏状态都由 Reader 自己管理。
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        fontScale={1.5}
+      />
+    )
+
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+    const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
+    const touchPanMode = screen.getByTestId('tool-bottom-bar-touch-pan-mode')
+    const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
+
+    expect(bottomBar.parentElement).toHaveAttribute(
+      'data-testid',
+      'reader-root'
+    )
+    expect(capturedViewerProps.selectedTool).toBe('text-selection')
+    expect(capturedViewerProps.touchPanMode).toBe('single-finger')
+    expect(capturedViewerProps.edgeCropEditing).toBe(false)
+
+    // When: 用户直接操作 Reader 自带的底栏。
+    fireEvent.click(rectTool)
+    fireEvent.click(touchPanMode)
+    fireEvent.click(edgeCrop)
+
+    // Then: 同一个 Reader viewer 收到更新后的工具与布局状态。
+    await waitFor(() => {
+      expect(capturedViewerProps.selectedTool).toBe('rect-selection')
+      expect(capturedViewerProps.touchPanMode).toBe('two-finger')
+      expect(capturedViewerProps.edgeCropEditing).toBe(true)
+    })
+
+    // When: 切换到 Text 模式。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    // Then: Reader 改用 Text viewer，并自动退出仅属于 Layout 的裁边模式。
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toBeInTheDocument()
+      expect(screen.getByTestId('tool-bottom-bar-edge-crop')).toBeDisabled()
+      expect(
+        screen.getByTestId('tool-bottom-bar-touch-pan-mode')
+      ).toBeDisabled()
+      expect(screen.getByTestId('tool-bottom-bar-ocr')).toBeDisabled()
+    })
+  })
+
+  it('keeps the default OCR toggle off until the user enables it', async () => {
+    // Given: 宿主没有传入 OCR 配置，Reader 使用默认的内部开关状态。
+    render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
+
+    const ocrToggle = screen.getByTestId('tool-bottom-bar-ocr')
+    expect(ocrToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(capturedViewerProps.ocr).toBe(false)
+
+    // When: 用户开启底栏 OCR。
+    fireEvent.click(ocrToggle)
+
+    // Then: 开关与布局 viewer 同步进入开启状态。
+    await waitFor(() => {
+      expect(ocrToggle).toHaveAttribute('aria-pressed', 'true')
+      expect(capturedViewerProps.ocr).toBe(true)
+    })
+  })
+
+  it('reports controlled OCR changes without mutating the host value', () => {
+    // Given: 宿主显式控制 OCR，当前值为关闭。
+    const onOcrChange = vi.fn()
+    const document = makeDocument({ pages: [makePage(1)] })
+    const { rerender } = render(
+      <Reader document={document} ocr={false} onOcrChange={onOcrChange} />
+    )
+    const ocrToggle = screen.getByTestId('tool-bottom-bar-ocr')
+
+    // When: 用户点击受控开关。
+    fireEvent.click(ocrToggle)
+
+    // Then: Reader 报告下一状态，但在宿主回传前仍保持关闭。
+    expect(onOcrChange).toHaveBeenCalledWith(true)
+    expect(ocrToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(capturedViewerProps.ocr).toBe(false)
+
+    // When: 宿主回传新的受控状态。
+    rerender(<Reader document={document} ocr onOcrChange={onOcrChange} />)
+
+    // Then: 底栏与 viewer 一起反映宿主值。
+    expect(ocrToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(capturedViewerProps.ocr).toBe(true)
+  })
+
+  it('lets controlled hosts receive default bottom bar changes', () => {
+    // Given: 宿主控制 Reader 底栏对应的公开状态。
+    const onRenderModeChange = vi.fn()
+    const onFontScaleChange = vi.fn()
+    const onTouchPanModeChange = vi.fn()
+    const onEdgeCropEditingChange = vi.fn()
+    const onSelectedToolChange = vi.fn()
+    const onDrawingStrokeColorChange = vi.fn()
+    const onHighlightColorChange = vi.fn()
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        renderMode='layout'
+        fontScale={1.5}
+        touchPanMode='single-finger'
+        edgeCropEditing={false}
+        selectedTool='text-selection'
+        drawingStrokeColor='#7d9ec0'
+        onRenderModeChange={onRenderModeChange}
+        onFontScaleChange={onFontScaleChange}
+        onTouchPanModeChange={onTouchPanModeChange}
+        onEdgeCropEditingChange={onEdgeCropEditingChange}
+        onSelectedToolChange={onSelectedToolChange}
+        onDrawingStrokeColorChange={onDrawingStrokeColorChange}
+        onHighlightColorChange={onHighlightColorChange}
+      />
+    )
+
+    // When: 用户逐项操作默认底栏。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-touch-pan-mode'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-edge-crop'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-drawing'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-font-scale'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '特小' }))
+
+    // Then: 受控宿主收到完整的下一状态，不依赖 Demo 私有实现。
+    expect(onRenderModeChange).toHaveBeenCalledWith('text')
+    expect(onTouchPanModeChange).toHaveBeenCalledWith('two-finger')
+    expect(onEdgeCropEditingChange).toHaveBeenCalledWith(true)
+    expect(onSelectedToolChange).toHaveBeenCalledWith('drawing')
+    expect(onDrawingStrokeColorChange).toHaveBeenCalledWith('#8eba8e')
+    expect(onHighlightColorChange).toHaveBeenCalledWith(
+      'rgba(142, 186, 142, 0.35)'
+    )
+    expect(onFontScaleChange).toHaveBeenCalledWith(0.5)
+  })
+
+  it('updates both uncontrolled drawing and highlight colors from the default bottom bar', async () => {
+    // Given: 宿主不控制工具颜色，Reader 使用原有描边默认值。
+    render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
+
+    expect(capturedViewerProps.drawingStrokeColor).toBe('#2563eb')
+
+    // When: 用户选择绿色工具颜色。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
+
+    // Then: 绘图与高亮颜色都由 Reader 内部同步更新。
+    await waitFor(() => {
+      expect(capturedViewerProps.drawingStrokeColor).toBe('#8eba8e')
+      expect(capturedViewerProps.highlightColor).toBe(
+        'rgba(142, 186, 142, 0.35)'
+      )
+    })
+  })
+
+  it('allows the default bottom bar to be replaced or disabled', () => {
+    // Given / When: 一个 Reader 提供自定义底栏，另一个显式传入 null。
+    const { rerender } = render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        bottomBar={<div data-testid='custom-bottom-bar'>Custom controls</div>}
+      />
+    )
+
+    // Then: 自定义节点替代默认底栏。
+    expect(screen.getByTestId('custom-bottom-bar')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+
+    rerender(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        bottomBar={null}
+      />
+    )
+
+    // Then: null 明确关闭底栏。
+    expect(screen.queryByTestId('custom-bottom-bar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+  })
+
+  it('provides toolbar semantics and restores menu focus on Escape', async () => {
+    // Given: 窄屏 Reader 使用折叠工具菜单。
+    const originalWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 375
+    })
+    fireEvent(window, new Event('resize'))
+    const user = userEvent.setup()
+
+    try {
+      render(
+        <Reader
+          document={makeDocument({ pages: [makePage(1)] })}
+          fontScale={1.5}
+        />
+      )
+
+      const toolbar = screen.getByRole('toolbar', { name: '工具栏' })
+      const trigger = within(toolbar).getByRole('button', { name: '工具菜单' })
+
+      // When: 用户打开工具菜单。
+      await user.click(trigger)
+
+      // Then: 触发器关联具名菜单，焦点进入第一个菜单项。
+      const menuId = trigger.getAttribute('aria-controls')
+      expect(menuId).toBeTruthy()
+      expect(screen.getByRole('menu', { name: '选择工具' })).toHaveAttribute(
+        'id',
+        menuId
+      )
+      await waitFor(() => {
+        expect(screen.getByRole('menuitem', { name: '文字工具' })).toHaveFocus()
+      })
+
+      // When: 用户按 Escape 关闭菜单。
+      await user.keyboard('{Escape}')
+
+      // Then: 菜单关闭，焦点回到原触发按钮。
+      expect(
+        screen.queryByRole('menu', { name: '选择工具' })
+      ).not.toBeInTheDocument()
+      expect(trigger).toHaveFocus()
+
+      // When: 用户在关闭后首次重新打开菜单。
+      await user.click(trigger)
+
+      // Then: 第一次重新激活不会被 React 合成事件生命周期吞掉。
+      expect(screen.getByRole('menu', { name: '选择工具' })).toBeInTheDocument()
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: originalWidth
+      })
+      fireEvent(window, new Event('resize'))
+    }
+  })
+
+  it('isolates menu ids and outside-click regions across Reader instances', () => {
+    // Given: 同一页面同时渲染两个窄屏 Reader。
+    const originalWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 375
+    })
+    fireEvent(window, new Event('resize'))
+
+    try {
+      render(
+        <>
+          <Reader
+            document={makeDocument({ pages: [makePage(1)] })}
+            fontScale={1.5}
+          />
+          <Reader
+            document={makeDocument({ pages: [makePage(2)] })}
+            fontScale={1.5}
+          />
+        </>
+      )
+
+      const toolTriggers = screen.getAllByRole('button', { name: '工具菜单' })
+      const fontTriggers = screen.getAllByTestId('tool-bottom-bar-font-scale')
+
+      // Then: 每个 Reader 的触发器都关联自己的唯一菜单 id。
+      expect(toolTriggers[0]?.getAttribute('aria-controls')).not.toBe(
+        toolTriggers[1]?.getAttribute('aria-controls')
+      )
+      expect(fontTriggers[0]?.getAttribute('aria-controls')).not.toBe(
+        fontTriggers[1]?.getAttribute('aria-controls')
+      )
+
+      // When: 两个工具菜单都打开，并在第二个菜单内部按下指针。
+      fireEvent.click(toolTriggers[0] as HTMLElement)
+      fireEvent.click(toolTriggers[1] as HTMLElement)
+      const toolMenus = screen.getAllByRole('menu', { name: '选择工具' })
+      fireEvent.pointerDown(
+        within(toolMenus[1] as HTMLElement).getByRole('menuitem', {
+          name: '文字工具'
+        })
+      )
+
+      // Then: 第二个 Reader 不会把自己菜单内的操作误判为外部点击。
+      expect(screen.getByRole('menu', { name: '选择工具' })).toHaveAttribute(
+        'id',
+        toolTriggers[1]?.getAttribute('aria-controls')
+      )
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: originalWidth
+      })
+      fireEvent(window, new Event('resize'))
+    }
+  })
+
   it('shows the document title fallback when pages are empty', () => {
     render(<Reader document={makeDocument({ pages: [] })} />)
 
@@ -900,7 +1202,7 @@ describe('Reader renderMode', () => {
     render(<Reader document={document} renderMode='text' />)
 
     // When: Reader 创建默认 selection popover。
-    render(<>{capturedTextViewerProps.selectionPopover as React.ReactNode}</>)
+    render(capturedTextViewerProps.selectionPopover as React.ReactElement)
 
     // Then: 用户能够看到确认高亮和颜色设置入口。
     expect(screen.getByRole('button', { name: '高亮' })).toBeInTheDocument()
@@ -2114,11 +2416,45 @@ describe('Reader annotation history', () => {
     })
 
     expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('Before')
+    expect(screen.getByTestId('tool-bottom-bar-undo')).toBeDisabled()
+    expect(screen.getByTestId('tool-bottom-bar-redo')).toBeDisabled()
     act(() => {
       expect(requireReaderSelectionRef(selectionRef).undo()).toBe(false)
       expect(requireReaderSelectionRef(selectionRef).redo()).toBe(false)
     })
     expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('Before')
+  })
+
+  it('disables layout history commands while Reader is in text mode', async () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} annotationHistory />)
+    await screen.findByText('Page 1 text')
+
+    const updateHistoryStatus =
+      capturedViewerProps.onAnnotationHistoryStatusChange
+    if (typeof updateHistoryStatus !== 'function') {
+      throw new Error('Expected internal annotation history status callback')
+    }
+
+    act(() => {
+      updateHistoryStatus({
+        enabled: true,
+        canUndo: true,
+        canRedo: true,
+        pastCount: 1,
+        futureCount: 1
+      })
+    })
+    expect(screen.getByTestId('tool-bottom-bar-undo')).toBeEnabled()
+    expect(screen.getByTestId('tool-bottom-bar-redo')).toBeEnabled()
+
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-bottom-bar-undo')).toBeDisabled()
+      expect(screen.getByTestId('tool-bottom-bar-redo')).toBeDisabled()
+    })
   })
 
   it('does not call single-item mutation callbacks during undo or redo replay', async () => {

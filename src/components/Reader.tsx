@@ -5,7 +5,14 @@ import type {
   IntermediateDocumentSerialized,
   IntermediateText
 } from '@hamster-note/types'
-import { type ReactNode, type Ref, useCallback, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 
 import type {
   ReaderComment,
@@ -20,6 +27,7 @@ import type {
 import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryOptions,
+  ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
@@ -54,8 +62,33 @@ import type {
   ReaderPageTextSelectionMap,
   ReaderPageTool
 } from './Page'
+import { DefaultBottomBar } from './Reader/DefaultBottomBar'
 
 export type ReaderRenderMode = 'layout' | 'text'
+
+type BottomBarHistoryContext = {
+  readonly status: ReaderAnnotationHistoryStatus
+  readonly renderMode: ReaderRenderMode
+  readonly hasHistoryChangeHandler: boolean
+  readonly hasControlledAnnotations: boolean
+}
+
+const resolveBottomBarHistoryStatus = ({
+  status,
+  renderMode,
+  hasHistoryChangeHandler,
+  hasControlledAnnotations
+}: BottomBarHistoryContext): ReaderAnnotationHistoryStatus => {
+  const commandsSupported =
+    renderMode === 'layout' &&
+    (hasHistoryChangeHandler || !hasControlledAnnotations)
+
+  return {
+    ...status,
+    canUndo: status.canUndo && commandsSupported,
+    canRedo: status.canRedo && commandsSupported
+  }
+}
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -77,6 +110,8 @@ export type ReaderProps = {
   overscanPages?: number
   pageRange?: ReaderPageRange
   ocr?: boolean | ReaderOcrOptions
+  /** OCR 开关变化回调；未传入 ocr 时 Reader 同时更新内部开关。 */
+  onOcrChange?: (enabled: boolean) => void
   /** 自定义 OCR 实现；接收页面原尺寸 base64 图片并返回 IntermediatePage。 */
   extraOCR?: ReaderExtraOcr
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -93,12 +128,16 @@ export type ReaderProps = {
    */
   ocrDebug?: boolean
   renderMode?: ReaderRenderMode
+  /** 渲染模式变化回调；未受控时 Reader 同时更新内部模式。 */
+  onRenderModeChange?: (mode: ReaderRenderMode) => void
   /** 当前文档是否为 EPUB；EPUB 的 Layout 高亮矩形只实时计算，不写入持久化数据。 */
   isEpub?: boolean
   /** 当前文档是否为 PDF；Text 模式会据此按文字 box 重建行与段落。 */
   isPdf?: boolean
   /** 可重排文档字号倍率；提供时按 `(原字号 / 16) * 倍率` rem 渲染。 */
   fontScale?: ReaderFontScale
+  /** 字号倍率变化回调。仅在提供 fontScale、启用字号菜单时触发。 */
+  onFontScaleChange?: (scale: ReaderFontScale) => void
   onTextSelectionChange?: (
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
@@ -114,6 +153,8 @@ export type ReaderProps = {
   ) => void
   interactionMode?: ReaderInteractionMode
   touchPanMode?: ReaderTouchPanMode
+  /** 触摸平移模式变化回调；未受控时 Reader 同时更新内部模式。 */
+  onTouchPanModeChange?: (mode: ReaderTouchPanMode) => void
   scale?: number
   defaultScale?: number
   onScaleChange?: (
@@ -213,9 +254,13 @@ export type ReaderProps = {
   onTogglePageBookmark?: (pageNumber: number) => void
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   selectedTool?: ReaderPageTool
+  /** 页面工具变化回调；未受控时 Reader 同时更新内部工具。 */
+  onSelectedToolChange?: (tool: ReaderPageTool) => void
   paintingTool?: DrawingTool
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
+  /** 绘图颜色变化回调；未受控时 Reader 同时更新内部颜色。 */
+  onDrawingStrokeColorChange?: (color: string) => void
   pagePaintings?: ReaderPagePaintingMap
   defaultPagePaintings?: ReaderPagePaintingMap
   /** @deprecated Use the linked `ranges` API. */
@@ -246,6 +291,10 @@ export type ReaderProps = {
   ) => void
   /** Popover 使用相对定位（absolute）相对于容器，而非 fixed 相对于 window */
   popoverRelative?: boolean
+  /** 自定义底部栏；省略时使用内置底部栏，显式传 null 时关闭底部栏。 */
+  bottomBar?: ReactNode
+  /** 边缘裁切编辑状态变化回调；未受控时 Reader 同时更新内部状态。 */
+  onEdgeCropEditingChange?: (editing: boolean) => void
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -340,6 +389,7 @@ export function Reader({
   data,
   onDataChange,
   edgeCropEditing,
+  onEdgeCropEditingChange,
   onEdgeCropApply,
   className,
   emptyText = 'No document',
@@ -347,15 +397,18 @@ export function Reader({
   overscanPages,
   pageRange,
   ocr,
+  onOcrChange,
   extraOCR,
   onOcrError,
   ocrTexts,
   onOcrTextsChange,
   ocrDebug,
   renderMode,
+  onRenderModeChange,
   isEpub,
   isPdf,
   fontScale,
+  onFontScaleChange,
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
@@ -367,6 +420,7 @@ export function Reader({
   maxLoadedPages,
   interactionMode,
   touchPanMode,
+  onTouchPanModeChange,
   ranges,
   defaultRanges,
   selectedRangeId,
@@ -424,8 +478,10 @@ export function Reader({
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   selectedTool,
+  onSelectedToolChange,
   paintingTool = 'pen',
-  drawingStrokeColor = '#2563eb',
+  drawingStrokeColor,
+  onDrawingStrokeColorChange,
   pagePaintings,
   defaultPagePaintings,
   pageTextSelections,
@@ -437,7 +493,8 @@ export function Reader({
   onPageTextSelectionsChange,
   onPageRectSelectionsChange,
   onPageLoadStatusChange,
-  popoverRelative
+  popoverRelative,
+  bottomBar
 }: ReaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
@@ -447,6 +504,19 @@ export function Reader({
     useState<ReaderPageTextSelectionMap>(defaultPageTextSelections ?? {})
   const [internalPageRectSelections, setInternalPageRectSelections] =
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
+  const [internalRenderMode, setInternalRenderMode] =
+    useState<ReaderRenderMode>('layout')
+  const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
+  const [internalTouchPanMode, setInternalTouchPanMode] =
+    useState<ReaderTouchPanMode>('single-finger')
+  const [internalEdgeCropEditing, setInternalEdgeCropEditing] = useState(false)
+  const [internalSelectedTool, setInternalSelectedTool] =
+    useState<ReaderPageTool>('text-selection')
+  const [internalDrawingStrokeColor, setInternalDrawingStrokeColor] =
+    useState('#2563eb')
+  const [internalHighlightColor, setInternalHighlightColor] = useState<
+    string | undefined
+  >(undefined)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
   const resolvedPagePaintings =
@@ -473,10 +543,37 @@ export function Reader({
     (Object.keys(resolvedPageRectSelections).length > 0
       ? getPageRects(resolvedPageRectSelections)
       : undefined)
-  const resolvedSelectionTool =
-    tool ?? (selectedTool === 'rect-selection' ? 'rect' : 'text')
   const normalizedAnnotationHistory =
     normalizeAnnotationHistoryOptions(annotationHistory)
+  const [historyStatus, setHistoryStatus] =
+    useState<ReaderAnnotationHistoryStatus>({
+      enabled: normalizedAnnotationHistory.enabled ?? false,
+      canUndo: false,
+      canRedo: false,
+      pastCount: 0,
+      futureCount: 0
+    })
+  const resolvedRenderMode = renderMode ?? internalRenderMode
+  const resolvedOcr = ocr ?? internalOcrEnabled
+  const resolvedOcrEnabled =
+    resolvedOcr === true ||
+    (typeof resolvedOcr === 'object' && resolvedOcr.enabled === true)
+  const resolvedTouchPanMode = touchPanMode ?? internalTouchPanMode
+  const resolvedEdgeCropEditing = edgeCropEditing ?? internalEdgeCropEditing
+  const resolvedSelectedTool = selectedTool ?? internalSelectedTool
+  const resolvedDrawingStrokeColor =
+    drawingStrokeColor ?? internalDrawingStrokeColor
+  const resolvedHighlightColor = highlightColor ?? internalHighlightColor
+  const bottomBarHistoryStatus = resolveBottomBarHistoryStatus({
+    status: historyStatus,
+    renderMode: resolvedRenderMode,
+    hasHistoryChangeHandler: onAnnotationHistoryChange !== undefined,
+    hasControlledAnnotations: [resolvedRanges, resolvedRects].some(
+      (value) => value !== undefined
+    )
+  })
+  const resolvedSelectionTool =
+    tool ?? (resolvedSelectedTool === 'rect-selection' ? 'rect' : 'text')
   const resolvedBookmarkedPageNumbers =
     data?.bookmarkedPageNumbers ?? bookmarkedPageNumbers
   const usesPageTextSelectionCompatibility =
@@ -508,6 +605,85 @@ export function Reader({
     typeof selectionRef === 'function'
       ? handleSelectionRef
       : (selectionRef ?? defaultSelectionRef)
+
+  useEffect(() => {
+    setHistoryStatus((current) => ({
+      ...current,
+      enabled: normalizedAnnotationHistory.enabled ?? false
+    }))
+  }, [normalizedAnnotationHistory.enabled])
+
+  const handleRenderModeChange = useCallback(
+    (nextMode: ReaderRenderMode) => {
+      if (renderMode === undefined) setInternalRenderMode(nextMode)
+      onRenderModeChange?.(nextMode)
+
+      if (nextMode === 'text' && resolvedEdgeCropEditing) {
+        if (edgeCropEditing === undefined) setInternalEdgeCropEditing(false)
+        onEdgeCropEditingChange?.(false)
+      }
+    },
+    [
+      edgeCropEditing,
+      onEdgeCropEditingChange,
+      onRenderModeChange,
+      renderMode,
+      resolvedEdgeCropEditing
+    ]
+  )
+
+  const handleOcrChange = useCallback(
+    (enabled: boolean) => {
+      if (ocr === undefined) setInternalOcrEnabled(enabled)
+      onOcrChange?.(enabled)
+    },
+    [ocr, onOcrChange]
+  )
+
+  const handleFontScaleChange = useCallback(
+    (nextScale: ReaderFontScale) => onFontScaleChange?.(nextScale),
+    [onFontScaleChange]
+  )
+
+  const handleTouchPanModeChange = useCallback(
+    (nextMode: ReaderTouchPanMode) => {
+      if (touchPanMode === undefined) setInternalTouchPanMode(nextMode)
+      onTouchPanModeChange?.(nextMode)
+    },
+    [onTouchPanModeChange, touchPanMode]
+  )
+
+  const handleEdgeCropEditingChange = useCallback(
+    (editing: boolean) => {
+      if (edgeCropEditing === undefined) setInternalEdgeCropEditing(editing)
+      onEdgeCropEditingChange?.(editing)
+    },
+    [edgeCropEditing, onEdgeCropEditingChange]
+  )
+
+  const handleSelectedToolChange = useCallback(
+    (nextTool: ReaderPageTool) => {
+      if (selectedTool === undefined) setInternalSelectedTool(nextTool)
+      onSelectedToolChange?.(nextTool)
+    },
+    [onSelectedToolChange, selectedTool]
+  )
+
+  const handleDrawingStrokeColorChange = useCallback(
+    (color: string) => {
+      if (drawingStrokeColor === undefined) setInternalDrawingStrokeColor(color)
+      onDrawingStrokeColorChange?.(color)
+    },
+    [drawingStrokeColor, onDrawingStrokeColorChange]
+  )
+
+  const handleHighlightColorChange = useCallback(
+    (color: string) => {
+      if (highlightColor === undefined) setInternalHighlightColor(color)
+      onHighlightColorChange?.(color)
+    },
+    [highlightColor, onHighlightColorChange]
+  )
 
   const handleVirtualPaperTransformChangeEnd = useCallback(
     (virtualPaper: ReaderVirtualPaperState) => {
@@ -757,7 +933,7 @@ export function Reader({
   const showDocumentContent = document?.title ?? emptyText
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
-      if (renderMode === 'text') {
+      if (resolvedRenderMode === 'text') {
         return (
           <IntermediateDocumentTextViewer
             document={document}
@@ -782,15 +958,15 @@ export function Reader({
             onSelectionStart={onSelectionStart}
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
-            highlightColor={highlightColor}
+            highlightColor={resolvedHighlightColor}
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               selectionPopover ?? (
                 <DefaultSelectionPopover
                   selectionRef={popoverSelectionRef}
-                  highlightColor={highlightColor}
-                  onHighlightColorChange={onHighlightColorChange}
+                  highlightColor={resolvedHighlightColor}
+                  onHighlightColorChange={handleHighlightColorChange}
                   selectedRangeId={selectedRangeId}
                   ranges={resolvedRanges}
                   onUpdateRange={handleUpdateRange}
@@ -803,8 +979,8 @@ export function Reader({
               ((highlight) => (
                 <DefaultHighlightPopover
                   selectionRef={popoverSelectionRef}
-                  highlightColor={highlightColor}
-                  onHighlightColorChange={onHighlightColorChange}
+                  highlightColor={resolvedHighlightColor}
+                  onHighlightColorChange={handleHighlightColorChange}
                   selectedRangeId={highlight.id}
                   ranges={resolvedRanges}
                   onUpdateRange={handleUpdateRange}
@@ -848,9 +1024,9 @@ export function Reader({
           pageRange={pageRange}
           hiddenPages={data?.hiddenPages}
           edgeCrop={data?.edgeCrop}
-          edgeCropEditing={edgeCropEditing}
+          edgeCropEditing={resolvedEdgeCropEditing}
           onEdgeCropApply={onEdgeCropApply}
-          ocr={ocr}
+          ocr={resolvedOcr}
           extraOCR={extraOCR}
           onOcrError={onOcrError}
           ocrTexts={ocrTexts}
@@ -870,7 +1046,7 @@ export function Reader({
           maxScale={maxScale}
           maxLoadedPages={maxLoadedPages}
           interactionMode={interactionMode}
-          touchPanMode={touchPanMode}
+          touchPanMode={resolvedTouchPanMode}
           ranges={resolvedRanges}
           defaultRanges={defaultRanges}
           selectedRangeId={selectedRangeId}
@@ -886,15 +1062,15 @@ export function Reader({
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
           onDragHighlight={onDragHighlight}
-          highlightColor={highlightColor}
+          highlightColor={resolvedHighlightColor}
           selectionColor={selectionColor}
           showSelectionMagnifier={showSelectionMagnifier}
           selectionPopover={
             selectionPopover ?? (
               <DefaultSelectionPopover
                 selectionRef={popoverSelectionRef}
-                highlightColor={highlightColor}
-                onHighlightColorChange={onHighlightColorChange}
+                highlightColor={resolvedHighlightColor}
+                onHighlightColorChange={handleHighlightColorChange}
                 selectedRangeId={selectedRangeId}
                 ranges={resolvedRanges}
                 onUpdateRange={handleUpdateRange}
@@ -907,8 +1083,8 @@ export function Reader({
             ((highlight) => (
               <DefaultHighlightPopover
                 selectionRef={popoverSelectionRef}
-                highlightColor={highlightColor}
-                onHighlightColorChange={onHighlightColorChange}
+                highlightColor={resolvedHighlightColor}
+                onHighlightColorChange={handleHighlightColorChange}
                 selectedRangeId={highlight.id}
                 ranges={resolvedRanges}
                 onUpdateRange={handleUpdateRange}
@@ -931,8 +1107,8 @@ export function Reader({
             ((rectangle) => (
               <DefaultRectanglePopover
                 rectangle={rectangle}
-                highlightColor={highlightColor}
-                onHighlightColorChange={onHighlightColorChange}
+                highlightColor={resolvedHighlightColor}
+                onHighlightColorChange={handleHighlightColorChange}
                 onUpdateRect={handleUpdateRect}
                 onRemoveRect={onRemoveRect}
                 onCommentRect={
@@ -946,6 +1122,7 @@ export function Reader({
           onUpdateRect={handleUpdateRect}
           annotationHistory={normalizedAnnotationHistory}
           onAnnotationHistoryChange={onAnnotationHistoryChange}
+          onAnnotationHistoryStatusChange={setHistoryStatus}
           initialLoadedPages={initialLoadedPages}
           pageLoadConcurrency={pageLoadConcurrency}
           pageLoadEnterDelayMs={pageLoadEnterDelayMs}
@@ -958,9 +1135,9 @@ export function Reader({
           containMarginTop={containMarginTop}
           containMarginBottom={containMarginBottom}
           containMarginY={containMarginY}
-          selectedTool={selectedTool}
+          selectedTool={resolvedSelectedTool}
           paintingTool={paintingTool}
-          drawingStrokeColor={drawingStrokeColor}
+          drawingStrokeColor={resolvedDrawingStrokeColor}
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
@@ -1034,6 +1211,31 @@ export function Reader({
           {renderDocumentContent()}
         </div>
       )}
+
+      {hasDocumentPages &&
+        (bottomBar === undefined ? (
+          <DefaultBottomBar
+            renderMode={resolvedRenderMode}
+            ocrEnabled={resolvedOcrEnabled}
+            fontScale={fontScale}
+            touchPanMode={resolvedTouchPanMode}
+            edgeCropEditing={resolvedEdgeCropEditing}
+            selectedTool={resolvedSelectedTool}
+            drawingStrokeColor={resolvedDrawingStrokeColor}
+            historyStatus={bottomBarHistoryStatus}
+            selectionRef={popoverSelectionRef}
+            onRenderModeChange={handleRenderModeChange}
+            onOcrChange={handleOcrChange}
+            onFontScaleChange={handleFontScaleChange}
+            onTouchPanModeChange={handleTouchPanModeChange}
+            onEdgeCropEditingChange={handleEdgeCropEditingChange}
+            onSelectedToolChange={handleSelectedToolChange}
+            onDrawingStrokeColorChange={handleDrawingStrokeColorChange}
+            onHighlightColorChange={handleHighlightColorChange}
+          />
+        ) : (
+          bottomBar
+        ))}
 
       {showFileInfo && (
         <div className='hamster-reader__file-info' data-testid='file-info'>

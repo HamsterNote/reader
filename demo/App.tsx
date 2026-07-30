@@ -1,14 +1,3 @@
-import {
-  Button,
-  Icon,
-  type IconName,
-  Menu,
-  MenuItem,
-  Popover,
-  PopoverSeparator,
-  type PopoverTheme
-} from '@hamster-note/components'
-import '@hamster-note/components/styles.css'
 import { DocxParser } from '@hamster-note/docx-parser'
 import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
@@ -83,97 +72,12 @@ export type SupportedParserLabel =
   | 'Markdown'
   | 'Image'
 
-// 底部栏第一期：工具切换配置（文字 / 矩形 / Drawing）
-// 单一数据源：底部栏按钮由该数组渲染，新增工具只需追加一项。
-export const BOTTOM_BAR_TOOLS: ReadonlyArray<{
-  tool: ReaderPageTool
-  icon: IconName
-  label: string
-}> = [
-  { tool: 'text-selection', icon: 'type', label: '文字' },
-  { tool: 'rect-selection', icon: 'rectangle', label: '矩形' },
-  { tool: 'drawing', icon: 'pen', label: '绘图' }
-]
-
-// 底部栏颜色选择：5 种低饱和色 + 黑色，覆盖文字高亮 / 矩形快照 / 绘图描边。
-// name 用作 data-testid 的 ascii 键，label 用作中文 aria-label。
-export const BOTTOM_BAR_COLORS: ReadonlyArray<{
-  name: 'blue' | 'green' | 'sand' | 'rose' | 'lavender' | 'black'
-  label: string
-  value: string
-}> = [
-  { name: 'blue', label: '蓝色', value: '#7d9ec0' },
-  { name: 'green', label: '绿色', value: '#8eba8e' },
-  { name: 'sand', label: '沙色', value: '#d1b88a' },
-  { name: 'rose', label: '玫瑰色', value: '#cf9cab' },
-  { name: 'lavender', label: '紫色', value: '#a99fc4' },
-  { name: 'black', label: '黑色', value: '#2a2a2a' }
-]
-
-const FONT_SCALE_OPTIONS: ReadonlyArray<{
-  label: '特小' | '小' | '中' | '大' | '特大'
-  scale: ReaderFontScale
-}> = [
-  { label: '特小', scale: 0.5 },
-  { label: '小', scale: 0.75 },
-  { label: '中', scale: 1 },
-  { label: '大', scale: 1.5 },
-  { label: '特大', scale: 2 }
-]
-
 const FONT_SCALABLE_PARSER_LABELS: ReadonlySet<SupportedParserLabel> = new Set([
   'PDF',
   'TXT',
   'EPUB',
   'Markdown'
 ])
-
-// 将 #rrggbb 十六进制颜色解析为带透明度的 rgba() 字符串，非法输入原样返回。
-export function hexToRgba(hex: string, alpha: number): string {
-  const match = /^#([0-9a-fA-F]{6})$/.exec(hex)
-  if (!match) return hex
-  const value = match[1]
-  const r = parseInt(value.slice(0, 2), 16)
-  const g = parseInt(value.slice(2, 4), 16)
-  const b = parseInt(value.slice(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
-// 监听系统明暗模式：jsdom 等无 matchMedia 的环境回退到 'dark'，保留既有行为与测试。
-// 初始值通过 useState 初始化器同步读取，随后订阅 change 事件保持跟随。
-function usePrefersColorScheme(): PopoverTheme {
-  const [scheme, setScheme] = useState<PopoverTheme>(() => {
-    if (typeof window.matchMedia !== 'function') return 'dark'
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light'
-  })
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
-    const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = (event: MediaQueryListEvent) => {
-      setScheme(event.matches ? 'dark' : 'light')
-    }
-    mql.addEventListener('change', handleChange)
-    return () => mql.removeEventListener('change', handleChange)
-  }, [])
-
-  return scheme
-}
-
-// 监听视口宽度：用于底部栏响应式（<1280 仅图标，<768 折叠为下拉菜单）。
-function useWindowWidth(): number {
-  const [width, setWidth] = useState(() => window.innerWidth)
-
-  useEffect(() => {
-    const handleResize = () => setWidth(window.innerWidth)
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
-
-  return width
-}
 
 export type ParseUploadedDocumentResult =
   | {
@@ -368,45 +272,6 @@ function persistHighlights(
       persisted.paintings
     )
   )
-}
-
-function useBottomBarMenuDismissal(
-  toolMenuAnchor: HTMLElement | null,
-  fontMenuAnchor: HTMLElement | null,
-  closeMenus: () => void
-) {
-  useEffect(() => {
-    if (!toolMenuAnchor && !fontMenuAnchor) return
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node
-      const toolPopover = window.document.querySelector(
-        '[data-testid="tool-bottom-bar-tool-menu-popover"]'
-      )
-      const fontPopover = window.document.querySelector(
-        '[data-testid="tool-bottom-bar-font-scale-popover"]'
-      )
-      if (
-        toolMenuAnchor?.contains(target) ||
-        fontMenuAnchor?.contains(target) ||
-        toolPopover?.contains(target) ||
-        fontPopover?.contains(target)
-      ) {
-        return
-      }
-      closeMenus()
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeMenus()
-    }
-
-    window.document.addEventListener('pointerdown', handlePointerDown)
-    window.document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.document.removeEventListener('pointerdown', handlePointerDown)
-      window.document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [closeMenus, fontMenuAnchor, toolMenuAnchor])
 }
 
 function useAnnotationHistoryShortcuts(
@@ -658,13 +523,6 @@ function parserSupportsFontScale(
   return parserLabel !== null && FONT_SCALABLE_PARSER_LABELS.has(parserLabel)
 }
 
-function getFontScaleLabel(fontScale: ReaderFontScale): string {
-  return (
-    FONT_SCALE_OPTIONS.find((option) => option.scale === fontScale)?.label ??
-    '大'
-  )
-}
-
 function getPageRange(
   enabled: boolean,
   start: number,
@@ -730,6 +588,7 @@ export function App() {
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
   // --- OCR 受控演示 state ---
+  const [automaticOcrEnabled, setAutomaticOcrEnabled] = useState(false)
   // ocrPages：已开启 OCR 的页码列表（传给 Reader 的 ocr.pages，移除即按页关闭）
   const [ocrPages, setOcrPages] = useState<number[]>([])
   // ocrTextsByPage：受控 OCR 数据，OCR 完成后由 onOcrTextsChange 回传并持久化
@@ -750,17 +609,7 @@ export function App() {
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
-  // 底部栏：跟随系统明暗模式、响应式宽度、工具颜色选择
-  const popoverTheme = usePrefersColorScheme()
-  const windowWidth = useWindowWidth()
-  const [toolColor, setToolColor] = useState(BOTTOM_BAR_COLORS[0].value)
-  const [toolMenuAnchor, setToolMenuAnchor] = useState<HTMLElement | null>(null)
-  const [fontMenuAnchor, setFontMenuAnchor] = useState<HTMLElement | null>(null)
-  const closeBottomBarMenus = useCallback(() => {
-    setToolMenuAnchor(null)
-    setFontMenuAnchor(null)
-  }, [])
-  useBottomBarMenuDismissal(toolMenuAnchor, fontMenuAnchor, closeBottomBarMenus)
+  const [toolColor, setToolColor] = useState('#7d9ec0')
   const [containMarginX, setContainMarginX] = useState<number>(0)
   const [containMarginTop, setContainMarginTop] = useState<number>(0)
   const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
@@ -1156,6 +1005,7 @@ export function App() {
       return
     }
     setOcrError(null)
+    setAutomaticOcrEnabled(false)
     setOcrPages((current) =>
       current.includes(page)
         ? current
@@ -1165,12 +1015,19 @@ export function App() {
 
   // 按页关闭 OCR：仅从开启列表移除；已识别数据保留，重新开启时无需重复 OCR
   const handleCloseOcrPage = useCallback((page: number) => {
+    setAutomaticOcrEnabled(false)
     setOcrPages((current) => current.filter((item) => item !== page))
   }, [])
 
   // 全局关闭：清空开启列表，文档内所有 OCR 文本层隐藏（数据同样保留）
   const handleCloseAllOcr = useCallback(() => {
+    setAutomaticOcrEnabled(false)
     setOcrPages([])
+  }, [])
+
+  const handleOcrChange = useCallback((enabled: boolean) => {
+    setOcrPages([])
+    setAutomaticOcrEnabled(enabled)
   }, [])
 
   // Reader OCR 完成回调：写入受控 state（持久化 effect 会同步到 localStorage）
@@ -1278,7 +1135,6 @@ export function App() {
         setLoadedParserLabel(result.label)
         setRenderMode(result.label === 'EPUB' ? 'text' : 'layout')
         setFontScale(1.5)
-        setFontMenuAnchor(null)
         setVirtualPaper({ x: 0, y: 0, scale: 1 })
 
         const storedHighlights = localStorage.getItem(
@@ -1306,6 +1162,9 @@ export function App() {
         )
         loadedOcrFileNameRef.current = file.name
         setOcrPages(parsedOcr.pages)
+        if (parsedOcr.pages.length > 0) {
+          setAutomaticOcrEnabled(false)
+        }
         setOcrTextsByPage(parsedOcr.textsByPage)
 
         setSelectedRangeId(null)
@@ -1359,7 +1218,6 @@ export function App() {
   }, [])
 
   const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
-  const selectedFontScaleLabel = getFontScaleLabel(fontScale)
 
   return (
     <main
@@ -2176,15 +2034,24 @@ export function App() {
           data={readerData}
           onDataChange={handleReaderDataChange}
           edgeCropEditing={edgeCropEditing}
+          onEdgeCropEditingChange={setEdgeCropEditing}
           onEdgeCropApply={handleEdgeCropApply}
           renderMode={renderMode}
+          onRenderModeChange={handleRenderModeChange}
           fontScale={supportsFontScale ? fontScale : undefined}
+          onFontScaleChange={setFontScale}
           touchPanMode={touchPanMode}
+          onTouchPanModeChange={setTouchPanMode}
           onFileUpload={handleManualFileUpload}
           emptyText='No document loaded'
           pageRange={getPageRange(usePageRange, pageRangeStart, pageRangeEnd)}
           overlayRectType='percent'
-          ocr={{ enabled: true, pages: ocrPages }}
+          ocr={
+            ocrPages.length > 0
+              ? { enabled: true, pages: ocrPages }
+              : automaticOcrEnabled
+          }
+          onOcrChange={handleOcrChange}
           ocrTexts={ocrTextsByPage}
           onOcrTextsChange={handleOcrTextsChange}
           onOcrError={handleOcrError}
@@ -2210,11 +2077,13 @@ export function App() {
           containMarginTop={containMarginTop}
           containMarginBottom={containMarginBottom}
           selectedTool={selectedTool}
+          onSelectedToolChange={handleToolChange}
           onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
           onPageBrowserClose={() => setShowPageBrowser(false)}
           themeColor={themeColor}
           drawingStrokeColor={toolColor}
+          onDrawingStrokeColorChange={setToolColor}
           comments={comments}
           onCommentsChange={handleCommentsChange}
           onTogglePageBookmark={handleTogglePageBookmark}
@@ -2231,193 +2100,6 @@ export function App() {
           onCommentHighlight={handleCommentHighlight}
           onPageLoadStatusChange={setLoadedPages}
         />
-        {document && (
-          <Popover
-            edge='bottom'
-            edgeOffset={16}
-            relative
-            theme={popoverTheme}
-            aria-label='工具栏'
-            data-testid='tool-bottom-bar'
-            style={{
-              boxSizing: 'border-box',
-              maxWidth: 'calc(100% - 16px)',
-              overflowX: 'auto',
-              // .hn-button 未设置 white-space，nowrap 继承进按钮使 label 无法换行、min-content 不再收缩，配合 overflowX:auto 改为滚动。
-              whiteSpace: 'nowrap'
-            }}
-          >
-            <Button
-              type='button'
-              size='small'
-              variant='ghost'
-              disabled={!historyStatus.canUndo}
-              aria-label='撤销'
-              data-testid='tool-bottom-bar-undo'
-              onClick={handleUndo}
-            >
-              <Icon name='undo' />
-            </Button>
-            <Button
-              type='button'
-              size='small'
-              variant='ghost'
-              disabled={!historyStatus.canRedo}
-              aria-label='恢复'
-              data-testid='tool-bottom-bar-redo'
-              onClick={handleRedo}
-            >
-              <Icon name='redo' />
-            </Button>
-            <PopoverSeparator />
-            <Button
-              type='button'
-              size='small'
-              variant={renderMode === 'text' ? 'primary' : 'ghost'}
-              aria-label={
-                renderMode === 'layout'
-                  ? '切换到文字渲染模式'
-                  : '切换到布局渲染模式'
-              }
-              aria-pressed={renderMode === 'text'}
-              data-testid='tool-bottom-bar-render-mode'
-              onClick={() =>
-                handleRenderModeChange(
-                  renderMode === 'layout' ? 'text' : 'layout'
-                )
-              }
-            >
-              <Icon name='switch' />
-            </Button>
-            <Button
-              type='button'
-              size='small'
-              variant={touchPanMode === 'two-finger' ? 'primary' : 'ghost'}
-              disabled={renderMode === 'text'}
-              aria-label={
-                touchPanMode === 'single-finger'
-                  ? '切换到双指滑动模式'
-                  : '切换到单指滑动模式'
-              }
-              aria-pressed={touchPanMode === 'two-finger'}
-              data-testid='tool-bottom-bar-touch-pan-mode'
-              onClick={() =>
-                setTouchPanMode((currentMode) =>
-                  currentMode === 'single-finger'
-                    ? 'two-finger'
-                    : 'single-finger'
-                )
-              }
-            >
-              <Icon name='touch' />
-            </Button>
-            <Button
-              type='button'
-              size='small'
-              variant={edgeCropEditing ? 'primary' : 'ghost'}
-              disabled={renderMode === 'text'}
-              aria-label='边缘裁切'
-              aria-pressed={edgeCropEditing}
-              data-testid='tool-bottom-bar-edge-crop'
-              onClick={() => setEdgeCropEditing((isEditing) => !isEditing)}
-            >
-              <Icon name='rectangle' />
-            </Button>
-            <PopoverSeparator />
-            {windowWidth < 768 ? (
-              // 窄屏：折叠为下拉菜单触发按钮
-              <Button
-                type='button'
-                size='small'
-                variant='primary'
-                aria-label='工具菜单'
-                aria-haspopup='menu'
-                aria-expanded={toolMenuAnchor !== null}
-                data-testid='tool-bottom-bar-tool-menu'
-                onClick={(event) => {
-                  const el = event.currentTarget
-                  setFontMenuAnchor(null)
-                  setToolMenuAnchor((prev) => (prev ? null : el))
-                }}
-              >
-                <Icon
-                  name={
-                    BOTTOM_BAR_TOOLS.find((t) => t.tool === selectedTool)
-                      ?.icon ?? 'type'
-                  }
-                />
-              </Button>
-            ) : (
-              // 中宽/宽屏：直接渲染工具按钮（<1280 仅图标，>=1280 图标+文字）
-              BOTTOM_BAR_TOOLS.map(({ tool, icon, label }) => (
-                <Button
-                  key={tool}
-                  type='button'
-                  size='small'
-                  variant={selectedTool === tool ? 'primary' : 'ghost'}
-                  aria-pressed={selectedTool === tool}
-                  aria-label={`${label}工具`}
-                  data-testid={`tool-bottom-bar-${tool}`}
-                  onClick={() => handleToolChange(tool)}
-                >
-                  <Icon name={icon} />
-                  {windowWidth >= 1280 && label}
-                </Button>
-              ))
-            )}
-            <PopoverSeparator />
-            {BOTTOM_BAR_COLORS.map(({ name, label, value }) => (
-              <button
-                key={name}
-                type='button'
-                aria-label={`${label}工具颜色`}
-                aria-pressed={toolColor === value}
-                data-testid={`tool-bottom-bar-color-${name}`}
-                onClick={() => {
-                  setToolColor(value)
-                  setHighlightColor(hexToRgba(value, 0.35))
-                }}
-                style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: '50%',
-                  backgroundColor: value,
-                  border:
-                    toolColor === value
-                      ? '2px solid currentColor'
-                      : '2px solid transparent',
-                  padding: 0,
-                  cursor: 'pointer',
-                  // 防止 flex 收缩把 20x20 色圆压成椭圆。
-                  flexShrink: 0
-                }}
-              />
-            ))}
-            {supportsFontScale && (
-              <>
-                <PopoverSeparator />
-                <Button
-                  type='button'
-                  size='small'
-                  variant='secondary'
-                  aria-haspopup='menu'
-                  aria-expanded={fontMenuAnchor !== null}
-                  aria-controls='tool-bottom-bar-font-scale-menu'
-                  data-testid='tool-bottom-bar-font-scale'
-                  onClick={(event) => {
-                    const element = event.currentTarget
-                    setToolMenuAnchor(null)
-                    setFontMenuAnchor((previous) =>
-                      previous === null ? element : null
-                    )
-                  }}
-                >
-                  字体：{selectedFontScaleLabel}
-                </Button>
-              </>
-            )}
-          </Popover>
-        )}
       </div>
       {highlightDragPreview !== null ? (
         <div
@@ -2440,99 +2122,6 @@ export function App() {
           onJumpToHighlight={handleJumpToHighlight}
           onClose={handleCloseCommentPanel}
         />
-      )}
-      {/* 窄屏菜单浮层：anchor 非空时展开，含三个工具选项 */}
-      {document && toolMenuAnchor && (
-        <Popover
-          anchor={toolMenuAnchor}
-          placement='top-start'
-          theme={popoverTheme}
-          data-testid='tool-bottom-bar-tool-menu-popover'
-        >
-          <Menu>
-            {BOTTOM_BAR_TOOLS.map(({ tool, icon, label }) => {
-              const isSelected = selectedTool === tool
-
-              return (
-                <MenuItem
-                  key={tool}
-                  aria-pressed={isSelected}
-                  aria-label={`${label}工具`}
-                  data-selected={isSelected}
-                  data-testid={`tool-bottom-bar-${tool}`}
-                  style={
-                    isSelected
-                      ? {
-                          backgroundColor:
-                            'color-mix(in srgb, var(--hn-color-accent) 14%, transparent)',
-                          color: 'var(--hn-color-accent)'
-                        }
-                      : undefined
-                  }
-                  onClick={() => {
-                    handleToolChange(tool)
-                    setToolMenuAnchor(null)
-                  }}
-                >
-                  <span
-                    aria-hidden='true'
-                    style={{
-                      display: 'inline-flex',
-                      visibility: isSelected ? 'visible' : 'hidden'
-                    }}
-                  >
-                    <Icon name='check' />
-                  </span>
-                  <Icon name={icon} />
-                  {label}
-                </MenuItem>
-              )
-            })}
-          </Menu>
-        </Popover>
-      )}
-      {document && supportsFontScale && fontMenuAnchor && (
-        <Popover
-          anchor={fontMenuAnchor}
-          placement='top-start'
-          theme={popoverTheme}
-          data-testid='tool-bottom-bar-font-scale-popover'
-        >
-          <Menu id='tool-bottom-bar-font-scale-menu' aria-label='字号菜单'>
-            {FONT_SCALE_OPTIONS.map(({ label, scale: optionScale }) => (
-              <MenuItem
-                key={label}
-                aria-pressed={fontScale === optionScale}
-                aria-label={label}
-                data-selected={fontScale === optionScale}
-                style={
-                  fontScale === optionScale
-                    ? {
-                        backgroundColor:
-                          'color-mix(in srgb, var(--hn-color-accent) 14%, transparent)',
-                        color: 'var(--hn-color-accent)'
-                      }
-                    : undefined
-                }
-                onClick={() => {
-                  setFontScale(optionScale)
-                  setFontMenuAnchor(null)
-                }}
-              >
-                <span
-                  aria-hidden='true'
-                  style={{
-                    display: 'inline-flex',
-                    visibility: fontScale === optionScale ? 'visible' : 'hidden'
-                  }}
-                >
-                  <Icon name='check' />
-                </span>
-                {label}
-              </MenuItem>
-            ))}
-          </Menu>
-        </Popover>
       )}
     </main>
   )
