@@ -76,6 +76,14 @@ describe('PdfTextContent', () => {
     ).toHaveLength(0)
     expect(paragraphs[0]?.textContent).toBe('Hello world')
     expect(container.querySelectorAll('[data-text-id]')).toHaveLength(2)
+    expect(screen.getByText('Hello')).toHaveAttribute(
+      'data-selection-start-offset',
+      '0'
+    )
+    expect(screen.getByText('world')).toHaveAttribute(
+      'data-selection-start-offset',
+      '5'
+    )
   })
 
   it('renders reconstructed paragraphs while preserving glyph identities and relative fonts', () => {
@@ -133,6 +141,39 @@ describe('PdfTextContent', () => {
     expect(titleElement.style.fontStyle).toBe('italic')
     expect(titleElement.style.color).toBe('rgb(18, 52, 86)')
     expect(setTextRef).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps source offsets distinct when PDF glyph ids repeat', () => {
+    // Given: 两个源字形共享展示 id，但在 canonical stream 中处于不同位置。
+    const firstGlyph = makeGlyph({
+      id: 'duplicate-pdf-glyph',
+      content: 'Hello',
+      x: 10,
+      y: 20
+    })
+    const secondGlyph = makeGlyph({
+      id: 'duplicate-pdf-glyph',
+      content: 'world',
+      x: 40,
+      y: 20
+    })
+
+    // When: PDF Text 模式渲染两个源对象。
+    const { container } = render(
+      <PdfTextContent
+        pageNumber={1}
+        texts={[firstGlyph, secondGlyph]}
+        paragraphs={[]}
+      />
+    )
+
+    // Then: marker 由源对象身份关联，不会被重复 id 覆盖。
+    expect(
+      Array.from(
+        container.querySelectorAll('[data-text-id="duplicate-pdf-glyph"]'),
+        (element) => element.getAttribute('data-selection-start-offset')
+      )
+    ).toEqual(['0', '5'])
   })
 
   it('keeps visible Text mode glyphs readable when source color is transparent', () => {

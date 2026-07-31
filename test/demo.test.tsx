@@ -948,6 +948,40 @@ describe('demo parser flow', () => {
     })
   })
 
+  it('restores automatic OCR and completed empty pages after remounting the same file', async () => {
+    // Given: 底栏已开启自动 OCR，且第 1 页成功完成但没有识别出文本。
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Persisted Automatic OCR Document')
+    )
+    const file = makeFile('persisted-automatic-ocr.pdf')
+    const firstRender = render(<App />)
+    upload(file)
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    act(() => {
+      findDocumentReaderProps()?.onOcrChange?.(true)
+      const onOcrTextsChange = findDocumentReaderProps()?.onOcrTextsChange
+      if (typeof onOcrTextsChange === 'function') {
+        onOcrTextsChange(1, [])
+      }
+    })
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toBe(true)
+      expect(findDocumentReaderProps()?.ocrTexts).toEqual({ 1: [] })
+    })
+
+    // When: Demo 卸载后重新加载同名文件。
+    firstRender.unmount()
+    render(<App />)
+    upload(makeFile('persisted-automatic-ocr.pdf'))
+
+    // Then: 自动模式和空结果完成态均恢复，Reader 不会把该页当作未识别。
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.ocr).toBe(true)
+      expect(findDocumentReaderProps()?.ocrTexts).toEqual({ 1: [] })
+    })
+  })
+
   it('starts OCR for the entered page and echoes recognized texts back as controlled data', async () => {
     // Given: PDF 解析成功，文档已加载。
     vi.mocked(PdfParser.encode).mockResolvedValue(

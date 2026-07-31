@@ -45,6 +45,8 @@ export type {
   ReaderSelectionPayload,
   ReaderTextSelectionDetail,
   ReaderTouchPanMode,
+  ReaderIntermediateImage,
+  ReaderIntermediateImageSerialized,
   TextElementInfo
 } from './components/IntermediateDocumentViewer'
 export {

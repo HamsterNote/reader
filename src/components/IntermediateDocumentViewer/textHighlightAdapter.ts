@@ -49,6 +49,12 @@ type TextPoint = {
   readonly offset: number
 }
 
+type AnchoredTextSegment = {
+  readonly element: HTMLElement
+  readonly startOffset: number
+  readonly endOffset: number
+}
+
 function deriveRectsByPage({
   range,
   root,
@@ -107,30 +113,103 @@ export function deriveDomSelectionPageRects({
   )
   if (!container || !content) return undefined
 
-  const start = resolveTextPoint(content, startOffset)
-  const end = resolveTextPoint(content, endOffset ?? getTextLength(content))
-  if (!start || !end) return undefined
+  const anchoredSegments = getAnchoredTextSegments(content)
+  const textLength =
+    anchoredSegments.length > 0
+      ? Math.max(...anchoredSegments.map((segment) => segment.endOffset))
+      : getTextNodeLength(content)
+  const resolvedEndOffset = endOffset ?? textLength
+  if (
+    !Number.isSafeInteger(startOffset) ||
+    !Number.isSafeInteger(resolvedEndOffset) ||
+    startOffset < 0 ||
+    resolvedEndOffset < startOffset ||
+    resolvedEndOffset > textLength
+  ) {
+    return undefined
+  }
 
-  const textRange = content.ownerDocument.createRange()
-  textRange.setStart(start.node, start.offset)
-  textRange.setEnd(end.node, end.offset)
-  if (typeof textRange.getClientRects !== 'function') return undefined
+  const textRanges =
+    anchoredSegments.length > 0
+      ? anchoredSegments.flatMap((segment) => {
+          const intersectionStart = Math.max(
+            startOffset,
+            segment.startOffset
+          )
+          const intersectionEnd = Math.min(
+            resolvedEndOffset,
+            segment.endOffset
+          )
+          if (intersectionStart >= intersectionEnd) return []
+
+          const textRange = createTextRange(
+            segment.element,
+            intersectionStart - segment.startOffset,
+            intersectionEnd - segment.startOffset
+          )
+          return textRange ? [textRange] : []
+        })
+      : [createTextRange(content, startOffset, resolvedEndOffset)].filter(
+          (textRange) => textRange !== null
+        )
+  if (textRanges.some((textRange) => !textRange.getClientRects)) {
+    return undefined
+  }
 
   const bounds = container.getBoundingClientRect()
-  const pixelRects: OverlayRect[] = Array.from(textRange.getClientRects())
-    .filter((rect) => rect.width > 0 && rect.height > 0)
-    .map((rect) => ({
-      x: rect.left - bounds.left,
-      y: rect.top - bounds.top,
-      width: rect.width,
-      height: rect.height
-    }))
+  const pixelRects: OverlayRect[] = textRanges.flatMap((textRange) =>
+    Array.from(textRange.getClientRects())
+      .filter((rect) => rect.width > 0 && rect.height > 0)
+      .map((rect) => ({
+        x: rect.left - bounds.left,
+        y: rect.top - bounds.top,
+        width: rect.width,
+        height: rect.height
+      }))
+  )
   return overlayRectType === 'percent'
     ? pixelRectsToPercentRects(pixelRects, container)
     : pixelRects
 }
 
-function getTextLength(root: HTMLElement): number {
+function getAnchoredTextSegments(root: HTMLElement): AnchoredTextSegment[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      '[data-selection-start-offset]'
+    )
+  ).flatMap((element) => {
+    const rawOffset = element.dataset.selectionStartOffset
+    if (!rawOffset || !/^(0|[1-9]\d*)$/.test(rawOffset)) return []
+
+    const startOffset = Number(rawOffset)
+    const textLength = getTextNodeLength(element)
+    if (!Number.isSafeInteger(startOffset) || textLength === 0) return []
+    return [
+      {
+        element,
+        startOffset,
+        endOffset: startOffset + textLength
+      }
+    ]
+  })
+}
+
+function createTextRange(
+  root: HTMLElement,
+  startOffset: number,
+  endOffset: number
+): Range | null {
+  const start = resolveTextNodePoint(root, startOffset)
+  const end = resolveTextNodePoint(root, endOffset)
+  if (!start || !end) return null
+
+  const textRange = root.ownerDocument.createRange()
+  textRange.setStart(start.node, start.offset)
+  textRange.setEnd(end.node, end.offset)
+  return textRange
+}
+
+function getTextNodeLength(root: HTMLElement): number {
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   let length = 0
   while (walker.nextNode()) {
@@ -140,11 +219,11 @@ function getTextLength(root: HTMLElement): number {
   return length
 }
 
-function resolveTextPoint(
+function resolveTextNodePoint(
   root: HTMLElement,
   textIndex: number
 ): TextPoint | null {
-  if (!Number.isInteger(textIndex) || textIndex < 0) return null
+  if (!Number.isSafeInteger(textIndex) || textIndex < 0) return null
 
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   let traversed = 0

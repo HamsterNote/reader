@@ -6,6 +6,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import {
+  type CSSProperties,
   type ReactNode,
   type Ref,
   useCallback,
@@ -63,6 +64,7 @@ import type {
   ReaderPageTool
 } from './Page'
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
+import { useBottomBarInset } from './Reader/useBottomBarInset'
 
 export type ReaderRenderMode = 'layout' | 'text'
 
@@ -291,7 +293,10 @@ export type ReaderProps = {
   ) => void
   /** Popover 使用相对定位（absolute）相对于容器，而非 fixed 相对于 window */
   popoverRelative?: boolean
-  /** 自定义底部栏；省略时使用内置底部栏，显式传 null 时关闭底部栏。 */
+  /**
+   * 自定义底部栏；省略时使用内置底部栏，显式传 null 时关闭底部栏。
+   * Reader 仅自动避让内置底部栏；自定义悬浮栏的遮挡应由宿主计入 containMarginBottom。
+   */
   bottomBar?: ReactNode
   /** 边缘裁切编辑状态变化回调；未受控时 Reader 同时更新内部状态。 */
   onEdgeCropEditingChange?: (editing: boolean) => void
@@ -381,6 +386,33 @@ function normalizeAnnotationHistoryOptions(
   return {
     enabled: annotationHistory.enabled ?? true,
     resetKey: annotationHistory.resetKey
+  }
+}
+
+interface ResolvedVerticalMargins {
+  readonly top: number | undefined
+  readonly bottom: number | undefined
+  readonly legacy: number | undefined
+}
+
+function resolveVerticalMargins(
+  containMarginTop: number | undefined,
+  containMarginBottom: number | undefined,
+  containMarginY: number | undefined,
+  bottomBarInset: number
+): ResolvedVerticalMargins {
+  if (bottomBarInset === 0) {
+    return {
+      top: containMarginTop,
+      bottom: containMarginBottom,
+      legacy: containMarginY
+    }
+  }
+
+  return {
+    top: containMarginTop ?? containMarginY,
+    bottom: (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset,
+    legacy: undefined
   }
 }
 
@@ -518,6 +550,8 @@ export function Reader({
     string | undefined
   >(undefined)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const readerRootRef = useRef<HTMLDivElement>(null)
+  const defaultBottomBarRef = useRef<HTMLDivElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
   const resolvedPagePaintings =
     data?.pagePaintings ?? pagePaintings ?? internalPagePaintings
@@ -564,6 +598,18 @@ export function Reader({
   const resolvedDrawingStrokeColor =
     drawingStrokeColor ?? internalDrawingStrokeColor
   const resolvedHighlightColor = highlightColor ?? internalHighlightColor
+  const hasDocumentPages = documentHasPages(document)
+  const bottomBarInset = useBottomBarInset({
+    rootRef: readerRootRef,
+    bottomBarRef: defaultBottomBarRef,
+    enabled: hasDocumentPages && bottomBar === undefined
+  })
+  const resolvedVerticalMargins = resolveVerticalMargins(
+    containMarginTop,
+    containMarginBottom,
+    containMarginY,
+    bottomBarInset
+  )
   const bottomBarHistoryStatus = resolveBottomBarHistoryStatus({
     status: historyStatus,
     renderMode: resolvedRenderMode,
@@ -904,6 +950,11 @@ export function Reader({
   const rootClassName = className
     ? `hamster-reader ${className}`
     : 'hamster-reader'
+  const readerThemeStyle: CSSProperties & {
+    '--hamster-reader-theme-color': string
+  } = {
+    '--hamster-reader-theme-color': themeColor ?? '#2563eb'
+  }
 
   const handleDefaultCommentHighlight = useCallback(
     async (range: ReaderSelectionRange) => {
@@ -929,7 +980,6 @@ export function Reader({
 
   const showUploadZone = !document && !uploadedFile
   const showFileInfo = !document && uploadedFile
-  const hasDocumentPages = documentHasPages(document)
   const showDocumentContent = document?.title ?? emptyText
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
@@ -940,6 +990,10 @@ export function Reader({
             isEpub={isEpub}
             isPdf={isPdf}
             fontScale={fontScale}
+            containMarginX={containMarginX}
+            containMarginTop={resolvedVerticalMargins.top}
+            containMarginBottom={resolvedVerticalMargins.bottom}
+            containMarginY={resolvedVerticalMargins.legacy}
             pageRange={pageRange}
             hiddenPages={data?.hiddenPages}
             className={className}
@@ -1019,6 +1073,7 @@ export function Reader({
         <IntermediateDocumentViewer
           document={document}
           isEpub={isEpub}
+          isPdf={isPdf}
           fontScale={fontScale}
           overscan={overscanPages}
           pageRange={pageRange}
@@ -1132,9 +1187,9 @@ export function Reader({
             onIntermediateDocumentRenderTiming
           }
           containMarginX={containMarginX}
-          containMarginTop={containMarginTop}
-          containMarginBottom={containMarginBottom}
-          containMarginY={containMarginY}
+          containMarginTop={resolvedVerticalMargins.top}
+          containMarginBottom={resolvedVerticalMargins.bottom}
+          containMarginY={resolvedVerticalMargins.legacy}
           selectedTool={resolvedSelectedTool}
           paintingTool={paintingTool}
           drawingStrokeColor={resolvedDrawingStrokeColor}
@@ -1159,7 +1214,12 @@ export function Reader({
   }
 
   return (
-    <div className={rootClassName} data-testid='reader-root'>
+    <div
+      ref={readerRootRef}
+      className={rootClassName}
+      data-testid='reader-root'
+      style={readerThemeStyle}
+    >
       {showUploadZone && (
         <button
           type='button'
@@ -1215,6 +1275,7 @@ export function Reader({
       {hasDocumentPages &&
         (bottomBar === undefined ? (
           <DefaultBottomBar
+            bottomBarRef={defaultBottomBarRef}
             renderMode={resolvedRenderMode}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}

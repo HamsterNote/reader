@@ -38,9 +38,14 @@ import {
   removeHighlightFromComments,
   serializeComments
 } from './commentStorage'
+import { convertEpubDocumentForReader } from './epubForReader'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 import { createImagePreviewDocument } from './imagePreview'
-import { parseOcrStorage, serializeOcrStorage } from './ocrStorage'
+import {
+  type DemoOcrMode,
+  parseOcrStorage,
+  serializeOcrStorage
+} from './ocrStorage'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -101,39 +106,6 @@ export function getParserErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-type EpubParserDocument = Awaited<ReturnType<typeof EpubParser.encode>>
-type EpubRuntimeDocument = ReturnType<
-  EpubParserDocument['getIntermediateDocument']
->
-type EpubDocumentSerializer = {
-  readonly serialize: (
-    document: EpubRuntimeDocument
-  ) => Promise<IntermediateDocumentSerialized>
-}
-
-function isEpubDocumentSerializer(
-  value: unknown
-): value is EpubDocumentSerializer {
-  if ((typeof value !== 'object' && typeof value !== 'function') || !value) {
-    return false
-  }
-
-  return typeof Reflect.get(value, 'serialize') === 'function'
-}
-
-export async function convertEpubDocumentForReader(
-  epubDocument: EpubParserDocument
-): Promise<ReaderDocument> {
-  const document = epubDocument.getIntermediateDocument()
-  // EPUB parser 内部携带 @hamster-note/types@0.10；先用它自己的 serialize 转成纯数据，再交给 reader 的 0.8 runtime parse。
-  const documentClass = document.constructor
-  if (!isEpubDocumentSerializer(documentClass)) {
-    throw new Error('EPUB document serializer is unavailable')
-  }
-
-  return documentClass.serialize(document)
-}
-
 export async function parseUploadedDocument(
   file: File,
   pages: number[] | undefined
@@ -167,7 +139,7 @@ export async function parseUploadedDocument(
     case 'epub':
       try {
         const epubDocument = await EpubParser.encode(file)
-        const document = await convertEpubDocumentForReader(epubDocument)
+        const document = await convertEpubDocumentForReader(epubDocument, file)
         return { status: 'parsed', label: 'EPUB', document }
       } catch (error) {
         return {
@@ -1047,16 +1019,23 @@ export function App() {
     []
   )
 
-  // OCR 数据持久化：开启列表 + 识别结果随状态变化写入 localStorage
   useEffect(() => {
     const loadedFileName = loadedOcrFileNameRef.current
     if (!loadedFileName) return
 
+    let mode: DemoOcrMode = ocrPages.length > 0 ? 'manual' : 'off'
+    if (automaticOcrEnabled) {
+      mode = 'automatic'
+    }
     localStorage.setItem(
       `${OCR_STORAGE_PREFIX}${loadedFileName}`,
-      serializeOcrStorage({ pages: ocrPages, textsByPage: ocrTextsByPage })
+      serializeOcrStorage({
+        mode,
+        pages: ocrPages,
+        textsByPage: ocrTextsByPage
+      })
     )
-  }, [ocrPages, ocrTextsByPage])
+  }, [automaticOcrEnabled, ocrPages, ocrTextsByPage])
 
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
@@ -1162,9 +1141,7 @@ export function App() {
         )
         loadedOcrFileNameRef.current = file.name
         setOcrPages(parsedOcr.pages)
-        if (parsedOcr.pages.length > 0) {
-          setAutomaticOcrEnabled(false)
-        }
+        setAutomaticOcrEnabled(parsedOcr.mode === 'automatic')
         setOcrTextsByPage(parsedOcr.textsByPage)
 
         setSelectedRangeId(null)

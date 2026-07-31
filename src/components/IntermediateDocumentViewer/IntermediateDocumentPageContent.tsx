@@ -1,4 +1,5 @@
 import type {
+  IntermediateContent,
   IntermediateImage,
   IntermediateParagraph,
   IntermediateText
@@ -6,7 +7,7 @@ import type {
 import { type CSSProperties, memo, Profiler } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
-import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
+import { IntermediateDocumentFlowContent } from './IntermediateDocumentFlowContent'
 import {
   buildImageStyle,
   getImageGeometry,
@@ -53,6 +54,7 @@ export type IntermediateDocumentPageContentProps = {
   baseImageSource: string | undefined
   /** getContent() 返回的 IntermediateImage 内容项 */
   images: IntermediateImage[]
+  orderedContent?: IntermediateContent[]
   /** 文本 span ref 注册回调 */
   setTextRef: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
@@ -134,20 +136,23 @@ function IntermediateDocumentPageContentComponent({
   ocrTexts,
   baseImageSource,
   images,
+  orderedContent,
   setTextRef,
   fontScale,
   onRenderTiming
 }: IntermediateDocumentPageContentProps) {
   if (useFlowLayout) {
     const content = (
-      <IntermediateDocumentFlowTextContent
-        pageNumber={pageNumber}
-        texts={texts}
-        paragraphs={paragraphs}
-        setTextRef={setTextRef}
-        fontScale={fontScale}
-        preserveSourceFontSize
-      />
+      <>
+        <IntermediateDocumentFlowContent
+          pageNumber={pageNumber}
+          content={orderedContent ?? [...texts, ...images]}
+          paragraphs={paragraphs}
+          setTextRef={setTextRef}
+          fontScale={fontScale}
+          preserveSourceFontSize
+        />
+      </>
     )
     if (!onRenderTiming) return content
 

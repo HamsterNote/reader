@@ -48,7 +48,7 @@ import {
   simulateLinkedSelectRange,
   simulateSelectionConfirmRect
 } from './mocks/selection'
-import { intersectionObserverMock } from './setup'
+import { intersectionObserverMock, mockElementSize } from './setup'
 
 let capturedViewerProps: Record<string, unknown> = {}
 let capturedTextViewerProps: Record<string, unknown> = {}
@@ -475,15 +475,16 @@ describe('Reader public API', () => {
     fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
 
     // Then: Reader 改用 Text viewer，并自动退出仅属于 Layout 的裁边模式。
+    // 在 Text 模式下，这些按钮被隐藏而不是禁用。
     await waitFor(() => {
       expect(
         screen.getByTestId('intermediate-document-text-viewer')
       ).toBeInTheDocument()
-      expect(screen.getByTestId('tool-bottom-bar-edge-crop')).toBeDisabled()
+      expect(screen.queryByTestId('tool-bottom-bar-edge-crop')).toBeNull()
       expect(
-        screen.getByTestId('tool-bottom-bar-touch-pan-mode')
-      ).toBeDisabled()
-      expect(screen.getByTestId('tool-bottom-bar-ocr')).toBeDisabled()
+        screen.queryByTestId('tool-bottom-bar-touch-pan-mode')
+      ).toBeNull()
+      expect(screen.queryByTestId('tool-bottom-bar-ocr')).toBeNull()
     })
   })
 
@@ -3126,6 +3127,98 @@ describe('Reader zoom props', () => {
       paddingTop: '32px',
       paddingBottom: '64px'
     })
+  })
+
+  it('adds the measured default bottom bar inset to Text Mode content', async () => {
+    // Given: the host provides only its 10px safe area and Reader renders its default toolbar.
+    const { document } = makeLazyDocument(1)
+    render(
+      <Reader document={document} renderMode='text' containMarginBottom={10} />
+    )
+    const root = screen.getByTestId('reader-root')
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+
+    // When: layout resolves a 54px toolbar positioned 16px above Reader's bottom edge.
+    mockElementSize(bottomBar, { width: 320, height: 54, top: 530 })
+    mockElementSize(root, { width: 800, height: 600 })
+
+    // Then: Reader owns the 70px obstruction and adds it to the host safe area.
+    await waitFor(() => {
+      expect(capturedTextViewerProps.containMarginBottom).toBe(80)
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toHaveStyle({ paddingBottom: '80px' })
+    })
+  })
+
+  it('preserves the legacy vertical margin while adding the default bottom bar inset', async () => {
+    // Given: a legacy Layout Mode consumer provides one symmetric vertical margin.
+    const { document } = makeLazyDocument(1)
+    render(<Reader document={document} containMarginY={10} />)
+    const root = screen.getByTestId('reader-root')
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+
+    // When: Reader measures a 70px obstruction from its built-in toolbar.
+    mockElementSize(bottomBar, { width: 320, height: 54, top: 530 })
+    mockElementSize(root, { width: 800, height: 600 })
+
+    // Then: the legacy top remains 10px and only the bottom grows to 80px.
+    await waitFor(() => {
+      expect(capturedViewerProps.containMarginTop).toBe(10)
+      expect(capturedViewerProps.containMarginBottom).toBe(80)
+      expect(capturedViewerProps.containMarginY).toBeUndefined()
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        paddingTop: '10px',
+        paddingBottom: '80px'
+      })
+    })
+  })
+
+  it('does not add a toolbar inset when the bottom bar is disabled', () => {
+    // Given: the host disables Reader's bottom bar and provides a 10px safe area.
+    const { document } = makeLazyDocument(1)
+
+    // When: Text Mode renders without an owned toolbar.
+    render(
+      <Reader
+        document={document}
+        renderMode='text'
+        containMarginBottom={10}
+        bottomBar={null}
+      />
+    )
+
+    // Then: the public margin remains exactly the host-provided safe area.
+    expect(capturedTextViewerProps.containMarginBottom).toBe(10)
+    expect(screen.getByTestId('intermediate-document-text-viewer')).toHaveStyle(
+      { paddingBottom: '10px' }
+    )
+  })
+
+  it('leaves custom bottom bar obstruction under host control', () => {
+    // Given: the host supplies a custom floating bar and its own 10px safe area.
+    const { document } = makeLazyDocument(1)
+    render(
+      <Reader
+        document={document}
+        renderMode='text'
+        containMarginBottom={10}
+        bottomBar={<div data-testid='custom-bottom-bar'>Custom bar</div>}
+      />
+    )
+
+    // When: the custom bar has a visible geometry that Reader does not own.
+    mockElementSize(screen.getByTestId('custom-bottom-bar'), {
+      width: 320,
+      height: 54,
+      top: 530
+    })
+
+    // Then: Reader preserves the host margin without adding a guessed inset.
+    expect(capturedTextViewerProps.containMarginBottom).toBe(10)
+    expect(screen.getByTestId('intermediate-document-text-viewer')).toHaveStyle(
+      { paddingBottom: '10px' }
+    )
   })
 
   it('defaults the page browser to closed and forwards an explicit open state', () => {

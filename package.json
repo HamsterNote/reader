@@ -85,6 +85,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-sonarjs": "^4.0.3",
     "globals": "^15.14.0",
+    "jszip": "^3.10.1",
     "jsdom": "^27.0.0",
     "prettier": "^3.7.4",
     "prettier-config-standard": "^7.0.0",

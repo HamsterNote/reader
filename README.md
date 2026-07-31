@@ -156,7 +156,7 @@ The browser Demo supports uploading and previewing the following formats:
 - **Markdown** (`.md`, `.markdown`)
 - **Images** (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.svg`)
 
-EPUB support uses `@hamster-note/epub-parser` and targets Reader text render mode. Fixed-layout fidelity and layout-mode EPUB rendering are out of scope for this Demo integration.
+EPUB support uses `@hamster-note/epub-parser`. Both Layout and Text modes render the EPUB cover and embedded chapter images; reflowable EPUB pages still follow the parser's flow layout rather than fixed-layout fidelity.
 
 ## API Notes
 
@@ -217,9 +217,9 @@ const [ocrTexts, setOcrTexts] = useState<Record<number, IntermediateText[]>>({})
 
 ### Text render mode
 
-`Reader` uses `renderMode='layout'` by default. Set `renderMode='text'` to render a text-only reading view that mounts and loads only the virtual pages currently visible in the scroll viewport.
+`Reader` uses `renderMode='layout'` by default. Set `renderMode='text'` to render a flow reading view that mounts and loads only the virtual pages currently visible in the scroll viewport.
 
-Text mode renders document text as normal flow content. It does not render page images, intermediate images, or OCR output. It uses the same linked ranges as layout mode, but derives current text-flow rectangles from each range's `selectionId + offset` anchors instead of rendering the persisted layout rectangles.
+Text mode renders document text and content-level `IntermediateImage` entries as normal flow content. Each image occupies its own row, and an available image `alt` value is shown as both accessible alternative text and a visible caption. Page base images, thumbnails, and OCR output are not rendered in Text mode. It uses the same linked ranges as layout mode, but derives current text-flow rectangles from each range's `selectionId + offset` anchors instead of rendering the persisted layout rectangles.
 
 ### Text, rectangle, and drawing tools
 

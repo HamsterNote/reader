@@ -1107,20 +1107,20 @@ describe('IntermediateDocumentViewer', () => {
       <IntermediateDocumentViewer document={document} initialLoadedPages={0} />
     )
     const wrapper = await screen.findByTestId('virtual-paper-wrapper')
-    const documentElement = wrapper.querySelector<HTMLElement>(
-      '.hamster-note-document'
+    const documentGutter = wrapper.querySelector<HTMLElement>(
+      '.hamster-note-document-gutter'
     )
-    expect(documentElement).not.toBeNull()
-    if (!documentElement) return
+    expect(documentGutter).not.toBeNull()
+    if (!documentGutter) return
 
-    setScrollContainerSize(documentElement, { width: 100, height: 200 })
+    setScrollContainerSize(documentGutter, { width: 100, height: 200 })
     await waitFor(() => {
       expect(wrapper).toHaveAttribute('data-content-width', '100')
       expect(wrapper).toHaveAttribute('data-content-height', '200')
     })
 
     // When: reader zoom 提交后，容器的布局宽度随 scale 增大。
-    setScrollContainerSize(documentElement, { width: 250, height: 300 })
+    setScrollContainerSize(documentGutter, { width: 250, height: 300 })
 
     // Then: width 不得被当作新的原始 contentSize 回写，否则会形成指数放大；
     // ResizeObserver 仍可同步因 flow 重排或异步内容加载而变化的高度。
@@ -1130,7 +1130,56 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('includes the 24px horizontal gutter in the VirtualPaper content size', async () => {
+  it('remeasures intrinsic content width when the runtime document changes', async () => {
+    // Given: 首份文档已经锁定一次性 intrinsic width，随后同一个 gutter DOM
+    // 完成了下一份文档的更宽布局。
+    const { document: firstDocument } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 64, y: 150 }
+    })
+    const { document: secondDocument } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 150 }
+    })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={firstDocument}
+        initialLoadedPages={0}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const documentGutter = wrapper.querySelector<HTMLElement>(
+      '.hamster-note-document-gutter'
+    )
+    if (!documentGutter) {
+      throw new Error('Expected document gutter')
+    }
+
+    setScrollContainerSize(documentGutter, { width: 88, height: 150 })
+    await waitFor(() => {
+      expect(wrapper).toHaveAttribute('data-content-width', '88')
+    })
+    setScrollContainerSize(documentGutter, { width: 124, height: 150 })
+    expect(wrapper).toHaveAttribute('data-content-width', '88')
+
+    // When: 宿主切换到第二份文档；React 复用相同的 gutter DOM 节点。
+    rerender(
+      <IntermediateDocumentViewer
+        document={secondDocument}
+        initialLoadedPages={0}
+      />
+    )
+    expect(
+      wrapper.querySelector<HTMLElement>('.hamster-note-document-gutter')
+    ).toBe(documentGutter)
+
+    // Then: 文档身份变化会开启新的 intrinsic width 采样周期。
+    await waitFor(() => {
+      expect(wrapper).toHaveAttribute('data-content-width', '124')
+    })
+  })
+
+  it('keeps the 24px VirtualPaper gutter outside the document bounds', async () => {
     // Given: 最宽页面为 100px，初始 reader scale 为 1。
     const { document } = makeDocument({
       pageCount: 1,
@@ -1146,13 +1195,20 @@ describe('IntermediateDocumentViewer', () => {
       expect(wrapper).toHaveAttribute('data-content-width', '124')
     })
 
-    // Then: 水平留白以文档容器的内联 padding 呈现，而不是页面外壳的 margin。
+    // Then: 水平留白由文档外层 gutter 承担，document 自身紧密包裹 Page。
     const documentElement = wrapper.querySelector<HTMLElement>(
       '.hamster-note-document'
     )
     expect(documentElement).not.toBeNull()
-    expect(documentElement?.style.paddingLeft).toBe('12px')
-    expect(documentElement?.style.paddingRight).toBe('12px')
+    expect(documentElement?.style.paddingLeft).toBe('')
+    expect(documentElement?.style.paddingRight).toBe('')
+    expect(documentElement?.style.width).toBe('fit-content')
+
+    const documentGutter = documentElement?.parentElement
+    expect(documentGutter).toHaveClass('hamster-note-document-gutter')
+    expect(documentGutter?.style.width).toBe('fit-content')
+    expect(documentGutter?.style.paddingLeft).toBe('12px')
+    expect(documentGutter?.style.paddingRight).toBe('12px')
 
     // Then: 页面外壳只保留垂直 margin，水平 margin 归零。
     const page = screen.getByTestId('intermediate-page-1')
@@ -1401,6 +1457,31 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('text mode applies the public contain margins to its scroll viewport', () => {
+    // Given: the host provides independent safe-area margins for Text Mode.
+    const { document } = makeDocument({ pageCount: 1 })
+
+    // When: the Text viewer mounts without the Layout-mode VirtualPaper layer.
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        containMarginX={12}
+        containMarginTop={20}
+        containMarginBottom={36}
+      />
+    )
+
+    // Then: the native Text scroll viewport consumes the same public contract.
+    expect(
+      screen.getByTestId('intermediate-document-text-viewer')
+    ).toHaveStyle({
+      paddingLeft: '12px',
+      paddingRight: '12px',
+      paddingTop: '20px',
+      paddingBottom: '36px'
+    })
+  })
+
   it('text mode reading progress follows the virtual scroll position', async () => {
     // Given: the Text viewer has twenty estimated 800px pages in a 600px viewport.
     const { document } = makeDocument({ pageCount: 20 })
@@ -1438,6 +1519,21 @@ describe('IntermediateDocumentViewer', () => {
       )
     })
 
+    // Then: brief virtualizer sync changes cannot hide the page feedback while
+    // the reader is still within the 500ms scrolling-feedback window.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    })
+    expect(progress).toHaveAttribute('data-visible', 'true')
+
+    // Then: the feedback becomes idle only after 500ms without another scroll.
+    await waitFor(
+      () => {
+        expect(progress).toHaveAttribute('data-visible', 'false')
+      },
+      { timeout: 1000 }
+    )
+
     // When: keyboard navigation focuses the vertical reading control.
     fireEvent.focus(progress)
 
@@ -1473,32 +1569,196 @@ describe('IntermediateDocumentViewer', () => {
       value: scrollTo
     })
 
-    // When: the reader grabs above the middle, then drags the thumb to the middle.
+    // When: the reader grabs the rail, then drags the pointer to page 10.
     act(() => {
       progress.dispatchEvent(
-        new PointerEvent('pointerdown', {
-          bubbles: true,
-          clientY: 200,
-          pointerId: 1
-        })
+         new PointerEvent('pointerdown', {
+           bubbles: true,
+           button: 0,
+           clientY: 200,
+           isPrimary: true,
+           pointerId: 1,
+           pointerType: 'mouse'
+         })
       )
       progress.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          clientY: 300,
-          pointerId: 1
-        })
+         new PointerEvent('pointermove', {
+           bubbles: true,
+           clientY: 280,
+           isPrimary: true,
+           pointerId: 1,
+           pointerType: 'mouse'
+         })
       )
     })
 
-    // Then: TanStack receives both live offsets before pointer release.
+    // Then: dragging only updates local page feedback and leaves Text scroll intact.
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(within(progress).getByText('第 10 页')).toHaveAttribute(
+      'data-visible',
+      'true'
+    )
+
+    // When: the same pointer is released at page 10.
+    act(() => {
+      progress.dispatchEvent(
+         new PointerEvent('pointerup', {
+           bubbles: true,
+           clientY: 280,
+           isPrimary: true,
+           pointerId: 1,
+           pointerType: 'mouse'
+         })
+      )
+    })
+
+    // Then: TanStack receives one page-index seek on release.
     await waitFor(() => {
-      expect(scrollTo).toHaveBeenCalledTimes(2)
-      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 7700 })
-      expect(scrollEl.scrollTop).toBe(7700)
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 7200 })
+      expect(scrollEl.scrollTop).toBe(7200)
       expect(progress).toHaveAttribute('aria-valuenow', '10')
       expect(screen.getByText('第 10 页')).toBeInTheDocument()
     })
+  })
+
+  it('keeps the Layout reading progress outside the VirtualPaper layer', async () => {
+    // Given: a three-page Layout viewer with its VirtualPaper mounted.
+    const { document } = makeDocument({ pageCount: 3 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const viewer = await screen.findByTestId('intermediate-document-viewer')
+    const virtualPaper = await screen.findByTestId('virtual-paper-wrapper')
+
+    // When: the Layout reading progress is resolved from the rendered viewer.
+    const progress = await screen.findByRole('slider', {
+      name: '版面阅读进度'
+    })
+
+    // Then: it belongs to the viewer overlay layer, not the scaled paper subtree.
+    expect(viewer).toContainElement(progress)
+    expect(virtualPaper).not.toContainElement(progress)
+    expect(progress).toHaveAttribute('data-mode', 'layout')
+  })
+
+  it('keeps Layout page feedback visible until transform activity becomes idle', async () => {
+    // Given: an idle three-page Layout viewer with an independently mounted rail.
+    const { document } = makeDocument({ pageCount: 3 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const paper = await screen.findByTestId('virtual-paper-container')
+    const progress = await screen.findByRole('slider', {
+      name: '版面阅读进度'
+    })
+    expect(progress).toHaveAttribute('data-visible', 'false')
+
+    vi.useFakeTimers()
+    try {
+      // When: VirtualPaper reports a pan or zoom transform.
+      act(() => {
+        VirtualPaper.__triggerTransform(paper, { x: 0, y: -100, scale: 1 })
+      })
+
+      // Then: the page label stays visible throughout the 500ms activity window.
+      expect(progress).toHaveAttribute('data-visible', 'true')
+      act(() => {
+        vi.advanceTimersByTime(499)
+      })
+      expect(progress).toHaveAttribute('data-visible', 'true')
+
+      // When: no newer transform arrives before the final millisecond elapses.
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+
+      // Then: the Layout feedback returns to its idle hidden state.
+      expect(progress).toHaveAttribute('data-visible', 'false')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps Layout page feedback visible until native scrolling becomes idle', async () => {
+    // Given: an idle Layout viewer whose native viewport can scroll independently.
+    const { document } = makeDocument({ pageCount: 3 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const virtualPaper = await screen.findByTestId('virtual-paper-wrapper')
+    const progress = await screen.findByRole('slider', {
+      name: '版面阅读进度'
+    })
+    expect(progress).toHaveAttribute('data-visible', 'false')
+
+    vi.useFakeTimers()
+    try {
+      // When: native scrolling starts.
+      fireEvent.scroll(virtualPaper)
+
+      // Then: page feedback appears immediately.
+      expect(progress).toHaveAttribute('data-visible', 'true')
+
+      // When: another scroll event arrives before the first idle window ends.
+      act(() => {
+        vi.advanceTimersByTime(400)
+      })
+      fireEvent.scroll(virtualPaper)
+      act(() => {
+        vi.advanceTimersByTime(499)
+      })
+
+      // Then: continuous scrolling keeps feedback visible for a fresh 500ms.
+      expect(progress).toHaveAttribute('data-visible', 'true')
+
+      // When: the final millisecond elapses without another native scroll event.
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+
+      // Then: the feedback returns to its idle hidden state.
+      expect(progress).toHaveAttribute('data-visible', 'false')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows Layout zoom percentage only while scale is changing', async () => {
+    // Given: an idle Layout viewer whose zoom overlay lives outside VirtualPaper.
+    const { document } = makeDocument({ pageCount: 3 })
+    render(<IntermediateDocumentViewer document={document} />)
+    const viewer = await screen.findByTestId('intermediate-document-viewer')
+    const paper = await screen.findByTestId('virtual-paper-container')
+    const virtualPaper = await screen.findByTestId('virtual-paper-wrapper')
+    expect(
+      screen.queryByTestId('layout-zoom-indicator')
+    ).not.toBeInTheDocument()
+
+    // When: VirtualPaper reports an active scale change.
+    await act(async () => {
+      VirtualPaper.__triggerTransform(paper, { x: 0, y: 0, scale: 1.25 })
+    })
+
+    // Then: the live rounded percentage appears in the unscaled viewer overlay.
+    const indicator = screen.getByTestId('layout-zoom-indicator')
+    expect(indicator).toHaveTextContent('125%')
+    expect(viewer).toContainElement(indicator)
+    expect(virtualPaper).not.toContainElement(indicator)
+
+    // When: the zoom transform ends.
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(paper, { x: 0, y: 0, scale: 1.25 })
+    })
+
+    // Then: the transient indicator disappears immediately.
+    expect(
+      screen.queryByTestId('layout-zoom-indicator')
+    ).not.toBeInTheDocument()
+
+    // When: a later transform changes position but keeps the committed scale.
+    await act(async () => {
+      VirtualPaper.__triggerTransform(paper, { x: 0, y: -100, scale: 1.25 })
+    })
+
+    // Then: pan-only movement does not reopen zoom feedback.
+    expect(
+      screen.queryByTestId('layout-zoom-indicator')
+    ).not.toBeInTheDocument()
   })
 
   it('text mode keeps estimated height for empty page placeholders', async () => {
@@ -1773,10 +2033,7 @@ describe('IntermediateDocumentViewer', () => {
   })
 
   // ---- 文本模式内容渲染（T5）----
-  // IntermediateDocumentTextPageContent 以普通文档流绘制 IntermediateText：
-  // 只渲染文本 span（带 --flow class + data-text-id），isEOL 后追加 <br>，
-  // 图片 / OCR / 底图在文本模式下不渲染。
-  it('text mode content renders only IntermediateText in flow order', async () => {
+  it('text mode renders IntermediateText and IntermediateImage content in flow order', async () => {
     const eolText: IntermediateText = {
       ...makeText('text-eol', 'Hello'),
       isEOL: true
@@ -1796,8 +2053,6 @@ describe('IntermediateDocumentViewer', () => {
         )
         const getContent = vi.fn(async () => [
           eolText,
-          sameParagraphText,
-          finalText,
           {
             id: 'image-1',
             src: 'data:image/png;base64,mixed-image',
@@ -1808,7 +2063,9 @@ describe('IntermediateDocumentViewer', () => {
               [0, 10]
             ],
             opacity: 1
-          } as IntermediateImage
+          } as IntermediateImage,
+          sameParagraphText,
+          finalText
         ])
         return Promise.resolve({
           paragraphs: [
@@ -1856,7 +2113,21 @@ describe('IntermediateDocumentViewer', () => {
     expect(pageDiv).toHaveClass('hamster-reader__intermediate-text-page')
     expect(pageDiv.innerHTML).toContain('<br>')
 
-    expect(pageDiv.querySelector('img')).not.toBeInTheDocument()
+    expect(
+      pageDiv.querySelector('.hamster-reader__intermediate-flow-image img')
+    ).toHaveAttribute('src', 'data:image/png;base64,mixed-image')
+    const renderedImage = pageDiv.querySelector(
+      '.hamster-reader__intermediate-flow-image'
+    )
+    const sameParagraphSpan = screen.getByText('Same paragraph')
+    expect(
+      helloText.compareDocumentPosition(renderedImage ?? pageDiv) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      (renderedImage ?? pageDiv).compareDocumentPosition(sameParagraphSpan) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
     expect(
       pageDiv.querySelector('.hamster-reader__intermediate-page-image')
     ).not.toBeInTheDocument()
@@ -4165,6 +4436,7 @@ describe('IntermediateDocumentViewer', () => {
         'hamster-reader__intermediate-page-content-scale--flow'
       )
       expect(contentScale.style.position).toBe('')
+      expect(contentScale.style.width).toBe('')
       expect(contentScale.style.transform).toBe('')
       expect(contentScale.style.height).toBe('')
       expect(firstSpan).toHaveClass('hamster-reader__intermediate-text--flow')
@@ -4178,6 +4450,140 @@ describe('IntermediateDocumentViewer', () => {
           '.hamster-reader__intermediate-paragraph-gap'
         )
       ).toHaveLength(1)
+    })
+
+    it('renders EPUB flow images on their own row with visible alt text', async () => {
+      // Given: EPUB 文档流内容包含一张正文图片及解析器附带的 alt 文本。
+      const image = makeImage(
+        'flow-image-1',
+        'data:image/png;base64,flow-image'
+      )
+      Reflect.set(image, 'alt', 'Chapter illustration')
+      const page = {
+        useFlowLayout: true,
+        paragraphs: [],
+        getContent: vi.fn(
+          async (): Promise<IntermediateContent[]> => [
+            makeText('flow-image-text', 'Before image'),
+            image,
+            makeText('flow-image-after', 'After image')
+          ]
+        ),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+
+      // When: Layout Mode 加载该 EPUB 页面。
+      render(
+        <IntermediateDocumentViewer document={makeContentTestDocument(page)} />
+      )
+
+      // Then: 图片作为独立 figure 行展示，img alt 与可见说明文字均保留。
+      const renderedImage = await screen.findByRole('img', {
+        name: 'Chapter illustration'
+      })
+      const figure = renderedImage.closest('figure')
+      if (!(figure instanceof HTMLElement)) {
+        throw new Error('Expected the EPUB image to render inside a figure')
+      }
+      expect(figure).toHaveClass('hamster-reader__intermediate-flow-image')
+      expect(renderedImage).toHaveAttribute(
+        'src',
+        'data:image/png;base64,flow-image'
+      )
+      expect(
+        within(figure).getByText('Chapter illustration')
+      ).toBeInTheDocument()
+      const beforeImage = screen.getByText('Before image')
+      const afterImage = screen.getByText('After image')
+      expect(
+        beforeImage.compareDocumentPosition(figure) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(
+        figure.compareDocumentPosition(afterImage) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    })
+
+    it('renders EPUB IntermediateImage entries in Text Mode', async () => {
+      // Given: Text Mode 页面仅包含 EPUB 正文图片，没有文字或缩略图。
+      const image = makeImage(
+        'text-epub-image',
+        'data:image/png;base64,text-epub-image'
+      )
+      Reflect.set(image, 'alt', 'EPUB text-mode illustration')
+      const page = {
+        paragraphs: [],
+        getContent: vi.fn(async (): Promise<IntermediateContent[]> => [image]),
+        getThumbnail: vi.fn(async () => 'data:image/png;base64,thumbnail')
+      }
+
+      // When: EPUB 以 Text Mode 渲染。
+      render(
+        <IntermediateDocumentTextViewer
+          document={makeContentTestDocument(page)}
+          isEpub
+        />
+      )
+      setScrollContainerSize(
+        screen.getByTestId('intermediate-document-text-viewer'),
+        { width: 800, height: 600 }
+      )
+
+      // Then: 纯图片页可测量并显示正文图，且 Text Mode 不读取 thumbnail。
+      const renderedImage = await screen.findByRole('img', {
+        name: 'EPUB text-mode illustration'
+      })
+      expect(renderedImage).toHaveAttribute(
+        'src',
+        'data:image/png;base64,text-epub-image'
+      )
+      expect(screen.getByTestId('intermediate-text-page-1')).toHaveAttribute(
+        'data-page-measurable',
+        'true'
+      )
+      expect(page.getThumbnail).not.toHaveBeenCalled()
+    })
+
+    it('renders PDF IntermediateImage entries but not its thumbnail in Text Mode', async () => {
+      // Given: PDF 内容识别产生正文 IntermediateImage，同时页面也能提供 thumbnail。
+      const image = makeImage(
+        'text-pdf-image',
+        'data:image/png;base64,text-pdf-image'
+      )
+      Reflect.set(image, 'alt', 'Detected PDF chart')
+      const page = {
+        paragraphs: [],
+        getContent: vi.fn(async (): Promise<IntermediateContent[]> => [image]),
+        getThumbnail: vi.fn(async () => 'data:image/png;base64,pdf-thumbnail')
+      }
+
+      // When: PDF 以 Text Mode 渲染。
+      render(
+        <IntermediateDocumentTextViewer
+          document={makeContentTestDocument(page)}
+          isPdf
+        />
+      )
+      setScrollContainerSize(
+        screen.getByTestId('intermediate-document-text-viewer'),
+        { width: 800, height: 600 }
+      )
+
+      // Then: 仅正文 IntermediateImage 与可见 alt 被展示，thumbnail 不参与渲染。
+      const renderedImage = await screen.findByRole('img', {
+        name: 'Detected PDF chart'
+      })
+      expect(renderedImage).toHaveAttribute(
+        'src',
+        'data:image/png;base64,text-pdf-image'
+      )
+      expect(screen.getByText('Detected PDF chart')).toBeInTheDocument()
+      const textPage = screen.getByTestId('intermediate-text-page-1')
+      expect(
+        textPage.querySelector('img[src="data:image/png;base64,pdf-thumbnail"]')
+      ).toBeNull()
+      expect(page.getThumbnail).not.toHaveBeenCalled()
     })
 
     it('uses flow shells for serialized pages before their content loads', async () => {
@@ -9616,6 +10022,101 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     }
   })
 
+  it('OCR processes loaded pages sequentially with only the active page loading', async () => {
+    // Given: 两个已加载页面都等待 OCR，且每次识别都由测试显式完成。
+    let resolveFirstOcr: (page: IntermediatePage) => void = () => {}
+    let resolveSecondOcr: (page: IntermediatePage) => void = () => {}
+    const firstOcr = new Promise<IntermediatePage>((resolve) => {
+      resolveFirstOcr = resolve
+    })
+    const secondOcr = new Promise<IntermediatePage>((resolve) => {
+      resolveSecondOcr = resolve
+    })
+    const startedImages: string[] = []
+    const extraOCR = vi.fn((imageBase64: string) => {
+      startedImages.push(imageBase64)
+      return startedImages.length === 1 ? firstOcr : secondOcr
+    })
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page1Fixture = pages.get(1)
+    const page2Fixture = pages.get(2)
+    if (!page1Fixture || !page2Fixture) {
+      throw new Error('Expected two page fixtures')
+    }
+    page1Fixture.thumbnail = 'data:image/png;base64,page-1'
+    page2Fixture.thumbnail = 'data:image/png;base64,page-2'
+
+    // When: 自动 OCR 开启并发现两个待识别页面。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        ocr
+        extraOCR={extraOCR}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+
+    // Then: 队列只启动第 1 页，只有当前页显示 Loading。
+    await waitFor(() => {
+      expect(extraOCR).toHaveBeenCalledTimes(1)
+      expect(extraOCR).toHaveBeenLastCalledWith('data:image/png;base64,page-1')
+      expect(
+        screen.getByTestId('intermediate-page-ocr-loading-1')
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-ocr-loading-2')
+      ).not.toBeInTheDocument()
+    })
+
+    // When: 第 1 页识别完成。
+    await act(async () => {
+      resolveFirstOcr(
+        new IntermediatePage({
+          id: 'queued-ocr-page-1',
+          number: 1,
+          width: 100,
+          height: 150,
+          content: [makeText('queued-ocr-text-1', 'Queued OCR page 1')]
+        })
+      )
+    })
+
+    // Then: 第 2 页此时才启动，Loading 从第 1 页转移到第 2 页。
+    await waitFor(() => {
+      expect(extraOCR).toHaveBeenCalledTimes(2)
+      expect(extraOCR).toHaveBeenLastCalledWith('data:image/png;base64,page-2')
+      expect(
+        screen.queryByTestId('intermediate-page-ocr-loading-1')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByTestId('intermediate-page-ocr-loading-2')
+      ).toBeInTheDocument()
+    })
+
+    // When: 第 2 页识别完成。
+    await act(async () => {
+      resolveSecondOcr(
+        new IntermediatePage({
+          id: 'queued-ocr-page-2',
+          number: 2,
+          width: 100,
+          height: 150,
+          content: [makeText('queued-ocr-text-2', 'Queued OCR page 2')]
+        })
+      )
+    })
+
+    // Then: 队列清空，页面识别结果全部渲染且不再显示 Loading。
+    await waitFor(() => {
+      expect(screen.getByText('Queued OCR page 1')).toBeInTheDocument()
+      expect(screen.getByText('Queued OCR page 2')).toBeInTheDocument()
+      expect(
+        screen.queryByTestId('intermediate-page-ocr-loading-2')
+      ).not.toBeInTheDocument()
+    })
+  })
+
   it('uses extraOCR with the page base64 image and renders its IntermediatePage text', async () => {
     // Given: 页面有原尺寸 base64 底图，宿主提供返回 IntermediatePage 的外挂 OCR。
     const { ImageParser } = await import('@hamster-note/image-parser')
@@ -9950,8 +10451,12 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       const page1 = screen.getByTestId('intermediate-page-1')
       await waitFor(() => {
         expect(encodeSpy).toHaveBeenCalledTimes(1)
+        const loading = screen.getByTestId('intermediate-page-ocr-loading-1')
+        expect(loading).toHaveClass('hn-loading', 'hn-loading--cover')
+        expect(loading).toHaveRole('status')
+        expect(loading).toHaveAccessibleName('OCR 识别中…')
         expect(
-          screen.getByTestId('intermediate-page-ocr-loading-1')
+          loading.querySelector('.hn-loading__spinner')
         ).toBeInTheDocument()
       })
 
@@ -10056,6 +10561,170 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     } finally {
       fetchSpy.mockRestore()
     }
+  })
+
+  it('retries a failed OCR page after it is closed and reopened', async () => {
+    // Given: 第 1 页第一次 OCR 失败，第二次可正常返回文本。
+    const failedOcr = new Error('Temporary OCR failure')
+    const extraOCR = vi
+      .fn<(imageBase64: string) => Promise<IntermediatePage>>()
+      .mockRejectedValueOnce(failedOcr)
+      .mockResolvedValueOnce(
+        new IntermediatePage({
+          id: 'retried-ocr-page-1',
+          number: 1,
+          width: 100,
+          height: 150,
+          content: [makeText('retried-ocr-text-1', 'Retried OCR text')]
+        })
+      )
+    const onOcrError = vi.fn()
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) {
+      throw new Error('Expected page 1 fixture')
+    }
+    page.thumbnail = 'data:image/png;base64,page-1'
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        ocr={{ enabled: true, pages: [1] }}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+
+    await waitFor(() => {
+      expect(extraOCR).toHaveBeenCalledTimes(1)
+      expect(onOcrError).toHaveBeenCalledWith(failedOcr, { pageNumber: 1 })
+    })
+
+    // When: 宿主先关闭失败页，再重新开启该页 OCR。
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        ocr={{ enabled: true, pages: [] }}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        ocr={{ enabled: true, pages: [1] }}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+
+    // Then: 失败标记已随关闭清除，重新开启会再次识别并渲染结果。
+    await waitFor(() => {
+      expect(extraOCR).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('Retried OCR text')).toBeInTheDocument()
+    })
+  })
+
+  it('drops a stale OCR rejection and waits for it before retrying the reopened page', async () => {
+    // Given: 第 1 页 OCR 在途，底层 Promise 只能等待 settle，不能真正取消。
+    let rejectFirstOcr: (error: Error) => void = () => {}
+    let resolveSecondOcr: (page: IntermediatePage) => void = () => {}
+    const firstOcr = new Promise<IntermediatePage>((_resolve, reject) => {
+      rejectFirstOcr = reject
+    })
+    const secondOcr = new Promise<IntermediatePage>((resolve) => {
+      resolveSecondOcr = resolve
+    })
+    let activeOcrCount = 0
+    let maxActiveOcrCount = 0
+    const extraOCR = vi.fn(() => {
+      activeOcrCount += 1
+      maxActiveOcrCount = Math.max(maxActiveOcrCount, activeOcrCount)
+      const run = extraOCR.mock.calls.length === 1 ? firstOcr : secondOcr
+      return run.finally(() => {
+        activeOcrCount -= 1
+      })
+    })
+    const onOcrError = vi.fn()
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) {
+      throw new Error('Expected page 1 fixture')
+    }
+    page.thumbnail = 'data:image/png;base64,page-1'
+
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        ocr={{ enabled: true, pages: [1] }}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+
+    await waitFor(() => {
+      expect(extraOCR).toHaveBeenCalledTimes(1)
+      expect(
+        screen.getByTestId('intermediate-page-ocr-loading-1')
+      ).toBeInTheDocument()
+    })
+
+    // When: 在途页被关闭后立即重开，Loading 可隐藏，但活动槽仍由旧任务持有。
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        ocr={{ enabled: true, pages: [] }}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('intermediate-page-ocr-loading-1')
+      ).not.toBeInTheDocument()
+    })
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        ocr={{ enabled: true, pages: [1] }}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+    expect(extraOCR).toHaveBeenCalledTimes(1)
+
+    const staleError = new Error('Stale OCR failure')
+    await act(async () => {
+      rejectFirstOcr(staleError)
+    })
+
+    // Then: 旧代际错误不回调、不污染失败标记，settle 后才启动第二次识别。
+    await waitFor(() => {
+      expect(extraOCR).toHaveBeenCalledTimes(2)
+    })
+    expect(onOcrError).not.toHaveBeenCalled()
+    expect(maxActiveOcrCount).toBe(1)
+
+    await act(async () => {
+      resolveSecondOcr(
+        new IntermediatePage({
+          id: 'fresh-ocr-page-1',
+          number: 1,
+          width: 100,
+          height: 150,
+          content: [makeText('fresh-ocr-text-1', 'Fresh OCR text')]
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Fresh OCR text')).toBeInTheDocument()
+    })
   })
 
   it('global disable clears all OCR text layers', async () => {

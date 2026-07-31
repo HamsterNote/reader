@@ -1,20 +1,21 @@
 import type {
+  IntermediateContent,
+  IntermediateImage,
   IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
 import { memo } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
-import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
+import { IntermediateDocumentFlowContent } from './IntermediateDocumentFlowContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
-import { PdfTextContent } from './PdfTextContent'
 
 /**
  * `intermediate-document` 文本渲染模式（`renderMode="text"`）单页内容渲染器。
  *
  * 与 layout 模式的 {@link IntermediateDocumentPageContent} 相对，文本模式以
- * 普通文档流（document flow）绘制 `IntermediateText` 条目，不做任何绝对定位、
- * 不渲染基础底图 / IntermediateImage / OCR span。每页内容容器自带 `padding: 5px`。
+ * 普通文档流（document flow）绘制 `IntermediateText` 与 `IntermediateImage` 条目，
+ * 不渲染基础底图 / thumbnail / OCR span。每页内容容器自带 `padding: 5px`。
  *
  * 关键约束（与 layout 模式保持一致）：
  * - 绝不使用 `dangerouslySetInnerHTML`；所有文本均为 React 文本节点。
@@ -34,6 +35,8 @@ export type IntermediateDocumentTextPageContentProps = {
   /** 已加载的文本内容列表（由 useLazyPageQueue text 模式过滤后传入） */
   texts: IntermediateText[]
   paragraphs: IntermediateParagraph[]
+  images: IntermediateImage[]
+  orderedContent?: IntermediateContent[]
   /** PDF 文本模式按文字 box 重建视觉行、段落和相对字号。 */
   isPdf?: boolean
   /** 文本 span ref 注册回调（与 layout 模式同型）；可选 */
@@ -67,27 +70,18 @@ function IntermediateDocumentTextPageContentComponent({
   pageNumber,
   texts,
   paragraphs,
+  images,
+  orderedContent,
   isPdf = false,
   setTextRef,
   fontScale
 }: IntermediateDocumentTextPageContentProps) {
-  if (isPdf) {
-    return (
-      <PdfTextContent
-        pageNumber={pageNumber}
-        texts={texts}
-        paragraphs={paragraphs}
-        setTextRef={setTextRef}
-        fontScale={fontScale}
-      />
-    )
-  }
-
   return (
-    <IntermediateDocumentFlowTextContent
+    <IntermediateDocumentFlowContent
       pageNumber={pageNumber}
-      texts={texts}
+      content={orderedContent ?? [...texts, ...images]}
       paragraphs={paragraphs}
+      isPdf={isPdf}
       setTextRef={setTextRef}
       fontScale={fontScale}
       preserveSourceFontSize={false}

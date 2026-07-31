@@ -42,6 +42,7 @@ export interface LazyPageQueueCallbacks {
     texts: IntermediateText[]
     paragraphs: IntermediateParagraph[]
     images: IntermediateImage[]
+    content: IntermediateContent[]
   }) => void
   /** 页面加载失败后，清空该页的状态并标记为 'error' */
   onPageError: (pageNumber: number) => void
@@ -240,10 +241,9 @@ export function useLazyPageQueue(
             }
 
             const texts = content.filter(isIntermediateText)
-            const images =
-              mode === 'text' || !isIntermediateImage
-                ? []
-                : content.filter(isIntermediateImage)
+            const images = isIntermediateImage
+              ? content.filter(isIntermediateImage)
+              : []
             callbacks.onPageLoaded({
               pageNumber,
               useFlowLayout,
@@ -251,7 +251,8 @@ export function useLazyPageQueue(
               thumbnailScale,
               texts,
               paragraphs,
-              images
+              images,
+              content
             })
           }
         )

@@ -465,7 +465,14 @@
       flex: 1 1 auto;
       width: 100%;
       min-height: 0;
+      scrollbar-width: none;
       touch-action: none;
+
+      &::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
+      }
     }
 
     // 中间文档每页之间的垂直外边距，与 VirtualPaper 缩放/平移无关，
@@ -950,8 +957,7 @@
       animation: none;
     }
 
-    &__text-reading-progress,
-    &__text-reading-progress-label {
+    &__reading-progress-feedback-content {
       transition: none;
     }
   }
@@ -985,73 +991,106 @@
     position: relative;
     width: 100%;
     height: 100%;
+    scrollbar-width: none;
     scroll-behavior: auto;
+
+    &::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
+    }
   }
 
-  &__text-reading-progress {
+  &__reading-progress {
     position: absolute;
     z-index: 12;
-    top: 20px;
-    bottom: 20px;
-    left: 8px;
+    top: 0;
+    right: 0;
+    bottom: 0;
     width: 32px;
     cursor: pointer;
     touch-action: none;
     user-select: none;
-    opacity: 0;
-    transition: opacity 120ms ease;
 
-    &[data-visible='true'] {
-      opacity: 1;
-    }
-
-    &:focus-visible,
-    &[data-focused='true'] {
+    &:focus-visible {
       outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
-      outline-offset: 2px;
-      border-radius: 8px;
+      outline-offset: -2px;
     }
   }
 
-  &__text-reading-progress-track {
+  &__reading-progress-track {
     position: absolute;
-    top: 6px;
-    bottom: 6px;
-    left: 15px;
-    width: 2px;
-    border-radius: 999px;
-    background: rgb(107 114 128 / 45%);
+    top: 0;
+    right: 1px;
+    bottom: 0;
+    width: 4px;
+    background: rgb(107 114 128 / 48%);
   }
 
-  &__text-reading-progress-position {
+  &__reading-progress-position,
+  &__reading-progress-feedback {
     position: absolute;
     z-index: 1;
-    top: 0;
-    bottom: 12px;
-    left: 10px;
-    width: 12px;
+    right: 1px;
+    width: 4px;
+    height: 0;
     pointer-events: none;
-    will-change: transform;
   }
 
-  &__text-reading-progress-thumb {
+  &__reading-progress-thumb {
     position: absolute;
-    top: 0;
-    left: 0;
+    top: 50%;
+    right: -2px;
     display: block;
-    width: 12px;
-    height: 12px;
+    width: 8px;
+    height: 8px;
     box-sizing: border-box;
-    border: 2px solid #ffffff;
-    border-radius: 50%;
-    background: var(--hamster-reader-theme-color, #2563eb);
-    box-shadow: 0 1px 4px rgb(15 23 42 / 28%);
+    border: 2px solid var(--hamster-reader-theme-color, #2563eb);
+    background: transparent;
+    transform: translateY(-50%);
   }
 
-  &__text-reading-progress-label {
+  &__reading-progress-highlight {
     position: absolute;
-    top: 6px;
-    left: 18px;
+    z-index: 2;
+    right: 1px;
+    width: 4px;
+    height: 1px;
+    pointer-events: none;
+    transform: translateY(-50%);
+  }
+
+  &__reading-progress-feedback-content {
+    --hamster-reader-progress-feedback-x: 4px;
+    --hamster-reader-progress-feedback-y: -50%;
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transform: translate3d(
+      var(--hamster-reader-progress-feedback-x),
+      var(--hamster-reader-progress-feedback-y),
+      0
+    );
+    transition:
+      opacity 120ms ease,
+      transform 120ms ease,
+      visibility 120ms ease;
+
+    &[data-visible='true'] {
+      --hamster-reader-progress-feedback-x: 0px;
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+
+  &__reading-progress-label {
     padding: 3px 7px;
     border-radius: 6px;
     color: #ffffff;
@@ -1062,12 +1101,50 @@
     line-height: 18px;
     white-space: nowrap;
     pointer-events: none;
-    transform: translate3d(-4px, -50%, 0);
-    transition: transform 120ms ease;
+  }
 
-    &[data-visible='true'] {
-      transform: translate3d(0, -50%, 0);
+  &__reading-progress[data-pointer-type='touch']
+    &__reading-progress-feedback-content {
+    right: calc(10px + 1cm);
+  }
+
+  &__reading-progress-preview {
+    display: block;
+    flex: 0 0 auto;
+    width: 104px;
+    aspect-ratio: 3 / 4;
+    overflow: hidden;
+    border: 1px solid rgb(148 163 184 / 65%);
+    border-radius: 4px;
+    background: #f8fafc;
+    box-shadow: 0 6px 18px rgb(15 23 42 / 20%);
+
+    img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
     }
+  }
+
+  &__layout-zoom-indicator {
+    position: absolute;
+    z-index: 13;
+    top: 12px;
+    left: 12px;
+    min-width: 48px;
+    padding: 5px 9px;
+    border: 1px solid rgb(255 255 255 / 28%);
+    border-radius: 7px;
+    color: #ffffff;
+    background: rgb(31 41 55 / 88%);
+    box-shadow: 0 3px 12px rgb(15 23 42 / 20%);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    line-height: 18px;
+    text-align: center;
+    pointer-events: none;
   }
 
   // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
@@ -1167,13 +1244,23 @@
       background-color: #fef2f2;
     }
 
-    // OCR 进行中的页内 Loading 角标：半透明白底，不拦截页面选择/交互
     &--ocr {
-      background-color: rgba(255, 255, 255, 0.6);
-      color: #374151;
-      font-weight: 500;
+      --hn-loading-duration: 0.9s;
+
+      background: color-mix(
+        in srgb,
+        var(--hn-color-surface, #ffffff) 72%,
+        transparent
+      );
+      backdrop-filter: blur(3px);
+      color: var(--hn-color-accent, #2563eb);
       pointer-events: none;
       z-index: 5;
+
+      .hn-loading__text {
+        color: var(--hn-color-text, #111827);
+        font-weight: 500;
+      }
     }
   }
 
@@ -1223,6 +1310,25 @@
     white-space: normal;
   }
 
+  &__intermediate-flow-image {
+    display: block;
+    margin: 1em 0;
+
+    img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      object-fit: contain;
+    }
+
+    figcaption {
+      margin-top: 0.5em;
+      color: var(--hn-color-text-muted, #6b7280);
+      font-size: 0.875em;
+      line-height: 1.5;
+    }
+  }
+
   &__pdf-text-content {
     white-space: normal;
   }
@@ -1256,6 +1362,17 @@
 
     .hsn-selection-percent-rect {
       box-sizing: border-box;
+    }
+
+    // 移除选中态高亮的 border 和 outline
+    .hsn-selection-percent-rect-selected {
+      border: none !important;
+      outline: none !important;
+    }
+
+    .hsn-selection-rect--selected {
+      stroke: none !important;
+      stroke-width: 0 !important;
     }
 
     // pixel 模式（SVG rect）保持 blend 在 rect 本身

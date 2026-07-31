@@ -34,18 +34,19 @@ export function DefaultBottomBarModeControls({
       >
         <Icon name='switch' />
       </Button>
-      <Button
-        type='button'
-        size='small'
-        variant={ocrEnabled ? 'primary' : 'ghost'}
-        disabled={layoutDisabled}
-        aria-label='OCR'
-        aria-pressed={ocrEnabled}
-        data-testid='tool-bottom-bar-ocr'
-        onClick={() => onOcrChange(!ocrEnabled)}
-      >
-        OCR
-      </Button>
+      {!layoutDisabled && (
+        <Button
+          type='button'
+          size='small'
+          variant={ocrEnabled ? 'primary' : 'ghost'}
+          aria-label='OCR'
+          aria-pressed={ocrEnabled}
+          data-testid='tool-bottom-bar-ocr'
+          onClick={() => onOcrChange(!ocrEnabled)}
+        >
+          OCR
+        </Button>
+      )}
     </>
   )
 }

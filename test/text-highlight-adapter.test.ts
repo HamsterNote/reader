@@ -28,6 +28,34 @@ function makeViewerRoot(): HTMLElement {
   return root
 }
 
+function makeAnchoredViewerRoot(content: string): {
+  readonly root: HTMLElement
+  readonly selectedTexts: string[]
+} {
+  const root = document.createElement('div')
+  root.innerHTML = `<div data-testid="intermediate-text-page-1"><div class="hsn-selection-container" data-selection-id="scope:page-1"><div class="hsn-selection-content">${content}</div></div></div>`
+  document.body.append(root)
+  const container = root.querySelector<HTMLElement>(
+    '.hsn-selection-container'
+  )
+  if (!container) throw new Error('Expected selection container')
+  vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(0, 0, 200, 100)
+  )
+  const selectedTexts: string[] = []
+  const clientRects = Object.assign([new DOMRect(10, 10, 50, 18)], {
+    item: (index: number) => clientRects[index] ?? null
+  })
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: vi.fn(function (this: Range) {
+      selectedTexts.push(this.toString())
+      return clientRects
+    })
+  })
+  return { root, selectedTexts }
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   Reflect.deleteProperty(Range.prototype, 'getClientRects')
@@ -122,5 +150,80 @@ describe('Text highlight adapter', () => {
     expect(afterReflow?.rectsBySelectionId['page-1']).toEqual([
       { x: 8, y: 32, width: 44, height: 36 }
     ])
+  })
+
+  it('restores Layout offsets without counting inferred PDF spaces', () => {
+    // Given: Layout 的 canonical stream 是 `Helloworld`，PDF Text 模式为阅读展示补了空格。
+    const { root, selectedTexts } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="0">Hello</span> <span data-selection-start-offset="5">world</span>'
+    )
+
+    // When: Text 模式用 Layout 保存的 `[5, 10]` 字符锚点重建高亮。
+    deriveTextSelectionRanges({
+      ranges: [
+        {
+          ...storedRange,
+          text: 'world',
+          start: { selectionId: 'page-1', offset: 5 },
+          end: { selectionId: 'page-1', offset: 10 }
+        }
+      ],
+      root,
+      pageNumbers: [1],
+      overlayRectType: 'px'
+    })
+
+    // Then: 展示用空格不占 canonical offset，恢复出的文字仍是 `world`。
+    expect(selectedTexts).toEqual(['world'])
+  })
+
+  it('restores canonical spans after PDF visual reordering', () => {
+    // Given: PDF Text DOM 按视觉位置重排，但 marker 仍指向原始 canonical 顺序。
+    const { root, selectedTexts } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="5">world</span> <span data-selection-start-offset="0">Hello</span>'
+    )
+
+    // When: 一个 Layout range 跨越两个在 DOM 中逆序的源 span。
+    deriveTextSelectionRanges({
+      ranges: [
+        {
+          ...storedRange,
+          text: 'Helloworld',
+          start: { selectionId: 'page-1', offset: 0 },
+          end: { selectionId: 'page-1', offset: 10 }
+        }
+      ],
+      root,
+      pageNumbers: [1],
+      overlayRectType: 'px'
+    })
+
+    // Then: 每个源 span 独立恢复，避免逆序 endpoint 折叠单个 DOM Range。
+    expect(selectedTexts).toEqual(['world', 'Hello'])
+  })
+
+  it('ignores empty PDF anchors at a canonical boundary', () => {
+    // Given: 一个零长度源项与前后非空 span 共享 canonical boundary。
+    const { root, selectedTexts } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="0">Hello</span><span data-selection-start-offset="5"></span><span data-selection-start-offset="5">world</span>'
+    )
+
+    // When: Layout range 的结束位置恰好落在该共享边界。
+    deriveTextSelectionRanges({
+      ranges: [
+        {
+          ...storedRange,
+          text: 'Hello',
+          start: { selectionId: 'page-1', offset: 0 },
+          end: { selectionId: 'page-1', offset: 5 }
+        }
+      ],
+      root,
+      pageNumbers: [1],
+      overlayRectType: 'px'
+    })
+
+    // Then: 空 span 不抢占 endpoint，非空源文字仍能恢复。
+    expect(selectedTexts).toEqual(['Hello'])
   })
 })

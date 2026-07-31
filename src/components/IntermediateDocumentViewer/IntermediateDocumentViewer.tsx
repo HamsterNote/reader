@@ -1,3 +1,4 @@
+import { Loading } from '@hamster-note/components'
 import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
 import type {
   LinkedSelectionData,
@@ -84,6 +85,7 @@ import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuar
 import { EdgeCropOverlay } from './EdgeCropOverlay'
 import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { hasHighlightRects } from './highlightRectModes'
+import { getReaderImageAlt } from './intermediateImage'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
 import { PageBrowser } from './PageBrowser'
@@ -97,6 +99,7 @@ import { getPagePreloadWindow } from './pagePreloadWindow'
 import { paginateTxtDocument } from './paginateTxtDocument'
 import { RangeHandle } from './RangeHandle'
 import { RangeMagnifierProvider } from './RangeMagnifier'
+import { ReadingProgress } from './ReadingProgress'
 import {
   computePageOriginY,
   computeTransform,
@@ -122,6 +125,7 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
+import { useReadingProgressActivity } from './useReadingProgressActivity'
 import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { useSelectionGeometryRevision } from './useDerivedTextSelectionRanges'
@@ -416,6 +420,8 @@ export type IntermediateDocumentViewerProps = {
   serializedDocument?: IntermediateDocumentSerialized | null
   /** EPUB 高亮仅从字符锚点实时派生，不持久化页面矩形。 */
   isEpub?: boolean
+  /** 仅 PDF 的版面模式进度反馈可显示页面缩略图。 */
+  isPdf?: boolean
   className?: string
   fontScale?: ReaderFontScale
   overscan?: number
@@ -679,10 +685,8 @@ const DEFAULT_PAGE_SIZE: PageSize = {
   height: 842
 }
 const MAX_RENDERABLE_PAGE_DIMENSION = 100_000
-// 水平留白（最宽页面两侧各 12px）的几何来源：文档容器
-// `.hamster-note-document` 的内联缩放 padding（见 IntermediateDocumentPages），
-// 不再由页面外壳的 margin 承担；reader.scss 中保留一份 hygiene fallback
-//（内联样式优先于 scss 规则）。
+// 水平留白（最宽页面两侧各 12px）由 document 外层 gutter 承担，
+// `.hamster-note-document` 本身只表示 Page 的紧密内容边界。
 const INTERMEDIATE_PAGE_HORIZONTAL_MARGIN = 24
 // 与 reader.scss 中 `.hamster-note-document` 的页面间距保持同步。
 const INTERMEDIATE_PAGE_GAP = 16
@@ -785,6 +789,23 @@ const isRuntimeDocument = (
 const serializedPageUsesFlowLayout = (page: object): boolean =>
   'useFlowLayout' in page && page.useFlowLayout === true
 
+const getSerializedImageAlts = (
+  serializedDocument: IntermediateDocumentSerialized
+): ReadonlyMap<number, ReadonlyMap<string, string>> => {
+  const imageAltsByPage = new Map<number, ReadonlyMap<string, string>>()
+
+  for (const page of serializedDocument.pages) {
+    const imageAlts = new Map<string, string>()
+    for (const content of page.content ?? []) {
+      const alt = getReaderImageAlt(content)
+      if ('src' in content && alt) imageAlts.set(content.id, alt)
+    }
+    if (imageAlts.size > 0) imageAltsByPage.set(page.number, imageAlts)
+  }
+
+  return imageAltsByPage
+}
+
 const restoreSerializedFlowLayout = (
   runtimeDocument: IntermediateDocument,
   serializedDocument: IntermediateDocumentSerialized
@@ -794,7 +815,10 @@ const restoreSerializedFlowLayout = (
       .filter(serializedPageUsesFlowLayout)
       .map((page) => page.number)
   )
-  if (flowLayoutPageNumbers.size === 0) return runtimeDocument
+  const imageAltsByPage = getSerializedImageAlts(serializedDocument)
+  if (flowLayoutPageNumbers.size === 0 && imageAltsByPage.size === 0) {
+    return runtimeDocument
+  }
 
   const pagesMap = IntermediatePageMap.makeByInfoList(
     serializedDocument.pages.map((serializedPage) => ({
@@ -816,6 +840,20 @@ const restoreSerializedFlowLayout = (
             enumerable: true,
             value: true
           })
+        }
+
+        const imageAlts = imageAltsByPage.get(serializedPage.number)
+        if (imageAlts) {
+          for (const content of await page.getContent()) {
+            const alt = imageAlts.get(content.id)
+            if (!alt || !isIntermediateImage(content)) continue
+
+            Object.defineProperty(content, 'alt', {
+              configurable: true,
+              enumerable: true,
+              value: alt
+            })
+          }
         }
         return page
       }
@@ -1016,6 +1054,17 @@ const createSetImagesHandler = (
     const nextImages = new Map(currentImages)
     nextImages.set(pageNumber, images)
     return nextImages
+  }
+}
+
+const createSetContentHandler = (
+  pageNumber: number,
+  content: IntermediateContent[]
+) => {
+  return (currentContent: Map<number, IntermediateContent[]>) => {
+    const nextContent = new Map(currentContent)
+    nextContent.set(pageNumber, content)
+    return nextContent
   }
 }
 
@@ -1236,6 +1285,7 @@ type PageRefSetter = (
 type PageResources = {
   pageSizesByPageNumber: Map<number, NormalizedPageSize>
   flowLayoutPages: ReadonlySet<number>
+  orderedContentByPageNumber: Map<number, IntermediateContent[]>
   textsByPageNumber: Map<number, IntermediateText[]>
   paragraphsByPageNumber: Map<number, IntermediateParagraph[]>
   ocrTextsByPageNumber: Map<number, IntermediateText[]>
@@ -1346,6 +1396,7 @@ type ViewerContentProps = PageResources & {
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
   showPageBrowser: boolean
+  previewEnabled: boolean
   onPageBrowserClose?: () => void
   onPageBrowserVisibilityChange: (
     pageNumber: number,
@@ -1359,6 +1410,11 @@ type ViewerContentProps = PageResources & {
   bookmarkedPageNumbers?: readonly number[]
   onTogglePageBookmark?: (pageNumber: number) => void
   popoverRelative?: boolean
+}
+
+type ScopedContentSize = {
+  readonly selectionScope: symbol
+  readonly size: PageSize
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
@@ -1558,7 +1614,7 @@ const getPageShellStyle = (
   useFlowLayout
     ? {
         width: `${FLOW_LAYOUT_PAGE_WIDTH * readerScale}px`,
-        // 水平留白改由文档容器的内联 padding 承担，避免块级布局
+        // 水平留白改由 document 外层 gutter 的内联 padding 承担，避免块级布局
         // 过约束（over-constraint）时右侧 margin 被浏览器丢弃。
         margin: `${(INTERMEDIATE_PAGE_HORIZONTAL_MARGIN / 2) * readerScale}px 0`
       }
@@ -1566,7 +1622,7 @@ const getPageShellStyle = (
         position: 'relative',
         width: `${(previewPageWidth || DEFAULT_PAGE_SIZE.width) * readerScale}px`,
         height: `${previewPageHeight * readerScale}px`,
-        // 水平留白改由文档容器的内联 padding 承担，避免块级布局
+        // 水平留白改由 document 外层 gutter 的内联 padding 承担，避免块级布局
         // 过约束（over-constraint）时右侧 margin 被浏览器丢弃。
         margin: `${(INTERMEDIATE_PAGE_HORIZONTAL_MARGIN / 2) * readerScale}px 0`,
         overflow: 'hidden'
@@ -1581,7 +1637,6 @@ const getContentScaleStyle = (
 ): CSSProperties | undefined =>
   useFlowLayout
     ? {
-        width: `${FLOW_LAYOUT_PAGE_WIDTH}px`,
         zoom: readerScale
       }
     : {
@@ -1608,6 +1663,7 @@ function IntermediateDocumentPages({
   runtimePageSelectionId,
   pageSizesByPageNumber,
   flowLayoutPages,
+  orderedContentByPageNumber,
   textsByPageNumber,
   paragraphsByPageNumber,
   ocrTextsByPageNumber,
@@ -1692,19 +1748,21 @@ function IntermediateDocumentPages({
   }, 0)
 
   return (
-    // 水平留白 = 文档容器的内联缩放 padding（box-sizing: border-box 使布局
-    // 宽度包含 padding）。padding 随 readerScale 缩放，保证「只采集一次」的
+    // 水平留白 = document 外层 gutter 的内联缩放 padding。padding 随
+    // readerScale 缩放，保证「只采集一次」的
     // intrinsicContentWidth（scrollWidth ÷ committedReaderScale）在任意采集
     // 缩放档位下都得到 最宽页面 + 24；必须与
     // INTERMEDIATE_PAGE_HORIZONTAL_MARGIN 保持同步。
     <div
-      className='hamster-note-document'
+      className='hamster-note-document-gutter'
       style={{
         boxSizing: 'border-box',
+        width: 'fit-content',
         padding: `0 ${(INTERMEDIATE_PAGE_HORIZONTAL_MARGIN / 2) * readerScale}px`
       }}
     >
-      {pageNumbers.map((pageNumber) => {
+      <div className='hamster-note-document' style={{ width: 'fit-content' }}>
+        {pageNumbers.map((pageNumber) => {
         const useFlowLayout = flowLayoutPages.has(pageNumber)
         const shellPageSize = getCachedPageSize(
           pageSizesByPageNumber,
@@ -1765,6 +1823,7 @@ function IntermediateDocumentPages({
         }
 
         const pageTexts = textsByPageNumber.get(pageNumber)
+        const pageOrderedContent = orderedContentByPageNumber.get(pageNumber)
         const pageParagraphs = paragraphsByPageNumber.get(pageNumber)
         const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
         const isPageContentLoaded = pageStatuses.get(pageNumber) === 'loaded'
@@ -1803,6 +1862,7 @@ function IntermediateDocumentPages({
             fontScale={fontScale}
             texts={pageTexts ?? EMPTY_INTERMEDIATE_TEXTS}
             paragraphs={pageParagraphs ?? EMPTY_INTERMEDIATE_PARAGRAPHS}
+            orderedContent={pageOrderedContent}
             useFlowLayout={useFlowLayout}
             ocrTexts={
               ocrTextsByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_TEXTS
@@ -1816,14 +1876,14 @@ function IntermediateDocumentPages({
           />
         ) : null
 
-        // OCR 进行中的页内 Loading 角标：OCR 成功/失败后随 ocrLoadingPages 移除而消失
         const ocrLoadingBadge = ocrLoadingPages.has(pageNumber) ? (
-          <div
+          <Loading
             className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--ocr'
+            cover
             data-testid={`intermediate-page-ocr-loading-${pageNumber}`}
-          >
-            OCR 识别中…
-          </div>
+            size='medium'
+            text='OCR 识别中…'
+          />
         ) : null
 
         return (
@@ -2011,7 +2071,8 @@ function IntermediateDocumentPages({
             )}
           </div>
         )
-      })}
+        })}
+      </div>
     </div>
   )
 }
@@ -3032,6 +3093,7 @@ function ViewerContent({
   setPageRef,
   setTextRef,
   textsByPageNumber,
+  orderedContentByPageNumber,
   paragraphsByPageNumber,
   ocrTextsByPageNumber,
   ocrLoadingPages,
@@ -3052,6 +3114,7 @@ function ViewerContent({
   onPagePaintingChange,
   drawingScale,
   showPageBrowser,
+  previewEnabled,
   onPageBrowserClose,
   onPageBrowserVisibilityChange,
   onNavigateToPage,
@@ -3071,7 +3134,7 @@ function ViewerContent({
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
   const [measuredContentSize, setMeasuredContentSize] =
-    useState<PageSize | null>(null)
+    useState<ScopedContentSize | null>(null)
   const popoverContainerRef = useRef<HTMLElement | null>(null)
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
@@ -3094,6 +3157,32 @@ function ViewerContent({
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
   const [popoverVisible, setPopoverVisible] = useState(true)
+  const {
+    isActive: isReadingProgressMoving,
+    signalActivity: signalReadingProgressActivity
+  } = useReadingProgressActivity()
+  useEffect(() => {
+    if (!viewerRootElement) return
+
+    const scrollViewport = viewerRootElement.querySelector<HTMLElement>(
+      '.virtual-paper-wrapper'
+    )
+    if (!scrollViewport) return
+
+    scrollViewport.addEventListener('scroll', signalReadingProgressActivity, {
+      passive: true
+    })
+    return () => {
+      scrollViewport.removeEventListener(
+        'scroll',
+        signalReadingProgressActivity
+      )
+    }
+  }, [signalReadingProgressActivity, viewerRootElement])
+  const [activeZoomPercent, setActiveZoomPercent] = useState<number | null>(
+    null
+  )
+  const lastObservedTransformScaleRef = useRef(virtualPaperTransform.scale)
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
   )
@@ -3161,43 +3250,53 @@ function ViewerContent({
   useEffect(() => {
     if (!viewerRootElement) return
 
-    let documentElement: HTMLElement | null = null
+    let documentGutterElement: HTMLElement | null = null
     let intrinsicContentWidth: number | null = null
 
     const measureContent = () => {
-      if (!documentElement) return
+      if (!documentGutterElement) return
       // readerMode 提交缩放后，document 的布局宽度会继承 container width。
       // 宽度只采集一次可阻断 contentSize -> container -> document 的反馈放大；
       // 高度继续同步，以覆盖 flow 重排和异步内容加载。
       const measuredWidth =
-        Math.max(documentElement.scrollWidth, documentElement.offsetWidth) /
+        Math.max(
+          documentGutterElement.scrollWidth,
+          documentGutterElement.offsetWidth
+        ) /
         committedReaderScale
       if (intrinsicContentWidth === null && measuredWidth > 0) {
         intrinsicContentWidth = measuredWidth
       }
       const width = intrinsicContentWidth
       const height =
-        Math.max(documentElement.scrollHeight, documentElement.offsetHeight) /
-        committedReaderScale
+        Math.max(
+          documentGutterElement.scrollHeight,
+          documentGutterElement.offsetHeight
+        ) / committedReaderScale
       if (width === null || height <= 0) return
 
       setMeasuredContentSize((currentSize) =>
-        currentSize?.width === width && currentSize.height === height
+        currentSize?.selectionScope === selectionScope &&
+        currentSize.size.width === width &&
+        currentSize.size.height === height
           ? currentSize
-          : { width, height }
+          : { selectionScope, size: { width, height } }
       )
     }
 
     const resizeObserver = new ResizeObserver(measureContent)
     const bindDocumentElement = () => {
-      const nextDocumentElement = viewerRootElement.querySelector<HTMLElement>(
-        '.hamster-note-document'
-      )
-      if (nextDocumentElement !== documentElement) {
+      const nextDocumentGutterElement =
+        viewerRootElement.querySelector<HTMLElement>(
+          '.hamster-note-document-gutter'
+        )
+      if (nextDocumentGutterElement !== documentGutterElement) {
         resizeObserver.disconnect()
-        documentElement = nextDocumentElement
+        documentGutterElement = nextDocumentGutterElement
         intrinsicContentWidth = null
-        if (documentElement) resizeObserver.observe(documentElement)
+        if (documentGutterElement) {
+          resizeObserver.observe(documentGutterElement)
+        }
       }
       measureContent()
     }
@@ -3212,7 +3311,7 @@ function ViewerContent({
       mutationObserver.disconnect()
       resizeObserver.disconnect()
     }
-  }, [committedReaderScale, viewerRootElement])
+  }, [committedReaderScale, selectionScope, viewerRootElement])
 
   const { highlightSelection } = useSelectionHighlight(
     pageNumbers,
@@ -3482,6 +3581,12 @@ function ViewerContent({
 
   const handleViewerPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.hamster-reader__reading-progress')
+      ) {
+        return
+      }
       // Viewer 内的新交互代表用户已离开旧的临时选区。高亮按钮通过 portal
       // 渲染在根节点之外，因此点击确认不会经过这里并误删待提交缓存。
       lastActiveRangeRef.current = null
@@ -3493,6 +3598,12 @@ function ViewerContent({
 
   const handleViewerPointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.hamster-reader__reading-progress')
+      ) {
+        return
+      }
       handleHighlightPointerMove(event)
       handleTouchPointerMove(event)
     },
@@ -3501,6 +3612,12 @@ function ViewerContent({
 
   const handleViewerPointerUp = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.hamster-reader__reading-progress')
+      ) {
+        return
+      }
       if (!handleHighlightPointerUp(event)) {
         handleTouchPointerUp(event)
       }
@@ -3510,6 +3627,12 @@ function ViewerContent({
 
   const handleViewerPointerCancel = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.hamster-reader__reading-progress')
+      ) {
+        return
+      }
       handleHighlightPointerCancel(event)
       handleTouchPointerCancel()
     },
@@ -3569,7 +3692,15 @@ function ViewerContent({
   // change 也安排恢复，兼容首次自动布局缺少 end 回调的情况。
   const handleTransformChangeWithPopover = useCallback(
     (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      if (
+        meta.source !== 'initialPlacement' &&
+        nextTransform.scale !== lastObservedTransformScaleRef.current
+      ) {
+        lastObservedTransformScaleRef.current = nextTransform.scale
+        setActiveZoomPercent(Math.round(nextTransform.scale * 100))
+      }
       setPopoverVisible(false)
+      signalReadingProgressActivity()
       if (popoverDebounceRef.current) {
         clearTimeout(popoverDebounceRef.current)
       }
@@ -3579,11 +3710,14 @@ function ViewerContent({
       }, 500)
       handleVirtualPaperTransformChange(nextTransform, meta)
     },
-    [handleVirtualPaperTransformChange]
+    [handleVirtualPaperTransformChange, signalReadingProgressActivity]
   )
 
   const handleTransformChangeEndWithPopover = useCallback(
     (nextTransform: VirtualPaperTransform, meta: VirtualPaperTransformMeta) => {
+      lastObservedTransformScaleRef.current = nextTransform.scale
+      setActiveZoomPercent(null)
+      signalReadingProgressActivity()
       handleVirtualPaperTransformChangeEnd(nextTransform, meta)
       if (popoverDebounceRef.current) {
         clearTimeout(popoverDebounceRef.current)
@@ -3593,7 +3727,7 @@ function ViewerContent({
         popoverDebounceRef.current = null
       }, 500)
     },
-    [handleVirtualPaperTransformChangeEnd]
+    [handleVirtualPaperTransformChangeEnd, signalReadingProgressActivity]
   )
 
   // 组件卸载时清理 debounce 定时器，防止内存泄漏
@@ -3620,6 +3754,7 @@ function ViewerContent({
       runtimePageSelectionId={runtimePageSelectionId}
       pageSizesByPageNumber={pageSizesByPageNumber}
       flowLayoutPages={flowLayoutPages}
+      orderedContentByPageNumber={orderedContentByPageNumber}
       textsByPageNumber={textsByPageNumber}
       paragraphsByPageNumber={paragraphsByPageNumber}
       ocrTextsByPageNumber={ocrTextsByPageNumber}
@@ -3686,6 +3821,15 @@ function ViewerContent({
   ) : (
     intermediateDocumentPages
   )
+  const currentLayoutPageNumber =
+    pageNumbers.find((pageNumber) => visiblePageNumbers.has(pageNumber)) ??
+    pageNumbers[0] ??
+    0
+  const viewerThemeStyle: CSSProperties & {
+    '--hamster-reader-theme-color': string
+  } = {
+    '--hamster-reader-theme-color': themeColor ?? '#2563eb'
+  }
 
   return (
     <div
@@ -3697,6 +3841,7 @@ function ViewerContent({
           : `${rootClassName} hamster-reader__intermediate-document-viewer--highlight-dragging`
       }
       data-testid='intermediate-document-viewer'
+      style={viewerThemeStyle}
       onPointerDownCapture={handleViewerPointerDown}
       onPointerMoveCapture={handleViewerPointerMove}
       onPointerUpCapture={handleViewerPointerUp}
@@ -3736,13 +3881,41 @@ function ViewerContent({
             onTogglePageBookmark={onTogglePageBookmark}
             onClose={onPageBrowserClose}
           />
+          {activeZoomPercent === null ? null : (
+            <output
+              aria-hidden='true'
+              className='hamster-reader__layout-zoom-indicator'
+              data-testid='layout-zoom-indicator'
+            >
+              {activeZoomPercent}%
+            </output>
+          )}
+          <ReadingProgress
+            mode='layout'
+            pageNumbers={pageNumbers}
+            currentPageNumber={currentLayoutPageNumber}
+            isMoving={isReadingProgressMoving}
+            ranges={effectiveRanges}
+            highlightColor={highlightColor}
+            previewEnabled={previewEnabled}
+            insetTop={containMarginTop ?? containMarginY}
+            insetBottom={containMarginBottom ?? containMarginY}
+            baseImagesByPageNumber={baseImagesByPageNumber}
+            pageSizesByPageNumber={pageSizesByPageNumber}
+            onPreviewPageVisibilityChange={onPageBrowserVisibilityChange}
+            onSeekPage={onNavigateToPage}
+          />
           <VirtualPaper
             readerMode={true}
             containMode={false}
             // 程序化/受控 scale 变化也走「CSS 预览 + 防抖提交」，
             // 与手势缩放同一套机制，避免缩放期间整页重排。
             readerModeExternalZoomPreview={true}
-            contentSize={measuredContentSize ?? fallbackContentSize}
+            contentSize={
+              measuredContentSize?.selectionScope === selectionScope
+                ? measuredContentSize.size
+                : fallbackContentSize
+            }
             transform={virtualPaperTransform}
             minScale={scaleRange.min}
             maxScale={scaleRange.max}
@@ -3773,6 +3946,7 @@ export function IntermediateDocumentViewer({
   document,
   serializedDocument,
   isEpub = false,
+  isPdf = false,
   className,
   fontScale,
   overscan = 1,
@@ -4002,6 +4176,9 @@ export function IntermediateDocumentViewer({
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
+  // Loading 可在关闭页面时提前隐藏，但底层 Promise 无法取消；独立活动槽必须保留到
+  // Promise settle，才能保证任何时刻实际运行的 OCR 任务都不超过一个。
+  const ocrActivePageRef = useRef<number | null>(null)
   const ocrCacheRef = useRef(new Map<string, IntermediateText[]>())
   const evictedOcrPagesRef = useRef(new Set<number>())
   // 每页 OCR 驱逐代际：离屏卸载时递增对应页码代际。OCR 异步任务发起时
@@ -4079,6 +4256,9 @@ export function IntermediateDocumentViewer({
   )
   const [textsByPageNumber, setTextsByPageNumber] = useState(
     () => new Map<number, IntermediateText[]>()
+  )
+  const [orderedContentByPageNumber, setOrderedContentByPageNumber] = useState(
+    () => new Map<number, IntermediateContent[]>()
   )
   const [flowLayoutPages, setFlowLayoutPages] = useState(
     () => new Set<number>()
@@ -4695,6 +4875,7 @@ export function IntermediateDocumentViewer({
   const [ocrLoadingPages, setOcrLoadingPages] = useState(
     () => new Set<number>()
   )
+  const [ocrActivePage, setOcrActivePage] = useState<number | null>(null)
   const [pageStatuses, setPageStatuses] = useState(
     () => new Map<number, PageLoadStatus>()
   )
@@ -4783,7 +4964,8 @@ export function IntermediateDocumentViewer({
         thumbnailScale,
         texts,
         paragraphs,
-        images
+        images,
+        content
       }) => {
         const loadTimingStart = pageLoadTimingStartsRef.current.get(pageNumber)
         if (loadTimingStart) {
@@ -4825,6 +5007,9 @@ export function IntermediateDocumentViewer({
           return nextPages
         })
         setImagesByPageNumber(createSetImagesHandler(pageNumber, images))
+        setOrderedContentByPageNumber(
+          createSetContentHandler(pageNumber, content)
+        )
         setPageStatuses(createSetPageStatusHandler(pageNumber, 'loaded'))
       },
       onPageError: (pageNumber) => {
@@ -4838,6 +5023,7 @@ export function IntermediateDocumentViewer({
           setFlowLayoutPages(deletePageFromSet(pageNumber))
         }
         setImagesByPageNumber(createSetImagesHandler(pageNumber, []))
+        setOrderedContentByPageNumber(createSetContentHandler(pageNumber, []))
         setPageStatuses(createSetPageStatusHandler(pageNumber, 'error'))
       },
       isPageLoaded: (pageNumber) =>
@@ -5030,6 +5216,7 @@ export function IntermediateDocumentViewer({
     setPageStatuses(new Map())
     setBaseImagesByPageNumber(new Map())
     setImagesByPageNumber(new Map())
+    setOrderedContentByPageNumber(new Map())
     lastThumbnailRefreshScalesRef.current.clear()
     clearAllUnloadTimers()
     clearAllJumpPins()
@@ -5622,6 +5809,7 @@ export function IntermediateDocumentViewer({
       setOcrTextsByPageNumber(deletePageEntry(pageNumber))
       setBaseImagesByPageNumber(deletePageEntry(pageNumber))
       setImagesByPageNumber(deletePageEntry(pageNumber))
+      setOrderedContentByPageNumber(deletePageEntry(pageNumber))
       setPageStatuses(deletePageEntry(pageNumber))
       setLoadablePages(deletePageFromSet(pageNumber))
       bumpOcrEvictGeneration(pageNumber)
@@ -6680,6 +6868,11 @@ export function IntermediateDocumentViewer({
         closedPages.add(pageNumber)
       }
     })
+    ocrFailedPagesRef.current.forEach((pageNumber) => {
+      if (!activePages.has(pageNumber)) {
+        closedPages.add(pageNumber)
+      }
+    })
 
     closedPages.forEach((pageNumber) => {
       bumpOcrEvictGeneration(pageNumber)
@@ -6701,126 +6894,113 @@ export function IntermediateDocumentViewer({
     if (!isOcrEnabled || !runtimeDocument) {
       return
     }
-
-    // 组件卸载或文档切换后，在途 OCR 结果应丢弃
-    const isRunAborted = () =>
-      !isMountedRef.current || activeDocumentRef.current !== runtimeDocument
+    if (ocrActivePage !== null || ocrActivePageRef.current !== null) {
+      return
+    }
 
     const targetPages = manualOcrPages ?? loadedOcrPages
+    const pageNumber = targetPages.find(
+      (targetPageNumber) =>
+        !controlledOcrTexts?.[targetPageNumber] &&
+        !ocrTextsByPageNumber.has(targetPageNumber) &&
+        !ocrLoadingPagesRef.current.has(targetPageNumber) &&
+        !ocrFailedPagesRef.current.has(targetPageNumber)
+    )
+    if (pageNumber === undefined) {
+      return
+    }
 
-    targetPages.forEach((pageNumber) => {
-      if (
-        controlledOcrTexts?.[pageNumber] ||
-        ocrTextsByPageNumber.has(pageNumber) ||
-        ocrLoadingPagesRef.current.has(pageNumber) ||
-        ocrFailedPagesRef.current.has(pageNumber)
-      ) {
-        return
-      }
+    ocrActivePageRef.current = pageNumber
+    setOcrActivePage(pageNumber)
+    addOcrLoadingPage(pageNumber)
+    // 捕获本次 OCR 发起时该页的驱逐代际，resolve 时比对以识别 stale 结果。
+    const ocrRunGeneration = ocrEvictGenerationRef.current.get(pageNumber) ?? 0
+    const isRunAborted = () =>
+      !isMountedRef.current ||
+      activeDocumentRef.current !== runtimeDocument ||
+      (ocrEvictGenerationRef.current.get(pageNumber) ?? 0) !== ocrRunGeneration
 
-      addOcrLoadingPage(pageNumber)
-      // 捕获本次 OCR 发起时该页的驱逐代际，resolve 时比对以识别 stale 结果。
-      const ocrRunGeneration =
-        ocrEvictGenerationRef.current.get(pageNumber) ?? 0
+    const startedAt = getRenderTimingNow()
+    const runOcr = async () => {
+      try {
+        // 向 parser 重新请求原尺寸（scale=1）页面图像用于 OCR；
+        // 不复用展示缩略图（baseImagesByPageNumber，按当前缩放渲染）。
+        const page = await runtimeDocument.getPageByPageNumber(pageNumber)
+        const ocrImageSource = page
+          ? await getBaseImageFromPage(page, OCR_IMAGE_SCALE)
+          : undefined
 
-      const startedAt = getRenderTimingNow()
-      const runOcr = async () => {
-        try {
-          // 向 parser 重新请求原尺寸（scale=1）页面图像用于 OCR；
-          // 不复用展示缩略图（baseImagesByPageNumber，按当前缩放渲染）。
-          const page = await runtimeDocument.getPageByPageNumber(pageNumber)
-          const ocrImageSource = page
-            ? await getBaseImageFromPage(page, OCR_IMAGE_SCALE)
-            : undefined
+        if (!ocrImageSource) {
+          throw new Error(`OCR image is unavailable for page ${pageNumber}`)
+        }
 
-          if (!ocrImageSource) {
-            throw new Error(`OCR image is unavailable for page ${pageNumber}`)
-          }
+        if (isRunAborted()) {
+          return
+        }
 
-          if (isRunAborted()) {
-            return
-          }
+        const cacheKey = getOcrCacheKey(
+          runtimeDocument.id,
+          pageNumber,
+          ocrImageSource
+        )
+        const cachedTexts = ocrCacheRef.current.get(cacheKey)
+        const shouldBypassCache = evictedOcrPagesRef.current.has(pageNumber)
 
-          // 取图期间该页被关闭/卸载过（代际已变），放弃本次运行
-          if (
-            (ocrEvictGenerationRef.current.get(pageNumber) ?? 0) !==
-            ocrRunGeneration
-          ) {
-            return
-          }
-
-          const cacheKey = getOcrCacheKey(
-            runtimeDocument.id,
-            pageNumber,
-            ocrImageSource
+        if (cachedTexts && !shouldBypassCache) {
+          setOcrTextsByPageNumber(
+            createSetTextsHandler(pageNumber, cachedTexts)
           )
-          const cachedTexts = ocrCacheRef.current.get(cacheKey)
-          const shouldBypassCache = evictedOcrPagesRef.current.has(pageNumber)
+          onOcrTextsChange?.(pageNumber, cachedTexts)
+          return
+        }
 
-          if (cachedTexts && !shouldBypassCache) {
-            setOcrTextsByPageNumber(
-              createSetTextsHandler(pageNumber, cachedTexts)
-            )
-            onOcrTextsChange?.(pageNumber, cachedTexts)
-            return
-          }
+        const ocrContent = await fetchOcrContent(ocrImageSource, extraOCR)
+        const ocrTexts = prefixOcrTextIds(
+          ocrContent.filter(isIntermediateText),
+          pageNumber
+        )
 
-          const ocrContent = await fetchOcrContent(ocrImageSource, extraOCR)
-          const ocrTexts = prefixOcrTextIds(
-            ocrContent.filter(isIntermediateText),
+        if (isRunAborted()) {
+          return
+        }
+
+        ocrCacheRef.current.set(cacheKey, ocrTexts)
+        evictedOcrPagesRef.current.delete(pageNumber)
+        // 始终写入内部 state 防止受控回传前的空窗期重复触发 OCR；
+        // 渲染时受控 ocrTexts 优先，宿主可随时用规范化数据覆盖。
+        setOcrTextsByPageNumber(createSetTextsHandler(pageNumber, ocrTexts))
+        onOcrTextsChange?.(pageNumber, ocrTexts)
+      } catch (error) {
+        if (isRunAborted()) {
+          return
+        }
+        // 标记失败页，避免 effect 重跑造成无限重试；重新开启该页 OCR 时可再试
+        ocrFailedPagesRef.current.add(pageNumber)
+        onOcrError?.(error, { pageNumber })
+        // 没有 onOcrError 时静默吞掉，避免在生产代码中遗留日志输出；
+        // 调用方需要可观测性时应主动传入 onOcrError 回调。
+      } finally {
+        if (!isRunAborted()) {
+          const endedAt = getRenderTimingNow()
+          renderTimingRef.current.record({
+            stage: 'ocr-processing',
+            startedAt,
+            endedAt,
+            durationMs: endedAt - startedAt,
             pageNumber
-          )
-
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== runtimeDocument
-          ) {
-            return
-          }
-
-          // 该页在本次 OCR 运行期间被离屏卸载或按页关闭过（代际已变），
-          // 结果为 stale，丢弃以免写回；重新开启/重载后会以新代际重新发起 OCR。
-          const currentGeneration =
-            ocrEvictGenerationRef.current.get(pageNumber) ?? 0
-          if (currentGeneration !== ocrRunGeneration) {
-            return
-          }
-
-          ocrCacheRef.current.set(cacheKey, ocrTexts)
-          evictedOcrPagesRef.current.delete(pageNumber)
-          // 始终写入内部 state 防止受控回传前的空窗期重复触发 OCR；
-          // 渲染时受控 ocrTexts 优先，宿主可随时用规范化数据覆盖。
-          setOcrTextsByPageNumber(createSetTextsHandler(pageNumber, ocrTexts))
-          onOcrTextsChange?.(pageNumber, ocrTexts)
-        } catch (error) {
-          if (isRunAborted()) {
-            return
-          }
-
-          // 标记失败页，避免 effect 重跑造成无限重试；重新开启该页 OCR 时可再试
-          ocrFailedPagesRef.current.add(pageNumber)
-          if (onOcrError) {
-            onOcrError(error, { pageNumber })
-          }
-          // 没有 onOcrError 时静默吞掉，避免在生产代码中遗留日志输出；
-          // 调用方需要可观测性时应主动传入 onOcrError 回调。
-        } finally {
-          if (!isRunAborted()) {
-            const endedAt = getRenderTimingNow()
-            renderTimingRef.current.record({
-              stage: 'ocr-processing',
-              startedAt,
-              endedAt,
-              durationMs: endedAt - startedAt,
-              pageNumber
-            })
-            removeOcrLoadingPage(pageNumber)
-          }
+          })
+        }
+        if (ocrActivePageRef.current === pageNumber) {
+          ocrActivePageRef.current = null
+        }
+        if (isMountedRef.current) {
+          removeOcrLoadingPage(pageNumber)
+          setOcrActivePage(null)
         }
       }
+    }
 
-      runOcr()
-    })
+    runOcr()
   }, [
     isOcrEnabled,
     manualOcrPages,
@@ -6831,6 +7011,7 @@ export function IntermediateDocumentViewer({
     onOcrTextsChange,
     controlledOcrTexts,
     ocrTextsByPageNumber,
+    ocrActivePage,
     addOcrLoadingPage,
     removeOcrLoadingPage
   ])
@@ -6907,6 +7088,7 @@ export function IntermediateDocumentViewer({
       onEdgeCropApply={onEdgeCropApply}
       pageSizesByPageNumber={pageSizesByPageNumber}
       flowLayoutPages={flowLayoutPages}
+      orderedContentByPageNumber={orderedContentByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
       committedReaderScale={committedReaderScale}
       scaleRange={scaleRange}
@@ -6978,6 +7160,7 @@ export function IntermediateDocumentViewer({
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={virtualPaperTransform.scale}
       showPageBrowser={showPageBrowser}
+      previewEnabled={isPdf}
       onPageBrowserClose={onPageBrowserClose}
       onPageBrowserVisibilityChange={handlePageBrowserVisibilityChange}
       onNavigateToPage={navigateToPage}

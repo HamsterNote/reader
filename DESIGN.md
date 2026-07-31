@@ -153,24 +153,51 @@ consumers can see how to implement the `onDragHighlight` integration.
   paragraph spacing.
 - **Fixed layout:** PDF and other geometry-preserving pages remain unchanged.
 
-## 13. Text Reading Progress
+## 13. Reading Progress Rail
 
-- **Scope:** Text mode alone overlays a compact progress control at the left
-  edge without replacing or duplicating the native scrolling model.
-- **Anatomy:** a quiet `2px` neutral track and a `12px` circular thumb use the
-  Reader theme color (`--hamster-reader-theme-color`, default `#2563eb`).
-- **Synchronization:** TanStack Virtual owns the scroll offset, total measured
-  size, current virtual page, and imperative seeking. Native scrolling moves
-  the thumb; track clicks, thumb drags, and keyboard input seek the Viewer.
-- **Transient visibility:** the track, thumb, and page label appear as one group
-  while scrolling, dragging, or keyboard focus is active. At rest they are
-  visually hidden, while the full interaction lane remains mounted, clickable,
-  and keyboard-focusable. The label shows the actual visible document page
-  number, including filtered or non-contiguous page ranges.
-- **Accessibility:** the full `32px` interaction lane is a vertical slider with
+- **Scope and layer:** Layout and Text modes each own an independent progress
+  rail at the right edge of their mode container. The rail is a direct child of
+  the mode shell, outside VirtualPaper, so zooming document content never scales
+  or repositions its screen-space geometry.
+- **Anatomy:** a persistent neutral-gray track spans the full container height,
+  is `4px` wide, and keeps `1px` horizontal margins. A square, theme-colored
+  border-only position frame marks the current page; its center stays transparent
+  so it never masks the track or highlight ticks. Existing transient page-number
+  feedback remains visible while the document is scrolling or transforming,
+  while the rail itself never disappears.
+- **Native scrolling:** Text mode and VirtualPaper keep their native scrolling
+  behavior, including wheel, trackpad, touch, and programmatic scrolling, but
+  their browser-provided scrollbar chrome is visually hidden so it cannot cover
+  the custom rail. The first native `scroll` event shows the current page label
+  immediately; every subsequent event restarts the idle window, and the label
+  hides only after `500ms` without scrolling.
+- **Mode synchronization:** each rail uses that mode's filtered page list and
+  current page. TanStack Virtual owns Text-mode visibility and seeking;
+  VirtualPaper visibility plus the existing page-navigation path own Layout
+  mode. Non-contiguous page ranges always expose their actual document numbers.
+- **Highlights:** each page containing a text highlight adds one `4px × 1px`
+  marker at that page's proportional rail position. The marker uses the range's
+  own `markerStyle.backgroundColor`, falling back to the Reader highlight color.
+- **Pointer interaction:** mouse, touch, and pen use Pointer Events with pointer
+  capture. Pointer down and drag update only local page feedback; navigation is
+  committed exactly once on pointer up. Pointer cancel never navigates. Mouse
+  hover and every active drag show the pointed page number immediately. Layout
+  mode follows the same live-drag timing as Text mode. During an active touch
+  drag, the page label and Layout thumbnail shift an additional `1cm` to the
+  left so the reader's finger cannot cover them; mouse and pen geometry does not
+  change.
+- **Layout preview:** PDF Layout mode also shows the pointed page thumbnail to
+  the left of the rail during hover or an active drag. It reuses the Page
+  Browser's lazy visibility queue and cached base image; it never creates a
+  second loader. Text mode and non-PDF Layout mode intentionally have no image
+  preview. Whenever no thumbnail is rendered, the page label stays next to the
+  right-side rail. When a thumbnail is rendered, the label moves to the
+  thumbnail's left instead. Near the bottom edge, preview feedback is clamped
+  above the bottom toolbar safe area instead of rendering behind the controls.
+- **Accessibility:** the full interaction lane remains a vertical slider with
   page-valued ARIA metadata, visible theme-color focus treatment, Arrow/Page
-  step keys, and Home/End boundaries. Reduced-motion preference removes the
-  shared group transition without removing state feedback.
+  step keys, Home/End boundaries, and a comfortably sized pointer target.
+  Reduced-motion preference removes feedback transitions without removing state.
 
 ## 14. Bottom Toolbar Reader Controls
 
@@ -195,5 +222,17 @@ consumers can see how to implement the `onDragHighlight` integration.
   as icon buttons on narrow screens. Only the three selection tools collapse
   into the existing anchored menu below `768px`. The toolbar is constrained to
   the viewport and may scroll internally instead of extending the page width.
+
+## 15. Layout Zoom Feedback
+
+- **Placement and layer:** Layout mode renders zoom feedback in the viewer's
+  top-left overlay layer, outside VirtualPaper's transformed subtree, so its
+  screen-space size and position remain stable while the document scales.
+- **Lifecycle:** a real scale change shows the current rounded percentage while
+  the zoom transform is active. Pan-only transforms do not open the indicator,
+  and the indicator disappears as soon as the transform-end signal arrives.
+- **Presentation:** the compact percentage badge uses tabular numerals, remains
+  non-interactive, and stays legible over both page content and the reader
+  background without competing with document controls.
 
 _(End of minimal design contract)_

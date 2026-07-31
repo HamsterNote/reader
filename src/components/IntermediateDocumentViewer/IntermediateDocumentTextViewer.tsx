@@ -9,12 +9,13 @@ import type {
   IntermediateContent,
   IntermediateDocument,
   IntermediateDocumentSerialized,
+  IntermediateImage,
   IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { ReactNode, PointerEvent as ReactPointerEvent, Ref } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode, Ref } from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
@@ -43,6 +44,7 @@ import {
   getPageContentEntries,
   getRuntimeDocument,
   getVisiblePageNumbers,
+  isIntermediateImage,
   isIntermediateText
 } from './IntermediateDocumentViewer'
 import { resolveHiddenPageNumbers } from './pageDisplay'
@@ -60,11 +62,12 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { TextReadingProgress } from './TextReadingProgress'
+import { ReadingProgress } from './ReadingProgress'
 import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
+import { useReadingProgressActivity } from './useReadingProgressActivity'
 
 /**
  * 文本模式下每页的初始高度估计值（px）。
@@ -82,8 +85,6 @@ const EMPTY_SELECTION_RANGES: SelectionRange[] = []
 
 type TextReadingProgressSnapshot = {
   readonly currentPageNumber: number
-  readonly isScrolling: boolean
-  readonly progress: number
 }
 
 const DISABLED_ANNOTATION_HISTORY_STATUS = {
@@ -570,6 +571,14 @@ export type IntermediateDocumentTextViewerProps = {
   serializedDocument?: IntermediateDocumentSerialized | null
   className?: string
   fontScale?: ReaderFontScale
+  /** 文本滚动视口的水平内容安全边距。 */
+  containMarginX?: number
+  /** 文本滚动视口的顶部内容安全边距。 */
+  containMarginTop?: number
+  /** 文本滚动视口的底部内容安全边距。 */
+  containMarginBottom?: number
+  /** @deprecated 请分别使用 containMarginTop / containMarginBottom。 */
+  containMarginY?: number
   pageRange?: ReaderPageRange
   /** 需要从文本阅读流中排除的 1-based 页码或公开 PageId。 */
   hiddenPages?: readonly (number | string)[]
@@ -681,6 +690,10 @@ export function IntermediateDocumentTextViewer(
     serializedDocument,
     className,
     fontScale,
+    containMarginX,
+    containMarginTop,
+    containMarginBottom,
+    containMarginY,
     pageRange,
     hiddenPages,
     initialLoadedPages = 1,
@@ -732,6 +745,10 @@ export function IntermediateDocumentTextViewer(
   )
   const previousPreloadPageNumbersRef = useRef(new Set<number>())
   const textsByPageNumberRef = useRef(new Map<number, IntermediateText[]>())
+  const imagesByPageNumberRef = useRef(new Map<number, IntermediateImage[]>())
+  const orderedContentByPageNumberRef = useRef(
+    new Map<number, IntermediateContent[]>()
+  )
 
   // 选择追踪：镜像 layout 模式 — scrollContainer 既做滚动又做 viewer root
   const viewerRootRef = scrollContainerRef
@@ -772,7 +789,15 @@ export function IntermediateDocumentTextViewer(
   const [paragraphsByPageNumber, setParagraphsByPageNumber] = useState(
     () => new Map<number, IntermediateParagraph[]>()
   )
+  const [imagesByPageNumber, setImagesByPageNumber] = useState(
+    () => new Map<number, IntermediateImage[]>()
+  )
+  const [orderedContentByPageNumber, setOrderedContentByPageNumber] = useState(
+    () => new Map<number, IntermediateContent[]>()
+  )
   textsByPageNumberRef.current = textsByPageNumber
+  imagesByPageNumberRef.current = imagesByPageNumber
+  orderedContentByPageNumberRef.current = orderedContentByPageNumber
 
   // 解析 runtime document，复用 layout 模式的同一份纯函数。
   // 文档缺失（null/undefined）时返回 null。
@@ -800,37 +825,46 @@ export function IntermediateDocumentTextViewer(
   )
   const [readingProgress, setReadingProgress] =
     useState<TextReadingProgressSnapshot>(() => ({
-      currentPageNumber: pageNumbers[0] ?? 0,
-      isScrolling: false,
-      progress: 0
+      currentPageNumber: pageNumbers[0] ?? 0
     }))
+  const readingProgressPageRef = useRef(readingProgress.currentPageNumber)
+  const {
+    isActive: isReadingProgressMoving,
+    signalActivity: signalReadingProgressActivity
+  } = useReadingProgressActivity()
+  useEffect(() => {
+    if (!viewerRootElement) return
+
+    viewerRootElement.addEventListener(
+      'scroll',
+      signalReadingProgressActivity,
+      { passive: true }
+    )
+    return () => {
+      viewerRootElement.removeEventListener(
+        'scroll',
+        signalReadingProgressActivity
+      )
+    }
+  }, [signalReadingProgressActivity, viewerRootElement])
   const handleVirtualizerChange = useCallback(
     (instance: Virtualizer<HTMLDivElement, HTMLElement>, sync: boolean) => {
       const scrollOffset = instance.scrollOffset ?? 0
-      const viewportHeight =
-        instance.scrollRect?.height ?? instance.scrollElement?.clientHeight ?? 0
-      const maximumScrollOffset = Math.max(
-        0,
-        instance.getTotalSize() - viewportHeight
-      )
       const currentItem = instance.getVirtualItemForOffset(scrollOffset)
       const currentPageNumber =
         pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
-      const progress =
-        maximumScrollOffset > 0 ? scrollOffset / maximumScrollOffset : 0
+
+      if (sync || currentPageNumber !== readingProgressPageRef.current) {
+        signalReadingProgressActivity()
+      }
+      readingProgressPageRef.current = currentPageNumber
 
       setReadingProgress((current) => {
-        if (
-          current.currentPageNumber === currentPageNumber &&
-          current.isScrolling === sync &&
-          current.progress === progress
-        ) {
-          return current
-        }
-        return { currentPageNumber, isScrolling: sync, progress }
+        if (current.currentPageNumber === currentPageNumber) return current
+        return { currentPageNumber }
       })
     },
-    [pageNumbers]
+    [pageNumbers, signalReadingProgressActivity]
   )
   // TanStack Virtual 虚拟化器：count = pageNumbers.length，
   // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
@@ -856,22 +890,16 @@ export function IntermediateDocumentTextViewer(
   })
 
   const virtualItems = virtualizer.getVirtualItems()
-  const handleReadingProgressSeek = useCallback(
-    (progress: number) => {
-      const viewportHeight =
-        virtualizer.scrollRect?.height ??
-        scrollContainerRef.current?.clientHeight ??
-        0
-      const maximumScrollOffset = Math.max(
-        0,
-        virtualizer.getTotalSize() - viewportHeight
-      )
-      virtualizer.scrollToOffset(progress * maximumScrollOffset, {
+  const handleReadingProgressSeekPage = useCallback(
+    (pageNumber: number) => {
+      const pageIndex = pageNumbers.indexOf(pageNumber)
+      if (pageIndex < 0) return
+      virtualizer.scrollToIndex(pageIndex, {
         align: 'start',
         behavior: 'auto'
       })
     },
-    [virtualizer]
+    [pageNumbers, virtualizer]
   )
   const visiblePageNumbers = useMemo(
     () =>
@@ -884,7 +912,9 @@ export function IntermediateDocumentTextViewer(
   )
   const textLayoutKey = `${fontScale ?? 'default'}:${Array.from(
     textsByPageNumber.keys()
-  ).join(',')}:${visiblePageNumbers.join(',')}`
+  ).join(',')}:${Array.from(imagesByPageNumber.keys()).join(
+    ','
+  )}:${visiblePageNumbers.join(',')}`
   const storedRanges = isRangesControlled ? ranges : internalRanges
   const effectiveRanges = useDerivedTextSelectionRanges({
     ranges: storedRanges,
@@ -1095,13 +1125,24 @@ export function IntermediateDocumentTextViewer(
     loadingPagesRef,
     getPageContentEntries: getTextContentEntries,
     isIntermediateText,
+    isIntermediateImage,
     callbacks: {
-      onPageLoaded: ({ pageNumber, texts, paragraphs }) => {
+      onPageLoaded: ({ pageNumber, texts, images, paragraphs, content }) => {
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
           nextParagraphs.set(pageNumber, paragraphs)
           return nextParagraphs
+        })
+        setImagesByPageNumber((currentImages) => {
+          const nextImages = new Map(currentImages)
+          nextImages.set(pageNumber, images)
+          return nextImages
+        })
+        setOrderedContentByPageNumber((currentContent) => {
+          const nextContent = new Map(currentContent)
+          nextContent.set(pageNumber, content)
+          return nextContent
         })
         setTextsByPageNumber((currentTexts) => {
           const nextTexts = new Map(currentTexts)
@@ -1115,6 +1156,16 @@ export function IntermediateDocumentTextViewer(
           const nextParagraphs = new Map(currentParagraphs)
           nextParagraphs.set(pageNumber, [])
           return nextParagraphs
+        })
+        setImagesByPageNumber((currentImages) => {
+          const nextImages = new Map(currentImages)
+          nextImages.set(pageNumber, [])
+          return nextImages
+        })
+        setOrderedContentByPageNumber((currentContent) => {
+          const nextContent = new Map(currentContent)
+          nextContent.set(pageNumber, [])
+          return nextContent
         })
         setTextsByPageNumber((currentTexts) => {
           const nextTexts = new Map(currentTexts)
@@ -1162,6 +1213,22 @@ export function IntermediateDocumentTextViewer(
       const nextTexts = new Map(currentTexts)
       nextTexts.delete(pageNumber)
       return nextTexts
+    })
+    setImagesByPageNumber((currentImages) => {
+      if (!currentImages.has(pageNumber)) {
+        return currentImages
+      }
+      const nextImages = new Map(currentImages)
+      nextImages.delete(pageNumber)
+      return nextImages
+    })
+    setOrderedContentByPageNumber((currentContent) => {
+      if (!currentContent.has(pageNumber)) {
+        return currentContent
+      }
+      const nextContent = new Map(currentContent)
+      nextContent.delete(pageNumber)
+      return nextContent
     })
   }, [])
 
@@ -1787,9 +1854,13 @@ export function IntermediateDocumentTextViewer(
     activePageNumbersKeyRef.current = pageNumbersKey
     previousPreloadPageNumbersRef.current = new Set()
     textsByPageNumberRef.current = new Map()
+    imagesByPageNumberRef.current = new Map()
+    orderedContentByPageNumberRef.current = new Map()
     textElementsRef.current.clear()
     setTextsByPageNumber(new Map())
     setParagraphsByPageNumber(new Map())
+    setImagesByPageNumber(new Map())
+    setOrderedContentByPageNumber(new Map())
     clearAllPreloadEnterTimers()
     clearAllUnloadTimers()
     lazyPageQueueRef.current.cancelAll()
@@ -1882,20 +1953,56 @@ export function IntermediateDocumentTextViewer(
     })
   }, [textsByPageNumber])
 
+  useEffect(() => {
+    setImagesByPageNumber((currentImages) => {
+      const hasEvictedPage = Array.from(currentImages.keys()).some(
+        (pageNumber) => !textsByPageNumber.has(pageNumber)
+      )
+      if (!hasEvictedPage) {
+        return currentImages
+      }
+
+      return new Map(
+        Array.from(currentImages.entries()).filter(([pageNumber]) =>
+          textsByPageNumber.has(pageNumber)
+        )
+      )
+    })
+  }, [textsByPageNumber])
+
+  useEffect(() => {
+    setOrderedContentByPageNumber((currentContent) => {
+      const hasEvictedPage = Array.from(currentContent.keys()).some(
+        (pageNumber) => !textsByPageNumber.has(pageNumber)
+      )
+      if (!hasEvictedPage) {
+        return currentContent
+      }
+
+      return new Map(
+        Array.from(currentContent.entries()).filter(([pageNumber]) =>
+          textsByPageNumber.has(pageNumber)
+        )
+      )
+    })
+  }, [textsByPageNumber])
+
   // 文档标题用于无障碍标签；缺失时回退到静态文案。
   const title = runtimeDocument?.title
 
   return (
     <div className='hamster-reader__intermediate-text-shell'>
       {pageNumbers.length > 0 ? (
-        <TextReadingProgress
+        <ReadingProgress
+          mode='text'
+          pageNumbers={pageNumbers}
           currentPageNumber={readingProgress.currentPageNumber}
-          isScrolling={readingProgress.isScrolling}
-          maximumPageNumber={pageNumbers.at(-1) ?? 0}
-          minimumPageNumber={pageNumbers[0] ?? 0}
-          pageCount={pageNumbers.length}
-          progress={readingProgress.progress}
-          onSeek={handleReadingProgressSeek}
+          isMoving={isReadingProgressMoving}
+          ranges={effectiveRanges}
+          highlightColor={highlightColor}
+          insetTop={containMarginTop ?? containMarginY}
+          insetBottom={containMarginBottom ?? containMarginY}
+          onSeekPage={handleReadingProgressSeekPage}
         />
       ) : null}
       <div
@@ -1918,6 +2025,12 @@ export function IntermediateDocumentTextViewer(
           .join(' ')}
         data-testid='intermediate-document-text-viewer'
         data-title={title}
+        style={{
+          paddingLeft: containMarginX,
+          paddingRight: containMarginX,
+          paddingTop: containMarginTop ?? containMarginY,
+          paddingBottom: containMarginBottom ?? containMarginY
+        }}
         onPointerDown={handleViewerPointerDown}
         onPointerMove={handleTouchPointerMove}
         onPointerUp={handleTouchPointerUp}
@@ -1944,6 +2057,8 @@ export function IntermediateDocumentTextViewer(
 
               const texts = textsByPageNumber.get(pageNumber)
               const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
+              const images = imagesByPageNumber.get(pageNumber) ?? []
+              const orderedContent = orderedContentByPageNumber.get(pageNumber)
               const pageSelectionId = getRuntimePageSelectionId(pageNumber)
               const isPopoverOwner =
                 popoverOwnerRuntimeId === null ||
@@ -1973,7 +2088,10 @@ export function IntermediateDocumentTextViewer(
                   key={pageNumber}
                   ref={virtualizer.measureElement}
                   data-index={virtualItem.index}
-                  data-page-measurable={texts !== undefined && texts.length > 0}
+                  data-page-measurable={
+                    texts !== undefined &&
+                    (texts.length > 0 || images.length > 0)
+                  }
                   data-page-number={pageNumber}
                   data-selection-id={pageSelectionId}
                   data-testid={`intermediate-text-page-${pageNumber}`}
@@ -2029,6 +2147,8 @@ export function IntermediateDocumentTextViewer(
                         pageNumber={pageNumber}
                         texts={texts}
                         paragraphs={paragraphs}
+                        images={images}
+                        orderedContent={orderedContent}
                         isPdf={isPdf}
                         setTextRef={setTextRef}
                         fontScale={fontScale}
