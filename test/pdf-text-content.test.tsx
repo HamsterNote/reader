@@ -176,6 +176,32 @@ describe('PdfTextContent', () => {
     ).toEqual(['0', '5'])
   })
 
+  it('continues page-level source offsets after an image splits PDF text runs', () => {
+    // Given: 图片前的 PDF 文字已经占用了 canonical stream 的前 5 个字符。
+    const glyphAfterImage = makeGlyph({
+      id: 'pdf-glyph-after-image',
+      content: 'world',
+      x: 10,
+      y: 20
+    })
+
+    // When: 图片后的文字 run 从页级 offset 5 继续渲染。
+    render(
+      <PdfTextContent
+        pageNumber={1}
+        texts={[glyphAfterImage]}
+        paragraphs={[]}
+        sourceOffsetBase={5}
+      />
+    )
+
+    // Then: selection marker 不会从 0 重新开始。
+    expect(screen.getByText('world')).toHaveAttribute(
+      'data-selection-start-offset',
+      '5'
+    )
+  })
+
   it('keeps visible Text mode glyphs readable when source color is transparent', () => {
     // Given: OCR/PDF 元数据把文字颜色标记为透明，但 Text 模式是可见正文层。
     const glyph = makeGlyph({

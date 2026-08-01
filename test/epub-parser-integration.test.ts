@@ -92,6 +92,7 @@ async function makeMinimalEpubBytes(
     <img src="https://example.com/external.png" alt="External decoration" />
     <img src="${chapterImageSource}" alt="Chapter illustration" />
     <img src="${chapterImageSource}" alt="Duplicate chapter illustration" />
+    <p>Text after chapter illustration</p>
   </body>
 </html>`
   )
@@ -130,6 +131,16 @@ describe('epub parser integration', () => {
     // Then: nav 与外链图不占用正文图片索引，封面只按首个可渲染页面判断。
     expect(metadata).toMatchObject({
       altsByPage: [['Book cover'], ['Chapter illustration'], []],
+      imagePlacementsByPage: [
+        [{ alt: 'Book cover', textBefore: '' }],
+        [
+          {
+            alt: 'Chapter illustration',
+            textBefore: 'Chapter 1 Hello EPUB text mode'
+          }
+        ],
+        []
+      ],
       coverAlt: 'Book cover',
       coverInSpine: true
     })
@@ -187,6 +198,14 @@ describe('epub parser integration', () => {
     expect(Reflect.get(chapterImages[0] ?? {}, 'alt')).toBe(
       'Chapter illustration'
     )
+    const chapterImageIndex = page1Entries.indexOf(chapterImages[0]!)
+    const trailingTextIndex = page1Entries.findIndex(
+      (entry) =>
+        isIntermediateText(entry) &&
+        entry.content === 'Text after chapter illustration'
+    )
+    expect(chapterImageIndex).toBeGreaterThan(-1)
+    expect(trailingTextIndex).toBeGreaterThan(chapterImageIndex)
     expect(page1Text).toContain('Hello EPUB text mode')
     expect(page2Text).toContain('Second chapter text')
     expect(coverPage).toHaveProperty('useFlowLayout', true)

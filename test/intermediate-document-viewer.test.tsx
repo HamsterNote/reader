@@ -1472,14 +1472,14 @@ describe('IntermediateDocumentViewer', () => {
     )
 
     // Then: the native Text scroll viewport consumes the same public contract.
-    expect(
-      screen.getByTestId('intermediate-document-text-viewer')
-    ).toHaveStyle({
-      paddingLeft: '12px',
-      paddingRight: '12px',
-      paddingTop: '20px',
-      paddingBottom: '36px'
-    })
+    expect(screen.getByTestId('intermediate-document-text-viewer')).toHaveStyle(
+      {
+        paddingLeft: '12px',
+        paddingRight: '12px',
+        paddingTop: '20px',
+        paddingBottom: '36px'
+      }
+    )
   })
 
   it('text mode reading progress follows the virtual scroll position', async () => {
@@ -1572,23 +1572,23 @@ describe('IntermediateDocumentViewer', () => {
     // When: the reader grabs the rail, then drags the pointer to page 10.
     act(() => {
       progress.dispatchEvent(
-         new PointerEvent('pointerdown', {
-           bubbles: true,
-           button: 0,
-           clientY: 200,
-           isPrimary: true,
-           pointerId: 1,
-           pointerType: 'mouse'
-         })
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          button: 0,
+          clientY: 200,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'mouse'
+        })
       )
       progress.dispatchEvent(
-         new PointerEvent('pointermove', {
-           bubbles: true,
-           clientY: 280,
-           isPrimary: true,
-           pointerId: 1,
-           pointerType: 'mouse'
-         })
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          clientY: 280,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'mouse'
+        })
       )
     })
 
@@ -1602,13 +1602,13 @@ describe('IntermediateDocumentViewer', () => {
     // When: the same pointer is released at page 10.
     act(() => {
       progress.dispatchEvent(
-         new PointerEvent('pointerup', {
-           bubbles: true,
-           clientY: 280,
-           isPrimary: true,
-           pointerId: 1,
-           pointerType: 'mouse'
-         })
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          clientY: 280,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: 'mouse'
+        })
       )
     })
 
@@ -4547,14 +4547,48 @@ describe('IntermediateDocumentViewer', () => {
 
     it('renders PDF IntermediateImage entries but not its thumbnail in Text Mode', async () => {
       // Given: PDF 内容识别产生正文 IntermediateImage，同时页面也能提供 thumbnail。
+      const textBeforeImage = makeText(
+        'pdf-text-before-image',
+        'Text before image'
+      )
+      Reflect.set(textBeforeImage, 'polygon', [
+        [10, 10],
+        [110, 10],
+        [110, 30],
+        [10, 30]
+      ])
       const image = makeImage(
         'text-pdf-image',
-        'data:image/png;base64,text-pdf-image'
+        'data:image/png;base64,text-pdf-image',
+        {
+          polygon: [
+            [10, 40],
+            [110, 40],
+            [110, 140],
+            [10, 140]
+          ]
+        }
       )
       Reflect.set(image, 'alt', 'Detected PDF chart')
+      const textAfterImage = makeText(
+        'pdf-text-after-image',
+        'Text after image'
+      )
+      Reflect.set(textAfterImage, 'polygon', [
+        [10, 150],
+        [110, 150],
+        [110, 170],
+        [10, 170]
+      ])
       const page = {
         paragraphs: [],
-        getContent: vi.fn(async (): Promise<IntermediateContent[]> => [image]),
+        getContent: vi.fn(
+          async (): Promise<IntermediateContent[]> => [
+            textBeforeImage,
+            textAfterImage,
+            image
+          ]
+        ),
         getThumbnail: vi.fn(async () => 'data:image/png;base64,pdf-thumbnail')
       }
 
@@ -4580,6 +4614,16 @@ describe('IntermediateDocumentViewer', () => {
       )
       expect(screen.getByText('Detected PDF chart')).toBeInTheDocument()
       const textPage = screen.getByTestId('intermediate-text-page-1')
+      const textBefore = screen.getByText('Text before image')
+      const textAfter = screen.getByText('Text after image')
+      expect(
+        textBefore.compareDocumentPosition(renderedImage) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(
+        renderedImage.compareDocumentPosition(textAfter) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
       expect(
         textPage.querySelector('img[src="data:image/png;base64,pdf-thumbnail"]')
       ).toBeNull()

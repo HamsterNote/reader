@@ -16,6 +16,7 @@ type PdfTextContentProps = {
   readonly paragraphs: IntermediateParagraph[]
   readonly setTextRef?: IntermediateDocumentSetTextRef
   readonly fontScale?: ReaderFontScale
+  readonly sourceOffsetBase?: number
 }
 
 export function PdfTextContent({
@@ -23,18 +24,19 @@ export function PdfTextContent({
   texts,
   paragraphs,
   setTextRef,
-  fontScale
+  fontScale,
+  sourceOffsetBase = 0
 }: PdfTextContentProps) {
   const layout = useMemo(() => reconstructPdfTextLayout(texts), [texts])
   const sourceOffsets = useMemo(() => {
-    let offset = 0
+    let offset = sourceOffsetBase
     const offsets = new WeakMap<IntermediateText, number>()
     texts.forEach((text) => {
       offsets.set(text, offset)
       offset += text.content.length
     })
     return offsets
-  }, [texts])
+  }, [sourceOffsetBase, texts])
 
   if (!layout.hasPositionedText) {
     return (
@@ -83,7 +85,9 @@ export function PdfTextContent({
                       }
                       className='hamster-reader__intermediate-text hamster-reader__intermediate-text--flow hamster-reader__intermediate-text--pdf-flow'
                       data-text-id={glyph.text.id}
-                      data-selection-start-offset={sourceOffsets.get(glyph.text)}
+                      data-selection-start-offset={sourceOffsets.get(
+                        glyph.text
+                      )}
                       data-page-number={pageNumber}
                       style={{
                         fontSize: `${glyph.fontSizeRatio * baseFontScale}rem`,

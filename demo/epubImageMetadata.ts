@@ -1,9 +1,12 @@
 import JSZip from 'jszip'
 
+import { type EpubImagePlacement, getTextBeforeImage } from './epubContentOrder'
+
 export type EpubBinaryInput = ArrayBuffer | Uint8Array | File | Blob
 
 export type EpubImageMetadata = {
   readonly altsByPage: readonly (readonly (string | null)[])[]
+  readonly imagePlacementsByPage: readonly (readonly EpubImagePlacement[])[]
   readonly coverAlt: string | null
   readonly coverInSpine: boolean
 }
@@ -26,6 +29,7 @@ type EpubPageImage = {
   readonly alt: string | null
   readonly id: string
   readonly path: string
+  readonly textBefore: string
 }
 
 function resolveArchivePath(
@@ -108,7 +112,8 @@ async function readPageImages(
       {
         alt: image.getAttribute('alt')?.trim() || null,
         id,
-        path
+        path,
+        textBefore: getTextBeforeImage(image)
       }
     ]
   })
@@ -166,11 +171,14 @@ async function readPackageIndex(
     const path = href ? resolveArchivePath(packagePath, href) : null
     if (!id || !path) continue
 
+    const fileName = path.toLowerCase().split('/').at(-1)
     const manifestItem = {
       id,
-      isNavigation: (item.getAttribute('properties') ?? '')
-        .split(/\s+/)
-        .includes('nav'),
+      isNavigation:
+        (item.getAttribute('properties') ?? '').split(/\s+/).includes('nav') ||
+        mediaType.toLowerCase() === 'application/x-dtbncx+xml' ||
+        fileName === 'toc.xhtml' ||
+        fileName === 'toc.ncx',
       mediaType,
       path
     }
@@ -222,6 +230,9 @@ export async function getEpubImageMetadata(
 
   return {
     altsByPage: chapterImages.map((images) => images.map((image) => image.alt)),
+    imagePlacementsByPage: chapterImages.map((images) =>
+      images.map(({ alt, textBefore }) => ({ alt, textBefore }))
+    ),
     coverAlt: coverPath
       ? (allPageImages.flat().find((image) => image.path === coverPath)?.alt ??
         null)

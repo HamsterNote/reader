@@ -35,9 +35,7 @@ function makeAnchoredViewerRoot(content: string): {
   const root = document.createElement('div')
   root.innerHTML = `<div data-testid="intermediate-text-page-1"><div class="hsn-selection-container" data-selection-id="scope:page-1"><div class="hsn-selection-content">${content}</div></div></div>`
   document.body.append(root)
-  const container = root.querySelector<HTMLElement>(
-    '.hsn-selection-container'
-  )
+  const container = root.querySelector<HTMLElement>('.hsn-selection-container')
   if (!container) throw new Error('Expected selection container')
   vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
     new DOMRect(0, 0, 200, 100)

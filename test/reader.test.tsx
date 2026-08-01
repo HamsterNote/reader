@@ -481,9 +481,7 @@ describe('Reader public API', () => {
         screen.getByTestId('intermediate-document-text-viewer')
       ).toBeInTheDocument()
       expect(screen.queryByTestId('tool-bottom-bar-edge-crop')).toBeNull()
-      expect(
-        screen.queryByTestId('tool-bottom-bar-touch-pan-mode')
-      ).toBeNull()
+      expect(screen.queryByTestId('tool-bottom-bar-touch-pan-mode')).toBeNull()
       expect(screen.queryByTestId('tool-bottom-bar-ocr')).toBeNull()
     })
   })

@@ -7,6 +7,10 @@ import type {
 
 import type { ReaderIntermediateImageSerialized } from '../src'
 
+import {
+  type EpubImagePlacement,
+  restoreEpubContentOrder
+} from './epubContentOrder'
 import { type EpubBinaryInput, getEpubImageMetadata } from './epubImageMetadata'
 
 type EpubParserDocument = Awaited<ReturnType<typeof EpubParser.encode>>
@@ -59,6 +63,23 @@ function addImageAlts(
 
     return { ...page, content }
   })
+}
+
+function restorePageContentOrder(
+  pages: IntermediateDocumentSerialized['pages'],
+  imagePlacementsByPage: readonly (readonly EpubImagePlacement[])[]
+): IntermediateDocumentSerialized['pages'] {
+  return pages.map((page, pageIndex) =>
+    page.content
+      ? {
+          ...page,
+          content: restoreEpubContentOrder(
+            page.content,
+            imagePlacementsByPage[pageIndex] ?? []
+          )
+        }
+      : page
+  )
 }
 
 function getEpubCover(document: object): EpubCover | null {
@@ -137,7 +158,10 @@ export async function convertEpubDocumentForReader(
     ? await getEpubImageMetadata(source, cover?.href ?? null)
     : null
   const pages = imageMetadata
-    ? addImageAlts(serializedDocument.pages, imageMetadata.altsByPage)
+    ? restorePageContentOrder(
+        addImageAlts(serializedDocument.pages, imageMetadata.altsByPage),
+        imageMetadata.imagePlacementsByPage
+      )
     : serializedDocument.pages
   const documentWithImageAlts = { ...serializedDocument, pages }
 

@@ -23,8 +23,19 @@ type IntermediateDocumentFlowContentProps = {
 }
 
 type ContentRun =
-  | { readonly kind: 'texts'; readonly texts: IntermediateText[] }
+  | {
+      readonly kind: 'texts'
+      readonly texts: IntermediateText[]
+      readonly sourceOffsetBase: number
+    }
   | { readonly kind: 'image'; readonly image: ReaderIntermediateImage }
+
+type PositionedContent = {
+  readonly entry: IntermediateContent
+  readonly index: number
+  readonly left: number
+  readonly top: number
+}
 
 const isText = (entry: IntermediateContent): entry is IntermediateText =>
   'content' in entry && 'fontSize' in entry
@@ -33,13 +44,70 @@ const isImage = (
   entry: IntermediateContent
 ): entry is ReaderIntermediateImage => 'src' in entry && 'polygon' in entry
 
+function getContentPosition(
+  entry: IntermediateContent,
+  index: number
+): PositionedContent | undefined {
+  const polygon: unknown = Reflect.get(entry, 'polygon')
+  if (!Array.isArray(polygon) || polygon.length === 0) return undefined
+
+  let left = Number.POSITIVE_INFINITY
+  let top = Number.POSITIVE_INFINITY
+  for (let pointIndex = 0; pointIndex < polygon.length; pointIndex += 1) {
+    const point: unknown = polygon[pointIndex]
+    if (!Array.isArray(point)) return undefined
+    const x: unknown = point[0]
+    const y: unknown = point[1]
+    if (
+      typeof x !== 'number' ||
+      !Number.isFinite(x) ||
+      typeof y !== 'number' ||
+      !Number.isFinite(y)
+    )
+      return undefined
+    left = Math.min(left, x)
+    top = Math.min(top, y)
+  }
+
+  return { entry, index, left, top }
+}
+
+function orderPdfContent(
+  content: IntermediateContent[]
+): IntermediateContent[] {
+  const positioned = content
+    .map(getContentPosition)
+    .filter((entry): entry is PositionedContent => entry !== undefined)
+    .sort(
+      (left, right) =>
+        left.top - right.top ||
+        left.left - right.left ||
+        left.index - right.index
+    )
+
+  let positionedIndex = 0
+  return content.map((entry, index) => {
+    if (!getContentPosition(entry, index)) return entry
+    const orderedEntry = positioned[positionedIndex]?.entry
+    positionedIndex += 1
+    return orderedEntry ?? entry
+  })
+}
+
 function createContentRuns(content: IntermediateContent[]): ContentRun[] {
   const runs: ContentRun[] = []
+  let sourceOffset = 0
   for (const entry of content) {
     if (isText(entry)) {
       const previous = runs.at(-1)
       if (previous?.kind === 'texts') previous.texts.push(entry)
-      else runs.push({ kind: 'texts', texts: [entry] })
+      else
+        runs.push({
+          kind: 'texts',
+          texts: [entry],
+          sourceOffsetBase: sourceOffset
+        })
+      sourceOffset += entry.content.length
     } else if (isImage(entry)) {
       runs.push({ kind: 'image', image: entry })
     }
@@ -56,7 +124,8 @@ export function IntermediateDocumentFlowContent({
   fontScale,
   preserveSourceFontSize
 }: IntermediateDocumentFlowContentProps) {
-  return createContentRuns(content).map((run) => {
+  const flowContent = isPdf ? orderPdfContent(content) : content
+  return createContentRuns(flowContent).map((run) => {
     if (run.kind === 'image') {
       return (
         <IntermediateDocumentFlowImageContent
@@ -77,6 +146,7 @@ export function IntermediateDocumentFlowContent({
             paragraphs={paragraphs}
             setTextRef={setTextRef}
             fontScale={fontScale}
+            sourceOffsetBase={run.sourceOffsetBase}
           />
         ) : (
           <IntermediateDocumentFlowTextContent

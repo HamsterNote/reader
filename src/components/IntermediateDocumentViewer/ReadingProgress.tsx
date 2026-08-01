@@ -207,13 +207,10 @@ export function ReadingProgress(props: ReadingProgressProps) {
     displayedPageNumber,
     pageNumbers
   )
-  const previewHeight = hasLayoutPreview
-    ? 104 *
-        (layoutPreview?.size
-          ? layoutPreview.size.height / layoutPreview.size.width
-          : 4 / 3) +
-      2
-    : 24
+  const layoutPreviewRatio = layoutPreview?.size
+    ? layoutPreview.size.height / layoutPreview.size.width
+    : 4 / 3
+  const previewHeight = hasLayoutPreview ? 104 * layoutPreviewRatio + 2 : 24
   const feedbackCenterInset = previewHeight / 2
   const feedbackPositionTop = `clamp(${feedbackCenterInset}px, ${feedbackPositionPercent}%, calc(100% - ${feedbackCenterInset}px))`
   const isFeedbackVisible = isMoving || previewPageNumber !== null || isFocused

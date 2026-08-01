@@ -135,7 +135,9 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
             <Button
               type='button'
               size='small'
-              variant={props.touchPanMode === 'two-finger' ? 'primary' : 'ghost'}
+              variant={
+                props.touchPanMode === 'two-finger' ? 'primary' : 'ghost'
+              }
               disabled={layoutDisabled}
               aria-label={
                 props.touchPanMode === 'single-finger'
@@ -162,7 +164,9 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
               aria-label='边缘裁切'
               aria-pressed={props.edgeCropEditing}
               data-testid='tool-bottom-bar-edge-crop'
-              onClick={() => props.onEdgeCropEditingChange(!props.edgeCropEditing)}
+              onClick={() =>
+                props.onEdgeCropEditingChange(!props.edgeCropEditing)
+              }
             >
               <Icon name='rectangle' />
             </Button>
@@ -189,9 +193,8 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           >
             <Icon
               name={
-                visibleTools.find(
-                  ({ tool }) => tool === props.selectedTool
-                )?.icon ?? 'type'
+                visibleTools.find(({ tool }) => tool === props.selectedTool)
+                  ?.icon ?? 'type'
               }
             />
           </Button>

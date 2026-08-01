@@ -1763,314 +1763,316 @@ function IntermediateDocumentPages({
     >
       <div className='hamster-note-document' style={{ width: 'fit-content' }}>
         {pageNumbers.map((pageNumber) => {
-        const useFlowLayout = flowLayoutPages.has(pageNumber)
-        const shellPageSize = getCachedPageSize(
-          pageSizesByPageNumber,
-          pageNumber
-        )
-        const cropGeometry = getPageCropGeometry(
-          shellPageSize,
-          resolvePageEdgeCrop(edgeCrop, pageNumber)
-        )
-        const pagePreviewScale = previewPageWidth / cropGeometry.width
-        const previewPageHeight = cropGeometry.height * pagePreviewScale
-        const shellSelectionId = runtimePageSelectionId(pageNumber)
-        const publicPageId = `page-${pageNumber}`
-
-        const findTouchedRect = (
-          pageElement: HTMLElement,
-          clientX: number,
-          clientY: number
-        ) => {
-          const pageContentScale = pageElement.querySelector<HTMLElement>(
-            '.hamster-reader__intermediate-page-content-scale'
+          const useFlowLayout = flowLayoutPages.has(pageNumber)
+          const shellPageSize = getCachedPageSize(
+            pageSizesByPageNumber,
+            pageNumber
           )
-          const contentBounds = pageContentScale?.getBoundingClientRect()
-          const pageBounds = pageElement.getBoundingClientRect()
-          const hasContentBounds =
-            contentBounds !== undefined &&
-            contentBounds.width > 0 &&
-            contentBounds.height > 0
-          const bounds = hasContentBounds ? contentBounds : pageBounds
-          if (bounds.width <= 0 || bounds.height <= 0) return undefined
-          const sourceLeft = hasContentBounds ? 0 : cropGeometry.left
-          const sourceTop = hasContentBounds ? 0 : cropGeometry.top
-          const sourceWidth = hasContentBounds
-            ? shellPageSize.width
-            : cropGeometry.width
-          const sourceHeight = hasContentBounds
-            ? shellPageSize.height
-            : cropGeometry.height
-          const pixelX =
-            sourceLeft + ((clientX - bounds.left) / bounds.width) * sourceWidth
-          const pixelY =
-            sourceTop + ((clientY - bounds.top) / bounds.height) * sourceHeight
-          const percentX = (pixelX / shellPageSize.width) * 100
-          const percentY = (pixelY / shellPageSize.height) * 100
-          return rects?.find((rect) => {
-            const localX =
-              rect.overlayRectType === 'percent' ? percentX : pixelX
-            const localY =
-              rect.overlayRectType === 'percent' ? percentY : pixelY
-            return (
-              rect.selectionId === shellSelectionId &&
-              localX >= rect.rect.x &&
-              localX <= rect.rect.x + rect.rect.width &&
-              localY >= rect.rect.y &&
-              localY <= rect.rect.y + rect.rect.height
+          const cropGeometry = getPageCropGeometry(
+            shellPageSize,
+            resolvePageEdgeCrop(edgeCrop, pageNumber)
+          )
+          const pagePreviewScale = previewPageWidth / cropGeometry.width
+          const previewPageHeight = cropGeometry.height * pagePreviewScale
+          const shellSelectionId = runtimePageSelectionId(pageNumber)
+          const publicPageId = `page-${pageNumber}`
+
+          const findTouchedRect = (
+            pageElement: HTMLElement,
+            clientX: number,
+            clientY: number
+          ) => {
+            const pageContentScale = pageElement.querySelector<HTMLElement>(
+              '.hamster-reader__intermediate-page-content-scale'
             )
-          })
-        }
-
-        const pageTexts = textsByPageNumber.get(pageNumber)
-        const pageOrderedContent = orderedContentByPageNumber.get(pageNumber)
-        const pageParagraphs = paragraphsByPageNumber.get(pageNumber)
-        const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
-        const isPageContentLoaded = pageStatuses.get(pageNumber) === 'loaded'
-
-        // popover gating：owner 为 null（无 selected range）时所有页面均呈现 popover，
-        // 否则仅 shellSelectionId === popoverOwnerRuntimeId 的页面拿到真实 popover 内容。
-        const isPopoverOwner =
-          popoverOwnerRuntimeId === null ||
-          popoverOwnerRuntimeId === shellSelectionId
-        const pagePopover = isPopoverOwner ? (
-          <PopoverPortal
-            containerRef={popoverContainerRef}
-            selectionKind='selected'
-            visible={popoverVisible}
-            relative={popoverRelative}
-          >
-            {selectedRectId
-              ? (rectPopover ?? selectionPopover)
-              : (highlightPopover ?? selectionPopover)}
-          </PopoverPortal>
-        ) : undefined
-        const pageSelectionPopover = isPopoverOwner ? (
-          <PopoverPortal
-            containerRef={popoverContainerRef}
-            selectionKind='active'
-            visible={popoverVisible}
-            relative={popoverRelative}
-          >
-            {selectionPopover}
-          </PopoverPortal>
-        ) : undefined
-
-        const pageContent = isPageContentLoaded ? (
-          <IntermediateDocumentPageContent
-            pageNumber={pageNumber}
-            fontScale={fontScale}
-            texts={pageTexts ?? EMPTY_INTERMEDIATE_TEXTS}
-            paragraphs={pageParagraphs ?? EMPTY_INTERMEDIATE_PARAGRAPHS}
-            orderedContent={pageOrderedContent}
-            useFlowLayout={useFlowLayout}
-            ocrTexts={
-              ocrTextsByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_TEXTS
-            }
-            baseImageSource={pageBaseImage}
-            images={
-              imagesByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_IMAGES
-            }
-            setTextRef={setTextRef}
-            onRenderTiming={onPageRenderTiming}
-          />
-        ) : null
-
-        const ocrLoadingBadge = ocrLoadingPages.has(pageNumber) ? (
-          <Loading
-            className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--ocr'
-            cover
-            data-testid={`intermediate-page-ocr-loading-${pageNumber}`}
-            size='medium'
-            text='OCR 识别中…'
-          />
-        ) : null
-
-        return (
-          <div
-            key={pageNumber}
-            ref={setPageRef(pageNumber)}
-            className={`hamster-reader__intermediate-page${
-              useFlowLayout ? ' hamster-reader__intermediate-page--flow' : ''
-            }`}
-            data-testid={`intermediate-page-${pageNumber}`}
-            data-page-number={pageNumber}
-            data-tool={selectedTool}
-            data-selection-id={shellSelectionId}
-            data-page-size-unavailable={
-              shellPageSize.pageSizeUnavailable ? 'true' : undefined
-            }
-            onPointerDownCapture={(event) => {
-              if (tool !== 'rect' || event.button !== 0) return
-              const target = event.target
-              if (
-                target instanceof Element &&
-                target.closest('button, input, [role="toolbar"]')
-              ) {
-                return
-              }
-
-              const touchedRangeId = findTouchedRangeIdByPoint(
-                runtimeLinkedData,
-                event.clientX,
-                event.clientY,
-                [event.currentTarget]
+            const contentBounds = pageContentScale?.getBoundingClientRect()
+            const pageBounds = pageElement.getBoundingClientRect()
+            const hasContentBounds =
+              contentBounds !== undefined &&
+              contentBounds.width > 0 &&
+              contentBounds.height > 0
+            const bounds = hasContentBounds ? contentBounds : pageBounds
+            if (bounds.width <= 0 || bounds.height <= 0) return undefined
+            const sourceLeft = hasContentBounds ? 0 : cropGeometry.left
+            const sourceTop = hasContentBounds ? 0 : cropGeometry.top
+            const sourceWidth = hasContentBounds
+              ? shellPageSize.width
+              : cropGeometry.width
+            const sourceHeight = hasContentBounds
+              ? shellPageSize.height
+              : cropGeometry.height
+            const pixelX =
+              sourceLeft +
+              ((clientX - bounds.left) / bounds.width) * sourceWidth
+            const pixelY =
+              sourceTop +
+              ((clientY - bounds.top) / bounds.height) * sourceHeight
+            const percentX = (pixelX / shellPageSize.width) * 100
+            const percentY = (pixelY / shellPageSize.height) * 100
+            return rects?.find((rect) => {
+              const localX =
+                rect.overlayRectType === 'percent' ? percentX : pixelX
+              const localY =
+                rect.overlayRectType === 'percent' ? percentY : pixelY
+              return (
+                rect.selectionId === shellSelectionId &&
+                localX >= rect.rect.x &&
+                localX <= rect.rect.x + rect.rect.width &&
+                localY >= rect.rect.y &&
+                localY <= rect.rect.y + rect.rect.height
               )
-              if (touchedRangeId) {
-                event.preventDefault()
-                event.stopPropagation()
-                if (selectedRectId !== null) {
-                  onSelectRect?.(null)
+            })
+          }
+
+          const pageTexts = textsByPageNumber.get(pageNumber)
+          const pageOrderedContent = orderedContentByPageNumber.get(pageNumber)
+          const pageParagraphs = paragraphsByPageNumber.get(pageNumber)
+          const pageBaseImage = baseImagesByPageNumber.get(pageNumber)
+          const isPageContentLoaded = pageStatuses.get(pageNumber) === 'loaded'
+
+          // popover gating：owner 为 null（无 selected range）时所有页面均呈现 popover，
+          // 否则仅 shellSelectionId === popoverOwnerRuntimeId 的页面拿到真实 popover 内容。
+          const isPopoverOwner =
+            popoverOwnerRuntimeId === null ||
+            popoverOwnerRuntimeId === shellSelectionId
+          const pagePopover = isPopoverOwner ? (
+            <PopoverPortal
+              containerRef={popoverContainerRef}
+              selectionKind='selected'
+              visible={popoverVisible}
+              relative={popoverRelative}
+            >
+              {selectedRectId
+                ? (rectPopover ?? selectionPopover)
+                : (highlightPopover ?? selectionPopover)}
+            </PopoverPortal>
+          ) : undefined
+          const pageSelectionPopover = isPopoverOwner ? (
+            <PopoverPortal
+              containerRef={popoverContainerRef}
+              selectionKind='active'
+              visible={popoverVisible}
+              relative={popoverRelative}
+            >
+              {selectionPopover}
+            </PopoverPortal>
+          ) : undefined
+
+          const pageContent = isPageContentLoaded ? (
+            <IntermediateDocumentPageContent
+              pageNumber={pageNumber}
+              fontScale={fontScale}
+              texts={pageTexts ?? EMPTY_INTERMEDIATE_TEXTS}
+              paragraphs={pageParagraphs ?? EMPTY_INTERMEDIATE_PARAGRAPHS}
+              orderedContent={pageOrderedContent}
+              useFlowLayout={useFlowLayout}
+              ocrTexts={
+                ocrTextsByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_TEXTS
+              }
+              baseImageSource={pageBaseImage}
+              images={
+                imagesByPageNumber.get(pageNumber) ?? EMPTY_INTERMEDIATE_IMAGES
+              }
+              setTextRef={setTextRef}
+              onRenderTiming={onPageRenderTiming}
+            />
+          ) : null
+
+          const ocrLoadingBadge = ocrLoadingPages.has(pageNumber) ? (
+            <Loading
+              className='hamster-reader__intermediate-page-status hamster-reader__intermediate-page-status--ocr'
+              cover
+              data-testid={`intermediate-page-ocr-loading-${pageNumber}`}
+              size='medium'
+              text='OCR 识别中…'
+            />
+          ) : null
+
+          return (
+            <div
+              key={pageNumber}
+              ref={setPageRef(pageNumber)}
+              className={`hamster-reader__intermediate-page${
+                useFlowLayout ? ' hamster-reader__intermediate-page--flow' : ''
+              }`}
+              data-testid={`intermediate-page-${pageNumber}`}
+              data-page-number={pageNumber}
+              data-tool={selectedTool}
+              data-selection-id={shellSelectionId}
+              data-page-size-unavailable={
+                shellPageSize.pageSizeUnavailable ? 'true' : undefined
+              }
+              onPointerDownCapture={(event) => {
+                if (tool !== 'rect' || event.button !== 0) return
+                const target = event.target
+                if (
+                  target instanceof Element &&
+                  target.closest('button, input, [role="toolbar"]')
+                ) {
+                  return
                 }
-                handleLinkedSelectRange(
-                  touchedRangeId === runtimeLinkedData.selectedRangeId
-                    ? null
-                    : touchedRangeId
-                )
-                return
-              }
 
-              const touchedRect = findTouchedRect(
-                event.currentTarget,
-                event.clientX,
-                event.clientY
-              )
-
-              if (touchedRect) {
-                event.preventDefault()
-                event.stopPropagation()
-                if (runtimeLinkedData.selectedRangeId !== null) {
-                  handleLinkedSelectRange(null)
-                }
-                onSelectRect?.(
-                  touchedRect.id === selectedRectId ? null : touchedRect.id
-                )
-                return
-              }
-
-              if (
-                selectedRectId &&
-                selectedRectPopoverOwnerRuntimeId !== shellSelectionId
-              ) {
-                onSelectRect?.(null)
-              }
-            }}
-            onClickCapture={(event) => {
-              if (tool !== 'rect' || event.button !== 0) return
-              if (
-                findTouchedRangeIdByPoint(
+                const touchedRangeId = findTouchedRangeIdByPoint(
                   runtimeLinkedData,
                   event.clientX,
                   event.clientY,
                   [event.currentTarget]
-                ) ||
-                findTouchedRect(
+                )
+                if (touchedRangeId) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (selectedRectId !== null) {
+                    onSelectRect?.(null)
+                  }
+                  handleLinkedSelectRange(
+                    touchedRangeId === runtimeLinkedData.selectedRangeId
+                      ? null
+                      : touchedRangeId
+                  )
+                  return
+                }
+
+                const touchedRect = findTouchedRect(
                   event.currentTarget,
                   event.clientX,
                   event.clientY
                 )
-              ) {
-                event.preventDefault()
-                event.stopPropagation()
-              }
-            }}
-            onPointerUp={() => onRectPointerUp?.(pageNumber)}
-            style={getPageShellStyle(
-              useFlowLayout,
-              previewPageWidth,
-              previewPageHeight,
-              readerScale
-            )}
-          >
-            {isPageContentLoaded ? (
-              <div
-                className={`hamster-reader__intermediate-page-content-scale${
-                  useFlowLayout
-                    ? ' hamster-reader__intermediate-page-content-scale--flow'
-                    : ''
-                }`}
-                data-testid={`intermediate-page-content-scale-${pageNumber}`}
-                style={getContentScaleStyle(
-                  useFlowLayout,
-                  shellPageSize,
-                  cropGeometry,
-                  pagePreviewScale,
-                  readerScale
-                )}
-              >
-                <HamsterSelection
-                  selectionId={shellSelectionId}
-                  linkedMode
-                  linkedData={runtimeLinkedData}
-                  onLinkedDataChange={handleLinkedDataChange}
-                  onLinkedSelect={handleLinkedSelect}
-                  onLinkedUpdateRange={handleLinkedUpdateRange}
-                  onLinkedSelectRange={handleLinkedSelectRange}
-                  ranges={EMPTY_SELECTION_RANGES}
-                  selectedRangeId={effectiveSelectedRangeId}
-                  onSelect={undefined}
-                  onSelectRange={undefined}
-                  onUpdateRange={undefined}
-                  onSelectionStart={selectionStartHandler}
-                  onSelectionEnd={selectionEndHandler}
-                  onHighlight={undefined}
-                  highlightColor={highlightColor}
-                  selectionColor={selectionColor}
-                  popover={pagePopover}
-                  selectionPopover={pageSelectionPopover}
-                  overlayRectType={overlayRectType}
-                  tool={tool}
-                  rects={rects}
-                  selectedRectId={selectedRectId}
-                  onCreateRect={onCreateRect}
-                  onSelectRect={onSelectRect}
-                  onUpdateRect={onUpdateRect}
-                  renderHandle={(handle) => (
-                    <RangeHandle
-                      handle={handle}
-                      linkedData={runtimeLinkedData}
-                      magnifierEnabled={
-                        showSelectionMagnifier && handle.target === 'rect'
+
+                if (touchedRect) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (runtimeLinkedData.selectedRangeId !== null) {
+                    handleLinkedSelectRange(null)
+                  }
+                  onSelectRect?.(
+                    touchedRect.id === selectedRectId ? null : touchedRect.id
+                  )
+                  return
+                }
+
+                if (
+                  selectedRectId &&
+                  selectedRectPopoverOwnerRuntimeId !== shellSelectionId
+                ) {
+                  onSelectRect?.(null)
+                }
+              }}
+              onClickCapture={(event) => {
+                if (tool !== 'rect' || event.button !== 0) return
+                if (
+                  findTouchedRangeIdByPoint(
+                    runtimeLinkedData,
+                    event.clientX,
+                    event.clientY,
+                    [event.currentTarget]
+                  ) ||
+                  findTouchedRect(
+                    event.currentTarget,
+                    event.clientX,
+                    event.clientY
+                  )
+                ) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }
+              }}
+              onPointerUp={() => onRectPointerUp?.(pageNumber)}
+              style={getPageShellStyle(
+                useFlowLayout,
+                previewPageWidth,
+                previewPageHeight,
+                readerScale
+              )}
+            >
+              {isPageContentLoaded ? (
+                <div
+                  className={`hamster-reader__intermediate-page-content-scale${
+                    useFlowLayout
+                      ? ' hamster-reader__intermediate-page-content-scale--flow'
+                      : ''
+                  }`}
+                  data-testid={`intermediate-page-content-scale-${pageNumber}`}
+                  style={getContentScaleStyle(
+                    useFlowLayout,
+                    shellPageSize,
+                    cropGeometry,
+                    pagePreviewScale,
+                    readerScale
+                  )}
+                >
+                  <HamsterSelection
+                    selectionId={shellSelectionId}
+                    linkedMode
+                    linkedData={runtimeLinkedData}
+                    onLinkedDataChange={handleLinkedDataChange}
+                    onLinkedSelect={handleLinkedSelect}
+                    onLinkedUpdateRange={handleLinkedUpdateRange}
+                    onLinkedSelectRange={handleLinkedSelectRange}
+                    ranges={EMPTY_SELECTION_RANGES}
+                    selectedRangeId={effectiveSelectedRangeId}
+                    onSelect={undefined}
+                    onSelectRange={undefined}
+                    onUpdateRange={undefined}
+                    onSelectionStart={selectionStartHandler}
+                    onSelectionEnd={selectionEndHandler}
+                    onHighlight={undefined}
+                    highlightColor={highlightColor}
+                    selectionColor={selectionColor}
+                    popover={pagePopover}
+                    selectionPopover={pageSelectionPopover}
+                    overlayRectType={overlayRectType}
+                    tool={tool}
+                    rects={rects}
+                    selectedRectId={selectedRectId}
+                    onCreateRect={onCreateRect}
+                    onSelectRect={onSelectRect}
+                    onUpdateRect={onUpdateRect}
+                    renderHandle={(handle) => (
+                      <RangeHandle
+                        handle={handle}
+                        linkedData={runtimeLinkedData}
+                        magnifierEnabled={
+                          showSelectionMagnifier && handle.target === 'rect'
+                        }
+                        scale={drawingScale * pagePreviewScale}
+                        selectionId={shellSelectionId}
+                        viewerRoot={viewerRootElement}
+                      />
+                    )}
+                    ref={selectionRefForRuntimeId(shellSelectionId)}
+                  >
+                    {pageContent}
+                  </HamsterSelection>
+                  {ocrLoadingBadge}
+                  {(selectedTool === 'drawing' ||
+                    hasDrawingStrokes(pagePaintings?.[publicPageId])) && (
+                    <PageDrawingLayer
+                      enabled={selectedTool === 'drawing'}
+                      pageId={publicPageId}
+                      tool={paintingTool}
+                      strokeColor={drawingStrokeColor}
+                      value={pagePaintings?.[publicPageId]}
+                      canvasScale={drawingScale * pagePreviewScale}
+                      onChange={
+                        onPagePaintingChange
+                          ? (nextValue) =>
+                              onPagePaintingChange(publicPageId, nextValue)
+                          : undefined
                       }
-                      scale={drawingScale * pagePreviewScale}
-                      selectionId={shellSelectionId}
-                      viewerRoot={viewerRootElement}
                     />
                   )}
-                  ref={selectionRefForRuntimeId(shellSelectionId)}
-                >
-                  {pageContent}
-                </HamsterSelection>
-                {ocrLoadingBadge}
-                {(selectedTool === 'drawing' ||
-                  hasDrawingStrokes(pagePaintings?.[publicPageId])) && (
-                  <PageDrawingLayer
-                    enabled={selectedTool === 'drawing'}
-                    pageId={publicPageId}
-                    tool={paintingTool}
-                    strokeColor={drawingStrokeColor}
-                    value={pagePaintings?.[publicPageId]}
-                    canvasScale={drawingScale * pagePreviewScale}
-                    onChange={
-                      onPagePaintingChange
-                        ? (nextValue) =>
-                            onPagePaintingChange(publicPageId, nextValue)
-                        : undefined
-                    }
-                  />
-                )}
-              </div>
-            ) : null}
-            {/* 仅已加载的页面显示裁切编辑覆盖层（未加载页无完整内容可裁切） */}
-            {edgeCropEditing && isPageContentLoaded && (
-              <EdgeCropOverlay
-                pageNumber={pageNumber}
-                edgeCrop={realEdgeCrop}
-                onApply={onEdgeCropApply}
-              />
-            )}
-          </div>
-        )
+                </div>
+              ) : null}
+              {/* 仅已加载的页面显示裁切编辑覆盖层（未加载页无完整内容可裁切） */}
+              {edgeCropEditing && isPageContentLoaded && (
+                <EdgeCropOverlay
+                  pageNumber={pageNumber}
+                  edgeCrop={realEdgeCrop}
+                  onApply={onEdgeCropApply}
+                />
+              )}
+            </div>
+          )
         })}
       </div>
     </div>
@@ -3035,6 +3037,27 @@ function useSelectionPointerGuard({
   }, [runtimeLinkedDataRef, selectedTool, viewerRootElement])
 }
 
+function syncLastActiveRange(
+  selectionScope: symbol,
+  activeRange: ReaderSelectionRange | null | undefined,
+  lastActiveRangeRef: React.MutableRefObject<ReaderSelectionRange | null>,
+  lastActiveRangeScopeRef: React.MutableRefObject<symbol>
+) {
+  if (lastActiveRangeScopeRef.current !== selectionScope) {
+    lastActiveRangeScopeRef.current = selectionScope
+    lastActiveRangeRef.current = activeRange ?? null
+  } else if (activeRange) {
+    lastActiveRangeRef.current = activeRange
+  }
+}
+
+function getEffectiveEdgeCrop(
+  edgeCropEditing: boolean | undefined,
+  edgeCrop: ReaderPageEdgeCrop | undefined
+) {
+  return edgeCropEditing ? undefined : edgeCrop
+}
+
 function ViewerContent({
   rootClassName,
   viewerRootRef,
@@ -3129,7 +3152,7 @@ function ViewerContent({
   // --- 边缘裁切编辑模式 ---
   // 编辑模式下，页面以未裁剪（原始）尺寸显示，叠加可拖拽的裁切线
   // effectiveEdgeCrop 在编辑时为 undefined，使 resolvePageEdgeCrop 返回零裁剪
-  const effectiveEdgeCrop = edgeCropEditing ? undefined : edgeCrop
+  const effectiveEdgeCrop = getEffectiveEdgeCrop(edgeCropEditing, edgeCrop)
 
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -3147,12 +3170,12 @@ function ViewerContent({
     runtimeLinkedData.activeRange ?? null
   )
   const lastActiveRangeScopeRef = useRef(selectionScope)
-  if (lastActiveRangeScopeRef.current !== selectionScope) {
-    lastActiveRangeScopeRef.current = selectionScope
-    lastActiveRangeRef.current = runtimeLinkedData.activeRange ?? null
-  } else if (runtimeLinkedData.activeRange) {
-    lastActiveRangeRef.current = runtimeLinkedData.activeRange
-  }
+  syncLastActiveRange(
+    selectionScope,
+    runtimeLinkedData.activeRange,
+    lastActiveRangeRef,
+    lastActiveRangeScopeRef
+  )
 
   // --- Portal popover 可见性控制 ---
   // VirtualPaper pan/zoom 期间隐藏 popover，transform 结束后 500ms debounce 再显示
@@ -3262,8 +3285,7 @@ function ViewerContent({
         Math.max(
           documentGutterElement.scrollWidth,
           documentGutterElement.offsetWidth
-        ) /
-        committedReaderScale
+        ) / committedReaderScale
       if (intrinsicContentWidth === null && measuredWidth > 0) {
         intrinsicContentWidth = measuredWidth
       }

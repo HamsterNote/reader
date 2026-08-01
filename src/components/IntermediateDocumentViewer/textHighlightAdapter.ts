@@ -132,14 +132,8 @@ export function deriveDomSelectionPageRects({
   const textRanges =
     anchoredSegments.length > 0
       ? anchoredSegments.flatMap((segment) => {
-          const intersectionStart = Math.max(
-            startOffset,
-            segment.startOffset
-          )
-          const intersectionEnd = Math.min(
-            resolvedEndOffset,
-            segment.endOffset
-          )
+          const intersectionStart = Math.max(startOffset, segment.startOffset)
+          const intersectionEnd = Math.min(resolvedEndOffset, segment.endOffset)
           if (intersectionStart >= intersectionEnd) return []
 
           const textRange = createTextRange(
@@ -174,9 +168,7 @@ export function deriveDomSelectionPageRects({
 
 function getAnchoredTextSegments(root: HTMLElement): AnchoredTextSegment[] {
   return Array.from(
-    root.querySelectorAll<HTMLElement>(
-      '[data-selection-start-offset]'
-    )
+    root.querySelectorAll<HTMLElement>('[data-selection-start-offset]')
   ).flatMap((element) => {
     const rawOffset = element.dataset.selectionStartOffset
     if (!rawOffset || !/^(0|[1-9]\d*)$/.test(rawOffset)) return []

@@ -39,6 +39,7 @@ import {
   serializeComments
 } from './commentStorage'
 import { convertEpubDocumentForReader } from './epubForReader'
+import { configurePdfParserForReader } from './pdfParserForReader'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 import { createImagePreviewDocument } from './imagePreview'
 import {
@@ -113,6 +114,7 @@ export async function parseUploadedDocument(
   switch (getFileExtension(file.name)) {
     case 'pdf':
       try {
+        configurePdfParserForReader(PdfParser)
         const document = await PdfParser.encode(
           file,
           pages ? { pages } : undefined
