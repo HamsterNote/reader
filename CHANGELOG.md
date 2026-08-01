@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0-beta.1] - 2026-08-02
+
+### Added
+- Shared reading progress rail for both Layout and Text modes, mounted outside VirtualPaper.
+- EPUB flow images rendering as flow figures in both Layout and Text modes.
+- Layout zoom feedback indicator (transient percentage badge).
+- OCR retry support and sequential page processing with stale rejection handling.
+- PDF flow content ordering by polygon position for correct reading order.
+- Giant TXT span splitting for improved text rendering.
+- `ReaderIntermediateImage` type exports for public consumption.
+- PDF parser configuration for Reader (disable offscreen canvas/image decoder fallbacks).
+- EPUB content order and image metadata utilities in demo.
+
+### Changed
+- Improved PDF text highlight adapter to handle visual reordering and duplicate glyph IDs.
+- Replaced `TextReadingProgress` with shared `ReadingProgress` rail.
+- Updated demo: EPUB image metadata extraction, OCR mode persistence (v2 storage).
+- Measured default bottom bar inset and added it to Text Mode content padding.
+
+### Fixed
+- Fixed SSR hydration mismatches.
+- Fixed PDF text selection offset canonicalization.
+- Fixed TXT page splitting edge cases for giant spans.
+
 ## [0.7.0-beta.1] - 2026-07-30
 
 ### Fixed
