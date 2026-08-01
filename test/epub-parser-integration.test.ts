@@ -15,7 +15,7 @@ const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
 async function makeMinimalEpubBytes(
-  coverInSpine = true,
+  coverSpinePosition: 'first' | 'after-chapter-1' | 'omitted' = 'first',
   chapterImageSource = 'images/chapter.png',
   reuseCoverInLastChapter = false
 ): Promise<Uint8Array> {
@@ -51,8 +51,9 @@ async function makeMinimalEpubBytes(
   </manifest>
   <spine>
     <itemref idref="nav" />
-    ${coverInSpine ? '<itemref idref="cover" />' : ''}
+    ${coverSpinePosition === 'first' ? '<itemref idref="cover" />' : ''}
     <itemref idref="chapter-1" />
+    ${coverSpinePosition === 'after-chapter-1' ? '<itemref idref="cover" />' : ''}
     <itemref idref="chapter-2" />
   </spine>
 </package>`
@@ -62,7 +63,7 @@ async function makeMinimalEpubBytes(
     `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head><title>Cover</title></head>
-  <body><img src="images/cover.png" alt="${coverInSpine ? 'Book cover' : ''}" /></body>
+  <body><img src="images/cover.png" alt="${coverSpinePosition === 'omitted' ? '' : 'Book cover'}" /></body>
 </html>`
   )
   zip.file(
@@ -118,7 +119,7 @@ describe('epub parser integration', () => {
   it('maps image alt text only from renderable spine content', async () => {
     // Given: spine 错误包含 nav，正文还在本地图之前包含外链图片。
     const epubBytes = await makeMinimalEpubBytes(
-      true,
+      'first',
       './images/chapter%2Epng?display=inline#artwork'
     )
 
@@ -144,6 +145,41 @@ describe('epub parser integration', () => {
       coverAlt: 'Book cover',
       coverInSpine: true
     })
+  })
+
+  it('does not duplicate a manifest cover found later in the spine', async () => {
+    // Given: 第一章排在封面 XHTML 之前，但封面仍属于 spine。
+    const epubBytes = await makeMinimalEpubBytes('after-chapter-1')
+    const epubDocument = await EpubParser.encode(epubBytes)
+
+    // When: 解析结果进入 Reader 转换层。
+    const document = await convertEpubDocumentForReader(epubDocument, epubBytes)
+    const runtimeDocument = getRuntimeDocument(document)
+
+    // Then: 转换层保留 spine 顺序，且不会在最前方重复插入封面。
+    expect(runtimeDocument).not.toBeNull()
+    if (!runtimeDocument) throw new Error('Expected runtime document')
+    expect(runtimeDocument.pageCount).toBe(3)
+
+    const pages = await Promise.all(
+      [1, 2, 3].map((pageNumber) => {
+        const page = runtimeDocument.getPageByPageNumber(pageNumber)
+        if (!page) throw new Error(`Expected EPUB page ${pageNumber}`)
+        return page
+      })
+    )
+    const entriesByPage = await Promise.all(pages.map(getPageContentEntries))
+    const coverPageIndexes = entriesByPage.flatMap((entries, pageIndex) =>
+      entries.some(
+        (entry) =>
+          isIntermediateImage(entry) &&
+          Reflect.get(entry, 'alt') === 'Book cover'
+      )
+        ? [pageIndex]
+        : []
+    )
+
+    expect(coverPageIndexes).toEqual([1])
   })
 
   it('parses a generated two-chapter EPUB for Reader text render mode', async () => {
@@ -195,10 +231,10 @@ describe('epub parser integration', () => {
     expect(coverImages[0]?.src).toMatch(/^data:image\/png;base64,/)
     expect(chapterImages).toHaveLength(1)
     expect(chapterImages[0]?.src).toMatch(/^data:image\/png;base64,/)
-    expect(Reflect.get(chapterImages[0] ?? {}, 'alt')).toBe(
-      'Chapter illustration'
-    )
-    const chapterImageIndex = page1Entries.indexOf(chapterImages[0]!)
+    const chapterImage = chapterImages[0]
+    if (!chapterImage) throw new Error('Expected the chapter image')
+    expect(Reflect.get(chapterImage, 'alt')).toBe('Chapter illustration')
+    const chapterImageIndex = page1Entries.indexOf(chapterImage)
     const trailingTextIndex = page1Entries.findIndex(
       (entry) =>
         isIntermediateText(entry) &&
@@ -213,8 +249,8 @@ describe('epub parser integration', () => {
   })
 
   it('adds a manifest cover when the EPUB spine omits its cover page', async () => {
-    // Given: EPUB 在 manifest 中声明封面图片，但 spine 只包含两个正文页。
-    const epubBytes = await makeMinimalEpubBytes(false, undefined, true)
+    // Given: EPUB 的 spine 没有封面页，但后续正文把同一封面图片作为插图复用。
+    const epubBytes = await makeMinimalEpubBytes('omitted', undefined, true)
     const epubDocument = await EpubParser.encode(epubBytes)
 
     // When: 解析结果进入 Reader 转换层。

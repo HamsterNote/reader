@@ -17,6 +17,7 @@ type PdfTextContentProps = {
   readonly setTextRef?: IntermediateDocumentSetTextRef
   readonly fontScale?: ReaderFontScale
   readonly sourceOffsetBase?: number
+  readonly sourceOffsets?: ReadonlyMap<IntermediateText, number>
 }
 
 export function PdfTextContent({
@@ -25,18 +26,20 @@ export function PdfTextContent({
   paragraphs,
   setTextRef,
   fontScale,
-  sourceOffsetBase = 0
+  sourceOffsetBase = 0,
+  sourceOffsets
 }: PdfTextContentProps) {
   const layout = useMemo(() => reconstructPdfTextLayout(texts), [texts])
-  const sourceOffsets = useMemo(() => {
+  const sequentialSourceOffsets = useMemo(() => {
     let offset = sourceOffsetBase
-    const offsets = new WeakMap<IntermediateText, number>()
+    const offsets = new Map<IntermediateText, number>()
     texts.forEach((text) => {
       offsets.set(text, offset)
       offset += text.content.length
     })
     return offsets
   }, [sourceOffsetBase, texts])
+  const resolvedSourceOffsets = sourceOffsets ?? sequentialSourceOffsets
 
   if (!layout.hasPositionedText) {
     return (
@@ -47,6 +50,7 @@ export function PdfTextContent({
         setTextRef={setTextRef}
         fontScale={fontScale}
         preserveSourceFontSize={false}
+        sourceOffsets={resolvedSourceOffsets}
       />
     )
   }
@@ -56,7 +60,7 @@ export function PdfTextContent({
     <div className='hamster-reader__pdf-text-content'>
       {layout.paragraphs.map((paragraph) => (
         <div
-          key={`${pageNumber}:paragraph:${sourceOffsets.get(paragraph.lines[0]?.glyphs[0]?.text)}`}
+          key={`${pageNumber}:paragraph:${resolvedSourceOffsets.get(paragraph.lines[0]?.glyphs[0]?.text)}`}
           className='hamster-reader__pdf-text-paragraph'
         >
           {paragraph.lines.map((line, lineIndex) => {
@@ -65,7 +69,7 @@ export function PdfTextContent({
             const currentContent = line.glyphs[0]?.text.content
             return (
               <Fragment
-                key={`${pageNumber}:line:${sourceOffsets.get(line.glyphs[0]?.text)}`}
+                key={`${pageNumber}:line:${resolvedSourceOffsets.get(line.glyphs[0]?.text)}`}
               >
                 {previousContent &&
                 currentContent &&
@@ -74,7 +78,7 @@ export function PdfTextContent({
                   : null}
                 {line.glyphs.map((glyph) => (
                   <Fragment
-                    key={`${pageNumber}:${sourceOffsets.get(glyph.text)}`}
+                    key={`${pageNumber}:${resolvedSourceOffsets.get(glyph.text)}`}
                   >
                     {glyph.spaceBefore ? ' ' : null}
                     <span
@@ -85,7 +89,7 @@ export function PdfTextContent({
                       }
                       className='hamster-reader__intermediate-text hamster-reader__intermediate-text--flow hamster-reader__intermediate-text--pdf-flow'
                       data-text-id={glyph.text.id}
-                      data-selection-start-offset={sourceOffsets.get(
+                      data-selection-start-offset={resolvedSourceOffsets.get(
                         glyph.text
                       )}
                       data-page-number={pageNumber}

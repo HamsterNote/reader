@@ -119,6 +119,26 @@ async function readPageImages(
   })
 }
 
+async function isImageOnlyCoverPage(
+  archive: JSZip,
+  chapterPath: string,
+  coverPath: string
+): Promise<boolean> {
+  const chapterXml = await readArchiveText(archive, chapterPath)
+  if (!chapterXml) return false
+
+  const chapterDocument = parseXml(chapterXml)
+  const body = getElements(chapterDocument, 'body')[0]
+  if (!body || body.textContent?.trim()) return false
+
+  return getElements(body.ownerDocument, 'img').some((image) => {
+    const source = image.getAttribute('src')
+    return source
+      ? resolveArchivePath(chapterPath, source) === coverPath
+      : false
+  })
+}
+
 async function hasZipSignature(source: EpubBinaryInput): Promise<boolean> {
   let bytes: Uint8Array
   if (source instanceof Blob) {
@@ -227,6 +247,15 @@ export async function getEpubImageMetadata(
   const allPageImages = await Promise.all(
     packageIndex.xhtmlPaths.map(readImages)
   )
+  const coverInSpine = coverPath
+    ? (
+        await Promise.all(
+          packageIndex.chapterPaths.map((chapterPath) =>
+            isImageOnlyCoverPage(archive, chapterPath, coverPath)
+          )
+        )
+      ).some(Boolean)
+    : false
 
   return {
     altsByPage: chapterImages.map((images) => images.map((image) => image.alt)),
@@ -237,8 +266,6 @@ export async function getEpubImageMetadata(
       ? (allPageImages.flat().find((image) => image.path === coverPath)?.alt ??
         null)
       : null,
-    coverInSpine: coverPath
-      ? (chapterImages[0]?.some((image) => image.path === coverPath) ?? false)
-      : false
+    coverInSpine
   }
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { canonicalizePdfSelectionRange } from '../src/components/IntermediateDocumentViewer/pdfSelectionOffsets'
 import { deriveTextSelectionRanges } from '../src/components/IntermediateDocumentViewer/textHighlightAdapter'
 import type { ReaderSelectionRange } from '../src/types/selection'
 
@@ -223,5 +224,74 @@ describe('Text highlight adapter', () => {
 
     // Then: 空 span 不抢占 endpoint，非空源文字仍能恢复。
     expect(selectedTexts).toEqual(['Hello'])
+  })
+
+  it('maps PDF DOM endpoints to visually reordered canonical spans', () => {
+    // Given: PDF DOM 是 world、展示空格、Hello，canonical stream 则是 Helloworld。
+    const { root } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="5">world</span> <span data-selection-start-offset="0">Hello</span>'
+    )
+
+    // When: 用户在视觉 DOM 中选择开头的 world。
+    const canonicalRange = canonicalizePdfSelectionRange(
+      {
+        ...storedRange,
+        text: 'world',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 }
+      },
+      root
+    )
+
+    // Then: 展示空格不进入 offset，端点恢复到 parser-stream 的 `[5, 10]`。
+    expect(canonicalRange).toMatchObject({
+      start: { selectionId: 'page-1', offset: 5 },
+      end: { selectionId: 'page-1', offset: 10 }
+    })
+  })
+
+  it('maps inferred PDF space endpoints to adjacent canonical boundaries', () => {
+    // Given: 两个 canonical 相邻的 span 在 DOM 中由一个推断空格分开。
+    const { root } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="0">Hello</span> <span data-selection-start-offset="5">world</span>'
+    )
+
+    // When: range 的两端分别落在展示空格的左右边界。
+    const canonicalRange = canonicalizePdfSelectionRange(
+      {
+        ...storedRange,
+        text: '',
+        start: { selectionId: 'page-1', offset: 5 },
+        end: { selectionId: 'page-1', offset: 6 }
+      },
+      root
+    )
+
+    // Then: 两个 endpoint 都折叠到同一 canonical boundary，不计空格。
+    expect(canonicalRange).toMatchObject({
+      start: { selectionId: 'page-1', offset: 5 },
+      end: { selectionId: 'page-1', offset: 5 }
+    })
+  })
+
+  it('rejects a PDF DOM range spanning discontinuous canonical segments', () => {
+    // Given: 视觉顺序 Left、Right 与 canonical 顺序 Right、Left 相反。
+    const { root } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="5">Left</span> <span data-selection-start-offset="0">Right</span>'
+    )
+
+    // When: 用户从视觉 Left 起点跨列选择到 Right 终点。
+    const canonicalRange = canonicalizePdfSelectionRange(
+      {
+        ...storedRange,
+        text: 'Left Right',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 10 }
+      },
+      root
+    )
+
+    // Then: 无法表示成单一 canonical 区间的范围不会被持久化为伪造端点。
+    expect(canonicalRange).toBeNull()
   })
 })

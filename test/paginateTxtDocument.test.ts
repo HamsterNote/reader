@@ -242,21 +242,26 @@ describe('paginateTxtDocument', () => {
     expect(paragraphs[2]?.y).toBe(originalParagraphY)
   })
 
-  it('falls back to the original giant-span content instead of slicing invalid rows', async () => {
+  it('losslessly splits giant parser text across every synthetic page', async () => {
+    // Given: txt-parser 0.3.0 把 501 行源文本编码为一个覆盖整页的 IntermediateText。
     const lineCount = TXT_DOCUMENT_LINES_PER_PAGE + 1
+    const sourceContent = Array.from(
+      { length: lineCount },
+      (_, index) => `Line ${index + 1}`
+    ).join('\n')
     const giantText = new IntermediateText({
-      ...IntermediateText.serialize(makeLineText(1, 'A\nB')),
+      ...IntermediateText.serialize(makeLineText(1, sourceContent)),
       polygon: [
         [0, 0],
-        [1, 0],
-        [1, lineCount],
+        [sourceContent.length, 0],
+        [sourceContent.length, lineCount],
         [0, lineCount]
       ]
     })
     const sourcePage = new IntermediatePage({
       id: TXT_PAGE_ID,
       number: 1,
-      width: 1,
+      width: sourceContent.length,
       height: lineCount,
       content: [],
       paragraphs: [],
@@ -270,17 +275,31 @@ describe('paginateTxtDocument', () => {
         {
           id: TXT_PAGE_ID,
           pageNumber: 1,
-          size: { x: 1, y: lineCount },
+          size: { x: sourceContent.length, y: lineCount },
           getData: async () => sourcePage
         }
       ])
     })
 
+    // When: Reader 把该单页 TXT 转换为 synthetic pages。
     const paginated = paginateTxtDocument(document)
     const page1 = await requirePage(paginated, 1)
     const page2 = await requirePage(paginated, 2)
+    const page1Texts = await getTexts(page1)
+    const page2Texts = await getTexts(page2)
 
-    expect(await page1.getContent()).toEqual([giantText])
-    expect(await page2.getContent()).toEqual([])
+    // Then: 每页都有对应行，且拼接所有切片可精确恢复原始文本。
+    expect(page1Texts).toHaveLength(TXT_DOCUMENT_LINES_PER_PAGE)
+    expect(page2Texts).toHaveLength(1)
+    expect(
+      [...page1Texts, ...page2Texts].map((text) => text.content).join('')
+    ).toBe(sourceContent)
+    expect(page2Texts[0]?.content).toBe(`Line ${lineCount}`)
+    expect(page2Texts[0]?.polygon).toEqual([
+      [0, 0],
+      [`Line ${lineCount}`.length, 0],
+      [`Line ${lineCount}`.length, 1],
+      [0, 1]
+    ])
   })
 })

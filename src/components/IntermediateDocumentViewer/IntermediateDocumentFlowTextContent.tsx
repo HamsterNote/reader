@@ -15,6 +15,7 @@ type IntermediateDocumentFlowTextContentProps = {
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
   preserveSourceFontSize: boolean
+  sourceOffsets?: ReadonlyMap<IntermediateText, number>
 }
 
 /**
@@ -45,7 +46,8 @@ export function IntermediateDocumentFlowTextContent({
   paragraphs,
   setTextRef,
   fontScale,
-  preserveSourceFontSize
+  preserveSourceFontSize,
+  sourceOffsets
 }: IntermediateDocumentFlowTextContentProps) {
   const paragraphGapTextIds = getParagraphGapTextIds(texts, paragraphs)
 
@@ -61,13 +63,13 @@ export function IntermediateDocumentFlowTextContent({
           />
         ) : null
 
-        if (!hasContent) {
-          return text.isEOL ? (
+        if (!hasContent && text.isEOL) {
+          return (
             <Fragment key={key}>
               <br />
               {paragraphGap}
             </Fragment>
-          ) : null
+          )
         }
 
         const shouldSetFontSize =
@@ -78,6 +80,7 @@ export function IntermediateDocumentFlowTextContent({
               ref={setTextRef ? setTextRef(text, pageNumber) : undefined}
               className='hamster-reader__intermediate-text hamster-reader__intermediate-text--flow'
               data-text-id={text.id}
+              data-selection-start-offset={sourceOffsets?.get(text)}
               data-page-number={pageNumber}
               style={
                 shouldSetFontSize

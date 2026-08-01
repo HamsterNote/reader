@@ -115,6 +115,19 @@ function createContentRuns(content: IntermediateContent[]): ContentRun[] {
   return runs
 }
 
+function createSourceOffsets(
+  content: IntermediateContent[]
+): ReadonlyMap<IntermediateText, number> {
+  const offsets = new Map<IntermediateText, number>()
+  let sourceOffset = 0
+  for (const entry of content) {
+    if (!isText(entry)) continue
+    offsets.set(entry, sourceOffset)
+    sourceOffset += entry.content.length
+  }
+  return offsets
+}
+
 export function IntermediateDocumentFlowContent({
   pageNumber,
   content,
@@ -125,6 +138,7 @@ export function IntermediateDocumentFlowContent({
   preserveSourceFontSize
 }: IntermediateDocumentFlowContentProps) {
   const flowContent = isPdf ? orderPdfContent(content) : content
+  const sourceOffsets = isPdf ? createSourceOffsets(content) : undefined
   return createContentRuns(flowContent).map((run) => {
     if (run.kind === 'image') {
       return (
@@ -147,6 +161,7 @@ export function IntermediateDocumentFlowContent({
             setTextRef={setTextRef}
             fontScale={fontScale}
             sourceOffsetBase={run.sourceOffsetBase}
+            sourceOffsets={sourceOffsets}
           />
         ) : (
           <IntermediateDocumentFlowTextContent

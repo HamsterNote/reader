@@ -2,10 +2,12 @@ import type { PopoverTheme } from '@hamster-note/components'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 
 export function useWindowWidth(): number {
-  const [width, setWidth] = useState(() => window.innerWidth)
+  const [width, setWidth] = useState(0)
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
     const handleResize = () => setWidth(window.innerWidth)
+    handleResize()
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
@@ -14,19 +16,20 @@ export function useWindowWidth(): number {
 }
 
 export function usePrefersColorScheme(): PopoverTheme {
-  const [scheme, setScheme] = useState<PopoverTheme>(() => {
-    if (typeof window.matchMedia !== 'function') return 'dark'
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light'
-  })
+  const [scheme, setScheme] = useState<PopoverTheme>('dark')
 
   useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
+    if (
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function'
+    ) {
+      return
+    }
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (event: MediaQueryListEvent) => {
       setScheme(event.matches ? 'dark' : 'light')
     }
+    setScheme(mediaQuery.matches ? 'dark' : 'light')
     mediaQuery.addEventListener('change', handleChange)
     return () => mediaQuery.removeEventListener('change', handleChange)
   }, [])

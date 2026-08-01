@@ -7,6 +7,12 @@ import {
   IntermediateText
 } from '@hamster-note/types'
 
+import {
+  getTxtLineStart,
+  isPerLineTxtContent,
+  normalizeGiantTxtContent
+} from './normalizeGiantTxtContent'
+
 export const TXT_DOCUMENT_LINES_PER_PAGE = 500
 
 // 与 @hamster-note/txt-parser 0.3.0 dist、以及 per-line 分支源码保持一致。
@@ -54,45 +60,6 @@ function getPositiveLinesPerPage(linesPerPage: number | undefined): number {
   return TXT_DOCUMENT_LINES_PER_PAGE
 }
 
-function isTextContent(
-  content: IntermediateContent
-): content is IntermediateText {
-  return content instanceof IntermediateText
-}
-
-function getPolygonLineStart(text: IntermediateText): number | null {
-  const [topLeft, topRight, bottomRight, bottomLeft] = text.polygon
-  const topY = topLeft[1]
-  const bottomY = bottomRight[1]
-  const hasPerLineShape =
-    topRight[1] === topY &&
-    bottomLeft[1] === bottomY &&
-    bottomY === topY + 1 &&
-    Number.isInteger(topY) &&
-    topY >= 0
-
-  return hasPerLineShape ? topY : null
-}
-
-function isPerLineTxtContent(
-  content: readonly IntermediateContent[],
-  sourceHeight: number
-): boolean {
-  const texts = content.filter(isTextContent)
-  if (texts.length !== sourceHeight) return false
-
-  const expectedRows = new Set(
-    Array.from({ length: sourceHeight }, (_, index) => index)
-  )
-
-  for (const text of texts) {
-    const row = getPolygonLineStart(text)
-    if (row === null || !expectedRows.delete(row)) return false
-  }
-
-  return expectedRows.size === 0
-}
-
 function shiftPolygonY(polygon: TextPolygon, lineOffset: number): TextPolygon {
   return [
     [polygon[0][0], polygon[0][1] - lineOffset],
@@ -134,7 +101,7 @@ function slicePerLineContent(
 
   for (const entry of source.content) {
     if (entry instanceof IntermediateText) {
-      const row = getPolygonLineStart(entry)
+      const row = getTxtLineStart(entry)
       if (row !== null && isRowInRange(row, range)) {
         content.push(cloneShiftedText(entry, range.lineOffset))
       }
@@ -227,7 +194,17 @@ export function paginateTxtDocument(
       } satisfies LoadedSourcePage
 
       if (!isPerLineTxtContent(content, sourceHeight)) {
-        return { kind: 'fallback', source } satisfies SourceContentResult
+        const normalizedContent = normalizeGiantTxtContent(
+          content,
+          sourceHeight
+        )
+        if (!normalizedContent) {
+          return { kind: 'fallback', source } satisfies SourceContentResult
+        }
+        return {
+          kind: 'per-line',
+          source: { ...source, content: normalizedContent, paragraphs: [] }
+        } satisfies SourceContentResult
       }
 
       return { kind: 'per-line', source } satisfies SourceContentResult

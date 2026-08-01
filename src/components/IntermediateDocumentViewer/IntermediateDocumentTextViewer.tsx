@@ -49,6 +49,7 @@ import {
 } from './IntermediateDocumentViewer'
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
+import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
 import { RangeHandle } from './RangeHandle'
 import { RangeMagnifierProvider } from './RangeMagnifier'
 import { parsePublicPageId } from './rangeJumpHelpers'
@@ -1409,11 +1410,17 @@ export function IntermediateDocumentTextViewer(
   )
 
   const toTextRange = useCallback(
-    (range: ReaderSelectionRange): ReaderSelectionRange => ({
-      ...range,
-      rectsBySelectionId: {}
-    }),
-    []
+    (range: ReaderSelectionRange): ReaderSelectionRange | null => {
+      const canonicalRange = isPdf
+        ? canonicalizePdfSelectionRange(range, viewerRootRef.current)
+        : range
+      if (!canonicalRange) return null
+      return {
+        ...canonicalRange,
+        rectsBySelectionId: {}
+      }
+    },
+    [isPdf]
   )
 
   const handleLinkedDataChange = useCallback(
@@ -1422,12 +1429,23 @@ export function IntermediateDocumentTextViewer(
         next,
         scopeId
       )
+      const existingRanges = new Map(
+        effectiveRangesRef.current.map((range) => [range.id, range])
+      )
+      const activeRangeId = runtimePublicLinkedData.activeRange?.id
+      const items = runtimePublicLinkedData.items.flatMap((range) => {
+        const existingRange = existingRanges.get(range.id)
+        if (existingRange && range.id !== activeRangeId) return [existingRange]
+        const textRange = toTextRange(range)
+        return textRange ? [textRange] : []
+      })
+      const activeRange = runtimePublicLinkedData.activeRange
+        ? toTextRange(runtimePublicLinkedData.activeRange)
+        : runtimePublicLinkedData.activeRange
       const publicLinkedData: ReaderLinkedSelectionData = {
         ...runtimePublicLinkedData,
-        items: runtimePublicLinkedData.items.map(toTextRange),
-        activeRange: runtimePublicLinkedData.activeRange
-          ? toTextRange(runtimePublicLinkedData.activeRange)
-          : runtimePublicLinkedData.activeRange
+        items,
+        activeRange
       }
       traceHighlight('text.callback.linked-data', {
         mode: 'text',
@@ -1481,6 +1499,7 @@ export function IntermediateDocumentTextViewer(
 
       if (publicRange) {
         const textRange = toTextRange(publicRange)
+        if (!textRange) return
         traceHighlight('text.callback.select', {
           mode: 'text',
           isEpub,
@@ -1507,6 +1526,7 @@ export function IntermediateDocumentTextViewer(
 
       if (publicRange) {
         const textRange = toTextRange(publicRange)
+        if (!textRange) return
         traceHighlight('text.callback.update', {
           mode: 'text',
           isEpub,

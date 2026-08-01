@@ -3058,6 +3058,165 @@ describe('IntermediateDocumentViewer', () => {
     clearSelectionProps()
   })
 
+  it('PDF text mode canonicalizes visually reordered linked callback offsets', async () => {
+    // Given: parser stream 与阅读顺序相反，DOM 会把 Left 排到 Right 前面。
+    clearSelectionProps()
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const right = makeText('right-column', 'Right')
+    const left = makeText('left-column', 'Left')
+    right.polygon = [
+      [200, 20],
+      [250, 20],
+      [250, 36],
+      [200, 36]
+    ]
+    left.polygon = [
+      [10, 20],
+      [50, 20],
+      [50, 36],
+      [10, 36]
+    ]
+    pages.get(1)?.getContent.mockResolvedValue([right, left])
+    const onLinkedDataChange = vi.fn()
+    const onLinkedSelect = vi.fn()
+    const onLinkedUpdateRange = vi.fn()
+    const onSelect = vi.fn()
+    const onUpdateRange = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        isPdf
+        onLinkedDataChange={onLinkedDataChange}
+        onLinkedSelect={onLinkedSelect}
+        onLinkedUpdateRange={onLinkedUpdateRange}
+        onSelect={onSelect}
+        onUpdateRange={onUpdateRange}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    mockElementSize(page1, { width: 800, height: 800 })
+    await waitFor(() => {
+      expect(page1.textContent).toContain('Left Right')
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+
+    // When: selection runtime 以视觉 DOM offset 回调 Left 的 `[0, 4]`。
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+    const runtimeRange = makeRuntimeLinkedRange(runtimeSelectionId, {
+      id: 'pdf-visually-reordered-range',
+      text: 'Left',
+      start: { selectionId: runtimeSelectionId, offset: 0 },
+      end: { selectionId: runtimeSelectionId, offset: 4 }
+    })
+    const linkedData = requireSelectionPropsById(runtimeSelectionId).linkedData
+    if (!linkedData) throw new Error('Expected linked selection data')
+
+    await act(async () => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...linkedData,
+        items: [runtimeRange],
+        activeRange: runtimeRange,
+        selectedRangeId: runtimeRange.id
+      })
+      simulateLinkedSelect(runtimeSelectionId, runtimeRange)
+      simulateLinkedUpdateRange(runtimeSelectionId, runtimeRange)
+    })
+
+    // Then: 所有可持久化回调都恢复成 parser-stream 中 Left 的 `[5, 9]`。
+    const canonicalEndpoints = {
+      start: { selectionId: 'page-1', offset: 5 },
+      end: { selectionId: 'page-1', offset: 9 }
+    }
+    expect(onLinkedDataChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining(canonicalEndpoints)],
+        activeRange: expect.objectContaining(canonicalEndpoints)
+      })
+    )
+    expect(onLinkedSelect).toHaveBeenCalledWith(
+      expect.objectContaining(canonicalEndpoints)
+    )
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining(canonicalEndpoints)
+    )
+    expect(onLinkedUpdateRange).toHaveBeenCalledWith(
+      expect.objectContaining(canonicalEndpoints)
+    )
+    expect(onUpdateRange).toHaveBeenCalledWith(
+      expect.objectContaining(canonicalEndpoints)
+    )
+    clearSelectionProps()
+  })
+
+  it('PDF text mode preserves canonical ranges when only selection id changes', async () => {
+    // Given: 已持久化的 Left range 使用 parser-stream canonical `[5, 9]`。
+    clearSelectionProps()
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const right = makeText('right-column-existing', 'Right')
+    const left = makeText('left-column-existing', 'Left')
+    right.polygon = [
+      [200, 20],
+      [250, 20],
+      [250, 36],
+      [200, 36]
+    ]
+    left.polygon = [
+      [10, 20],
+      [50, 20],
+      [50, 36],
+      [10, 36]
+    ]
+    pages.get(1)?.getContent.mockResolvedValue([right, left])
+    const existingRange: ReaderSelectionRange = {
+      ...makeReaderRange('existing-pdf-range', 'Left'),
+      start: { selectionId: 'page-1', offset: 5 },
+      end: { selectionId: 'page-1', offset: 9 }
+    }
+    const onLinkedDataChange = vi.fn()
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        isPdf
+        defaultRanges={[existingRange]}
+        onLinkedDataChange={onLinkedDataChange}
+      />
+    )
+
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+    const page1 = await screen.findByTestId('intermediate-text-page-1')
+    mockElementSize(page1, { width: 800, height: 800 })
+    await waitFor(() => {
+      expect(page1.textContent).toContain('Left Right')
+      expect(getAllSelectionProps()).toHaveLength(1)
+    })
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+
+    // When: Selection 仅切换 selectedRangeId，并回传未变化的现有 items。
+    await act(async () => {
+      simulateLinkedSelectRange(runtimeSelectionId, existingRange.id)
+    })
+
+    // Then: callback 保留 canonical offsets，不把它们再次解释成 DOM offsets。
+    expect(onLinkedDataChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedRangeId: existingRange.id,
+        items: [
+          expect.objectContaining({
+            start: { selectionId: 'page-1', offset: 5 },
+            end: { selectionId: 'page-1', offset: 9 }
+          })
+        ]
+      })
+    )
+    clearSelectionProps()
+  })
+
   it('text mode supports controlled and uncontrolled ranges', async () => {
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 1 })

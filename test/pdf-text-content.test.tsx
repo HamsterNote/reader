@@ -2,6 +2,7 @@ import { IntermediateText, TextDir } from '@hamster-note/types'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { IntermediateDocumentFlowContent } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentFlowContent'
 import { PdfTextContent } from '../src/components/IntermediateDocumentViewer/PdfTextContent'
 
 const makeGlyph = ({
@@ -199,6 +200,89 @@ describe('PdfTextContent', () => {
     expect(screen.getByText('world')).toHaveAttribute(
       'data-selection-start-offset',
       '5'
+    )
+  })
+
+  it('preserves parser-stream offsets after visually ordering PDF glyphs', () => {
+    // Given: 解析器先返回右栏、再返回左栏，但 Text 模式需要按视觉位置展示左栏、右栏。
+    const rightColumn = makeGlyph({
+      id: 'pdf-right-column',
+      content: 'Right',
+      x: 200,
+      y: 20
+    })
+    const leftColumn = makeGlyph({
+      id: 'pdf-left-column',
+      content: 'Left',
+      x: 10,
+      y: 20
+    })
+
+    // When: PDF flow 内容按几何位置重排并渲染。
+    const { container } = render(
+      <IntermediateDocumentFlowContent
+        pageNumber={1}
+        content={[rightColumn, leftColumn]}
+        paragraphs={[]}
+        isPdf
+        preserveSourceFontSize={false}
+      />
+    )
+
+    // Then: DOM 保持视觉顺序，但 selection offset 仍指向原始 parser stream。
+    expect(
+      Array.from(container.querySelectorAll('[data-text-id]'), (element) =>
+        element.getAttribute('data-text-id')
+      )
+    ).toEqual(['pdf-left-column', 'pdf-right-column'])
+    expect(screen.getByText('Right')).toHaveAttribute(
+      'data-selection-start-offset',
+      '0'
+    )
+    expect(screen.getByText('Left')).toHaveAttribute(
+      'data-selection-start-offset',
+      String(rightColumn.content.length)
+    )
+  })
+
+  it('preserves parser-stream anchors when PDF layout falls back', () => {
+    // Given: 一个 glyph 缺少有效 polygon，整组 PDF 文本需要走通用 flow fallback。
+    const positioned = makeGlyph({
+      id: 'pdf-positioned-fallback',
+      content: 'Positioned',
+      x: 200,
+      y: 20
+    })
+    const unpositioned = makeGlyph({
+      id: 'pdf-unpositioned-fallback',
+      content: 'Fallback',
+      x: 10,
+      y: 20
+    })
+    unpositioned.polygon = [
+      [Number.NaN, Number.NaN],
+      [Number.NaN, Number.NaN],
+      [Number.NaN, Number.NaN],
+      [Number.NaN, Number.NaN]
+    ]
+
+    // When: fallback renderer 输出 parser 顺序文本。
+    render(
+      <PdfTextContent
+        pageNumber={1}
+        texts={[positioned, unpositioned]}
+        paragraphs={[]}
+      />
+    )
+
+    // Then: 每个 span 仍携带 canonical parser-stream anchor。
+    expect(screen.getByText('Positioned')).toHaveAttribute(
+      'data-selection-start-offset',
+      '0'
+    )
+    expect(screen.getByText('Fallback')).toHaveAttribute(
+      'data-selection-start-offset',
+      String(positioned.content.length)
     )
   })
 
