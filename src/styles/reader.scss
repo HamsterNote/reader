@@ -1,8 +1,25 @@
 .hamster-reader {
   display: block;
+  position: relative;
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
     Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+
+  &__bottom-bar-color {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 50%;
+    appearance: none;
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: var(--hn-focus-ring);
+    }
+  }
 
   // Upload zone
   &__upload-zone {
@@ -298,6 +315,17 @@
     inset: 0;
   }
 
+  // useFlowLayout 页面：选择层与文本层回到文档流，由内容撑开页面高度，
+  // 不再随 surface 的 aspect-ratio 绝对铺满。
+  &__selection-layer--flow,
+  &__text-layer--flow {
+    position: static;
+  }
+
+  &__page-surface--flow {
+    min-height: 0;
+  }
+
   &__selection-layer {
     z-index: 2;
   }
@@ -330,6 +358,13 @@
     word-break: break-word;
     color: inherit;
     transform-origin: top left;
+  }
+
+  // useFlowLayout 页面：文本条目回到文档流，按内容顺序 inline 排列，
+  // 换行由 isEOL 条目后的 <br> 承担。
+  &__text-item--flow {
+    position: static;
+    display: inline;
   }
 
   &__page-hint {
@@ -426,16 +461,26 @@
 
     // VirtualPaper wrapper：占满 viewer 区域并作为手势/滚动容器。
     .virtual-paper-wrapper {
+      position: relative;
       flex: 1 1 auto;
       width: 100%;
       min-height: 0;
+      scrollbar-width: none;
       touch-action: none;
+
+      &::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
+      }
     }
 
-    // 中间文档每页之间的外边距，与 VirtualPaper 缩放/平移无关，
+    // 中间文档每页之间的垂直外边距，与 VirtualPaper 缩放/平移无关，
     // 仅用于页面间距（transform 会等比缩放 margin）。
+    // 有效的水平留白来自 TS 中文档容器的内联缩放 padding；此处水平
+    // margin 置 0，仅作 hygiene fallback（内联样式优先于此规则）。
     .hamster-reader__intermediate-page {
-      margin: 12px;
+      margin: 12px 0;
     }
   }
 
@@ -911,6 +956,10 @@
     &__highlight-rect-placeholder {
       animation: none;
     }
+
+    &__reading-progress-feedback-content {
+      transition: none;
+    }
   }
 
   // ---- 文本渲染模式（renderMode="text"）scoped styles (T7) ----
@@ -926,12 +975,176 @@
   // 文本模式 viewer 根 / 原生滚动容器：
   // display:block 覆盖 layout 模式的 display:flex
   // overflow:auto 提供原生滚动（layout 模式为 overflow:hidden）
+  &__intermediate-text-shell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   &__intermediate-text-viewer,
   &__intermediate-text-scroll {
     display: block;
     overflow: auto;
     box-sizing: border-box;
     position: relative;
+    width: 100%;
+    height: 100%;
+    scrollbar-width: none;
+    scroll-behavior: auto;
+
+    &::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+  }
+
+  &__reading-progress {
+    position: absolute;
+    z-index: 12;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 32px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: -2px;
+    }
+  }
+
+  &__reading-progress-track {
+    position: absolute;
+    top: 0;
+    right: 1px;
+    bottom: 0;
+    width: 4px;
+    background: rgb(107 114 128 / 48%);
+  }
+
+  &__reading-progress-position,
+  &__reading-progress-feedback {
+    position: absolute;
+    z-index: 1;
+    right: 1px;
+    width: 4px;
+    height: 0;
+    pointer-events: none;
+  }
+
+  &__reading-progress-thumb {
+    position: absolute;
+    top: 50%;
+    right: -2px;
+    display: block;
+    width: 8px;
+    height: 8px;
+    box-sizing: border-box;
+    border: 2px solid var(--hamster-reader-theme-color, #2563eb);
+    background: transparent;
+    transform: translateY(-50%);
+  }
+
+  &__reading-progress-highlight {
+    position: absolute;
+    z-index: 2;
+    right: 1px;
+    width: 4px;
+    height: 1px;
+    pointer-events: none;
+    transform: translateY(-50%);
+  }
+
+  &__reading-progress-feedback-content {
+    --hamster-reader-progress-feedback-x: 4px;
+    --hamster-reader-progress-feedback-y: -50%;
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transform: translate3d(
+      var(--hamster-reader-progress-feedback-x),
+      var(--hamster-reader-progress-feedback-y),
+      0
+    );
+    transition:
+      opacity 120ms ease,
+      transform 120ms ease,
+      visibility 120ms ease;
+
+    &[data-visible='true'] {
+      --hamster-reader-progress-feedback-x: 0px;
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+
+  &__reading-progress-label {
+    padding: 3px 7px;
+    border-radius: 6px;
+    color: #ffffff;
+    background: #1f2937;
+    box-shadow: 0 2px 8px rgb(15 23 42 / 18%);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    line-height: 18px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  &__reading-progress[data-pointer-type='touch']
+    &__reading-progress-feedback-content {
+    right: calc(10px + 1cm);
+  }
+
+  &__reading-progress-preview {
+    display: block;
+    flex: 0 0 auto;
+    width: 104px;
+    aspect-ratio: 3 / 4;
+    overflow: hidden;
+    border: 1px solid rgb(148 163 184 / 65%);
+    border-radius: 4px;
+    background: #f8fafc;
+    box-shadow: 0 6px 18px rgb(15 23 42 / 20%);
+
+    img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+  }
+
+  &__layout-zoom-indicator {
+    position: absolute;
+    z-index: 13;
+    top: 12px;
+    left: 12px;
+    min-width: 48px;
+    padding: 5px 9px;
+    border: 1px solid rgb(255 255 255 / 28%);
+    border-radius: 7px;
+    color: #ffffff;
+    background: rgb(31 41 55 / 88%);
+    box-shadow: 0 3px 12px rgb(15 23 42 / 20%);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    line-height: 18px;
+    text-align: center;
+    pointer-events: none;
   }
 
   // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
@@ -951,59 +1164,28 @@
     width: 100%;
     padding: 5px;
     box-sizing: border-box;
+
+    // 后续虚拟页把页间距纳入自身盒模型，TanStack Virtual 的测量高度会
+    // 同步包含该间距，不会与下一页发生视觉重叠。
+    &--following {
+      padding-top: 17px;
+    }
+
+    .hsn-selection-container {
+      position: relative;
+      min-height: 100%;
+    }
+
+    .hsn-selection-content {
+      position: relative;
+      min-height: 100%;
+      height: auto;
+    }
   }
 
   // 注意：&__intermediate-text--flow 修饰符定义在 &__intermediate-text
   // 之后（见文件下方），以确保 CSS 源码顺序覆盖 layout 模式的
   // position:absolute / display:inline-block / white-space:pre。
-
-  &__html-parser-output {
-    width: 100%;
-    box-sizing: border-box;
-
-    // Page-only html-parser fragment layout rules.
-    // decodeToHtml returns .hamster-note-page fragments without injecting
-    // document/page/text/image layout CSS, so Reader must provide the scoped
-    // styles here under the html-parser output root.
-    .hamster-note-document {
-      position: relative;
-      display: block;
-      contain: layout style;
-      width: 100%;
-    }
-
-    .hamster-note-page {
-      position: relative;
-      overflow: visible;
-      background-repeat: no-repeat;
-      background-position: top center;
-      background-size: contain;
-    }
-
-    .hamster-note-text {
-      position: absolute;
-      white-space: pre;
-      transform-origin: 0 0;
-    }
-
-    .hamster-note-image {
-      position: absolute;
-    }
-
-    // Allow text selection in html-parser output even when the parent page
-    // has user-select: none. This is necessary because html-parser renders
-    // actual DOM text nodes (unlike the direct-render path which uses
-    // absolutely-positioned spans with explicit user-select: text).
-    user-select: text;
-    -webkit-user-select: text;
-
-    // Ensure text nodes inside the html-parser output are selectable.
-    .hamster-note-page,
-    .hamster-note-page * {
-      user-select: text;
-      -webkit-user-select: text;
-    }
-  }
 
   // Intermediate page shell
   &__intermediate-page {
@@ -1028,6 +1210,21 @@
       background-size: 200% 100%;
       animation: skeleton-shimmer 1.5s ease-in-out infinite;
     }
+
+    &--flow {
+      height: auto;
+      overflow: visible;
+      padding: 24px;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+  }
+
+  &__intermediate-page-content-scale--flow {
+    position: static;
+    width: 100%;
+    height: auto;
+    transform: none;
   }
 
   &__intermediate-page-status {
@@ -1046,6 +1243,25 @@
       color: #b91c1c;
       background-color: #fef2f2;
     }
+
+    &--ocr {
+      --hn-loading-duration: 0.9s;
+
+      background: color-mix(
+        in srgb,
+        var(--hn-color-surface, #ffffff) 72%,
+        transparent
+      );
+      backdrop-filter: blur(3px);
+      color: var(--hn-color-accent, #2563eb);
+      pointer-events: none;
+      z-index: 5;
+
+      .hn-loading__text {
+        color: var(--hn-color-text, #111827);
+        font-weight: 500;
+      }
+    }
   }
 
   // Intermediate page base image (direct-render path)
@@ -1062,11 +1278,8 @@
     z-index: 0;
   }
 
-  // NOTE: The html-parser renders backgrounds as CSS `background-image` on
-  // `.hamster-note-page` divs, not as separate DOM elements. CSS backgrounds
-  // are inherently unselectable — they are not DOM nodes and cannot be captured
-  // by text selection or touch callout menus. The direct-render path above
-  // (base-image) covers the `<img>` background case.
+  // 底图通过 pointer-events: none + user-select: none 保证不可选中，
+  // 直渲染路径的 <img> 背景由上面的 base-image 规则覆盖。
 
     // Intermediate text spans
     &__intermediate-text {
@@ -1079,14 +1292,66 @@
       z-index: 1;
     }
 
+    // OCR 开发调试模式（ocrDebug）：给 OCR 文本 span 加红色外框。
+    // 用 outline 而非 border，避免改变盒模型尺寸导致定位偏移；
+    // 文字颜色由渲染边界按 ocrDebug 覆盖为 rgba(0, 0, 0, 0.5)。
+    &__intermediate-document-viewer--ocr-debug
+      &__intermediate-text[data-ocr='true'] {
+      outline: 1px solid rgba(255, 0, 0, 0.8);
+    }
+
     // 文本模式 flow span 修饰符 (T7)：
     // 必须在 &__intermediate-text 之后定义，以 CSS 源码顺序覆盖
     // layout 模式的 position:absolute / display:inline-block / white-space:pre，
     // 改为普通文档流内联文本。
-    &__intermediate-text--flow {
-      position: static;
-      display: inline;
-      white-space: normal;
+  &__intermediate-text--flow {
+    position: static;
+    display: block;
+    min-height: 1.5em;
+    white-space: normal;
+  }
+
+  &__intermediate-flow-image {
+    display: block;
+    margin: 1em 0;
+
+    img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      object-fit: contain;
+    }
+
+    figcaption {
+      margin-top: 0.5em;
+      color: var(--hn-color-text-muted, #6b7280);
+      font-size: 0.875em;
+      line-height: 1.5;
+    }
+  }
+
+  &__pdf-text-content {
+    white-space: normal;
+  }
+
+  &__pdf-text-paragraph {
+    display: block;
+    margin-block: 0 0.75em;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  &__intermediate-text--pdf-flow {
+    display: inline;
+  }
+
+    // 仅由 IntermediateParagraph 元数据产生；普通 isEOL 换行不增加段距。
+    &__intermediate-paragraph-gap {
+      display: block;
+      height: 0.75em;
+      pointer-events: none;
     }
 
     // 高亮标记使用 multiply 混合模式
@@ -1096,13 +1361,19 @@
       opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
     }
 
-    // 修复：selection 库的 .hsn-selection-percent-rect 默认 box-sizing: content-box，
-    // 选中态（-selected）会附加 border: 1.5px，该 border 被加到 width 百分比之外，
-    // 导致 rect 的 box 右边缘超出 handle 位置（handle 的 left% 对齐的是
-    // selection 库计算的选区终点 = content 右边缘）。使用 border-box 让 width
-    // 百分比包含 border，使 rect box 右边缘与 handle 中心精确对齐。
     .hsn-selection-percent-rect {
       box-sizing: border-box;
+    }
+
+    // 移除选中态高亮的 border 和 outline
+    .hsn-selection-percent-rect-selected {
+      border: none !important;
+      outline: none !important;
+    }
+
+    .hsn-selection-rect--selected {
+      stroke: none !important;
+      stroke-width: 0 !important;
     }
 
     // pixel 模式（SVG rect）保持 blend 在 rect 本身
@@ -1110,22 +1381,23 @@
       mix-blend-mode: multiply;
     }
 
-    // Selection 容器与内容区高度占满页面外壳，避免嵌套 flex/absolute
+    // Selection 容器与内容区高度占满 layout 页面外壳，避免嵌套 flex/absolute
     // 布局中因高度未显式声明而导致的选择 overlay 偏移或空白。
-    .hsn-selection-container,
-    .hsn-selection-content {
+    &__intermediate-page .hsn-selection-container,
+    &__intermediate-page .hsn-selection-content {
       height: 100%;
     }
 
-    // 与 @hamster-note/selection Demo 保持一致：移动端/粗指针设备上禁用
-    // 浏览器原生文本选择，避免长按时出现系统 selection handles 和选框；桌面端
-    // 仍保留 text selection，供 selection 包读取 Range 并绘制自定义高亮。
+    &__intermediate-page--flow .hsn-selection-container,
+    &__intermediate-page--flow .hsn-selection-content {
+      height: auto;
+      min-height: 0;
+    }
+
+    // 粗指针设备禁用浏览器原生选区，统一使用 selection 组件绘制的选框与手柄。
     @media (pointer: coarse) {
       &__intermediate-text,
-      .hsn-selection-content &__intermediate-text,
-      &__html-parser-output,
-      &__html-parser-output .hamster-note-page,
-      &__html-parser-output .hamster-note-page * {
+      .hsn-selection-content &__intermediate-text {
         user-select: none;
         -webkit-user-select: none;
         -webkit-touch-callout: none;
@@ -1142,6 +1414,15 @@
   100% {
     background-position: -200% 0;
   }
+}
+
+// IntermediateDocumentViewer 可作为独立公共组件使用，不要求外层存在 `.hamster-reader`。
+// 激活前保留浏览器文本选择；激活后临时禁止原生选区抢占整段高亮拖动手势。
+.hamster-reader__intermediate-document-viewer--highlight-dragging,
+.hamster-reader__intermediate-document-viewer--highlight-dragging
+  .hsn-selection-content {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,6 +1449,7 @@
 }
 
 .hamster-demo-main {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1211,6 +1493,27 @@
       box-shadow: 0 0 0 2px #3b82f6;
     }
   }
+}
+
+// Demo-only drag affordance: stays screen-sized while the Reader paper pans or zooms.
+.hamster-demo-highlight-drag-preview {
+  position: fixed;
+  inset: 0 auto auto 0;
+  z-index: 1000;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 9px 12px;
+  overflow: hidden;
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2);
+  pointer-events: none;
+  will-change: transform;
 }
 
 @media (max-width: 640px) {
@@ -1348,5 +1651,104 @@
       border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 4px;
     }
+  }
+}
+
+// ========== 边缘裁切编辑覆盖层 ==========
+.hamster-reader__edge-crop-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none;
+}
+
+// 裁切线：视觉为 2px 虚线，但可拖拽热区为 20px。
+// 容器本身是 20px 透明热区，::before 绘制居中的 2px 虚线。
+.hamster-reader__edge-crop-line {
+  position: absolute;
+  pointer-events: auto;
+  // 禁止浏览器触摸滚动劫持，保证触屏拖拽裁切线生效
+  touch-action: none;
+
+  &::before {
+    content: '';
+    position: absolute;
+  }
+}
+
+.hamster-reader__edge-crop-line--horizontal {
+  left: 0;
+  width: 100%;
+  height: 20px;
+  // 热区以裁切位置为中心（top 定位到线位置后向上回退一半热区高度）
+  transform: translateY(-50%);
+  cursor: ns-resize;
+
+  &::before {
+    left: 0;
+    right: 0;
+    top: 50%;
+    margin-top: -1px;
+    border-top: 2px dashed #2563eb;
+  }
+}
+
+.hamster-reader__edge-crop-line--vertical {
+  top: 0;
+  height: 100%;
+  width: 20px;
+  // 热区以裁切位置为中心（left 定位到线位置后向左回退一半热区宽度）
+  transform: translateX(-50%);
+  cursor: ew-resize;
+
+  &::before {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    margin-left: -1px;
+    border-left: 2px dashed #2563eb;
+  }
+}
+
+// ========== 每页裁切操作按钮 ==========
+.hamster-reader__edge-crop-actions {
+  position: absolute;
+  // 按钮组位于页面正中间
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.hamster-reader__edge-crop-action {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.hamster-reader__edge-crop-action--page {
+  background-color: #2563eb;
+  color: #fff;
+
+  &:hover {
+    background-color: #1d4ed8;
+  }
+}
+
+.hamster-reader__edge-crop-action--all {
+  background-color: #e5e7eb;
+  color: #374151;
+
+  &:hover {
+    background-color: #d1d5db;
   }
 }

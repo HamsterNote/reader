@@ -34,10 +34,11 @@ export type ReaderLinkedSelectionRange = Omit<
 > & {
   start: ReaderSelectionEndpoint
   end: ReaderSelectionEndpoint
+  /** Layout 模式可持久化的页面坐标；Text 与 EPUB 可保持为空并按字符锚点实时计算。 */
   rectsBySelectionId: Record<string, ReaderSelectionRect[]>
 }
 
-/** html-parser highlight API 的公开 range 契约：只接受 linked/page-scoped 形状。 */
+/** highlight API 的公开 range 契约：只接受 linked/page-scoped 形状。 */
 export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
   readonly __readerSelectionRangeBrand?: never
 }
@@ -46,6 +47,11 @@ export type ReaderSelectionRange = ReaderLinkedSelectionRange & {
 export type ReaderHighlightPopover =
   | ReactNode
   | ((highlight: ReaderSelectionRange) => ReactNode)
+
+/** 已确认矩形 Popover：静态内容，或基于当前矩形原始对象渲染的内容。 */
+export type ReaderRectanglePopover =
+  | ReactNode
+  | ((rectangle: ReaderSelectionRectangle) => ReactNode)
 
 export type ReaderLinkedSelectionData = Omit<
   LinkedSelectionData,

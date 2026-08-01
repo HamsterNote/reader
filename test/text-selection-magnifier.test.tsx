@@ -12,16 +12,20 @@ vi.mock('html2canvas', () => ({ default: html2canvasMock }))
 
 interface HarnessProps {
   readonly children: ReactNode
+  readonly pageClassName?: string
 }
 
-const Harness = ({ children }: HarnessProps) => {
+const Harness = ({
+  children,
+  pageClassName = 'hamster-reader__intermediate-page'
+}: HarnessProps) => {
   const [viewerRoot, setViewerRoot] = useState<HTMLDivElement | null>(null)
 
   return (
     <div ref={setViewerRoot} data-testid='viewer-root'>
       <RangeMagnifierProvider rootElement={viewerRoot}>
         <TextSelectionMagnifier viewerRootElement={viewerRoot} />
-        <div className='hamster-reader__intermediate-page'>{children}</div>
+        <div className={pageClassName}>{children}</div>
       </RangeMagnifierProvider>
     </div>
   )
@@ -125,5 +129,39 @@ describe('text selection handle magnifier', () => {
     expect(magnifier).toHaveStyle({ left: '95px', top: '127px' })
     fireEvent.pointerUp(document, { pointerId: 23 })
     expect(magnifier).toHaveAttribute('hidden')
+  })
+
+  it('opens for handles rendered by the text-only viewer', () => {
+    // Given: a text-only page owns the browser selection handle.
+    html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))
+    render(
+      <Harness pageClassName='hamster-reader__intermediate-text-page'>
+        <TextHandle className='hsn-selection-handle hsn-selection-handle--start' />
+      </Harness>
+    )
+    const viewerRoot = screen.getByTestId('viewer-root')
+    const page = viewerRoot.querySelector<HTMLElement>(
+      '.hamster-reader__intermediate-text-page'
+    )
+    const handle = screen.getByRole('button', { name: 'Text range handle' })
+    if (!page) throw new Error('Expected an intermediate text page')
+    mockElementSize(viewerRoot, { left: 10, top: 20, width: 320, height: 480 })
+    mockElementSize(page, { left: 30, top: 40, width: 200, height: 300 })
+    mockElementSize(handle, { left: 140, top: 260, width: 20, height: 20 })
+
+    // When: mouse dragging starts from that text handle.
+    fireEvent.pointerDown(handle, {
+      pointerId: 29,
+      clientX: 145,
+      clientY: 265,
+      buttons: 1
+    })
+
+    // Then: the opt-in lens opens and captures the text-only page.
+    expect(screen.getByTestId('range-magnifier')).not.toHaveAttribute('hidden')
+    expect(html2canvasMock).toHaveBeenCalledWith(
+      page,
+      expect.objectContaining({ logging: false, useCORS: true })
+    )
   })
 })

@@ -20,3 +20,7 @@ yalc.lock
 .omo/
 test-results/
 .history/
+
+# Playwright MCP logs and screenshots
+.playwright-mcp/
+*.png

@@ -7,6 +7,18 @@ export type {
   SelectionRect as ReaderSelectionRectangle,
   SelectionTool as ReaderSelectionTool
 } from '@hamster-note/selection'
+export {
+  buildReaderCommentTree,
+  getCommentCountByHighlightId,
+  getCommentsByHighlightId
+} from './comments'
+export {
+  DefaultHighlightPopover,
+  type DefaultPopoverContext,
+  DefaultRectanglePopover,
+  type DefaultRectanglePopoverProps,
+  DefaultSelectionPopover
+} from './components/DefaultPopover'
 export type {
   CreateIntermediateDocumentRenderTimingOptions,
   IntermediateDocumentRenderTiming,
@@ -16,7 +28,9 @@ export type {
   IntermediateDocumentRenderTimingStage,
   IntermediateDocumentViewerProps,
   NormalizedRect,
+  ReaderExtraOcr,
   ReaderInteractionMode,
+  ReaderOcrOptions,
   ReaderPageRange,
   ReaderSavedSelection,
   ReaderSavedSelectionAnchor,
@@ -31,9 +45,10 @@ export type {
   ReaderSelectionPayload,
   ReaderTextSelectionDetail,
   ReaderTouchPanMode,
+  ReaderIntermediateImage,
+  ReaderIntermediateImageSerialized,
   TextElementInfo
 } from './components/IntermediateDocumentViewer'
-
 export {
   buildSavedSelection,
   buildSelectionPayload,
@@ -45,8 +60,16 @@ export {
   textHash
 } from './components/IntermediateDocumentViewer'
 export {
+  HIGHLIGHT_DEBUG_STORAGE_KEY,
+  type HighlightDebugEvent,
+  summarizeHighlightRanges,
+  traceHighlight
+} from './components/IntermediateDocumentViewer/highlightDebug'
+export {
+  FLOW_LAYOUT_PAGE_WIDTH,
   Page,
   type PageProps,
+  type ReaderFlowLayoutPage,
   type ReaderPagePaintingMap,
   type ReaderPageRectSelectionMap,
   type ReaderPageTextSelectionMap,
@@ -58,6 +81,19 @@ export {
   type ReaderRenderMode
 } from './components/Reader'
 export type {
+  ReaderComment,
+  ReaderCommentChangeDetail,
+  ReaderCommentChangeSource,
+  ReaderCommentThreadNode
+} from './types/comments'
+export type { ReaderFontScale } from './types/fontScale'
+export type {
+  ReaderData,
+  ReaderEdgeCrop,
+  ReaderPageEdgeCrop,
+  ReaderVirtualPaperState
+} from './types/readerData'
+export type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
   ReaderAnnotationHistoryOptions,
@@ -66,26 +102,30 @@ export type {
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
   ReaderLinkedSelectionRange,
+  ReaderRectanglePopover,
   ReaderSelectionEndpoint,
   ReaderSelectionRange,
   ReaderSelectionRect,
   ReaderSelectionRef
 } from './types/selection'
 
-export {
-  DefaultSelectionPopover,
-  DefaultHighlightPopover,
-  type DefaultPopoverContext
-} from './components/DefaultPopover'
-
 export type ReaderInteractiveProps = Pick<
   import('./components/Reader').ReaderProps,
+  | 'data'
+  | 'onDataChange'
   | 'ocr'
+  | 'onOcrChange'
+  | 'extraOCR'
   | 'onSelectText'
   | 'onTextSelectionChange'
   | 'onTextSelectionEnd'
   | 'interactionMode'
+  | 'renderMode'
+  | 'onRenderModeChange'
+  | 'fontScale'
+  | 'onFontScaleChange'
   | 'touchPanMode'
+  | 'onTouchPanModeChange'
   | 'ranges'
   | 'selectedRangeId'
   | 'onSelect'
@@ -98,21 +138,28 @@ export type ReaderInteractiveProps = Pick<
   | 'onSelectionStart'
   | 'onSelectionEnd'
   | 'onHighlight'
+  | 'onDragHighlight'
   | 'onRemoveRange'
   | 'onHighlightColorChange'
   | 'highlightColor'
   | 'selectionColor'
+  | 'showSelectionMagnifier'
   | 'selectionPopover'
   | 'highlightPopover'
   | 'onCommentHighlight'
+  | 'onCommentRect'
+  | 'comments'
+  | 'onCommentsChange'
   | 'selectionRef'
   | 'overlayRectType'
   | 'tool'
   | 'rects'
   | 'selectedRectId'
+  | 'rectPopover'
   | 'onCreateRect'
   | 'onSelectRect'
   | 'onUpdateRect'
+  | 'onRemoveRect'
   | 'annotationHistory'
   | 'onAnnotationHistoryChange'
   | 'containMarginX'
@@ -124,10 +171,15 @@ export type ReaderInteractiveProps = Pick<
   | 'bookmarkedPageNumbers'
   | 'onTogglePageBookmark'
   | 'selectedTool'
+  | 'onSelectedToolChange'
   | 'paintingTool'
   | 'drawingStrokeColor'
+  | 'onDrawingStrokeColorChange'
   | 'pagePaintings'
   | 'defaultPagePaintings'
   | 'onPagePaintingChange'
   | 'onPagePaintingsChange'
+  | 'edgeCropEditing'
+  | 'onEdgeCropEditingChange'
+  | 'bottomBar'
 >

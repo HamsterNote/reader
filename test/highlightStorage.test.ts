@@ -112,6 +112,26 @@ describe('highlight storage helpers', () => {
     })
   })
 
+  it('preserves a range with empty rectangles when parsing v4', () => {
+    // Given: EPUB 或 Text 模式保存的 range 仅保留字符锚点。
+    const textRange: ReaderSelectionRange = {
+      ...linkedRangeA,
+      rectsBySelectionId: {}
+    }
+    const raw = JSON.stringify({
+      version: 4,
+      ranges: [textRange],
+      rects: [],
+      paintings: {}
+    })
+
+    // When: demo 从 localStorage 恢复高亮。
+    const parsed = parseHighlights(raw)
+
+    // Then: 空矩形对象合法，字符锚点可在渲染时重新生成几何。
+    expect(parsed.ranges).toEqual([textRange])
+  })
+
   it('parses v2 envelopes and treats rects as missing', () => {
     const raw = JSON.stringify({
       version: 2,

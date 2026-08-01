@@ -1,28 +1,52 @@
 import { DocxParser } from '@hamster-note/docx-parser'
+import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
 import { PdfParser } from '@hamster-note/pdf-parser'
-import type {
-  ReaderAnnotationHistoryChangeDetail,
-  ReaderAnnotationHistoryStatus,
-  ReaderAnnotationHistoryValue,
-  ReaderPageRange,
-  ReaderPageTool,
-  ReaderRenderMode,
-  ReaderSelectionRange,
-  ReaderSelectionRectangle,
-  ReaderSelectionRef,
-  ReaderTouchPanMode
+import {
+  type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
+  Reader,
+  type ReaderAnnotationHistoryStatus,
+  type ReaderAnnotationHistoryValue,
+  type ReaderComment,
+  type ReaderData,
+  type ReaderEdgeCrop,
+  type ReaderFontScale,
+  type ReaderLinkedSelectionData,
+  type ReaderPageRange,
+  type ReaderPageTool,
+  type ReaderRenderMode,
+  type ReaderSelectionRange,
+  type ReaderSelectionRectangle,
+  type ReaderSelectionRef,
+  type ReaderTouchPanMode,
+  type ReaderVirtualPaperState,
+  summarizeHighlightRanges,
+  traceHighlight
 } from '@hamster-note/reader'
-import { Reader } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
 import { TxtParser } from '@hamster-note/txt-parser'
 import type {
   IntermediateDocument,
-  IntermediateDocumentSerialized
+  IntermediateDocumentSerialized,
+  IntermediateText
 } from '@hamster-note/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CommentPanel } from './CommentPanel'
+import {
+  parseComments,
+  removeHighlightFromComments,
+  serializeComments
+} from './commentStorage'
+import { convertEpubDocumentForReader } from './epubForReader'
+import { configurePdfParserForReader } from './pdfParserForReader'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
+import { createImagePreviewDocument } from './imagePreview'
+import {
+  type DemoOcrMode,
+  parseOcrStorage,
+  serializeOcrStorage
+} from './ocrStorage'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -31,12 +55,35 @@ import {
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
-export const SUPPORTED_FILE_TYPE_LABEL = 'PDF, TXT, DOCX, Markdown'
+type HighlightDragPreview = {
+  readonly highlight: ReaderSelectionRange
+  readonly pointerId: number
+  readonly x: number
+  readonly y: number
+}
+
+type PrimaryPointer = Omit<HighlightDragPreview, 'highlight'>
+
+export const SUPPORTED_FILE_TYPE_LABEL =
+  'PDF, TXT, DOCX, EPUB, Markdown, Images'
 
 export const UNSUPPORTED_FILE_TYPE_MESSAGE =
-  'Unsupported file type. Supported: PDF, TXT, DOCX, Markdown.'
+  'Unsupported file type. Supported: PDF, TXT, DOCX, EPUB, Markdown, and images.'
 
-export type SupportedParserLabel = 'PDF' | 'TXT' | 'DOCX' | 'Markdown'
+export type SupportedParserLabel =
+  | 'PDF'
+  | 'TXT'
+  | 'DOCX'
+  | 'EPUB'
+  | 'Markdown'
+  | 'Image'
+
+const FONT_SCALABLE_PARSER_LABELS: ReadonlySet<SupportedParserLabel> = new Set([
+  'PDF',
+  'TXT',
+  'EPUB',
+  'Markdown'
+])
 
 export type ParseUploadedDocumentResult =
   | {
@@ -67,6 +114,7 @@ export async function parseUploadedDocument(
   switch (getFileExtension(file.name)) {
     case 'pdf':
       try {
+        configurePdfParserForReader(PdfParser)
         const document = await PdfParser.encode(
           file,
           pages ? { pages } : undefined
@@ -87,6 +135,18 @@ export async function parseUploadedDocument(
         return {
           status: 'failed',
           label: 'TXT',
+          error: getParserErrorMessage(error)
+        }
+      }
+    case 'epub':
+      try {
+        const epubDocument = await EpubParser.encode(file)
+        const document = await convertEpubDocumentForReader(epubDocument, file)
+        return { status: 'parsed', label: 'EPUB', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'EPUB',
           error: getParserErrorMessage(error)
         }
       }
@@ -113,6 +173,23 @@ export async function parseUploadedDocument(
           error: getParserErrorMessage(error)
         }
       }
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'webp':
+    case 'bmp':
+    case 'svg':
+      try {
+        const document = await createImagePreviewDocument(file)
+        return { status: 'parsed', label: 'Image', document }
+      } catch (error) {
+        return {
+          status: 'failed',
+          label: 'Image',
+          error: getParserErrorMessage(error)
+        }
+      }
     default:
       return { status: 'unsupported', error: UNSUPPORTED_FILE_TYPE_MESSAGE }
   }
@@ -123,6 +200,9 @@ export async function parseUploadedDocument(
 // ---------------------------------------------------------------------------
 
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
+const OCR_STORAGE_PREFIX = 'hamster-reader-demo:ocr:'
+
+type OcrTextsByPage = Record<number, IntermediateText[]>
 
 function parseStoredBookmarks(raw: string | null): number[] {
   if (raw === null || raw.trim() === '') return []
@@ -154,6 +234,10 @@ function persistHighlights(
   const persisted = parseHighlights(
     serializeHighlights(ranges, rects, paintings)
   )
+  traceHighlight('demo.storage.write', {
+    fileName,
+    ranges: summarizeHighlightRanges(Array.from(persisted.ranges))
+  })
   localStorage.setItem(
     `hamster-reader-demo:highlights:${fileName}`,
     serializeHighlights(
@@ -164,98 +248,299 @@ function persistHighlights(
   )
 }
 
-// ---------------------------------------------------------------------------
-// 评论数据模型与存储 helpers
-// ---------------------------------------------------------------------------
+function useAnnotationHistoryShortcuts(
+  selectionRef: React.RefObject<ReaderSelectionRef | null>
+) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable === true
+      ) {
+        return
+      }
 
-/** 单条评论条目：唯一 ID、评论内容、创建时间戳 */
-type CommentItem = {
-  id: string
-  content: string
-  createdAt: number
+      const isMac = navigator.platform.toLowerCase().includes('mac')
+      const modifier = isMac ? event.metaKey : event.ctrlKey
+      if (!modifier) return
+
+      const key = event.key.toLowerCase()
+      const isUndo = key === 'z' && !event.shiftKey
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y'
+      if (!isUndo && !isRedo) return
+
+      event.preventDefault()
+      if (isUndo) selectionRef.current?.undo()
+      else selectionRef.current?.redo()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectionRef])
 }
 
-/** 高亮 ID -> 评论列表 */
-type CommentMap = Record<string, CommentItem[]>
+function useHighlightDragTracking(
+  isHighlightDragging: boolean,
+  setHighlightDragPreview: React.Dispatch<
+    React.SetStateAction<HighlightDragPreview | null>
+  >
+) {
+  useEffect(() => {
+    if (!isHighlightDragging) return
 
-let fallbackCommentIdCounter = 0
+    const handlePointerMove = (event: PointerEvent) => {
+      setHighlightDragPreview((current) =>
+        current?.pointerId === event.pointerId
+          ? { ...current, x: event.clientX, y: event.clientY }
+          : current
+      )
+    }
+    const handlePointerEnd = (event: PointerEvent) => {
+      setHighlightDragPreview((current) =>
+        current?.pointerId === event.pointerId ? null : current
+      )
+    }
 
-function generateCommentId(): string {
-  if (
-    typeof crypto !== 'undefined' &&
-    typeof crypto.randomUUID === 'function'
-  ) {
-    return crypto.randomUUID()
+    window.addEventListener('pointermove', handlePointerMove, true)
+    window.addEventListener('pointerup', handlePointerEnd, true)
+    window.addEventListener('pointercancel', handlePointerEnd, true)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove, true)
+      window.removeEventListener('pointerup', handlePointerEnd, true)
+      window.removeEventListener('pointercancel', handlePointerEnd, true)
+    }
+  }, [isHighlightDragging, setHighlightDragPreview])
+}
+
+function trackPrimaryPointer(
+  event: React.PointerEvent<HTMLElement>,
+  pointerRef: React.MutableRefObject<PrimaryPointer | null>
+) {
+  if (!event.isPrimary) return
+  pointerRef.current = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY
   }
-  fallbackCommentIdCounter += 1
-  return `comment-${Date.now()}-${fallbackCommentIdCounter}`
 }
 
-function createCommentItem(content: string): CommentItem {
-  return {
-    id: generateCommentId(),
-    content: content.trim(),
-    createdAt: Date.now()
-  }
-}
-
-function formatCommentTime(timestamp: number): string {
-  const date = new Date(timestamp)
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
-
-function isCommentItem(item: unknown): item is CommentItem {
+function ParseStatus({
+  isParsing,
+  parseError
+}: {
+  readonly isParsing: boolean
+  readonly parseError: string | null
+}) {
   return (
-    typeof item === 'object' &&
-    item !== null &&
-    typeof (item as CommentItem).id === 'string' &&
-    typeof (item as CommentItem).content === 'string' &&
-    typeof (item as CommentItem).createdAt === 'number'
+    <>
+      {isParsing && (
+        <section style={{ marginBottom: '24px' }}>
+          <h2>Parsing...</h2>
+          <p>Loading file content...</p>
+        </section>
+      )}
+      {parseError && (
+        <section
+          data-testid='demo-error-state'
+          style={{ marginBottom: '24px', color: 'red' }}
+        >
+          <h2>Parse Error</h2>
+          <p>{parseError}</p>
+        </section>
+      )}
+    </>
   )
 }
 
-function parseCommentEntry(value: unknown): CommentItem[] | null {
-  // 兼容旧格式：value 为字符串时转换为单条评论数组
-  if (typeof value === 'string') {
-    return [createCommentItem(value)]
-  }
-  if (!Array.isArray(value)) return null
-  const items = value.filter(isCommentItem)
-  return items.length > 0 ? items : null
+function EmptyState({
+  document,
+  parseError,
+  isParsing
+}: {
+  readonly document: ReaderDocument | null
+  readonly parseError: string | null
+  readonly isParsing: boolean
+}) {
+  if (document || parseError || isParsing) return null
+  return <div data-testid='demo-empty-state' style={{ display: 'none' }} />
 }
 
-/**
- * 安全解析 localStorage 中保存的评论数据。
- * 兼容旧版 Record<string, string>（单条评论），自动转换为单元素数组。
- */
-function parseStoredComments(raw: string | null): CommentMap {
-  if (raw === null || raw.trim() === '') return {}
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return {}
-    }
+function LoadedPagesStatus({
+  document,
+  pageNumbers
+}: {
+  readonly document: ReaderDocument | null
+  readonly pageNumbers: readonly number[]
+}) {
+  if (!document) return null
 
-    const result: CommentMap = {}
-    for (const [key, value] of Object.entries(parsed)) {
-      const items = parseCommentEntry(value)
-      if (items !== null) {
-        result[key] = items
-      }
-    }
-    return result
-  } catch {
-    return {}
+  return (
+    <section style={{ marginBottom: '24px' }}>
+      <h2>已加载页面 ({pageNumbers.length})</h2>
+      <div style={{ fontSize: '12px', color: '#64748b' }}>
+        已加载: {pageNumbers.length > 0 ? pageNumbers.join(', ') : '无'}
+      </div>
+    </section>
+  )
+}
+
+function RecentFileStatus({
+  file,
+  isParsing,
+  isSaved,
+  setIsSaved
+}: {
+  readonly file: File | null
+  readonly isParsing: boolean
+  readonly isSaved: boolean
+  readonly setIsSaved: (isSaved: boolean) => void
+}) {
+  if (!file || isParsing) return null
+
+  return (
+    <section style={{ marginBottom: '24px' }}>
+      <h2>Last Uploaded File</h2>
+      <p>Name: {file.name}</p>
+      <p>Size: {file.size} bytes</p>
+      <p>Type: {file.type}</p>
+      <p style={{ fontSize: '12px', color: '#64748b' }}>
+        The last successful file is stored in this browser.
+      </p>
+      <button
+        type='button'
+        disabled={!isSaved}
+        onClick={() => {
+          clearRecentFile().then((cleared) => {
+            if (cleared) setIsSaved(false)
+          })
+        }}
+        style={{
+          padding: '4px 8px',
+          fontSize: '12px',
+          cursor: isSaved ? 'pointer' : 'not-allowed'
+        }}
+      >
+        Forget saved file
+      </button>
+    </section>
+  )
+}
+
+function AnnotationHistoryControls({
+  document,
+  status,
+  onUndo,
+  onRedo
+}: {
+  readonly document: ReaderDocument | null
+  readonly status: ReaderAnnotationHistoryStatus
+  readonly onUndo: () => void
+  readonly onRedo: () => void
+}) {
+  if (!document) return null
+
+  return (
+    <section style={{ marginBottom: '24px' }}>
+      <h2>Undo / Redo</h2>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button
+          type='button'
+          onClick={onUndo}
+          disabled={!status.canUndo}
+          data-testid='undo-btn'
+          style={{
+            padding: '4px 12px',
+            fontSize: '13px',
+            cursor: status.canUndo ? 'pointer' : 'not-allowed',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            background: status.canUndo ? '#fff' : '#f5f5f5',
+            opacity: status.canUndo ? 1 : 0.6
+          }}
+        >
+          撤销 Undo
+        </button>
+        <button
+          type='button'
+          onClick={onRedo}
+          disabled={!status.canRedo}
+          data-testid='redo-btn'
+          style={{
+            padding: '4px 12px',
+            fontSize: '13px',
+            cursor: status.canRedo ? 'pointer' : 'not-allowed',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            background: status.canRedo ? '#fff' : '#f5f5f5',
+            opacity: status.canRedo ? 1 : 0.6
+          }}
+        >
+          重做 Redo
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function getDocumentPageCount(document: ReaderDocument | null): number {
+  if (!document) return 0
+  const serialized = document as IntermediateDocumentSerialized
+  if (Array.isArray(serialized.pages)) return serialized.pages.length
+  return (document as IntermediateDocument).pageCount
+}
+
+function parserSupportsFontScale(
+  parserLabel: SupportedParserLabel | null
+): boolean {
+  return parserLabel !== null && FONT_SCALABLE_PARSER_LABELS.has(parserLabel)
+}
+
+function getPageRange(
+  enabled: boolean,
+  start: number,
+  end: number
+): ReaderPageRange | undefined {
+  return enabled ? { start, end } : undefined
+}
+
+function getParserPages(
+  range: ReaderPageRange | undefined
+): number[] | undefined {
+  if (!range) return undefined
+
+  const start = Math.trunc(range.start)
+  const end = Math.trunc(range.end)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
+    return undefined
   }
+
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+}
+
+function useEdgeCropState() {
+  const [all, setAll] = useState<ReaderEdgeCrop | undefined>(undefined)
+  const [pages, setPages] = useState<
+    Record<string, ReaderEdgeCrop> | undefined
+  >(undefined)
+  const [isEditing, setIsEditing] = useState(false)
+  const apply = useCallback(
+    (pageNumber: number | null, crop: ReaderEdgeCrop) => {
+      if (pageNumber === null) {
+        setAll(crop)
+      } else {
+        setPages((current) => ({
+          ...current,
+          [`page-${pageNumber}`]: crop
+        }))
+      }
+      setIsEditing(false)
+    },
+    []
+  )
+
+  return { all, pages, isEditing, setAll, setPages, setIsEditing, apply }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,12 +552,25 @@ export function App() {
   const [document, setDocument] = useState<
     IntermediateDocument | IntermediateDocumentSerialized | null
   >(null)
+  const [loadedParserLabel, setLoadedParserLabel] =
+    useState<SupportedParserLabel | null>(null)
+  const [fontScale, setFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
+  // --- OCR 受控演示 state ---
+  const [automaticOcrEnabled, setAutomaticOcrEnabled] = useState(false)
+  // ocrPages：已开启 OCR 的页码列表（传给 Reader 的 ocr.pages，移除即按页关闭）
+  const [ocrPages, setOcrPages] = useState<number[]>([])
+  // ocrTextsByPage：受控 OCR 数据，OCR 完成后由 onOcrTextsChange 回传并持久化
+  const [ocrTextsByPage, setOcrTextsByPage] = useState<OcrTextsByPage>({})
+  const [ocrPageInput, setOcrPageInput] = useState<string>('1')
+  const [ocrError, setOcrError] = useState<string | null>(null)
+  // ocrDevMode：OCR 开发调试模式开关，开启后 OCR 文字可见（黑色 50%）并加红色外框
+  const [ocrDevMode, setOcrDevMode] = useState<boolean>(false)
   const [renderMode, setRenderMode] = useState<ReaderRenderMode>('layout')
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
@@ -285,11 +583,27 @@ export function App() {
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
   )
+  const [toolColor, setToolColor] = useState('#7d9ec0')
   const [containMarginX, setContainMarginX] = useState<number>(0)
   const [containMarginTop, setContainMarginTop] = useState<number>(0)
   const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
+  const {
+    all: edgeCropAll,
+    pages: edgeCropPages,
+    isEditing: edgeCropEditing,
+    setAll: setEdgeCropAll,
+    setPages: setEdgeCropPages,
+    setIsEditing: setEdgeCropEditing,
+    apply: handleEdgeCropApply
+  } = useEdgeCropState()
+  const [hideSecondPage, setHideSecondPage] = useState(false)
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
+  const [virtualPaper, setVirtualPaper] = useState<ReaderVirtualPaperState>({
+    x: 0,
+    y: 0,
+    scale: 1
+  })
   const requestIdRef = useRef(0)
   const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -297,6 +611,17 @@ export function App() {
   // --- Selection 库集成演示 state ---
   // ranges 列表：受控模式，Reader 内部不修改，由 onSelect 回调外部追加
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+  useEffect(() => {
+    traceHighlight('mode.render', {
+      mode: renderMode,
+      isEpub: loadedParserLabel === 'EPUB',
+      fileName: uploadedFile?.name ?? null,
+      ranges: summarizeHighlightRanges(ranges)
+    })
+  }, [loadedParserLabel, ranges, renderMode, uploadedFile?.name])
+  const [highlightDragPreview, setHighlightDragPreview] =
+    useState<HighlightDragPreview | null>(null)
+  const latestPrimaryPointerRef = useRef<PrimaryPointer | null>(null)
   // 当前选中的 range ID（点击高亮列表项时切换）
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedTool, setSelectedTool] =
@@ -307,17 +632,47 @@ export function App() {
   const [loadedPages, setLoadedPages] = useState<number[]>([])
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
-  const [commentingHighlight, setCommentingHighlight] =
-    useState<ReaderSelectionRange | null>(null)
-  const [commentDraft, setCommentDraft] = useState('')
-  // comments: 高亮 ID -> 评论列表；与 highlights 独立存储以避免污染 Reader range 类型
-  const [comments, setComments] = useState<CommentMap>({})
+  const [comments, setComments] = useState<ReaderComment[]>([])
+  const readerData = useMemo<ReaderData>(
+    () => ({
+      edgeCrop: {
+        all: edgeCropAll,
+        pages: edgeCropPages
+      },
+      hiddenPages: hideSecondPage ? [2] : [],
+      ranges,
+      rects,
+      pagePaintings,
+      virtualPaper,
+      bookmarkedPageNumbers
+    }),
+    [
+      bookmarkedPageNumbers,
+      edgeCropAll,
+      edgeCropPages,
+      hideSecondPage,
+      pagePaintings,
+      ranges,
+      rects,
+      virtualPaper
+    ]
+  )
+  const handleReaderDataChange = useCallback((nextData: ReaderData) => {
+    if (nextData.virtualPaper) {
+      setVirtualPaper(nextData.virtualPaper)
+    }
+  }, [])
+  // 评论面板开关状态 + 当前激活的高亮 ID（用于自动勾选评论绑定）
+  const [isCommentPanelOpen, setIsCommentPanelOpen] = useState(false)
+  const [activeHighlightId, setActiveHighlightId] = useState<string | null>(
+    null
+  )
   // 只有当前文件成功恢复评论后，持久化 effect 才允许写入，避免解析期间覆盖旧数据。
   const loadedCommentsFileNameRef = useRef<string | null>(null)
-  const commentResolverRef = useRef<
-    ((highlight: ReaderSelectionRange) => void) | null
-  >(null)
+  // OCR 持久化同理：仅当当前文件的 OCR 数据完成恢复后才允许写回
+  const loadedOcrFileNameRef = useRef<string | null>(null)
   const selectionRef = useRef<ReaderSelectionRef>(null)
+  useAnnotationHistoryShortcuts(selectionRef)
 
   // --- Annotation history (undo/redo) state ---
   // 从 onAnnotationHistoryChange 的 detail.status 中获取响应式状态，
@@ -339,8 +694,16 @@ export function App() {
   const handleAnnotationHistoryChange = useCallback(
     (
       next: ReaderAnnotationHistoryValue,
-      detail: ReaderAnnotationHistoryChangeDetail
+      detail: AnnotationHistoryChangeDetail
     ) => {
+      traceHighlight('demo.history.change', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        source: detail.source,
+        stateOwner: true,
+        selectedRangeId: next.selectedRangeId,
+        ranges: summarizeHighlightRanges(next.ranges)
+      })
       setRanges(next.ranges as ReaderSelectionRange[])
       setRects(next.rects as ReaderSelectionRectangle[])
       setSelectedRangeId(next.selectedRangeId)
@@ -355,17 +718,82 @@ export function App() {
         )
       }
     },
-    [uploadedFile?.name, pagePaintings]
+    [loadedParserLabel, pagePaintings, renderMode, uploadedFile?.name]
   )
 
-  // onSelect 回调：history 启用后，onAnnotationHistoryChange 是正规路径，
-  // 此回调保持为 no-op。
-  const handleSelectionSelect = useCallback(() => {}, [])
+  // onSelect 回调：点击高亮按钮后输出高亮数据到控制台
+  const handleSelectionSelect = useCallback(
+    (range: ReaderSelectionRange) => {
+      traceHighlight('demo.callback.select', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        ranges: summarizeHighlightRanges([range])
+      })
+    },
+    [loadedParserLabel, renderMode]
+  )
 
-  // onHighlight 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
-  const handleHighlight = useCallback(() => {}, [])
+  const handleHighlight = useCallback(
+    (range: ReaderSelectionRange) => {
+      traceHighlight('demo.callback.highlight', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        stateOwner: renderMode === 'text',
+        ranges: summarizeHighlightRanges([range])
+      })
+      if (renderMode !== 'text') return
+
+      setRanges((prev) => {
+        const existingIndex = prev.findIndex((item) => item.id === range.id)
+        const nextRanges =
+          existingIndex === -1
+            ? [...prev, range]
+            : prev.map((item) => (item.id === range.id ? range : item))
+        persistHighlights(uploadedFile?.name, nextRanges, rects, pagePaintings)
+        return nextRanges
+      })
+      setSelectedRangeId(range.id)
+    },
+    [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
+  )
+
+  const handleLinkedDataChange = useCallback(
+    (next: ReaderLinkedSelectionData) => {
+      traceHighlight('demo.callback.linked-data', {
+        mode: renderMode,
+        isEpub: loadedParserLabel === 'EPUB',
+        stateOwner: renderMode === 'text',
+        selectedRangeId: next.selectedRangeId,
+        ranges: summarizeHighlightRanges(next.items)
+      })
+      if (renderMode !== 'text') return
+
+      setRanges(next.items)
+      setSelectedRangeId(next.selectedRangeId)
+      persistHighlights(uploadedFile?.name, next.items, rects, pagePaintings)
+    },
+    [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
+  )
+
+  const handleDragHighlight = useCallback((highlight: ReaderSelectionRange) => {
+    const pointer = latestPrimaryPointerRef.current
+    if (pointer === null) return
+
+    setHighlightDragPreview({ highlight, ...pointer })
+  }, [])
+
+  const isHighlightDragging = highlightDragPreview !== null
+  useHighlightDragTracking(isHighlightDragging, setHighlightDragPreview)
 
   const handleSelectionEnd = useCallback(() => {}, [])
+
+  // 工具切换：底部栏与设置面板 select 共用；
+  // 切换工具时仅重置 selectedRangeId/selectedRectId 选中态，不清除标注数据本身。
+  const handleToolChange = useCallback((nextTool: ReaderPageTool) => {
+    setSelectedTool(nextTool)
+    setSelectedRangeId(null)
+    setSelectedRectId(null)
+  }, [])
 
   // onSelectRange 回调：用户点击已有 range 时触发（selection-only，不创建 checkpoint）
   const handleSelectRange = useCallback((id: string | null) => {
@@ -389,58 +817,31 @@ export function App() {
     [rects, pagePaintings, uploadedFile?.name]
   )
 
+  // onCommentHighlight：立即 resolve Promise 让 Reader 关闭 popover，
+  // 同时打开 CommentPanel 并设置 activeHighlightId（自动勾选评论绑定）
   const handleCommentHighlight = useCallback(
-    (highlight: ReaderSelectionRange) =>
-      new Promise<ReaderSelectionRange>((resolve) => {
-        commentResolverRef.current = resolve
-        setCommentingHighlight(highlight)
-        // 每次打开评论面板都是新增一条评论，因此使用空草稿
-        setCommentDraft('')
-      }),
-    []
-  )
-
-  const handleFinishComment = useCallback(() => {
-    if (!commentingHighlight || !commentResolverRef.current) return
-
-    const trimmed = commentDraft.trim()
-    if (trimmed !== '') {
-      // 将新评论追加到该高亮的评论列表末尾
-      setComments((prev) => {
-        const existing = prev[commentingHighlight.id] ?? []
-        return {
-          ...prev,
-          [commentingHighlight.id]: [...existing, createCommentItem(trimmed)]
-        }
-      })
-    }
-
-    const resolve = commentResolverRef.current
-    commentResolverRef.current = null
-    setCommentingHighlight(null)
-    setCommentDraft('')
-    resolve(commentingHighlight)
-  }, [commentingHighlight, commentDraft])
-
-  // 删除某条高亮下的单条评论
-  const handleDeleteComment = useCallback(
-    (highlightId: string, commentId: string) => {
-      setComments((prev) => {
-        const items = prev[highlightId]
-        if (!items) return prev
-        const filtered = items.filter((item) => item.id !== commentId)
-        if (filtered.length === items.length) return prev
-        const next = { ...prev }
-        if (filtered.length === 0) {
-          delete next[highlightId]
-        } else {
-          next[highlightId] = filtered
-        }
-        return next
-      })
+    (highlight: ReaderSelectionRange) => {
+      setActiveHighlightId(highlight.id)
+      setIsCommentPanelOpen(true)
+      return Promise.resolve(highlight)
     },
     []
   )
+
+  // CommentPanel 的高亮跳转回调：滚动到指定 range
+  const handleJumpToHighlight = useCallback((highlightId: string) => {
+    selectionRef.current?.scrollToRange(highlightId)
+  }, [])
+
+  // CommentPanel 关闭回调
+  const handleCloseCommentPanel = useCallback(() => {
+    setIsCommentPanelOpen(false)
+    setActiveHighlightId(null)
+  }, [])
+
+  const handleCommentsChange = useCallback((next: readonly ReaderComment[]) => {
+    setComments(Array.from(next))
+  }, [])
 
   // 评论数据持久化：随 comments 变化写入 localStorage
   useEffect(() => {
@@ -449,16 +850,8 @@ export function App() {
 
     localStorage.setItem(
       `hamster-reader-demo:comments:${loadedFileName}`,
-      JSON.stringify(comments)
+      serializeComments(comments)
     )
-  }, [comments])
-
-  const commentCountByRangeId = useMemo(() => {
-    const result: Record<string, number> = {}
-    for (const [highlightId, items] of Object.entries(comments)) {
-      result[highlightId] = items.length
-    }
-    return result
   }, [comments])
 
   // onCreateRect 回调：history 启用后为 no-op（onAnnotationHistoryChange 负责状态更新）。
@@ -493,7 +886,9 @@ export function App() {
   // library 会创建 checkpoint 并通过 onAnnotationHistoryChange 回传空快照。
   const handleClearAllRanges = useCallback(() => {
     selectionRef.current?.clear()
-    setComments({})
+    setComments([])
+    setIsCommentPanelOpen(false)
+    setActiveHighlightId(null)
   }, [])
 
   const handleRemoveRange = useCallback(
@@ -503,17 +898,21 @@ export function App() {
         persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
-      setComments((prev) => {
-        if (!(id in prev)) return prev
-        const next = { ...prev }
-        delete next[id]
-        return next
-      })
+      setComments((prev) => removeHighlightFromComments(prev, id))
       if (selectedRangeId === id) {
         setSelectedRangeId(null)
       }
+      if (activeHighlightId === id) {
+        setActiveHighlightId(null)
+      }
     },
-    [rects, pagePaintings, selectedRangeId, uploadedFile?.name]
+    [
+      rects,
+      pagePaintings,
+      selectedRangeId,
+      activeHighlightId,
+      uploadedFile?.name
+    ]
   )
 
   // 包装 setPagePaintings：pagePaintings 不走 annotation history，需独立持久化。
@@ -565,39 +964,80 @@ export function App() {
     selectionRef.current?.scrollToPosition({ x: scrollX, y: scrollY })
   }, [scrollX, scrollY])
 
-  // Demo-only 键盘快捷键：Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做。
-  // 必须忽略 input/textarea/contenteditable 中的按键，避免与文本编辑冲突。
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null
-      if (
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA' ||
-        target?.isContentEditable === true
-      ) {
-        return
-      }
+  // 当前文档页数（兼容 serialized pages 数组与运行时 pageCount）
+  const documentPageCount = getDocumentPageCount(document)
 
-      const isMac = navigator.platform.toLowerCase().includes('mac')
-      const modifier = isMac ? event.metaKey : event.ctrlKey
-      if (!modifier) return
-
-      const key = event.key.toLowerCase()
-      const isUndo = key === 'z' && !event.shiftKey
-      const isRedo = (key === 'z' && event.shiftKey) || key === 'y'
-
-      if (isUndo) {
-        event.preventDefault()
-        selectionRef.current?.undo()
-      } else if (isRedo) {
-        event.preventDefault()
-        selectionRef.current?.redo()
-      }
+  // 点击「OCR」按钮：校验页码后加入 ocrPages，Reader 会对该页发起识别
+  const handleStartOcr = useCallback(() => {
+    const page = Number(ocrPageInput)
+    if (!Number.isInteger(page) || page <= 0) {
+      setOcrError('请输入有效的页码（正整数）')
+      return
     }
+    if (documentPageCount > 0 && page > documentPageCount) {
+      setOcrError(`页码超出范围（当前文档共 ${documentPageCount} 页）`)
+      return
+    }
+    setOcrError(null)
+    setAutomaticOcrEnabled(false)
+    setOcrPages((current) =>
+      current.includes(page)
+        ? current
+        : [...current, page].sort((left, right) => left - right)
+    )
+  }, [ocrPageInput, documentPageCount])
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+  // 按页关闭 OCR：仅从开启列表移除；已识别数据保留，重新开启时无需重复 OCR
+  const handleCloseOcrPage = useCallback((page: number) => {
+    setAutomaticOcrEnabled(false)
+    setOcrPages((current) => current.filter((item) => item !== page))
   }, [])
+
+  // 全局关闭：清空开启列表，文档内所有 OCR 文本层隐藏（数据同样保留）
+  const handleCloseAllOcr = useCallback(() => {
+    setAutomaticOcrEnabled(false)
+    setOcrPages([])
+  }, [])
+
+  const handleOcrChange = useCallback((enabled: boolean) => {
+    setOcrPages([])
+    setAutomaticOcrEnabled(enabled)
+  }, [])
+
+  // Reader OCR 完成回调：写入受控 state（持久化 effect 会同步到 localStorage）
+  const handleOcrTextsChange = useCallback(
+    (pageNumber: number, texts: IntermediateText[]) => {
+      setOcrTextsByPage((current) => ({ ...current, [pageNumber]: texts }))
+    },
+    []
+  )
+
+  const handleOcrError = useCallback(
+    (error: unknown, detail: { pageNumber: number }) => {
+      setOcrError(
+        `第 ${detail.pageNumber} 页 OCR 失败：${getParserErrorMessage(error)}`
+      )
+    },
+    []
+  )
+
+  useEffect(() => {
+    const loadedFileName = loadedOcrFileNameRef.current
+    if (!loadedFileName) return
+
+    let mode: DemoOcrMode = ocrPages.length > 0 ? 'manual' : 'off'
+    if (automaticOcrEnabled) {
+      mode = 'automatic'
+    }
+    localStorage.setItem(
+      `${OCR_STORAGE_PREFIX}${loadedFileName}`,
+      serializeOcrStorage({
+        mode,
+        pages: ocrPages,
+        textsByPage: ocrTextsByPage
+      })
+    )
+  }, [automaticOcrEnabled, ocrPages, ocrTextsByPage])
 
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
@@ -607,34 +1047,28 @@ export function App() {
     selectionRef.current?.redo()
   }, [])
 
-  const buildPageRange = useCallback((): ReaderPageRange | undefined => {
-    if (!usePageRange) {
-      return undefined
-    }
-    return { start: pageRangeStart, end: pageRangeEnd }
-  }, [usePageRange, pageRangeStart, pageRangeEnd])
-
-  const buildParserPages = useCallback((): number[] | undefined => {
-    if (!usePageRange) {
-      return undefined
-    }
-    const start = Math.trunc(pageRangeStart)
-    const end = Math.trunc(pageRangeEnd)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
-      return undefined
-    }
-    return Array.from({ length: end - start + 1 }, (_, index) => start + index)
-  }, [usePageRange, pageRangeStart, pageRangeEnd])
+  const handleRenderModeChange = useCallback(
+    (nextRenderMode: ReaderRenderMode) => {
+      setRenderMode(nextRenderMode)
+      if (nextRenderMode === 'text') {
+        setEdgeCropEditing(false)
+      }
+    },
+    [setEdgeCropEditing]
+  )
 
   const handleFileUpload = useCallback(
     async (file: File) => {
+      setOcrError(null)
       setParseError(null)
 
       const requestId = ++requestIdRef.current
       setIsParsing(true)
 
       try {
-        const selectedPages = buildParserPages()
+        const selectedPages = getParserPages(
+          getPageRange(usePageRange, pageRangeStart, pageRangeEnd)
+        )
         const result = await parseUploadedDocument(file, selectedPages)
 
         if (requestId !== requestIdRef.current) {
@@ -644,12 +1078,14 @@ export function App() {
         if (result.status === 'unsupported') {
           setParseError(result.error)
           setDocument(null)
+          setLoadedParserLabel(null)
           return
         }
 
         if (result.status === 'failed') {
           setParseError(`Failed to parse ${result.label}: ${result.error}`)
           setDocument(null)
+          setLoadedParserLabel(null)
           return
         }
 
@@ -658,6 +1094,7 @@ export function App() {
             `Failed to parse ${result.label}: received undefined result`
           )
           setDocument(null)
+          setLoadedParserLabel(null)
           return
         }
 
@@ -676,6 +1113,10 @@ export function App() {
         }
         setUploadedFile(file)
         setDocument(result.document)
+        setLoadedParserLabel(result.label)
+        setRenderMode(result.label === 'EPUB' ? 'text' : 'layout')
+        setFontScale(1.5)
+        setVirtualPaper({ x: 0, y: 0, scale: 1 })
 
         const storedHighlights = localStorage.getItem(
           `hamster-reader-demo:highlights:${file.name}`
@@ -684,7 +1125,6 @@ export function App() {
         setRanges(Array.from(parsedHighlights.ranges))
         setRects(Array.from(parsedHighlights.rects))
         setPagePaintings(parsedHighlights.paintings)
-
         setBookmarkedPageNumbers(
           parseStoredBookmarks(
             localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
@@ -695,7 +1135,16 @@ export function App() {
           `hamster-reader-demo:comments:${file.name}`
         )
         loadedCommentsFileNameRef.current = file.name
-        setComments(parseStoredComments(storedComments))
+        setComments(parseComments(storedComments))
+
+        // 恢复该文件持久化的 OCR 开启列表与识别数据（受控回传给 Reader）
+        const parsedOcr = parseOcrStorage(
+          localStorage.getItem(`${OCR_STORAGE_PREFIX}${file.name}`)
+        )
+        loadedOcrFileNameRef.current = file.name
+        setOcrPages(parsedOcr.pages)
+        setAutomaticOcrEnabled(parsedOcr.mode === 'automatic')
+        setOcrTextsByPage(parsedOcr.textsByPage)
 
         setSelectedRangeId(null)
         setSelectedRectId(null)
@@ -706,13 +1155,14 @@ export function App() {
 
         setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
         setDocument(null)
+        setLoadedParserLabel(null)
       } finally {
         if (requestId === requestIdRef.current) {
           setIsParsing(false)
         }
       }
     },
-    [buildParserPages]
+    [pageRangeEnd, pageRangeStart, usePageRange]
   )
 
   const handleManualFileUpload = useCallback(
@@ -746,26 +1196,23 @@ export function App() {
     }
   }, [])
 
+  const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
+
   return (
-    <main data-testid='reader-demo-root' className='hamster-demo-shell'>
+    <main
+      data-testid='reader-demo-root'
+      className='hamster-demo-shell'
+      onPointerDownCapture={(event) =>
+        trackPrimaryPointer(event, latestPrimaryPointerRef)
+      }
+      onPointerMoveCapture={(event) =>
+        trackPrimaryPointer(event, latestPrimaryPointerRef)
+      }
+    >
       <div className='hamster-demo-sidebar'>
         <div data-testid='demo-sidebar-settings'>
           <h1>Hamster Reader Demo</h1>
-          {isParsing && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>Parsing...</h2>
-              <p>Loading PDF content...</p>
-            </section>
-          )}
-          {parseError && (
-            <section
-              data-testid='demo-error-state'
-              style={{ marginBottom: '24px', color: 'red' }}
-            >
-              <h2>Parse Error</h2>
-              <p>{parseError}</p>
-            </section>
-          )}
+          <ParseStatus isParsing={isParsing} parseError={parseError} />
 
           <section style={{ marginBottom: '24px' }}>
             <h2>Upload {SUPPORTED_FILE_TYPE_LABEL}</h2>
@@ -847,7 +1294,7 @@ export function App() {
                 <input
                   type='file'
                   aria-label='Choose another file'
-                  accept='.pdf,.txt,.docx,.md,.markdown'
+                  accept='.pdf,.txt,.docx,.epub,.md,.markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/*'
                   disabled={isParsing}
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0]
@@ -863,42 +1310,144 @@ export function App() {
             {/* The single Reader handles both upload and document rendering on the right panel */}
           </section>
 
+          <LoadedPagesStatus document={document} pageNumbers={loadedPages} />
+
           {document && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>已加载页面 ({loadedPages.length})</h2>
-              <div style={{ fontSize: '12px', color: '#64748b' }}>
-                已加载: {loadedPages.length > 0 ? loadedPages.join(', ') : '无'}
+            <section
+              style={{ marginBottom: '24px' }}
+              data-testid='ocr-controls'
+            >
+              <h2>OCR 文字识别</h2>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  alignItems: 'center',
+                  marginBottom: '8px'
+                }}
+              >
+                <input
+                  type='number'
+                  min={1}
+                  value={ocrPageInput}
+                  onChange={(event) => setOcrPageInput(event.target.value)}
+                  style={{ width: '70px', padding: '4px' }}
+                  data-testid='ocr-page-input'
+                  aria-label='OCR 页码'
+                />
+                <button
+                  type='button'
+                  onClick={handleStartOcr}
+                  data-testid='ocr-start-btn'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: '#fff'
+                  }}
+                >
+                  OCR
+                </button>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={ocrDevMode}
+                    onChange={(event) => setOcrDevMode(event.target.checked)}
+                    data-testid='ocr-dev-mode-toggle'
+                  />
+                  开发模式（红框标注 OCR 文字）
+                </label>
               </div>
+              {ocrError && (
+                <p
+                  data-testid='ocr-error'
+                  style={{ color: '#b91c1c', fontSize: '12px' }}
+                >
+                  {ocrError}
+                </p>
+              )}
+              {ocrPages.length > 0 && (
+                <div data-testid='ocr-active-pages'>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '6px',
+                      marginBottom: '8px'
+                    }}
+                  >
+                    {ocrPages.map((page) => (
+                      <span
+                        key={`ocr-page-${page}`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '2px 6px',
+                          fontSize: '12px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          background: '#fafafa'
+                        }}
+                        data-testid={`ocr-active-page-${page}`}
+                      >
+                        第 {page} 页
+                        {ocrTextsByPage[page] ? '（已识别）' : '（识别中）'}
+                        <button
+                          type='button'
+                          aria-label={`关闭第 ${page} 页 OCR`}
+                          onClick={() => handleCloseOcrPage(page)}
+                          data-testid={`ocr-close-page-${page}`}
+                          style={{
+                            padding: '0 4px',
+                            cursor: 'pointer',
+                            border: 'none',
+                            background: 'transparent',
+                            color: '#f44336',
+                            fontSize: '13px'
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <button
+                    type='button'
+                    onClick={handleCloseAllOcr}
+                    data-testid='ocr-close-all-btn'
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      background: '#fff'
+                    }}
+                  >
+                    全部关闭
+                  </button>
+                </div>
+              )}
             </section>
           )}
 
-          {uploadedFile && !isParsing && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>Last Uploaded File</h2>
-              <p>Name: {uploadedFile.name}</p>
-              <p>Size: {uploadedFile.size} bytes</p>
-              <p>Type: {uploadedFile.type}</p>
-              <p style={{ fontSize: '12px', color: '#64748b' }}>
-                The last successful file is stored in this browser.
-              </p>
-              <button
-                type='button'
-                disabled={!hasSavedRecentFile}
-                onClick={() => {
-                  clearRecentFile().then((cleared) => {
-                    if (cleared) setHasSavedRecentFile(false)
-                  })
-                }}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  cursor: hasSavedRecentFile ? 'pointer' : 'not-allowed'
-                }}
-              >
-                Forget saved file
-              </button>
-            </section>
-          )}
+          <RecentFileStatus
+            file={uploadedFile}
+            isParsing={isParsing}
+            isSaved={hasSavedRecentFile}
+            setIsSaved={setHasSavedRecentFile}
+          />
 
           {document && (
             <section style={{ marginBottom: '24px' }}>
@@ -920,7 +1469,7 @@ export function App() {
                         nextRenderMode === 'layout' ||
                         nextRenderMode === 'text'
                       ) {
-                        setRenderMode(nextRenderMode)
+                        handleRenderModeChange(nextRenderMode)
                       }
                     }}
                     data-testid='render-mode-select'
@@ -1038,6 +1587,98 @@ export function App() {
                     gap: '8px'
                   }}
                 >
+                  <input
+                    type='checkbox'
+                    checked={edgeCropAll !== undefined}
+                    onChange={(event) =>
+                      setEdgeCropAll(
+                        event.currentTarget.checked
+                          ? { top: 0.1, right: 0.2, bottom: 0.05, left: 0.15 }
+                          : undefined
+                      )
+                    }
+                    data-testid='global-edge-crop-toggle'
+                  />
+                  <span>全局四边裁切 Global edge crop</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={edgeCropPages !== undefined}
+                    onChange={(event) =>
+                      setEdgeCropPages(
+                        event.currentTarget.checked
+                          ? {
+                              'page-1': {
+                                top: 0.02,
+                                right: 0.05,
+                                bottom: 0.2,
+                                left: 0.25
+                              }
+                            }
+                          : undefined
+                      )
+                    }
+                    data-testid='special-edge-crop-toggle'
+                  />
+                  <span>第 1 页特殊裁切 Page 1 override</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                {/* 边缘裁切编辑模式开关：点击后已加载页面显示 4 条可拖拽虚线，
+                    点击页内「应用到当前页/应用到全部」后自动退出该模式 */}
+                <button
+                  type='button'
+                  onClick={() => setEdgeCropEditing((prev) => !prev)}
+                  data-testid='edge-crop-edit-toggle'
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    background: edgeCropEditing ? '#2563eb' : '#fff',
+                    color: edgeCropEditing ? '#fff' : '#333'
+                  }}
+                >
+                  边缘裁切 Edge Crop
+                </button>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={hideSecondPage}
+                    onChange={(event) =>
+                      setHideSecondPage(event.currentTarget.checked)
+                    }
+                    data-testid='hide-second-page-toggle'
+                  />
+                  <span>隐藏第 2 页 Hide page 2</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
                   <span>水平留白 Margin X (px)</span>
                   <input
                     type='number'
@@ -1117,11 +1758,7 @@ export function App() {
                         nextTool === 'rect-selection' ||
                         nextTool === 'drawing'
                       ) {
-                        setSelectedTool(nextTool)
-                        // 切换工具时取消所有选中状态（不清除数据本身，
-                        // 仅重置 selectedRangeId/selectedRectId 高亮选中）。
-                        setSelectedRangeId(null)
-                        setSelectedRectId(null)
+                        handleToolChange(nextTool)
                       }
                     }}
                     data-testid='selection-tool-select'
@@ -1199,47 +1836,12 @@ export function App() {
             </section>
           )}
 
-          {document && (
-            <section style={{ marginBottom: '24px' }}>
-              <h2>Undo / Redo</h2>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type='button'
-                  onClick={handleUndo}
-                  disabled={!historyStatus.canUndo}
-                  data-testid='undo-btn'
-                  style={{
-                    padding: '4px 12px',
-                    fontSize: '13px',
-                    cursor: historyStatus.canUndo ? 'pointer' : 'not-allowed',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    background: historyStatus.canUndo ? '#fff' : '#f5f5f5',
-                    opacity: historyStatus.canUndo ? 1 : 0.6
-                  }}
-                >
-                  撤销 Undo
-                </button>
-                <button
-                  type='button'
-                  onClick={handleRedo}
-                  disabled={!historyStatus.canRedo}
-                  data-testid='redo-btn'
-                  style={{
-                    padding: '4px 12px',
-                    fontSize: '13px',
-                    cursor: historyStatus.canRedo ? 'pointer' : 'not-allowed',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    background: historyStatus.canRedo ? '#fff' : '#f5f5f5',
-                    opacity: historyStatus.canRedo ? 1 : 0.6
-                  }}
-                >
-                  重做 Redo
-                </button>
-              </div>
-            </section>
-          )}
+          <AnnotationHistoryControls
+            document={document}
+            status={historyStatus}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+          />
         </div>
 
         {ranges.length + rects.length > 0 && (
@@ -1274,149 +1876,62 @@ export function App() {
               </button>
             </div>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {ranges.map((range) => (
-                <li
-                  key={`range-${range.id}`}
-                  style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '4px 0',
-                    fontSize: '13px'
-                  }}
-                  className='hamster-demo-action-group'
-                >
-                  <button
-                    type='button'
-                    aria-label='Select highlight'
-                    onClick={() => handleHighlightSelect(range.id)}
+              {ranges.map((range) => {
+                return (
+                  <li
+                    key={`range-${range.id}`}
                     style={{
-                      flex: 1,
-                      textAlign: 'left',
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      border:
-                        selectedRangeId === range.id
-                          ? '2px solid #2196f3'
-                          : '1px solid #ddd',
-                      borderRadius: '4px',
-                      background:
-                        selectedRangeId === range.id ? '#e3f2fd' : '#fafafa',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {range.text || '(空选区)'}
-                  </button>
-                  <button
-                    type='button'
-                    aria-label='Remove highlight'
-                    onClick={() => handleRemoveRange(range.id)}
-                    style={{
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      border: '1px solid #f44336',
-                      borderRadius: '4px',
-                      background: '#fff',
-                      color: '#f44336',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '4px 0',
                       fontSize: '13px'
                     }}
+                    className='hamster-demo-action-group'
                   >
-                    删除
-                  </button>
-                  {(comments[range.id] ?? []).length > 0 && (
-                    <ul
+                    <button
+                      type='button'
+                      aria-label='Select highlight'
+                      onClick={() => handleHighlightSelect(range.id)}
                       style={{
-                        flexBasis: '100%',
-                        listStyle: 'none',
-                        padding: '8px',
-                        margin: '4px 0 0',
-                        borderRadius: '6px',
-                        background: '#f1f5f9'
+                        flex: 1,
+                        textAlign: 'left',
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        border:
+                          selectedRangeId === range.id
+                            ? '2px solid #2196f3'
+                            : '1px solid #ddd',
+                        borderRadius: '4px',
+                        background:
+                          selectedRangeId === range.id ? '#e3f2fd' : '#fafafa',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
                       }}
                     >
-                      {comments[range.id]?.map((item, index) => (
-                        <li
-                          key={item.id}
-                          style={{
-                            padding:
-                              index < (comments[range.id]?.length ?? 0) - 1
-                                ? '0 0 8px'
-                                : 0,
-                            marginBottom:
-                              index < (comments[range.id]?.length ?? 0) - 1
-                                ? '8px'
-                                : 0,
-                            borderBottom:
-                              index < (comments[range.id]?.length ?? 0) - 1
-                                ? '1px solid #e2e8f0'
-                                : 'none'
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              marginBottom: '4px'
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                color: '#64748b',
-                                fontWeight: 600
-                              }}
-                            >
-                              #{index + 1}
-                            </span>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <span
-                                style={{ fontSize: '11px', color: '#94a3b8' }}
-                              >
-                                {formatCommentTime(item.createdAt)}
-                              </span>
-                              <button
-                                type='button'
-                                aria-label='Delete comment'
-                                onClick={() =>
-                                  handleDeleteComment(range.id, item.id)
-                                }
-                                style={{
-                                  padding: '0 4px',
-                                  fontSize: '11px',
-                                  lineHeight: 1,
-                                  cursor: 'pointer',
-                                  border: 'none',
-                                  borderRadius: '3px',
-                                  background: 'transparent',
-                                  color: '#ef4444'
-                                }}
-                              >
-                                删除
-                              </button>
-                            </div>
-                          </div>
-                          <p
-                            style={{
-                              margin: 0,
-                              fontSize: '12px',
-                              lineHeight: 1.5,
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                              color: '#334155'
-                            }}
-                          >
-                            {item.content}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
+                      {range.text || '(空选区)'}
+                    </button>
+                    <button
+                      type='button'
+                      aria-label='Remove highlight'
+                      onClick={() => handleRemoveRange(range.id)}
+                      style={{
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        border: '1px solid #f44336',
+                        borderRadius: '4px',
+                        background: '#fff',
+                        color: '#f44336',
+                        fontSize: '13px'
+                      }}
+                    >
+                      删除
+                    </button>
+                  </li>
+                )
+              })}
               {rects.map((rect) => (
                 <li
                   key={`rect-${rect.id}`}
@@ -1486,27 +2001,50 @@ export function App() {
           minWidth: 0
         }}
       >
-        {!document && !parseError && !isParsing && (
-          <div data-testid='demo-empty-state' style={{ display: 'none' }} />
-        )}
+        <EmptyState
+          document={document}
+          parseError={parseError}
+          isParsing={isParsing}
+        />
         <Reader
           document={document || undefined}
+          isEpub={loadedParserLabel === 'EPUB'}
+          isPdf={loadedParserLabel === 'PDF'}
+          data={readerData}
+          onDataChange={handleReaderDataChange}
+          edgeCropEditing={edgeCropEditing}
+          onEdgeCropEditingChange={setEdgeCropEditing}
+          onEdgeCropApply={handleEdgeCropApply}
           renderMode={renderMode}
+          onRenderModeChange={handleRenderModeChange}
+          fontScale={supportsFontScale ? fontScale : undefined}
+          onFontScaleChange={setFontScale}
           touchPanMode={touchPanMode}
+          onTouchPanModeChange={setTouchPanMode}
           onFileUpload={handleManualFileUpload}
           emptyText='No document loaded'
-          pageRange={buildPageRange()}
+          pageRange={getPageRange(usePageRange, pageRangeStart, pageRangeEnd)}
           overlayRectType='percent'
-          ocr={{ enabled: false }}
+          ocr={
+            ocrPages.length > 0
+              ? { enabled: true, pages: ocrPages }
+              : automaticOcrEnabled
+          }
+          onOcrChange={handleOcrChange}
+          ocrTexts={ocrTextsByPage}
+          onOcrTextsChange={handleOcrTextsChange}
+          onOcrError={handleOcrError}
+          ocrDebug={ocrDevMode}
           onTextSelectionChange={() => {}}
           onTextSelectionEnd={() => {}}
           onSelectText={() => {}}
-          ranges={ranges}
           selectedRangeId={selectedRangeId}
           onSelect={handleSelectionSelect}
+          onLinkedDataChange={handleLinkedDataChange}
           onSelectRange={handleSelectRange}
           onUpdateRange={handleUpdateRange}
           onHighlight={handleHighlight}
+          onDragHighlight={handleDragHighlight}
           onRemoveRange={handleRemoveRange}
           onHighlightColorChange={setHighlightColor}
           onSelectionEnd={handleSelectionEnd}
@@ -1518,20 +2056,21 @@ export function App() {
           containMarginTop={containMarginTop}
           containMarginBottom={containMarginBottom}
           selectedTool={selectedTool}
-          pagePaintings={pagePaintings}
+          onSelectedToolChange={handleToolChange}
           onPagePaintingsChange={handlePagePaintingsChange}
           showPageBrowser={showPageBrowser}
           onPageBrowserClose={() => setShowPageBrowser(false)}
           themeColor={themeColor}
-          commentCountByRangeId={commentCountByRangeId}
-          commentCountByRectId={commentCountByRangeId}
-          bookmarkedPageNumbers={bookmarkedPageNumbers}
+          drawingStrokeColor={toolColor}
+          onDrawingStrokeColorChange={setToolColor}
+          comments={comments}
+          onCommentsChange={handleCommentsChange}
           onTogglePageBookmark={handleTogglePageBookmark}
-          rects={rects}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}
           onUpdateRect={handleUpdateRect}
+          onRemoveRect={handleRemoveRect}
           annotationHistory={{
             enabled: true,
             resetKey: uploadedFile?.name ?? 'none'
@@ -1541,133 +2080,27 @@ export function App() {
           onPageLoadStatusChange={setLoadedPages}
         />
       </div>
-      {commentingHighlight && (
-        <aside
-          role='dialog'
-          aria-modal='true'
-          aria-labelledby='highlight-comment-title'
-          data-testid='highlight-comment-panel'
+      {highlightDragPreview !== null ? (
+        <div
+          aria-hidden='true'
+          className='hamster-demo-highlight-drag-preview'
+          data-testid='highlight-drag-preview'
           style={{
-            position: 'fixed',
-            right: '24px',
-            bottom: '24px',
-            zIndex: 1000,
-            width: 'min(360px, calc(100vw - 48px))',
-            boxSizing: 'border-box',
-            padding: '20px',
-            border: '1px solid #cbd5e1',
-            borderRadius: '12px',
-            background: '#fff',
-            boxShadow: '0 20px 48px rgba(15, 23, 42, 0.2)'
+            transform: `translate3d(${highlightDragPreview.x + 14}px, ${highlightDragPreview.y + 14}px, 0)`
           }}
         >
-          <h2
-            id='highlight-comment-title'
-            style={{ margin: '0 0 8px', fontSize: '18px' }}
-          >
-            评论高亮
-          </h2>
-          <p style={{ margin: '0 0 12px', color: '#64748b' }}>
-            {commentingHighlight.text || '(空选区)'}
-          </p>
-          {(comments[commentingHighlight.id] ?? []).length > 0 && (
-            <div
-              style={{
-                maxHeight: '160px',
-                overflowY: 'auto',
-                marginBottom: '12px',
-                padding: '10px',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-                background: '#f8fafc'
-              }}
-            >
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                {comments[commentingHighlight.id]?.map((item, index) => (
-                  <li
-                    key={item.id}
-                    style={{
-                      padding: '8px 0',
-                      borderBottom:
-                        index <
-                        (comments[commentingHighlight.id]?.length ?? 0) - 1
-                          ? '1px solid #e2e8f0'
-                          : 'none'
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: '4px'
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          color: '#64748b',
-                          fontWeight: 600
-                        }}
-                      >
-                        #{index + 1}
-                      </span>
-                      <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                        {formatCommentTime(item.createdAt)}
-                      </span>
-                    </div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: '13px',
-                        lineHeight: 1.5,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        color: '#334155'
-                      }}
-                    >
-                      {item.content}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <textarea
-            aria-label='评论内容'
-            value={commentDraft}
-            onChange={(event) => setCommentDraft(event.currentTarget.value)}
-            placeholder='输入新评论…'
-            style={{
-              boxSizing: 'border-box',
-              width: '100%',
-              minHeight: '96px',
-              marginBottom: '12px',
-              padding: '10px',
-              border: '1px solid #cbd5e1',
-              borderRadius: '8px',
-              resize: 'vertical',
-              font: 'inherit'
-            }}
-          />
-          <button
-            type='button'
-            onClick={handleFinishComment}
-            style={{
-              width: '100%',
-              minHeight: '44px',
-              border: 0,
-              borderRadius: '8px',
-              background: '#2563eb',
-              color: '#fff',
-              font: 'inherit',
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
-          >
-            完成评论
-          </button>
-        </aside>
+          {highlightDragPreview.highlight.text.trim() || '高亮内容'}
+        </div>
+      ) : null}
+      {isCommentPanelOpen && (
+        <CommentPanel
+          comments={comments}
+          ranges={ranges}
+          activeHighlightId={activeHighlightId}
+          onCommentsChange={handleCommentsChange}
+          onJumpToHighlight={handleJumpToHighlight}
+          onClose={handleCloseCommentPanel}
+        />
       )}
     </main>
   )

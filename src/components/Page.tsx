@@ -10,7 +10,7 @@ import type {
   IntermediatePageSerialized,
   IntermediateTextSerialized
 } from '@hamster-note/types'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PageDrawingLayer, sanitizeDrawingValue } from './PageDrawingLayer'
 
@@ -19,7 +19,28 @@ const STANDALONE_DRAWING_GESTURES = [
   'TouchDoubleZoom'
 ] as const
 
+/**
+ * 文档流页面的坐标基准宽度：A4 纸宽度（pt，72dpi 下 210mm = 595pt）。
+ * 与 IntermediateDocumentViewer 的 DEFAULT_PAGE_SIZE 宽度保持一致。
+ *
+ * useFlowLayout 页面不再受自身 width/height 约束：宽度按 A4 纸宽度计算
+ * 文字缩放，高度由文档流内容自然撑开。
+ */
+export const FLOW_LAYOUT_PAGE_WIDTH = 595
+
 export type ReaderPageTool = 'text-selection' | 'rect-selection' | 'drawing'
+
+/**
+ * 携带 useFlowLayout 标记的序列化页面。
+ *
+ * 普通页面按 width/height 比例做绝对定位渲染；当页面数据带有
+ * `useFlowLayout: true` 时（例如 TXT 直出页面），Page 改用文档流渲染：
+ * 文本条目不做绝对定位，按内容顺序排列，isEOL 条目后换行。
+ */
+export type ReaderFlowLayoutPage = IntermediatePageSerialized & {
+  /** 为 true 时使用文档流渲染，忽略 width/height 的尺寸约束 */
+  useFlowLayout?: boolean
+}
 
 export type ReaderPagePaintingMap = Record<string, DrawingValue>
 
@@ -34,7 +55,7 @@ export type ReaderPageRectSelectionMap = Record<
 >
 
 export type PageProps = {
-  page: IntermediatePageSerialized
+  page: ReaderFlowLayoutPage
   selectedTool?: ReaderPageTool
   paintingValue?: DrawingValue
   paintingTool?: DrawingTool
@@ -175,7 +196,48 @@ function getTextGeometry(text: SerializedPageText): PageTextGeometry | null {
   return null
 }
 
-function renderTextLayer(page: IntermediatePageSerialized) {
+function renderFlowTextItem(text: SerializedPageText, index: number) {
+  const key = text.id ?? `flow-text-${index}`
+
+  // EOL 空文本（TXT 空行）不产出 span，只保留一个换行。
+  if (text.content.length === 0) {
+    return text.isEOL ? <br key={`${key}:eol`} /> : null
+  }
+
+  return (
+    <Fragment key={key}>
+      <span
+        className='hamster-reader__text-item hamster-reader__text-item--flow'
+        data-testid={`reader-page-text-${text.id}`}
+        style={{
+          fontSize: `${(text.fontSize / FLOW_LAYOUT_PAGE_WIDTH) * 100}%`,
+          lineHeight: `${Math.max((text.lineHeight / text.fontSize) * 100, 100)}%`,
+          fontFamily: text.fontFamily,
+          fontWeight: text.fontWeight,
+          fontStyle: text.italic ? 'italic' : 'normal',
+          color: text.color
+        }}
+      >
+        {text.content}
+      </span>
+      {text.isEOL ? <br key={`${key}:eol`} /> : null}
+    </Fragment>
+  )
+}
+
+function renderTextLayer(page: ReaderFlowLayoutPage, useFlowLayout: boolean) {
+  if (useFlowLayout) {
+    return (
+      <div
+        className='hamster-reader__text-layer hamster-reader__text-layer--flow'
+        data-testid={`reader-page-text-layer-${page.id}`}
+        style={{ fontSize: '100cqw' }}
+      >
+        {getPageTexts(page).map(renderFlowTextItem)}
+      </div>
+    )
+  }
+
   const textItems = getPageTexts(page).map((text) => {
     const geometry = getTextGeometry(text)
     if (!geometry) {
@@ -281,7 +343,11 @@ export function Page({
     []
   )
 
-  const textLayer = useMemo(() => renderTextLayer(page), [page])
+  const useFlowLayout = page.useFlowLayout === true
+  const textLayer = useMemo(
+    () => renderTextLayer(page, useFlowLayout),
+    [page, useFlowLayout]
+  )
   const showSelectionLayer = selectedTool !== 'drawing'
   const handleSelectionEnd = () => {
     if (confirmationTimerRef.current !== null) {
@@ -315,7 +381,9 @@ export function Page({
           <div>
             <dt>Size</dt>
             <dd>
-              {page.width} × {page.height}
+              {useFlowLayout
+                ? `${FLOW_LAYOUT_PAGE_WIDTH} × auto`
+                : `${page.width} × ${page.height}`}
             </dd>
           </div>
           <div>
@@ -343,14 +411,26 @@ export function Page({
 
       <div className='hamster-reader__page-body'>
         <div
-          className='hamster-reader__page-surface'
-          style={{ aspectRatio: `${page.width} / ${page.height}` }}
+          className={
+            useFlowLayout
+              ? 'hamster-reader__page-surface hamster-reader__page-surface--flow'
+              : 'hamster-reader__page-surface'
+          }
+          style={
+            useFlowLayout
+              ? undefined
+              : { aspectRatio: `${page.width} / ${page.height}` }
+          }
           data-testid={`reader-page-surface-${page.id}`}
         >
           {showSelectionLayer ? (
             <Selection
               ref={selectionRef}
-              className='hamster-reader__selection-layer'
+              className={
+                useFlowLayout
+                  ? 'hamster-reader__selection-layer hamster-reader__selection-layer--flow'
+                  : 'hamster-reader__selection-layer'
+              }
               tool={selectionTool}
               ranges={[...textSelections]}
               rects={[...rectSelections]}

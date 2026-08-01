@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-beta.1] - 2026-07-30
+
+### Fixed
+- Fixed CI workflow to use Node 22 for PR checks.
+- Fixed comment parent cycles, duplicate IDs, dynamic portal containers, and deferred crop updates in Reader component.
+
+## [0.7.0-beta.0] - 2026-07-30
+
+### Added
+- Flow-text rendering with PDF text extraction, OCR diagnostics, and unified `ReaderData` support.
+- Configurable edge cropping for document pages.
+
+### Changed
+- Updated `@hamster-note/virtual-paper` to the published `1.1.0` package.
+
+### Fixed
+- Positioned the bottom toolbar within the Reader container and corrected zoom-aware thumbnail resolution.
+- Restored rectangle selection, coordinate mapping, popover controls, and range-handle dragging after synchronized content replacement.
+- Kept the public selection ref available while lazily evicted pages reload for programmatic navigation.
+- Stabilized demo annotation-history and lazy-page regression coverage and resolved the release lint violations.
+
+## [0.6.1-beta.0] - 2026-07-23
+
+### Added
+- Direct TXT rendering mode with automatic pagination and page splitting.
+- Comment system with M:N highlight-to-comment binding and reply tree support.
+- Image preview support in TXT render mode with click-to-open overlay.
+- Export `comments.ts` helpers: `getCommentsByHighlightId`, `getCommentCountByHighlightId`, `buildReaderCommentTree`.
+
+### Changed
+- `IntermediateDocumentViewer` refactored for shared layout/text renderer architecture.
+- `caretResolver` updated to handle cross-page text selection for TXT content.
+- README documentation expanded with comments API section.
+
 ## [0.6.0] - 2026-07-19
 
 ### Added

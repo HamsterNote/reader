@@ -220,6 +220,8 @@ export default defineConfig(({ mode }) => ({
     host: '0.0.0.0'
   },
   resolve: {
+    // 本地 file: 引用 @hamster-note/virtual-paper 时防止 React 双实例。
+    dedupe: ['react', 'react-dom'],
     alias: [
       {
         find: /^@hamster-note\/reader\/style\.css$/,
@@ -269,11 +271,15 @@ export default defineConfig(({ mode }) => ({
   },
   optimizeDeps: {
     include: [
-      '@paddleocr/paddleocr-js',
       '@hamster-note/document-parser',
-      '@hamster-note/types'
+      '@hamster-note/types',
+      '@techstark/opencv-js'
     ],
-    exclude: ['@hamster-note/pdf-parser', '@hamster-note/image-parser']
+    exclude: [
+      '@hamster-note/pdf-parser',
+      '@hamster-note/image-parser',
+      '@paddleocr/paddleocr-js'
+    ]
   },
   build: {
     outDir: 'demo-dist'

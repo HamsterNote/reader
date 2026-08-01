@@ -2,6 +2,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ReaderSelectionRange,
+  ReaderSelectionRectangle,
   ReaderSelectionRef
 } from '../types/selection'
 
@@ -286,6 +287,103 @@ export function DefaultHighlightPopover(props: DefaultPopoverContext) {
         删除
       </button>
       <HighlightColorPicker {...props} />
+    </div>
+  )
+}
+
+export type DefaultRectanglePopoverProps = {
+  readonly rectangle?: ReaderSelectionRectangle
+  readonly selectedRectId?: string | null
+  readonly highlightColor?: string
+  readonly onHighlightColorChange?: (color: string) => void
+  readonly onUpdateRect?: (rectangle: ReaderSelectionRectangle) => void
+  readonly onRemoveRect?: (id: string) => void
+  readonly onCommentRect?: (
+    rectangle: ReaderSelectionRectangle
+  ) => Promise<ReaderSelectionRectangle>
+}
+
+export function DefaultRectanglePopover({
+  rectangle,
+  selectedRectId,
+  highlightColor,
+  onHighlightColorChange,
+  onUpdateRect,
+  onRemoveRect,
+  onCommentRect
+}: DefaultRectanglePopoverProps) {
+  const [commenting, setCommenting] = useState(false)
+  const rectangleId = rectangle?.id ?? selectedRectId
+
+  const handleRemove = useCallback(() => {
+    if (rectangleId) onRemoveRect?.(rectangleId)
+  }, [onRemoveRect, rectangleId])
+
+  const handleComment = useCallback(() => {
+    if (commenting || !onCommentRect || !rectangle) return
+    setCommenting(true)
+    onCommentRect(rectangle).then(
+      () => setCommenting(false),
+      () => setCommenting(false)
+    )
+  }, [commenting, onCommentRect, rectangle])
+
+  const rectangleColor = rectangle?.markerStyle?.backgroundColor
+  const fallbackColor = highlightColor?.startsWith('#')
+    ? highlightColor
+    : '#ffc107'
+  const colorValue = rectangleColor?.startsWith('#')
+    ? rectangleColor
+    : fallbackColor
+
+  return (
+    <div
+      className='hamster-reader-popover'
+      role='toolbar'
+      aria-label='矩形高亮操作'
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      {onCommentRect && rectangle && (
+        <button
+          type='button'
+          className='hamster-reader-popover-btn'
+          onClick={handleComment}
+          disabled={commenting}
+        >
+          评论
+        </button>
+      )}
+      <button
+        type='button'
+        className='hamster-reader-popover-btn hamster-reader-popover-btn--danger'
+        onClick={handleRemove}
+      >
+        删除
+      </button>
+      {rectangle && (
+        <label className='hamster-reader-popover-color'>
+          <span className='hamster-reader-popover-color-label'>
+            背景颜色设置
+          </span>
+          <input
+            type='color'
+            aria-label='Highlight color'
+            className='hamster-reader-popover-color-input'
+            value={colorValue}
+            onChange={(event) => {
+              const newColor = event.target.value
+              onHighlightColorChange?.(newColor)
+              onUpdateRect?.({
+                ...rectangle,
+                markerStyle: {
+                  ...rectangle.markerStyle,
+                  backgroundColor: newColor
+                }
+              })
+            }}
+          />
+        </label>
+      )}
     </div>
   )
 }

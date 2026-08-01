@@ -3,7 +3,9 @@ export {
   isNonSpaceBlankText,
   mergeSelectionRects,
   type IntermediateDocumentViewerProps,
+  type ReaderExtraOcr,
   type ReaderInteractionMode,
+  type ReaderOcrOptions,
   type ReaderPageRange,
   type ReaderTouchPanMode,
   type ReaderSavedSelection,
@@ -25,6 +27,10 @@ export {
   IntermediateDocumentTextPageContent,
   type IntermediateDocumentTextPageContentProps
 } from './IntermediateDocumentTextPageContent'
+export type {
+  ReaderIntermediateImage,
+  ReaderIntermediateImageSerialized
+} from './intermediateImage'
 export {
   getNearestTextElementForPoint,
   getPageElementByPageNumber,

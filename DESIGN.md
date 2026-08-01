@@ -70,30 +70,27 @@ Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
 
 ## 8. Text Selection Range Handles
 
-Text range handles use the mobile selection convention while retaining the
-existing circular handle appearance supplied by `@hamster-note/selection`.
+Text ranges use the browser's native `Selection` painting, tinted by the
+Reader's `selectionColor`, instead of a temporary painted rectangle overlay.
 
-- **Stem:** `2px` wide, the same height as the corresponding first or last
-  selection rectangle, and separated from that rectangle by a `2px`
-  horizontal gap.
-- **Start endpoint:** the circle center coincides with the stem's top endpoint.
-- **End endpoint:** the circle center coincides with the stem's bottom endpoint.
-- **Document order:** the document-front endpoint always uses the start
-  treatment and the document-back endpoint always uses the end treatment,
-  including selections created in the reverse gesture direction.
-- **Interaction:** the stem is presentation-only (`pointer-events: none`); only
-  the existing circular handle starts a drag.
-- **Drag coordinate:** dragging resolves the caret from the stem midpoint. The
-  initial grab position inside the circle must not offset the resolved caret.
+- **Mouse:** retain the existing circular start and end handles supplied by
+  `@hamster-note/selection`; dragging either endpoint updates the native range.
+- **Touch:** do not render custom text handles. Browser-native selection handles
+  remain enabled for long-press selection and persisted-highlight activation.
+- **Persisted highlights:** unselected ranges retain their overlay. Activating a
+  persisted range temporarily hides its selected overlay and materializes the
+  equivalent browser-native range; mouse activation keeps the circles while
+  touch activation uses only the native handles.
+- **Selected rectangle border:** selected text-range rectangles have no stroke
+  or border, including both SVG and percent overlay modes.
 - **Rectangle selection:** rectangle-tool handles retain the dependency's
   existing circular rendering and drag behavior.
 
 ## 9. Range Handle Magnifier
 
-Dragging a range handle exposes a compact view of the page directly under the
-handle's visual center, so the selection endpoint remains visible beneath the
-user's pointer. Text handles use their corrected drag coordinate; rectangle
-handles retain the dependency's original coordinate behavior.
+The handle magnifier is opt-in through `showSelectionMagnifier`; it is disabled
+by default. When enabled, dragging a custom range handle exposes a compact view
+of the page directly under the handle's visual center.
 
 - **Portal:** `.hamster-reader__range-magnifier` is rendered as a direct child
   of `.hamster-reader__intermediate-document-viewer`, never inside
@@ -106,8 +103,136 @@ handles retain the dependency's original coordinate behavior.
 - **Placement:** center above the handle with an `18px` gap. If the reader has
   less than `8px` of clearance above, place it below; clamp both axes to an
   `8px` viewport inset.
-- **Interaction:** show during text or rectangle handle dragging, ignore pointer
-  input, update from the active handle center, and hide on pointer up, pointer
-  cancel, window blur, or capture failure.
+- **Interaction:** when enabled, show during mouse text-handle or rectangle-
+  handle dragging, ignore pointer input, update from the active handle center,
+  and hide on pointer up, pointer cancel, window blur, or capture failure.
+
+## 10. Reflowable Document Font Control
+
+The bottom toolbar exposes font scaling only for reflowable EPUB, TXT, and
+Markdown documents. Fixed-layout PDF, DOCX, and image documents keep the
+existing toolbar unchanged.
+
+- **Trigger:** a compact secondary button labelled `字体：当前档位`, with the
+  current value visible at every responsive width.
+- **Menu:** an anchored menu above the trigger with `特小`, `小`, `中`, `大`,
+  and `特大` in ascending order; the active item exposes `aria-pressed=true`.
+- **Default:** each newly loaded supported document starts at `大` (`1.5`).
+- **Scale mapping:** `特小=0.5`, `小=0.75`, `中=1`, `大=1.5`, `特大=2`.
+  Every source font size is converted to rem with
+  `(sourceFontSize / 16) * scale` so proportional differences are preserved.
+- **Dismissal:** selection, outside pointer input, or Escape closes the menu.
+- **Compatibility:** consumers that omit the Reader font scale retain legacy
+  pixel sizing; the demo opts into scaling only for supported file formats.
+
+## 11. Highlight Drag Preview
+
+Dragging an existing layout highlight exposes a compact, demo-owned preview so
+consumers can see how to implement the `onDragHighlight` integration.
+
+- **Surface:** `.hamster-demo-highlight-drag-preview` is a fixed, white neutral
+  card with a restrained blue border and elevation shadow.
+- **Placement:** offset `14px` from the active pointer and clamped by a
+  `calc(100vw - 32px)` maximum width; movement uses `translate3d` only.
+- **Content:** show the dragged highlight text on one truncated line, falling
+  back to `高亮内容` when the range text is empty.
+- **Interaction:** the preview ignores pointer input, follows the initiating
+  pointer outside Reader, appears as soon as the drag activates, and disappears
+  on pointer up or pointer cancel. Native page selection stays available while
+  the gesture is only a candidate, then is suspended for the active drag. A
+  successful touch long press also suspends canvas panning until that pointer
+  ends or is cancelled.
+
+## 12. Reflowable Document Spacing
+
+- **Text pages:** every visible page after the first receives `12px` of extra
+  top spacing inside its measured virtual-page box. The first visible page has
+  no leading gap, including when page ranges or hidden pages change the start.
+- **Paragraphs:** Text mode and reflowable Layout pages add `0.75em` after each
+  non-final `IntermediateParagraph`. Ordinary `isEOL` line breaks do not create
+  paragraph spacing.
+- **Fixed layout:** PDF and other geometry-preserving pages remain unchanged.
+
+## 13. Reading Progress Rail
+
+- **Scope and layer:** Layout and Text modes each own an independent progress
+  rail at the right edge of their mode container. The rail is a direct child of
+  the mode shell, outside VirtualPaper, so zooming document content never scales
+  or repositions its screen-space geometry.
+- **Anatomy:** a persistent neutral-gray track spans the full container height,
+  is `4px` wide, and keeps `1px` horizontal margins. A square, theme-colored
+  border-only position frame marks the current page; its center stays transparent
+  so it never masks the track or highlight ticks. Existing transient page-number
+  feedback remains visible while the document is scrolling or transforming,
+  while the rail itself never disappears.
+- **Native scrolling:** Text mode and VirtualPaper keep their native scrolling
+  behavior, including wheel, trackpad, touch, and programmatic scrolling, but
+  their browser-provided scrollbar chrome is visually hidden so it cannot cover
+  the custom rail. The first native `scroll` event shows the current page label
+  immediately; every subsequent event restarts the idle window, and the label
+  hides only after `500ms` without scrolling.
+- **Mode synchronization:** each rail uses that mode's filtered page list and
+  current page. TanStack Virtual owns Text-mode visibility and seeking;
+  VirtualPaper visibility plus the existing page-navigation path own Layout
+  mode. Non-contiguous page ranges always expose their actual document numbers.
+- **Highlights:** each page containing a text highlight adds one `4px × 1px`
+  marker at that page's proportional rail position. The marker uses the range's
+  own `markerStyle.backgroundColor`, falling back to the Reader highlight color.
+- **Pointer interaction:** mouse, touch, and pen use Pointer Events with pointer
+  capture. Pointer down and drag update only local page feedback; navigation is
+  committed exactly once on pointer up. Pointer cancel never navigates. Mouse
+  hover and every active drag show the pointed page number immediately. Layout
+  mode follows the same live-drag timing as Text mode. During an active touch
+  drag, the page label and Layout thumbnail shift an additional `1cm` to the
+  left so the reader's finger cannot cover them; mouse and pen geometry does not
+  change.
+- **Layout preview:** PDF Layout mode also shows the pointed page thumbnail to
+  the left of the rail during hover or an active drag. It reuses the Page
+  Browser's lazy visibility queue and cached base image; it never creates a
+  second loader. Text mode and non-PDF Layout mode intentionally have no image
+  preview. Whenever no thumbnail is rendered, the page label stays next to the
+  right-side rail. When a thumbnail is rendered, the label moves to the
+  thumbnail's left instead. Near the bottom edge, preview feedback is clamped
+  above the bottom toolbar safe area instead of rendering behind the controls.
+- **Accessibility:** the full interaction lane remains a vertical slider with
+  page-valued ARIA metadata, visible theme-color focus treatment, Arrow/Page
+  step keys, Home/End boundaries, and a comfortably sized pointer target.
+  Reduced-motion preference removes feedback transitions without removing state.
+
+## 14. Bottom Toolbar Reader Controls
+
+- **History:** Undo and redo remain visible as compact icon buttons at every
+  responsive width and are disabled when their corresponding history action is
+  unavailable.
+- **Render mode:** one toggle switches between Layout and Text. Its accessible
+  label always names the destination mode, and its pressed state represents
+  Text mode.
+- **Layout-only controls:** touch-panning and edge-crop editing remain visible
+  but disabled in Text mode. Entering Text mode also exits edge-crop editing so
+  a hidden edit session cannot survive the mode transition.
+- **OCR:** the OCR toggle is off by default and is available only in Layout
+  mode. Turning it on immediately recognizes every currently loaded page and
+  automatically recognizes each page loaded afterward while it remains on.
+  Text mode disables the toggle without discarding its state.
+- **State feedback:** two-finger panning and active edge-crop editing use the
+  existing primary button treatment and expose `aria-pressed=true`; OCR follows
+  the same primary/ghost and pressed-state convention. Inactive controls use
+  the existing ghost treatment.
+- **Responsive behavior:** these reader-level controls stay directly available
+  as icon buttons on narrow screens. Only the three selection tools collapse
+  into the existing anchored menu below `768px`. The toolbar is constrained to
+  the viewport and may scroll internally instead of extending the page width.
+
+## 15. Layout Zoom Feedback
+
+- **Placement and layer:** Layout mode renders zoom feedback in the viewer's
+  top-left overlay layer, outside VirtualPaper's transformed subtree, so its
+  screen-space size and position remain stable while the document scales.
+- **Lifecycle:** a real scale change shows the current rounded percentage while
+  the zoom transform is active. Pan-only transforms do not open the indicator,
+  and the indicator disappears as soon as the transform-end signal arrives.
+- **Presentation:** the compact percentage badge uses tabular numerals, remains
+  non-interactive, and stays legible over both page content and the reader
+  background without competing with document controls.
 
 _(End of minimal design contract)_

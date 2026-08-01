@@ -1,6 +1,13 @@
-import type { IntermediateImage, IntermediateText } from '@hamster-note/types'
-import { memo, Profiler, type CSSProperties } from 'react'
+import type {
+  IntermediateContent,
+  IntermediateImage,
+  IntermediateParagraph,
+  IntermediateText
+} from '@hamster-note/types'
+import { type CSSProperties, memo, Profiler } from 'react'
 
+import type { ReaderFontScale } from '../../types/fontScale'
+import { IntermediateDocumentFlowContent } from './IntermediateDocumentFlowContent'
 import {
   buildImageStyle,
   getImageGeometry,
@@ -39,14 +46,18 @@ export type IntermediateDocumentPageContentProps = {
   pageNumber: number
   /** getContent() 返回的文本内容（已过滤掉图片项） */
   texts: IntermediateText[]
+  paragraphs: IntermediateParagraph[]
+  useFlowLayout: boolean
   /** OCR 识别产生的文本 span（id 已带 ocr- 前缀） */
   ocrTexts: IntermediateText[]
   /** 基础底图 URL（来自 thumbnail / image / getThumbnail() 的 duck typing 解析） */
   baseImageSource: string | undefined
   /** getContent() 返回的 IntermediateImage 内容项 */
   images: IntermediateImage[]
+  orderedContent?: IntermediateContent[]
   /** 文本 span ref 注册回调 */
   setTextRef: IntermediateDocumentSetTextRef
+  fontScale?: ReaderFontScale
   onRenderTiming?: (
     pageNumber: number,
     startTime: number,
@@ -70,11 +81,17 @@ const renderTextSpan = (
   textData: IntermediateText,
   pageNumber: number,
   setTextRef: IntermediateDocumentSetTextRef,
-  isOcr = false
+  isOcr = false,
+  fontScale?: ReaderFontScale
 ) => {
   const text = textData as RenderableIntermediateText
   const bbox = getTextBbox(text)
-  const spanStyle: CSSProperties = buildTextSpanStyle(text, bbox, true)
+  const spanStyle: CSSProperties = buildTextSpanStyle(
+    text,
+    bbox,
+    true,
+    fontScale
+  )
 
   return (
     <span
@@ -114,12 +131,50 @@ const renderImageEntry = (image: IntermediateImage) => {
 function IntermediateDocumentPageContentComponent({
   pageNumber,
   texts,
+  paragraphs,
+  useFlowLayout,
   ocrTexts,
   baseImageSource,
   images,
+  orderedContent,
   setTextRef,
+  fontScale,
   onRenderTiming
 }: IntermediateDocumentPageContentProps) {
+  if (useFlowLayout) {
+    const content = (
+      <>
+        <IntermediateDocumentFlowContent
+          pageNumber={pageNumber}
+          content={orderedContent ?? [...texts, ...images]}
+          paragraphs={paragraphs}
+          setTextRef={setTextRef}
+          fontScale={fontScale}
+          preserveSourceFontSize
+        />
+      </>
+    )
+    if (!onRenderTiming) return content
+
+    return (
+      <Profiler
+        id={`intermediate-page-content-${pageNumber}`}
+        onRender={(
+          _id,
+          _phase,
+          actualDuration,
+          _baseDuration,
+          startTime,
+          commitTime
+        ) => {
+          onRenderTiming(pageNumber, startTime, commitTime, actualDuration)
+        }}
+      >
+        {content}
+      </Profiler>
+    )
+  }
+
   // 过滤纯空白文本 span，与页面内容渲染契约保持一致
   const renderableTexts = texts.filter(isRenderableText)
   const renderableOcrTexts = ocrTexts.filter(isRenderableText)
@@ -141,12 +196,12 @@ function IntermediateDocumentPageContentComponent({
 
       {/* getContent() 文本 span */}
       {renderableTexts.map((text) =>
-        renderTextSpan(text, pageNumber, setTextRef)
+        renderTextSpan(text, pageNumber, setTextRef, false, fontScale)
       )}
 
       {/* OCR 文本 span（id 已带 ocr- 前缀，复用同一渲染逻辑） */}
       {renderableOcrTexts.map((text) =>
-        renderTextSpan(text, pageNumber, setTextRef, true)
+        renderTextSpan(text, pageNumber, setTextRef, true, fontScale)
       )}
     </>
   )

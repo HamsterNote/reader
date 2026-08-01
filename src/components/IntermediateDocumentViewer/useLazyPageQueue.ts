@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react'
-
 import type {
   IntermediateContent,
   IntermediateDocument,
   IntermediateImage,
+  IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
+import { useCallback, useEffect, useRef } from 'react'
 
 /**
  * 懒加载页面队列的参数配置。由 `IntermediateDocumentViewer` 通过
@@ -36,9 +36,13 @@ export interface LazyPageQueueCallbacks {
   /** 页面加载成功后，更新底图/文本/图片/状态 */
   onPageLoaded: (params: {
     pageNumber: number
+    useFlowLayout: boolean
     baseImage: string | undefined
+    thumbnailScale: number | undefined
     texts: IntermediateText[]
+    paragraphs: IntermediateParagraph[]
     images: IntermediateImage[]
+    content: IntermediateContent[]
   }) => void
   /** 页面加载失败后，清空该页的状态并标记为 'error' */
   onPageError: (pageNumber: number) => void
@@ -59,6 +63,12 @@ export interface LazyPageQueueApi {
 }
 
 type LazyPageQueueMode = 'layout' | 'text'
+
+const pageUsesFlowLayout = (page: unknown): boolean =>
+  typeof page === 'object' &&
+  page !== null &&
+  'useFlowLayout' in page &&
+  page.useFlowLayout === true
 
 /**
  * intermediate-document 默认模式的懒加载页面队列 hook。
@@ -81,9 +91,6 @@ export function useLazyPageQueue(
     activeDocumentRef: React.MutableRefObject<IntermediateDocument | null>
     isMountedRef: React.MutableRefObject<boolean>
     loadingPagesRef: React.MutableRefObject<Set<number>>
-    // scale 可选参数用于按当前缩放比例请求更高/更低分辨率的缩略图，
-    // 使放大后的背景图更清晰。初始加载时不传 scale（使用默认值），
-    // 仅在 debounced thumbnail refresh effect 中按 effectiveScale 传入。
     getBaseImageFromPage?: (
       page: unknown,
       scale?: number
@@ -96,8 +103,7 @@ export function useLazyPageQueue(
       content: IntermediateContent
     ) => content is IntermediateImage
     callbacks: LazyPageQueueCallbacks
-    // 当前 effectiveScale 的 ref，用于懒加载时按当前缩放比例请求合适分辨率的缩略图
-    effectiveScaleRef: React.MutableRefObject<number>
+    getThumbnailScale?: (pageNumber: number) => number
   }
 ): LazyPageQueueApi {
   const {
@@ -110,7 +116,7 @@ export function useLazyPageQueue(
     isIntermediateText,
     isIntermediateImage,
     callbacks,
-    effectiveScaleRef
+    getThumbnailScale
   } = options
 
   // 待加载页码队列（保持插入顺序，不去重存储层，enqueuePage 内去重）
@@ -202,33 +208,54 @@ export function useLazyPageQueue(
           if (mode === 'text') {
             return Promise.all([
               Promise.resolve(undefined),
-              getPageContentEntries(page)
+              getPageContentEntries(page),
+              Promise.resolve(undefined),
+              Promise.resolve(pageUsesFlowLayout(page)),
+              Promise.resolve(
+                Array.isArray(page.paragraphs) ? page.paragraphs : []
+              )
             ])
           }
 
+          const thumbnailScale = getThumbnailScale?.(pageNumber)
           return Promise.all([
-            getBaseImageFromPage?.(page, effectiveScaleRef.current) ??
+            getBaseImageFromPage?.(page, thumbnailScale) ??
               Promise.resolve(undefined),
-            getPageContentEntries(page)
+            getPageContentEntries(page),
+            Promise.resolve(thumbnailScale),
+            Promise.resolve(pageUsesFlowLayout(page)),
+            Promise.resolve(
+              Array.isArray(page.paragraphs) ? page.paragraphs : []
+            )
           ])
         })
-        .then(([baseImage, content]) => {
-          // stale 守卫：unmount / document 切换 / generation 过期
-          if (
-            !isMountedRef.current ||
-            activeDocumentRef.current !== document ||
-            generationRef.current !== generation
-          ) {
-            return
-          }
+        .then(
+          ([baseImage, content, thumbnailScale, useFlowLayout, paragraphs]) => {
+            // stale 守卫：unmount / document 切换 / generation 过期
+            if (
+              !isMountedRef.current ||
+              activeDocumentRef.current !== document ||
+              generationRef.current !== generation
+            ) {
+              return
+            }
 
-          const texts = content.filter(isIntermediateText)
-          const images =
-            mode === 'text' || !isIntermediateImage
-              ? []
-              : content.filter(isIntermediateImage)
-          callbacks.onPageLoaded({ pageNumber, baseImage, texts, images })
-        })
+            const texts = content.filter(isIntermediateText)
+            const images = isIntermediateImage
+              ? content.filter(isIntermediateImage)
+              : []
+            callbacks.onPageLoaded({
+              pageNumber,
+              useFlowLayout,
+              baseImage,
+              thumbnailScale,
+              texts,
+              paragraphs,
+              images,
+              content
+            })
+          }
+        )
         .catch(() => {
           if (
             !isMountedRef.current ||
@@ -271,7 +298,7 @@ export function useLazyPageQueue(
       getPageContentEntries,
       isIntermediateText,
       isIntermediateImage,
-      effectiveScaleRef
+      getThumbnailScale
     ]
   )
 

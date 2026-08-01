@@ -16,13 +16,17 @@ import {
 import userEvent from '@testing-library/user-event'
 import { createRef, type RefObject, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
   SUPPORTED_UPLOAD_COPY
 } from '../src/components/Reader'
-import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import type {
+  DefaultRectanglePopoverProps,
+  ReaderComment,
+  ReaderCommentChangeDetail,
   ReaderInteractionMode,
+  ReaderInteractiveProps,
   ReaderProps,
   ReaderRenderMode,
   ReaderSelectionRange,
@@ -30,7 +34,7 @@ import type {
   ReaderSelectionRef,
   ReaderTouchPanMode
 } from '../src/index'
-import { Page, Reader } from '../src/index'
+import { DefaultRectanglePopover, Page, Reader } from '../src/index'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange
@@ -44,9 +48,10 @@ import {
   simulateLinkedSelectRange,
   simulateSelectionConfirmRect
 } from './mocks/selection'
-import { intersectionObserverMock } from './setup'
+import { intersectionObserverMock, mockElementSize } from './setup'
 
 let capturedViewerProps: Record<string, unknown> = {}
+let capturedTextViewerProps: Record<string, unknown> = {}
 
 vi.mock(
   '../src/components/IntermediateDocumentViewer',
@@ -61,6 +66,25 @@ vi.mock(
         capturedViewerProps = props
         return actual.IntermediateDocumentViewer(
           props as Parameters<typeof actual.IntermediateDocumentViewer>[0]
+        )
+      }
+    }
+  }
+)
+
+vi.mock(
+  '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer')
+      >()
+    return {
+      ...actual,
+      IntermediateDocumentTextViewer: (props: Record<string, unknown>) => {
+        capturedTextViewerProps = props
+        return actual.IntermediateDocumentTextViewer(
+          props as Parameters<typeof actual.IntermediateDocumentTextViewer>[0]
         )
       }
     }
@@ -370,6 +394,7 @@ function createMockFile(
 describe('Reader public API', () => {
   beforeEach(() => {
     capturedViewerProps = {}
+    capturedTextViewerProps = {}
   })
 
   it('renders the provided document title on the public entry', () => {
@@ -410,6 +435,307 @@ describe('Reader public API', () => {
       screen.getByTestId('intermediate-document-viewer')
     ).toBeInTheDocument()
     expect(screen.getByTestId('reader-content')).toBeInTheDocument()
+  })
+
+  it('renders a working default bottom bar for paged documents', async () => {
+    // Given: 宿主只提供文档，所有底栏状态都由 Reader 自己管理。
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        fontScale={1.5}
+      />
+    )
+
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+    const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
+    const touchPanMode = screen.getByTestId('tool-bottom-bar-touch-pan-mode')
+    const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
+
+    expect(bottomBar.parentElement).toHaveAttribute(
+      'data-testid',
+      'reader-root'
+    )
+    expect(capturedViewerProps.selectedTool).toBe('text-selection')
+    expect(capturedViewerProps.touchPanMode).toBe('single-finger')
+    expect(capturedViewerProps.edgeCropEditing).toBe(false)
+
+    // When: 用户直接操作 Reader 自带的底栏。
+    fireEvent.click(rectTool)
+    fireEvent.click(touchPanMode)
+    fireEvent.click(edgeCrop)
+
+    // Then: 同一个 Reader viewer 收到更新后的工具与布局状态。
+    await waitFor(() => {
+      expect(capturedViewerProps.selectedTool).toBe('rect-selection')
+      expect(capturedViewerProps.touchPanMode).toBe('two-finger')
+      expect(capturedViewerProps.edgeCropEditing).toBe(true)
+    })
+
+    // When: 切换到 Text 模式。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    // Then: Reader 改用 Text viewer，并自动退出仅属于 Layout 的裁边模式。
+    // 在 Text 模式下，这些按钮被隐藏而不是禁用。
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-bottom-bar-edge-crop')).toBeNull()
+      expect(screen.queryByTestId('tool-bottom-bar-touch-pan-mode')).toBeNull()
+      expect(screen.queryByTestId('tool-bottom-bar-ocr')).toBeNull()
+    })
+  })
+
+  it('keeps the default OCR toggle off until the user enables it', async () => {
+    // Given: 宿主没有传入 OCR 配置，Reader 使用默认的内部开关状态。
+    render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
+
+    const ocrToggle = screen.getByTestId('tool-bottom-bar-ocr')
+    expect(ocrToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(capturedViewerProps.ocr).toBe(false)
+
+    // When: 用户开启底栏 OCR。
+    fireEvent.click(ocrToggle)
+
+    // Then: 开关与布局 viewer 同步进入开启状态。
+    await waitFor(() => {
+      expect(ocrToggle).toHaveAttribute('aria-pressed', 'true')
+      expect(capturedViewerProps.ocr).toBe(true)
+    })
+  })
+
+  it('reports controlled OCR changes without mutating the host value', () => {
+    // Given: 宿主显式控制 OCR，当前值为关闭。
+    const onOcrChange = vi.fn()
+    const document = makeDocument({ pages: [makePage(1)] })
+    const { rerender } = render(
+      <Reader document={document} ocr={false} onOcrChange={onOcrChange} />
+    )
+    const ocrToggle = screen.getByTestId('tool-bottom-bar-ocr')
+
+    // When: 用户点击受控开关。
+    fireEvent.click(ocrToggle)
+
+    // Then: Reader 报告下一状态，但在宿主回传前仍保持关闭。
+    expect(onOcrChange).toHaveBeenCalledWith(true)
+    expect(ocrToggle).toHaveAttribute('aria-pressed', 'false')
+    expect(capturedViewerProps.ocr).toBe(false)
+
+    // When: 宿主回传新的受控状态。
+    rerender(<Reader document={document} ocr onOcrChange={onOcrChange} />)
+
+    // Then: 底栏与 viewer 一起反映宿主值。
+    expect(ocrToggle).toHaveAttribute('aria-pressed', 'true')
+    expect(capturedViewerProps.ocr).toBe(true)
+  })
+
+  it('lets controlled hosts receive default bottom bar changes', () => {
+    // Given: 宿主控制 Reader 底栏对应的公开状态。
+    const onRenderModeChange = vi.fn()
+    const onFontScaleChange = vi.fn()
+    const onTouchPanModeChange = vi.fn()
+    const onEdgeCropEditingChange = vi.fn()
+    const onSelectedToolChange = vi.fn()
+    const onDrawingStrokeColorChange = vi.fn()
+    const onHighlightColorChange = vi.fn()
+
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        renderMode='layout'
+        fontScale={1.5}
+        touchPanMode='single-finger'
+        edgeCropEditing={false}
+        selectedTool='text-selection'
+        drawingStrokeColor='#7d9ec0'
+        onRenderModeChange={onRenderModeChange}
+        onFontScaleChange={onFontScaleChange}
+        onTouchPanModeChange={onTouchPanModeChange}
+        onEdgeCropEditingChange={onEdgeCropEditingChange}
+        onSelectedToolChange={onSelectedToolChange}
+        onDrawingStrokeColorChange={onDrawingStrokeColorChange}
+        onHighlightColorChange={onHighlightColorChange}
+      />
+    )
+
+    // When: 用户逐项操作默认底栏。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-touch-pan-mode'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-edge-crop'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-drawing'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-font-scale'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '特小' }))
+
+    // Then: 受控宿主收到完整的下一状态，不依赖 Demo 私有实现。
+    expect(onRenderModeChange).toHaveBeenCalledWith('text')
+    expect(onTouchPanModeChange).toHaveBeenCalledWith('two-finger')
+    expect(onEdgeCropEditingChange).toHaveBeenCalledWith(true)
+    expect(onSelectedToolChange).toHaveBeenCalledWith('drawing')
+    expect(onDrawingStrokeColorChange).toHaveBeenCalledWith('#8eba8e')
+    expect(onHighlightColorChange).toHaveBeenCalledWith(
+      'rgba(142, 186, 142, 0.35)'
+    )
+    expect(onFontScaleChange).toHaveBeenCalledWith(0.5)
+  })
+
+  it('updates both uncontrolled drawing and highlight colors from the default bottom bar', async () => {
+    // Given: 宿主不控制工具颜色，Reader 使用原有描边默认值。
+    render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
+
+    expect(capturedViewerProps.drawingStrokeColor).toBe('#2563eb')
+
+    // When: 用户选择绿色工具颜色。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
+
+    // Then: 绘图与高亮颜色都由 Reader 内部同步更新。
+    await waitFor(() => {
+      expect(capturedViewerProps.drawingStrokeColor).toBe('#8eba8e')
+      expect(capturedViewerProps.highlightColor).toBe(
+        'rgba(142, 186, 142, 0.35)'
+      )
+    })
+  })
+
+  it('allows the default bottom bar to be replaced or disabled', () => {
+    // Given / When: 一个 Reader 提供自定义底栏，另一个显式传入 null。
+    const { rerender } = render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        bottomBar={<div data-testid='custom-bottom-bar'>Custom controls</div>}
+      />
+    )
+
+    // Then: 自定义节点替代默认底栏。
+    expect(screen.getByTestId('custom-bottom-bar')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+
+    rerender(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        bottomBar={null}
+      />
+    )
+
+    // Then: null 明确关闭底栏。
+    expect(screen.queryByTestId('custom-bottom-bar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+  })
+
+  it('provides toolbar semantics and restores menu focus on Escape', async () => {
+    // Given: 窄屏 Reader 使用折叠工具菜单。
+    const originalWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 375
+    })
+    fireEvent(window, new Event('resize'))
+    const user = userEvent.setup()
+
+    try {
+      render(
+        <Reader
+          document={makeDocument({ pages: [makePage(1)] })}
+          fontScale={1.5}
+        />
+      )
+
+      const toolbar = screen.getByRole('toolbar', { name: '工具栏' })
+      const trigger = within(toolbar).getByRole('button', { name: '工具菜单' })
+
+      // When: 用户打开工具菜单。
+      await user.click(trigger)
+
+      // Then: 触发器关联具名菜单，焦点进入第一个菜单项。
+      const menuId = trigger.getAttribute('aria-controls')
+      expect(menuId).toBeTruthy()
+      expect(screen.getByRole('menu', { name: '选择工具' })).toHaveAttribute(
+        'id',
+        menuId
+      )
+      await waitFor(() => {
+        expect(screen.getByRole('menuitem', { name: '文字工具' })).toHaveFocus()
+      })
+
+      // When: 用户按 Escape 关闭菜单。
+      await user.keyboard('{Escape}')
+
+      // Then: 菜单关闭，焦点回到原触发按钮。
+      expect(
+        screen.queryByRole('menu', { name: '选择工具' })
+      ).not.toBeInTheDocument()
+      expect(trigger).toHaveFocus()
+
+      // When: 用户在关闭后首次重新打开菜单。
+      await user.click(trigger)
+
+      // Then: 第一次重新激活不会被 React 合成事件生命周期吞掉。
+      expect(screen.getByRole('menu', { name: '选择工具' })).toBeInTheDocument()
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: originalWidth
+      })
+      fireEvent(window, new Event('resize'))
+    }
+  })
+
+  it('isolates menu ids and outside-click regions across Reader instances', () => {
+    // Given: 同一页面同时渲染两个窄屏 Reader。
+    const originalWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 375
+    })
+    fireEvent(window, new Event('resize'))
+
+    try {
+      render(
+        <>
+          <Reader
+            document={makeDocument({ pages: [makePage(1)] })}
+            fontScale={1.5}
+          />
+          <Reader
+            document={makeDocument({ pages: [makePage(2)] })}
+            fontScale={1.5}
+          />
+        </>
+      )
+
+      const toolTriggers = screen.getAllByRole('button', { name: '工具菜单' })
+      const fontTriggers = screen.getAllByTestId('tool-bottom-bar-font-scale')
+
+      // Then: 每个 Reader 的触发器都关联自己的唯一菜单 id。
+      expect(toolTriggers[0]?.getAttribute('aria-controls')).not.toBe(
+        toolTriggers[1]?.getAttribute('aria-controls')
+      )
+      expect(fontTriggers[0]?.getAttribute('aria-controls')).not.toBe(
+        fontTriggers[1]?.getAttribute('aria-controls')
+      )
+
+      // When: 两个工具菜单都打开，并在第二个菜单内部按下指针。
+      fireEvent.click(toolTriggers[0] as HTMLElement)
+      fireEvent.click(toolTriggers[1] as HTMLElement)
+      const toolMenus = screen.getAllByRole('menu', { name: '选择工具' })
+      fireEvent.pointerDown(
+        within(toolMenus[1] as HTMLElement).getByRole('menuitem', {
+          name: '文字工具'
+        })
+      )
+
+      // Then: 第二个 Reader 不会把自己菜单内的操作误判为外部点击。
+      expect(screen.getByRole('menu', { name: '选择工具' })).toHaveAttribute(
+        'id',
+        toolTriggers[1]?.getAttribute('aria-controls')
+      )
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: originalWidth
+      })
+      fireEvent(window, new Event('resize'))
+    }
   })
 
   it('shows the document title fallback when pages are empty', () => {
@@ -590,6 +916,48 @@ describe('Reader public API', () => {
     )
   })
 
+  it('renders useFlowLayout page in document flow without positioning', () => {
+    render(
+      <Page
+        page={{
+          ...makePage(1),
+          useFlowLayout: true,
+          content: [
+            { ...makeText('flow-text-1', '第一行'), isEOL: true },
+            { ...makeText('flow-text-2', '第二行'), isEOL: true }
+          ],
+          texts: undefined
+        }}
+        selectedTool='text-selection'
+      />
+    )
+
+    // 文档流模式：surface 不再按 width/height 固定纵横比
+    const surface = screen.getByTestId('reader-page-surface-page-1')
+    expect(surface.className).toContain('hamster-reader__page-surface--flow')
+    expect(surface.getAttribute('style') ?? '').not.toContain('aspect-ratio')
+
+    // 文本条目不做绝对定位，fontSize 按 A4 宽度（595）缩放：12/595*100
+    const firstLine = screen.getByTestId('reader-page-text-flow-text-1')
+    expect(firstLine.className).toContain('hamster-reader__text-item--flow')
+    const firstLineStyle = firstLine.getAttribute('style') ?? ''
+    expect(firstLineStyle).toContain('font-size: 2.0168067226890756%')
+    expect(firstLineStyle).not.toContain('left:')
+    expect(firstLineStyle).not.toContain('top:')
+    expect(firstLineStyle).not.toContain('transform:')
+
+    // isEOL 条目后紧跟 <br> 换行
+    const textLayer = screen.getByTestId('reader-page-text-layer-page-1')
+    expect(textLayer.className).toContain('hamster-reader__text-layer--flow')
+    expect(textLayer.querySelectorAll('br')).toHaveLength(2)
+    expect(firstLine.nextElementSibling?.tagName).toBe('BR')
+
+    // 页面元信息不再展示固定 height
+    expect(screen.getByText('Size').nextElementSibling).toHaveTextContent(
+      '595 × auto'
+    )
+  })
+
   it('preserves rapid uncontrolled painting updates across pages', () => {
     const onPagePaintingsChange = vi.fn()
     render(
@@ -694,6 +1062,152 @@ describe('Reader renderMode', () => {
     expect(screen.getByTestId('reader-content')).toContainElement(textViewer)
   })
 
+  it('renderMode text forwards canonical range props without VirtualPaper', () => {
+    const ranges = [makeReaderRange('text-highlight', 'Text mode range')]
+    const defaultRanges: ReaderSelectionRange[] = []
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const selectionPopover = <div>Custom text selection popover</div>
+    const highlightPopover = vi.fn((highlight: ReaderSelectionRange) => (
+      <div>{highlight.id}</div>
+    ))
+    const onHighlight = vi.fn()
+    const onUpdateRange = vi.fn()
+    const onSelectRange = vi.fn()
+    const onSelectionStart = vi.fn()
+    const onSelectionEnd = vi.fn()
+    const onScaleChange = vi.fn()
+    const onCreateRect = vi.fn()
+    const onSelectRect = vi.fn()
+    const onUpdateRect = vi.fn()
+    const onPagePaintingChange = vi.fn()
+    const onPageBrowserClose = vi.fn()
+    const rects = [makeReaderRect('text-mode-rect')]
+    const pagePaintings: Record<string, DrawingValue> = {
+      'page-1': { strokes: [] }
+    }
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        ranges={ranges}
+        defaultRanges={defaultRanges}
+        selectedRangeId='text-highlight'
+        defaultSelectedRangeId='default-text-highlight'
+        onHighlight={onHighlight}
+        onUpdateRange={onUpdateRange}
+        onSelectRange={onSelectRange}
+        onSelectionStart={onSelectionStart}
+        onSelectionEnd={onSelectionEnd}
+        highlightColor='#ffcc00'
+        selectionColor='#0066ff'
+        showSelectionMagnifier={true}
+        selectionPopover={selectionPopover}
+        highlightPopover={highlightPopover}
+        autoHighlight={true}
+        selectionRef={selectionRef}
+        overlayRectType='percent'
+        scale={2}
+        defaultScale={1.5}
+        onScaleChange={onScaleChange}
+        minScale={0.25}
+        maxScale={4}
+        tool='rect'
+        selectedTool='rect-selection'
+        rects={rects}
+        selectedRectId='text-mode-rect'
+        onCreateRect={onCreateRect}
+        onSelectRect={onSelectRect}
+        onUpdateRect={onUpdateRect}
+        showPageBrowser={true}
+        onPageBrowserClose={onPageBrowserClose}
+        themeColor='#123456'
+        paintingTool='pen'
+        drawingStrokeColor='#654321'
+        pagePaintings={pagePaintings}
+        onPagePaintingChange={onPagePaintingChange}
+      />
+    )
+
+    expect(capturedTextViewerProps.ranges).toBe(ranges)
+    expect(capturedTextViewerProps.defaultRanges).toBe(defaultRanges)
+    expect(capturedTextViewerProps.selectedRangeId).toBe('text-highlight')
+    expect(capturedTextViewerProps.defaultSelectedRangeId).toBe(
+      'default-text-highlight'
+    )
+    expect(capturedTextViewerProps.onHighlight).toBe(onHighlight)
+    const capturedOnUpdateRange = capturedTextViewerProps.onUpdateRange
+    if (typeof capturedOnUpdateRange !== 'function') {
+      throw new TypeError('Expected text viewer onUpdateRange callback')
+    }
+    capturedOnUpdateRange(ranges[0])
+    expect(onUpdateRange).toHaveBeenCalledWith(ranges[0])
+    expect(capturedTextViewerProps.onSelectRange).toBe(onSelectRange)
+    expect(capturedTextViewerProps.onSelectionStart).toBe(onSelectionStart)
+    expect(capturedTextViewerProps.onSelectionEnd).toBe(onSelectionEnd)
+    expect(capturedTextViewerProps.highlightColor).toBe('#ffcc00')
+    expect(capturedTextViewerProps.selectionColor).toBe('#0066ff')
+    expect(capturedTextViewerProps.showSelectionMagnifier).toBe(true)
+    expect(capturedTextViewerProps.selectionPopover).toBe(selectionPopover)
+    expect(capturedTextViewerProps.highlightPopover).toBe(highlightPopover)
+    expect(capturedTextViewerProps.autoHighlight).toBe(true)
+    expect(capturedTextViewerProps.selectionRef).toBe(selectionRef)
+    expect(capturedTextViewerProps.overlayRectType).toBe('percent')
+    expect(capturedTextViewerProps).not.toHaveProperty('scale')
+    expect(capturedTextViewerProps).not.toHaveProperty('defaultScale')
+    expect(capturedTextViewerProps).not.toHaveProperty('onScaleChange')
+    expect(capturedTextViewerProps).not.toHaveProperty('minScale')
+    expect(capturedTextViewerProps).not.toHaveProperty('maxScale')
+    expect(capturedTextViewerProps).not.toHaveProperty('tool')
+    expect(capturedTextViewerProps).not.toHaveProperty('selectedTool')
+    expect(capturedTextViewerProps).not.toHaveProperty('rects')
+    expect(capturedTextViewerProps).not.toHaveProperty('selectedRectId')
+    expect(capturedTextViewerProps).not.toHaveProperty('onCreateRect')
+    expect(capturedTextViewerProps).not.toHaveProperty('onSelectRect')
+    expect(capturedTextViewerProps).not.toHaveProperty('onUpdateRect')
+    expect(capturedTextViewerProps).not.toHaveProperty('showPageBrowser')
+    expect(capturedTextViewerProps).not.toHaveProperty('onPageBrowserClose')
+    expect(capturedTextViewerProps).not.toHaveProperty('themeColor')
+    expect(capturedTextViewerProps).not.toHaveProperty('paintingTool')
+    expect(capturedTextViewerProps).not.toHaveProperty('drawingStrokeColor')
+    expect(capturedTextViewerProps).not.toHaveProperty('pagePaintings')
+    expect(capturedTextViewerProps).not.toHaveProperty('onPagePaintingChange')
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+  })
+
+  it('renderMode text prefers canonical ranges from ReaderData', () => {
+    const flatRange = makeReaderRange('flat-highlight', 'flat')
+    const dataRange = makeReaderRange('data-highlight', 'data')
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={{ ranges: [dataRange] }}
+        ranges={[flatRange]}
+      />
+    )
+
+    expect(capturedTextViewerProps.ranges).toEqual([dataRange])
+  })
+
+  it('renderMode text provides the default selection confirmation popover', () => {
+    // Given: 文本模式没有传入自定义 selection popover。
+    const { document } = makeLazyDocument(1)
+    render(<Reader document={document} renderMode='text' />)
+
+    // When: Reader 创建默认 selection popover。
+    render(capturedTextViewerProps.selectionPopover as React.ReactElement)
+
+    // Then: 用户能够看到确认高亮和颜色设置入口。
+    expect(screen.getByRole('button', { name: '高亮' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Highlight color')).toBeInTheDocument()
+  })
+
   it('renderMode text renders for a runtime (lazy) document', () => {
     const { document } = makeLazyDocument(1)
 
@@ -726,7 +1240,7 @@ describe('Reader file upload', () => {
     expect(uploadZone).toBeInTheDocument()
     expect(uploadZone).toHaveTextContent('Click or drag document to upload')
     expect(uploadZone).toHaveTextContent(
-      'Supports PDF, TXT, DOCX, and Markdown files'
+      'Supports PDF, TXT, DOCX, Markdown, and image files'
     )
     expect(fileInput.getAttribute('accept')).toBe(SUPPORTED_UPLOAD_ACCEPT)
   })
@@ -839,7 +1353,7 @@ describe('Reader file upload', () => {
   })
 
   it('exports SUPPORTED_UPLOAD_COPY with expected value', () => {
-    expect(SUPPORTED_UPLOAD_COPY).toBe('PDF, TXT, DOCX, and Markdown')
+    expect(SUPPORTED_UPLOAD_COPY).toBe('PDF, TXT, DOCX, Markdown, and image')
   })
 
   it('hides file info when document is provided', () => {
@@ -863,6 +1377,15 @@ describe('Reader prop forwarding', () => {
     expect(
       screen.getByTestId('intermediate-document-viewer')
     ).toBeInTheDocument()
+  })
+
+  it('forwards extraOCR to the layout viewer', () => {
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const extraOCR = vi.fn()
+
+    render(<Reader document={doc} extraOCR={extraOCR} />)
+
+    expect(capturedViewerProps.extraOCR).toBe(extraOCR)
   })
 
   it('renders IntermediateDocumentViewer when onTextSelectionEnd is passed', () => {
@@ -1129,6 +1652,7 @@ describe('Reader prop forwarding', () => {
         pageLoadConcurrency={4}
         pageLoadEnterDelayMs={250}
         pageUnloadDelayMs={3000}
+        showSelectionMagnifier={true}
         onScaleChange={onScaleChange}
       />
     )
@@ -1141,7 +1665,76 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.pageLoadConcurrency).toBe(4)
     expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
     expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
+    expect(capturedViewerProps.showSelectionMagnifier).toBe(true)
     expect(capturedViewerProps.onScaleChange).toBe(onScaleChange)
+  })
+
+  it('prefers unified data fields over legacy flat props', () => {
+    // Given: unified data and legacy flat props intentionally contain different values.
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const dataRange = makeReaderRange('data-range', 'Data range')
+    const legacyRange = makeReaderRange('legacy-range', 'Legacy range')
+    const dataRect: ReaderSelectionRectangle = {
+      id: 'data-rect',
+      createdAt: 1,
+      overlayRectType: 'percent',
+      start: { x: 10, y: 20 },
+      end: { x: 30, y: 40 },
+      selectionId: 'page-1',
+      rect: { x: 10, y: 20, width: 20, height: 20 }
+    }
+    const dataPaintings: Record<string, DrawingValue> = {
+      'page-1': { strokes: [] }
+    }
+    const edgeCrop = {
+      all: { top: 0.1, right: 0.2, bottom: 0.3, left: 0.05 },
+      pages: { 'page-2': { left: 0.25 } }
+    }
+    const virtualPaper = { x: 24, y: -36, scale: 1.5 }
+
+    // When: Reader receives the new unified data prop.
+    render(
+      <Reader
+        document={doc}
+        data={{
+          edgeCrop,
+          hiddenPages: [2, 'page-3'],
+          ranges: [dataRange],
+          rects: [dataRect],
+          pagePaintings: dataPaintings,
+          virtualPaper,
+          bookmarkedPageNumbers: [2]
+        }}
+        ranges={[legacyRange]}
+        rects={[]}
+        pagePaintings={{}}
+        scale={3}
+        bookmarkedPageNumbers={[1]}
+      />
+    )
+
+    // Then: every migrated field forwarded to the layout viewer comes from data.
+    expect(capturedViewerProps.ranges).toEqual([dataRange])
+    expect(capturedViewerProps.rects).toEqual([dataRect])
+    expect(capturedViewerProps.pagePaintings).toBe(dataPaintings)
+    expect(capturedViewerProps.bookmarkedPageNumbers).toEqual([2])
+    expect(capturedViewerProps.hiddenPages).toEqual([2, 'page-3'])
+    expect(capturedViewerProps.edgeCrop).toBe(edgeCrop)
+    expect(capturedViewerProps.defaultVirtualPaperTransform).toBe(virtualPaper)
+    expect(capturedViewerProps.scale).toBeUndefined()
+  })
+
+  it('forwards unified hidden pages to text mode', () => {
+    // Given: text mode uses the same unified document data as layout mode.
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+
+    // When: page 2 is hidden through Reader data.
+    render(
+      <Reader document={doc} renderMode='text' data={{ hiddenPages: [2] }} />
+    )
+
+    // Then: the text viewer receives the same hidden-page contract.
+    expect(capturedTextViewerProps.hiddenPages).toEqual([2])
   })
 
   it('exposes scrollToRange on the forwarded Reader ref without firing onScaleChange', async () => {
@@ -1431,6 +2024,97 @@ describe('Reader prop forwarding', () => {
     )
   })
 
+  it('renders a delete action for the selected rectangle', async () => {
+    // Given: an existing rectangle is selected through the public Reader API.
+    const user = userEvent.setup()
+    const rect = makeReaderRect('selected-rect')
+    const onRemoveRect = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        rects={[rect]}
+        selectedRectId={rect.id}
+        onRemoveRect={onRemoveRect}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // When: the user clicks the selected rectangle's delete action.
+    const deleteButton = within(popoverView.container).getByRole('button', {
+      name: '删除'
+    })
+    await user.click(deleteButton)
+
+    // Then: Reader removes the rectangle ID, not a text range ID.
+    expect(onRemoveRect).toHaveBeenCalledWith(rect.id)
+  })
+
+  it('updates the selected rectangle color from the default popover', async () => {
+    // Given: a selected rectangle has its own persisted marker color and opacity.
+    const rect: ReaderSelectionRectangle = {
+      ...makeReaderRect('colored-rect'),
+      markerStyle: { backgroundColor: '#ff3366', opacity: 0.5 }
+    }
+    const onUpdateRect = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        rects={[rect]}
+        selectedRectId={rect.id}
+        onUpdateRect={onUpdateRect}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+    const colorInput = within(popoverView.container).getByLabelText(
+      'Highlight color'
+    )
+    expect(colorInput).toHaveValue('#ff3366')
+
+    // When: the user changes the rectangle color.
+    fireEvent.change(colorInput, { target: { value: '#00aa88' } })
+
+    // Then: Reader updates only the color and preserves the remaining marker style.
+    expect(onUpdateRect).toHaveBeenCalledWith({
+      ...rect,
+      markerStyle: { backgroundColor: '#00aa88', opacity: 0.5 }
+    })
+  })
+
+  it('opens comments from the default rectangle popover', async () => {
+    // Given: a selected rectangle and a host-controlled comment flow.
+    const user = userEvent.setup()
+    const rect = makeReaderRect('commented-rect')
+    const onCommentRect = vi.fn(
+      async (rectangle: ReaderSelectionRectangle) => rectangle
+    )
+    const onSelectRect = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        rects={[rect]}
+        selectedRectId={rect.id}
+        onCommentRect={onCommentRect}
+        onSelectRect={onSelectRect}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // When: the user clicks the rectangle comment action.
+    await user.click(
+      within(popoverView.container).getByRole('button', { name: '评论' })
+    )
+
+    // Then: the original rectangle is passed to the host and selection clears.
+    expect(onCommentRect).toHaveBeenCalledWith(rect)
+    await waitFor(() => expect(onSelectRect).toHaveBeenCalledWith(null))
+  })
+
   it('closes an existing highlight popover after its comment promise resolves', async () => {
     // Given: a selected public highlight and a host-controlled comment flow.
     const user = userEvent.setup()
@@ -1540,6 +2224,28 @@ describe('Reader prop forwarding', () => {
       overlayRectType: 'percent'
     }
     expect(props.overlayRectType).toBe('percent')
+  })
+
+  it('keeps the legacy default rectangle popover delete contract', async () => {
+    const user = userEvent.setup()
+    const onRemoveRect = vi.fn()
+    const props: DefaultRectanglePopoverProps = {
+      selectedRectId: 'legacy-rect',
+      onRemoveRect
+    }
+
+    render(<DefaultRectanglePopover {...props} />)
+    await user.click(screen.getByRole('button', { name: '删除' }))
+
+    expect(onRemoveRect).toHaveBeenCalledWith('legacy-rect')
+    expect(screen.queryByLabelText('Highlight color')).not.toBeInTheDocument()
+  })
+
+  it('compile-time: onCommentRect satisfies ReaderInteractiveProps', () => {
+    const props: ReaderInteractiveProps = {
+      onCommentRect: async (rectangle) => rectangle
+    }
+    expect(props.onCommentRect).toBeTypeOf('function')
   })
 
   it('compile-time: interactionMode satisfies ReaderProps', () => {
@@ -1709,11 +2415,45 @@ describe('Reader annotation history', () => {
     })
 
     expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('Before')
+    expect(screen.getByTestId('tool-bottom-bar-undo')).toBeDisabled()
+    expect(screen.getByTestId('tool-bottom-bar-redo')).toBeDisabled()
     act(() => {
       expect(requireReaderSelectionRef(selectionRef).undo()).toBe(false)
       expect(requireReaderSelectionRef(selectionRef).redo()).toBe(false)
     })
     expect(requireLinkedData(runtimeSelectionId).items[0]?.text).toBe('Before')
+  })
+
+  it('disables layout history commands while Reader is in text mode', async () => {
+    const { document } = makeLazyDocument(1)
+
+    render(<Reader document={document} annotationHistory />)
+    await screen.findByText('Page 1 text')
+
+    const updateHistoryStatus =
+      capturedViewerProps.onAnnotationHistoryStatusChange
+    if (typeof updateHistoryStatus !== 'function') {
+      throw new Error('Expected internal annotation history status callback')
+    }
+
+    act(() => {
+      updateHistoryStatus({
+        enabled: true,
+        canUndo: true,
+        canRedo: true,
+        pastCount: 1,
+        futureCount: 1
+      })
+    })
+    expect(screen.getByTestId('tool-bottom-bar-undo')).toBeEnabled()
+    expect(screen.getByTestId('tool-bottom-bar-redo')).toBeEnabled()
+
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-bottom-bar-undo')).toBeDisabled()
+      expect(screen.getByTestId('tool-bottom-bar-redo')).toBeDisabled()
+    })
   })
 
   it('does not call single-item mutation callbacks during undo or redo replay', async () => {
@@ -2325,6 +3065,7 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.initialLoadedPages).toBeUndefined()
     expect(capturedViewerProps.pageLoadConcurrency).toBeUndefined()
     expect(capturedViewerProps.pageLoadEnterDelayMs).toBeUndefined()
+    expect(capturedViewerProps.pagePreloadRadius).toBeUndefined()
     expect(capturedViewerProps.pageUnloadDelayMs).toBeUndefined()
   })
 
@@ -2337,6 +3078,7 @@ describe('Reader zoom props', () => {
         initialLoadedPages={2}
         pageLoadConcurrency={5}
         pageLoadEnterDelayMs={250}
+        pagePreloadRadius={4}
         pageUnloadDelayMs={3000}
       />
     )
@@ -2344,16 +3086,24 @@ describe('Reader zoom props', () => {
     expect(capturedViewerProps.initialLoadedPages).toBe(2)
     expect(capturedViewerProps.pageLoadConcurrency).toBe(5)
     expect(capturedViewerProps.pageLoadEnterDelayMs).toBe(250)
+    expect(capturedViewerProps.pagePreloadRadius).toBe(4)
     expect(capturedViewerProps.pageUnloadDelayMs).toBe(3000)
   })
 
-  it('VirtualPaper receives containMode={true} via IntermediateDocumentViewer', () => {
+  it('configures VirtualPaper for reading mode without contain mode', () => {
     const { document } = makeLazyDocument(1)
 
     render(<Reader document={document} />)
 
     const wrapper = screen.getByTestId('virtual-paper-wrapper')
-    expect(wrapper).toHaveAttribute('data-contain-mode', 'true')
+    expect(wrapper).toHaveAttribute('data-reader-mode', 'true')
+    expect(wrapper).toHaveAttribute('data-contain-mode', 'false')
+    expect(Number(wrapper.getAttribute('data-content-width'))).toBeGreaterThan(
+      0
+    )
+    expect(Number(wrapper.getAttribute('data-content-height'))).toBeGreaterThan(
+      0
+    )
   })
 
   it('forwards horizontal and independent vertical margins to IntermediateDocumentViewer', () => {
@@ -2377,6 +3127,98 @@ describe('Reader zoom props', () => {
     })
   })
 
+  it('adds the measured default bottom bar inset to Text Mode content', async () => {
+    // Given: the host provides only its 10px safe area and Reader renders its default toolbar.
+    const { document } = makeLazyDocument(1)
+    render(
+      <Reader document={document} renderMode='text' containMarginBottom={10} />
+    )
+    const root = screen.getByTestId('reader-root')
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+
+    // When: layout resolves a 54px toolbar positioned 16px above Reader's bottom edge.
+    mockElementSize(bottomBar, { width: 320, height: 54, top: 530 })
+    mockElementSize(root, { width: 800, height: 600 })
+
+    // Then: Reader owns the 70px obstruction and adds it to the host safe area.
+    await waitFor(() => {
+      expect(capturedTextViewerProps.containMarginBottom).toBe(80)
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toHaveStyle({ paddingBottom: '80px' })
+    })
+  })
+
+  it('preserves the legacy vertical margin while adding the default bottom bar inset', async () => {
+    // Given: a legacy Layout Mode consumer provides one symmetric vertical margin.
+    const { document } = makeLazyDocument(1)
+    render(<Reader document={document} containMarginY={10} />)
+    const root = screen.getByTestId('reader-root')
+    const bottomBar = screen.getByTestId('tool-bottom-bar')
+
+    // When: Reader measures a 70px obstruction from its built-in toolbar.
+    mockElementSize(bottomBar, { width: 320, height: 54, top: 530 })
+    mockElementSize(root, { width: 800, height: 600 })
+
+    // Then: the legacy top remains 10px and only the bottom grows to 80px.
+    await waitFor(() => {
+      expect(capturedViewerProps.containMarginTop).toBe(10)
+      expect(capturedViewerProps.containMarginBottom).toBe(80)
+      expect(capturedViewerProps.containMarginY).toBeUndefined()
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        paddingTop: '10px',
+        paddingBottom: '80px'
+      })
+    })
+  })
+
+  it('does not add a toolbar inset when the bottom bar is disabled', () => {
+    // Given: the host disables Reader's bottom bar and provides a 10px safe area.
+    const { document } = makeLazyDocument(1)
+
+    // When: Text Mode renders without an owned toolbar.
+    render(
+      <Reader
+        document={document}
+        renderMode='text'
+        containMarginBottom={10}
+        bottomBar={null}
+      />
+    )
+
+    // Then: the public margin remains exactly the host-provided safe area.
+    expect(capturedTextViewerProps.containMarginBottom).toBe(10)
+    expect(screen.getByTestId('intermediate-document-text-viewer')).toHaveStyle(
+      { paddingBottom: '10px' }
+    )
+  })
+
+  it('leaves custom bottom bar obstruction under host control', () => {
+    // Given: the host supplies a custom floating bar and its own 10px safe area.
+    const { document } = makeLazyDocument(1)
+    render(
+      <Reader
+        document={document}
+        renderMode='text'
+        containMarginBottom={10}
+        bottomBar={<div data-testid='custom-bottom-bar'>Custom bar</div>}
+      />
+    )
+
+    // When: the custom bar has a visible geometry that Reader does not own.
+    mockElementSize(screen.getByTestId('custom-bottom-bar'), {
+      width: 320,
+      height: 54,
+      top: 530
+    })
+
+    // Then: Reader preserves the host margin without adding a guessed inset.
+    expect(capturedTextViewerProps.containMarginBottom).toBe(10)
+    expect(screen.getByTestId('intermediate-document-text-viewer')).toHaveStyle(
+      { paddingBottom: '10px' }
+    )
+  })
+
   it('defaults the page browser to closed and forwards an explicit open state', () => {
     const { document } = makeLazyDocument(2)
     const { rerender } = render(<Reader document={document} />)
@@ -2386,5 +3228,40 @@ describe('Reader zoom props', () => {
     rerender(<Reader document={document} showPageBrowser={true} />)
 
     expect(capturedViewerProps.showPageBrowser).toBe(true)
+  })
+
+  it('forwards controlled comment props to IntermediateDocumentViewer', () => {
+    // Given：宿主以纯受控方式持有评论数据与统一变更回调。
+    const { document } = makeLazyDocument(1)
+    const comments: readonly ReaderComment[] = [
+      {
+        id: 'comment-1',
+        highlightIds: ['range-1'],
+        content: '第一条评论',
+        createdAt: 1,
+        parentId: null
+      }
+    ]
+    const onCommentsChange =
+      vi.fn<
+        (
+          nextComments: readonly ReaderComment[],
+          detail: ReaderCommentChangeDetail
+        ) => void
+      >()
+
+    // When：Reader 渲染布局 viewer。
+    render(
+      <Reader
+        document={document}
+        comments={comments}
+        onCommentsChange={onCommentsChange}
+      />
+    )
+
+    // Then：Reader 只透传受控评论 props，本身不修改评论数据。
+    expect(capturedViewerProps.comments).toBe(comments)
+    expect(capturedViewerProps.onCommentsChange).toBe(onCommentsChange)
+    expect(onCommentsChange).not.toHaveBeenCalled()
   })
 })
