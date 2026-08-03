@@ -24,6 +24,8 @@ import type {
   ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
+  ReaderTextAnchor,
+  ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from '../types/readerData'
 import type {
@@ -69,6 +71,35 @@ import { DefaultBottomBar } from './Reader/DefaultBottomBar'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
 
 export type ReaderRenderMode = 'layout' | 'text'
+
+type ReaderDocumentInput =
+  | IntermediateDocument
+  | IntermediateDocumentSerialized
+  | null
+  | undefined
+
+type ReaderPositionHandoff<T> = {
+  readonly document: ReaderDocumentInput
+  readonly replacedValueKey: string
+  readonly value: T
+}
+
+const getReaderTextProgressKey = (
+  progress: ReaderTextReadingProgress | undefined
+): string =>
+  progress?.anchor
+    ? getTextAnchorKey(progress.anchor)
+    : `${progress?.currentPageNumber ?? ''}:page`
+
+const getReaderVirtualPaperKey = (
+  virtualPaper: ReaderVirtualPaperState | undefined
+): string => {
+  if (!virtualPaper) return ''
+  const anchorKey = virtualPaper.anchor
+    ? getTextAnchorKey(virtualPaper.anchor)
+    : ''
+  return `${virtualPaper.x}:${virtualPaper.y}:${virtualPaper.scale}:${anchorKey}`
+}
 
 type BottomBarHistoryContext = {
   readonly status: ReaderAnnotationHistoryStatus
@@ -577,6 +608,10 @@ export function Reader({
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const [internalRenderMode, setInternalRenderMode] =
     useState<ReaderRenderMode>('layout')
+  const [layoutPositionHandoff, setLayoutPositionHandoff] =
+    useState<ReaderPositionHandoff<ReaderVirtualPaperState> | null>(null)
+  const [textPositionHandoff, setTextPositionHandoff] =
+    useState<ReaderPositionHandoff<ReaderTextReadingProgress> | null>(null)
   const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
   const [internalTouchPanMode, setInternalTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
@@ -592,6 +627,15 @@ export function Reader({
   const readerRootRef = useRef<HTMLDivElement>(null)
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
+  const currentTextAnchorRef = useRef<{
+    readonly document: ReaderDocumentInput
+    readonly anchor: ReaderTextAnchor | undefined
+  } | null>(null)
+  const currentVirtualPaperStateRef = useRef<{
+    readonly document: ReaderDocumentInput
+    readonly replacedValueKey: string
+    readonly value: ReaderVirtualPaperState
+  } | null>(null)
   const resolvedPagePaintings =
     data?.pagePaintings ?? pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
@@ -627,6 +671,20 @@ export function Reader({
       futureCount: 0
     })
   const resolvedRenderMode = renderMode ?? internalRenderMode
+  const resolvedTextReadingProgress =
+    textPositionHandoff !== null &&
+    textPositionHandoff.document === document &&
+    textPositionHandoff.replacedValueKey ===
+      getReaderTextProgressKey(data?.textReadingProgress)
+      ? textPositionHandoff.value
+      : data?.textReadingProgress
+  const resolvedVirtualPaperState =
+    layoutPositionHandoff !== null &&
+    layoutPositionHandoff.document === document &&
+    layoutPositionHandoff.replacedValueKey ===
+      getReaderVirtualPaperKey(data?.virtualPaper)
+      ? layoutPositionHandoff.value
+      : data?.virtualPaper
   const resolvedOcr = ocr ?? internalOcrEnabled
   const resolvedOcrEnabled =
     resolvedOcr === true ||
@@ -707,8 +765,70 @@ export function Reader({
     }))
   }, [normalizedAnnotationHistory.enabled])
 
+  const handoffReadingPosition = useCallback(
+    (nextMode: ReaderRenderMode) => {
+      if (nextMode === resolvedRenderMode) return
+      const currentTextAnchor = currentTextAnchorRef.current
+      const currentAnchor =
+        currentTextAnchor !== null && currentTextAnchor.document === document
+          ? currentTextAnchor.anchor
+          : undefined
+      const sourceAnchor =
+        currentAnchor ??
+        (resolvedRenderMode === 'layout'
+          ? resolvedVirtualPaperState?.anchor
+          : resolvedTextReadingProgress?.anchor)
+      if (!sourceAnchor) return
+
+      if (nextMode === 'text') {
+        setTextPositionHandoff({
+          document,
+          replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
+          value: {
+            currentPageNumber: sourceAnchor.pageNumber,
+            anchor: sourceAnchor
+          }
+        })
+        return
+      }
+
+      const persistedVirtualPaperKey = getReaderVirtualPaperKey(
+        data?.virtualPaper
+      )
+      const currentVirtualPaperState = currentVirtualPaperStateRef.current
+      const localVirtualPaper =
+        currentVirtualPaperState !== null &&
+        currentVirtualPaperState.document === document &&
+        currentVirtualPaperState.replacedValueKey === persistedVirtualPaperKey
+          ? currentVirtualPaperState.value
+          : undefined
+      const currentVirtualPaper = localVirtualPaper ??
+        data?.virtualPaper ?? {
+          x: 0,
+          y: 0,
+          scale: scale ?? defaultScale ?? 1
+        }
+      setLayoutPositionHandoff({
+        document,
+        replacedValueKey: persistedVirtualPaperKey,
+        value: { ...currentVirtualPaper, anchor: sourceAnchor }
+      })
+    },
+    [
+      data?.textReadingProgress,
+      data?.virtualPaper,
+      defaultScale,
+      document,
+      resolvedRenderMode,
+      resolvedTextReadingProgress?.anchor,
+      resolvedVirtualPaperState?.anchor,
+      scale
+    ]
+  )
+
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
+      handoffReadingPosition(nextMode)
       if (renderMode === undefined) setInternalRenderMode(nextMode)
       onRenderModeChange?.(nextMode)
 
@@ -719,6 +839,7 @@ export function Reader({
     },
     [
       edgeCropEditing,
+      handoffReadingPosition,
       onEdgeCropEditingChange,
       onRenderModeChange,
       renderMode,
@@ -781,15 +902,30 @@ export function Reader({
 
   const handleVirtualPaperTransformChangeEnd = useCallback(
     (virtualPaper: ReaderVirtualPaperState) => {
+      currentVirtualPaperStateRef.current = {
+        document,
+        replacedValueKey: getReaderVirtualPaperKey(data?.virtualPaper),
+        value: virtualPaper
+      }
       onDataChange?.({ ...data, virtualPaper })
     },
-    [data, onDataChange]
+    [data, document, onDataChange]
+  )
+  const handleTextAnchorChange = useCallback(
+    (anchor: ReaderTextAnchor | undefined) => {
+      currentTextAnchorRef.current = { document, anchor }
+    },
+    [document]
   )
   const handleTextReadingProgressChange = useCallback(
     (textReadingProgress: NonNullable<ReaderData['textReadingProgress']>) => {
+      currentTextAnchorRef.current = {
+        document,
+        anchor: textReadingProgress.anchor
+      }
       onDataChange?.({ ...data, textReadingProgress })
     },
-    [data, onDataChange]
+    [data, document, onDataChange]
   )
   const handleToggleBookmark = useCallback(
     (bookmark: ReaderBookmark) => {
@@ -1079,8 +1215,9 @@ export function Reader({
             )}
             bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
             onTogglePageBookmark={onTogglePageBookmark}
-            textReadingProgress={data?.textReadingProgress}
+            textReadingProgress={resolvedTextReadingProgress}
             onTextReadingProgressChange={handleTextReadingProgressChange}
+            onTextAnchorChange={handleTextAnchorChange}
             pageRange={pageRange}
             hiddenPages={data?.hiddenPages}
             className={className}
@@ -1179,15 +1316,16 @@ export function Reader({
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
-          scale={whenEnabled(data?.virtualPaper === undefined, scale)}
+          scale={whenEnabled(resolvedVirtualPaperState === undefined, scale)}
           defaultScale={whenEnabled(
-            data?.virtualPaper === undefined,
+            resolvedVirtualPaperState === undefined,
             defaultScale
           )}
-          defaultVirtualPaperTransform={data?.virtualPaper}
+          defaultVirtualPaperTransform={resolvedVirtualPaperState}
           onVirtualPaperTransformChangeEnd={
             handleVirtualPaperTransformChangeEnd
           }
+          onTextAnchorChange={handleTextAnchorChange}
           onScaleChange={onScaleChange}
           minScale={minScale}
           maxScale={maxScale}

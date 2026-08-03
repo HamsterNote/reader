@@ -1272,7 +1272,7 @@ describe('Reader renderMode', () => {
     if (typeof onLayoutTextAnchorChange !== 'function') {
       throw new TypeError('Expected Layout text anchor callback')
     }
-    onLayoutTextAnchorChange(layoutAnchor)
+    act(() => onLayoutTextAnchorChange(layoutAnchor))
 
     // When: 用户从 Layout 切换到 Text Mode。
     fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
@@ -1318,7 +1318,7 @@ describe('Reader renderMode', () => {
     if (typeof onTextAnchorChange !== 'function') {
       throw new TypeError('Expected Text Mode anchor callback')
     }
-    onTextAnchorChange(textAnchor)
+    act(() => onTextAnchorChange(textAnchor))
 
     // When: 用户从 Text 切回 Layout Mode。
     fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))

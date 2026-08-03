@@ -731,6 +731,7 @@ export type IntermediateDocumentTextViewerProps = {
   textReadingProgress?: ReaderTextReadingProgress
   /** 当前阅读页变化时触发。 */
   onTextReadingProgressChange?: (next: ReaderTextReadingProgress) => void
+  onTextAnchorChange?: (anchor: ReaderTextAnchor | undefined) => void
   pageRange?: ReaderPageRange
   /** 需要从文本阅读流中排除的 1-based 页码或公开 PageId。 */
   hiddenPages?: readonly (number | string)[]
@@ -858,6 +859,7 @@ export function IntermediateDocumentTextViewer(
     onTogglePageBookmark,
     textReadingProgress,
     onTextReadingProgressChange,
+    onTextAnchorChange,
     pageRange,
     hiddenPages,
     initialLoadedPages = 1,
@@ -1070,6 +1072,7 @@ export function IntermediateDocumentTextViewer(
     isInitialProgressRestorePendingRef.current =
       textReadingProgress !== undefined
     setReadingProgress(nextProgress)
+    onTextAnchorChange?.(undefined)
   })
   const {
     isActive: isReadingProgressMoving,
@@ -1092,6 +1095,7 @@ export function IntermediateDocumentTextViewer(
       currentPageNumber: anchor.pageNumber,
       anchor
     } satisfies ReaderTextReadingProgress
+    onTextAnchorChange?.(anchor)
     const nextKey = getTextReadingProgressKey(nextProgress)
     setFallbackBookmarkKey(undefined)
     readingProgressPageRef.current = anchor.pageNumber
@@ -1104,7 +1108,7 @@ export function IntermediateDocumentTextViewer(
     lastObservedProgressKeyRef.current = nextKey
     lastLocallyEmittedProgressKeyRef.current = nextKey
     onTextReadingProgressChange?.(nextProgress)
-  }, [onTextReadingProgressChange])
+  }, [onTextAnchorChange, onTextReadingProgressChange])
 
   const cancelRestoreAttempt = useCallback(() => {
     restoreAttemptCleanupRef.current?.()

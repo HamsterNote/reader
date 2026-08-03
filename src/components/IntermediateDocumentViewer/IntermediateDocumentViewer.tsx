@@ -511,6 +511,7 @@ export type IntermediateDocumentViewerProps = {
   onVirtualPaperTransformChangeEnd?: (
     transform: ReaderVirtualPaperState
   ) => void
+  onTextAnchorChange?: (anchor: ReaderTextAnchor | undefined) => void
   /**
    * Fires only when a wheel or pinch gesture produces a changed, clamped scale.
    * The detail object reports `source: 'wheel' | 'pinch'` and may include the
@@ -4070,6 +4071,7 @@ export function IntermediateDocumentViewer({
   defaultScale,
   defaultVirtualPaperTransform,
   onVirtualPaperTransformChangeEnd,
+  onTextAnchorChange,
   onScaleChange,
   minScale,
   maxScale,
@@ -4966,6 +4968,8 @@ export function IntermediateDocumentViewer({
   const [currentTextAnchor, setCurrentTextAnchor] = useState<
     ReaderTextAnchor | undefined
   >(defaultVirtualPaperTransform?.anchor)
+  const currentTextAnchorRef = useRef(currentTextAnchor)
+  currentTextAnchorRef.current = currentTextAnchor
   const [currentLayoutPageNumber, setCurrentLayoutPageNumber] = useState(
     () => pageNumbers[0] ?? 0
   )
@@ -5023,24 +5027,22 @@ export function IntermediateDocumentViewer({
           ) ?? undefined)
         : undefined
 
-      setCurrentTextAnchor((currentAnchor) => {
-        if (currentAnchor === undefined && anchor === undefined) {
-          return currentAnchor
-        }
-        if (
-          currentAnchor !== undefined &&
+      const currentAnchor = currentTextAnchorRef.current
+      const anchorChanged =
+        (currentAnchor === undefined) !== (anchor === undefined) ||
+        (currentAnchor !== undefined &&
           anchor !== undefined &&
-          getTextAnchorKey(currentAnchor) === getTextAnchorKey(anchor) &&
-          currentAnchor.text === anchor.text
-        ) {
-          return currentAnchor
-        }
-        return anchor
-      })
+          (getTextAnchorKey(currentAnchor) !== getTextAnchorKey(anchor) ||
+            currentAnchor.text !== anchor.text))
+      if (anchorChanged) {
+        currentTextAnchorRef.current = anchor
+        setCurrentTextAnchor(anchor)
+        onTextAnchorChange?.(anchor)
+      }
       if (clearFallback && anchor) setFallbackBookmarkKey(undefined)
       return anchor
     },
-    [pageNumbers, textsByPageNumber]
+    [onTextAnchorChange, pageNumbers, textsByPageNumber]
   )
   const handleViewportPositionChange = useCallback(() => {
     captureCurrentTextAnchor(true)
