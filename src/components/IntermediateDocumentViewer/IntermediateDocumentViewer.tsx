@@ -50,8 +50,10 @@ import type {
 } from '../../types/comments'
 import type { ReaderFontScale } from '../../types/fontScale'
 import type {
+  ReaderBookmark,
   ReaderEdgeCrop,
   ReaderPageEdgeCrop,
+  ReaderTextAnchor,
   ReaderVirtualPaperState
 } from '../../types/readerData'
 import type {
@@ -127,6 +129,15 @@ import {
 } from './selectionAdapter'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
 import { TextSelectionMagnifier } from './TextSelectionMagnifier'
+import {
+  findTopTextAnchor,
+  getActiveBookmarkKey,
+  getTextAnchorKey,
+  hasAnchorableText,
+  resolveBookmarkNavigationHandler,
+  resolveTextAnchorElement,
+  type TextAnchorElementRecord
+} from './textAnchor'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { useSelectionGeometryRevision } from './useDerivedTextSelectionRanges'
 import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
@@ -600,6 +611,10 @@ export type IntermediateDocumentViewerProps = {
   onSelectRect?: (id: string | null) => void
   /** 当用户拖动矩形手柄调整后触发 */
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  /** 用户从页面浏览侧栏删除高亮 range 时触发；数据由调用方负责移除。 */
+  onRemoveRange?: (id: string) => void
+  /** 用户从页面浏览侧栏删除矩形框选时触发；数据由调用方负责移除。 */
+  onRemoveRect?: (id: string) => void
   annotationHistory?: ReaderAnnotationHistoryOptions
   onAnnotationHistoryChange?: (
     next: ReaderAnnotationHistoryValue,
@@ -660,9 +675,13 @@ export type IntermediateDocumentViewerProps = {
     nextComments: readonly ReaderComment[],
     detail: ReaderCommentChangeDetail
   ) => void
-  /** 由宿主控制的书签页码。 */
+  /** 由宿主控制的精确文字书签。 */
+  bookmarks?: readonly ReaderBookmark[]
+  /** 添加或删除指定文字书签。 */
+  onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  /** @deprecated 使用 bookmarks。 */
   bookmarkedPageNumbers?: readonly number[]
-  /** 添加或删除指定页书签。 */
+  /** @deprecated 使用 onToggleBookmark。 */
   onTogglePageBookmark?: (pageNumber: number) => void
   /** 页面加载状态变化时的回调，报告当前已加载的页码列表 */
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
@@ -1379,6 +1398,8 @@ type ViewerContentProps = PageResources & {
   onCreateRect?: (rect: ReaderSelectionRectangle) => void
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: ReaderSelectionRectangle) => void
+  onRemoveRange?: (id: string) => void
+  onRemoveRect?: (id: string) => void
   annotationHistoryController: ReturnType<typeof useAnnotationHistory>
   onClearAnnotationHistory: () => void
   onRunAnnotationHistory: (source: 'undo' | 'redo') => boolean
@@ -1407,8 +1428,15 @@ type ViewerContentProps = PageResources & {
   visiblePageNumbers: ReadonlySet<number>
   commentCountByRangeId?: Readonly<Record<string, number>>
   commentCountByRectId?: Readonly<Record<string, number>>
+  bookmarks?: readonly ReaderBookmark[]
+  currentAnchor?: ReaderTextAnchor
+  currentPageNumber: number
+  activeBookmarkKey?: string
+  onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  onToggleBookmark?: (bookmark: ReaderBookmark) => void
   bookmarkedPageNumbers?: readonly number[]
   onTogglePageBookmark?: (pageNumber: number) => void
+  onViewportPositionChange: () => void
   popoverRelative?: boolean
 }
 
@@ -1418,6 +1446,20 @@ type ScopedContentSize = {
 }
 
 type PendingLinkedHighlightOperation = ReadonlySet<string>
+
+type PendingTextAnchorOperation = {
+  readonly anchor: ReaderTextAnchor
+  readonly runtimeDocument: IntermediateDocument | null
+  readonly source: 'restore' | 'bookmark'
+  readonly token: symbol
+}
+
+const getVirtualPaperStateKey = (state: ReaderVirtualPaperState): string =>
+  `${state.x}:${state.y}:${state.scale}:${state.anchor ? getTextAnchorKey(state.anchor) : ''}`
+
+const getOptionalVirtualPaperStateKey = (
+  state: ReaderVirtualPaperState | undefined
+): string => (state ? getVirtualPaperStateKey(state) : '')
 
 type PageLoadTimingStart = {
   readonly startedAt: number
@@ -2423,11 +2465,14 @@ function resolveEnabledInteractions(
 function resolveContainMarginY(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
-  containMarginY: number | undefined
+  containMarginY: number | undefined,
+  scale: number
 ): number | undefined {
-  return containMarginTop === undefined && containMarginBottom === undefined
-    ? containMarginY
-    : undefined
+  if (containMarginTop !== undefined || containMarginBottom !== undefined) {
+    return undefined
+  }
+  if (containMarginY === undefined) return undefined
+  return containMarginY / scale
 }
 
 /**
@@ -3110,6 +3155,8 @@ function ViewerContent({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  onRemoveRange,
+  onRemoveRect,
   annotationHistoryController,
   onClearAnnotationHistory,
   onRunAnnotationHistory,
@@ -3145,8 +3192,15 @@ function ViewerContent({
   visiblePageNumbers,
   commentCountByRangeId,
   commentCountByRectId,
+  bookmarks,
+  currentAnchor,
+  currentPageNumber,
+  activeBookmarkKey,
+  onNavigateToBookmark,
+  onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
+  onViewportPositionChange,
   popoverRelative
 }: ViewerContentProps) {
   // --- 边缘裁切编辑模式 ---
@@ -3192,16 +3246,37 @@ function ViewerContent({
     )
     if (!scrollViewport) return
 
-    scrollViewport.addEventListener('scroll', signalReadingProgressActivity, {
+    let frameId: number | null = null
+    const handleViewportScroll = () => {
+      signalReadingProgressActivity()
+      if (frameId !== null) return
+
+      const ownerWindow = scrollViewport.ownerDocument.defaultView
+      if (!ownerWindow) {
+        onViewportPositionChange()
+        return
+      }
+      frameId = ownerWindow.requestAnimationFrame(() => {
+        frameId = null
+        onViewportPositionChange()
+      })
+    }
+
+    scrollViewport.addEventListener('scroll', handleViewportScroll, {
       passive: true
     })
     return () => {
-      scrollViewport.removeEventListener(
-        'scroll',
-        signalReadingProgressActivity
-      )
+      scrollViewport.removeEventListener('scroll', handleViewportScroll)
+      const ownerWindow = scrollViewport.ownerDocument.defaultView
+      if (frameId !== null && ownerWindow) {
+        ownerWindow.cancelAnimationFrame(frameId)
+      }
     }
-  }, [signalReadingProgressActivity, viewerRootElement])
+  }, [
+    onViewportPositionChange,
+    signalReadingProgressActivity,
+    viewerRootElement
+  ])
   const [activeZoomPercent, setActiveZoomPercent] = useState<number | null>(
     null
   )
@@ -3843,10 +3918,6 @@ function ViewerContent({
   ) : (
     intermediateDocumentPages
   )
-  const currentLayoutPageNumber =
-    pageNumbers.find((pageNumber) => visiblePageNumbers.has(pageNumber)) ??
-    pageNumbers[0] ??
-    0
   const viewerThemeStyle: CSSProperties & {
     '--hamster-reader-theme-color': string
   } = {
@@ -3893,12 +3964,20 @@ function ViewerContent({
             selectedRangeId={effectiveSelectedRangeId}
             onSelectRange={handleLinkedSelectRange}
             onNavigateToRange={onScrollToRange}
+            onDeleteRange={onRemoveRange}
             commentCountByRangeId={commentCountByRangeId}
             rects={rects}
             selectedRectId={selectedRectId}
             onSelectRect={onSelectRect}
             onNavigateToRect={onScrollToRect}
+            onDeleteRect={onRemoveRect}
             commentCountByRectId={commentCountByRectId}
+            bookmarks={bookmarks}
+            currentAnchor={currentAnchor}
+            currentPageNumber={currentPageNumber}
+            activeBookmarkKey={activeBookmarkKey}
+            onNavigateToBookmark={onNavigateToBookmark}
+            onToggleBookmark={onToggleBookmark}
             bookmarkedPageNumbers={bookmarkedPageNumbers}
             onTogglePageBookmark={onTogglePageBookmark}
             onClose={onPageBrowserClose}
@@ -3915,7 +3994,7 @@ function ViewerContent({
           <ReadingProgress
             mode='layout'
             pageNumbers={pageNumbers}
-            currentPageNumber={currentLayoutPageNumber}
+            currentPageNumber={currentPageNumber}
             isMoving={isReadingProgressMoving}
             ranges={effectiveRanges}
             highlightColor={highlightColor}
@@ -3948,7 +4027,8 @@ function ViewerContent({
             containMarginY={resolveContainMarginY(
               containMarginTop,
               containMarginBottom,
-              containMarginY
+              containMarginY,
+              virtualPaperTransform.scale
             )}
             containerStyle={buildContainerStyle(
               containMarginTop,
@@ -4027,6 +4107,8 @@ export function IntermediateDocumentViewer({
   onCreateRect,
   onSelectRect,
   onUpdateRect,
+  onRemoveRange,
+  onRemoveRect,
   annotationHistory,
   onAnnotationHistoryChange,
   onAnnotationHistoryStatusChange,
@@ -4051,6 +4133,8 @@ export function IntermediateDocumentViewer({
   commentCountByRangeId,
   commentCountByRectId,
   comments,
+  bookmarks,
+  onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   onPageLoadStatusChange,
@@ -4786,9 +4870,23 @@ export function IntermediateDocumentViewer({
     readonly runtimeDocument: IntermediateDocument | null
     readonly transform: VirtualPaperTransform
   } | null>(null)
+  const paperTransformRef = useRef(paperTransform)
+  paperTransformRef.current = paperTransform
+  const lastLocallyEmittedVirtualPaperKeyRef = useRef('')
+  const defaultVirtualPaperStateKey = getOptionalVirtualPaperStateKey(
+    defaultVirtualPaperTransform
+  )
 
   useEffect(() => {
     if (!normalizedDefaultVirtualPaperTransform) return
+
+    if (
+      defaultVirtualPaperStateKey.length > 0 &&
+      lastLocallyEmittedVirtualPaperKeyRef.current ===
+        defaultVirtualPaperStateKey
+    ) {
+      return
+    }
 
     const appliedDefault = appliedDefaultVirtualPaperRef.current
     if (
@@ -4804,6 +4902,7 @@ export function IntermediateDocumentViewer({
       runtimeDocument,
       transform: normalizedDefaultVirtualPaperTransform
     }
+    paperTransformRef.current = normalizedDefaultVirtualPaperTransform
 
     setPaperTransform((currentTransform) =>
       currentTransform.x === normalizedDefaultVirtualPaperTransform.x &&
@@ -4812,7 +4911,11 @@ export function IntermediateDocumentViewer({
         ? currentTransform
         : normalizedDefaultVirtualPaperTransform
     )
-  }, [normalizedDefaultVirtualPaperTransform, runtimeDocument])
+  }, [
+    defaultVirtualPaperStateKey,
+    normalizedDefaultVirtualPaperTransform,
+    runtimeDocument
+  ])
 
   const effectiveScale = useMemo(
     () => clampScale(scale ?? paperTransform.scale, scaleRange),
@@ -4857,9 +4960,103 @@ export function IntermediateDocumentViewer({
     [effectiveScale, paperTransform.x, paperTransform.y]
   )
 
-  const textElementsRef = useRef<
-    Map<string, { text: IntermediateText; pageNumber: number }>
-  >(new Map())
+  const textElementsRef = useRef(
+    new Map<string, TextAnchorElementRecord<IntermediateText>>()
+  )
+  const [currentTextAnchor, setCurrentTextAnchor] = useState<
+    ReaderTextAnchor | undefined
+  >(defaultVirtualPaperTransform?.anchor)
+  const [currentLayoutPageNumber, setCurrentLayoutPageNumber] = useState(
+    () => pageNumbers[0] ?? 0
+  )
+  const currentLayoutPageNumberRef = useRef(currentLayoutPageNumber)
+  currentLayoutPageNumberRef.current = currentLayoutPageNumber
+  const [fallbackBookmarkKey, setFallbackBookmarkKey] = useState<string>()
+  const activeBookmarkKey = getActiveBookmarkKey(
+    currentTextAnchor,
+    fallbackBookmarkKey,
+    bookmarks
+  )
+  const [pendingTextAnchor, setPendingTextAnchor] =
+    useState<PendingTextAnchorOperation | null>(null)
+  const pendingTextAnchorRef = useRef<PendingTextAnchorOperation | null>(null)
+  const appliedDefaultTextAnchorRef = useRef<{
+    readonly runtimeDocument: IntermediateDocument | null
+    readonly key: string
+  } | null>(null)
+  const captureCurrentTextAnchor = useCallback(
+    (clearFallback: boolean) => {
+      const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+        '.virtual-paper-wrapper'
+      )
+      const viewportRect = viewport?.getBoundingClientRect()
+      const pageRects = viewportRect
+        ? pageNumbers.flatMap((pageNumber) => {
+            const rect = pageRefs.current
+              .get(pageNumber)
+              ?.getBoundingClientRect()
+            return rect && rect.height > 0 ? [{ pageNumber, rect }] : []
+          })
+        : []
+      const topPageNumber = viewportRect
+        ? (pageRects.find(
+            ({ rect }) =>
+              rect.top <= viewportRect.top && rect.bottom > viewportRect.top
+          )?.pageNumber ??
+          pageRects
+            .filter(({ rect }) => rect.top > viewportRect.top)
+            .sort((left, right) => left.rect.top - right.rect.top)[0]
+            ?.pageNumber)
+        : undefined
+      const resolvedPageNumber =
+        topPageNumber ?? currentLayoutPageNumberRef.current ?? pageNumbers[0]
+      if (resolvedPageNumber !== undefined) {
+        currentLayoutPageNumberRef.current = resolvedPageNumber
+        setCurrentLayoutPageNumber(resolvedPageNumber)
+      }
+      const anchor = viewport
+        ? (findTopTextAnchor(
+            viewport,
+            textElementsRef.current,
+            textsByPageNumber,
+            resolvedPageNumber
+          ) ?? undefined)
+        : undefined
+
+      setCurrentTextAnchor((currentAnchor) => {
+        if (currentAnchor === undefined && anchor === undefined) {
+          return currentAnchor
+        }
+        if (
+          currentAnchor !== undefined &&
+          anchor !== undefined &&
+          getTextAnchorKey(currentAnchor) === getTextAnchorKey(anchor) &&
+          currentAnchor.text === anchor.text
+        ) {
+          return currentAnchor
+        }
+        return anchor
+      })
+      if (clearFallback && anchor) setFallbackBookmarkKey(undefined)
+      return anchor
+    },
+    [pageNumbers, textsByPageNumber]
+  )
+  const handleViewportPositionChange = useCallback(() => {
+    captureCurrentTextAnchor(true)
+  }, [captureCurrentTextAnchor])
+  useEffect(() => {
+    const viewerWindow = viewerRootRef.current?.ownerDocument.defaultView
+    if (!viewerWindow) {
+      captureCurrentTextAnchor(false)
+      return
+    }
+
+    const frameId = viewerWindow.requestAnimationFrame(() => {
+      captureCurrentTextAnchor(false)
+    })
+    return () => viewerWindow.cancelAnimationFrame(frameId)
+  }, [captureCurrentTextAnchor])
   const boundedDirectRenderPayloadsRef = useRef(
     new WeakMap<ReaderTextSelectionDetail, ReaderSelectionPayload>()
   )
@@ -4901,6 +5098,8 @@ export function IntermediateDocumentViewer({
   const [pageStatuses, setPageStatuses] = useState(
     () => new Map<number, PageLoadStatus>()
   )
+  const [pageResourcesDocument, setPageResourcesDocument] =
+    useState(runtimeDocument)
   const [baseImagesByPageNumber, setBaseImagesByPageNumber] = useState(
     () => new Map<number, string>()
   )
@@ -5185,10 +5384,28 @@ export function IntermediateDocumentViewer({
     [clearJumpPinCleanupTimer, releaseJumpPinnedPage]
   )
 
+  const cancelPendingTextAnchor = useCallback(() => {
+    const operation = pendingTextAnchorRef.current
+    pendingTextAnchorRef.current = null
+    setPendingTextAnchor(null)
+    if (operation) {
+      releaseJumpPinnedPage(operation.anchor.pageNumber, operation.token)
+    }
+  }, [releaseJumpPinnedPage])
+
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
   useEffect(() => {
     const currentPageNumbers = new Set(pageNumbers)
+
+    const pendingOperation = pendingTextAnchorRef.current
+    if (pendingOperation) {
+      cancelPendingTextAnchor()
+      appliedDefaultTextAnchorRef.current = null
+      if (!currentPageNumbers.has(pendingOperation.anchor.pageNumber)) {
+        setFallbackBookmarkKey(undefined)
+      }
+    }
 
     clearAllJumpPins()
     activePinchRef.current = false
@@ -5208,7 +5425,7 @@ export function IntermediateDocumentViewer({
         pageBrowserVisiblePagesRef.current.delete(pageNumber)
       }
     })
-  }, [clearAllJumpPins, pageNumbers])
+  }, [cancelPendingTextAnchor, clearAllJumpPins, pageNumbers])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -5239,6 +5456,14 @@ export function IntermediateDocumentViewer({
     setBaseImagesByPageNumber(new Map())
     setImagesByPageNumber(new Map())
     setOrderedContentByPageNumber(new Map())
+    setPageResourcesDocument(runtimeDocument)
+    setCurrentTextAnchor(undefined)
+    const firstPageNumber = pageNumbersRef.current[0] ?? 0
+    currentLayoutPageNumberRef.current = firstPageNumber
+    setCurrentLayoutPageNumber(firstPageNumber)
+    setFallbackBookmarkKey(undefined)
+    lastLocallyEmittedVirtualPaperKeyRef.current = ''
+    cancelPendingTextAnchor()
     lastThumbnailRefreshScalesRef.current.clear()
     clearAllUnloadTimers()
     clearAllJumpPins()
@@ -5246,7 +5471,8 @@ export function IntermediateDocumentViewer({
     runtimeDocument,
     serializedFlowLayoutPageNumbers,
     clearAllUnloadTimers,
-    clearAllJumpPins
+    clearAllJumpPins,
+    cancelPendingTextAnchor
   ])
 
   const bumpOcrEvictGeneration = useCallback((pageNumber: number) => {
@@ -5334,11 +5560,18 @@ export function IntermediateDocumentViewer({
       setCommittedReaderScale(
         scale === undefined ? completedScale : effectiveScaleRef.current
       )
-      onVirtualPaperTransformChangeEnd?.({
+      const completedState: ReaderVirtualPaperState = {
         x: nextTransform.x,
         y: nextTransform.y,
         scale: scale === undefined ? completedScale : effectiveScaleRef.current
-      })
+      }
+      const anchor = captureCurrentTextAnchor(true)
+      const completedReaderState = anchor
+        ? { ...completedState, anchor }
+        : completedState
+      lastLocallyEmittedVirtualPaperKeyRef.current =
+        getVirtualPaperStateKey(completedReaderState)
+      onVirtualPaperTransformChangeEnd?.(completedReaderState)
       if (
         transformStartScale !== null &&
         completedScale > transformStartScale
@@ -5353,6 +5586,7 @@ export function IntermediateDocumentViewer({
       }
     },
     [
+      captureCurrentTextAnchor,
       handleVirtualPaperTransform,
       onVirtualPaperTransformChangeEnd,
       scale,
@@ -5743,26 +5977,30 @@ export function IntermediateDocumentViewer({
   )
 
   const scrollToPosition = useCallback(
-    (position: { x: number; y: number; scale?: number }) => {
-      if (!runtimeDocument || pageNumbers.length === 0) return
+    (position: {
+      x: number
+      y: number
+      scale?: number
+    }): VirtualPaperTransform | null => {
+      if (!runtimeDocument || pageNumbers.length === 0) return null
 
       const widestPageSize = getWidestRenderedPageSize(
         pageNumbers,
         previewPageSizesByPageNumber
       )
-      if (!widestPageSize) return
+      if (!widestPageSize) return null
 
       const viewportElement = viewerRootRef.current?.querySelector(
         '.virtual-paper-wrapper'
       )
-      if (!(viewportElement instanceof HTMLElement)) return
+      if (!(viewportElement instanceof HTMLElement)) return null
 
       const viewportRect = viewportElement.getBoundingClientRect()
       const contentWidth = widestPageSize.width
       const lastPageNumber = pageNumbers.at(-1)
-      if (lastPageNumber === undefined) return
+      if (lastPageNumber === undefined) return null
       const lastPageSize = previewPageSizesByPageNumber.get(lastPageNumber)
-      if (!lastPageSize) return
+      if (!lastPageSize) return null
       const contentHeight =
         computePageOriginY(
           lastPageNumber,
@@ -5779,13 +6017,16 @@ export function IntermediateDocumentViewer({
         offsetY: position.y,
         scale: position.scale ?? effectiveScaleRef.current
       })
-      if (!nextTransform) return
+      if (!nextTransform) return null
 
-      setPaperTransform((currentTransform) => ({
+      const resolvedTransform = {
         x: nextTransform.x,
         y: nextTransform.y,
-        scale: nextTransform.scale ?? currentTransform.scale
-      }))
+        scale: nextTransform.scale ?? paperTransformRef.current.scale
+      }
+      paperTransformRef.current = resolvedTransform
+      setPaperTransform(resolvedTransform)
+      return resolvedTransform
     },
     [pageNumbers, previewPageSizesByPageNumber, runtimeDocument]
   )
@@ -5796,6 +6037,9 @@ export function IntermediateDocumentViewer({
         return
       }
       const token = jumpPinTokensRef.current.get(pageNumber)
+      if (pendingTextAnchorRef.current?.token === token) {
+        return
+      }
       if (token) {
         releaseJumpPinnedPage(pageNumber, token)
       }
@@ -6075,6 +6319,8 @@ export function IntermediateDocumentViewer({
 
   const navigateToPage = useCallback(
     (pageNumber: number) => {
+      cancelPendingTextAnchor()
+      setFallbackBookmarkKey(undefined)
       if (!pageNumbers.includes(pageNumber)) return
 
       const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
@@ -6091,7 +6337,7 @@ export function IntermediateDocumentViewer({
         lazyPageQueue.enqueuePage(pageNumber)
       }
 
-      scrollToPosition({
+      const nextTransform = scrollToPosition({
         x: 0,
         y: computePageOriginY(
           pageNumber,
@@ -6099,9 +6345,15 @@ export function IntermediateDocumentViewer({
           previewPageSizesByPageNumber
         )
       })
+      if (nextTransform) {
+        lastLocallyEmittedVirtualPaperKeyRef.current =
+          getVirtualPaperStateKey(nextTransform)
+        onVirtualPaperTransformChangeEnd?.(nextTransform)
+      }
     },
     [
       clearUnloadTimer,
+      cancelPendingTextAnchor,
       lazyPageQueue,
       markLoadableWithOverscan,
       pageNumbers,
@@ -6109,9 +6361,257 @@ export function IntermediateDocumentViewer({
       pinJumpTargetPage,
       previewPageSizesByPageNumber,
       releaseJumpPinnedPage,
-      scrollToPosition
+      scrollToPosition,
+      onVirtualPaperTransformChangeEnd
     ]
   )
+
+  const alignTextAnchor = useCallback(
+    (operation: PendingTextAnchorOperation): boolean => {
+      if (
+        pendingTextAnchorRef.current !== operation ||
+        operation.runtimeDocument !== runtimeDocument
+      ) {
+        return false
+      }
+      const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+        '.virtual-paper-wrapper'
+      )
+      if (!viewport) return false
+
+      const targetElement = resolveTextAnchorElement(
+        operation.anchor,
+        textElementsRef.current,
+        textsByPageNumber
+      )
+      if (!targetElement) return false
+
+      const viewportRect = viewport.getBoundingClientRect()
+      const targetRect = targetElement.getBoundingClientRect()
+      const offsetY = viewportRect.top - targetRect.top
+      const currentTransform = paperTransformRef.current
+      const nextTransform =
+        offsetY === 0
+          ? currentTransform
+          : { ...currentTransform, y: currentTransform.y + offsetY }
+      paperTransformRef.current = nextTransform
+      setPaperTransform(nextTransform)
+      setCurrentTextAnchor(operation.anchor)
+      setFallbackBookmarkKey(undefined)
+      currentLayoutPageNumberRef.current = operation.anchor.pageNumber
+      setCurrentLayoutPageNumber(operation.anchor.pageNumber)
+      setPendingTextAnchor(null)
+      pendingTextAnchorRef.current = null
+      releaseJumpPinnedPage(operation.anchor.pageNumber, operation.token)
+      if (operation.source === 'bookmark') {
+        const completedState = { ...nextTransform, anchor: operation.anchor }
+        lastLocallyEmittedVirtualPaperKeyRef.current =
+          getVirtualPaperStateKey(completedState)
+        onVirtualPaperTransformChangeEnd?.(completedState)
+      }
+      return true
+    },
+    [
+      onVirtualPaperTransformChangeEnd,
+      releaseJumpPinnedPage,
+      runtimeDocument,
+      textsByPageNumber
+    ]
+  )
+
+  const alignTextAnchorPageFallback = useCallback(
+    (anchor: ReaderTextAnchor) => {
+      const pageOriginY = computePageOriginY(
+        anchor.pageNumber,
+        pageNumbers,
+        previewPageSizesByPageNumber
+      )
+      const currentTransform = paperTransformRef.current
+      const nextTransform = {
+        ...currentTransform,
+        y:
+          -pageOriginY *
+          (scale === undefined
+            ? currentTransform.scale
+            : clampScale(scale, scaleRange))
+      }
+      paperTransformRef.current = nextTransform
+      setPaperTransform(nextTransform)
+      setCurrentTextAnchor(undefined)
+      currentLayoutPageNumberRef.current = anchor.pageNumber
+      setCurrentLayoutPageNumber(anchor.pageNumber)
+    },
+    [pageNumbers, previewPageSizesByPageNumber, scale, scaleRange]
+  )
+
+  const completeTextAnchorPageFallback = useCallback(
+    (operation: PendingTextAnchorOperation) => {
+      if (pendingTextAnchorRef.current !== operation) return
+
+      pendingTextAnchorRef.current = null
+      setPendingTextAnchor(null)
+      releaseJumpPinnedPage(operation.anchor.pageNumber, operation.token)
+      if (operation.source === 'bookmark') {
+        const completedState = {
+          ...paperTransformRef.current,
+          anchor: operation.anchor
+        }
+        setFallbackBookmarkKey(getTextAnchorKey(operation.anchor))
+        lastLocallyEmittedVirtualPaperKeyRef.current =
+          getVirtualPaperStateKey(completedState)
+        onVirtualPaperTransformChangeEnd?.(completedState)
+      }
+    },
+    [onVirtualPaperTransformChangeEnd, releaseJumpPinnedPage]
+  )
+
+  const navigateToTextAnchor = useCallback(
+    (anchor: ReaderTextAnchor, source: 'restore' | 'bookmark' = 'bookmark') => {
+      cancelPendingTextAnchor()
+      if (
+        !pageNumbers.includes(anchor.pageNumber) ||
+        pageResourcesDocument !== runtimeDocument
+      ) {
+        setFallbackBookmarkKey(undefined)
+        return
+      }
+
+      const token = pinJumpTargetPage(anchor.pageNumber)
+      const operation: PendingTextAnchorOperation = {
+        anchor,
+        runtimeDocument,
+        source,
+        token
+      }
+      pendingTextAnchorRef.current = operation
+      setPendingTextAnchor(operation)
+      setFallbackBookmarkKey(
+        source === 'bookmark' ? getTextAnchorKey(anchor) : undefined
+      )
+      const pageStatus = pageStatuses.get(anchor.pageNumber)
+      const pageHasRegistrableText = hasAnchorableText(
+        textsByPageNumber.get(anchor.pageNumber)
+      )
+      if (pageStatus !== 'loaded' || !pageHasRegistrableText) {
+        alignTextAnchorPageFallback(anchor)
+      }
+      clearUnloadTimer(anchor.pageNumber)
+      lazilyEvictedPagesRef.current.delete(anchor.pageNumber)
+      markLoadableWithOverscan(anchor.pageNumber)
+
+      if (pageStatus !== 'loaded') {
+        lazyPageQueue.enqueuePage(anchor.pageNumber)
+      } else if (!pageHasRegistrableText) {
+        completeTextAnchorPageFallback(operation)
+      }
+    },
+    [
+      alignTextAnchorPageFallback,
+      cancelPendingTextAnchor,
+      clearUnloadTimer,
+      completeTextAnchorPageFallback,
+      lazyPageQueue,
+      markLoadableWithOverscan,
+      pageNumbers,
+      pageResourcesDocument,
+      pageStatuses,
+      pinJumpTargetPage,
+      runtimeDocument,
+      textsByPageNumber
+    ]
+  )
+
+  useEffect(() => {
+    if (!pendingTextAnchor) return
+    if (
+      pendingTextAnchorRef.current !== pendingTextAnchor ||
+      pendingTextAnchor.runtimeDocument !== runtimeDocument
+    ) {
+      return
+    }
+    const anchor = pendingTextAnchor.anchor
+    const pageStatus = pageStatuses.get(anchor.pageNumber)
+    if (pageStatus !== 'loaded' && pageStatus !== 'error') {
+      return
+    }
+
+    if (pageStatus === 'error') {
+      completeTextAnchorPageFallback(pendingTextAnchor)
+      return
+    }
+
+    const viewerWindow = viewerRootRef.current?.ownerDocument.defaultView
+    if (!viewerWindow) {
+      if (!alignTextAnchor(pendingTextAnchor) && pageStatus === 'loaded') {
+        completeTextAnchorPageFallback(pendingTextAnchor)
+      }
+      return
+    }
+
+    const frameId = viewerWindow.requestAnimationFrame(() => {
+      if (!alignTextAnchor(pendingTextAnchor) && pageStatus === 'loaded') {
+        completeTextAnchorPageFallback(pendingTextAnchor)
+      }
+    })
+    return () => viewerWindow.cancelAnimationFrame(frameId)
+  }, [
+    alignTextAnchor,
+    completeTextAnchorPageFallback,
+    pageStatuses,
+    pendingTextAnchor,
+    runtimeDocument
+  ])
+
+  useEffect(() => {
+    const defaultAnchor = defaultVirtualPaperTransform?.anchor
+    if (!defaultAnchor) {
+      if (
+        appliedDefaultTextAnchorRef.current?.runtimeDocument === runtimeDocument
+      ) {
+        cancelPendingTextAnchor()
+        setFallbackBookmarkKey(undefined)
+        appliedDefaultTextAnchorRef.current = null
+      }
+      return
+    }
+    if (pageResourcesDocument !== runtimeDocument) return
+
+    const key = getTextAnchorKey(defaultAnchor)
+    const appliedDefaultAnchor = appliedDefaultTextAnchorRef.current
+    if (
+      appliedDefaultAnchor?.runtimeDocument === runtimeDocument &&
+      appliedDefaultAnchor.key === key
+    ) {
+      return
+    }
+    appliedDefaultTextAnchorRef.current = { runtimeDocument, key }
+    if (
+      defaultVirtualPaperStateKey.length > 0 &&
+      lastLocallyEmittedVirtualPaperKeyRef.current ===
+        defaultVirtualPaperStateKey
+    ) {
+      appliedDefaultTextAnchorRef.current = { runtimeDocument, key }
+      return
+    }
+    navigateToTextAnchor(defaultAnchor, 'restore')
+  }, [
+    defaultVirtualPaperTransform?.anchor,
+    defaultVirtualPaperStateKey,
+    cancelPendingTextAnchor,
+    navigateToTextAnchor,
+    pageResourcesDocument,
+    runtimeDocument
+  ])
+
+  useEffect(() => {
+    if (
+      defaultVirtualPaperStateKey.length > 0 &&
+      lastLocallyEmittedVirtualPaperKeyRef.current ===
+        defaultVirtualPaperStateKey
+    ) {
+      lastLocallyEmittedVirtualPaperKeyRef.current = ''
+    }
+  }, [defaultVirtualPaperStateKey])
 
   const scheduleEviction = useCallback(
     (snapshot: { visiblePages: Set<number>; pageNumbers: number[] }) => {
@@ -6268,7 +6768,7 @@ export function IntermediateDocumentViewer({
     (text: IntermediateText, pageNumber: number) =>
       (element: HTMLSpanElement | null) => {
         if (element) {
-          textElementsRef.current.set(text.id, { text, pageNumber })
+          textElementsRef.current.set(text.id, { text, pageNumber, element })
           textElementRecords.set(element, { text, pageNumber })
         } else {
           textElementsRef.current.delete(text.id)
@@ -7156,6 +7656,8 @@ export function IntermediateDocumentViewer({
       onCreateRect={handleCreateRect}
       onSelectRect={handleSelectRect}
       onUpdateRect={handleUpdateRect}
+      onRemoveRange={onRemoveRange}
+      onRemoveRect={onRemoveRect}
       annotationHistoryController={annotationHistoryController}
       onClearAnnotationHistory={clearAnnotationHistory}
       onRunAnnotationHistory={runAnnotationHistory}
@@ -7190,8 +7692,19 @@ export function IntermediateDocumentViewer({
       visiblePageNumbers={visiblePages}
       commentCountByRangeId={effectiveCommentCountByRangeId}
       commentCountByRectId={commentCountByRectId}
+      bookmarks={bookmarks}
+      currentAnchor={currentTextAnchor}
+      currentPageNumber={currentLayoutPageNumber}
+      activeBookmarkKey={activeBookmarkKey}
+      onNavigateToBookmark={resolveBookmarkNavigationHandler(
+        bookmarks,
+        onToggleBookmark,
+        navigateToTextAnchor
+      )}
+      onToggleBookmark={onToggleBookmark}
       bookmarkedPageNumbers={bookmarkedPageNumbers}
       onTogglePageBookmark={onTogglePageBookmark}
+      onViewportPositionChange={handleViewportPositionChange}
       popoverRelative={popoverRelative}
     />
   )

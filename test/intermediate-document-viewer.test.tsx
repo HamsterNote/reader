@@ -25,7 +25,8 @@ import {
   type ReactNode,
   type RefObject,
   useCallback,
-  useRef
+  useRef,
+  useState
 } from 'react'
 import * as sass from 'sass'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -83,6 +84,7 @@ import {
 import {
   intersectionObserverMock,
   mockElementSize,
+  resizeObserverMock,
   setScrollContainerSize
 } from './setup'
 
@@ -948,20 +950,47 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('forwards containMarginX and containMarginY to VirtualPaper', async () => {
+  it('keeps VirtualPaper margins visually fixed when zoomed', async () => {
+    // Given：阅读器以 2 倍缩放渲染，且同时配置横向与旧版对称边距。
     const { document } = makeDocument({ pageCount: 1 })
 
     render(
       <IntermediateDocumentViewer
         document={document}
+        defaultScale={2}
         containMarginX={24}
         containMarginY={48}
       />
     )
 
+    // When：VirtualPaper 把内容容器整体放大 2 倍。
     const container = await screen.findByTestId('virtual-paper-container')
+
+    // Then：旧版垂直边距按 scale 反向补偿，横向边距维持原有布局语义。
     expect(container).toHaveAttribute('data-contain-margin-x', '24')
-    expect(container).toHaveAttribute('data-contain-margin-y', '48')
+    expect(container).toHaveAttribute('data-contain-margin-y', '24')
+  })
+
+  it('uses independent vertical margins for content and reading progress', async () => {
+    // Given：上下边距不同，且阅读器以 2 倍缩放渲染。
+    const { document } = makeDocument({ pageCount: 1 })
+
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        defaultScale={2}
+        containMarginTop={40}
+        containMarginBottom={60}
+      />
+    )
+
+    // When：读取被缩放的内容容器与不参与缩放的进度条。
+    const container = await screen.findByTestId('virtual-paper-container')
+    const progress = screen.getByRole('slider', { name: '版面阅读进度' })
+
+    // Then：内容 padding 被反向补偿，进度条则直接使用屏幕像素边距。
+    expect(container).toHaveStyle({ paddingTop: '20px', paddingBottom: '30px' })
+    expect(progress).toHaveStyle({ top: '40px', bottom: '60px' })
   })
 
   it('enables readerModeExternalZoomPreview on VirtualPaper', async () => {
@@ -1098,6 +1127,913 @@ describe('IntermediateDocumentViewer', () => {
       y: -80,
       scale: 2
     })
+  })
+
+  it('layout mode persists the text crossing the top of the viewport', async () => {
+    // Given: the second text starts at the viewport top after the first text.
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) throw new Error('Expected page 1 fixture')
+    page.getContent.mockResolvedValue([
+      makeText('page-1-first', 'First'),
+      makeText('page-1-second', 'Second')
+    ])
+    const onVirtualPaperTransformChangeEnd = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+    const first = await screen.findByText('First')
+    const second = screen.getByText('Second')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(first, { left: 20, top: -20, width: 100, height: 20 })
+    mockElementRect(second, { left: 20, top: 0, width: 100, height: 20 })
+
+    // When: the user finishes panning the layout surface.
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(container, {
+        x: 40,
+        y: -80,
+        scale: 2
+      })
+    })
+
+    // Then: persistence includes the concrete top text and its page-local offset.
+    expect(onVirtualPaperTransformChangeEnd).toHaveBeenCalledWith({
+      x: 40,
+      y: -80,
+      scale: 2,
+      anchor: {
+        pageNumber: 1,
+        textId: 'page-1-second',
+        text: 'Second',
+        offset: 5
+      }
+    })
+  })
+
+  it('layout mode ignores the host echo of its locally persisted anchor', async () => {
+    // Given: the current text partially crosses the viewport top when Layout
+    // persists its exact transform and anchor to a controlled host.
+    const { document } = makeDocument({ pageCount: 1 })
+    const onVirtualPaperTransformChangeEnd = vi.fn()
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+    await screen.findByText('Page 1 text')
+    const target = screen
+      .getByTestId('intermediate-page-1')
+      .querySelector<HTMLElement>('[data-text-id="text-1"]')
+    if (!target) throw new Error('Expected bookmark target text')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(target, { left: 20, top: -10, width: 100, height: 20 })
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(container, {
+        x: 12,
+        y: -34,
+        scale: 1
+      })
+    })
+    const persistedState = onVirtualPaperTransformChangeEnd.mock.calls[0]?.[0]
+    if (!persistedState) throw new Error('Expected locally persisted state')
+
+    // When: the host immediately echoes that exact controlled value.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        defaultVirtualPaperTransform={persistedState}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+
+    // Then: the text is not re-aligned to the top and the viewport does not jump.
+    await waitFor(() => {
+      expect(container).toHaveStyle({
+        transform: 'translate3d(12px, -34px, 0) scale(1)'
+      })
+    })
+  })
+
+  it('layout mode consumes a local host echo before restoring the same state later', async () => {
+    // Given: Layout emits state A, the host echoes A, then externally restores B.
+    const { document } = makeDocument({ pageCount: 1 })
+    const onVirtualPaperTransformChangeEnd = vi.fn()
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+    await screen.findByText('Page 1 text')
+    const target = screen
+      .getByTestId('intermediate-page-1')
+      .querySelector<HTMLElement>('[data-text-id="text-1"]')
+    if (!target) throw new Error('Expected persisted anchor target')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(target, { left: 20, top: -10, width: 100, height: 20 })
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(container, {
+        x: 12,
+        y: -34,
+        scale: 1
+      })
+    })
+    const stateA = onVirtualPaperTransformChangeEnd.mock.calls[0]?.[0]
+    if (!stateA) throw new Error('Expected locally persisted state A')
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        defaultVirtualPaperTransform={stateA}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    const stateB = { x: 70, y: -90, scale: 1 } as const
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        defaultVirtualPaperTransform={stateB}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    await waitFor(() => {
+      expect(container).toHaveStyle({
+        transform: 'translate3d(70px, -90px, 0) scale(1)'
+      })
+    })
+
+    // When: the host later requests state A again as a legitimate external restore.
+    mockElementRect(target, { left: 20, top: 100, width: 100, height: 20 })
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        defaultVirtualPaperTransform={stateA}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+
+    // Then: the stale echo marker cannot suppress A, including its anchor alignment.
+    await waitFor(() => {
+      expect(container).toHaveStyle({
+        transform: 'translate3d(12px, -134px, 0) scale(1)'
+      })
+    })
+  })
+
+  it('layout mode opens a bookmark by page offset when its text id is missing', async () => {
+    // Given: a saved bookmark whose original text id no longer exists.
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) throw new Error('Expected page 1 fixture')
+    page.getContent.mockResolvedValue([
+      makeText('page-1-first', 'First'),
+      makeText('page-1-replacement', 'Replacement')
+    ])
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'removed-text-id',
+      text: 'Previously saved text',
+      offset: 5
+    } as const
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const replacement = await screen.findByText('Replacement')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(replacement, {
+      left: 20,
+      top: 120,
+      width: 100,
+      height: 20
+    })
+
+    // When: the user opens the precise bookmark from the sidebar.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: '跳转到书签：Previously saved text'
+      })
+    )
+
+    // Then: the fallback text is aligned to the viewport top through VirtualPaper.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(0px, -120px, 0) scale(1)'
+      })
+    })
+  })
+
+  it('layout mode persists the final transform after bookmark navigation', async () => {
+    // Given: a precise bookmark resolves to loaded text below the viewport top.
+    const { document } = makeDocument({ pageCount: 1 })
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'text-1',
+      text: 'Page 1 text',
+      offset: 0
+    } as const
+    const onVirtualPaperTransformChangeEnd = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    await screen.findAllByText('Page 1 text')
+    const target = screen
+      .getByTestId('intermediate-page-1')
+      .querySelector<HTMLElement>('[data-text-id="text-1"]')
+    if (!target) throw new Error('Expected bookmark target text')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(target, { left: 20, top: 120, width: 100, height: 20 })
+
+    // When: the user opens the bookmark and performs no later pan gesture.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: '跳转到书签：Page 1 text' })
+    )
+
+    // Then: the final aligned transform is committed once for host persistence.
+    await waitFor(() => {
+      expect(onVirtualPaperTransformChangeEnd).toHaveBeenCalledWith({
+        x: 0,
+        y: -120,
+        scale: 1,
+        anchor: bookmark
+      })
+    })
+    expect(onVirtualPaperTransformChangeEnd).toHaveBeenCalledTimes(1)
+  })
+
+  it('layout mode derives the active bookmark from the current viewport anchor', async () => {
+    // Given: the user has opened a precise bookmark.
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) throw new Error('Expected page 1 fixture')
+    page.getContent.mockResolvedValue([
+      makeText('first-anchor', 'First anchor'),
+      makeText('second-anchor', 'Second anchor')
+    ])
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'first-anchor',
+      text: 'First anchor',
+      offset: 0
+    } as const
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+    await screen.findAllByText('First anchor')
+    const pageElement = screen.getByTestId('intermediate-page-1')
+    const first = pageElement.querySelector<HTMLElement>(
+      '[data-text-id="first-anchor"]'
+    )
+    const second = pageElement.querySelector<HTMLElement>(
+      '[data-text-id="second-anchor"]'
+    )
+    if (!first || !second) throw new Error('Expected both anchor text elements')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(first, { left: 20, top: 0, width: 100, height: 20 })
+    mockElementRect(second, { left: 20, top: 80, width: 100, height: 20 })
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    const bookmarkButton = screen.getByRole('button', {
+      name: '跳转到书签：First anchor'
+    })
+    fireEvent.click(bookmarkButton)
+    expect(bookmarkButton).toHaveAttribute('aria-current', 'location')
+
+    // When: a later user pan makes a different text the concrete top anchor.
+    mockElementRect(first, { left: 20, top: -80, width: 100, height: 20 })
+    mockElementRect(second, { left: 20, top: 0, width: 100, height: 20 })
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(container, { x: 0, y: -80, scale: 1 })
+    })
+
+    // Then: the stale clicked bookmark no longer claims the current location.
+    expect(bookmarkButton).not.toHaveAttribute('aria-current')
+  })
+
+  it('layout mode persists a page-browser navigation without a later gesture', async () => {
+    // Given: the page browser can navigate to a second page in a measured viewport.
+    const { document } = makeDocument({ pageCount: 2 })
+    const onVirtualPaperTransformChangeEnd = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        showPageBrowser={true}
+        onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 100, height: 100 })
+
+    // When: the user commits page 2 from the shared page-navigation surface.
+    fireEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
+
+    // Then: the rendered transform is persisted immediately and exactly once.
+    await waitFor(() => {
+      expect(onVirtualPaperTransformChangeEnd).toHaveBeenCalledTimes(1)
+    })
+    const persistedState = onVirtualPaperTransformChangeEnd.mock.calls[0]?.[0]
+    expect(persistedState).toMatchObject({ scale: 1 })
+    expect(container).toHaveStyle({
+      transform: `translate3d(${persistedState.x}px, ${persistedState.y}px, 0) scale(1)`
+    })
+  })
+
+  it('layout mode restores reading progress by page offset when its text id is missing', async () => {
+    // Given: the document changed after saving a precise Layout reading position.
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const page = pages.get(1)
+    if (!page) throw new Error('Expected page 1 fixture')
+    page.getContent.mockResolvedValue([
+      makeText('page-1-first', 'First'),
+      makeText('page-1-replacement', 'Replacement')
+    ])
+    const view = render(<IntermediateDocumentViewer document={document} />)
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const replacement = await screen.findByText('Replacement')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(replacement, {
+      left: 20,
+      top: 120,
+      width: 100,
+      height: 20
+    })
+
+    // When: the host restores an anchor whose original text id is unavailable.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        defaultVirtualPaperTransform={{
+          x: 25,
+          y: -10,
+          scale: 1.5,
+          anchor: {
+            pageNumber: 1,
+            textId: 'removed-text-id',
+            text: 'Previously saved text',
+            offset: 5
+          }
+        }}
+      />
+    )
+
+    // Then: the fallback text is aligned while the persisted x and scale remain.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(25px, -130px, 0) scale(1.5)'
+      })
+    })
+  })
+
+  it('layout mode falls back to an empty bookmark page and releases its jump pin', async () => {
+    // Given: the bookmarked page is already loaded but contains no registrable text.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    page.getContent.mockResolvedValue([])
+    const bookmark = {
+      pageNumber: 2,
+      textId: 'removed-text-id',
+      text: 'Empty saved page',
+      offset: 0
+    } as const
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        overscan={0}
+        pageLoadEnterDelayMs={0}
+        pageUnloadDelayMs={20}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(page.getContent).toHaveBeenCalledTimes(1)
+    })
+
+    // When: the user opens the precise bookmark from the sidebar.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: '跳转到书签：Empty saved page'
+      })
+    )
+    expect(
+      screen.getByRole('button', { name: '跳转到书签：Empty saved page' })
+    ).toHaveAttribute('aria-current', 'location')
+
+    // Then: the page top is used as the terminal fallback.
+    const pageOrigin = computePageOriginY(
+      2,
+      [1, 2],
+      new Map([
+        [1, { width: 100, height: 150 }],
+        [2, { width: 100, height: 150 }]
+      ])
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: `translate3d(0px, ${-pageOrigin}px, 0) scale(1)`
+      })
+    })
+
+    // And: terminal fallback releases the pin immediately, so normal unload and
+    // visibility-driven reload can proceed before the five-second safety timeout.
+    const page2 = screen.getByTestId('intermediate-page-2')
+    vi.useFakeTimers()
+    try {
+      intersectionObserverMock.trigger(page2, false)
+      await act(async () => {
+        vi.advanceTimersByTime(20)
+        await Promise.resolve()
+      })
+      intersectionObserverMock.trigger(page2, true)
+      await act(async () => {
+        vi.advanceTimersByTime(0)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+    await waitFor(() => {
+      expect(page.getContent).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('layout mode restores an EOL-only page anchor without changing x or scale', async () => {
+    // Given: persisted Layout progress targets a page represented only by a line break.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    const emptyLine = makeText('page-2-empty-line', '')
+    emptyLine.isEOL = true
+    page.getContent.mockResolvedValue([emptyLine])
+    const pageOrigin = computePageOriginY(
+      2,
+      [1, 2],
+      new Map([
+        [1, { width: 100, height: 150 }],
+        [2, { width: 100, height: 150 }]
+      ])
+    )
+
+    // When: the host restores the precise anchor.
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 25, y: -10, scale: 1.5 }}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{
+          x: 25,
+          y: -10,
+          scale: 1.5,
+          anchor: {
+            pageNumber: 2,
+            textId: 'page-2-empty-line',
+            text: '',
+            offset: 0
+          }
+        }}
+      />
+    )
+
+    // Then: page-level fallback is immediate and keeps the persisted horizontal
+    // position and scale while the lazy page finishes loading without a text span.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: `translate3d(25px, ${-pageOrigin * 1.5}px, 0) scale(1.5)`
+      })
+    })
+    await waitFor(() => {
+      expect(page.getContent).toHaveBeenCalledTimes(1)
+    })
+    expect(
+      screen
+        .getByTestId('intermediate-page-2')
+        .querySelector('[data-text-id="page-2-empty-line"]')
+    ).toBeNull()
+  })
+
+  it('layout mode terminates a trailing EOL anchor with page fallback', async () => {
+    // Given: a loaded page has normal body text followed by an unrendered EOL item.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    const trailingLine = makeText('page-2-trailing-line', '')
+    trailingLine.isEOL = true
+    page.getContent.mockResolvedValue([
+      makeText('page-2-body', 'Body'),
+      trailingLine
+    ])
+    const anchor = {
+      pageNumber: 2,
+      textId: trailingLine.id,
+      text: '',
+      offset: 4
+    } as const
+    const pageOrigin = computePageOriginY(
+      2,
+      [1, 2],
+      new Map([
+        [1, { width: 100, height: 150 }],
+        [2, { width: 100, height: 150 }]
+      ])
+    )
+
+    // When: Layout restores the precise anchor after the page is loaded.
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        defaultVirtualPaperTransform={{ x: 18, y: -10, scale: 1.25, anchor }}
+      />
+    )
+    await screen.findByText('Body')
+
+    // Then: the missing target span reaches the terminal page fallback.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: `translate3d(18px, ${-pageOrigin * 1.25}px, 0) scale(1.25)`
+      })
+    })
+  })
+
+  it('layout mode uses a scale supplied with the same anchor update', async () => {
+    // Given: an empty target page and an already-mounted Layout document.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    page.getContent.mockResolvedValue([])
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        defaultVirtualPaperTransform={{ x: 10, y: -5, scale: 1 }}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const pageOrigin = computePageOriginY(
+      2,
+      [1, 2],
+      new Map([
+        [1, { width: 100, height: 150 }],
+        [2, { width: 100, height: 150 }]
+      ])
+    )
+
+    // When: one host update changes both scale and precise anchor.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        defaultVirtualPaperTransform={{
+          x: 25,
+          y: -10,
+          scale: 1.5,
+          anchor: {
+            pageNumber: 2,
+            textId: 'missing-empty-text',
+            text: '',
+            offset: 0
+          }
+        }}
+      />
+    )
+
+    // Then: page fallback uses the newly committed scale, not the previous ref value.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: `translate3d(25px, ${-pageOrigin * 1.5}px, 0) scale(1.5)`
+      })
+    })
+  })
+
+  it('layout mode cancels a pending anchor when the host removes it', async () => {
+    // Given: page 2 loading is pending while a precise restore operation is active.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    let resolvePage: ((texts: IntermediateText[]) => void) | undefined
+    page.getContent.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePage = resolve
+        })
+    )
+    const anchor = {
+      pageNumber: 2,
+      textId: 'late-target',
+      text: 'Late target',
+      offset: 0
+    } as const
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 0, y: 0, scale: 1 }}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 0, y: 0, scale: 1, anchor }}
+      />
+    )
+    await waitFor(() => expect(page.getContent).toHaveBeenCalledTimes(1))
+
+    // When: the host explicitly removes the anchor before loading completes.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 31, y: -47, scale: 1 }}
+      />
+    )
+    await act(async () => {
+      resolvePage?.([makeText('late-target', 'Late target')])
+      await flushIntermediateDocumentMicrotasks()
+    })
+
+    // Then: the stale operation cannot overwrite the host's page-only transform.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(31px, -47px, 0) scale(1)'
+      })
+    })
+  })
+
+  it('layout mode cancels a pending anchor when its page leaves the range', async () => {
+    // Given: page 2 is still loading for a precise restore operation.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    let resolvePage: ((texts: IntermediateText[]) => void) | undefined
+    page.getContent.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePage = resolve
+        })
+    )
+    const anchor = {
+      pageNumber: 2,
+      textId: 'removed-range-target',
+      text: 'Removed range target',
+      offset: 0
+    } as const
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 0, y: 0, scale: 1 }}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 0, y: 0, scale: 1, anchor }}
+      />
+    )
+    await waitFor(() => expect(page.getContent).toHaveBeenCalledTimes(1))
+
+    // When: the host keeps the restore input but removes its target page from
+    // the rendered range, then the user moves to a different position.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        pageRange={{ start: 1, end: 1 }}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 0, y: 0, scale: 1, anchor }}
+      />
+    )
+    const container = screen.getByTestId('virtual-paper-container')
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(container, { x: 27, y: -43, scale: 1 })
+      resolvePage?.([makeText('removed-range-target', 'Removed range target')])
+      await flushIntermediateDocumentMicrotasks()
+    })
+
+    // Then: completion from the removed page cannot realign the current view.
+    await waitFor(() => {
+      expect(container).toHaveStyle({
+        transform: 'translate3d(27px, -43px, 0) scale(1)'
+      })
+    })
+    expect(screen.queryByText('Removed range target')).not.toBeInTheDocument()
+  })
+
+  it('layout mode keeps an empty top page from leaking the next page anchor', async () => {
+    // Given: page 2 is empty while page 3 text is also visible below it.
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    pages.get(2)?.getContent.mockResolvedValue([])
+    const onToggleBookmark = vi.fn()
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView
+    })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={3}
+        showPageBrowser={true}
+        bookmarks={[]}
+        onToggleBookmark={onToggleBookmark}
+      />
+    )
+    const wrapper = await screen.findByTestId('virtual-paper-wrapper')
+    const container = screen.getByTestId('virtual-paper-container')
+    const page2 = screen.getByTestId('intermediate-page-2')
+    const page3 = screen.getByTestId('intermediate-page-3')
+    const page3Text = await screen.findByText('Page 3 text')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(page2, { left: 20, top: -12, width: 100, height: 150 })
+    mockElementRect(page3, { left: 20, top: 150, width: 100, height: 150 })
+    mockElementRect(page3Text, { left: 30, top: 170, width: 80, height: 20 })
+    intersectionObserverMock.trigger(page2, true)
+    intersectionObserverMock.trigger(page3, true)
+
+    // When: Layout persists the viewport position with the empty page crossing its top.
+    await act(async () => {
+      VirtualPaper.__triggerTransformEnd(container, { x: 0, y: -174, scale: 1 })
+    })
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+
+    // Then: progress reports page 2 and text-bookmark creation stays disabled.
+    expect(
+      screen.getByRole('slider', { name: '版面阅读进度' })
+    ).toHaveAttribute('aria-valuetext', '第 2 页')
+    expect(screen.getByRole('button', { name: '新增书签' })).toBeDisabled()
+    Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+  })
+
+  it('layout mode restores the same anchor key after a document switch', async () => {
+    // Given: the old document already loaded page 2, while the replacement uses
+    // the same anchor identity for different page content.
+    const first = makeDocument({ pageCount: 2 })
+    const second = makeDocument({ pageCount: 2 })
+    const secondPage = second.pages.get(2)
+    if (!secondPage) throw new Error('Expected second document page 2')
+    secondPage.getContent.mockResolvedValue([
+      makeText('shared-layout-target', 'Second document target')
+    ])
+    const anchor = {
+      pageNumber: 2,
+      textId: 'shared-layout-target',
+      text: 'Second document target',
+      offset: 0
+    } as const
+    const view = render(
+      <IntermediateDocumentViewer
+        document={first.document}
+        initialLoadedPages={2}
+      />
+    )
+    await screen.findByText('Page 2 text')
+
+    // When: the host swaps documents and restores the same page/id/offset key.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={second.document}
+        initialLoadedPages={1}
+        overscan={0}
+        defaultVirtualPaperTransform={{ x: 9, y: -5, scale: 1, anchor }}
+      />
+    )
+
+    // Then: the new page is independently enqueued instead of reusing old maps.
+    expect(
+      await screen.findByText('Second document target')
+    ).toBeInTheDocument()
+    expect(secondPage.getContent).toHaveBeenCalledTimes(1)
+  })
+
+  it('layout mode keeps a precise anchor pinned until its alignment frame', async () => {
+    // Given: a lazy exact target and a controllable animation-frame boundary.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const page = pages.get(2)
+    if (!page) throw new Error('Expected page 2 fixture')
+    page.getContent.mockResolvedValue([
+      makeText('frame-protected-target', 'Frame protected target')
+    ])
+    const callbacks: FrameRequestCallback[] = []
+    const requestFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        callbacks.push(callback)
+        return callbacks.length
+      })
+    const cancelFrame = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation(() => {})
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        pageUnloadDelayMs={0}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    // When: the anchor page loads and immediately becomes offscreen before RAF.
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        overscan={0}
+        pageUnloadDelayMs={0}
+        defaultVirtualPaperTransform={{
+          x: 0,
+          y: 0,
+          scale: 1,
+          anchor: {
+            pageNumber: 2,
+            textId: 'frame-protected-target',
+            text: 'Frame protected target',
+            offset: 0
+          }
+        }}
+      />
+    )
+    const target = await screen.findByText('Frame protected target')
+    const wrapper = screen.getByTestId('virtual-paper-wrapper')
+    mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
+    mockElementRect(target, { left: 20, top: 90, width: 120, height: 20 })
+    intersectionObserverMock.trigger(
+      screen.getByTestId('intermediate-page-2'),
+      false
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      callbacks.splice(0).forEach((callback) => {
+        callback(0)
+      })
+      await Promise.resolve()
+    })
+
+    // Then: the target survives through exact alignment instead of being evicted.
+    expect(screen.getByText('Frame protected target')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(0px, -256px, 0) scale(1)'
+      })
+    })
+    requestFrame.mockRestore()
+    cancelFrame.mockRestore()
   })
 
   it('keeps reader content width stable when the rendered document resizes', async () => {
@@ -1482,6 +2418,39 @@ describe('IntermediateDocumentViewer', () => {
     )
   })
 
+  it('text mode exposes only highlight and bookmark navigation in PageBrowser', async () => {
+    // Given: Text Mode receives the shared sidebar state from Reader.
+    const { document } = makeDocument({ pageCount: 2 })
+    const range = makeRuntimeLinkedRange('page-1', {
+      id: 'text-sidebar-highlight'
+    })
+
+    // When: the host opens PageBrowser in Text Mode.
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        ranges={[range]}
+        bookmarkedPageNumbers={[1]}
+        onTogglePageBookmark={vi.fn()}
+      />
+    )
+
+    // Then: Text Mode hides the unavailable page preview surface.
+    expect(
+      await screen.findByRole('navigation', { name: 'Page browser' })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '页面' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '高亮' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    expect(
+      screen.getByRole('button', { name: '跳转到书签：第 1 页' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+  })
+
   it('text mode reading progress follows the virtual scroll position', async () => {
     // Given: the Text viewer has twenty estimated 800px pages in a 600px viewport.
     const { document } = makeDocument({ pageCount: 20 })
@@ -1542,10 +2511,818 @@ describe('IntermediateDocumentViewer', () => {
     expect(progress).toHaveAttribute('data-visible', 'true')
   })
 
+  it('text mode restores persisted reading progress before reporting scroll changes', async () => {
+    // Given: page 5 is the persisted Text reading position.
+    const onTextReadingProgressChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 10 })
+    const { rerender } = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 5 }}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    const scrollTo = vi.fn((options: ScrollToOptions) => {
+      scrollEl.scrollTop = options.top ?? 0
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 8000
+    })
+
+    // Then: restoration seeks page 5 without first persisting the default page 1.
+    const progress = await screen.findByRole('slider', {
+      name: '文本阅读进度'
+    })
+    await waitFor(() => {
+      expect(progress).toHaveAttribute('aria-valuenow', '5')
+      expect(scrollEl.scrollTop).toBe(3200)
+    })
+
+    // When: the restored page mounts visible text and reports a late measurement.
+    const restoredText = await screen.findByText('Page 5 text')
+    mockElementSize(restoredText, { width: 100, height: 20, top: 0 })
+    resizeObserverMock.trigger(screen.getByTestId('intermediate-text-page-5'))
+    await act(async () => Promise.resolve())
+
+    // Then: initial external restoration remains silent after concrete text exists.
+    expect(onTextReadingProgressChange).not.toHaveBeenCalled()
+
+    // When: the user scrolls onward to page 6.
+    act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
+      scrollEl.scrollTop = 4200
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    // Then: only the newly reached page is emitted for persistence.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+        currentPageNumber: 6
+      })
+    })
+
+    // When: a controlled host echoes the locally reported page through ReaderData.
+    rerender(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 6 }}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+
+    // Then: the echo preserves the user's offset within page 6 instead of seeking its top.
+    await waitFor(() => {
+      expect(scrollEl.scrollTop).toBe(4200)
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+    })
+
+    // When: the host later restores a different page-only position.
+    onTextReadingProgressChange.mockClear()
+    rerender(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 8 }}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+
+    // Then: every programmatic scroll synchronization remains silent.
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(5600))
+    await act(async () => Promise.resolve())
+    expect(onTextReadingProgressChange).not.toHaveBeenCalled()
+
+    // When: a new wheel gesture scrolls beyond the restored position.
+    act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
+      scrollEl.scrollTop = 6400
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    // Then: the first real user scroll after restore persists normally.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenCalled()
+    })
+  })
+
+  it('text mode keeps a restored text anchor stable during late page measurement', async () => {
+    // Given: a precise anchor points inside a page whose real height is not measured yet.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'page-1-second',
+      text: 'Second',
+      offset: 5
+    } as const
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('page-1-first', 'First'),
+        makeText('page-1-second', 'Second')
+      ])
+    const onTextReadingProgressChange = vi.fn()
+    const { rerender } = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2400
+    })
+    const targetText = await screen.findByText('Second')
+    const page = screen.getByTestId('intermediate-text-page-1')
+    Object.defineProperty(targetText, 'getBoundingClientRect', {
+      configurable: true,
+      value: () =>
+        DOMRect.fromRect({
+          x: 0,
+          y: 1200 - scrollEl.scrollTop,
+          width: 100,
+          height: 20
+        })
+    })
+    const scrollTo = vi.fn((options: ScrollToOptions) => {
+      scrollEl.scrollTop = options.top ?? 0
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    onTextReadingProgressChange.mockClear()
+
+    // When: the controlled host restores the anchor before ResizeObserver reports the page height.
+    rerender(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 1, anchor }}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(1200))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    })
+    Object.defineProperty(page, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => DOMRect.fromRect({ width: 800, height: 1600 })
+    })
+    resizeObserverMock.trigger(page)
+
+    // Then: measuring the current page does not push the restored text away from the viewport top.
+    await act(async () => Promise.resolve())
+    expect(scrollEl.scrollTop).toBe(1200)
+    expect(onTextReadingProgressChange).not.toHaveBeenCalled()
+  })
+
+  it('text mode restores the same anchor key again after the document changes', async () => {
+    // Given: two documents reuse a text id and page-local offset at different positions.
+    const firstAnchor = {
+      pageNumber: 1,
+      textId: 'shared-target',
+      text: 'Document A target',
+      offset: 5
+    } as const
+    const secondAnchor = { ...firstAnchor, text: 'Document B target' } as const
+    const first = makeDocument({ pageCount: 1 })
+    const second = makeDocument({ pageCount: 1 })
+    first.pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('first-prefix', 'First'),
+        makeText('shared-target', firstAnchor.text)
+      ])
+    second.pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('second-prefix', 'First'),
+        makeText('shared-target', secondAnchor.text)
+      ])
+    const { rerender } = render(
+      <IntermediateDocumentTextViewer document={first.document} />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2400
+    })
+    const target = await screen.findByText(firstAnchor.text)
+    const firstPage = screen.getByTestId('intermediate-text-page-1')
+    Object.defineProperty(target, 'getBoundingClientRect', {
+      configurable: true,
+      value: () =>
+        DOMRect.fromRect({
+          y:
+            (target.textContent === firstAnchor.text ? 400 : 900) -
+            scrollEl.scrollTop,
+          width: 100,
+          height: 20
+        })
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: (options: ScrollToOptions) => {
+        scrollEl.scrollTop = options.top ?? 0
+        scrollEl.dispatchEvent(new Event('scroll'))
+      }
+    })
+    rerender(
+      <IntermediateDocumentTextViewer
+        document={first.document}
+        textReadingProgress={{ currentPageNumber: 1, anchor: firstAnchor }}
+      />
+    )
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(400))
+
+    // When: the host swaps the document while preserving the same anchor identity key.
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.textContent === secondAnchor.text) {
+          return DOMRect.fromRect({
+            y: 900 - scrollEl.scrollTop,
+            width: 100,
+            height: 20
+          })
+        }
+        return defaultGetBoundingClientRect.call(this)
+      })
+    rerender(
+      <IntermediateDocumentTextViewer
+        document={second.document}
+        textReadingProgress={{ currentPageNumber: 1, anchor: secondAnchor }}
+      />
+    )
+
+    // Then: the new document is independently loaded and aligned to its own target.
+    await screen.findByText(secondAnchor.text)
+    await waitFor(() => expect(scrollEl.scrollTop).toBe(900))
+
+    // When: the new document reports its first real page height after alignment.
+    const secondPage = screen.getByTestId('intermediate-text-page-1')
+    expect(secondPage).not.toBe(firstPage)
+    Object.defineProperty(secondPage, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => DOMRect.fromRect({ width: 800, height: 1600 })
+    })
+    resizeObserverMock.trigger(secondPage)
+
+    // Then: the previous document's page-size cache cannot displace the new anchor.
+    await act(async () => Promise.resolve())
+    expect(scrollEl.scrollTop).toBe(900)
+    rectSpy.mockRestore()
+  })
+
+  it('text mode keeps a same-page external restore silent after document change', async () => {
+    // Given: document A is already on page 1 before a controlled document switch.
+    const first = makeDocument({ pageCount: 2 })
+    const second = makeDocument({ pageCount: 2 })
+    second.pages
+      .get(1)
+      ?.getContent.mockResolvedValue([makeText('second-page-1', 'Second doc')])
+    const onTextReadingProgressChange = vi.fn()
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={first.document}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1600
+    })
+    await screen.findByText('Page 1 text')
+    onTextReadingProgressChange.mockClear()
+
+    // When: document B requests the same page-only position during the switch.
+    view.rerender(
+      <IntermediateDocumentTextViewer
+        document={second.document}
+        textReadingProgress={{ currentPageNumber: 1 }}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const secondText = await screen.findByText('Second doc')
+    mockElementSize(secondText, { width: 100, height: 20, top: 0 })
+    resizeObserverMock.trigger(screen.getByTestId('intermediate-text-page-1'))
+    await act(async () => Promise.resolve())
+
+    // Then: text mount and late measurement cannot write the restore back.
+    expect(onTextReadingProgressChange).not.toHaveBeenCalled()
+
+    // When: a later wheel gesture moves to page 2.
+    act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
+      scrollEl.scrollTop = 800
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    // Then: user persistence resumes after the document-switch restore.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenCalled()
+    })
+  })
+
+  it('text mode cancels a pending anchor restore when the host switches to page-only progress', async () => {
+    // Given: an anchor target is still loading when the controlled host requests it.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'late-target',
+      text: 'Late target',
+      offset: 5
+    } as const
+    let resolveContent: ((content: IntermediateText[]) => void) | undefined
+    const contentPromise = new Promise<IntermediateText[]>((resolve) => {
+      resolveContent = resolve
+    })
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages.get(1)?.getContent.mockReturnValue(contentPromise)
+    const { rerender } = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 1, anchor }}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1600
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+
+    // When: the host revokes the anchor before its text mounts, then loading finishes.
+    rerender(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    await act(async () => {
+      resolveContent?.([
+        makeText('late-prefix', 'First'),
+        makeText('late-target', anchor.text)
+      ])
+      await contentPromise
+    })
+    const target = await screen.findByText(anchor.text)
+    mockElementSize(target, { width: 100, height: 20, top: 500 })
+    await act(async () => Promise.resolve())
+
+    // Then: no delayed task can restore the revoked text anchor.
+    expect(scrollTo).not.toHaveBeenCalledWith({ behavior: 'auto', top: 500 })
+  })
+
+  it('text mode cancels a pending external anchor restore when the user takes over scrolling', async () => {
+    // Given: an externally restored anchor is still waiting for its page content.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'late-user-target',
+      text: 'Late user target',
+      offset: 5
+    } as const
+    let resolveContent: ((content: IntermediateText[]) => void) | undefined
+    const contentPromise = new Promise<IntermediateText[]>((resolve) => {
+      resolveContent = resolve
+    })
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages.get(1)?.getContent.mockReturnValue(contentPromise)
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 1, anchor }}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1600
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.textContent === anchor.text) {
+          return DOMRect.fromRect({
+            y: 500 - scrollEl.scrollTop,
+            width: 100,
+            height: 20
+          })
+        }
+        return defaultGetBoundingClientRect.call(this)
+      })
+
+    // When: the user takes over before the delayed target mounts.
+    act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
+      scrollEl.scrollTop = 240
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    await act(async () => {
+      resolveContent?.([
+        makeText('late-user-prefix', 'First'),
+        makeText('late-user-target', anchor.text)
+      ])
+      await contentPromise
+    })
+    await screen.findByText(anchor.text)
+    await act(async () => Promise.resolve())
+
+    // Then: the stale external request cannot pull the viewport back to its anchor.
+    expect(scrollTo).not.toHaveBeenCalledWith({ behavior: 'auto', top: 500 })
+    expect(scrollEl.scrollTop).toBe(240)
+    rectSpy.mockRestore()
+  })
+
+  it('text mode releases progress capture when a restored anchor page is empty', async () => {
+    // Given: the restored page has no text, while the following page is readable.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'removed-text',
+      text: 'Removed text',
+      offset: 0
+    } as const
+    const onTextReadingProgressChange = vi.fn()
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    pages.get(1)?.getContent.mockResolvedValue([])
+    pages
+      .get(2)
+      ?.getContent.mockResolvedValue([makeText('page-2-text', 'Readable page')])
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        textReadingProgress={{ currentPageNumber: 1, anchor }}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1600
+    })
+    await screen.findByTestId('intermediate-text-page-1')
+
+    // When: the user scrolls to the next readable page after fallback completes.
+    act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
+      scrollEl.scrollTop = 800
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    // Then: progress is no longer frozen by the unresolvable initial anchor.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+        currentPageNumber: 2
+      })
+    })
+  })
+
+  it.each([
+    { label: 'blank text', text: makeText('blank-text', '') },
+    {
+      label: 'an end-of-line break',
+      text: { ...makeText('blank-line', ''), isEOL: true }
+    }
+  ])(
+    'text mode releases progress capture when the restored page only contains $label',
+    async ({ text }) => {
+      // Given: the restored page has source entries but none can register a text anchor.
+      const anchor = {
+        pageNumber: 1,
+        textId: 'removed-text',
+        text: 'Removed text',
+        offset: 0
+      } as const
+      const onTextReadingProgressChange = vi.fn()
+      const { document, pages } = makeDocument({ pageCount: 2 })
+      pages.get(1)?.getContent.mockResolvedValue([text])
+      pages
+        .get(2)
+        ?.getContent.mockResolvedValue([
+          makeText('page-2-anchorable', 'Readable page')
+        ])
+      render(
+        <IntermediateDocumentTextViewer
+          document={document}
+          textReadingProgress={{ currentPageNumber: 1, anchor }}
+          onTextReadingProgressChange={onTextReadingProgressChange}
+        />
+      )
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, {
+        width: 800,
+        height: 600,
+        scrollHeight: 1600
+      })
+      await screen.findByTestId('intermediate-text-page-1')
+
+      // When: the user moves to a page that exposes a concrete text anchor.
+      act(() => {
+        scrollEl.dispatchEvent(new WheelEvent('wheel'))
+        scrollEl.scrollTop = 800
+        scrollEl.dispatchEvent(new Event('scroll'))
+      })
+
+      // Then: the unrenderable entry cannot leave progress capture pending forever.
+      await waitFor(() => {
+        expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+          currentPageNumber: 2
+        })
+      })
+    }
+  )
+
+  it('text mode persists the text crossing the top of the scroll viewport', async () => {
+    // Given: the second text starts after five characters on the current page.
+    const onTextReadingProgressChange = vi.fn()
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('page-1-first', 'First'),
+        makeText('page-1-second', 'Second')
+      ])
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[]}
+        onToggleBookmark={vi.fn()}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 800
+    })
+    const secondText = await screen.findByText('Second')
+    mockElementSize(screen.getByText('First'), {
+      width: 100,
+      height: 20,
+      top: -20
+    })
+    mockElementSize(secondText, { width: 100, height: 20, top: 0 })
+
+    // When: native scrolling asks the viewer to persist its current position.
+    fireEvent.scroll(scrollEl)
+
+    // Then: progress carries the top text and its page-local offset.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+        currentPageNumber: 1,
+        anchor: {
+          pageNumber: 1,
+          textId: 'page-1-second',
+          text: 'Second',
+          offset: 5
+        }
+      })
+    })
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    const addBookmark = screen.getByRole('button', { name: '新增书签' })
+    await waitFor(() => expect(addBookmark).toBeEnabled())
+
+    // When: TanStack Virtual synchronizes the measured height of the same page.
+    resizeObserverMock.trigger(screen.getByTestId('intermediate-text-page-1'))
+    await act(async () => Promise.resolve())
+
+    // Then: same-page virtualizer synchronization keeps the captured anchor usable.
+    expect(addBookmark).toBeEnabled()
+  })
+
+  it('text mode opens a bookmark by page offset when its text id is missing', async () => {
+    // Given: a saved bookmark points at a removed id but retains its page-local offset.
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'removed-text-id',
+      text: 'Previously saved text',
+      offset: 5
+    } as const
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    const onTextReadingProgressChange = vi.fn()
+    pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('page-1-first', 'First'),
+        makeText('page-1-replacement', 'Replacement')
+      ])
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 800
+    })
+    const replacementText = await screen.findByText('Replacement')
+    mockElementSize(replacementText, {
+      width: 120,
+      height: 20,
+      top: 120
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+
+    // When: the reader opens the precise bookmark from the Text sidebar.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: '跳转到书签：Previously saved text' })
+    )
+
+    // Then: the replacement text is aligned and the exact bookmark is persisted once.
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 120 })
+    })
+    expect(onTextReadingProgressChange).toHaveBeenCalledTimes(1)
+    expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+      currentPageNumber: 1,
+      anchor: bookmark
+    })
+    const seekCountBeforeEcho = scrollTo.mock.calls.length
+
+    // When: the controlled host echoes that locally persisted bookmark.
+    view.rerender(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        textReadingProgress={{ currentPageNumber: 1, anchor: bookmark }}
+        onToggleBookmark={vi.fn()}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+
+    // Then: the echo neither seeks nor persists a second time.
+    await act(async () => Promise.resolve())
+    expect(scrollTo).toHaveBeenCalledTimes(seekCountBeforeEcho)
+    expect(onTextReadingProgressChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('text mode persists and highlights an empty-page bookmark fallback', async () => {
+    // Given: a bookmark targets an empty loaded page with no concrete text anchor.
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'removed-empty-text',
+      text: 'Empty page bookmark',
+      offset: 0
+    } as const
+    const onTextReadingProgressChange = vi.fn()
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    pages.get(1)?.getContent.mockResolvedValue([])
+    pages
+      .get(2)
+      ?.getContent.mockResolvedValue([makeText('page-2-text', 'Readable page')])
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 800
+    })
+    await screen.findByTestId('intermediate-text-page-1')
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    const bookmarkButton = screen.getByRole('button', {
+      name: '跳转到书签：Empty page bookmark'
+    })
+
+    // When: the reader opens the bookmark and completes page fallback.
+    fireEvent.click(bookmarkButton)
+
+    // Then: persistence is immediate and the bookmark stays current without text.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenCalledTimes(1)
+    })
+    expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+      currentPageNumber: 1,
+      anchor: bookmark
+    })
+    expect(bookmarkButton).toHaveAttribute('aria-current', 'location')
+
+    // When: the user later scrolls to concrete text on the next page.
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve())
+      })
+    })
+    act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
+      scrollEl.scrollTop = 800
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    const readableText = await screen.findByText('Readable page')
+    mockElementSize(readableText, { width: 100, height: 20, top: 0 })
+    act(() => {
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    // Then: concrete reading progress supersedes the empty bookmark identity.
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenLastCalledWith({
+        currentPageNumber: 2,
+        anchor: {
+          pageNumber: 2,
+          textId: 'page-2-text',
+          text: 'Readable page',
+          offset: 0
+        }
+      })
+    })
+    expect(bookmarkButton).not.toHaveAttribute('aria-current')
+  })
+
+  it('text mode highlights the bookmark at the persisted reading anchor', async () => {
+    // Given: Text mode restores reading progress at a precise saved bookmark.
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'page-1-second',
+      text: 'Second',
+      offset: 5
+    } as const
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('page-1-first', 'First'),
+        makeText('page-1-second', 'Second')
+      ])
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        textReadingProgress={{ currentPageNumber: 1, anchor: bookmark }}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    await screen.findByText('Second')
+
+    // When: the user opens the bookmark tab without navigating again.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+
+    // Then: the bookmark matching actual reading progress is identified as current.
+    expect(
+      screen.getByRole('button', { name: '跳转到书签：Second' })
+    ).toHaveAttribute('aria-current', 'location')
+  })
+
   it('text mode reading progress seeks through the TanStack virtualizer', async () => {
     // Given: the progress track spans 400px beside a twenty-page Text viewer.
     const { document } = makeDocument({ pageCount: 20 })
-    render(<IntermediateDocumentTextViewer document={document} />)
+    const onTextReadingProgressChange = vi.fn()
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(scrollEl, {
       width: 800,
@@ -1619,6 +3396,10 @@ describe('IntermediateDocumentViewer', () => {
       expect(scrollEl.scrollTop).toBe(7200)
       expect(progress).toHaveAttribute('aria-valuenow', '10')
       expect(screen.getByText('第 10 页')).toBeInTheDocument()
+    })
+    expect(onTextReadingProgressChange).toHaveBeenCalledTimes(1)
+    expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+      currentPageNumber: 10
     })
   })
 
@@ -12619,6 +14400,26 @@ describe('touchPanMode', () => {
   })
 
   describe('page browser', () => {
+    function ControlledPageBrowserHarness({
+      document
+    }: {
+      readonly document: IntermediateDocument
+    }) {
+      const [isOpen, setIsOpen] = useState(false)
+      return (
+        <>
+          <button type='button' onClick={() => setIsOpen(true)}>
+            打开页面浏览
+          </button>
+          <IntermediateDocumentViewer
+            document={document}
+            showPageBrowser={isOpen}
+            onPageBrowserClose={() => setIsOpen(false)}
+          />
+        </>
+      )
+    }
+
     it('is hidden by default and slides open through the public prop', () => {
       const { document } = makeDocument({ pageCount: 3 })
       const { rerender } = render(
@@ -12641,6 +14442,96 @@ describe('touchPanMode', () => {
       expect(
         screen.getAllByRole('button', { name: /Go to page/ })
       ).toHaveLength(3)
+    })
+
+    it('closes from its visible control and restores focus to the opener', () => {
+      // Given: keyboard focus opens the controlled page browser.
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<ControlledPageBrowserHarness document={document} />)
+      const opener = screen.getByRole('button', { name: '打开页面浏览' })
+      opener.focus()
+      fireEvent.click(opener)
+      const closeButton = screen.getByRole('button', { name: '关闭页面浏览' })
+      expect(closeButton).toHaveFocus()
+
+      // When: the user activates the visible close control.
+      fireEvent.click(closeButton)
+
+      // Then: the drawer is inert and focus returns to the element that opened it.
+      expect(screen.getByTestId('page-browser')).toHaveAttribute('inert')
+      expect(opener).toHaveFocus()
+    })
+
+    it('closes on Escape and restores focus to the opener', () => {
+      // Given: focus is inside an open controlled page browser.
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<ControlledPageBrowserHarness document={document} />)
+      const opener = screen.getByRole('button', { name: '打开页面浏览' })
+      opener.focus()
+      fireEvent.click(opener)
+      expect(screen.getByRole('button', { name: '关闭页面浏览' })).toHaveFocus()
+
+      // When: the user presses Escape.
+      fireEvent.keyDown(globalThis.document, { key: 'Escape' })
+
+      // Then: the controlled drawer closes and restores focus.
+      expect(screen.getByTestId('page-browser')).toHaveAttribute(
+        'aria-hidden',
+        'true'
+      )
+      expect(opener).toHaveFocus()
+    })
+
+    it('auto-scrolls the active page without forced smooth motion', async () => {
+      // Given: the open page browser observes page 2 as the current page.
+      const { document } = makeDocument({ pageCount: 2 })
+      const scrollIntoView = vi.fn()
+      const descriptor = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        'scrollIntoView'
+      )
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: scrollIntoView
+      })
+      const view = render(
+        <IntermediateDocumentViewer
+          document={document}
+          showPageBrowser={true}
+        />
+      )
+
+      try {
+        // When: the visible-page set changes to page 2.
+        intersectionObserverMock.trigger(
+          screen.getByTestId('intermediate-page-2'),
+          true
+        )
+        view.rerender(
+          <IntermediateDocumentViewer
+            document={document}
+            showPageBrowser={true}
+          />
+        )
+
+        // Then: synchronization uses immediate native scrolling.
+        await waitFor(() => {
+          expect(scrollIntoView).toHaveBeenCalledWith({
+            block: 'nearest',
+            behavior: 'auto'
+          })
+        })
+      } finally {
+        if (descriptor) {
+          Object.defineProperty(
+            HTMLElement.prototype,
+            'scrollIntoView',
+            descriptor
+          )
+        } else {
+          Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+        }
+      }
     })
 
     it('loads a sustained visible thumbnail through the shared lazy queue', async () => {
@@ -12752,7 +14643,11 @@ describe('touchPanMode', () => {
       fireEvent.click(
         screen.getByRole('button', { name: '跳转到书签：第 2 页' })
       )
-      fireEvent.click(screen.getByRole('button', { name: '删除第 2 页书签' }))
+      fireEvent.click(screen.getByRole('button', { name: '删除书签：第 2 页' }))
+      fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+      await waitFor(() => {
+        expect(onTogglePageBookmark).toHaveBeenCalledWith(2)
+      })
 
       // Then: navigation uses the viewer page loader and removal stays controlled.
       expect(document.getPageByPageNumber).toHaveBeenCalledWith(2)

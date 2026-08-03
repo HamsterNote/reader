@@ -222,8 +222,11 @@
     padding: 20px;
     border: 1px solid #dbe4f0;
     border-radius: 16px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 1));
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.96),
+      rgba(248, 250, 252, 1)
+    );
     box-shadow: 0 14px 40px rgba(15, 23, 42, 0.06);
   }
 
@@ -291,8 +294,11 @@
     border-radius: 14px;
     overflow: hidden;
     border: 1px solid #cbd5e1;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(241, 245, 249, 1));
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 1),
+      rgba(241, 245, 249, 1)
+    );
 
     // 直接约束第三方绘图组件的宿主节点尺寸，让每页都有稳定可绘制区域。
     > div {
@@ -493,7 +499,7 @@
     flex-direction: column;
     box-sizing: border-box;
     color: #111827;
-    background: rgba(249, 250, 251, 0.98);
+    background: #f9fafb;
     border-right: 1px solid #e5e7eb;
     box-shadow: 12px 0 32px rgba(17, 24, 39, 0.12);
     opacity: 0;
@@ -523,12 +529,52 @@
   // ---- Tab switcher (跑道型 / track-shaped pill) ----
   // 外层 shell: padding 4px, border-radius 18px (= 14 + 4, 同心圆弧)
   // 内层 tab: border-radius 14px, 激活态实心主题色背景 + 白字
+  &__page-browser-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+    padding: 8px 12px 0;
+  }
+
+  &__page-browser-title {
+    color: #374151;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  &__page-browser-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    color: #4b5563;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 24px;
+    line-height: 1;
+
+    &:hover {
+      background: #e5e7eb;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
+
   &__page-browser-tabs {
     flex: 0 0 auto;
     display: flex;
     gap: 0;
     padding: 4px;
-    margin: 12px 12px 0;
+    margin: 4px 12px 0;
     border-radius: 18px;
     background: color-mix(
       in srgb,
@@ -547,14 +593,14 @@
     border: 0;
     border-radius: 14px;
     background: transparent;
-    color: var(--hamster-reader-theme-color, #2563eb);
+    color: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 88%,
+      #111827
+    );
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition:
-      background-color 160ms ease,
-      color 160ms ease;
-
     &--active {
       background: var(--hamster-reader-theme-color, #2563eb);
       color: #ffffff;
@@ -695,25 +741,65 @@
     scrollbar-gutter: stable;
   }
 
+  &__bookmark-add {
+    width: 100%;
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    color: #ffffff;
+    background: var(--hamster-reader-theme-color, #2563eb);
+    border: 1px solid var(--hamster-reader-theme-color, #2563eb);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      filter: brightness(0.94);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+  }
+
   &__bookmark-item {
     display: flex;
     align-items: stretch;
     gap: 8px;
     margin: 0 0 8px;
+    padding: 8px 10px;
+    color: #374151;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
 
     &:last-child {
       margin-bottom: 0;
+    }
+
+    &:hover {
+      border-color: #9ca3af;
+      background: #f9fafb;
     }
   }
 
   &__bookmark-link {
     flex: 1 1 0;
     min-width: 0;
-    padding: 8px 10px;
+    overflow: hidden;
+    padding: 0;
     color: #374151;
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
+    background: transparent;
+    border: 0;
     cursor: pointer;
     font-size: 13px;
     text-align: left;
@@ -721,14 +807,27 @@
       border-color 160ms ease,
       background-color 160ms ease;
 
-    &:hover {
-      border-color: #9ca3af;
-      background: #f9fafb;
-    }
-
     &:focus-visible {
       outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
       outline-offset: 2px;
+    }
+
+    &--active,
+    &--active:hover {
+      border-color: var(--hamster-reader-theme-color, #2563eb);
+      background: color-mix(
+        in srgb,
+        var(--hamster-reader-theme-color, #2563eb) 8%,
+        #ffffff
+      );
+    }
+
+    .hamster-reader__highlight-text {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
   }
 
@@ -797,7 +896,7 @@
   &__highlight-empty {
     margin: 0;
     padding: 24px 12px;
-    color: #9ca3af;
+    color: #6b7280;
     font-size: 13px;
     text-align: center;
   }
@@ -806,7 +905,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
     margin: 0 0 8px;
     padding: 8px 10px;
     color: #374151;
@@ -845,16 +943,16 @@
 
   &__highlight-item--rect {
     position: relative;
-    display: block;
     overflow: hidden;
-    padding: 0;
   }
 
   &__highlight-text {
     flex: 1 1 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     font-size: 13px;
     line-height: 1.4;
   }
@@ -887,6 +985,121 @@
   &__highlight-comment-count {
     min-width: 8px;
     text-align: center;
+  }
+
+  &__highlight-content {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+  }
+
+  &__highlight-item--rect &__highlight-content {
+    align-self: stretch;
+    overflow: hidden;
+  }
+
+  &__highlight-delete,
+  &__bookmark-delete {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: #6b7280;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition:
+      color 160ms ease,
+      border-color 160ms ease,
+      background-color 160ms ease;
+
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    &:hover {
+      color: #ef4444;
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+
+  &__delete-confirm {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__delete-confirm-yes,
+  &__delete-confirm-no {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition:
+      color 160ms ease,
+      border-color 160ms ease,
+      background-color 160ms ease;
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
+
+  &__delete-confirm-yes {
+    color: #16a34a;
+    background: #f0fdf4;
+    border-color: #bbf7d0;
+
+    &:hover {
+      background: #dcfce7;
+      border-color: #86efac;
+    }
+  }
+
+  &__delete-confirm-no {
+    color: #6b7280;
+    background: #f9fafb;
+    border-color: #e5e7eb;
+
+    &:hover {
+      background: #f3f4f6;
+      border-color: #d1d5db;
+    }
   }
 
   &__highlight-rect-preview {
@@ -933,8 +1146,13 @@
   }
 
   @keyframes hamster-reader-rect-placeholder-pulse {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
+    0%,
+    100% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 1;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -1040,7 +1258,7 @@
   &__reading-progress-thumb {
     position: absolute;
     top: 50%;
-    right: -2px;
+    right: 0;
     display: block;
     width: 8px;
     height: 8px;
@@ -1201,12 +1419,7 @@
 
     // Skeleton / loading placeholder state
     &--loading {
-      background: linear-gradient(
-        90deg,
-        #f3f4f6 25%,
-        #e5e7eb 50%,
-        #f3f4f6 75%
-      );
+      background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
       background-size: 200% 100%;
       animation: skeleton-shimmer 1.5s ease-in-out infinite;
     }
@@ -1281,29 +1494,29 @@
   // 底图通过 pointer-events: none + user-select: none 保证不可选中，
   // 直渲染路径的 <img> 背景由上面的 base-image 规则覆盖。
 
-    // Intermediate text spans
-    &__intermediate-text {
-      position: absolute;
-      display: inline-block;
-      white-space: pre;
-      box-sizing: border-box;
-      user-select: text;
-      -webkit-user-select: text;
-      z-index: 1;
-    }
+  // Intermediate text spans
+  &__intermediate-text {
+    position: absolute;
+    display: inline-block;
+    white-space: pre;
+    box-sizing: border-box;
+    user-select: text;
+    -webkit-user-select: text;
+    z-index: 1;
+  }
 
-    // OCR 开发调试模式（ocrDebug）：给 OCR 文本 span 加红色外框。
-    // 用 outline 而非 border，避免改变盒模型尺寸导致定位偏移；
-    // 文字颜色由渲染边界按 ocrDebug 覆盖为 rgba(0, 0, 0, 0.5)。
-    &__intermediate-document-viewer--ocr-debug
-      &__intermediate-text[data-ocr='true'] {
-      outline: 1px solid rgba(255, 0, 0, 0.8);
-    }
+  // OCR 开发调试模式（ocrDebug）：给 OCR 文本 span 加红色外框。
+  // 用 outline 而非 border，避免改变盒模型尺寸导致定位偏移；
+  // 文字颜色由渲染边界按 ocrDebug 覆盖为 rgba(0, 0, 0, 0.5)。
+  &__intermediate-document-viewer--ocr-debug
+    &__intermediate-text[data-ocr='true'] {
+    outline: 1px solid rgba(255, 0, 0, 0.8);
+  }
 
-    // 文本模式 flow span 修饰符 (T7)：
-    // 必须在 &__intermediate-text 之后定义，以 CSS 源码顺序覆盖
-    // layout 模式的 position:absolute / display:inline-block / white-space:pre，
-    // 改为普通文档流内联文本。
+  // 文本模式 flow span 修饰符 (T7)：
+  // 必须在 &__intermediate-text 之后定义，以 CSS 源码顺序覆盖
+  // layout 模式的 position:absolute / display:inline-block / white-space:pre，
+  // 改为普通文档流内联文本。
   &__intermediate-text--flow {
     position: static;
     display: block;
@@ -1347,64 +1560,81 @@
     display: inline;
   }
 
-    // 仅由 IntermediateParagraph 元数据产生；普通 isEOL 换行不增加段距。
-    &__intermediate-paragraph-gap {
-      display: block;
-      height: 0.75em;
-      pointer-events: none;
-    }
-
-    // 高亮标记使用 multiply 混合模式
-    // percent 模式：将 blend 应用到 overlay 容器，影响所有子 rect
-    .hsn-selection-percent-overlay {
-      mix-blend-mode: multiply;
-      opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
-    }
-
-    .hsn-selection-percent-rect {
-      box-sizing: border-box;
-    }
-
-    // 移除选中态高亮的 border 和 outline
-    .hsn-selection-percent-rect-selected {
-      border: none !important;
-      outline: none !important;
-    }
-
-    .hsn-selection-rect--selected {
-      stroke: none !important;
-      stroke-width: 0 !important;
-    }
-
-    // pixel 模式（SVG rect）保持 blend 在 rect 本身
-    .hsn-selection-rect--highlight {
-      mix-blend-mode: multiply;
-    }
-
-    // Selection 容器与内容区高度占满 layout 页面外壳，避免嵌套 flex/absolute
-    // 布局中因高度未显式声明而导致的选择 overlay 偏移或空白。
-    &__intermediate-page .hsn-selection-container,
-    &__intermediate-page .hsn-selection-content {
-      height: 100%;
-    }
-
-    &__intermediate-page--flow .hsn-selection-container,
-    &__intermediate-page--flow .hsn-selection-content {
-      height: auto;
-      min-height: 0;
-    }
-
-    // 粗指针设备禁用浏览器原生选区，统一使用 selection 组件绘制的选框与手柄。
-    @media (pointer: coarse) {
-      &__intermediate-text,
-      .hsn-selection-content &__intermediate-text {
-        user-select: none;
-        -webkit-user-select: none;
-        -webkit-touch-callout: none;
-      }
-    }
-
+  // 仅由 IntermediateParagraph 元数据产生；普通 isEOL 换行不增加段距。
+  &__intermediate-paragraph-gap {
+    display: block;
+    height: 0.75em;
+    pointer-events: none;
   }
+
+  // 高亮标记使用 multiply 混合模式
+  // percent 模式：将 blend 应用到 overlay 容器，影响所有子 rect
+  .hsn-selection-percent-overlay {
+    mix-blend-mode: multiply;
+    opacity: 1; // 默认不透明，由 mix-blend-mode 控制视觉效果
+  }
+
+  .hsn-selection-percent-rect {
+    box-sizing: border-box;
+  }
+
+  // 移除选中态高亮的 border 和 outline
+  .hsn-selection-percent-rect-selected {
+    border: none !important;
+    outline: none !important;
+  }
+
+  .hsn-selection-rect--selected {
+    stroke: none !important;
+    stroke-width: 0 !important;
+  }
+
+  // pixel 模式（SVG rect）保持 blend 在 rect 本身
+  .hsn-selection-rect--highlight {
+    mix-blend-mode: multiply;
+  }
+
+  // Selection 容器与内容区高度占满 layout 页面外壳，避免嵌套 flex/absolute
+  // 布局中因高度未显式声明而导致的选择 overlay 偏移或空白。
+  &__intermediate-page .hsn-selection-container,
+  &__intermediate-page .hsn-selection-content {
+    height: 100%;
+  }
+
+  &__intermediate-page--flow .hsn-selection-container,
+  &__intermediate-page--flow .hsn-selection-content {
+    height: auto;
+    min-height: 0;
+  }
+
+  // 粗指针设备禁用浏览器原生选区，统一使用 selection 组件绘制的选框与手柄。
+  @media (pointer: coarse) {
+    &__intermediate-text,
+    .hsn-selection-content &__intermediate-text {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    &__page-browser-close,
+    &__bookmark-toggle {
+      width: 44px;
+      height: 44px;
+    }
+
+    &__page-browser-tab {
+      min-height: 44px;
+    }
+
+    &__highlight-delete,
+    &__bookmark-delete,
+    &__delete-confirm-yes,
+    &__delete-confirm-no {
+      width: 44px;
+      height: 44px;
+    }
+  }
+}
 
 // Skeleton shimmer animation (global, scoped to keyframes only)
 @keyframes skeleton-shimmer {
@@ -1413,6 +1643,34 @@
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+// 页面浏览侧栏可能由独立 viewer 根节点直接渲染，不一定包在 .hamster-reader 内。
+// 因此在全局媒体规则中再次保证删除与确认操作具备移动端触控尺寸。
+@media (pointer: coarse) {
+  .hamster-reader__highlight-delete,
+  .hamster-reader__bookmark-delete,
+  .hamster-reader__delete-confirm-yes,
+  .hamster-reader__delete-confirm-no {
+    width: 44px !important;
+    min-width: 44px;
+    height: 44px !important;
+    min-height: 44px;
+  }
+
+  .hamster-reader__page-browser
+    .hamster-reader__delete-confirm-yes,
+  .hamster-reader__page-browser
+    .hamster-reader__delete-confirm-no {
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+  }
+
+  .hamster-reader__delete-confirm {
+    gap: 8px;
   }
 }
 
@@ -1472,7 +1730,7 @@
     &__intermediate-document-viewer {
       height: 100%;
       max-height: 100%;
-      // flex: 1 is not strictly necessary here because height: 100% does the job, 
+      // flex: 1 is not strictly necessary here because height: 100% does the job,
       // but the layout in App handles standard viewer height via css vars if not overriden.
     }
   }
@@ -1590,7 +1848,9 @@
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 
   &:hover {
     background: rgba(255, 255, 255, 0.14);

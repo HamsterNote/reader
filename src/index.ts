@@ -88,9 +88,12 @@ export type {
 } from './types/comments'
 export type { ReaderFontScale } from './types/fontScale'
 export type {
+  ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
   ReaderPageEdgeCrop,
+  ReaderTextAnchor,
+  ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from './types/readerData'
 export type {
@@ -168,6 +171,8 @@ export type ReaderInteractiveProps = Pick<
   | 'containMarginY'
   | 'showPageBrowser'
   | 'onPageBrowserClose'
+  | 'bookmarks'
+  | 'onToggleBookmark'
   | 'bookmarkedPageNumbers'
   | 'onTogglePageBookmark'
   | 'selectedTool'

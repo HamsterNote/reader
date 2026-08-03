@@ -21,6 +21,7 @@ import type {
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
+  ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
   ReaderVirtualPaperState
@@ -57,6 +58,7 @@ import type {
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
+import { getTextAnchorKey } from './IntermediateDocumentViewer/textAnchor'
 import type {
   ReaderPagePaintingMap,
   ReaderPageRectSelectionMap,
@@ -96,7 +98,7 @@ export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   /** 可持久化阅读数据的统一入口；其中字段优先于对应的旧版扁平 props。 */
   data?: ReaderData
-  /** 阅读数据变化回调；目前在 VirtualPaper 手势结束后回传最终位置和缩放。 */
+  /** 阅读数据变化回调；回传带顶部文字锚点的阅读位置和精确书签。 */
   onDataChange?: (nextData: ReaderData) => void
   /** 边缘裁切编辑模式开关；开启后页面以未裁剪尺寸显示并展示可拖拽虚线。 */
   edgeCropEditing?: boolean
@@ -233,7 +235,7 @@ export type ReaderProps = {
   containMarginBottom?: number
   /** @deprecated Use `containMarginTop` and `containMarginBottom`. */
   containMarginY?: number
-  /** 是否显示布局模式的页面浏览侧栏，默认 false */
+  /** 是否显示页面浏览侧栏，布局与文本模式均支持，默认 false。 */
   showPageBrowser?: boolean
   /** 页面浏览侧栏被左滑关闭时触发。 */
   onPageBrowserClose?: () => void
@@ -250,9 +252,13 @@ export type ReaderProps = {
     nextComments: readonly ReaderComment[],
     detail: ReaderCommentChangeDetail
   ) => void
-  /** 由宿主控制的书签页码，在 page-browser 的页面与书签面板中展示。 */
+  /** 由宿主控制的精确文字书签。 */
+  bookmarks?: readonly ReaderBookmark[]
+  /** 添加或删除指定文字锚点书签。 */
+  onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  /** @deprecated Use `bookmarks`. */
   bookmarkedPageNumbers?: readonly number[]
-  /** 添加或删除指定页书签。 */
+  /** @deprecated Use `onToggleBookmark`. */
   onTogglePageBookmark?: (pageNumber: number) => void
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   selectedTool?: ReaderPageTool
@@ -395,6 +401,37 @@ interface ResolvedVerticalMargins {
   readonly legacy: number | undefined
 }
 
+interface BookmarkCapabilities {
+  readonly usesPreciseBookmarks: boolean
+  readonly canTogglePreciseBookmarks: boolean
+}
+
+function resolveBookmarkCapabilities({
+  bookmarks,
+  bookmarkedPageNumbers,
+  hasPreciseToggle,
+  hasPageToggle,
+  hasDataChange
+}: {
+  readonly bookmarks: readonly ReaderBookmark[] | undefined
+  readonly bookmarkedPageNumbers: readonly number[] | undefined
+  readonly hasPreciseToggle: boolean
+  readonly hasPageToggle: boolean
+  readonly hasDataChange: boolean
+}): BookmarkCapabilities {
+  return {
+    usesPreciseBookmarks:
+      bookmarks !== undefined ||
+      hasPreciseToggle ||
+      (hasDataChange && bookmarkedPageNumbers === undefined && !hasPageToggle),
+    canTogglePreciseBookmarks: hasPreciseToggle || hasDataChange
+  }
+}
+
+function whenEnabled<Value>(enabled: boolean, value: Value): Value | undefined {
+  return enabled ? value : undefined
+}
+
 function resolveVerticalMargins(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
@@ -507,6 +544,8 @@ export function Reader({
   commentCountByRectId,
   comments,
   onCommentsChange,
+  bookmarks,
+  onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   selectedTool,
@@ -622,6 +661,15 @@ export function Reader({
     tool ?? (resolvedSelectedTool === 'rect-selection' ? 'rect' : 'text')
   const resolvedBookmarkedPageNumbers =
     data?.bookmarkedPageNumbers ?? bookmarkedPageNumbers
+  const resolvedBookmarks = data?.bookmarks ?? bookmarks
+  const { usesPreciseBookmarks, canTogglePreciseBookmarks } =
+    resolveBookmarkCapabilities({
+      bookmarks: resolvedBookmarks,
+      bookmarkedPageNumbers: resolvedBookmarkedPageNumbers,
+      hasPreciseToggle: onToggleBookmark !== undefined,
+      hasPageToggle: onTogglePageBookmark !== undefined,
+      hasDataChange: onDataChange !== undefined
+    })
   const usesPageTextSelectionCompatibility =
     pageTextSelections !== undefined ||
     defaultPageTextSelections !== undefined ||
@@ -736,6 +784,32 @@ export function Reader({
       onDataChange?.({ ...data, virtualPaper })
     },
     [data, onDataChange]
+  )
+  const handleTextReadingProgressChange = useCallback(
+    (textReadingProgress: NonNullable<ReaderData['textReadingProgress']>) => {
+      onDataChange?.({ ...data, textReadingProgress })
+    },
+    [data, onDataChange]
+  )
+  const handleToggleBookmark = useCallback(
+    (bookmark: ReaderBookmark) => {
+      onToggleBookmark?.(bookmark)
+      if (!onDataChange) return
+
+      const bookmarkKey = getTextAnchorKey(bookmark)
+      const currentBookmarks = resolvedBookmarks ?? []
+      const containsBookmark = currentBookmarks.some(
+        (currentBookmark) => getTextAnchorKey(currentBookmark) === bookmarkKey
+      )
+      const nextBookmarks = containsBookmark
+        ? currentBookmarks.filter(
+            (currentBookmark) =>
+              getTextAnchorKey(currentBookmark) !== bookmarkKey
+          )
+        : [...currentBookmarks, bookmark]
+      onDataChange({ ...data, bookmarks: nextBookmarks })
+    },
+    [data, onDataChange, onToggleBookmark, resolvedBookmarks]
   )
 
   const handleFile = useCallback(
@@ -994,6 +1068,19 @@ export function Reader({
             containMarginTop={resolvedVerticalMargins.top}
             containMarginBottom={resolvedVerticalMargins.bottom}
             containMarginY={resolvedVerticalMargins.legacy}
+            showPageBrowser={showPageBrowser}
+            onPageBrowserClose={onPageBrowserClose}
+            themeColor={themeColor}
+            commentCountByRangeId={commentCountByRangeId}
+            bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
+            onToggleBookmark={whenEnabled(
+              usesPreciseBookmarks && canTogglePreciseBookmarks,
+              handleToggleBookmark
+            )}
+            bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
+            onTogglePageBookmark={onTogglePageBookmark}
+            textReadingProgress={data?.textReadingProgress}
+            onTextReadingProgressChange={handleTextReadingProgressChange}
             pageRange={pageRange}
             hiddenPages={data?.hiddenPages}
             className={className}
@@ -1009,6 +1096,8 @@ export function Reader({
             onLinkedSelectRange={onLinkedSelectRange}
             onSelectRange={onSelectRange}
             onUpdateRange={handleUpdateRange}
+            onRemoveRange={onRemoveRange}
+            onRemoveRect={onRemoveRect}
             onSelectionStart={onSelectionStart}
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
@@ -1039,17 +1128,17 @@ export function Reader({
                   ranges={resolvedRanges}
                   onUpdateRange={handleUpdateRange}
                   onRemoveRange={onRemoveRange}
-                  onCommentHighlight={
-                    onCommentHighlight
-                      ? handleDefaultCommentHighlight
-                      : undefined
-                  }
+                  onCommentHighlight={whenEnabled(
+                    onCommentHighlight !== undefined,
+                    handleDefaultCommentHighlight
+                  )}
                 />
               ))
             }
-            onCommentHighlight={
-              highlightPopover ? onCommentHighlight : undefined
-            }
+            onCommentHighlight={whenEnabled(
+              highlightPopover !== undefined,
+              onCommentHighlight
+            )}
             autoHighlight={autoHighlight}
             selectionRef={resolvedSelectionRef}
             overlayRectType={overlayRectType}
@@ -1090,8 +1179,11 @@ export function Reader({
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
-          scale={data?.virtualPaper ? undefined : scale}
-          defaultScale={data?.virtualPaper ? undefined : defaultScale}
+          scale={whenEnabled(data?.virtualPaper === undefined, scale)}
+          defaultScale={whenEnabled(
+            data?.virtualPaper === undefined,
+            defaultScale
+          )}
           defaultVirtualPaperTransform={data?.virtualPaper}
           onVirtualPaperTransformChangeEnd={
             handleVirtualPaperTransformChangeEnd
@@ -1113,6 +1205,8 @@ export function Reader({
           onLinkedSelectRange={onLinkedSelectRange}
           onSelectRange={onSelectRange}
           onUpdateRange={handleUpdateRange}
+          onRemoveRange={onRemoveRange}
+          onRemoveRect={onRemoveRect}
           onSelectionStart={onSelectionStart}
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
@@ -1144,13 +1238,17 @@ export function Reader({
                 ranges={resolvedRanges}
                 onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
-                onCommentHighlight={
-                  onCommentHighlight ? handleDefaultCommentHighlight : undefined
-                }
+                onCommentHighlight={whenEnabled(
+                  onCommentHighlight !== undefined,
+                  handleDefaultCommentHighlight
+                )}
               />
             ))
           }
-          onCommentHighlight={highlightPopover ? onCommentHighlight : undefined}
+          onCommentHighlight={whenEnabled(
+            highlightPopover !== undefined,
+            onCommentHighlight
+          )}
           autoHighlight={autoHighlight}
           selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}
@@ -1166,9 +1264,10 @@ export function Reader({
                 onHighlightColorChange={handleHighlightColorChange}
                 onUpdateRect={handleUpdateRect}
                 onRemoveRect={onRemoveRect}
-                onCommentRect={
-                  onCommentRect ? handleDefaultCommentRect : undefined
-                }
+                onCommentRect={whenEnabled(
+                  onCommentRect !== undefined,
+                  handleDefaultCommentRect
+                )}
               />
             ))
           }
@@ -1202,6 +1301,11 @@ export function Reader({
           commentCountByRectId={commentCountByRectId}
           comments={comments}
           onCommentsChange={onCommentsChange}
+          bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
+          onToggleBookmark={whenEnabled(
+            usesPreciseBookmarks && canTogglePreciseBookmarks,
+            handleToggleBookmark
+          )}
           bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
           onTogglePageBookmark={onTogglePageBookmark}
           onPageLoadStatusChange={onPageLoadStatusChange}
