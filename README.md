@@ -61,7 +61,14 @@ export function PersistedReader() {
     rects: [],
     pagePaintings: {},
     virtualPaper: { x: 0, y: 0, scale: 1 },
-    bookmarkedPageNumbers: [1, 3]
+    bookmarks: [
+      {
+        pageNumber: 1,
+        textId: 'page-1-introduction',
+        text: 'Introduction',
+        offset: 0
+      }
+    ]
   })
 
   return (
@@ -79,18 +86,6 @@ export function PersistedReader() {
       onPagePaintingsChange={(pagePaintings) =>
         setData((current) => ({ ...current, pagePaintings }))
       }
-      onTogglePageBookmark={(pageNumber) =>
-        setData((current) => {
-          const bookmarks = current.bookmarkedPageNumbers ?? []
-          const containsPage = bookmarks.includes(pageNumber)
-          return {
-            ...current,
-            bookmarkedPageNumbers: containsPage
-              ? bookmarks.filter((value) => value !== pageNumber)
-              : [...bookmarks, pageNumber]
-          }
-        })
-      }
     />
   )
 }
@@ -98,7 +93,9 @@ export function PersistedReader() {
 
 `edgeCrop` ratios are clamped to the valid page area. `edgeCrop.all` applies globally, while `edgeCrop.pages['page-N']` fully overrides it for that page. Visual edge crop is layout-mode only; `hiddenPages` applies to both layout and text modes. Invalid hidden-page values are ignored. Public page IDs always use `page-${pageNumber}`.
 
-`onDataChange` reports the final `{ x, y, scale }` after a VirtualPaper gesture. Highlight, rectangle, drawing, and bookmark edits continue to use their existing typed callbacks; update the corresponding `data` field from those callbacks as shown above.
+`onDataChange` reports the final Layout position as `{ x, y, scale, anchor? }` and the Text position as `{ currentPageNumber, anchor? }` through `data.textReadingProgress`. Both modes anchor the position to the concrete text crossing the top of the viewport. An anchor stores `{ pageNumber, textId, text, offset }`; `offset` is the target text's character offset within that page, not within the whole document. Restoration uses `textId` first and falls back to the page-local `offset` when that ID no longer exists. The legacy shapes without `anchor` remain valid and restore by transform or page number.
+
+Pass the saved `ReaderData` back to restore either reading position. Precise bookmark toggles are merged into `data.bookmarks` through the same `onDataChange` callback. Highlight, rectangle, and drawing edits continue to use their existing typed callbacks. The deprecated `bookmarkedPageNumbers` and `onTogglePageBookmark` APIs remain available for hosts that still use page-only bookmarks.
 
 #### Lazy Page Loading Props
 
@@ -221,11 +218,13 @@ const [ocrTexts, setOcrTexts] = useState<Record<number, IntermediateText[]>>({})
 
 Text mode renders document text and content-level `IntermediateImage` entries as normal flow content. Each image occupies its own row, and an available image `alt` value is shown as both accessible alternative text and a visible caption. Page base images, thumbnails, and OCR output are not rendered in Text mode. It uses the same linked ranges as layout mode, but derives current text-flow rectangles from each range's `selectionId + offset` anchors instead of rendering the persisted layout rectangles.
 
+`containMarginX`, `containMarginTop`, and `containMarginBottom` apply directly to the Text-mode scroll viewport in screen pixels. `showPageBrowser` also works in Text mode, but exposes only the highlight and bookmark tabs; the unavailable page-preview tab is not rendered. Store `data.textReadingProgress` from `onDataChange` to restore the exact text at the top of the viewport after reopening a document.
+
 ### Text, rectangle, and drawing tools
 
 In layout mode, `selectedTool` switches the active page interaction without replacing the virtualized reader. Existing zoom, page-range, OCR, lazy loading, and linked-selection behavior therefore remains available in every tool mode.
 
-For documents with pages, `Reader` renders a built-in bottom toolbar by default. It includes undo/redo, Layout/Text mode, touch pan, edge crop, selection tools, drawing/highlight colors, and the font-scale menu when `fontScale` is provided. Omit the value props to let Reader manage toolbar state internally, or pair them with their `on...Change` callbacks for controlled state.
+For documents with pages, `Reader` renders a built-in bottom toolbar by default. It includes undo/redo, Layout/Text mode, touch pan, edge crop, selection tools, drawing/highlight colors, and the font-scale menu when `fontScale` is provided. When drawing is active, the same bottom-bar area also renders `@hamster-note/painting`'s controlled painting tools, so every page shares the selected drawing tool, stroke color, width, and related options. Omit the value props to let Reader manage toolbar state internally, or pair them with their `on...Change` callbacks for controlled state.
 
 Pass a React node through `bottomBar` to replace the built-in toolbar. Pass `bottomBar={null}` to disable it explicitly.
 
@@ -243,7 +242,7 @@ const [pagePaintings, setPagePaintings] = useState<ReaderPagePaintingMap>({})
 
 - `text-selection` uses the same linked ranges in layout and text modes (`ranges`, `onHighlight`, `onUpdateRange`).
 - `rect-selection` uses the existing rectangle API (`rects`, `onCreateRect`, `onUpdateRect`).
-- `drawing` enables a per-page `DrawingSurface`; painting map keys use stable public IDs such as `page-1` and `page-2`.
+- `drawing` enables a per-page `PaintingBoard` with its internal toolbar disabled. Reader renders the shared `PaintingController` in its own bottom-bar area; `paintingTool` / `onPaintingToolChange` and `drawingStrokeColor` / `onDrawingStrokeColorChange` can control its tool and color. Painting map keys use stable public IDs such as `page-1` and `page-2`.
 - An explicitly supplied legacy `tool` prop takes precedence over the text/rectangle mapping from `selectedTool`.
 - `renderMode='text'` remains text-only and does not mount drawing or rectangle overlays.
 
@@ -342,11 +341,11 @@ export function App() {
 | `onCommentHighlight`     | `(highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>`        | Adds a comment button to the existing-highlight popover. The callback receives the original range reference. Resolve with that same range when the host comment UI closes; Reader then closes the popover. |
 | `selectionRef`           | `React.Ref<ReaderSelectionRef>`                                             | Reader-owned command ref, distinct from the upstream Selection component ref. Exposes `highlight()`, `clear()`, and additive `scrollToRange(id)` for jumping to an existing range.                         |
 | `overlayRectType`        | `ReaderSelectionOverlayRectType`                                            | Controls whether selection overlay rectangles are stored/rendered as pixel (`'px'`) or percentage (`'percent'`) coordinates relative to the selection container. Defaults to `'percent'`.                  |
-| `containMarginX`         | `number`                                                                    | Horizontal whitespace around the virtual paper.                                                                                                                                                            |
-| `containMarginTop`       | `number`                                                                    | Independent top whitespace around the virtual paper.                                                                                                                                                       |
-| `containMarginBottom`    | `number`                                                                    | Independent bottom whitespace around the virtual paper.                                                                                                                                                    |
+| `containMarginX`         | `number`                                                                    | Horizontal whitespace around the Layout virtual paper or Text scroll viewport.                                                                                                                            |
+| `containMarginTop`       | `number`                                                                    | Independent top whitespace in screen pixels. It also positions the reading-progress rail.                                                                                                                 |
+| `containMarginBottom`    | `number`                                                                    | Independent bottom whitespace in screen pixels. It also positions the reading-progress rail.                                                                                                              |
 | `containMarginY`         | `number`                                                                    | Deprecated symmetric vertical whitespace fallback. It is ignored when either independent vertical margin is supplied.                                                                                      |
-| `showPageBrowser`        | `boolean`                                                                   | Shows a left-side, vertically scrollable page browser in layout mode. Its thumbnails use the same lazy-loading queue and cache as the main view. Defaults to `false`.                                      |
+| `showPageBrowser`        | `boolean`                                                                   | Shows the left-side browser. Layout mode exposes page, highlight, and bookmark tabs; Text mode exposes only highlight and bookmark tabs. Layout thumbnails share the lazy-loading cache. Defaults to `false`. |
 
 The existing-highlight popover can use range-specific data and delegate the comment lifecycle to the host:
 
@@ -403,7 +402,7 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 ### Demo Browser Storage
 
-The browser Demo persists annotation metadata to localStorage keyed by filename. Layout and text-mode annotations share `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }` under `hamster-reader-demo:highlights:{filename}`. Comments are stored under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Their page ownership cannot be proven, so the demo does not attempt to migrate them. If you have old data, recreate the annotations instead.
+The browser Demo persists annotation metadata to localStorage keyed by filename. Layout and text-mode annotations share `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }` under `hamster-reader-demo:highlights:{filename}`. Text reading progress is stored as `{ currentPageNumber, anchor? }` under `hamster-reader-demo:text-reading-progress:{filename}`, and precise `ReaderBookmark[]` anchors use `hamster-reader-demo:bookmarks:{filename}`. Comments are stored under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare highlight arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Legacy numeric Demo bookmarks are also ignored because they do not contain a text ID, text, or page-local offset and therefore cannot be safely converted to a precise bookmark. The library-level deprecated page-number bookmark API remains compatible. If the Demo has old metadata that cannot prove its location, recreate that annotation or bookmark instead.
 
 After a file parses successfully, the Demo also stores that source `File` in browser-local IndexedDB. On reload, it reopens and reparses the most recent successful file so its annotations and comments can be displayed without another upload. The Demo labels this behavior beside the uploaded-file details and provides a **Forget saved file** button. Clearing the saved file does not delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all Demo storage.
 

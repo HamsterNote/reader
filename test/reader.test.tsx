@@ -23,6 +23,7 @@ import {
 } from '../src/components/Reader'
 import type {
   DefaultRectanglePopoverProps,
+  ReaderBookmark,
   ReaderComment,
   ReaderCommentChangeDetail,
   ReaderInteractionMode,
@@ -121,6 +122,11 @@ vi.mock('@system-ui-js/multi-drag', () => {
 
   return {
     DragOperationType,
+    MixinType: {
+      Drag: 'drag',
+      Rotate: 'rotate',
+      Scale: 'scale'
+    },
     Drag: class MockedDrag {
       private readonly listeners = new Map<
         string,
@@ -195,6 +201,13 @@ vi.mock('@system-ui-js/multi-drag', () => {
         this.emit(DragOperationType.AllEnd, event)
         this.primaryPointerId = null
       }
+    },
+    Mixin: class MockedMixin {
+      destroy() {}
+
+      addEventListener() {}
+
+      removeEventListener() {}
     }
   }
 })
@@ -448,7 +461,6 @@ describe('Reader public API', () => {
 
     const bottomBar = screen.getByTestId('tool-bottom-bar')
     const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
-    const touchPanMode = screen.getByTestId('tool-bottom-bar-touch-pan-mode')
     const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
 
     expect(bottomBar.parentElement).toHaveAttribute(
@@ -461,7 +473,6 @@ describe('Reader public API', () => {
 
     // When: 用户直接操作 Reader 自带的底栏。
     fireEvent.click(rectTool)
-    fireEvent.click(touchPanMode)
     fireEvent.click(edgeCrop)
 
     // Then: 同一个 Reader viewer 收到更新后的工具与布局状态。
@@ -484,6 +495,55 @@ describe('Reader public API', () => {
       expect(screen.queryByTestId('tool-bottom-bar-touch-pan-mode')).toBeNull()
       expect(screen.queryByTestId('tool-bottom-bar-ocr')).toBeNull()
     })
+  })
+
+  it('switches touch panning to two fingers when rectangle selection activates', async () => {
+    // Given: the built-in toolbar starts with text selection and single-finger panning.
+    const onSelectedToolChange = vi.fn()
+    const onTouchPanModeChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        onSelectedToolChange={onSelectedToolChange}
+        onTouchPanModeChange={onTouchPanModeChange}
+      />
+    )
+
+    // When: the rectangle-selection tool is activated.
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-rect-selection'))
+
+    // Then: the viewer and public callbacks receive the paired interaction state.
+    await waitFor(() => {
+      expect(capturedViewerProps.selectedTool).toBe('rect-selection')
+      expect(capturedViewerProps.touchPanMode).toBe('two-finger')
+    })
+    expect(onSelectedToolChange).toHaveBeenCalledWith('rect-selection')
+    expect(onTouchPanModeChange).toHaveBeenCalledWith('two-finger')
+  })
+
+  it('shows font scaling in Text mode and EPUB Layout mode only', () => {
+    // Given: a non-EPUB document is rendered in Layout mode with font scaling enabled.
+    const document = makeDocument({ pages: [makePage(1)] })
+    const { rerender } = render(
+      <Reader document={document} renderMode='layout' fontScale={1.5} />
+    )
+
+    // Then: fixed Layout content does not expose the font-size control.
+    expect(screen.queryByTestId('tool-bottom-bar-font-scale')).toBeNull()
+
+    // When: the same Layout document is identified as EPUB.
+    rerender(
+      <Reader document={document} renderMode='layout' fontScale={1.5} isEpub />
+    )
+
+    // Then: EPUB keeps its reflowable font-size control in Layout mode.
+    expect(screen.getByTestId('tool-bottom-bar-font-scale')).toBeInTheDocument()
+
+    // When: a non-EPUB document uses Text mode.
+    rerender(<Reader document={document} renderMode='text' fontScale={1.5} />)
+
+    // Then: Text mode still exposes font scaling for supported text documents.
+    expect(screen.getByTestId('tool-bottom-bar-font-scale')).toBeInTheDocument()
   })
 
   it('keeps the default OCR toggle off until the user enables it', async () => {
@@ -542,6 +602,7 @@ describe('Reader public API', () => {
     render(
       <Reader
         document={makeDocument({ pages: [makePage(1)] })}
+        isEpub
         renderMode='layout'
         fontScale={1.5}
         touchPanMode='single-finger'
@@ -694,10 +755,12 @@ describe('Reader public API', () => {
         <>
           <Reader
             document={makeDocument({ pages: [makePage(1)] })}
+            isEpub
             fontScale={1.5}
           />
           <Reader
             document={makeDocument({ pages: [makePage(2)] })}
+            isEpub
             fontScale={1.5}
           />
         </>
@@ -1166,9 +1229,9 @@ describe('Reader renderMode', () => {
     expect(capturedTextViewerProps).not.toHaveProperty('onCreateRect')
     expect(capturedTextViewerProps).not.toHaveProperty('onSelectRect')
     expect(capturedTextViewerProps).not.toHaveProperty('onUpdateRect')
-    expect(capturedTextViewerProps).not.toHaveProperty('showPageBrowser')
-    expect(capturedTextViewerProps).not.toHaveProperty('onPageBrowserClose')
-    expect(capturedTextViewerProps).not.toHaveProperty('themeColor')
+    expect(capturedTextViewerProps.showPageBrowser).toBe(true)
+    expect(capturedTextViewerProps.onPageBrowserClose).toBe(onPageBrowserClose)
+    expect(capturedTextViewerProps.themeColor).toBe('#123456')
     expect(capturedTextViewerProps).not.toHaveProperty('paintingTool')
     expect(capturedTextViewerProps).not.toHaveProperty('drawingStrokeColor')
     expect(capturedTextViewerProps).not.toHaveProperty('pagePaintings')
@@ -1193,6 +1256,322 @@ describe('Reader renderMode', () => {
     )
 
     expect(capturedTextViewerProps.ranges).toEqual([dataRange])
+  })
+
+  it('renderMode text restores and persists reading progress through ReaderData', () => {
+    // Given: Reader receives a persisted Text page together with other canonical data.
+    const onDataChange = vi.fn()
+    const anchor = {
+      pageNumber: 3,
+      textId: 'page-3-paragraph',
+      text: 'Page three paragraph',
+      offset: 12
+    }
+    const data = {
+      hiddenPages: [2],
+      textReadingProgress: { currentPageNumber: 3, anchor }
+    } as const
+    const doc = makeDocument({ pages: [makePage(1), makePage(2), makePage(3)] })
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={data}
+        onDataChange={onDataChange}
+      />
+    )
+
+    // When: Text Mode reports that the reader reached a new page.
+    expect(capturedTextViewerProps.textReadingProgress).toBe(
+      data.textReadingProgress
+    )
+    const onProgressChange = capturedTextViewerProps.onTextReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected Text reading progress callback')
+    }
+    const nextAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-paragraph',
+      text: 'Page one paragraph',
+      offset: 4
+    }
+    onProgressChange({ currentPageNumber: 1, anchor: nextAnchor })
+
+    // Then: Reader merges the new page without dropping other persisted fields.
+    expect(onDataChange).toHaveBeenCalledWith({
+      hiddenPages: [2],
+      textReadingProgress: { currentPageNumber: 1, anchor: nextAnchor }
+    })
+  })
+
+  it('hands the Layout visual top anchor to Text Mode when switching', async () => {
+    // Given: Layout 当前视觉第一行与 Text 之前持久化的位置不同。
+    const layoutAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-visual-top',
+      text: 'Current visual top line',
+      offset: 24
+    }
+    const staleTextAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-stale',
+      text: 'Previously persisted line',
+      offset: 3
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    render(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 1,
+            anchor: staleTextAnchor
+          }
+        }}
+      />
+    )
+    const onLayoutTextAnchorChange = capturedViewerProps.onTextAnchorChange
+    if (typeof onLayoutTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Layout text anchor callback')
+    }
+    act(() => onLayoutTextAnchorChange(layoutAnchor))
+
+    // When: 用户从 Layout 切换到 Text Mode。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    // Then: Text 的既有恢复链路收到当前视觉第一行，而不是旧持久化位置。
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toEqual({
+        currentPageNumber: 2,
+        anchor: layoutAnchor
+      })
+    })
+  })
+
+  it('hands the Text visual top anchor to Layout Mode when switching', async () => {
+    // Given: Reader 先进入 Text Mode，且 Layout 保存着旧 transform 与旧锚点。
+    const staleLayoutAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-stale-layout',
+      text: 'Previously persisted layout line',
+      offset: 5
+    }
+    const textAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-visual-top',
+      text: 'Current text visual top line',
+      offset: 30
+    }
+    const virtualPaper = {
+      x: 120,
+      y: 360,
+      scale: 1.5,
+      anchor: staleLayoutAnchor
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    render(<Reader document={doc} data={{ virtualPaper }} />)
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toBeInTheDocument()
+    })
+    const onTextAnchorChange = capturedTextViewerProps.onTextAnchorChange
+    if (typeof onTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Text Mode anchor callback')
+    }
+    act(() => onTextAnchorChange(textAnchor))
+
+    // When: 用户从 Text 切回 Layout Mode。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    // Then: Layout 保留缩放信息，但以 Text 的视觉第一行作为恢复锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.defaultVirtualPaperTransform).toEqual({
+        ...virtualPaper,
+        anchor: textAnchor
+      })
+    })
+  })
+
+  it('uses externally navigated Text progress for a controlled mode switch', async () => {
+    // Given: Text Mode 先上报旧锚点，随后宿主把阅读位置导航到另一个锚点。
+    const oldAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-old-text-position',
+      text: 'Old text position',
+      offset: 4
+    }
+    const navigatedAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-external-navigation',
+      text: 'Externally navigated position',
+      offset: 18
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const { rerender } = render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={{
+          textReadingProgress: { currentPageNumber: 1, anchor: oldAnchor }
+        }}
+      />
+    )
+    const onTextAnchorChange = capturedTextViewerProps.onTextAnchorChange
+    if (typeof onTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Text Mode anchor callback')
+    }
+    act(() => onTextAnchorChange(oldAnchor))
+    rerender(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 2,
+            anchor: navigatedAnchor
+          }
+        }}
+      />
+    )
+
+    // When: 宿主直接把受控模式切换为 Layout。
+    rerender(
+      <Reader
+        document={doc}
+        renderMode='layout'
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 2,
+            anchor: navigatedAnchor
+          }
+        }}
+      />
+    )
+
+    // Then: Layout 使用宿主的新位置，而不是 Viewer 之前上报的旧锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.defaultVirtualPaperTransform).toMatchObject({
+        anchor: navigatedAnchor
+      })
+    })
+  })
+
+  it('does not revive an invalidated Text handoff when persisted progress returns to its old key', async () => {
+    // Given: Layout 切换到 Text 时，临时交接覆盖了 Text 原先的持久化位置。
+    const layoutAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-layout-handoff',
+      text: 'Layout handoff position',
+      offset: 24
+    }
+    const oldPersistedAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-old-persisted',
+      text: 'Old persisted text position',
+      offset: 3
+    }
+    const externalAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-external-text-position',
+      text: 'External text position',
+      offset: 40
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const { rerender } = render(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 1,
+            anchor: oldPersistedAnchor
+          }
+        }}
+      />
+    )
+    const onLayoutTextAnchorChange = capturedViewerProps.onTextAnchorChange
+    if (typeof onLayoutTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Layout text anchor callback')
+    }
+    act(() => onLayoutTextAnchorChange(layoutAnchor))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toMatchObject({
+        anchor: layoutAnchor
+      })
+    })
+
+    // When: 宿主先导航到新位置，再合法地返回原持久化 key。
+    rerender(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 2,
+            anchor: externalAnchor
+          }
+        }}
+      />
+    )
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toMatchObject({
+        anchor: externalAnchor
+      })
+    })
+    rerender(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 1,
+            anchor: oldPersistedAnchor
+          }
+        }}
+      />
+    )
+
+    // Then: 已失效的 Layout 交接不会复活并覆盖宿主位置。
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toMatchObject({
+        anchor: oldPersistedAnchor
+      })
+    })
+  })
+
+  it('toggles precise text bookmarks through ReaderData', () => {
+    // Given: ReaderData already contains one precise text bookmark.
+    const bookmark: ReaderBookmark = {
+      pageNumber: 1,
+      textId: 'page-1-paragraph',
+      text: 'Saved paragraph',
+      offset: 8
+    }
+    const onDataChange = vi.fn()
+    const data = { hiddenPages: [2], bookmarks: [bookmark] } as const
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={data}
+        onDataChange={onDataChange}
+      />
+    )
+
+    // When: the text viewer toggles the same anchor.
+    const onToggleBookmark = capturedTextViewerProps.onToggleBookmark
+    if (typeof onToggleBookmark !== 'function') {
+      throw new TypeError('Expected precise bookmark callback')
+    }
+    onToggleBookmark(bookmark)
+
+    // Then: Reader removes only that anchor and preserves unrelated data.
+    expect(capturedTextViewerProps.bookmarks).toBe(data.bookmarks)
+    expect(onDataChange).toHaveBeenCalledWith({
+      hiddenPages: [2],
+      bookmarks: []
+    })
   })
 
   it('renderMode text provides the default selection confirmation popover', () => {
@@ -1691,6 +2070,14 @@ describe('Reader prop forwarding', () => {
       pages: { 'page-2': { left: 0.25 } }
     }
     const virtualPaper = { x: 24, y: -36, scale: 1.5 }
+    const bookmarks: readonly ReaderBookmark[] = [
+      {
+        pageNumber: 2,
+        textId: 'data-bookmark',
+        text: 'Data bookmark',
+        offset: 14
+      }
+    ]
 
     // When: Reader receives the new unified data prop.
     render(
@@ -1703,6 +2090,7 @@ describe('Reader prop forwarding', () => {
           rects: [dataRect],
           pagePaintings: dataPaintings,
           virtualPaper,
+          bookmarks,
           bookmarkedPageNumbers: [2]
         }}
         ranges={[legacyRange]}
@@ -1718,10 +2106,71 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.rects).toEqual([dataRect])
     expect(capturedViewerProps.pagePaintings).toBe(dataPaintings)
     expect(capturedViewerProps.bookmarkedPageNumbers).toEqual([2])
+    expect(capturedViewerProps.bookmarks).toBe(bookmarks)
     expect(capturedViewerProps.hiddenPages).toEqual([2, 'page-3'])
     expect(capturedViewerProps.edgeCrop).toBe(edgeCrop)
     expect(capturedViewerProps.defaultVirtualPaperTransform).toBe(virtualPaper)
     expect(capturedViewerProps.scale).toBeUndefined()
+  })
+
+  it('keeps legacy-only bookmark hosts on the page bookmark contract', () => {
+    // Given: a host controls only deprecated page-number bookmarks.
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const onTogglePageBookmark = vi.fn()
+
+    // When: Reader forwards bookmark capabilities to the layout viewer.
+    render(
+      <Reader
+        document={doc}
+        bookmarkedPageNumbers={[1]}
+        onTogglePageBookmark={onTogglePageBookmark}
+      />
+    )
+
+    // Then: Reader must not synthesize a precise bookmark capability.
+    expect(capturedViewerProps.bookmarkedPageNumbers).toEqual([1])
+    expect(capturedViewerProps.onTogglePageBookmark).toBe(onTogglePageBookmark)
+    expect(capturedViewerProps.bookmarks).toBeUndefined()
+    expect(capturedViewerProps.onToggleBookmark).toBeUndefined()
+  })
+
+  it('enables precise bookmarks for unified ReaderData hosts', () => {
+    // Given: the unified host persists data without legacy bookmark props.
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const onDataChange = vi.fn()
+
+    // When: Reader receives the unified data change channel.
+    render(<Reader document={doc} data={{}} onDataChange={onDataChange} />)
+
+    // Then: the viewer receives the precise toggle capability used by ReaderData.
+    expect(capturedViewerProps.bookmarks).toBeUndefined()
+    expect(capturedViewerProps.onToggleBookmark).toEqual(expect.any(Function))
+  })
+
+  it('keeps precise bookmark data read-only without a precise write channel', () => {
+    // Given: a host supplies precise bookmark data but only a legacy page toggle.
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const bookmarks: readonly ReaderBookmark[] = [
+      {
+        pageNumber: 1,
+        textId: 'read-only-bookmark',
+        text: 'Read-only bookmark',
+        offset: 0
+      }
+    ]
+
+    // When: Reader forwards the mixed bookmark contract.
+    render(
+      <Reader
+        document={doc}
+        bookmarks={bookmarks}
+        onTogglePageBookmark={vi.fn()}
+      />
+    )
+
+    // Then: precise data remains visible without advertising a no-op precise toggle.
+    expect(capturedViewerProps.bookmarks).toBe(bookmarks)
+    expect(capturedViewerProps.onToggleBookmark).toBeUndefined()
   })
 
   it('forwards unified hidden pages to text mode', () => {

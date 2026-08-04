@@ -6,6 +6,7 @@ import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
+  ReaderBookmark,
   ReaderComment,
   ReaderData,
   ReaderEdgeCrop,
@@ -157,6 +158,8 @@ const mockReaderProps: MockReaderProps[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 const COMMENT_STORAGE_PREFIX = 'hamster-reader-demo:comments:'
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
+const TEXT_READING_PROGRESS_STORAGE_PREFIX =
+  'hamster-reader-demo:text-reading-progress:'
 
 // --- Mock annotation history state ---
 // 模拟 library 内部的 undo/redo 栈，让 mock Reader 能在测试中
@@ -3184,11 +3187,30 @@ describe('demo parser flow', () => {
       resetMockHistory()
     })
 
-    it('restores sorted unique valid bookmarks for the parsed file', async () => {
-      // Given: persisted data contains duplicates and invalid page values.
+    it('restores sorted unique valid text bookmarks for the parsed file', async () => {
+      // Given: persisted data contains duplicate and invalid text anchors.
+      const firstBookmark: ReaderBookmark = {
+        pageNumber: 1,
+        textId: 'page-1-intro',
+        text: 'First saved paragraph',
+        offset: 0
+      }
+      const thirdPageBookmark: ReaderBookmark = {
+        pageNumber: 3,
+        textId: 'page-3-summary',
+        text: 'Third-page summary',
+        offset: 42
+      }
       localStorage.setItem(
         bookmarkStorageKey('bookmarked.pdf'),
-        JSON.stringify([3, 1, 3, 'bad', 0, 2.5])
+        JSON.stringify([
+          thirdPageBookmark,
+          firstBookmark,
+          thirdPageBookmark,
+          1,
+          { ...firstBookmark, offset: -1 },
+          { pageNumber: 2, textId: null, text: 'Invalid', offset: 0 }
+        ])
       )
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Bookmarked Document')
@@ -3199,56 +3221,57 @@ describe('demo parser flow', () => {
       upload(makeFile('bookmarked.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
-      // Then: Reader receives only canonical bookmark page numbers.
+      // Then: Reader receives only canonical full-text anchors.
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual([
-          1, 3
+        expect(findDocumentReaderProps()?.data?.bookmarks).toEqual([
+          firstBookmark,
+          thirdPageBookmark
         ])
       })
     })
 
-    it('persists bookmark additions and removals through the Reader callback', async () => {
+    it('persists text bookmark additions and removals through ReaderData', async () => {
       // Given: a freshly parsed file has no saved bookmarks.
+      const bookmark: ReaderBookmark = {
+        pageNumber: 2,
+        textId: 'page-2-body',
+        text: 'Current viewport text',
+        offset: 18
+      }
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Bookmark Toggle Document')
       )
       render(<App />)
       upload(makeFile('bookmark-toggle.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
-      expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual([])
+      expect(findDocumentReaderProps()?.data?.bookmarks).toEqual([])
 
-      // When: page 2 is bookmarked from Reader.
+      // When: Reader returns a bookmark anchored to the viewport's top text.
       act(() => {
-        const onTogglePageBookmark = findDocumentReaderProps()
-          ?.onTogglePageBookmark as (pageNumber: number) => void
-        onTogglePageBookmark(2)
+        const props = findDocumentReaderProps()
+        props?.onDataChange?.({ ...props.data, bookmarks: [bookmark] })
       })
 
-      // Then: both controlled props and per-file storage contain page 2.
+      // Then: controlled data and per-file storage retain the full anchor.
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual([
-          2
-        ])
+        expect(findDocumentReaderProps()?.data?.bookmarks).toEqual([bookmark])
       })
       expect(
         JSON.parse(
           localStorage.getItem(bookmarkStorageKey('bookmark-toggle.pdf')) ||
             '[]'
         )
-      ).toEqual([2])
+      ).toEqual([bookmark])
 
-      // When: page 2 is toggled again from the latest controlled callback.
+      // When: Reader returns the bookmark collection after removal.
       act(() => {
-        const onTogglePageBookmark = findDocumentReaderProps()
-          ?.onTogglePageBookmark as (pageNumber: number) => void
-        onTogglePageBookmark(2)
+        const props = findDocumentReaderProps()
+        props?.onDataChange?.({ ...props.data, bookmarks: [] })
       })
 
       // Then: the bookmark is removed from props and persistence.
       await waitFor(() => {
-        expect(findDocumentReaderProps()?.data?.bookmarkedPageNumbers).toEqual(
-          []
-        )
+        expect(findDocumentReaderProps()?.data?.bookmarks).toEqual([])
       })
       expect(
         JSON.parse(
@@ -3256,6 +3279,66 @@ describe('demo parser flow', () => {
             '[]'
         )
       ).toEqual([])
+    })
+
+    it('restores and persists the text reading progress anchor', async () => {
+      // Given: Text Mode progress identifies a concrete text and page-local offset.
+      const progress = {
+        currentPageNumber: 2,
+        anchor: {
+          pageNumber: 2,
+          textId: 'page-2-paragraph',
+          text: 'Resume from this paragraph',
+          offset: 31
+        }
+      } as const
+      localStorage.setItem(
+        `${TEXT_READING_PROGRESS_STORAGE_PREFIX}progress.pdf`,
+        JSON.stringify(progress)
+      )
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Progress Document')
+      )
+
+      // When: the document is parsed and Reader reports a new anchored position.
+      render(<App />)
+      upload(makeFile('progress.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.data?.textReadingProgress).toEqual(
+          progress
+        )
+      })
+      const nextProgress = {
+        currentPageNumber: 3,
+        anchor: {
+          pageNumber: 3,
+          textId: 'page-3-paragraph',
+          text: 'New viewport text',
+          offset: 12
+        }
+      } as const
+      act(() => {
+        const props = findDocumentReaderProps()
+        props?.onDataChange?.({
+          ...props.data,
+          textReadingProgress: nextProgress
+        })
+      })
+
+      // Then: the full anchor remains in controlled data and browser storage.
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.data?.textReadingProgress).toEqual(
+          nextProgress
+        )
+      })
+      expect(
+        JSON.parse(
+          localStorage.getItem(
+            `${TEXT_READING_PROGRESS_STORAGE_PREFIX}progress.pdf`
+          ) || '{}'
+        )
+      ).toEqual(nextProgress)
     })
   })
 

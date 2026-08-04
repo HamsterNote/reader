@@ -8,6 +8,7 @@ import {
   Reader,
   type ReaderAnnotationHistoryStatus,
   type ReaderAnnotationHistoryValue,
+  type ReaderBookmark,
   type ReaderComment,
   type ReaderData,
   type ReaderEdgeCrop,
@@ -20,6 +21,8 @@ import {
   type ReaderSelectionRectangle,
   type ReaderSelectionRef,
   type ReaderTouchPanMode,
+  type ReaderTextAnchor,
+  type ReaderTextReadingProgress,
   type ReaderVirtualPaperState,
   summarizeHighlightRanges,
   traceHighlight
@@ -201,26 +204,98 @@ export async function parseUploadedDocument(
 
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
 const OCR_STORAGE_PREFIX = 'hamster-reader-demo:ocr:'
+const TEXT_READING_PROGRESS_STORAGE_PREFIX =
+  'hamster-reader-demo:text-reading-progress:'
 
 type OcrTextsByPage = Record<number, IntermediateText[]>
 
-function parseStoredBookmarks(raw: string | null): number[] {
+function parseStoredTextAnchor(value: unknown): ReaderTextAnchor | undefined {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('pageNumber' in value) ||
+    !('textId' in value) ||
+    !('text' in value) ||
+    !('offset' in value)
+  ) {
+    return undefined
+  }
+
+  const { pageNumber, textId, text, offset } = value
+  if (
+    typeof pageNumber !== 'number' ||
+    !Number.isInteger(pageNumber) ||
+    pageNumber <= 0 ||
+    typeof textId !== 'string' ||
+    typeof text !== 'string' ||
+    typeof offset !== 'number' ||
+    !Number.isInteger(offset) ||
+    offset < 0
+  ) {
+    return undefined
+  }
+
+  return { pageNumber, textId, text, offset }
+}
+
+function parseStoredBookmarks(raw: string | null): ReaderBookmark[] {
   if (raw === null || raw.trim() === '') return []
 
   try {
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
 
-    return Array.from(
-      new Set(
-        parsed.filter(
-          (value): value is number =>
-            typeof value === 'number' && Number.isInteger(value) && value > 0
-        )
-      )
-    ).sort((left, right) => left - right)
+    const bookmarksByKey = new Map<string, ReaderBookmark>()
+    for (const value of parsed) {
+      const bookmark = parseStoredTextAnchor(value)
+      if (!bookmark) continue
+
+      const key = `${bookmark.pageNumber}:${bookmark.textId}:${bookmark.offset}`
+      bookmarksByKey.set(key, bookmark)
+    }
+
+    return Array.from(bookmarksByKey.values()).sort(
+      (left, right) =>
+        left.pageNumber - right.pageNumber ||
+        left.offset - right.offset ||
+        left.textId.localeCompare(right.textId)
+    )
   } catch {
     return []
+  }
+}
+
+function parseStoredTextReadingProgress(
+  raw: string | null
+): ReaderTextReadingProgress | undefined {
+  if (raw === null || raw.trim() === '') return undefined
+
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      !('currentPageNumber' in parsed)
+    ) {
+      return undefined
+    }
+
+    const { currentPageNumber } = parsed
+    if (
+      typeof currentPageNumber !== 'number' ||
+      !Number.isInteger(currentPageNumber) ||
+      currentPageNumber <= 0
+    ) {
+      return undefined
+    }
+
+    const anchor =
+      'anchor' in parsed ? parseStoredTextAnchor(parsed.anchor) : undefined
+    return anchor?.pageNumber === currentPageNumber
+      ? { currentPageNumber, anchor }
+      : { currentPageNumber }
+  } catch {
+    return undefined
   }
 }
 
@@ -576,9 +651,7 @@ export function App() {
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
   const [showPageBrowser, setShowPageBrowser] = useState(false)
-  const [bookmarkedPageNumbers, setBookmarkedPageNumbers] = useState<number[]>(
-    []
-  )
+  const [bookmarks, setBookmarks] = useState<readonly ReaderBookmark[]>([])
   const [themeColor, setThemeColor] = useState('#2563eb')
   const [highlightColor, setHighlightColor] = useState(
     'rgba(255, 193, 7, 0.35)'
@@ -604,6 +677,9 @@ export function App() {
     y: 0,
     scale: 1
   })
+  const [textReadingProgress, setTextReadingProgress] = useState<
+    ReaderTextReadingProgress | undefined
+  >(undefined)
   const requestIdRef = useRef(0)
   const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -644,24 +720,49 @@ export function App() {
       rects,
       pagePaintings,
       virtualPaper,
-      bookmarkedPageNumbers
+      textReadingProgress,
+      bookmarks
     }),
     [
-      bookmarkedPageNumbers,
+      bookmarks,
       edgeCropAll,
       edgeCropPages,
       hideSecondPage,
       pagePaintings,
       ranges,
       rects,
+      textReadingProgress,
       virtualPaper
     ]
   )
-  const handleReaderDataChange = useCallback((nextData: ReaderData) => {
-    if (nextData.virtualPaper) {
-      setVirtualPaper(nextData.virtualPaper)
-    }
-  }, [])
+  const handleReaderDataChange = useCallback(
+    (nextData: ReaderData) => {
+      if (nextData.virtualPaper) {
+        setVirtualPaper(nextData.virtualPaper)
+      }
+
+      if (nextData.textReadingProgress) {
+        setTextReadingProgress(nextData.textReadingProgress)
+        if (uploadedFile?.name) {
+          localStorage.setItem(
+            `${TEXT_READING_PROGRESS_STORAGE_PREFIX}${uploadedFile.name}`,
+            JSON.stringify(nextData.textReadingProgress)
+          )
+        }
+      }
+
+      if (nextData.bookmarks) {
+        setBookmarks(nextData.bookmarks)
+        if (uploadedFile?.name) {
+          localStorage.setItem(
+            `${BOOKMARK_STORAGE_PREFIX}${uploadedFile.name}`,
+            JSON.stringify(nextData.bookmarks)
+          )
+        }
+      }
+    },
+    [uploadedFile?.name]
+  )
   // 评论面板开关状态 + 当前激活的高亮 ID（用于自动勾选评论绑定）
   const [isCommentPanelOpen, setIsCommentPanelOpen] = useState(false)
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(
@@ -924,28 +1025,6 @@ export function App() {
     [ranges, rects, uploadedFile?.name]
   )
 
-  const handleTogglePageBookmark = useCallback(
-    (pageNumber: number) => {
-      if (!uploadedFile || !Number.isInteger(pageNumber) || pageNumber <= 0) {
-        return
-      }
-
-      setBookmarkedPageNumbers((currentPageNumbers) => {
-        const nextPageNumbers = currentPageNumbers.includes(pageNumber)
-          ? currentPageNumbers.filter((current) => current !== pageNumber)
-          : [...currentPageNumbers, pageNumber].sort(
-              (left, right) => left - right
-            )
-        localStorage.setItem(
-          `${BOOKMARK_STORAGE_PREFIX}${uploadedFile.name}`,
-          JSON.stringify(nextPageNumbers)
-        )
-        return nextPageNumbers
-      })
-    },
-    [uploadedFile]
-  )
-
   // 侧边栏文字高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
   const handleHighlightSelect = useCallback((id: string) => {
     setSelectedRangeId(id)
@@ -1117,6 +1196,13 @@ export function App() {
         setRenderMode(result.label === 'EPUB' ? 'text' : 'layout')
         setFontScale(1.5)
         setVirtualPaper({ x: 0, y: 0, scale: 1 })
+        setTextReadingProgress(
+          parseStoredTextReadingProgress(
+            localStorage.getItem(
+              `${TEXT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
+            )
+          )
+        )
 
         const storedHighlights = localStorage.getItem(
           `hamster-reader-demo:highlights:${file.name}`
@@ -1125,7 +1211,7 @@ export function App() {
         setRanges(Array.from(parsedHighlights.ranges))
         setRects(Array.from(parsedHighlights.rects))
         setPagePaintings(parsedHighlights.paintings)
-        setBookmarkedPageNumbers(
+        setBookmarks(
           parseStoredBookmarks(
             localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
           )
@@ -1522,46 +1608,46 @@ export function App() {
                       </select>
                     </label>
                   </div>
-                  <div style={{ marginBottom: '12px' }}>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                    >
-                      <input
-                        type='checkbox'
-                        checked={showPageBrowser}
-                        onChange={(event) =>
-                          setShowPageBrowser(event.currentTarget.checked)
-                        }
-                        data-testid='page-browser-toggle'
-                      />
-                      <span>显示页面浏览栏 Page Browser</span>
-                    </label>
-                  </div>
-                  <div style={{ marginBottom: '12px' }}>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                    >
-                      <input
-                        type='color'
-                        value={themeColor}
-                        onChange={(event) =>
-                          setThemeColor(event.currentTarget.value)
-                        }
-                        data-testid='theme-color-picker'
-                      />
-                      <span>主题色 (Page Browser 选中项)</span>
-                    </label>
-                  </div>
                 </>
               )}
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={showPageBrowser}
+                    onChange={(event) =>
+                      setShowPageBrowser(event.currentTarget.checked)
+                    }
+                    data-testid='page-browser-toggle'
+                  />
+                  <span>显示页面浏览栏 Page Browser</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='color'
+                    value={themeColor}
+                    onChange={(event) =>
+                      setThemeColor(event.currentTarget.value)
+                    }
+                    data-testid='theme-color-picker'
+                  />
+                  <span>主题色 (Page Browser 选中项)</span>
+                </label>
+              </div>
               <div style={{ marginBottom: '12px' }}>
                 <label
                   style={{
@@ -2065,7 +2151,6 @@ export function App() {
           onDrawingStrokeColorChange={setToolColor}
           comments={comments}
           onCommentsChange={handleCommentsChange}
-          onTogglePageBookmark={handleTogglePageBookmark}
           selectedRectId={selectedRectId}
           onCreateRect={handleCreateRect}
           onSelectRect={handleSelectRect}

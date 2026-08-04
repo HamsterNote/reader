@@ -58,15 +58,15 @@ Layout mode may expose an overlay page browser controlled by `showPageBrowser`.
 
 - **Container:** `.hamster-reader__page-browser`, anchored to the reader's left edge without resizing the document viewport.
 - **Width:** `min(240px, 78vw)` so the panel remains usable on narrow screens while leaving part of the document visible.
-- **Surface:** `rgba(249, 250, 251, 0.98)`, right border `#e5e7eb`, and a restrained right-facing shadow.
+- **Surface:** opaque `#f9fafb`, right border `#e5e7eb`, and a restrained right-facing shadow.
 - **Motion:** enter and exit with horizontal `transform` and `opacity` only; reduced-motion users receive an immediate state change.
 - **Scrolling:** the thumbnail list owns vertical scrolling and contains overscroll within the panel.
-- **Accessibility:** the closed panel is hidden from assistive technology and keyboard focus; open page buttons have visible `#2563eb` focus outlines.
+- **Accessibility:** the closed panel is `inert` and hidden from assistive technology; the open panel has a visible close button, closes on Escape, restores focus to the opener, and uses visible `#2563eb` focus outlines.
 - **Loading:** thumbnail visibility must route through the layout viewer's existing lazy page queue and cache rather than introducing a second loader.
-- **Tabs:** the panel groups `页面`, `高亮`, and `书签` as peer tabs without changing the panel width or visual hierarchy.
-- **Bookmark action:** every page thumbnail exposes a separate SVG bookmark toggle with an explicit add/remove label and `aria-pressed` state; interactive controls must never be nested.
-- **Bookmark list:** bookmarked pages appear in page order, support page navigation and removal, and show `暂无书签` when empty.
-- **Ownership:** bookmark data is controlled by the Reader host. The demo persists only valid positive integer page numbers per file and restores them when that file is reopened.
+- **Tabs:** Layout mode groups `页面`, `高亮`, and `书签` as peer tabs. Text mode renders only `高亮` and `书签`; it does not render an unavailable page-preview tab or placeholder thumbnails.
+- **Bookmark action:** precise bookmarks capture the concrete text crossing the mode container's top edge. The action stores the text ID, displayed text, page number, and that text's page-local character offset.
+- **Bookmark list:** precise bookmarks show their concrete text and page number, support anchored navigation and removal, and show `暂无书签` when empty. Restoration resolves the text ID first and falls back to the offset within that page when the ID no longer exists.
+- **Ownership:** precise bookmark data is controlled by the Reader host as full anchors. The demo persists validated anchors per file. Page-thumbnail SVG toggles and positive-integer page bookmarks remain available only through the deprecated page-only API; interactive controls must never be nested.
 
 ## 8. Text Selection Range Handles
 
@@ -109,9 +109,9 @@ of the page directly under the handle's visual center.
 
 ## 10. Reflowable Document Font Control
 
-The bottom toolbar exposes font scaling only for reflowable EPUB, TXT, and
-Markdown documents. Fixed-layout PDF, DOCX, and image documents keep the
-existing toolbar unchanged.
+The bottom toolbar exposes font scaling in Text mode for supported reflowable
+documents. In Layout mode, only EPUB keeps the font scaling control; PDF,
+DOCX, image, TXT, and Markdown Layout views hide it.
 
 - **Trigger:** a compact secondary button labelled `字体：当前档位`, with the
   current value visible at every responsive width.
@@ -171,10 +171,13 @@ consumers can see how to implement the `onDragHighlight` integration.
   the custom rail. The first native `scroll` event shows the current page label
   immediately; every subsequent event restarts the idle window, and the label
   hides only after `500ms` without scrolling.
-- **Mode synchronization:** each rail uses that mode's filtered page list and
-  current page. TanStack Virtual owns Text-mode visibility and seeking;
-  VirtualPaper visibility plus the existing page-navigation path own Layout
-  mode. Non-contiguous page ranges always expose their actual document numbers.
+- **Mode synchronization:** each rail uses that mode's filtered page list. The
+  concrete text crossing the container top supplies the current page and the
+  persisted `{ pageNumber, textId, text, offset }` anchor in both modes. Text
+  mode seeks through TanStack Virtual, while Layout mode preserves its
+  VirtualPaper `x` and `scale` and corrects `y` to the resolved text. Both
+  resolve `textId` first and fall back to the page-local offset. The rail remains
+  page-valued, and non-contiguous page ranges expose actual document numbers.
 - **Highlights:** each page containing a text highlight adds one `4px × 1px`
   marker at that page's proportional rail position. The marker uses the range's
   own `markerStyle.backgroundColor`, falling back to the Reader highlight color.
@@ -231,6 +234,10 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Lifecycle:** a real scale change shows the current rounded percentage while
   the zoom transform is active. Pan-only transforms do not open the indicator,
   and the indicator disappears as soon as the transform-end signal arrives.
+- **Percentage:** fixed top whitespace from `containMarginTop` (or the legacy
+  `containMarginY` fallback) participates in the displayed effective scale but
+  remains screen-fixed; the document content height alone receives the active
+  VirtualPaper scale.
 - **Presentation:** the compact percentage badge uses tabular numerals, remains
   non-interactive, and stays legible over both page content and the reader
   background without competing with document controls.

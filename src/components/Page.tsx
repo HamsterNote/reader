@@ -1,4 +1,8 @@
-import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
+import type {
+  DrawingTool,
+  DrawingValue,
+  PaintingControllerData
+} from '@hamster-note/painting'
 import {
   Selection,
   type SelectionRange,
@@ -13,11 +17,6 @@ import type {
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PageDrawingLayer, sanitizeDrawingValue } from './PageDrawingLayer'
-
-const STANDALONE_DRAWING_GESTURES = [
-  'TouchDoublePan',
-  'TouchDoubleZoom'
-] as const
 
 /**
  * 文档流页面的坐标基准宽度：A4 纸宽度（pt，72dpi 下 210mm = 595pt）。
@@ -311,6 +310,21 @@ export function Page({
   const contentCount = getPageTexts(page).length
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
+  const [paintingControllerData, setPaintingControllerData] =
+    useState<PaintingControllerData>({
+      tool: paintingTool,
+      minimap: false,
+      strokeColor: drawingStrokeColor,
+      strokeWidth: 3
+    })
+
+  useEffect(() => {
+    setPaintingControllerData((current) => ({
+      ...current,
+      tool: paintingTool,
+      strokeColor: drawingStrokeColor
+    }))
+  }, [drawingStrokeColor, paintingTool])
 
   useEffect(() => {
     setSelectedRangeId((currentValue) => {
@@ -462,12 +476,10 @@ export function Page({
           <PageDrawingLayer
             enabled={selectedTool === 'drawing'}
             pageId={page.id}
-            tool={paintingTool}
-            strokeColor={drawingStrokeColor}
+            controllerData={paintingControllerData}
+            onControllerDataChange={setPaintingControllerData}
             value={paintingValue}
             onChange={onPaintingChange}
-            gestures={STANDALONE_DRAWING_GESTURES}
-            gestureScaleBounds={{ minScale: 0.5, maxScale: 4 }}
           />
         </div>
 

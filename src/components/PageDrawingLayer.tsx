@@ -1,189 +1,39 @@
 import {
-  DrawingSurface,
-  type DrawingGesture,
-  type DrawingPoint,
-  type DrawingStroke,
-  type DrawingTool,
-  type DrawingValue
+  normalizeDrawingValue,
+  PaintingBoard,
+  type DrawingValue,
+  type PaintingControllerData
 } from '@hamster-note/painting'
 import { useMemo } from 'react'
-
-const EMPTY_DRAWING_VALUE: DrawingValue = { strokes: [] }
-const MAX_DRAWING_STROKES = 500
-const MAX_DRAWING_POINTS = 20_000
-const MAX_DASH_ARRAY_VALUES = 32
 
 export type PageDrawingLayerProps = {
   readonly enabled: boolean
   readonly pageId: string
-  readonly tool?: DrawingTool
-  /** 绘制图形的描边颜色，默认 '#2563eb' */
-  readonly strokeColor?: string
+  readonly controllerData: PaintingControllerData
+  readonly onControllerDataChange: (data: PaintingControllerData) => void
   readonly value?: DrawingValue
   readonly onChange?: (nextValue: DrawingValue) => void
-  readonly gestures?: readonly DrawingGesture[]
-  readonly gestureScaleBounds?: {
-    readonly minScale?: number
-    readonly maxScale?: number
-  }
   readonly canvasScale?: number
 }
 
-function parseDrawingPoint(point: unknown): DrawingPoint | null {
-  if (
-    typeof point !== 'object' ||
-    point === null ||
-    !('x' in point) ||
-    typeof point.x !== 'number' ||
-    !Number.isFinite(point.x) ||
-    !('y' in point) ||
-    typeof point.y !== 'number' ||
-    !Number.isFinite(point.y)
-  ) {
-    return null
-  }
-
-  return {
-    x: point.x,
-    y: point.y,
-    ...('pressure' in point &&
-    typeof point.pressure === 'number' &&
-    Number.isFinite(point.pressure)
-      ? { pressure: point.pressure }
-      : {})
-  }
-}
-
-function parseDrawingTool(tool: unknown): DrawingTool | null {
-  switch (tool) {
-    case 'pen':
-    case 'line':
-    case 'rect':
-    case 'ellipse':
-    case 'polygon':
-    case 'bezier':
-    case 'eraser':
-      return tool
-    default:
-      return null
-  }
-}
-
-type DrawingStrokeCandidate = {
-  readonly id: unknown
-  readonly tool?: unknown
-  readonly points: unknown
-}
-
-function isDrawingStrokeCandidate(
-  stroke: unknown
-): stroke is DrawingStrokeCandidate {
-  return (
-    typeof stroke === 'object' &&
-    stroke !== null &&
-    'id' in stroke &&
-    'points' in stroke
-  )
-}
-
-function getFiniteNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function getOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function getDashArray(value: unknown): number[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const values = value
-    .slice(0, MAX_DASH_ARRAY_VALUES)
-    .filter(
-      (item): item is number =>
-        typeof item === 'number' && Number.isFinite(item)
-    )
-  return values.length === Math.min(value.length, MAX_DASH_ARRAY_VALUES)
-    ? values
-    : undefined
-}
-
-function parseDrawingStroke(
-  stroke: unknown,
-  maxPointChecks: number
-): {
-  readonly stroke: DrawingStroke
-  readonly inspectedPointCount: number
-} | null {
-  if (
-    !isDrawingStrokeCandidate(stroke) ||
-    typeof stroke.id !== 'string' ||
-    !Array.isArray(stroke.points)
-  ) {
-    return null
-  }
-
-  const tool = parseDrawingTool(stroke.tool)
-  if (!tool) return null
-
-  const inspectedPoints = stroke.points.slice(0, maxPointChecks)
-  const points = inspectedPoints.flatMap(
-    (point: unknown) => parseDrawingPoint(point) ?? []
-  )
-
-  return {
-    inspectedPointCount: inspectedPoints.length,
-    stroke: {
-      id: stroke.id,
-      tool,
-      points,
-      ...('strokeColor' in stroke
-        ? { strokeColor: getOptionalString(stroke.strokeColor) }
-        : {}),
-      ...('strokeWidth' in stroke
-        ? { strokeWidth: getFiniteNumber(stroke.strokeWidth) }
-        : {}),
-      ...('dashArray' in stroke
-        ? { dashArray: getDashArray(stroke.dashArray) }
-        : {}),
-      ...('dashOffset' in stroke
-        ? { dashOffset: getFiniteNumber(stroke.dashOffset) }
-        : {}),
-      ...('fillColor' in stroke
-        ? { fillColor: getOptionalString(stroke.fillColor) }
-        : {}),
-      ...('fillOpacity' in stroke
-        ? { fillOpacity: getFiniteNumber(stroke.fillOpacity) }
-        : {})
-    }
-  }
-}
-
+/**
+ * 将外部持久化数据统一迁移到 painting 当前的数据结构。
+ * PaintingBoard 产生的 text、image 等新笔迹字段会由官方迁移器完整保留。
+ */
 export function sanitizeDrawingValue(value: unknown): DrawingValue {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    !('strokes' in value) ||
-    !Array.isArray(value.strokes)
-  ) {
-    return EMPTY_DRAWING_VALUE
+  const normalized =
+    typeof value === 'object' && value !== null
+      ? normalizeDrawingValue(value)
+      : normalizeDrawingValue(undefined)
+
+  return {
+    ...normalized,
+    strokes: normalized.strokes.slice(0, 500).map((stroke) => ({
+      ...stroke,
+      points: stroke.points.slice(0, 20_000),
+      dashArray: stroke.dashArray?.slice(0, 32)
+    }))
   }
-
-  let inspectedPointCount = 0
-  const strokes: DrawingStroke[] = []
-  const rawStrokes: readonly unknown[] = value.strokes
-
-  for (const stroke of rawStrokes.slice(0, MAX_DRAWING_STROKES)) {
-    const remainingPointChecks = MAX_DRAWING_POINTS - inspectedPointCount
-    if (remainingPointChecks === 0) break
-
-    const parsedStroke = parseDrawingStroke(stroke, remainingPointChecks)
-    if (!parsedStroke) continue
-
-    inspectedPointCount += parsedStroke.inspectedPointCount
-    strokes.push(parsedStroke.stroke)
-  }
-
-  return { strokes }
 }
 
 function scaleDrawingValue(value: DrawingValue, scale: number): DrawingValue {
@@ -212,12 +62,10 @@ export function hasDrawingStrokes(value: unknown): boolean {
 export function PageDrawingLayer({
   enabled,
   pageId,
-  tool = 'pen',
-  strokeColor = '#2563eb',
+  controllerData,
+  onControllerDataChange,
   value,
   onChange,
-  gestures = [],
-  gestureScaleBounds,
   canvasScale = 1
 }: PageDrawingLayerProps) {
   const safeCanvasScale =
@@ -244,16 +92,18 @@ export function PageDrawingLayer({
         transformOrigin: 'top left'
       }}
     >
-      <DrawingSurface
+      <PaintingBoard
         value={drawingValue}
         onChange={handleChange}
-        tool={tool}
         inputMethods={enabled ? undefined : []}
-        gestures={gestures}
-        gestureScaleBounds={gestureScaleBounds}
         cursor={enabled ? undefined : false}
-        strokeColor={strokeColor}
-        strokeWidth={3}
+        toolbar={false}
+        virtualPaper={false}
+        controller={{
+          boardId: pageId,
+          data: controllerData,
+          onDataChange: onControllerDataChange
+        }}
         testID={`reader-painting-${pageId}`}
       />
     </div>

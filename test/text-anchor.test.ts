@@ -1,0 +1,137 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import {
+  findTopTextAnchor,
+  getTextAnchorKey,
+  resolveTextAnchorElement,
+  type TextAnchorElementRecord
+} from '../src/components/IntermediateDocumentViewer/textAnchor'
+import type { ReaderTextAnchor } from '../src/types/readerData'
+
+function makeElementRect(
+  element: HTMLElement,
+  top: number,
+  height: number
+): void {
+  vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(0, top, 200, height)
+  )
+}
+
+describe('text anchors', () => {
+  it('captures the top text with an offset local to its page', () => {
+    // Given: the viewport top crosses the second text on page 2.
+    const viewport = document.createElement('div')
+    const firstElement = document.createElement('span')
+    const secondElement = document.createElement('span')
+    makeElementRect(viewport, 100, 400)
+    makeElementRect(firstElement, 20, 40)
+    makeElementRect(secondElement, 80, 40)
+    const pageTexts = [
+      { id: 'page-2-first', content: 'first' },
+      { id: 'page-2-second', content: 'second' }
+    ]
+    const records = new Map<string, TextAnchorElementRecord>([
+      [
+        'page-2-first',
+        { text: pageTexts[0], pageNumber: 2, element: firstElement }
+      ],
+      [
+        'page-2-second',
+        { text: pageTexts[1], pageNumber: 2, element: secondElement }
+      ]
+    ])
+
+    // When: the current reading anchor is sampled from the viewport.
+    const anchor = findTopTextAnchor(
+      viewport,
+      records,
+      new Map([[2, pageTexts]])
+    )
+
+    // Then: the offset counts only text before it on page 2.
+    expect(anchor).toEqual({
+      pageNumber: 2,
+      textId: 'page-2-second',
+      text: 'second',
+      offset: 5
+    })
+  })
+
+  it('resolves an existing text id before considering its offset', () => {
+    // Given: the persisted offset points to the first text but the id points to the second.
+    const firstElement = document.createElement('span')
+    const secondElement = document.createElement('span')
+    const pageTexts = [
+      { id: 'first', content: 'first' },
+      { id: 'second', content: 'second' }
+    ]
+    const records = new Map<string, TextAnchorElementRecord>([
+      ['first', { text: pageTexts[0], pageNumber: 3, element: firstElement }],
+      ['second', { text: pageTexts[1], pageNumber: 3, element: secondElement }]
+    ])
+    const anchor: ReaderTextAnchor = {
+      pageNumber: 3,
+      textId: 'second',
+      text: 'second',
+      offset: 0
+    }
+
+    // When: the anchor is restored.
+    const element = resolveTextAnchorElement(
+      anchor,
+      records,
+      new Map([[3, pageTexts]])
+    )
+
+    // Then: the stable id wins.
+    expect(element).toBe(secondElement)
+  })
+
+  it('falls back to the page-local offset when the text id is missing', () => {
+    // Given: the saved text id disappeared while the same page content remains.
+    const firstElement = document.createElement('span')
+    const secondElement = document.createElement('span')
+    const pageTexts = [
+      { id: 'new-first', content: 'first' },
+      { id: 'new-second', content: 'second' }
+    ]
+    const records = new Map<string, TextAnchorElementRecord>([
+      [
+        'new-first',
+        { text: pageTexts[0], pageNumber: 4, element: firstElement }
+      ],
+      [
+        'new-second',
+        { text: pageTexts[1], pageNumber: 4, element: secondElement }
+      ]
+    ])
+    const anchor: ReaderTextAnchor = {
+      pageNumber: 4,
+      textId: 'removed-id',
+      text: 'second',
+      offset: 5
+    }
+
+    // When: restoration cannot find the original id.
+    const element = resolveTextAnchorElement(
+      anchor,
+      records,
+      new Map([[4, pageTexts]])
+    )
+
+    // Then: offset 5 selects the second text on page 4.
+    expect(element).toBe(secondElement)
+  })
+
+  it('uses page, id, and offset as bookmark identity', () => {
+    const anchor: ReaderTextAnchor = {
+      pageNumber: 7,
+      textId: 'paragraph-2',
+      text: 'Changed display text',
+      offset: 18
+    }
+
+    expect(getTextAnchorKey(anchor)).toBe('7:paragraph-2:18')
+  })
+})

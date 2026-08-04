@@ -15,10 +15,20 @@ import type {
 } from '@hamster-note/types'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { PointerEvent as ReactPointerEvent, ReactNode, Ref } from 'react'
+import type {
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  Ref,
+  RefObject
+} from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type {
+  ReaderBookmark,
+  ReaderTextAnchor,
+  ReaderTextReadingProgress
+} from '../../types/readerData'
 import type {
   ReaderHighlightPopover,
   ReaderLinkedSelectionData,
@@ -63,8 +73,18 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
+import { PageBrowser } from './PageBrowser'
 import { ReadingProgress } from './ReadingProgress'
 import { TextSelectionMagnifier } from './TextSelectionMagnifier'
+import {
+  findTopTextAnchor,
+  getActiveBookmarkKey,
+  getTextAnchorKey,
+  hasAnchorableText,
+  resolveTextAnchorElement,
+  resolveBookmarkNavigationHandler,
+  type TextAnchorElementRecord
+} from './textAnchor'
 import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
@@ -84,8 +104,119 @@ const DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS = 5000
 
 const EMPTY_SELECTION_RANGES: SelectionRange[] = []
 
+const TEXT_PAGE_FALLBACK_SIZE = { width: 595, height: 842 } as const
+
+const EMPTY_TEXT_PAGE_IMAGES = new Map<number, string>()
+
+const handleTextPageBrowserVisibilityChange = () => {}
+
 type TextReadingProgressSnapshot = {
   readonly currentPageNumber: number
+  readonly anchor?: ReaderTextAnchor
+}
+
+type TextAnchorRestoreRequest = {
+  readonly token: number
+  readonly documentGeneration: number
+  readonly anchorKey: string
+  readonly source: 'bookmark' | 'restore'
+}
+
+type PendingTextAnchorRestore = {
+  readonly anchor: ReaderTextAnchor
+  readonly request: TextAnchorRestoreRequest
+}
+
+function getTextReadingProgressKey(
+  progress: TextReadingProgressSnapshot
+): string {
+  return progress.anchor
+    ? getTextAnchorKey(progress.anchor)
+    : `${progress.currentPageNumber}:page`
+}
+
+function useDocumentGeneration(
+  runtimeDocument: object | null,
+  pageNumbersKey: string
+): number {
+  const scopeRef = useRef({ runtimeDocument, pageNumbersKey, generation: 0 })
+  if (
+    scopeRef.current.runtimeDocument !== runtimeDocument ||
+    scopeRef.current.pageNumbersKey !== pageNumbersKey
+  ) {
+    scopeRef.current = {
+      runtimeDocument,
+      pageNumbersKey,
+      generation: scopeRef.current.generation + 1
+    }
+  }
+  return scopeRef.current.generation
+}
+
+function useInvalidateRestoreRequest(
+  controlledProgressIdentity: string,
+  activeRestoreRequestRef: RefObject<TextAnchorRestoreRequest | null>,
+  restoreRequestTokenRef: RefObject<number>
+): void {
+  const previousIdentityRef = useRef(controlledProgressIdentity)
+  if (previousIdentityRef.current === controlledProgressIdentity) return
+
+  previousIdentityRef.current = controlledProgressIdentity
+  if (
+    activeRestoreRequestRef.current?.anchorKey !== controlledProgressIdentity
+  ) {
+    restoreRequestTokenRef.current += 1
+    activeRestoreRequestRef.current = null
+  }
+}
+
+function useDocumentGenerationChange(
+  documentGeneration: number,
+  onChange: () => void
+): void {
+  const appliedGenerationRef = useRef(documentGeneration)
+  useEffect(() => {
+    if (appliedGenerationRef.current === documentGeneration) return
+    appliedGenerationRef.current = documentGeneration
+    onChange()
+  }, [documentGeneration, onChange])
+}
+
+function resolveRequestedTextReadingProgress(
+  progress: ReaderTextReadingProgress | undefined,
+  pageNumbers: readonly number[]
+): ReaderTextReadingProgress | null {
+  const pageNumber = progress?.currentPageNumber
+  if (typeof pageNumber !== 'number' || !pageNumbers.includes(pageNumber)) {
+    return null
+  }
+  const anchor =
+    progress?.anchor?.pageNumber === pageNumber ? progress.anchor : undefined
+  return anchor
+    ? { currentPageNumber: pageNumber, anchor }
+    : { currentPageNumber: pageNumber }
+}
+
+function getRequestedProgressIdentity(
+  progress: ReaderTextReadingProgress | null
+): string {
+  return progress ? getTextReadingProgressKey(progress) : ''
+}
+
+function getInitialTextReadingProgress(
+  persistedProgress: ReaderTextReadingProgress | undefined,
+  pageNumbers: readonly number[]
+): TextReadingProgressSnapshot {
+  const currentPageNumber =
+    persistedProgress &&
+    pageNumbers.includes(persistedProgress.currentPageNumber)
+      ? persistedProgress.currentPageNumber
+      : (pageNumbers[0] ?? 0)
+  const anchor = persistedProgress?.anchor
+  if (anchor?.pageNumber === currentPageNumber) {
+    return { currentPageNumber, anchor }
+  }
+  return { currentPageNumber }
 }
 
 const DISABLED_ANNOTATION_HISTORY_STATUS = {
@@ -560,8 +691,8 @@ function useSelectionHighlight(
  * - linked selection 公开 props：当前由 Reader text branch 透传到此边界，
  *   后续文本 viewer 的 linked selection 状态机接入时会消费这些值。
  *
- * 文本模式不经过 `VirtualPaper`，因此不接受任何缩放、交互模式、矩形框选、
- * 绘制或 PageBrowser 相关 props。
+ * 文本模式不经过 `VirtualPaper`，因此不接受任何缩放、交互模式、矩形框选或
+ * 绘制相关 props；页面浏览侧栏则与布局模式共用书签和文本高亮数据。
  */
 export type IntermediateDocumentTextViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -580,6 +711,27 @@ export type IntermediateDocumentTextViewerProps = {
   containMarginBottom?: number
   /** @deprecated 请分别使用 containMarginTop / containMarginBottom。 */
   containMarginY?: number
+  /** 是否显示页面、文本高亮和书签侧栏。 */
+  showPageBrowser?: boolean
+  /** 页面浏览侧栏被左滑关闭时触发。 */
+  onPageBrowserClose?: () => void
+  /** 页面浏览侧栏主题色。 */
+  themeColor?: string
+  /** 每个文本高亮对应的评论数量。 */
+  commentCountByRangeId?: Readonly<Record<string, number>>
+  /** container 顶部文字对应的精确书签。 */
+  bookmarks?: readonly ReaderBookmark[]
+  /** 添加或删除指定文字锚点书签。 */
+  onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  /** @deprecated 请使用 bookmarks。 */
+  bookmarkedPageNumbers?: readonly number[]
+  /** @deprecated 请使用 onToggleBookmark。 */
+  onTogglePageBookmark?: (pageNumber: number) => void
+  /** 受控的 Text Mode 当前阅读页。 */
+  textReadingProgress?: ReaderTextReadingProgress
+  /** 当前阅读页变化时触发。 */
+  onTextReadingProgressChange?: (next: ReaderTextReadingProgress) => void
+  onTextAnchorChange?: (anchor: ReaderTextAnchor | undefined) => void
   pageRange?: ReaderPageRange
   /** 需要从文本阅读流中排除的 1-based 页码或公开 PageId。 */
   hiddenPages?: readonly (number | string)[]
@@ -632,6 +784,8 @@ export type IntermediateDocumentTextViewerProps = {
   onSelectRange?: (id: string | null) => void
   /** 公开 range 更新回调；文本模式状态机接入后与 linked 更新同步触发。 */
   onUpdateRange?: (range: ReaderSelectionRange) => void
+  onRemoveRange?: (id: string) => void
+  onRemoveRect?: (id: string) => void
   /** linked selection 手势开始回调；文本模式状态机接入后由 Selection 包装层触发。 */
   onSelectionStart?: (
     mousePos: ReaderMousePosition,
@@ -695,6 +849,17 @@ export function IntermediateDocumentTextViewer(
     containMarginTop,
     containMarginBottom,
     containMarginY,
+    showPageBrowser = false,
+    onPageBrowserClose,
+    themeColor,
+    commentCountByRangeId,
+    bookmarks,
+    onToggleBookmark,
+    bookmarkedPageNumbers,
+    onTogglePageBookmark,
+    textReadingProgress,
+    onTextReadingProgressChange,
+    onTextAnchorChange,
     pageRange,
     hiddenPages,
     initialLoadedPages = 1,
@@ -714,6 +879,8 @@ export function IntermediateDocumentTextViewer(
     onLinkedSelectRange,
     onSelectRange,
     onUpdateRange,
+    onRemoveRange,
+    onRemoveRect,
     onSelectionStart,
     onSelectionEnd,
     onHighlight,
@@ -761,7 +928,7 @@ export function IntermediateDocumentTextViewer(
 
   // textElementsRef: key = text.id — 仅注册已挂载的可见文本 span
   const textElementsRef = useRef<
-    Map<string, { text: IntermediateText; pageNumber: number }>
+    Map<string, TextAnchorElementRecord<IntermediateText>>
   >(new Map())
 
   // 选择作用域 id（useId 保证多实例不冲突），写入每页 data-selection-id
@@ -817,6 +984,14 @@ export function IntermediateDocumentTextViewer(
     )
   }, [hiddenPages, runtimeDocument, pageRange])
   const pageNumbersKey = useMemo(() => pageNumbers.join(','), [pageNumbers])
+  const documentGeneration = useDocumentGeneration(
+    runtimeDocument,
+    pageNumbersKey
+  )
+  const getVirtualPageKey = useCallback(
+    (pageNumber: number) => `${documentGeneration}:${pageNumber}`,
+    [documentGeneration]
+  )
 
   const selectionScope = useSelectionScope(runtimeDocument, pageNumbersKey)
 
@@ -825,31 +1000,245 @@ export function IntermediateDocumentTextViewer(
     () => defaultRanges ?? []
   )
   const [readingProgress, setReadingProgress] =
-    useState<TextReadingProgressSnapshot>(() => ({
-      currentPageNumber: pageNumbers[0] ?? 0
-    }))
+    useState<TextReadingProgressSnapshot>(() =>
+      getInitialTextReadingProgress(textReadingProgress, pageNumbers)
+    )
+  const [fallbackBookmarkKey, setFallbackBookmarkKey] = useState<string>()
+  const readingProgressRef =
+    useRef<TextReadingProgressSnapshot>(readingProgress)
+  readingProgressRef.current = readingProgress
   const readingProgressPageRef = useRef(readingProgress.currentPageNumber)
+  const lastObservedProgressKeyRef = useRef(
+    textReadingProgress ? getTextReadingProgressKey(readingProgress) : ''
+  )
+  const lastLocallyEmittedProgressKeyRef = useRef('')
+  const suppressProgrammaticProgressRef = useRef(false)
+  const isInitialProgressRestorePendingRef = useRef(
+    textReadingProgress !== undefined
+  )
+  const restoredProgressPageRef = useRef<number | null>(null)
+  const restoredProgressAnchorKeyRef = useRef<string | null>(null)
+  const restoreRequestTokenRef = useRef(0)
+  const committedBookmarkRequestTokenRef = useRef<number | null>(null)
+  const activeRestoreRequestRef = useRef<TextAnchorRestoreRequest | null>(null)
+  const requestedProgress = resolveRequestedTextReadingProgress(
+    textReadingProgress,
+    pageNumbers
+  )
+  const controlledProgressIdentity =
+    getRequestedProgressIdentity(requestedProgress)
+  useInvalidateRestoreRequest(
+    controlledProgressIdentity,
+    activeRestoreRequestRef,
+    restoreRequestTokenRef
+  )
+  const pendingTextAnchorRef = useRef<PendingTextAnchorRestore | null>(null)
+  const progressDocumentGenerationRef = useRef(documentGeneration)
+  progressDocumentGenerationRef.current = documentGeneration
+  const restoreAttemptCleanupRef = useRef<(() => void) | null>(null)
+  const anchorMeasurementRef = useRef<{
+    readonly itemKey: string
+    readonly anchor: ReaderTextAnchor
+    readonly request: TextAnchorRestoreRequest
+  } | null>(null)
+  const alignTextAnchorRef = useRef<
+    | ((anchor: ReaderTextAnchor, request: TextAnchorRestoreRequest) => boolean)
+    | null
+  >(null)
+  useDocumentGenerationChange(documentGeneration, () => {
+    progressDocumentGenerationRef.current = documentGeneration
+    restoreAttemptCleanupRef.current?.()
+    restoreAttemptCleanupRef.current = null
+    restoreRequestTokenRef.current += 1
+    committedBookmarkRequestTokenRef.current = null
+    activeRestoreRequestRef.current = null
+    anchorMeasurementRef.current = null
+    pendingTextAnchorRef.current = null
+    textElementsRef.current.clear()
+    restoredProgressPageRef.current = null
+    restoredProgressAnchorKeyRef.current = null
+    lastLocallyEmittedProgressKeyRef.current = ''
+    suppressProgrammaticProgressRef.current = false
+    setFallbackBookmarkKey(undefined)
+    const nextProgress = getInitialTextReadingProgress(
+      textReadingProgress,
+      pageNumbers
+    )
+    readingProgressPageRef.current = nextProgress.currentPageNumber
+    readingProgressRef.current = nextProgress
+    lastObservedProgressKeyRef.current = textReadingProgress
+      ? getTextReadingProgressKey(nextProgress)
+      : ''
+    isInitialProgressRestorePendingRef.current =
+      textReadingProgress !== undefined
+    setReadingProgress(nextProgress)
+    onTextAnchorChange?.(undefined)
+  })
   const {
     isActive: isReadingProgressMoving,
     signalActivity: signalReadingProgressActivity
   } = useReadingProgressActivity()
+  const captureReadingProgress = useCallback(() => {
+    if (isInitialProgressRestorePendingRef.current) return
+    if (suppressProgrammaticProgressRef.current) return
+    const viewport = scrollContainerRef.current
+    if (!viewport) return
+
+    const anchor = findTopTextAnchor(
+      viewport,
+      textElementsRef.current,
+      textsByPageNumberRef.current
+    )
+    if (!anchor) return
+
+    const nextProgress = {
+      currentPageNumber: anchor.pageNumber,
+      anchor
+    } satisfies ReaderTextReadingProgress
+    onTextAnchorChange?.(anchor)
+    const nextKey = getTextReadingProgressKey(nextProgress)
+    setFallbackBookmarkKey(undefined)
+    readingProgressPageRef.current = anchor.pageNumber
+    readingProgressRef.current = nextProgress
+    setReadingProgress((current) =>
+      getTextReadingProgressKey(current) === nextKey ? current : nextProgress
+    )
+    if (lastObservedProgressKeyRef.current === nextKey) return
+
+    lastObservedProgressKeyRef.current = nextKey
+    lastLocallyEmittedProgressKeyRef.current = nextKey
+    onTextReadingProgressChange?.(nextProgress)
+  }, [onTextAnchorChange, onTextReadingProgressChange])
+
+  const cancelRestoreAttempt = useCallback(() => {
+    restoreAttemptCleanupRef.current?.()
+    restoreAttemptCleanupRef.current = null
+  }, [])
+
+  const cancelTextAnchorRestore = useCallback(() => {
+    cancelRestoreAttempt()
+    restoreRequestTokenRef.current += 1
+    activeRestoreRequestRef.current = null
+    anchorMeasurementRef.current = null
+    pendingTextAnchorRef.current = null
+  }, [cancelRestoreAttempt])
+
   useEffect(() => {
     if (!viewerRootElement) return
+    const viewerWindow = viewerRootElement.ownerDocument.defaultView
+    let frameId: number | null = null
+    const releaseProgrammaticSuppression = () => {
+      cancelTextAnchorRestore()
+      isInitialProgressRestorePendingRef.current = false
+      suppressProgrammaticProgressRef.current = false
+    }
+    const handleUserKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.key === 'ArrowDown' ||
+        event.key === 'ArrowUp' ||
+        event.key === 'PageDown' ||
+        event.key === 'PageUp' ||
+        event.key === 'Home' ||
+        event.key === 'End' ||
+        event.key === ' '
+      ) {
+        releaseProgrammaticSuppression()
+      }
+    }
+    const handleScroll = () => {
+      signalReadingProgressActivity()
+      if (!viewerWindow) {
+        captureReadingProgress()
+        return
+      }
+      if (frameId !== null) viewerWindow.cancelAnimationFrame(frameId)
+      frameId = viewerWindow.requestAnimationFrame(captureReadingProgress)
+    }
 
+    viewerRootElement.addEventListener('scroll', handleScroll, {
+      passive: true
+    })
     viewerRootElement.addEventListener(
-      'scroll',
-      signalReadingProgressActivity,
+      'wheel',
+      releaseProgrammaticSuppression,
       { passive: true }
     )
+    viewerRootElement.addEventListener(
+      'touchstart',
+      releaseProgrammaticSuppression,
+      { passive: true }
+    )
+    viewerRootElement.addEventListener(
+      'pointerdown',
+      releaseProgrammaticSuppression
+    )
+    viewerRootElement.addEventListener('keydown', handleUserKeyDown)
     return () => {
+      viewerRootElement.removeEventListener('scroll', handleScroll)
       viewerRootElement.removeEventListener(
-        'scroll',
-        signalReadingProgressActivity
+        'wheel',
+        releaseProgrammaticSuppression
       )
+      viewerRootElement.removeEventListener(
+        'touchstart',
+        releaseProgrammaticSuppression
+      )
+      viewerRootElement.removeEventListener(
+        'pointerdown',
+        releaseProgrammaticSuppression
+      )
+      viewerRootElement.removeEventListener('keydown', handleUserKeyDown)
+      if (frameId !== null && viewerWindow) {
+        viewerWindow.cancelAnimationFrame(frameId)
+      }
     }
-  }, [signalReadingProgressActivity, viewerRootElement])
+  }, [
+    cancelTextAnchorRestore,
+    captureReadingProgress,
+    signalReadingProgressActivity,
+    viewerRootElement
+  ])
+  const restoreInitialReadingProgress = useCallback(
+    (instance: Virtualizer<HTMLDivElement, HTMLElement>) => {
+      if (textReadingProgress?.anchor) return
+
+      const requestedPageNumber = textReadingProgress?.currentPageNumber
+      if (requestedPageNumber === undefined) return
+
+      const requestedPageIndex = pageNumbers.indexOf(requestedPageNumber)
+      const scrollElement = instance.scrollElement
+      if (requestedPageIndex < 0 || !scrollElement) return
+      if (scrollElement.clientHeight <= 0) return
+
+      const currentItem = instance.getVirtualItemForOffset(
+        instance.scrollOffset ?? 0
+      )
+      const currentPageNumber =
+        pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
+      readingProgressPageRef.current = requestedPageNumber
+      const requestedProgress = { currentPageNumber: requestedPageNumber }
+      readingProgressRef.current = requestedProgress
+      setReadingProgress(requestedProgress)
+      restoredProgressPageRef.current = requestedPageNumber
+      suppressProgrammaticProgressRef.current = true
+      if (currentPageNumber === requestedPageNumber) {
+        isInitialProgressRestorePendingRef.current = false
+        return
+      }
+      instance.scrollToIndex(requestedPageIndex, {
+        align: 'start',
+        behavior: 'auto'
+      })
+    },
+    [pageNumbers, textReadingProgress]
+  )
   const handleVirtualizerChange = useCallback(
     (instance: Virtualizer<HTMLDivElement, HTMLElement>, sync: boolean) => {
+      if (isInitialProgressRestorePendingRef.current) {
+        restoreInitialReadingProgress(instance)
+        return
+      }
+
       const scrollOffset = instance.scrollOffset ?? 0
       const currentItem = instance.getVirtualItemForOffset(scrollOffset)
       const currentPageNumber =
@@ -858,14 +1247,35 @@ export function IntermediateDocumentTextViewer(
       if (sync || currentPageNumber !== readingProgressPageRef.current) {
         signalReadingProgressActivity()
       }
+      const previousPageNumber = readingProgressPageRef.current
       readingProgressPageRef.current = currentPageNumber
 
       setReadingProgress((current) => {
-        if (current.currentPageNumber === currentPageNumber) return current
+        if (current.currentPageNumber === currentPageNumber) {
+          return current
+        }
         return { currentPageNumber }
       })
+      if (currentPageNumber !== previousPageNumber) {
+        const nextProgress = { currentPageNumber }
+        const nextKey = getTextReadingProgressKey(nextProgress)
+        readingProgressRef.current = nextProgress
+        if (
+          !suppressProgrammaticProgressRef.current &&
+          lastObservedProgressKeyRef.current !== nextKey
+        ) {
+          lastObservedProgressKeyRef.current = nextKey
+          lastLocallyEmittedProgressKeyRef.current = nextKey
+          onTextReadingProgressChange?.(nextProgress)
+        }
+      }
     },
-    [pageNumbers, signalReadingProgressActivity]
+    [
+      onTextReadingProgressChange,
+      pageNumbers,
+      restoreInitialReadingProgress,
+      signalReadingProgressActivity
+    ]
   )
   // TanStack Virtual 虚拟化器：count = pageNumbers.length，
   // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
@@ -878,7 +1288,7 @@ export function IntermediateDocumentTextViewer(
     count: pageNumbers.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => TEXT_PAGE_ESTIMATED_HEIGHT,
-    getItemKey: (index) => pageNumbers[index],
+    getItemKey: (index) => getVirtualPageKey(pageNumbers[index] ?? index),
     overscan: 0,
     onChange: handleVirtualizerChange,
     measureElement: (el) => {
@@ -886,21 +1296,50 @@ export function IntermediateDocumentTextViewer(
         return TEXT_PAGE_ESTIMATED_HEIGHT
       }
       const measured = el.getBoundingClientRect().height
+      const pendingMeasurement = anchorMeasurementRef.current
+      const pageNumber = Number(el.getAttribute('data-page-number'))
+      const itemKey = getVirtualPageKey(pageNumber)
+      if (
+        measured > 0 &&
+        pendingMeasurement?.request.documentGeneration ===
+          progressDocumentGenerationRef.current &&
+        pendingMeasurement.itemKey === itemKey
+      ) {
+        anchorMeasurementRef.current = null
+        globalThis.queueMicrotask(() => {
+          alignTextAnchorRef.current?.(
+            pendingMeasurement.anchor,
+            pendingMeasurement.request
+          )
+        })
+      }
       return measured > 0 ? measured : TEXT_PAGE_ESTIMATED_HEIGHT
     }
   })
 
   const virtualItems = virtualizer.getVirtualItems()
   const handleReadingProgressSeekPage = useCallback(
-    (pageNumber: number) => {
+    (pageNumber: number, source: 'restore' | 'user' = 'user') => {
       const pageIndex = pageNumbers.indexOf(pageNumber)
       if (pageIndex < 0) return
+      const nextProgress = { currentPageNumber: pageNumber }
+      const nextKey = getTextReadingProgressKey(nextProgress)
+      readingProgressPageRef.current = pageNumber
+      readingProgressRef.current = nextProgress
+      setReadingProgress(nextProgress)
+      setFallbackBookmarkKey(undefined)
+      suppressProgrammaticProgressRef.current = true
+      if (source === 'user' && lastObservedProgressKeyRef.current !== nextKey) {
+        lastObservedProgressKeyRef.current = nextKey
+        lastLocallyEmittedProgressKeyRef.current = nextKey
+        onTextReadingProgressChange?.(nextProgress)
+      }
       virtualizer.scrollToIndex(pageIndex, {
         align: 'start',
         behavior: 'auto'
       })
     },
-    [pageNumbers, virtualizer]
+    [onTextReadingProgressChange, pageNumbers, virtualizer]
   )
   const visiblePageNumbers = useMemo(
     () =>
@@ -910,6 +1349,17 @@ export function IntermediateDocumentTextViewer(
           (pageNumber): pageNumber is number => typeof pageNumber === 'number'
         ),
     [virtualItems, pageNumbers]
+  )
+  const visiblePageNumberSet = useMemo(
+    () => new Set(visiblePageNumbers),
+    [visiblePageNumbers]
+  )
+  const pageSizesByPageNumber = useMemo(
+    () =>
+      new Map(
+        pageNumbers.map((pageNumber) => [pageNumber, TEXT_PAGE_FALLBACK_SIZE])
+      ),
+    [pageNumbers]
   )
   const textLayoutKey = `${fontScale ?? 'default'}:${Array.from(
     textsByPageNumber.keys()
@@ -1181,6 +1631,168 @@ export function IntermediateDocumentTextViewer(
   const lazyPageQueueRef = useRef(lazyPageQueue)
   lazyPageQueueRef.current = lazyPageQueue
 
+  const alignTextAnchor = useCallback(
+    (anchor: ReaderTextAnchor, request: TextAnchorRestoreRequest): boolean => {
+      const activeRequest = activeRestoreRequestRef.current
+      if (
+        activeRequest?.token !== request.token ||
+        request.documentGeneration !== progressDocumentGenerationRef.current ||
+        request.anchorKey !== getTextAnchorKey(anchor)
+      ) {
+        return false
+      }
+      const viewport = scrollContainerRef.current
+      if (!viewport) return false
+      const element = resolveTextAnchorElement(
+        anchor,
+        textElementsRef.current,
+        textsByPageNumberRef.current
+      )
+      if (!element) return false
+
+      const itemKey = getVirtualPageKey(anchor.pageNumber)
+      if (!virtualizer.itemSizeCache.has(itemKey)) {
+        anchorMeasurementRef.current = {
+          itemKey,
+          anchor,
+          request
+        }
+      } else {
+        anchorMeasurementRef.current = null
+      }
+      const viewportRect = viewport.getBoundingClientRect()
+      const elementRect = element.getBoundingClientRect()
+      viewport.scrollTo({
+        behavior: 'auto',
+        top: viewport.scrollTop + elementRect.top - viewportRect.top
+      })
+      restoreAttemptCleanupRef.current?.()
+      restoreAttemptCleanupRef.current = null
+      pendingTextAnchorRef.current = null
+      isInitialProgressRestorePendingRef.current = false
+      restoredProgressAnchorKeyRef.current = getTextAnchorKey(anchor)
+      const nextProgress = {
+        currentPageNumber: anchor.pageNumber,
+        anchor
+      } satisfies ReaderTextReadingProgress
+      readingProgressPageRef.current = anchor.pageNumber
+      readingProgressRef.current = nextProgress
+      setReadingProgress(nextProgress)
+      setFallbackBookmarkKey(undefined)
+      if (
+        request.source === 'bookmark' &&
+        committedBookmarkRequestTokenRef.current !== request.token
+      ) {
+        committedBookmarkRequestTokenRef.current = request.token
+        const nextKey = getTextReadingProgressKey(nextProgress)
+        lastObservedProgressKeyRef.current = nextKey
+        lastLocallyEmittedProgressKeyRef.current = nextKey
+        onTextReadingProgressChange?.(nextProgress)
+      }
+      return true
+    },
+    [getVirtualPageKey, onTextReadingProgressChange, virtualizer]
+  )
+  alignTextAnchorRef.current = alignTextAnchor
+
+  const scrollToTextAnchor = useCallback(
+    (anchor: ReaderTextAnchor, source: 'bookmark' | 'restore' = 'bookmark') => {
+      const pageIndex = pageNumbers.indexOf(anchor.pageNumber)
+      if (pageIndex < 0) return
+
+      cancelRestoreAttempt()
+      const documentGeneration = progressDocumentGenerationRef.current
+      const request = {
+        token: restoreRequestTokenRef.current + 1,
+        documentGeneration,
+        anchorKey: getTextAnchorKey(anchor),
+        source
+      } satisfies TextAnchorRestoreRequest
+      restoreRequestTokenRef.current = request.token
+      activeRestoreRequestRef.current = request
+      isInitialProgressRestorePendingRef.current = true
+      suppressProgrammaticProgressRef.current = true
+      setFallbackBookmarkKey(
+        source === 'bookmark' ? getTextAnchorKey(anchor) : undefined
+      )
+      clearUnloadTimer(anchor.pageNumber)
+      pendingTextAnchorRef.current = { anchor, request }
+      if (!textsByPageNumberRef.current.has(anchor.pageNumber)) {
+        lazyPageQueueRef.current.enqueuePage(anchor.pageNumber)
+      }
+      virtualizer.scrollToIndex(pageIndex, {
+        align: 'start',
+        behavior: 'auto'
+      })
+      const loadedTexts = textsByPageNumberRef.current.get(anchor.pageNumber)
+      if (loadedTexts && !hasAnchorableText(loadedTexts)) {
+        cancelTextAnchorRestore()
+        isInitialProgressRestorePendingRef.current = false
+        restoredProgressAnchorKeyRef.current = null
+        restoredProgressPageRef.current = anchor.pageNumber
+        const fallbackProgress = { currentPageNumber: anchor.pageNumber }
+        readingProgressPageRef.current = anchor.pageNumber
+        readingProgressRef.current = fallbackProgress
+        setReadingProgress(fallbackProgress)
+        setFallbackBookmarkKey(getTextAnchorKey(anchor))
+        if (source === 'bookmark') {
+          const persistedProgress = {
+            currentPageNumber: anchor.pageNumber,
+            anchor
+          }
+          const nextKey = getTextReadingProgressKey(persistedProgress)
+          lastObservedProgressKeyRef.current = nextKey
+          lastLocallyEmittedProgressKeyRef.current = nextKey
+          onTextReadingProgressChange?.(persistedProgress)
+        }
+        return
+      }
+      if (alignTextAnchor(anchor, request)) return
+
+      const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
+      if (!viewerWindow) {
+        const timerId = globalThis.setTimeout(() => {
+          alignTextAnchor(anchor, request)
+        }, 0)
+        restoreAttemptCleanupRef.current = () =>
+          globalThis.clearTimeout(timerId)
+        return
+      }
+      let secondFrameId: number | null = null
+      let timerId: number | null = null
+      const firstFrameId = viewerWindow.requestAnimationFrame(() => {
+        if (
+          documentGeneration !== progressDocumentGenerationRef.current ||
+          alignTextAnchor(anchor, request)
+        ) {
+          return
+        }
+        secondFrameId = viewerWindow.requestAnimationFrame(() => {
+          alignTextAnchor(anchor, request)
+        })
+        timerId = viewerWindow.setTimeout(() => {
+          alignTextAnchor(anchor, request)
+        }, 0)
+      })
+      restoreAttemptCleanupRef.current = () => {
+        viewerWindow.cancelAnimationFrame(firstFrameId)
+        if (secondFrameId !== null) {
+          viewerWindow.cancelAnimationFrame(secondFrameId)
+        }
+        if (timerId !== null) viewerWindow.clearTimeout(timerId)
+      }
+    },
+    [
+      alignTextAnchor,
+      cancelRestoreAttempt,
+      cancelTextAnchorRestore,
+      clearUnloadTimer,
+      onTextReadingProgressChange,
+      pageNumbers,
+      virtualizer
+    ]
+  )
+
   const { onTextSelectionChange, onTextSelectionEnd, onSelectText } = props
 
   // setTextRef: 柯里化回调 (text, pageNumber) => (element) => void
@@ -1189,7 +1801,7 @@ export function IntermediateDocumentTextViewer(
     (text: IntermediateText, pageNumber: number) =>
       (element: HTMLSpanElement | null) => {
         if (element) {
-          textElementsRef.current.set(text.id, { text, pageNumber })
+          textElementsRef.current.set(text.id, { text, pageNumber, element })
           textElementRecords.set(element, { text, pageNumber })
         } else {
           textElementsRef.current.delete(text.id)
@@ -1197,6 +1809,141 @@ export function IntermediateDocumentTextViewer(
       },
     []
   )
+
+  useEffect(() => {
+    const pendingRestore = pendingTextAnchorRef.current
+    if (
+      pendingRestore &&
+      textsByPageNumber.has(pendingRestore.anchor.pageNumber)
+    ) {
+      const { anchor, request } = pendingRestore
+      const loadedTexts = textsByPageNumber.get(anchor.pageNumber)
+      if (loadedTexts && !hasAnchorableText(loadedTexts)) {
+        const source = request.source
+        cancelTextAnchorRestore()
+        isInitialProgressRestorePendingRef.current = false
+        restoredProgressAnchorKeyRef.current = null
+        restoredProgressPageRef.current = anchor.pageNumber
+        const fallbackProgress = {
+          currentPageNumber: anchor.pageNumber
+        }
+        readingProgressPageRef.current = anchor.pageNumber
+        readingProgressRef.current = fallbackProgress
+        setReadingProgress(fallbackProgress)
+        setFallbackBookmarkKey(getTextAnchorKey(anchor))
+        if (source === 'bookmark') {
+          const nextKey = getTextReadingProgressKey({
+            currentPageNumber: anchor.pageNumber,
+            anchor
+          })
+          lastObservedProgressKeyRef.current = nextKey
+          lastLocallyEmittedProgressKeyRef.current = nextKey
+          onTextReadingProgressChange?.({
+            currentPageNumber: anchor.pageNumber,
+            anchor
+          })
+        }
+        return
+      }
+      alignTextAnchor(anchor, request)
+    }
+  }, [
+    alignTextAnchor,
+    cancelTextAnchorRestore,
+    onTextReadingProgressChange,
+    textsByPageNumber
+  ])
+
+  useEffect(() => {
+    const requestedProgress = resolveRequestedTextReadingProgress(
+      textReadingProgress,
+      pageNumbers
+    )
+    if (!requestedProgress) {
+      cancelTextAnchorRestore()
+      isInitialProgressRestorePendingRef.current = false
+      restoredProgressPageRef.current = null
+      restoredProgressAnchorKeyRef.current = null
+      pendingTextAnchorRef.current = null
+      return
+    }
+    const requestedPageNumber = requestedProgress.currentPageNumber
+    const requestedAnchor = requestedProgress.anchor
+    const requestedKey = getTextReadingProgressKey(requestedProgress)
+    lastObservedProgressKeyRef.current = requestedKey
+    if (!requestedAnchor) {
+      cancelTextAnchorRestore()
+      restoredProgressAnchorKeyRef.current = null
+      setFallbackBookmarkKey(undefined)
+    } else {
+      const pendingAnchor = pendingTextAnchorRef.current?.anchor
+      if (
+        pendingAnchor &&
+        getTextAnchorKey(pendingAnchor) !== getTextAnchorKey(requestedAnchor)
+      ) {
+        cancelTextAnchorRestore()
+      }
+    }
+    if (lastLocallyEmittedProgressKeyRef.current === requestedKey) {
+      lastLocallyEmittedProgressKeyRef.current = ''
+      isInitialProgressRestorePendingRef.current = false
+      restoredProgressPageRef.current = requestedPageNumber
+      restoredProgressAnchorKeyRef.current = requestedAnchor
+        ? requestedKey
+        : null
+      return
+    }
+
+    if (requestedAnchor) {
+      if (restoredProgressAnchorKeyRef.current === requestedKey) return
+      readingProgressPageRef.current = requestedPageNumber
+      readingProgressRef.current = requestedProgress
+      setReadingProgress(requestedProgress)
+      isInitialProgressRestorePendingRef.current = true
+      restoredProgressPageRef.current = requestedPageNumber
+      scrollToTextAnchor(requestedAnchor, 'restore')
+      return
+    }
+
+    if (restoredProgressPageRef.current === requestedPageNumber) return
+    if (!viewerRootElement || viewerRootElement.clientHeight <= 0) return
+    const currentItem = virtualizer.getVirtualItemForOffset(
+      virtualizer.scrollOffset ?? 0
+    )
+    const currentPageNumber =
+      pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
+    readingProgressPageRef.current = requestedPageNumber
+    readingProgressRef.current = requestedProgress
+    setReadingProgress(requestedProgress)
+    restoredProgressPageRef.current = requestedPageNumber
+    suppressProgrammaticProgressRef.current = true
+    if (currentPageNumber === requestedPageNumber) {
+      isInitialProgressRestorePendingRef.current = false
+      return
+    }
+
+    isInitialProgressRestorePendingRef.current = true
+    handleReadingProgressSeekPage(requestedPageNumber, 'restore')
+  }, [
+    cancelTextAnchorRestore,
+    handleReadingProgressSeekPage,
+    pageNumbers,
+    scrollToTextAnchor,
+    textReadingProgress,
+    viewerRootElement,
+    virtualizer
+  ])
+
+  useEffect(() => {
+    if (textsByPageNumber.size === 0) return
+    const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
+    if (!viewerWindow) {
+      captureReadingProgress()
+      return
+    }
+    const frameId = viewerWindow.requestAnimationFrame(captureReadingProgress)
+    return () => viewerWindow.cancelAnimationFrame(frameId)
+  }, [captureReadingProgress, textsByPageNumber])
 
   const removeLoadedTextPage = useCallback((pageNumber: number) => {
     setParagraphsByPageNumber((currentParagraphs) => {
@@ -1863,11 +2610,13 @@ export function IntermediateDocumentTextViewer(
     isMountedRef.current = true
     return () => {
       isMountedRef.current = false
+      cancelRestoreAttempt()
+      anchorMeasurementRef.current = null
       clearAllPreloadEnterTimers()
       clearAllUnloadTimers()
       lazyPageQueueRef.current.cancelAll()
     }
-  }, [clearAllPreloadEnterTimers, clearAllUnloadTimers])
+  }, [cancelRestoreAttempt, clearAllPreloadEnterTimers, clearAllUnloadTimers])
 
   useEffect(() => {
     activeDocumentRef.current = runtimeDocument
@@ -2012,11 +2761,50 @@ export function IntermediateDocumentTextViewer(
 
   return (
     <div className='hamster-reader__intermediate-text-shell'>
+      <PageBrowser
+        isOpen={showPageBrowser}
+        pageNumbers={pageNumbers}
+        pageSizesByPageNumber={pageSizesByPageNumber}
+        baseImagesByPageNumber={EMPTY_TEXT_PAGE_IMAGES}
+        onPageVisibilityChange={handleTextPageBrowserVisibilityChange}
+        onNavigateToPage={handleReadingProgressSeekPage}
+        themeColor={themeColor}
+        visiblePageNumbers={visiblePageNumberSet}
+        containMarginTop={containMarginTop ?? containMarginY}
+        containMarginBottom={containMarginBottom ?? containMarginY}
+        ranges={effectiveRanges}
+        selectedRangeId={effectiveSelectedRangeId}
+        onSelectRange={handlePageLinkedSelectRange}
+        onNavigateToRange={scrollToRange}
+        onDeleteRange={onRemoveRange}
+        commentCountByRangeId={commentCountByRangeId}
+        onDeleteRect={onRemoveRect}
+        showPagesTab={false}
+        bookmarks={bookmarks}
+        currentAnchor={readingProgress.anchor}
+        activeBookmarkKey={getActiveBookmarkKey(
+          readingProgress.anchor,
+          fallbackBookmarkKey,
+          bookmarks
+        )}
+        onNavigateToBookmark={resolveBookmarkNavigationHandler(
+          bookmarks,
+          onToggleBookmark,
+          scrollToTextAnchor
+        )}
+        onToggleBookmark={onToggleBookmark}
+        bookmarkedPageNumbers={bookmarkedPageNumbers}
+        onTogglePageBookmark={onTogglePageBookmark}
+        onClose={onPageBrowserClose}
+      />
       {pageNumbers.length > 0 ? (
         <ReadingProgress
           mode='text'
           pageNumbers={pageNumbers}
-          currentPageNumber={readingProgress.currentPageNumber}
+          currentPageNumber={
+            readingProgress.anchor?.pageNumber ??
+            readingProgress.currentPageNumber
+          }
           isMoving={isReadingProgressMoving}
           ranges={effectiveRanges}
           highlightColor={highlightColor}
@@ -2105,7 +2893,7 @@ export function IntermediateDocumentTextViewer(
               ) : undefined
               return (
                 <div
-                  key={pageNumber}
+                  key={virtualItem.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualItem.index}
                   data-page-measurable={
@@ -2163,7 +2951,7 @@ export function IntermediateDocumentTextViewer(
                       ref={selectionRefForRuntimeId(pageSelectionId)}
                     >
                       <IntermediateDocumentTextPageContent
-                        key={pageNumber}
+                        key={virtualItem.key}
                         pageNumber={pageNumber}
                         texts={texts}
                         paragraphs={paragraphs}

@@ -2,6 +2,10 @@ import '@testing-library/jest-dom/vitest'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach } from 'vitest'
 
+import { installMatchMediaMock } from './mocks/matchMedia'
+
+installMatchMediaMock()
+
 let observerInstances: MockIntersectionObserver[] = []
 let resizeObserverInstances: MockResizeObserver[] = []
 

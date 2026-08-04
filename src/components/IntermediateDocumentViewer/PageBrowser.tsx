@@ -1,9 +1,12 @@
 import type { DrawingValue } from '@hamster-note/painting'
+import { confirm } from '@hamster-note/components'
+import type { CSSProperties, KeyboardEvent, RefObject } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle
 } from '../../types/selection'
+import type { ReaderBookmark, ReaderTextAnchor } from '../../types/readerData'
 import { hasDrawingStrokes } from '../PageDrawingLayer'
 import {
   PageBookmarkButton,
@@ -11,17 +14,37 @@ import {
 } from './PageBrowserBookmarks'
 import { PageBrowserDrawingPreview } from './PageBrowserDrawingPreview'
 import { parsePublicPageId } from './rangeJumpHelpers'
+import { getTextAnchorKey } from './textAnchor'
 import { usePageBrowserDrag } from './usePageBrowserDrag'
 
 type PageBrowserTab = 'pages' | 'highlights' | 'bookmarks'
 
+function TrashIcon() {
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      fill='none'
+      stroke='currentColor'
+      strokeWidth='2'
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      aria-hidden='true'
+      focusable='false'
+    >
+      <polyline points='3 6 5 6 21 6' />
+      <path d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' />
+      <line x1='10' y1='11' x2='10' y2='17' />
+      <line x1='14' y1='11' x2='14' y2='17' />
+    </svg>
+  )
+}
+
+type PageSize = { readonly width: number; readonly height: number }
+
 type PageBrowserProps = {
   readonly isOpen: boolean
   readonly pageNumbers: readonly number[]
-  readonly pageSizesByPageNumber: ReadonlyMap<
-    number,
-    { readonly width: number; readonly height: number }
-  >
+  readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
   readonly baseImagesByPageNumber: ReadonlyMap<number, string>
   readonly pagePaintings?: Readonly<Record<string, DrawingValue>>
   readonly onPageVisibilityChange: (
@@ -57,6 +80,17 @@ type PageBrowserProps = {
   readonly onNavigateToRect?: (id: string) => void
   /** 每个 rectId 对应的评论数量，用于在矩形框选项上展示评论计数徽章。 */
   readonly commentCountByRectId?: Readonly<Record<string, number>>
+  /** 删除高亮 range 时触发。 */
+  readonly onDeleteRange?: (id: string) => void
+  /** 删除矩形框选时触发。 */
+  readonly onDeleteRect?: (id: string) => void
+  readonly showPagesTab?: boolean
+  readonly bookmarks?: readonly ReaderBookmark[]
+  readonly currentAnchor?: ReaderTextAnchor
+  readonly currentPageNumber?: number
+  readonly activeBookmarkKey?: string
+  readonly onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  readonly onToggleBookmark?: (bookmark: ReaderBookmark) => void
   readonly bookmarkedPageNumbers?: readonly number[]
   readonly onTogglePageBookmark?: (pageNumber: number) => void
   /** 侧栏被手势关闭时通知受控宿主同步开关状态。 */
@@ -84,6 +118,198 @@ function CommentBubbleIcon() {
 type RectPreviewGeometry = {
   readonly aspectRatio: string
   readonly imageStyle: React.CSSProperties
+}
+
+function getTabClassName(isActive: boolean): string {
+  return [
+    'hamster-reader__page-browser-tab',
+    isActive ? 'hamster-reader__page-browser-tab--active' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+type PageBrowserTabsProps = {
+  readonly activeTab: PageBrowserTab
+  readonly isOpen: boolean
+  readonly showPagesTab: boolean
+  readonly onSelectTab: (tab: PageBrowserTab) => void
+}
+
+function PageBrowserTabs({
+  activeTab,
+  isOpen,
+  showPagesTab,
+  onSelectTab
+}: PageBrowserTabsProps) {
+  const tabs: readonly PageBrowserTab[] = showPagesTab
+    ? ['pages', 'highlights', 'bookmarks']
+    : ['highlights', 'bookmarks']
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const currentIndex = tabs.indexOf(activeTab)
+    const nextIndex = (() => {
+      switch (event.key) {
+        case 'ArrowRight':
+          return (currentIndex + 1) % tabs.length
+        case 'ArrowLeft':
+          return (currentIndex - 1 + tabs.length) % tabs.length
+        case 'Home':
+          return 0
+        case 'End':
+          return tabs.length - 1
+        default:
+          return null
+      }
+    })()
+    if (nextIndex === null) return
+
+    event.preventDefault()
+    onSelectTab(tabs[nextIndex])
+    event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [nextIndex]?.focus()
+  }
+
+  return (
+    <div className='hamster-reader__page-browser-tabs' role='tablist'>
+      {showPagesTab ? (
+        <button
+          type='button'
+          role='tab'
+          aria-selected={activeTab === 'pages'}
+          className={getTabClassName(activeTab === 'pages')}
+          tabIndex={isOpen && activeTab === 'pages' ? 0 : -1}
+          onClick={() => onSelectTab('pages')}
+          onKeyDown={handleKeyDown}
+        >
+          页面
+        </button>
+      ) : null}
+      <button
+        type='button'
+        role='tab'
+        aria-selected={activeTab === 'highlights'}
+        className={getTabClassName(activeTab === 'highlights')}
+        tabIndex={isOpen && activeTab === 'highlights' ? 0 : -1}
+        onClick={() => onSelectTab('highlights')}
+        onKeyDown={handleKeyDown}
+      >
+        高亮
+      </button>
+      <button
+        type='button'
+        role='tab'
+        aria-selected={activeTab === 'bookmarks'}
+        className={getTabClassName(activeTab === 'bookmarks')}
+        tabIndex={isOpen && activeTab === 'bookmarks' ? 0 : -1}
+        onClick={() => onSelectTab('bookmarks')}
+        onKeyDown={handleKeyDown}
+      >
+        书签
+      </button>
+    </div>
+  )
+}
+
+type PageBrowserPagesPanelProps = {
+  readonly activeTab: PageBrowserTab
+  readonly pageNumbers: readonly number[]
+  readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
+  readonly baseImagesByPageNumber: ReadonlyMap<number, string>
+  readonly visiblePageNumbers?: ReadonlySet<number>
+  readonly bookmarkedPages: ReadonlySet<number>
+  readonly isOpen: boolean
+  readonly scrollRootRef: RefObject<HTMLDivElement | null>
+  readonly listStyle: CSSProperties
+  readonly onNavigateToPage: (pageNumber: number) => void
+  readonly onTogglePageBookmark?: (pageNumber: number) => void
+}
+
+function PageBrowserPagesPanel({
+  activeTab,
+  pageNumbers,
+  pageSizesByPageNumber,
+  baseImagesByPageNumber,
+  visiblePageNumbers,
+  bookmarkedPages,
+  isOpen,
+  scrollRootRef,
+  listStyle,
+  onNavigateToPage,
+  onTogglePageBookmark
+}: PageBrowserPagesPanelProps) {
+  return (
+    <div
+      className='hamster-reader__page-browser-panel'
+      role='tabpanel'
+      hidden={activeTab !== 'pages'}
+    >
+      <div
+        ref={scrollRootRef}
+        className='hamster-reader__page-browser-list'
+        style={listStyle}
+      >
+        {pageNumbers.map((pageNumber) => {
+          const pageSize = pageSizesByPageNumber.get(pageNumber)
+          const baseImage = baseImagesByPageNumber.get(pageNumber)
+          const aspectRatio = pageSize
+            ? `${pageSize.width} / ${pageSize.height}`
+            : undefined
+          const isSelected = visiblePageNumbers?.has(pageNumber) ?? false
+          const itemClassName = [
+            'hamster-reader__page-browser-item',
+            isSelected ? 'hamster-reader__page-browser-item--selected' : ''
+          ]
+            .filter(Boolean)
+            .join(' ')
+
+          return (
+            <div key={pageNumber} className='hamster-reader__page-browser-page'>
+              <button
+                type='button'
+                className={itemClassName}
+                aria-label={`Go to page ${pageNumber}`}
+                aria-current={isSelected ? 'page' : undefined}
+                tabIndex={isOpen ? 0 : -1}
+                data-page-number={pageNumber}
+                data-testid={`page-browser-page-${pageNumber}`}
+                onClick={() => onNavigateToPage(pageNumber)}
+              >
+                <span
+                  className='hamster-reader__page-browser-preview'
+                  style={{ aspectRatio }}
+                >
+                  {baseImage ? (
+                    <img
+                      src={baseImage}
+                      alt=''
+                      className='hamster-reader__page-browser-image'
+                      draggable={false}
+                    />
+                  ) : (
+                    <span
+                      className='hamster-reader__page-browser-placeholder'
+                      aria-hidden='true'
+                    />
+                  )}
+                </span>
+                <span className='hamster-reader__page-browser-page-number'>
+                  {pageNumber}
+                </span>
+              </button>
+              <PageBookmarkButton
+                pageNumber={pageNumber}
+                isBookmarked={bookmarkedPages.has(pageNumber)}
+                isOpen={isOpen}
+                isEnabled={onTogglePageBookmark !== undefined}
+                onToggle={onTogglePageBookmark}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 /** PageBrowser 接收运行时 rect，其 selectionId 可能带 reader scope 前缀。 */
@@ -165,13 +391,22 @@ export function PageBrowser({
   onSelectRect,
   onNavigateToRect,
   commentCountByRectId,
+  onDeleteRange,
+  onDeleteRect,
+  showPagesTab = true,
+  bookmarks,
+  currentAnchor,
+  currentPageNumber: currentPageNumberProp,
+  activeBookmarkKey,
+  onNavigateToBookmark,
+  onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   onClose
 }: PageBrowserProps) {
-  // 默认展示页面 tab，保证 page-browser-page-N 按钮处于 a11y 树中
-  // （测试依赖 getAllByRole('button', { name: /Go to page/ }) 能查到全部页面按钮）。
-  const [activeTab, setActiveTab] = useState<PageBrowserTab>('pages')
+  const [activeTab, setActiveTab] = useState<PageBrowserTab>(() =>
+    showPagesTab ? 'pages' : 'highlights'
+  )
   const highlightRanges = ranges ?? []
   const highlightRects = rects ?? []
   const bookmarkedPages = useMemo(() => {
@@ -179,6 +414,11 @@ export function PageBrowser({
     return pageNumbers.filter((pageNumber) => bookmarkSet.has(pageNumber))
   }, [bookmarkedPageNumbers, pageNumbers])
   const bookmarkSet = useMemo(() => new Set(bookmarkedPages), [bookmarkedPages])
+  const currentPageNumber =
+    currentPageNumberProp ??
+    (visiblePageNumbers && visiblePageNumbers.size > 0
+      ? Math.min(...visiblePageNumbers)
+      : pageNumbers[0])
   const observableItemsKey = (() => {
     switch (activeTab) {
       case 'pages':
@@ -188,11 +428,16 @@ export function PageBrowser({
           .map((rect) => `${rect.id}:${rect.selectionId ?? ''}`)
           .join(',')
       case 'bookmarks':
-        return bookmarkedPages.join(',')
+        return bookmarks
+          ? bookmarks.map(getTextAnchorKey).join(',')
+          : bookmarkedPages.join(',')
     }
   })()
 
   const navRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const restoreFocusRef = useRef<HTMLElement | null>(null)
+  const wasOpenRef = useRef(false)
   const pagesScrollRootRef = useRef<HTMLDivElement>(null)
   const highlightsScrollRootRef = useRef<HTMLDivElement>(null)
   const bookmarksScrollRootRef = useRef<HTMLDivElement>(null)
@@ -203,10 +448,48 @@ export function PageBrowser({
     if (!isOpen) setDismissedByGesture(false)
   }, [isOpen])
 
+  useEffect(() => {
+    if (!showPagesTab && activeTab === 'pages') {
+      setActiveTab('highlights')
+    }
+  }, [activeTab, showPagesTab])
+
   const handleDismiss = useCallback(() => {
     setDismissedByGesture(true)
     onClose?.()
   }, [onClose])
+
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current
+    wasOpenRef.current = effectiveOpen
+    if (effectiveOpen && !wasOpen) {
+      const activeElement = navRef.current?.ownerDocument.activeElement
+      restoreFocusRef.current =
+        activeElement instanceof HTMLElement &&
+        !navRef.current?.contains(activeElement)
+          ? activeElement
+          : null
+      closeButtonRef.current?.focus()
+      return
+    }
+    if (!effectiveOpen && wasOpen) {
+      restoreFocusRef.current?.focus()
+      restoreFocusRef.current = null
+    }
+  }, [effectiveOpen])
+
+  useEffect(() => {
+    if (!effectiveOpen) return
+    const ownerDocument = navRef.current?.ownerDocument
+    if (!ownerDocument) return
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      handleDismiss()
+    }
+    ownerDocument.addEventListener('keydown', handleKeyDown)
+    return () => ownerDocument.removeEventListener('keydown', handleKeyDown)
+  }, [effectiveOpen, handleDismiss])
   const isDragging = usePageBrowserDrag({
     elementRef: navRef,
     isOpen: effectiveOpen,
@@ -294,7 +577,7 @@ export function PageBrowser({
       `[data-page-number="${firstVisiblePage}"]`
     )
     if (targetButton) {
-      targetButton.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      targetButton.scrollIntoView({ block: 'nearest', behavior: 'auto' })
     }
   }, [activeTab, effectiveOpen, visiblePageNumbers])
 
@@ -312,9 +595,9 @@ export function PageBrowser({
     '--hamster-reader-theme-color': themeColor ?? '#2563eb',
     paddingTop:
       typeof containMarginTop === 'number' ? `${containMarginTop}px` : undefined
-  } as React.CSSProperties
+  } as CSSProperties
 
-  const listStyle: React.CSSProperties = {
+  const listStyle: CSSProperties = {
     paddingBottom:
       typeof containMarginBottom === 'number'
         ? `${containMarginBottom}px`
@@ -333,146 +616,75 @@ export function PageBrowser({
     onNavigateToRect?.(rectId)
   }
 
+  const handleDeleteRange = async (range: ReaderSelectionRange) => {
+    const shouldDelete = await confirm({
+      title: '删除高亮？',
+      description: `删除“${range.text || '(空选区)'}”高亮后无法恢复。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      tone: 'danger'
+    })
+    if (shouldDelete) onDeleteRange?.(range.id)
+  }
+
+  const handleDeleteRect = async (rect: ReaderSelectionRectangle) => {
+    const pageNumber = parseRectPageNumber(rect.selectionId)
+    const pageLabel = pageNumber === null ? '' : `第${pageNumber}页`
+    const shouldDelete = await confirm({
+      title: '删除矩形选区？',
+      description: `删除${pageLabel}矩形选区后无法恢复。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      tone: 'danger'
+    })
+    if (shouldDelete) onDeleteRect?.(rect.id)
+  }
+
   return (
     <nav
       ref={navRef}
       className={className}
       aria-label='Page browser'
       aria-hidden={!effectiveOpen}
+      inert={!effectiveOpen}
       data-testid='page-browser'
       style={containerStyle}
     >
-      {/* 跑道型 tab 切换器：外层 shell padding=4px + border-radius=18px，
-          内层 tab border-radius=14px，形成同心圆弧 (R_outer = R_inner + padding) */}
-      <div className='hamster-reader__page-browser-tabs' role='tablist'>
+      <div className='hamster-reader__page-browser-toolbar'>
+        <span className='hamster-reader__page-browser-title'>页面浏览</span>
         <button
+          ref={closeButtonRef}
           type='button'
-          role='tab'
-          aria-selected={activeTab === 'pages'}
-          className={[
-            'hamster-reader__page-browser-tab',
-            activeTab === 'pages'
-              ? 'hamster-reader__page-browser-tab--active'
-              : ''
-          ]
-            .filter(Boolean)
-            .join(' ')}
+          className='hamster-reader__page-browser-close'
+          aria-label='关闭页面浏览'
           tabIndex={effectiveOpen ? 0 : -1}
-          onClick={() => setActiveTab('pages')}
+          onClick={handleDismiss}
         >
-          页面
-        </button>
-        <button
-          type='button'
-          role='tab'
-          aria-selected={activeTab === 'highlights'}
-          className={[
-            'hamster-reader__page-browser-tab',
-            activeTab === 'highlights'
-              ? 'hamster-reader__page-browser-tab--active'
-              : ''
-          ]
-            .filter(Boolean)
-            .join(' ')}
-          tabIndex={effectiveOpen ? 0 : -1}
-          onClick={() => setActiveTab('highlights')}
-        >
-          高亮
-        </button>
-        <button
-          type='button'
-          role='tab'
-          aria-selected={activeTab === 'bookmarks'}
-          className={[
-            'hamster-reader__page-browser-tab',
-            activeTab === 'bookmarks'
-              ? 'hamster-reader__page-browser-tab--active'
-              : ''
-          ]
-            .filter(Boolean)
-            .join(' ')}
-          tabIndex={effectiveOpen ? 0 : -1}
-          onClick={() => setActiveTab('bookmarks')}
-        >
-          书签
+          <span aria-hidden='true'>×</span>
         </button>
       </div>
+      <PageBrowserTabs
+        activeTab={activeTab}
+        isOpen={effectiveOpen}
+        showPagesTab={showPagesTab}
+        onSelectTab={setActiveTab}
+      />
 
-      {/* 页面缩略图面板 */}
-      <div
-        className='hamster-reader__page-browser-panel'
-        role='tabpanel'
-        hidden={activeTab !== 'pages'}
-      >
-        <div
-          ref={pagesScrollRootRef}
-          className='hamster-reader__page-browser-list'
-          style={listStyle}
-        >
-          {pageNumbers.map((pageNumber) => {
-            const pageSize = pageSizesByPageNumber.get(pageNumber)
-            const baseImage = baseImagesByPageNumber.get(pageNumber)
-            const aspectRatio = pageSize
-              ? `${pageSize.width} / ${pageSize.height}`
-              : undefined
-            const isSelected = visiblePageNumbers?.has(pageNumber) ?? false
-
-            const itemClassName = [
-              'hamster-reader__page-browser-item',
-              isSelected ? 'hamster-reader__page-browser-item--selected' : ''
-            ]
-              .filter(Boolean)
-              .join(' ')
-
-            return (
-              <div
-                key={pageNumber}
-                className='hamster-reader__page-browser-page'
-              >
-                <button
-                  type='button'
-                  className={itemClassName}
-                  aria-label={`Go to page ${pageNumber}`}
-                  aria-current={isSelected ? 'page' : undefined}
-                  tabIndex={effectiveOpen ? 0 : -1}
-                  data-page-number={pageNumber}
-                  data-testid={`page-browser-page-${pageNumber}`}
-                  onClick={() => onNavigateToPage(pageNumber)}
-                >
-                  <span
-                    className='hamster-reader__page-browser-preview'
-                    style={{ aspectRatio }}
-                  >
-                    {baseImage ? (
-                      <img
-                        src={baseImage}
-                        alt=''
-                        className='hamster-reader__page-browser-image'
-                        draggable={false}
-                      />
-                    ) : (
-                      <span
-                        className='hamster-reader__page-browser-placeholder'
-                        aria-hidden='true'
-                      />
-                    )}
-                  </span>
-                  <span className='hamster-reader__page-browser-page-number'>
-                    {pageNumber}
-                  </span>
-                </button>
-                <PageBookmarkButton
-                  pageNumber={pageNumber}
-                  isBookmarked={bookmarkSet.has(pageNumber)}
-                  isOpen={effectiveOpen}
-                  isEnabled={onTogglePageBookmark !== undefined}
-                  onToggle={onTogglePageBookmark}
-                />
-              </div>
-            )
-          })}
-        </div>
-      </div>
+      {showPagesTab ? (
+        <PageBrowserPagesPanel
+          activeTab={activeTab}
+          pageNumbers={pageNumbers}
+          pageSizesByPageNumber={pageSizesByPageNumber}
+          baseImagesByPageNumber={baseImagesByPageNumber}
+          visiblePageNumbers={visiblePageNumbers}
+          bookmarkedPages={bookmarkSet}
+          isOpen={effectiveOpen}
+          scrollRootRef={pagesScrollRootRef}
+          listStyle={listStyle}
+          onNavigateToPage={onNavigateToPage}
+          onTogglePageBookmark={onTogglePageBookmark}
+        />
+      ) : null}
 
       {/* 高亮列表面板 */}
       <div
@@ -491,8 +703,10 @@ export function PageBrowser({
             <>
               {highlightRanges.map((range) => {
                 const isSelected = selectedRangeId === range.id
-                // 评论计数：从外部传入的映射中读取，缺省为 0
                 const commentCount = commentCountByRangeId?.[range.id] ?? 0
+                const highlightColor = range.markerStyle?.backgroundColor as
+                  | string
+                  | undefined
 
                 const itemClassName = [
                   'hamster-reader__highlight-item',
@@ -501,34 +715,58 @@ export function PageBrowser({
                   .filter(Boolean)
                   .join(' ')
 
+                const itemStyle: CSSProperties | undefined = highlightColor
+                  ? {
+                      backgroundColor: `color-mix(in srgb, ${highlightColor} 15%, white)`,
+                      borderColor: `color-mix(in srgb, ${highlightColor} 30%, white)`
+                    }
+                  : undefined
+
                 return (
-                  <button
+                  <div
                     key={range.id}
-                    type='button'
                     className={itemClassName}
-                    aria-label={`跳转到高亮：${range.text || '(空选区)'}`}
-                    aria-current={isSelected ? 'true' : undefined}
-                    tabIndex={effectiveOpen ? 0 : -1}
-                    data-range-id={range.id}
-                    data-testid={`page-browser-highlight-${range.id}`}
-                    onClick={() => handleHighlightClick(range.id)}
+                    style={itemStyle}
                   >
-                    <span className='hamster-reader__highlight-text'>
-                      {range.text || '(空选区)'}
-                    </span>
-                    {commentCount > 0 && (
-                      <span
-                        className='hamster-reader__highlight-comment-badge'
-                        role='img'
-                        aria-label={`${commentCount} 条评论`}
-                      >
-                        <CommentBubbleIcon />
-                        <span className='hamster-reader__highlight-comment-count'>
-                          {commentCount}
-                        </span>
+                    <button
+                      type='button'
+                      className='hamster-reader__highlight-content'
+                      aria-label={`跳转到高亮：${range.text || '(空选区)'}`}
+                      aria-current={isSelected ? 'true' : undefined}
+                      tabIndex={effectiveOpen ? 0 : -1}
+                      data-range-id={range.id}
+                      data-testid={`page-browser-highlight-${range.id}`}
+                      onClick={() => handleHighlightClick(range.id)}
+                    >
+                      <span className='hamster-reader__highlight-text'>
+                        {range.text || '(空选区)'}
                       </span>
+                      {commentCount > 0 && (
+                        <span
+                          className='hamster-reader__highlight-comment-badge'
+                          role='img'
+                          aria-label={`${commentCount} 条评论`}
+                        >
+                          <CommentBubbleIcon />
+                          <span className='hamster-reader__highlight-comment-count'>
+                            {commentCount}
+                          </span>
+                        </span>
+                      )}
+                    </button>
+                    {onDeleteRange && (
+                      <button
+                        type='button'
+                        className='hamster-reader__highlight-delete'
+                        aria-label={`删除高亮：${range.text || '(空选区)'}`}
+                        tabIndex={effectiveOpen ? 0 : -1}
+                        data-testid={`page-browser-delete-highlight-${range.id}`}
+                        onClick={() => void handleDeleteRange(range)}
+                      >
+                        <TrashIcon />
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )
               })}
               {highlightRects.map((rect) => {
@@ -563,64 +801,88 @@ export function PageBrowser({
                 ]
                   .filter(Boolean)
                   .join(' ')
+                const markerColor = rect.markerStyle?.backgroundColor
+                const itemStyle: CSSProperties | undefined = markerColor
+                  ? {
+                      backgroundColor: `color-mix(in srgb, ${markerColor} 15%, white)`,
+                      borderColor: `color-mix(in srgb, ${markerColor} 30%, white)`
+                    }
+                  : undefined
 
                 return (
-                  <button
+                  <div
                     key={rect.id}
-                    type='button'
                     className={itemClassName}
-                    aria-label={ariaLabel}
-                    aria-current={isSelected ? 'true' : undefined}
-                    tabIndex={effectiveOpen ? 0 : -1}
-                    data-rect-id={rect.id}
-                    data-page-number={pageNumber ?? undefined}
-                    data-testid={`page-browser-rect-${rect.id}`}
-                    onClick={() => handleRectClick(rect.id)}
+                    style={itemStyle}
                   >
-                    {baseImage && previewGeometry ? (
-                      <span
-                        className='hamster-reader__highlight-rect-preview'
-                        data-testid={`page-browser-rect-preview-${rect.id}`}
-                        style={{ aspectRatio: previewGeometry.aspectRatio }}
-                      >
-                        <img
-                          src={baseImage}
-                          alt=''
-                          className='hamster-reader__highlight-rect-screenshot'
-                          draggable={false}
-                          style={previewGeometry.imageStyle}
-                        />
-                        {publicPageId &&
-                          pageSize &&
-                          drawingValue &&
-                          hasDrawingStrokes(drawingValue) && (
-                            <PageBrowserDrawingPreview
-                              pageId={`${publicPageId}-${rect.id}`}
-                              pageSize={pageSize}
-                              value={drawingValue}
-                              style={previewGeometry.imageStyle}
-                            />
-                          )}
-                      </span>
-                    ) : (
-                      <span
-                        className='hamster-reader__highlight-rect-placeholder'
-                        aria-hidden='true'
-                      />
-                    )}
-                    {commentCount > 0 && (
-                      <span
-                        className='hamster-reader__highlight-comment-badge'
-                        role='img'
-                        aria-label={`${commentCount} 条评论`}
-                      >
-                        <CommentBubbleIcon />
-                        <span className='hamster-reader__highlight-comment-count'>
-                          {commentCount}
+                    <button
+                      type='button'
+                      className='hamster-reader__highlight-content'
+                      aria-label={ariaLabel}
+                      aria-current={isSelected ? 'true' : undefined}
+                      tabIndex={effectiveOpen ? 0 : -1}
+                      data-rect-id={rect.id}
+                      data-page-number={pageNumber ?? undefined}
+                      data-testid={`page-browser-rect-${rect.id}`}
+                      onClick={() => handleRectClick(rect.id)}
+                    >
+                      {baseImage && previewGeometry ? (
+                        <span
+                          className='hamster-reader__highlight-rect-preview'
+                          data-testid={`page-browser-rect-preview-${rect.id}`}
+                          style={{ aspectRatio: previewGeometry.aspectRatio }}
+                        >
+                          <img
+                            src={baseImage}
+                            alt=''
+                            className='hamster-reader__highlight-rect-screenshot'
+                            draggable={false}
+                            style={previewGeometry.imageStyle}
+                          />
+                          {publicPageId &&
+                            pageSize &&
+                            drawingValue &&
+                            hasDrawingStrokes(drawingValue) && (
+                              <PageBrowserDrawingPreview
+                                pageId={`${publicPageId}-${rect.id}`}
+                                pageSize={pageSize}
+                                value={drawingValue}
+                                style={previewGeometry.imageStyle}
+                              />
+                            )}
                         </span>
-                      </span>
+                      ) : (
+                        <span
+                          className='hamster-reader__highlight-rect-placeholder'
+                          aria-hidden='true'
+                        />
+                      )}
+                      {commentCount > 0 && (
+                        <span
+                          className='hamster-reader__highlight-comment-badge'
+                          role='img'
+                          aria-label={`${commentCount} 条评论`}
+                        >
+                          <CommentBubbleIcon />
+                          <span className='hamster-reader__highlight-comment-count'>
+                            {commentCount}
+                          </span>
+                        </span>
+                      )}
+                    </button>
+                    {onDeleteRect && (
+                      <button
+                        type='button'
+                        className='hamster-reader__highlight-delete'
+                        aria-label={`删除矩形选区：第${pageNumber ?? ''}页`}
+                        tabIndex={effectiveOpen ? 0 : -1}
+                        data-testid={`page-browser-delete-rect-${rect.id}`}
+                        onClick={() => void handleDeleteRect(rect)}
+                      >
+                        <TrashIcon />
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </>
@@ -634,12 +896,19 @@ export function PageBrowser({
         hidden={activeTab !== 'bookmarks'}
       >
         <PageBrowserBookmarksPanel
+          bookmarks={bookmarks}
+          currentAnchor={currentAnchor}
+          activeBookmarkKey={activeBookmarkKey}
           bookmarkedPageNumbers={bookmarkedPages}
+          currentPageNumber={currentPageNumber}
           isOpen={effectiveOpen}
-          isEnabled={onTogglePageBookmark !== undefined}
+          isTextBookmarkEnabled={onToggleBookmark !== undefined}
+          isPageBookmarkEnabled={onTogglePageBookmark !== undefined}
           scrollRootRef={bookmarksScrollRootRef}
           listStyle={listStyle}
           onNavigateToPage={onNavigateToPage}
+          onNavigateToBookmark={onNavigateToBookmark}
+          onToggleBookmark={onToggleBookmark}
           onTogglePageBookmark={onTogglePageBookmark}
         />
       </div>

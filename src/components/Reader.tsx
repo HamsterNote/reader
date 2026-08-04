@@ -1,4 +1,8 @@
-import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
+import type {
+  DrawingTool,
+  DrawingValue,
+  PaintingControllerData
+} from '@hamster-note/painting'
 import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import type {
   IntermediateDocument,
@@ -11,6 +15,8 @@ import {
   type Ref,
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState
 } from 'react'
@@ -21,8 +27,11 @@ import type {
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
+  ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
+  ReaderTextAnchor,
+  ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from '../types/readerData'
 import type {
@@ -57,6 +66,7 @@ import type {
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
+import { getTextAnchorKey } from './IntermediateDocumentViewer/textAnchor'
 import type {
   ReaderPagePaintingMap,
   ReaderPageRectSelectionMap,
@@ -67,6 +77,48 @@ import { DefaultBottomBar } from './Reader/DefaultBottomBar'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
 
 export type ReaderRenderMode = 'layout' | 'text'
+
+type ReaderDocumentInput =
+  | IntermediateDocument
+  | IntermediateDocumentSerialized
+  | null
+  | undefined
+
+type ReaderPositionHandoff<T> = {
+  readonly document: ReaderDocumentInput
+  readonly replacedValueKey: string
+  readonly value: T
+}
+
+function resolvePositionHandoff<T>(
+  handoff: ReaderPositionHandoff<T> | null,
+  document: ReaderDocumentInput,
+  persistedValueKey: string,
+  persistedValue: T | undefined
+): T | undefined {
+  return handoff !== null &&
+    handoff.document === document &&
+    handoff.replacedValueKey === persistedValueKey
+    ? handoff.value
+    : persistedValue
+}
+
+const getReaderTextProgressKey = (
+  progress: ReaderTextReadingProgress | undefined
+): string =>
+  progress?.anchor
+    ? getTextAnchorKey(progress.anchor)
+    : `${progress?.currentPageNumber ?? ''}:page`
+
+const getReaderVirtualPaperKey = (
+  virtualPaper: ReaderVirtualPaperState | undefined
+): string => {
+  if (!virtualPaper) return ''
+  const anchorKey = virtualPaper.anchor
+    ? getTextAnchorKey(virtualPaper.anchor)
+    : ''
+  return `${virtualPaper.x}:${virtualPaper.y}:${virtualPaper.scale}:${anchorKey}`
+}
 
 type BottomBarHistoryContext = {
   readonly status: ReaderAnnotationHistoryStatus
@@ -96,7 +148,7 @@ export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   /** 可持久化阅读数据的统一入口；其中字段优先于对应的旧版扁平 props。 */
   data?: ReaderData
-  /** 阅读数据变化回调；目前在 VirtualPaper 手势结束后回传最终位置和缩放。 */
+  /** 阅读数据变化回调；回传带顶部文字锚点的阅读位置和精确书签。 */
   onDataChange?: (nextData: ReaderData) => void
   /** 边缘裁切编辑模式开关；开启后页面以未裁剪尺寸显示并展示可拖拽虚线。 */
   edgeCropEditing?: boolean
@@ -233,7 +285,7 @@ export type ReaderProps = {
   containMarginBottom?: number
   /** @deprecated Use `containMarginTop` and `containMarginBottom`. */
   containMarginY?: number
-  /** 是否显示布局模式的页面浏览侧栏，默认 false */
+  /** 是否显示页面浏览侧栏，布局与文本模式均支持，默认 false。 */
   showPageBrowser?: boolean
   /** 页面浏览侧栏被左滑关闭时触发。 */
   onPageBrowserClose?: () => void
@@ -250,15 +302,21 @@ export type ReaderProps = {
     nextComments: readonly ReaderComment[],
     detail: ReaderCommentChangeDetail
   ) => void
-  /** 由宿主控制的书签页码，在 page-browser 的页面与书签面板中展示。 */
+  /** 由宿主控制的精确文字书签。 */
+  bookmarks?: readonly ReaderBookmark[]
+  /** 添加或删除指定文字锚点书签。 */
+  onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  /** @deprecated Use `bookmarks`. */
   bookmarkedPageNumbers?: readonly number[]
-  /** 添加或删除指定页书签。 */
+  /** @deprecated Use `onToggleBookmark`. */
   onTogglePageBookmark?: (pageNumber: number) => void
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   selectedTool?: ReaderPageTool
   /** 页面工具变化回调；未受控时 Reader 同时更新内部工具。 */
   onSelectedToolChange?: (tool: ReaderPageTool) => void
   paintingTool?: DrawingTool
+  /** PaintingBoard 工具变化回调；未受控时 Reader 同时更新内部工具。 */
+  onPaintingToolChange?: (tool: DrawingTool) => void
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
   /** 绘图颜色变化回调；未受控时 Reader 同时更新内部颜色。 */
@@ -372,6 +430,38 @@ function getPageRects(
   )
 }
 
+function resolveSelectionRanges(
+  dataRanges: ReaderSelectionRange[] | undefined,
+  ranges: ReaderSelectionRange[] | undefined,
+  selectionsByPage: ReaderPageTextSelectionMap
+): ReaderSelectionRange[] | undefined {
+  return (
+    dataRanges ??
+    ranges ??
+    (Object.keys(selectionsByPage).length > 0
+      ? getLinkedRanges(selectionsByPage)
+      : undefined)
+  )
+}
+
+function resolveSelectionRectangles(
+  dataRects: ReaderSelectionRectangle[] | undefined,
+  rects: ReaderSelectionRectangle[] | undefined,
+  selectionsByPage: ReaderPageRectSelectionMap
+): ReaderSelectionRectangle[] | undefined {
+  return (
+    dataRects ??
+    rects ??
+    (Object.keys(selectionsByPage).length > 0
+      ? getPageRects(selectionsByPage)
+      : undefined)
+  )
+}
+
+function hasDefinedValue(values: readonly unknown[]): boolean {
+  return values.some((value) => value !== undefined)
+}
+
 function normalizeAnnotationHistoryOptions(
   annotationHistory: boolean | ReaderAnnotationHistoryOptions | undefined
 ): ReaderAnnotationHistoryOptions {
@@ -393,6 +483,37 @@ interface ResolvedVerticalMargins {
   readonly top: number | undefined
   readonly bottom: number | undefined
   readonly legacy: number | undefined
+}
+
+interface BookmarkCapabilities {
+  readonly usesPreciseBookmarks: boolean
+  readonly canTogglePreciseBookmarks: boolean
+}
+
+function resolveBookmarkCapabilities({
+  bookmarks,
+  bookmarkedPageNumbers,
+  hasPreciseToggle,
+  hasPageToggle,
+  hasDataChange
+}: {
+  readonly bookmarks: readonly ReaderBookmark[] | undefined
+  readonly bookmarkedPageNumbers: readonly number[] | undefined
+  readonly hasPreciseToggle: boolean
+  readonly hasPageToggle: boolean
+  readonly hasDataChange: boolean
+}): BookmarkCapabilities {
+  return {
+    usesPreciseBookmarks:
+      bookmarks !== undefined ||
+      hasPreciseToggle ||
+      (hasDataChange && bookmarkedPageNumbers === undefined && !hasPageToggle),
+    canTogglePreciseBookmarks: hasPreciseToggle || hasDataChange
+  }
+}
+
+function whenEnabled<Value>(enabled: boolean, value: Value): Value | undefined {
+  return enabled ? value : undefined
 }
 
 function resolveVerticalMargins(
@@ -507,11 +628,14 @@ export function Reader({
   commentCountByRectId,
   comments,
   onCommentsChange,
+  bookmarks,
+  onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   selectedTool,
   onSelectedToolChange,
-  paintingTool = 'pen',
+  paintingTool,
+  onPaintingToolChange,
   drawingStrokeColor,
   onDrawingStrokeColorChange,
   pagePaintings,
@@ -538,6 +662,10 @@ export function Reader({
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const [internalRenderMode, setInternalRenderMode] =
     useState<ReaderRenderMode>('layout')
+  const [layoutPositionHandoff, setLayoutPositionHandoff] =
+    useState<ReaderPositionHandoff<ReaderVirtualPaperState> | null>(null)
+  const [textPositionHandoff, setTextPositionHandoff] =
+    useState<ReaderPositionHandoff<ReaderTextReadingProgress> | null>(null)
   const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
   const [internalTouchPanMode, setInternalTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
@@ -546,6 +674,13 @@ export function Reader({
     useState<ReaderPageTool>('text-selection')
   const [internalDrawingStrokeColor, setInternalDrawingStrokeColor] =
     useState('#2563eb')
+  const [internalPaintingControllerData, setInternalPaintingControllerData] =
+    useState<PaintingControllerData>({
+      tool: 'pen',
+      minimap: false,
+      strokeColor: '#2563eb',
+      strokeWidth: 3
+    })
   const [internalHighlightColor, setInternalHighlightColor] = useState<
     string | undefined
   >(undefined)
@@ -553,6 +688,17 @@ export function Reader({
   const readerRootRef = useRef<HTMLDivElement>(null)
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
+  const currentTextAnchorRef = useRef<{
+    readonly mode: ReaderRenderMode
+    readonly document: ReaderDocumentInput
+    readonly persistedValueKey: string
+    readonly anchor: ReaderTextAnchor | undefined
+  } | null>(null)
+  const currentVirtualPaperStateRef = useRef<{
+    readonly document: ReaderDocumentInput
+    readonly replacedValueKey: string
+    readonly value: ReaderVirtualPaperState
+  } | null>(null)
   const resolvedPagePaintings =
     data?.pagePaintings ?? pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
@@ -565,18 +711,16 @@ export function Reader({
   pageTextSelectionsRef.current = resolvedPageTextSelections
   const pageRectSelectionsRef = useRef(resolvedPageRectSelections)
   pageRectSelectionsRef.current = resolvedPageRectSelections
-  const resolvedRanges =
-    data?.ranges ??
-    ranges ??
-    (Object.keys(resolvedPageTextSelections).length > 0
-      ? getLinkedRanges(resolvedPageTextSelections)
-      : undefined)
-  const resolvedRects =
-    data?.rects ??
-    rects ??
-    (Object.keys(resolvedPageRectSelections).length > 0
-      ? getPageRects(resolvedPageRectSelections)
-      : undefined)
+  const resolvedRanges = resolveSelectionRanges(
+    data?.ranges,
+    ranges,
+    resolvedPageTextSelections
+  )
+  const resolvedRects = resolveSelectionRectangles(
+    data?.rects,
+    rects,
+    resolvedPageRectSelections
+  )
   const normalizedAnnotationHistory =
     normalizeAnnotationHistoryOptions(annotationHistory)
   const [historyStatus, setHistoryStatus] =
@@ -588,6 +732,19 @@ export function Reader({
       futureCount: 0
     })
   const resolvedRenderMode = renderMode ?? internalRenderMode
+  const previousRenderModeRef = useRef(resolvedRenderMode)
+  const resolvedTextReadingProgress = resolvePositionHandoff(
+    textPositionHandoff,
+    document,
+    getReaderTextProgressKey(data?.textReadingProgress),
+    data?.textReadingProgress
+  )
+  const resolvedVirtualPaperState = resolvePositionHandoff(
+    layoutPositionHandoff,
+    document,
+    getReaderVirtualPaperKey(data?.virtualPaper),
+    data?.virtualPaper
+  )
   const resolvedOcr = ocr ?? internalOcrEnabled
   const resolvedOcrEnabled =
     resolvedOcr === true ||
@@ -597,6 +754,20 @@ export function Reader({
   const resolvedSelectedTool = selectedTool ?? internalSelectedTool
   const resolvedDrawingStrokeColor =
     drawingStrokeColor ?? internalDrawingStrokeColor
+  const resolvedPaintingTool =
+    paintingTool ?? internalPaintingControllerData.tool
+  const resolvedPaintingControllerData = useMemo<PaintingControllerData>(
+    () => ({
+      ...internalPaintingControllerData,
+      tool: resolvedPaintingTool,
+      strokeColor: resolvedDrawingStrokeColor
+    }),
+    [
+      internalPaintingControllerData,
+      resolvedDrawingStrokeColor,
+      resolvedPaintingTool
+    ]
+  )
   const resolvedHighlightColor = highlightColor ?? internalHighlightColor
   const hasDocumentPages = documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
@@ -622,14 +793,25 @@ export function Reader({
     tool ?? (resolvedSelectedTool === 'rect-selection' ? 'rect' : 'text')
   const resolvedBookmarkedPageNumbers =
     data?.bookmarkedPageNumbers ?? bookmarkedPageNumbers
-  const usesPageTextSelectionCompatibility =
-    pageTextSelections !== undefined ||
-    defaultPageTextSelections !== undefined ||
-    onPageTextSelectionsChange !== undefined
-  const usesPageRectSelectionCompatibility =
-    pageRectSelections !== undefined ||
-    defaultPageRectSelections !== undefined ||
-    onPageRectSelectionsChange !== undefined
+  const resolvedBookmarks = data?.bookmarks ?? bookmarks
+  const { usesPreciseBookmarks, canTogglePreciseBookmarks } =
+    resolveBookmarkCapabilities({
+      bookmarks: resolvedBookmarks,
+      bookmarkedPageNumbers: resolvedBookmarkedPageNumbers,
+      hasPreciseToggle: onToggleBookmark !== undefined,
+      hasPageToggle: onTogglePageBookmark !== undefined,
+      hasDataChange: onDataChange !== undefined
+    })
+  const usesPageTextSelectionCompatibility = hasDefinedValue([
+    pageTextSelections,
+    defaultPageTextSelections,
+    onPageTextSelectionsChange
+  ])
+  const usesPageRectSelectionCompatibility = hasDefinedValue([
+    pageRectSelections,
+    defaultPageRectSelections,
+    onPageRectSelectionsChange
+  ])
 
   const handleSelectionRef = useCallback(
     (value: ReaderSelectionRef | null) => {
@@ -659,8 +841,84 @@ export function Reader({
     }))
   }, [normalizedAnnotationHistory.enabled])
 
+  const handoffReadingPosition = useCallback(
+    (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode) => {
+      if (nextMode === sourceMode) return
+      const currentTextAnchor = currentTextAnchorRef.current
+      const sourcePersistedValueKey =
+        sourceMode === 'layout'
+          ? getReaderVirtualPaperKey(data?.virtualPaper)
+          : getReaderTextProgressKey(data?.textReadingProgress)
+      const currentAnchor =
+        currentTextAnchor !== null &&
+        currentTextAnchor.mode === sourceMode &&
+        currentTextAnchor.document === document &&
+        currentTextAnchor.persistedValueKey === sourcePersistedValueKey
+          ? currentTextAnchor.anchor
+          : undefined
+      const sourceAnchor =
+        currentAnchor ??
+        (sourceMode === 'layout'
+          ? resolvedVirtualPaperState?.anchor
+          : resolvedTextReadingProgress?.anchor)
+
+      if (nextMode === 'text') {
+        if (!sourceAnchor) {
+          setTextPositionHandoff(null)
+          return
+        }
+        setTextPositionHandoff({
+          document,
+          replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
+          value: {
+            currentPageNumber: sourceAnchor.pageNumber,
+            anchor: sourceAnchor
+          }
+        })
+        return
+      }
+
+      if (!sourceAnchor) {
+        setLayoutPositionHandoff(null)
+        return
+      }
+
+      const persistedVirtualPaperKey = getReaderVirtualPaperKey(
+        data?.virtualPaper
+      )
+      const currentVirtualPaperState = currentVirtualPaperStateRef.current
+      const localVirtualPaper =
+        currentVirtualPaperState !== null &&
+        currentVirtualPaperState.document === document &&
+        currentVirtualPaperState.replacedValueKey === persistedVirtualPaperKey
+          ? currentVirtualPaperState.value
+          : undefined
+      const currentVirtualPaper = localVirtualPaper ??
+        data?.virtualPaper ?? {
+          x: 0,
+          y: 0,
+          scale: scale ?? defaultScale ?? 1
+        }
+      setLayoutPositionHandoff({
+        document,
+        replacedValueKey: persistedVirtualPaperKey,
+        value: { ...currentVirtualPaper, anchor: sourceAnchor }
+      })
+    },
+    [
+      data?.textReadingProgress,
+      data?.virtualPaper,
+      defaultScale,
+      document,
+      resolvedTextReadingProgress?.anchor,
+      resolvedVirtualPaperState?.anchor,
+      scale
+    ]
+  )
+
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
+      handoffReadingPosition(resolvedRenderMode, nextMode)
       if (renderMode === undefined) setInternalRenderMode(nextMode)
       onRenderModeChange?.(nextMode)
 
@@ -671,12 +929,51 @@ export function Reader({
     },
     [
       edgeCropEditing,
+      handoffReadingPosition,
       onEdgeCropEditingChange,
       onRenderModeChange,
       renderMode,
-      resolvedEdgeCropEditing
+      resolvedEdgeCropEditing,
+      resolvedRenderMode
     ]
   )
+
+  useLayoutEffect(() => {
+    const persistedTextProgressKey = getReaderTextProgressKey(
+      data?.textReadingProgress
+    )
+    if (
+      textPositionHandoff !== null &&
+      (textPositionHandoff.document !== document ||
+        textPositionHandoff.replacedValueKey !== persistedTextProgressKey)
+    ) {
+      setTextPositionHandoff(null)
+    }
+
+    const persistedVirtualPaperKey = getReaderVirtualPaperKey(
+      data?.virtualPaper
+    )
+    if (
+      layoutPositionHandoff !== null &&
+      (layoutPositionHandoff.document !== document ||
+        layoutPositionHandoff.replacedValueKey !== persistedVirtualPaperKey)
+    ) {
+      setLayoutPositionHandoff(null)
+    }
+  }, [
+    data?.textReadingProgress,
+    data?.virtualPaper,
+    document,
+    layoutPositionHandoff,
+    textPositionHandoff
+  ])
+
+  useLayoutEffect(() => {
+    const previousMode = previousRenderModeRef.current
+    previousRenderModeRef.current = resolvedRenderMode
+    if (previousMode === resolvedRenderMode) return
+    handoffReadingPosition(previousMode, resolvedRenderMode)
+  }, [handoffReadingPosition, resolvedRenderMode])
 
   const handleOcrChange = useCallback(
     (enabled: boolean) => {
@@ -711,8 +1008,27 @@ export function Reader({
     (nextTool: ReaderPageTool) => {
       if (selectedTool === undefined) setInternalSelectedTool(nextTool)
       onSelectedToolChange?.(nextTool)
+      // 矩形选框或绘制工具 → 自动切换到双指模式，避免单指滑动干扰框选/绘制手势
+      if (
+        (nextTool === 'rect-selection' || nextTool === 'drawing') &&
+        resolvedTouchPanMode !== 'two-finger'
+      ) {
+        handleTouchPanModeChange('two-finger')
+      }
+      // 文字选择工具 → 自动切换到单指模式，方便单指滚动浏览文本
+      else if (
+        nextTool === 'text-selection' &&
+        resolvedTouchPanMode !== 'single-finger'
+      ) {
+        handleTouchPanModeChange('single-finger')
+      }
     },
-    [onSelectedToolChange, selectedTool]
+    [
+      handleTouchPanModeChange,
+      onSelectedToolChange,
+      resolvedTouchPanMode,
+      selectedTool
+    ]
   )
 
   const handleDrawingStrokeColorChange = useCallback(
@@ -721,6 +1037,28 @@ export function Reader({
       onDrawingStrokeColorChange?.(color)
     },
     [drawingStrokeColor, onDrawingStrokeColorChange]
+  )
+
+  const handlePaintingControllerDataChange = useCallback(
+    (nextData: PaintingControllerData) => {
+      setInternalPaintingControllerData(nextData)
+
+      if (nextData.tool !== resolvedPaintingTool) {
+        onPaintingToolChange?.(nextData.tool)
+      }
+      if (
+        nextData.strokeColor !== undefined &&
+        nextData.strokeColor !== resolvedDrawingStrokeColor
+      ) {
+        handleDrawingStrokeColorChange(nextData.strokeColor)
+      }
+    },
+    [
+      handleDrawingStrokeColorChange,
+      onPaintingToolChange,
+      resolvedDrawingStrokeColor,
+      resolvedPaintingTool
+    ]
   )
 
   const handleHighlightColorChange = useCallback(
@@ -733,9 +1071,65 @@ export function Reader({
 
   const handleVirtualPaperTransformChangeEnd = useCallback(
     (virtualPaper: ReaderVirtualPaperState) => {
+      currentVirtualPaperStateRef.current = {
+        document,
+        replacedValueKey: getReaderVirtualPaperKey(data?.virtualPaper),
+        value: virtualPaper
+      }
       onDataChange?.({ ...data, virtualPaper })
     },
-    [data, onDataChange]
+    [data, document, onDataChange]
+  )
+  const handleTextAnchorChange = useCallback(
+    (anchor: ReaderTextAnchor | undefined) => {
+      currentTextAnchorRef.current = {
+        mode: resolvedRenderMode,
+        document,
+        persistedValueKey:
+          resolvedRenderMode === 'layout'
+            ? getReaderVirtualPaperKey(data?.virtualPaper)
+            : getReaderTextProgressKey(data?.textReadingProgress),
+        anchor
+      }
+    },
+    [
+      data?.textReadingProgress,
+      data?.virtualPaper,
+      document,
+      resolvedRenderMode
+    ]
+  )
+  const handleTextReadingProgressChange = useCallback(
+    (textReadingProgress: NonNullable<ReaderData['textReadingProgress']>) => {
+      currentTextAnchorRef.current = {
+        mode: 'text',
+        document,
+        persistedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
+        anchor: textReadingProgress.anchor
+      }
+      onDataChange?.({ ...data, textReadingProgress })
+    },
+    [data, document, onDataChange]
+  )
+  const handleToggleBookmark = useCallback(
+    (bookmark: ReaderBookmark) => {
+      onToggleBookmark?.(bookmark)
+      if (!onDataChange) return
+
+      const bookmarkKey = getTextAnchorKey(bookmark)
+      const currentBookmarks = resolvedBookmarks ?? []
+      const containsBookmark = currentBookmarks.some(
+        (currentBookmark) => getTextAnchorKey(currentBookmark) === bookmarkKey
+      )
+      const nextBookmarks = containsBookmark
+        ? currentBookmarks.filter(
+            (currentBookmark) =>
+              getTextAnchorKey(currentBookmark) !== bookmarkKey
+          )
+        : [...currentBookmarks, bookmark]
+      onDataChange({ ...data, bookmarks: nextBookmarks })
+    },
+    [data, onDataChange, onToggleBookmark, resolvedBookmarks]
   )
 
   const handleFile = useCallback(
@@ -994,6 +1388,20 @@ export function Reader({
             containMarginTop={resolvedVerticalMargins.top}
             containMarginBottom={resolvedVerticalMargins.bottom}
             containMarginY={resolvedVerticalMargins.legacy}
+            showPageBrowser={showPageBrowser}
+            onPageBrowserClose={onPageBrowserClose}
+            themeColor={themeColor}
+            commentCountByRangeId={commentCountByRangeId}
+            bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
+            onToggleBookmark={whenEnabled(
+              usesPreciseBookmarks && canTogglePreciseBookmarks,
+              handleToggleBookmark
+            )}
+            bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
+            onTogglePageBookmark={onTogglePageBookmark}
+            textReadingProgress={resolvedTextReadingProgress}
+            onTextReadingProgressChange={handleTextReadingProgressChange}
+            onTextAnchorChange={handleTextAnchorChange}
             pageRange={pageRange}
             hiddenPages={data?.hiddenPages}
             className={className}
@@ -1009,6 +1417,8 @@ export function Reader({
             onLinkedSelectRange={onLinkedSelectRange}
             onSelectRange={onSelectRange}
             onUpdateRange={handleUpdateRange}
+            onRemoveRange={onRemoveRange}
+            onRemoveRect={onRemoveRect}
             onSelectionStart={onSelectionStart}
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
@@ -1039,17 +1449,17 @@ export function Reader({
                   ranges={resolvedRanges}
                   onUpdateRange={handleUpdateRange}
                   onRemoveRange={onRemoveRange}
-                  onCommentHighlight={
-                    onCommentHighlight
-                      ? handleDefaultCommentHighlight
-                      : undefined
-                  }
+                  onCommentHighlight={whenEnabled(
+                    onCommentHighlight !== undefined,
+                    handleDefaultCommentHighlight
+                  )}
                 />
               ))
             }
-            onCommentHighlight={
-              highlightPopover ? onCommentHighlight : undefined
-            }
+            onCommentHighlight={whenEnabled(
+              highlightPopover !== undefined,
+              onCommentHighlight
+            )}
             autoHighlight={autoHighlight}
             selectionRef={resolvedSelectionRef}
             overlayRectType={overlayRectType}
@@ -1090,12 +1500,16 @@ export function Reader({
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
-          scale={data?.virtualPaper ? undefined : scale}
-          defaultScale={data?.virtualPaper ? undefined : defaultScale}
-          defaultVirtualPaperTransform={data?.virtualPaper}
+          scale={whenEnabled(resolvedVirtualPaperState === undefined, scale)}
+          defaultScale={whenEnabled(
+            resolvedVirtualPaperState === undefined,
+            defaultScale
+          )}
+          defaultVirtualPaperTransform={resolvedVirtualPaperState}
           onVirtualPaperTransformChangeEnd={
             handleVirtualPaperTransformChangeEnd
           }
+          onTextAnchorChange={handleTextAnchorChange}
           onScaleChange={onScaleChange}
           minScale={minScale}
           maxScale={maxScale}
@@ -1113,6 +1527,8 @@ export function Reader({
           onLinkedSelectRange={onLinkedSelectRange}
           onSelectRange={onSelectRange}
           onUpdateRange={handleUpdateRange}
+          onRemoveRange={onRemoveRange}
+          onRemoveRect={onRemoveRect}
           onSelectionStart={onSelectionStart}
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
@@ -1144,13 +1560,17 @@ export function Reader({
                 ranges={resolvedRanges}
                 onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
-                onCommentHighlight={
-                  onCommentHighlight ? handleDefaultCommentHighlight : undefined
-                }
+                onCommentHighlight={whenEnabled(
+                  onCommentHighlight !== undefined,
+                  handleDefaultCommentHighlight
+                )}
               />
             ))
           }
-          onCommentHighlight={highlightPopover ? onCommentHighlight : undefined}
+          onCommentHighlight={whenEnabled(
+            highlightPopover !== undefined,
+            onCommentHighlight
+          )}
           autoHighlight={autoHighlight}
           selectionRef={resolvedSelectionRef}
           overlayRectType={overlayRectType}
@@ -1166,9 +1586,10 @@ export function Reader({
                 onHighlightColorChange={handleHighlightColorChange}
                 onUpdateRect={handleUpdateRect}
                 onRemoveRect={onRemoveRect}
-                onCommentRect={
-                  onCommentRect ? handleDefaultCommentRect : undefined
-                }
+                onCommentRect={whenEnabled(
+                  onCommentRect !== undefined,
+                  handleDefaultCommentRect
+                )}
               />
             ))
           }
@@ -1191,8 +1612,10 @@ export function Reader({
           containMarginBottom={resolvedVerticalMargins.bottom}
           containMarginY={resolvedVerticalMargins.legacy}
           selectedTool={resolvedSelectedTool}
-          paintingTool={paintingTool}
+          paintingTool={resolvedPaintingTool}
           drawingStrokeColor={resolvedDrawingStrokeColor}
+          paintingControllerData={resolvedPaintingControllerData}
+          onPaintingControllerDataChange={handlePaintingControllerDataChange}
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
@@ -1202,6 +1625,11 @@ export function Reader({
           commentCountByRectId={commentCountByRectId}
           comments={comments}
           onCommentsChange={onCommentsChange}
+          bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
+          onToggleBookmark={whenEnabled(
+            usesPreciseBookmarks && canTogglePreciseBookmarks,
+            handleToggleBookmark
+          )}
           bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
           onTogglePageBookmark={onTogglePageBookmark}
           onPageLoadStatusChange={onPageLoadStatusChange}
@@ -1277,12 +1705,15 @@ export function Reader({
           <DefaultBottomBar
             bottomBarRef={defaultBottomBarRef}
             renderMode={resolvedRenderMode}
+            isEpub={isEpub}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
             touchPanMode={resolvedTouchPanMode}
             edgeCropEditing={resolvedEdgeCropEditing}
             selectedTool={resolvedSelectedTool}
             drawingStrokeColor={resolvedDrawingStrokeColor}
+            paintingControllerData={resolvedPaintingControllerData}
+            onPaintingControllerDataChange={handlePaintingControllerDataChange}
             historyStatus={bottomBarHistoryStatus}
             selectionRef={popoverSelectionRef}
             onRenderModeChange={handleRenderModeChange}

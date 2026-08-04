@@ -19,11 +19,36 @@ export type ReaderPageEdgeCrop = {
   readonly pages?: Readonly<Record<string, ReaderEdgeCrop>>
 }
 
-/** VirtualPaper 可持久化的最后浏览位置与缩放。 */
+/** 指向页面内具体文字的可持久化定位锚点。 */
+export type ReaderTextAnchor = {
+  readonly pageNumber: number
+  readonly textId: string
+  readonly text: string
+  /** 目标文字起始字符在当前页面内的偏移量，不是整篇文档的累计偏移量。 */
+  readonly offset: number
+}
+
+/** 精确书签与文字锚点保持相同的数据形状。 */
+export type ReaderBookmark = {
+  readonly pageNumber: number
+  readonly textId: string
+  readonly text: string
+  /** 目标文字起始字符在当前页面内的偏移量，不是整篇文档的累计偏移量。 */
+  readonly offset: number
+}
+
+/** VirtualPaper 可持久化的最后浏览位置、缩放与文字锚点。 */
 export type ReaderVirtualPaperState = {
   readonly x: number
   readonly y: number
   readonly scale: number
+  readonly anchor?: ReaderTextAnchor
+}
+
+/** Text Mode 可持久化的当前阅读页与文字锚点。 */
+export type ReaderTextReadingProgress = {
+  readonly currentPageNumber: number
+  readonly anchor?: ReaderTextAnchor
 }
 
 /**
@@ -39,5 +64,8 @@ export type ReaderData = {
   readonly rects?: ReaderSelectionRectangle[]
   readonly pagePaintings?: Record<string, DrawingValue>
   readonly virtualPaper?: ReaderVirtualPaperState
+  readonly textReadingProgress?: ReaderTextReadingProgress
+  readonly bookmarks?: readonly ReaderBookmark[]
+  /** @deprecated 使用可精确定位到文字的 `bookmarks`。 */
   readonly bookmarkedPageNumbers?: readonly number[]
 }
