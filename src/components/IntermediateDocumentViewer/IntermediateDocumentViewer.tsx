@@ -711,10 +711,12 @@ const INTERMEDIATE_PAGE_HORIZONTAL_MARGIN = 24
 // 与 reader.scss 中 `.hamster-note-document` 的页面间距保持同步。
 const INTERMEDIATE_PAGE_GAP = 16
 
-const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS =
-  DEFAULT_ENABLED_INTERACTIONS.filter(
+const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS = [
+  ...DEFAULT_ENABLED_INTERACTIONS.filter(
     (mode) => mode !== VirtualPaperInteractionMode.TouchSingleFingerPan
-  )
+  ),
+  VirtualPaperInteractionMode.TouchTwoFingerPan
+]
 
 export const getVisiblePageNumbers = (
   allPageNumbers: number[],
@@ -3345,6 +3347,10 @@ function ViewerContent({
       )
     }
   }, [effectiveEdgeCrop, flowLayoutPages, pageNumbers, pageSizesByPageNumber])
+  const activeContentSize =
+    measuredContentSize?.selectionScope === selectionScope
+      ? measuredContentSize.size
+      : fallbackContentSize
 
   useEffect(() => {
     if (!viewerRootElement) return
@@ -3795,7 +3801,11 @@ function ViewerContent({
         nextTransform.scale !== lastObservedTransformScaleRef.current
       ) {
         lastObservedTransformScaleRef.current = nextTransform.scale
-        setActiveZoomPercent(Math.round(nextTransform.scale * 100))
+        const topWhitespace = containMarginTop ?? containMarginY ?? 0
+        const baselineHeight = topWhitespace + activeContentSize.height
+        const scaledHeight =
+          topWhitespace + activeContentSize.height * nextTransform.scale
+        setActiveZoomPercent(Math.round((scaledHeight / baselineHeight) * 100))
       }
       setPopoverVisible(false)
       signalReadingProgressActivity()
@@ -3808,7 +3818,13 @@ function ViewerContent({
       }, 500)
       handleVirtualPaperTransformChange(nextTransform, meta)
     },
-    [handleVirtualPaperTransformChange, signalReadingProgressActivity]
+    [
+      activeContentSize.height,
+      containMarginTop,
+      containMarginY,
+      handleVirtualPaperTransformChange,
+      signalReadingProgressActivity
+    ]
   )
 
   const handleTransformChangeEndWithPopover = useCallback(
@@ -4013,15 +4029,18 @@ function ViewerContent({
             // 程序化/受控 scale 变化也走「CSS 预览 + 防抖提交」，
             // 与手势缩放同一套机制，避免缩放期间整页重排。
             readerModeExternalZoomPreview={true}
-            contentSize={
-              measuredContentSize?.selectionScope === selectionScope
-                ? measuredContentSize.size
-                : fallbackContentSize
-            }
+            contentSize={activeContentSize}
             transform={virtualPaperTransform}
             minScale={scaleRange.min}
             maxScale={scaleRange.max}
             enabledInteractions={enabledInteractions}
+            wrapperProps={
+              touchPanMode === 'two-finger'
+                ? {
+                    className: 'hamster-reader__two-finger-touch-pan'
+                  }
+                : undefined
+            }
             onTransformChange={handleTransformChangeWithPopover}
             onTransformChangeEnd={handleTransformChangeEndWithPopover}
             containMarginX={containMarginX}

@@ -449,7 +449,6 @@ describe('Reader public API', () => {
 
     const bottomBar = screen.getByTestId('tool-bottom-bar')
     const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
-    const touchPanMode = screen.getByTestId('tool-bottom-bar-touch-pan-mode')
     const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
 
     expect(bottomBar.parentElement).toHaveAttribute(
@@ -462,7 +461,6 @@ describe('Reader public API', () => {
 
     // When: 用户直接操作 Reader 自带的底栏。
     fireEvent.click(rectTool)
-    fireEvent.click(touchPanMode)
     fireEvent.click(edgeCrop)
 
     // Then: 同一个 Reader viewer 收到更新后的工具与布局状态。
@@ -485,6 +483,55 @@ describe('Reader public API', () => {
       expect(screen.queryByTestId('tool-bottom-bar-touch-pan-mode')).toBeNull()
       expect(screen.queryByTestId('tool-bottom-bar-ocr')).toBeNull()
     })
+  })
+
+  it('switches touch panning to two fingers when rectangle selection activates', async () => {
+    // Given: the built-in toolbar starts with text selection and single-finger panning.
+    const onSelectedToolChange = vi.fn()
+    const onTouchPanModeChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        onSelectedToolChange={onSelectedToolChange}
+        onTouchPanModeChange={onTouchPanModeChange}
+      />
+    )
+
+    // When: the rectangle-selection tool is activated.
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-rect-selection'))
+
+    // Then: the viewer and public callbacks receive the paired interaction state.
+    await waitFor(() => {
+      expect(capturedViewerProps.selectedTool).toBe('rect-selection')
+      expect(capturedViewerProps.touchPanMode).toBe('two-finger')
+    })
+    expect(onSelectedToolChange).toHaveBeenCalledWith('rect-selection')
+    expect(onTouchPanModeChange).toHaveBeenCalledWith('two-finger')
+  })
+
+  it('shows font scaling in Text mode and EPUB Layout mode only', () => {
+    // Given: a non-EPUB document is rendered in Layout mode with font scaling enabled.
+    const document = makeDocument({ pages: [makePage(1)] })
+    const { rerender } = render(
+      <Reader document={document} renderMode='layout' fontScale={1.5} />
+    )
+
+    // Then: fixed Layout content does not expose the font-size control.
+    expect(screen.queryByTestId('tool-bottom-bar-font-scale')).toBeNull()
+
+    // When: the same Layout document is identified as EPUB.
+    rerender(
+      <Reader document={document} renderMode='layout' fontScale={1.5} isEpub />
+    )
+
+    // Then: EPUB keeps its reflowable font-size control in Layout mode.
+    expect(screen.getByTestId('tool-bottom-bar-font-scale')).toBeInTheDocument()
+
+    // When: a non-EPUB document uses Text mode.
+    rerender(<Reader document={document} renderMode='text' fontScale={1.5} />)
+
+    // Then: Text mode still exposes font scaling for supported text documents.
+    expect(screen.getByTestId('tool-bottom-bar-font-scale')).toBeInTheDocument()
   })
 
   it('keeps the default OCR toggle off until the user enables it', async () => {
@@ -543,6 +590,7 @@ describe('Reader public API', () => {
     render(
       <Reader
         document={makeDocument({ pages: [makePage(1)] })}
+        isEpub
         renderMode='layout'
         fontScale={1.5}
         touchPanMode='single-finger'
@@ -695,10 +743,12 @@ describe('Reader public API', () => {
         <>
           <Reader
             document={makeDocument({ pages: [makePage(1)] })}
+            isEpub
             fontScale={1.5}
           />
           <Reader
             document={makeDocument({ pages: [makePage(2)] })}
+            isEpub
             fontScale={1.5}
           />
         </>

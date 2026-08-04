@@ -474,6 +474,12 @@
       scrollbar-width: none;
       touch-action: none;
 
+      &.hamster-reader__two-finger-touch-pan {
+        // VirtualPaper Reader 模式以内联样式开放原生滚动，双指模式必须覆盖它，
+        // 将平移完全交给 TouchTwoFingerPan，避免单指触发浏览器默认滚动。
+        touch-action: none !important;
+      }
+
       &::-webkit-scrollbar {
         display: none;
         width: 0;

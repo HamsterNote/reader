@@ -109,9 +109,9 @@ of the page directly under the handle's visual center.
 
 ## 10. Reflowable Document Font Control
 
-The bottom toolbar exposes font scaling only for reflowable EPUB, TXT, and
-Markdown documents. Fixed-layout PDF, DOCX, and image documents keep the
-existing toolbar unchanged.
+The bottom toolbar exposes font scaling in Text mode for supported reflowable
+documents. In Layout mode, only EPUB keeps the font scaling control; PDF,
+DOCX, image, TXT, and Markdown Layout views hide it.
 
 - **Trigger:** a compact secondary button labelled `字体：当前档位`, with the
   current value visible at every responsive width.
@@ -234,6 +234,10 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Lifecycle:** a real scale change shows the current rounded percentage while
   the zoom transform is active. Pan-only transforms do not open the indicator,
   and the indicator disappears as soon as the transform-end signal arrives.
+- **Percentage:** fixed top whitespace from `containMarginTop` (or the legacy
+  `containMarginY` fallback) participates in the displayed effective scale but
+  remains screen-fixed; the document content height alone receives the active
+  VirtualPaper scale.
 - **Presentation:** the compact percentage badge uses tabular numerals, remains
   non-interactive, and stays legible over both page content and the reader
   background without competing with document controls.

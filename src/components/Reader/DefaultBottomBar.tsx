@@ -31,6 +31,7 @@ import {
 export type DefaultBottomBarProps = {
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
   readonly renderMode: ReaderRenderMode
+  readonly isEpub: boolean | undefined
   readonly ocrEnabled: boolean
   readonly fontScale: ReaderFontScale | undefined
   readonly touchPanMode: ReaderTouchPanMode
@@ -54,6 +55,8 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
   const theme = usePrefersColorScheme()
   const menus = useBottomBarMenus()
   const layoutDisabled = props.renderMode === 'text'
+  const visibleFontScale =
+    props.renderMode === 'text' || props.isEpub ? props.fontScale : undefined
 
   // 在 Text Render Mode 下，自动切换工具到 text-selection
   useEffect(() => {
@@ -227,7 +230,7 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
             ))}
           </>
         )}
-        {props.fontScale !== undefined && (
+        {visibleFontScale !== undefined && (
           <>
             <PopoverSeparator />
             <Button
@@ -246,13 +249,13 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
                 )
               }}
             >
-              字体：{getFontScaleLabel(props.fontScale)}
+              字体：{getFontScaleLabel(visibleFontScale)}
             </Button>
           </>
         )}
       </Popover>
       <DefaultBottomBarMenus
-        fontScale={props.fontScale}
+        fontScale={visibleFontScale}
         selectedTool={props.selectedTool}
         theme={theme}
         menus={menus}

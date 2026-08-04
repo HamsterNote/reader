@@ -936,8 +936,19 @@ export function Reader({
     (nextTool: ReaderPageTool) => {
       if (selectedTool === undefined) setInternalSelectedTool(nextTool)
       onSelectedToolChange?.(nextTool)
+      if (
+        nextTool === 'rect-selection' &&
+        resolvedTouchPanMode !== 'two-finger'
+      ) {
+        handleTouchPanModeChange('two-finger')
+      }
     },
-    [onSelectedToolChange, selectedTool]
+    [
+      handleTouchPanModeChange,
+      onSelectedToolChange,
+      resolvedTouchPanMode,
+      selectedTool
+    ]
   )
 
   const handleDrawingStrokeColorChange = useCallback(
@@ -1590,6 +1601,7 @@ export function Reader({
           <DefaultBottomBar
             bottomBarRef={defaultBottomBarRef}
             renderMode={resolvedRenderMode}
+            isEpub={isEpub}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
             touchPanMode={resolvedTouchPanMode}

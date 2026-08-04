@@ -3542,6 +3542,28 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('includes fixed top whitespace in the displayed Layout zoom percentage', async () => {
+    // Given: the top whitespace and the intrinsic page content are both 100px tall.
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 100 }
+    })
+    render(
+      <IntermediateDocumentViewer document={document} containMarginTop={100} />
+    )
+    const paper = await screen.findByTestId('virtual-paper-container')
+
+    // When: page content zooms to 200% while the screen-pixel whitespace stays fixed.
+    await act(async () => {
+      VirtualPaper.__triggerTransform(paper, { x: 0, y: 0, scale: 2 })
+    })
+
+    // Then: the combined 200px baseline grows to 300px, so the indicator shows 150%.
+    expect(screen.getByTestId('layout-zoom-indicator')).toHaveTextContent(
+      '150%'
+    )
+  })
+
   it('text mode keeps estimated height for empty page placeholders', async () => {
     // Given: loaded pages have no text while their placeholders report a 22px DOM height.
     const { document, pages } = makeDocument({ pageCount: 20 })
@@ -14368,11 +14390,15 @@ describe('touchPanMode', () => {
       VirtualPaperInteractionMode.TouchTwoFingerZoom
     )
     expect(interactions).toContain(
+      VirtualPaperInteractionMode.TouchTwoFingerPan
+    )
+    expect(interactions).toContain(
       VirtualPaperInteractionMode.TrackpadScrollPan
     )
     expect(interactions).toContain(
       VirtualPaperInteractionMode.MouseWheelCtrlZoom
     )
+    expect(wrapper).toHaveClass('hamster-reader__two-finger-touch-pan')
   })
 
   it('从 two-finger 切换到 single-finger 后 TouchSingleFingerPan 重新出现', () => {
