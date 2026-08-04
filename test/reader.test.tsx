@@ -1332,6 +1332,151 @@ describe('Reader renderMode', () => {
     })
   })
 
+  it('uses externally navigated Text progress for a controlled mode switch', async () => {
+    // Given: Text Mode 先上报旧锚点，随后宿主把阅读位置导航到另一个锚点。
+    const oldAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-old-text-position',
+      text: 'Old text position',
+      offset: 4
+    }
+    const navigatedAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-external-navigation',
+      text: 'Externally navigated position',
+      offset: 18
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const { rerender } = render(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={{
+          textReadingProgress: { currentPageNumber: 1, anchor: oldAnchor }
+        }}
+      />
+    )
+    const onTextAnchorChange = capturedTextViewerProps.onTextAnchorChange
+    if (typeof onTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Text Mode anchor callback')
+    }
+    act(() => onTextAnchorChange(oldAnchor))
+    rerender(
+      <Reader
+        document={doc}
+        renderMode='text'
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 2,
+            anchor: navigatedAnchor
+          }
+        }}
+      />
+    )
+
+    // When: 宿主直接把受控模式切换为 Layout。
+    rerender(
+      <Reader
+        document={doc}
+        renderMode='layout'
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 2,
+            anchor: navigatedAnchor
+          }
+        }}
+      />
+    )
+
+    // Then: Layout 使用宿主的新位置，而不是 Viewer 之前上报的旧锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.defaultVirtualPaperTransform).toMatchObject({
+        anchor: navigatedAnchor
+      })
+    })
+  })
+
+  it('does not revive an invalidated Text handoff when persisted progress returns to its old key', async () => {
+    // Given: Layout 切换到 Text 时，临时交接覆盖了 Text 原先的持久化位置。
+    const layoutAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-layout-handoff',
+      text: 'Layout handoff position',
+      offset: 24
+    }
+    const oldPersistedAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-old-persisted',
+      text: 'Old persisted text position',
+      offset: 3
+    }
+    const externalAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-external-text-position',
+      text: 'External text position',
+      offset: 40
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const { rerender } = render(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 1,
+            anchor: oldPersistedAnchor
+          }
+        }}
+      />
+    )
+    const onLayoutTextAnchorChange = capturedViewerProps.onTextAnchorChange
+    if (typeof onLayoutTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Layout text anchor callback')
+    }
+    act(() => onLayoutTextAnchorChange(layoutAnchor))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toMatchObject({
+        anchor: layoutAnchor
+      })
+    })
+
+    // When: 宿主先导航到新位置，再合法地返回原持久化 key。
+    rerender(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 2,
+            anchor: externalAnchor
+          }
+        }}
+      />
+    )
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toMatchObject({
+        anchor: externalAnchor
+      })
+    })
+    rerender(
+      <Reader
+        document={doc}
+        data={{
+          textReadingProgress: {
+            currentPageNumber: 1,
+            anchor: oldPersistedAnchor
+          }
+        }}
+      />
+    )
+
+    // Then: 已失效的 Layout 交接不会复活并覆盖宿主位置。
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toMatchObject({
+        anchor: oldPersistedAnchor
+      })
+    })
+  })
+
   it('toggles precise text bookmarks through ReaderData', () => {
     // Given: ReaderData already contains one precise text bookmark.
     const bookmark: ReaderBookmark = {

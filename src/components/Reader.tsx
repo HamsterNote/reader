@@ -11,6 +11,7 @@ import {
   type Ref,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react'
@@ -628,7 +629,9 @@ export function Reader({
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
   const currentTextAnchorRef = useRef<{
+    readonly mode: ReaderRenderMode
     readonly document: ReaderDocumentInput
+    readonly persistedValueKey: string
     readonly anchor: ReaderTextAnchor | undefined
   } | null>(null)
   const currentVirtualPaperStateRef = useRef<{
@@ -671,6 +674,7 @@ export function Reader({
       futureCount: 0
     })
   const resolvedRenderMode = renderMode ?? internalRenderMode
+  const previousRenderModeRef = useRef(resolvedRenderMode)
   const resolvedTextReadingProgress =
     textPositionHandoff !== null &&
     textPositionHandoff.document === document &&
@@ -766,21 +770,31 @@ export function Reader({
   }, [normalizedAnnotationHistory.enabled])
 
   const handoffReadingPosition = useCallback(
-    (nextMode: ReaderRenderMode) => {
-      if (nextMode === resolvedRenderMode) return
+    (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode) => {
+      if (nextMode === sourceMode) return
       const currentTextAnchor = currentTextAnchorRef.current
+      const sourcePersistedValueKey =
+        sourceMode === 'layout'
+          ? getReaderVirtualPaperKey(data?.virtualPaper)
+          : getReaderTextProgressKey(data?.textReadingProgress)
       const currentAnchor =
-        currentTextAnchor !== null && currentTextAnchor.document === document
+        currentTextAnchor !== null &&
+        currentTextAnchor.mode === sourceMode &&
+        currentTextAnchor.document === document &&
+        currentTextAnchor.persistedValueKey === sourcePersistedValueKey
           ? currentTextAnchor.anchor
           : undefined
       const sourceAnchor =
         currentAnchor ??
-        (resolvedRenderMode === 'layout'
+        (sourceMode === 'layout'
           ? resolvedVirtualPaperState?.anchor
           : resolvedTextReadingProgress?.anchor)
-      if (!sourceAnchor) return
 
       if (nextMode === 'text') {
+        if (!sourceAnchor) {
+          setTextPositionHandoff(null)
+          return
+        }
         setTextPositionHandoff({
           document,
           replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
@@ -789,6 +803,11 @@ export function Reader({
             anchor: sourceAnchor
           }
         })
+        return
+      }
+
+      if (!sourceAnchor) {
+        setLayoutPositionHandoff(null)
         return
       }
 
@@ -819,7 +838,6 @@ export function Reader({
       data?.virtualPaper,
       defaultScale,
       document,
-      resolvedRenderMode,
       resolvedTextReadingProgress?.anchor,
       resolvedVirtualPaperState?.anchor,
       scale
@@ -828,7 +846,7 @@ export function Reader({
 
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
-      handoffReadingPosition(nextMode)
+      handoffReadingPosition(resolvedRenderMode, nextMode)
       if (renderMode === undefined) setInternalRenderMode(nextMode)
       onRenderModeChange?.(nextMode)
 
@@ -843,9 +861,47 @@ export function Reader({
       onEdgeCropEditingChange,
       onRenderModeChange,
       renderMode,
-      resolvedEdgeCropEditing
+      resolvedEdgeCropEditing,
+      resolvedRenderMode
     ]
   )
+
+  useLayoutEffect(() => {
+    const persistedTextProgressKey = getReaderTextProgressKey(
+      data?.textReadingProgress
+    )
+    if (
+      textPositionHandoff !== null &&
+      (textPositionHandoff.document !== document ||
+        textPositionHandoff.replacedValueKey !== persistedTextProgressKey)
+    ) {
+      setTextPositionHandoff(null)
+    }
+
+    const persistedVirtualPaperKey = getReaderVirtualPaperKey(
+      data?.virtualPaper
+    )
+    if (
+      layoutPositionHandoff !== null &&
+      (layoutPositionHandoff.document !== document ||
+        layoutPositionHandoff.replacedValueKey !== persistedVirtualPaperKey)
+    ) {
+      setLayoutPositionHandoff(null)
+    }
+  }, [
+    data?.textReadingProgress,
+    data?.virtualPaper,
+    document,
+    layoutPositionHandoff,
+    textPositionHandoff
+  ])
+
+  useLayoutEffect(() => {
+    const previousMode = previousRenderModeRef.current
+    previousRenderModeRef.current = resolvedRenderMode
+    if (previousMode === resolvedRenderMode) return
+    handoffReadingPosition(previousMode, resolvedRenderMode)
+  }, [handoffReadingPosition, resolvedRenderMode])
 
   const handleOcrChange = useCallback(
     (enabled: boolean) => {
@@ -913,14 +969,29 @@ export function Reader({
   )
   const handleTextAnchorChange = useCallback(
     (anchor: ReaderTextAnchor | undefined) => {
-      currentTextAnchorRef.current = { document, anchor }
+      currentTextAnchorRef.current = {
+        mode: resolvedRenderMode,
+        document,
+        persistedValueKey:
+          resolvedRenderMode === 'layout'
+            ? getReaderVirtualPaperKey(data?.virtualPaper)
+            : getReaderTextProgressKey(data?.textReadingProgress),
+        anchor
+      }
     },
-    [document]
+    [
+      data?.textReadingProgress,
+      data?.virtualPaper,
+      document,
+      resolvedRenderMode
+    ]
   )
   const handleTextReadingProgressChange = useCallback(
     (textReadingProgress: NonNullable<ReaderData['textReadingProgress']>) => {
       currentTextAnchorRef.current = {
+        mode: 'text',
         document,
+        persistedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
         anchor: textReadingProgress.anchor
       }
       onDataChange?.({ ...data, textReadingProgress })
