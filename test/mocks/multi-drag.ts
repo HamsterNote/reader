@@ -92,6 +92,14 @@ export class Drag {
   }
 }
 
+export const MixinType = {
+  Drag: 'drag',
+  Rotate: 'rotate',
+  Scale: 'scale'
+} as const
+
+export class Mixin extends Drag {}
+
 export const DragOperationType = {
   Start: 'start',
   Move: 'move',

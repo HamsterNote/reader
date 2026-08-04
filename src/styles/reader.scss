@@ -21,6 +21,24 @@
     }
   }
 
+  &__bottom-bar-stack {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    height: 64px;
+    pointer-events: none;
+
+    > * {
+      pointer-events: auto;
+    }
+
+    &--drawing {
+      height: 112px;
+    }
+  }
+
   // Upload zone
   &__upload-zone {
     display: flex;

@@ -1,4 +1,7 @@
-import type { DrawingValue } from '@hamster-note/painting'
+import type {
+  DrawingValue,
+  PaintingControllerData
+} from '@hamster-note/painting'
 import { useEffect, useRef } from 'react'
 import { PageDrawingLayer } from '../PageDrawingLayer'
 
@@ -9,8 +12,15 @@ type PageBrowserDrawingPreviewProps = {
   readonly style: React.CSSProperties
 }
 
+const PREVIEW_CONTROLLER_DATA: PaintingControllerData = {
+  tool: 'pen',
+  minimap: false
+}
+
+function ignorePreviewControllerChange() {}
+
 /**
- * 复用正式页面的 DrawingSurface，并为其 SVG 补上页面坐标系 viewBox。
+ * 复用正式页面的 PaintingBoard，并为其 SVG 补上页面坐标系 viewBox。
  * 这样绘制笔迹会和底图按完全相同的几何比例缩放、裁切，无需生成异步截图。
  */
 export function PageBrowserDrawingPreview({
@@ -40,6 +50,8 @@ export function PageBrowserDrawingPreview({
       <PageDrawingLayer
         enabled={false}
         pageId={`preview-${pageId}`}
+        controllerData={PREVIEW_CONTROLLER_DATA}
+        onControllerDataChange={ignorePreviewControllerChange}
         value={value}
       />
     </span>

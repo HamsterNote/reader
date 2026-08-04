@@ -122,6 +122,11 @@ vi.mock('@system-ui-js/multi-drag', () => {
 
   return {
     DragOperationType,
+    MixinType: {
+      Drag: 'drag',
+      Rotate: 'rotate',
+      Scale: 'scale'
+    },
     Drag: class MockedDrag {
       private readonly listeners = new Map<
         string,
@@ -196,6 +201,13 @@ vi.mock('@system-ui-js/multi-drag', () => {
         this.emit(DragOperationType.AllEnd, event)
         this.primaryPointerId = null
       }
+    },
+    Mixin: class MockedMixin {
+      destroy() {}
+
+      addEventListener() {}
+
+      removeEventListener() {}
     }
   }
 })

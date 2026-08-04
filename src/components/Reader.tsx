@@ -1,4 +1,8 @@
-import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
+import type {
+  DrawingTool,
+  DrawingValue,
+  PaintingControllerData
+} from '@hamster-note/painting'
 import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import type {
   IntermediateDocument,
@@ -12,6 +16,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState
 } from 'react'
@@ -297,6 +302,8 @@ export type ReaderProps = {
   /** 页面工具变化回调；未受控时 Reader 同时更新内部工具。 */
   onSelectedToolChange?: (tool: ReaderPageTool) => void
   paintingTool?: DrawingTool
+  /** PaintingBoard 工具变化回调；未受控时 Reader 同时更新内部工具。 */
+  onPaintingToolChange?: (tool: DrawingTool) => void
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
   /** 绘图颜色变化回调；未受控时 Reader 同时更新内部颜色。 */
@@ -582,7 +589,8 @@ export function Reader({
   onTogglePageBookmark,
   selectedTool,
   onSelectedToolChange,
-  paintingTool = 'pen',
+  paintingTool,
+  onPaintingToolChange,
   drawingStrokeColor,
   onDrawingStrokeColorChange,
   pagePaintings,
@@ -621,6 +629,13 @@ export function Reader({
     useState<ReaderPageTool>('text-selection')
   const [internalDrawingStrokeColor, setInternalDrawingStrokeColor] =
     useState('#2563eb')
+  const [internalPaintingControllerData, setInternalPaintingControllerData] =
+    useState<PaintingControllerData>({
+      tool: 'pen',
+      minimap: false,
+      strokeColor: '#2563eb',
+      strokeWidth: 3
+    })
   const [internalHighlightColor, setInternalHighlightColor] = useState<
     string | undefined
   >(undefined)
@@ -698,6 +713,20 @@ export function Reader({
   const resolvedSelectedTool = selectedTool ?? internalSelectedTool
   const resolvedDrawingStrokeColor =
     drawingStrokeColor ?? internalDrawingStrokeColor
+  const resolvedPaintingTool =
+    paintingTool ?? internalPaintingControllerData.tool
+  const resolvedPaintingControllerData = useMemo<PaintingControllerData>(
+    () => ({
+      ...internalPaintingControllerData,
+      tool: resolvedPaintingTool,
+      strokeColor: resolvedDrawingStrokeColor
+    }),
+    [
+      internalPaintingControllerData,
+      resolvedDrawingStrokeColor,
+      resolvedPaintingTool
+    ]
+  )
   const resolvedHighlightColor = highlightColor ?? internalHighlightColor
   const hasDocumentPages = documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
@@ -936,11 +965,19 @@ export function Reader({
     (nextTool: ReaderPageTool) => {
       if (selectedTool === undefined) setInternalSelectedTool(nextTool)
       onSelectedToolChange?.(nextTool)
+      // 矩形选框或绘制工具 → 自动切换到双指模式，避免单指滑动干扰框选/绘制手势
       if (
-        nextTool === 'rect-selection' &&
+        (nextTool === 'rect-selection' || nextTool === 'drawing') &&
         resolvedTouchPanMode !== 'two-finger'
       ) {
         handleTouchPanModeChange('two-finger')
+      }
+      // 文字选择工具 → 自动切换到单指模式，方便单指滚动浏览文本
+      else if (
+        nextTool === 'text-selection' &&
+        resolvedTouchPanMode !== 'single-finger'
+      ) {
+        handleTouchPanModeChange('single-finger')
       }
     },
     [
@@ -957,6 +994,28 @@ export function Reader({
       onDrawingStrokeColorChange?.(color)
     },
     [drawingStrokeColor, onDrawingStrokeColorChange]
+  )
+
+  const handlePaintingControllerDataChange = useCallback(
+    (nextData: PaintingControllerData) => {
+      setInternalPaintingControllerData(nextData)
+
+      if (nextData.tool !== resolvedPaintingTool) {
+        onPaintingToolChange?.(nextData.tool)
+      }
+      if (
+        nextData.strokeColor !== undefined &&
+        nextData.strokeColor !== resolvedDrawingStrokeColor
+      ) {
+        handleDrawingStrokeColorChange(nextData.strokeColor)
+      }
+    },
+    [
+      handleDrawingStrokeColorChange,
+      onPaintingToolChange,
+      resolvedDrawingStrokeColor,
+      resolvedPaintingTool
+    ]
   )
 
   const handleHighlightColorChange = useCallback(
@@ -1510,8 +1569,10 @@ export function Reader({
           containMarginBottom={resolvedVerticalMargins.bottom}
           containMarginY={resolvedVerticalMargins.legacy}
           selectedTool={resolvedSelectedTool}
-          paintingTool={paintingTool}
+          paintingTool={resolvedPaintingTool}
           drawingStrokeColor={resolvedDrawingStrokeColor}
+          paintingControllerData={resolvedPaintingControllerData}
+          onPaintingControllerDataChange={handlePaintingControllerDataChange}
           pagePaintings={resolvedPagePaintings}
           onPagePaintingChange={handlePagePaintingChange}
           showPageBrowser={showPageBrowser}
@@ -1608,6 +1669,8 @@ export function Reader({
             edgeCropEditing={resolvedEdgeCropEditing}
             selectedTool={resolvedSelectedTool}
             drawingStrokeColor={resolvedDrawingStrokeColor}
+            paintingControllerData={resolvedPaintingControllerData}
+            onPaintingControllerDataChange={handlePaintingControllerDataChange}
             historyStatus={bottomBarHistoryStatus}
             selectionRef={popoverSelectionRef}
             onRenderModeChange={handleRenderModeChange}

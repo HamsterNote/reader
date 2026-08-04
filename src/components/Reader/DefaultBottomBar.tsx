@@ -4,6 +4,7 @@ import {
   Popover,
   PopoverSeparator
 } from '@hamster-note/components'
+import type { PaintingControllerData } from '@hamster-note/painting'
 import { type RefObject, useEffect } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
@@ -17,10 +18,14 @@ import type { ReaderRenderMode } from '../Reader'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
 import { DefaultBottomBarModeControls } from './DefaultBottomBarModeControls'
 import {
-  DEFAULT_BOTTOM_BAR_COLORS,
+  BottomBarHistoryControls,
+  BottomBarToolButtons,
+  BottomBarColorControls,
+  DrawingBottomBarStack
+} from './DefaultBottomBarControls'
+import {
   DEFAULT_BOTTOM_BAR_TOOLS,
-  getFontScaleLabel,
-  getTranslucentColor
+  getFontScaleLabel
 } from './defaultBottomBarConfig'
 import {
   useBottomBarMenus,
@@ -38,6 +43,7 @@ export type DefaultBottomBarProps = {
   readonly edgeCropEditing: boolean
   readonly selectedTool: ReaderPageTool
   readonly drawingStrokeColor: string
+  readonly paintingControllerData: PaintingControllerData
   readonly historyStatus: ReaderAnnotationHistoryStatus
   readonly selectionRef: RefObject<ReaderSelectionRef | null>
   readonly onRenderModeChange: (mode: ReaderRenderMode) => void
@@ -47,6 +53,9 @@ export type DefaultBottomBarProps = {
   readonly onEdgeCropEditingChange: (editing: boolean) => void
   readonly onSelectedToolChange: (tool: ReaderPageTool) => void
   readonly onDrawingStrokeColorChange: (color: string) => void
+  readonly onPaintingControllerDataChange: (
+    data: PaintingControllerData
+  ) => void
   readonly onHighlightColorChange: ((color: string) => void) | undefined
 }
 
@@ -70,190 +79,157 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
     ? DEFAULT_BOTTOM_BAR_TOOLS.filter(({ tool }) => tool === 'text-selection')
     : DEFAULT_BOTTOM_BAR_TOOLS
 
-  const toolButtons = visibleTools.map(({ tool, icon, label }) => (
-    <Button
-      key={tool}
-      type='button'
-      size='small'
-      variant={props.selectedTool === tool ? 'primary' : 'ghost'}
-      aria-pressed={props.selectedTool === tool}
-      aria-label={`${label}工具`}
-      data-testid={`tool-bottom-bar-${tool}`}
-      onClick={() => props.onSelectedToolChange(tool)}
+  const readerToolbar = (
+    <Popover
+      ref={props.selectedTool === 'drawing' ? undefined : props.bottomBarRef}
+      edge='bottom'
+      edgeOffset={16}
+      relative
+      theme={theme}
+      role='toolbar'
+      aria-label='工具栏'
+      data-testid='tool-bottom-bar'
+      style={{
+        boxSizing: 'border-box',
+        maxWidth: 'calc(100% - 16px)',
+        overflowX: 'auto',
+        whiteSpace: 'nowrap'
+      }}
     >
-      <Icon name={icon} />
-      {width >= 1280 && label}
-    </Button>
-  ))
-
-  return (
-    <>
-      <Popover
-        ref={props.bottomBarRef}
-        edge='bottom'
-        edgeOffset={16}
-        relative
-        theme={theme}
-        role='toolbar'
-        aria-label='工具栏'
-        data-testid='tool-bottom-bar'
-        style={{
-          boxSizing: 'border-box',
-          maxWidth: 'calc(100% - 16px)',
-          overflowX: 'auto',
-          whiteSpace: 'nowrap'
-        }}
-      >
-        <Button
-          type='button'
-          size='small'
-          variant='ghost'
-          disabled={!props.historyStatus.canUndo}
-          aria-label='撤销'
-          data-testid='tool-bottom-bar-undo'
-          onClick={() => props.selectionRef.current?.undo()}
-        >
-          <Icon name='undo' />
-        </Button>
-        <Button
-          type='button'
-          size='small'
-          variant='ghost'
-          disabled={!props.historyStatus.canRedo}
-          aria-label='恢复'
-          data-testid='tool-bottom-bar-redo'
-          onClick={() => props.selectionRef.current?.redo()}
-        >
-          <Icon name='redo' />
-        </Button>
-        <PopoverSeparator />
-        <DefaultBottomBarModeControls
-          renderMode={props.renderMode}
-          ocrEnabled={props.ocrEnabled}
-          onRenderModeChange={props.onRenderModeChange}
-          onOcrChange={props.onOcrChange}
-        />
-        {!layoutDisabled && (
-          <>
-            <Button
-              type='button'
-              size='small'
-              variant={
-                props.touchPanMode === 'two-finger' ? 'primary' : 'ghost'
-              }
-              disabled={layoutDisabled}
-              aria-label={
-                props.touchPanMode === 'single-finger'
-                  ? '切换到双指滑动模式'
-                  : '切换到单指滑动模式'
-              }
-              aria-pressed={props.touchPanMode === 'two-finger'}
-              data-testid='tool-bottom-bar-touch-pan-mode'
-              onClick={() =>
-                props.onTouchPanModeChange(
-                  props.touchPanMode === 'single-finger'
-                    ? 'two-finger'
-                    : 'single-finger'
-                )
-              }
-            >
-              <Icon name='touch' />
-            </Button>
-            <Button
-              type='button'
-              size='small'
-              variant={props.edgeCropEditing ? 'primary' : 'ghost'}
-              disabled={layoutDisabled}
-              aria-label='边缘裁切'
-              aria-pressed={props.edgeCropEditing}
-              data-testid='tool-bottom-bar-edge-crop'
-              onClick={() =>
-                props.onEdgeCropEditingChange(!props.edgeCropEditing)
-              }
-            >
-              <Icon name='rectangle' />
-            </Button>
-            <PopoverSeparator />
-          </>
-        )}
-        {width < 768 ? (
+      <BottomBarHistoryControls
+        historyStatus={props.historyStatus}
+        selectionRef={props.selectionRef}
+      />
+      <PopoverSeparator />
+      <DefaultBottomBarModeControls
+        renderMode={props.renderMode}
+        ocrEnabled={props.ocrEnabled}
+        onRenderModeChange={props.onRenderModeChange}
+        onOcrChange={props.onOcrChange}
+      />
+      {!layoutDisabled && (
+        <>
           <Button
             type='button'
             size='small'
-            variant='primary'
-            aria-label='工具菜单'
+            variant={props.touchPanMode === 'two-finger' ? 'primary' : 'ghost'}
+            disabled={layoutDisabled}
+            aria-label={
+              props.touchPanMode === 'single-finger'
+                ? '切换到双指滑动模式'
+                : '切换到单指滑动模式'
+            }
+            aria-pressed={props.touchPanMode === 'two-finger'}
+            data-testid='tool-bottom-bar-touch-pan-mode'
+            onClick={() =>
+              props.onTouchPanModeChange(
+                props.touchPanMode === 'single-finger'
+                  ? 'two-finger'
+                  : 'single-finger'
+              )
+            }
+          >
+            <Icon name='touch' />
+          </Button>
+          <Button
+            type='button'
+            size='small'
+            variant={props.edgeCropEditing ? 'primary' : 'ghost'}
+            disabled={layoutDisabled}
+            aria-label='边缘裁切'
+            aria-pressed={props.edgeCropEditing}
+            data-testid='tool-bottom-bar-edge-crop'
+            onClick={() =>
+              props.onEdgeCropEditingChange(!props.edgeCropEditing)
+            }
+          >
+            <Icon name='rectangle' />
+          </Button>
+          <PopoverSeparator />
+        </>
+      )}
+      {width < 768 ? (
+        <Button
+          type='button'
+          size='small'
+          variant='primary'
+          aria-label='工具菜单'
+          aria-haspopup='menu'
+          aria-expanded={menus.toolMenuAnchor !== null}
+          aria-controls={menus.toolMenuId}
+          data-testid='tool-bottom-bar-tool-menu'
+          onClick={(event) => {
+            const anchor = event.currentTarget
+            menus.setFontMenuAnchor(null)
+            menus.setToolMenuAnchor((current) =>
+              current === null ? anchor : null
+            )
+          }}
+        >
+          <Icon
+            name={
+              visibleTools.find(({ tool }) => tool === props.selectedTool)
+                ?.icon ?? 'type'
+            }
+          />
+        </Button>
+      ) : (
+        <BottomBarToolButtons
+          tools={visibleTools}
+          selectedTool={props.selectedTool}
+          showLabels={width >= 1280}
+          onSelectedToolChange={props.onSelectedToolChange}
+        />
+      )}
+      {!layoutDisabled && (
+        <>
+          <PopoverSeparator />
+          <BottomBarColorControls
+            drawingStrokeColor={props.drawingStrokeColor}
+            onDrawingStrokeColorChange={props.onDrawingStrokeColorChange}
+            onHighlightColorChange={props.onHighlightColorChange}
+          />
+        </>
+      )}
+      {visibleFontScale !== undefined && (
+        <>
+          <PopoverSeparator />
+          <Button
+            type='button'
+            size='small'
+            variant='ghost'
             aria-haspopup='menu'
-            aria-expanded={menus.toolMenuAnchor !== null}
-            aria-controls={menus.toolMenuId}
-            data-testid='tool-bottom-bar-tool-menu'
+            aria-expanded={menus.fontMenuAnchor !== null}
+            aria-controls={menus.fontMenuId}
+            data-testid='tool-bottom-bar-font-scale'
             onClick={(event) => {
               const anchor = event.currentTarget
-              menus.setFontMenuAnchor(null)
-              menus.setToolMenuAnchor((current) =>
+              menus.setToolMenuAnchor(null)
+              menus.setFontMenuAnchor((current) =>
                 current === null ? anchor : null
               )
             }}
           >
-            <Icon
-              name={
-                visibleTools.find(({ tool }) => tool === props.selectedTool)
-                  ?.icon ?? 'type'
-              }
-            />
+            字体：{getFontScaleLabel(visibleFontScale)}
           </Button>
-        ) : (
-          toolButtons
-        )}
-        {!layoutDisabled && (
-          <>
-            <PopoverSeparator />
-            {DEFAULT_BOTTOM_BAR_COLORS.map(({ name, label, value }) => (
-              <button
-                key={name}
-                type='button'
-                className='hamster-reader__bottom-bar-color'
-                aria-label={`${label}工具颜色`}
-                aria-pressed={props.drawingStrokeColor === value}
-                data-testid={`tool-bottom-bar-color-${name}`}
-                onClick={() => {
-                  props.onDrawingStrokeColorChange(value)
-                  props.onHighlightColorChange?.(getTranslucentColor(value))
-                }}
-                style={{
-                  backgroundColor: value,
-                  borderColor:
-                    props.drawingStrokeColor === value
-                      ? 'currentColor'
-                      : 'transparent'
-                }}
-              />
-            ))}
-          </>
-        )}
-        {visibleFontScale !== undefined && (
-          <>
-            <PopoverSeparator />
-            <Button
-              type='button'
-              size='small'
-              variant='ghost'
-              aria-haspopup='menu'
-              aria-expanded={menus.fontMenuAnchor !== null}
-              aria-controls={menus.fontMenuId}
-              data-testid='tool-bottom-bar-font-scale'
-              onClick={(event) => {
-                const anchor = event.currentTarget
-                menus.setToolMenuAnchor(null)
-                menus.setFontMenuAnchor((current) =>
-                  current === null ? anchor : null
-                )
-              }}
-            >
-              字体：{getFontScaleLabel(visibleFontScale)}
-            </Button>
-          </>
-        )}
-      </Popover>
+        </>
+      )}
+    </Popover>
+  )
+
+  return (
+    <>
+      {props.selectedTool === 'drawing' ? (
+        <DrawingBottomBarStack
+          bottomBarRef={props.bottomBarRef}
+          readerToolbar={readerToolbar}
+          paintingControllerData={props.paintingControllerData}
+          theme={theme}
+          onPaintingControllerDataChange={props.onPaintingControllerDataChange}
+        />
+      ) : (
+        readerToolbar
+      )}
       <DefaultBottomBarMenus
         fontScale={visibleFontScale}
         selectedTool={props.selectedTool}

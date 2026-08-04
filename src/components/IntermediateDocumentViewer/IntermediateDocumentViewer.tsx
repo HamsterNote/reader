@@ -1,5 +1,9 @@
 import { Loading } from '@hamster-note/components'
-import type { DrawingTool, DrawingValue } from '@hamster-note/painting'
+import type {
+  DrawingTool,
+  DrawingValue,
+  PaintingControllerData
+} from '@hamster-note/painting'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
@@ -657,6 +661,8 @@ export type IntermediateDocumentViewerProps = {
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
   paintingTool?: DrawingTool
   drawingStrokeColor?: string
+  paintingControllerData?: PaintingControllerData
+  onPaintingControllerDataChange?: (data: PaintingControllerData) => void
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
@@ -1414,8 +1420,8 @@ type ViewerContentProps = PageResources & {
   containMarginBottom?: number
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
-  paintingTool?: DrawingTool
-  drawingStrokeColor?: string
+  paintingControllerData: PaintingControllerData
+  onPaintingControllerDataChange: (data: PaintingControllerData) => void
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
@@ -1456,6 +1462,8 @@ type PendingTextAnchorOperation = {
   readonly source: 'restore' | 'bookmark'
   readonly token: symbol
 }
+
+function ignorePaintingControllerChange() {}
 
 const getVirtualPaperStateKey = (state: ReaderVirtualPaperState): string =>
   `${state.x}:${state.y}:${state.scale}:${state.anchor ? getTextAnchorKey(state.anchor) : ''}`
@@ -1575,8 +1583,8 @@ type IntermediateDocumentPagesProps = PageResources & {
     actualDuration: number
   ) => void
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
-  paintingTool?: DrawingTool
-  drawingStrokeColor?: string
+  paintingControllerData: PaintingControllerData
+  onPaintingControllerDataChange: (data: PaintingControllerData) => void
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
@@ -1745,8 +1753,8 @@ function IntermediateDocumentPages({
   onRectPointerUp,
   onPageRenderTiming,
   selectedTool,
-  paintingTool,
-  drawingStrokeColor,
+  paintingControllerData,
+  onPaintingControllerDataChange,
   pagePaintings,
   onPagePaintingChange,
   drawingScale,
@@ -2094,8 +2102,8 @@ function IntermediateDocumentPages({
                     <PageDrawingLayer
                       enabled={selectedTool === 'drawing'}
                       pageId={publicPageId}
-                      tool={paintingTool}
-                      strokeColor={drawingStrokeColor}
+                      controllerData={paintingControllerData}
+                      onControllerDataChange={onPaintingControllerDataChange}
                       value={pagePaintings?.[publicPageId]}
                       canvasScale={drawingScale * pagePreviewScale}
                       onChange={
@@ -3181,8 +3189,8 @@ function ViewerContent({
   containMarginBottom,
   containMarginY,
   selectedTool,
-  paintingTool,
-  drawingStrokeColor,
+  paintingControllerData,
+  onPaintingControllerDataChange,
   pagePaintings,
   onPagePaintingChange,
   drawingScale,
@@ -3906,8 +3914,8 @@ function ViewerContent({
       onRectPointerUp={handleRectPointerUp}
       onPageRenderTiming={onPageRenderTiming}
       selectedTool={selectedTool}
-      paintingTool={paintingTool}
-      drawingStrokeColor={drawingStrokeColor}
+      paintingControllerData={paintingControllerData}
+      onPaintingControllerDataChange={onPaintingControllerDataChange}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={drawingScale}
@@ -4146,6 +4154,8 @@ export function IntermediateDocumentViewer({
   selectedTool,
   paintingTool,
   drawingStrokeColor,
+  paintingControllerData,
+  onPaintingControllerDataChange,
   pagePaintings,
   onPagePaintingChange,
   showPageBrowser = false,
@@ -4163,6 +4173,18 @@ export function IntermediateDocumentViewer({
 }: IntermediateDocumentViewerProps) {
   // 编辑模式下页面以未裁切尺寸显示，effectiveEdgeCrop 为 undefined
   const effectiveEdgeCrop = resolveEffectiveEdgeCrop(edgeCropEditing, edgeCrop)
+  const resolvedPaintingControllerData = useMemo<PaintingControllerData>(
+    () =>
+      paintingControllerData ?? {
+        tool: paintingTool ?? 'pen',
+        minimap: false,
+        strokeColor: drawingStrokeColor ?? '#2563eb',
+        strokeWidth: 3
+      },
+    [drawingStrokeColor, paintingControllerData, paintingTool]
+  )
+  const handlePaintingControllerDataChange =
+    onPaintingControllerDataChange ?? ignorePaintingControllerChange
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
   // instrumentation.
@@ -7699,8 +7721,8 @@ export function IntermediateDocumentViewer({
       containMarginBottom={containMarginBottom}
       containMarginY={containMarginY}
       selectedTool={selectedTool}
-      paintingTool={paintingTool}
-      drawingStrokeColor={drawingStrokeColor}
+      paintingControllerData={resolvedPaintingControllerData}
+      onPaintingControllerDataChange={handlePaintingControllerDataChange}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={virtualPaperTransform.scale}

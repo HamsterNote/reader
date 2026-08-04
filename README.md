@@ -224,7 +224,7 @@ Text mode renders document text and content-level `IntermediateImage` entries as
 
 In layout mode, `selectedTool` switches the active page interaction without replacing the virtualized reader. Existing zoom, page-range, OCR, lazy loading, and linked-selection behavior therefore remains available in every tool mode.
 
-For documents with pages, `Reader` renders a built-in bottom toolbar by default. It includes undo/redo, Layout/Text mode, touch pan, edge crop, selection tools, drawing/highlight colors, and the font-scale menu when `fontScale` is provided. Omit the value props to let Reader manage toolbar state internally, or pair them with their `on...Change` callbacks for controlled state.
+For documents with pages, `Reader` renders a built-in bottom toolbar by default. It includes undo/redo, Layout/Text mode, touch pan, edge crop, selection tools, drawing/highlight colors, and the font-scale menu when `fontScale` is provided. When drawing is active, the same bottom-bar area also renders `@hamster-note/painting`'s controlled painting tools, so every page shares the selected drawing tool, stroke color, width, and related options. Omit the value props to let Reader manage toolbar state internally, or pair them with their `on...Change` callbacks for controlled state.
 
 Pass a React node through `bottomBar` to replace the built-in toolbar. Pass `bottomBar={null}` to disable it explicitly.
 
@@ -242,7 +242,7 @@ const [pagePaintings, setPagePaintings] = useState<ReaderPagePaintingMap>({})
 
 - `text-selection` uses the same linked ranges in layout and text modes (`ranges`, `onHighlight`, `onUpdateRange`).
 - `rect-selection` uses the existing rectangle API (`rects`, `onCreateRect`, `onUpdateRect`).
-- `drawing` enables a per-page `DrawingSurface`; painting map keys use stable public IDs such as `page-1` and `page-2`.
+- `drawing` enables a per-page `PaintingBoard` with its internal toolbar disabled. Reader renders the shared `PaintingController` in its own bottom-bar area; `paintingTool` / `onPaintingToolChange` and `drawingStrokeColor` / `onDrawingStrokeColorChange` can control its tool and color. Painting map keys use stable public IDs such as `page-1` and `page-2`.
 - An explicitly supplied legacy `tool` prop takes precedence over the text/rectangle mapping from `selectedTool`.
 - `renderMode='text'` remains text-only and does not mount drawing or rectangle overlays.
 

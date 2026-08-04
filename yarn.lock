@@ -498,12 +498,16 @@
     mdast-util-to-markdown "^2.1.2"
     micromark-extension-gfm "^3.0.0"
 
-"@hamster-note/painting@0.1.1-beta.2":
-  version "0.1.1-beta.2"
-  resolved "https://registry.yarnpkg.com/@hamster-note/painting/-/painting-0.1.1-beta.2.tgz#5603f6b538898760f8f464f57357a0f383f7e946"
-  integrity sha512-eVmMcJJ1thdYzzBa1tYw/k05RD3+B8PA7SjNOrVqi2ehMmepaQH2SuKspyf/2xgUC/B0FGoQPhlLlhsShBepJQ==
+"@hamster-note/painting@0.4.0":
+  version "0.4.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/painting/-/painting-0.4.0.tgz#a430a9bee807d8bcd328c7d679003f7deeeb9e77"
+  integrity sha512-eIXmJHokIJjbmnyUBgwBh6hZVhtSSKqYxd0STGjZMtBe70HebL/L4D1CwI3+E2g52TX/RiS8PJpw1Ss6hdeBMA==
   dependencies:
+    "@hamster-note/components" "0.2.1-beta.3"
+    "@hamster-note/virtual-paper" "0.1.0-beta.2"
+    "@system-ui-js/multi-drag" "0.4.0"
     "@system-ui-js/multi-drag-core" "0.4.0"
+    use-undo "1.2.0"
 
 "@hamster-note/pdf-parser@^1.0.0":
   version "1.0.0"
@@ -547,6 +551,13 @@
     class-transformer "^0.5.1"
     class-validator "^0.14.1"
     reflect-metadata "^0.2.2"
+
+"@hamster-note/virtual-paper@0.1.0-beta.2":
+  version "0.1.0-beta.2"
+  resolved "https://registry.yarnpkg.com/@hamster-note/virtual-paper/-/virtual-paper-0.1.0-beta.2.tgz#2cff4d99116c9665dc9eef94c57a3a97d7f2c580"
+  integrity sha512-x8HN06mlbwEvpOXrn/j/s5ggploDzjwfTTEnKZphrFqnif2+UYngJfQrhTyXZjiUYM0iSlctD6wl/q4KVj2aiQ==
+  dependencies:
+    "@system-ui-js/multi-drag" "^0.4.0"
 
 "@hamster-note/virtual-paper@1.1.0":
   version "1.1.0"
@@ -1009,7 +1020,7 @@
   resolved "https://registry.yarnpkg.com/@system-ui-js/multi-drag-core/-/multi-drag-core-0.4.0.tgz#68dd401af22691ca55f840e0fd4b7818794473d6"
   integrity sha512-7V366jAmK8hUjPJi9yYngabhuE+ixnRxZS7lw/1uNbxEYLaR/Mh5XtxMvY/gGHcL7tdJtYzE5lF1i786jKbKIA==
 
-"@system-ui-js/multi-drag@^0.4.0":
+"@system-ui-js/multi-drag@0.4.0", "@system-ui-js/multi-drag@^0.4.0":
   version "0.4.0"
   resolved "https://registry.yarnpkg.com/@system-ui-js/multi-drag/-/multi-drag-0.4.0.tgz#0404192470eaa84a1afbe9ed01cf1ea1a2a12097"
   integrity sha512-gZwFJ2hrpq8CCmJhdoViIQAFd1cD+o8uWJUP/+Myo2xuqvamIuZdDsd9rIaD+JV6otA9+JF2O9XV0vozmqafOg==
@@ -4694,7 +4705,7 @@ uri-js@^4.2.2:
   dependencies:
     punycode "^2.1.0"
 
-use-undo@^1.2.0:
+use-undo@1.2.0, use-undo@^1.2.0:
   version "1.2.0"
   resolved "https://registry.yarnpkg.com/use-undo/-/use-undo-1.2.0.tgz#fed1ed5e698b07acaa3e6ea828fd1ea989682914"
   integrity sha512-ZzrdoHH67DCMuWbTQ14MKX2YRhzzCZMd9dtiaSu3mLzxd/iXfvKY6m6qCIAlU/Psmq328o2o4PvM/keGijXCIA==
