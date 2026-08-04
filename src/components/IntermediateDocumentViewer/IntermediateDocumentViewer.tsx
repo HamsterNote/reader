@@ -3114,6 +3114,20 @@ function getEffectiveEdgeCrop(
   return edgeCropEditing ? undefined : edgeCrop
 }
 
+function resolveHighlightPopover(
+  highlightPopover: ReaderHighlightPopover | undefined,
+  selectedHighlight: ReaderSelectionRange | null,
+  selectionPopover: ReactNode
+): ReactNode {
+  if (typeof highlightPopover !== 'function') {
+    return highlightPopover ?? selectionPopover
+  }
+
+  return selectedHighlight
+    ? highlightPopover(selectedHighlight)
+    : selectionPopover
+}
+
 function ViewerContent({
   rootClassName,
   viewerRootRef,
@@ -3774,14 +3788,11 @@ function ViewerContent({
     selectedHighlight
   ])
 
-  let resolvedHighlightPopover: ReactNode
-  if (typeof highlightPopover === 'function') {
-    resolvedHighlightPopover = selectedHighlight
-      ? highlightPopover(selectedHighlight)
-      : selectionPopover
-  } else {
-    resolvedHighlightPopover = highlightPopover ?? selectionPopover
-  }
+  const resolvedHighlightPopover = resolveHighlightPopover(
+    highlightPopover,
+    selectedHighlight,
+    selectionPopover
+  )
   const existingHighlightPopover =
     selectedHighlight && onCommentHighlight ? (
       <div className='hamster-reader__highlight-popover'>

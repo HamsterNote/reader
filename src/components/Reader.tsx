@@ -90,6 +90,19 @@ type ReaderPositionHandoff<T> = {
   readonly value: T
 }
 
+function resolvePositionHandoff<T>(
+  handoff: ReaderPositionHandoff<T> | null,
+  document: ReaderDocumentInput,
+  persistedValueKey: string,
+  persistedValue: T | undefined
+): T | undefined {
+  return handoff !== null &&
+    handoff.document === document &&
+    handoff.replacedValueKey === persistedValueKey
+    ? handoff.value
+    : persistedValue
+}
+
 const getReaderTextProgressKey = (
   progress: ReaderTextReadingProgress | undefined
 ): string =>
@@ -417,6 +430,38 @@ function getPageRects(
   )
 }
 
+function resolveSelectionRanges(
+  dataRanges: ReaderSelectionRange[] | undefined,
+  ranges: ReaderSelectionRange[] | undefined,
+  selectionsByPage: ReaderPageTextSelectionMap
+): ReaderSelectionRange[] | undefined {
+  return (
+    dataRanges ??
+    ranges ??
+    (Object.keys(selectionsByPage).length > 0
+      ? getLinkedRanges(selectionsByPage)
+      : undefined)
+  )
+}
+
+function resolveSelectionRectangles(
+  dataRects: ReaderSelectionRectangle[] | undefined,
+  rects: ReaderSelectionRectangle[] | undefined,
+  selectionsByPage: ReaderPageRectSelectionMap
+): ReaderSelectionRectangle[] | undefined {
+  return (
+    dataRects ??
+    rects ??
+    (Object.keys(selectionsByPage).length > 0
+      ? getPageRects(selectionsByPage)
+      : undefined)
+  )
+}
+
+function hasDefinedValue(values: readonly unknown[]): boolean {
+  return values.some((value) => value !== undefined)
+}
+
 function normalizeAnnotationHistoryOptions(
   annotationHistory: boolean | ReaderAnnotationHistoryOptions | undefined
 ): ReaderAnnotationHistoryOptions {
@@ -666,18 +711,16 @@ export function Reader({
   pageTextSelectionsRef.current = resolvedPageTextSelections
   const pageRectSelectionsRef = useRef(resolvedPageRectSelections)
   pageRectSelectionsRef.current = resolvedPageRectSelections
-  const resolvedRanges =
-    data?.ranges ??
-    ranges ??
-    (Object.keys(resolvedPageTextSelections).length > 0
-      ? getLinkedRanges(resolvedPageTextSelections)
-      : undefined)
-  const resolvedRects =
-    data?.rects ??
-    rects ??
-    (Object.keys(resolvedPageRectSelections).length > 0
-      ? getPageRects(resolvedPageRectSelections)
-      : undefined)
+  const resolvedRanges = resolveSelectionRanges(
+    data?.ranges,
+    ranges,
+    resolvedPageTextSelections
+  )
+  const resolvedRects = resolveSelectionRectangles(
+    data?.rects,
+    rects,
+    resolvedPageRectSelections
+  )
   const normalizedAnnotationHistory =
     normalizeAnnotationHistoryOptions(annotationHistory)
   const [historyStatus, setHistoryStatus] =
@@ -690,20 +733,18 @@ export function Reader({
     })
   const resolvedRenderMode = renderMode ?? internalRenderMode
   const previousRenderModeRef = useRef(resolvedRenderMode)
-  const resolvedTextReadingProgress =
-    textPositionHandoff !== null &&
-    textPositionHandoff.document === document &&
-    textPositionHandoff.replacedValueKey ===
-      getReaderTextProgressKey(data?.textReadingProgress)
-      ? textPositionHandoff.value
-      : data?.textReadingProgress
-  const resolvedVirtualPaperState =
-    layoutPositionHandoff !== null &&
-    layoutPositionHandoff.document === document &&
-    layoutPositionHandoff.replacedValueKey ===
-      getReaderVirtualPaperKey(data?.virtualPaper)
-      ? layoutPositionHandoff.value
-      : data?.virtualPaper
+  const resolvedTextReadingProgress = resolvePositionHandoff(
+    textPositionHandoff,
+    document,
+    getReaderTextProgressKey(data?.textReadingProgress),
+    data?.textReadingProgress
+  )
+  const resolvedVirtualPaperState = resolvePositionHandoff(
+    layoutPositionHandoff,
+    document,
+    getReaderVirtualPaperKey(data?.virtualPaper),
+    data?.virtualPaper
+  )
   const resolvedOcr = ocr ?? internalOcrEnabled
   const resolvedOcrEnabled =
     resolvedOcr === true ||
@@ -761,14 +802,16 @@ export function Reader({
       hasPageToggle: onTogglePageBookmark !== undefined,
       hasDataChange: onDataChange !== undefined
     })
-  const usesPageTextSelectionCompatibility =
-    pageTextSelections !== undefined ||
-    defaultPageTextSelections !== undefined ||
-    onPageTextSelectionsChange !== undefined
-  const usesPageRectSelectionCompatibility =
-    pageRectSelections !== undefined ||
-    defaultPageRectSelections !== undefined ||
-    onPageRectSelectionsChange !== undefined
+  const usesPageTextSelectionCompatibility = hasDefinedValue([
+    pageTextSelections,
+    defaultPageTextSelections,
+    onPageTextSelectionsChange
+  ])
+  const usesPageRectSelectionCompatibility = hasDefinedValue([
+    pageRectSelections,
+    defaultPageRectSelections,
+    onPageRectSelectionsChange
+  ])
 
   const handleSelectionRef = useCallback(
     (value: ReaderSelectionRef | null) => {
