@@ -9389,23 +9389,28 @@ describe('IntermediateDocumentViewer', () => {
       expect(textBlock).toContain('-webkit-user-select: text')
     })
 
-    it('SCSS suppresses native mobile selection handles on coarse pointers', () => {
+    it('SCSS keeps text hittable before Selection suppresses native long-press UI', () => {
       const scssSource = fs.readFileSync(
         path.resolve(__dirname, '../src/styles/reader.scss'),
         'utf-8'
       )
-      const coarsePointerStart = scssSource.indexOf('@media (pointer: coarse)')
-      const coarsePointerEnd = scssSource.indexOf('\n    }', coarsePointerStart)
-      if (coarsePointerStart === -1 || coarsePointerEnd === -1) {
-        throw new Error('Expected coarse-pointer SCSS block to exist')
+      const textBlockMatch = scssSource.match(
+        /&__intermediate-text\s*\{([^}]*)\}/
+      )
+      const suppressionBlockMatch = scssSource.match(
+        /\.hsn-selection-content--suppress-native-selection\s+&__intermediate-text\s*\{([^}]*)\}/
+      )
+      expect(textBlockMatch).toBeTruthy()
+      expect(suppressionBlockMatch).toBeTruthy()
+      if (!textBlockMatch || !suppressionBlockMatch) {
+        throw new Error('Expected selectable text and suppression SCSS blocks')
       }
 
-      const block = scssSource.slice(coarsePointerStart, coarsePointerEnd)
-      expect(block).toContain('&__intermediate-text')
-      expect(block).toContain('.hsn-selection-content &__intermediate-text')
-      expect(block).toContain('user-select: none')
-      expect(block).toContain('-webkit-user-select: none')
-      expect(block).toContain('-webkit-touch-callout: none')
+      expect(textBlockMatch[1]).toContain('user-select: text')
+      expect(textBlockMatch[1]).toContain('-webkit-user-select: text')
+      expect(suppressionBlockMatch[1]).toContain('user-select: none')
+      expect(suppressionBlockMatch[1]).toContain('-webkit-user-select: none')
+      expect(suppressionBlockMatch[1]).toContain('-webkit-touch-callout: none')
       expect(scssSource).not.toContain('--hamster-reader-selection-color')
       expect(scssSource).not.toContain('data-native-selected-range')
       expect(scssSource).not.toMatch(
