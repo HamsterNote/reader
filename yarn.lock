@@ -520,10 +520,10 @@
     pdf-lib "^1.17.1"
     pdfjs-dist "5.4.530"
 
-"@hamster-note/selection@0.1.2":
-  version "0.1.2"
-  resolved "https://registry.yarnpkg.com/@hamster-note/selection/-/selection-0.1.2.tgz#ec26ed543314e0aed938b674b5d6a8c524477ec9"
-  integrity sha512-L4tuEIonUR4wC6X6yaS80hKkw85YLLhzsfUHgcp+yYTJtjkO0rQKrLqM6kZ44qdFQ9BxY4QkoIHHt9q6/3xLAA==
+"@hamster-note/selection@0.3.0":
+  version "0.3.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/selection/-/selection-0.3.0.tgz#79da93af1a41681fa68c00827fae7ce245481349"
+  integrity sha512-yjaHECNfBfHunxZZ6n25VxO/VSOilIvTkq4WcyN1E44oDGzv9XXmAq6dexvJCurxcNcRHayUtyu5ICHNkh6vlA==
 
 "@hamster-note/txt-parser@^0.3.0":
   version "0.3.0"
