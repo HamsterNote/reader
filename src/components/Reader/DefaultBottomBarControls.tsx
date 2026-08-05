@@ -9,9 +9,11 @@ import type {
   ReaderAnnotationHistoryStatus,
   ReaderSelectionRef
 } from '../../types/selection'
-import type { ReaderPageTool } from '../Page'
+import type {
+  ReaderColorOption,
+  ReaderPageTool
+} from '../../types/readerOptions'
 import {
-  DEFAULT_BOTTOM_BAR_COLORS,
   DEFAULT_BOTTOM_BAR_TOOLS,
   getTranslucentColor
 } from './defaultBottomBarConfig'
@@ -110,28 +112,29 @@ export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
 }
 
 type BottomBarColorControlsProps = {
+  readonly colors: readonly ReaderColorOption[]
   readonly drawingStrokeColor: string
   readonly onDrawingStrokeColorChange: (color: string) => void
   readonly onHighlightColorChange: ((color: string) => void) | undefined
 }
 
 export function BottomBarColorControls(props: BottomBarColorControlsProps) {
-  return DEFAULT_BOTTOM_BAR_COLORS.map(({ name, label, value }) => (
+  return props.colors.map(({ name, color }) => (
     <button
       key={name}
       type='button'
       className='hamster-reader__bottom-bar-color'
-      aria-label={`${label}工具颜色`}
-      aria-pressed={props.drawingStrokeColor === value}
+      aria-label={`${name}工具颜色`}
+      aria-pressed={props.drawingStrokeColor === color}
       data-testid={`tool-bottom-bar-color-${name}`}
       onClick={() => {
-        props.onDrawingStrokeColorChange(value)
-        props.onHighlightColorChange?.(getTranslucentColor(value))
+        props.onDrawingStrokeColorChange(color)
+        props.onHighlightColorChange?.(getTranslucentColor(color))
       }}
       style={{
-        backgroundColor: value,
+        backgroundColor: color,
         borderColor:
-          props.drawingStrokeColor === value ? 'currentColor' : 'transparent'
+          props.drawingStrokeColor === color ? 'currentColor' : 'transparent'
       }}
     />
   ))

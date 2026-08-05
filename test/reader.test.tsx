@@ -658,6 +658,30 @@ describe('Reader public API', () => {
     })
   })
 
+  it('uses the colors prop as the default bottom bar color list', () => {
+    // Given: 宿主提供与默认颜色完全不同的公共颜色列表。
+    const onDrawingStrokeColorChange = vi.fn()
+    const onHighlightColorChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        colors={[{ name: 'brand', color: '#123456' }]}
+        onDrawingStrokeColorChange={onDrawingStrokeColorChange}
+        onHighlightColorChange={onHighlightColorChange}
+      />
+    )
+
+    // When: 用户选择自定义颜色。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-brand'))
+
+    // Then: 底栏只展示公共列表，并同步绘图与高亮颜色。
+    expect(screen.queryByTestId('tool-bottom-bar-color-green')).toBeNull()
+    expect(onDrawingStrokeColorChange).toHaveBeenCalledWith('#123456')
+    expect(onHighlightColorChange).toHaveBeenCalledWith(
+      'rgba(18, 52, 86, 0.35)'
+    )
+  })
+
   it('allows the default bottom bar to be replaced or disabled', () => {
     // Given / When: 一个 Reader 提供自定义底栏，另一个显式传入 null。
     const { rerender } = render(
@@ -2145,6 +2169,53 @@ describe('Reader prop forwarding', () => {
     // Then: the viewer receives the precise toggle capability used by ReaderData.
     expect(capturedViewerProps.bookmarks).toBeUndefined()
     expect(capturedViewerProps.onToggleBookmark).toEqual(expect.any(Function))
+  })
+
+  it('prefers persisted render mode and selected tool from ReaderData', () => {
+    // Given: 持久化 data 与旧版扁平 props 提供不同值。
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    // When: Reader 解析统一数据入口。
+    render(
+      <Reader
+        document={doc}
+        data={{ renderMode: 'layout', selectedTool: 'rect-selection' }}
+        renderMode='text'
+        selectedTool='text-selection'
+      />
+    )
+
+    // Then: data 按统一入口约定覆盖旧版 props。
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(capturedViewerProps.selectedTool).toBe('rect-selection')
+  })
+
+  it('publishes render mode and selected tool changes through ReaderData', () => {
+    // Given: 宿主通过统一数据入口控制模式和工具，并保留其他持久化字段。
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const onDataChange = vi.fn()
+    const data = {
+      hiddenPages: [2],
+      renderMode: 'layout',
+      selectedTool: 'text-selection'
+    } as const
+    render(<Reader document={doc} data={data} onDataChange={onDataChange} />)
+
+    // When: 用户分别切换页面工具与渲染模式。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-rect-selection'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    // Then: 每次变化都通过 onDataChange 发布完整的新 ReaderData。
+    expect(onDataChange).toHaveBeenNthCalledWith(1, {
+      ...data,
+      selectedTool: 'rect-selection'
+    })
+    expect(onDataChange).toHaveBeenNthCalledWith(2, {
+      ...data,
+      renderMode: 'text'
+    })
   })
 
   it('keeps precise bookmark data read-only without a precise write channel', () => {

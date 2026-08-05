@@ -10,6 +10,8 @@ import type {
   ReaderCommentChangeDetail,
   ReaderCommentChangeSource,
   ReaderCommentThreadNode,
+  ReaderColorOption,
+  ReaderData,
   ReaderInteractiveProps,
   ReaderLinkedSelectionRange,
   ReaderPageRectSelectionMap,
@@ -187,6 +189,17 @@ const _renderModeAccepted: RenderModeInReaderProps = true
 
 const _renderModeValue: ReaderRenderMode = 'layout'
 const _readerPropsRenderMode: ReaderProps['renderMode'] = _renderModeValue
+
+const _persistedReaderState: ReaderData = {
+  renderMode: 'text',
+  selectedTool: 'drawing'
+}
+const _readerColor: ReaderColorOption = { name: 'brand', color: '#123456' }
+const _readerPropsColors: ReaderProps['colors'] = [_readerColor]
+type ColorsInInteractiveProps = 'colors' extends keyof ReaderInteractiveProps
+  ? true
+  : false
+const _colorsInteractiveAccepted: AssertTrue<ColorsInInteractiveProps> = true
 
 /**
  * GREEN 合约测试：touchPanMode 是 ReaderProps 和 ReaderInteractiveProps 的已知键，
@@ -384,6 +397,13 @@ describe('Reader public selection types', () => {
     expect(_touchPanModeAccepted).toBe(true)
     expect(_touchPanModeInteractiveAccepted).toBe(true)
     expect(_readerPropsTouchPanMode).toBe('two-finger')
+  })
+
+  it('exposes persisted reader options and shared colors through public types', () => {
+    expect(_persistedReaderState.renderMode).toBe('text')
+    expect(_persistedReaderState.selectedTool).toBe('drawing')
+    expect(_readerPropsColors).toEqual([_readerColor])
+    expect(_colorsInteractiveAccepted).toBe(true)
   })
 
   it('exposes the selection magnifier switch through public Reader types', () => {

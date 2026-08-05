@@ -1,7 +1,10 @@
 import type { IconName } from '@hamster-note/components'
 
 import type { ReaderFontScale } from '../../types/fontScale'
-import type { ReaderPageTool } from '../Page'
+import type {
+  ReaderColorOption,
+  ReaderPageTool
+} from '../../types/readerOptions'
 
 export const DEFAULT_BOTTOM_BAR_TOOLS: readonly {
   readonly tool: ReaderPageTool
@@ -13,17 +16,13 @@ export const DEFAULT_BOTTOM_BAR_TOOLS: readonly {
   { tool: 'drawing', icon: 'pen', label: '绘图' }
 ]
 
-export const DEFAULT_BOTTOM_BAR_COLORS: readonly {
-  readonly name: 'blue' | 'green' | 'sand' | 'rose' | 'lavender' | 'black'
-  readonly label: string
-  readonly value: string
-}[] = [
-  { name: 'blue', label: '蓝色', value: '#7d9ec0' },
-  { name: 'green', label: '绿色', value: '#8eba8e' },
-  { name: 'sand', label: '沙色', value: '#d1b88a' },
-  { name: 'rose', label: '玫瑰色', value: '#cf9cab' },
-  { name: 'lavender', label: '紫色', value: '#a99fc4' },
-  { name: 'black', label: '黑色', value: '#2a2a2a' }
+export const DEFAULT_BOTTOM_BAR_COLORS: readonly ReaderColorOption[] = [
+  { name: 'blue', color: '#7d9ec0' },
+  { name: 'green', color: '#8eba8e' },
+  { name: 'sand', color: '#d1b88a' },
+  { name: 'rose', color: '#cf9cab' },
+  { name: 'lavender', color: '#a99fc4' },
+  { name: 'black', color: '#2a2a2a' }
 ]
 
 export const DEFAULT_FONT_SCALE_OPTIONS: readonly {

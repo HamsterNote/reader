@@ -27,6 +27,10 @@ import type {
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
+  ReaderColorOption,
+  ReaderRenderMode
+} from '../types/readerOptions'
+import type {
   ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
@@ -74,9 +78,10 @@ import type {
   ReaderPageTool
 } from './Page'
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
+import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
 
-export type ReaderRenderMode = 'layout' | 'text'
+export type { ReaderRenderMode } from '../types/readerOptions'
 
 type ReaderDocumentInput =
   | IntermediateDocument
@@ -319,6 +324,7 @@ export type ReaderProps = {
   onPaintingToolChange?: (tool: DrawingTool) => void
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
+  colors?: readonly ReaderColorOption[]
   /** 绘图颜色变化回调；未受控时 Reader 同时更新内部颜色。 */
   onDrawingStrokeColorChange?: (color: string) => void
   pagePaintings?: ReaderPagePaintingMap
@@ -637,6 +643,7 @@ export function Reader({
   paintingTool,
   onPaintingToolChange,
   drawingStrokeColor,
+  colors,
   onDrawingStrokeColorChange,
   pagePaintings,
   defaultPagePaintings,
@@ -731,7 +738,7 @@ export function Reader({
       pastCount: 0,
       futureCount: 0
     })
-  const resolvedRenderMode = renderMode ?? internalRenderMode
+  const resolvedRenderMode = data?.renderMode ?? renderMode ?? internalRenderMode
   const previousRenderModeRef = useRef(resolvedRenderMode)
   const resolvedTextReadingProgress = resolvePositionHandoff(
     textPositionHandoff,
@@ -751,7 +758,8 @@ export function Reader({
     (typeof resolvedOcr === 'object' && resolvedOcr.enabled === true)
   const resolvedTouchPanMode = touchPanMode ?? internalTouchPanMode
   const resolvedEdgeCropEditing = edgeCropEditing ?? internalEdgeCropEditing
-  const resolvedSelectedTool = selectedTool ?? internalSelectedTool
+  const resolvedSelectedTool =
+    data?.selectedTool ?? selectedTool ?? internalSelectedTool
   const resolvedDrawingStrokeColor =
     drawingStrokeColor ?? internalDrawingStrokeColor
   const resolvedPaintingTool =
@@ -919,7 +927,10 @@ export function Reader({
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
       handoffReadingPosition(resolvedRenderMode, nextMode)
-      if (renderMode === undefined) setInternalRenderMode(nextMode)
+      if (data?.renderMode === undefined && renderMode === undefined) {
+        setInternalRenderMode(nextMode)
+      }
+      onDataChange?.({ ...data, renderMode: nextMode })
       onRenderModeChange?.(nextMode)
 
       if (nextMode === 'text' && resolvedEdgeCropEditing) {
@@ -929,7 +940,9 @@ export function Reader({
     },
     [
       edgeCropEditing,
+      data,
       handoffReadingPosition,
+      onDataChange,
       onEdgeCropEditingChange,
       onRenderModeChange,
       renderMode,
@@ -1006,7 +1019,10 @@ export function Reader({
 
   const handleSelectedToolChange = useCallback(
     (nextTool: ReaderPageTool) => {
-      if (selectedTool === undefined) setInternalSelectedTool(nextTool)
+      if (data?.selectedTool === undefined && selectedTool === undefined) {
+        setInternalSelectedTool(nextTool)
+      }
+      onDataChange?.({ ...data, selectedTool: nextTool })
       onSelectedToolChange?.(nextTool)
       // 矩形选框或绘制工具 → 自动切换到双指模式，避免单指滑动干扰框选/绘制手势
       if (
@@ -1025,6 +1041,8 @@ export function Reader({
     },
     [
       handleTouchPanModeChange,
+      data,
+      onDataChange,
       onSelectedToolChange,
       resolvedTouchPanMode,
       selectedTool
@@ -1711,6 +1729,7 @@ export function Reader({
             touchPanMode={resolvedTouchPanMode}
             edgeCropEditing={resolvedEdgeCropEditing}
             selectedTool={resolvedSelectedTool}
+            colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
             drawingStrokeColor={resolvedDrawingStrokeColor}
             paintingControllerData={resolvedPaintingControllerData}
             onPaintingControllerDataChange={handlePaintingControllerDataChange}

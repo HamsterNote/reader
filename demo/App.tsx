@@ -9,6 +9,7 @@ import {
   type ReaderAnnotationHistoryStatus,
   type ReaderAnnotationHistoryValue,
   type ReaderBookmark,
+  type ReaderColorOption,
   type ReaderComment,
   type ReaderData,
   type ReaderEdgeCrop,
@@ -55,6 +56,10 @@ import {
   loadRecentFile,
   saveRecentFile
 } from './recentFileStorage'
+import {
+  parseReaderPreferences,
+  serializeReaderPreferences
+} from './readerPreferencesStorage'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -206,6 +211,15 @@ const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
 const OCR_STORAGE_PREFIX = 'hamster-reader-demo:ocr:'
 const TEXT_READING_PROGRESS_STORAGE_PREFIX =
   'hamster-reader-demo:text-reading-progress:'
+const READER_PREFERENCES_STORAGE_PREFIX = 'hamster-reader-demo:preferences:'
+const DEMO_READER_COLORS = [
+  { name: 'blue', color: '#7d9ec0' },
+  { name: 'green', color: '#8eba8e' },
+  { name: 'sand', color: '#d1b88a' },
+  { name: 'rose', color: '#cf9cab' },
+  { name: 'lavender', color: '#a99fc4' },
+  { name: 'black', color: '#2a2a2a' }
+] as const satisfies readonly ReaderColorOption[]
 
 type OcrTextsByPage = Record<number, IntermediateText[]>
 
@@ -683,6 +697,7 @@ export function App() {
   const requestIdRef = useRef(0)
   const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
+  const loadedReaderPreferencesFileNameRef = useRef<string | null>(null)
 
   // --- Selection 库集成演示 state ---
   // ranges 列表：受控模式，Reader 内部不修改，由 onSelect 回调外部追加
@@ -721,7 +736,9 @@ export function App() {
       pagePaintings,
       virtualPaper,
       textReadingProgress,
-      bookmarks
+      bookmarks,
+      renderMode,
+      selectedTool
     }),
     [
       bookmarks,
@@ -731,12 +748,24 @@ export function App() {
       pagePaintings,
       ranges,
       rects,
+      renderMode,
+      selectedTool,
       textReadingProgress,
       virtualPaper
     ]
   )
   const handleReaderDataChange = useCallback(
     (nextData: ReaderData) => {
+      if (nextData.renderMode) {
+        setRenderMode(nextData.renderMode)
+      }
+
+      if (nextData.selectedTool) {
+        setSelectedTool(nextData.selectedTool)
+        setSelectedRangeId(null)
+        setSelectedRectId(null)
+      }
+
       if (nextData.virtualPaper) {
         setVirtualPaper(nextData.virtualPaper)
       }
@@ -1118,6 +1147,16 @@ export function App() {
     )
   }, [automaticOcrEnabled, ocrPages, ocrTextsByPage])
 
+  useEffect(() => {
+    const loadedFileName = loadedReaderPreferencesFileNameRef.current
+    if (!loadedFileName) return
+
+    localStorage.setItem(
+      `${READER_PREFERENCES_STORAGE_PREFIX}${loadedFileName}`,
+      serializeReaderPreferences({ renderMode, selectedTool })
+    )
+  }, [renderMode, selectedTool])
+
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
   }, [])
@@ -1193,7 +1232,18 @@ export function App() {
         setUploadedFile(file)
         setDocument(result.document)
         setLoadedParserLabel(result.label)
-        setRenderMode(result.label === 'EPUB' ? 'text' : 'layout')
+        const readerPreferences = parseReaderPreferences(
+          localStorage.getItem(
+            `${READER_PREFERENCES_STORAGE_PREFIX}${file.name}`
+          ),
+          {
+            renderMode: result.label === 'EPUB' ? 'text' : 'layout',
+            selectedTool: 'text-selection'
+          }
+        )
+        setRenderMode(readerPreferences.renderMode)
+        setSelectedTool(readerPreferences.selectedTool)
+        loadedReaderPreferencesFileNameRef.current = file.name
         setFontScale(1.5)
         setVirtualPaper({ x: 0, y: 0, scale: 1 })
         setTextReadingProgress(
@@ -2149,6 +2199,7 @@ export function App() {
           themeColor={themeColor}
           drawingStrokeColor={toolColor}
           onDrawingStrokeColorChange={setToolColor}
+          colors={DEMO_READER_COLORS}
           comments={comments}
           onCommentsChange={handleCommentsChange}
           selectedRectId={selectedRectId}

@@ -9,12 +9,15 @@ import { type RefObject, useEffect } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
 import type {
+  ReaderColorOption,
+  ReaderPageTool,
+  ReaderRenderMode
+} from '../../types/readerOptions'
+import type {
   ReaderAnnotationHistoryStatus,
   ReaderSelectionRef
 } from '../../types/selection'
 import type { ReaderTouchPanMode } from '../IntermediateDocumentViewer'
-import type { ReaderPageTool } from '../Page'
-import type { ReaderRenderMode } from '../Reader'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
 import { DefaultBottomBarModeControls } from './DefaultBottomBarModeControls'
 import {
@@ -42,6 +45,7 @@ export type DefaultBottomBarProps = {
   readonly touchPanMode: ReaderTouchPanMode
   readonly edgeCropEditing: boolean
   readonly selectedTool: ReaderPageTool
+  readonly colors: readonly ReaderColorOption[]
   readonly drawingStrokeColor: string
   readonly paintingControllerData: PaintingControllerData
   readonly historyStatus: ReaderAnnotationHistoryStatus
@@ -185,6 +189,7 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
         <>
           <PopoverSeparator />
           <BottomBarColorControls
+            colors={props.colors}
             drawingStrokeColor={props.drawingStrokeColor}
             onDrawingStrokeColorChange={props.onDrawingStrokeColorChange}
             onHighlightColorChange={props.onHighlightColorChange}

@@ -4,6 +4,7 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle
 } from './selection'
+import type { ReaderPageTool, ReaderRenderMode } from './readerOptions'
 
 /** 单页四边裁切比例。每个值均以页面原尺寸为基准，取值范围为 0..1。 */
 export type ReaderEdgeCrop = {
@@ -57,6 +58,8 @@ export type ReaderTextReadingProgress = {
  * 传入本对象的字段优先于同名旧版扁平 props。
  */
 export type ReaderData = {
+  readonly renderMode?: ReaderRenderMode
+  readonly selectedTool?: ReaderPageTool
   readonly edgeCrop?: ReaderPageEdgeCrop
   readonly hiddenPages?: readonly (number | string)[]
   /** Layout 与 Text 模式共享的规范化高亮数据。Text 模式会实时重算渲染矩形。 */
