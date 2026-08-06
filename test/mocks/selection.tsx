@@ -135,6 +135,7 @@ export interface SelectionProps {
   onSelectRect?: (id: string | null) => void
   onUpdateRect?: (rect: SelectionRect) => void
   renderHandle?: (props: HandleRenderProps) => React.ReactNode
+  showSelectionMagnifier?: boolean
 }
 
 // ---------------------------------------------------------------------------

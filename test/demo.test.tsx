@@ -154,6 +154,7 @@ type MockReaderProps = Record<string, unknown> & {
   edgeCropEditing?: boolean
   onEdgeCropEditingChange?: (editing: boolean) => void
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+  useVirtualPaper?: boolean
 }
 
 const mockReaderProps: MockReaderProps[] = []
@@ -576,6 +577,32 @@ describe('demo parser flow', () => {
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
     expect(EpubParser.encode).not.toHaveBeenCalled()
+  })
+
+  it('defaults VirtualPaper beta off and lets the sidebar enable it', async () => {
+    // Given: a parsed document opens the Demo settings and Reader.
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('VirtualPaper Toggle Document')
+    )
+    render(<App />)
+    upload(makeFile('virtual-paper-toggle.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // Then: the beta switch is off and the Demo opts into native rendering.
+    const toggle = screen.getByRole('checkbox', {
+      name: '使用 VirtualPaper（beta）'
+    })
+    expect(toggle).not.toBeChecked()
+    expect(findDocumentReaderProps()?.useVirtualPaper).toBe(false)
+
+    // When: the user enables VirtualPaper.
+    fireEvent.click(toggle)
+
+    // Then: the same Reader receives the enabled preference.
+    await waitFor(() => {
+      expect(toggle).toBeChecked()
+      expect(findDocumentReaderProps()?.useVirtualPaper).toBe(true)
+    })
   })
 
   it.each([

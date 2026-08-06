@@ -88,24 +88,15 @@ Reader's `selectionColor`, instead of a temporary painted rectangle overlay.
 
 ## 9. Range Handle Magnifier
 
-The handle magnifier is opt-in through `showSelectionMagnifier`; it is disabled
-by default. When enabled, dragging a custom range handle exposes a compact view
-of the page directly under the handle's visual center.
+The handle magnifier is enabled by default through `showSelectionMagnifier` and
+can be disabled explicitly. Reader delegates both endpoint handles and their
+magnifier to `@hamster-note/selection` instead of injecting a custom renderer.
 
-- **Portal:** `.hamster-reader__range-magnifier` is rendered as a direct child
-  of `.hamster-reader__intermediate-document-viewer`, never inside
-  `.virtual-paper-container`; its dimensions therefore remain screen-fixed at
-  every document zoom level.
-- **Geometry:** a `120px` circular lens with `3px` white border, restrained
-  neutral shadow, and an `8px` blue center marker.
-- **Magnification:** page content is rendered at `2x` around the corrected range
-  endpoint. The handle itself is excluded from the captured page image.
-- **Placement:** center above the handle with an `18px` gap. If the reader has
-  less than `8px` of clearance above, place it below; clamp both axes to an
-  `8px` viewport inset.
-- **Interaction:** when enabled, show during mouse text-handle or rectangle-
-  handle dragging, ignore pointer input, update from the active handle center,
-  and hide on pointer up, pointer cancel, window blur, or capture failure.
+- **Ownership:** the dependency renders its built-in text and rectangle handles
+  and owns the magnifier lifecycle; Reader only forwards the public option.
+- **Interaction:** when enabled, dragging a built-in Selection handle displays
+  the dependency's magnified view around the active endpoint and hides it when
+  the handle drag ends or is cancelled.
 
 ## 10. Reflowable Document Font Control
 
@@ -207,6 +198,11 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **History:** Undo and redo remain visible as compact icon buttons at every
   responsive width and are disabled when their corresponding history action is
   unavailable.
+- **Native layout zoom:** when Layout mode runs without VirtualPaper, a compact
+  percentage button follows the history controls as its own toolbar group, with
+  separators on both sides. Its anchored menu offers 25%, 50%, 75%, 100%, 150%,
+  200%, 300%, and fit width. Fit width is the default selection, while the
+  trigger always reports the resolved percentage currently applied to pages.
 - **Render mode:** one toggle switches between Layout and Text. Its accessible
   label always names the destination mode, and its pressed state represents
   Text mode.
@@ -228,7 +224,7 @@ consumers can see how to implement the `onDragHighlight` integration.
 
 ## 15. Layout Zoom Feedback
 
-- **Placement and layer:** Layout mode renders zoom feedback in the viewer's
+- **VirtualPaper placement and layer:** VirtualPaper Layout mode renders zoom feedback in the viewer's
   top-left overlay layer, outside VirtualPaper's transformed subtree, so its
   screen-space size and position remain stable while the document scales.
 - **Lifecycle:** a real scale change shows the current rounded percentage while
@@ -241,5 +237,21 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Presentation:** the compact percentage badge uses tabular numerals, remains
   non-interactive, and stays legible over both page content and the reader
   background without competing with document controls.
+- **Native viewport:** when VirtualPaper is disabled, Layout mode uses a native
+  overflow viewport and does not render the top-left feedback badge. Selecting
+  a zoom preset or fit width keeps the page-space point under the viewport
+  center at the same screen position, subject only to native scroll clamping.
+  Reader-container two-finger pinch zoom is disabled in this mode; ordinary
+  native scrolling remains available.
+
+## 16. Demo VirtualPaper Beta Switch
+
+- **Default and scope:** Reader Settings exposes “使用 VirtualPaper（beta）” as
+  a native checkbox following the Demo's existing setting pattern. It defaults
+  to off and controls only the Demo Reader instance; the library-level Reader
+  default remains on for backward compatibility.
+- **Mode behavior:** turning the switch on restores the existing VirtualPaper
+  transform, gesture, persistence, and top-left zoom-feedback behavior. Turning
+  it off selects the native Layout viewport and its bottom-toolbar zoom menu.
 
 _(End of minimal design contract)_

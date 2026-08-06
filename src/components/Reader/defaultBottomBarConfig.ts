@@ -1,10 +1,13 @@
 import type { IconName } from '@hamster-note/components'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLayoutZoom } from '../IntermediateDocumentViewer/nativeLayoutZoom'
 import type {
   ReaderColorOption,
   ReaderPageTool
 } from '../../types/readerOptions'
+
+export type { ReaderLayoutZoom } from '../IntermediateDocumentViewer/nativeLayoutZoom'
 
 export const DEFAULT_BOTTOM_BAR_TOOLS: readonly {
   readonly tool: ReaderPageTool
@@ -34,6 +37,20 @@ export const DEFAULT_FONT_SCALE_OPTIONS: readonly {
   { label: '中', scale: 1 },
   { label: '大', scale: 1.5 },
   { label: '特大', scale: 2 }
+]
+
+export const DEFAULT_LAYOUT_ZOOM_OPTIONS: readonly {
+  readonly label: string
+  readonly zoom: ReaderLayoutZoom
+}[] = [
+  { label: '25%', zoom: 0.25 },
+  { label: '50%', zoom: 0.5 },
+  { label: '75%', zoom: 0.75 },
+  { label: '100%', zoom: 1 },
+  { label: '150%', zoom: 1.5 },
+  { label: '200%', zoom: 2 },
+  { label: '300%', zoom: 3 },
+  { label: '适配宽度', zoom: 'fit-width' }
 ]
 
 export function getFontScaleLabel(fontScale: ReaderFontScale): string {

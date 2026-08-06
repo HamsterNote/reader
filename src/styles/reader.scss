@@ -1389,6 +1389,24 @@
     pointer-events: none;
   }
 
+  // 非 VirtualPaper 的布局视口：使用浏览器原生滚动与 CSS zoom。
+  // touch-action 保留平移，同时禁止 reader container 内的双指缩放。
+  &__native-layout-viewport {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+  }
+
+  &__native-layout-container {
+    width: max-content;
+    min-width: 100%;
+    min-height: 100%;
+    box-sizing: border-box;
+    transform-origin: top left;
+  }
+
   // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
   // CSS 只负责 position:relative 作为绝对定位页面的包含块
   &__intermediate-text-spacer {

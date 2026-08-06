@@ -1101,6 +1101,54 @@ describe('Reader renderMode', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('renders native layout zoom controls when VirtualPaper is disabled', () => {
+    // Given: Layout mode explicitly opts out of VirtualPaper.
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    // When: Reader renders its built-in viewport and toolbar.
+    render(<Reader document={doc} useVirtualPaper={false} />)
+
+    // Then: the native viewport replaces VirtualPaper and exposes fit-width zoom.
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('native-layout-viewport')).toBeInTheDocument()
+    expect(capturedViewerProps.useVirtualPaper).toBe(false)
+    expect(capturedViewerProps.scale).toBeUndefined()
+    expect(capturedViewerProps.defaultScale).toBeUndefined()
+    const zoomTrigger = screen.getByTestId('tool-bottom-bar-layout-zoom')
+    expect(zoomTrigger).toHaveTextContent('%')
+
+    fireEvent.click(zoomTrigger)
+    const zoomMenu = screen.getByRole('menu', { name: '缩放菜单' })
+    expect(
+      within(zoomMenu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent?.trim())
+    ).toEqual(['25%', '50%', '75%', '100%', '150%', '200%', '300%', '适配宽度'])
+    expect(
+      within(zoomMenu).getByRole('menuitem', { name: '适配宽度' })
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    // When: the reader selects a fixed zoom preset.
+    fireEvent.click(within(zoomMenu).getByRole('menuitem', { name: '150%' }))
+
+    // Then: the trigger and viewer both receive the selected scale.
+    expect(zoomTrigger).toHaveTextContent('150%')
+    expect(capturedViewerProps.nativeLayoutZoom).toBe(1.5)
+  })
+
+  it('keeps VirtualPaper and hides native zoom controls by default', () => {
+    // Given / When: no VirtualPaper preference is supplied.
+    render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
+
+    // Then: the public default remains backward compatible.
+    expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+    expect(screen.queryByTestId('native-layout-viewport')).toBeNull()
+    expect(screen.queryByTestId('tool-bottom-bar-layout-zoom')).toBeNull()
+    expect(capturedViewerProps.useVirtualPaper).toBe(true)
+  })
+
   it('renderMode text renders the separate text viewer without VirtualPaper', () => {
     const doc = makeDocument({ pages: [makePage(1)] })
     render(<Reader document={doc} renderMode='text' />)

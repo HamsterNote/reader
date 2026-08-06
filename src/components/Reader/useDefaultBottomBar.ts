@@ -41,19 +41,23 @@ export function useBottomBarMenus() {
   const menuIdPrefix = useId()
   const [toolMenuAnchor, setToolMenuAnchor] = useState<HTMLElement | null>(null)
   const [fontMenuAnchor, setFontMenuAnchor] = useState<HTMLElement | null>(null)
+  const [zoomMenuAnchor, setZoomMenuAnchor] = useState<HTMLElement | null>(null)
   const toolMenuRef = useRef<HTMLDivElement>(null)
   const fontMenuRef = useRef<HTMLDivElement>(null)
+  const zoomMenuRef = useRef<HTMLDivElement>(null)
   const toolMenuId = `${menuIdPrefix}-tool-menu`
   const fontMenuId = `${menuIdPrefix}-font-menu`
+  const zoomMenuId = `${menuIdPrefix}-zoom-menu`
   const closeMenus = useCallback(() => {
     setToolMenuAnchor(null)
     setFontMenuAnchor(null)
+    setZoomMenuAnchor(null)
   }, [])
   const closeMenusAndRestoreFocus = useCallback(() => {
-    const activeAnchor = toolMenuAnchor ?? fontMenuAnchor
+    const activeAnchor = toolMenuAnchor ?? fontMenuAnchor ?? zoomMenuAnchor
     closeMenus()
     activeAnchor?.focus()
-  }, [closeMenus, fontMenuAnchor, toolMenuAnchor])
+  }, [closeMenus, fontMenuAnchor, toolMenuAnchor, zoomMenuAnchor])
 
   useEffect(() => {
     if (!toolMenuAnchor) return
@@ -76,7 +80,17 @@ export function useBottomBarMenus() {
   }, [fontMenuAnchor])
 
   useEffect(() => {
-    if (!toolMenuAnchor && !fontMenuAnchor) return
+    if (!zoomMenuAnchor) return
+    const frame = window.requestAnimationFrame(() => {
+      zoomMenuRef.current
+        ?.querySelector<HTMLElement>('[role="menuitem"]')
+        ?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [zoomMenuAnchor])
+
+  useEffect(() => {
+    if (!toolMenuAnchor && !fontMenuAnchor && !zoomMenuAnchor) return
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
@@ -84,8 +98,10 @@ export function useBottomBarMenus() {
       if (
         toolMenuAnchor?.contains(target) ||
         fontMenuAnchor?.contains(target) ||
+        zoomMenuAnchor?.contains(target) ||
         toolMenuRef.current?.contains(target) ||
-        fontMenuRef.current?.contains(target)
+        fontMenuRef.current?.contains(target) ||
+        zoomMenuRef.current?.contains(target)
       ) {
         return
       }
@@ -101,17 +117,27 @@ export function useBottomBarMenus() {
       document.removeEventListener('pointerdown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [closeMenus, closeMenusAndRestoreFocus, fontMenuAnchor, toolMenuAnchor])
+  }, [
+    closeMenus,
+    closeMenusAndRestoreFocus,
+    fontMenuAnchor,
+    toolMenuAnchor,
+    zoomMenuAnchor
+  ])
 
   return {
     toolMenuId,
     fontMenuId,
+    zoomMenuId,
     toolMenuRef,
     fontMenuRef,
+    zoomMenuRef,
     toolMenuAnchor,
     fontMenuAnchor,
+    zoomMenuAnchor,
     setToolMenuAnchor,
     setFontMenuAnchor,
+    setZoomMenuAnchor,
     closeMenus,
     closeMenusAndRestoreFocus
   }

@@ -69,6 +69,7 @@ import type {
 } from './IntermediateDocumentViewer'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import type { ReaderLayoutZoom } from './IntermediateDocumentViewer/nativeLayoutZoom'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { getTextAnchorKey } from './IntermediateDocumentViewer/textAnchor'
 import type {
@@ -214,6 +215,8 @@ export type ReaderProps = {
   touchPanMode?: ReaderTouchPanMode
   /** 触摸平移模式变化回调；未受控时 Reader 同时更新内部模式。 */
   onTouchPanModeChange?: (mode: ReaderTouchPanMode) => void
+  /** 是否用 VirtualPaper 渲染版面模式；默认开启以保持库级兼容。 */
+  useVirtualPaper?: boolean
   scale?: number
   defaultScale?: number
   onScaleChange?: (
@@ -251,7 +254,7 @@ export type ReaderProps = {
   onHighlightColorChange?: (color: string) => void
   highlightColor?: string
   selectionColor?: string
-  /** 是否启用选区端点放大镜，默认 false。 */
+  /** 是否启用 Selection 内置的选区端点放大镜，默认 true。 */
   showSelectionMagnifier?: boolean
   selectionPopover?: ReactNode
   highlightPopover?: ReaderHighlightPopover
@@ -522,6 +525,30 @@ function whenEnabled<Value>(enabled: boolean, value: Value): Value | undefined {
   return enabled ? value : undefined
 }
 
+function useReaderLayoutZoom() {
+  const [layoutZoom, setLayoutZoom] = useState<ReaderLayoutZoom>('fit-width')
+  const [resolvedLayoutScale, setResolvedLayoutScale] = useState(1)
+  const handleLayoutZoomChange = useCallback((nextZoom: ReaderLayoutZoom) => {
+    setLayoutZoom(nextZoom)
+    if (nextZoom !== 'fit-width') setResolvedLayoutScale(nextZoom)
+  }, [])
+
+  return {
+    layoutZoom,
+    resolvedLayoutScale,
+    setResolvedLayoutScale,
+    handleLayoutZoomChange
+  }
+}
+
+function resolveBottomBarLayoutZoom(
+  renderMode: ReaderRenderMode,
+  useVirtualPaper: boolean,
+  layoutZoom: ReaderLayoutZoom
+): ReaderLayoutZoom | undefined {
+  return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
+}
+
 function resolveVerticalMargins(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
@@ -571,6 +598,7 @@ export function Reader({
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
+  useVirtualPaper = true,
   scale,
   defaultScale,
   onScaleChange,
@@ -599,7 +627,7 @@ export function Reader({
   onHighlightColorChange,
   highlightColor,
   selectionColor,
-  showSelectionMagnifier = false,
+  showSelectionMagnifier = true,
   selectionPopover,
   highlightPopover,
   onCommentHighlight,
@@ -676,6 +704,12 @@ export function Reader({
   const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
   const [internalTouchPanMode, setInternalTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
+  const {
+    layoutZoom,
+    resolvedLayoutScale,
+    setResolvedLayoutScale,
+    handleLayoutZoomChange
+  } = useReaderLayoutZoom()
   const [internalEdgeCropEditing, setInternalEdgeCropEditing] = useState(false)
   const [internalSelectedTool, setInternalSelectedTool] =
     useState<ReaderPageTool>('text-selection')
@@ -738,7 +772,8 @@ export function Reader({
       pastCount: 0,
       futureCount: 0
     })
-  const resolvedRenderMode = data?.renderMode ?? renderMode ?? internalRenderMode
+  const resolvedRenderMode =
+    data?.renderMode ?? renderMode ?? internalRenderMode
   const previousRenderModeRef = useRef(resolvedRenderMode)
   const resolvedTextReadingProgress = resolvePositionHandoff(
     textPositionHandoff,
@@ -1518,12 +1553,21 @@ export function Reader({
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
-          scale={whenEnabled(resolvedVirtualPaperState === undefined, scale)}
+          useVirtualPaper={useVirtualPaper}
+          nativeLayoutZoom={layoutZoom}
+          onNativeLayoutScaleChange={setResolvedLayoutScale}
+          scale={whenEnabled(
+            useVirtualPaper && resolvedVirtualPaperState === undefined,
+            scale
+          )}
           defaultScale={whenEnabled(
-            resolvedVirtualPaperState === undefined,
+            useVirtualPaper && resolvedVirtualPaperState === undefined,
             defaultScale
           )}
-          defaultVirtualPaperTransform={resolvedVirtualPaperState}
+          defaultVirtualPaperTransform={whenEnabled(
+            useVirtualPaper,
+            resolvedVirtualPaperState
+          )}
           onVirtualPaperTransformChangeEnd={
             handleVirtualPaperTransformChangeEnd
           }
@@ -1726,6 +1770,12 @@ export function Reader({
             isEpub={isEpub}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
+            layoutZoom={resolveBottomBarLayoutZoom(
+              resolvedRenderMode,
+              useVirtualPaper,
+              layoutZoom
+            )}
+            resolvedLayoutScale={resolvedLayoutScale}
             touchPanMode={resolvedTouchPanMode}
             edgeCropEditing={resolvedEdgeCropEditing}
             selectedTool={resolvedSelectedTool}
@@ -1738,6 +1788,7 @@ export function Reader({
             onRenderModeChange={handleRenderModeChange}
             onOcrChange={handleOcrChange}
             onFontScaleChange={handleFontScaleChange}
+            onLayoutZoomChange={handleLayoutZoomChange}
             onTouchPanModeChange={handleTouchPanModeChange}
             onEdgeCropEditingChange={handleEdgeCropEditingChange}
             onSelectedToolChange={handleSelectedToolChange}

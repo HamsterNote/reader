@@ -661,6 +661,7 @@ export function App() {
   // ocrDevMode：OCR 开发调试模式开关，开启后 OCR 文字可见（黑色 50%）并加红色外框
   const [ocrDevMode, setOcrDevMode] = useState<boolean>(false)
   const [renderMode, setRenderMode] = useState<ReaderRenderMode>('layout')
+  const [useVirtualPaper, setUseVirtualPaper] = useState(false)
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
@@ -1688,6 +1689,25 @@ export function App() {
                   }}
                 >
                   <input
+                    type='checkbox'
+                    checked={useVirtualPaper}
+                    onChange={(event) =>
+                      setUseVirtualPaper(event.currentTarget.checked)
+                    }
+                    data-testid='virtual-paper-toggle'
+                  />
+                  <span>使用 VirtualPaper（beta）</span>
+                </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
                     type='color'
                     value={themeColor}
                     onChange={(event) =>
@@ -2174,6 +2194,7 @@ export function App() {
           onTextSelectionChange={() => {}}
           onTextSelectionEnd={() => {}}
           onSelectText={() => {}}
+          useVirtualPaper={useVirtualPaper}
           selectedRangeId={selectedRangeId}
           onSelect={handleSelectionSelect}
           onLinkedDataChange={handleLinkedDataChange}

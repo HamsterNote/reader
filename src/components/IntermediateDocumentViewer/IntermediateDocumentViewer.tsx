@@ -42,6 +42,7 @@ import React, {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -78,6 +79,10 @@ import type {
 } from '../../types/selection'
 import { FLOW_LAYOUT_PAGE_WIDTH, type ReaderPageTool } from '../Page'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
+import {
+  computeCenteredScrollPosition,
+  type ReaderLayoutZoom
+} from './nativeLayoutZoom'
 import { PopoverPortal } from '../PopoverPortal'
 import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
 import { isPointOnSelectionText } from '../selection/caretResolver'
@@ -103,8 +108,6 @@ import {
 } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
 import { paginateTxtDocument } from './paginateTxtDocument'
-import { RangeHandle } from './RangeHandle'
-import { RangeMagnifierProvider } from './RangeMagnifier'
 import { ReadingProgress } from './ReadingProgress'
 import {
   computePageOriginY,
@@ -132,7 +135,6 @@ import {
   runtimePageSelectionId
 } from './selectionAdapter'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
-import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import {
   findTopTextAnchor,
   getActiveBookmarkKey,
@@ -497,6 +499,12 @@ export type IntermediateDocumentViewerProps = {
     extractedText: string
   ) => void
   // ---- Zoom props ----
+  /** 使用 VirtualPaper 承载版面模式；默认 true。 */
+  useVirtualPaper?: boolean
+  /** 非 VirtualPaper 模式的预设缩放或适配宽度策略。 */
+  nativeLayoutZoom?: ReaderLayoutZoom
+  /** 非 VirtualPaper 模式解析出实际缩放比例时触发。 */
+  onNativeLayoutScaleChange?: (scale: number) => void
   /**
    * Controlled zoom scale. When provided, internal wheel/pinch gestures do not
    * mutate scale state; they call `onScaleChange` with the next clamped value
@@ -1334,6 +1342,8 @@ type ViewerContentProps = PageResources & {
   edgeCropEditing?: boolean
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
   virtualPaperTransform: VirtualPaperTransform
+  useVirtualPaper: boolean
+  nativeLayoutZoom: ReaderLayoutZoom
   committedReaderScale: number
   scaleRange: { min: number; max: number }
   onInitialFitScale: (fitScale: number) => void
@@ -1521,7 +1531,6 @@ const getRuntimeSelectionIdFromSelectionNode = (
  */
 type IntermediateDocumentPagesProps = PageResources & {
   popoverContainerRef: React.RefObject<HTMLElement | null>
-  viewerRootElement: HTMLElement | null
   pageNumbers: number[]
   fontScale?: ReaderFontScale
   edgeCrop?: ReaderPageEdgeCrop
@@ -1704,7 +1713,6 @@ const getContentScaleStyle = (
 
 function IntermediateDocumentPages({
   popoverContainerRef,
-  viewerRootElement,
   pageNumbers,
   fontScale,
   edgeCrop,
@@ -2080,18 +2088,7 @@ function IntermediateDocumentPages({
                     onCreateRect={onCreateRect}
                     onSelectRect={onSelectRect}
                     onUpdateRect={onUpdateRect}
-                    renderHandle={(handle) => (
-                      <RangeHandle
-                        handle={handle}
-                        linkedData={runtimeLinkedData}
-                        magnifierEnabled={
-                          showSelectionMagnifier && handle.target === 'rect'
-                        }
-                        scale={drawingScale * pagePreviewScale}
-                        selectionId={shellSelectionId}
-                        viewerRoot={viewerRootElement}
-                      />
-                    )}
+                    showSelectionMagnifier={showSelectionMagnifier}
                     ref={selectionRefForRuntimeId(shellSelectionId)}
                   >
                     {pageContent}
@@ -2818,6 +2815,11 @@ function useHighlightDrag({
       }
       dragStartRef.current = dragStart
 
+      // 命中既有高亮后立即独占该指针，避免 500ms 候选期内原生文字选择或
+      // VirtualPaper 平移先于长按拖动启动；普通文本落点仍走原有选择链路。
+      if (event.cancelable) event.preventDefault()
+      event.stopPropagation()
+
       const PointerEventConstructor =
         event.currentTarget.ownerDocument.defaultView?.PointerEvent
       const dragElement = dragElementRef.current
@@ -3128,6 +3130,127 @@ function resolveHighlightPopover(
     : selectionPopover
 }
 
+function useNativeLayoutViewport(
+  useVirtualPaper: boolean,
+  viewerRootElement: HTMLDivElement | null,
+  scale: number
+) {
+  const previousScaleRef = useRef(scale)
+
+  useLayoutEffect(() => {
+    if (useVirtualPaper || !viewerRootElement) {
+      previousScaleRef.current = scale
+      return
+    }
+
+    const previousScale = previousScaleRef.current
+    if (previousScale === scale) return
+    const viewport = viewerRootElement.querySelector<HTMLElement>(
+      '.hamster-reader__native-layout-viewport'
+    )
+    if (!viewport) return
+
+    const nextPosition = computeCenteredScrollPosition(
+      viewport,
+      previousScale,
+      scale
+    )
+    viewport.scrollLeft = nextPosition.left
+    viewport.scrollTop = nextPosition.top
+    previousScaleRef.current = scale
+  }, [scale, useVirtualPaper, viewerRootElement])
+
+  useEffect(() => {
+    if (useVirtualPaper || !viewerRootElement) return
+    const viewport = viewerRootElement.querySelector<HTMLElement>(
+      '.hamster-reader__native-layout-viewport'
+    )
+    if (!viewport) return
+
+    const preventMultiTouchZoom = (event: TouchEvent) => {
+      if (event.touches.length > 1) event.preventDefault()
+    }
+    const preventGestureZoom = (event: Event) => event.preventDefault()
+    viewport.addEventListener('touchmove', preventMultiTouchZoom, {
+      passive: false
+    })
+    viewport.addEventListener('gesturestart', preventGestureZoom)
+    viewport.addEventListener('gesturechange', preventGestureZoom)
+
+    return () => {
+      viewport.removeEventListener('touchmove', preventMultiTouchZoom)
+      viewport.removeEventListener('gesturestart', preventGestureZoom)
+      viewport.removeEventListener('gesturechange', preventGestureZoom)
+    }
+  }, [useVirtualPaper, viewerRootElement])
+}
+
+type NativeLayoutViewportProps = Readonly<{
+  pagesNode: ReactNode
+  transform: VirtualPaperTransform
+  containMarginX: number | undefined
+  containMarginTop: number | undefined
+  containMarginBottom: number | undefined
+}>
+
+function NativeLayoutViewport({
+  pagesNode,
+  transform,
+  containMarginX,
+  containMarginTop,
+  containMarginBottom
+}: NativeLayoutViewportProps) {
+  return (
+    <div
+      className='virtual-paper-wrapper hamster-reader__native-layout-viewport'
+      data-testid='native-layout-viewport'
+      style={{ touchAction: 'pan-x pan-y' }}
+    >
+      <div
+        className='virtual-paper-container hamster-reader__native-layout-container'
+        style={{
+          ...buildContainerStyle(
+            containMarginTop,
+            containMarginBottom,
+            transform.scale
+          ),
+          paddingLeft:
+            containMarginX === undefined
+              ? undefined
+              : containMarginX / transform.scale,
+          paddingRight:
+            containMarginX === undefined
+              ? undefined
+              : containMarginX / transform.scale,
+          zoom: transform.scale
+        }}
+      >
+        {pagesNode}
+      </div>
+    </div>
+  )
+}
+
+function LayoutZoomIndicator({
+  useVirtualPaper,
+  percent
+}: Readonly<{
+  useVirtualPaper: boolean
+  percent: number | null
+}>) {
+  if (!useVirtualPaper || percent === null) return null
+
+  return (
+    <output
+      aria-hidden='true'
+      className='hamster-reader__layout-zoom-indicator'
+      data-testid='layout-zoom-indicator'
+    >
+      {percent}%
+    </output>
+  )
+}
+
 function ViewerContent({
   rootClassName,
   viewerRootRef,
@@ -3140,6 +3263,8 @@ function ViewerContent({
   pageSizesByPageNumber,
   flowLayoutPages,
   virtualPaperTransform,
+  useVirtualPaper,
+  nativeLayoutZoom,
   committedReaderScale,
   scaleRange,
   onInitialFitScale,
@@ -3238,6 +3363,11 @@ function ViewerContent({
   const [measuredContentSize, setMeasuredContentSize] =
     useState<ScopedContentSize | null>(null)
   const popoverContainerRef = useRef<HTMLElement | null>(null)
+  useNativeLayoutViewport(
+    useVirtualPaper,
+    viewerRootElement,
+    virtualPaperTransform.scale
+  )
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
@@ -3488,15 +3618,30 @@ function ViewerContent({
       return true
     }
 
-    if (applyInitialFit(container.getBoundingClientRect().width)) {
+    if (
+      useVirtualPaper &&
+      applyInitialFit(container.getBoundingClientRect().width)
+    ) {
       return () => {
         popoverContainerRef.current = null
       }
     }
 
+    if (!useVirtualPaper && nativeLayoutZoom !== 'fit-width') {
+      return () => {
+        popoverContainerRef.current = null
+      }
+    }
+
+    applyInitialFit(container.getBoundingClientRect().width)
+
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
-      if (entry && applyInitialFit(entry.contentRect.width)) {
+      if (
+        entry &&
+        applyInitialFit(entry.contentRect.width) &&
+        useVirtualPaper
+      ) {
         observer.disconnect()
       }
     })
@@ -3511,6 +3656,8 @@ function ViewerContent({
     onInitialFitScale,
     pageNumbers,
     pageSizesByPageNumber,
+    nativeLayoutZoom,
+    useVirtualPaper,
     viewerRootElement
   ])
 
@@ -3875,7 +4022,6 @@ function ViewerContent({
   const intermediateDocumentPages = (
     <IntermediateDocumentPages
       popoverContainerRef={popoverContainerRef}
-      viewerRootElement={viewerRootElement}
       pageNumbers={pageNumbers}
       fontScale={fontScale}
       edgeCrop={effectiveEdgeCrop}
@@ -3977,13 +4123,7 @@ function ViewerContent({
       onPointerCancelCapture={handleViewerPointerCancel}
     >
       {pageNumbers.length > 0 ? (
-        <RangeMagnifierProvider
-          enabled={showSelectionMagnifier}
-          rootElement={viewerRootElement}
-        >
-          {showSelectionMagnifier ? (
-            <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
-          ) : null}
+        <>
           <PageBrowser
             isOpen={showPageBrowser}
             pageNumbers={pageNumbers}
@@ -4018,15 +4158,10 @@ function ViewerContent({
             onTogglePageBookmark={onTogglePageBookmark}
             onClose={onPageBrowserClose}
           />
-          {activeZoomPercent === null ? null : (
-            <output
-              aria-hidden='true'
-              className='hamster-reader__layout-zoom-indicator'
-              data-testid='layout-zoom-indicator'
-            >
-              {activeZoomPercent}%
-            </output>
-          )}
+          <LayoutZoomIndicator
+            useVirtualPaper={useVirtualPaper}
+            percent={activeZoomPercent}
+          />
           <ReadingProgress
             mode='layout'
             pageNumbers={pageNumbers}
@@ -4042,42 +4177,52 @@ function ViewerContent({
             onPreviewPageVisibilityChange={onPageBrowserVisibilityChange}
             onSeekPage={onNavigateToPage}
           />
-          <VirtualPaper
-            readerMode={true}
-            containMode={false}
-            // 程序化/受控 scale 变化也走「CSS 预览 + 防抖提交」，
-            // 与手势缩放同一套机制，避免缩放期间整页重排。
-            readerModeExternalZoomPreview={true}
-            contentSize={activeContentSize}
-            transform={virtualPaperTransform}
-            minScale={scaleRange.min}
-            maxScale={scaleRange.max}
-            enabledInteractions={enabledInteractions}
-            wrapperProps={
-              touchPanMode === 'two-finger'
-                ? {
-                    className: 'hamster-reader__two-finger-touch-pan'
-                  }
-                : undefined
-            }
-            onTransformChange={handleTransformChangeWithPopover}
-            onTransformChangeEnd={handleTransformChangeEndWithPopover}
-            containMarginX={containMarginX}
-            containMarginY={resolveContainMarginY(
-              containMarginTop,
-              containMarginBottom,
-              containMarginY,
-              virtualPaperTransform.scale
-            )}
-            containerStyle={buildContainerStyle(
-              containMarginTop,
-              containMarginBottom,
-              virtualPaperTransform.scale
-            )}
-          >
-            {pagesNode}
-          </VirtualPaper>
-        </RangeMagnifierProvider>
+          {useVirtualPaper ? (
+            <VirtualPaper
+              readerMode={true}
+              containMode={false}
+              // 程序化/受控 scale 变化也走「CSS 预览 + 防抖提交」，
+              // 与手势缩放同一套机制，避免缩放期间整页重排。
+              readerModeExternalZoomPreview={true}
+              contentSize={activeContentSize}
+              transform={virtualPaperTransform}
+              minScale={scaleRange.min}
+              maxScale={scaleRange.max}
+              enabledInteractions={enabledInteractions}
+              wrapperProps={
+                touchPanMode === 'two-finger'
+                  ? {
+                      className: 'hamster-reader__two-finger-touch-pan'
+                    }
+                  : undefined
+              }
+              onTransformChange={handleTransformChangeWithPopover}
+              onTransformChangeEnd={handleTransformChangeEndWithPopover}
+              containMarginX={containMarginX}
+              containMarginY={resolveContainMarginY(
+                containMarginTop,
+                containMarginBottom,
+                containMarginY,
+                virtualPaperTransform.scale
+              )}
+              containerStyle={buildContainerStyle(
+                containMarginTop,
+                containMarginBottom,
+                virtualPaperTransform.scale
+              )}
+            >
+              {pagesNode}
+            </VirtualPaper>
+          ) : (
+            <NativeLayoutViewport
+              pagesNode={pagesNode}
+              transform={virtualPaperTransform}
+              containMarginX={containMarginX}
+              containMarginTop={containMarginTop}
+              containMarginBottom={containMarginBottom}
+            />
+          )}
+        </>
       ) : null}
     </div>
   )
@@ -4105,6 +4250,9 @@ export function IntermediateDocumentViewer({
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
+  useVirtualPaper = true,
+  nativeLayoutZoom = 'fit-width',
+  onNativeLayoutScaleChange,
   scale,
   defaultScale,
   defaultVirtualPaperTransform,
@@ -4133,7 +4281,7 @@ export function IntermediateDocumentViewer({
   onDragHighlight,
   highlightColor,
   selectionColor,
-  showSelectionMagnifier = false,
+  showSelectionMagnifier = true,
   selectionPopover,
   highlightPopover,
   rectPopover,
@@ -4986,6 +5134,18 @@ export function IntermediateDocumentViewer({
 
   const handleInitialFitScale = useCallback(
     (fitScale: number) => {
+      if (!useVirtualPaper && nativeLayoutZoom === 'fit-width') {
+        const nextScale = clampScale(fitScale, scaleRange)
+        setPaperTransform((currentTransform) => ({
+          ...currentTransform,
+          scale: nextScale
+        }))
+        onNativeLayoutScaleChange?.(nextScale)
+        return
+      }
+
+      if (!useVirtualPaper) return
+
       if (
         !runtimeDocument ||
         initialFitDocumentRef.current === runtimeDocument
@@ -5002,8 +5162,27 @@ export function IntermediateDocumentViewer({
         scale: clampScale(fitScale, scaleRange)
       }))
     },
-    [defaultVirtualPaperTransform, runtimeDocument, scale, scaleRange]
+    [
+      defaultVirtualPaperTransform,
+      nativeLayoutZoom,
+      onNativeLayoutScaleChange,
+      runtimeDocument,
+      scale,
+      scaleRange,
+      useVirtualPaper
+    ]
   )
+
+  useEffect(() => {
+    if (useVirtualPaper || nativeLayoutZoom === 'fit-width') return
+
+    const nextScale = clampScale(nativeLayoutZoom, scaleRange)
+    setPaperTransform((currentTransform) => ({
+      ...currentTransform,
+      scale: nextScale
+    }))
+    onNativeLayoutScaleChange?.(nextScale)
+  }, [nativeLayoutZoom, onNativeLayoutScaleChange, scaleRange, useVirtualPaper])
 
   const virtualPaperTransform = useMemo<VirtualPaperTransform>(
     () => ({
@@ -7666,6 +7845,8 @@ export function IntermediateDocumentViewer({
       flowLayoutPages={flowLayoutPages}
       orderedContentByPageNumber={orderedContentByPageNumber}
       virtualPaperTransform={virtualPaperTransform}
+      useVirtualPaper={useVirtualPaper}
+      nativeLayoutZoom={nativeLayoutZoom}
       committedReaderScale={committedReaderScale}
       scaleRange={scaleRange}
       onInitialFitScale={handleInitialFitScale}
