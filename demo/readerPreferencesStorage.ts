@@ -1,7 +1,4 @@
-import type {
-  ReaderPageTool,
-  ReaderRenderMode
-} from '@hamster-note/reader'
+import type { ReaderPageTool, ReaderRenderMode } from '@hamster-note/reader'
 
 export type ReaderPreferences = {
   readonly renderMode: ReaderRenderMode
