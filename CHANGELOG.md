@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-06
+
+### Added
+- VirtualPaper beta toggle with native pinch-zoom and bottom bar zoom menu for non-VP mode.
+- Persist `renderMode` and `selectedTool` across sessions.
+- Text reading progress tracking and precise bookmark support with text-anchor anchoring.
+
+### Changed
+- Upgraded `@hamster-note/selection` from `0.1.2` to `0.3.0`.
+- CI workflows upgraded to GitHub Actions v5 for Node.js 24 runtime; Prettier import formatting fixed.
+- Expanded test coverage for intermediate document viewer, page browser, text anchors, and native layout zoom.
+
+### Fixed
+- Ensured Selection custom UI works correctly on iPad by following suppress class state.
+
 ## [0.8.0-beta.1] - 2026-08-02
 
 ### Added
