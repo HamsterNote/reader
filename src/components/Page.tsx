@@ -16,7 +16,10 @@ import type {
 } from '@hamster-note/types'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
+import type { ReaderPageTool } from '../types/readerOptions'
 import { PageDrawingLayer, sanitizeDrawingValue } from './PageDrawingLayer'
+
+export type { ReaderPageTool } from '../types/readerOptions'
 
 /**
  * 文档流页面的坐标基准宽度：A4 纸宽度（pt，72dpi 下 210mm = 595pt）。
@@ -26,8 +29,6 @@ import { PageDrawingLayer, sanitizeDrawingValue } from './PageDrawingLayer'
  * 文字缩放，高度由文档流内容自然撑开。
  */
 export const FLOW_LAYOUT_PAGE_WIDTH = 595
-
-export type ReaderPageTool = 'text-selection' | 'rect-selection' | 'drawing'
 
 /**
  * 携带 useFlowLayout 标记的序列化页面。

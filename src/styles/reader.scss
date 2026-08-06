@@ -1389,6 +1389,24 @@
     pointer-events: none;
   }
 
+  // 非 VirtualPaper 的布局视口：使用浏览器原生滚动与 CSS zoom。
+  // touch-action 保留平移，同时禁止 reader container 内的双指缩放。
+  &__native-layout-viewport {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+  }
+
+  &__native-layout-container {
+    width: max-content;
+    min-width: 100%;
+    min-height: 100%;
+    box-sizing: border-box;
+    transform-origin: top left;
+  }
+
   // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
   // CSS 只负责 position:relative 作为绝对定位页面的包含块
   &__intermediate-text-spacer {
@@ -1529,6 +1547,14 @@
     z-index: 1;
   }
 
+  // Selection 0.3.0 会先在可选文本上缓存 Range，再添加 suppression class。
+  // 候选期必须让子 span 一并禁选，否则 iOS 会绕过父级 none，显示原生选框、handle 与 Popover。
+  .hsn-selection-content--suppress-native-selection &__intermediate-text {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
   // OCR 开发调试模式（ocrDebug）：给 OCR 文本 span 加红色外框。
   // 用 outline 而非 border，避免改变盒模型尺寸导致定位偏移；
   // 文字颜色由渲染边界按 ocrDebug 覆盖为 rgba(0, 0, 0, 0.5)。
@@ -1631,15 +1657,7 @@
     min-height: 0;
   }
 
-  // 粗指针设备禁用浏览器原生选区，统一使用 selection 组件绘制的选框与手柄。
   @media (pointer: coarse) {
-    &__intermediate-text,
-    .hsn-selection-content &__intermediate-text {
-      user-select: none;
-      -webkit-user-select: none;
-      -webkit-touch-callout: none;
-    }
-
     &__page-browser-close,
     &__bookmark-toggle {
       width: 44px;

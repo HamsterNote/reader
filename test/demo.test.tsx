@@ -7,6 +7,7 @@ import type {
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
   ReaderBookmark,
+  ReaderColorOption,
   ReaderComment,
   ReaderData,
   ReaderEdgeCrop,
@@ -115,6 +116,7 @@ type MockReaderProps = Record<string, unknown> & {
   onSelectedToolChange?: (tool: ReaderPageTool) => void
   drawingStrokeColor?: string
   onDrawingStrokeColorChange?: (color: string) => void
+  colors?: readonly ReaderColorOption[]
   data?: ReaderData
   onDataChange?: (nextData: ReaderData) => void
   onFileUpload?: (file: File) => void
@@ -152,6 +154,7 @@ type MockReaderProps = Record<string, unknown> & {
   edgeCropEditing?: boolean
   onEdgeCropEditingChange?: (editing: boolean) => void
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+  useVirtualPaper?: boolean
 }
 
 const mockReaderProps: MockReaderProps[] = []
@@ -574,6 +577,32 @@ describe('demo parser flow', () => {
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
     expect(EpubParser.encode).not.toHaveBeenCalled()
+  })
+
+  it('defaults VirtualPaper beta off and lets the sidebar enable it', async () => {
+    // Given: a parsed document opens the Demo settings and Reader.
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('VirtualPaper Toggle Document')
+    )
+    render(<App />)
+    upload(makeFile('virtual-paper-toggle.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // Then: the beta switch is off and the Demo opts into native rendering.
+    const toggle = screen.getByRole('checkbox', {
+      name: '使用 VirtualPaper（beta）'
+    })
+    expect(toggle).not.toBeChecked()
+    expect(findDocumentReaderProps()?.useVirtualPaper).toBe(false)
+
+    // When: the user enables VirtualPaper.
+    fireEvent.click(toggle)
+
+    // Then: the same Reader receives the enabled preference.
+    await waitFor(() => {
+      expect(toggle).toBeChecked()
+      expect(findDocumentReaderProps()?.useVirtualPaper).toBe(true)
+    })
   })
 
   it.each([
@@ -1374,6 +1403,18 @@ describe('demo parser flow', () => {
       selectedTool: 'text-selection',
       drawingStrokeColor: '#7d9ec0'
     })
+    expect(initialProps?.data).toMatchObject({
+      renderMode: 'layout',
+      selectedTool: 'text-selection'
+    })
+    expect(initialProps?.colors).toEqual([
+      { name: 'blue', color: '#7d9ec0' },
+      { name: 'green', color: '#8eba8e' },
+      { name: 'sand', color: '#d1b88a' },
+      { name: 'rose', color: '#cf9cab' },
+      { name: 'lavender', color: '#a99fc4' },
+      { name: 'black', color: '#2a2a2a' }
+    ])
     expect(initialProps?.onRenderModeChange).toBeTypeOf('function')
     expect(initialProps?.onFontScaleChange).toBeTypeOf('function')
     expect(initialProps?.onTouchPanModeChange).toBeTypeOf('function')
@@ -1417,6 +1458,66 @@ describe('demo parser flow', () => {
         edgeCropEditing: false
       })
       expect(screen.getByTestId('render-mode-select')).toHaveValue('text')
+    })
+  })
+
+  it('restores and persists render mode and selected tool per file', async () => {
+    // Given: 当前文件已有持久化的阅读偏好。
+    localStorage.clear()
+    localStorage.setItem(
+      'hamster-reader-demo:preferences:reader-preferences.pdf',
+      JSON.stringify({
+        version: 1,
+        renderMode: 'text',
+        selectedTool: 'drawing'
+      })
+    )
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Reader Preferences Document')
+    )
+
+    // When: 用户重新上传同名文件。
+    render(<App />)
+    upload(makeFile('reader-preferences.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // Then: Reader 从统一 data 中恢复模式与工具。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.data).toMatchObject({
+        renderMode: 'text',
+        selectedTool: 'drawing'
+      })
+      expect(screen.getByTestId('render-mode-select')).toHaveValue('text')
+      expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
+    })
+
+    // When: Reader 通过统一 data 回传新的模式与工具。
+    const readerProps = findDocumentReaderProps()
+    act(() => {
+      readerProps?.onDataChange?.({
+        ...readerProps.data,
+        renderMode: 'layout',
+        selectedTool: 'rect-selection'
+      })
+    })
+
+    // Then: Demo 同步界面状态并覆盖该文件的持久化偏好。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()?.data).toMatchObject({
+        renderMode: 'layout',
+        selectedTool: 'rect-selection'
+      })
+      expect(
+        localStorage.getItem(
+          'hamster-reader-demo:preferences:reader-preferences.pdf'
+        )
+      ).toBe(
+        JSON.stringify({
+          version: 1,
+          renderMode: 'layout',
+          selectedTool: 'rect-selection'
+        })
+      )
     })
   })
 

@@ -658,6 +658,30 @@ describe('Reader public API', () => {
     })
   })
 
+  it('uses the colors prop as the default bottom bar color list', () => {
+    // Given: 宿主提供与默认颜色完全不同的公共颜色列表。
+    const onDrawingStrokeColorChange = vi.fn()
+    const onHighlightColorChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        colors={[{ name: 'brand', color: '#123456' }]}
+        onDrawingStrokeColorChange={onDrawingStrokeColorChange}
+        onHighlightColorChange={onHighlightColorChange}
+      />
+    )
+
+    // When: 用户选择自定义颜色。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-brand'))
+
+    // Then: 底栏只展示公共列表，并同步绘图与高亮颜色。
+    expect(screen.queryByTestId('tool-bottom-bar-color-green')).toBeNull()
+    expect(onDrawingStrokeColorChange).toHaveBeenCalledWith('#123456')
+    expect(onHighlightColorChange).toHaveBeenCalledWith(
+      'rgba(18, 52, 86, 0.35)'
+    )
+  })
+
   it('allows the default bottom bar to be replaced or disabled', () => {
     // Given / When: 一个 Reader 提供自定义底栏，另一个显式传入 null。
     const { rerender } = render(
@@ -1075,6 +1099,54 @@ describe('Reader renderMode', () => {
     expect(
       screen.queryByTestId('intermediate-document-text-viewer')
     ).not.toBeInTheDocument()
+  })
+
+  it('renders native layout zoom controls when VirtualPaper is disabled', () => {
+    // Given: Layout mode explicitly opts out of VirtualPaper.
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    // When: Reader renders its built-in viewport and toolbar.
+    render(<Reader document={doc} useVirtualPaper={false} />)
+
+    // Then: the native viewport replaces VirtualPaper and exposes fit-width zoom.
+    expect(
+      screen.queryByTestId('virtual-paper-wrapper')
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('native-layout-viewport')).toBeInTheDocument()
+    expect(capturedViewerProps.useVirtualPaper).toBe(false)
+    expect(capturedViewerProps.scale).toBeUndefined()
+    expect(capturedViewerProps.defaultScale).toBeUndefined()
+    const zoomTrigger = screen.getByTestId('tool-bottom-bar-layout-zoom')
+    expect(zoomTrigger).toHaveTextContent('%')
+
+    fireEvent.click(zoomTrigger)
+    const zoomMenu = screen.getByRole('menu', { name: '缩放菜单' })
+    expect(
+      within(zoomMenu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent?.trim())
+    ).toEqual(['25%', '50%', '75%', '100%', '150%', '200%', '300%', '适配宽度'])
+    expect(
+      within(zoomMenu).getByRole('menuitem', { name: '适配宽度' })
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    // When: the reader selects a fixed zoom preset.
+    fireEvent.click(within(zoomMenu).getByRole('menuitem', { name: '150%' }))
+
+    // Then: the trigger and viewer both receive the selected scale.
+    expect(zoomTrigger).toHaveTextContent('150%')
+    expect(capturedViewerProps.nativeLayoutZoom).toBe(1.5)
+  })
+
+  it('keeps VirtualPaper and hides native zoom controls by default', () => {
+    // Given / When: no VirtualPaper preference is supplied.
+    render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
+
+    // Then: the public default remains backward compatible.
+    expect(screen.getByTestId('virtual-paper-wrapper')).toBeInTheDocument()
+    expect(screen.queryByTestId('native-layout-viewport')).toBeNull()
+    expect(screen.queryByTestId('tool-bottom-bar-layout-zoom')).toBeNull()
+    expect(capturedViewerProps.useVirtualPaper).toBe(true)
   })
 
   it('renderMode text renders the separate text viewer without VirtualPaper', () => {
@@ -2145,6 +2217,53 @@ describe('Reader prop forwarding', () => {
     // Then: the viewer receives the precise toggle capability used by ReaderData.
     expect(capturedViewerProps.bookmarks).toBeUndefined()
     expect(capturedViewerProps.onToggleBookmark).toEqual(expect.any(Function))
+  })
+
+  it('prefers persisted render mode and selected tool from ReaderData', () => {
+    // Given: 持久化 data 与旧版扁平 props 提供不同值。
+    const doc = makeDocument({ pages: [makePage(1)] })
+
+    // When: Reader 解析统一数据入口。
+    render(
+      <Reader
+        document={doc}
+        data={{ renderMode: 'layout', selectedTool: 'rect-selection' }}
+        renderMode='text'
+        selectedTool='text-selection'
+      />
+    )
+
+    // Then: data 按统一入口约定覆盖旧版 props。
+    expect(
+      screen.getByTestId('intermediate-document-viewer')
+    ).toBeInTheDocument()
+    expect(capturedViewerProps.selectedTool).toBe('rect-selection')
+  })
+
+  it('publishes render mode and selected tool changes through ReaderData', () => {
+    // Given: 宿主通过统一数据入口控制模式和工具，并保留其他持久化字段。
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const onDataChange = vi.fn()
+    const data = {
+      hiddenPages: [2],
+      renderMode: 'layout',
+      selectedTool: 'text-selection'
+    } as const
+    render(<Reader document={doc} data={data} onDataChange={onDataChange} />)
+
+    // When: 用户分别切换页面工具与渲染模式。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-rect-selection'))
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+
+    // Then: 每次变化都通过 onDataChange 发布完整的新 ReaderData。
+    expect(onDataChange).toHaveBeenNthCalledWith(1, {
+      ...data,
+      selectedTool: 'rect-selection'
+    })
+    expect(onDataChange).toHaveBeenNthCalledWith(2, {
+      ...data,
+      renderMode: 'text'
+    })
   })
 
   it('keeps precise bookmark data read-only without a precise write channel', () => {

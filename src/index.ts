@@ -87,6 +87,7 @@ export type {
   ReaderCommentThreadNode
 } from './types/comments'
 export type { ReaderFontScale } from './types/fontScale'
+export type { ReaderColorOption } from './types/readerOptions'
 export type {
   ReaderBookmark,
   ReaderData,
@@ -177,6 +178,7 @@ export type ReaderInteractiveProps = Pick<
   | 'onTogglePageBookmark'
   | 'selectedTool'
   | 'onSelectedToolChange'
+  | 'colors'
   | 'paintingTool'
   | 'drawingStrokeColor'
   | 'onDrawingStrokeColorChange'

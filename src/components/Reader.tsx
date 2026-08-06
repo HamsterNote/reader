@@ -27,6 +27,10 @@ import type {
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
+  ReaderColorOption,
+  ReaderRenderMode
+} from '../types/readerOptions'
+import type {
   ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
@@ -65,6 +69,7 @@ import type {
 } from './IntermediateDocumentViewer'
 import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import type { ReaderLayoutZoom } from './IntermediateDocumentViewer/nativeLayoutZoom'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import { getTextAnchorKey } from './IntermediateDocumentViewer/textAnchor'
 import type {
@@ -74,9 +79,10 @@ import type {
   ReaderPageTool
 } from './Page'
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
+import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
 
-export type ReaderRenderMode = 'layout' | 'text'
+export type { ReaderRenderMode } from '../types/readerOptions'
 
 type ReaderDocumentInput =
   | IntermediateDocument
@@ -209,6 +215,8 @@ export type ReaderProps = {
   touchPanMode?: ReaderTouchPanMode
   /** 触摸平移模式变化回调；未受控时 Reader 同时更新内部模式。 */
   onTouchPanModeChange?: (mode: ReaderTouchPanMode) => void
+  /** 是否用 VirtualPaper 渲染版面模式；默认开启以保持库级兼容。 */
+  useVirtualPaper?: boolean
   scale?: number
   defaultScale?: number
   onScaleChange?: (
@@ -246,7 +254,7 @@ export type ReaderProps = {
   onHighlightColorChange?: (color: string) => void
   highlightColor?: string
   selectionColor?: string
-  /** 是否启用选区端点放大镜，默认 false。 */
+  /** 是否启用 Selection 内置的选区端点放大镜，默认 true。 */
   showSelectionMagnifier?: boolean
   selectionPopover?: ReactNode
   highlightPopover?: ReaderHighlightPopover
@@ -319,6 +327,7 @@ export type ReaderProps = {
   onPaintingToolChange?: (tool: DrawingTool) => void
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
+  colors?: readonly ReaderColorOption[]
   /** 绘图颜色变化回调；未受控时 Reader 同时更新内部颜色。 */
   onDrawingStrokeColorChange?: (color: string) => void
   pagePaintings?: ReaderPagePaintingMap
@@ -516,6 +525,30 @@ function whenEnabled<Value>(enabled: boolean, value: Value): Value | undefined {
   return enabled ? value : undefined
 }
 
+function useReaderLayoutZoom() {
+  const [layoutZoom, setLayoutZoom] = useState<ReaderLayoutZoom>('fit-width')
+  const [resolvedLayoutScale, setResolvedLayoutScale] = useState(1)
+  const handleLayoutZoomChange = useCallback((nextZoom: ReaderLayoutZoom) => {
+    setLayoutZoom(nextZoom)
+    if (nextZoom !== 'fit-width') setResolvedLayoutScale(nextZoom)
+  }, [])
+
+  return {
+    layoutZoom,
+    resolvedLayoutScale,
+    setResolvedLayoutScale,
+    handleLayoutZoomChange
+  }
+}
+
+function resolveBottomBarLayoutZoom(
+  renderMode: ReaderRenderMode,
+  useVirtualPaper: boolean,
+  layoutZoom: ReaderLayoutZoom
+): ReaderLayoutZoom | undefined {
+  return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
+}
+
 function resolveVerticalMargins(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
@@ -565,6 +598,7 @@ export function Reader({
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
+  useVirtualPaper = true,
   scale,
   defaultScale,
   onScaleChange,
@@ -593,7 +627,7 @@ export function Reader({
   onHighlightColorChange,
   highlightColor,
   selectionColor,
-  showSelectionMagnifier = false,
+  showSelectionMagnifier = true,
   selectionPopover,
   highlightPopover,
   onCommentHighlight,
@@ -637,6 +671,7 @@ export function Reader({
   paintingTool,
   onPaintingToolChange,
   drawingStrokeColor,
+  colors,
   onDrawingStrokeColorChange,
   pagePaintings,
   defaultPagePaintings,
@@ -669,6 +704,12 @@ export function Reader({
   const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
   const [internalTouchPanMode, setInternalTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
+  const {
+    layoutZoom,
+    resolvedLayoutScale,
+    setResolvedLayoutScale,
+    handleLayoutZoomChange
+  } = useReaderLayoutZoom()
   const [internalEdgeCropEditing, setInternalEdgeCropEditing] = useState(false)
   const [internalSelectedTool, setInternalSelectedTool] =
     useState<ReaderPageTool>('text-selection')
@@ -731,7 +772,8 @@ export function Reader({
       pastCount: 0,
       futureCount: 0
     })
-  const resolvedRenderMode = renderMode ?? internalRenderMode
+  const resolvedRenderMode =
+    data?.renderMode ?? renderMode ?? internalRenderMode
   const previousRenderModeRef = useRef(resolvedRenderMode)
   const resolvedTextReadingProgress = resolvePositionHandoff(
     textPositionHandoff,
@@ -751,7 +793,8 @@ export function Reader({
     (typeof resolvedOcr === 'object' && resolvedOcr.enabled === true)
   const resolvedTouchPanMode = touchPanMode ?? internalTouchPanMode
   const resolvedEdgeCropEditing = edgeCropEditing ?? internalEdgeCropEditing
-  const resolvedSelectedTool = selectedTool ?? internalSelectedTool
+  const resolvedSelectedTool =
+    data?.selectedTool ?? selectedTool ?? internalSelectedTool
   const resolvedDrawingStrokeColor =
     drawingStrokeColor ?? internalDrawingStrokeColor
   const resolvedPaintingTool =
@@ -919,7 +962,10 @@ export function Reader({
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
       handoffReadingPosition(resolvedRenderMode, nextMode)
-      if (renderMode === undefined) setInternalRenderMode(nextMode)
+      if (data?.renderMode === undefined && renderMode === undefined) {
+        setInternalRenderMode(nextMode)
+      }
+      onDataChange?.({ ...data, renderMode: nextMode })
       onRenderModeChange?.(nextMode)
 
       if (nextMode === 'text' && resolvedEdgeCropEditing) {
@@ -929,7 +975,9 @@ export function Reader({
     },
     [
       edgeCropEditing,
+      data,
       handoffReadingPosition,
+      onDataChange,
       onEdgeCropEditingChange,
       onRenderModeChange,
       renderMode,
@@ -1006,7 +1054,10 @@ export function Reader({
 
   const handleSelectedToolChange = useCallback(
     (nextTool: ReaderPageTool) => {
-      if (selectedTool === undefined) setInternalSelectedTool(nextTool)
+      if (data?.selectedTool === undefined && selectedTool === undefined) {
+        setInternalSelectedTool(nextTool)
+      }
+      onDataChange?.({ ...data, selectedTool: nextTool })
       onSelectedToolChange?.(nextTool)
       // 矩形选框或绘制工具 → 自动切换到双指模式，避免单指滑动干扰框选/绘制手势
       if (
@@ -1025,6 +1076,8 @@ export function Reader({
     },
     [
       handleTouchPanModeChange,
+      data,
+      onDataChange,
       onSelectedToolChange,
       resolvedTouchPanMode,
       selectedTool
@@ -1500,12 +1553,21 @@ export function Reader({
           onTextSelectionChange={onTextSelectionChange}
           onTextSelectionEnd={onTextSelectionEnd}
           onSelectText={onSelectText}
-          scale={whenEnabled(resolvedVirtualPaperState === undefined, scale)}
+          useVirtualPaper={useVirtualPaper}
+          nativeLayoutZoom={layoutZoom}
+          onNativeLayoutScaleChange={setResolvedLayoutScale}
+          scale={whenEnabled(
+            useVirtualPaper && resolvedVirtualPaperState === undefined,
+            scale
+          )}
           defaultScale={whenEnabled(
-            resolvedVirtualPaperState === undefined,
+            useVirtualPaper && resolvedVirtualPaperState === undefined,
             defaultScale
           )}
-          defaultVirtualPaperTransform={resolvedVirtualPaperState}
+          defaultVirtualPaperTransform={whenEnabled(
+            useVirtualPaper,
+            resolvedVirtualPaperState
+          )}
           onVirtualPaperTransformChangeEnd={
             handleVirtualPaperTransformChangeEnd
           }
@@ -1708,9 +1770,16 @@ export function Reader({
             isEpub={isEpub}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
+            layoutZoom={resolveBottomBarLayoutZoom(
+              resolvedRenderMode,
+              useVirtualPaper,
+              layoutZoom
+            )}
+            resolvedLayoutScale={resolvedLayoutScale}
             touchPanMode={resolvedTouchPanMode}
             edgeCropEditing={resolvedEdgeCropEditing}
             selectedTool={resolvedSelectedTool}
+            colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
             drawingStrokeColor={resolvedDrawingStrokeColor}
             paintingControllerData={resolvedPaintingControllerData}
             onPaintingControllerDataChange={handlePaintingControllerDataChange}
@@ -1719,6 +1788,7 @@ export function Reader({
             onRenderModeChange={handleRenderModeChange}
             onOcrChange={handleOcrChange}
             onFontScaleChange={handleFontScaleChange}
+            onLayoutZoomChange={handleLayoutZoomChange}
             onTouchPanModeChange={handleTouchPanModeChange}
             onEdgeCropEditingChange={handleEdgeCropEditingChange}
             onSelectedToolChange={handleSelectedToolChange}

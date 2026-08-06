@@ -63,7 +63,6 @@ import type {
   ReaderSelectionRef
 } from '../src/types/selection'
 import type {
-  HandleRenderProps,
   LinkedSelectionRange,
   OverlayRectType,
   SelectionProps
@@ -2287,6 +2286,39 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
+  it('preserves a fixed native zoom when the viewport resizes', async () => {
+    // Given: the native layout starts in fit-width mode with a 124px page box.
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 150 }
+    })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={0}
+        useVirtualPaper={false}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementSize(viewport, { width: 496, height: 300 })
+    await waitFor(() => expect(page).toHaveStyle({ width: '400px' }))
+
+    // When: the host selects 150% and the viewport subsequently resizes.
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={0}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1.5}
+      />
+    )
+    mockElementSize(viewport, { width: 620, height: 300 })
+
+    // Then: fit-width observation no longer overwrites the fixed preset.
+    await waitFor(() => expect(page).toHaveStyle({ width: '150px' }))
+  })
+
   it('upscales the page to fill a wider container during initialization', async () => {
     // Given: the page and its horizontal margins form a 124px-wide box.
     const { document } = makeDocument({
@@ -4417,7 +4449,7 @@ describe('IntermediateDocumentViewer', () => {
     clearSelectionProps()
   })
 
-  it('text mode renders custom RangeHandle with scale 1', async () => {
+  it('text mode delegates handles and enables the Selection magnifier by default', async () => {
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 1 })
 
@@ -4431,120 +4463,30 @@ describe('IntermediateDocumentViewer', () => {
     })
 
     const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
-    const renderHandle =
-      requireSelectionPropsById(runtimeSelectionId).renderHandle
-    if (!renderHandle) {
-      throw new Error('Expected text mode renderHandle')
-    }
-
-    const handle = {
-      owner: 'active-selection',
-      rangeId: null,
-      target: 'text',
-      rectId: null,
-      positionUnit: 'percent',
-      isDragging: false,
-      onPointerDown: vi.fn(),
-      className: 'hsn-selection-handle',
-      style: { background: '#ff4fa3' },
-      type: 'start',
-      position: { x: 10, y: 24 },
-      ariaLabel: 'text mode start handle'
-    } satisfies HandleRenderProps
-
-    render(<>{renderHandle(handle)}</>)
-
-    expect(
-      screen.getByRole('button', { name: 'text mode start handle' })
-    ).toHaveStyle({ transform: 'translate(-50%, -50%) scale(1)' })
+    const selectionProps = requireSelectionPropsById(runtimeSelectionId)
+    expect(selectionProps.renderHandle).toBeUndefined()
+    expect(selectionProps.showSelectionMagnifier).toBe(true)
     clearSelectionProps()
   })
 
-  it('text mode keeps custom text circles for touch and mouse input', async () => {
-    // Given: text mode exposes its custom handle renderer.
+  it('text mode forwards an explicit disabled Selection magnifier setting', async () => {
+    // Given: the host explicitly disables Selection's built-in magnifier.
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 1 })
-    render(<IntermediateDocumentTextViewer document={document} />)
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showSelectionMagnifier={false}
+      />
+    )
     const viewer = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(viewer, { width: 800, height: 600 })
     await screen.findByTestId('intermediate-text-page-1')
     const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
-    const textHandle = {
-      owner: 'active-selection',
-      rangeId: null,
-      target: 'text',
-      rectId: null,
-      positionUnit: 'percent',
-      isDragging: false,
-      onPointerDown: vi.fn(),
-      className: 'hsn-selection-handle',
-      style: { background: '#ff4fa3' },
-      type: 'start',
-      position: { x: 10, y: 24 },
-      ariaLabel: 'text pointer handle'
-    } satisfies HandleRenderProps
-
-    // When: the latest selection gesture comes from touch.
-    await act(async () => {
-      fireEvent.pointerDown(viewer, { pointerType: 'touch', pointerId: 9 })
-    })
-
-    // Then: touch continues using the custom text circle.
-    await waitFor(() => {
-      expect(
-        requireSelectionPropsById(runtimeSelectionId).renderHandle?.(textHandle)
-      ).not.toBeNull()
-    })
-
-    // When: a later mouse gesture starts.
-    await act(async () => {
-      fireEvent.pointerDown(viewer, { pointerType: 'mouse', pointerId: 10 })
-    })
-
-    // Then: mouse also keeps using the custom text circle.
-    await waitFor(() => {
-      expect(
-        requireSelectionPropsById(runtimeSelectionId).renderHandle?.(textHandle)
-      ).not.toBeNull()
-    })
-    clearSelectionProps()
-  })
-
-  it('text mode does not mount the selection magnifier by default', async () => {
-    // Given: the text viewer uses the public default magnifier setting.
-    const { document } = makeDocument({ pageCount: 1 })
-
-    // When: the first text page finishes mounting.
-    render(<IntermediateDocumentTextViewer document={document} />)
-    setScrollContainerSize(
-      screen.getByTestId('intermediate-document-text-viewer'),
-      { width: 800, height: 600 }
-    )
-    await screen.findByTestId('intermediate-text-page-1')
-
-    // Then: no magnifier portal or document-level drag listener surface exists.
-    expect(screen.queryByTestId('range-magnifier')).not.toBeInTheDocument()
-  })
-
-  it('text mode mounts the selection magnifier when explicitly enabled', async () => {
-    // Given: the host explicitly opts into the selection magnifier.
-    const { document } = makeDocument({ pageCount: 1 })
-
-    // When: the text viewer mounts with showSelectionMagnifier enabled.
-    render(
-      <IntermediateDocumentTextViewer
-        document={document}
-        showSelectionMagnifier
-      />
-    )
-    setScrollContainerSize(
-      screen.getByTestId('intermediate-document-text-viewer'),
-      { width: 800, height: 600 }
-    )
-    await screen.findByTestId('intermediate-text-page-1')
-
-    // Then: the hidden lens is mounted and ready for a mouse handle drag.
-    expect(screen.getByTestId('range-magnifier')).toHaveAttribute('hidden')
+    // Then: Reader still delegates handle rendering and forwards the opt-out.
+    const selectionProps = requireSelectionPropsById(runtimeSelectionId)
+    expect(selectionProps.renderHandle).toBeUndefined()
+    expect(selectionProps.showSelectionMagnifier).toBe(false)
   })
 
   it('text mode reselects a persisted mouse highlight without creating a native selection', async () => {
@@ -4584,7 +4526,7 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('text mode keeps custom text handles after touch input', async () => {
+  it('text mode keeps built-in Selection handles after touch input', async () => {
     // Given: a touch gesture starts over a persisted range on page 1.
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 1 })
@@ -4608,26 +4550,11 @@ describe('IntermediateDocumentViewer', () => {
       simulateLinkedSelectRange(runtimeSelectionId, range.id)
     })
 
-    // Then: the browser selection stays inactive and the custom handle remains.
+    // Then: the browser selection stays inactive and Reader does not replace the built-in handle.
     expect(window.getSelection()?.toString()).toBe('')
-    const renderHandle =
-      requireSelectionPropsById(runtimeSelectionId).renderHandle
     expect(
-      renderHandle?.({
-        type: 'start',
-        owner: 'persisted-range',
-        rangeId: range.id,
-        target: 'text',
-        rectId: null,
-        position: { x: 0, y: 0 },
-        positionUnit: 'percent',
-        isDragging: false,
-        onPointerDown: vi.fn(),
-        ariaLabel: 'touch persisted handle',
-        className: 'hsn-selection-handle',
-        style: {}
-      })
-    ).not.toBeNull()
+      requireSelectionPropsById(runtimeSelectionId).renderHandle
+    ).toBeUndefined()
   })
 
   it('text mode selectionRef highlight and clear target mounted page Selection refs', async () => {
@@ -9389,23 +9316,28 @@ describe('IntermediateDocumentViewer', () => {
       expect(textBlock).toContain('-webkit-user-select: text')
     })
 
-    it('SCSS suppresses native mobile selection handles on coarse pointers', () => {
+    it('SCSS keeps text hittable before Selection suppresses native long-press UI', () => {
       const scssSource = fs.readFileSync(
         path.resolve(__dirname, '../src/styles/reader.scss'),
         'utf-8'
       )
-      const coarsePointerStart = scssSource.indexOf('@media (pointer: coarse)')
-      const coarsePointerEnd = scssSource.indexOf('\n    }', coarsePointerStart)
-      if (coarsePointerStart === -1 || coarsePointerEnd === -1) {
-        throw new Error('Expected coarse-pointer SCSS block to exist')
+      const textBlockMatch = scssSource.match(
+        /&__intermediate-text\s*\{([^}]*)\}/
+      )
+      const suppressionBlockMatch = scssSource.match(
+        /\.hsn-selection-content--suppress-native-selection\s+&__intermediate-text\s*\{([^}]*)\}/
+      )
+      expect(textBlockMatch).toBeTruthy()
+      expect(suppressionBlockMatch).toBeTruthy()
+      if (!textBlockMatch || !suppressionBlockMatch) {
+        throw new Error('Expected selectable text and suppression SCSS blocks')
       }
 
-      const block = scssSource.slice(coarsePointerStart, coarsePointerEnd)
-      expect(block).toContain('&__intermediate-text')
-      expect(block).toContain('.hsn-selection-content &__intermediate-text')
-      expect(block).toContain('user-select: none')
-      expect(block).toContain('-webkit-user-select: none')
-      expect(block).toContain('-webkit-touch-callout: none')
+      expect(textBlockMatch[1]).toContain('user-select: text')
+      expect(textBlockMatch[1]).toContain('-webkit-user-select: text')
+      expect(suppressionBlockMatch[1]).toContain('user-select: none')
+      expect(suppressionBlockMatch[1]).toContain('-webkit-user-select: none')
+      expect(suppressionBlockMatch[1]).toContain('-webkit-touch-callout: none')
       expect(scssSource).not.toContain('--hamster-reader-selection-color')
       expect(scssSource).not.toContain('data-native-selected-range')
       expect(scssSource).not.toMatch(
@@ -9738,7 +9670,7 @@ describe('linked data adapter integration', () => {
   })
 })
 
-describe('text range handle integration', () => {
+describe('Selection built-in handle integration', () => {
   beforeEach(() => {
     clearSelectionProps()
   })
@@ -9747,399 +9679,48 @@ describe('text range handle integration', () => {
     clearSelectionProps()
   })
 
-  it('renders document-order endpoint circles at range ends and drags from the circle center', async () => {
-    // Given: a linked active range whose first and last rectangles have
-    // different heights, making each endpoint geometry independently visible.
-    const { document } = makeDocument({ pageCount: 1 })
-    render(<IntermediateDocumentViewer document={document} scale={4} />)
-    await screen.findByText('Page 1 text')
-    await waitFor(() => {
-      expect(getAllSelectionProps()).toHaveLength(1)
-    })
-
-    const pageId = requireRuntimeSelectionId(':page-1')
-    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
-    if (!initialLinkedData) {
-      throw new Error('Expected linked data for range handle test')
-    }
-
-    await act(async () => {
-      simulateLinkedDataChange(pageId, {
-        ...initialLinkedData,
-        activeRange: makeRuntimeLinkedRange(pageId, {
-          rectsBySelectionId: {
-            [pageId]: [
-              { x: 10, y: 20, width: 30, height: 8 },
-              { x: 12, y: 40, width: 20, height: 12 }
-            ]
-          }
-        })
-      })
-    })
-
-    await waitFor(() => {
-      expect(requireSelectionPropsById(pageId).renderHandle).toBeTypeOf(
-        'function'
-      )
-    })
-    const renderHandle = requireSelectionPropsById(pageId).renderHandle
-    if (!renderHandle) {
-      throw new Error('Expected custom range handle renderer')
-    }
-
-    const onPointerDown = vi.fn()
-    const commonHandle = {
-      owner: 'active-selection',
-      rangeId: null,
-      target: 'text',
-      rectId: null,
-      positionUnit: 'percent',
-      isDragging: false,
-      onPointerDown,
-      className: 'hsn-selection-handle',
-      style: { background: '#ff4fa3' }
-    } satisfies Omit<HandleRenderProps, 'ariaLabel' | 'position' | 'type'>
-
-    // When: the dependency asks the reader to render both document-order ends.
-    const stopAtDocumentCapture = (event: PointerEvent) => {
-      event.stopPropagation()
-    }
-    globalThis.document.addEventListener(
-      'pointerdown',
-      stopAtDocumentCapture,
-      true
-    )
-    const { container } = render(
-      <>
-        {renderHandle({
-          ...commonHandle,
-          type: 'start',
-          position: { x: 10, y: 24 },
-          ariaLabel: 'start'
-        })}
-        {renderHandle({
-          ...commonHandle,
-          type: 'end',
-          position: { x: 32, y: 46 },
-          ariaLabel: 'end'
-        })}
-      </>
-    )
-
-    // Then: no stems are rendered; circles sit directly at the range
-    // endpoints (handle.position) with a fixed 20px CSS diameter and a
-    // reverse scale(1/scale = 0.25 at scale 4) that cancels the parent
-    // transform, keeping the visual diameter at 20px; centered via
-    // translate(-50%, -50%).
-    expect(container.querySelector('[data-range-handle-stem]')).toBeNull()
-    const startCircle = screen.getByRole('button', { name: 'start' })
-    const endCircle = screen.getByRole('button', { name: 'end' })
-
-    expect(startCircle).toHaveStyle({
-      left: '10%',
-      top: '24%',
-      width: '20px',
-      height: '20px',
-      borderRadius: '50%',
-      transform: 'translate(-50%, -50%) scale(0.25)'
-    })
-    expect(endCircle).toHaveStyle({
-      left: '32%',
-      top: '46%',
-      width: '20px',
-      height: '20px',
-      borderRadius: '50%',
-      transform: 'translate(-50%, -50%) scale(0.25)'
-    })
-
-    mockElementRect(startCircle, {
-      left: 98,
-      top: 96,
-      width: 12,
-      height: 12
-    })
-    mockElementFromPoint(screen.getByText('Page 1 text'))
-    const observedMoves: Array<{ x: number; y: number }> = []
-    const observeMove = (event: PointerEvent) => {
-      observedMoves.push({ x: event.clientX, y: event.clientY })
-    }
-    globalThis.document.addEventListener('pointermove', observeMove)
-
-    // When: the user grabs off-center inside the circle and moves it.
-    fireEvent.pointerDown(startCircle, {
-      pointerId: 7,
-      clientX: 100,
-      clientY: 102,
-      buttons: 1
-    })
-    fireEvent.pointerMove(globalThis.document, {
-      pointerId: 7,
-      clientX: 200,
-      clientY: 300,
-      buttons: 1
-    })
-    fireEvent.pointerUp(globalThis.document, { pointerId: 7 })
-    globalThis.document.removeEventListener(
-      'pointerdown',
-      stopAtDocumentCapture,
-      true
-    )
-    globalThis.document.removeEventListener('pointermove', observeMove)
-
-    // Then: the dependency-facing event follows the circle center
-    // (104, 102) for the start handle, preserving the 4px horizontal
-    // grab offset.
-    expect(onPointerDown).not.toHaveBeenCalled()
-    expect(observedMoves).toEqual([{ x: 204, y: 300 }])
-  })
-
-  it('blocks a persisted text handle while the pointer is over page blank space', async () => {
-    // Given: an existing highlighted range rendered with a text endpoint handle.
-    const { document } = makeDocument({ pageCount: 1 })
-    render(<IntermediateDocumentViewer document={document} />)
-    const text = await screen.findByText('Page 1 text')
-    const pageId = requireRuntimeSelectionId(':page-1')
-    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
-    if (!initialLinkedData) {
-      throw new Error('Expected linked data for persisted handle test')
-    }
-
-    const range = makeRuntimeLinkedRange(pageId, {
-      id: 'persisted-range-1',
-      rectsBySelectionId: {
-        [pageId]: [{ x: 10, y: 20, width: 30, height: 8 }]
-      }
-    })
-    await act(async () => {
-      simulateLinkedDataChange(pageId, {
-        ...initialLinkedData,
-        items: [range],
-        selectedRangeId: range.id
-      })
-    })
-
-    const renderHandle = requireSelectionPropsById(pageId).renderHandle
-    if (!renderHandle) {
-      throw new Error('Expected persisted linked handle renderer')
-    }
-    const { unmount } = render(
-      renderHandle({
-        type: 'start',
-        owner: 'persisted-range',
-        rangeId: range.id,
-        target: 'text',
-        rectId: null,
-        position: { x: 10, y: 24 },
-        positionUnit: 'percent',
-        isDragging: false,
-        onPointerDown: vi.fn(),
-        ariaLabel: 'persisted start',
-        className: 'hsn-selection-handle hsn-selection-handle--start',
-        style: { background: '#ff4fa3' }
-      })
-    )
-    const circle = screen.getByRole('button', { name: 'persisted start' })
-    mockElementRect(circle, { left: 98, top: 96, width: 12, height: 12 })
-    const page = screen.getByTestId('intermediate-page-1')
-    mockElementFromPoint(page)
-    const observedMoves: Array<{ x: number; y: number }> = []
-    const observeMove = (event: PointerEvent) => {
-      observedMoves.push({ x: event.clientX, y: event.clientY })
-    }
-    globalThis.document.addEventListener('pointermove', observeMove)
-
-    // When: a mouse drags the persisted handle into the page shell.
-    fireEvent.pointerDown(circle, {
-      pointerId: 41,
-      pointerType: 'mouse',
-      clientX: 100,
-      clientY: 102,
-      buttons: 1
-    })
-    fireEvent.pointerMove(globalThis.document, {
-      pointerId: 41,
-      pointerType: 'mouse',
-      clientX: 200,
-      clientY: 300,
-      buttons: 1
-    })
-
-    // Then: no dependency-facing move is emitted outside actual text.
-    expect(observedMoves).toEqual([])
-
-    mockElementFromPoint(text)
-    fireEvent.pointerMove(globalThis.document, {
-      pointerId: 41,
-      pointerType: 'mouse',
-      clientX: 200,
-      clientY: 300,
-      buttons: 1
-    })
-    expect(observedMoves).toEqual([{ x: 204, y: 300 }])
-
-    globalThis.document.removeEventListener('pointermove', observeMove)
-    unmount()
-  })
-
-  it('removes pointer correction when the dragged handle is not replaced', async () => {
-    // Given: a text handle with an active correction session.
-    const { document } = makeDocument({ pageCount: 1 })
-    render(<IntermediateDocumentViewer document={document} />)
-    await screen.findByText('Page 1 text')
-    const pageId = await waitFor(() => requireRuntimeSelectionId(':page-1'))
-    const initialLinkedData = requireSelectionPropsById(pageId).linkedData
-    const renderHandle = requireSelectionPropsById(pageId).renderHandle
-    if (!initialLinkedData || !renderHandle) {
-      throw new Error('Expected linked handle renderer')
-    }
-
-    await act(async () => {
-      simulateLinkedDataChange(pageId, {
-        ...initialLinkedData,
-        activeRange: makeRuntimeLinkedRange(pageId, {
-          rectsBySelectionId: {
-            [pageId]: [{ x: 10, y: 20, width: 30, height: 8 }]
-          }
-        })
-      })
-    })
-    const activeRenderHandle = requireSelectionPropsById(pageId).renderHandle
-    if (!activeRenderHandle) {
-      throw new Error('Expected active linked handle renderer')
-    }
-
-    const { unmount } = render(
-      activeRenderHandle({
-        type: 'start',
-        owner: 'active-selection',
-        rangeId: null,
-        target: 'text',
-        rectId: null,
-        position: { x: 10, y: 24 },
-        positionUnit: 'percent',
-        isDragging: false,
-        onPointerDown: vi.fn(),
-        ariaLabel: 'temporary start',
-        className: 'hsn-selection-handle hsn-selection-handle--start',
-        style: { background: '#ff4fa3' }
-      })
-    )
-    const circle = screen.getByRole('button', { name: 'temporary start' })
-    mockElementRect(circle, { left: 98, top: 96, width: 12, height: 12 })
-    fireEvent.pointerDown(circle, {
-      pointerId: 8,
-      clientX: 100,
-      clientY: 102,
-      buttons: 1
-    })
-
-    // When: selection removal unmounts the handle without a replacement.
-    unmount()
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
-    const observedMoves: Array<{ x: number; y: number }> = []
-    const observeMove = (event: PointerEvent) => {
-      observedMoves.push({ x: event.clientX, y: event.clientY })
-    }
-    globalThis.document.addEventListener('pointermove', observeMove)
-    fireEvent.pointerMove(globalThis.document, {
-      pointerId: 8,
-      clientX: 200,
-      clientY: 300,
-      buttons: 1
-    })
-    globalThis.document.removeEventListener('pointermove', observeMove)
-
-    // Then: the stale session no longer rewrites subsequent pointer events.
-    expect(observedMoves).toEqual([{ x: 200, y: 300 }])
-  })
-
-  it('keeps rectangle handles on the dependency default circle path', async () => {
-    // Given: a loaded page with the custom renderer wired into Selection.
+  it('layout mode delegates text and rectangle handle rendering to Selection', async () => {
+    // Given: a loaded layout page wrapped by Selection.
     const { document } = makeDocument({ pageCount: 1 })
     render(<IntermediateDocumentViewer document={document} />)
     await screen.findByText('Page 1 text')
     const pageId = requireRuntimeSelectionId(':page-1')
-    const renderHandle = requireSelectionPropsById(pageId).renderHandle
-    if (!renderHandle) {
-      throw new Error('Expected custom range handle renderer')
-    }
-
-    // When: the selection dependency requests a rectangle handle.
-    const { container } = render(
-      renderHandle({
-        type: 'start',
-        owner: 'persisted-range',
-        rangeId: 'rect-range',
-        target: 'rect',
-        rectId: 'rect-1',
-        position: { x: 20, y: 30 },
-        positionUnit: 'px',
-        isDragging: false,
-        onPointerDown: vi.fn(),
-        ariaLabel: 'rectangle start',
-        className: 'hsn-selection-handle hsn-selection-handle-rect',
-        style: { left: 20, top: 30 }
-      })
-    )
-
-    // Then: no text stem is introduced and the dependency position is intact.
-    expect(container.querySelector('[data-range-handle-stem]')).toBeNull()
-    expect(screen.getByRole('button', { name: 'rectangle start' })).toHaveStyle(
-      {
-        left: '20px',
-        top: '30px'
-      }
-    )
+    // Then: omitting renderHandle activates the dependency's built-in path.
+    expect(requireSelectionPropsById(pageId).renderHandle).toBeUndefined()
   })
 
-  it('layout mode keeps custom text and rectangle handles after touch input', async () => {
-    // Given: layout mode has both text and rectangle handles available.
+  it('layout mode enables the Selection magnifier by default', async () => {
+    // Given: the layout viewer uses its public defaults.
     const { document } = makeDocument({ pageCount: 1 })
+
+    // When: its first Selection instance finishes loading.
     render(<IntermediateDocumentViewer document={document} />)
     await screen.findByText('Page 1 text')
     const pageId = requireRuntimeSelectionId(':page-1')
-    const viewer = screen.getByTestId('intermediate-document-viewer')
-    const commonHandle = {
-      type: 'start',
-      owner: 'active-selection',
-      rangeId: null,
-      rectId: null,
-      position: { x: 20, y: 30 },
-      positionUnit: 'percent',
-      isDragging: false,
-      onPointerDown: vi.fn(),
-      className: 'hsn-selection-handle',
-      style: { left: '20%', top: '30%' },
-      ariaLabel: 'touch-gated handle'
-    } satisfies Omit<HandleRenderProps, 'target'>
 
-    // When: touch becomes the active input type.
-    await act(async () => {
-      fireEvent.pointerDown(viewer, { pointerType: 'touch', pointerId: 11 })
-    })
-
-    // Then: both selection targets continue using the custom handle renderer.
-    await waitFor(() => {
-      const renderHandle = requireSelectionPropsById(pageId).renderHandle
-      expect(renderHandle?.({ ...commonHandle, target: 'text' })).not.toBeNull()
-      expect(renderHandle?.({ ...commonHandle, target: 'rect' })).not.toBeNull()
-    })
+    // Then: the built-in magnifier is enabled without a Reader-owned lens.
+    expect(requireSelectionPropsById(pageId).showSelectionMagnifier).toBe(true)
+    expect(screen.queryByTestId('range-magnifier')).not.toBeInTheDocument()
   })
 
-  it('layout mode mounts the magnifier only when explicitly enabled', async () => {
-    // Given: the layout viewer explicitly enables the optional magnifier.
+  it('layout mode forwards an explicit disabled Selection magnifier setting', async () => {
+    // Given: the host opts out of the built-in magnifier.
     const { document } = makeDocument({ pageCount: 1 })
 
-    // When: its first page finishes loading.
+    // When: the page mounts with magnification disabled.
     render(
-      <IntermediateDocumentViewer document={document} showSelectionMagnifier />
+      <IntermediateDocumentViewer
+        document={document}
+        showSelectionMagnifier={false}
+      />
     )
     await screen.findByText('Page 1 text')
+    const pageId = requireRuntimeSelectionId(':page-1')
 
-    // Then: the hidden lens portal is available for custom handle drags.
-    expect(screen.getByTestId('range-magnifier')).toHaveAttribute('hidden')
+    // Then: Selection receives the opt-out and Reader still injects no handle.
+    const selectionProps = requireSelectionPropsById(pageId)
+    expect(selectionProps.showSelectionMagnifier).toBe(false)
+    expect(selectionProps.renderHandle).toBeUndefined()
   })
 })
 
@@ -10873,15 +10454,17 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     if (!selectionContent) {
       throw new Error('Expected rendered selection content')
     }
-    selectionContent.addEventListener('pointerdown', (event) => {
+    const onSelectionPointerDown = vi.fn((event: PointerEvent) => {
       event.stopPropagation()
     })
+    selectionContent.addEventListener('pointerdown', onSelectionPointerDown)
     vi.useFakeTimers()
 
     try {
       // When: the touch remains still for the 500 ms long-press interval.
+      let pointerDownAllowed = true
       await act(async () => {
-        fireEvent.pointerDown(selectionContent, {
+        pointerDownAllowed = fireEvent.pointerDown(selectionContent, {
           pointerType: 'touch',
           pointerId: 42,
           isPrimary: true,
@@ -10889,6 +10472,10 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
           clientY: 240
         })
       })
+      // 候选手势从命中既有高亮的 pointerdown 起就归 Viewer 独占，避免浏览器
+      // 或 Selection/VirtualPaper 在 500ms 等待期内先启动文字选择或页面拖动。
+      expect(pointerDownAllowed).toBe(false)
+      expect(onSelectionPointerDown).not.toHaveBeenCalled()
       await act(async () => {
         vi.advanceTimersByTime(499)
       })

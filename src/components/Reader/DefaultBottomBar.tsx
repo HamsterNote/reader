@@ -9,14 +9,19 @@ import { type RefObject, useEffect } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
 import type {
+  ReaderColorOption,
+  ReaderPageTool,
+  ReaderRenderMode
+} from '../../types/readerOptions'
+import type {
   ReaderAnnotationHistoryStatus,
   ReaderSelectionRef
 } from '../../types/selection'
 import type { ReaderTouchPanMode } from '../IntermediateDocumentViewer'
-import type { ReaderPageTool } from '../Page'
-import type { ReaderRenderMode } from '../Reader'
+import { DefaultBottomBarFontScaleControl } from './DefaultBottomBarFontScaleControl'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
 import { DefaultBottomBarModeControls } from './DefaultBottomBarModeControls'
+import { DefaultBottomBarZoomControl } from './DefaultBottomBarZoomControl'
 import {
   BottomBarHistoryControls,
   BottomBarToolButtons,
@@ -25,7 +30,7 @@ import {
 } from './DefaultBottomBarControls'
 import {
   DEFAULT_BOTTOM_BAR_TOOLS,
-  getFontScaleLabel
+  type ReaderLayoutZoom
 } from './defaultBottomBarConfig'
 import {
   useBottomBarMenus,
@@ -39,9 +44,12 @@ export type DefaultBottomBarProps = {
   readonly isEpub: boolean | undefined
   readonly ocrEnabled: boolean
   readonly fontScale: ReaderFontScale | undefined
+  readonly layoutZoom: ReaderLayoutZoom | undefined
+  readonly resolvedLayoutScale: number
   readonly touchPanMode: ReaderTouchPanMode
   readonly edgeCropEditing: boolean
   readonly selectedTool: ReaderPageTool
+  readonly colors: readonly ReaderColorOption[]
   readonly drawingStrokeColor: string
   readonly paintingControllerData: PaintingControllerData
   readonly historyStatus: ReaderAnnotationHistoryStatus
@@ -49,6 +57,7 @@ export type DefaultBottomBarProps = {
   readonly onRenderModeChange: (mode: ReaderRenderMode) => void
   readonly onOcrChange: (enabled: boolean) => void
   readonly onFontScaleChange: (scale: ReaderFontScale) => void
+  readonly onLayoutZoomChange: (zoom: ReaderLayoutZoom) => void
   readonly onTouchPanModeChange: (mode: ReaderTouchPanMode) => void
   readonly onEdgeCropEditingChange: (editing: boolean) => void
   readonly onSelectedToolChange: (tool: ReaderPageTool) => void
@@ -101,6 +110,15 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
         selectionRef={props.selectionRef}
       />
       <PopoverSeparator />
+      {props.layoutZoom !== undefined && (
+        <>
+          <DefaultBottomBarZoomControl
+            resolvedScale={props.resolvedLayoutScale}
+            menus={menus}
+          />
+          <PopoverSeparator />
+        </>
+      )}
       <DefaultBottomBarModeControls
         renderMode={props.renderMode}
         ocrEnabled={props.ocrEnabled}
@@ -185,35 +203,17 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
         <>
           <PopoverSeparator />
           <BottomBarColorControls
+            colors={props.colors}
             drawingStrokeColor={props.drawingStrokeColor}
             onDrawingStrokeColorChange={props.onDrawingStrokeColorChange}
             onHighlightColorChange={props.onHighlightColorChange}
           />
         </>
       )}
-      {visibleFontScale !== undefined && (
-        <>
-          <PopoverSeparator />
-          <Button
-            type='button'
-            size='small'
-            variant='ghost'
-            aria-haspopup='menu'
-            aria-expanded={menus.fontMenuAnchor !== null}
-            aria-controls={menus.fontMenuId}
-            data-testid='tool-bottom-bar-font-scale'
-            onClick={(event) => {
-              const anchor = event.currentTarget
-              menus.setToolMenuAnchor(null)
-              menus.setFontMenuAnchor((current) =>
-                current === null ? anchor : null
-              )
-            }}
-          >
-            字体：{getFontScaleLabel(visibleFontScale)}
-          </Button>
-        </>
-      )}
+      <DefaultBottomBarFontScaleControl
+        fontScale={visibleFontScale}
+        menus={menus}
+      />
     </Popover>
   )
 
@@ -232,10 +232,12 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
       )}
       <DefaultBottomBarMenus
         fontScale={visibleFontScale}
+        layoutZoom={props.layoutZoom}
         selectedTool={props.selectedTool}
         theme={theme}
         menus={menus}
         onFontScaleChange={props.onFontScaleChange}
+        onLayoutZoomChange={props.onLayoutZoomChange}
         onSelectedToolChange={props.onSelectedToolChange}
       />
     </>

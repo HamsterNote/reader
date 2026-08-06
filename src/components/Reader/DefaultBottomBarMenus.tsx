@@ -4,7 +4,9 @@ import type { ReaderFontScale } from '../../types/fontScale'
 import type { ReaderPageTool } from '../Page'
 import {
   DEFAULT_BOTTOM_BAR_TOOLS,
-  DEFAULT_FONT_SCALE_OPTIONS
+  DEFAULT_FONT_SCALE_OPTIONS,
+  DEFAULT_LAYOUT_ZOOM_OPTIONS,
+  type ReaderLayoutZoom
 } from './defaultBottomBarConfig'
 import type {
   useBottomBarMenus,
@@ -14,10 +16,12 @@ import type {
 type DefaultBottomBarMenusProps = {
   readonly fontScale: ReaderFontScale | undefined
   readonly selectedTool: ReaderPageTool
+  readonly layoutZoom: ReaderLayoutZoom | undefined
   readonly theme: ReturnType<typeof usePrefersColorScheme>
   readonly menus: ReturnType<typeof useBottomBarMenus>
   readonly onFontScaleChange: (scale: ReaderFontScale) => void
   readonly onSelectedToolChange: (tool: ReaderPageTool) => void
+  readonly onLayoutZoomChange: (zoom: ReaderLayoutZoom) => void
 }
 
 const selectedItemStyle = {
@@ -29,10 +33,12 @@ const selectedItemStyle = {
 export function DefaultBottomBarMenus({
   fontScale,
   selectedTool,
+  layoutZoom,
   theme,
   menus,
   onFontScaleChange,
-  onSelectedToolChange
+  onSelectedToolChange,
+  onLayoutZoomChange
 }: DefaultBottomBarMenusProps) {
   return (
     <>
@@ -100,6 +106,45 @@ export function DefaultBottomBarMenus({
                   style={selected ? selectedItemStyle : undefined}
                   onClick={() => {
                     onFontScaleChange(scale)
+                    menus.closeMenusAndRestoreFocus()
+                  }}
+                >
+                  <span
+                    aria-hidden='true'
+                    style={{ visibility: selected ? 'visible' : 'hidden' }}
+                  >
+                    <Icon name='check' />
+                  </span>
+                  {label}
+                </MenuItem>
+              )
+            })}
+          </Menu>
+        </Popover>
+      )}
+      {layoutZoom !== undefined && menus.zoomMenuAnchor !== null && (
+        <Popover
+          anchor={menus.zoomMenuAnchor}
+          placement='top-start'
+          theme={theme}
+          data-testid='tool-bottom-bar-layout-zoom-popover'
+        >
+          <Menu
+            id={menus.zoomMenuId}
+            ref={menus.zoomMenuRef}
+            aria-label='缩放菜单'
+          >
+            {DEFAULT_LAYOUT_ZOOM_OPTIONS.map(({ label, zoom }) => {
+              const selected = layoutZoom === zoom
+              return (
+                <MenuItem
+                  key={label}
+                  aria-pressed={selected}
+                  aria-label={label}
+                  data-selected={selected}
+                  style={selected ? selectedItemStyle : undefined}
+                  onClick={() => {
+                    onLayoutZoomChange(zoom)
                     menus.closeMenusAndRestoreFocus()
                   }}
                 >

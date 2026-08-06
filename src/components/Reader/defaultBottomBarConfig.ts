@@ -1,7 +1,13 @@
 import type { IconName } from '@hamster-note/components'
 
 import type { ReaderFontScale } from '../../types/fontScale'
-import type { ReaderPageTool } from '../Page'
+import type { ReaderLayoutZoom } from '../IntermediateDocumentViewer/nativeLayoutZoom'
+import type {
+  ReaderColorOption,
+  ReaderPageTool
+} from '../../types/readerOptions'
+
+export type { ReaderLayoutZoom } from '../IntermediateDocumentViewer/nativeLayoutZoom'
 
 export const DEFAULT_BOTTOM_BAR_TOOLS: readonly {
   readonly tool: ReaderPageTool
@@ -13,17 +19,13 @@ export const DEFAULT_BOTTOM_BAR_TOOLS: readonly {
   { tool: 'drawing', icon: 'pen', label: '绘图' }
 ]
 
-export const DEFAULT_BOTTOM_BAR_COLORS: readonly {
-  readonly name: 'blue' | 'green' | 'sand' | 'rose' | 'lavender' | 'black'
-  readonly label: string
-  readonly value: string
-}[] = [
-  { name: 'blue', label: '蓝色', value: '#7d9ec0' },
-  { name: 'green', label: '绿色', value: '#8eba8e' },
-  { name: 'sand', label: '沙色', value: '#d1b88a' },
-  { name: 'rose', label: '玫瑰色', value: '#cf9cab' },
-  { name: 'lavender', label: '紫色', value: '#a99fc4' },
-  { name: 'black', label: '黑色', value: '#2a2a2a' }
+export const DEFAULT_BOTTOM_BAR_COLORS: readonly ReaderColorOption[] = [
+  { name: 'blue', color: '#7d9ec0' },
+  { name: 'green', color: '#8eba8e' },
+  { name: 'sand', color: '#d1b88a' },
+  { name: 'rose', color: '#cf9cab' },
+  { name: 'lavender', color: '#a99fc4' },
+  { name: 'black', color: '#2a2a2a' }
 ]
 
 export const DEFAULT_FONT_SCALE_OPTIONS: readonly {
@@ -35,6 +37,20 @@ export const DEFAULT_FONT_SCALE_OPTIONS: readonly {
   { label: '中', scale: 1 },
   { label: '大', scale: 1.5 },
   { label: '特大', scale: 2 }
+]
+
+export const DEFAULT_LAYOUT_ZOOM_OPTIONS: readonly {
+  readonly label: string
+  readonly zoom: ReaderLayoutZoom
+}[] = [
+  { label: '25%', zoom: 0.25 },
+  { label: '50%', zoom: 0.5 },
+  { label: '75%', zoom: 0.75 },
+  { label: '100%', zoom: 1 },
+  { label: '150%', zoom: 1.5 },
+  { label: '200%', zoom: 2 },
+  { label: '300%', zoom: 3 },
+  { label: '适配宽度', zoom: 'fit-width' }
 ]
 
 export function getFontScaleLabel(fontScale: ReaderFontScale): string {

@@ -60,8 +60,6 @@ import {
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
 import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
-import { RangeHandle } from './RangeHandle'
-import { RangeMagnifierProvider } from './RangeMagnifier'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
@@ -75,7 +73,6 @@ import {
 } from './selectionAdapter'
 import { PageBrowser } from './PageBrowser'
 import { ReadingProgress } from './ReadingProgress'
-import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import {
   findTopTextAnchor,
   getActiveBookmarkKey,
@@ -886,7 +883,7 @@ export function IntermediateDocumentTextViewer(
     onHighlight,
     highlightColor,
     selectionColor,
-    showSelectionMagnifier = false,
+    showSelectionMagnifier = true,
     selectionPopover,
     highlightPopover,
     onCommentHighlight,
@@ -2844,132 +2841,112 @@ export function IntermediateDocumentTextViewer(
         onPointerUp={handleTouchPointerUp}
         onPointerCancel={handleTouchPointerCancel}
       >
-        <RangeMagnifierProvider
-          enabled={showSelectionMagnifier}
-          rootElement={viewerRootElement}
+        {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
+        <div
+          className='hamster-reader__intermediate-text-spacer'
+          style={{ height: virtualizer.getTotalSize() }}
         >
-          {showSelectionMagnifier ? (
-            <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
-          ) : null}
-          {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
-          <div
-            className='hamster-reader__intermediate-text-spacer'
-            style={{ height: virtualizer.getTotalSize() }}
-          >
-            {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
-            {virtualItems.map((virtualItem) => {
-              const pageNumber = pageNumbers[virtualItem.index]
-              if (typeof pageNumber !== 'number') {
-                return null
-              }
+          {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
+          {virtualItems.map((virtualItem) => {
+            const pageNumber = pageNumbers[virtualItem.index]
+            if (typeof pageNumber !== 'number') {
+              return null
+            }
 
-              const texts = textsByPageNumber.get(pageNumber)
-              const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
-              const images = imagesByPageNumber.get(pageNumber) ?? []
-              const orderedContent = orderedContentByPageNumber.get(pageNumber)
-              const pageSelectionId = getRuntimePageSelectionId(pageNumber)
-              const isPopoverOwner =
-                popoverOwnerRuntimeId === null ||
-                popoverOwnerRuntimeId === pageSelectionId
-              const pagePopover = isPopoverOwner ? (
-                <PopoverPortal
-                  containerRef={popoverContainerRef}
-                  selectionKind='selected'
-                  visible={true}
-                  relative={popoverRelative}
-                >
-                  {existingHighlightPopover}
-                </PopoverPortal>
-              ) : undefined
-              const pageSelectionPopover = isPopoverOwner ? (
-                <PopoverPortal
-                  containerRef={popoverContainerRef}
-                  selectionKind='active'
-                  visible={true}
-                  relative={popoverRelative}
-                >
-                  {selectionPopover}
-                </PopoverPortal>
-              ) : undefined
-              return (
-                <div
-                  key={virtualItem.key}
-                  ref={virtualizer.measureElement}
-                  data-index={virtualItem.index}
-                  data-page-measurable={
-                    texts !== undefined &&
-                    (texts.length > 0 || images.length > 0)
-                  }
-                  data-page-number={pageNumber}
-                  data-selection-id={pageSelectionId}
-                  data-testid={`intermediate-text-page-${pageNumber}`}
-                  // SCSS .hamster-reader__intermediate-text-page 提供
-                  // position:absolute / top:0 / left:0 / width:100% / padding:5px，
-                  // 仅保留动态 transform（由 TanStack Virtual 计算）
-                  className={`hamster-reader__intermediate-text-page${
-                    virtualItem.index > 0
-                      ? ' hamster-reader__intermediate-text-page--following'
-                      : ''
-                  }`}
-                  style={{ transform: `translateY(${virtualItem.start}px)` }}
-                >
-                  {texts ? (
-                    <HamsterSelection
-                      selectionId={pageSelectionId}
-                      linkedMode
-                      linkedData={runtimeLinkedData}
-                      onLinkedDataChange={handlePageLinkedDataChange}
-                      onLinkedSelect={handleLinkedSelect}
-                      onLinkedUpdateRange={handleLinkedUpdateRange}
-                      onLinkedSelectRange={handlePageLinkedSelectRange}
-                      ranges={EMPTY_SELECTION_RANGES}
-                      selectedRangeId={effectiveSelectedRangeId}
-                      onSelect={undefined}
-                      onSelectRange={undefined}
-                      onUpdateRange={undefined}
-                      onSelectionStart={selectionStartHandler}
-                      onSelectionEnd={selectionEndHandler}
-                      onHighlight={undefined}
-                      highlightColor={highlightColor}
-                      selectionColor={selectionColor}
-                      popover={pagePopover}
-                      selectionPopover={pageSelectionPopover}
-                      overlayRectType={overlayRectType}
-                      tool='text'
-                      renderHandle={(handle) => (
-                        <RangeHandle
-                          handle={handle}
-                          linkedData={runtimeLinkedData}
-                          magnifierEnabled={
-                            showSelectionMagnifier && handle.target === 'rect'
-                          }
-                          scale={1}
-                          selectionId={pageSelectionId}
-                          viewerRoot={viewerRootElement}
-                        />
-                      )}
-                      ref={selectionRefForRuntimeId(pageSelectionId)}
-                    >
-                      <IntermediateDocumentTextPageContent
-                        key={virtualItem.key}
-                        pageNumber={pageNumber}
-                        texts={texts}
-                        paragraphs={paragraphs}
-                        images={images}
-                        orderedContent={orderedContent}
-                        isPdf={isPdf}
-                        setTextRef={setTextRef}
-                        fontScale={fontScale}
-                      />
-                    </HamsterSelection>
-                  ) : (
-                    <>Page {pageNumber}</>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </RangeMagnifierProvider>
+            const texts = textsByPageNumber.get(pageNumber)
+            const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
+            const images = imagesByPageNumber.get(pageNumber) ?? []
+            const orderedContent = orderedContentByPageNumber.get(pageNumber)
+            const pageSelectionId = getRuntimePageSelectionId(pageNumber)
+            const isPopoverOwner =
+              popoverOwnerRuntimeId === null ||
+              popoverOwnerRuntimeId === pageSelectionId
+            const pagePopover = isPopoverOwner ? (
+              <PopoverPortal
+                containerRef={popoverContainerRef}
+                selectionKind='selected'
+                visible={true}
+                relative={popoverRelative}
+              >
+                {existingHighlightPopover}
+              </PopoverPortal>
+            ) : undefined
+            const pageSelectionPopover = isPopoverOwner ? (
+              <PopoverPortal
+                containerRef={popoverContainerRef}
+                selectionKind='active'
+                visible={true}
+                relative={popoverRelative}
+              >
+                {selectionPopover}
+              </PopoverPortal>
+            ) : undefined
+            return (
+              <div
+                key={virtualItem.key}
+                ref={virtualizer.measureElement}
+                data-index={virtualItem.index}
+                data-page-measurable={
+                  texts !== undefined && (texts.length > 0 || images.length > 0)
+                }
+                data-page-number={pageNumber}
+                data-selection-id={pageSelectionId}
+                data-testid={`intermediate-text-page-${pageNumber}`}
+                // SCSS .hamster-reader__intermediate-text-page 提供
+                // position:absolute / top:0 / left:0 / width:100% / padding:5px，
+                // 仅保留动态 transform（由 TanStack Virtual 计算）
+                className={`hamster-reader__intermediate-text-page${
+                  virtualItem.index > 0
+                    ? ' hamster-reader__intermediate-text-page--following'
+                    : ''
+                }`}
+                style={{ transform: `translateY(${virtualItem.start}px)` }}
+              >
+                {texts ? (
+                  <HamsterSelection
+                    selectionId={pageSelectionId}
+                    linkedMode
+                    linkedData={runtimeLinkedData}
+                    onLinkedDataChange={handlePageLinkedDataChange}
+                    onLinkedSelect={handleLinkedSelect}
+                    onLinkedUpdateRange={handleLinkedUpdateRange}
+                    onLinkedSelectRange={handlePageLinkedSelectRange}
+                    ranges={EMPTY_SELECTION_RANGES}
+                    selectedRangeId={effectiveSelectedRangeId}
+                    onSelect={undefined}
+                    onSelectRange={undefined}
+                    onUpdateRange={undefined}
+                    onSelectionStart={selectionStartHandler}
+                    onSelectionEnd={selectionEndHandler}
+                    onHighlight={undefined}
+                    highlightColor={highlightColor}
+                    selectionColor={selectionColor}
+                    popover={pagePopover}
+                    selectionPopover={pageSelectionPopover}
+                    overlayRectType={overlayRectType}
+                    tool='text'
+                    showSelectionMagnifier={showSelectionMagnifier}
+                    ref={selectionRefForRuntimeId(pageSelectionId)}
+                  >
+                    <IntermediateDocumentTextPageContent
+                      key={virtualItem.key}
+                      pageNumber={pageNumber}
+                      texts={texts}
+                      paragraphs={paragraphs}
+                      images={images}
+                      orderedContent={orderedContent}
+                      isPdf={isPdf}
+                      setTextRef={setTextRef}
+                      fontScale={fontScale}
+                    />
+                  </HamsterSelection>
+                ) : (
+                  <>Page {pageNumber}</>
+                )}
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
