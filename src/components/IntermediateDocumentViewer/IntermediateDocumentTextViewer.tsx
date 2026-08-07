@@ -2823,6 +2823,7 @@ export function IntermediateDocumentTextViewer(
           onToggleBookmark,
           scrollToBookmark
         )}
+        isBookmarkNavigationEnabled={isTextBookmark}
         onToggleBookmark={onToggleBookmark}
         bookmarkedPageNumbers={bookmarkedPageNumbers}
         onTogglePageBookmark={onTogglePageBookmark}

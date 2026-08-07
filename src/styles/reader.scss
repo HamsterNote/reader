@@ -836,6 +836,11 @@
       outline-offset: 2px;
     }
 
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
     &--active,
     &--active:hover {
       border-color: var(--hamster-reader-theme-color, #2563eb);

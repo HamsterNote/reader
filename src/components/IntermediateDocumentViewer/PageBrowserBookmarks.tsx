@@ -86,6 +86,7 @@ type PageBrowserBookmarksPanelProps = {
   readonly listStyle: CSSProperties
   readonly onNavigateToPage: (pageNumber: number) => void
   readonly onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  readonly isBookmarkNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggleBookmark?: (bookmark: ReaderBookmark) => void
   readonly onTogglePageBookmark?: (pageNumber: number) => void
 }
@@ -96,6 +97,7 @@ type TextBookmarksListProps = {
   readonly isEnabled: boolean
   readonly activeBookmarkKey?: string
   readonly onNavigate?: (bookmark: ReaderBookmark) => void
+  readonly isNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggle?: (bookmark: ReaderBookmark) => void
 }
 
@@ -110,6 +112,7 @@ function TextBookmarksList({
   isEnabled,
   activeBookmarkKey,
   onNavigate,
+  isNavigationEnabled,
   onToggle
 }: TextBookmarksListProps) {
   const handleDelete = useCallback(
@@ -137,6 +140,7 @@ function TextBookmarksList({
     const bookmarkKey = getBookmarkKey(bookmark)
     const label = getBookmarkLabel(bookmark)
     const isActive = bookmarkKey === activeBookmarkKey
+    const canNavigate = isNavigationEnabled?.(bookmark) ?? true
     return (
       <div key={bookmarkKey} className='hamster-reader__bookmark-item'>
         <button
@@ -148,7 +152,9 @@ function TextBookmarksList({
           }
           aria-label={`跳转到书签：${label}`}
           aria-current={isActive ? 'location' : undefined}
-          tabIndex={isOpen ? 0 : -1}
+          disabled={!canNavigate}
+          title={canNavigate ? undefined : '当前阅读模式不支持跳转到此书签'}
+          tabIndex={isOpen && canNavigate ? 0 : -1}
           data-page-number={bookmark.pageNumber}
           onClick={() => onNavigate?.(bookmark)}
         >
@@ -246,6 +252,7 @@ export function PageBrowserBookmarksPanel({
   listStyle,
   onNavigateToPage,
   onNavigateToBookmark,
+  isBookmarkNavigationEnabled,
   onToggleBookmark,
   onTogglePageBookmark
 }: PageBrowserBookmarksPanelProps) {
@@ -296,6 +303,7 @@ export function PageBrowserBookmarksPanel({
           isEnabled={isTextBookmarkEnabled}
           activeBookmarkKey={activeBookmarkKey}
           onNavigate={onNavigateToBookmark}
+          isNavigationEnabled={isBookmarkNavigationEnabled}
           onToggle={onToggleBookmark}
         />
       ) : (

@@ -90,6 +90,7 @@ type PageBrowserProps = {
   readonly currentPageNumber?: number
   readonly activeBookmarkKey?: string
   readonly onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  readonly isBookmarkNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggleBookmark?: (bookmark: ReaderBookmark) => void
   readonly bookmarkedPageNumbers?: readonly number[]
   readonly onTogglePageBookmark?: (pageNumber: number) => void
@@ -399,6 +400,7 @@ export function PageBrowser({
   currentPageNumber: currentPageNumberProp,
   activeBookmarkKey,
   onNavigateToBookmark,
+  isBookmarkNavigationEnabled,
   onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
@@ -908,6 +910,7 @@ export function PageBrowser({
           listStyle={listStyle}
           onNavigateToPage={onNavigateToPage}
           onNavigateToBookmark={onNavigateToBookmark}
+          isBookmarkNavigationEnabled={isBookmarkNavigationEnabled}
           onToggleBookmark={onToggleBookmark}
           onTogglePageBookmark={onTogglePageBookmark}
         />

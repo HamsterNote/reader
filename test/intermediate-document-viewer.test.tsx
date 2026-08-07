@@ -1426,9 +1426,11 @@ describe('IntermediateDocumentViewer', () => {
 
     // When: the user opens the saved page-position bookmark.
     fireEvent.click(screen.getByRole('tab', { name: '书签' }))
-    fireEvent.click(
-      screen.getByRole('button', { name: '跳转到书签：第 2 页 · 40%' })
-    )
+    const bookmarkButton = screen.getByRole('button', {
+      name: '跳转到书签：第 2 页 · 40%'
+    })
+    expect(bookmarkButton).toBeEnabled()
+    fireEvent.click(bookmarkButton)
 
     // Then: page 2's 166px origin plus 60px is aligned to the viewport top.
     await waitFor(() => {
@@ -3482,6 +3484,33 @@ describe('IntermediateDocumentViewer', () => {
     await act(async () => Promise.resolve())
     expect(scrollTo).toHaveBeenCalledTimes(seekCountBeforeEcho)
     expect(onTextReadingProgressChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('text mode disables page-position bookmarks created in layout mode', async () => {
+    // Given: the sidebar contains a page-and-percentage bookmark without a text anchor.
+    const bookmark = { pageNumber: 1, verticalPercentage: 40 } as const
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    scrollEl.scrollTop = 37
+
+    // When: the user opens the bookmarks tab in Text Mode.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    const bookmarkButton = screen.getByRole('button', {
+      name: '跳转到书签：第 1 页 · 40%'
+    })
+
+    // Then: the incompatible bookmark cannot be activated or move the reader.
+    expect(bookmarkButton).toBeDisabled()
+    fireEvent.click(bookmarkButton)
+    expect(scrollEl.scrollTop).toBe(37)
   })
 
   it('text mode persists and highlights an empty-page bookmark fallback', async () => {
