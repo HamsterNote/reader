@@ -8,7 +8,7 @@ This document defines the minimal layout tokens and component class contracts re
 
 The demo application transitions from a single-column vertical flow to a two-column shell when a document is parsed and loaded.
 
-- **Container:** `.hamster-demo-shell` (CSS Grid or Flexbox, 100vw, 100vh, `overflow: hidden`)
+- **Container:** `.hamster-demo-shell` (CSS Grid or Flexbox, `100%` width, `100vh`, `overflow: hidden`); use the containing block width rather than `100vw` so page margins cannot push the reader rail beyond the viewport.
 - **Left Panel (Sidebar):** `.hamster-demo-sidebar`
   - Fixed width: `300px`
   - Background: `#f9fafb` (Tailwind `gray-50`)
@@ -206,9 +206,15 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Render mode:** one toggle switches between Layout and Text. Its accessible
   label always names the destination mode, and its pressed state represents
   Text mode.
-- **Layout-only controls:** touch-panning and edge-crop editing remain visible
-  but disabled in Text mode. Entering Text mode also exits edge-crop editing so
-  a hidden edit session cannot survive the mode transition.
+- **Mode-specific controls:** touch-panning and edge-crop editing are omitted in
+  Text mode. Entering Text mode also exits edge-crop editing so a hidden edit
+  session cannot survive the mode transition. The color palette remains
+  available in both modes: Layout updates the drawing and highlight colors,
+  while Text updates the highlight color only.
+- **Hidden pages while cropping:** hidden pages remain omitted from normal
+  Layout and Text reading. Edge-crop editing keeps each hidden page's original
+  position as a content-free dashed rectangle labeled `当前 第 x 页 已隐藏`, so
+  users can understand page order without revealing or mounting page content.
 - **OCR:** the OCR toggle is off by default and is available only in Layout
   mode. Turning it on immediately recognizes every currently loaded page and
   automatically recognizes each page loaded afterward while it remains on.

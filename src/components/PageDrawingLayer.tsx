@@ -1,10 +1,10 @@
 import {
+  type DrawingValue,
   normalizeDrawingValue,
   PaintingBoard,
-  type DrawingValue,
   type PaintingControllerData
 } from '@hamster-note/painting'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 export type PageDrawingLayerProps = {
   readonly enabled: boolean
@@ -14,6 +14,7 @@ export type PageDrawingLayerProps = {
   readonly value?: DrawingValue
   readonly onChange?: (nextValue: DrawingValue) => void
   readonly canvasScale?: number
+  readonly cancelDrawingOnMultiTouch?: boolean
 }
 
 /**
@@ -66,8 +67,10 @@ export function PageDrawingLayer({
   onControllerDataChange,
   value,
   onChange,
-  canvasScale = 1
+  canvasScale = 1,
+  cancelDrawingOnMultiTouch = false
 }: PageDrawingLayerProps) {
+  const layerRef = useRef<HTMLDivElement>(null)
   const safeCanvasScale =
     Number.isFinite(canvasScale) && canvasScale > 0 ? canvasScale : 1
   const drawingValue = useMemo(
@@ -80,8 +83,74 @@ export function PageDrawingLayer({
       }
     : undefined
 
+  useEffect(() => {
+    const layer = layerRef.current
+    if (!enabled || !cancelDrawingOnMultiTouch || !layer) return
+
+    const ownerDocument = layer.ownerDocument
+    const PointerEventConstructor = ownerDocument.defaultView?.PointerEvent
+    if (!PointerEventConstructor) return
+
+    const activeTouchPointerIds = new Set<number>()
+    const dispatchedCancelPointerIds = new Set<number>()
+    let isMultiTouchGesture = false
+
+    const cancelDrawingPointers = () => {
+      for (const pointerId of activeTouchPointerIds) {
+        dispatchedCancelPointerIds.add(pointerId)
+        ownerDocument.dispatchEvent(
+          new PointerEventConstructor('pointercancel', {
+            bubbles: true,
+            pointerId,
+            pointerType: 'touch'
+          })
+        )
+      }
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return
+
+      if (activeTouchPointerIds.size === 0 && !isMultiTouchGesture) {
+        activeTouchPointerIds.add(event.pointerId)
+        return
+      }
+
+      cancelDrawingPointers()
+      activeTouchPointerIds.add(event.pointerId)
+      isMultiTouchGesture = true
+      event.stopImmediatePropagation()
+    }
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return
+      if (
+        event.type === 'pointercancel' &&
+        dispatchedCancelPointerIds.delete(event.pointerId)
+      ) {
+        return
+      }
+
+      activeTouchPointerIds.delete(event.pointerId)
+      if (activeTouchPointerIds.size === 0) {
+        isMultiTouchGesture = false
+      }
+    }
+
+    layer.addEventListener('pointerdown', handlePointerDown, true)
+    ownerDocument.addEventListener('pointerup', handlePointerEnd, true)
+    ownerDocument.addEventListener('pointercancel', handlePointerEnd, true)
+    return () => {
+      cancelDrawingPointers()
+      layer.removeEventListener('pointerdown', handlePointerDown, true)
+      ownerDocument.removeEventListener('pointerup', handlePointerEnd, true)
+      ownerDocument.removeEventListener('pointercancel', handlePointerEnd, true)
+    }
+  }, [cancelDrawingOnMultiTouch, enabled])
+
   return (
     <div
+      ref={layerRef}
       className='hamster-reader__drawing-layer'
       data-testid={`reader-page-drawing-layer-${pageId}`}
       style={{

@@ -6,7 +6,7 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle
 } from '../../types/selection'
-import type { ReaderBookmark, ReaderTextAnchor } from '../../types/readerData'
+import type { ReaderBookmark } from '../../types/readerData'
 import { hasDrawingStrokes } from '../PageDrawingLayer'
 import {
   PageBookmarkButton,
@@ -14,7 +14,7 @@ import {
 } from './PageBrowserBookmarks'
 import { PageBrowserDrawingPreview } from './PageBrowserDrawingPreview'
 import { parsePublicPageId } from './rangeJumpHelpers'
-import { getTextAnchorKey } from './textAnchor'
+import { getBookmarkKey } from './textAnchor'
 import { usePageBrowserDrag } from './usePageBrowserDrag'
 
 type PageBrowserTab = 'pages' | 'highlights' | 'bookmarks'
@@ -86,10 +86,11 @@ type PageBrowserProps = {
   readonly onDeleteRect?: (id: string) => void
   readonly showPagesTab?: boolean
   readonly bookmarks?: readonly ReaderBookmark[]
-  readonly currentAnchor?: ReaderTextAnchor
+  readonly currentBookmark?: ReaderBookmark
   readonly currentPageNumber?: number
   readonly activeBookmarkKey?: string
   readonly onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  readonly isBookmarkNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggleBookmark?: (bookmark: ReaderBookmark) => void
   readonly bookmarkedPageNumbers?: readonly number[]
   readonly onTogglePageBookmark?: (pageNumber: number) => void
@@ -395,10 +396,11 @@ export function PageBrowser({
   onDeleteRect,
   showPagesTab = true,
   bookmarks,
-  currentAnchor,
+  currentBookmark,
   currentPageNumber: currentPageNumberProp,
   activeBookmarkKey,
   onNavigateToBookmark,
+  isBookmarkNavigationEnabled,
   onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
@@ -429,7 +431,7 @@ export function PageBrowser({
           .join(',')
       case 'bookmarks':
         return bookmarks
-          ? bookmarks.map(getTextAnchorKey).join(',')
+          ? bookmarks.map(getBookmarkKey).join(',')
           : bookmarkedPages.join(',')
     }
   })()
@@ -897,7 +899,7 @@ export function PageBrowser({
       >
         <PageBrowserBookmarksPanel
           bookmarks={bookmarks}
-          currentAnchor={currentAnchor}
+          currentBookmark={currentBookmark}
           activeBookmarkKey={activeBookmarkKey}
           bookmarkedPageNumbers={bookmarkedPages}
           currentPageNumber={currentPageNumber}
@@ -908,6 +910,7 @@ export function PageBrowser({
           listStyle={listStyle}
           onNavigateToPage={onNavigateToPage}
           onNavigateToBookmark={onNavigateToBookmark}
+          isBookmarkNavigationEnabled={isBookmarkNavigationEnabled}
           onToggleBookmark={onToggleBookmark}
           onTogglePageBookmark={onTogglePageBookmark}
         />

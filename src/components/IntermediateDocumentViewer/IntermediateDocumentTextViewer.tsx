@@ -76,8 +76,10 @@ import { ReadingProgress } from './ReadingProgress'
 import {
   findTopTextAnchor,
   getActiveBookmarkKey,
+  getBookmarkKey,
   getTextAnchorKey,
   hasAnchorableText,
+  isTextBookmark,
   resolveTextAnchorElement,
   resolveBookmarkNavigationHandler,
   type TextAnchorElementRecord
@@ -1790,6 +1792,38 @@ export function IntermediateDocumentTextViewer(
     ]
   )
 
+  const scrollToBookmark = useCallback(
+    (bookmark: ReaderBookmark) => {
+      if (isTextBookmark(bookmark)) {
+        scrollToTextAnchor(bookmark)
+        return
+      }
+
+      const pageIndex = pageNumbers.indexOf(bookmark.pageNumber)
+      if (pageIndex < 0) return
+      handleReadingProgressSeekPage(bookmark.pageNumber)
+      setFallbackBookmarkKey(getBookmarkKey(bookmark))
+      const verticalRatio =
+        Math.min(100, Math.max(0, bookmark.verticalPercentage)) / 100
+      const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
+      viewerWindow?.requestAnimationFrame(() => {
+        const viewport = scrollContainerRef.current
+        const pageElement = viewerRootElement?.querySelector<HTMLElement>(
+          `[data-testid="intermediate-text-page-${bookmark.pageNumber}"]`
+        )
+        if (!viewport || !pageElement) return
+        viewport.scrollTop +=
+          pageElement.getBoundingClientRect().height * verticalRatio
+      })
+    },
+    [
+      handleReadingProgressSeekPage,
+      pageNumbers,
+      scrollToTextAnchor,
+      viewerRootElement
+    ]
+  )
+
   const { onTextSelectionChange, onTextSelectionEnd, onSelectText } = props
 
   // setTextRef: 柯里化回调 (text, pageNumber) => (element) => void
@@ -2778,7 +2812,7 @@ export function IntermediateDocumentTextViewer(
         onDeleteRect={onRemoveRect}
         showPagesTab={false}
         bookmarks={bookmarks}
-        currentAnchor={readingProgress.anchor}
+        currentBookmark={readingProgress.anchor}
         activeBookmarkKey={getActiveBookmarkKey(
           readingProgress.anchor,
           fallbackBookmarkKey,
@@ -2787,8 +2821,9 @@ export function IntermediateDocumentTextViewer(
         onNavigateToBookmark={resolveBookmarkNavigationHandler(
           bookmarks,
           onToggleBookmark,
-          scrollToTextAnchor
+          scrollToBookmark
         )}
+        isBookmarkNavigationEnabled={isTextBookmark}
         onToggleBookmark={onToggleBookmark}
         bookmarkedPageNumbers={bookmarkedPageNumbers}
         onTogglePageBookmark={onTogglePageBookmark}
