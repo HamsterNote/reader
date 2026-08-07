@@ -71,7 +71,10 @@ import { IntermediateDocumentViewer } from './IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from './IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import type { ReaderLayoutZoom } from './IntermediateDocumentViewer/nativeLayoutZoom'
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
-import { getTextAnchorKey } from './IntermediateDocumentViewer/textAnchor'
+import {
+  getBookmarkKey,
+  getTextAnchorKey
+} from './IntermediateDocumentViewer/textAnchor'
 import type {
   ReaderPagePaintingMap,
   ReaderPageRectSelectionMap,
@@ -1052,6 +1055,24 @@ export function Reader({
     [edgeCropEditing, onEdgeCropEditingChange]
   )
 
+  const handleEdgeCropHidePage = useCallback(
+    (pageNumber: number) => {
+      if (!onDataChange) return
+
+      const hiddenPages = data?.hiddenPages ?? []
+      const pageId = `page-${pageNumber}`
+      if (
+        hiddenPages.some(
+          (hiddenPage) => hiddenPage === pageNumber || hiddenPage === pageId
+        )
+      ) {
+        return
+      }
+      onDataChange({ ...data, hiddenPages: [...hiddenPages, pageNumber] })
+    },
+    [data, onDataChange]
+  )
+
   const handleSelectedToolChange = useCallback(
     (nextTool: ReaderPageTool) => {
       if (data?.selectedTool === undefined && selectedTool === undefined) {
@@ -1169,15 +1190,14 @@ export function Reader({
       onToggleBookmark?.(bookmark)
       if (!onDataChange) return
 
-      const bookmarkKey = getTextAnchorKey(bookmark)
+      const bookmarkKey = getBookmarkKey(bookmark)
       const currentBookmarks = resolvedBookmarks ?? []
       const containsBookmark = currentBookmarks.some(
-        (currentBookmark) => getTextAnchorKey(currentBookmark) === bookmarkKey
+        (currentBookmark) => getBookmarkKey(currentBookmark) === bookmarkKey
       )
       const nextBookmarks = containsBookmark
         ? currentBookmarks.filter(
-            (currentBookmark) =>
-              getTextAnchorKey(currentBookmark) !== bookmarkKey
+            (currentBookmark) => getBookmarkKey(currentBookmark) !== bookmarkKey
           )
         : [...currentBookmarks, bookmark]
       onDataChange({ ...data, bookmarks: nextBookmarks })
@@ -1544,6 +1564,7 @@ export function Reader({
           edgeCrop={data?.edgeCrop}
           edgeCropEditing={resolvedEdgeCropEditing}
           onEdgeCropApply={onEdgeCropApply}
+          onEdgeCropHidePage={handleEdgeCropHidePage}
           ocr={resolvedOcr}
           extraOCR={extraOCR}
           onOcrError={onOcrError}
@@ -1781,6 +1802,7 @@ export function Reader({
             selectedTool={resolvedSelectedTool}
             colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
             drawingStrokeColor={resolvedDrawingStrokeColor}
+            highlightColor={resolvedHighlightColor}
             paintingControllerData={resolvedPaintingControllerData}
             onPaintingControllerDataChange={handlePaintingControllerDataChange}
             historyStatus={bottomBarHistoryStatus}

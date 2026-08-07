@@ -93,6 +93,7 @@ export type {
   ReaderData,
   ReaderEdgeCrop,
   ReaderPageEdgeCrop,
+  ReaderPagePositionBookmark,
   ReaderTextAnchor,
   ReaderTextReadingProgress,
   ReaderVirtualPaperState

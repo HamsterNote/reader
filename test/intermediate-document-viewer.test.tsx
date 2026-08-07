@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import type { DrawingValue } from '@hamster-note/painting'
 import {
   type IntermediateContent,
   IntermediateDocument,
@@ -1041,6 +1042,29 @@ describe('IntermediateDocumentViewer', () => {
     expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
   })
 
+  it('shows hidden page placeholders without page content while cropping', async () => {
+    // Given: 第二页已隐藏，阅读器正在编辑页面裁切。
+    const { document } = makeDocument({ pageCount: 2 })
+
+    // When: 裁切模式渲染全部页面位置。
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        hiddenPages={[2]}
+        edgeCropEditing
+        initialLoadedPages={2}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    // Then: 隐藏页保留矩形位置和页码提示，但不泄露真实页面内容。
+    expect(screen.getByTestId('intermediate-page-2')).toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-page-hidden-2')).toHaveTextContent(
+      '当前 第 2 页 已隐藏'
+    )
+    expect(screen.queryByText('Page 2 text')).not.toBeInTheDocument()
+  })
+
   it('crops page shells and offsets full-size page content', async () => {
     // Given: two equal pages, a global crop, and a page-specific override.
     const { document } = makeDocument({
@@ -1334,6 +1358,82 @@ describe('IntermediateDocumentViewer', () => {
     await waitFor(() => {
       expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
         transform: 'translate3d(0px, -120px, 0) scale(1)'
+      })
+    })
+  })
+
+  it('native layout opens a bookmark through document-flow scrolling', async () => {
+    // Given: a loaded native-flow bookmark target is below the viewport top.
+    const { document } = makeDocument({ pageCount: 1 })
+    const bookmark = {
+      pageNumber: 1,
+      textId: 'text-1',
+      text: 'Page 1 text',
+      offset: 0
+    } as const
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const target = viewport.querySelector<HTMLElement>(
+      '[data-text-id="text-1"]'
+    )
+    expect(target).not.toBeNull()
+    setScrollContainerSize(viewport, {
+      width: 300,
+      height: 200,
+      scrollHeight: 1000,
+      scrollTop: 40
+    })
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    if (target) {
+      mockElementRect(target, { left: 20, top: 120, width: 100, height: 20 })
+    }
+
+    // When: the user opens the bookmark from the sidebar.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: '跳转到书签：Page 1 text' })
+    )
+
+    // Then: the real native viewport scrolls to the target text.
+    await waitFor(() => expect(viewport.scrollTop).toBe(160))
+  })
+
+  it('layout mode opens a textless bookmark at its page percentage', async () => {
+    // Given: page 2 has no text and a bookmark points 40% down its 150px height.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    pages.get(2)?.getContent.mockResolvedValue([])
+    const bookmark = { pageNumber: 2, verticalPercentage: 40 } as const
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        showPageBrowser={true}
+        bookmarks={[bookmark]}
+        onToggleBookmark={vi.fn()}
+      />
+    )
+    await screen.findByTestId('intermediate-page-2')
+
+    // When: the user opens the saved page-position bookmark.
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: '跳转到书签：第 2 页 · 40%' })
+    )
+
+    // Then: page 2's 166px origin plus 60px is aligned to the viewport top.
+    await waitFor(() => {
+      expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
+        transform: 'translate3d(0px, -226px, 0) scale(1)'
       })
     })
   })
@@ -1911,11 +2011,15 @@ describe('IntermediateDocumentViewer', () => {
     })
     fireEvent.click(screen.getByRole('tab', { name: '书签' }))
 
-    // Then: progress reports page 2 and text-bookmark creation stays disabled.
+    // Then: progress reports page 2 and saves its 8% vertical position.
     expect(
       screen.getByRole('slider', { name: '版面阅读进度' })
     ).toHaveAttribute('aria-valuetext', '第 2 页')
-    expect(screen.getByRole('button', { name: '新增书签' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '新增书签' }))
+    expect(onToggleBookmark).toHaveBeenCalledWith({
+      pageNumber: 2,
+      verticalPercentage: 8
+    })
     Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
   })
 
@@ -2286,8 +2390,8 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('preserves a fixed native zoom when the viewport resizes', async () => {
-    // Given: the native layout starts in fit-width mode with a 124px page box.
+  it('fits the native document width directly to the reader viewport', async () => {
+    // Given: the native layout starts in fit-width mode with a 100px page.
     const { document } = makeDocument({
       pageCount: 1,
       pageSize: { x: 100, y: 150 }
@@ -2301,8 +2405,21 @@ describe('IntermediateDocumentViewer', () => {
     )
     const viewport = await screen.findByTestId('native-layout-viewport')
     const page = screen.getByTestId('intermediate-page-1')
+    const container = viewport.querySelector<HTMLElement>(
+      '.hamster-reader__native-layout-container'
+    )
+    if (!container) {
+      throw new Error('Expected native layout container')
+    }
     mockElementSize(viewport, { width: 496, height: 300 })
-    await waitFor(() => expect(page).toHaveStyle({ width: '400px' }))
+    await waitFor(() => expect(container.style.zoom).toBe('4.96'))
+    expect(page).toHaveStyle({ width: '100px' })
+    expect(page.closest('.hamster-note-document-gutter')).toHaveStyle({
+      marginLeft: 'auto',
+      marginRight: 'auto',
+      paddingLeft: '0px',
+      paddingRight: '0px'
+    })
 
     // When: the host selects 150% and the viewport subsequently resizes.
     rerender(
@@ -2316,7 +2433,144 @@ describe('IntermediateDocumentViewer', () => {
     mockElementSize(viewport, { width: 620, height: 300 })
 
     // Then: fit-width observation no longer overwrites the fixed preset.
-    await waitFor(() => expect(page).toHaveStyle({ width: '150px' }))
+    await waitFor(() => expect(container.style.zoom).toBe('1.5'))
+    expect(page).toHaveStyle({ width: '100px' })
+  })
+
+  it('keeps native drawing coordinates intrinsic at a fixed percentage zoom', async () => {
+    // Given: a persisted stroke is displayed in native layout at 150%.
+    const onPagePaintingChange = vi.fn()
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 150 }
+    })
+    const drawing: DrawingValue = {
+      strokes: [
+        {
+          id: 'native-stroke',
+          tool: 'pen',
+          points: [
+            { x: 10, y: 12 },
+            { x: 40, y: 44 }
+          ]
+        }
+      ]
+    }
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        selectedTool='drawing'
+        pagePaintings={{ 'page-1': drawing }}
+        onPagePaintingChange={onPagePaintingChange}
+      />
+    )
+
+    // When: the bottom-bar percentage changes from 100% to 150%.
+    await screen.findByTestId('native-layout-viewport')
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1.5}
+        selectedTool='drawing'
+        pagePaintings={{ 'page-1': drawing }}
+        onPagePaintingChange={onPagePaintingChange}
+      />
+    )
+    const layer = await screen.findByTestId('reader-page-drawing-layer-page-1')
+    const path = screen
+      .getByTestId('reader-painting-page-1')
+      .querySelector('path')
+
+    fireEvent.pointerDown(screen.getByTestId('reader-painting-page-1'), {
+      button: 0,
+      clientX: 150,
+      clientY: 90,
+      pointerId: 1,
+      pointerType: 'pen'
+    })
+    fireEvent.pointerMove(globalThis.document, {
+      button: -1,
+      clientX: 210,
+      clientY: 90,
+      pointerId: 1,
+      pointerType: 'pen'
+    })
+    fireEvent.pointerUp(globalThis.document, {
+      clientX: 210,
+      clientY: 90,
+      pointerId: 1,
+      pointerType: 'pen'
+    })
+
+    // Then: the inverse layer scale preserves SVG geometry and normalizes visual input.
+    expect(layer).toHaveStyle({
+      width: '150%',
+      height: '150%',
+      transform: `scale(${1 / 1.5})`
+    })
+    expect(path).toHaveAttribute('d', 'M 15 18 L 60 66')
+    const nextDrawing = onPagePaintingChange.mock.calls.at(-1)?.[1]
+    const points = nextDrawing?.strokes.at(-1)?.points
+    expect(points?.at(0)).toEqual(expect.objectContaining({ x: 100, y: 60 }))
+    expect(points?.at(-1)).toEqual(expect.objectContaining({ x: 140, y: 60 }))
+    expect((points?.at(-1)?.x ?? 0) - (points?.at(0)?.x ?? 0)).toBe(40)
+  })
+
+  it('restores the top native-flow text after selecting a fixed zoom', async () => {
+    // Given: native flow is scrolled past the start of a page with concrete text visible.
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 500 }
+    })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    const container = viewport.querySelector<HTMLElement>(
+      '.hamster-reader__native-layout-container'
+    )
+    expect(container).not.toBeNull()
+    const target = await screen.findByText('Page 1 text')
+    setScrollContainerSize(viewport, {
+      width: 300,
+      height: 200,
+      scrollHeight: 1000,
+      scrollTop: 100
+    })
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page, { left: 0, top: -100, width: 100, height: 500 })
+    vi.spyOn(target, 'getBoundingClientRect').mockImplementation(() =>
+      makeDomRect({
+        left: 20,
+        top: container?.style.zoom === '2' ? 40 : 20,
+        width: 100,
+        height: 20
+      })
+    )
+
+    // When: the bottom-bar zoom preset changes from 100% to 200%.
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={2}
+      />
+    )
+
+    // Then: the same text keeps its previous 20px offset from the viewport top.
+    await waitFor(() => expect(viewport.scrollTop).toBe(120))
   })
 
   it('upscales the page to fill a wider container during initialization', async () => {
@@ -6339,6 +6593,46 @@ describe('IntermediateDocumentViewer', () => {
           '.hamster-reader__intermediate-paragraph-gap'
         )
       ).toHaveLength(1)
+    })
+
+    it('fits native flow pages once through the viewport container', async () => {
+      // Given: a native flow page uses the intrinsic 595px document width.
+      const page = {
+        useFlowLayout: true,
+        paragraphs: [],
+        getContent: vi.fn(
+          async () =>
+            [makeText('flow-text-1', 'Flow text')] as IntermediateContent[]
+        ),
+        getThumbnail: vi.fn(async () => undefined)
+      }
+      render(
+        <IntermediateDocumentViewer
+          document={makeContentTestDocument(page)}
+          useVirtualPaper={false}
+        />
+      )
+      const viewport = await screen.findByTestId('native-layout-viewport')
+      const shell = screen.getByTestId('intermediate-page-1')
+      const contentScale = screen.getByTestId(
+        'intermediate-page-content-scale-1'
+      )
+      const container = viewport.querySelector<HTMLElement>(
+        '.hamster-reader__native-layout-container'
+      )
+      if (!container) {
+        throw new Error('Expected native layout container')
+      }
+
+      // When: fit-width observes a 980px reader viewport.
+      mockElementSize(viewport, { width: 980, height: 600 })
+
+      // Then: only the container scales 595px to 980px; children stay intrinsic.
+      await waitFor(() => {
+        expect(container.style.zoom).toBe(String(980 / 595))
+      })
+      expect(shell).toHaveStyle({ width: '595px' })
+      expect(contentScale.style.zoom).toBe('1')
     })
 
     it('renders EPUB flow images on their own row with visible alt text', async () => {
@@ -14010,6 +14304,49 @@ describe('touchPanMode', () => {
     expect(wrapper.dataset.enabledInteractions).toContain(
       VirtualPaperInteractionMode.TouchSingleFingerPan
     )
+  })
+
+  it('native two-finger mode pans scrollTop and scrollLeft without zooming', async () => {
+    // Given: native-flow two-finger mode starts at a two-axis scroll position.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={0}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        touchPanMode='two-finger'
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    setScrollContainerSize(viewport, {
+      width: 300,
+      height: 200,
+      scrollWidth: 600,
+      scrollHeight: 1000,
+      scrollLeft: 50,
+      scrollTop: 100
+    })
+
+    // When: both touches move 20px left and 30px up.
+    fireEvent.touchStart(viewport, {
+      touches: [
+        { clientX: 100, clientY: 100, identifier: 1 },
+        { clientX: 200, clientY: 100, identifier: 2 }
+      ]
+    })
+    fireEvent.touchMove(viewport, {
+      touches: [
+        { clientX: 80, clientY: 70, identifier: 1 },
+        { clientX: 180, clientY: 70, identifier: 2 }
+      ]
+    })
+
+    // Then: the native viewport pans directly on both axes.
+    expect(viewport.scrollLeft).toBe(70)
+    expect(viewport.scrollTop).toBe(130)
+    expect(page).toHaveStyle({ width: '100px' })
   })
 
   describe('page browser', () => {

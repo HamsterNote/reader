@@ -169,7 +169,7 @@ describe('PageBrowser', () => {
     const onNavigateToBookmark = vi.fn()
     renderPageBrowser({
       bookmarks: [savedBookmark],
-      currentAnchor,
+      currentBookmark: currentAnchor,
       onToggleBookmark,
       onNavigateToBookmark
     })
@@ -208,7 +208,7 @@ describe('PageBrowser', () => {
     }
     renderPageBrowser({
       bookmarks: [currentAnchor],
-      currentAnchor,
+      currentBookmark: currentAnchor,
       onToggleBookmark: vi.fn(),
       onNavigateToBookmark: vi.fn()
     })
@@ -216,6 +216,25 @@ describe('PageBrowser', () => {
 
     // Then: 新增按钮禁用，避免同一文字锚点被重复保存。
     expect(screen.getByRole('button', { name: '新增书签' })).toBeDisabled()
+  })
+
+  it('adds a page-position bookmark when the current page has no text', () => {
+    // Given: the current layout position is 8% down page 2 without a text anchor.
+    const currentBookmark = { pageNumber: 2, verticalPercentage: 8 } as const
+    const onToggleBookmark = vi.fn()
+    renderPageBrowser({
+      bookmarks: [],
+      currentBookmark,
+      onToggleBookmark,
+      onNavigateToBookmark: vi.fn()
+    })
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+
+    // When: the user adds the current position.
+    fireEvent.click(screen.getByRole('button', { name: '新增书签' }))
+
+    // Then: the precise page and vertical percentage are saved.
+    expect(onToggleBookmark).toHaveBeenCalledWith(currentBookmark)
   })
 
   it('keeps legacy page bookmarks when only the legacy toggle is available', () => {
@@ -228,7 +247,7 @@ describe('PageBrowser', () => {
       offset: 18
     }
     renderPageBrowser({
-      currentAnchor,
+      currentBookmark: currentAnchor,
       bookmarkedPageNumbers: [1],
       visiblePageNumbers: new Set([2]),
       onTogglePageBookmark

@@ -306,9 +306,9 @@ describe('ReadingProgress', () => {
     expect(onPreviewPageVisibilityChange).toHaveBeenLastCalledWith(3, false)
   })
 
-  it('moves the Layout page label only while a thumbnail is rendered', () => {
+  it('shows only a spinner while a Layout thumbnail is loading', () => {
     // Given: scroll activity exposes a Layout page label without pointer preview.
-    render(
+    const { rerender } = render(
       <ReadingProgress
         mode='layout'
         pageNumbers={[1, 2, 3]}
@@ -340,11 +340,38 @@ describe('ReadingProgress', () => {
       pointerType: 'mouse'
     })
 
-    // Then: no empty preview shell appears and the label remains next to the rail.
-    expect(feedback).toHaveAttribute('data-has-preview', 'false')
+    // Then: the preview frame reserves its final layout and exposes only the spinner.
+    expect(feedback).toHaveAttribute('data-has-preview', 'true')
     expect(
       slider.querySelector('.hamster-reader__reading-progress-preview')
+    ).toBeInTheDocument()
+    const loading = screen.getByRole('status', { name: '加载中' })
+    expect(loading.querySelectorAll('.hn-loading__spinner')).toHaveLength(1)
+    expect(loading.querySelector('.hn-loading__text')).not.toBeInTheDocument()
+
+    // When: the shared lazy queue publishes the requested page image.
+    rerender(
+      <ReadingProgress
+        mode='layout'
+        pageNumbers={[1, 2, 3]}
+        currentPageNumber={2}
+        isMoving={true}
+        ranges={[]}
+        previewEnabled={true}
+        baseImagesByPageNumber={new Map([[3, 'data:image/png;base64,page3']])}
+        pageSizesByPageNumber={new Map([[3, { width: 600, height: 800 }]])}
+        onSeekPage={vi.fn()}
+      />
+    )
+
+    // Then: the frame replaces Loading with the requested thumbnail in place.
+    expect(
+      screen.queryByRole('status', { name: '加载中' })
     ).not.toBeInTheDocument()
+    expect(screen.getByTestId('reading-progress-preview-3')).toHaveAttribute(
+      'src',
+      'data:image/png;base64,page3'
+    )
   })
 
   it('keeps non-PDF Layout feedback thumbnail-free and inside its safe area', () => {

@@ -252,6 +252,39 @@ function parseStoredTextAnchor(value: unknown): ReaderTextAnchor | undefined {
   return { pageNumber, textId, text, offset }
 }
 
+function parseStoredBookmark(value: unknown): ReaderBookmark | undefined {
+  const textAnchor = parseStoredTextAnchor(value)
+  if (textAnchor) return textAnchor
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('pageNumber' in value) ||
+    !('verticalPercentage' in value)
+  ) {
+    return undefined
+  }
+
+  const { pageNumber, verticalPercentage } = value
+  if (
+    typeof pageNumber !== 'number' ||
+    !Number.isInteger(pageNumber) ||
+    pageNumber <= 0 ||
+    typeof verticalPercentage !== 'number' ||
+    !Number.isFinite(verticalPercentage) ||
+    verticalPercentage < 0 ||
+    verticalPercentage > 100
+  ) {
+    return undefined
+  }
+  return { pageNumber, verticalPercentage }
+}
+
+function getStoredBookmarkKey(bookmark: ReaderBookmark): string {
+  return 'textId' in bookmark
+    ? `${bookmark.pageNumber}:${bookmark.textId}:${bookmark.offset}`
+    : `page:${bookmark.pageNumber}:${bookmark.verticalPercentage}`
+}
+
 function parseStoredBookmarks(raw: string | null): ReaderBookmark[] {
   if (raw === null || raw.trim() === '') return []
 
@@ -261,18 +294,17 @@ function parseStoredBookmarks(raw: string | null): ReaderBookmark[] {
 
     const bookmarksByKey = new Map<string, ReaderBookmark>()
     for (const value of parsed) {
-      const bookmark = parseStoredTextAnchor(value)
+      const bookmark = parseStoredBookmark(value)
       if (!bookmark) continue
 
-      const key = `${bookmark.pageNumber}:${bookmark.textId}:${bookmark.offset}`
+      const key = getStoredBookmarkKey(bookmark)
       bookmarksByKey.set(key, bookmark)
     }
 
     return Array.from(bookmarksByKey.values()).sort(
       (left, right) =>
         left.pageNumber - right.pageNumber ||
-        left.offset - right.offset ||
-        left.textId.localeCompare(right.textId)
+        getStoredBookmarkKey(left).localeCompare(getStoredBookmarkKey(right))
     )
   } catch {
     return []
@@ -684,7 +716,9 @@ export function App() {
     setIsEditing: setEdgeCropEditing,
     apply: handleEdgeCropApply
   } = useEdgeCropState()
-  const [hideSecondPage, setHideSecondPage] = useState(false)
+  const [hiddenPages, setHiddenPages] = useState<readonly (number | string)[]>(
+    []
+  )
   const [scrollX, setScrollX] = useState<number>(0)
   const [scrollY, setScrollY] = useState<number>(0)
   const [virtualPaper, setVirtualPaper] = useState<ReaderVirtualPaperState>({
@@ -731,7 +765,7 @@ export function App() {
         all: edgeCropAll,
         pages: edgeCropPages
       },
-      hiddenPages: hideSecondPage ? [2] : [],
+      hiddenPages,
       ranges,
       rects,
       pagePaintings,
@@ -745,7 +779,7 @@ export function App() {
       bookmarks,
       edgeCropAll,
       edgeCropPages,
-      hideSecondPage,
+      hiddenPages,
       pagePaintings,
       ranges,
       rects,
@@ -789,6 +823,10 @@ export function App() {
             JSON.stringify(nextData.bookmarks)
           )
         }
+      }
+
+      if (nextData.hiddenPages) {
+        setHiddenPages(nextData.hiddenPages)
       }
     },
     [uploadedFile?.name]
@@ -1789,8 +1827,6 @@ export function App() {
                 </label>
               </div>
               <div style={{ marginBottom: '12px' }}>
-                {/* 边缘裁切编辑模式开关：点击后已加载页面显示 4 条可拖拽虚线，
-                    点击页内「应用到当前页/应用到全部」后自动退出该模式 */}
                 <button
                   type='button'
                   onClick={() => setEdgeCropEditing((prev) => !prev)}
@@ -1818,10 +1854,20 @@ export function App() {
                 >
                   <input
                     type='checkbox'
-                    checked={hideSecondPage}
-                    onChange={(event) =>
-                      setHideSecondPage(event.currentTarget.checked)
-                    }
+                    checked={hiddenPages.some(
+                      (page) => page === 2 || page === 'page-2'
+                    )}
+                    onChange={(event) => {
+                      const shouldHide = event.currentTarget.checked
+                      setHiddenPages((currentPages) => {
+                        const pagesWithoutSecond = currentPages.filter(
+                          (page) => page !== 2 && page !== 'page-2'
+                        )
+                        return shouldHide
+                          ? [...pagesWithoutSecond, 2]
+                          : pagesWithoutSecond
+                      })
+                    }}
                     data-testid='hide-second-page-toggle'
                   />
                   <span>隐藏第 2 页 Hide page 2</span>

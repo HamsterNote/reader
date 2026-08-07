@@ -35,7 +35,7 @@
     }
 
     &--drawing {
-      height: 112px;
+      height: 128px;
     }
   }
 
@@ -1351,7 +1351,8 @@
   }
 
   &__reading-progress-preview {
-    display: block;
+    display: grid;
+    place-items: center;
     flex: 0 0 auto;
     width: 104px;
     aspect-ratio: 3 / 4;
@@ -1701,10 +1702,8 @@
     min-height: 44px;
   }
 
-  .hamster-reader__page-browser
-    .hamster-reader__delete-confirm-yes,
-  .hamster-reader__page-browser
-    .hamster-reader__delete-confirm-no {
+  .hamster-reader__page-browser .hamster-reader__delete-confirm-yes,
+  .hamster-reader__page-browser .hamster-reader__delete-confirm-no {
     width: 44px !important;
     min-width: 44px !important;
     height: 44px !important;
@@ -1730,7 +1729,7 @@
 // ---------------------------------------------------------------------------
 .hamster-demo-shell {
   display: flex;
-  width: 100vw;
+  width: 100%;
   height: 100vh;
   overflow: hidden;
   box-sizing: border-box;
@@ -2024,17 +2023,47 @@
   transform: translate(-50%, -50%);
   z-index: 20;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: min(90%, 520px);
   gap: 8px;
   pointer-events: auto;
+  touch-action: manipulation;
 }
 
 .hamster-reader__edge-crop-action {
+  min-height: 44px;
   padding: 6px 16px;
   border: none;
   border-radius: 4px;
   font-size: 14px;
   cursor: pointer;
   transition: background-color 0.15s;
+}
+
+.hamster-reader__edge-crop-action--hide {
+  background-color: #fff;
+  color: #b42318;
+  border: 1px solid #fda29b;
+
+  &:hover {
+    background-color: #fff1f0;
+  }
+}
+
+.hamster-reader__hidden-page-placeholder {
+  position: absolute;
+  inset: 10%;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  border: 2px dashed #98a2b3;
+  border-radius: 8px;
+  background: #f2f4f7;
+  color: #475467;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
 }
 
 .hamster-reader__edge-crop-action--page {

@@ -42,7 +42,6 @@ import React, {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -79,10 +78,7 @@ import type {
 } from '../../types/selection'
 import { FLOW_LAYOUT_PAGE_WIDTH, type ReaderPageTool } from '../Page'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
-import {
-  computeCenteredScrollPosition,
-  type ReaderLayoutZoom
-} from './nativeLayoutZoom'
+import type { ReaderLayoutZoom } from './nativeLayoutZoom'
 import { PopoverPortal } from '../PopoverPortal'
 import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
 import { isPointOnSelectionText } from '../selection/caretResolver'
@@ -138,8 +134,10 @@ import { useReadingProgressActivity } from './useReadingProgressActivity'
 import {
   findTopTextAnchor,
   getActiveBookmarkKey,
+  getBookmarkKey,
   getTextAnchorKey,
   hasAnchorableText,
+  isTextBookmark,
   resolveBookmarkNavigationHandler,
   resolveTextAnchorElement,
   type TextAnchorElementRecord
@@ -458,6 +456,7 @@ export type IntermediateDocumentViewerProps = {
    * 宿主应在此回调中将 edgeCropEditing 设为 false。
    */
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+  onEdgeCropHidePage?: (pageNumber: number) => void
   /**
    * OCR 配置。
    * - `true` / `{ enabled: true }`：自动模式，识别当前与后续加载完成的页面；
@@ -1337,10 +1336,12 @@ type ViewerContentProps = PageResources & {
   viewerRootRef: (element: HTMLDivElement | null) => void
   selectionScope: symbol
   pageNumbers: number[]
+  hiddenPageNumbers: ReadonlySet<number>
   fontScale?: ReaderFontScale
   edgeCrop?: ReaderPageEdgeCrop
   edgeCropEditing?: boolean
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+  onEdgeCropHidePage?: (pageNumber: number) => void
   virtualPaperTransform: VirtualPaperTransform
   useVirtualPaper: boolean
   nativeLayoutZoom: ReaderLayoutZoom
@@ -1448,7 +1449,7 @@ type ViewerContentProps = PageResources & {
   commentCountByRangeId?: Readonly<Record<string, number>>
   commentCountByRectId?: Readonly<Record<string, number>>
   bookmarks?: readonly ReaderBookmark[]
-  currentAnchor?: ReaderTextAnchor
+  currentBookmark?: ReaderBookmark
   currentPageNumber: number
   activeBookmarkKey?: string
   onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
@@ -1531,7 +1532,9 @@ const getRuntimeSelectionIdFromSelectionNode = (
  */
 type IntermediateDocumentPagesProps = PageResources & {
   popoverContainerRef: React.RefObject<HTMLElement | null>
+  useVirtualPaper: boolean
   pageNumbers: number[]
+  hiddenPageNumbers: ReadonlySet<number>
   fontScale?: ReaderFontScale
   edgeCrop?: ReaderPageEdgeCrop
   edgeCropEditing?: boolean
@@ -1539,6 +1542,7 @@ type IntermediateDocumentPagesProps = PageResources & {
   realEdgeCrop?: ReaderPageEdgeCrop
   /** 应用裁切回调；pageNumber 为 null 表示应用到所有页面 */
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+  onEdgeCropHidePage?: (pageNumber: number) => void
   setPageRef: PageRefSetter
   setTextRef: SetTextRef
   runtimePageSelectionId: (pageNumber: number) => string
@@ -1597,8 +1601,81 @@ type IntermediateDocumentPagesProps = PageResources & {
   pagePaintings?: Record<string, DrawingValue>
   onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
   drawingScale: number
+  cancelDrawingOnMultiTouch: boolean
   readerScale: number
   popoverRelative?: boolean
+}
+
+type PageVisibilityBoundaryProps = {
+  readonly pageNumber: number
+  readonly hidden: boolean
+  readonly children: ReactNode
+}
+
+type PagePopoverOptions = {
+  readonly containerRef: React.RefObject<HTMLElement | null>
+  readonly visible: boolean
+  readonly relative: boolean | undefined
+  readonly selectionPopover: ReactNode
+  readonly highlightPopover: ReactNode
+  readonly rectPopover: ReactNode
+  readonly selectedRectId: string | null | undefined
+}
+
+type PagePopovers = {
+  readonly selected: ReactNode
+  readonly active: ReactNode
+}
+
+const getPagePopovers = (
+  isOwner: boolean,
+  options: PagePopoverOptions
+): PagePopovers => {
+  if (!isOwner) return { selected: undefined, active: undefined }
+
+  const selectedPopover = options.selectedRectId
+    ? (options.rectPopover ?? options.selectionPopover)
+    : (options.highlightPopover ?? options.selectionPopover)
+
+  return {
+    selected: (
+      <PopoverPortal
+        containerRef={options.containerRef}
+        selectionKind='selected'
+        visible={options.visible}
+        relative={options.relative}
+      >
+        {selectedPopover}
+      </PopoverPortal>
+    ),
+    active: (
+      <PopoverPortal
+        containerRef={options.containerRef}
+        selectionKind='active'
+        visible={options.visible}
+        relative={options.relative}
+      >
+        {options.selectionPopover}
+      </PopoverPortal>
+    )
+  }
+}
+
+function PageVisibilityBoundary({
+  pageNumber,
+  hidden,
+  children
+}: PageVisibilityBoundaryProps) {
+  if (!hidden) return children
+
+  return (
+    <div
+      className='hamster-reader__hidden-page-placeholder'
+      data-testid={`intermediate-page-hidden-${pageNumber}`}
+    >
+      当前 第 {pageNumber} 页 已隐藏
+    </div>
+  )
 }
 
 const areAnnotationHistorySnapshotsEqual = (
@@ -1711,16 +1788,151 @@ const getContentScaleStyle = (
         transformOrigin: 'top left'
       }
 
+type PageRectHitTestContext = {
+  readonly shellPageSize: NormalizedPageSize
+  readonly cropGeometry: ReturnType<typeof getPageCropGeometry>
+  readonly rects: readonly ReaderSelectionRectangle[] | undefined
+  readonly shellSelectionId: string
+}
+
+const findTouchedRect = (
+  pageElement: HTMLElement,
+  point: Pick<PointerEvent, 'clientX' | 'clientY'>,
+  context: PageRectHitTestContext
+): ReaderSelectionRectangle | undefined => {
+  const pageContentScale = pageElement.querySelector<HTMLElement>(
+    '.hamster-reader__intermediate-page-content-scale'
+  )
+  const contentBounds = pageContentScale?.getBoundingClientRect()
+  const pageBounds = pageElement.getBoundingClientRect()
+  const hasContentBounds =
+    contentBounds !== undefined &&
+    contentBounds.width > 0 &&
+    contentBounds.height > 0
+  const bounds = hasContentBounds ? contentBounds : pageBounds
+  if (bounds.width <= 0 || bounds.height <= 0) return undefined
+
+  const sourceLeft = hasContentBounds ? 0 : context.cropGeometry.left
+  const sourceTop = hasContentBounds ? 0 : context.cropGeometry.top
+  const sourceWidth = hasContentBounds
+    ? context.shellPageSize.width
+    : context.cropGeometry.width
+  const sourceHeight = hasContentBounds
+    ? context.shellPageSize.height
+    : context.cropGeometry.height
+  const pixelX =
+    sourceLeft + ((point.clientX - bounds.left) / bounds.width) * sourceWidth
+  const pixelY =
+    sourceTop + ((point.clientY - bounds.top) / bounds.height) * sourceHeight
+  const percentX = (pixelX / context.shellPageSize.width) * 100
+  const percentY = (pixelY / context.shellPageSize.height) * 100
+
+  return context.rects?.find((rect) => {
+    const localX = rect.overlayRectType === 'percent' ? percentX : pixelX
+    const localY = rect.overlayRectType === 'percent' ? percentY : pixelY
+    return (
+      rect.selectionId === context.shellSelectionId &&
+      localX >= rect.rect.x &&
+      localX <= rect.rect.x + rect.rect.width &&
+      localY >= rect.rect.y &&
+      localY <= rect.rect.y + rect.rect.height
+    )
+  })
+}
+
+type PagePointerInteractionContext = PageRectHitTestContext & {
+  readonly tool: ReaderSelectionTool | undefined
+  readonly runtimeLinkedData: ReaderLinkedSelectionData
+  readonly selectedRectId: string | null | undefined
+  readonly selectedRectPopoverOwnerRuntimeId: string | null
+  readonly onSelectRect: ((id: string | null) => void) | undefined
+  readonly handleLinkedSelectRange: (id: string | null) => void
+}
+
+const handlePagePointerDown = (
+  event: React.PointerEvent<HTMLDivElement>,
+  context: PagePointerInteractionContext
+): void => {
+  if (context.tool !== 'rect' || event.button !== 0) return
+  const target = event.target
+  if (
+    target instanceof Element &&
+    target.closest('button, input, [role="toolbar"]')
+  ) {
+    return
+  }
+
+  const touchedRangeId = findTouchedRangeIdByPoint(
+    context.runtimeLinkedData,
+    event.clientX,
+    event.clientY,
+    [event.currentTarget]
+  )
+  if (touchedRangeId) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (context.selectedRectId !== null) context.onSelectRect?.(null)
+    context.handleLinkedSelectRange(
+      touchedRangeId === context.runtimeLinkedData.selectedRangeId
+        ? null
+        : touchedRangeId
+    )
+    return
+  }
+
+  const touchedRect = findTouchedRect(event.currentTarget, event, context)
+  if (touchedRect) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (context.runtimeLinkedData.selectedRangeId !== null) {
+      context.handleLinkedSelectRange(null)
+    }
+    context.onSelectRect?.(
+      touchedRect.id === context.selectedRectId ? null : touchedRect.id
+    )
+    return
+  }
+
+  if (
+    context.selectedRectId &&
+    context.selectedRectPopoverOwnerRuntimeId !== context.shellSelectionId
+  ) {
+    context.onSelectRect?.(null)
+  }
+}
+
+const handlePageClick = (
+  event: React.MouseEvent<HTMLDivElement>,
+  context: PagePointerInteractionContext
+): void => {
+  if (context.tool !== 'rect' || event.button !== 0) return
+  if (
+    findTouchedRangeIdByPoint(
+      context.runtimeLinkedData,
+      event.clientX,
+      event.clientY,
+      [event.currentTarget]
+    ) ||
+    findTouchedRect(event.currentTarget, event, context)
+  ) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
 function IntermediateDocumentPages({
   popoverContainerRef,
   pageNumbers,
+  hiddenPageNumbers,
   fontScale,
   edgeCrop,
   edgeCropEditing,
   realEdgeCrop,
   onEdgeCropApply,
+  onEdgeCropHidePage,
   setPageRef,
   setTextRef,
+  useVirtualPaper,
   runtimePageSelectionId,
   pageSizesByPageNumber,
   flowLayoutPages,
@@ -1766,6 +1978,7 @@ function IntermediateDocumentPages({
   pagePaintings,
   onPagePaintingChange,
   drawingScale,
+  cancelDrawingOnMultiTouch,
   readerScale,
   popoverRelative
 }: IntermediateDocumentPagesProps) {
@@ -1809,21 +2022,20 @@ function IntermediateDocumentPages({
   }, 0)
 
   return (
-    // 水平留白 = document 外层 gutter 的内联缩放 padding。padding 随
-    // readerScale 缩放，保证「只采集一次」的
-    // intrinsicContentWidth（scrollWidth ÷ committedReaderScale）在任意采集
-    // 缩放档位下都得到 最宽页面 + 24；必须与
-    // INTERMEDIATE_PAGE_HORIZONTAL_MARGIN 保持同步。
     <div
       className='hamster-note-document-gutter'
       style={{
         boxSizing: 'border-box',
         width: 'fit-content',
-        padding: `0 ${(INTERMEDIATE_PAGE_HORIZONTAL_MARGIN / 2) * readerScale}px`
+        margin: useVirtualPaper ? undefined : '0 auto',
+        padding: useVirtualPaper
+          ? `0 ${(INTERMEDIATE_PAGE_HORIZONTAL_MARGIN / 2) * readerScale}px`
+          : 0
       }}
     >
       <div className='hamster-note-document' style={{ width: 'fit-content' }}>
         {pageNumbers.map((pageNumber) => {
+          const isPageHidden = hiddenPageNumbers.has(pageNumber)
           const useFlowLayout = flowLayoutPages.has(pageNumber)
           const shellPageSize = getCachedPageSize(
             pageSizesByPageNumber,
@@ -1838,53 +2050,6 @@ function IntermediateDocumentPages({
           const shellSelectionId = runtimePageSelectionId(pageNumber)
           const publicPageId = `page-${pageNumber}`
 
-          const findTouchedRect = (
-            pageElement: HTMLElement,
-            clientX: number,
-            clientY: number
-          ) => {
-            const pageContentScale = pageElement.querySelector<HTMLElement>(
-              '.hamster-reader__intermediate-page-content-scale'
-            )
-            const contentBounds = pageContentScale?.getBoundingClientRect()
-            const pageBounds = pageElement.getBoundingClientRect()
-            const hasContentBounds =
-              contentBounds !== undefined &&
-              contentBounds.width > 0 &&
-              contentBounds.height > 0
-            const bounds = hasContentBounds ? contentBounds : pageBounds
-            if (bounds.width <= 0 || bounds.height <= 0) return undefined
-            const sourceLeft = hasContentBounds ? 0 : cropGeometry.left
-            const sourceTop = hasContentBounds ? 0 : cropGeometry.top
-            const sourceWidth = hasContentBounds
-              ? shellPageSize.width
-              : cropGeometry.width
-            const sourceHeight = hasContentBounds
-              ? shellPageSize.height
-              : cropGeometry.height
-            const pixelX =
-              sourceLeft +
-              ((clientX - bounds.left) / bounds.width) * sourceWidth
-            const pixelY =
-              sourceTop +
-              ((clientY - bounds.top) / bounds.height) * sourceHeight
-            const percentX = (pixelX / shellPageSize.width) * 100
-            const percentY = (pixelY / shellPageSize.height) * 100
-            return rects?.find((rect) => {
-              const localX =
-                rect.overlayRectType === 'percent' ? percentX : pixelX
-              const localY =
-                rect.overlayRectType === 'percent' ? percentY : pixelY
-              return (
-                rect.selectionId === shellSelectionId &&
-                localX >= rect.rect.x &&
-                localX <= rect.rect.x + rect.rect.width &&
-                localY >= rect.rect.y &&
-                localY <= rect.rect.y + rect.rect.height
-              )
-            })
-          }
-
           const pageTexts = textsByPageNumber.get(pageNumber)
           const pageOrderedContent = orderedContentByPageNumber.get(pageNumber)
           const pageParagraphs = paragraphsByPageNumber.get(pageNumber)
@@ -1896,30 +2061,17 @@ function IntermediateDocumentPages({
           const isPopoverOwner =
             popoverOwnerRuntimeId === null ||
             popoverOwnerRuntimeId === shellSelectionId
-          const pagePopover = isPopoverOwner ? (
-            <PopoverPortal
-              containerRef={popoverContainerRef}
-              selectionKind='selected'
-              visible={popoverVisible}
-              relative={popoverRelative}
-            >
-              {selectedRectId
-                ? (rectPopover ?? selectionPopover)
-                : (highlightPopover ?? selectionPopover)}
-            </PopoverPortal>
-          ) : undefined
-          const pageSelectionPopover = isPopoverOwner ? (
-            <PopoverPortal
-              containerRef={popoverContainerRef}
-              selectionKind='active'
-              visible={popoverVisible}
-              relative={popoverRelative}
-            >
-              {selectionPopover}
-            </PopoverPortal>
-          ) : undefined
+          const pagePopovers = getPagePopovers(isPopoverOwner, {
+            containerRef: popoverContainerRef,
+            visible: popoverVisible,
+            relative: popoverRelative,
+            selectionPopover,
+            highlightPopover,
+            rectPopover,
+            selectedRectId
+          })
 
-          const pageContent = isPageContentLoaded ? (
+          const pageContent = (
             <IntermediateDocumentPageContent
               pageNumber={pageNumber}
               fontScale={fontScale}
@@ -1937,7 +2089,7 @@ function IntermediateDocumentPages({
               setTextRef={setTextRef}
               onRenderTiming={onPageRenderTiming}
             />
-          ) : null
+          )
 
           const ocrLoadingBadge = ocrLoadingPages.has(pageNumber) ? (
             <Loading
@@ -1948,6 +2100,98 @@ function IntermediateDocumentPages({
               text='OCR 识别中…'
             />
           ) : null
+
+          const loadedPageContent = isPageContentLoaded ? (
+            <>
+              <div
+                className={`hamster-reader__intermediate-page-content-scale${
+                  useFlowLayout
+                    ? ' hamster-reader__intermediate-page-content-scale--flow'
+                    : ''
+                }`}
+                data-testid={`intermediate-page-content-scale-${pageNumber}`}
+                style={getContentScaleStyle(
+                  useFlowLayout,
+                  shellPageSize,
+                  cropGeometry,
+                  pagePreviewScale,
+                  readerScale
+                )}
+              >
+                <HamsterSelection
+                  selectionId={shellSelectionId}
+                  linkedMode
+                  linkedData={runtimeLinkedData}
+                  onLinkedDataChange={handleLinkedDataChange}
+                  onLinkedSelect={handleLinkedSelect}
+                  onLinkedUpdateRange={handleLinkedUpdateRange}
+                  onLinkedSelectRange={handleLinkedSelectRange}
+                  ranges={EMPTY_SELECTION_RANGES}
+                  selectedRangeId={effectiveSelectedRangeId}
+                  onSelect={undefined}
+                  onSelectRange={undefined}
+                  onUpdateRange={undefined}
+                  onSelectionStart={selectionStartHandler}
+                  onSelectionEnd={selectionEndHandler}
+                  onHighlight={undefined}
+                  highlightColor={highlightColor}
+                  selectionColor={selectionColor}
+                  popover={pagePopovers.selected}
+                  selectionPopover={pagePopovers.active}
+                  overlayRectType={overlayRectType}
+                  tool={tool}
+                  rects={rects}
+                  selectedRectId={selectedRectId}
+                  onCreateRect={onCreateRect}
+                  onSelectRect={onSelectRect}
+                  onUpdateRect={onUpdateRect}
+                  showSelectionMagnifier={showSelectionMagnifier}
+                  ref={selectionRefForRuntimeId(shellSelectionId)}
+                >
+                  {pageContent}
+                </HamsterSelection>
+                {ocrLoadingBadge}
+                {(selectedTool === 'drawing' ||
+                  hasDrawingStrokes(pagePaintings?.[publicPageId])) && (
+                  <PageDrawingLayer
+                    enabled={selectedTool === 'drawing'}
+                    pageId={publicPageId}
+                    controllerData={paintingControllerData}
+                    onControllerDataChange={onPaintingControllerDataChange}
+                    value={pagePaintings?.[publicPageId]}
+                    canvasScale={drawingScale * pagePreviewScale}
+                    cancelDrawingOnMultiTouch={cancelDrawingOnMultiTouch}
+                    onChange={
+                      onPagePaintingChange
+                        ? (nextValue) =>
+                            onPagePaintingChange(publicPageId, nextValue)
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
+              {edgeCropEditing ? (
+                <EdgeCropOverlay
+                  pageNumber={pageNumber}
+                  edgeCrop={realEdgeCrop}
+                  onApply={onEdgeCropApply}
+                  onHidePage={onEdgeCropHidePage}
+                />
+              ) : null}
+            </>
+          ) : null
+          const pagePointerInteractionContext: PagePointerInteractionContext = {
+            shellPageSize,
+            cropGeometry,
+            rects,
+            shellSelectionId,
+            tool,
+            runtimeLinkedData,
+            selectedRectId,
+            selectedRectPopoverOwnerRuntimeId,
+            onSelectRect,
+            handleLinkedSelectRange
+          }
 
           return (
             <div
@@ -1963,80 +2207,12 @@ function IntermediateDocumentPages({
               data-page-size-unavailable={
                 shellPageSize.pageSizeUnavailable ? 'true' : undefined
               }
-              onPointerDownCapture={(event) => {
-                if (tool !== 'rect' || event.button !== 0) return
-                const target = event.target
-                if (
-                  target instanceof Element &&
-                  target.closest('button, input, [role="toolbar"]')
-                ) {
-                  return
-                }
-
-                const touchedRangeId = findTouchedRangeIdByPoint(
-                  runtimeLinkedData,
-                  event.clientX,
-                  event.clientY,
-                  [event.currentTarget]
-                )
-                if (touchedRangeId) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  if (selectedRectId !== null) {
-                    onSelectRect?.(null)
-                  }
-                  handleLinkedSelectRange(
-                    touchedRangeId === runtimeLinkedData.selectedRangeId
-                      ? null
-                      : touchedRangeId
-                  )
-                  return
-                }
-
-                const touchedRect = findTouchedRect(
-                  event.currentTarget,
-                  event.clientX,
-                  event.clientY
-                )
-
-                if (touchedRect) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  if (runtimeLinkedData.selectedRangeId !== null) {
-                    handleLinkedSelectRange(null)
-                  }
-                  onSelectRect?.(
-                    touchedRect.id === selectedRectId ? null : touchedRect.id
-                  )
-                  return
-                }
-
-                if (
-                  selectedRectId &&
-                  selectedRectPopoverOwnerRuntimeId !== shellSelectionId
-                ) {
-                  onSelectRect?.(null)
-                }
-              }}
-              onClickCapture={(event) => {
-                if (tool !== 'rect' || event.button !== 0) return
-                if (
-                  findTouchedRangeIdByPoint(
-                    runtimeLinkedData,
-                    event.clientX,
-                    event.clientY,
-                    [event.currentTarget]
-                  ) ||
-                  findTouchedRect(
-                    event.currentTarget,
-                    event.clientX,
-                    event.clientY
-                  )
-                ) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                }
-              }}
+              onPointerDownCapture={(event) =>
+                handlePagePointerDown(event, pagePointerInteractionContext)
+              }
+              onClickCapture={(event) =>
+                handlePageClick(event, pagePointerInteractionContext)
+              }
               onPointerUp={() => onRectPointerUp?.(pageNumber)}
               style={getPageShellStyle(
                 useFlowLayout,
@@ -2045,82 +2221,12 @@ function IntermediateDocumentPages({
                 readerScale
               )}
             >
-              {isPageContentLoaded ? (
-                <div
-                  className={`hamster-reader__intermediate-page-content-scale${
-                    useFlowLayout
-                      ? ' hamster-reader__intermediate-page-content-scale--flow'
-                      : ''
-                  }`}
-                  data-testid={`intermediate-page-content-scale-${pageNumber}`}
-                  style={getContentScaleStyle(
-                    useFlowLayout,
-                    shellPageSize,
-                    cropGeometry,
-                    pagePreviewScale,
-                    readerScale
-                  )}
-                >
-                  <HamsterSelection
-                    selectionId={shellSelectionId}
-                    linkedMode
-                    linkedData={runtimeLinkedData}
-                    onLinkedDataChange={handleLinkedDataChange}
-                    onLinkedSelect={handleLinkedSelect}
-                    onLinkedUpdateRange={handleLinkedUpdateRange}
-                    onLinkedSelectRange={handleLinkedSelectRange}
-                    ranges={EMPTY_SELECTION_RANGES}
-                    selectedRangeId={effectiveSelectedRangeId}
-                    onSelect={undefined}
-                    onSelectRange={undefined}
-                    onUpdateRange={undefined}
-                    onSelectionStart={selectionStartHandler}
-                    onSelectionEnd={selectionEndHandler}
-                    onHighlight={undefined}
-                    highlightColor={highlightColor}
-                    selectionColor={selectionColor}
-                    popover={pagePopover}
-                    selectionPopover={pageSelectionPopover}
-                    overlayRectType={overlayRectType}
-                    tool={tool}
-                    rects={rects}
-                    selectedRectId={selectedRectId}
-                    onCreateRect={onCreateRect}
-                    onSelectRect={onSelectRect}
-                    onUpdateRect={onUpdateRect}
-                    showSelectionMagnifier={showSelectionMagnifier}
-                    ref={selectionRefForRuntimeId(shellSelectionId)}
-                  >
-                    {pageContent}
-                  </HamsterSelection>
-                  {ocrLoadingBadge}
-                  {(selectedTool === 'drawing' ||
-                    hasDrawingStrokes(pagePaintings?.[publicPageId])) && (
-                    <PageDrawingLayer
-                      enabled={selectedTool === 'drawing'}
-                      pageId={publicPageId}
-                      controllerData={paintingControllerData}
-                      onControllerDataChange={onPaintingControllerDataChange}
-                      value={pagePaintings?.[publicPageId]}
-                      canvasScale={drawingScale * pagePreviewScale}
-                      onChange={
-                        onPagePaintingChange
-                          ? (nextValue) =>
-                              onPagePaintingChange(publicPageId, nextValue)
-                          : undefined
-                      }
-                    />
-                  )}
-                </div>
-              ) : null}
-              {/* 仅已加载的页面显示裁切编辑覆盖层（未加载页无完整内容可裁切） */}
-              {edgeCropEditing && isPageContentLoaded && (
-                <EdgeCropOverlay
-                  pageNumber={pageNumber}
-                  edgeCrop={realEdgeCrop}
-                  onApply={onEdgeCropApply}
-                />
-              )}
+              <PageVisibilityBoundary
+                pageNumber={pageNumber}
+                hidden={isPageHidden}
+              >
+                {loadedPageContent}
+              </PageVisibilityBoundary>
             </div>
           )
         })}
@@ -3133,33 +3239,8 @@ function resolveHighlightPopover(
 function useNativeLayoutViewport(
   useVirtualPaper: boolean,
   viewerRootElement: HTMLDivElement | null,
-  scale: number
+  touchPanMode: ReaderTouchPanMode | undefined
 ) {
-  const previousScaleRef = useRef(scale)
-
-  useLayoutEffect(() => {
-    if (useVirtualPaper || !viewerRootElement) {
-      previousScaleRef.current = scale
-      return
-    }
-
-    const previousScale = previousScaleRef.current
-    if (previousScale === scale) return
-    const viewport = viewerRootElement.querySelector<HTMLElement>(
-      '.hamster-reader__native-layout-viewport'
-    )
-    if (!viewport) return
-
-    const nextPosition = computeCenteredScrollPosition(
-      viewport,
-      previousScale,
-      scale
-    )
-    viewport.scrollLeft = nextPosition.left
-    viewport.scrollTop = nextPosition.top
-    previousScaleRef.current = scale
-  }, [scale, useVirtualPaper, viewerRootElement])
-
   useEffect(() => {
     if (useVirtualPaper || !viewerRootElement) return
     const viewport = viewerRootElement.querySelector<HTMLElement>(
@@ -3167,22 +3248,55 @@ function useNativeLayoutViewport(
     )
     if (!viewport) return
 
-    const preventMultiTouchZoom = (event: TouchEvent) => {
-      if (event.touches.length > 1) event.preventDefault()
+    let previousCentroid: {
+      readonly x: number
+      readonly y: number
+    } | null = null
+    const getCentroid = (event: TouchEvent) => {
+      if (event.touches.length < 2) return null
+      const firstTouch = event.touches[0]
+      const secondTouch = event.touches[1]
+      if (!firstTouch || !secondTouch) return null
+      return {
+        x: (firstTouch.clientX + secondTouch.clientX) / 2,
+        y: (firstTouch.clientY + secondTouch.clientY) / 2
+      }
+    }
+    const handleTouchStart = (event: TouchEvent) => {
+      previousCentroid = getCentroid(event)
+    }
+    const handleTouchMove = (event: TouchEvent) => {
+      if (event.touches.length < 2) return
+      event.preventDefault()
+      const nextCentroid = getCentroid(event)
+      if (touchPanMode === 'two-finger' && previousCentroid && nextCentroid) {
+        viewport.scrollLeft += previousCentroid.x - nextCentroid.x
+        viewport.scrollTop += previousCentroid.y - nextCentroid.y
+      }
+      previousCentroid = nextCentroid
+    }
+    const handleTouchEnd = (event: TouchEvent) => {
+      previousCentroid = getCentroid(event)
     }
     const preventGestureZoom = (event: Event) => event.preventDefault()
-    viewport.addEventListener('touchmove', preventMultiTouchZoom, {
+    viewport.addEventListener('touchstart', handleTouchStart)
+    viewport.addEventListener('touchmove', handleTouchMove, {
       passive: false
     })
+    viewport.addEventListener('touchend', handleTouchEnd)
+    viewport.addEventListener('touchcancel', handleTouchEnd)
     viewport.addEventListener('gesturestart', preventGestureZoom)
     viewport.addEventListener('gesturechange', preventGestureZoom)
 
     return () => {
-      viewport.removeEventListener('touchmove', preventMultiTouchZoom)
+      viewport.removeEventListener('touchstart', handleTouchStart)
+      viewport.removeEventListener('touchmove', handleTouchMove)
+      viewport.removeEventListener('touchend', handleTouchEnd)
+      viewport.removeEventListener('touchcancel', handleTouchEnd)
       viewport.removeEventListener('gesturestart', preventGestureZoom)
       viewport.removeEventListener('gesturechange', preventGestureZoom)
     }
-  }, [useVirtualPaper, viewerRootElement])
+  }, [touchPanMode, useVirtualPaper, viewerRootElement])
 }
 
 type NativeLayoutViewportProps = Readonly<{
@@ -3191,6 +3305,7 @@ type NativeLayoutViewportProps = Readonly<{
   containMarginX: number | undefined
   containMarginTop: number | undefined
   containMarginBottom: number | undefined
+  touchPanMode: ReaderTouchPanMode | undefined
 }>
 
 function NativeLayoutViewport({
@@ -3198,13 +3313,16 @@ function NativeLayoutViewport({
   transform,
   containMarginX,
   containMarginTop,
-  containMarginBottom
+  containMarginBottom,
+  touchPanMode
 }: NativeLayoutViewportProps) {
   return (
     <div
       className='virtual-paper-wrapper hamster-reader__native-layout-viewport'
       data-testid='native-layout-viewport'
-      style={{ touchAction: 'pan-x pan-y' }}
+      style={{
+        touchAction: touchPanMode === 'two-finger' ? 'none' : 'pan-x pan-y'
+      }}
     >
       <div
         className='virtual-paper-container hamster-reader__native-layout-container'
@@ -3256,10 +3374,12 @@ function ViewerContent({
   viewerRootRef,
   selectionScope,
   pageNumbers,
+  hiddenPageNumbers,
   fontScale,
   edgeCrop,
   edgeCropEditing,
   onEdgeCropApply,
+  onEdgeCropHidePage,
   pageSizesByPageNumber,
   flowLayoutPages,
   virtualPaperTransform,
@@ -3343,7 +3463,7 @@ function ViewerContent({
   commentCountByRangeId,
   commentCountByRectId,
   bookmarks,
-  currentAnchor,
+  currentBookmark,
   currentPageNumber,
   activeBookmarkKey,
   onNavigateToBookmark,
@@ -3363,11 +3483,7 @@ function ViewerContent({
   const [measuredContentSize, setMeasuredContentSize] =
     useState<ScopedContentSize | null>(null)
   const popoverContainerRef = useRef<HTMLElement | null>(null)
-  useNativeLayoutViewport(
-    useVirtualPaper,
-    viewerRootElement,
-    virtualPaperTransform.scale
-  )
+  useNativeLayoutViewport(useVirtualPaper, viewerRootElement, touchPanMode)
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
@@ -3592,6 +3708,16 @@ function ViewerContent({
 
     const widestPageSize = pageNumbers.reduce<PageSize | null>(
       (widestSize, pageNumber) => {
+        if (flowLayoutPages.has(pageNumber)) {
+          if (widestSize && widestSize.width >= FLOW_LAYOUT_PAGE_WIDTH) {
+            return widestSize
+          }
+          return {
+            width: FLOW_LAYOUT_PAGE_WIDTH,
+            height: 0
+          }
+        }
+
         const pageSize = pageSizesByPageNumber.get(pageNumber)
         if (!pageSize) return widestSize
 
@@ -3613,7 +3739,9 @@ function ViewerContent({
       if (!widestPageSize || width <= 0) return false
 
       onInitialFitScale(
-        width / (widestPageSize.width + INTERMEDIATE_PAGE_HORIZONTAL_MARGIN)
+        width /
+          (widestPageSize.width +
+            (useVirtualPaper ? INTERMEDIATE_PAGE_HORIZONTAL_MARGIN : 0))
       )
       return true
     }
@@ -3653,6 +3781,7 @@ function ViewerContent({
     }
   }, [
     effectiveEdgeCrop,
+    flowLayoutPages,
     onInitialFitScale,
     pageNumbers,
     pageSizesByPageNumber,
@@ -4023,13 +4152,16 @@ function ViewerContent({
     <IntermediateDocumentPages
       popoverContainerRef={popoverContainerRef}
       pageNumbers={pageNumbers}
+      hiddenPageNumbers={hiddenPageNumbers}
       fontScale={fontScale}
       edgeCrop={effectiveEdgeCrop}
       edgeCropEditing={edgeCropEditing}
       realEdgeCrop={edgeCrop}
       onEdgeCropApply={onEdgeCropApply}
+      onEdgeCropHidePage={onEdgeCropHidePage}
       setPageRef={setPageRef}
       setTextRef={setTextRef}
+      useVirtualPaper={useVirtualPaper}
       runtimePageSelectionId={runtimePageSelectionId}
       pageSizesByPageNumber={pageSizesByPageNumber}
       flowLayoutPages={flowLayoutPages}
@@ -4076,7 +4208,8 @@ function ViewerContent({
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
       drawingScale={drawingScale}
-      readerScale={committedReaderScale}
+      cancelDrawingOnMultiTouch={!useVirtualPaper}
+      readerScale={useVirtualPaper ? committedReaderScale : 1}
       popoverRelative={popoverRelative}
     />
   )
@@ -4149,7 +4282,7 @@ function ViewerContent({
             onDeleteRect={onRemoveRect}
             commentCountByRectId={commentCountByRectId}
             bookmarks={bookmarks}
-            currentAnchor={currentAnchor}
+            currentBookmark={currentBookmark}
             currentPageNumber={currentPageNumber}
             activeBookmarkKey={activeBookmarkKey}
             onNavigateToBookmark={onNavigateToBookmark}
@@ -4220,6 +4353,7 @@ function ViewerContent({
               containMarginX={containMarginX}
               containMarginTop={containMarginTop}
               containMarginBottom={containMarginBottom}
+              touchPanMode={touchPanMode}
             />
           )}
         </>
@@ -4241,6 +4375,7 @@ export function IntermediateDocumentViewer({
   edgeCrop,
   edgeCropEditing,
   onEdgeCropApply,
+  onEdgeCropHidePage,
   ocr,
   extraOCR,
   onOcrError,
@@ -4410,13 +4545,19 @@ export function IntermediateDocumentViewer({
     pageUnloadDelayMs
   }
 
+  const hiddenPageNumbers = useMemo(
+    () => resolveHiddenPageNumbers(hiddenPages),
+    [hiddenPages]
+  )
   const pageNumbers = useMemo(() => {
     const allPageNumbers = runtimeDocument?.pageNumbers ?? []
-    const hiddenPageNumbers = resolveHiddenPageNumbers(hiddenPages)
-    return getVisiblePageNumbers(allPageNumbers, pageRange).filter(
-      (pageNumber) => !hiddenPageNumbers.has(pageNumber)
-    )
-  }, [hiddenPages, runtimeDocument, pageRange])
+    const visiblePageNumbers = getVisiblePageNumbers(allPageNumbers, pageRange)
+    return edgeCropEditing
+      ? visiblePageNumbers
+      : visiblePageNumbers.filter(
+          (pageNumber) => !hiddenPageNumbers.has(pageNumber)
+        )
+  }, [edgeCropEditing, hiddenPageNumbers, runtimeDocument, pageRange])
   const pageNumbersKey = pageNumbers.join(',')
   const selectionScopeRef = useRef({
     runtimeDocument,
@@ -5119,10 +5260,18 @@ export function IntermediateDocumentViewer({
     runtimeDocument
   ])
 
-  const effectiveScale = useMemo(
-    () => clampScale(scale ?? paperTransform.scale, scaleRange),
-    [scale, paperTransform.scale, scaleRange]
-  )
+  const effectiveScale = useMemo(() => {
+    if (!useVirtualPaper && nativeLayoutZoom === 'fit-width') {
+      return paperTransform.scale
+    }
+    return clampScale(scale ?? paperTransform.scale, scaleRange)
+  }, [
+    nativeLayoutZoom,
+    paperTransform.scale,
+    scale,
+    scaleRange,
+    useVirtualPaper
+  ])
   const effectiveScaleRef = useRef(effectiveScale)
   effectiveScaleRef.current = effectiveScale
   const initialFitDocumentRef = useRef<IntermediateDocument | null>(null)
@@ -5131,58 +5280,6 @@ export function IntermediateDocumentViewer({
     if (isTransformingRef.current) return
     setCommittedReaderScale(effectiveScale)
   }, [effectiveScale])
-
-  const handleInitialFitScale = useCallback(
-    (fitScale: number) => {
-      if (!useVirtualPaper && nativeLayoutZoom === 'fit-width') {
-        const nextScale = clampScale(fitScale, scaleRange)
-        setPaperTransform((currentTransform) => ({
-          ...currentTransform,
-          scale: nextScale
-        }))
-        onNativeLayoutScaleChange?.(nextScale)
-        return
-      }
-
-      if (!useVirtualPaper) return
-
-      if (
-        !runtimeDocument ||
-        initialFitDocumentRef.current === runtimeDocument
-      ) {
-        return
-      }
-
-      initialFitDocumentRef.current = runtimeDocument
-      if (scale !== undefined || defaultVirtualPaperTransform !== undefined)
-        return
-
-      setPaperTransform((currentTransform) => ({
-        ...currentTransform,
-        scale: clampScale(fitScale, scaleRange)
-      }))
-    },
-    [
-      defaultVirtualPaperTransform,
-      nativeLayoutZoom,
-      onNativeLayoutScaleChange,
-      runtimeDocument,
-      scale,
-      scaleRange,
-      useVirtualPaper
-    ]
-  )
-
-  useEffect(() => {
-    if (useVirtualPaper || nativeLayoutZoom === 'fit-width') return
-
-    const nextScale = clampScale(nativeLayoutZoom, scaleRange)
-    setPaperTransform((currentTransform) => ({
-      ...currentTransform,
-      scale: nextScale
-    }))
-    onNativeLayoutScaleChange?.(nextScale)
-  }, [nativeLayoutZoom, onNativeLayoutScaleChange, scaleRange, useVirtualPaper])
 
   const virtualPaperTransform = useMemo<VirtualPaperTransform>(
     () => ({
@@ -5199,6 +5296,9 @@ export function IntermediateDocumentViewer({
   const [currentTextAnchor, setCurrentTextAnchor] = useState<
     ReaderTextAnchor | undefined
   >(defaultVirtualPaperTransform?.anchor)
+  const [currentBookmark, setCurrentBookmark] = useState<
+    ReaderBookmark | undefined
+  >(defaultVirtualPaperTransform?.anchor)
   const currentTextAnchorRef = useRef(currentTextAnchor)
   currentTextAnchorRef.current = currentTextAnchor
   const [currentLayoutPageNumber, setCurrentLayoutPageNumber] = useState(
@@ -5208,7 +5308,7 @@ export function IntermediateDocumentViewer({
   currentLayoutPageNumberRef.current = currentLayoutPageNumber
   const [fallbackBookmarkKey, setFallbackBookmarkKey] = useState<string>()
   const activeBookmarkKey = getActiveBookmarkKey(
-    currentTextAnchor,
+    currentBookmark,
     fallbackBookmarkKey,
     bookmarks
   )
@@ -5233,18 +5333,19 @@ export function IntermediateDocumentViewer({
             return rect && rect.height > 0 ? [{ pageNumber, rect }] : []
           })
         : []
-      const topPageNumber = viewportRect
+      const topPage = viewportRect
         ? (pageRects.find(
             ({ rect }) =>
               rect.top <= viewportRect.top && rect.bottom > viewportRect.top
-          )?.pageNumber ??
+          ) ??
           pageRects
             .filter(({ rect }) => rect.top > viewportRect.top)
-            .sort((left, right) => left.rect.top - right.rect.top)[0]
-            ?.pageNumber)
+            .sort((left, right) => left.rect.top - right.rect.top)[0])
         : undefined
       const resolvedPageNumber =
-        topPageNumber ?? currentLayoutPageNumberRef.current ?? pageNumbers[0]
+        topPage?.pageNumber ??
+        currentLayoutPageNumberRef.current ??
+        pageNumbers[0]
       if (resolvedPageNumber !== undefined) {
         currentLayoutPageNumberRef.current = resolvedPageNumber
         setCurrentLayoutPageNumber(resolvedPageNumber)
@@ -5257,6 +5358,32 @@ export function IntermediateDocumentViewer({
             resolvedPageNumber
           ) ?? undefined)
         : undefined
+      const nextBookmark: ReaderBookmark | undefined =
+        anchor ??
+        (viewportRect && topPage
+          ? {
+              pageNumber: topPage.pageNumber,
+              verticalPercentage:
+                Math.round(
+                  Math.min(
+                    100,
+                    Math.max(
+                      0,
+                      ((viewportRect.top - topPage.rect.top) /
+                        topPage.rect.height) *
+                        100
+                    )
+                  ) * 100
+                ) / 100
+            }
+          : undefined)
+      setCurrentBookmark((value) =>
+        value &&
+        nextBookmark &&
+        getBookmarkKey(value) === getBookmarkKey(nextBookmark)
+          ? value
+          : nextBookmark
+      )
 
       const currentAnchor = currentTextAnchorRef.current
       const anchorChanged =
@@ -5275,6 +5402,98 @@ export function IntermediateDocumentViewer({
     },
     [onTextAnchorChange, pageNumbers, textsByPageNumber]
   )
+  const pendingNativeZoomAnchorRef = useRef<{
+    readonly element: HTMLElement
+    readonly scale: number
+    readonly top: number
+  } | null>(null)
+  const applyNativeLayoutScale = useCallback(
+    (nextScale: number) => {
+      if (effectiveScaleRef.current === nextScale) return
+
+      const anchor = captureCurrentTextAnchor(false)
+      const anchorElement = anchor
+        ? resolveTextAnchorElement(
+            anchor,
+            textElementsRef.current,
+            textsByPageNumber
+          )
+        : null
+      const pendingAnchor = anchorElement
+        ? {
+            element: anchorElement,
+            scale: nextScale,
+            top: anchorElement.getBoundingClientRect().top
+          }
+        : null
+      pendingNativeZoomAnchorRef.current = pendingAnchor
+      setPaperTransform((currentTransform) => ({
+        ...currentTransform,
+        scale: nextScale
+      }))
+      onNativeLayoutScaleChange?.(nextScale)
+
+      const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+        '.hamster-reader__native-layout-viewport'
+      )
+      const viewerWindow = viewport?.ownerDocument.defaultView
+      if (!pendingAnchor || !viewport || !viewerWindow) return
+      viewerWindow.requestAnimationFrame(() => {
+        viewerWindow.requestAnimationFrame(() => {
+          if (
+            pendingNativeZoomAnchorRef.current !== pendingAnchor ||
+            !viewport.isConnected
+          ) {
+            return
+          }
+          pendingNativeZoomAnchorRef.current = null
+          viewport.scrollTop +=
+            pendingAnchor.element.getBoundingClientRect().top -
+            pendingAnchor.top
+        })
+      })
+    },
+    [captureCurrentTextAnchor, onNativeLayoutScaleChange, textsByPageNumber]
+  )
+  const handleInitialFitScale = useCallback(
+    (fitScale: number) => {
+      if (!useVirtualPaper && nativeLayoutZoom === 'fit-width') {
+        applyNativeLayoutScale(fitScale)
+        return
+      }
+
+      if (!useVirtualPaper) return
+
+      if (
+        !runtimeDocument ||
+        initialFitDocumentRef.current === runtimeDocument
+      ) {
+        return
+      }
+
+      initialFitDocumentRef.current = runtimeDocument
+      if (scale !== undefined || defaultVirtualPaperTransform !== undefined)
+        return
+
+      setPaperTransform((currentTransform) => ({
+        ...currentTransform,
+        scale: clampScale(fitScale, scaleRange)
+      }))
+    },
+    [
+      applyNativeLayoutScale,
+      defaultVirtualPaperTransform,
+      nativeLayoutZoom,
+      runtimeDocument,
+      scale,
+      scaleRange,
+      useVirtualPaper
+    ]
+  )
+  useEffect(() => {
+    if (useVirtualPaper || nativeLayoutZoom === 'fit-width') return
+    applyNativeLayoutScale(clampScale(nativeLayoutZoom, scaleRange))
+  }, [applyNativeLayoutScale, nativeLayoutZoom, scaleRange, useVirtualPaper])
   const handleViewportPositionChange = useCallback(() => {
     captureCurrentTextAnchor(true)
   }, [captureCurrentTextAnchor])
@@ -6255,7 +6474,8 @@ export function IntermediateDocumentViewer({
       const resolvedTransform = {
         x: nextTransform.x,
         y: nextTransform.y,
-        scale: nextTransform.scale ?? paperTransformRef.current.scale
+        scale:
+          nextTransform.scale ?? position.scale ?? effectiveScaleRef.current
       }
       paperTransformRef.current = resolvedTransform
       setPaperTransform(resolvedTransform)
@@ -6555,6 +6775,7 @@ export function IntermediateDocumentViewer({
       cancelPendingTextAnchor()
       setFallbackBookmarkKey(undefined)
       if (!pageNumbers.includes(pageNumber)) return
+      initialFitDocumentRef.current = runtimeDocument
 
       const alreadyLoaded = pageStatuses.get(pageNumber) === 'loaded'
       const pinToken = pinJumpTargetPage(pageNumber)
@@ -6594,6 +6815,7 @@ export function IntermediateDocumentViewer({
       pinJumpTargetPage,
       previewPageSizesByPageNumber,
       releaseJumpPinnedPage,
+      runtimeDocument,
       scrollToPosition,
       onVirtualPaperTransformChangeEnd
     ]
@@ -6621,14 +6843,19 @@ export function IntermediateDocumentViewer({
 
       const viewportRect = viewport.getBoundingClientRect()
       const targetRect = targetElement.getBoundingClientRect()
-      const offsetY = viewportRect.top - targetRect.top
       const currentTransform = paperTransformRef.current
-      const nextTransform =
-        offsetY === 0
-          ? currentTransform
-          : { ...currentTransform, y: currentTransform.y + offsetY }
-      paperTransformRef.current = nextTransform
-      setPaperTransform(nextTransform)
+      const nextTransform = useVirtualPaper
+        ? {
+            ...currentTransform,
+            y: currentTransform.y + viewportRect.top - targetRect.top
+          }
+        : currentTransform
+      if (useVirtualPaper) {
+        paperTransformRef.current = nextTransform
+        setPaperTransform(nextTransform)
+      } else {
+        viewport.scrollTop += targetRect.top - viewportRect.top
+      }
       setCurrentTextAnchor(operation.anchor)
       setFallbackBookmarkKey(undefined)
       currentLayoutPageNumberRef.current = operation.anchor.pageNumber
@@ -6648,12 +6875,29 @@ export function IntermediateDocumentViewer({
       onVirtualPaperTransformChangeEnd,
       releaseJumpPinnedPage,
       runtimeDocument,
-      textsByPageNumber
+      textsByPageNumber,
+      useVirtualPaper
     ]
   )
 
   const alignTextAnchorPageFallback = useCallback(
     (anchor: ReaderTextAnchor) => {
+      if (!useVirtualPaper) {
+        const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+          '.hamster-reader__native-layout-viewport'
+        )
+        const pageElement = pageRefs.current.get(anchor.pageNumber)
+        if (viewport && pageElement) {
+          viewport.scrollTop +=
+            pageElement.getBoundingClientRect().top -
+            viewport.getBoundingClientRect().top
+        }
+        setCurrentTextAnchor(undefined)
+        currentLayoutPageNumberRef.current = anchor.pageNumber
+        setCurrentLayoutPageNumber(anchor.pageNumber)
+        return
+      }
+
       const pageOriginY = computePageOriginY(
         anchor.pageNumber,
         pageNumbers,
@@ -6674,7 +6918,13 @@ export function IntermediateDocumentViewer({
       currentLayoutPageNumberRef.current = anchor.pageNumber
       setCurrentLayoutPageNumber(anchor.pageNumber)
     },
-    [pageNumbers, previewPageSizesByPageNumber, scale, scaleRange]
+    [
+      pageNumbers,
+      previewPageSizesByPageNumber,
+      scale,
+      scaleRange,
+      useVirtualPaper
+    ]
   )
 
   const completeTextAnchorPageFallback = useCallback(
@@ -6751,6 +7001,79 @@ export function IntermediateDocumentViewer({
       pinJumpTargetPage,
       runtimeDocument,
       textsByPageNumber
+    ]
+  )
+
+  const navigateToBookmark = useCallback(
+    (bookmark: ReaderBookmark) => {
+      if (isTextBookmark(bookmark)) {
+        navigateToTextAnchor(bookmark)
+        return
+      }
+      if (!pageNumbers.includes(bookmark.pageNumber)) return
+
+      cancelPendingTextAnchor()
+      const verticalRatio =
+        Math.min(100, Math.max(0, bookmark.verticalPercentage)) / 100
+      const pageElement = pageRefs.current.get(bookmark.pageNumber)
+      if (!useVirtualPaper) {
+        const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+          '.hamster-reader__native-layout-viewport'
+        )
+        if (viewport && pageElement) {
+          const pageRect = pageElement.getBoundingClientRect()
+          viewport.scrollTop +=
+            pageRect.top +
+            pageRect.height * verticalRatio -
+            viewport.getBoundingClientRect().top
+        }
+      } else {
+        const pageHeight = previewPageSizesByPageNumber.get(
+          bookmark.pageNumber
+        )?.height
+        if (pageHeight === undefined) return
+        const currentTransform = paperTransformRef.current
+        const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+          '.virtual-paper-wrapper'
+        )
+        const pageRect = pageElement?.getBoundingClientRect()
+        const viewportRect = viewport?.getBoundingClientRect()
+        const targetY =
+          computePageOriginY(
+            bookmark.pageNumber,
+            pageNumbers,
+            previewPageSizesByPageNumber
+          ) +
+          pageHeight * verticalRatio
+        const nextTransform = {
+          ...currentTransform,
+          y:
+            pageRect && viewportRect && pageRect.height > 0
+              ? currentTransform.y +
+                viewportRect.top -
+                (pageRect.top + pageRect.height * verticalRatio)
+              : -targetY * currentTransform.scale
+        }
+        paperTransformRef.current = nextTransform
+        setPaperTransform(nextTransform)
+        lastLocallyEmittedVirtualPaperKeyRef.current =
+          getVirtualPaperStateKey(nextTransform)
+        onVirtualPaperTransformChangeEnd?.(nextTransform)
+      }
+      currentTextAnchorRef.current = undefined
+      setCurrentTextAnchor(undefined)
+      setCurrentBookmark(bookmark)
+      currentLayoutPageNumberRef.current = bookmark.pageNumber
+      setCurrentLayoutPageNumber(bookmark.pageNumber)
+      setFallbackBookmarkKey(getBookmarkKey(bookmark))
+    },
+    [
+      cancelPendingTextAnchor,
+      navigateToTextAnchor,
+      onVirtualPaperTransformChangeEnd,
+      pageNumbers,
+      previewPageSizesByPageNumber,
+      useVirtualPaper
     ]
   )
 
@@ -7837,10 +8160,12 @@ export function IntermediateDocumentViewer({
       viewerRootRef={setViewerRootRef}
       selectionScope={selectionScope}
       pageNumbers={pageNumbers}
+      hiddenPageNumbers={hiddenPageNumbers}
       fontScale={fontScale}
       edgeCrop={edgeCrop}
       edgeCropEditing={edgeCropEditing}
       onEdgeCropApply={onEdgeCropApply}
+      onEdgeCropHidePage={onEdgeCropHidePage}
       pageSizesByPageNumber={pageSizesByPageNumber}
       flowLayoutPages={flowLayoutPages}
       orderedContentByPageNumber={orderedContentByPageNumber}
@@ -7928,13 +8253,13 @@ export function IntermediateDocumentViewer({
       commentCountByRangeId={effectiveCommentCountByRangeId}
       commentCountByRectId={commentCountByRectId}
       bookmarks={bookmarks}
-      currentAnchor={currentTextAnchor}
+      currentBookmark={currentBookmark}
       currentPageNumber={currentLayoutPageNumber}
       activeBookmarkKey={activeBookmarkKey}
       onNavigateToBookmark={resolveBookmarkNavigationHandler(
         bookmarks,
         onToggleBookmark,
-        navigateToTextAnchor
+        navigateToBookmark
       )}
       onToggleBookmark={onToggleBookmark}
       bookmarkedPageNumbers={bookmarkedPageNumbers}
