@@ -13,8 +13,8 @@ describe('EdgeCropOverlay', () => {
     ) as HTMLElement
   }
 
-  it('renders four crop lines and two apply buttons', () => {
-    // 基本渲染：验证四条裁切线和两个操作按钮都存在
+  it('renders four crop lines, two apply buttons, and a hide button', () => {
+    // 基本渲染：验证四条裁切线和三个操作按钮都存在
     render(<EdgeCropOverlay pageNumber={1} edgeCrop={undefined} />)
 
     expect(screen.getByTestId('edge-crop-line-top')).toBeInTheDocument()
@@ -23,6 +23,7 @@ describe('EdgeCropOverlay', () => {
     expect(screen.getByTestId('edge-crop-line-right')).toBeInTheDocument()
     expect(screen.getByTestId('edge-crop-apply-page')).toBeInTheDocument()
     expect(screen.getByTestId('edge-crop-apply-all')).toBeInTheDocument()
+    expect(screen.getByTestId('edge-crop-hide-page')).toBeInTheDocument()
   })
 
   it('initializes line positions from global edgeCrop', () => {
@@ -230,6 +231,24 @@ describe('EdgeCropOverlay', () => {
     })
   })
 
+  it('calls onHidePage with the current page when hide-page is clicked', () => {
+    // Given: 当前页覆盖层提供隐藏页回调。
+    const onHidePage = vi.fn()
+    render(
+      <EdgeCropOverlay
+        pageNumber={3}
+        edgeCrop={undefined}
+        onHidePage={onHidePage}
+      />
+    )
+
+    // When: 用户点击隐藏当前页。
+    fireEvent.click(screen.getByTestId('edge-crop-hide-page'))
+
+    // Then: 回调收到当前 1-based 页码。
+    expect(onHidePage).toHaveBeenCalledWith(3)
+  })
+
   it('passes updated crop after drag to onApply', () => {
     // 验证：拖拽后点击应用，onApply 收到的是更新后的裁切值
     const onApply = vi.fn()
@@ -301,5 +320,28 @@ describe('EdgeCropOverlay', () => {
 
     // Then: 祖先的原生拦截不影响拖拽，top 应更新为 80/800 = 10%
     expect(topLine).toHaveStyle({ top: '10%' })
+  })
+
+  it('isolates action pointerdown from the native viewer gesture handler', () => {
+    // Given: VirtualPaper 祖先通过原生 pointerdown 启动触摸平移手势。
+    const onAncestorPointerDown = vi.fn()
+    render(
+      <div
+        ref={(node) => {
+          node?.addEventListener('pointerdown', onAncestorPointerDown)
+        }}
+      >
+        <EdgeCropOverlay pageNumber={1} edgeCrop={undefined} />
+      </div>
+    )
+
+    // When: 手机用户在裁切操作按钮上按下手指。
+    fireEvent.pointerDown(screen.getByTestId('edge-crop-apply-page'), {
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+
+    // Then: 按钮独占该手势，不让页面平移处理器抢占后续点击。
+    expect(onAncestorPointerDown).not.toHaveBeenCalled()
   })
 })

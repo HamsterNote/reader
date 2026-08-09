@@ -51,6 +51,7 @@ export type DefaultBottomBarProps = {
   readonly selectedTool: ReaderPageTool
   readonly colors: readonly ReaderColorOption[]
   readonly drawingStrokeColor: string
+  readonly highlightColor: string | undefined
   readonly paintingControllerData: PaintingControllerData
   readonly historyStatus: ReaderAnnotationHistoryStatus
   readonly selectionRef: RefObject<ReaderSelectionRef | null>
@@ -92,7 +93,7 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
     <Popover
       ref={props.selectedTool === 'drawing' ? undefined : props.bottomBarRef}
       edge='bottom'
-      edgeOffset={16}
+      edgeOffset={32}
       relative
       theme={theme}
       role='toolbar'
@@ -166,7 +167,7 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           <PopoverSeparator />
         </>
       )}
-      {width < 768 ? (
+      {width < 768 && !layoutDisabled && !props.edgeCropEditing && (
         <Button
           type='button'
           size='small'
@@ -191,7 +192,8 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
             }
           />
         </Button>
-      ) : (
+      )}
+      {width >= 768 && (
         <BottomBarToolButtons
           tools={visibleTools}
           selectedTool={props.selectedTool}
@@ -199,12 +201,14 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           onSelectedToolChange={props.onSelectedToolChange}
         />
       )}
-      {!layoutDisabled && (
+      {(width >= 768 || !props.edgeCropEditing) && (
         <>
           <PopoverSeparator />
           <BottomBarColorControls
             colors={props.colors}
+            renderMode={props.renderMode}
             drawingStrokeColor={props.drawingStrokeColor}
+            highlightColor={props.highlightColor}
             onDrawingStrokeColorChange={props.onDrawingStrokeColorChange}
             onHighlightColorChange={props.onHighlightColorChange}
           />

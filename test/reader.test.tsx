@@ -658,6 +658,48 @@ describe('Reader public API', () => {
     })
   })
 
+  it('changes only the highlight color from the Text mode bottom bar', async () => {
+    // Given: Text Mode 使用默认底栏，绘图颜色由宿主监听。
+    const onDrawingStrokeColorChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        renderMode='text'
+        onDrawingStrokeColorChange={onDrawingStrokeColorChange}
+      />
+    )
+
+    // When: 用户选择绿色。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
+
+    // Then: Text viewer 的高亮颜色更新，绘图描边保持不变。
+    await waitFor(() => {
+      expect(capturedTextViewerProps.highlightColor).toBe(
+        'rgba(142, 186, 142, 0.35)'
+      )
+    })
+    expect(onDrawingStrokeColorChange).not.toHaveBeenCalled()
+  })
+
+  it('writes hidden pages through ReaderData from the crop overlay', async () => {
+    // Given: ReaderData 由宿主持久化，裁切模式正在编辑第一页。
+    const onDataChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        data={{ hiddenPages: [] }}
+        onDataChange={onDataChange}
+        edgeCropEditing
+      />
+    )
+
+    // When: 用户点击隐藏当前页。
+    fireEvent.click(await screen.findByTestId('edge-crop-hide-page'))
+
+    // Then: Reader 通过统一数据入口追加当前页，不改动其他数据。
+    expect(onDataChange).toHaveBeenCalledWith({ hiddenPages: [1] })
+  })
+
   it('uses the colors prop as the default bottom bar color list', () => {
     // Given: 宿主提供与默认颜色完全不同的公共颜色列表。
     const onDrawingStrokeColorChange = vi.fn()
@@ -1644,6 +1686,33 @@ describe('Reader renderMode', () => {
       hiddenPages: [2],
       bookmarks: []
     })
+  })
+
+  it('toggles a textless page-position bookmark through ReaderData', () => {
+    // Given: ReaderData has no bookmarks and layout mode exposes its toggle callback.
+    const bookmark: ReaderBookmark = {
+      pageNumber: 2,
+      verticalPercentage: 41
+    }
+    const onDataChange = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    render(
+      <Reader
+        document={doc}
+        data={{ bookmarks: [] }}
+        onDataChange={onDataChange}
+      />
+    )
+
+    // When: the layout viewer toggles a textless page position.
+    const onToggleBookmark = capturedViewerProps.onToggleBookmark
+    if (typeof onToggleBookmark !== 'function') {
+      throw new TypeError('Expected precise bookmark callback')
+    }
+    onToggleBookmark(bookmark)
+
+    // Then: Reader persists the page number and vertical percentage unchanged.
+    expect(onDataChange).toHaveBeenCalledWith({ bookmarks: [bookmark] })
   })
 
   it('renderMode text provides the default selection confirmation popover', () => {

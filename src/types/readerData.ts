@@ -29,14 +29,15 @@ export type ReaderTextAnchor = {
   readonly offset: number
 }
 
-/** 精确书签与文字锚点保持相同的数据形状。 */
-export type ReaderBookmark = {
+/** 无文字页面中，以页码和页内纵向百分比定位的可持久化书签。 */
+export type ReaderPagePositionBookmark = {
   readonly pageNumber: number
-  readonly textId: string
-  readonly text: string
-  /** 目标文字起始字符在当前页面内的偏移量，不是整篇文档的累计偏移量。 */
-  readonly offset: number
+  /** 相对页面顶部的纵向位置，取值范围为 0..100。 */
+  readonly verticalPercentage: number
 }
+
+/** 精确书签优先使用文字锚点，无文字时使用页内纵向百分比。 */
+export type ReaderBookmark = ReaderTextAnchor | ReaderPagePositionBookmark
 
 /** VirtualPaper 可持久化的最后浏览位置、缩放与文字锚点。 */
 export type ReaderVirtualPaperState = {

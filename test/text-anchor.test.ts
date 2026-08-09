@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   findTopTextAnchor,
+  getBookmarkKey,
   getTextAnchorKey,
   resolveTextAnchorElement,
   type TextAnchorElementRecord
@@ -133,5 +134,16 @@ describe('text anchors', () => {
     }
 
     expect(getTextAnchorKey(anchor)).toBe('7:paragraph-2:18')
+  })
+
+  it('uses page and vertical percentage as textless bookmark identity', () => {
+    // Given: a bookmark points 37% down a page without text.
+    const bookmark = { pageNumber: 4, verticalPercentage: 37 } as const
+
+    // When: its stable identity is derived.
+    const key = getBookmarkKey(bookmark)
+
+    // Then: it cannot collide with a text-anchor identity.
+    expect(key).toBe('page:4:37')
   })
 })

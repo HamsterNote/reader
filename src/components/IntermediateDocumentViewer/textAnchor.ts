@@ -14,16 +14,26 @@ export function getTextAnchorKey(anchor: ReaderTextAnchor): string {
   return `${anchor.pageNumber}:${anchor.textId}:${anchor.offset}`
 }
 
+export function isTextBookmark(
+  bookmark: ReaderBookmark
+): bookmark is ReaderTextAnchor {
+  return 'textId' in bookmark
+}
+
+export function getBookmarkKey(bookmark: ReaderBookmark): string {
+  return isTextBookmark(bookmark)
+    ? getTextAnchorKey(bookmark)
+    : `page:${bookmark.pageNumber}:${bookmark.verticalPercentage}`
+}
+
 export function getActiveBookmarkKey(
-  anchor: ReaderTextAnchor | undefined,
+  bookmark: ReaderBookmark | undefined,
   fallbackKey: string | undefined,
   bookmarks: readonly ReaderBookmark[] | undefined
 ): string | undefined {
-  const currentKey = anchor ? getTextAnchorKey(anchor) : fallbackKey
+  const currentKey = bookmark ? getBookmarkKey(bookmark) : fallbackKey
   if (!currentKey) return undefined
-  return bookmarks?.some(
-    (bookmark) => getTextAnchorKey(bookmark) === currentKey
-  )
+  return bookmarks?.some((item) => getBookmarkKey(item) === currentKey)
     ? currentKey
     : undefined
 }

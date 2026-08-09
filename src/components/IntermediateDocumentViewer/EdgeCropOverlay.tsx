@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ReaderEdgeCrop, ReaderPageEdgeCrop } from '../../types/readerData'
+import { EdgeCropActions } from './EdgeCropActions'
 import { resolvePageEdgeCrop } from './pageDisplay'
 
 /**
@@ -26,6 +27,7 @@ type EdgeCropOverlayProps = {
    * - `pageNumber` 为 `null` 时：将 crop 应用到所有页面（写入 edgeCrop.all）。
    */
   onApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
+  onHidePage?: (pageNumber: number) => void
 }
 
 /**
@@ -33,9 +35,10 @@ type EdgeCropOverlayProps = {
  *
  * 仅在 edgeCropEditing 为 true 时由 IntermediateDocumentPages 渲染。
  * 渲染 4 条可拖拽的虚线（上/下/左/右），用户拖拽时实时更新本地裁切比例。
- * 提供两个按钮：
+ * 提供三个操作按钮：
  * - 「应用到当前页」：将当前裁切值应用到当前页（onApply(pageNumber, crop)）。
  * - 「应用到全部」：将当前裁切值应用到所有页（onApply(null, crop)）。
+ * - 「隐藏当前页」：隐藏当前页（onHidePage(pageNumber)）。
  *
  * 使用 setPointerCapture 捕获指针，避免拖拽过程中 VirtualPaper 接收事件。
  * 本地状态跟随 resolvePageEdgeCrop(edgeCrop, pageNumber)；拖拽期间到达的受控更新
@@ -44,7 +47,8 @@ type EdgeCropOverlayProps = {
 export function EdgeCropOverlay({
   pageNumber,
   edgeCrop,
-  onApply
+  onApply,
+  onHidePage
 }: EdgeCropOverlayProps) {
   const controlledCrop = resolvePageEdgeCrop(edgeCrop, pageNumber) ?? {
     top: 0,
@@ -113,6 +117,14 @@ export function EdgeCropOverlay({
     const root = containerRef.current
     if (!root) return
     const handleNativePointerDown = (event: PointerEvent) => {
+      const action =
+        event.target instanceof Element
+          ? event.target.closest('[data-edge-crop-action]')
+          : null
+      if (action) {
+        event.stopPropagation()
+        return
+      }
       const line =
         event.target instanceof Element
           ? event.target.closest<HTMLElement>('[data-edge]')
@@ -197,6 +209,10 @@ export function EdgeCropOverlay({
     onApply?.(null, localCrop)
   }, [localCrop, onApply])
 
+  const handleHidePage = useCallback(() => {
+    onHidePage?.(pageNumber)
+  }, [onHidePage, pageNumber])
+
   // 各边线条位置（百分比）
   const topPct = (localCrop.top ?? 0) * 100
   const bottomPct = (1 - (localCrop.bottom ?? 0)) * 100
@@ -245,25 +261,12 @@ export function EdgeCropOverlay({
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
       />
-      {/* 每页操作按钮区域 */}
-      <div className='hamster-reader__edge-crop-actions'>
-        <button
-          type='button'
-          className='hamster-reader__edge-crop-action hamster-reader__edge-crop-action--page'
-          data-testid='edge-crop-apply-page'
-          onClick={handleApplyPage}
-        >
-          应用到当前页
-        </button>
-        <button
-          type='button'
-          className='hamster-reader__edge-crop-action hamster-reader__edge-crop-action--all'
-          data-testid='edge-crop-apply-all'
-          onClick={handleApplyAll}
-        >
-          应用到全部
-        </button>
-      </div>
+      <EdgeCropActions
+        canHidePage={onHidePage !== undefined}
+        onApplyPage={handleApplyPage}
+        onApplyAll={handleApplyAll}
+        onHidePage={handleHidePage}
+      />
     </div>
   )
 }

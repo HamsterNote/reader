@@ -1,8 +1,8 @@
 import type { CSSProperties, RefObject } from 'react'
 import { useCallback } from 'react'
 import { confirm } from '@hamster-note/components'
-import type { ReaderBookmark, ReaderTextAnchor } from '../../types/readerData'
-import { getTextAnchorKey } from './textAnchor'
+import type { ReaderBookmark } from '../../types/readerData'
+import { getBookmarkKey, isTextBookmark } from './textAnchor'
 
 type PageBookmarkButtonProps = {
   readonly pageNumber: number
@@ -75,7 +75,7 @@ export function PageBookmarkButton({
 
 type PageBrowserBookmarksPanelProps = {
   readonly bookmarks?: readonly ReaderBookmark[]
-  readonly currentAnchor?: ReaderTextAnchor
+  readonly currentBookmark?: ReaderBookmark
   readonly activeBookmarkKey?: string
   readonly bookmarkedPageNumbers: readonly number[]
   readonly currentPageNumber?: number
@@ -86,6 +86,7 @@ type PageBrowserBookmarksPanelProps = {
   readonly listStyle: CSSProperties
   readonly onNavigateToPage: (pageNumber: number) => void
   readonly onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  readonly isBookmarkNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggleBookmark?: (bookmark: ReaderBookmark) => void
   readonly onTogglePageBookmark?: (pageNumber: number) => void
 }
@@ -96,8 +97,14 @@ type TextBookmarksListProps = {
   readonly isEnabled: boolean
   readonly activeBookmarkKey?: string
   readonly onNavigate?: (bookmark: ReaderBookmark) => void
+  readonly isNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggle?: (bookmark: ReaderBookmark) => void
 }
+
+const getBookmarkLabel = (bookmark: ReaderBookmark) =>
+  isTextBookmark(bookmark)
+    ? bookmark.text
+    : `第 ${bookmark.pageNumber} 页 · ${bookmark.verticalPercentage}%`
 
 function TextBookmarksList({
   bookmarks,
@@ -105,13 +112,15 @@ function TextBookmarksList({
   isEnabled,
   activeBookmarkKey,
   onNavigate,
+  isNavigationEnabled,
   onToggle
 }: TextBookmarksListProps) {
   const handleDelete = useCallback(
     async (bookmark: ReaderBookmark) => {
+      const label = getBookmarkLabel(bookmark)
       const shouldDelete = await confirm({
         title: '删除书签？',
-        description: `删除“${bookmark.text}”书签后无法恢复。`,
+        description: `删除“${label}”书签后无法恢复。`,
         confirmText: '删除',
         cancelText: '取消',
         tone: 'danger'
@@ -128,8 +137,10 @@ function TextBookmarksList({
   }
 
   return bookmarks.map((bookmark) => {
-    const bookmarkKey = getTextAnchorKey(bookmark)
+    const bookmarkKey = getBookmarkKey(bookmark)
+    const label = getBookmarkLabel(bookmark)
     const isActive = bookmarkKey === activeBookmarkKey
+    const canNavigate = isNavigationEnabled?.(bookmark) ?? true
     return (
       <div key={bookmarkKey} className='hamster-reader__bookmark-item'>
         <button
@@ -139,21 +150,21 @@ function TextBookmarksList({
               ? 'hamster-reader__bookmark-link hamster-reader__bookmark-link--active'
               : 'hamster-reader__bookmark-link'
           }
-          aria-label={`跳转到书签：${bookmark.text}`}
+          aria-label={`跳转到书签：${label}`}
           aria-current={isActive ? 'location' : undefined}
-          tabIndex={isOpen ? 0 : -1}
+          disabled={!canNavigate}
+          title={canNavigate ? undefined : '当前阅读模式不支持跳转到此书签'}
+          tabIndex={isOpen && canNavigate ? 0 : -1}
           data-page-number={bookmark.pageNumber}
           onClick={() => onNavigate?.(bookmark)}
         >
-          <span className='hamster-reader__highlight-text'>
-            {bookmark.text}
-          </span>
+          <span className='hamster-reader__highlight-text'>{label}</span>
           <span>第 {bookmark.pageNumber} 页</span>
         </button>
         <button
           type='button'
           className='hamster-reader__bookmark-delete'
-          aria-label={`删除书签：${bookmark.text}`}
+          aria-label={`删除书签：${label}`}
           disabled={!isEnabled}
           tabIndex={isOpen && isEnabled ? 0 : -1}
           onClick={() => void handleDelete(bookmark)}
@@ -230,7 +241,7 @@ function LegacyBookmarksList({
 
 export function PageBrowserBookmarksPanel({
   bookmarks,
-  currentAnchor,
+  currentBookmark,
   activeBookmarkKey,
   bookmarkedPageNumbers,
   currentPageNumber,
@@ -241,20 +252,21 @@ export function PageBrowserBookmarksPanel({
   listStyle,
   onNavigateToPage,
   onNavigateToBookmark,
+  isBookmarkNavigationEnabled,
   onToggleBookmark,
   onTogglePageBookmark
 }: PageBrowserBookmarksPanelProps) {
   const usesTextBookmarks =
     bookmarks !== undefined || onToggleBookmark !== undefined
   const textBookmarks = bookmarks ?? []
-  const currentAnchorKey = currentAnchor
-    ? getTextAnchorKey(currentAnchor)
+  const currentBookmarkKey = currentBookmark
+    ? getBookmarkKey(currentBookmark)
     : undefined
-  const canAddCurrentAnchor =
+  const canAddCurrentBookmark =
     isTextBookmarkEnabled &&
-    currentAnchor !== undefined &&
+    currentBookmark !== undefined &&
     !textBookmarks.some(
-      (bookmark) => getTextAnchorKey(bookmark) === currentAnchorKey
+      (bookmark) => getBookmarkKey(bookmark) === currentBookmarkKey
     )
   const canAddCurrentPage =
     isPageBookmarkEnabled &&
@@ -270,11 +282,13 @@ export function PageBrowserBookmarksPanel({
       <button
         type='button'
         className='hamster-reader__bookmark-add'
-        disabled={usesTextBookmarks ? !canAddCurrentAnchor : !canAddCurrentPage}
+        disabled={
+          usesTextBookmarks ? !canAddCurrentBookmark : !canAddCurrentPage
+        }
         tabIndex={isOpen ? 0 : -1}
         onClick={() => {
-          if (usesTextBookmarks && canAddCurrentAnchor) {
-            onToggleBookmark?.(currentAnchor)
+          if (usesTextBookmarks && canAddCurrentBookmark) {
+            onToggleBookmark?.(currentBookmark)
           } else if (!usesTextBookmarks && canAddCurrentPage) {
             onTogglePageBookmark?.(currentPageNumber)
           }
@@ -289,6 +303,7 @@ export function PageBrowserBookmarksPanel({
           isEnabled={isTextBookmarkEnabled}
           activeBookmarkKey={activeBookmarkKey}
           onNavigate={onNavigateToBookmark}
+          isNavigationEnabled={isBookmarkNavigationEnabled}
           onToggle={onToggleBookmark}
         />
       ) : (

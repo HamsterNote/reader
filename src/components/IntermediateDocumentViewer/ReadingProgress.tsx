@@ -1,3 +1,4 @@
+import { Loading } from '@hamster-note/components'
 import type { KeyboardEvent, PointerEvent } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -87,6 +88,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
     null
   )
   const layoutPreview = getLayoutPreview(props, previewPageNumber)
+  const showsLayoutPreview = layoutPreview !== undefined
   const hasLayoutPreview = Boolean(layoutPreview?.image)
   const onPreviewPageVisibilityChange =
     props.mode === 'layout' && props.previewEnabled
@@ -210,7 +212,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
   const layoutPreviewRatio = layoutPreview?.size
     ? layoutPreview.size.height / layoutPreview.size.width
     : 4 / 3
-  const previewHeight = hasLayoutPreview ? 104 * layoutPreviewRatio + 2 : 24
+  const previewHeight = showsLayoutPreview ? 104 * layoutPreviewRatio + 2 : 24
   const feedbackCenterInset = previewHeight / 2
   const feedbackPositionTop = `clamp(${feedbackCenterInset}px, ${feedbackPositionPercent}%, calc(100% - ${feedbackCenterInset}px))`
   const isFeedbackVisible = isMoving || previewPageNumber !== null || isFocused
@@ -290,7 +292,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
       </span>
       <span
         className='hamster-reader__reading-progress-feedback'
-        data-has-preview={hasLayoutPreview}
+        data-has-preview={showsLayoutPreview}
         data-page-number={displayedPageNumber}
         style={{
           top: feedbackPositionTop
@@ -307,9 +309,8 @@ export function ReadingProgress(props: ReadingProgressProps) {
           >
             第 {displayedPageNumber} 页
           </span>
-          {hasLayoutPreview ? (
+          {showsLayoutPreview ? (
             <span
-              aria-hidden='true'
               className='hamster-reader__reading-progress-preview'
               style={
                 layoutPreview?.size
@@ -319,12 +320,16 @@ export function ReadingProgress(props: ReadingProgressProps) {
                   : undefined
               }
             >
-              <img
-                alt=''
-                data-testid={`reading-progress-preview-${previewPageNumber}`}
-                draggable={false}
-                src={layoutPreview?.image}
-              />
+              {hasLayoutPreview ? (
+                <img
+                  alt=''
+                  data-testid={`reading-progress-preview-${previewPageNumber}`}
+                  draggable={false}
+                  src={layoutPreview?.image}
+                />
+              ) : (
+                <Loading size='small' />
+              )}
             </span>
           ) : null}
         </span>
