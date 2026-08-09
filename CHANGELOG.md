@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-09
+
+### Added
+- Edge-crop hide page feature
+- Page-position bookmark support
+- Multi-touch cancel gesture
+- Text-mode color palette
+
+### Fixed
+- Disabled page+percentage bookmarks in Text Mode
+
 ## [0.9.0] - 2026-08-06
 
 ### Added
