@@ -1289,11 +1289,11 @@
     top: 50%;
     right: 0;
     display: block;
-    width: 8px;
-    height: 8px;
+    // 轨道宽 4px，横线宽 6px：向左多出 2px，便于在轨道外侧也能看清当前位置
+    width: 6px;
+    height: 2px;
     box-sizing: border-box;
-    border: 2px solid var(--hamster-reader-theme-color, #2563eb);
-    background: transparent;
+    background: var(--hamster-reader-theme-color, #2563eb);
     transform: translateY(-50%);
   }
 

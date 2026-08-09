@@ -10799,6 +10799,13 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       // 或 Selection/VirtualPaper 在 500ms 等待期内先启动文字选择或页面拖动。
       expect(pointerDownAllowed).toBe(false)
       expect(onSelectionPointerDown).not.toHaveBeenCalled()
+      // Then: 同一高亮候选取消原生 touchstart，避免浏览器抢占后续移动。
+      expect(
+        fireEvent.touchStart(selectionContent, {
+          touches: [{ identifier: 42, clientX: 180, clientY: 240 }],
+          changedTouches: [{ identifier: 42, clientX: 180, clientY: 240 }]
+        })
+      ).toBe(false)
       await act(async () => {
         vi.advanceTimersByTime(499)
       })
@@ -10875,6 +10882,13 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       expect(viewerSpace.dataset.enabledInteractions).toContain(
         VirtualPaperInteractionMode.TouchSingleFingerPan
       )
+      // Then: 手势结束后，普通阅读区域仍保留浏览器原生触摸行为。
+      expect(
+        fireEvent.touchStart(viewerSpace, {
+          touches: [{ identifier: 45, clientX: 20, clientY: 20 }],
+          changedTouches: [{ identifier: 45, clientX: 20, clientY: 20 }]
+        })
+      ).toBe(true)
     } finally {
       vi.useRealTimers()
     }

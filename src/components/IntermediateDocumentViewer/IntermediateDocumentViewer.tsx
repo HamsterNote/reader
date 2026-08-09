@@ -2858,6 +2858,28 @@ function useHighlightDrag({
     }
   }, [clearDragStart, handleTrackedPointerMove, viewerRootElement])
 
+  useEffect(() => {
+    if (!viewerRootElement) return
+
+    const preventNativeTouchGesture = (event: TouchEvent) => {
+      if (dragStartRef.current?.pointerType !== 'touch') return
+      if (event.cancelable) event.preventDefault()
+    }
+    viewerRootElement.addEventListener(
+      'touchstart',
+      preventNativeTouchGesture,
+      { capture: true, passive: false }
+    )
+
+    return () => {
+      viewerRootElement.removeEventListener(
+        'touchstart',
+        preventNativeTouchGesture,
+        true
+      )
+    }
+  }, [viewerRootElement])
+
   const handleHighlightPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (dragStartRef.current?.triggered) return
@@ -6791,6 +6813,63 @@ export function IntermediateDocumentViewer({
         lazyPageQueue.enqueuePage(pageNumber)
       }
 
+      // 原生滚动视口（NativeLayoutViewport）只消费 transform.scale（zoom），
+      // x/y 平移完全依赖 wrapper 的原生滚动，因此这里必须直接操作 scrollTop，
+      // 否则下游 scrollToPosition 算出的 transform 没有任何人应用，跳转无效。
+      if (!useVirtualPaper) {
+        const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+          '.hamster-reader__native-layout-viewport'
+        )
+        if (viewport) {
+          const viewportRect = viewport.getBoundingClientRect()
+          const pageElement = pageRefs.current.get(pageNumber)
+          if (pageElement) {
+            // 目标页已渲染：与 navigateToBookmark 的原生分支一致，
+            // 直接用 DOM 位置做增量滚动，结果精确。
+            viewport.scrollTop +=
+              pageElement.getBoundingClientRect().top - viewportRect.top
+          } else {
+            // 目标页尚未渲染（懒加载未挂载）：找离目标最近的已渲染页做锚点，
+            // 用「文档坐标差 × scale」估算目标的滚动偏移。
+            const scale = paperTransformRef.current.scale
+            let anchor: {
+              pageNumber: number
+              element: HTMLDivElement
+            } | null = null
+            for (const candidate of pageNumbers) {
+              const element = pageRefs.current.get(candidate)
+              if (!element || !element.isConnected) continue
+              if (
+                !anchor ||
+                Math.abs(candidate - pageNumber) <
+                  Math.abs(anchor.pageNumber - pageNumber)
+              ) {
+                anchor = { pageNumber: candidate, element }
+              }
+            }
+            if (anchor) {
+              const anchorRect = anchor.element.getBoundingClientRect()
+              const docDeltaY =
+                computePageOriginY(
+                  pageNumber,
+                  pageNumbers,
+                  previewPageSizesByPageNumber
+                ) -
+                computePageOriginY(
+                  anchor.pageNumber,
+                  pageNumbers,
+                  previewPageSizesByPageNumber
+                )
+              viewport.scrollTop +=
+                anchorRect.top - viewportRect.top + docDeltaY * scale
+            }
+          }
+        }
+        currentLayoutPageNumberRef.current = pageNumber
+        setCurrentLayoutPageNumber(pageNumber)
+        return
+      }
+
       const nextTransform = scrollToPosition({
         x: 0,
         y: computePageOriginY(
@@ -6817,6 +6896,7 @@ export function IntermediateDocumentViewer({
       releaseJumpPinnedPage,
       runtimeDocument,
       scrollToPosition,
+      useVirtualPaper,
       onVirtualPaperTransformChangeEnd
     ]
   )
