@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-11
+
+### Changed
+- 重构原生视口导航逻辑，降低 `navigateToPage` 认知复杂度以通过 lint 检查。
+
+### Fixed
+- 修复拖拽高亮时浏览器原生手势抢占的问题。
+- 改进阅读进度指示器的平滑性。
+
 ## [0.10.0] - 2026-08-09
 
 ### Added
