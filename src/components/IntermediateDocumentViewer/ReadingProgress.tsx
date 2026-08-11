@@ -55,6 +55,16 @@ const canStartPointerDrag = (
   activePointerId: number | null
 ): boolean => activePointerId === null && event.isPrimary && event.button <= 0
 
+// 光标在轨道内的原始进度（0..1），不做页码量化，
+// 供位置指示横线平滑跟随光标使用。
+const resolveProgressFromPointer = (
+  event: PointerEvent<HTMLDivElement>
+): number | null => {
+  const trackRect = event.currentTarget.getBoundingClientRect()
+  if (trackRect.height <= 0) return null
+  return clamp((event.clientY - trackRect.top) / trackRect.height, 1)
+}
+
 const getLayoutPreview = (
   props: ReadingProgressProps,
   pageNumber: number | null
@@ -87,6 +97,9 @@ export function ReadingProgress(props: ReadingProgressProps) {
   const [previewPageNumber, setPreviewPageNumber] = useState<number | null>(
     null
   )
+  // hover/拖拽时光标的原始轨道进度（0..1），null 表示光标不在轨道上。
+  // 与量化后的 previewPageNumber 分开，保证位置指示横线平滑跟随光标。
+  const [pointerProgress, setPointerProgress] = useState<number | null>(null)
   const layoutPreview = getLayoutPreview(props, previewPageNumber)
   const showsLayoutPreview = layoutPreview !== undefined
   const hasLayoutPreview = Boolean(layoutPreview?.image)
@@ -97,13 +110,9 @@ export function ReadingProgress(props: ReadingProgressProps) {
 
   const resolvePageFromPointer = useCallback(
     (event: PointerEvent<HTMLDivElement>): number | null => {
-      const trackRect = event.currentTarget.getBoundingClientRect()
-      if (trackRect.height <= 0 || pageNumbers.length === 0) return null
+      const progress = resolveProgressFromPointer(event)
+      if (progress === null || pageNumbers.length === 0) return null
 
-      const progress = clamp(
-        (event.clientY - trackRect.top) / trackRect.height,
-        1
-      )
       const pageIndex = Math.round(progress * (pageNumbers.length - 1))
       return pageNumbers[pageIndex] ?? null
     },
@@ -124,6 +133,11 @@ export function ReadingProgress(props: ReadingProgressProps) {
       }
       setIsTouchDragging(false)
       setPreviewPageNumber(pointerType === 'mouse' ? pageNumber : null)
+      // 鼠标释放后光标通常还停留在轨道上，保留进度让横线停在释放位置；
+      // 触摸结束则手指已离开，直接清除。
+      setPointerProgress(
+        pointerType === 'mouse' ? resolveProgressFromPointer(event) : null
+      )
     },
     [onSeekPage, resolvePageFromPointer]
   )
@@ -205,16 +219,21 @@ export function ReadingProgress(props: ReadingProgressProps) {
   }, [])
 
   const displayedPageNumber = previewPageNumber ?? currentPageNumber
-  const feedbackPositionPercent = getPagePositionPercent(
-    displayedPageNumber,
-    pageNumbers
-  )
+  // 光标在轨道上时用原始进度（平滑跟随光标），
+  // 否则回落到量化后的页码位置（滚动/键盘导航时指示当前页）。
+  const pointerPositionPercent =
+    pointerProgress !== null
+      ? pointerProgress * 100
+      : getPagePositionPercent(displayedPageNumber, pageNumbers)
   const layoutPreviewRatio = layoutPreview?.size
     ? layoutPreview.size.height / layoutPreview.size.width
     : 4 / 3
   const previewHeight = showsLayoutPreview ? 104 * layoutPreviewRatio + 2 : 24
   const feedbackCenterInset = previewHeight / 2
-  const feedbackPositionTop = `clamp(${feedbackCenterInset}px, ${feedbackPositionPercent}%, calc(100% - ${feedbackCenterInset}px))`
+  const feedbackPositionTop = `clamp(${feedbackCenterInset}px, ${pointerPositionPercent}%, calc(100% - ${feedbackCenterInset}px))`
+  // 横线高 2px，clamp 1px 防止贴边溢出轨道；与 feedback 分开计算，
+  // 使横线尽量贴近光标实际位置，不受预览卡片 inset 的限制。
+  const thumbPositionTop = `clamp(1px, ${pointerPositionPercent}%, calc(100% - 1px))`
   const isFeedbackVisible = isMoving || previewPageNumber !== null || isFocused
 
   return (
@@ -241,6 +260,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
         activePointerTypeRef.current = null
         setIsTouchDragging(false)
         setPreviewPageNumber(null)
+        setPointerProgress(null)
       }}
       onPointerCancel={(event) => finishPointer(event, false)}
       onPointerDown={(event) => {
@@ -254,10 +274,14 @@ export function ReadingProgress(props: ReadingProgressProps) {
         activePointerTypeRef.current = event.pointerType
         setIsTouchDragging(event.pointerType === 'touch')
         setPreviewPageNumber(resolvePageFromPointer(event))
+        setPointerProgress(resolveProgressFromPointer(event))
         event.currentTarget.setPointerCapture(event.pointerId)
       }}
       onPointerLeave={() => {
-        if (activePointerIdRef.current === null) setPreviewPageNumber(null)
+        if (activePointerIdRef.current === null) {
+          setPreviewPageNumber(null)
+          setPointerProgress(null)
+        }
       }}
       onPointerMove={(event) => {
         const activeId = activePointerIdRef.current
@@ -266,6 +290,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
           (activeId === null && event.pointerType === 'mouse')
         ) {
           setPreviewPageNumber(resolvePageFromPointer(event))
+          setPointerProgress(resolveProgressFromPointer(event))
         }
       }}
       onPointerUp={(event) => finishPointer(event, true)}
@@ -285,7 +310,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
         className='hamster-reader__reading-progress-position'
         data-page-number={displayedPageNumber}
         style={{
-          top: feedbackPositionTop
+          top: thumbPositionTop
         }}
       >
         <span className='hamster-reader__reading-progress-thumb' />

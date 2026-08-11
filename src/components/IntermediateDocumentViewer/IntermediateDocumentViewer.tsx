@@ -173,6 +173,31 @@ export {
   textElementRecords
 } from '../selection/selectionPayloadSerializer'
 
+type NativeLayoutPageAnchor = {
+  readonly pageNumber: number
+  readonly element: HTMLDivElement
+}
+
+const findNearestConnectedPage = (
+  targetPageNumber: number,
+  pageNumbers: readonly number[],
+  pageElements: ReadonlyMap<number, HTMLDivElement>
+): NativeLayoutPageAnchor | null => {
+  let nearestPage: NativeLayoutPageAnchor | null = null
+  for (const pageNumber of pageNumbers) {
+    const element = pageElements.get(pageNumber)
+    if (!element?.isConnected) continue
+    if (
+      !nearestPage ||
+      Math.abs(pageNumber - targetPageNumber) <
+        Math.abs(nearestPage.pageNumber - targetPageNumber)
+    ) {
+      nearestPage = { pageNumber, element }
+    }
+  }
+  return nearestPage
+}
+
 const getSelectionForRoot = (
   viewerRoot: HTMLElement | null
 ): Selection | null => {
@@ -2857,6 +2882,28 @@ function useHighlightDrag({
       clearDragStart()
     }
   }, [clearDragStart, handleTrackedPointerMove, viewerRootElement])
+
+  useEffect(() => {
+    if (!viewerRootElement) return
+
+    const preventNativeTouchGesture = (event: TouchEvent) => {
+      if (dragStartRef.current?.pointerType !== 'touch') return
+      if (event.cancelable) event.preventDefault()
+    }
+    viewerRootElement.addEventListener(
+      'touchstart',
+      preventNativeTouchGesture,
+      { capture: true, passive: false }
+    )
+
+    return () => {
+      viewerRootElement.removeEventListener(
+        'touchstart',
+        preventNativeTouchGesture,
+        true
+      )
+    }
+  }, [viewerRootElement])
 
   const handleHighlightPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -6770,6 +6817,53 @@ export function IntermediateDocumentViewer({
     ]
   )
 
+  const navigateToNativeLayoutPage = useCallback(
+    (pageNumber: number): boolean => {
+      if (useVirtualPaper) return false
+
+      // 原生滚动视口只消费缩放值，页面平移必须直接修改 scrollTop。
+      const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+        '.hamster-reader__native-layout-viewport'
+      )
+      if (viewport) {
+        const viewportRect = viewport.getBoundingClientRect()
+        const pageElement = pageRefs.current.get(pageNumber)
+        if (pageElement) {
+          viewport.scrollTop +=
+            pageElement.getBoundingClientRect().top - viewportRect.top
+        } else {
+          const scale = paperTransformRef.current.scale
+          const anchor = findNearestConnectedPage(
+            pageNumber,
+            pageNumbers,
+            pageRefs.current
+          )
+          if (anchor) {
+            const anchorRect = anchor.element.getBoundingClientRect()
+            const docDeltaY =
+              computePageOriginY(
+                pageNumber,
+                pageNumbers,
+                previewPageSizesByPageNumber
+              ) -
+              computePageOriginY(
+                anchor.pageNumber,
+                pageNumbers,
+                previewPageSizesByPageNumber
+              )
+            viewport.scrollTop +=
+              anchorRect.top - viewportRect.top + docDeltaY * scale
+          }
+        }
+      }
+
+      currentLayoutPageNumberRef.current = pageNumber
+      setCurrentLayoutPageNumber(pageNumber)
+      return true
+    },
+    [pageNumbers, previewPageSizesByPageNumber, useVirtualPaper]
+  )
+
   const navigateToPage = useCallback(
     (pageNumber: number) => {
       cancelPendingTextAnchor()
@@ -6791,6 +6885,8 @@ export function IntermediateDocumentViewer({
         lazyPageQueue.enqueuePage(pageNumber)
       }
 
+      if (navigateToNativeLayoutPage(pageNumber)) return
+
       const nextTransform = scrollToPosition({
         x: 0,
         y: computePageOriginY(
@@ -6810,6 +6906,7 @@ export function IntermediateDocumentViewer({
       cancelPendingTextAnchor,
       lazyPageQueue,
       markLoadableWithOverscan,
+      navigateToNativeLayoutPage,
       pageNumbers,
       pageStatuses,
       pinJumpTargetPage,
