@@ -142,3 +142,48 @@ export function findTopTextAnchor(
     offset
   }
 }
+
+export function findTextAnchorAtOrBelow(
+  viewport: HTMLElement,
+  records: ReadonlyMap<string, TextAnchorElementRecord>,
+  textsByPageNumber: ReadonlyMap<number, readonly AnchorText[]>,
+  pageNumber?: number
+): ReaderTextAnchor | null {
+  const visibleAnchor = findTopTextAnchor(
+    viewport,
+    records,
+    textsByPageNumber,
+    pageNumber
+  )
+  if (visibleAnchor) return visibleAnchor
+
+  const viewportTop = viewport.getBoundingClientRect().top
+  let closestRecord: TextAnchorElementRecord | null = null
+  let closestTop = Number.POSITIVE_INFINITY
+  records.forEach((record) => {
+    if (pageNumber !== undefined && record.pageNumber < pageNumber) return
+
+    const rect = record.element.getBoundingClientRect()
+    if (rect.bottom <= viewportTop) return
+
+    const distanceFromTop = Math.max(0, rect.top - viewportTop)
+    if (distanceFromTop < closestTop) {
+      closestRecord = record
+      closestTop = distanceFromTop
+    }
+  })
+
+  if (!closestRecord) return null
+  const selectedRecord: TextAnchorElementRecord = closestRecord
+  const pageTexts = textsByPageNumber.get(selectedRecord.pageNumber)
+  if (!pageTexts) return null
+  const offset = getPageTextOffset(pageTexts, selectedRecord.text.id)
+  if (offset === null) return null
+
+  return {
+    pageNumber: selectedRecord.pageNumber,
+    textId: selectedRecord.text.id,
+    text: selectedRecord.text.content,
+    offset
+  }
+}

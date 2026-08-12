@@ -139,6 +139,11 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Text pages:** every visible page after the first receives `12px` of extra
   top spacing inside its measured virtual-page box. The first visible page has
   no leading gap, including when page ranges or hidden pages change the start.
+- **PDF page marker:** PDF Text mode starts every visible virtual page with a
+  compact, non-interactive divider labelled `第 n 页`. Its horizontal hairline
+  and `11px` label use `--hamster-reader-theme-color`; other reflowable document
+  types do not render this marker. The marker remains visible while page content
+  is loading so the page boundary does not depend on extraction completion.
 - **Paragraphs:** Text mode and reflowable Layout pages add `0.75em` after each
   non-final `IntermediateParagraph`. Ordinary `isEOL` line breaks do not create
   paragraph spacing.

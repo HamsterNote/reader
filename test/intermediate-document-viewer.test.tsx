@@ -32,7 +32,10 @@ import {
 import * as sass from 'sass'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { buildSelectionPayload } from '../src/components/IntermediateDocumentViewer'
+import {
+  buildSelectionPayload,
+  type ReaderReadingPositionHandle
+} from '../src/components/IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import {
   computePageOriginY,
@@ -58,7 +61,7 @@ import {
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer, Reader } from '../src/index'
 import type { ReaderComment } from '../src/types/comments'
-import type { ReaderBookmark } from '../src/types/readerData'
+import type { ReaderBookmark, ReaderTextAnchor } from '../src/types/readerData'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -266,6 +269,12 @@ function fireNativeLayoutProgressEvent(viewport: HTMLElement): void {
   }
 
   fireEvent.scroll(viewport)
+}
+
+function finishNativeTextScroll(viewport: HTMLElement): void {
+  if ('onscrollend' in viewport) {
+    fireEvent(viewport, new Event('scrollend'))
+  }
 }
 
 type RectInput = {
@@ -2750,6 +2759,45 @@ describe('IntermediateDocumentViewer', () => {
     }
   })
 
+  it('captures the first mounted text below a native layout percentage', async () => {
+    // Given: the native viewport is in page 1 whitespace and page 2 text is below it.
+    const { document } = makeDocument({ pageCount: 2 })
+    const readingPositionRef = createRef<ReaderReadingPositionHandle>()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        readingPositionRef={readingPositionRef}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page1 = screen.getByTestId('intermediate-page-1')
+    const page2 = screen.getByTestId('intermediate-page-2')
+    const page1Text = await screen.findByText('Page 1 text')
+    const page2Text = await screen.findByText('Page 2 text')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page1, { left: 0, top: -75, width: 100, height: 150 })
+    mockElementRect(page2, { left: 0, top: 91, width: 100, height: 150 })
+    mockElementRect(page1Text, { left: 20, top: -50, width: 80, height: 20 })
+    mockElementRect(page2Text, { left: 20, top: 240, width: 80, height: 20 })
+
+    // When: Reader synchronously captures an anchor before changing modes.
+    let anchor: ReaderTextAnchor | undefined
+    await act(async () => {
+      anchor = readingPositionRef.current?.captureTextAnchor()
+    })
+
+    // Then: the next text becomes the cross-mode anchor instead of page 1's top.
+    expect(anchor).toEqual({
+      pageNumber: 2,
+      textId: 'text-2',
+      text: 'Page 2 text',
+      offset: 0
+    })
+  })
+
   it('does not overwrite restored native percentage before its page is ready', async () => {
     // Given: 宿主提供百分比进度，而页面要到首次尺寸测量后才可定位。
     const { document, pages } = makeDocument({ pageCount: 1 })
@@ -3348,6 +3396,41 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('PDF text mode marks every visible page boundary with its page number', async () => {
+    // Given: PDF Text Mode 渲染一个可见的虚拟页面。
+    const { document } = makeDocument({ pageCount: 1 })
+
+    // When: 页面进入 Text Mode 的可见范围。
+    render(<IntermediateDocumentTextViewer document={document} isPdf />)
+    setScrollContainerSize(
+      screen.getByTestId('intermediate-document-text-viewer'),
+      { width: 800, height: 600 }
+    )
+
+    // Then: 页面正文前展示 PDF 专属页码分隔标记。
+    const page = await screen.findByTestId('intermediate-text-page-1')
+    const marker = within(page).getByTestId('pdf-text-page-marker-1')
+    expect(marker).toHaveTextContent('第 1 页')
+    expect(marker).toHaveAttribute('aria-hidden', 'true')
+    expect(marker.nextElementSibling).toHaveClass('hsn-selection-container')
+  })
+
+  it('non-PDF text mode does not render PDF page boundary markers', async () => {
+    // Given: 普通可重排文档进入 Text Mode。
+    const { document } = makeDocument({ pageCount: 1 })
+
+    // When: 首个虚拟页面被渲染。
+    render(<IntermediateDocumentTextViewer document={document} />)
+    setScrollContainerSize(
+      screen.getByTestId('intermediate-document-text-viewer'),
+      { width: 800, height: 600 }
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+
+    // Then: 非 PDF 文档不展示 PDF 页码分隔标记。
+    expect(screen.queryByTestId('pdf-text-page-marker-1')).toBeNull()
+  })
+
   it('text mode applies the public contain margins to its scroll viewport', () => {
     // Given: the host provides independent safe-area margins for Text Mode.
     const { document } = makeDocument({ pageCount: 1 })
@@ -3516,6 +3599,10 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 4200
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(progress).toHaveAttribute('aria-valuenow', '6')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: only the newly reached page is emitted for persistence.
     await waitFor(() => {
@@ -3560,10 +3647,61 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 6400
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(progress).toHaveAttribute('aria-valuenow', '9')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: the first real user scroll after restore persists normally.
     await waitFor(() => {
       expect(onTextReadingProgressChange).toHaveBeenCalled()
+    })
+  })
+
+  it('text mode reports native reading progress only after scrollend', async () => {
+    // Given: Text Mode 已渲染可滚动内容，且浏览器支持原生 scrollend。
+    const onTextReadingProgressChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 10 })
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 8000
+    })
+    await screen.findByTestId('intermediate-text-page-1')
+    expect('onscrollend' in scrollEl).toBe(true)
+
+    // When: 视口仍在滚动，仅触发 scroll。
+    act(() => {
+      scrollEl.scrollTop = 3200
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve())
+        })
+    )
+
+    // Then: 滚动过程中不提前发布持久化位置。
+    expect(onTextReadingProgressChange).not.toHaveBeenCalled()
+
+    // When: 浏览器确认本轮滚动结束。
+    act(() => {
+      scrollEl.dispatchEvent(new Event('scrollend'))
+    })
+
+    // Then: Text Mode 只发布最终可见页。
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenLastCalledWith({
+        currentPageNumber: 5
+      })
     })
   })
 
@@ -3787,6 +3925,12 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 800
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('slider', { name: '文本阅读进度' })
+      ).toHaveAttribute('aria-valuenow', '2')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: user persistence resumes after the document-switch restore.
     await waitFor(() => {
@@ -3951,6 +4095,12 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 800
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('slider', { name: '文本阅读进度' })
+      ).toHaveAttribute('aria-valuenow', '2')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: progress is no longer frozen by the unresolvable initial anchor.
     await waitFor(() => {
@@ -4005,6 +4155,7 @@ describe('IntermediateDocumentViewer', () => {
         scrollEl.scrollTop = 800
         scrollEl.dispatchEvent(new Event('scroll'))
       })
+      finishNativeTextScroll(scrollEl)
 
       // Then: the unrenderable entry cannot leave progress capture pending forever.
       await waitFor(() => {
@@ -4050,6 +4201,7 @@ describe('IntermediateDocumentViewer', () => {
 
     // When: native scrolling asks the viewer to persist its current position.
     fireEvent.scroll(scrollEl)
+    finishNativeTextScroll(scrollEl)
 
     // Then: progress carries the top text and its page-local offset.
     await waitFor(() => {
@@ -4244,6 +4396,7 @@ describe('IntermediateDocumentViewer', () => {
     act(() => {
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    finishNativeTextScroll(scrollEl)
 
     // Then: concrete reading progress supersedes the empty bookmark identity.
     await waitFor(() => {
@@ -6410,6 +6563,25 @@ describe('IntermediateDocumentViewer', () => {
       expect(
         window.getComputedStyle(page).getPropertyValue('padding-top')
       ).toBe('5px')
+    })
+
+    it('PDF page marker uses the compact theme-colored divider style', async () => {
+      // Given / When: PDF Text Mode 渲染首个可见页面并注入 Reader 样式。
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} isPdf />)
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+      // Then: 标记保持 11px，并从主题变量继承细线和文字颜色。
+      const marker = await screen.findByTestId('pdf-text-page-marker-1')
+      const markerStyle = window.getComputedStyle(marker)
+      expect(markerStyle.fontSize).toBe('11px')
+      expect(markerStyle.color).toBe(
+        'var(--hamster-reader-theme-color, #2563eb)'
+      )
+      expect(readerStyles).toMatch(
+        /\.hamster-reader__intermediate-text-page-marker::before\s*{[^}]*background-color:\s*currentColor;/
+      )
     })
 
     it('text mode root has scoped classes without inline overflow or display', async () => {
@@ -14084,6 +14256,46 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
         transform: 'translate3d(0px, -327px, 0) scale(1)'
       })
+    })
+
+    it('centers a page-3 range in the native layout viewport', async () => {
+      // Given: native Layout owns translation through its scrollable viewport.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      const viewport = screen.getByTestId('native-layout-viewport')
+      mockElementRect(viewport, {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+      mockElementRect(screen.getByTestId('intermediate-page-3'), {
+        left: 0,
+        top: 200,
+        width: 100,
+        height: 150
+      })
+
+      // When: the public ref jumps to the page-3 range.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then: native scrolling aligns the range center with the viewport center.
+      expect(viewport.scrollTop).toBe(195)
     })
 
     it('uses stretched preview coordinates when jumping to a narrow page', async () => {

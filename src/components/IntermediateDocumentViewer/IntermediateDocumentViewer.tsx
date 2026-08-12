@@ -28,12 +28,6 @@ import {
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
-import {
-  Drag,
-  DragOperationType,
-  type Finger,
-  type Pose
-} from '@system-ui-js/multi-drag'
 import React, {
   type CSSProperties,
   Profiler,
@@ -42,6 +36,7 @@ import React, {
   useCallback,
   useEffect,
   useId,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -131,9 +126,11 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
+import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
 import {
   findTopTextAnchor,
+  findTextAnchorAtOrBelow,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
@@ -456,6 +453,10 @@ export type ReaderExtraOcr = (
   imageBase64: string
 ) => IntermediatePage | Promise<IntermediatePage>
 
+export type ReaderReadingPositionHandle = {
+  readonly captureTextAnchor: () => ReaderTextAnchor | undefined
+}
+
 export type IntermediateDocumentViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   serializedDocument?: IntermediateDocumentSerialized | null
@@ -553,6 +554,7 @@ export type IntermediateDocumentViewerProps = {
   /** 原生 Layout 滚动后回传文字锚点，页面无文字时回传页内百分比。 */
   onLayoutReadingProgressChange?: (progress: ReaderBookmark) => void
   onTextAnchorChange?: (anchor: ReaderTextAnchor | undefined) => void
+  readingPositionRef?: Ref<ReaderReadingPositionHandle>
   /**
    * Fires only when a wheel or pinch gesture produces a changed, clamped scale.
    * The detail object reports `source: 'wheel' | 'pinch'` and may include the
@@ -1709,6 +1711,7 @@ type ViewerContentProps = PageResources & {
   ) => void
   effectiveSelectedRangeId: string | null
   selectedHighlight: ReaderSelectionRange | null
+  storedRanges: ReaderSelectionRange[]
   effectiveRanges: ReaderSelectionRange[]
   runtimePageSelectionId: (pageNumber: number) => string
   runtimeLinkedData: LinkedSelectionData
@@ -2695,27 +2698,6 @@ interface TouchTapStart {
   moved: boolean
 }
 
-type HighlightDragStart = {
-  pointerId: number
-  pointerType: 'mouse' | 'touch'
-  clientX: number
-  clientY: number
-  highlight: ReaderSelectionRange
-  triggered: boolean
-  longPressTimer: ReturnType<typeof setTimeout> | null
-}
-
-type HighlightDragOptions = {
-  viewerRootElement: HTMLDivElement | null
-  selectedTool: ReaderPageTool | undefined
-  effectiveRanges: ReaderSelectionRange[]
-  runtimeLinkedDataRef: React.MutableRefObject<ReaderLinkedSelectionData>
-  onDragHighlight: ((highlight: ReaderSelectionRange) => void) | undefined
-}
-
-const HIGHLIGHT_DRAG_MOVE_TOLERANCE = 4
-const HIGHLIGHT_TOUCH_LONG_PRESS_MS = 500
-
 /**
  * 判断一次 touch pointerup 是否应该被忽略：不是有效的轻触、或当前正在拖拽选区/创建 range。
  */
@@ -3065,343 +3047,6 @@ function useTouchTapSelection(
     handleTouchPointerMove,
     handleTouchPointerUp,
     handleTouchPointerCancel
-  }
-}
-
-/**
- * 使用 multi-drag 统一追踪鼠标与触摸指针，再按阅读器语义决定激活时机。
- * capture move 仅补偿 VirtualPaper 截断冒泡的情况，候选与结束生命周期仍由
- * multi-drag 的 finger 集合约束，避免 Reader 外部移动后丢失拖动状态。
- */
-function useHighlightDrag({
-  viewerRootElement,
-  selectedTool,
-  effectiveRanges,
-  runtimeLinkedDataRef,
-  onDragHighlight
-}: HighlightDragOptions) {
-  const dragStartRef = useRef<HighlightDragStart | null>(null)
-  const dragRef = useRef<Drag | null>(null)
-  const dragElementRef = useRef<HTMLElement | null>(null)
-  const [activePointerType, setActivePointerType] = useState<
-    HighlightDragStart['pointerType'] | null
-  >(null)
-  const [suppressNativeSelection, setSuppressNativeSelection] = useState(false)
-
-  const clearDragStart = useCallback(() => {
-    const dragStart = dragStartRef.current
-    if (dragStart?.longPressTimer) {
-      clearTimeout(dragStart.longPressTimer)
-    }
-    dragStartRef.current = null
-    setActivePointerType(null)
-    setSuppressNativeSelection(false)
-  }, [])
-
-  const activateDrag = useCallback(
-    (dragStart: HighlightDragStart) => {
-      if (dragStartRef.current !== dragStart || dragStart.triggered) return
-
-      dragStart.triggered = true
-      if (dragStart.longPressTimer) {
-        clearTimeout(dragStart.longPressTimer)
-        dragStart.longPressTimer = null
-      }
-      // 候选期已经禁止新选区；激活时再清理浏览器可能遗留的旧选区。
-      viewerRootElement?.ownerDocument.getSelection()?.removeAllRanges()
-      setActivePointerType(dragStart.pointerType)
-      onDragHighlight?.(dragStart.highlight)
-    },
-    [onDragHighlight, viewerRootElement]
-  )
-
-  const handleTrackedPointerMove = useCallback(
-    (event: PointerEvent) => {
-      const dragStart = dragStartRef.current
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return
-      if (
-        !dragRef.current
-          ?.getFingers()
-          .some((finger) => finger.pointerId === event.pointerId)
-      ) {
-        return
-      }
-      if (dragStart.triggered) {
-        if (event.cancelable) event.preventDefault()
-        return
-      }
-
-      const movedPastTolerance =
-        Math.abs(event.clientX - dragStart.clientX) >
-          HIGHLIGHT_DRAG_MOVE_TOLERANCE ||
-        Math.abs(event.clientY - dragStart.clientY) >
-          HIGHLIGHT_DRAG_MOVE_TOLERANCE
-      if (!movedPastTolerance) return
-
-      if (dragStart.pointerType === 'touch') {
-        clearDragStart()
-        return
-      }
-
-      if (event.cancelable) event.preventDefault()
-      activateDrag(dragStart)
-    },
-    [activateDrag, clearDragStart]
-  )
-
-  useEffect(() => {
-    const ownerDocument = viewerRootElement?.ownerDocument
-    if (!ownerDocument) return
-
-    // Selection 会拦截 pointerdown 冒泡，因此用独立节点接收 capture 阶段转发的
-    // 有效高亮起点，再让 multi-drag 通过 document 监听追踪后续真实事件。
-    const dragElement = ownerDocument.createElement('div')
-    const stationaryPose: Pose = {
-      position: { x: 0, y: 0 },
-      width: 0,
-      height: 0
-    }
-    const drag = new Drag(dragElement, {
-      maxFingerCount: 1,
-      inertial: false,
-      getPose: () => stationaryPose,
-      // Viewer 本身不随手势移动；multi-drag 只负责可靠地追踪 pointer 生命周期。
-      setPose: () => {},
-      setPoseOnEnd: () => {}
-    })
-    dragRef.current = drag
-    dragElementRef.current = dragElement
-
-    const handleDragMove = (fingers: Finger[]) => {
-      const dragStart = dragStartRef.current
-      if (!dragStart) return
-      const event = fingers
-        .find((finger) => finger.pointerId === dragStart.pointerId)
-        ?.getLastOperation()?.event
-      if (event) handleTrackedPointerMove(event)
-    }
-    const handleAllDragEnd = () => clearDragStart()
-    drag.addEventListener(DragOperationType.Move, handleDragMove)
-    drag.addEventListener(DragOperationType.AllEnd, handleAllDragEnd)
-
-    return () => {
-      drag.removeEventListener(DragOperationType.Move, handleDragMove)
-      drag.removeEventListener(DragOperationType.AllEnd, handleAllDragEnd)
-      drag.destroy()
-      if (dragRef.current === drag) dragRef.current = null
-      if (dragElementRef.current === dragElement) dragElementRef.current = null
-      clearDragStart()
-    }
-  }, [clearDragStart, handleTrackedPointerMove, viewerRootElement])
-
-  useEffect(() => {
-    if (!viewerRootElement) return
-
-    const preventNativeTouchGesture = (event: TouchEvent) => {
-      if (
-        !onDragHighlight ||
-        selectedTool === 'drawing' ||
-        event.touches.length !== 1
-      ) {
-        return
-      }
-
-      const linkedData = runtimeLinkedDataRef.current
-      if (
-        linkedData.activeRange ||
-        linkedData.draggingRange ||
-        linkedData.selectingText
-      ) {
-        return
-      }
-
-      // touchstart 早于 pointerdown，必须直接用当前触点命中已有高亮。
-      const touch = event.touches[0]
-      if (!touch) return
-      const touchedRangeId = findTouchedRangeIdByPoint(
-        linkedData,
-        touch.clientX,
-        touch.clientY,
-        Array.from(
-          viewerRootElement.querySelectorAll<HTMLElement>(
-            '.hamster-reader__intermediate-page[data-selection-id]'
-          )
-        )
-      )
-      if (!effectiveRanges.some((range) => range.id === touchedRangeId)) return
-
-      if (event.cancelable) event.preventDefault()
-    }
-    viewerRootElement.addEventListener(
-      'touchstart',
-      preventNativeTouchGesture,
-      { capture: true, passive: false }
-    )
-
-    return () => {
-      viewerRootElement.removeEventListener(
-        'touchstart',
-        preventNativeTouchGesture,
-        true
-      )
-    }
-  }, [
-    effectiveRanges,
-    onDragHighlight,
-    runtimeLinkedDataRef,
-    selectedTool,
-    viewerRootElement
-  ])
-
-  const handleHighlightPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (dragStartRef.current?.triggered) return
-      if (
-        !onDragHighlight ||
-        !event.isPrimary ||
-        (event.pointerType !== 'mouse' && event.pointerType !== 'touch') ||
-        (event.pointerType === 'mouse' && event.button !== 0) ||
-        selectedTool === 'drawing'
-      ) {
-        return
-      }
-      clearDragStart()
-
-      const linkedData = runtimeLinkedDataRef.current
-      if (
-        linkedData.activeRange ||
-        linkedData.draggingRange ||
-        linkedData.selectingText
-      ) {
-        return
-      }
-
-      const selectionContainers = Array.from(
-        event.currentTarget.querySelectorAll<HTMLElement>(
-          '.hamster-reader__intermediate-page[data-selection-id]'
-        )
-      )
-      const touchedRangeId = findTouchedRangeIdByPoint(
-        linkedData,
-        event.clientX,
-        event.clientY,
-        selectionContainers
-      )
-      const highlight = effectiveRanges.find(
-        (range) => range.id === touchedRangeId
-      )
-      if (!highlight) return
-
-      const dragStart: HighlightDragStart = {
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        highlight,
-        triggered: false,
-        longPressTimer: null
-      }
-      if (event.pointerType === 'touch') {
-        dragStart.longPressTimer = setTimeout(() => {
-          if (dragStartRef.current !== dragStart) return
-          const pointerIsTracked = dragRef.current
-            ?.getFingers()
-            .some((finger) => finger.pointerId === dragStart.pointerId)
-          if (!pointerIsTracked) {
-            clearDragStart()
-            return
-          }
-          activateDrag(dragStart)
-        }, HIGHLIGHT_TOUCH_LONG_PRESS_MS)
-      }
-      dragStartRef.current = dragStart
-      setSuppressNativeSelection(event.pointerType === 'touch')
-
-      // 命中既有高亮后立即独占该指针，避免 500ms 候选期内原生文字选择或
-      // VirtualPaper 平移先于长按拖动启动；普通文本落点仍走原有选择链路。
-      if (event.cancelable) event.preventDefault()
-      event.stopPropagation()
-
-      const PointerEventConstructor =
-        event.currentTarget.ownerDocument.defaultView?.PointerEvent
-      const dragElement = dragElementRef.current
-      if (!PointerEventConstructor || !dragElement) {
-        clearDragStart()
-        return
-      }
-      dragElement.dispatchEvent(
-        new PointerEventConstructor('pointerdown', {
-          bubbles: false,
-          cancelable: true,
-          pointerId: event.pointerId,
-          pointerType: event.pointerType,
-          isPrimary: event.isPrimary,
-          button: event.button,
-          buttons: event.buttons,
-          clientX: event.clientX,
-          clientY: event.clientY,
-          screenX: event.screenX,
-          screenY: event.screenY,
-          width: event.width,
-          height: event.height,
-          pressure: event.pressure,
-          tangentialPressure: event.tangentialPressure,
-          tiltX: event.tiltX,
-          tiltY: event.tiltY,
-          twist: event.twist,
-          ctrlKey: event.ctrlKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-          metaKey: event.metaKey
-        })
-      )
-    },
-    [
-      clearDragStart,
-      activateDrag,
-      effectiveRanges,
-      onDragHighlight,
-      runtimeLinkedDataRef,
-      selectedTool
-    ]
-  )
-
-  const handleHighlightPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      handleTrackedPointerMove(event.nativeEvent)
-    },
-    [handleTrackedPointerMove]
-  )
-
-  const handleHighlightPointerUp = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>): boolean => {
-      const dragStart = dragStartRef.current
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return false
-
-      const triggered = dragStart.triggered
-      clearDragStart()
-      return triggered
-    },
-    [clearDragStart]
-  )
-
-  const handleHighlightPointerCancel = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      const dragStart = dragStartRef.current
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return
-
-      clearDragStart()
-    },
-    [clearDragStart]
-  )
-
-  return {
-    activePointerType,
-    suppressNativeSelection,
-    handleHighlightPointerDown,
-    handleHighlightPointerMove,
-    handleHighlightPointerUp,
-    handleHighlightPointerCancel
   }
 }
 
@@ -3792,6 +3437,7 @@ function ViewerContent({
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
   selectedHighlight,
+  storedRanges,
   effectiveRanges,
   runtimePageSelectionId,
   runtimeLinkedData,
@@ -4373,6 +4019,31 @@ function ViewerContent({
     runtimeLinkedDataRef,
     handlePageLinkedSelectRange
   )
+  const resolveHighlightDragTarget = useCallback(
+    (clientX: number, clientY: number) => {
+      const linkedData = runtimeLinkedDataRef.current
+      if (
+        selectedTool === 'drawing' ||
+        linkedData.activeRange ||
+        linkedData.draggingRange ||
+        linkedData.selectingText
+      ) {
+        return null
+      }
+      const touchedRangeId = findTouchedRangeIdByPoint(
+        linkedData,
+        clientX,
+        clientY,
+        Array.from(
+          viewerRootElement?.querySelectorAll<HTMLElement>(
+            '.hamster-reader__intermediate-page[data-selection-id]'
+          ) ?? []
+        )
+      )
+      return storedRanges.find((range) => range.id === touchedRangeId) ?? null
+    },
+    [selectedTool, storedRanges, viewerRootElement]
+  )
   const {
     activePointerType: highlightDragPointerType,
     suppressNativeSelection,
@@ -4380,11 +4051,9 @@ function ViewerContent({
     handleHighlightPointerMove,
     handleHighlightPointerUp,
     handleHighlightPointerCancel
-  } = useHighlightDrag({
+  } = useReaderHighlightDrag({
     viewerRootElement,
-    selectedTool,
-    effectiveRanges,
-    runtimeLinkedDataRef,
+    resolveHighlight: resolveHighlightDragTarget,
     onDragHighlight
   })
 
@@ -4821,6 +4490,7 @@ export function IntermediateDocumentViewer({
   layoutReadingProgress,
   onLayoutReadingProgressChange,
   onTextAnchorChange,
+  readingPositionRef,
   onScaleChange,
   minScale,
   maxScale,
@@ -5771,7 +5441,11 @@ export function IntermediateDocumentViewer({
     useVirtualPaper
   })
   const captureCurrentTextAnchor = useCallback(
-    (clearFallback: boolean, reportNativeProgress: boolean) => {
+    (
+      clearFallback: boolean,
+      reportNativeProgress: boolean,
+      scanBelow: boolean = false
+    ) => {
       const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
         '.virtual-paper-wrapper'
       )
@@ -5801,8 +5475,9 @@ export function IntermediateDocumentViewer({
         currentLayoutPageNumberRef.current = resolvedPageNumber
         setCurrentLayoutPageNumber(resolvedPageNumber)
       }
+      const findAnchor = scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor
       const anchor = viewport
-        ? (findTopTextAnchor(
+        ? (findAnchor(
             viewport,
             textElementsRef.current,
             textsByPageNumber,
@@ -5853,6 +5528,13 @@ export function IntermediateDocumentViewer({
       textsByPageNumber,
       useVirtualPaper
     ]
+  )
+  useImperativeHandle(
+    readingPositionRef,
+    () => ({
+      captureTextAnchor: () => captureCurrentTextAnchor(false, false, true)
+    }),
+    [captureCurrentTextAnchor]
   )
   const pendingNativeZoomAnchorRef = useRef<{
     readonly element: HTMLElement
@@ -6649,6 +6331,39 @@ export function IntermediateDocumentViewer({
     [overscan, pageNumbers]
   )
 
+  // native Layout 通过自身可滚动视口承载平移：把目标范围中心滚动到视口中心。
+  // 抽成独立函数以降低 scrollToRange 的认知复杂度（含嵌套条件与提前返回）。
+  const scrollNativeLayoutToRange = useCallback(
+    ({
+      targetPageNumber,
+      targetPoint,
+      targetPreviewPageSize,
+      viewportElement,
+      viewportRect,
+      nextTransform
+    }: {
+      targetPageNumber: number
+      targetPoint: { readonly x: number; readonly y: number }
+      targetPreviewPageSize: NormalizedPageSize
+      viewportElement: HTMLElement
+      viewportRect: DOMRect
+      nextTransform: { readonly y: number }
+    }): void => {
+      const targetPageElement = pageRefs.current.get(targetPageNumber)
+      const targetPageRect = targetPageElement?.getBoundingClientRect()
+      if (targetPageRect && targetPageRect.height > 0) {
+        const targetRatioY = targetPoint.y / targetPreviewPageSize.height
+        viewportElement.scrollTop +=
+          targetPageRect.top +
+          targetPageRect.height * targetRatioY -
+          (viewportRect.top + viewportRect.height / 2)
+        return
+      }
+      viewportElement.scrollTop = -nextTransform.y
+    },
+    []
+  )
+
   const scrollToRange = useCallback(
     (rangeId: string) => {
       if (!runtimeDocument || pageNumbers.length === 0) return
@@ -6750,6 +6465,18 @@ export function IntermediateDocumentViewer({
         lazyPageQueue.enqueuePage(targetPageNumber)
       }
 
+      if (!useVirtualPaper) {
+        scrollNativeLayoutToRange({
+          targetPageNumber,
+          targetPoint,
+          targetPreviewPageSize,
+          viewportElement,
+          viewportRect,
+          nextTransform
+        })
+        return
+      }
+
       setPaperTransform((currentTransform) => ({
         x: nextTransform.x,
         y: nextTransform.y,
@@ -6768,7 +6495,9 @@ export function IntermediateDocumentViewer({
       pinJumpTargetPage,
       previewPageSizesByPageNumber,
       releaseJumpPinnedPage,
-      runtimeDocument
+      runtimeDocument,
+      scrollNativeLayoutToRange,
+      useVirtualPaper
     ]
   )
 
@@ -8728,6 +8457,7 @@ export function IntermediateDocumentViewer({
       }
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       selectedHighlight={selectedHighlight}
+      storedRanges={storedRanges}
       effectiveRanges={effectiveRanges}
       runtimePageSelectionId={getRuntimePageSelectionId}
       runtimeLinkedData={runtimeLinkedData}

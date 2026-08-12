@@ -21,7 +21,15 @@ import type {
   Ref,
   RefObject
 } from 'react'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
 import type {
@@ -48,6 +56,7 @@ import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { IntermediateDocumentTextPageContent } from './IntermediateDocumentTextPageContent'
 import type {
   ReaderPageRange,
+  ReaderReadingPositionHandle,
   ReaderTextSelectionDetail
 } from './IntermediateDocumentViewer'
 import {
@@ -75,6 +84,7 @@ import { PageBrowser } from './PageBrowser'
 import { ReadingProgress } from './ReadingProgress'
 import {
   findTopTextAnchor,
+  findTextAnchorAtOrBelow,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
@@ -85,6 +95,7 @@ import {
   type TextAnchorElementRecord
 } from './textAnchor'
 import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'
+import { useHighlightDrag } from './useHighlightDrag'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
@@ -330,19 +341,27 @@ function findTouchedRangeIdByPoint(
         )
         if (!container) return false
 
-        const bounds = container.getBoundingClientRect()
+        // Text page 负责公开 runtime selection id，而 Selection 内层容器负责
+        // 百分比 overlay 的实际坐标系；二者在真实浏览器中边界并不相同。
+        const overlayContainer = container.matches(
+          '.hamster-reader__intermediate-text-page'
+        )
+          ? (container.querySelector<HTMLElement>('.hsn-selection-container') ??
+            container)
+          : container
+        const bounds = overlayContainer.getBoundingClientRect()
         if (bounds.width <= 0 || bounds.height <= 0) return false
 
         const localX =
           rectType === 'percent'
             ? ((clientX - bounds.left) / bounds.width) * 100
             : ((clientX - bounds.left) / bounds.width) *
-              (container.clientWidth || bounds.width)
+              (overlayContainer.clientWidth || bounds.width)
         const localY =
           rectType === 'percent'
             ? ((clientY - bounds.top) / bounds.height) * 100
             : ((clientY - bounds.top) / bounds.height) *
-              (container.clientHeight || bounds.height)
+              (overlayContainer.clientHeight || bounds.height)
         return rects.some(
           (rect) =>
             localX >= rect.x &&
@@ -356,6 +375,32 @@ function findTouchedRangeIdByPoint(
   }
 
   return null
+}
+
+function completeHighlightPointerUp(
+  event: ReactPointerEvent<HTMLDivElement>,
+  finishHighlightDrag: (event: ReactPointerEvent<HTMLDivElement>) => boolean,
+  finishTouchTap: (event: ReactPointerEvent<HTMLDivElement>) => void
+): void {
+  if (!finishHighlightDrag(event)) finishTouchTap(event)
+}
+
+function getHighlightDragClassNames(
+  suppressNativeSelection: boolean,
+  activePointerType: string | null
+): string[] {
+  const classNames: string[] = []
+  if (suppressNativeSelection) {
+    classNames.push(
+      'hamster-reader__intermediate-document-viewer--suppress-native-selection'
+    )
+  }
+  if (activePointerType !== null) {
+    classNames.push(
+      'hamster-reader__intermediate-document-viewer--highlight-dragging'
+    )
+  }
+  return classNames
 }
 
 function isPointOnHighlightElement(
@@ -730,6 +775,7 @@ export type IntermediateDocumentTextViewerProps = {
   /** 当前阅读页变化时触发。 */
   onTextReadingProgressChange?: (next: ReaderTextReadingProgress) => void
   onTextAnchorChange?: (anchor: ReaderTextAnchor | undefined) => void
+  readingPositionRef?: Ref<ReaderReadingPositionHandle>
   pageRange?: ReaderPageRange
   /** 需要从文本阅读流中排除的 1-based 页码或公开 PageId。 */
   hiddenPages?: readonly (number | string)[]
@@ -793,6 +839,8 @@ export type IntermediateDocumentTextViewerProps = {
   onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   /** 高亮确认回调；文本模式状态机接入后由 highlight/autoHighlight 触发。 */
   onHighlight?: (range: ReaderSelectionRange) => void
+  /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
+  onDragHighlight?: (highlight: ReaderSelectionRange) => void
   /** linked selection 高亮颜色；文本模式状态机接入后传给 Selection 包装层。 */
   highlightColor?: string
   /** linked selection 活跃选区颜色；文本模式状态机接入后传给 Selection 包装层。 */
@@ -858,6 +906,7 @@ export function IntermediateDocumentTextViewer(
     textReadingProgress,
     onTextReadingProgressChange,
     onTextAnchorChange,
+    readingPositionRef,
     pageRange,
     hiddenPages,
     initialLoadedPages = 1,
@@ -882,6 +931,7 @@ export function IntermediateDocumentTextViewer(
     onSelectionStart,
     onSelectionEnd,
     onHighlight,
+    onDragHighlight,
     highlightColor,
     selectionColor,
     showSelectionMagnifier = true,
@@ -1010,6 +1060,8 @@ export function IntermediateDocumentTextViewer(
     textReadingProgress ? getTextReadingProgressKey(readingProgress) : ''
   )
   const lastLocallyEmittedProgressKeyRef = useRef('')
+  const usesNativeScrollEndRef = useRef(false)
+  const nativeScrollPendingRef = useRef(false)
   const suppressProgrammaticProgressRef = useRef(false)
   const isInitialProgressRestorePendingRef = useRef(
     textReadingProgress !== undefined
@@ -1076,18 +1128,23 @@ export function IntermediateDocumentTextViewer(
     isActive: isReadingProgressMoving,
     signalActivity: signalReadingProgressActivity
   } = useReadingProgressActivity()
-  const captureReadingProgress = useCallback(() => {
-    if (isInitialProgressRestorePendingRef.current) return
-    if (suppressProgrammaticProgressRef.current) return
+  const captureCurrentTextAnchor = useCallback((scanBelow: boolean = false) => {
     const viewport = scrollContainerRef.current
-    if (!viewport) return
+    if (!viewport) return undefined
 
-    const anchor = findTopTextAnchor(
-      viewport,
-      textElementsRef.current,
-      textsByPageNumberRef.current
+    return (
+      (scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor)(
+        viewport,
+        textElementsRef.current,
+        textsByPageNumberRef.current
+      ) ?? undefined
     )
-    if (!anchor) return
+  }, [])
+  const captureReadingProgress = useCallback(() => {
+    if (isInitialProgressRestorePendingRef.current) return undefined
+    if (suppressProgrammaticProgressRef.current) return undefined
+    const anchor = captureCurrentTextAnchor()
+    if (!anchor) return undefined
 
     const nextProgress = {
       currentPageNumber: anchor.pageNumber,
@@ -1101,12 +1158,22 @@ export function IntermediateDocumentTextViewer(
     setReadingProgress((current) =>
       getTextReadingProgressKey(current) === nextKey ? current : nextProgress
     )
-    if (lastObservedProgressKeyRef.current === nextKey) return
+    if (lastObservedProgressKeyRef.current === nextKey) return anchor
 
     lastObservedProgressKeyRef.current = nextKey
     lastLocallyEmittedProgressKeyRef.current = nextKey
     onTextReadingProgressChange?.(nextProgress)
-  }, [onTextAnchorChange, onTextReadingProgressChange])
+    return anchor
+  }, [
+    captureCurrentTextAnchor,
+    onTextAnchorChange,
+    onTextReadingProgressChange
+  ])
+  useImperativeHandle(
+    readingPositionRef,
+    () => ({ captureTextAnchor: () => captureCurrentTextAnchor(true) }),
+    [captureCurrentTextAnchor]
+  )
 
   const cancelRestoreAttempt = useCallback(() => {
     restoreAttemptCleanupRef.current?.()
@@ -1124,6 +1191,8 @@ export function IntermediateDocumentTextViewer(
   useEffect(() => {
     if (!viewerRootElement) return
     const viewerWindow = viewerRootElement.ownerDocument.defaultView
+    const usesNativeScrollEnd = 'onscrollend' in viewerRootElement
+    usesNativeScrollEndRef.current = usesNativeScrollEnd
     let frameId: number | null = null
     const releaseProgrammaticSuppression = () => {
       cancelTextAnchorRestore()
@@ -1145,6 +1214,14 @@ export function IntermediateDocumentTextViewer(
     }
     const handleScroll = () => {
       signalReadingProgressActivity()
+      if (usesNativeScrollEnd) {
+        nativeScrollPendingRef.current = true
+        if (frameId !== null && viewerWindow) {
+          viewerWindow.cancelAnimationFrame(frameId)
+          frameId = null
+        }
+        return
+      }
       if (!viewerWindow) {
         captureReadingProgress()
         return
@@ -1152,10 +1229,29 @@ export function IntermediateDocumentTextViewer(
       if (frameId !== null) viewerWindow.cancelAnimationFrame(frameId)
       frameId = viewerWindow.requestAnimationFrame(captureReadingProgress)
     }
+    const handleScrollEnd = () => {
+      nativeScrollPendingRef.current = false
+      captureReadingProgress()
+      const fallbackProgress = readingProgressRef.current
+      const fallbackKey = getTextReadingProgressKey(fallbackProgress)
+      if (
+        !suppressProgrammaticProgressRef.current &&
+        lastObservedProgressKeyRef.current !== fallbackKey
+      ) {
+        lastObservedProgressKeyRef.current = fallbackKey
+        lastLocallyEmittedProgressKeyRef.current = fallbackKey
+        onTextReadingProgressChange?.(fallbackProgress)
+      }
+    }
 
     viewerRootElement.addEventListener('scroll', handleScroll, {
       passive: true
     })
+    if (usesNativeScrollEnd) {
+      viewerRootElement.addEventListener('scrollend', handleScrollEnd, {
+        passive: true
+      })
+    }
     viewerRootElement.addEventListener(
       'wheel',
       releaseProgrammaticSuppression,
@@ -1173,6 +1269,11 @@ export function IntermediateDocumentTextViewer(
     viewerRootElement.addEventListener('keydown', handleUserKeyDown)
     return () => {
       viewerRootElement.removeEventListener('scroll', handleScroll)
+      if (usesNativeScrollEnd) {
+        viewerRootElement.removeEventListener('scrollend', handleScrollEnd)
+      }
+      usesNativeScrollEndRef.current = false
+      nativeScrollPendingRef.current = false
       viewerRootElement.removeEventListener(
         'wheel',
         releaseProgrammaticSuppression
@@ -1193,6 +1294,7 @@ export function IntermediateDocumentTextViewer(
   }, [
     cancelTextAnchorRestore,
     captureReadingProgress,
+    onTextReadingProgressChange,
     signalReadingProgressActivity,
     viewerRootElement
   ])
@@ -1245,6 +1347,9 @@ export function IntermediateDocumentTextViewer(
       if (sync || currentPageNumber !== readingProgressPageRef.current) {
         signalReadingProgressActivity()
       }
+      if (sync && usesNativeScrollEndRef.current) {
+        nativeScrollPendingRef.current = true
+      }
       const previousPageNumber = readingProgressPageRef.current
       readingProgressPageRef.current = currentPageNumber
 
@@ -1260,6 +1365,7 @@ export function IntermediateDocumentTextViewer(
         readingProgressRef.current = nextProgress
         if (
           !suppressProgrammaticProgressRef.current &&
+          !nativeScrollPendingRef.current &&
           lastObservedProgressKeyRef.current !== nextKey
         ) {
           lastObservedProgressKeyRef.current = nextKey
@@ -2531,12 +2637,79 @@ export function IntermediateDocumentTextViewer(
   const selectionEndHandler =
     onSelectionEnd || autoHighlight ? handleSelectionEndWrap : undefined
 
+  const resolveHighlightDragTarget = useCallback(
+    (clientX: number, clientY: number) => {
+      const linkedData = runtimeLinkedDataRef.current
+      if (
+        [
+          linkedData.activeRange,
+          linkedData.draggingRange,
+          linkedData.selectingText
+        ].some(Boolean)
+      ) {
+        return null
+      }
+      const touchedRangeId = findTouchedRangeIdByPoint(
+        linkedData,
+        clientX,
+        clientY,
+        Array.from(
+          viewerRootElement?.querySelectorAll<HTMLElement>(
+            '.hamster-reader__intermediate-text-page[data-selection-id], .hsn-selection-container[data-selection-id]'
+          ) ?? []
+        )
+      )
+      return storedRanges.find((range) => range.id === touchedRangeId) ?? null
+    },
+    [storedRanges, viewerRootElement]
+  )
+  const {
+    activePointerType: highlightDragPointerType,
+    suppressNativeSelection,
+    handleHighlightPointerDown,
+    handleHighlightPointerMove,
+    handleHighlightPointerUp,
+    handleHighlightPointerCancel
+  } = useHighlightDrag({
+    viewerRootElement,
+    resolveHighlight: resolveHighlightDragTarget,
+    onDragHighlight
+  })
+
   const handleViewerPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       lastActiveRangeRef.current = null
+      handleHighlightPointerDown(event)
       handleTouchPointerDown(event)
     },
-    [handleTouchPointerDown]
+    [handleHighlightPointerDown, handleTouchPointerDown]
+  )
+
+  const handleViewerPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      handleHighlightPointerMove(event)
+      handleTouchPointerMove(event)
+    },
+    [handleHighlightPointerMove, handleTouchPointerMove]
+  )
+
+  const handleViewerPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      completeHighlightPointerUp(
+        event,
+        handleHighlightPointerUp,
+        handleTouchPointerUp
+      )
+    },
+    [handleHighlightPointerUp, handleTouchPointerUp]
+  )
+
+  const handleViewerPointerCancel = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      handleHighlightPointerCancel(event)
+      handleTouchPointerCancel()
+    },
+    [handleHighlightPointerCancel, handleTouchPointerCancel]
   )
 
   const handleCommentHighlight = useCallback(() => {
@@ -2858,6 +3031,10 @@ export function IntermediateDocumentTextViewer(
           // 的 display:block / overflow:auto 在源码顺序上后于该 class，覆盖其
           // display:flex / overflow:hidden
           'hamster-reader__intermediate-document-viewer',
+          ...getHighlightDragClassNames(
+            suppressNativeSelection,
+            highlightDragPointerType
+          ),
           className
         ]
           .filter(Boolean)
@@ -2870,10 +3047,10 @@ export function IntermediateDocumentTextViewer(
           paddingTop: containMarginTop ?? containMarginY,
           paddingBottom: containMarginBottom ?? containMarginY
         }}
-        onPointerDown={handleViewerPointerDown}
-        onPointerMove={handleTouchPointerMove}
-        onPointerUp={handleTouchPointerUp}
-        onPointerCancel={handleTouchPointerCancel}
+        onPointerDownCapture={handleViewerPointerDown}
+        onPointerMoveCapture={handleViewerPointerMove}
+        onPointerUpCapture={handleViewerPointerUp}
+        onPointerCancelCapture={handleViewerPointerCancel}
       >
         {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
         <div
@@ -2936,6 +3113,15 @@ export function IntermediateDocumentTextViewer(
                 }`}
                 style={{ transform: `translateY(${virtualItem.start}px)` }}
               >
+                {isPdf ? (
+                  <div
+                    aria-hidden='true'
+                    className='hamster-reader__intermediate-text-page-marker'
+                    data-testid={`pdf-text-page-marker-${pageNumber}`}
+                  >
+                    第 {pageNumber} 页
+                  </div>
+                ) : null}
                 {texts ? (
                   <HamsterSelection
                     selectionId={pageSelectionId}

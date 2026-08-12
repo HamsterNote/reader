@@ -7,6 +7,7 @@ export {
   type ReaderInteractionMode,
   type ReaderOcrOptions,
   type ReaderPageRange,
+  type ReaderReadingPositionHandle,
   type ReaderTouchPanMode,
   type ReaderSavedSelection,
   type ReaderSavedSelectionAnchor,

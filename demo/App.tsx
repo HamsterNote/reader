@@ -733,7 +733,8 @@ export function App() {
   >(null)
   const [loadedParserLabel, setLoadedParserLabel] =
     useState<SupportedParserLabel | null>(null)
-  const [fontScale, setFontScale] = useState<ReaderFontScale>(1.5)
+  const [textFontScale, setTextFontScale] = useState<ReaderFontScale>(1.5)
+  const [layoutFontScale, setLayoutFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
@@ -1265,9 +1266,15 @@ export function App() {
 
     localStorage.setItem(
       `${READER_PREFERENCES_STORAGE_PREFIX}${loadedFileName}`,
-      serializeReaderPreferences({ renderMode, selectedTool })
+      serializeReaderPreferences({
+        renderMode,
+        selectedTool,
+        textFontScale,
+        layoutFontScale,
+        highlightColor
+      })
     )
-  }, [renderMode, selectedTool])
+  }, [highlightColor, layoutFontScale, renderMode, selectedTool, textFontScale])
 
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
@@ -1350,13 +1357,18 @@ export function App() {
           ),
           {
             renderMode: result.label === 'EPUB' ? 'text' : 'layout',
-            selectedTool: 'text-selection'
+            selectedTool: 'text-selection',
+            textFontScale: 1.5,
+            layoutFontScale: 1.5,
+            highlightColor: 'rgba(255, 193, 7, 0.35)'
           }
         )
         setRenderMode(readerPreferences.renderMode)
         setSelectedTool(readerPreferences.selectedTool)
+        setTextFontScale(readerPreferences.textFontScale)
+        setLayoutFontScale(readerPreferences.layoutFontScale)
+        setHighlightColor(readerPreferences.highlightColor)
         loadedReaderPreferencesFileNameRef.current = file.name
-        setFontScale(1.5)
         setVirtualPaper({ x: 0, y: 0, scale: 1 })
         setLayoutReadingProgress(
           parseStoredLayoutReadingProgress(
@@ -1452,6 +1464,8 @@ export function App() {
   }, [])
 
   const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
+  const activeFontScale =
+    renderMode === 'text' ? textFontScale : layoutFontScale
 
   return (
     <main
@@ -2306,8 +2320,10 @@ export function App() {
           onEdgeCropApply={handleEdgeCropApply}
           renderMode={renderMode}
           onRenderModeChange={handleRenderModeChange}
-          fontScale={supportsFontScale ? fontScale : undefined}
-          onFontScaleChange={setFontScale}
+          fontScale={supportsFontScale ? activeFontScale : undefined}
+          onFontScaleChange={
+            renderMode === 'text' ? setTextFontScale : setLayoutFontScale
+          }
           touchPanMode={touchPanMode}
           onTouchPanModeChange={setTouchPanMode}
           onFileUpload={handleManualFileUpload}

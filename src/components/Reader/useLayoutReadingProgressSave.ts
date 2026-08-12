@@ -1,35 +1,41 @@
 import { useCallback, useEffect, useRef } from 'react'
 
-import type { ReaderBookmark, ReaderData } from '../../types/readerData'
+import type {
+  ReaderBookmark,
+  ReaderData,
+  ReaderTextReadingProgress
+} from '../../types/readerData'
 
 const SAVE_DEBOUNCE_MS = 100
 const SAVE_MAX_WAIT_MS = 1000
 
-type PendingSave = {
-  readonly baselineData: ReaderData | undefined
-  readonly baselineOnDataChange: ((nextData: ReaderData) => void) | undefined
+type ReadingProgressField = 'layoutReadingProgress' | 'textReadingProgress'
+
+type ReadingProgressByField = {
   readonly layoutReadingProgress: ReaderBookmark
-  readonly resetKey: unknown
+  readonly textReadingProgress: ReaderTextReadingProgress
 }
 
-type CurrentSaveTarget = {
+type SaveTarget = {
   readonly data: ReaderData | undefined
   readonly onDataChange: ((nextData: ReaderData) => void) | undefined
   readonly resetKey: unknown
 }
 
-export const useLayoutReadingProgressSave = (
-  resetKey: unknown,
-  data: ReaderData | undefined,
-  onDataChange: ((nextData: ReaderData) => void) | undefined
-): ((layoutReadingProgress: ReaderBookmark) => void) => {
-  const pendingSaveRef = useRef<PendingSave | null>(null)
-  const currentTargetRef = useRef<CurrentSaveTarget>({
-    data,
-    onDataChange,
-    resetKey
-  })
-  currentTargetRef.current = { data, onDataChange, resetKey }
+type PendingSave<Field extends ReadingProgressField> = {
+  readonly baselineData: ReaderData | undefined
+  readonly baselineOnDataChange: ((nextData: ReaderData) => void) | undefined
+  readonly progress: ReadingProgressByField[Field]
+  readonly resetKey: unknown
+}
+
+const useReadingProgressSave = <Field extends ReadingProgressField>(
+  field: Field,
+  target: SaveTarget
+): ((progress: ReadingProgressByField[Field]) => void) => {
+  const pendingSaveRef = useRef<PendingSave<Field> | null>(null)
+  const currentTargetRef = useRef<SaveTarget>(target)
+  currentTargetRef.current = target
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const maxWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -57,23 +63,23 @@ export const useLayoutReadingProgressSave = (
           }
     saveTarget.onDataChange?.({
       ...saveTarget.data,
-      layoutReadingProgress: pendingSave.layoutReadingProgress
+      [field]: pendingSave.progress
     })
-  }, [])
+  }, [field])
 
   const schedule = useCallback(
-    (layoutReadingProgress: ReaderBookmark) => {
+    (progress: ReadingProgressByField[Field]) => {
       if (
         pendingSaveRef.current !== null &&
-        pendingSaveRef.current.resetKey !== resetKey
+        pendingSaveRef.current.resetKey !== target.resetKey
       ) {
         flush()
       }
       pendingSaveRef.current = {
         baselineData: currentTargetRef.current.data,
         baselineOnDataChange: currentTargetRef.current.onDataChange,
-        layoutReadingProgress,
-        resetKey
+        progress,
+        resetKey: target.resetKey
       }
 
       if (debounceTimerRef.current !== null) {
@@ -85,16 +91,38 @@ export const useLayoutReadingProgressSave = (
         maxWaitTimerRef.current = setTimeout(flush, SAVE_MAX_WAIT_MS)
       }
     },
-    [flush, resetKey]
+    [flush, target.resetKey]
   )
 
   useEffect(() => {
     return () => {
-      if (pendingSaveRef.current?.resetKey === resetKey) {
+      if (pendingSaveRef.current?.resetKey === target.resetKey) {
         flush()
       }
     }
-  }, [flush, resetKey])
+  }, [flush, target.resetKey])
 
   return schedule
 }
+
+export const useLayoutReadingProgressSave = (
+  resetKey: unknown,
+  data: ReaderData | undefined,
+  onDataChange: ((nextData: ReaderData) => void) | undefined
+): ((layoutReadingProgress: ReaderBookmark) => void) =>
+  useReadingProgressSave('layoutReadingProgress', {
+    data,
+    onDataChange,
+    resetKey
+  })
+
+export const useTextReadingProgressSave = (
+  resetKey: unknown,
+  data: ReaderData | undefined,
+  onDataChange: ((nextData: ReaderData) => void) | undefined
+): ((textReadingProgress: ReaderTextReadingProgress) => void) =>
+  useReadingProgressSave('textReadingProgress', {
+    data,
+    onDataChange,
+    resetKey
+  })

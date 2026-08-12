@@ -63,6 +63,7 @@ import type {
   ReaderInteractionMode,
   ReaderOcrOptions,
   ReaderPageRange,
+  ReaderReadingPositionHandle,
   ReaderSelectedTextSegment,
   ReaderTextSelectionDetail,
   ReaderTouchPanMode
@@ -85,7 +86,10 @@ import type {
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
 import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
-import { useLayoutReadingProgressSave } from './Reader/useLayoutReadingProgressSave'
+import {
+  useLayoutReadingProgressSave,
+  useTextReadingProgressSave
+} from './Reader/useLayoutReadingProgressSave'
 
 export type { ReaderRenderMode } from '../types/readerOptions'
 
@@ -130,6 +134,9 @@ const getReaderVirtualPaperKey = (
     : ''
   return `${virtualPaper.x}:${virtualPaper.y}:${virtualPaper.scale}:${anchorKey}`
 }
+
+const getReaderBookmarkKey = (bookmark: ReaderBookmark | undefined): string =>
+  bookmark ? getBookmarkKey(bookmark) : ''
 
 type BottomBarHistoryContext = {
   readonly status: ReaderAnnotationHistoryStatus
@@ -704,6 +711,8 @@ export function Reader({
     useState<ReaderRenderMode>('layout')
   const [layoutPositionHandoff, setLayoutPositionHandoff] =
     useState<ReaderPositionHandoff<ReaderVirtualPaperState> | null>(null)
+  const [nativeLayoutPositionHandoff, setNativeLayoutPositionHandoff] =
+    useState<ReaderPositionHandoff<ReaderBookmark> | null>(null)
   const [textPositionHandoff, setTextPositionHandoff] =
     useState<ReaderPositionHandoff<ReaderTextReadingProgress> | null>(null)
   const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
@@ -740,12 +749,18 @@ export function Reader({
     readonly persistedValueKey: string
     readonly anchor: ReaderTextAnchor | undefined
   } | null>(null)
+  const readingPositionHandleRef = useRef<ReaderReadingPositionHandle>(null)
   const currentVirtualPaperStateRef = useRef<{
     readonly document: ReaderDocumentInput
     readonly replacedValueKey: string
     readonly value: ReaderVirtualPaperState
   } | null>(null)
   const scheduleLayoutReadingProgressSave = useLayoutReadingProgressSave(
+    document,
+    data,
+    onDataChange
+  )
+  const scheduleTextReadingProgressSave = useTextReadingProgressSave(
     document,
     data,
     onDataChange
@@ -785,6 +800,10 @@ export function Reader({
   const resolvedRenderMode =
     data?.renderMode ?? renderMode ?? internalRenderMode
   const previousRenderModeRef = useRef(resolvedRenderMode)
+  const completedModeHandoffRef = useRef<{
+    readonly sourceMode: ReaderRenderMode
+    readonly nextMode: ReaderRenderMode
+  } | null>(null)
   const resolvedTextReadingProgress = resolvePositionHandoff(
     textPositionHandoff,
     document,
@@ -796,6 +815,12 @@ export function Reader({
     document,
     getReaderVirtualPaperKey(data?.virtualPaper),
     data?.virtualPaper
+  )
+  const resolvedLayoutReadingProgress = resolvePositionHandoff(
+    nativeLayoutPositionHandoff,
+    document,
+    getReaderBookmarkKey(data?.layoutReadingProgress),
+    data?.layoutReadingProgress
   )
   const resolvedOcr = ocr ?? internalOcrEnabled
   const resolvedOcrEnabled =
@@ -933,9 +958,15 @@ export function Reader({
 
       if (!sourceAnchor) {
         setLayoutPositionHandoff(null)
+        setNativeLayoutPositionHandoff(null)
         return
       }
 
+      setNativeLayoutPositionHandoff({
+        document,
+        replacedValueKey: getReaderBookmarkKey(data?.layoutReadingProgress),
+        value: sourceAnchor
+      })
       const persistedVirtualPaperKey = getReaderVirtualPaperKey(
         data?.virtualPaper
       )
@@ -960,6 +991,7 @@ export function Reader({
     },
     [
       data?.textReadingProgress,
+      data?.layoutReadingProgress,
       data?.virtualPaper,
       defaultScale,
       document,
@@ -971,7 +1003,24 @@ export function Reader({
 
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
+      const capturedAnchor =
+        readingPositionHandleRef.current?.captureTextAnchor()
+      if (capturedAnchor) {
+        currentTextAnchorRef.current = {
+          mode: resolvedRenderMode,
+          document,
+          persistedValueKey:
+            resolvedRenderMode === 'layout'
+              ? getReaderVirtualPaperKey(data?.virtualPaper)
+              : getReaderTextProgressKey(data?.textReadingProgress),
+          anchor: capturedAnchor
+        }
+      }
       handoffReadingPosition(resolvedRenderMode, nextMode)
+      completedModeHandoffRef.current = {
+        sourceMode: resolvedRenderMode,
+        nextMode
+      }
       if (data?.renderMode === undefined && renderMode === undefined) {
         setInternalRenderMode(nextMode)
       }
@@ -986,12 +1035,39 @@ export function Reader({
     [
       edgeCropEditing,
       data,
+      document,
       handoffReadingPosition,
       onDataChange,
       onEdgeCropEditingChange,
       onRenderModeChange,
       renderMode,
       resolvedEdgeCropEditing,
+      resolvedRenderMode
+    ]
+  )
+  const handleReadingPositionRef = useCallback(
+    (handle: ReaderReadingPositionHandle | null) => {
+      if (handle === null) {
+        const capturedAnchor =
+          readingPositionHandleRef.current?.captureTextAnchor()
+        if (capturedAnchor) {
+          currentTextAnchorRef.current = {
+            mode: resolvedRenderMode,
+            document,
+            persistedValueKey:
+              resolvedRenderMode === 'layout'
+                ? getReaderVirtualPaperKey(data?.virtualPaper)
+                : getReaderTextProgressKey(data?.textReadingProgress),
+            anchor: capturedAnchor
+          }
+        }
+      }
+      readingPositionHandleRef.current = handle
+    },
+    [
+      data?.textReadingProgress,
+      data?.virtualPaper,
+      document,
       resolvedRenderMode
     ]
   )
@@ -1018,11 +1094,25 @@ export function Reader({
     ) {
       setLayoutPositionHandoff(null)
     }
+
+    const persistedLayoutProgressKey = getReaderBookmarkKey(
+      data?.layoutReadingProgress
+    )
+    if (
+      nativeLayoutPositionHandoff !== null &&
+      (nativeLayoutPositionHandoff.document !== document ||
+        nativeLayoutPositionHandoff.replacedValueKey !==
+          persistedLayoutProgressKey)
+    ) {
+      setNativeLayoutPositionHandoff(null)
+    }
   }, [
+    data?.layoutReadingProgress,
     data?.textReadingProgress,
     data?.virtualPaper,
     document,
     layoutPositionHandoff,
+    nativeLayoutPositionHandoff,
     textPositionHandoff
   ])
 
@@ -1030,6 +1120,14 @@ export function Reader({
     const previousMode = previousRenderModeRef.current
     previousRenderModeRef.current = resolvedRenderMode
     if (previousMode === resolvedRenderMode) return
+    const completedHandoff = completedModeHandoffRef.current
+    completedModeHandoffRef.current = null
+    if (
+      completedHandoff?.sourceMode === previousMode &&
+      completedHandoff.nextMode === resolvedRenderMode
+    ) {
+      return
+    }
     handoffReadingPosition(previousMode, resolvedRenderMode)
   }, [handoffReadingPosition, resolvedRenderMode])
 
@@ -1204,9 +1302,16 @@ export function Reader({
         persistedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
         anchor: textReadingProgress.anchor
       }
-      onDataChange?.({ ...data, textReadingProgress })
+      if (onDataChange) {
+        scheduleTextReadingProgressSave(textReadingProgress)
+      }
     },
-    [data, document, onDataChange]
+    [
+      data?.textReadingProgress,
+      document,
+      onDataChange,
+      scheduleTextReadingProgressSave
+    ]
   )
   const handleToggleBookmark = useCallback(
     (bookmark: ReaderBookmark) => {
@@ -1498,6 +1603,7 @@ export function Reader({
             textReadingProgress={resolvedTextReadingProgress}
             onTextReadingProgressChange={handleTextReadingProgressChange}
             onTextAnchorChange={handleTextAnchorChange}
+            readingPositionRef={handleReadingPositionRef}
             pageRange={pageRange}
             hiddenPages={data?.hiddenPages}
             className={className}
@@ -1518,6 +1624,7 @@ export function Reader({
             onSelectionStart={onSelectionStart}
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
+            onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
@@ -1617,10 +1724,11 @@ export function Reader({
           }
           layoutReadingProgress={whenEnabled(
             !useVirtualPaper,
-            data?.layoutReadingProgress
+            resolvedLayoutReadingProgress
           )}
           onLayoutReadingProgressChange={handleLayoutReadingProgressChange}
           onTextAnchorChange={handleTextAnchorChange}
+          readingPositionRef={handleReadingPositionRef}
           onScaleChange={onScaleChange}
           minScale={minScale}
           maxScale={maxScale}

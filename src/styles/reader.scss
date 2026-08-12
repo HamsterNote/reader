@@ -1449,6 +1449,26 @@
     }
   }
 
+  &__intermediate-text-page-marker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: var(--hamster-reader-theme-color, #2563eb);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    user-select: none;
+
+    &::before {
+      flex: 1;
+      height: 1px;
+      background-color: currentColor;
+      content: '';
+      opacity: 0.35;
+    }
+  }
+
   // 注意：&__intermediate-text--flow 修饰符定义在 &__intermediate-text
   // 之后（见文件下方），以确保 CSS 源码顺序覆盖 layout 模式的
   // position:absolute / display:inline-block / white-space:pre。

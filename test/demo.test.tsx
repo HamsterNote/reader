@@ -1463,7 +1463,7 @@ describe('demo parser flow', () => {
     })
   })
 
-  it('restores and persists render mode and selected tool per file', async () => {
+  it('restores legacy reader preferences and persists all preferences per file', async () => {
     // Given: 当前文件已有持久化的阅读偏好。
     localStorage.clear()
     localStorage.setItem(
@@ -1491,19 +1491,34 @@ describe('demo parser flow', () => {
       })
       expect(screen.getByTestId('render-mode-select')).toHaveValue('text')
       expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
+      expect(findDocumentReaderProps()).toMatchObject({
+        fontScale: 1.5,
+        highlightColor: 'rgba(255, 193, 7, 0.35)'
+      })
     })
 
-    // When: Reader 通过统一 data 回传新的模式与工具。
+    // When: Reader 更新 Text 字号和高亮色，再切换到 Layout 更新另一端字号。
     const readerProps = findDocumentReaderProps()
     act(() => {
+      readerProps?.onFontScaleChange?.(0.75)
+      readerProps?.onHighlightColorChange?.('#ff0000')
       readerProps?.onDataChange?.({
         ...readerProps.data,
         renderMode: 'layout',
         selectedTool: 'rect-selection'
       })
     })
+    await waitFor(() => {
+      expect(findDocumentReaderProps()).toMatchObject({
+        renderMode: 'layout',
+        fontScale: 1.5
+      })
+    })
+    act(() => {
+      findDocumentReaderProps()?.onFontScaleChange?.(2)
+    })
 
-    // Then: Demo 同步界面状态并覆盖该文件的持久化偏好。
+    // Then: Demo 保存模式、工具、两种模式各自字号及当前高亮色。
     await waitFor(() => {
       expect(findDocumentReaderProps()?.data).toMatchObject({
         renderMode: 'layout',
@@ -1515,11 +1530,28 @@ describe('demo parser flow', () => {
         )
       ).toBe(
         JSON.stringify({
-          version: 1,
+          version: 2,
           renderMode: 'layout',
-          selectedTool: 'rect-selection'
+          selectedTool: 'rect-selection',
+          textFontScale: 0.75,
+          layoutFontScale: 2,
+          highlightColor: '#ff0000'
         })
       )
+    })
+
+    // When: 切回 Text Mode。
+    act(() => {
+      findDocumentReaderProps()?.onRenderModeChange?.('text')
+    })
+
+    // Then: Text Mode 恢复自己的字号，颜色选择保持不变。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()).toMatchObject({
+        renderMode: 'text',
+        fontScale: 0.75,
+        highlightColor: '#ff0000'
+      })
     })
   })
 
