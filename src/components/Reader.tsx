@@ -920,10 +920,7 @@ export function Reader({
   }, [normalizedAnnotationHistory.enabled])
 
   const handoffReadingPosition = useCallback(
-    (
-      sourceMode: ReaderRenderMode,
-      nextMode: ReaderRenderMode
-    ): ReaderData => {
+    (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode): ReaderData => {
       if (nextMode === sourceMode) return { ...data }
       const currentTextAnchor = currentTextAnchorRef.current
       const sourcePersistedValueKey =
