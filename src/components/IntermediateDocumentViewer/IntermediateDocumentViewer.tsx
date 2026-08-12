@@ -6347,18 +6347,24 @@ export function IntermediateDocumentViewer({
       targetPreviewPageSize: NormalizedPageSize
       viewportElement: HTMLElement
       viewportRect: DOMRect
-      nextTransform: { readonly y: number }
+      nextTransform: { readonly x: number; readonly y: number }
     }): void => {
       const targetPageElement = pageRefs.current.get(targetPageNumber)
       const targetPageRect = targetPageElement?.getBoundingClientRect()
       if (targetPageRect && targetPageRect.height > 0) {
+        const targetRatioX = targetPoint.x / targetPreviewPageSize.width
         const targetRatioY = targetPoint.y / targetPreviewPageSize.height
+        viewportElement.scrollLeft +=
+          targetPageRect.left +
+          targetPageRect.width * targetRatioX -
+          (viewportRect.left + viewportRect.width / 2)
         viewportElement.scrollTop +=
           targetPageRect.top +
           targetPageRect.height * targetRatioY -
           (viewportRect.top + viewportRect.height / 2)
         return
       }
+      viewportElement.scrollLeft = -nextTransform.x
       viewportElement.scrollTop = -nextTransform.y
     },
     []

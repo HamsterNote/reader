@@ -1651,7 +1651,8 @@ describe('Reader renderMode', () => {
       offset: 28
     }
     const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
-    render(<Reader document={doc} />)
+    const onDataChange = vi.fn()
+    render(<Reader document={doc} onDataChange={onDataChange} />)
     const onLayoutTextAnchorChange = capturedViewerProps.onTextAnchorChange
     if (typeof onLayoutTextAnchorChange !== 'function') {
       throw new TypeError('Expected Layout text anchor callback')
@@ -1676,6 +1677,13 @@ describe('Reader renderMode', () => {
         currentPageNumber: 2,
         anchor: latestAnchor
       })
+    })
+    expect(onDataChange).toHaveBeenCalledWith({
+      renderMode: 'text',
+      textReadingProgress: {
+        currentPageNumber: 2,
+        anchor: latestAnchor
+      }
     })
   })
 
@@ -1741,7 +1749,14 @@ describe('Reader renderMode', () => {
     }
     const virtualPaper = { x: 80, y: 240, scale: 1.25 }
     const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
-    render(<Reader document={doc} data={{ virtualPaper }} />)
+    const onDataChange = vi.fn()
+    render(
+      <Reader
+        document={doc}
+        data={{ virtualPaper }}
+        onDataChange={onDataChange}
+      />
+    )
     fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
     await waitFor(() => {
       expect(
@@ -1753,6 +1768,7 @@ describe('Reader renderMode', () => {
       throw new TypeError('Expected Text Mode anchor callback')
     }
     act(() => onTextAnchorChange(staleAnchor))
+    onDataChange.mockClear()
     const readingPositionRef = capturedTextViewerProps.readingPositionRef
     if (typeof readingPositionRef !== 'function') {
       throw new TypeError('Expected Text reading position ref')
@@ -1772,6 +1788,65 @@ describe('Reader renderMode', () => {
         ...virtualPaper,
         anchor: latestAnchor
       })
+    })
+    expect(onDataChange).toHaveBeenCalledWith({
+      virtualPaper: {
+        ...virtualPaper,
+        anchor: latestAnchor
+      },
+      renderMode: 'layout'
+    })
+  })
+
+  it('persists the latest Text anchor when switching to native Layout', async () => {
+    // Given: native Layout 的持久化位置已过期，Text 持有尚未异步上报的新锚点。
+    const staleLayoutAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-stale-native-layout',
+      text: 'Stale native Layout position',
+      offset: 2
+    }
+    const latestAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-current-text-for-native-layout',
+      text: 'Current Text position for native Layout',
+      offset: 34
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const onDataChange = vi.fn()
+    render(
+      <Reader
+        document={doc}
+        data={{ layoutReadingProgress: staleLayoutAnchor }}
+        onDataChange={onDataChange}
+        useVirtualPaper={false}
+      />
+    )
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toBeInTheDocument()
+    })
+    onDataChange.mockClear()
+    const readingPositionRef = capturedTextViewerProps.readingPositionRef
+    if (typeof readingPositionRef !== 'function') {
+      throw new TypeError('Expected Text reading position ref')
+    }
+
+    // When: 用户在进度回调前切回 native Layout。
+    act(() => {
+      readingPositionRef({ captureTextAnchor: () => latestAnchor })
+      fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    })
+
+    // Then: native Layout 的交接位置和持久化数据使用同一个最新锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.layoutReadingProgress).toEqual(latestAnchor)
+    })
+    expect(onDataChange).toHaveBeenCalledWith({
+      layoutReadingProgress: latestAnchor,
+      renderMode: 'layout'
     })
   })
 

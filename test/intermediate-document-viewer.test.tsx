@@ -13955,6 +13955,13 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
         'page-3': [{ x: 10, y: 20, width: 20, height: 20 }]
       }
     }
+    const pageThreeRightRange: ReaderSelectionRange = {
+      ...pageThreeRange,
+      id: 'jump-page-3-right',
+      rectsBySelectionId: {
+        'page-3': [{ x: 70, y: 20, width: 20, height: 20 }]
+      }
+    }
     const pageFourRange: ReaderSelectionRange = {
       id: 'jump-page-4',
       text: 'Out of range target',
@@ -14268,7 +14275,7 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       render(
         <IntermediateDocumentViewer
           document={document}
-          ranges={[pageThreeRange]}
+          ranges={[pageThreeRightRange]}
           selectionRef={selectionRef}
           initialLoadedPages={1}
           useVirtualPaper={false}
@@ -14291,11 +14298,49 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
 
       // When: the public ref jumps to the page-3 range.
       act(() => {
-        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+        requireReaderSelectionRef(selectionRef).scrollToRange(
+          'jump-page-3-right'
+        )
       })
 
       // Then: native scrolling aligns the range center with the viewport center.
+      expect(viewport.scrollLeft).toBe(55)
       expect(viewport.scrollTop).toBe(195)
+    })
+
+    it('uses both computed axes when native page geometry is unavailable', async () => {
+      // Given: native Layout 已挂载，但目标页尚未提供可测量的 DOM 尺寸。
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 200, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      const viewport = screen.getByTestId('native-layout-viewport')
+      mockElementRect(viewport, {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: 公开 ref 在目标页 DOM 尺寸不可用时跳转。
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then: fallback 使用计算出的绝对横纵偏移，而非只更新纵轴。
+      expect(viewport.scrollLeft).toBe(15)
+      expect(viewport.scrollTop).toBe(327)
     })
 
     it('uses stretched preview coordinates when jumping to a narrow page', async () => {

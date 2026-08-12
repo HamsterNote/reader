@@ -920,8 +920,11 @@ export function Reader({
   }, [normalizedAnnotationHistory.enabled])
 
   const handoffReadingPosition = useCallback(
-    (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode) => {
-      if (nextMode === sourceMode) return
+    (
+      sourceMode: ReaderRenderMode,
+      nextMode: ReaderRenderMode
+    ): ReaderData => {
+      if (nextMode === sourceMode) return { ...data }
       const currentTextAnchor = currentTextAnchorRef.current
       const sourcePersistedValueKey =
         sourceMode === 'layout'
@@ -943,23 +946,24 @@ export function Reader({
       if (nextMode === 'text') {
         if (!sourceAnchor) {
           setTextPositionHandoff(null)
-          return
+          return { ...data }
+        }
+        const textReadingProgress = {
+          currentPageNumber: sourceAnchor.pageNumber,
+          anchor: sourceAnchor
         }
         setTextPositionHandoff({
           document,
           replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
-          value: {
-            currentPageNumber: sourceAnchor.pageNumber,
-            anchor: sourceAnchor
-          }
+          value: textReadingProgress
         })
-        return
+        return { ...data, textReadingProgress }
       }
 
       if (!sourceAnchor) {
         setLayoutPositionHandoff(null)
         setNativeLayoutPositionHandoff(null)
-        return
+        return { ...data }
       }
 
       setNativeLayoutPositionHandoff({
@@ -983,21 +987,25 @@ export function Reader({
           y: 0,
           scale: scale ?? defaultScale ?? 1
         }
+      const virtualPaper = { ...currentVirtualPaper, anchor: sourceAnchor }
       setLayoutPositionHandoff({
         document,
         replacedValueKey: persistedVirtualPaperKey,
-        value: { ...currentVirtualPaper, anchor: sourceAnchor }
+        value: virtualPaper
       })
+
+      return useVirtualPaper
+        ? { ...data, virtualPaper }
+        : { ...data, layoutReadingProgress: sourceAnchor }
     },
     [
-      data?.textReadingProgress,
-      data?.layoutReadingProgress,
-      data?.virtualPaper,
+      data,
       defaultScale,
       document,
       resolvedTextReadingProgress?.anchor,
       resolvedVirtualPaperState?.anchor,
-      scale
+      scale,
+      useVirtualPaper
     ]
   )
 
@@ -1016,7 +1024,7 @@ export function Reader({
           anchor: capturedAnchor
         }
       }
-      handoffReadingPosition(resolvedRenderMode, nextMode)
+      const nextData = handoffReadingPosition(resolvedRenderMode, nextMode)
       completedModeHandoffRef.current = {
         sourceMode: resolvedRenderMode,
         nextMode
@@ -1024,7 +1032,7 @@ export function Reader({
       if (data?.renderMode === undefined && renderMode === undefined) {
         setInternalRenderMode(nextMode)
       }
-      onDataChange?.({ ...data, renderMode: nextMode })
+      onDataChange?.({ ...nextData, renderMode: nextMode })
       onRenderModeChange?.(nextMode)
 
       if (nextMode === 'text' && resolvedEdgeCropEditing) {
