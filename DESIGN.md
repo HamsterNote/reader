@@ -180,6 +180,11 @@ consumers can see how to implement the `onDragHighlight` integration.
   drag, the page label and Layout thumbnail shift an additional `1cm` to the
   left so the reader's finger cannot cover them; mouse and pen geometry does not
   change.
+- **Highlight long press:** a primary touch that starts on a persisted highlight
+  reserves that highlight immediately and suppresses browser-native text
+  selection throughout the `500ms` drag-candidate interval. A stationary hold
+  activates highlight dragging; cancellation or pointer release restores native
+  selection. Long-pressing ordinary text remains available for text selection.
 - **Layout preview:** PDF Layout mode also shows the pointed page thumbnail to
   the left of the rail during hover or an active drag. It reuses the Page
   Browser's lazy visibility queue and cached base image; it never creates a
@@ -259,5 +264,9 @@ consumers can see how to implement the `onDragHighlight` integration.
 - **Mode behavior:** turning the switch on restores the existing VirtualPaper
   transform, gesture, persistence, and top-left zoom-feedback behavior. Turning
   it off selects the native Layout viewport and its bottom-toolbar zoom menu.
+- **Progress feedback:** the Demo sidebar shows the last saved reading progress.
+  Native Layout records a concrete text anchor when text crosses the viewport
+  top and falls back to the current page's vertical percentage when no text is
+  available.
 
 _(End of minimal design contract)_

@@ -211,6 +211,8 @@ const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
 const OCR_STORAGE_PREFIX = 'hamster-reader-demo:ocr:'
 const TEXT_READING_PROGRESS_STORAGE_PREFIX =
   'hamster-reader-demo:text-reading-progress:'
+const LAYOUT_READING_PROGRESS_STORAGE_PREFIX =
+  'hamster-reader-demo:layout-reading-progress:'
 const READER_PREFERENCES_STORAGE_PREFIX = 'hamster-reader-demo:preferences:'
 const DEMO_READER_COLORS = [
   { name: 'blue', color: '#7d9ec0' },
@@ -340,6 +342,18 @@ function parseStoredTextReadingProgress(
     return anchor?.pageNumber === currentPageNumber
       ? { currentPageNumber, anchor }
       : { currentPageNumber }
+  } catch {
+    return undefined
+  }
+}
+
+function parseStoredLayoutReadingProgress(
+  raw: string | null
+): ReaderBookmark | undefined {
+  if (raw === null || raw.trim() === '') return undefined
+
+  try {
+    return parseStoredBookmark(JSON.parse(raw))
   } catch {
     return undefined
   }
@@ -503,6 +517,50 @@ function LoadedPagesStatus({
       <div style={{ fontSize: '12px', color: '#64748b' }}>
         已加载: {pageNumbers.length > 0 ? pageNumbers.join(', ') : '无'}
       </div>
+    </section>
+  )
+}
+
+function ReadingProgressStatus({
+  document,
+  renderMode,
+  layoutReadingProgress,
+  textReadingProgress
+}: {
+  readonly document: ReaderDocument | null
+  readonly renderMode: ReaderRenderMode
+  readonly layoutReadingProgress: ReaderBookmark | undefined
+  readonly textReadingProgress: ReaderTextReadingProgress | undefined
+}) {
+  if (!document) return null
+
+  const progress =
+    renderMode === 'layout'
+      ? layoutReadingProgress
+      : textReadingProgress?.anchor
+  const pageNumber =
+    progress?.pageNumber ?? textReadingProgress?.currentPageNumber
+  let detail = '尚未保存'
+  if (progress && 'textId' in progress) {
+    const normalizedText = progress.text.replace(/\s+/g, ' ').trim()
+    const textPreview =
+      normalizedText.length > 84
+        ? `${normalizedText.slice(0, 84).trimEnd()}…`
+        : normalizedText
+    detail = `第 ${progress.pageNumber} 页 · ${textPreview} · 偏移 ${progress.offset}`
+  } else if (progress) {
+    detail = `第 ${progress.pageNumber} 页 · ${progress.verticalPercentage}%`
+  } else if (pageNumber !== undefined) {
+    detail = `第 ${pageNumber} 页`
+  }
+
+  return (
+    <section
+      data-testid='demo-reading-progress-status'
+      style={{ marginBottom: '24px' }}
+    >
+      <h2>最后保存的阅读进度</h2>
+      <div style={{ fontSize: '12px', color: '#64748b' }}>{detail}</div>
     </section>
   )
 }
@@ -729,6 +787,9 @@ export function App() {
   const [textReadingProgress, setTextReadingProgress] = useState<
     ReaderTextReadingProgress | undefined
   >(undefined)
+  const [layoutReadingProgress, setLayoutReadingProgress] = useState<
+    ReaderBookmark | undefined
+  >(undefined)
   const requestIdRef = useRef(0)
   const manualFileUploadStartedRef = useRef(false)
   const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -770,6 +831,7 @@ export function App() {
       rects,
       pagePaintings,
       virtualPaper,
+      layoutReadingProgress,
       textReadingProgress,
       bookmarks,
       renderMode,
@@ -780,6 +842,7 @@ export function App() {
       edgeCropAll,
       edgeCropPages,
       hiddenPages,
+      layoutReadingProgress,
       pagePaintings,
       ranges,
       rects,
@@ -811,6 +874,16 @@ export function App() {
           localStorage.setItem(
             `${TEXT_READING_PROGRESS_STORAGE_PREFIX}${uploadedFile.name}`,
             JSON.stringify(nextData.textReadingProgress)
+          )
+        }
+      }
+
+      if (nextData.layoutReadingProgress) {
+        setLayoutReadingProgress(nextData.layoutReadingProgress)
+        if (uploadedFile?.name) {
+          localStorage.setItem(
+            `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}${uploadedFile.name}`,
+            JSON.stringify(nextData.layoutReadingProgress)
           )
         }
       }
@@ -1285,6 +1358,13 @@ export function App() {
         loadedReaderPreferencesFileNameRef.current = file.name
         setFontScale(1.5)
         setVirtualPaper({ x: 0, y: 0, scale: 1 })
+        setLayoutReadingProgress(
+          parseStoredLayoutReadingProgress(
+            localStorage.getItem(
+              `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
+            )
+          )
+        )
         setTextReadingProgress(
           parseStoredTextReadingProgress(
             localStorage.getItem(
@@ -1486,6 +1566,13 @@ export function App() {
           </section>
 
           <LoadedPagesStatus document={document} pageNumbers={loadedPages} />
+
+          <ReadingProgressStatus
+            document={document}
+            renderMode={renderMode}
+            layoutReadingProgress={layoutReadingProgress}
+            textReadingProgress={textReadingProgress}
+          />
 
           {document && (
             <section

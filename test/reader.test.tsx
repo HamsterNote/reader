@@ -1418,6 +1418,164 @@ describe('Reader renderMode', () => {
     })
   })
 
+  it('native layout debounces frequent completed-scroll progress reports for 100ms', () => {
+    // Given: 原生版面缩放由 ReaderData 控制，并保留其他文档数据。
+    const onDataChange = vi.fn()
+    const progress = {
+      pageNumber: 2,
+      verticalPercentage: 37.5
+    } as const
+    const data = { hiddenPages: [3], layoutReadingProgress: progress } as const
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        data={data}
+        onDataChange={onDataChange}
+      />
+    )
+
+    // When: 连续两次滚动结束报告不同位置，间隔不足 100ms。
+    expect(capturedViewerProps.layoutReadingProgress).toBe(progress)
+    const onProgressChange = capturedViewerProps.onLayoutReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected native layout reading progress callback')
+    }
+    const nextProgress = {
+      pageNumber: 1,
+      textId: 'page-1-paragraph',
+      text: 'Page one paragraph',
+      offset: 4
+    } as const
+    vi.useFakeTimers()
+    try {
+      onProgressChange({ pageNumber: 1, verticalPercentage: 25 })
+      act(() => vi.advanceTimersByTime(99))
+      expect(onDataChange).not.toHaveBeenCalled()
+
+      onProgressChange(nextProgress)
+      act(() => vi.advanceTimersByTime(99))
+      expect(onDataChange).not.toHaveBeenCalled()
+      act(() => vi.advanceTimersByTime(1))
+
+      // Then: Reader 仅发布静止前的最后一个精确位置，且不丢失其他字段。
+      expect(onDataChange).toHaveBeenCalledTimes(1)
+      expect(onDataChange).toHaveBeenCalledWith({
+        hiddenPages: [3],
+        layoutReadingProgress: nextProgress
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('native layout progress flush preserves data received during debounce', () => {
+    // Given: 一次原生版面进度已排队，但父级随后传入了更新后的书签数据。
+    const onDataChange = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const view = render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        data={{ hiddenPages: [2] }}
+        onDataChange={onDataChange}
+      />
+    )
+    const onProgressChange = capturedViewerProps.onLayoutReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected native layout reading progress callback')
+    }
+    const nextProgress = {
+      pageNumber: 1,
+      verticalPercentage: 42
+    } as const
+    const addedBookmark = {
+      pageNumber: 1,
+      textId: 'new-bookmark',
+      text: 'New bookmark',
+      offset: 2
+    } as const
+
+    vi.useFakeTimers()
+    try {
+      // When: 进度排队后，受控 ReaderData 在 100ms 窗口内更新。
+      onProgressChange(nextProgress)
+      view.rerender(
+        <Reader
+          document={doc}
+          useVirtualPaper={false}
+          data={{ hiddenPages: [3], bookmarks: [addedBookmark] }}
+          onDataChange={onDataChange}
+        />
+      )
+      act(() => vi.advanceTimersByTime(100))
+
+      // Then: flush 将进度合并到同一文档的最新数据，而不是回放旧快照。
+      expect(onDataChange).toHaveBeenCalledTimes(1)
+      expect(onDataChange).toHaveBeenCalledWith({
+        hiddenPages: [3],
+        bookmarks: [addedBookmark],
+        layoutReadingProgress: nextProgress
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('native layout saves every second when completed-scroll reports stay frequent', () => {
+    // Given: Reader 已挂载，滚动结束报告持续变化且始终没有 100ms 静止期。
+    const onDataChange = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        data={{ hiddenPages: [3] }}
+        onDataChange={onDataChange}
+      />
+    )
+    const onProgressChange = capturedViewerProps.onLayoutReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected native layout reading progress callback')
+    }
+
+    vi.useFakeTimers()
+    try {
+      // When: 每 50ms 上报一次，连续跨过两个 1 秒保存周期。
+      for (let index = 1; index <= 40; index += 1) {
+        onProgressChange({
+          pageNumber: 1,
+          verticalPercentage: index
+        })
+        act(() => vi.advanceTimersByTime(50))
+
+        if (index === 19) expect(onDataChange).not.toHaveBeenCalled()
+        if (index === 20) {
+          expect(onDataChange).toHaveBeenNthCalledWith(1, {
+            hiddenPages: [3],
+            layoutReadingProgress: {
+              pageNumber: 1,
+              verticalPercentage: 20
+            }
+          })
+        }
+      }
+
+      // Then: 连续变化不会饿死保存，每秒都保存该时刻的最新位置。
+      expect(onDataChange).toHaveBeenCalledTimes(2)
+      expect(onDataChange).toHaveBeenNthCalledWith(2, {
+        hiddenPages: [3],
+        layoutReadingProgress: {
+          pageNumber: 1,
+          verticalPercentage: 40
+        }
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('hands the Layout visual top anchor to Text Mode when switching', async () => {
     // Given: Layout 当前视觉第一行与 Text 之前持久化的位置不同。
     const layoutAnchor = {

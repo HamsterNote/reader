@@ -73,7 +73,8 @@ import type { ReaderLayoutZoom } from './IntermediateDocumentViewer/nativeLayout
 import type { IntermediateDocumentRenderTimingCallback } from './IntermediateDocumentViewer/renderTiming'
 import {
   getBookmarkKey,
-  getTextAnchorKey
+  getTextAnchorKey,
+  isTextBookmark
 } from './IntermediateDocumentViewer/textAnchor'
 import type {
   ReaderPagePaintingMap,
@@ -84,6 +85,7 @@ import type {
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
 import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
+import { useLayoutReadingProgressSave } from './Reader/useLayoutReadingProgressSave'
 
 export type { ReaderRenderMode } from '../types/readerOptions'
 
@@ -743,6 +745,11 @@ export function Reader({
     readonly replacedValueKey: string
     readonly value: ReaderVirtualPaperState
   } | null>(null)
+  const scheduleLayoutReadingProgressSave = useLayoutReadingProgressSave(
+    document,
+    data,
+    onDataChange
+  )
   const resolvedPagePaintings =
     data?.pagePaintings ?? pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
@@ -1173,6 +1180,22 @@ export function Reader({
       resolvedRenderMode
     ]
   )
+  const handleLayoutReadingProgressChange = useCallback(
+    (layoutReadingProgress: ReaderBookmark) => {
+      currentTextAnchorRef.current = {
+        mode: 'layout',
+        document,
+        persistedValueKey: getReaderVirtualPaperKey(data?.virtualPaper),
+        anchor: isTextBookmark(layoutReadingProgress)
+          ? layoutReadingProgress
+          : undefined
+      }
+      if (onDataChange) {
+        scheduleLayoutReadingProgressSave(layoutReadingProgress)
+      }
+    },
+    [data, document, onDataChange, scheduleLayoutReadingProgressSave]
+  )
   const handleTextReadingProgressChange = useCallback(
     (textReadingProgress: NonNullable<ReaderData['textReadingProgress']>) => {
       currentTextAnchorRef.current = {
@@ -1592,6 +1615,11 @@ export function Reader({
           onVirtualPaperTransformChangeEnd={
             handleVirtualPaperTransformChangeEnd
           }
+          layoutReadingProgress={whenEnabled(
+            !useVirtualPaper,
+            data?.layoutReadingProgress
+          )}
+          onLayoutReadingProgressChange={handleLayoutReadingProgressChange}
           onTextAnchorChange={handleTextAnchorChange}
           onScaleChange={onScaleChange}
           minScale={minScale}

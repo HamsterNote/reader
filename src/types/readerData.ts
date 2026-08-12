@@ -68,6 +68,8 @@ export type ReaderData = {
   readonly rects?: ReaderSelectionRectangle[]
   readonly pagePaintings?: Record<string, DrawingValue>
   readonly virtualPaper?: ReaderVirtualPaperState
+  /** 原生 Layout 缩放模式的阅读进度：优先记录文字，无文字时记录页内百分比。 */
+  readonly layoutReadingProgress?: ReaderBookmark
   readonly textReadingProgress?: ReaderTextReadingProgress
   readonly bookmarks?: readonly ReaderBookmark[]
   /** @deprecated 使用可精确定位到文字的 `bookmarks`。 */

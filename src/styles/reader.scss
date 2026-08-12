@@ -1721,12 +1721,20 @@
 }
 
 // IntermediateDocumentViewer 可作为独立公共组件使用，不要求外层存在 `.hamster-reader`。
-// 激活前保留浏览器文本选择；激活后临时禁止原生选区抢占整段高亮拖动手势。
+// 触摸命中既有高亮后，候选期与拖动期都禁止浏览器原生选词；普通文本仍可长按选择。
+.hamster-reader__intermediate-document-viewer--suppress-native-selection,
+.hamster-reader__intermediate-document-viewer--suppress-native-selection
+  .hsn-selection-content,
+.hamster-reader__intermediate-document-viewer--suppress-native-selection
+  .hamster-reader__intermediate-text,
 .hamster-reader__intermediate-document-viewer--highlight-dragging,
 .hamster-reader__intermediate-document-viewer--highlight-dragging
-  .hsn-selection-content {
+  .hsn-selection-content,
+.hamster-reader__intermediate-document-viewer--highlight-dragging
+  .hamster-reader__intermediate-text {
   user-select: none !important;
   -webkit-user-select: none !important;
+  -webkit-touch-callout: none;
 }
 
 // ---------------------------------------------------------------------------

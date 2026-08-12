@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1-beta.1] - 2026-08-12
+
+### Added
+- 原生 Layout 缩放模式新增可恢复的阅读进度（`data.layoutReadingProgress`）：优先记录视口顶部文字锚点，页面无文字时回退到页内垂直百分比；Demo 侧边栏展示最后保存的进度并持久化到 localStorage。
+
+### Fixed
+- 修复触摸长按高亮时浏览器原生选词抢占拖动手势的问题：命中既有高亮后，候选期与拖动期均抑制原生选区，普通文本仍可长按进行文字选择。
+
 ## [0.11.0] - 2026-08-11
 
 ### Changed

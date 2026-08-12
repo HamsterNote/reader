@@ -161,6 +161,8 @@ const mockReaderProps: MockReaderProps[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 const COMMENT_STORAGE_PREFIX = 'hamster-reader-demo:comments:'
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
+const LAYOUT_READING_PROGRESS_STORAGE_PREFIX =
+  'hamster-reader-demo:layout-reading-progress:'
 const TEXT_READING_PROGRESS_STORAGE_PREFIX =
   'hamster-reader-demo:text-reading-progress:'
 
@@ -3440,6 +3442,63 @@ describe('demo parser flow', () => {
           ) || '{}'
         )
       ).toEqual(nextProgress)
+    })
+
+    it('restores, persists, and displays native layout reading progress', async () => {
+      // Given: 当前文件上次停在无文字页面的 42.5% 位置。
+      const progress = { pageNumber: 2, verticalPercentage: 42.5 } as const
+      localStorage.setItem(
+        `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}layout-progress.pdf`,
+        JSON.stringify(progress)
+      )
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Layout Progress Document')
+      )
+
+      // When: 文件打开后，Reader 又报告了一个具体文字位置。
+      render(<App />)
+      upload(makeFile('layout-progress.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.data?.layoutReadingProgress).toEqual(
+          progress
+        )
+      })
+      expect(
+        screen.getByTestId('demo-reading-progress-status')
+      ).toHaveTextContent('第 2 页 · 42.5%')
+      const nextProgress = {
+        pageNumber: 3,
+        textId: 'page-3-paragraph',
+        text: 'New native viewport text with enough additional content to verify the sidebar keeps the saved anchor concise and readable.',
+        offset: 12
+      } as const
+      act(() => {
+        const props = findDocumentReaderProps()
+        props?.onDataChange?.({
+          ...props.data,
+          layoutReadingProgress: nextProgress
+        })
+      })
+
+      // Then: 精确文字进度同步到受控数据、浏览器存储和 Demo 信息区。
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.data?.layoutReadingProgress).toEqual(
+          nextProgress
+        )
+      })
+      expect(
+        JSON.parse(
+          localStorage.getItem(
+            `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}layout-progress.pdf`
+          ) || '{}'
+        )
+      ).toEqual(nextProgress)
+      expect(
+        screen.getByTestId('demo-reading-progress-status')
+      ).toHaveTextContent(
+        '第 3 页 · New native viewport text with enough additional content to verify the sidebar keeps… · 偏移 12'
+      )
     })
   })
 

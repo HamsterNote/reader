@@ -397,7 +397,6 @@ function shouldIgnoreTouchPointerUp(
     event.pointerId !== touchStart.pointerId ||
     Math.abs(event.clientX - touchStart.clientX) > 4 ||
     Math.abs(event.clientY - touchStart.clientY) > 4 ||
-    linkedData.selectedRangeId === null ||
     Boolean(linkedData.activeRange) ||
     Boolean(linkedData.draggingRange) ||
     Boolean(linkedData.selectingText)
