@@ -36,7 +36,7 @@ import {
   within
 } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
 import { loadFileToMemory } from '../demo/fileMemoryLoader'
@@ -643,6 +643,13 @@ describe('demo parser flow', () => {
     resetMockHistory()
   })
 
+  afterEach(async () => {
+    await act(async () => {
+      await Promise.resolve()
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    })
+  })
+
   it('renders the parsed document and uploaded file details on success', async () => {
     vi.mocked(PdfParser.encode).mockResolvedValue(
       makeRuntimeDocument('Success Document')
@@ -787,7 +794,9 @@ describe('demo parser flow', () => {
 
     render(<App />)
     selectFile(makeFile('a.txt'))
+    await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(1))
     selectFile(makeFile('b.txt'))
+    await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('TXT B')).toBeInTheDocument()
 
     staleTxt.resolve(makeRuntimeDocument('TXT A'))
@@ -814,6 +823,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     selectFile(makeFile('loading-a.pdf'))
+    await waitFor(() => expect(loadFileToMemory).toHaveBeenCalledTimes(1))
     selectFile(makeFile('loading-b.pdf'))
 
     expect(await screen.findByTestId('pdf-ready-card')).toHaveTextContent(
@@ -954,6 +964,7 @@ describe('demo parser flow', () => {
       upload(uploadedFile)
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(await screen.findByText(caseData.title)).toBeInTheDocument()
 
       const shell = screen.getByTestId('reader-demo-root')
       expect(shell).toHaveClass('hamster-demo-shell')
@@ -980,7 +991,6 @@ describe('demo parser flow', () => {
         ).not.toHaveLength(0)
       }
 
-      expect(screen.getByText(caseData.title)).toBeInTheDocument()
       expect(screen.getByText(`Name: ${caseData.fileName}`)).toBeInTheDocument()
       expect(screen.getByLabelText('Choose another file')).toHaveAttribute(
         'accept',
@@ -1958,7 +1968,9 @@ describe('demo parser flow', () => {
 
     render(<App />)
     upload(makeFile('stale.txt'))
+    await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(1))
     upload(makeFile('fresh.txt'))
+    await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(2))
 
     freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
 
@@ -2629,6 +2641,7 @@ describe('demo parser flow', () => {
 
       render(<App />)
 
+      await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledOnce())
       expect(
         await screen.findByText('Restored After Reload')
       ).toBeInTheDocument()
@@ -3516,7 +3529,9 @@ describe('demo parser flow', () => {
 
       render(<App />)
       upload(makeFile('stale.txt'))
+      await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(1))
       upload(makeFile('fresh.txt'))
+      await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(2))
 
       freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
       expect(await screen.findByText('Fresh Document')).toBeInTheDocument()

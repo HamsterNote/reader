@@ -37,6 +37,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { CommentPanel } from './CommentPanel'
 import {
   parseComments,
@@ -62,6 +63,11 @@ import {
   parseReaderPreferences,
   serializeReaderPreferences
 } from './readerPreferencesStorage'
+import {
+  createViewerLifetimeToken,
+  ViewerLifetimeBoundary,
+  type ViewerLifetimeToken
+} from './ViewerLifetimeBoundary'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -112,6 +118,15 @@ type PdfTimingPanelState = {
   >
 }
 
+type RetiringPdfError = {
+  readonly retirement: Promise<void>
+}
+
+type RetiredViewerOwnership = {
+  readonly handle: OpenDocumentHandle | null
+  readonly token: ViewerLifetimeToken | null
+}
+
 const INITIAL_PDF_TIMING: PdfTimingPanelState = {
   documentResolutionMs: null,
   fileLoadMs: null,
@@ -125,6 +140,23 @@ function formatTimingMs(value: number | null): string {
   if (value === null) return '—'
   if (value < 0.1) return '<0.1 ms'
   return `${value.toFixed(1)} ms`
+}
+
+function getPdfRetirement(error: unknown): Promise<void> | null {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('retirement' in error) ||
+    !(error.retirement instanceof Promise)
+  ) {
+    return null
+  }
+
+  return (error as RetiringPdfError).retirement
+}
+
+function reportLifecycleError(error: unknown): void {
+  console.error('PDF viewer lifecycle cleanup failed', error)
 }
 
 type HighlightDragPreview = {
@@ -921,8 +953,15 @@ export function App() {
   const selectionEpochRef = useRef<FileSelection | null>(null)
   const selectionAbortControllerRef = useRef<AbortController | null>(null)
   const openDocumentHandleRef = useRef<OpenDocumentHandle | null>(null)
-  const mountedRef = useRef(true)
-  const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
+  const [viewerLifetimeToken, setViewerLifetimeToken] =
+    useState<ViewerLifetimeToken | null>(null)
+  const viewerLifetimeTokenRef = useRef<ViewerLifetimeToken | null>(null)
+  const mountedRef = useRef(false)
+  const lifecycleGenerationRef = useRef(0)
+  const terminalEnqueuedRef = useRef(false)
+  const switchBarrierRef = useRef<Promise<void>>(Promise.resolve())
+  const pdfRetirementRef = useRef<Promise<void>>(Promise.resolve())
+  const recentFilePersistenceChainRef = useRef<Promise<void>>(Promise.resolve())
   const loadedReaderPreferencesFileNameRef = useRef<string | null>(null)
 
   // --- Selection 库集成演示 state ---
@@ -1411,6 +1450,49 @@ export function App() {
     )
   }, [])
 
+  const disposeRetiredViewer = useCallback(
+    async ({ handle, token }: RetiredViewerOwnership) => {
+      if (handle === null) return
+      if (token?.mounted) await token.ack
+      await handle.dispose()
+    },
+    []
+  )
+
+  const appendSwitchBarrier = useCallback(
+    (selection: FileSelection): Promise<void> => {
+      const runBarrier = async () => {
+        if (!mountedRef.current) return
+
+        let retired: RetiredViewerOwnership = { handle: null, token: null }
+        flushSync(() => {
+          retired = {
+            handle: openDocumentHandleRef.current,
+            token: viewerLifetimeTokenRef.current
+          }
+          openDocumentHandleRef.current = null
+          viewerLifetimeTokenRef.current = null
+          setViewerLifetimeToken(null)
+          setDocument(null)
+          setLoadedParserLabel(null)
+        })
+
+        try {
+          await disposeRetiredViewer(retired)
+        } catch (error) {
+          reportLifecycleError(error)
+        }
+
+        if (!isCurrentSelection(selection)) return
+      }
+
+      const command = switchBarrierRef.current.then(runBarrier, runBarrier)
+      switchBarrierRef.current = command.catch(reportLifecycleError)
+      return command
+    },
+    [disposeRetiredViewer, isCurrentSelection]
+  )
+
   // 计时面板的统一更新入口：同步维护 ref 与 state
   const updatePdfTiming = useCallback(
     (updater: (current: PdfTimingPanelState) => PdfTimingPanelState) => {
@@ -1545,7 +1627,7 @@ export function App() {
 
   const saveSelectedFile = useCallback(
     async (selection: FileSelection) => {
-      const saveTask = recentFileSaveChainRef.current.then(async () => {
+      const saveTask = recentFilePersistenceChainRef.current.then(async () => {
         if (!isCurrentSelection(selection)) return
 
         const saved = await saveRecentFile(selection.file)
@@ -1553,10 +1635,87 @@ export function App() {
           setHasSavedRecentFile(saved)
         }
       })
-      recentFileSaveChainRef.current = saveTask.catch(() => undefined)
+      recentFilePersistenceChainRef.current =
+        saveTask.catch(reportLifecycleError)
       await saveTask
     },
     [isCurrentSelection]
+  )
+
+  const startPdfFileRead = useCallback(
+    (
+      selection: FileSelection,
+      abortController: AbortController,
+      pages: number[] | undefined
+    ) => {
+      loadFileToMemory(
+        selection.file,
+        (loaded, total) => {
+          if (!isCurrentSelection(selection)) return
+          setPdfLoadState({
+            phase: 'loading',
+            selection,
+            loaded,
+            total
+          })
+        },
+        abortController.signal
+      )
+        .then((loadedFile) => {
+          if (!isCurrentSelection(selection)) return
+          updatePdfTiming((current) => ({
+            ...current,
+            fileLoadMs: loadedFile.elapsedMs
+          }))
+          setPdfLoadState({
+            phase: 'ready',
+            selection,
+            buffer: loadedFile.buffer,
+            elapsedMs: loadedFile.elapsedMs,
+            pages
+          })
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentSelection(selection)) return
+          setPdfLoadState({ phase: 'error', selection })
+          setParseError(`Failed to load PDF: ${getParserErrorMessage(error)}`)
+        })
+    },
+    [isCurrentSelection, updatePdfTiming]
+  )
+
+  const startNonPdfParse = useCallback(
+    async (selection: FileSelection) => {
+      try {
+        const result = await parseUploadedDocument(selection.file)
+        if (!isCurrentSelection(selection)) return
+
+        if (result.status === 'unsupported') {
+          setParseError(result.error)
+          return
+        }
+        if (result.status === 'failed') {
+          setParseError(`Failed to parse ${result.label}: ${result.error}`)
+          return
+        }
+        if (result.document === undefined) {
+          setParseError(
+            `Failed to parse ${result.label}: received undefined result`
+          )
+          return
+        }
+
+        await saveSelectedFile(selection)
+        if (!isCurrentSelection(selection)) return
+        commitParsedDocument(selection, result.document, result.label)
+      } catch (error) {
+        if (!isCurrentSelection(selection)) return
+        setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
+      } finally {
+        if (isCurrentSelection(selection)) setIsParsing(false)
+      }
+    },
+    [commitParsedDocument, isCurrentSelection, saveSelectedFile]
   )
 
   const startFileSelection = useCallback(
@@ -1573,8 +1732,6 @@ export function App() {
 
       setOcrError(null)
       setParseError(null)
-      setDocument(null)
-      setLoadedParserLabel(null)
       setStagedFile(file)
       // 新选择开始时重置三段计时与额外阶段聚合，旧文件的耗时不再保留
       extraTimingStagesRef.current = {}
@@ -1584,10 +1741,8 @@ export function App() {
       }
       updatePdfTiming(() => INITIAL_PDF_TIMING)
 
-      if (getFileExtension(file.name) === 'pdf') {
-        const pages = getParserPages(
-          getPageRange(usePageRange, pageRangeStart, pageRangeEnd)
-        )
+      const isPdf = getFileExtension(file.name) === 'pdf'
+      if (isPdf) {
         setIsParsing(false)
         setPdfLoadState({
           phase: 'loading',
@@ -1595,84 +1750,32 @@ export function App() {
           loaded: 0,
           total: file.size
         })
-        loadFileToMemory(
-          file,
-          (loaded, total) => {
-            if (!isCurrentSelection(selection)) return
-            setPdfLoadState({
-              phase: 'loading',
-              selection,
-              loaded,
-              total
-            })
-          },
-          abortController.signal
-        )
-          .then((loadedFile) => {
-            if (!isCurrentSelection(selection)) return
-            // ① 文件加载耗时来自阶段1加载器的实测 elapsedMs
-            updatePdfTiming((current) => ({
-              ...current,
-              fileLoadMs: loadedFile.elapsedMs
-            }))
-            setPdfLoadState({
-              phase: 'ready',
-              selection,
-              buffer: loadedFile.buffer,
-              elapsedMs: loadedFile.elapsedMs,
-              pages
-            })
-          })
-          .catch((error: unknown) => {
-            if (!isCurrentSelection(selection)) return
-            setPdfLoadState({ phase: 'error', selection })
-            setParseError(`Failed to load PDF: ${getParserErrorMessage(error)}`)
-          })
-        return
+      } else {
+        setPdfLoadState({ phase: 'idle' })
+        setIsParsing(true)
       }
 
-      setPdfLoadState({ phase: 'idle' })
-      setIsParsing(true)
-      void (async () => {
-        try {
-          const result = await parseUploadedDocument(file)
-          if (!isCurrentSelection(selection)) return
+      appendSwitchBarrier(selection).then(() => {
+        if (!isCurrentSelection(selection)) return
 
-          if (result.status === 'unsupported') {
-            setParseError(result.error)
-            return
-          }
-          if (result.status === 'failed') {
-            setParseError(`Failed to parse ${result.label}: ${result.error}`)
-            return
-          }
-          if (result.document === undefined) {
-            setParseError(
-              `Failed to parse ${result.label}: received undefined result`
-            )
-            return
-          }
-
-          if (!isCurrentSelection(selection)) return
-          await saveSelectedFile(selection)
-          if (!isCurrentSelection(selection)) return
-          commitParsedDocument(selection, result.document, result.label)
-        } catch (error) {
-          if (!isCurrentSelection(selection)) return
-          setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
-        } finally {
-          if (isCurrentSelection(selection)) {
-            setIsParsing(false)
-          }
+        if (isPdf) {
+          const pages = getParserPages(
+            getPageRange(usePageRange, pageRangeStart, pageRangeEnd)
+          )
+          startPdfFileRead(selection, abortController, pages)
+          return
         }
-      })()
+
+        startNonPdfParse(selection).catch(reportLifecycleError)
+      }, reportLifecycleError)
     },
     [
-      commitParsedDocument,
+      appendSwitchBarrier,
       isCurrentSelection,
       pageRangeEnd,
       pageRangeStart,
-      saveSelectedFile,
+      startNonPdfParse,
+      startPdfFileRead,
       updatePdfTiming,
       usePageRange
     ]
@@ -1699,48 +1802,51 @@ export function App() {
     })
 
     let sourceBuffer: ArrayBuffer | null = buffer
-    // ② 解析耗时：openDocument 调用起止
     const parseStartedAt = performance.now()
-    PdfParser.openDocument(sourceBuffer, {
-      pages,
-      signal: selectionAbortControllerRef.current?.signal,
-      onProgress: (progress) => {
-        if (!isCurrentSelection(selection)) return
-        setPdfLoadState({
-          phase: 'parsing',
-          selection,
-          elapsedMs,
-          current: Math.min(progress.current, progress.total),
-          total: progress.total
+    void (async () => {
+      try {
+        await pdfRetirementRef.current
+        if (!isCurrentSelection(selection) || sourceBuffer === null) return
+
+        const handle = await PdfParser.openDocument(sourceBuffer, {
+          pages,
+          signal: selectionAbortControllerRef.current?.signal,
+          onProgress: (progress) => {
+            if (!isCurrentSelection(selection)) return
+            setPdfLoadState({
+              phase: 'parsing',
+              selection,
+              elapsedMs,
+              current: Math.min(progress.current, progress.total),
+              total: progress.total
+            })
+          }
         })
-      }
-    })
-      .then(async (handle) => {
         sourceBuffer = null
         if (!isCurrentSelection(selection)) {
           await handle.dispose()
           return
         }
 
-        await saveSelectedFile(selection)
-        if (!isCurrentSelection(selection)) {
-          await handle.dispose()
-          return
-        }
-
+        const token = createViewerLifetimeToken()
         openDocumentHandleRef.current = handle
-        // ② 解析耗时只在结果仍为当前选择时记录，stale 句柄不写面板
+        viewerLifetimeTokenRef.current = token
+        setViewerLifetimeToken(token)
         updatePdfTiming((current) => ({
           ...current,
           parseMs: performance.now() - parseStartedAt
         }))
         commitParsedDocument(selection, handle.document, 'PDF')
         setPdfLoadState({ phase: 'done', selection })
-      })
-      .catch((error: unknown) => {
+
+        await saveSelectedFile(selection)
+      } catch (error) {
         sourceBuffer = null
+        const retirement = getPdfRetirement(error)
+        if (retirement !== null) {
+          pdfRetirementRef.current = retirement.catch(reportLifecycleError)
+        }
         if (!isCurrentSelection(selection)) return
-        // 解析失败：保留 ① 文件加载耗时，② 显示失败标记而非假数字
         updatePdfTiming((current) => ({
           ...current,
           parseFailed: true,
@@ -1755,7 +1861,8 @@ export function App() {
         ])
         setPdfLoadState({ phase: 'error', selection })
         setParseError(`Failed to parse PDF: ${getParserErrorMessage(error)}`)
-      })
+      }
+    })()
   }, [
     commitParsedDocument,
     isCurrentSelection,
@@ -1766,7 +1873,10 @@ export function App() {
 
   const handleForgetRecentFile = useCallback(() => {
     const epoch = selectionEpochRef.current?.epoch
-    clearRecentFile().then((cleared) => {
+    const clearTask = recentFilePersistenceChainRef.current.then(async () => {
+      if (!mountedRef.current || selectionEpochRef.current?.epoch !== epoch)
+        return
+      const cleared = await clearRecentFile()
       if (
         cleared &&
         mountedRef.current &&
@@ -1775,6 +1885,8 @@ export function App() {
         setHasSavedRecentFile(false)
       }
     })
+    recentFilePersistenceChainRef.current =
+      clearTask.catch(reportLifecycleError)
   }, [])
 
   const handleManualFileUpload = useCallback(
@@ -1794,7 +1906,6 @@ export function App() {
   }, [startFileSelection])
 
   useEffect(() => {
-    mountedRef.current = true
     const restoreEpoch = selectionEpochRef.current?.epoch ?? 0
 
     loadRecentFile().then((file) => {
@@ -1810,14 +1921,63 @@ export function App() {
       startFileSelectionRef.current(file, 'recent-file')
     })
 
-    return () => {
-      mountedRef.current = false
-      selectionAbortControllerRef.current?.abort()
-      if (extraTimingFlushTimerRef.current !== null) {
-        clearTimeout(extraTimingFlushTimerRef.current)
-        extraTimingFlushTimerRef.current = null
+    return undefined
+  }, [])
+
+  const handleBoundarySetup = useCallback(() => {
+    lifecycleGenerationRef.current += 1
+    mountedRef.current = true
+  }, [])
+
+  const handleBoundaryCleanup = useCallback(() => {
+    mountedRef.current = false
+    const cleanupGeneration = lifecycleGenerationRef.current
+
+    queueMicrotask(() => {
+      if (
+        mountedRef.current ||
+        lifecycleGenerationRef.current !== cleanupGeneration ||
+        terminalEnqueuedRef.current
+      ) {
+        return
       }
-    }
+      terminalEnqueuedRef.current = true
+
+      const runTerminal = async () => {
+        if (
+          mountedRef.current ||
+          lifecycleGenerationRef.current !== cleanupGeneration
+        ) {
+          return
+        }
+
+        const selection = selectionEpochRef.current
+        if (selection !== null) {
+          selectionEpochRef.current = {
+            ...selection,
+            epoch: selection.epoch + 1
+          }
+        }
+        selectionAbortControllerRef.current?.abort()
+        selectionAbortControllerRef.current = null
+
+        const handle = openDocumentHandleRef.current
+        const token = viewerLifetimeTokenRef.current
+        openDocumentHandleRef.current = null
+        viewerLifetimeTokenRef.current = null
+
+        if (extraTimingFlushTimerRef.current !== null) {
+          clearTimeout(extraTimingFlushTimerRef.current)
+          extraTimingFlushTimerRef.current = null
+        }
+
+        if (token !== null) await token.ack
+        if (handle !== null) await handle.dispose()
+      }
+
+      const terminal = switchBarrierRef.current.then(runTerminal, runTerminal)
+      switchBarrierRef.current = terminal.catch(reportLifecycleError)
+    })
   }, [])
 
   const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
@@ -2662,85 +2822,96 @@ export function App() {
           parseError={parseError}
           isParsing={isParsing}
         />
-        {pdfLoadState.phase !== 'ready' && pdfLoadState.phase !== 'parsing' && (
-          <Reader
-            document={document || undefined}
-            isEpub={loadedParserLabel === 'EPUB'}
-            isPdf={loadedParserLabel === 'PDF'}
-            data={readerData}
-            onDataChange={handleReaderDataChange}
-            edgeCropEditing={edgeCropEditing}
-            onEdgeCropEditingChange={setEdgeCropEditing}
-            onEdgeCropApply={handleEdgeCropApply}
-            renderMode={renderMode}
-            onRenderModeChange={handleRenderModeChange}
-            fontScale={supportsFontScale ? fontScale : undefined}
-            onFontScaleChange={setFontScale}
-            touchPanMode={touchPanMode}
-            onTouchPanModeChange={setTouchPanMode}
-            onFileUpload={handleReaderFileUpload}
-            emptyText='No document loaded'
-            pageRange={getPageRange(usePageRange, pageRangeStart, pageRangeEnd)}
-            overlayRectType='percent'
-            ocr={
-              ocrPages.length > 0
-                ? { enabled: true, pages: ocrPages }
-                : automaticOcrEnabled
-            }
-            onOcrChange={handleOcrChange}
-            ocrTexts={ocrTextsByPage}
-            onOcrTextsChange={handleOcrTextsChange}
-            onOcrError={handleOcrError}
-            ocrDebug={ocrDevMode}
-            onTextSelectionChange={() => {}}
-            onTextSelectionEnd={() => {}}
-            onSelectText={() => {}}
-            useVirtualPaper={useVirtualPaper}
-            selectedRangeId={selectedRangeId}
-            onSelect={handleSelectionSelect}
-            onLinkedDataChange={handleLinkedDataChange}
-            onSelectRange={handleSelectRange}
-            onUpdateRange={handleUpdateRange}
-            onHighlight={handleHighlight}
-            onDragHighlight={handleDragHighlight}
-            onRemoveRange={handleRemoveRange}
-            onHighlightColorChange={setHighlightColor}
-            onSelectionEnd={handleSelectionEnd}
-            selectionRef={selectionRef}
-            highlightColor={highlightColor}
-            selectionColor='rgba(33, 150, 243, 0.2)'
-            autoHighlight={autoHighlight}
-            containMarginX={containMarginX}
-            containMarginTop={containMarginTop}
-            containMarginBottom={containMarginBottom}
-            selectedTool={selectedTool}
-            onSelectedToolChange={handleToolChange}
-            onPagePaintingsChange={handlePagePaintingsChange}
-            showPageBrowser={showPageBrowser}
-            onPageBrowserClose={() => setShowPageBrowser(false)}
-            themeColor={themeColor}
-            drawingStrokeColor={toolColor}
-            onDrawingStrokeColorChange={setToolColor}
-            colors={DEMO_READER_COLORS}
-            comments={comments}
-            onCommentsChange={handleCommentsChange}
-            selectedRectId={selectedRectId}
-            onCreateRect={handleCreateRect}
-            onSelectRect={handleSelectRect}
-            onUpdateRect={handleUpdateRect}
-            onRemoveRect={handleRemoveRect}
-            annotationHistory={{
-              enabled: true,
-              resetKey: uploadedFile?.name ?? 'none'
-            }}
-            onAnnotationHistoryChange={handleAnnotationHistoryChange}
-            onCommentHighlight={handleCommentHighlight}
-            onIntermediateDocumentRenderTiming={
-              handleIntermediateDocumentRenderTiming
-            }
-            onPageLoadStatusChange={setLoadedPages}
-          />
-        )}
+        <ViewerLifetimeBoundary
+          token={viewerLifetimeToken}
+          onSetup={handleBoundarySetup}
+          onCleanup={handleBoundaryCleanup}
+        >
+          {pdfLoadState.phase !== 'ready' &&
+            pdfLoadState.phase !== 'parsing' && (
+              <Reader
+                document={document || undefined}
+                isEpub={loadedParserLabel === 'EPUB'}
+                isPdf={loadedParserLabel === 'PDF'}
+                data={readerData}
+                onDataChange={handleReaderDataChange}
+                edgeCropEditing={edgeCropEditing}
+                onEdgeCropEditingChange={setEdgeCropEditing}
+                onEdgeCropApply={handleEdgeCropApply}
+                renderMode={renderMode}
+                onRenderModeChange={handleRenderModeChange}
+                fontScale={supportsFontScale ? fontScale : undefined}
+                onFontScaleChange={setFontScale}
+                touchPanMode={touchPanMode}
+                onTouchPanModeChange={setTouchPanMode}
+                onFileUpload={handleReaderFileUpload}
+                emptyText='No document loaded'
+                pageRange={getPageRange(
+                  usePageRange,
+                  pageRangeStart,
+                  pageRangeEnd
+                )}
+                overlayRectType='percent'
+                ocr={
+                  ocrPages.length > 0
+                    ? { enabled: true, pages: ocrPages }
+                    : automaticOcrEnabled
+                }
+                onOcrChange={handleOcrChange}
+                ocrTexts={ocrTextsByPage}
+                onOcrTextsChange={handleOcrTextsChange}
+                onOcrError={handleOcrError}
+                ocrDebug={ocrDevMode}
+                onTextSelectionChange={() => {}}
+                onTextSelectionEnd={() => {}}
+                onSelectText={() => {}}
+                useVirtualPaper={useVirtualPaper}
+                selectedRangeId={selectedRangeId}
+                onSelect={handleSelectionSelect}
+                onLinkedDataChange={handleLinkedDataChange}
+                onSelectRange={handleSelectRange}
+                onUpdateRange={handleUpdateRange}
+                onHighlight={handleHighlight}
+                onDragHighlight={handleDragHighlight}
+                onRemoveRange={handleRemoveRange}
+                onHighlightColorChange={setHighlightColor}
+                onSelectionEnd={handleSelectionEnd}
+                selectionRef={selectionRef}
+                highlightColor={highlightColor}
+                selectionColor='rgba(33, 150, 243, 0.2)'
+                autoHighlight={autoHighlight}
+                containMarginX={containMarginX}
+                containMarginTop={containMarginTop}
+                containMarginBottom={containMarginBottom}
+                selectedTool={selectedTool}
+                onSelectedToolChange={handleToolChange}
+                onPagePaintingsChange={handlePagePaintingsChange}
+                showPageBrowser={showPageBrowser}
+                onPageBrowserClose={() => setShowPageBrowser(false)}
+                themeColor={themeColor}
+                drawingStrokeColor={toolColor}
+                onDrawingStrokeColorChange={setToolColor}
+                colors={DEMO_READER_COLORS}
+                comments={comments}
+                onCommentsChange={handleCommentsChange}
+                selectedRectId={selectedRectId}
+                onCreateRect={handleCreateRect}
+                onSelectRect={handleSelectRect}
+                onUpdateRect={handleUpdateRect}
+                onRemoveRect={handleRemoveRect}
+                annotationHistory={{
+                  enabled: true,
+                  resetKey: uploadedFile?.name ?? 'none'
+                }}
+                onAnnotationHistoryChange={handleAnnotationHistoryChange}
+                onCommentHighlight={handleCommentHighlight}
+                onIntermediateDocumentRenderTiming={
+                  handleIntermediateDocumentRenderTiming
+                }
+                onPageLoadStatusChange={setLoadedPages}
+              />
+            )}
+        </ViewerLifetimeBoundary>
       </div>
       {highlightDragPreview !== null ? (
         <div
