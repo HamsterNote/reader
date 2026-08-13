@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.2] - 2026-08-13
+
+### Fixed
+- 修复 native Layout 模式下 `scrollToRange` 跳转到目标范围时仅更新纵向滚动的问题：现在同步计算横向偏移，将范围中心与视口中心水平对齐；目标页 DOM 尺寸不可用时回退到计算出的绝对横纵偏移。
+- 修复 Layout/Text 模式切换时持久化阅读进度与交接锚点不一致的问题：模式切换时 `handoffReadingPosition` 返回最新 `ReaderData`，将最新锚点随 `onDataChange` 一并写入 `textReadingProgress` / `virtualPaper` / `layoutReadingProgress`。
+
 ## [0.11.1-beta.2] - 2026-08-12
 
 ### Added

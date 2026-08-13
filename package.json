@@ -1,6 +1,6 @@
 {
   "name": "@hamster-note/reader",
-  "version": "0.11.1-beta.2",
+  "version": "1.11.2",
   "description": "",
   "type": "module",
   "main": "dist/index.js",
