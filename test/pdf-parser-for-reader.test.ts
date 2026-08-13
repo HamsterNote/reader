@@ -1,3 +1,4 @@
+import { IntermediateDocument, IntermediatePageMap } from '@hamster-note/types'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -30,16 +31,16 @@ describe('configurePdfParserForReader', () => {
   })
 
   it('leaves parser test doubles without a session loader unchanged', () => {
-    // Given: 单元测试或替代实现只暴露公开 encode 方法。
-    const encode = vi.fn()
-    const parser = { encode }
+    // Given: 单元测试或替代实现只暴露公开 openDocument 方法。
+    const openDocument = vi.fn()
+    const parser = { openDocument }
 
     // When: Reader 尝试启用可选的 PDF.js raw image 配置。
     const configured = configurePdfParserForReader(parser)
 
     // Then: 缺少内部loader不会阻断公开parser契约。
     expect(configured).toBe(false)
-    expect(parser).toEqual({ encode })
+    expect(parser).toEqual({ openDocument })
   })
 
   it('waits for the PDF.js object callback when its synchronous result is null', async () => {
@@ -70,23 +71,38 @@ describe('configurePdfParserForReader', () => {
 })
 
 describe('openPdfDocumentForReader', () => {
-  it('falls back to encode when the published parser has no openDocument method', async () => {
-    // Given: npm 已发布 parser 的真实公开形态：有 encode，但没有新 openDocument API。
-    const document = { id: 'published-parser-document' }
-    const encode = vi.fn(async () => document)
-    const parser = { encode }
+  it('delegates to the published openDocument API and preserves its handle', async () => {
+    // Given: 1.1.0 parser 公开 openDocument，并返回带生命周期所有权的句柄。
+    const document = new IntermediateDocument({
+      id: 'published-parser-document',
+      title: 'Example',
+      pagesMap: new IntermediatePageMap()
+    })
+    const dispose = vi.fn(async () => undefined)
+    const handle = {
+      id: 'pdf-session-1',
+      title: 'Example',
+      pageCount: 2,
+      document,
+      dispose
+    }
+    const openDocument = vi.fn(async () => handle)
+    const parser = { openDocument }
     const source = new ArrayBuffer(4)
     const onProgress = vi.fn()
-
-    // When: Reader 通过版本兼容边界打开 PDF。
-    const handle = await openPdfDocumentForReader(parser, source, {
+    const options = {
       pages: [2, 4],
+      scanConcurrency: 3,
       onProgress
-    })
+    }
 
-    // Then: 旧版 encode 仍能完成加载，并返回统一、可安全释放的文档句柄。
-    expect(encode).toHaveBeenCalledWith(source, { pages: [2, 4] }, onProgress)
-    expect(handle.document).toBe(document)
-    await expect(handle.dispose()).resolves.toBeUndefined()
+    // When: Reader 通过统一入口打开 PDF。
+    const openedHandle = await openPdfDocumentForReader(parser, source, options)
+
+    // Then: 新版扫描参数原样传递，且保留 parser 的真实 dispose 生命周期。
+    expect(openDocument).toHaveBeenCalledWith(source, options)
+    expect(openedHandle).toBe(handle)
+    await expect(openedHandle.dispose()).resolves.toBeUndefined()
+    expect(dispose).toHaveBeenCalledOnce()
   })
 })

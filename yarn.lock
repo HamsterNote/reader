@@ -509,10 +509,10 @@
     "@system-ui-js/multi-drag-core" "0.4.0"
     use-undo "1.2.0"
 
-"@hamster-note/pdf-parser@^1.0.0":
-  version "1.0.0"
-  resolved "https://registry.yarnpkg.com/@hamster-note/pdf-parser/-/pdf-parser-1.0.0.tgz#6adaf0037d1846d8072a385557617607a1aa8ecb"
-  integrity sha512-S8tlCPW1/pgMU8BIWjCTjTRBsQimoFmn188ud5eGmm6SBSxR5KHKW1t+Jg1pcbHb78xBmLhVlOEBsMEV/DVgBA==
+"@hamster-note/pdf-parser@^1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/pdf-parser/-/pdf-parser-1.1.0.tgz#50f9631792257562665b2fa9fd12c2c4cdddbd02"
+  integrity sha512-mMRSBTWqG+m6Iga6uzfmSCSeJAw3ZtZOq5ap1ghM8+QVnwmcGhzmgTnkMjcuwWvh6aF1bUadk7UGG6jjCC+44A==
   dependencies:
     "@hamster-note/document-parser" "^0.2.1"
     "@hamster-note/types" "0.8.0"

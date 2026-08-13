@@ -2,10 +2,10 @@ import { DocxParser } from '@hamster-note/docx-parser'
 import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
-import { PdfParser } from '@hamster-note/pdf-parser'
+import { type OpenDocumentHandle, PdfParser } from '@hamster-note/pdf-parser'
 import {
-  type IntermediateDocumentRenderTimingEntry,
   type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
+  type IntermediateDocumentRenderTimingEntry,
   Reader,
   type ReaderAnnotationHistoryStatus,
   type ReaderAnnotationHistoryValue,
@@ -16,15 +16,16 @@ import {
   type ReaderEdgeCrop,
   type ReaderFontScale,
   type ReaderLinkedSelectionData,
+  type ReaderLoadingProgress,
   type ReaderPageRange,
   type ReaderPageTool,
   type ReaderRenderMode,
   type ReaderSelectionRange,
   type ReaderSelectionRectangle,
   type ReaderSelectionRef,
-  type ReaderTouchPanMode,
   type ReaderTextAnchor,
   type ReaderTextReadingProgress,
+  type ReaderTouchPanMode,
   type ReaderVirtualPaperState,
   summarizeHighlightRanges,
   traceHighlight
@@ -54,19 +55,18 @@ import {
   serializeOcrStorage
 } from './ocrStorage'
 import {
-  type PdfDocumentHandle,
   configurePdfParserForReader,
   openPdfDocumentForReader
 } from './pdfParserForReader'
+import {
+  parseReaderPreferences,
+  serializeReaderPreferences
+} from './readerPreferencesStorage'
 import {
   clearRecentFile,
   loadRecentFile,
   saveRecentFile
 } from './recentFileStorage'
-import {
-  parseReaderPreferences,
-  serializeReaderPreferences
-} from './readerPreferencesStorage'
 import {
   createViewerLifetimeToken,
   ViewerLifetimeBoundary,
@@ -74,8 +74,6 @@ import {
 } from './ViewerLifetimeBoundary'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
-
-type OpenDocumentHandle = PdfDocumentHandle<IntermediateDocument>
 
 type FileSelectionSource = 'reader-upload' | 'sidebar' | 'recent-file'
 
@@ -546,28 +544,6 @@ function ParseStatus({
   readonly timing: PdfTimingPanelState
   readonly onLoadPdf: () => void
 }) {
-  let progress: {
-    readonly label: string
-    readonly current: number
-    readonly total: number
-  } | null = null
-  if (pdfLoadState.phase === 'loading') {
-    progress = {
-      label: '正在读取文件',
-      current: pdfLoadState.loaded,
-      total: pdfLoadState.total
-    }
-  } else if (pdfLoadState.phase === 'parsing') {
-    progress = {
-      label: '正在解析 PDF',
-      current: pdfLoadState.current,
-      total: pdfLoadState.total
-    }
-  }
-  const progressRatio =
-    progress && progress.total > 0 ? progress.current / progress.total : 0
-  const progressPercent = Math.min(100, Math.max(0, progressRatio * 100))
-
   return (
     <>
       <section
@@ -622,25 +598,7 @@ function ParseStatus({
           </ul>
         )}
       </section>
-      {progress && (
-        <section
-          data-testid='pdf-progress-status'
-          style={{ marginBottom: '24px' }}
-        >
-          <h2>{progress.label}</h2>
-          <progress
-            aria-label={progress.label}
-            data-testid='pdf-progress-bar'
-            max={100}
-            value={progressPercent}
-            style={{ width: '100%' }}
-          />
-          <p data-testid='pdf-progress-percent'>
-            {progressPercent.toFixed(0)}%
-          </p>
-        </section>
-      )}
-      {isParsing && !progress && (
+      {isParsing && (
         <section style={{ marginBottom: '24px' }}>
           <h2>Parsing...</h2>
           <p>Loading file content...</p>
@@ -1987,6 +1945,29 @@ export function App() {
   }, [])
 
   const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
+  let readerLoadingProgress: ReaderLoadingProgress | null
+  switch (pdfLoadState.phase) {
+    case 'loading':
+      readerLoadingProgress = {
+        label: '正在读取文件',
+        current: pdfLoadState.loaded,
+        total: pdfLoadState.total
+      }
+      break
+    case 'parsing':
+      readerLoadingProgress = {
+        label: '正在解析 PDF',
+        current: pdfLoadState.current,
+        total: pdfLoadState.total
+      }
+      break
+    case 'done':
+    case 'error':
+    case 'idle':
+    case 'ready':
+      readerLoadingProgress = null
+      break
+  }
 
   return (
     <main
@@ -2281,43 +2262,39 @@ export function App() {
                 </label>
               </div>
               {renderMode === 'layout' && (
-                <>
-                  <div style={{ marginBottom: '12px' }}>
-                    <label
+                <div style={{ marginBottom: '12px' }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    <span>滑动模式 Touch Pan Mode</span>
+                    <select
+                      value={touchPanMode}
+                      onChange={(e) => {
+                        const nextTouchPanMode = e.currentTarget.value
+                        if (
+                          nextTouchPanMode === 'single-finger' ||
+                          nextTouchPanMode === 'two-finger'
+                        ) {
+                          setTouchPanMode(nextTouchPanMode)
+                        }
+                      }}
+                      data-testid='touch-pan-mode-select'
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
+                        padding: '4px 8px',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px',
+                        background: '#fff'
                       }}
                     >
-                      <span>滑动模式 Touch Pan Mode</span>
-                      <select
-                        value={touchPanMode}
-                        onChange={(e) => {
-                          const nextTouchPanMode = e.currentTarget.value
-                          if (
-                            nextTouchPanMode === 'single-finger' ||
-                            nextTouchPanMode === 'two-finger'
-                          ) {
-                            setTouchPanMode(nextTouchPanMode)
-                          }
-                        }}
-                        data-testid='touch-pan-mode-select'
-                        style={{
-                          padding: '4px 8px',
-                          border: '1px solid #ccc',
-                          borderRadius: '4px',
-                          background: '#fff'
-                        }}
-                      >
-                        <option value='single-finger'>
-                          单指 Single-finger
-                        </option>
-                        <option value='two-finger'>双指 Two-finger</option>
-                      </select>
-                    </label>
-                  </div>
-                </>
+                      <option value='single-finger'>单指 Single-finger</option>
+                      <option value='two-finger'>双指 Two-finger</option>
+                    </select>
+                  </label>
+                </div>
               )}
               <div style={{ marginBottom: '12px' }}>
                 <label
@@ -2833,90 +2810,90 @@ export function App() {
           onSetup={handleBoundarySetup}
           onCleanup={handleBoundaryCleanup}
         >
-          {pdfLoadState.phase !== 'ready' &&
-            pdfLoadState.phase !== 'parsing' && (
-              <Reader
-                document={document || undefined}
-                isEpub={loadedParserLabel === 'EPUB'}
-                isPdf={loadedParserLabel === 'PDF'}
-                data={readerData}
-                onDataChange={handleReaderDataChange}
-                edgeCropEditing={edgeCropEditing}
-                onEdgeCropEditingChange={setEdgeCropEditing}
-                onEdgeCropApply={handleEdgeCropApply}
-                renderMode={renderMode}
-                onRenderModeChange={handleRenderModeChange}
-                fontScale={supportsFontScale ? fontScale : undefined}
-                onFontScaleChange={setFontScale}
-                touchPanMode={touchPanMode}
-                onTouchPanModeChange={setTouchPanMode}
-                onFileUpload={handleReaderFileUpload}
-                emptyText='No document loaded'
-                pageRange={getPageRange(
-                  usePageRange,
-                  pageRangeStart,
-                  pageRangeEnd
-                )}
-                overlayRectType='percent'
-                ocr={
-                  ocrPages.length > 0
-                    ? { enabled: true, pages: ocrPages }
-                    : automaticOcrEnabled
-                }
-                onOcrChange={handleOcrChange}
-                ocrTexts={ocrTextsByPage}
-                onOcrTextsChange={handleOcrTextsChange}
-                onOcrError={handleOcrError}
-                ocrDebug={ocrDevMode}
-                onTextSelectionChange={() => {}}
-                onTextSelectionEnd={() => {}}
-                onSelectText={() => {}}
-                useVirtualPaper={useVirtualPaper}
-                selectedRangeId={selectedRangeId}
-                onSelect={handleSelectionSelect}
-                onLinkedDataChange={handleLinkedDataChange}
-                onSelectRange={handleSelectRange}
-                onUpdateRange={handleUpdateRange}
-                onHighlight={handleHighlight}
-                onDragHighlight={handleDragHighlight}
-                onRemoveRange={handleRemoveRange}
-                onHighlightColorChange={setHighlightColor}
-                onSelectionEnd={handleSelectionEnd}
-                selectionRef={selectionRef}
-                highlightColor={highlightColor}
-                selectionColor='rgba(33, 150, 243, 0.2)'
-                autoHighlight={autoHighlight}
-                containMarginX={containMarginX}
-                containMarginTop={containMarginTop}
-                containMarginBottom={containMarginBottom}
-                selectedTool={selectedTool}
-                onSelectedToolChange={handleToolChange}
-                onPagePaintingsChange={handlePagePaintingsChange}
-                showPageBrowser={showPageBrowser}
-                onPageBrowserClose={() => setShowPageBrowser(false)}
-                themeColor={themeColor}
-                drawingStrokeColor={toolColor}
-                onDrawingStrokeColorChange={setToolColor}
-                colors={DEMO_READER_COLORS}
-                comments={comments}
-                onCommentsChange={handleCommentsChange}
-                selectedRectId={selectedRectId}
-                onCreateRect={handleCreateRect}
-                onSelectRect={handleSelectRect}
-                onUpdateRect={handleUpdateRect}
-                onRemoveRect={handleRemoveRect}
-                annotationHistory={{
-                  enabled: true,
-                  resetKey: uploadedFile?.name ?? 'none'
-                }}
-                onAnnotationHistoryChange={handleAnnotationHistoryChange}
-                onCommentHighlight={handleCommentHighlight}
-                onIntermediateDocumentRenderTiming={
-                  handleIntermediateDocumentRenderTiming
-                }
-                onPageLoadStatusChange={setLoadedPages}
-              />
-            )}
+          {pdfLoadState.phase !== 'ready' && (
+            <Reader
+              document={document || undefined}
+              loadingProgress={readerLoadingProgress}
+              isEpub={loadedParserLabel === 'EPUB'}
+              isPdf={loadedParserLabel === 'PDF'}
+              data={readerData}
+              onDataChange={handleReaderDataChange}
+              edgeCropEditing={edgeCropEditing}
+              onEdgeCropEditingChange={setEdgeCropEditing}
+              onEdgeCropApply={handleEdgeCropApply}
+              renderMode={renderMode}
+              onRenderModeChange={handleRenderModeChange}
+              fontScale={supportsFontScale ? fontScale : undefined}
+              onFontScaleChange={setFontScale}
+              touchPanMode={touchPanMode}
+              onTouchPanModeChange={setTouchPanMode}
+              onFileUpload={handleReaderFileUpload}
+              emptyText='No document loaded'
+              pageRange={getPageRange(
+                usePageRange,
+                pageRangeStart,
+                pageRangeEnd
+              )}
+              overlayRectType='percent'
+              ocr={
+                ocrPages.length > 0
+                  ? { enabled: true, pages: ocrPages }
+                  : automaticOcrEnabled
+              }
+              onOcrChange={handleOcrChange}
+              ocrTexts={ocrTextsByPage}
+              onOcrTextsChange={handleOcrTextsChange}
+              onOcrError={handleOcrError}
+              ocrDebug={ocrDevMode}
+              onTextSelectionChange={() => {}}
+              onTextSelectionEnd={() => {}}
+              onSelectText={() => {}}
+              useVirtualPaper={useVirtualPaper}
+              selectedRangeId={selectedRangeId}
+              onSelect={handleSelectionSelect}
+              onLinkedDataChange={handleLinkedDataChange}
+              onSelectRange={handleSelectRange}
+              onUpdateRange={handleUpdateRange}
+              onHighlight={handleHighlight}
+              onDragHighlight={handleDragHighlight}
+              onRemoveRange={handleRemoveRange}
+              onHighlightColorChange={setHighlightColor}
+              onSelectionEnd={handleSelectionEnd}
+              selectionRef={selectionRef}
+              highlightColor={highlightColor}
+              selectionColor='rgba(33, 150, 243, 0.2)'
+              autoHighlight={autoHighlight}
+              containMarginX={containMarginX}
+              containMarginTop={containMarginTop}
+              containMarginBottom={containMarginBottom}
+              selectedTool={selectedTool}
+              onSelectedToolChange={handleToolChange}
+              onPagePaintingsChange={handlePagePaintingsChange}
+              showPageBrowser={showPageBrowser}
+              onPageBrowserClose={() => setShowPageBrowser(false)}
+              themeColor={themeColor}
+              drawingStrokeColor={toolColor}
+              onDrawingStrokeColorChange={setToolColor}
+              colors={DEMO_READER_COLORS}
+              comments={comments}
+              onCommentsChange={handleCommentsChange}
+              selectedRectId={selectedRectId}
+              onCreateRect={handleCreateRect}
+              onSelectRect={handleSelectRect}
+              onUpdateRect={handleUpdateRect}
+              onRemoveRect={handleRemoveRect}
+              annotationHistory={{
+                enabled: true,
+                resetKey: uploadedFile?.name ?? 'none'
+              }}
+              onAnnotationHistoryChange={handleAnnotationHistoryChange}
+              onCommentHighlight={handleCommentHighlight}
+              onIntermediateDocumentRenderTiming={
+                handleIntermediateDocumentRenderTiming
+              }
+              onPageLoadStatusChange={setLoadedPages}
+            />
+          )}
         </ViewerLifetimeBoundary>
       </div>
       {highlightDragPreview !== null ? (

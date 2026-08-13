@@ -13,6 +13,7 @@ import type {
   ReaderEdgeCrop,
   ReaderFontScale,
   ReaderLinkedSelectionData,
+  ReaderLoadingProgress,
   ReaderOcrOptions,
   ReaderPageTool,
   ReaderRenderMode,
@@ -175,6 +176,7 @@ type MockReaderProps = Record<string, unknown> & {
   data?: ReaderData
   onDataChange?: (nextData: ReaderData) => void
   onFileUpload?: (file: File) => void
+  loadingProgress?: ReaderLoadingProgress | null
   onTextSelectionChange?: (text: unknown, detail: unknown) => void
   onTextSelectionEnd?: (text: unknown, detail: unknown) => void
   onSelectText?: (
@@ -472,6 +474,12 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
           }}
         >
           {props.document ? props.document.title : props.emptyText}
+          {props.loadingProgress && (
+            <section data-testid='mock-reader-loading-progress'>
+              {props.loadingProgress.label}: {props.loadingProgress.current}/
+              {props.loadingProgress.total}
+            </section>
+          )}
           {props.onFileUpload && (
             <input
               data-testid='file-input'
@@ -687,6 +695,28 @@ describe('demo parser flow', () => {
     expect(PdfParser.openDocument).toHaveBeenCalledOnce()
   })
 
+  it('renders PDF file-read progress inside the Reader container', async () => {
+    // Given: PDF 文件读取已报告部分字节，但读取任务尚未结束。
+    const pendingLoad =
+      createDeferred<Awaited<ReturnType<typeof loadFileToMemory>>>()
+    vi.mocked(loadFileToMemory).mockImplementationOnce((file, onProgress) => {
+      onProgress?.(1, file.size)
+      return pendingLoad.promise
+    })
+
+    render(<App />)
+
+    // When: 用户选择 PDF 并进入文件读取阶段。
+    selectFile(makeFile('reader-progress.pdf'))
+    const reader = await screen.findByTestId('mock-reader')
+    const progress = await screen.findByTestId('mock-reader-loading-progress')
+
+    // Then: 进度属于 Reader 容器，侧栏不再渲染旧进度组件。
+    expect(reader).toContainElement(progress)
+    expect(progress).toHaveTextContent('正在读取文件: 1/3')
+    expect(screen.queryByTestId('pdf-progress-status')).not.toBeInTheDocument()
+  })
+
   it('configures the PDF parser immediately before every openDocument call', async () => {
     const events: string[] = []
     vi.mocked(configurePdfParserForReader).mockImplementation(() => {
@@ -770,7 +800,9 @@ describe('demo parser flow', () => {
 
     render(<App />)
     await upload(makeFile('stale.pdf'))
-    await screen.findByText('正在解析 PDF')
+    expect(
+      await screen.findByTestId('mock-reader-loading-progress')
+    ).toHaveTextContent('正在解析 PDF')
     selectFile(makeFile('fresh.txt'))
     expect(await screen.findByText('Fresh TXT')).toBeInTheDocument()
 

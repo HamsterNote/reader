@@ -1,33 +1,15 @@
+import type {
+  OpenDocumentHandle,
+  OpenDocumentOptions
+} from '@hamster-note/pdf-parser'
+
 type PdfJsDocumentOverrides = Readonly<Record<string, unknown>>
 
-type PdfEncodeProgress = {
-  readonly current: number
-  readonly total: number
-}
-
-type PdfEncodeProgressReporter = (progress: PdfEncodeProgress) => void
-
-type PdfOpenOptions = {
-  readonly onProgress?: PdfEncodeProgressReporter
-  readonly pages?: number[]
-  readonly signal?: AbortSignal
-}
-
-type PdfParserForReader<Document> = {
-  readonly encode: (
+type PdfParserForReader = {
+  readonly openDocument: (
     source: ArrayBuffer,
-    options?: { readonly pages?: number[] },
-    onProgress?: PdfEncodeProgressReporter
-  ) => Promise<Document | undefined>
-  readonly openDocument?: (
-    source: ArrayBuffer,
-    options?: PdfOpenOptions
-  ) => Promise<PdfDocumentHandle<Document>>
-}
-
-export type PdfDocumentHandle<Document> = {
-  readonly document: Document
-  readonly dispose: () => Promise<void>
+    options?: OpenDocumentOptions
+  ) => Promise<OpenDocumentHandle>
 }
 
 type PdfParserSessionLoader = (
@@ -42,26 +24,12 @@ type PdfPageObjectResolver = (
 
 const configuredParsers = new WeakSet<object>()
 
-export async function openPdfDocumentForReader<Document>(
-  parser: PdfParserForReader<Document>,
+export async function openPdfDocumentForReader(
+  parser: PdfParserForReader,
   source: ArrayBuffer,
-  options: PdfOpenOptions = {}
-): Promise<PdfDocumentHandle<Document>> {
-  if (parser.openDocument !== undefined) {
-    return parser.openDocument(source, options)
-  }
-
-  const document = await parser.encode(
-    source,
-    { pages: options.pages },
-    options.onProgress
-  )
-  if (document === undefined) throw new Error('PDF parser returned no document')
-
-  return {
-    document,
-    dispose: async () => undefined
-  }
+  options: OpenDocumentOptions = {}
+): Promise<OpenDocumentHandle> {
+  return parser.openDocument(source, options)
 }
 
 export function configurePdfParserForReader(parser: object): boolean {

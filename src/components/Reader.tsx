@@ -27,10 +27,6 @@ import type {
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
-  ReaderColorOption,
-  ReaderRenderMode
-} from '../types/readerOptions'
-import type {
   ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
@@ -38,6 +34,10 @@ import type {
   ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from '../types/readerData'
+import type {
+  ReaderColorOption,
+  ReaderRenderMode
+} from '../types/readerOptions'
 import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryOptions,
@@ -155,6 +155,8 @@ const resolveBottomBarHistoryStatus = ({
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
+  /** 宿主提供的受控加载进度；传入时在 Reader 容器内显示并暂时隐藏上传区。 */
+  loadingProgress?: ReaderLoadingProgress | null
   /** 可持久化阅读数据的统一入口；其中字段优先于对应的旧版扁平 props。 */
   data?: ReaderData
   /** 阅读数据变化回调；回传带顶部文字锚点的阅读位置和精确书签。 */
@@ -372,6 +374,12 @@ export type ReaderProps = {
   onEdgeCropEditingChange?: (editing: boolean) => void
 }
 
+export type ReaderLoadingProgress = {
+  readonly label: string
+  readonly current: number
+  readonly total: number
+}
+
 export const SUPPORTED_UPLOAD_ACCEPT =
   '.pdf,application/pdf,.txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.md,.markdown,text/markdown,text/x-markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/png,image/jpeg,image/gif,image/webp,image/bmp,image/svg+xml'
 
@@ -573,8 +581,23 @@ function resolveVerticalMargins(
   }
 }
 
+function resolveLoadingProgress(
+  progress: ReaderLoadingProgress | null | undefined
+): { readonly label: string; readonly percent: number } | null {
+  if (!progress) {
+    return null
+  }
+
+  const ratio = progress.total > 0 ? progress.current / progress.total : 0
+  return {
+    label: progress.label,
+    percent: Math.min(100, Math.max(0, ratio * 100))
+  }
+}
+
 export function Reader({
   document,
+  loadingProgress,
   data,
   onDataChange,
   edgeCropEditing,
@@ -1445,8 +1468,9 @@ export function Reader({
     [onCommentRect, onSelectRect, selectedRectId]
   )
 
-  const showUploadZone = !document && !uploadedFile
-  const showFileInfo = !document && uploadedFile
+  const resolvedLoadingProgress = resolveLoadingProgress(loadingProgress)
+  const showUploadZone = !document && !uploadedFile && !resolvedLoadingProgress
+  const showFileInfo = !document && uploadedFile && !resolvedLoadingProgress
   const showDocumentContent = document?.title ?? emptyText
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
@@ -1730,7 +1754,33 @@ export function Reader({
       className={rootClassName}
       data-testid='reader-root'
       style={readerThemeStyle}
+      aria-busy={resolvedLoadingProgress ? true : undefined}
     >
+      {resolvedLoadingProgress && (
+        <section
+          className='hamster-reader__loading-progress'
+          data-testid='reader-loading-progress'
+        >
+          <div
+            className='hamster-reader__loading-progress-heading'
+            role='status'
+            aria-live='polite'
+            aria-atomic='true'
+          >
+            <span>{resolvedLoadingProgress.label}</span>
+            <span data-testid='reader-loading-progress-percent'>
+              {resolvedLoadingProgress.percent.toFixed(0)}%
+            </span>
+          </div>
+          <progress
+            aria-label={resolvedLoadingProgress.label}
+            className='hamster-reader__loading-progress-bar'
+            max={100}
+            value={resolvedLoadingProgress.percent}
+          />
+        </section>
+      )}
+
       {showUploadZone && (
         <button
           type='button'
@@ -1777,13 +1827,14 @@ export function Reader({
         </button>
       )}
 
-      {showDocumentContent && !showFileInfo && (
+      {showDocumentContent && !showFileInfo && !resolvedLoadingProgress && (
         <div className='hamster-reader__content' data-testid='reader-content'>
           {renderDocumentContent()}
         </div>
       )}
 
-      {hasDocumentPages &&
+      {!resolvedLoadingProgress &&
+        hasDocumentPages &&
         (bottomBar === undefined ? (
           <DefaultBottomBar
             bottomBarRef={defaultBottomBarRef}
