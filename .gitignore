@@ -3,6 +3,7 @@
 node_modules/
 dist/
 demo-dist/
+demo/.fixtures/
 coverage/
 .nyc_output/
 *.lcov
