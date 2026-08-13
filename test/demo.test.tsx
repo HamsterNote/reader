@@ -161,6 +161,8 @@ const mockReaderProps: MockReaderProps[] = []
 const HIGHLIGHT_STORAGE_PREFIX = 'hamster-reader-demo:highlights:'
 const COMMENT_STORAGE_PREFIX = 'hamster-reader-demo:comments:'
 const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
+const LAYOUT_READING_PROGRESS_STORAGE_PREFIX =
+  'hamster-reader-demo:layout-reading-progress:'
 const TEXT_READING_PROGRESS_STORAGE_PREFIX =
   'hamster-reader-demo:text-reading-progress:'
 
@@ -1461,7 +1463,7 @@ describe('demo parser flow', () => {
     })
   })
 
-  it('restores and persists render mode and selected tool per file', async () => {
+  it('restores legacy reader preferences and persists all preferences per file', async () => {
     // Given: 当前文件已有持久化的阅读偏好。
     localStorage.clear()
     localStorage.setItem(
@@ -1489,19 +1491,34 @@ describe('demo parser flow', () => {
       })
       expect(screen.getByTestId('render-mode-select')).toHaveValue('text')
       expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
+      expect(findDocumentReaderProps()).toMatchObject({
+        fontScale: 1.5,
+        highlightColor: 'rgba(255, 193, 7, 0.35)'
+      })
     })
 
-    // When: Reader 通过统一 data 回传新的模式与工具。
+    // When: Reader 更新 Text 字号和高亮色，再切换到 Layout 更新另一端字号。
     const readerProps = findDocumentReaderProps()
     act(() => {
+      readerProps?.onFontScaleChange?.(0.75)
+      readerProps?.onHighlightColorChange?.('#ff0000')
       readerProps?.onDataChange?.({
         ...readerProps.data,
         renderMode: 'layout',
         selectedTool: 'rect-selection'
       })
     })
+    await waitFor(() => {
+      expect(findDocumentReaderProps()).toMatchObject({
+        renderMode: 'layout',
+        fontScale: 1.5
+      })
+    })
+    act(() => {
+      findDocumentReaderProps()?.onFontScaleChange?.(2)
+    })
 
-    // Then: Demo 同步界面状态并覆盖该文件的持久化偏好。
+    // Then: Demo 保存模式、工具、两种模式各自字号及当前高亮色。
     await waitFor(() => {
       expect(findDocumentReaderProps()?.data).toMatchObject({
         renderMode: 'layout',
@@ -1513,11 +1530,28 @@ describe('demo parser flow', () => {
         )
       ).toBe(
         JSON.stringify({
-          version: 1,
+          version: 2,
           renderMode: 'layout',
-          selectedTool: 'rect-selection'
+          selectedTool: 'rect-selection',
+          textFontScale: 0.75,
+          layoutFontScale: 2,
+          highlightColor: '#ff0000'
         })
       )
+    })
+
+    // When: 切回 Text Mode。
+    act(() => {
+      findDocumentReaderProps()?.onRenderModeChange?.('text')
+    })
+
+    // Then: Text Mode 恢复自己的字号，颜色选择保持不变。
+    await waitFor(() => {
+      expect(findDocumentReaderProps()).toMatchObject({
+        renderMode: 'text',
+        fontScale: 0.75,
+        highlightColor: '#ff0000'
+      })
     })
   })
 
@@ -3440,6 +3474,63 @@ describe('demo parser flow', () => {
           ) || '{}'
         )
       ).toEqual(nextProgress)
+    })
+
+    it('restores, persists, and displays native layout reading progress', async () => {
+      // Given: 当前文件上次停在无文字页面的 42.5% 位置。
+      const progress = { pageNumber: 2, verticalPercentage: 42.5 } as const
+      localStorage.setItem(
+        `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}layout-progress.pdf`,
+        JSON.stringify(progress)
+      )
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Layout Progress Document')
+      )
+
+      // When: 文件打开后，Reader 又报告了一个具体文字位置。
+      render(<App />)
+      upload(makeFile('layout-progress.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.data?.layoutReadingProgress).toEqual(
+          progress
+        )
+      })
+      expect(
+        screen.getByTestId('demo-reading-progress-status')
+      ).toHaveTextContent('第 2 页 · 42.5%')
+      const nextProgress = {
+        pageNumber: 3,
+        textId: 'page-3-paragraph',
+        text: 'New native viewport text with enough additional content to verify the sidebar keeps the saved anchor concise and readable.',
+        offset: 12
+      } as const
+      act(() => {
+        const props = findDocumentReaderProps()
+        props?.onDataChange?.({
+          ...props.data,
+          layoutReadingProgress: nextProgress
+        })
+      })
+
+      // Then: 精确文字进度同步到受控数据、浏览器存储和 Demo 信息区。
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.data?.layoutReadingProgress).toEqual(
+          nextProgress
+        )
+      })
+      expect(
+        JSON.parse(
+          localStorage.getItem(
+            `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}layout-progress.pdf`
+          ) || '{}'
+        )
+      ).toEqual(nextProgress)
+      expect(
+        screen.getByTestId('demo-reading-progress-status')
+      ).toHaveTextContent(
+        '第 3 页 · New native viewport text with enough additional content to verify the sidebar keeps… · 偏移 12'
+      )
     })
   })
 

@@ -28,12 +28,6 @@ import {
   type VirtualPaperTransform,
   type VirtualPaperTransformMeta
 } from '@hamster-note/virtual-paper'
-import {
-  Drag,
-  DragOperationType,
-  type Finger,
-  type Pose
-} from '@system-ui-js/multi-drag'
 import React, {
   type CSSProperties,
   Profiler,
@@ -42,6 +36,8 @@ import React, {
   useCallback,
   useEffect,
   useId,
+  useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -78,7 +74,6 @@ import type {
 } from '../../types/selection'
 import { FLOW_LAYOUT_PAGE_WIDTH, type ReaderPageTool } from '../Page'
 import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
-import type { ReaderLayoutZoom } from './nativeLayoutZoom'
 import { PopoverPortal } from '../PopoverPortal'
 import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
 import { isPointOnSelectionText } from '../selection/caretResolver'
@@ -95,6 +90,7 @@ import { hasHighlightRects } from './highlightRectModes'
 import { getReaderImageAlt } from './intermediateImage'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
+import type { ReaderLayoutZoom } from './nativeLayoutZoom'
 import { PageBrowser } from './PageBrowser'
 import {
   getCroppedPreviewPoint,
@@ -130,9 +126,11 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
+import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
 import {
   findTopTextAnchor,
+  findTextAnchorAtOrBelow,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
@@ -455,6 +453,10 @@ export type ReaderExtraOcr = (
   imageBase64: string
 ) => IntermediatePage | Promise<IntermediatePage>
 
+export type ReaderReadingPositionHandle = {
+  readonly captureTextAnchor: () => ReaderTextAnchor | undefined
+}
+
 export type IntermediateDocumentViewerProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   serializedDocument?: IntermediateDocumentSerialized | null
@@ -547,7 +549,12 @@ export type IntermediateDocumentViewerProps = {
   onVirtualPaperTransformChangeEnd?: (
     transform: ReaderVirtualPaperState
   ) => void
+  /** 原生 Layout 缩放模式的可恢复阅读进度。 */
+  layoutReadingProgress?: ReaderBookmark
+  /** 原生 Layout 滚动后回传文字锚点，页面无文字时回传页内百分比。 */
+  onLayoutReadingProgressChange?: (progress: ReaderBookmark) => void
   onTextAnchorChange?: (anchor: ReaderTextAnchor | undefined) => void
+  readingPositionRef?: Ref<ReaderReadingPositionHandle>
   /**
    * Fires only when a wheel or pinch gesture produces a changed, clamped scale.
    * The detail object reports `source: 'wheel' | 'pinch'` and may include the
@@ -726,6 +733,311 @@ export type IntermediateDocumentViewerProps = {
   onPageLoadStatusChange?: (loadedPageNumbers: number[]) => void
   /** Popover 使用相对定位（absolute）相对于容器，而非 fixed 相对于 window */
   popoverRelative?: boolean
+}
+
+function resolveRestoringNativeProgressKey(
+  progressKey: string | undefined,
+  lastReportedKey: string | undefined,
+  restoringKey: string | undefined
+): string | undefined {
+  return progressKey !== undefined &&
+    (restoringKey === progressKey || lastReportedKey !== progressKey)
+    ? progressKey
+    : undefined
+}
+
+function getUnreportedNativeProgressKey(
+  useVirtualPaper: boolean,
+  nextBookmark: ReaderBookmark | undefined,
+  restoringKey: string | undefined,
+  lastReportedKey: string | undefined
+): string | undefined {
+  if (useVirtualPaper || !nextBookmark || restoringKey !== undefined) {
+    return undefined
+  }
+  const progressKey = getBookmarkKey(nextBookmark)
+  return lastReportedKey === progressKey ? undefined : progressKey
+}
+
+function getInitialLayoutTextAnchor(
+  defaultVirtualPaperTransform: ReaderVirtualPaperState | undefined,
+  layoutReadingProgress: ReaderBookmark | undefined
+): ReaderTextAnchor | undefined {
+  if (defaultVirtualPaperTransform?.anchor) {
+    return defaultVirtualPaperTransform.anchor
+  }
+  return layoutReadingProgress && isTextBookmark(layoutReadingProgress)
+    ? layoutReadingProgress
+    : undefined
+}
+
+function getInitialLayoutBookmark(
+  defaultVirtualPaperTransform: ReaderVirtualPaperState | undefined,
+  layoutReadingProgress: ReaderBookmark | undefined
+): ReaderBookmark | undefined {
+  return defaultVirtualPaperTransform?.anchor ?? layoutReadingProgress
+}
+
+function getOptionalBookmarkKey(
+  bookmark: ReaderBookmark | undefined
+): string | undefined {
+  return bookmark ? getBookmarkKey(bookmark) : undefined
+}
+
+type NativeLayoutProgressReportOptions = {
+  readonly lastReportedProgressKeyRef: { current: string | undefined }
+  readonly nextBookmark: ReaderBookmark | undefined
+  readonly onProgressChange: ((progress: ReaderBookmark) => void) | undefined
+  readonly restoringProgressKeyRef: { current: string | undefined }
+  readonly useVirtualPaper: boolean
+}
+
+function reportUnreportedNativeProgress({
+  lastReportedProgressKeyRef,
+  nextBookmark,
+  onProgressChange,
+  restoringProgressKeyRef,
+  useVirtualPaper
+}: NativeLayoutProgressReportOptions): void {
+  const progressKey = getUnreportedNativeProgressKey(
+    useVirtualPaper,
+    nextBookmark,
+    restoringProgressKeyRef.current,
+    lastReportedProgressKeyRef.current
+  )
+  if (!progressKey || !nextBookmark) return
+
+  lastReportedProgressKeyRef.current = progressKey
+  onProgressChange?.(nextBookmark)
+}
+
+function completeNativeProgressRestore(
+  source: 'restore' | 'bookmark',
+  restoringProgressKeyRef: { current: string | undefined }
+): void {
+  if (source === 'restore') {
+    restoringProgressKeyRef.current = undefined
+  }
+}
+
+function resolveNativeLayoutBookmark(
+  anchor: ReaderTextAnchor | undefined,
+  viewportRect: DOMRect | undefined,
+  topPage: { readonly pageNumber: number; readonly rect: DOMRect } | undefined
+): ReaderBookmark | undefined {
+  if (anchor) return anchor
+  if (!viewportRect || !topPage) return undefined
+
+  return {
+    pageNumber: topPage.pageNumber,
+    verticalPercentage:
+      Math.round(
+        Math.min(
+          100,
+          Math.max(
+            0,
+            ((viewportRect.top - topPage.rect.top) / topPage.rect.height) * 100
+          )
+        ) * 100
+      ) / 100
+  }
+}
+
+type NativeLayoutProgressGateOptions = {
+  readonly lastReportedProgressKeyRef: { current: string | undefined }
+  readonly layoutReadingProgress: ReaderBookmark | undefined
+  readonly restoringProgressKeyRef: { current: string | undefined }
+  readonly runtimeDocument: IntermediateDocument | null
+  readonly useVirtualPaper: boolean
+}
+
+function useSyncNativeLayoutProgressGate({
+  lastReportedProgressKeyRef,
+  layoutReadingProgress,
+  restoringProgressKeyRef,
+  runtimeDocument,
+  useVirtualPaper
+}: NativeLayoutProgressGateOptions): void {
+  const progressDocumentRef = useRef(runtimeDocument)
+  useLayoutEffect(() => {
+    const progressKey = layoutReadingProgress
+      ? getBookmarkKey(layoutReadingProgress)
+      : undefined
+    const documentChanged = progressDocumentRef.current !== runtimeDocument
+    progressDocumentRef.current = runtimeDocument
+    const nativeProgressKey = useVirtualPaper ? undefined : progressKey
+    restoringProgressKeyRef.current = documentChanged
+      ? nativeProgressKey
+      : resolveRestoringNativeProgressKey(
+          nativeProgressKey,
+          lastReportedProgressKeyRef.current,
+          restoringProgressKeyRef.current
+        )
+    lastReportedProgressKeyRef.current = progressKey
+  }, [
+    lastReportedProgressKeyRef,
+    layoutReadingProgress,
+    runtimeDocument,
+    restoringProgressKeyRef,
+    useVirtualPaper
+  ])
+}
+
+type NativeLayoutReadingProgressRestoreOptions = {
+  readonly cancelPendingProgressRestore: () => void
+  readonly effectiveScale: number
+  readonly layoutReadingProgress: ReaderBookmark | undefined
+  readonly navigateToBookmark: (
+    bookmark: ReaderBookmark,
+    source?: 'restore' | 'bookmark'
+  ) => void
+  readonly pageRefs: { readonly current: Map<number, HTMLDivElement> }
+  readonly pageNumbers: readonly number[]
+  readonly pageResourcesDocument: IntermediateDocument | null
+  readonly pageStatuses: ReadonlyMap<number, PageLoadStatus>
+  readonly requestPageLoad: (pageNumber: number) => void
+  readonly restoringProgressKeyRef: { current: string | undefined }
+  readonly runtimeDocument: IntermediateDocument | null
+  readonly useVirtualPaper: boolean
+  readonly viewerRootRef: { readonly current: HTMLDivElement | null }
+}
+
+function useNativeLayoutReadingProgressRestore({
+  cancelPendingProgressRestore,
+  effectiveScale,
+  layoutReadingProgress,
+  navigateToBookmark,
+  pageNumbers,
+  pageRefs,
+  pageResourcesDocument,
+  pageStatuses,
+  requestPageLoad,
+  restoringProgressKeyRef,
+  runtimeDocument,
+  useVirtualPaper,
+  viewerRootRef
+}: NativeLayoutReadingProgressRestoreOptions): void {
+  const appliedProgressRef = useRef<{
+    readonly runtimeDocument: IntermediateDocument
+    readonly key: string
+    readonly scale: number
+  } | null>(null)
+
+  useEffect(() => {
+    if (useVirtualPaper) return
+    if (!layoutReadingProgress) {
+      cancelPendingProgressRestore()
+      appliedProgressRef.current = null
+      return
+    }
+    if (!runtimeDocument || pageResourcesDocument !== runtimeDocument) {
+      return
+    }
+
+    const key = getBookmarkKey(layoutReadingProgress)
+    const applied = appliedProgressRef.current
+    if (
+      applied?.runtimeDocument === runtimeDocument &&
+      applied.key === key &&
+      applied.scale === effectiveScale
+    ) {
+      return
+    }
+
+    const markApplied = () => {
+      appliedProgressRef.current = {
+        runtimeDocument,
+        key,
+        scale: effectiveScale
+      }
+    }
+    const releaseRestore = () => {
+      if (restoringProgressKeyRef.current === key) {
+        restoringProgressKeyRef.current = undefined
+      }
+    }
+    const isScaleReapplication =
+      applied?.runtimeDocument === runtimeDocument && applied.key === key
+    if (restoringProgressKeyRef.current !== key && !isScaleReapplication) {
+      cancelPendingProgressRestore()
+      markApplied()
+      return
+    }
+
+    const progressPageStatus = pageStatuses.get(
+      layoutReadingProgress.pageNumber
+    )
+    if (
+      !pageNumbers.includes(layoutReadingProgress.pageNumber) ||
+      progressPageStatus === 'error'
+    ) {
+      cancelPendingProgressRestore()
+      releaseRestore()
+      markApplied()
+      return
+    }
+    if (
+      !isTextBookmark(layoutReadingProgress) &&
+      progressPageStatus !== 'loaded'
+    ) {
+      requestPageLoad(layoutReadingProgress.pageNumber)
+      return
+    }
+    if (
+      !isTextBookmark(layoutReadingProgress) &&
+      !pageRefs.current.has(layoutReadingProgress.pageNumber)
+    ) {
+      releaseRestore()
+      markApplied()
+      return
+    }
+    if (isTextBookmark(layoutReadingProgress)) {
+      markApplied()
+      navigateToBookmark(layoutReadingProgress, 'restore')
+      return
+    }
+
+    restoringProgressKeyRef.current = key
+    const viewerWindow = viewerRootRef.current?.ownerDocument.defaultView
+    if (!viewerWindow) {
+      navigateToBookmark(layoutReadingProgress, 'restore')
+      restoringProgressKeyRef.current = undefined
+      markApplied()
+      return
+    }
+
+    let settleFrameId: number | undefined
+    const restoreProgress = () => {
+      navigateToBookmark(layoutReadingProgress, 'restore')
+      markApplied()
+      releaseRestore()
+    }
+    const waitForSettledLayout = () => {
+      settleFrameId = viewerWindow.requestAnimationFrame(restoreProgress)
+    }
+    const layoutFrameId =
+      viewerWindow.requestAnimationFrame(waitForSettledLayout)
+    return () => {
+      viewerWindow.cancelAnimationFrame(layoutFrameId)
+      if (settleFrameId !== undefined) {
+        viewerWindow.cancelAnimationFrame(settleFrameId)
+      }
+    }
+  }, [
+    cancelPendingProgressRestore,
+    effectiveScale,
+    layoutReadingProgress,
+    navigateToBookmark,
+    pageNumbers,
+    pageRefs,
+    pageResourcesDocument,
+    pageStatuses,
+    requestPageLoad,
+    restoringProgressKeyRef,
+    runtimeDocument,
+    useVirtualPaper,
+    viewerRootRef
+  ])
 }
 
 type PageSize = {
@@ -1399,6 +1711,7 @@ type ViewerContentProps = PageResources & {
   ) => void
   effectiveSelectedRangeId: string | null
   selectedHighlight: ReaderSelectionRange | null
+  storedRanges: ReaderSelectionRange[]
   effectiveRanges: ReaderSelectionRange[]
   runtimePageSelectionId: (pageNumber: number) => string
   runtimeLinkedData: LinkedSelectionData
@@ -2385,27 +2698,6 @@ interface TouchTapStart {
   moved: boolean
 }
 
-type HighlightDragStart = {
-  pointerId: number
-  pointerType: 'mouse' | 'touch'
-  clientX: number
-  clientY: number
-  highlight: ReaderSelectionRange
-  triggered: boolean
-  longPressTimer: ReturnType<typeof setTimeout> | null
-}
-
-type HighlightDragOptions = {
-  viewerRootElement: HTMLDivElement | null
-  selectedTool: ReaderPageTool | undefined
-  effectiveRanges: ReaderSelectionRange[]
-  runtimeLinkedDataRef: React.MutableRefObject<ReaderLinkedSelectionData>
-  onDragHighlight: ((highlight: ReaderSelectionRange) => void) | undefined
-}
-
-const HIGHLIGHT_DRAG_MOVE_TOLERANCE = 4
-const HIGHLIGHT_TOUCH_LONG_PRESS_MS = 500
-
 /**
  * 判断一次 touch pointerup 是否应该被忽略：不是有效的轻触、或当前正在拖拽选区/创建 range。
  */
@@ -2421,7 +2713,6 @@ function shouldIgnoreTouchPointerUp(
     event.pointerId !== touchStart.pointerId ||
     Math.abs(event.clientX - touchStart.clientX) > 4 ||
     Math.abs(event.clientY - touchStart.clientY) > 4 ||
-    linkedData.selectedRangeId === null ||
     Boolean(linkedData.activeRange) ||
     Boolean(linkedData.draggingRange) ||
     Boolean(linkedData.selectingText)
@@ -2756,302 +3047,6 @@ function useTouchTapSelection(
     handleTouchPointerMove,
     handleTouchPointerUp,
     handleTouchPointerCancel
-  }
-}
-
-/**
- * 使用 multi-drag 统一追踪鼠标与触摸指针，再按阅读器语义决定激活时机。
- * capture move 仅补偿 VirtualPaper 截断冒泡的情况，候选与结束生命周期仍由
- * multi-drag 的 finger 集合约束，避免 Reader 外部移动后丢失拖动状态。
- */
-function useHighlightDrag({
-  viewerRootElement,
-  selectedTool,
-  effectiveRanges,
-  runtimeLinkedDataRef,
-  onDragHighlight
-}: HighlightDragOptions) {
-  const dragStartRef = useRef<HighlightDragStart | null>(null)
-  const dragRef = useRef<Drag | null>(null)
-  const dragElementRef = useRef<HTMLElement | null>(null)
-  const [activePointerType, setActivePointerType] = useState<
-    HighlightDragStart['pointerType'] | null
-  >(null)
-
-  const clearDragStart = useCallback(() => {
-    const dragStart = dragStartRef.current
-    if (dragStart?.longPressTimer) {
-      clearTimeout(dragStart.longPressTimer)
-    }
-    dragStartRef.current = null
-    setActivePointerType(null)
-  }, [])
-
-  const activateDrag = useCallback(
-    (dragStart: HighlightDragStart) => {
-      if (dragStartRef.current !== dragStart || dragStart.triggered) return
-
-      dragStart.triggered = true
-      if (dragStart.longPressTimer) {
-        clearTimeout(dragStart.longPressTimer)
-        dragStart.longPressTimer = null
-      }
-      // 激活前仍允许原生选择；激活瞬间清掉可能形成的浏览器选区并由 class 暂停后续选择。
-      viewerRootElement?.ownerDocument.getSelection()?.removeAllRanges()
-      setActivePointerType(dragStart.pointerType)
-      onDragHighlight?.(dragStart.highlight)
-    },
-    [onDragHighlight, viewerRootElement]
-  )
-
-  const handleTrackedPointerMove = useCallback(
-    (event: PointerEvent) => {
-      const dragStart = dragStartRef.current
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return
-      if (
-        !dragRef.current
-          ?.getFingers()
-          .some((finger) => finger.pointerId === event.pointerId)
-      ) {
-        return
-      }
-      if (dragStart.triggered) {
-        if (event.cancelable) event.preventDefault()
-        return
-      }
-
-      const movedPastTolerance =
-        Math.abs(event.clientX - dragStart.clientX) >
-          HIGHLIGHT_DRAG_MOVE_TOLERANCE ||
-        Math.abs(event.clientY - dragStart.clientY) >
-          HIGHLIGHT_DRAG_MOVE_TOLERANCE
-      if (!movedPastTolerance) return
-
-      if (dragStart.pointerType === 'touch') {
-        clearDragStart()
-        return
-      }
-
-      if (event.cancelable) event.preventDefault()
-      activateDrag(dragStart)
-    },
-    [activateDrag, clearDragStart]
-  )
-
-  useEffect(() => {
-    const ownerDocument = viewerRootElement?.ownerDocument
-    if (!ownerDocument) return
-
-    // Selection 会拦截 pointerdown 冒泡，因此用独立节点接收 capture 阶段转发的
-    // 有效高亮起点，再让 multi-drag 通过 document 监听追踪后续真实事件。
-    const dragElement = ownerDocument.createElement('div')
-    const stationaryPose: Pose = {
-      position: { x: 0, y: 0 },
-      width: 0,
-      height: 0
-    }
-    const drag = new Drag(dragElement, {
-      maxFingerCount: 1,
-      inertial: false,
-      getPose: () => stationaryPose,
-      // Viewer 本身不随手势移动；multi-drag 只负责可靠地追踪 pointer 生命周期。
-      setPose: () => {},
-      setPoseOnEnd: () => {}
-    })
-    dragRef.current = drag
-    dragElementRef.current = dragElement
-
-    const handleDragMove = (fingers: Finger[]) => {
-      const dragStart = dragStartRef.current
-      if (!dragStart) return
-      const event = fingers
-        .find((finger) => finger.pointerId === dragStart.pointerId)
-        ?.getLastOperation()?.event
-      if (event) handleTrackedPointerMove(event)
-    }
-    const handleAllDragEnd = () => clearDragStart()
-    drag.addEventListener(DragOperationType.Move, handleDragMove)
-    drag.addEventListener(DragOperationType.AllEnd, handleAllDragEnd)
-
-    return () => {
-      drag.removeEventListener(DragOperationType.Move, handleDragMove)
-      drag.removeEventListener(DragOperationType.AllEnd, handleAllDragEnd)
-      drag.destroy()
-      if (dragRef.current === drag) dragRef.current = null
-      if (dragElementRef.current === dragElement) dragElementRef.current = null
-      clearDragStart()
-    }
-  }, [clearDragStart, handleTrackedPointerMove, viewerRootElement])
-
-  useEffect(() => {
-    if (!viewerRootElement) return
-
-    const preventNativeTouchGesture = (event: TouchEvent) => {
-      if (dragStartRef.current?.pointerType !== 'touch') return
-      if (event.cancelable) event.preventDefault()
-    }
-    viewerRootElement.addEventListener(
-      'touchstart',
-      preventNativeTouchGesture,
-      { capture: true, passive: false }
-    )
-
-    return () => {
-      viewerRootElement.removeEventListener(
-        'touchstart',
-        preventNativeTouchGesture,
-        true
-      )
-    }
-  }, [viewerRootElement])
-
-  const handleHighlightPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (dragStartRef.current?.triggered) return
-      if (
-        !onDragHighlight ||
-        !event.isPrimary ||
-        (event.pointerType !== 'mouse' && event.pointerType !== 'touch') ||
-        (event.pointerType === 'mouse' && event.button !== 0) ||
-        selectedTool === 'drawing'
-      ) {
-        return
-      }
-      clearDragStart()
-
-      const linkedData = runtimeLinkedDataRef.current
-      if (
-        linkedData.activeRange ||
-        linkedData.draggingRange ||
-        linkedData.selectingText
-      ) {
-        return
-      }
-
-      const selectionContainers = Array.from(
-        event.currentTarget.querySelectorAll<HTMLElement>(
-          '.hamster-reader__intermediate-page[data-selection-id]'
-        )
-      )
-      const touchedRangeId = findTouchedRangeIdByPoint(
-        linkedData,
-        event.clientX,
-        event.clientY,
-        selectionContainers
-      )
-      const highlight = effectiveRanges.find(
-        (range) => range.id === touchedRangeId
-      )
-      if (!highlight) return
-
-      const dragStart: HighlightDragStart = {
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        highlight,
-        triggered: false,
-        longPressTimer: null
-      }
-      if (event.pointerType === 'touch') {
-        dragStart.longPressTimer = setTimeout(() => {
-          if (dragStartRef.current !== dragStart) return
-          const pointerIsTracked = dragRef.current
-            ?.getFingers()
-            .some((finger) => finger.pointerId === dragStart.pointerId)
-          if (!pointerIsTracked) {
-            clearDragStart()
-            return
-          }
-          activateDrag(dragStart)
-        }, HIGHLIGHT_TOUCH_LONG_PRESS_MS)
-      }
-      dragStartRef.current = dragStart
-
-      // 命中既有高亮后立即独占该指针，避免 500ms 候选期内原生文字选择或
-      // VirtualPaper 平移先于长按拖动启动；普通文本落点仍走原有选择链路。
-      if (event.cancelable) event.preventDefault()
-      event.stopPropagation()
-
-      const PointerEventConstructor =
-        event.currentTarget.ownerDocument.defaultView?.PointerEvent
-      const dragElement = dragElementRef.current
-      if (!PointerEventConstructor || !dragElement) {
-        clearDragStart()
-        return
-      }
-      dragElement.dispatchEvent(
-        new PointerEventConstructor('pointerdown', {
-          bubbles: false,
-          cancelable: true,
-          pointerId: event.pointerId,
-          pointerType: event.pointerType,
-          isPrimary: event.isPrimary,
-          button: event.button,
-          buttons: event.buttons,
-          clientX: event.clientX,
-          clientY: event.clientY,
-          screenX: event.screenX,
-          screenY: event.screenY,
-          width: event.width,
-          height: event.height,
-          pressure: event.pressure,
-          tangentialPressure: event.tangentialPressure,
-          tiltX: event.tiltX,
-          tiltY: event.tiltY,
-          twist: event.twist,
-          ctrlKey: event.ctrlKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-          metaKey: event.metaKey
-        })
-      )
-    },
-    [
-      clearDragStart,
-      activateDrag,
-      effectiveRanges,
-      onDragHighlight,
-      runtimeLinkedDataRef,
-      selectedTool
-    ]
-  )
-
-  const handleHighlightPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      handleTrackedPointerMove(event.nativeEvent)
-    },
-    [handleTrackedPointerMove]
-  )
-
-  const handleHighlightPointerUp = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>): boolean => {
-      const dragStart = dragStartRef.current
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return false
-
-      const triggered = dragStart.triggered
-      clearDragStart()
-      return triggered
-    },
-    [clearDragStart]
-  )
-
-  const handleHighlightPointerCancel = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      const dragStart = dragStartRef.current
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return
-
-      clearDragStart()
-    },
-    [clearDragStart]
-  )
-
-  return {
-    activePointerType,
-    handleHighlightPointerDown,
-    handleHighlightPointerMove,
-    handleHighlightPointerUp,
-    handleHighlightPointerCancel
   }
 }
 
@@ -3442,6 +3437,7 @@ function ViewerContent({
   handleVirtualPaperTransformChangeEnd,
   effectiveSelectedRangeId,
   selectedHighlight,
+  storedRanges,
   effectiveRanges,
   runtimePageSelectionId,
   runtimeLinkedData,
@@ -3556,6 +3552,10 @@ function ViewerContent({
     isActive: isReadingProgressMoving,
     signalActivity: signalReadingProgressActivity
   } = useReadingProgressActivity()
+  const onViewportPositionChangeRef = useRef(onViewportPositionChange)
+  onViewportPositionChangeRef.current = onViewportPositionChange
+  const signalReadingProgressActivityRef = useRef(signalReadingProgressActivity)
+  signalReadingProgressActivityRef.current = signalReadingProgressActivity
   useEffect(() => {
     if (!viewerRootElement) return
 
@@ -3564,37 +3564,57 @@ function ViewerContent({
     )
     if (!scrollViewport) return
 
+    const ownerWindow = scrollViewport.ownerDocument.defaultView
     let frameId: number | null = null
-    const handleViewportScroll = () => {
-      signalReadingProgressActivity()
+    const cancelScheduledViewportPositionChange = () => {
+      if (frameId === null || !ownerWindow) return
+
+      ownerWindow.cancelAnimationFrame(frameId)
+      frameId = null
+    }
+    const scheduleViewportPositionChange = () => {
       if (frameId !== null) return
 
-      const ownerWindow = scrollViewport.ownerDocument.defaultView
       if (!ownerWindow) {
-        onViewportPositionChange()
+        onViewportPositionChangeRef.current()
         return
       }
       frameId = ownerWindow.requestAnimationFrame(() => {
         frameId = null
-        onViewportPositionChange()
+        onViewportPositionChangeRef.current()
       })
+    }
+    const usesScrollEndForPosition =
+      !useVirtualPaper && 'onscrollend' in scrollViewport
+    const handleViewportScroll = () => {
+      signalReadingProgressActivityRef.current()
+      if (usesScrollEndForPosition) {
+        cancelScheduledViewportPositionChange()
+      }
+      if (!usesScrollEndForPosition) scheduleViewportPositionChange()
     }
 
     scrollViewport.addEventListener('scroll', handleViewportScroll, {
       passive: true
     })
+    if (usesScrollEndForPosition) {
+      scrollViewport.addEventListener(
+        'scrollend',
+        scheduleViewportPositionChange,
+        { passive: true }
+      )
+    }
     return () => {
       scrollViewport.removeEventListener('scroll', handleViewportScroll)
-      const ownerWindow = scrollViewport.ownerDocument.defaultView
-      if (frameId !== null && ownerWindow) {
-        ownerWindow.cancelAnimationFrame(frameId)
+      if (usesScrollEndForPosition) {
+        scrollViewport.removeEventListener(
+          'scrollend',
+          scheduleViewportPositionChange
+        )
       }
+      cancelScheduledViewportPositionChange()
     }
-  }, [
-    onViewportPositionChange,
-    signalReadingProgressActivity,
-    viewerRootElement
-  ])
+  }, [useVirtualPaper, viewerRootElement])
   const [activeZoomPercent, setActiveZoomPercent] = useState<number | null>(
     null
   )
@@ -3999,17 +4019,41 @@ function ViewerContent({
     runtimeLinkedDataRef,
     handlePageLinkedSelectRange
   )
+  const resolveHighlightDragTarget = useCallback(
+    (clientX: number, clientY: number) => {
+      const linkedData = runtimeLinkedDataRef.current
+      if (
+        selectedTool === 'drawing' ||
+        linkedData.activeRange ||
+        linkedData.draggingRange ||
+        linkedData.selectingText
+      ) {
+        return null
+      }
+      const touchedRangeId = findTouchedRangeIdByPoint(
+        linkedData,
+        clientX,
+        clientY,
+        Array.from(
+          viewerRootElement?.querySelectorAll<HTMLElement>(
+            '.hamster-reader__intermediate-page[data-selection-id]'
+          ) ?? []
+        )
+      )
+      return storedRanges.find((range) => range.id === touchedRangeId) ?? null
+    },
+    [selectedTool, storedRanges, viewerRootElement]
+  )
   const {
     activePointerType: highlightDragPointerType,
+    suppressNativeSelection,
     handleHighlightPointerDown,
     handleHighlightPointerMove,
     handleHighlightPointerUp,
     handleHighlightPointerCancel
-  } = useHighlightDrag({
+  } = useReaderHighlightDrag({
     viewerRootElement,
-    selectedTool,
-    effectiveRanges,
-    runtimeLinkedDataRef,
+    resolveHighlight: resolveHighlightDragTarget,
     onDragHighlight
   })
 
@@ -4290,11 +4334,15 @@ function ViewerContent({
     <div
       ref={setRootRef}
       role='document'
-      className={
+      className={`${rootClassName}${
+        suppressNativeSelection
+          ? ' hamster-reader__intermediate-document-viewer--suppress-native-selection'
+          : ''
+      }${
         highlightDragPointerType === null
-          ? rootClassName
-          : `${rootClassName} hamster-reader__intermediate-document-viewer--highlight-dragging`
-      }
+          ? ''
+          : ' hamster-reader__intermediate-document-viewer--highlight-dragging'
+      }`}
       data-testid='intermediate-document-viewer'
       style={viewerThemeStyle}
       onPointerDownCapture={handleViewerPointerDown}
@@ -4439,7 +4487,10 @@ export function IntermediateDocumentViewer({
   defaultScale,
   defaultVirtualPaperTransform,
   onVirtualPaperTransformChangeEnd,
+  layoutReadingProgress,
+  onLayoutReadingProgressChange,
   onTextAnchorChange,
+  readingPositionRef,
   onScaleChange,
   minScale,
   maxScale,
@@ -5342,10 +5393,20 @@ export function IntermediateDocumentViewer({
   )
   const [currentTextAnchor, setCurrentTextAnchor] = useState<
     ReaderTextAnchor | undefined
-  >(defaultVirtualPaperTransform?.anchor)
+  >(
+    getInitialLayoutTextAnchor(
+      defaultVirtualPaperTransform,
+      layoutReadingProgress
+    )
+  )
   const [currentBookmark, setCurrentBookmark] = useState<
     ReaderBookmark | undefined
-  >(defaultVirtualPaperTransform?.anchor)
+  >(
+    getInitialLayoutBookmark(
+      defaultVirtualPaperTransform,
+      layoutReadingProgress
+    )
+  )
   const currentTextAnchorRef = useRef(currentTextAnchor)
   currentTextAnchorRef.current = currentTextAnchor
   const [currentLayoutPageNumber, setCurrentLayoutPageNumber] = useState(
@@ -5366,8 +5427,25 @@ export function IntermediateDocumentViewer({
     readonly runtimeDocument: IntermediateDocument | null
     readonly key: string
   } | null>(null)
+  const lastReportedLayoutProgressKeyRef = useRef(
+    getOptionalBookmarkKey(layoutReadingProgress)
+  )
+  const restoringNativeProgressKeyRef = useRef(
+    getOptionalBookmarkKey(layoutReadingProgress)
+  )
+  useSyncNativeLayoutProgressGate({
+    lastReportedProgressKeyRef: lastReportedLayoutProgressKeyRef,
+    layoutReadingProgress,
+    restoringProgressKeyRef: restoringNativeProgressKeyRef,
+    runtimeDocument,
+    useVirtualPaper
+  })
   const captureCurrentTextAnchor = useCallback(
-    (clearFallback: boolean) => {
+    (
+      clearFallback: boolean,
+      reportNativeProgress: boolean,
+      scanBelow: boolean = false
+    ) => {
       const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
         '.virtual-paper-wrapper'
       )
@@ -5397,33 +5475,20 @@ export function IntermediateDocumentViewer({
         currentLayoutPageNumberRef.current = resolvedPageNumber
         setCurrentLayoutPageNumber(resolvedPageNumber)
       }
+      const findAnchor = scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor
       const anchor = viewport
-        ? (findTopTextAnchor(
+        ? (findAnchor(
             viewport,
             textElementsRef.current,
             textsByPageNumber,
             resolvedPageNumber
           ) ?? undefined)
         : undefined
-      const nextBookmark: ReaderBookmark | undefined =
-        anchor ??
-        (viewportRect && topPage
-          ? {
-              pageNumber: topPage.pageNumber,
-              verticalPercentage:
-                Math.round(
-                  Math.min(
-                    100,
-                    Math.max(
-                      0,
-                      ((viewportRect.top - topPage.rect.top) /
-                        topPage.rect.height) *
-                        100
-                    )
-                  ) * 100
-                ) / 100
-            }
-          : undefined)
+      const nextBookmark = resolveNativeLayoutBookmark(
+        anchor,
+        viewportRect,
+        topPage
+      )
       setCurrentBookmark((value) =>
         value &&
         nextBookmark &&
@@ -5431,6 +5496,15 @@ export function IntermediateDocumentViewer({
           ? value
           : nextBookmark
       )
+      if (reportNativeProgress) {
+        reportUnreportedNativeProgress({
+          lastReportedProgressKeyRef: lastReportedLayoutProgressKeyRef,
+          nextBookmark,
+          onProgressChange: onLayoutReadingProgressChange,
+          restoringProgressKeyRef: restoringNativeProgressKeyRef,
+          useVirtualPaper
+        })
+      }
 
       const currentAnchor = currentTextAnchorRef.current
       const anchorChanged =
@@ -5447,7 +5521,20 @@ export function IntermediateDocumentViewer({
       if (clearFallback && anchor) setFallbackBookmarkKey(undefined)
       return anchor
     },
-    [onTextAnchorChange, pageNumbers, textsByPageNumber]
+    [
+      onLayoutReadingProgressChange,
+      onTextAnchorChange,
+      pageNumbers,
+      textsByPageNumber,
+      useVirtualPaper
+    ]
+  )
+  useImperativeHandle(
+    readingPositionRef,
+    () => ({
+      captureTextAnchor: () => captureCurrentTextAnchor(false, false, true)
+    }),
+    [captureCurrentTextAnchor]
   )
   const pendingNativeZoomAnchorRef = useRef<{
     readonly element: HTMLElement
@@ -5458,7 +5545,7 @@ export function IntermediateDocumentViewer({
     (nextScale: number) => {
       if (effectiveScaleRef.current === nextScale) return
 
-      const anchor = captureCurrentTextAnchor(false)
+      const anchor = captureCurrentTextAnchor(false, false)
       const anchorElement = anchor
         ? resolveTextAnchorElement(
             anchor,
@@ -5542,17 +5629,17 @@ export function IntermediateDocumentViewer({
     applyNativeLayoutScale(clampScale(nativeLayoutZoom, scaleRange))
   }, [applyNativeLayoutScale, nativeLayoutZoom, scaleRange, useVirtualPaper])
   const handleViewportPositionChange = useCallback(() => {
-    captureCurrentTextAnchor(true)
+    captureCurrentTextAnchor(true, true)
   }, [captureCurrentTextAnchor])
   useEffect(() => {
     const viewerWindow = viewerRootRef.current?.ownerDocument.defaultView
     if (!viewerWindow) {
-      captureCurrentTextAnchor(false)
+      captureCurrentTextAnchor(false, false)
       return
     }
 
     const frameId = viewerWindow.requestAnimationFrame(() => {
-      captureCurrentTextAnchor(false)
+      captureCurrentTextAnchor(false, false)
     })
     return () => viewerWindow.cancelAnimationFrame(frameId)
   }, [captureCurrentTextAnchor])
@@ -5892,6 +5979,12 @@ export function IntermediateDocumentViewer({
     }
   }, [releaseJumpPinnedPage])
 
+  const cancelPendingProgressRestore = useCallback(() => {
+    if (pendingTextAnchorRef.current?.source === 'restore') {
+      cancelPendingTextAnchor()
+    }
+  }, [cancelPendingTextAnchor])
+
   // 已保存选择的解析结果（按 id 索引），在 mount/update 时计算并缓存。
   // 已移除组件内自定义 SVG overlay 状态、容器 refs 与手柄状态，保留已保存选择类型缓存供数据流程使用。
   useEffect(() => {
@@ -6064,7 +6157,7 @@ export function IntermediateDocumentViewer({
         y: nextTransform.y,
         scale: scale === undefined ? completedScale : effectiveScaleRef.current
       }
-      const anchor = captureCurrentTextAnchor(true)
+      const anchor = captureCurrentTextAnchor(true, false)
       const completedReaderState = anchor
         ? { ...completedState, anchor }
         : completedState
@@ -6238,6 +6331,45 @@ export function IntermediateDocumentViewer({
     [overscan, pageNumbers]
   )
 
+  // native Layout 通过自身可滚动视口承载平移：把目标范围中心滚动到视口中心。
+  // 抽成独立函数以降低 scrollToRange 的认知复杂度（含嵌套条件与提前返回）。
+  const scrollNativeLayoutToRange = useCallback(
+    ({
+      targetPageNumber,
+      targetPoint,
+      targetPreviewPageSize,
+      viewportElement,
+      viewportRect,
+      nextTransform
+    }: {
+      targetPageNumber: number
+      targetPoint: { readonly x: number; readonly y: number }
+      targetPreviewPageSize: NormalizedPageSize
+      viewportElement: HTMLElement
+      viewportRect: DOMRect
+      nextTransform: { readonly x: number; readonly y: number }
+    }): void => {
+      const targetPageElement = pageRefs.current.get(targetPageNumber)
+      const targetPageRect = targetPageElement?.getBoundingClientRect()
+      if (targetPageRect && targetPageRect.height > 0) {
+        const targetRatioX = targetPoint.x / targetPreviewPageSize.width
+        const targetRatioY = targetPoint.y / targetPreviewPageSize.height
+        viewportElement.scrollLeft +=
+          targetPageRect.left +
+          targetPageRect.width * targetRatioX -
+          (viewportRect.left + viewportRect.width / 2)
+        viewportElement.scrollTop +=
+          targetPageRect.top +
+          targetPageRect.height * targetRatioY -
+          (viewportRect.top + viewportRect.height / 2)
+        return
+      }
+      viewportElement.scrollLeft = -nextTransform.x
+      viewportElement.scrollTop = -nextTransform.y
+    },
+    []
+  )
+
   const scrollToRange = useCallback(
     (rangeId: string) => {
       if (!runtimeDocument || pageNumbers.length === 0) return
@@ -6339,6 +6471,18 @@ export function IntermediateDocumentViewer({
         lazyPageQueue.enqueuePage(targetPageNumber)
       }
 
+      if (!useVirtualPaper) {
+        scrollNativeLayoutToRange({
+          targetPageNumber,
+          targetPoint,
+          targetPreviewPageSize,
+          viewportElement,
+          viewportRect,
+          nextTransform
+        })
+        return
+      }
+
       setPaperTransform((currentTransform) => ({
         x: nextTransform.x,
         y: nextTransform.y,
@@ -6357,7 +6501,9 @@ export function IntermediateDocumentViewer({
       pinJumpTargetPage,
       previewPageSizesByPageNumber,
       releaseJumpPinnedPage,
-      runtimeDocument
+      runtimeDocument,
+      scrollNativeLayoutToRange,
+      useVirtualPaper
     ]
   )
 
@@ -6960,6 +7106,10 @@ export function IntermediateDocumentViewer({
       setPendingTextAnchor(null)
       pendingTextAnchorRef.current = null
       releaseJumpPinnedPage(operation.anchor.pageNumber, operation.token)
+      completeNativeProgressRestore(
+        operation.source,
+        restoringNativeProgressKeyRef
+      )
       if (operation.source === 'bookmark') {
         const completedState = { ...nextTransform, anchor: operation.anchor }
         lastLocallyEmittedVirtualPaperKeyRef.current =
@@ -7031,6 +7181,10 @@ export function IntermediateDocumentViewer({
       pendingTextAnchorRef.current = null
       setPendingTextAnchor(null)
       releaseJumpPinnedPage(operation.anchor.pageNumber, operation.token)
+      completeNativeProgressRestore(
+        operation.source,
+        restoringNativeProgressKeyRef
+      )
       if (operation.source === 'bookmark') {
         const completedState = {
           ...paperTransformRef.current,
@@ -7102,9 +7256,9 @@ export function IntermediateDocumentViewer({
   )
 
   const navigateToBookmark = useCallback(
-    (bookmark: ReaderBookmark) => {
+    (bookmark: ReaderBookmark, source: 'restore' | 'bookmark' = 'bookmark') => {
       if (isTextBookmark(bookmark)) {
-        navigateToTextAnchor(bookmark)
+        navigateToTextAnchor(bookmark, source)
         return
       }
       if (!pageNumbers.includes(bookmark.pageNumber)) return
@@ -7162,7 +7316,9 @@ export function IntermediateDocumentViewer({
       setCurrentBookmark(bookmark)
       currentLayoutPageNumberRef.current = bookmark.pageNumber
       setCurrentLayoutPageNumber(bookmark.pageNumber)
-      setFallbackBookmarkKey(getBookmarkKey(bookmark))
+      setFallbackBookmarkKey(
+        source === 'bookmark' ? getBookmarkKey(bookmark) : undefined
+      )
     },
     [
       cancelPendingTextAnchor,
@@ -7173,6 +7329,32 @@ export function IntermediateDocumentViewer({
       useVirtualPaper
     ]
   )
+
+  const requestNativeProgressPageLoad = useCallback(
+    (pageNumber: number) => {
+      clearUnloadTimer(pageNumber)
+      lazilyEvictedPagesRef.current.delete(pageNumber)
+      markLoadableWithOverscan(pageNumber)
+      lazyPageQueue.enqueuePage(pageNumber)
+    },
+    [clearUnloadTimer, lazyPageQueue, markLoadableWithOverscan]
+  )
+
+  useNativeLayoutReadingProgressRestore({
+    cancelPendingProgressRestore,
+    effectiveScale,
+    layoutReadingProgress,
+    navigateToBookmark,
+    pageNumbers,
+    pageRefs,
+    pageResourcesDocument,
+    pageStatuses,
+    requestPageLoad: requestNativeProgressPageLoad,
+    restoringProgressKeyRef: restoringNativeProgressKeyRef,
+    runtimeDocument,
+    useVirtualPaper,
+    viewerRootRef
+  })
 
   useEffect(() => {
     if (!pendingTextAnchor) return
@@ -8281,6 +8463,7 @@ export function IntermediateDocumentViewer({
       }
       effectiveSelectedRangeId={effectiveSelectedRangeId}
       selectedHighlight={selectedHighlight}
+      storedRanges={storedRanges}
       effectiveRanges={effectiveRanges}
       runtimePageSelectionId={getRuntimePageSelectionId}
       runtimeLinkedData={runtimeLinkedData}
