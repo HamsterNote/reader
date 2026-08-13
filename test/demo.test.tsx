@@ -39,7 +39,9 @@ import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
+import { loadFileToMemory } from '../demo/fileMemoryLoader'
 import { createImagePreviewDocument } from '../demo/imagePreview'
+import { configurePdfParserForReader } from '../demo/pdfParserForReader'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -48,8 +50,14 @@ import {
 
 vi.mock('@hamster-note/pdf-parser', () => ({
   PdfParser: {
-    encode: vi.fn()
+    encode: vi.fn(),
+    loadPdfSession: vi.fn(),
+    openDocument: vi.fn()
   }
+}))
+
+vi.mock('../demo/pdfParserForReader', () => ({
+  configurePdfParserForReader: vi.fn(() => true)
 }))
 
 vi.mock('@hamster-note/txt-parser', () => ({
@@ -80,6 +88,21 @@ vi.mock('../demo/imagePreview', () => ({
   createImagePreviewDocument: vi.fn()
 }))
 
+vi.mock('../demo/fileMemoryLoader', () => ({
+  loadFileToMemory: vi.fn(
+    async (file: File, onProgress: (loaded: number, total: number) => void) => {
+      onProgress(file.size, file.size)
+      const buffer = new ArrayBuffer(file.size)
+      pdfFilesByBuffer.set(buffer, file)
+      return {
+        file,
+        buffer,
+        elapsedMs: 1
+      }
+    }
+  )
+}))
+
 vi.mock('../demo/recentFileStorage', () => ({
   clearRecentFile: vi.fn(),
   loadRecentFile: vi.fn(),
@@ -90,7 +113,38 @@ beforeEach(() => {
   vi.mocked(clearRecentFile).mockResolvedValue(true)
   vi.mocked(loadRecentFile).mockResolvedValue(null)
   vi.mocked(saveRecentFile).mockResolvedValue(true)
+  vi.mocked(configurePdfParserForReader).mockReturnValue(true)
+  vi.mocked(PdfParser.openDocument).mockImplementation(
+    async (buffer, options) => {
+      const document = await vi.mocked(PdfParser.encode)(
+        buffer instanceof ArrayBuffer
+          ? (pdfFilesByBuffer.get(buffer) ?? latestUploadedPdfFile)
+          : latestUploadedPdfFile,
+        options?.pages ? { pages: options.pages } : undefined
+      )
+      if (document === undefined) {
+        throw new Error('received undefined result')
+      }
+      options?.onProgress?.({
+        stage: 'encode:complete',
+        current: 1,
+        total: 1
+      })
+      return {
+        id: document.id,
+        title: document.title,
+        pageCount: 1,
+        document,
+        dispose: vi.fn().mockResolvedValue(undefined)
+      }
+    }
+  )
 })
+
+let latestUploadedPdfFile = new File([], 'initial.pdf', {
+  type: 'application/pdf'
+})
+const pdfFilesByBuffer = new WeakMap<ArrayBuffer, File>()
 
 const mockCallbacks: {
   onTextSelectionChange?: (text: unknown, detail: unknown) => void
@@ -536,10 +590,39 @@ function isCommentHighlightCallback(
   return typeof value === 'function'
 }
 
-function upload(file: File) {
-  fireEvent.change(screen.getByTestId('file-input'), {
+function selectFile(file: File) {
+  if (file.name.toLowerCase().endsWith('.pdf')) {
+    latestUploadedPdfFile = file
+  }
+  const input =
+    screen.queryByTestId('file-input') ??
+    screen.getByLabelText('Choose another file')
+  fireEvent.change(input, {
     target: { files: [file] }
   })
+}
+
+function upload(file: File) {
+  selectFile(file)
+  if (file.name.toLowerCase().endsWith('.pdf')) {
+    screen.findByRole('button', { name: '加载文件' }).then((button) => {
+      if (
+        screen.getByTestId('pdf-ready-card').textContent?.includes(file.name)
+      ) {
+        fireEvent.click(button)
+      }
+    })
+  }
+}
+
+function makePdfHandle(document: IntermediateDocument) {
+  return {
+    id: document.id,
+    title: document.title,
+    pageCount: 1,
+    document,
+    dispose: vi.fn().mockResolvedValue(undefined)
+  }
 }
 
 function createDeferred<T>() {
@@ -569,7 +652,7 @@ describe('demo parser flow', () => {
     const uploadedFile = makeFile('success.pdf')
     upload(uploadedFile)
 
-    expect(screen.getByText('Parsing...')).toBeInTheDocument()
+    expect(screen.getByText('正在读取文件')).toBeInTheDocument()
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('Success Document')).toBeInTheDocument()
     expect(screen.getByText('Name: success.pdf')).toBeInTheDocument()
@@ -577,6 +660,176 @@ describe('demo parser flow', () => {
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
     expect(EpubParser.encode).not.toHaveBeenCalled()
+  })
+
+  it('keeps a PDF in the ready state until the user clicks 加载文件', async () => {
+    const document = makeRuntimeDocument('Two Phase Document')
+    vi.mocked(PdfParser.openDocument).mockResolvedValue(makePdfHandle(document))
+
+    render(<App />)
+    const file = makeFile('two-phase.pdf')
+    selectFile(file)
+
+    expect(await screen.findByTestId('pdf-ready-card')).toHaveTextContent(
+      'two-phase.pdf'
+    )
+    expect(screen.queryByTestId('mock-reader')).not.toBeInTheDocument()
+    expect(configurePdfParserForReader).not.toHaveBeenCalled()
+    expect(PdfParser.openDocument).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '加载文件' }))
+
+    expect(await screen.findByText('Two Phase Document')).toBeInTheDocument()
+    expect(configurePdfParserForReader).toHaveBeenCalledOnce()
+    expect(PdfParser.openDocument).toHaveBeenCalledOnce()
+  })
+
+  it('configures the PDF parser immediately before every openDocument call', async () => {
+    const events: string[] = []
+    vi.mocked(configurePdfParserForReader).mockImplementation(() => {
+      events.push('configure')
+      return true
+    })
+    vi.mocked(PdfParser.openDocument).mockImplementation(async () => {
+      events.push('openDocument')
+      return makePdfHandle(makeRuntimeDocument(`Document ${events.length}`))
+    })
+
+    render(<App />)
+    upload(makeFile('first-configure.pdf'))
+    expect(await screen.findByText('Document 2')).toBeInTheDocument()
+    upload(makeFile('second-configure.pdf'))
+    expect(await screen.findByText('Document 4')).toBeInTheDocument()
+
+    expect(events).toEqual([
+      'configure',
+      'openDocument',
+      'configure',
+      'openDocument'
+    ])
+  })
+
+  it('enters an explicit error state without opening when parser configuration fails', async () => {
+    vi.mocked(configurePdfParserForReader).mockReturnValue(false)
+
+    render(<App />)
+    selectFile(makeFile('configuration-failure.pdf'))
+    fireEvent.click(await screen.findByRole('button', { name: '加载文件' }))
+
+    expect(await screen.findByTestId('demo-error-state')).toHaveTextContent(
+      'parser configuration failed'
+    )
+    expect(PdfParser.openDocument).not.toHaveBeenCalled()
+  })
+
+  it('restores a recent PDF as a ready card without parsing it', async () => {
+    const recentFile = makeFile('restored-ready.pdf')
+    vi.mocked(loadRecentFile).mockResolvedValue(recentFile)
+
+    render(<App />)
+
+    expect(await screen.findByTestId('pdf-ready-card')).toHaveTextContent(
+      'restored-ready.pdf'
+    )
+    expect(PdfParser.openDocument).not.toHaveBeenCalled()
+    expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
+  })
+
+  it('lets a newer PDF win while an older TXT parser is pending', async () => {
+    const staleTxt = createDeferred<IntermediateDocument>()
+    vi.mocked(TxtParser.encode).mockReturnValue(staleTxt.promise)
+    vi.mocked(PdfParser.openDocument).mockResolvedValue(
+      makePdfHandle(makeRuntimeDocument('Fresh PDF'))
+    )
+
+    render(<App />)
+    selectFile(makeFile('stale.txt'))
+    upload(makeFile('fresh.pdf'))
+
+    expect(await screen.findByText('Fresh PDF')).toBeInTheDocument()
+    staleTxt.resolve(makeRuntimeDocument('Stale TXT'))
+    await act(async () => Promise.resolve())
+
+    expect(screen.queryByText('Stale TXT')).not.toBeInTheDocument()
+    expect(saveRecentFile).toHaveBeenCalledTimes(1)
+    expect(saveRecentFile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'fresh.pdf' })
+    )
+  })
+
+  it('disposes a late PDF handle after a newer TXT selection wins', async () => {
+    const staleOpen = createDeferred<ReturnType<typeof makePdfHandle>>()
+    const staleHandle = makePdfHandle(makeRuntimeDocument('Stale PDF'))
+    vi.mocked(PdfParser.openDocument).mockReturnValue(staleOpen.promise)
+    vi.mocked(TxtParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Fresh TXT')
+    )
+
+    render(<App />)
+    upload(makeFile('stale.pdf'))
+    await screen.findByText('正在解析 PDF')
+    selectFile(makeFile('fresh.txt'))
+    expect(await screen.findByText('Fresh TXT')).toBeInTheDocument()
+
+    staleOpen.resolve(staleHandle)
+    await waitFor(() => expect(staleHandle.dispose).toHaveBeenCalledOnce())
+    expect(screen.queryByText('Stale PDF')).not.toBeInTheDocument()
+    expect(saveRecentFile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'stale.pdf' })
+    )
+  })
+
+  it('keeps only TXT B when TXT A resolves after it', async () => {
+    const staleTxt = createDeferred<IntermediateDocument>()
+    vi.mocked(TxtParser.encode)
+      .mockReturnValueOnce(staleTxt.promise)
+      .mockResolvedValueOnce(makeRuntimeDocument('TXT B'))
+
+    render(<App />)
+    selectFile(makeFile('a.txt'))
+    selectFile(makeFile('b.txt'))
+    expect(await screen.findByText('TXT B')).toBeInTheDocument()
+
+    staleTxt.resolve(makeRuntimeDocument('TXT A'))
+    await act(async () => Promise.resolve())
+    expect(screen.queryByText('TXT A')).not.toBeInTheDocument()
+    expect(saveRecentFile).toHaveBeenCalledTimes(1)
+    expect(saveRecentFile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'b.txt' })
+    )
+  })
+
+  it('aborts stale phase-one loading and shows the newer PDF ready card', async () => {
+    const staleLoad = createDeferred<{
+      file: File
+      buffer: ArrayBuffer
+      elapsedMs: number
+    }>()
+    vi.mocked(loadFileToMemory)
+      .mockReturnValueOnce(staleLoad.promise)
+      .mockImplementationOnce(async (file, onProgress) => {
+        onProgress(file.size, file.size)
+        return { file, buffer: new ArrayBuffer(file.size), elapsedMs: 2 }
+      })
+
+    render(<App />)
+    selectFile(makeFile('loading-a.pdf'))
+    selectFile(makeFile('loading-b.pdf'))
+
+    expect(await screen.findByTestId('pdf-ready-card')).toHaveTextContent(
+      'loading-b.pdf'
+    )
+    staleLoad.resolve({
+      file: makeFile('loading-a.pdf'),
+      buffer: new ArrayBuffer(3),
+      elapsedMs: 3
+    })
+    await act(async () => Promise.resolve())
+
+    expect(screen.getByTestId('pdf-ready-card')).toHaveTextContent(
+      'loading-b.pdf'
+    )
+    expect(screen.getByLabelText('Choose another file')).not.toBeDisabled()
   })
 
   it('defaults VirtualPaper beta off and lets the sidebar enable it', async () => {
@@ -1696,16 +1949,16 @@ describe('demo parser flow', () => {
   })
 
   it('ignores stale parser results after a replacement upload', async () => {
-    const staleRequest = createDeferred<IntermediateDocument | undefined>()
-    const freshRequest = createDeferred<IntermediateDocument | undefined>()
+    const staleRequest = createDeferred<IntermediateDocument>()
+    const freshRequest = createDeferred<IntermediateDocument>()
 
-    vi.mocked(PdfParser.encode)
+    vi.mocked(TxtParser.encode)
       .mockReturnValueOnce(staleRequest.promise)
       .mockReturnValueOnce(freshRequest.promise)
 
     render(<App />)
-    upload(makeFile('stale.pdf'))
-    upload(makeFile('fresh.pdf'))
+    upload(makeFile('stale.txt'))
+    upload(makeFile('fresh.txt'))
 
     freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
 
@@ -3239,31 +3492,31 @@ describe('demo parser flow', () => {
     })
 
     it('ignores stale parser results applying older highlights to a newer file', async () => {
-      const staleRequest = createDeferred<IntermediateDocument | undefined>()
-      const freshRequest = createDeferred<IntermediateDocument | undefined>()
+      const staleRequest = createDeferred<IntermediateDocument>()
+      const freshRequest = createDeferred<IntermediateDocument>()
 
       localStorage.setItem(
-        highlightStorageKey('stale.pdf'),
+        highlightStorageKey('stale.txt'),
         JSON.stringify({
           version: 2,
           ranges: [makeLinkedRange('range-stale', 'stale text')]
         })
       )
       localStorage.setItem(
-        highlightStorageKey('fresh.pdf'),
+        highlightStorageKey('fresh.txt'),
         JSON.stringify({
           version: 2,
           ranges: [makeLinkedRange('range-fresh', 'fresh text')]
         })
       )
 
-      vi.mocked(PdfParser.encode)
+      vi.mocked(TxtParser.encode)
         .mockReturnValueOnce(staleRequest.promise)
         .mockReturnValueOnce(freshRequest.promise)
 
       render(<App />)
-      upload(makeFile('stale.pdf'))
-      upload(makeFile('fresh.pdf'))
+      upload(makeFile('stale.txt'))
+      upload(makeFile('fresh.txt'))
 
       freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
       expect(await screen.findByText('Fresh Document')).toBeInTheDocument()
