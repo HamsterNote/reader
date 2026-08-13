@@ -4,6 +4,7 @@ import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
 import { type OpenDocumentHandle, PdfParser } from '@hamster-note/pdf-parser'
 import {
+  type IntermediateDocumentRenderTimingEntry,
   type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
   Reader,
   type ReaderAnnotationHistoryStatus,
@@ -98,6 +99,33 @@ type PdfLoadState =
       readonly phase: 'done' | 'error'
       readonly selection: FileSelection
     }
+
+// 三段计时面板状态：文件加载 / 解析 / reader document-resolution 分别测量，
+// 绝不做加总；otherStages 聚合滚动加载等后续阶段的耗时（nice-to-have）。
+type PdfTimingPanelState = {
+  readonly fileLoadMs: number | null
+  readonly parseMs: number | null
+  readonly parseFailed: boolean
+  readonly documentResolutionMs: number | null
+  readonly otherStages: Readonly<
+    Record<string, { readonly count: number; readonly totalMs: number }>
+  >
+}
+
+const INITIAL_PDF_TIMING: PdfTimingPanelState = {
+  documentResolutionMs: null,
+  fileLoadMs: null,
+  otherStages: {},
+  parseFailed: false,
+  parseMs: null
+}
+
+// 毫秒展示：null 显示占位符，极小值显示 <0.1 ms，其余保留一位小数
+function formatTimingMs(value: number | null): string {
+  if (value === null) return '—'
+  if (value < 0.1) return '<0.1 ms'
+  return `${value.toFixed(1)} ms`
+}
 
 type HighlightDragPreview = {
   readonly highlight: ReaderSelectionRange
@@ -471,11 +499,13 @@ function ParseStatus({
   isParsing,
   parseError,
   pdfLoadState,
+  timing,
   onLoadPdf
 }: {
   readonly isParsing: boolean
   readonly parseError: string | null
   readonly pdfLoadState: PdfLoadState
+  readonly timing: PdfTimingPanelState
   readonly onLoadPdf: () => void
 }) {
   let progress: {
@@ -502,6 +532,58 @@ function ParseStatus({
 
   return (
     <>
+      <section
+        data-testid='pdf-timing-panel'
+        style={{
+          marginBottom: '24px',
+          padding: '12px 16px',
+          border: '1px solid #e5e7eb',
+          borderRadius: '8px',
+          background: '#fff',
+          fontSize: '13px'
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>计时面板</h2>
+        <p style={{ margin: '0 0 8px', color: '#64748b' }}>
+          三段独立测量，含义不同，不做加总
+        </p>
+        <dl
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto 1fr',
+            gap: '4px 12px',
+            margin: 0
+          }}
+        >
+          <dt>① 文件加载</dt>
+          <dd data-testid='pdf-timing-file-load' style={{ margin: 0 }}>
+            {formatTimingMs(timing.fileLoadMs)}
+          </dd>
+          <dt>② 解析（openDocument）</dt>
+          <dd data-testid='pdf-timing-parse' style={{ margin: 0 }}>
+            {timing.parseFailed ? '解析失败' : formatTimingMs(timing.parseMs)}
+          </dd>
+          <dt>③ reader document-resolution</dt>
+          <dd
+            data-testid='pdf-timing-document-resolution'
+            style={{ margin: 0 }}
+          >
+            {formatTimingMs(timing.documentResolutionMs)}
+          </dd>
+        </dl>
+        {Object.keys(timing.otherStages).length > 0 && (
+          <ul
+            style={{ margin: '8px 0 0', paddingLeft: '16px', color: '#64748b' }}
+          >
+            {Object.entries(timing.otherStages).map(([stage, aggregate]) => (
+              <li key={stage} data-testid={`pdf-timing-extra-${stage}`}>
+                {stage}：平均 {(aggregate.totalMs / aggregate.count).toFixed(1)}{' '}
+                ms（{aggregate.count} 次）
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       {progress && (
         <section
           data-testid='pdf-progress-status'
@@ -772,6 +854,18 @@ export function App() {
   const [pdfLoadState, setPdfLoadState] = useState<PdfLoadState>({
     phase: 'idle'
   })
+  // 三段计时面板：state 驱动 UI，ref 供异步回调读取最新值（避免闭包过期）
+  const [pdfTiming, setPdfTiming] =
+    useState<PdfTimingPanelState>(INITIAL_PDF_TIMING)
+  const pdfTimingRef = useRef<PdfTimingPanelState>(INITIAL_PDF_TIMING)
+  // 额外阶段的聚合只进 ref，经防抖/首段落盘时才同步进 state——
+  // 否则 Profiler onRender 派生的条目会造成 setState → 提交 → 新条目 的循环
+  const extraTimingStagesRef = useRef<
+    Record<string, { count: number; totalMs: number }>
+  >({})
+  const extraTimingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
@@ -1317,6 +1411,71 @@ export function App() {
     )
   }, [])
 
+  // 计时面板的统一更新入口：同步维护 ref 与 state
+  const updatePdfTiming = useCallback(
+    (updater: (current: PdfTimingPanelState) => PdfTimingPanelState) => {
+      const next = updater(pdfTimingRef.current)
+      pdfTimingRef.current = next
+      setPdfTiming(next)
+    },
+    []
+  )
+
+  // Reader 渲染计时回调：document-resolution 记入第三段并输出 console.table。
+  // shell-rendering / page-content-rendering 由 Profiler onRender 在每次提交后发射，
+  // 对其 setState 会形成「更新 → 提交 → 新条目 → 更新」循环，因此直接忽略；
+  // 其余事件驱动阶段（滚动触发的 initial-page-loading 等）聚合到 ref 并防抖落盘。
+  const handleIntermediateDocumentRenderTiming = useCallback(
+    (entry: IntermediateDocumentRenderTimingEntry) => {
+      if (entry.stage === 'document-resolution') {
+        if (pdfTimingRef.current.documentResolutionMs !== null) return
+        updatePdfTiming((current) => ({
+          ...current,
+          documentResolutionMs: entry.durationMs,
+          otherStages: { ...extraTimingStagesRef.current }
+        }))
+        const timing = pdfTimingRef.current
+        if (timing.fileLoadMs !== null && timing.parseMs !== null) {
+          console.table([
+            { 阶段: '① 文件加载', '耗时 (ms)': timing.fileLoadMs },
+            { 阶段: '② 解析 (openDocument)', '耗时 (ms)': timing.parseMs },
+            {
+              阶段: '③ reader document-resolution',
+              '耗时 (ms)': timing.documentResolutionMs
+            }
+          ])
+        }
+        return
+      }
+
+      if (
+        entry.stage === 'shell-rendering' ||
+        entry.stage === 'page-content-rendering'
+      ) {
+        return
+      }
+
+      const existing = extraTimingStagesRef.current[entry.stage]
+      extraTimingStagesRef.current = {
+        ...extraTimingStagesRef.current,
+        [entry.stage]: {
+          count: (existing?.count ?? 0) + 1,
+          totalMs: (existing?.totalMs ?? 0) + entry.durationMs
+        }
+      }
+      if (extraTimingFlushTimerRef.current === null) {
+        extraTimingFlushTimerRef.current = setTimeout(() => {
+          extraTimingFlushTimerRef.current = null
+          updatePdfTiming((current) => ({
+            ...current,
+            otherStages: { ...extraTimingStagesRef.current }
+          }))
+        }, 300)
+      }
+    },
+    [updatePdfTiming]
+  )
+
   const commitParsedDocument = useCallback(
     (
       selection: FileSelection,
@@ -1417,6 +1576,13 @@ export function App() {
       setDocument(null)
       setLoadedParserLabel(null)
       setStagedFile(file)
+      // 新选择开始时重置三段计时与额外阶段聚合，旧文件的耗时不再保留
+      extraTimingStagesRef.current = {}
+      if (extraTimingFlushTimerRef.current !== null) {
+        clearTimeout(extraTimingFlushTimerRef.current)
+        extraTimingFlushTimerRef.current = null
+      }
+      updatePdfTiming(() => INITIAL_PDF_TIMING)
 
       if (getFileExtension(file.name) === 'pdf') {
         const pages = getParserPages(
@@ -1444,6 +1610,11 @@ export function App() {
         )
           .then((loadedFile) => {
             if (!isCurrentSelection(selection)) return
+            // ① 文件加载耗时来自阶段1加载器的实测 elapsedMs
+            updatePdfTiming((current) => ({
+              ...current,
+              fileLoadMs: loadedFile.elapsedMs
+            }))
             setPdfLoadState({
               phase: 'ready',
               selection,
@@ -1502,6 +1673,7 @@ export function App() {
       pageRangeEnd,
       pageRangeStart,
       saveSelectedFile,
+      updatePdfTiming,
       usePageRange
     ]
   )
@@ -1527,6 +1699,8 @@ export function App() {
     })
 
     let sourceBuffer: ArrayBuffer | null = buffer
+    // ② 解析耗时：openDocument 调用起止
+    const parseStartedAt = performance.now()
     PdfParser.openDocument(sourceBuffer, {
       pages,
       signal: selectionAbortControllerRef.current?.signal,
@@ -1555,16 +1729,40 @@ export function App() {
         }
 
         openDocumentHandleRef.current = handle
+        // ② 解析耗时只在结果仍为当前选择时记录，stale 句柄不写面板
+        updatePdfTiming((current) => ({
+          ...current,
+          parseMs: performance.now() - parseStartedAt
+        }))
         commitParsedDocument(selection, handle.document, 'PDF')
         setPdfLoadState({ phase: 'done', selection })
       })
       .catch((error: unknown) => {
         sourceBuffer = null
         if (!isCurrentSelection(selection)) return
+        // 解析失败：保留 ① 文件加载耗时，② 显示失败标记而非假数字
+        updatePdfTiming((current) => ({
+          ...current,
+          parseFailed: true,
+          parseMs: null
+        }))
+        console.table([
+          {
+            阶段: '① 文件加载',
+            '耗时 (ms)': pdfTimingRef.current.fileLoadMs ?? '—'
+          },
+          { 阶段: '② 解析 (openDocument)', '耗时 (ms)': '解析失败' }
+        ])
         setPdfLoadState({ phase: 'error', selection })
         setParseError(`Failed to parse PDF: ${getParserErrorMessage(error)}`)
       })
-  }, [commitParsedDocument, isCurrentSelection, pdfLoadState, saveSelectedFile])
+  }, [
+    commitParsedDocument,
+    isCurrentSelection,
+    pdfLoadState,
+    saveSelectedFile,
+    updatePdfTiming
+  ])
 
   const handleForgetRecentFile = useCallback(() => {
     const epoch = selectionEpochRef.current?.epoch
@@ -1615,6 +1813,10 @@ export function App() {
     return () => {
       mountedRef.current = false
       selectionAbortControllerRef.current?.abort()
+      if (extraTimingFlushTimerRef.current !== null) {
+        clearTimeout(extraTimingFlushTimerRef.current)
+        extraTimingFlushTimerRef.current = null
+      }
     }
   }, [])
 
@@ -1638,6 +1840,7 @@ export function App() {
             isParsing={isParsing}
             parseError={parseError}
             pdfLoadState={pdfLoadState}
+            timing={pdfTiming}
             onLoadPdf={handleLoadPdf}
           />
 
@@ -2532,6 +2735,9 @@ export function App() {
             }}
             onAnnotationHistoryChange={handleAnnotationHistoryChange}
             onCommentHighlight={handleCommentHighlight}
+            onIntermediateDocumentRenderTiming={
+              handleIntermediateDocumentRenderTiming
+            }
             onPageLoadStatusChange={setLoadedPages}
           />
         )}
