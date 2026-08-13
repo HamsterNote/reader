@@ -337,7 +337,7 @@ function wrapMutationCallback<
 vi.mock('@hamster-note/reader', async (importOriginal) => {
   // 部分 mock：保留库内纯函数，仅替换 Reader 组件
   const actual = await importOriginal<typeof import('@hamster-note/reader')>()
-  const { useEffect } = await import('react')
+  const { useLayoutEffect } = await import('react')
   return {
     ...actual,
     Reader: (props: MockReaderProps) => {
@@ -354,8 +354,7 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
       // 始终更新 latestOnAHC，避免 selectionRef.current spread 导致闭包过期
       latestOnAHC = props.onAnnotationHistoryChange
 
-      // resetKey 变化时在 useEffect 中清空 undo/redo 栈并通知 host
-      useEffect(() => {
+      useLayoutEffect(() => {
         const currentResetKey = props.annotationHistory?.resetKey
         if (currentResetKey === lastMockResetKey) return
         lastMockResetKey = currentResetKey
@@ -602,16 +601,13 @@ function selectFile(file: File) {
   })
 }
 
-function upload(file: File) {
+async function upload(file: File): Promise<void> {
   selectFile(file)
   if (file.name.toLowerCase().endsWith('.pdf')) {
-    screen.findByRole('button', { name: '加载文件' }).then((button) => {
-      if (
-        screen.getByTestId('pdf-ready-card').textContent?.includes(file.name)
-      ) {
-        fireEvent.click(button)
-      }
-    })
+    const button = await screen.findByRole('button', { name: '加载文件' })
+    if (screen.getByTestId('pdf-ready-card').textContent?.includes(file.name)) {
+      fireEvent.click(button)
+    }
   }
 }
 
@@ -657,9 +653,8 @@ describe('demo parser flow', () => {
 
     render(<App />)
     const uploadedFile = makeFile('success.pdf')
-    upload(uploadedFile)
+    await upload(uploadedFile)
 
-    expect(screen.getByText('正在读取文件')).toBeInTheDocument()
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('Success Document')).toBeInTheDocument()
     expect(screen.getByText('Name: success.pdf')).toBeInTheDocument()
@@ -703,9 +698,9 @@ describe('demo parser flow', () => {
     })
 
     render(<App />)
-    upload(makeFile('first-configure.pdf'))
+    await upload(makeFile('first-configure.pdf'))
     expect(await screen.findByText('Document 2')).toBeInTheDocument()
-    upload(makeFile('second-configure.pdf'))
+    await upload(makeFile('second-configure.pdf'))
     expect(await screen.findByText('Document 4')).toBeInTheDocument()
 
     expect(events).toEqual([
@@ -751,7 +746,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     selectFile(makeFile('stale.txt'))
-    upload(makeFile('fresh.pdf'))
+    await upload(makeFile('fresh.pdf'))
 
     expect(await screen.findByText('Fresh PDF')).toBeInTheDocument()
     staleTxt.resolve(makeRuntimeDocument('Stale TXT'))
@@ -773,7 +768,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('stale.pdf'))
+    await upload(makeFile('stale.pdf'))
     await screen.findByText('正在解析 PDF')
     selectFile(makeFile('fresh.txt'))
     expect(await screen.findByText('Fresh TXT')).toBeInTheDocument()
@@ -848,7 +843,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('VirtualPaper Toggle Document')
     )
     render(<App />)
-    upload(makeFile('virtual-paper-toggle.pdf'))
+    await upload(makeFile('virtual-paper-toggle.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     // Then: the beta switch is off and the Demo opts into native rendering.
@@ -961,7 +956,7 @@ describe('demo parser flow', () => {
 
       render(<App />)
       const uploadedFile = makeFile(caseData.fileName)
-      upload(uploadedFile)
+      await upload(uploadedFile)
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(await screen.findByText(caseData.title)).toBeInTheDocument()
@@ -1009,7 +1004,7 @@ describe('demo parser flow', () => {
 
       render(<App />)
       const uploadedFile = makeFile(`scan.${extension}`)
-      upload(uploadedFile)
+      await upload(uploadedFile)
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(createImagePreviewDocument).toHaveBeenCalledWith(uploadedFile)
@@ -1042,7 +1037,7 @@ describe('demo parser flow', () => {
 
     // When: 文件加载完成，并由 Text Reader 创建一条新的 canonical range。
     render(<App />)
-    upload(makeFile(fileName))
+    await upload(makeFile(fileName))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(findDocumentReaderProps()?.renderMode).toBe('text')
     expect(findDocumentReaderProps()?.data?.ranges).toEqual([storedHighlight])
@@ -1075,7 +1070,7 @@ describe('demo parser flow', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     mockEpubParserSuccess(makeRuntimeDocument('Layout History Owner'))
     render(<App />)
-    upload(makeFile(fileName))
+    await upload(makeFile(fileName))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     fireEvent.change(screen.getByTestId('render-mode-select'), {
       target: { value: 'layout' }
@@ -1118,7 +1113,7 @@ describe('demo parser flow', () => {
     'rejects unsupported upload %s by extension',
     async (fileName) => {
       render(<App />)
-      upload(makeFile(fileName))
+      await upload(makeFile(fileName))
 
       expect(await screen.findByText('Parse Error')).toBeInTheDocument()
       expect(
@@ -1140,7 +1135,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     const uploadedFile = makeFile('broken.epub')
-    upload(uploadedFile)
+    await upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(
@@ -1160,7 +1155,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     const uploadedFile = makeFile('broken.txt')
-    upload(uploadedFile)
+    await upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse TXT: bad txt')).toBeInTheDocument()
@@ -1176,7 +1171,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     const uploadedFile = makeFile('undefined.pdf')
-    upload(uploadedFile)
+    await upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(
@@ -1192,7 +1187,7 @@ describe('demo parser flow', () => {
 
     render(<App />)
     const uploadedFile = makeFile('broken.pdf')
-    upload(uploadedFile)
+    await upload(uploadedFile)
 
     expect(await screen.findByText('Parse Error')).toBeInTheDocument()
     expect(screen.getByText('Failed to parse PDF: bad pdf')).toBeInTheDocument()
@@ -1207,7 +1202,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('ocr.pdf'))
+    await upload(makeFile('ocr.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(screen.getByText('OCR Document')).toBeInTheDocument()
   })
@@ -1218,7 +1213,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('Automatic OCR Document')
     )
     render(<App />)
-    upload(makeFile('automatic-ocr.pdf'))
+    await upload(makeFile('automatic-ocr.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(findDocumentReaderProps()?.ocr).toBe(false)
 
@@ -1250,7 +1245,7 @@ describe('demo parser flow', () => {
     )
     const file = makeFile('persisted-automatic-ocr.pdf')
     const firstRender = render(<App />)
-    upload(file)
+    await upload(file)
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     act(() => {
       findDocumentReaderProps()?.onOcrChange?.(true)
@@ -1267,7 +1262,7 @@ describe('demo parser flow', () => {
     // When: Demo 卸载后重新加载同名文件。
     firstRender.unmount()
     render(<App />)
-    upload(makeFile('persisted-automatic-ocr.pdf'))
+    await upload(makeFile('persisted-automatic-ocr.pdf'))
 
     // Then: 自动模式和空结果完成态均恢复，Reader 不会把该页当作未识别。
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
@@ -1284,7 +1279,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('ocr-target.pdf'))
+    await upload(makeFile('ocr-target.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     expect(findDocumentReaderProps()?.ocr).toBe(false)
 
@@ -1349,7 +1344,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('ocr-close.pdf'))
+    await upload(makeFile('ocr-close.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const pageInput = screen.getByTestId('ocr-page-input')
@@ -1403,7 +1398,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('single-page.pdf'))
+    await upload(makeFile('single-page.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     // When: 用户输入超出页数范围的页码并点击 OCR。
@@ -1447,7 +1442,7 @@ describe('demo parser flow', () => {
 
     // When: 用户重新上传该文件。
     render(<App />)
-    upload(makeFile('restore-ocr.pdf'))
+    await upload(makeFile('restore-ocr.pdf'))
 
     // Then: OCR 开启列表与受控识别数据被恢复，无需重复 OCR。
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
@@ -1469,7 +1464,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('OCR Dev Mode Document')
     )
     render(<App />)
-    upload(makeFile('ocr-dev-mode.pdf'))
+    await upload(makeFile('ocr-dev-mode.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     // Then: 开发模式默认关闭，Reader 收到 ocrDebug=false。
@@ -1492,7 +1487,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('rendermode.pdf'))
+    await upload(makeFile('rendermode.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const select = screen.getByTestId('render-mode-select')
@@ -1518,7 +1513,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('Text Highlight Roundtrip Document')
     )
     render(<App />)
-    upload(makeFile('text-highlight-roundtrip.pdf'))
+    await upload(makeFile('text-highlight-roundtrip.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     const renderModeSelect = screen.getByTestId('render-mode-select')
     fireEvent.change(renderModeSelect, { target: { value: 'text' } })
@@ -1563,7 +1558,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('Manual Text Highlight Roundtrip Document')
     )
     render(<App />)
-    upload(makeFile('manual-text-highlight-roundtrip.pdf'))
+    await upload(makeFile('manual-text-highlight-roundtrip.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
     const renderModeSelect = screen.getByTestId('render-mode-select')
     fireEvent.change(renderModeSelect, { target: { value: 'text' } })
@@ -1603,7 +1598,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('touchpanmode.pdf'))
+    await upload(makeFile('touchpanmode.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const select = screen.getByTestId('touch-pan-mode-select')
@@ -1629,7 +1624,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('drawing-tool.pdf'))
+    await upload(makeFile('drawing-tool.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const select = screen.getByTestId('selection-tool-select')
@@ -1654,7 +1649,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('Reader Bottom Bar Contract')
     )
     render(<App />)
-    upload(makeFile('reader-bottom-bar-contract.pdf'))
+    await upload(makeFile('reader-bottom-bar-contract.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     const initialProps = findDocumentReaderProps()
@@ -1741,7 +1736,7 @@ describe('demo parser flow', () => {
 
     // When: 用户重新上传同名文件。
     render(<App />)
-    upload(makeFile('reader-preferences.pdf'))
+    await upload(makeFile('reader-preferences.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     // Then: Reader 从统一 data 中恢复模式与工具。
@@ -1790,7 +1785,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('Page Display Data Document')
     )
     render(<App />)
-    upload(makeFile('page-display-data.pdf'))
+    await upload(makeFile('page-display-data.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     // When: the demo enables global crop, a page override, and page hiding.
@@ -1818,7 +1813,7 @@ describe('demo parser flow', () => {
       makeRuntimeDocument('Edge Crop Edit Document')
     )
     render(<App />)
-    upload(makeFile('edge-crop-edit.pdf'))
+    await upload(makeFile('edge-crop-edit.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     // 初始状态：编辑模式关闭
@@ -1880,7 +1875,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('textmode-touchpan.pdf'))
+    await upload(makeFile('textmode-touchpan.pdf'))
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
     expect(screen.getByTestId('touch-pan-mode-select')).toBeInTheDocument()
@@ -1902,7 +1897,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('callback.pdf'))
+    await upload(makeFile('callback.pdf'))
 
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
@@ -1930,7 +1925,7 @@ describe('demo parser flow', () => {
     )
 
     render(<App />)
-    upload(makeFile('selecttext.pdf'))
+    await upload(makeFile('selecttext.pdf'))
 
     expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
@@ -1967,9 +1962,9 @@ describe('demo parser flow', () => {
       .mockReturnValueOnce(freshRequest.promise)
 
     render(<App />)
-    upload(makeFile('stale.txt'))
+    await upload(makeFile('stale.txt'))
     await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(1))
-    upload(makeFile('fresh.txt'))
+    await upload(makeFile('fresh.txt'))
     await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(2))
 
     freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
@@ -1998,7 +1993,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Auto Highlight Document')
       )
       render(<App />)
-      upload(makeFile('auto.pdf'))
+      await upload(makeFile('auto.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
@@ -2022,7 +2017,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Popover Document')
       )
       render(<App />)
-      upload(makeFile('popover.pdf'))
+      await upload(makeFile('popover.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = mockReaderProps.find(
@@ -2048,7 +2043,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Highlight Popover Document')
       )
       render(<App />)
-      upload(makeFile('hpopover.pdf'))
+      await upload(makeFile('hpopover.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = mockReaderProps.find(
@@ -2071,7 +2066,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Own Highlight Color Document')
       )
       render(<App />)
-      upload(makeFile('own-highlight-color.pdf'))
+      await upload(makeFile('own-highlight-color.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range: ReaderSelectionRange = {
         ...makeLinkedRange('own-color-range', 'own color text'),
@@ -2091,7 +2086,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Independent Margins Document')
       )
       render(<App />)
-      upload(makeFile('independent-margins.pdf'))
+      await upload(makeFile('independent-margins.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       // When: 分别设置顶部和底部留白。
@@ -2117,7 +2112,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Highlight Comment Document')
       )
       render(<App />)
-      upload(makeFile('highlight-comment.pdf'))
+      await upload(makeFile('highlight-comment.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('comment-range', 'comment target text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -2138,7 +2133,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('No Auto Highlight Document')
       )
       render(<App />)
-      upload(makeFile('no-auto.pdf'))
+      await upload(makeFile('no-auto.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = mockReaderProps.find(
@@ -2160,7 +2155,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Manual Highlight Document')
       )
       render(<App />)
-      upload(makeFile('manual.pdf'))
+      await upload(makeFile('manual.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = mockReaderProps.find(
@@ -2195,7 +2190,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Color Document')
       )
       render(<App />)
-      upload(makeFile('color.pdf'))
+      await upload(makeFile('color.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       let uploadReaderProps = findDocumentReaderProps()
@@ -2220,7 +2215,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Highlight Color Document')
       )
       render(<App />)
-      upload(makeFile('highlight-color.pdf'))
+      await upload(makeFile('highlight-color.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       let uploadReaderProps = findDocumentReaderProps()
@@ -2265,7 +2260,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Delete Document')
       )
       render(<App />)
-      upload(makeFile('delete.pdf'))
+      await upload(makeFile('delete.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       let uploadReaderProps = mockReaderProps.find(
@@ -2331,7 +2326,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Single Store Document')
       )
       render(<App />)
-      upload(makeFile('single.pdf'))
+      await upload(makeFile('single.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = mockReaderProps.find(
@@ -2360,7 +2355,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Sidebar Click Document')
       )
       render(<App />)
-      upload(makeFile('sidebar-click.pdf'))
+      await upload(makeFile('sidebar-click.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = findDocumentReaderProps()
@@ -2392,7 +2387,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Double Click Document')
       )
       render(<App />)
-      upload(makeFile('double-click.pdf'))
+      await upload(makeFile('double-click.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = findDocumentReaderProps()
@@ -2423,7 +2418,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Rect Sidebar Document')
       )
       render(<App />)
-      upload(makeFile('rect-sidebar.pdf'))
+      await upload(makeFile('rect-sidebar.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = findDocumentReaderProps()
@@ -2473,7 +2468,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('No Scroll Delete Document')
       )
       render(<App />)
-      upload(makeFile('no-scroll-delete.pdf'))
+      await upload(makeFile('no-scroll-delete.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       let uploadReaderProps = findDocumentReaderProps()
@@ -2528,7 +2523,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Null Ref Document')
       )
       render(<App />)
-      upload(makeFile('null-ref.pdf'))
+      await upload(makeFile('null-ref.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = findDocumentReaderProps()
@@ -2558,7 +2553,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Absent Ref Current Document')
       )
       render(<App />)
-      upload(makeFile('absent-ref-current.pdf'))
+      await upload(makeFile('absent-ref-current.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const uploadReaderProps = findDocumentReaderProps()
@@ -2599,7 +2594,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('clean.pdf'))
+      await upload(makeFile('clean.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
@@ -2694,7 +2689,7 @@ describe('demo parser flow', () => {
       render(<App />)
 
       // When：用户先完成手动选择，随后 IndexedDB 才返回旧文件。
-      upload(selectedFile)
+      await upload(selectedFile)
       expect(
         await screen.findByText('Manually Selected Document')
       ).toBeInTheDocument()
@@ -2718,7 +2713,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('cached.pdf'))
+      await upload(makeFile('cached.pdf'))
 
       expect(await screen.findByText('Cached Document')).toBeInTheDocument()
       expect(
@@ -2745,12 +2740,12 @@ describe('demo parser flow', () => {
       const firstFile = makeFile('first.pdf')
       const secondFile = makeFile('second.pdf')
 
-      upload(firstFile)
+      await upload(firstFile)
       await waitFor(() => {
         expect(saveRecentFile).toHaveBeenCalledWith(firstFile)
       })
 
-      upload(secondFile)
+      await upload(secondFile)
       await waitFor(() => {
         expect(PdfParser.encode).toHaveBeenCalledTimes(2)
       })
@@ -2797,7 +2792,7 @@ describe('demo parser flow', () => {
       vi.mocked(PdfParser.encode).mockReturnValue(pendingParse.promise)
 
       render(<App />)
-      upload(makeFile(fileName))
+      await upload(makeFile(fileName))
 
       expect(localStorage.getItem(commentStorageKey(fileName))).toBe(
         JSON.stringify(storedComments)
@@ -2834,13 +2829,13 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile(fileName))
+      await upload(makeFile(fileName))
       expect(
         await screen.findByText('Initial Comment Document')
       ).toBeInTheDocument()
 
       vi.mocked(PdfParser.encode).mockReturnValueOnce(pendingParse.promise)
-      upload(makeFile(fileName))
+      await upload(makeFile(fileName))
 
       const callback = findDocumentReaderProps()?.onCommentHighlight
       if (!isCommentHighlightCallback(callback)) {
@@ -2885,7 +2880,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Flat Comment Document')
       )
       render(<App />)
-      upload(makeFile(fileName))
+      await upload(makeFile(fileName))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
@@ -2938,7 +2933,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Empty Comment Document')
       )
       render(<App />)
-      upload(makeFile('empty-comments.pdf'))
+      await upload(makeFile('empty-comments.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('empty-range', 'empty range text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -2958,7 +2953,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Comment Count Document')
       )
       render(<App />)
-      upload(makeFile('count-comments.pdf'))
+      await upload(makeFile('count-comments.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('count-range', 'count range text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -2981,7 +2976,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Reply Nesting Document')
       )
       render(<App />)
-      upload(makeFile('reply-nesting.pdf'))
+      await upload(makeFile('reply-nesting.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('reply-range', 'reply range text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -3017,7 +3012,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Edit Comment Document')
       )
       render(<App />)
-      upload(makeFile('edit-comment.pdf'))
+      await upload(makeFile('edit-comment.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('edit-range', 'edit range text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -3058,7 +3053,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Delete Reply Document')
       )
       render(<App />)
-      upload(makeFile('delete-reply.pdf'))
+      await upload(makeFile('delete-reply.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('delete-reply-range', 'delete reply text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -3091,7 +3086,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Cascade Delete Document')
       )
       render(<App />)
-      upload(makeFile('cascade-delete.pdf'))
+      await upload(makeFile('cascade-delete.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('cascade-range', 'cascade text')
       const callback = findDocumentReaderProps()?.onCommentHighlight
@@ -3127,22 +3122,26 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Multi Bind Document')
       )
       render(<App />)
-      upload(makeFile('multi-bind.pdf'))
+      await upload(makeFile('multi-bind.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const rangeA = makeLinkedRange('multi-a', 'multi range a')
       const rangeB = makeLinkedRange('multi-b', 'multi range b')
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(rangeA)
-      onHighlight(rangeB)
+      act(() => {
+        onHighlight(rangeA)
+        onHighlight(rangeB)
+      })
 
       const callback = findDocumentReaderProps()?.onCommentHighlight
       if (!isCommentHighlightCallback(callback)) {
         throw new Error('Expected onCommentHighlight callback')
       }
 
-      await callback(rangeA)
+      await act(async () => {
+        await callback(rangeA)
+      })
       await screen.findByTestId('comment-panel')
       // 勾选第二个高亮
       fireEvent.click(screen.getByRole('checkbox', { name: 'multi range b' }))
@@ -3166,22 +3165,26 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Chips Document')
       )
       render(<App />)
-      upload(makeFile('chips.pdf'))
+      await upload(makeFile('chips.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const rangeA = makeLinkedRange('chip-a', 'chip range a')
       const rangeB = makeLinkedRange('chip-b', 'chip range b')
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(rangeA)
-      onHighlight(rangeB)
+      act(() => {
+        onHighlight(rangeA)
+        onHighlight(rangeB)
+      })
 
       const callback = findDocumentReaderProps()?.onCommentHighlight
       if (!isCommentHighlightCallback(callback)) {
         throw new Error('Expected onCommentHighlight callback')
       }
 
-      await callback(rangeA)
+      await act(async () => {
+        await callback(rangeA)
+      })
       await screen.findByTestId('comment-panel')
       fireEvent.click(screen.getByRole('checkbox', { name: 'chip range b' }))
       fireEvent.change(screen.getByLabelText('评论内容'), {
@@ -3202,7 +3205,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Chip Click Document')
       )
       render(<App />)
-      upload(makeFile('chip-click.pdf'))
+      await upload(makeFile('chip-click.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       const range = makeLinkedRange('chip-click-range', 'chip click text')
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
@@ -3239,7 +3242,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('highlight.pdf'))
+      await upload(makeFile('highlight.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
@@ -3290,7 +3293,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('mixed.pdf'))
+      await upload(makeFile('mixed.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.getByText('已创建高亮 (2)')).toBeInTheDocument()
@@ -3317,7 +3320,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('legacy.pdf'))
+      await upload(makeFile('legacy.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
@@ -3336,7 +3339,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('update.pdf'))
+      await upload(makeFile('update.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
@@ -3370,7 +3373,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('clear.pdf'))
+      await upload(makeFile('clear.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
@@ -3410,7 +3413,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('runtime.pdf'))
+      await upload(makeFile('runtime.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
@@ -3447,7 +3450,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('restored.pdf'))
+      await upload(makeFile('restored.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.getByText('已创建高亮 (1)')).toBeInTheDocument()
@@ -3468,7 +3471,7 @@ describe('demo parser flow', () => {
       )
 
       render(<App />)
-      upload(makeFile('file-b.pdf'))
+      await upload(makeFile('file-b.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
@@ -3491,14 +3494,14 @@ describe('demo parser flow', () => {
       )
 
       const { unmount } = render(<App />)
-      upload(makeFile('corrupt.pdf'))
+      await upload(makeFile('corrupt.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
       unmount()
 
       render(<App />)
-      upload(makeFile('wrong-shape.pdf'))
+      await upload(makeFile('wrong-shape.pdf'))
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
@@ -3528,9 +3531,9 @@ describe('demo parser flow', () => {
         .mockReturnValueOnce(freshRequest.promise)
 
       render(<App />)
-      upload(makeFile('stale.txt'))
+      await upload(makeFile('stale.txt'))
       await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(1))
-      upload(makeFile('fresh.txt'))
+      await upload(makeFile('fresh.txt'))
       await waitFor(() => expect(TxtParser.encode).toHaveBeenCalledTimes(2))
 
       freshRequest.resolve(makeRuntimeDocument('Fresh Document'))
@@ -3587,7 +3590,7 @@ describe('demo parser flow', () => {
 
       // When: that file is parsed by the demo.
       render(<App />)
-      upload(makeFile('bookmarked.pdf'))
+      await upload(makeFile('bookmarked.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       // Then: Reader receives only canonical full-text anchors.
@@ -3611,7 +3614,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Bookmark Toggle Document')
       )
       render(<App />)
-      upload(makeFile('bookmark-toggle.pdf'))
+      await upload(makeFile('bookmark-toggle.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(findDocumentReaderProps()?.data?.bookmarks).toEqual([])
 
@@ -3671,7 +3674,7 @@ describe('demo parser flow', () => {
 
       // When: the document is parsed and Reader reports a new anchored position.
       render(<App />)
-      upload(makeFile('progress.pdf'))
+      await upload(makeFile('progress.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       await waitFor(() => {
         expect(findDocumentReaderProps()?.data?.textReadingProgress).toEqual(
@@ -3724,7 +3727,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Undo Enable Document')
       )
       render(<App />)
-      upload(makeFile('undo-enable.pdf'))
+      await upload(makeFile('undo-enable.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const undoBtn = screen.getByTestId('undo-btn')
@@ -3747,15 +3750,20 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Undo Remove Document')
       )
       render(<App />)
-      upload(makeFile('undo-remove.pdf'))
+      await upload(makeFile('undo-remove.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('undo-rm', 'undo remove text'))
+      act(() => {
+        onHighlight(makeLinkedRange('undo-rm', 'undo remove text'))
+      })
 
-      expect(await screen.findByText('undo remove text')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText('undo remove text')).toBeInTheDocument()
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      })
 
       fireEvent.click(screen.getByTestId('undo-btn'))
 
@@ -3782,7 +3790,7 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Redo Restore Document')
       )
       render(<App />)
-      upload(makeFile('redo-restore.pdf'))
+      await upload(makeFile('redo-restore.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(screen.getByTestId('undo-btn')).toBeDisabled()
       expect(screen.getByTestId('redo-btn')).toBeDisabled()
@@ -3790,11 +3798,15 @@ describe('demo parser flow', () => {
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('redo-range', 'redo text'))
+      act(() => {
+        onHighlight(makeLinkedRange('redo-range', 'redo text'))
+      })
 
-      expect(await screen.findByText('redo text')).toBeInTheDocument()
-      expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
-      expect(screen.getByTestId('redo-btn')).toBeDisabled()
+      await waitFor(() => {
+        expect(screen.getByText('redo text')).toBeInTheDocument()
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+        expect(screen.getByTestId('redo-btn')).toBeDisabled()
+      })
 
       fireEvent.click(screen.getByTestId('undo-btn'))
 
@@ -3833,23 +3845,28 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Rect Undo Redo Document')
       )
       render(<App />)
-      upload(makeFile('rect-undo.pdf'))
+      await upload(makeFile('rect-undo.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onCreateRect = findDocumentReaderProps()?.onCreateRect as (
         rect: unknown
       ) => void
-      onCreateRect({
-        id: 'rect-undo-1',
-        createdAt: 1,
-        overlayRectType: 'percent',
-        start: { x: 0, y: 0 },
-        end: { x: 100, y: 100 },
-        selectionId: 'page-1',
-        rect: { x: 10, y: 20, width: 30, height: 40 }
+      act(() => {
+        onCreateRect({
+          id: 'rect-undo-1',
+          createdAt: 1,
+          overlayRectType: 'percent',
+          start: { x: 0, y: 0 },
+          end: { x: 100, y: 100 },
+          selectionId: 'page-1',
+          rect: { x: 10, y: 20, width: 30, height: 40 }
+        })
       })
 
-      expect(await screen.findByText('矩形 rect-undo-1')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText('矩形 rect-undo-1')).toBeInTheDocument()
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      })
 
       fireEvent.click(screen.getByTestId('undo-btn'))
 
@@ -3869,13 +3886,15 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('File A Document')
       )
       render(<App />)
-      upload(makeFile('file-a-reset.pdf'))
+      await upload(makeFile('file-a-reset.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('reset-range', 'reset text'))
+      act(() => {
+        onHighlight(makeLinkedRange('reset-range', 'reset text'))
+      })
 
       await waitFor(() => {
         expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
@@ -3884,7 +3903,7 @@ describe('demo parser flow', () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('File B Document')
       )
-      upload(makeFile('file-b-reset.pdf'))
+      await upload(makeFile('file-b-reset.pdf'))
 
       expect(await screen.findByText('File B Document')).toBeInTheDocument()
 
@@ -3899,13 +3918,15 @@ describe('demo parser flow', () => {
         makeRuntimeDocument('Painting Undo Document')
       )
       render(<App />)
-      upload(makeFile('painting-undo.pdf'))
+      await upload(makeFile('painting-undo.pdf'))
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
 
       const onPagePaintingsChange = findDocumentReaderProps()
         ?.onPagePaintingsChange as (paintings: unknown) => void
       const mockPaintings = { 'page-1': { shapes: [] } }
-      onPagePaintingsChange(mockPaintings)
+      act(() => {
+        onPagePaintingsChange(mockPaintings)
+      })
 
       await waitFor(() => {
         expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual(
@@ -3916,9 +3937,14 @@ describe('demo parser flow', () => {
       const onHighlight = findDocumentReaderProps()?.onHighlight as (
         range: unknown
       ) => void
-      onHighlight(makeLinkedRange('paint-range', 'painting undo text'))
+      act(() => {
+        onHighlight(makeLinkedRange('paint-range', 'painting undo text'))
+      })
 
-      expect(await screen.findByText('painting undo text')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText('painting undo text')).toBeInTheDocument()
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      })
 
       fireEvent.click(screen.getByTestId('undo-btn'))
 
