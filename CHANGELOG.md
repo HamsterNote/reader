@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0-beta.1] - 2026-08-13
+
+### Added
+- Reader 新增受控 `loadingProgress` prop：宿主传入 `{ label, current, total }` 后，Reader 容器内展示加载阶段标签、整数百分比与原生 `<progress>` 进度条；加载期间临时隐藏上传区、文件信息、文档内容与底栏，根节点同步暴露 `aria-busy`。同时导出 `ReaderLoadingProgress` 类型。
+- Demo 新增 PDF 两阶段加载流程：先将文件流式读入内存并显示读取进度，再以「待加载」卡片等待用户点击「加载文件」后解析渲染；刷新后恢复到同一待加载卡片。
+- Demo 新增加载/解析/渲染三段计时面板，便于诊断长文档渲染瓶颈。
+- Demo 新增文件流式读入内存加载器 `fileMemoryLoader`：支持进度回调、AbortSignal 取消与字节数完整性校验。
+- 新增 PDF 解析器版本兼容封装层 `pdfParserForReader`：为 Reader 关闭 offscreen canvas 与 image decoder 回退。
+- 新增 PDF 流式加载、内存加载器与解析器封装相关测试。
+
+### Changed
+- 移除过时的 `pdf-parser` ambient 类型声明。
+- 更新 README 与 DESIGN 文档：补充 PDF 两阶段加载说明与 Reader Loading Progress 设计契约。
+
+### Fixed
+- 修复文档切换时 PDF 会话未释放，以及「Forget 已保存文件」与持久化队列的竞态。
+- 稳定 Demo 测试的异步 teardown 与持久化队列时序。
+
 ## [0.11.0] - 2026-08-11
 
 ### Changed

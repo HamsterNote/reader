@@ -22,6 +22,9 @@ yalc.lock
 test-results/
 .history/
 
+# E2E fixture manifest output
+manifest.txt
+
 # Playwright MCP logs and screenshots
 .playwright-mcp/
 *.png
