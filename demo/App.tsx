@@ -2,7 +2,7 @@ import { DocxParser } from '@hamster-note/docx-parser'
 import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
-import { type OpenDocumentHandle, PdfParser } from '@hamster-note/pdf-parser'
+import { PdfParser } from '@hamster-note/pdf-parser'
 import {
   type IntermediateDocumentRenderTimingEntry,
   type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
@@ -46,7 +46,6 @@ import {
 } from './commentStorage'
 import { convertEpubDocumentForReader } from './epubForReader'
 import { loadFileToMemory } from './fileMemoryLoader'
-import { configurePdfParserForReader } from './pdfParserForReader'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 import { createImagePreviewDocument } from './imagePreview'
 import {
@@ -54,6 +53,11 @@ import {
   parseOcrStorage,
   serializeOcrStorage
 } from './ocrStorage'
+import {
+  type PdfDocumentHandle,
+  configurePdfParserForReader,
+  openPdfDocumentForReader
+} from './pdfParserForReader'
 import {
   clearRecentFile,
   loadRecentFile,
@@ -70,6 +74,8 @@ import {
 } from './ViewerLifetimeBoundary'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
+
+type OpenDocumentHandle = PdfDocumentHandle<IntermediateDocument>
 
 type FileSelectionSource = 'reader-upload' | 'sidebar' | 'recent-file'
 
@@ -1808,7 +1814,7 @@ export function App() {
         await pdfRetirementRef.current
         if (!isCurrentSelection(selection) || sourceBuffer === null) return
 
-        const handle = await PdfParser.openDocument(sourceBuffer, {
+        const handle = await openPdfDocumentForReader(PdfParser, sourceBuffer, {
           pages,
           signal: selectionAbortControllerRef.current?.signal,
           onProgress: (progress) => {

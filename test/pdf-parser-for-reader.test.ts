@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { configurePdfParserForReader } from '../demo/pdfParserForReader'
+import {
+  configurePdfParserForReader,
+  openPdfDocumentForReader
+} from '../demo/pdfParserForReader'
 
 describe('configurePdfParserForReader', () => {
   it('loads every PDF.js session with raw image decoding enabled', async () => {
@@ -63,5 +66,27 @@ describe('configurePdfParserForReader', () => {
 
     // Then: null占位不会抢先结算，最终返回异步raw image data。
     expect(resolved).toBe(rawImage)
+  })
+})
+
+describe('openPdfDocumentForReader', () => {
+  it('falls back to encode when the published parser has no openDocument method', async () => {
+    // Given: npm 已发布 parser 的真实公开形态：有 encode，但没有新 openDocument API。
+    const document = { id: 'published-parser-document' }
+    const encode = vi.fn(async () => document)
+    const parser = { encode }
+    const source = new ArrayBuffer(4)
+    const onProgress = vi.fn()
+
+    // When: Reader 通过版本兼容边界打开 PDF。
+    const handle = await openPdfDocumentForReader(parser, source, {
+      pages: [2, 4],
+      onProgress
+    })
+
+    // Then: 旧版 encode 仍能完成加载，并返回统一、可安全释放的文档句柄。
+    expect(encode).toHaveBeenCalledWith(source, { pages: [2, 4] }, onProgress)
+    expect(handle.document).toBe(document)
+    await expect(handle.dispose()).resolves.toBeUndefined()
   })
 })

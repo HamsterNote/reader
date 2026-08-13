@@ -56,7 +56,8 @@ vi.mock('@hamster-note/pdf-parser', () => ({
   }
 }))
 
-vi.mock('../demo/pdfParserForReader', () => ({
+vi.mock('../demo/pdfParserForReader', async (importOriginal) => ({
+  ...(await importOriginal()),
   configurePdfParserForReader: vi.fn(() => true)
 }))
 
