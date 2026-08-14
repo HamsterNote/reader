@@ -5883,6 +5883,109 @@ describe('IntermediateDocumentViewer', () => {
     clearSelectionProps()
   })
 
+  it('text mode ignores a stale range scroll after a precise anchor restore', async () => {
+    // Given: a range navigation has queued follow-up scrolling for a mounted page.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'range-restore-anchor',
+      text: 'Precise restore target',
+      offset: 7
+    } as const
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('range-prefix', 'First'),
+        makeText(anchor.textId, anchor.text)
+      ])
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const range = makeReaderRange('stale-range-navigation', 'Range target', 1)
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        ranges={[range]}
+        selectionRef={selectionRef}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2400
+    })
+    const targetText = await screen.findByText(anchor.text)
+    Object.defineProperty(targetText, 'getBoundingClientRect', {
+      configurable: true,
+      value: () =>
+        DOMRect.fromRect({
+          y: 1200 - scrollEl.scrollTop,
+          width: 100,
+          height: 20
+        })
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: (options: ScrollToOptions) => {
+        scrollEl.scrollTop = options.top ?? 0
+        scrollEl.dispatchEvent(new Event('scroll'))
+      }
+    })
+    const page = screen.getByTestId('intermediate-text-page-1')
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement) {
+        if (this === page) scrollEl.scrollTop = 200
+      }
+    })
+
+    try {
+      await act(async () => {
+        selectionRef.current?.scrollToRange(range.id)
+        await Promise.resolve()
+      })
+
+      // When: the controlled host restores a newer precise anchor before the
+      // queued range-navigation frames execute.
+      await act(async () => {
+        view.rerender(
+          <IntermediateDocumentTextViewer
+            document={document}
+            ranges={[range]}
+            selectionRef={selectionRef}
+            textReadingProgress={{ currentPageNumber: 1, anchor }}
+          />
+        )
+        await Promise.resolve()
+      })
+      expect(scrollEl.scrollTop).toBe(1200)
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve())
+            })
+          })
+      )
+
+      // Then: stale range callbacks cannot replace the newer restored offset.
+      expect(scrollEl.scrollTop).toBe(1200)
+    } finally {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          'scrollIntoView',
+          scrollIntoViewDescriptor
+        )
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+      }
+    }
+  })
+
   it('text mode bridges linked Selection callbacks to public page ids', async () => {
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 1 })
