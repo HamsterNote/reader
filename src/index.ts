@@ -32,9 +32,9 @@ export type {
   PaginateTxtDocumentOptions,
   ReaderDocumentInput,
   ReaderExtraOcr,
-  ReaderInteractionMode,
   ReaderIntermediateImage,
   ReaderIntermediateImageSerialized,
+  ReaderInteractionMode,
   ReaderOcrOptions,
   ReaderPageRange,
   ReaderSavedSelection,
@@ -89,6 +89,7 @@ export {
 } from './components/Page'
 export {
   Reader,
+  type ReaderLoadingProgress,
   type ReaderProps,
   type ReaderRenderMode
 } from './components/Reader'

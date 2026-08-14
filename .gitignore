@@ -3,6 +3,7 @@
 node_modules/
 dist/
 demo-dist/
+demo/.fixtures/
 coverage/
 .nyc_output/
 *.lcov
@@ -20,6 +21,9 @@ yalc.lock
 .omo/
 test-results/
 .history/
+
+# E2E fixture manifest output
+manifest.txt
 
 # Playwright MCP logs and screenshots
 .playwright-mcp/
