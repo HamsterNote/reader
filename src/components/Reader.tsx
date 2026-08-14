@@ -27,10 +27,6 @@ import type {
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
-  ReaderColorOption,
-  ReaderRenderMode
-} from '../types/readerOptions'
-import type {
   ReaderBookmark,
   ReaderData,
   ReaderEdgeCrop,
@@ -38,6 +34,10 @@ import type {
   ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from '../types/readerData'
+import type {
+  ReaderColorOption,
+  ReaderRenderMode
+} from '../types/readerOptions'
 import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryOptions,
@@ -59,6 +59,7 @@ import {
   DefaultSelectionPopover
 } from './DefaultPopover'
 import type {
+  ReaderDocumentInput,
   ReaderExtraOcr,
   ReaderInteractionMode,
   ReaderOcrOptions,
@@ -92,12 +93,6 @@ import {
 } from './Reader/useLayoutReadingProgressSave'
 
 export type { ReaderRenderMode } from '../types/readerOptions'
-
-type ReaderDocumentInput =
-  | IntermediateDocument
-  | IntermediateDocumentSerialized
-  | null
-  | undefined
 
 type ReaderPositionHandoff<T> = {
   readonly document: ReaderDocumentInput
@@ -163,7 +158,7 @@ const resolveBottomBarHistoryStatus = ({
 }
 
 export type ReaderProps = {
-  document?: IntermediateDocument | IntermediateDocumentSerialized | null
+  document?: ReaderDocumentInput
   /** 可持久化阅读数据的统一入口；其中字段优先于对应的旧版扁平 props。 */
   data?: ReaderData
   /** 阅读数据变化回调；回传带顶部文字锚点的阅读位置和精确书签。 */

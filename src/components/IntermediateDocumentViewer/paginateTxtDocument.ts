@@ -7,6 +7,7 @@ import {
   IntermediateText
 } from '@hamster-note/types'
 
+import { isIntermediateText } from './intermediateContent'
 import {
   getTxtLineStart,
   isPerLineTxtContent,
@@ -20,7 +21,7 @@ export const TXT_DOCUMENT_LINES_PER_PAGE = 500
 const TXT_PARSER_DOCUMENT_ID = 'txt-parser-document'
 const TXT_PARSER_PAGE_ID_PREFIX = 'txt-parser-page-'
 
-type PaginateTxtDocumentOptions = {
+export type PaginateTxtDocumentOptions = {
   readonly linesPerPage?: number
 }
 
@@ -49,15 +50,11 @@ type SourceContentResult =
     }
 
 function getPositiveLinesPerPage(linesPerPage: number | undefined): number {
-  if (
-    typeof linesPerPage === 'number' &&
-    Number.isFinite(linesPerPage) &&
-    linesPerPage > 0
-  ) {
-    return Math.floor(linesPerPage)
+  if (linesPerPage === undefined) return TXT_DOCUMENT_LINES_PER_PAGE
+  if (!Number.isSafeInteger(linesPerPage) || linesPerPage < 1) {
+    throw new RangeError('linesPerPage must be a positive safe integer')
   }
-
-  return TXT_DOCUMENT_LINES_PER_PAGE
+  return linesPerPage
 }
 
 function shiftPolygonY(polygon: TextPolygon, lineOffset: number): TextPolygon {
@@ -100,7 +97,7 @@ function slicePerLineContent(
   const content: IntermediateContent[] = []
 
   for (const entry of source.content) {
-    if (entry instanceof IntermediateText) {
+    if (isIntermediateText(entry)) {
       const row = getTxtLineStart(entry)
       if (row !== null && isRowInRange(row, range)) {
         content.push(cloneShiftedText(entry, range.lineOffset))

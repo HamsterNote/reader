@@ -9,6 +9,7 @@ import type { ReaderFontScale } from '../../types/fontScale'
 import { IntermediateDocumentFlowImageContent } from './IntermediateDocumentFlowImageContent'
 import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
+import { isIntermediateText } from './intermediateContent'
 import type { ReaderIntermediateImage } from './intermediateImage'
 import { PdfTextContent } from './PdfTextContent'
 
@@ -36,9 +37,6 @@ type PositionedContent = {
   readonly left: number
   readonly top: number
 }
-
-const isText = (entry: IntermediateContent): entry is IntermediateText =>
-  'content' in entry && 'fontSize' in entry
 
 const isImage = (
   entry: IntermediateContent
@@ -98,7 +96,7 @@ function createContentRuns(content: IntermediateContent[]): ContentRun[] {
   const runs: ContentRun[] = []
   let sourceOffset = 0
   for (const entry of content) {
-    if (isText(entry)) {
+    if (isIntermediateText(entry)) {
       const previous = runs.at(-1)
       if (previous?.kind === 'texts') previous.texts.push(entry)
       else
@@ -121,7 +119,7 @@ function createSourceOffsets(
   const offsets = new Map<IntermediateText, number>()
   let sourceOffset = 0
   for (const entry of content) {
-    if (!isText(entry)) continue
+    if (!isIntermediateText(entry)) continue
     offsets.set(entry, sourceOffset)
     sourceOffset += entry.content.length
   }

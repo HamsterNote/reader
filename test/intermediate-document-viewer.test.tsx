@@ -7610,9 +7610,11 @@ describe('IntermediateDocumentViewer', () => {
         'src',
         'data:image/png;base64,flow-image'
       )
-      expect(
-        within(figure).getByText('Chapter illustration')
-      ).toBeInTheDocument()
+      expect(figure.querySelector('figcaption')).toHaveAttribute(
+        'data-caption',
+        'Chapter illustration'
+      )
+      expect(figure).not.toHaveTextContent('Chapter illustration')
       const beforeImage = screen.getByText('Before image')
       const afterImage = screen.getByText('After image')
       expect(
@@ -7724,7 +7726,7 @@ describe('IntermediateDocumentViewer', () => {
         { width: 800, height: 600 }
       )
 
-      // Then: 仅正文 IntermediateImage 与可见 alt 被展示，thumbnail 不参与渲染。
+      // Then: 图片 alt 与视觉 caption 保留，但 caption 不成为 selection 文本节点。
       const renderedImage = await screen.findByRole('img', {
         name: 'Detected PDF chart'
       })
@@ -7732,7 +7734,10 @@ describe('IntermediateDocumentViewer', () => {
         'src',
         'data:image/png;base64,text-pdf-image'
       )
-      expect(screen.getByText('Detected PDF chart')).toBeInTheDocument()
+      const figure = renderedImage.closest('figure')
+      const caption = figure?.querySelector('figcaption')
+      expect(caption).toHaveAttribute('data-caption', 'Detected PDF chart')
+      expect(figure).not.toHaveTextContent('Detected PDF chart')
       const textPage = screen.getByTestId('intermediate-text-page-1')
       const textBefore = screen.getByText('Text before image')
       const textAfter = screen.getByText('Text after image')

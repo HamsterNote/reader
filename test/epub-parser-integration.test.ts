@@ -6,10 +6,10 @@ import { convertEpubDocumentForReader } from '../demo/epubForReader'
 import { getEpubImageMetadata } from '../demo/epubImageMetadata'
 import {
   getPageContentEntries,
-  getRuntimeDocument,
   isIntermediateImage,
   isIntermediateText
 } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentViewer'
+import { getRuntimeDocument } from '../src/components/IntermediateDocumentViewer/runtimeDocument'
 
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='

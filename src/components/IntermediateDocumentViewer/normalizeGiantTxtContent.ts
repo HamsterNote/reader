@@ -1,5 +1,7 @@
 import { type IntermediateContent, IntermediateText } from '@hamster-note/types'
 
+import { isIntermediateText } from './intermediateContent'
+
 type TextPolygon = IntermediateText['polygon']
 
 export function getTxtLineStart(text: IntermediateText): number | null {
@@ -20,9 +22,7 @@ export function isPerLineTxtContent(
   content: readonly IntermediateContent[],
   sourceHeight: number
 ): boolean {
-  const texts = content.filter(
-    (entry): entry is IntermediateText => entry instanceof IntermediateText
-  )
+  const texts = content.filter(isIntermediateText)
   if (texts.length !== sourceHeight) return false
 
   const expectedRows = new Set(
@@ -55,7 +55,7 @@ export function normalizeGiantTxtContent(
   sourceHeight: number
 ): IntermediateContent[] | undefined {
   const [sourceText] = content
-  if (content.length !== 1 || !(sourceText instanceof IntermediateText)) {
+  if (content.length !== 1 || !sourceText || !isIntermediateText(sourceText)) {
     return undefined
   }
 

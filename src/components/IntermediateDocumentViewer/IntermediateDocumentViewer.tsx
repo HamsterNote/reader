@@ -4,22 +4,21 @@ import type {
   DrawingValue,
   PaintingControllerData
 } from '@hamster-note/painting'
-import type {
-  LinkedSelectionData,
-  LinkedSelectionRange,
-  SelectionRange,
-  SelectionRef
-} from '@hamster-note/selection'
-import { Selection as HamsterSelection } from '@hamster-note/selection'
 import {
-  type IntermediateContent,
+  Selection as HamsterSelection,
+  type LinkedSelectionData,
+  type LinkedSelectionRange,
+  type SelectionRange,
+  type SelectionRef
+} from '@hamster-note/selection'
+import type {
+  IntermediateContent,
   IntermediateDocument,
-  type IntermediateDocumentSerialized,
-  type IntermediateImage,
-  type IntermediatePage,
-  IntermediatePageMap,
-  type IntermediateParagraph,
-  type IntermediateText
+  IntermediateDocumentSerialized,
+  IntermediateImage,
+  IntermediatePage,
+  IntermediateParagraph,
+  IntermediateText
 } from '@hamster-note/types'
 import {
   DEFAULT_ENABLED_INTERACTIONS,
@@ -87,8 +86,8 @@ import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuar
 import { EdgeCropOverlay } from './EdgeCropOverlay'
 import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { hasHighlightRects } from './highlightRectModes'
-import { getReaderImageAlt } from './intermediateImage'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import { isIntermediateText } from './intermediateContent'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
 import type { ReaderLayoutZoom } from './nativeLayoutZoom'
 import { PageBrowser } from './PageBrowser'
@@ -99,7 +98,6 @@ import {
   resolvePageEdgeCrop
 } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
-import { paginateTxtDocument } from './paginateTxtDocument'
 import { ReadingProgress } from './ReadingProgress'
 import {
   computePageOriginY,
@@ -114,6 +112,7 @@ import {
   type IntermediateDocumentRenderTimingCallback,
   type IntermediateDocumentRenderTimingEntry
 } from './renderTiming'
+import { getRuntimeDocument, isRuntimeDocument } from './runtimeDocument'
 import {
   areRuntimeLinkedTransientsEqual,
   buildRuntimeLinkedSelectionData,
@@ -126,11 +125,9 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
-import { useReadingProgressActivity } from './useReadingProgressActivity'
 import {
-  findTopTextAnchor,
   findTextAnchorAtOrBelow,
+  findTopTextAnchor,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
@@ -142,7 +139,9 @@ import {
 } from './textAnchor'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { useSelectionGeometryRevision } from './useDerivedTextSelectionRanges'
+import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
 import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
+import { useReadingProgressActivity } from './useReadingProgressActivity'
 
 export {
   getNearestTextElementForPoint,
@@ -1153,92 +1152,8 @@ function getEffectiveMaxLoadedPages(
   return Math.max(configured, floorCount, 5)
 }
 
-const isRuntimeDocument = (
-  document: IntermediateDocument | IntermediateDocumentSerialized
-): document is IntermediateDocument =>
-  typeof (document as IntermediateDocument).getPageByPageNumber === 'function'
-
 const serializedPageUsesFlowLayout = (page: object): boolean =>
   'useFlowLayout' in page && page.useFlowLayout === true
-
-const getSerializedImageAlts = (
-  serializedDocument: IntermediateDocumentSerialized
-): ReadonlyMap<number, ReadonlyMap<string, string>> => {
-  const imageAltsByPage = new Map<number, ReadonlyMap<string, string>>()
-
-  for (const page of serializedDocument.pages) {
-    const imageAlts = new Map<string, string>()
-    for (const content of page.content ?? []) {
-      const alt = getReaderImageAlt(content)
-      if ('src' in content && alt) imageAlts.set(content.id, alt)
-    }
-    if (imageAlts.size > 0) imageAltsByPage.set(page.number, imageAlts)
-  }
-
-  return imageAltsByPage
-}
-
-const restoreSerializedFlowLayout = (
-  runtimeDocument: IntermediateDocument,
-  serializedDocument: IntermediateDocumentSerialized
-): IntermediateDocument => {
-  const flowLayoutPageNumbers = new Set(
-    serializedDocument.pages
-      .filter(serializedPageUsesFlowLayout)
-      .map((page) => page.number)
-  )
-  const imageAltsByPage = getSerializedImageAlts(serializedDocument)
-  if (flowLayoutPageNumbers.size === 0 && imageAltsByPage.size === 0) {
-    return runtimeDocument
-  }
-
-  const pagesMap = IntermediatePageMap.makeByInfoList(
-    serializedDocument.pages.map((serializedPage) => ({
-      id: serializedPage.id,
-      pageNumber: serializedPage.number,
-      size: { x: serializedPage.width, y: serializedPage.height },
-      getData: async () => {
-        const pagePromise = runtimeDocument.getPageByPageNumber(
-          serializedPage.number
-        )
-        if (!pagePromise) {
-          throw new Error(`Missing runtime page ${serializedPage.number}`)
-        }
-
-        const page = await pagePromise
-        if (flowLayoutPageNumbers.has(serializedPage.number)) {
-          Object.defineProperty(page, 'useFlowLayout', {
-            configurable: true,
-            enumerable: true,
-            value: true
-          })
-        }
-
-        const imageAlts = imageAltsByPage.get(serializedPage.number)
-        if (imageAlts) {
-          for (const content of await page.getContent()) {
-            const alt = imageAlts.get(content.id)
-            if (!alt || !isIntermediateImage(content)) continue
-
-            Object.defineProperty(content, 'alt', {
-              configurable: true,
-              enumerable: true,
-              value: alt
-            })
-          }
-        }
-        return page
-      }
-    }))
-  )
-
-  return new IntermediateDocument({
-    id: runtimeDocument.id,
-    title: runtimeDocument.title,
-    outline: runtimeDocument.getOutline(),
-    pagesMap
-  })
-}
 
 const getSerializedFlowLayoutPageNumbers = (
   document:
@@ -1256,28 +1171,6 @@ const getSerializedFlowLayoutPageNumbers = (
   )
 }
 
-export const getRuntimeDocument = (
-  inputDocument:
-    | IntermediateDocument
-    | IntermediateDocumentSerialized
-    | null
-    | undefined
-) => {
-  if (!inputDocument) return null
-  const runtimeDocument = isRuntimeDocument(inputDocument)
-    ? inputDocument
-    : restoreSerializedFlowLayout(
-        IntermediateDocument.parse(inputDocument),
-        inputDocument
-      )
-
-  return paginateTxtDocument(runtimeDocument)
-}
-
-export const isIntermediateText = (
-  content: IntermediateContent
-): content is IntermediateText => 'content' in content && 'fontSize' in content
-
 export const isIntermediateImage = (
   content: IntermediateContent
 ): content is IntermediateImage => {
@@ -1287,6 +1180,8 @@ export const isIntermediateImage = (
 
   return typeof content.src === 'string' && content.src.trim().length > 0
 }
+
+export { isIntermediateText } from './intermediateContent'
 
 const normalizePageSize = (size: { x?: number; y?: number } | undefined) => {
   const sourceWidth = size?.x

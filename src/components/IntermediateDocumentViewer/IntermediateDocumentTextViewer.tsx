@@ -16,8 +16,8 @@ import type {
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
-  PointerEvent as ReactPointerEvent,
   ReactNode,
+  PointerEvent as ReactPointerEvent,
   Ref,
   RefObject
 } from 'react'
@@ -61,16 +61,18 @@ import type {
 } from './IntermediateDocumentViewer'
 import {
   getPageContentEntries,
-  getRuntimeDocument,
   getVisiblePageNumbers,
-  isIntermediateImage,
-  isIntermediateText
+  isIntermediateImage
 } from './IntermediateDocumentViewer'
+import { isIntermediateText } from './intermediateContent'
+import { PageBrowser } from './PageBrowser'
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
 import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
+import { ReadingProgress } from './ReadingProgress'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
+import { getRuntimeDocument } from './runtimeDocument'
 import {
   areRuntimeLinkedTransientsEqual,
   buildRuntimeLinkedSelectionData,
@@ -80,18 +82,16 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { PageBrowser } from './PageBrowser'
-import { ReadingProgress } from './ReadingProgress'
 import {
-  findTopTextAnchor,
   findTextAnchorAtOrBelow,
+  findTopTextAnchor,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
   hasAnchorableText,
   isTextBookmark,
-  resolveTextAnchorElement,
   resolveBookmarkNavigationHandler,
+  resolveTextAnchorElement,
   type TextAnchorElementRecord
 } from './textAnchor'
 import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'

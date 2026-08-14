@@ -22,7 +22,7 @@ function IntermediateDocumentFlowImageContentComponent({
         data-image-id={image.id}
       >
         <img src={image.src} alt={alt} />
-        {alt ? <figcaption>{alt}</figcaption> : null}
+        {alt ? <figcaption aria-hidden='true' data-caption={alt} /> : null}
       </figure>
     )
   })

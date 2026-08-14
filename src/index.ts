@@ -21,6 +21,7 @@ export {
 } from './components/DefaultPopover'
 export type {
   CreateIntermediateDocumentRenderTimingOptions,
+  CreateTextModeDocumentOptions,
   IntermediateDocumentRenderTiming,
   IntermediateDocumentRenderTimingCallback,
   IntermediateDocumentRenderTimingClock,
@@ -28,8 +29,12 @@ export type {
   IntermediateDocumentRenderTimingStage,
   IntermediateDocumentViewerProps,
   NormalizedRect,
+  PaginateTxtDocumentOptions,
+  ReaderDocumentInput,
   ReaderExtraOcr,
   ReaderInteractionMode,
+  ReaderIntermediateImage,
+  ReaderIntermediateImageSerialized,
   ReaderOcrOptions,
   ReaderPageRange,
   ReaderSavedSelection,
@@ -45,18 +50,25 @@ export type {
   ReaderSelectionPayload,
   ReaderTextSelectionDetail,
   ReaderTouchPanMode,
-  ReaderIntermediateImage,
-  ReaderIntermediateImageSerialized,
-  TextElementInfo
+  TextElementInfo,
+  TextModeDocument,
+  TextModeHighlightInput,
+  TextModeHighlightUpdate,
+  TextModePage,
+  TextModePageRange
 } from './components/IntermediateDocumentViewer'
 export {
   buildSavedSelection,
   buildSelectionPayload,
   createIntermediateDocumentRenderTiming,
+  createTextModeDocument,
   denormalizePageRects,
+  getRuntimeDocument,
   IntermediateDocumentViewer,
   normalizePageRects,
+  paginateTxtDocument,
   resolveSavedSelection,
+  TXT_DOCUMENT_LINES_PER_PAGE,
   textHash
 } from './components/IntermediateDocumentViewer'
 export {
@@ -87,7 +99,6 @@ export type {
   ReaderCommentThreadNode
 } from './types/comments'
 export type { ReaderFontScale } from './types/fontScale'
-export type { ReaderColorOption } from './types/readerOptions'
 export type {
   ReaderBookmark,
   ReaderData,
@@ -98,6 +109,7 @@ export type {
   ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from './types/readerData'
+export type { ReaderColorOption } from './types/readerOptions'
 export type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
