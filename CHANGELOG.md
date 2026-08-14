@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0-beta.3] - 2026-08-14
+
+### Added
+- 新增 Text Mode 公共 API：`createTextModeDocument` 控制器公开分页获取（`getPages`）与高亮增删改查（`getHighlights`/`addHighlight`/`updateHighlight`/`removeHighlight`）接口；同时导出 `getRuntimeDocument`、`paginateTxtDocument` 及 `TextModeDocument`、`TextModePage`、`TextModeHighlightInput` 等相关类型。
+
+### Changed
+- 图片 caption 改为 CSS 伪元素渲染，避免干扰 selection offset 校验。
+- 跨包 runtime 文档改用结构化文本识别（`isRuntimeDocument`），不再依赖 `instanceof`。
+- `paginateTxtDocument` 仅接受正安全整数页码，非法值抛出 `RangeError`。
+
+### Fixed
+- 修复 `addHighlight` 入口的输入快照与 ID 预留逻辑，消除异步竞态与并发重复高亮。
+- 修复文本模式恢复精确锚点后，因锚点已过期而被忽略的范围滚动问题。
+
 ## [1.12.0-beta.2] - 2026-08-14
 
 ### Added
