@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0-beta.2] - 2026-08-14
+
+### Added
+- 合并 origin/main：引入 PDF 文本模式页码分隔标记、原生 Layout 阅读进度持久化、高亮拖拽重构及阅读偏好 v2 等特性。
+
+### Changed
+- Demo 阅读偏好升级为 v2，为 Text/Layout 两种模式分别持久化字号，并持久化当前高亮色。
+
+### Fixed
+- 用 `@system-ui-js/multi-drag` 重构高亮拖拽，统一追踪移出 viewer 的指针，避免浏览器原生手势抢占导致高亮移动失败。
+- 阅读进度在 Layout/Text 模式切换与文档替换时同步捕获并保存最新锚点；Text 阅读进度改为 `scrollend` 防抖后仅持久化最终位置。
+- native Layout 通过其可滚动视口承载平移，滚动到目标范围时将该范围中心与视口中心对齐。
+- 修复 Reader 回调签名格式与模式切换时的锚点同步问题。
+
 ## [1.12.0-beta.1] - 2026-08-13
 
 ### Added
