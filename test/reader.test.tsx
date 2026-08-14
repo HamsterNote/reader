@@ -1302,6 +1302,7 @@ describe('Reader renderMode', () => {
       <div>{highlight.id}</div>
     ))
     const onHighlight = vi.fn()
+    const onDragHighlight = vi.fn()
     const onUpdateRange = vi.fn()
     const onSelectRange = vi.fn()
     const onSelectionStart = vi.fn()
@@ -1327,6 +1328,7 @@ describe('Reader renderMode', () => {
         selectedRangeId='text-highlight'
         defaultSelectedRangeId='default-text-highlight'
         onHighlight={onHighlight}
+        onDragHighlight={onDragHighlight}
         onUpdateRange={onUpdateRange}
         onSelectRange={onSelectRange}
         onSelectionStart={onSelectionStart}
@@ -1368,6 +1370,7 @@ describe('Reader renderMode', () => {
       'default-text-highlight'
     )
     expect(capturedTextViewerProps.onHighlight).toBe(onHighlight)
+    expect(capturedTextViewerProps.onDragHighlight).toBe(onDragHighlight)
     const capturedOnUpdateRange = capturedTextViewerProps.onUpdateRange
     if (typeof capturedOnUpdateRange !== 'function') {
       throw new TypeError('Expected text viewer onUpdateRange callback')
@@ -1426,7 +1429,7 @@ describe('Reader renderMode', () => {
     expect(capturedTextViewerProps.ranges).toEqual([dataRange])
   })
 
-  it('renderMode text restores and persists reading progress through ReaderData', () => {
+  it('renderMode text restores and debounces reading progress through ReaderData', () => {
     // Given: Reader receives a persisted Text page together with other canonical data.
     const onDataChange = vi.fn()
     const anchor = {
@@ -1463,13 +1466,184 @@ describe('Reader renderMode', () => {
       text: 'Page one paragraph',
       offset: 4
     }
-    onProgressChange({ currentPageNumber: 1, anchor: nextAnchor })
+    vi.useFakeTimers()
+    try {
+      onProgressChange({ currentPageNumber: 2 })
+      act(() => vi.advanceTimersByTime(99))
+      expect(onDataChange).not.toHaveBeenCalled()
 
-    // Then: Reader merges the new page without dropping other persisted fields.
-    expect(onDataChange).toHaveBeenCalledWith({
-      hiddenPages: [2],
-      textReadingProgress: { currentPageNumber: 1, anchor: nextAnchor }
-    })
+      onProgressChange({ currentPageNumber: 1, anchor: nextAnchor })
+      act(() => vi.advanceTimersByTime(99))
+      expect(onDataChange).not.toHaveBeenCalled()
+      act(() => vi.advanceTimersByTime(1))
+
+      // Then: Reader 仅合并静止前的最后位置，且不丢失其他持久化字段。
+      expect(onDataChange).toHaveBeenCalledTimes(1)
+      expect(onDataChange).toHaveBeenCalledWith({
+        hiddenPages: [2],
+        textReadingProgress: { currentPageNumber: 1, anchor: nextAnchor }
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('native layout debounces frequent completed-scroll progress reports for 100ms', () => {
+    // Given: 原生版面缩放由 ReaderData 控制，并保留其他文档数据。
+    const onDataChange = vi.fn()
+    const progress = {
+      pageNumber: 2,
+      verticalPercentage: 37.5
+    } as const
+    const data = { hiddenPages: [3], layoutReadingProgress: progress } as const
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        data={data}
+        onDataChange={onDataChange}
+      />
+    )
+
+    // When: 连续两次滚动结束报告不同位置，间隔不足 100ms。
+    expect(capturedViewerProps.layoutReadingProgress).toBe(progress)
+    const onProgressChange = capturedViewerProps.onLayoutReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected native layout reading progress callback')
+    }
+    const nextProgress = {
+      pageNumber: 1,
+      textId: 'page-1-paragraph',
+      text: 'Page one paragraph',
+      offset: 4
+    } as const
+    vi.useFakeTimers()
+    try {
+      onProgressChange({ pageNumber: 1, verticalPercentage: 25 })
+      act(() => vi.advanceTimersByTime(99))
+      expect(onDataChange).not.toHaveBeenCalled()
+
+      onProgressChange(nextProgress)
+      act(() => vi.advanceTimersByTime(99))
+      expect(onDataChange).not.toHaveBeenCalled()
+      act(() => vi.advanceTimersByTime(1))
+
+      // Then: Reader 仅发布静止前的最后一个精确位置，且不丢失其他字段。
+      expect(onDataChange).toHaveBeenCalledTimes(1)
+      expect(onDataChange).toHaveBeenCalledWith({
+        hiddenPages: [3],
+        layoutReadingProgress: nextProgress
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('native layout progress flush preserves data received during debounce', () => {
+    // Given: 一次原生版面进度已排队，但父级随后传入了更新后的书签数据。
+    const onDataChange = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+    const view = render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        data={{ hiddenPages: [2] }}
+        onDataChange={onDataChange}
+      />
+    )
+    const onProgressChange = capturedViewerProps.onLayoutReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected native layout reading progress callback')
+    }
+    const nextProgress = {
+      pageNumber: 1,
+      verticalPercentage: 42
+    } as const
+    const addedBookmark = {
+      pageNumber: 1,
+      textId: 'new-bookmark',
+      text: 'New bookmark',
+      offset: 2
+    } as const
+
+    vi.useFakeTimers()
+    try {
+      // When: 进度排队后，受控 ReaderData 在 100ms 窗口内更新。
+      onProgressChange(nextProgress)
+      view.rerender(
+        <Reader
+          document={doc}
+          useVirtualPaper={false}
+          data={{ hiddenPages: [3], bookmarks: [addedBookmark] }}
+          onDataChange={onDataChange}
+        />
+      )
+      act(() => vi.advanceTimersByTime(100))
+
+      // Then: flush 将进度合并到同一文档的最新数据，而不是回放旧快照。
+      expect(onDataChange).toHaveBeenCalledTimes(1)
+      expect(onDataChange).toHaveBeenCalledWith({
+        hiddenPages: [3],
+        bookmarks: [addedBookmark],
+        layoutReadingProgress: nextProgress
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('native layout saves every second when completed-scroll reports stay frequent', () => {
+    // Given: Reader 已挂载，滚动结束报告持续变化且始终没有 100ms 静止期。
+    const onDataChange = vi.fn()
+    const doc = makeDocument({ pages: [makePage(1)] })
+    render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        data={{ hiddenPages: [3] }}
+        onDataChange={onDataChange}
+      />
+    )
+    const onProgressChange = capturedViewerProps.onLayoutReadingProgressChange
+    if (typeof onProgressChange !== 'function') {
+      throw new TypeError('Expected native layout reading progress callback')
+    }
+
+    vi.useFakeTimers()
+    try {
+      // When: 每 50ms 上报一次，连续跨过两个 1 秒保存周期。
+      for (let index = 1; index <= 40; index += 1) {
+        onProgressChange({
+          pageNumber: 1,
+          verticalPercentage: index
+        })
+        act(() => vi.advanceTimersByTime(50))
+
+        if (index === 19) expect(onDataChange).not.toHaveBeenCalled()
+        if (index === 20) {
+          expect(onDataChange).toHaveBeenNthCalledWith(1, {
+            hiddenPages: [3],
+            layoutReadingProgress: {
+              pageNumber: 1,
+              verticalPercentage: 20
+            }
+          })
+        }
+      }
+
+      // Then: 连续变化不会饿死保存，每秒都保存该时刻的最新位置。
+      expect(onDataChange).toHaveBeenCalledTimes(2)
+      expect(onDataChange).toHaveBeenNthCalledWith(2, {
+        hiddenPages: [3],
+        layoutReadingProgress: {
+          pageNumber: 1,
+          verticalPercentage: 40
+        }
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('hands the Layout visual top anchor to Text Mode when switching', async () => {
@@ -1516,6 +1690,57 @@ describe('Reader renderMode', () => {
     })
   })
 
+  it('captures the latest Layout anchor synchronously when switching before scroll reporting', async () => {
+    // Given: 滚动后的异步上报尚未执行，Reader 仍保存着旧锚点。
+    const staleAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-before-scroll-report',
+      text: 'Position before the pending scroll frame',
+      offset: 2
+    }
+    const latestAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-current-visual-top',
+      text: 'Current visual top before mode switch',
+      offset: 28
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const onDataChange = vi.fn()
+    render(<Reader document={doc} onDataChange={onDataChange} />)
+    const onLayoutTextAnchorChange = capturedViewerProps.onTextAnchorChange
+    if (typeof onLayoutTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Layout text anchor callback')
+    }
+    act(() => onLayoutTextAnchorChange(staleAnchor))
+
+    const readingPositionRef = capturedViewerProps.readingPositionRef
+    if (typeof readingPositionRef !== 'function') {
+      throw new TypeError('Expected Layout reading position ref')
+    }
+    // When: 用户在滚动 rAF 上报前立即切换到 Text Mode。
+    act(() => {
+      readingPositionRef({
+        captureTextAnchor: () => latestAnchor
+      })
+      fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    })
+
+    // Then: 切换主动读取保存格式一致的实时锚点，而不是沿用旧回调值。
+    await waitFor(() => {
+      expect(capturedTextViewerProps.textReadingProgress).toEqual({
+        currentPageNumber: 2,
+        anchor: latestAnchor
+      })
+    })
+    expect(onDataChange).toHaveBeenCalledWith({
+      renderMode: 'text',
+      textReadingProgress: {
+        currentPageNumber: 2,
+        anchor: latestAnchor
+      }
+    })
+  })
+
   it('hands the Text visual top anchor to Layout Mode when switching', async () => {
     // Given: Reader 先进入 Text Mode，且 Layout 保存着旧 transform 与旧锚点。
     const staleLayoutAnchor = {
@@ -1559,6 +1784,165 @@ describe('Reader renderMode', () => {
         ...virtualPaper,
         anchor: textAnchor
       })
+    })
+  })
+
+  it('captures the latest Text anchor synchronously when switching before scroll reporting', async () => {
+    // Given: Text 滚动后的异步上报尚未执行，Reader 仍保存着旧锚点。
+    const staleAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-before-text-scroll-report',
+      text: 'Text position before the pending scroll frame',
+      offset: 4
+    }
+    const latestAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-current-text-visual-top',
+      text: 'Current Text visual top before mode switch',
+      offset: 32
+    }
+    const virtualPaper = { x: 80, y: 240, scale: 1.25 }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const onDataChange = vi.fn()
+    render(
+      <Reader
+        document={doc}
+        data={{ virtualPaper }}
+        onDataChange={onDataChange}
+      />
+    )
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toBeInTheDocument()
+    })
+    const onTextAnchorChange = capturedTextViewerProps.onTextAnchorChange
+    if (typeof onTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Text Mode anchor callback')
+    }
+    act(() => onTextAnchorChange(staleAnchor))
+    onDataChange.mockClear()
+    const readingPositionRef = capturedTextViewerProps.readingPositionRef
+    if (typeof readingPositionRef !== 'function') {
+      throw new TypeError('Expected Text reading position ref')
+    }
+
+    // When: 用户在滚动 rAF 上报前立即切回 Layout Mode。
+    act(() => {
+      readingPositionRef({
+        captureTextAnchor: () => latestAnchor
+      })
+      fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    })
+
+    // Then: Layout 保留 transform，同时使用 Text 当前视觉顶部的规范锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.defaultVirtualPaperTransform).toEqual({
+        ...virtualPaper,
+        anchor: latestAnchor
+      })
+    })
+    expect(onDataChange).toHaveBeenCalledWith({
+      virtualPaper: {
+        ...virtualPaper,
+        anchor: latestAnchor
+      },
+      renderMode: 'layout'
+    })
+  })
+
+  it('persists the latest Text anchor when switching to native Layout', async () => {
+    // Given: native Layout 的持久化位置已过期，Text 持有尚未异步上报的新锚点。
+    const staleLayoutAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-stale-native-layout',
+      text: 'Stale native Layout position',
+      offset: 2
+    }
+    const latestAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-current-text-for-native-layout',
+      text: 'Current Text position for native Layout',
+      offset: 34
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const onDataChange = vi.fn()
+    render(
+      <Reader
+        document={doc}
+        data={{ layoutReadingProgress: staleLayoutAnchor }}
+        onDataChange={onDataChange}
+        useVirtualPaper={false}
+      />
+    )
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('intermediate-document-text-viewer')
+      ).toBeInTheDocument()
+    })
+    onDataChange.mockClear()
+    const readingPositionRef = capturedTextViewerProps.readingPositionRef
+    if (typeof readingPositionRef !== 'function') {
+      throw new TypeError('Expected Text reading position ref')
+    }
+
+    // When: 用户在进度回调前切回 native Layout。
+    act(() => {
+      readingPositionRef({ captureTextAnchor: () => latestAnchor })
+      fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    })
+
+    // Then: native Layout 的交接位置和持久化数据使用同一个最新锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.layoutReadingProgress).toEqual(latestAnchor)
+    })
+    expect(onDataChange).toHaveBeenCalledWith({
+      layoutReadingProgress: latestAnchor,
+      renderMode: 'layout'
+    })
+  })
+
+  it('captures controlled Text position during unmount and restores native Layout', async () => {
+    // Given: 外部控制 Text Mode，滚动回调尚未上报当前可见锚点。
+    const staleAnchor = {
+      pageNumber: 1,
+      textId: 'page-1-controlled-stale',
+      text: 'Controlled stale text position',
+      offset: 6
+    }
+    const latestAnchor = {
+      pageNumber: 2,
+      textId: 'page-2-controlled-current',
+      text: 'Controlled current visual top',
+      offset: 36
+    }
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const { rerender } = render(
+      <Reader document={doc} renderMode='text' useVirtualPaper={false} />
+    )
+    const onTextAnchorChange = capturedTextViewerProps.onTextAnchorChange
+    const readingPositionRef = capturedTextViewerProps.readingPositionRef
+    if (typeof onTextAnchorChange !== 'function') {
+      throw new TypeError('Expected Text Mode anchor callback')
+    }
+    if (typeof readingPositionRef !== 'function') {
+      throw new TypeError('Expected Text reading position ref')
+    }
+    act(() => {
+      onTextAnchorChange(staleAnchor)
+      readingPositionRef({ captureTextAnchor: () => latestAnchor })
+    })
+
+    // When: 宿主直接切换受控模式，旧 Text viewer 在提交阶段卸载。
+    rerender(
+      <Reader document={doc} renderMode='layout' useVirtualPaper={false} />
+    )
+
+    // Then: native Layout 消费卸载前同步捕获的规范锚点。
+    await waitFor(() => {
+      expect(capturedViewerProps.layoutReadingProgress).toEqual(latestAnchor)
     })
   })
 

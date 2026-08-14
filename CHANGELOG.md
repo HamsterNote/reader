@@ -25,6 +25,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修复文档切换时 PDF 会话未释放，以及「Forget 已保存文件」与持久化队列的竞态。
 - 稳定 Demo 测试的异步 teardown 与持久化队列时序。
 
+## [0.11.1-beta.2] - 2026-08-12
+
+### Added
+- PDF 文本模式为每个可见页渲染 `第 n 页` 页码分隔标记，并注入 `--hamster-reader-theme-color` 主题色。
+- 阅读进度在 Layout/Text 模式切换与文档替换时同步捕获并保存最新锚点：`Text` 阅读进度改为 `scrollend` 防抖后仅持久化最终位置；卸载前同步读取实时锚点避免丢失滚动中的进度。
+- Demo 阅读偏好升级为 v2，为 Text/Layout 两种模式分别持久化字号，并持久化当前高亮色。
+
+### Fixed
+- 用 `@system-ui-js/multi-drag` 重构高亮拖拽，统一追踪移出 viewer 的指针，避免浏览器原生手势抢占导致高亮移动失败。
+- native Layout 通过其可滚动视口承载平移，滚动到目标范围时将该范围中心与视口中心对齐。
+
+## [0.11.1-beta.1] - 2026-08-12
+
+### Added
+- 原生 Layout 缩放模式新增可恢复的阅读进度（`data.layoutReadingProgress`）：优先记录视口顶部文字锚点，页面无文字时回退到页内垂直百分比；Demo 侧边栏展示最后保存的进度并持久化到 localStorage。
+
+### Fixed
+- 修复触摸长按高亮时浏览器原生选词抢占拖动手势的问题：命中既有高亮后，候选期与拖动期均抑制原生选区，普通文本仍可长按进行文字选择。
+
 ## [0.11.0] - 2026-08-11
 
 ### Changed

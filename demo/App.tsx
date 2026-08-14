@@ -295,6 +295,8 @@ const BOOKMARK_STORAGE_PREFIX = 'hamster-reader-demo:bookmarks:'
 const OCR_STORAGE_PREFIX = 'hamster-reader-demo:ocr:'
 const TEXT_READING_PROGRESS_STORAGE_PREFIX =
   'hamster-reader-demo:text-reading-progress:'
+const LAYOUT_READING_PROGRESS_STORAGE_PREFIX =
+  'hamster-reader-demo:layout-reading-progress:'
 const READER_PREFERENCES_STORAGE_PREFIX = 'hamster-reader-demo:preferences:'
 const DEMO_READER_COLORS = [
   { name: 'blue', color: '#7d9ec0' },
@@ -424,6 +426,18 @@ function parseStoredTextReadingProgress(
     return anchor?.pageNumber === currentPageNumber
       ? { currentPageNumber, anchor }
       : { currentPageNumber }
+  } catch {
+    return undefined
+  }
+}
+
+function parseStoredLayoutReadingProgress(
+  raw: string | null
+): ReaderBookmark | undefined {
+  if (raw === null || raw.trim() === '') return undefined
+
+  try {
+    return parseStoredBookmark(JSON.parse(raw))
   } catch {
     return undefined
   }
@@ -680,6 +694,50 @@ function LoadedPagesStatus({
   )
 }
 
+function ReadingProgressStatus({
+  document,
+  renderMode,
+  layoutReadingProgress,
+  textReadingProgress
+}: {
+  readonly document: ReaderDocument | null
+  readonly renderMode: ReaderRenderMode
+  readonly layoutReadingProgress: ReaderBookmark | undefined
+  readonly textReadingProgress: ReaderTextReadingProgress | undefined
+}) {
+  if (!document) return null
+
+  const progress =
+    renderMode === 'layout'
+      ? layoutReadingProgress
+      : textReadingProgress?.anchor
+  const pageNumber =
+    progress?.pageNumber ?? textReadingProgress?.currentPageNumber
+  let detail = '尚未保存'
+  if (progress && 'textId' in progress) {
+    const normalizedText = progress.text.replace(/\s+/g, ' ').trim()
+    const textPreview =
+      normalizedText.length > 84
+        ? `${normalizedText.slice(0, 84).trimEnd()}…`
+        : normalizedText
+    detail = `第 ${progress.pageNumber} 页 · ${textPreview} · 偏移 ${progress.offset}`
+  } else if (progress) {
+    detail = `第 ${progress.pageNumber} 页 · ${progress.verticalPercentage}%`
+  } else if (pageNumber !== undefined) {
+    detail = `第 ${pageNumber} 页`
+  }
+
+  return (
+    <section
+      data-testid='demo-reading-progress-status'
+      style={{ marginBottom: '24px' }}
+    >
+      <h2>最后保存的阅读进度</h2>
+      <div style={{ fontSize: '12px', color: '#64748b' }}>{detail}</div>
+    </section>
+  )
+}
+
 function RecentFileStatus({
   file,
   isParsing,
@@ -845,7 +903,8 @@ export function App() {
   >(null)
   const [loadedParserLabel, setLoadedParserLabel] =
     useState<SupportedParserLabel | null>(null)
-  const [fontScale, setFontScale] = useState<ReaderFontScale>(1.5)
+  const [textFontScale, setTextFontScale] = useState<ReaderFontScale>(1.5)
+  const [layoutFontScale, setLayoutFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
   const [pdfLoadState, setPdfLoadState] = useState<PdfLoadState>({
     phase: 'idle'
@@ -926,6 +985,9 @@ export function App() {
   const switchBarrierRef = useRef<Promise<void>>(Promise.resolve())
   const pdfRetirementRef = useRef<Promise<void>>(Promise.resolve())
   const recentFilePersistenceChainRef = useRef<Promise<void>>(Promise.resolve())
+  const [layoutReadingProgress, setLayoutReadingProgress] = useState<
+    ReaderBookmark | undefined
+  >(undefined)
   const loadedReaderPreferencesFileNameRef = useRef<string | null>(null)
 
   // --- Selection 库集成演示 state ---
@@ -964,6 +1026,7 @@ export function App() {
       rects,
       pagePaintings,
       virtualPaper,
+      layoutReadingProgress,
       textReadingProgress,
       bookmarks,
       renderMode,
@@ -974,6 +1037,7 @@ export function App() {
       edgeCropAll,
       edgeCropPages,
       hiddenPages,
+      layoutReadingProgress,
       pagePaintings,
       ranges,
       rects,
@@ -1005,6 +1069,16 @@ export function App() {
           localStorage.setItem(
             `${TEXT_READING_PROGRESS_STORAGE_PREFIX}${uploadedFile.name}`,
             JSON.stringify(nextData.textReadingProgress)
+          )
+        }
+      }
+
+      if (nextData.layoutReadingProgress) {
+        setLayoutReadingProgress(nextData.layoutReadingProgress)
+        if (uploadedFile?.name) {
+          localStorage.setItem(
+            `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}${uploadedFile.name}`,
+            JSON.stringify(nextData.layoutReadingProgress)
           )
         }
       }
@@ -1386,9 +1460,15 @@ export function App() {
 
     localStorage.setItem(
       `${READER_PREFERENCES_STORAGE_PREFIX}${loadedFileName}`,
-      serializeReaderPreferences({ renderMode, selectedTool })
+      serializeReaderPreferences({
+        renderMode,
+        selectedTool,
+        textFontScale,
+        layoutFontScale,
+        highlightColor
+      })
     )
-  }, [renderMode, selectedTool])
+  }, [highlightColor, layoutFontScale, renderMode, selectedTool, textFontScale])
 
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
@@ -1541,14 +1621,26 @@ export function App() {
         ),
         {
           renderMode: parserLabel === 'EPUB' ? 'text' : 'layout',
-          selectedTool: 'text-selection'
+          selectedTool: 'text-selection',
+          textFontScale: 1.5,
+          layoutFontScale: 1.5,
+          highlightColor: 'rgba(255, 193, 7, 0.35)'
         }
       )
       setRenderMode(readerPreferences.renderMode)
       setSelectedTool(readerPreferences.selectedTool)
+      setTextFontScale(readerPreferences.textFontScale)
+      setLayoutFontScale(readerPreferences.layoutFontScale)
+      setHighlightColor(readerPreferences.highlightColor)
       loadedReaderPreferencesFileNameRef.current = file.name
-      setFontScale(1.5)
       setVirtualPaper({ x: 0, y: 0, scale: 1 })
+      setLayoutReadingProgress(
+        parseStoredLayoutReadingProgress(
+          localStorage.getItem(
+            `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
+          )
+        )
+      )
       setTextReadingProgress(
         parseStoredTextReadingProgress(
           localStorage.getItem(
@@ -1968,6 +2060,8 @@ export function App() {
       readerLoadingProgress = null
       break
   }
+  const activeFontScale =
+    renderMode === 'text' ? textFontScale : layoutFontScale
 
   return (
     <main
@@ -2087,6 +2181,13 @@ export function App() {
           </section>
 
           <LoadedPagesStatus document={document} pageNumbers={loadedPages} />
+
+          <ReadingProgressStatus
+            document={document}
+            renderMode={renderMode}
+            layoutReadingProgress={layoutReadingProgress}
+            textReadingProgress={textReadingProgress}
+          />
 
           {document && (
             <section
@@ -2823,8 +2924,10 @@ export function App() {
               onEdgeCropApply={handleEdgeCropApply}
               renderMode={renderMode}
               onRenderModeChange={handleRenderModeChange}
-              fontScale={supportsFontScale ? fontScale : undefined}
-              onFontScaleChange={setFontScale}
+              fontScale={supportsFontScale ? activeFontScale : undefined}
+              onFontScaleChange={
+                renderMode === 'text' ? setTextFontScale : setLayoutFontScale
+              }
               touchPanMode={touchPanMode}
               onTouchPanModeChange={setTouchPanMode}
               onFileUpload={handleReaderFileUpload}

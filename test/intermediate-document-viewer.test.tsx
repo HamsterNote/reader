@@ -32,7 +32,10 @@ import {
 import * as sass from 'sass'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { buildSelectionPayload } from '../src/components/IntermediateDocumentViewer'
+import {
+  buildSelectionPayload,
+  type ReaderReadingPositionHandle
+} from '../src/components/IntermediateDocumentViewer'
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import {
   computePageOriginY,
@@ -58,6 +61,7 @@ import {
 } from '../src/components/selection/selectionPayloadSerializer'
 import { IntermediateDocumentViewer, Reader } from '../src/index'
 import type { ReaderComment } from '../src/types/comments'
+import type { ReaderBookmark, ReaderTextAnchor } from '../src/types/readerData'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle,
@@ -255,6 +259,21 @@ function makeReaderRect(id: string, pageNumber = 1): ReaderSelectionRectangle {
     end: { x: 40, y: 60 },
     selectionId: `page-${pageNumber}`,
     rect: { x: 10, y: 20, width: 30, height: 40 }
+  }
+}
+
+function fireNativeLayoutProgressEvent(viewport: HTMLElement): void {
+  if ('onscrollend' in viewport) {
+    fireEvent(viewport, new Event('scrollend'))
+    return
+  }
+
+  fireEvent.scroll(viewport)
+}
+
+function finishNativeTextScroll(viewport: HTMLElement): void {
+  if ('onscrollend' in viewport) {
+    fireEvent(viewport, new Event('scrollend'))
   }
 }
 
@@ -2439,6 +2458,702 @@ describe('IntermediateDocumentViewer', () => {
     expect(page).toHaveStyle({ width: '100px' })
   })
 
+  it('reports native layout reading progress by text with percentage fallback', async () => {
+    // Given: 第一页有可定位文字，第二页没有文字。
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    pages.get(2)?.getContent.mockResolvedValue([])
+    const onLayoutReadingProgressChange = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page1 = screen.getByTestId('intermediate-page-1')
+    const page2 = screen.getByTestId('intermediate-page-2')
+    const page1Text = await screen.findByText('Page 1 text')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page1, { left: 0, top: -20, width: 100, height: 200 })
+    mockElementRect(page2, { left: 0, top: 180, width: 100, height: 200 })
+    mockElementRect(page1Text, { left: 20, top: 10, width: 100, height: 20 })
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+    })
+
+    // When: 支持 scrollend 的原生视口仍在滚动。
+    expect('onscrollend' in viewport).toBe(true)
+    onLayoutReadingProgressChange.mockClear()
+    mockElementRect(page1, { left: 0, top: -300, width: 100, height: 200 })
+    mockElementRect(page2, { left: 0, top: -50, width: 100, height: 200 })
+    mockElementRect(page1Text, { left: 20, top: -280, width: 100, height: 20 })
+    fireEvent.scroll(viewport)
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve())
+        })
+    )
+
+    // Then: 滚动过程只维持活动状态，不提前采集阅读位置。
+    expect(onLayoutReadingProgressChange).not.toHaveBeenCalled()
+
+    // When: 原生视口结束滚动。
+    fireNativeLayoutProgressEvent(viewport)
+
+    // Then: 仅在结束后保存第二页 25% 的页内位置。
+    await waitFor(() => {
+      expect(onLayoutReadingProgressChange).toHaveBeenLastCalledWith({
+        pageNumber: 2,
+        verticalPercentage: 25
+      })
+    })
+
+    // When: 原生视口继续滚到第一页文字位置并结束滚动。
+    mockElementRect(page1, { left: 0, top: -20, width: 100, height: 200 })
+    mockElementRect(page2, { left: 0, top: 180, width: 100, height: 200 })
+    mockElementRect(page1Text, { left: 20, top: 10, width: 100, height: 20 })
+    fireNativeLayoutProgressEvent(viewport)
+
+    // Then: 保存具体文字锚点。
+    await waitFor(() => {
+      expect(onLayoutReadingProgressChange).toHaveBeenLastCalledWith({
+        pageNumber: 1,
+        textId: 'text-1',
+        text: 'Page 1 text',
+        offset: 0
+      })
+    })
+  })
+
+  it('does not report native progress when content rerenders before scrollend', async () => {
+    // Given: 原生视口支持 scrollend，且初始位置已完成采集。
+    const { document } = makeDocument({ pageCount: 1 })
+    const onLayoutReadingProgressChange = vi.fn()
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page, { left: 0, top: -50, width: 100, height: 200 })
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve())
+        })
+    )
+    fireEvent(viewport, new Event('scrollend'))
+    await waitFor(() => {
+      expect(onLayoutReadingProgressChange).toHaveBeenCalledWith({
+        pageNumber: 1,
+        verticalPercentage: 25
+      })
+    })
+    onLayoutReadingProgressChange.mockClear()
+    mockElementRect(page, { left: 0, top: -100, width: 100, height: 200 })
+
+    // When: 内容相关回调换身份，引发通用锚点重新采集，但没有 scrollend。
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onTextAnchorChange={() => {}}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve())
+        })
+    )
+
+    // Then: 通用采集只更新内部锚点，不绕过 scrollend 持久化位置。
+    expect(onLayoutReadingProgressChange).not.toHaveBeenCalled()
+  })
+
+  it('invalidates a pending scrollend frame when a new scroll starts', async () => {
+    // Given: 原生视口支持 scrollend，动画帧可由测试精确推进。
+    const frameCallbacks = new Map<number, FrameRequestCallback>()
+    let nextFrameId = 0
+    const requestFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        nextFrameId += 1
+        frameCallbacks.set(nextFrameId, callback)
+        return nextFrameId
+      })
+    const cancelFrame = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((frameId) => {
+        frameCallbacks.delete(frameId)
+      })
+    const { document } = makeDocument({ pageCount: 1 })
+    const onLayoutReadingProgressChange = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page, { left: 0, top: -50, width: 100, height: 200 })
+    await act(async () => {
+      frameCallbacks.forEach((callback) => {
+        callback(0)
+      })
+      frameCallbacks.clear()
+    })
+    onLayoutReadingProgressChange.mockClear()
+
+    // When: 一次 scrollend 已排队，但下一次滚动在该帧执行前开始。
+    fireEvent(viewport, new Event('scrollend'))
+    fireEvent.scroll(viewport)
+    await act(async () => {
+      frameCallbacks.forEach((callback) => {
+        callback(0)
+      })
+      frameCallbacks.clear()
+    })
+
+    // Then: 上一轮结束帧被作废，滚动中的中间位置不会被持久化。
+    expect(cancelFrame).toHaveBeenCalled()
+    expect(onLayoutReadingProgressChange).not.toHaveBeenCalled()
+    requestFrame.mockRestore()
+    cancelFrame.mockRestore()
+  })
+
+  it('keeps a pending scrollend frame across callback rerenders', async () => {
+    // Given: scrollend 捕获已排队，动画帧可由测试精确推进。
+    const frameCallbacks = new Map<number, FrameRequestCallback>()
+    let nextFrameId = 0
+    const requestFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        nextFrameId += 1
+        frameCallbacks.set(nextFrameId, callback)
+        return nextFrameId
+      })
+    const cancelFrame = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((frameId) => {
+        frameCallbacks.delete(frameId)
+      })
+    const { document } = makeDocument({ pageCount: 1 })
+    const firstProgressChange = vi.fn()
+    const latestProgressChange = vi.fn()
+    const view = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onLayoutReadingProgressChange={firstProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page, { left: 0, top: -50, width: 100, height: 200 })
+    await act(async () => {
+      frameCallbacks.forEach((callback) => {
+        callback(0)
+      })
+      frameCallbacks.clear()
+    })
+    firstProgressChange.mockClear()
+
+    // When: scrollend 后、动画帧前，宿主换成新的回调身份。
+    fireEvent(viewport, new Event('scrollend'))
+    view.rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onLayoutReadingProgressChange={latestProgressChange}
+      />
+    )
+    await act(async () => {
+      frameCallbacks.forEach((callback) => {
+        callback(0)
+      })
+      frameCallbacks.clear()
+    })
+
+    // Then: effect 不重绑、不丢帧，并通过最新回调恰好上报一次。
+    expect(firstProgressChange).not.toHaveBeenCalled()
+    expect(latestProgressChange).toHaveBeenCalledTimes(1)
+    requestFrame.mockRestore()
+    cancelFrame.mockRestore()
+  })
+
+  it('falls back to scroll for native layout progress without scrollend support', async () => {
+    // Given: 浏览器不支持 Element scrollend，第一页只能保存页内百分比。
+    const scrollEndDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'onscrollend'
+    )
+    if (!scrollEndDescriptor) {
+      throw new TypeError('Expected jsdom to expose HTMLElement.onscrollend')
+    }
+    Reflect.deleteProperty(HTMLElement.prototype, 'onscrollend')
+
+    try {
+      const { document, pages } = makeDocument({ pageCount: 1 })
+      pages.get(1)?.getContent.mockResolvedValue([])
+      const onLayoutReadingProgressChange = vi.fn()
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+          nativeLayoutZoom={1}
+          onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+        />
+      )
+      const viewport = await screen.findByTestId('native-layout-viewport')
+      const page = screen.getByTestId('intermediate-page-1')
+      mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+      mockElementRect(page, { left: 0, top: -50, width: 100, height: 200 })
+
+      // When: 不支持 scrollend 的原生视口发生滚动。
+      expect('onscrollend' in viewport).toBe(false)
+      fireEvent.scroll(viewport)
+
+      // Then: scroll 事件仍会触发原生布局位置采集。
+      await waitFor(() => {
+        expect(onLayoutReadingProgressChange).toHaveBeenCalledWith({
+          pageNumber: 1,
+          verticalPercentage: 25
+        })
+      })
+    } finally {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        'onscrollend',
+        scrollEndDescriptor
+      )
+    }
+  })
+
+  it('captures the first mounted text below a native layout percentage', async () => {
+    // Given: the native viewport is in page 1 whitespace and page 2 text is below it.
+    const { document } = makeDocument({ pageCount: 2 })
+    const readingPositionRef = createRef<ReaderReadingPositionHandle>()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={2}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        readingPositionRef={readingPositionRef}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page1 = screen.getByTestId('intermediate-page-1')
+    const page2 = screen.getByTestId('intermediate-page-2')
+    const page1Text = await screen.findByText('Page 1 text')
+    const page2Text = await screen.findByText('Page 2 text')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page1, { left: 0, top: -75, width: 100, height: 150 })
+    mockElementRect(page2, { left: 0, top: 91, width: 100, height: 150 })
+    mockElementRect(page1Text, { left: 20, top: -50, width: 80, height: 20 })
+    mockElementRect(page2Text, { left: 20, top: 240, width: 80, height: 20 })
+
+    // When: Reader synchronously captures an anchor before changing modes.
+    let anchor: ReaderTextAnchor | undefined
+    await act(async () => {
+      anchor = readingPositionRef.current?.captureTextAnchor()
+    })
+
+    // Then: the next text becomes the cross-mode anchor instead of page 1's top.
+    expect(anchor).toEqual({
+      pageNumber: 2,
+      textId: 'text-2',
+      text: 'Page 2 text',
+      offset: 0
+    })
+  })
+
+  it('does not overwrite restored native percentage before its page is ready', async () => {
+    // Given: 宿主提供百分比进度，而页面要到首次尺寸测量后才可定位。
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages.get(1)?.getContent.mockResolvedValue([])
+    const onLayoutReadingProgressChange = vi.fn()
+    const ControlledViewer = () => {
+      const [progress, setProgress] = useState<ReaderBookmark>({
+        pageNumber: 1,
+        verticalPercentage: 42.5
+      })
+      return (
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+          nativeLayoutZoom={1}
+          layoutReadingProgress={progress}
+          onLayoutReadingProgressChange={(nextProgress) => {
+            onLayoutReadingProgressChange(nextProgress)
+            setProgress(nextProgress)
+          }}
+        />
+      )
+    }
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.testid === 'native-layout-viewport') {
+          return DOMRect.fromRect({ width: 300, height: 200 })
+        }
+        if (this.dataset.testid === 'intermediate-page-1') {
+          const viewportElement =
+            globalThis.document.querySelector<HTMLElement>(
+              '[data-testid="native-layout-viewport"]'
+            )
+          return DOMRect.fromRect({
+            y: -(viewportElement?.scrollTop ?? 0),
+            width: 100,
+            height: 200
+          })
+        }
+        return defaultGetBoundingClientRect.call(this)
+      })
+    render(<ControlledViewer />)
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    await waitFor(() => expect(pages.get(1)?.getContent).toHaveBeenCalled())
+
+    // When: 页面加载完成并触发原生布局的初始化捕获与恢复。
+    await act(async () => Promise.resolve())
+
+    // Then: 先恢复到 42.5%，且初始化事件不得把它覆盖为 0%。
+    await waitFor(() => expect(viewport.scrollTop).toBe(85))
+    expect(onLayoutReadingProgressChange).not.toHaveBeenCalledWith({
+      pageNumber: 1,
+      verticalPercentage: 0
+    })
+
+    // When: 恢复完成后，用户继续滚动到页面的一半。
+    onLayoutReadingProgressChange.mockClear()
+    viewport.scrollTop = 100
+    fireNativeLayoutProgressEvent(viewport)
+
+    // Then: 恢复门控已经释放，新的百分比仍会继续回传。
+    await waitFor(() => {
+      expect(onLayoutReadingProgressChange).toHaveBeenCalledWith({
+        pageNumber: 1,
+        verticalPercentage: 50
+      })
+    })
+    rectSpy.mockRestore()
+  })
+
+  it('loads a remote native page before restoring its percentage progress', async () => {
+    // Given: 只预载第一页，但宿主保存的是第三页的百分比进度。
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    pages.get(3)?.getContent.mockResolvedValue([])
+    const onLayoutReadingProgressChange = vi.fn()
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.testid === 'native-layout-viewport') {
+          return DOMRect.fromRect({ width: 300, height: 200 })
+        }
+        if (this.dataset.testid === 'intermediate-page-1') {
+          return DOMRect.fromRect({ y: -1000, width: 100, height: 200 })
+        }
+        if (this.dataset.testid === 'intermediate-page-2') {
+          return DOMRect.fromRect({ y: -500, width: 100, height: 200 })
+        }
+        if (this.dataset.testid === 'intermediate-page-3') {
+          const viewportElement =
+            globalThis.document.querySelector<HTMLElement>(
+              '[data-testid="native-layout-viewport"]'
+            )
+          return DOMRect.fromRect({
+            y: 400 - (viewportElement?.scrollTop ?? 0),
+            width: 100,
+            height: 200
+          })
+        }
+        return defaultGetBoundingClientRect.call(this)
+      })
+
+    try {
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+          nativeLayoutZoom={1}
+          layoutReadingProgress={{
+            pageNumber: 3,
+            verticalPercentage: 50
+          }}
+          onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+        />
+      )
+      const viewport = await screen.findByTestId('native-layout-viewport')
+
+      // When: 恢复逻辑发现目标页尚未加载。
+      await waitFor(() => expect(pages.get(1)?.getContent).toHaveBeenCalled())
+
+      // Then: 第三页会被主动加载，并恢复到该页 50% 的位置。
+      await waitFor(() => expect(pages.get(3)?.getContent).toHaveBeenCalled())
+      await waitFor(() => expect(viewport.scrollTop).toBe(500))
+
+      // When: 恢复完成后，用户继续滚动到第三页 75% 的位置。
+      onLayoutReadingProgressChange.mockClear()
+      viewport.scrollTop = 550
+      fireNativeLayoutProgressEvent(viewport)
+
+      // Then: 远端页恢复门控已释放，后续位置仍会继续保存。
+      await waitFor(() => {
+        expect(onLayoutReadingProgressChange).toHaveBeenCalledWith({
+          pageNumber: 3,
+          verticalPercentage: 75
+        })
+      })
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it('does not overwrite a restored native text anchor while its text is loading', async () => {
+    // Given: 宿主恢复一个尚未挂载的文字锚点。
+    const anchor = {
+      pageNumber: 1,
+      textId: 'late-layout-target',
+      text: 'Late layout target',
+      offset: 0
+    } as const
+    let resolveContent: ((content: IntermediateText[]) => void) | undefined
+    const contentPromise = new Promise<IntermediateText[]>((resolve) => {
+      resolveContent = resolve
+    })
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages.get(1)?.getContent.mockReturnValue(contentPromise)
+    const onLayoutReadingProgressChange = vi.fn()
+    const ControlledViewer = () => {
+      const [progress, setProgress] = useState<ReaderBookmark>(anchor)
+      return (
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+          nativeLayoutZoom={1}
+          layoutReadingProgress={progress}
+          onLayoutReadingProgressChange={(nextProgress) => {
+            onLayoutReadingProgressChange(nextProgress)
+            setProgress(nextProgress)
+          }}
+        />
+      )
+    }
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.testid === 'native-layout-viewport') {
+          return DOMRect.fromRect({ width: 300, height: 200 })
+        }
+        if (this.dataset.testid === 'intermediate-page-1') {
+          return DOMRect.fromRect({ width: 100, height: 200 })
+        }
+        if (this.textContent === anchor.text) {
+          return DOMRect.fromRect({ y: 85, width: 100, height: 20 })
+        }
+        return defaultGetBoundingClientRect.call(this)
+      })
+    render(<ControlledViewer />)
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    await waitFor(() => expect(pages.get(1)?.getContent).toHaveBeenCalled())
+
+    // When: 初始化位置捕获先运行，随后目标文字才完成加载。
+    fireNativeLayoutProgressEvent(viewport)
+    await act(async () => Promise.resolve())
+    await act(async () => {
+      resolveContent?.([makeText(anchor.textId, anchor.text)])
+      await contentPromise
+    })
+    await screen.findByText(anchor.text)
+
+    // Then: 初始化的 0% 不得覆盖锚点，且锚点最终完成定位。
+    await waitFor(() => expect(viewport.scrollTop).toBe(85))
+    expect(onLayoutReadingProgressChange).not.toHaveBeenCalledWith({
+      pageNumber: 1,
+      verticalPercentage: 0
+    })
+    rectSpy.mockRestore()
+  })
+
+  it('restores native text progress after switching documents in the same viewer', async () => {
+    // Given: 文档 A、B 使用相同的锚点 key，但文档 B 的文字内容尚未加载完成。
+    const { document: documentA, pages: pagesA } = makeDocument({
+      pageCount: 1
+    })
+    const { document: documentB, pages: pagesB } = makeDocument({
+      pageCount: 1
+    })
+    const anchor = {
+      pageNumber: 1,
+      textId: 'shared-document-target',
+      text: 'Shared document target',
+      offset: 0
+    } as const
+    pagesA
+      .get(1)
+      ?.getContent.mockResolvedValue([makeText(anchor.textId, anchor.text)])
+    let resolveDocumentBContent:
+      | ((content: ReturnType<typeof makeText>[]) => void)
+      | null = null
+    pagesB.get(1)?.getContent.mockImplementation(
+      () =>
+        new Promise<ReturnType<typeof makeText>[]>((resolve) => {
+          resolveDocumentBContent = resolve
+        })
+    )
+    const onLayoutReadingProgressChange = vi.fn()
+    let pageTop = 0
+    let targetTop = 85
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.testid === 'native-layout-viewport') {
+          return DOMRect.fromRect({ width: 300, height: 200 })
+        }
+        if (this.dataset.testid === 'intermediate-page-1') {
+          return DOMRect.fromRect({ y: pageTop, width: 100, height: 200 })
+        }
+        if (this.textContent === anchor.text) {
+          return DOMRect.fromRect({ y: targetTop, width: 100, height: 20 })
+        }
+        return defaultGetBoundingClientRect.call(this)
+      })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={documentA}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    await screen.findByText(anchor.text)
+    fireNativeLayoutProgressEvent(viewport)
+    await waitFor(() =>
+      expect(onLayoutReadingProgressChange).toHaveBeenCalledWith(anchor)
+    )
+    rerender(
+      <IntermediateDocumentViewer
+        document={documentA}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        layoutReadingProgress={anchor}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    onLayoutReadingProgressChange.mockClear()
+
+    // When: 不卸载 Viewer，直接切换到具有相同锚点 key 的文档 B，并在文字就绪前触发位置捕获。
+    rerender(
+      <IntermediateDocumentViewer
+        document={documentB}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        layoutReadingProgress={anchor}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    await waitFor(() => expect(resolveDocumentBContent).not.toBeNull())
+    fireNativeLayoutProgressEvent(viewport)
+    expect(onLayoutReadingProgressChange).not.toHaveBeenCalled()
+    await act(async () => {
+      resolveDocumentBContent?.([makeText(anchor.textId, anchor.text)])
+    })
+    await screen.findByText(anchor.text)
+
+    // Then: 同 key 不会被误判为宿主回显；新文档恢复完成后仍允许继续上报。
+    await waitFor(() => expect(viewport.scrollTop).toBe(85))
+    onLayoutReadingProgressChange.mockClear()
+    pageTop = -50
+    targetTop = -100
+    fireNativeLayoutProgressEvent(viewport)
+    await waitFor(() =>
+      expect(onLayoutReadingProgressChange).toHaveBeenCalledWith({
+        pageNumber: 1,
+        verticalPercentage: 25
+      })
+    )
+
+    // When: 宿主把刚保存的百分比原样回显，并且用户在恢复调度帧内继续滚动。
+    rerender(
+      <IntermediateDocumentViewer
+        document={documentB}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        layoutReadingProgress={{ pageNumber: 1, verticalPercentage: 25 }}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    await act(async () => {})
+    onLayoutReadingProgressChange.mockClear()
+    viewport.scrollTop = 185
+    pageTop = -100
+    fireNativeLayoutProgressEvent(viewport)
+
+    // Then: 本地回显不会重新导航或锁住捕获，新的 50% 位置会继续保存。
+    await waitFor(() =>
+      expect(onLayoutReadingProgressChange).toHaveBeenCalledWith({
+        pageNumber: 1,
+        verticalPercentage: 50
+      })
+    )
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+    })
+    expect(viewport.scrollTop).toBe(185)
+    rectSpy.mockRestore()
+  })
+
   it('keeps native drawing coordinates intrinsic at a fixed percentage zoom', async () => {
     // Given: a persisted stroke is displayed in native layout at 150%.
     const onPagePaintingChange = vi.fn()
@@ -2681,6 +3396,41 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('PDF text mode marks every visible page boundary with its page number', async () => {
+    // Given: PDF Text Mode 渲染一个可见的虚拟页面。
+    const { document } = makeDocument({ pageCount: 1 })
+
+    // When: 页面进入 Text Mode 的可见范围。
+    render(<IntermediateDocumentTextViewer document={document} isPdf />)
+    setScrollContainerSize(
+      screen.getByTestId('intermediate-document-text-viewer'),
+      { width: 800, height: 600 }
+    )
+
+    // Then: 页面正文前展示 PDF 专属页码分隔标记。
+    const page = await screen.findByTestId('intermediate-text-page-1')
+    const marker = within(page).getByTestId('pdf-text-page-marker-1')
+    expect(marker).toHaveTextContent('第 1 页')
+    expect(marker).toHaveAttribute('aria-hidden', 'true')
+    expect(marker.nextElementSibling).toHaveClass('hsn-selection-container')
+  })
+
+  it('non-PDF text mode does not render PDF page boundary markers', async () => {
+    // Given: 普通可重排文档进入 Text Mode。
+    const { document } = makeDocument({ pageCount: 1 })
+
+    // When: 首个虚拟页面被渲染。
+    render(<IntermediateDocumentTextViewer document={document} />)
+    setScrollContainerSize(
+      screen.getByTestId('intermediate-document-text-viewer'),
+      { width: 800, height: 600 }
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+
+    // Then: 非 PDF 文档不展示 PDF 页码分隔标记。
+    expect(screen.queryByTestId('pdf-text-page-marker-1')).toBeNull()
+  })
+
   it('text mode applies the public contain margins to its scroll viewport', () => {
     // Given: the host provides independent safe-area margins for Text Mode.
     const { document } = makeDocument({ pageCount: 1 })
@@ -2849,6 +3599,10 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 4200
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(progress).toHaveAttribute('aria-valuenow', '6')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: only the newly reached page is emitted for persistence.
     await waitFor(() => {
@@ -2893,10 +3647,61 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 6400
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(progress).toHaveAttribute('aria-valuenow', '9')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: the first real user scroll after restore persists normally.
     await waitFor(() => {
       expect(onTextReadingProgressChange).toHaveBeenCalled()
+    })
+  })
+
+  it('text mode reports native reading progress only after scrollend', async () => {
+    // Given: Text Mode 已渲染可滚动内容，且浏览器支持原生 scrollend。
+    const onTextReadingProgressChange = vi.fn()
+    const { document } = makeDocument({ pageCount: 10 })
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        onTextReadingProgressChange={onTextReadingProgressChange}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 8000
+    })
+    await screen.findByTestId('intermediate-text-page-1')
+    expect('onscrollend' in scrollEl).toBe(true)
+
+    // When: 视口仍在滚动，仅触发 scroll。
+    act(() => {
+      scrollEl.scrollTop = 3200
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve())
+        })
+    )
+
+    // Then: 滚动过程中不提前发布持久化位置。
+    expect(onTextReadingProgressChange).not.toHaveBeenCalled()
+
+    // When: 浏览器确认本轮滚动结束。
+    act(() => {
+      scrollEl.dispatchEvent(new Event('scrollend'))
+    })
+
+    // Then: Text Mode 只发布最终可见页。
+    await waitFor(() => {
+      expect(onTextReadingProgressChange).toHaveBeenLastCalledWith({
+        currentPageNumber: 5
+      })
     })
   })
 
@@ -3120,6 +3925,12 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 800
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('slider', { name: '文本阅读进度' })
+      ).toHaveAttribute('aria-valuenow', '2')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: user persistence resumes after the document-switch restore.
     await waitFor(() => {
@@ -3284,6 +4095,12 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.scrollTop = 800
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('slider', { name: '文本阅读进度' })
+      ).toHaveAttribute('aria-valuenow', '2')
+    })
+    finishNativeTextScroll(scrollEl)
 
     // Then: progress is no longer frozen by the unresolvable initial anchor.
     await waitFor(() => {
@@ -3338,6 +4155,7 @@ describe('IntermediateDocumentViewer', () => {
         scrollEl.scrollTop = 800
         scrollEl.dispatchEvent(new Event('scroll'))
       })
+      finishNativeTextScroll(scrollEl)
 
       // Then: the unrenderable entry cannot leave progress capture pending forever.
       await waitFor(() => {
@@ -3383,6 +4201,7 @@ describe('IntermediateDocumentViewer', () => {
 
     // When: native scrolling asks the viewer to persist its current position.
     fireEvent.scroll(scrollEl)
+    finishNativeTextScroll(scrollEl)
 
     // Then: progress carries the top text and its page-local offset.
     await waitFor(() => {
@@ -3577,6 +4396,7 @@ describe('IntermediateDocumentViewer', () => {
     act(() => {
       scrollEl.dispatchEvent(new Event('scroll'))
     })
+    finishNativeTextScroll(scrollEl)
 
     // Then: concrete reading progress supersedes the empty bookmark identity.
     await waitFor(() => {
@@ -4809,6 +5629,75 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
+  it('text mode selects an unselected persisted highlight with a touch tap', async () => {
+    // Given: 文本模式已渲染一个持久高亮，但当前没有任何高亮被选中。
+    clearSelectionProps()
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const range = makeReaderRange('text-touch-select-range', 'Page')
+    const clientRects = Object.assign([new DOMRect(180, 250, 80, 30)], {
+      item: (index: number) => clientRects[index] ?? null
+    })
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: vi.fn(() => clientRects)
+    })
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('hsn-selection-container') ||
+          this.dataset.testid === 'intermediate-text-page-1'
+          ? DOMRect.fromRect({ x: 100, y: 100, width: 400, height: 600 })
+          : defaultGetBoundingClientRect.call(this)
+      })
+
+    try {
+      render(
+        <IntermediateDocumentTextViewer
+          document={document}
+          ranges={[range]}
+          overlayRectType='px'
+          onSelectRange={onSelectRange}
+        />
+      )
+      const viewer = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(viewer, { width: 800, height: 600 })
+      await screen.findByTestId('intermediate-text-page-1')
+      const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+      await waitFor(() => {
+        expect(
+          requireSelectionPropsById(runtimeSelectionId).linkedData?.items[0]
+            ?.rectsBySelectionId[runtimeSelectionId]
+        ).toEqual([{ x: 80, y: 150, width: 80, height: 30 }])
+      })
+
+      // When: 主触点在该高亮的动态文本矩形内完成一次静止轻触。
+      fireEvent.pointerDown(viewer, {
+        pointerType: 'touch',
+        pointerId: 13,
+        isPrimary: true,
+        clientX: 180,
+        clientY: 250
+      })
+      fireEvent.pointerUp(viewer, {
+        pointerType: 'touch',
+        pointerId: 13,
+        isPrimary: true,
+        clientX: 180,
+        clientY: 250
+      })
+
+      // Then: 首次触摸选择与既有鼠标选择一样上报公共 range ID。
+      expect(onSelectRange).toHaveBeenCalledWith(range.id)
+    } finally {
+      rectSpy.mockRestore()
+      Reflect.deleteProperty(Range.prototype, 'getClientRects')
+      clearSelectionProps()
+    }
+  })
+
   it('text mode keeps built-in Selection handles after touch input', async () => {
     // Given: a touch gesture starts over a persisted range on page 1.
     clearSelectionProps()
@@ -5674,6 +6563,25 @@ describe('IntermediateDocumentViewer', () => {
       expect(
         window.getComputedStyle(page).getPropertyValue('padding-top')
       ).toBe('5px')
+    })
+
+    it('PDF page marker uses the compact theme-colored divider style', async () => {
+      // Given / When: PDF Text Mode 渲染首个可见页面并注入 Reader 样式。
+      const { document } = makeDocument({ pageCount: 1 })
+      render(<IntermediateDocumentTextViewer document={document} isPdf />)
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, { width: 800, height: 600 })
+
+      // Then: 标记保持 11px，并从主题变量继承细线和文字颜色。
+      const marker = await screen.findByTestId('pdf-text-page-marker-1')
+      const markerStyle = window.getComputedStyle(marker)
+      expect(markerStyle.fontSize).toBe('11px')
+      expect(markerStyle.color).toBe(
+        'var(--hamster-reader-theme-color, #2563eb)'
+      )
+      expect(readerStyles).toMatch(
+        /\.hamster-reader__intermediate-text-page-marker::before\s*{[^}]*background-color:\s*currentColor;/
+      )
     })
 
     it('text mode root has scoped classes without inline overflow or display', async () => {
@@ -10644,6 +11552,54 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     expect(onSelectRange).toHaveBeenCalledWith(secondRange.id)
   })
 
+  it('selects an unselected persisted highlight when touch lands on it', async () => {
+    // Given: layout 模式已渲染一个持久高亮，但当前没有任何高亮被选中。
+    const onSelectRange = vi.fn()
+    const { document } = makeDocument({ pageCount: 1 })
+    const range = makeReaderRange('touch-first-select-range', 'Touch select')
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        ranges={[range]}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const page = screen.getByTestId('intermediate-page-1')
+    const selectionContainer = page.querySelector('.hsn-selection-container')
+    if (!(selectionContainer instanceof HTMLElement)) {
+      throw new Error('Expected the page selection container')
+    }
+    // 真实依赖把 scoped selection ID 放在 Reader 的页面外壳上。
+    selectionContainer.removeAttribute('data-selection-id')
+    mockElementRect(page, {
+      left: 100,
+      top: 100,
+      width: 400,
+      height: 600
+    })
+
+    // When: 主触点在该高亮的百分比矩形内完成一次静止轻触。
+    const viewerSpace = screen.getByTestId('virtual-paper-wrapper')
+    fireEvent.pointerDown(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 5,
+      isPrimary: true,
+      clientX: 180,
+      clientY: 250
+    })
+    fireEvent.pointerUp(viewerSpace, {
+      pointerType: 'touch',
+      pointerId: 5,
+      isPrimary: true,
+      clientX: 180,
+      clientY: 250
+    })
+
+    // Then: 首次触摸选择上报命中的公共 range ID。
+    expect(onSelectRange).toHaveBeenCalledWith(range.id)
+  })
+
   it('starts dragging a highlight after mouse movement passes the drag threshold', async () => {
     // Given: a persisted percent-based highlight and a drag callback.
     const onDragHighlight = vi.fn()
@@ -10701,6 +11657,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     expect(onDragHighlight).not.toHaveBeenCalled()
     expect(viewer).not.toHaveClass(
       'hamster-reader__intermediate-document-viewer--highlight-dragging'
+    )
+    expect(viewer).not.toHaveClass(
+      'hamster-reader__intermediate-document-viewer--suppress-native-selection'
     )
     await act(async () => {
       fireEvent.pointerMove(selectionContent, {
@@ -10784,7 +11743,16 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
     vi.useFakeTimers()
 
     try {
-      // When: the touch remains still for the 500 ms long-press interval.
+      // When: 浏览器先派发 touchstart，再派发对应的 pointerdown，且触点保持静止。
+      // 原生选词由 touchstart 启动，必须在这一刻就被 Viewer 取消。
+      let touchStartAllowed = true
+      await act(async () => {
+        touchStartAllowed = fireEvent.touchStart(selectionContent, {
+          touches: [{ identifier: 42, clientX: 180, clientY: 240 }],
+          changedTouches: [{ identifier: 42, clientX: 180, clientY: 240 }]
+        })
+      })
+      expect(touchStartAllowed).toBe(false)
       let pointerDownAllowed = true
       await act(async () => {
         pointerDownAllowed = fireEvent.pointerDown(selectionContent, {
@@ -10799,19 +11767,23 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       // 或 Selection/VirtualPaper 在 500ms 等待期内先启动文字选择或页面拖动。
       expect(pointerDownAllowed).toBe(false)
       expect(onSelectionPointerDown).not.toHaveBeenCalled()
-      // Then: 同一高亮候选取消原生 touchstart，避免浏览器抢占后续移动。
-      expect(
-        fireEvent.touchStart(selectionContent, {
-          touches: [{ identifier: 42, clientX: 180, clientY: 240 }],
-          changedTouches: [{ identifier: 42, clientX: 180, clientY: 240 }]
-        })
-      ).toBe(false)
+      // 候选期还没有进入拖动态，但命中既有高亮后必须立即禁用原生选词。
+      // 这条状态边界可由真实浏览器 CSS 执行，避免 jsdom 伪造 UA Selection。
+      expect(viewer).toHaveClass(
+        'hamster-reader__intermediate-document-viewer--suppress-native-selection'
+      )
+      expect(viewer).not.toHaveClass(
+        'hamster-reader__intermediate-document-viewer--highlight-dragging'
+      )
       await act(async () => {
         vi.advanceTimersByTime(499)
       })
       expect(onDragHighlight).not.toHaveBeenCalled()
       expect(viewer).not.toHaveClass(
         'hamster-reader__intermediate-document-viewer--highlight-dragging'
+      )
+      expect(viewer).toHaveClass(
+        'hamster-reader__intermediate-document-viewer--suppress-native-selection'
       )
       expect(viewerSpace.dataset.enabledInteractions).toContain(
         VirtualPaperInteractionMode.TouchSingleFingerPan
@@ -10879,6 +11851,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       expect(viewer).not.toHaveClass(
         'hamster-reader__intermediate-document-viewer--highlight-dragging'
       )
+      expect(viewer).not.toHaveClass(
+        'hamster-reader__intermediate-document-viewer--suppress-native-selection'
+      )
       expect(viewerSpace.dataset.enabledInteractions).toContain(
         VirtualPaperInteractionMode.TouchSingleFingerPan
       )
@@ -10929,6 +11904,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
           clientY: 240
         })
       })
+      expect(viewer).toHaveClass(
+        'hamster-reader__intermediate-document-viewer--suppress-native-selection'
+      )
       await act(async () => {
         fireEvent.pointerMove(viewerSpace, {
           pointerType: 'touch',
@@ -10946,6 +11924,9 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       expect(onDragHighlight).not.toHaveBeenCalled()
       expect(viewer).not.toHaveClass(
         'hamster-reader__intermediate-document-viewer--highlight-dragging'
+      )
+      expect(viewer).not.toHaveClass(
+        'hamster-reader__intermediate-document-viewer--suppress-native-selection'
       )
       expect(viewerSpace.dataset.enabledInteractions).toContain(
         VirtualPaperInteractionMode.TouchSingleFingerPan
@@ -12974,6 +13955,13 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
         'page-3': [{ x: 10, y: 20, width: 20, height: 20 }]
       }
     }
+    const pageThreeRightRange: ReaderSelectionRange = {
+      ...pageThreeRange,
+      id: 'jump-page-3-right',
+      rectsBySelectionId: {
+        'page-3': [{ x: 70, y: 20, width: 20, height: 20 }]
+      }
+    }
     const pageFourRange: ReaderSelectionRange = {
       id: 'jump-page-4',
       text: 'Out of range target',
@@ -13275,6 +14263,84 @@ describe('intermediate-document selection and OCR regression (task-7)', () => {
       expect(screen.getByTestId('virtual-paper-container')).toHaveStyle({
         transform: 'translate3d(0px, -327px, 0) scale(1)'
       })
+    })
+
+    it('centers a page-3 range in the native layout viewport', async () => {
+      // Given: native Layout owns translation through its scrollable viewport.
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 100, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRightRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      const viewport = screen.getByTestId('native-layout-viewport')
+      mockElementRect(viewport, {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+      mockElementRect(screen.getByTestId('intermediate-page-3'), {
+        left: 0,
+        top: 200,
+        width: 100,
+        height: 150
+      })
+
+      // When: the public ref jumps to the page-3 range.
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange(
+          'jump-page-3-right'
+        )
+      })
+
+      // Then: native scrolling aligns the range center with the viewport center.
+      expect(viewport.scrollLeft).toBe(55)
+      expect(viewport.scrollTop).toBe(195)
+    })
+
+    it('uses both computed axes when native page geometry is unavailable', async () => {
+      // Given: native Layout 已挂载，但目标页尚未提供可测量的 DOM 尺寸。
+      const selectionRef = createRef<ReaderSelectionRef>()
+      const { document } = makeDocument({
+        pageCount: 3,
+        pageSize: { x: 200, y: 150 }
+      })
+      render(
+        <IntermediateDocumentViewer
+          document={document}
+          ranges={[pageThreeRange]}
+          selectionRef={selectionRef}
+          initialLoadedPages={1}
+          useVirtualPaper={false}
+        />
+      )
+      await screen.findByText('Page 1 text')
+      const viewport = screen.getByTestId('native-layout-viewport')
+      mockElementRect(viewport, {
+        left: 0,
+        top: 0,
+        width: 50,
+        height: 100
+      })
+
+      // When: 公开 ref 在目标页 DOM 尺寸不可用时跳转。
+      act(() => {
+        requireReaderSelectionRef(selectionRef).scrollToRange('jump-page-3')
+      })
+
+      // Then: fallback 使用计算出的绝对横纵偏移，而非只更新纵轴。
+      expect(viewport.scrollLeft).toBe(15)
+      expect(viewport.scrollTop).toBe(327)
     })
 
     it('uses stretched preview coordinates when jumping to a narrow page', async () => {
