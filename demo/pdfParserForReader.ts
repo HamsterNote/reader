@@ -1,4 +1,16 @@
+import type {
+  OpenDocumentHandle,
+  OpenDocumentOptions
+} from '@hamster-note/pdf-parser'
+
 type PdfJsDocumentOverrides = Readonly<Record<string, unknown>>
+
+type PdfParserForReader = {
+  readonly openDocument: (
+    source: ArrayBuffer,
+    options?: OpenDocumentOptions
+  ) => Promise<OpenDocumentHandle>
+}
 
 type PdfParserSessionLoader = (
   data: ArrayBuffer,
@@ -11,6 +23,14 @@ type PdfPageObjectResolver = (
 ) => Promise<unknown>
 
 const configuredParsers = new WeakSet<object>()
+
+export async function openPdfDocumentForReader(
+  parser: PdfParserForReader,
+  source: ArrayBuffer,
+  options: OpenDocumentOptions = {}
+): Promise<OpenDocumentHandle> {
+  return parser.openDocument(source, options)
+}
 
 export function configurePdfParserForReader(parser: object): boolean {
   if (configuredParsers.has(parser)) return true

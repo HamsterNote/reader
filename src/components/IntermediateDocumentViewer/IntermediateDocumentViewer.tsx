@@ -822,11 +822,11 @@ function completeNativeProgressRestore(
 
 function resolveNativeLayoutBookmark(
   anchor: ReaderTextAnchor | undefined,
-  viewportRect: DOMRect | undefined,
+  contentTop: number,
   topPage: { readonly pageNumber: number; readonly rect: DOMRect } | undefined
 ): ReaderBookmark | undefined {
   if (anchor) return anchor
-  if (!viewportRect || !topPage) return undefined
+  if (!topPage) return undefined
 
   return {
     pageNumber: topPage.pageNumber,
@@ -836,7 +836,7 @@ function resolveNativeLayoutBookmark(
           100,
           Math.max(
             0,
-            ((viewportRect.top - topPage.rect.top) / topPage.rect.height) * 100
+            ((contentTop - topPage.rect.top) / topPage.rect.height) * 100
           )
         ) * 100
       ) / 100
@@ -5450,6 +5450,8 @@ export function IntermediateDocumentViewer({
         '.virtual-paper-wrapper'
       )
       const viewportRect = viewport?.getBoundingClientRect()
+      const contentTop =
+        (viewportRect?.top ?? 0) + (containMarginTop ?? containMarginY ?? 0)
       const pageRects = viewportRect
         ? pageNumbers.flatMap((pageNumber) => {
             const rect = pageRefs.current
@@ -5460,11 +5462,10 @@ export function IntermediateDocumentViewer({
         : []
       const topPage = viewportRect
         ? (pageRects.find(
-            ({ rect }) =>
-              rect.top <= viewportRect.top && rect.bottom > viewportRect.top
+            ({ rect }) => rect.top <= contentTop && rect.bottom > contentTop
           ) ??
           pageRects
-            .filter(({ rect }) => rect.top > viewportRect.top)
+            .filter(({ rect }) => rect.top > contentTop)
             .sort((left, right) => left.rect.top - right.rect.top)[0])
         : undefined
       const resolvedPageNumber =
@@ -5477,16 +5478,14 @@ export function IntermediateDocumentViewer({
       }
       const findAnchor = scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor
       const anchor = viewport
-        ? (findAnchor(
-            viewport,
-            textElementsRef.current,
-            textsByPageNumber,
-            resolvedPageNumber
-          ) ?? undefined)
+        ? (findAnchor(viewport, textElementsRef.current, textsByPageNumber, {
+            pageNumber: resolvedPageNumber,
+            topInset: containMarginTop ?? containMarginY
+          }) ?? undefined)
         : undefined
       const nextBookmark = resolveNativeLayoutBookmark(
         anchor,
-        viewportRect,
+        contentTop,
         topPage
       )
       setCurrentBookmark((value) =>
@@ -5524,6 +5523,8 @@ export function IntermediateDocumentViewer({
     [
       onLayoutReadingProgressChange,
       onTextAnchorChange,
+      containMarginTop,
+      containMarginY,
       pageNumbers,
       textsByPageNumber,
       useVirtualPaper

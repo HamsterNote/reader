@@ -1171,8 +1171,9 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('layout mode persists the text crossing the top of the viewport', async () => {
-    // Given: the second text starts at the viewport top after the first text.
+  it('layout mode persists the text crossing the top content inset', async () => {
+    // Given: the first text is inside the fixed top whitespace while the second
+    // text starts at the actual content-reading boundary.
     const { document, pages } = makeDocument({ pageCount: 1 })
     const page = pages.get(1)
     if (!page) throw new Error('Expected page 1 fixture')
@@ -1184,6 +1185,7 @@ describe('IntermediateDocumentViewer', () => {
     render(
       <IntermediateDocumentViewer
         document={document}
+        containMarginTop={40}
         onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
       />
     )
@@ -1192,8 +1194,8 @@ describe('IntermediateDocumentViewer', () => {
     const first = await screen.findByText('First')
     const second = screen.getByText('Second')
     mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
-    mockElementRect(first, { left: 20, top: -20, width: 100, height: 20 })
-    mockElementRect(second, { left: 20, top: 0, width: 100, height: 20 })
+    mockElementRect(first, { left: 20, top: 0, width: 100, height: 20 })
+    mockElementRect(second, { left: 20, top: 40, width: 100, height: 20 })
 
     // When: the user finishes panning the layout surface.
     await act(async () => {
@@ -2530,6 +2532,49 @@ describe('IntermediateDocumentViewer', () => {
         textId: 'text-1',
         text: 'Page 1 text',
         offset: 0
+      })
+    })
+  })
+
+  it('reports native layout percentage relative to the top content inset', async () => {
+    // Given: 页面没有可用文字，顶部内容边界位于视口顶部下方 40px。
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages.get(1)?.getContent.mockResolvedValue([])
+    const onLayoutReadingProgressChange = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        containMarginTop={40}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page, { left: 0, top: 10, width: 100, height: 200 })
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+    })
+
+    // When: 原生视口结束滚动并采集无文字页面的 fallback 进度。
+    onLayoutReadingProgressChange.mockClear()
+    await act(async () => {
+      fireNativeLayoutProgressEvent(viewport)
+    })
+
+    // Then: 百分比按 contentTop(40px) 计算，而不是按 viewportTop(0px) 计算。
+    await waitFor(() => {
+      expect(onLayoutReadingProgressChange).toHaveBeenLastCalledWith({
+        pageNumber: 1,
+        verticalPercentage: 15
       })
     })
   })
@@ -4166,8 +4211,9 @@ describe('IntermediateDocumentViewer', () => {
     }
   )
 
-  it('text mode persists the text crossing the top of the scroll viewport', async () => {
-    // Given: the second text starts after five characters on the current page.
+  it('text mode persists the text crossing the top content inset', async () => {
+    // Given: the first text is inside the top padding while the second text
+    // starts after five characters at the actual content-reading boundary.
     const onTextReadingProgressChange = vi.fn()
     const { document, pages } = makeDocument({ pageCount: 1 })
     pages
@@ -4181,6 +4227,7 @@ describe('IntermediateDocumentViewer', () => {
         document={document}
         showPageBrowser={true}
         bookmarks={[]}
+        containMarginTop={40}
         onToggleBookmark={vi.fn()}
         onTextReadingProgressChange={onTextReadingProgressChange}
       />
@@ -4195,9 +4242,9 @@ describe('IntermediateDocumentViewer', () => {
     mockElementSize(screen.getByText('First'), {
       width: 100,
       height: 20,
-      top: -20
+      top: 0
     })
-    mockElementSize(secondText, { width: 100, height: 20, top: 0 })
+    mockElementSize(secondText, { width: 100, height: 20, top: 40 })
 
     // When: native scrolling asks the viewer to persist its current position.
     fireEvent.scroll(scrollEl)
@@ -5881,6 +5928,109 @@ describe('IntermediateDocumentViewer', () => {
     }
 
     clearSelectionProps()
+  })
+
+  it('text mode ignores a stale range scroll after a precise anchor restore', async () => {
+    // Given: a range navigation has queued follow-up scrolling for a mounted page.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'range-restore-anchor',
+      text: 'Precise restore target',
+      offset: 7
+    } as const
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages
+      .get(1)
+      ?.getContent.mockResolvedValue([
+        makeText('range-prefix', 'First'),
+        makeText(anchor.textId, anchor.text)
+      ])
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const range = makeReaderRange('stale-range-navigation', 'Range target', 1)
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        ranges={[range]}
+        selectionRef={selectionRef}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2400
+    })
+    const targetText = await screen.findByText(anchor.text)
+    Object.defineProperty(targetText, 'getBoundingClientRect', {
+      configurable: true,
+      value: () =>
+        DOMRect.fromRect({
+          y: 1200 - scrollEl.scrollTop,
+          width: 100,
+          height: 20
+        })
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: (options: ScrollToOptions) => {
+        scrollEl.scrollTop = options.top ?? 0
+        scrollEl.dispatchEvent(new Event('scroll'))
+      }
+    })
+    const page = screen.getByTestId('intermediate-text-page-1')
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollIntoView'
+    )
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement) {
+        if (this === page) scrollEl.scrollTop = 200
+      }
+    })
+
+    try {
+      await act(async () => {
+        selectionRef.current?.scrollToRange(range.id)
+        await Promise.resolve()
+      })
+
+      // When: the controlled host restores a newer precise anchor before the
+      // queued range-navigation frames execute.
+      await act(async () => {
+        view.rerender(
+          <IntermediateDocumentTextViewer
+            document={document}
+            ranges={[range]}
+            selectionRef={selectionRef}
+            textReadingProgress={{ currentPageNumber: 1, anchor }}
+          />
+        )
+        await Promise.resolve()
+      })
+      expect(scrollEl.scrollTop).toBe(1200)
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve())
+            })
+          })
+      )
+
+      // Then: stale range callbacks cannot replace the newer restored offset.
+      expect(scrollEl.scrollTop).toBe(1200)
+    } finally {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          'scrollIntoView',
+          scrollIntoViewDescriptor
+        )
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+      }
+    }
   })
 
   it('text mode bridges linked Selection callbacks to public page ids', async () => {

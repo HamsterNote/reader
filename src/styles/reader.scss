@@ -124,6 +124,34 @@
     box-sizing: border-box;
   }
 
+  &__loading-progress {
+    display: grid;
+    gap: 10px;
+    width: min(480px, calc(100% - 48px));
+    margin: 24px auto;
+    padding: 16px;
+    box-sizing: border-box;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    color: #374151;
+  }
+
+  &__loading-progress-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  &__loading-progress-bar {
+    width: 100%;
+    height: 8px;
+    accent-color: var(--hamster-reader-theme-color);
+  }
+
   &__highlight-popover {
     display: flex;
     align-items: center;

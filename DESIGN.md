@@ -274,4 +274,20 @@ consumers can see how to implement the `onDragHighlight` integration.
   top and falls back to the current page's vertical percentage when no text is
   available.
 
+## 17. Reader Loading Progress
+
+- **Ownership:** `loadingProgress` is a controlled host state. Reader displays
+  the supplied label and normalized integer percentage but does not read or
+  parse files itself. Passing `null` or omitting the prop restores normal UI.
+- **State priority:** loading progress is exclusive within the Reader container.
+  While active, it temporarily replaces the upload zone, document content,
+  default or custom bottom bar, and internally retained uploaded-file details.
+- **Surface:** use the existing neutral white card, `#e5e7eb` border, `8px`
+  radius, Reader spacing, and theme-color progress accent. The card is at most
+  `480px` wide and retains `24px` horizontal gutters on narrow viewports.
+- **Accessibility:** the Reader root exposes `aria-busy=true` while progress is
+  active. A polite, atomic status announces the phase label and rounded integer
+  percentage, while the native `progress` element keeps the phase label as its
+  accessible name.
+
 _(End of minimal design contract)_

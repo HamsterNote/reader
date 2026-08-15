@@ -428,6 +428,60 @@ describe('Reader public API', () => {
     expect(root).toHaveTextContent('Nothing to render')
   })
 
+  it('renders controlled loading progress inside the Reader container', () => {
+    // Given: Reader 已有文档，但宿主进入新的文件读取阶段。
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        loadingProgress={{
+          label: '正在读取文件',
+          current: 25,
+          total: 100
+        }}
+      />
+    )
+
+    // When: Reader 渲染受控进度。
+    const root = screen.getByTestId('reader-root')
+    const status = screen.getByTestId('reader-loading-progress')
+    const progress = screen.getByRole('progressbar', { name: '正在读取文件' })
+
+    // Then: 进度显示属于忙碌的 Reader，并排他地替代文档和底栏。
+    expect(root).toContainElement(status)
+    expect(root).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('正在读取文件25%')
+    expect(progress).toHaveAttribute('max', '100')
+    expect(progress).toHaveAttribute('value', '25')
+    expect(
+      screen.getByTestId('reader-loading-progress-percent')
+    ).toHaveTextContent('25%')
+    expect(screen.queryByTestId('upload-zone')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('reader-content')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+  })
+
+  it('clamps loading progress to the valid percentage range', () => {
+    // Given: 外部进度短暂超过总量。
+    render(
+      <Reader
+        loadingProgress={{
+          label: '正在解析 PDF',
+          current: 12,
+          total: 10
+        }}
+      />
+    )
+
+    // When: Reader 计算展示百分比。
+    const progress = screen.getByRole('progressbar', { name: '正在解析 PDF' })
+
+    // Then: 原生 progress 和文字都不会超过 100%。
+    expect(progress).toHaveAttribute('value', '100')
+    expect(
+      screen.getByTestId('reader-loading-progress-percent')
+    ).toHaveTextContent('100%')
+  })
+
   it('renders IntermediateDocumentViewer by default for a paged serialized document', () => {
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
 
@@ -2182,6 +2236,36 @@ describe('Reader file upload', () => {
     expect(fileInfo).toBeInTheDocument()
     expect(fileInfo).toHaveTextContent('test.pdf')
     expect(fileInfo).toHaveTextContent('100.0 KB')
+  })
+
+  it('replaces historical uploaded file info with external loading progress', () => {
+    // Given: Reader 内部仍保存上一次选择的文件信息。
+    const onFileUpload = vi.fn()
+    const { rerender } = render(
+      <Reader document={null} onFileUpload={onFileUpload} />
+    )
+    const mockFile = createMockFile('previous.pdf', 1024 * 100)
+    fireEvent.change(screen.getByTestId('file-input'), {
+      target: { files: [mockFile] }
+    })
+    expect(screen.getByTestId('file-info')).toHaveTextContent('previous.pdf')
+
+    // When: 宿主开始报告新的受控加载进度。
+    rerender(
+      <Reader
+        document={null}
+        onFileUpload={onFileUpload}
+        loadingProgress={{
+          label: '正在解析 PDF',
+          current: 1,
+          total: 4
+        }}
+      />
+    )
+
+    // Then: 新进度成为 Reader container 中唯一的主状态。
+    expect(screen.getByTestId('reader-loading-progress')).toBeInTheDocument()
+    expect(screen.queryByTestId('file-info')).not.toBeInTheDocument()
   })
 
   it('displays file name and size correctly for small files', () => {

@@ -2,9 +2,10 @@ import { DocxParser } from '@hamster-note/docx-parser'
 import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import type { DrawingValue } from '@hamster-note/painting'
-import { PdfParser } from '@hamster-note/pdf-parser'
+import { type OpenDocumentHandle, PdfParser } from '@hamster-note/pdf-parser'
 import {
   type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
+  type IntermediateDocumentRenderTimingEntry,
   Reader,
   type ReaderAnnotationHistoryStatus,
   type ReaderAnnotationHistoryValue,
@@ -15,15 +16,16 @@ import {
   type ReaderEdgeCrop,
   type ReaderFontScale,
   type ReaderLinkedSelectionData,
+  type ReaderLoadingProgress,
   type ReaderPageRange,
   type ReaderPageTool,
   type ReaderRenderMode,
   type ReaderSelectionRange,
   type ReaderSelectionRectangle,
   type ReaderSelectionRef,
-  type ReaderTouchPanMode,
   type ReaderTextAnchor,
   type ReaderTextReadingProgress,
+  type ReaderTouchPanMode,
   type ReaderVirtualPaperState,
   summarizeHighlightRanges,
   traceHighlight
@@ -36,6 +38,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { CommentPanel } from './CommentPanel'
 import {
   parseComments,
@@ -43,7 +46,7 @@ import {
   serializeComments
 } from './commentStorage'
 import { convertEpubDocumentForReader } from './epubForReader'
-import { configurePdfParserForReader } from './pdfParserForReader'
+import { loadFileToMemory } from './fileMemoryLoader'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 import { createImagePreviewDocument } from './imagePreview'
 import {
@@ -52,16 +55,113 @@ import {
   serializeOcrStorage
 } from './ocrStorage'
 import {
+  configurePdfParserForReader,
+  openPdfDocumentForReader
+} from './pdfParserForReader'
+import {
+  parseReaderPreferences,
+  serializeReaderPreferences
+} from './readerPreferencesStorage'
+import {
   clearRecentFile,
   loadRecentFile,
   saveRecentFile
 } from './recentFileStorage'
 import {
-  parseReaderPreferences,
-  serializeReaderPreferences
-} from './readerPreferencesStorage'
+  createViewerLifetimeToken,
+  ViewerLifetimeBoundary,
+  type ViewerLifetimeToken
+} from './ViewerLifetimeBoundary'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
+
+type FileSelectionSource = 'reader-upload' | 'sidebar' | 'recent-file'
+
+type FileSelection = {
+  readonly epoch: number
+  readonly file: File
+  readonly source: FileSelectionSource
+}
+
+type PdfLoadState =
+  | { readonly phase: 'idle' }
+  | {
+      readonly phase: 'loading'
+      readonly selection: FileSelection
+      readonly loaded: number
+      readonly total: number
+    }
+  | {
+      readonly phase: 'ready'
+      readonly selection: FileSelection
+      readonly buffer: ArrayBuffer
+      readonly elapsedMs: number
+      readonly pages: number[] | undefined
+    }
+  | {
+      readonly phase: 'parsing'
+      readonly selection: FileSelection
+      readonly elapsedMs: number
+      readonly current: number
+      readonly total: number
+    }
+  | {
+      readonly phase: 'done' | 'error'
+      readonly selection: FileSelection
+    }
+
+// 三段计时面板状态：文件加载 / 解析 / reader document-resolution 分别测量，
+// 绝不做加总；otherStages 聚合滚动加载等后续阶段的耗时（nice-to-have）。
+type PdfTimingPanelState = {
+  readonly fileLoadMs: number | null
+  readonly parseMs: number | null
+  readonly parseFailed: boolean
+  readonly documentResolutionMs: number | null
+  readonly otherStages: Readonly<
+    Record<string, { readonly count: number; readonly totalMs: number }>
+  >
+}
+
+type RetiringPdfError = {
+  readonly retirement: Promise<void>
+}
+
+type RetiredViewerOwnership = {
+  readonly handle: OpenDocumentHandle | null
+  readonly token: ViewerLifetimeToken | null
+}
+
+const INITIAL_PDF_TIMING: PdfTimingPanelState = {
+  documentResolutionMs: null,
+  fileLoadMs: null,
+  otherStages: {},
+  parseFailed: false,
+  parseMs: null
+}
+
+// 毫秒展示：null 显示占位符，极小值显示 <0.1 ms，其余保留一位小数
+function formatTimingMs(value: number | null): string {
+  if (value === null) return '—'
+  if (value < 0.1) return '<0.1 ms'
+  return `${value.toFixed(1)} ms`
+}
+
+function getPdfRetirement(error: unknown): Promise<void> | null {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('retirement' in error) ||
+    !(error.retirement instanceof Promise)
+  ) {
+    return null
+  }
+
+  return (error as RetiringPdfError).retirement
+}
+
+function reportLifecycleError(error: unknown): void {
+  console.error('PDF viewer lifecycle cleanup failed', error)
+}
 
 type HighlightDragPreview = {
   readonly highlight: ReaderSelectionRange
@@ -116,25 +216,9 @@ export function getParserErrorMessage(error: unknown): string {
 }
 
 export async function parseUploadedDocument(
-  file: File,
-  pages: number[] | undefined
+  file: File
 ): Promise<ParseUploadedDocumentResult> {
   switch (getFileExtension(file.name)) {
-    case 'pdf':
-      try {
-        configurePdfParserForReader(PdfParser)
-        const document = await PdfParser.encode(
-          file,
-          pages ? { pages } : undefined
-        )
-        return { status: 'parsed', label: 'PDF', document }
-      } catch (error) {
-        return {
-          status: 'failed',
-          label: 'PDF',
-          error: getParserErrorMessage(error)
-        }
-      }
     case 'txt':
       try {
         const document = await TxtParser.encode(file)
@@ -463,17 +547,106 @@ function trackPrimaryPointer(
 
 function ParseStatus({
   isParsing,
-  parseError
+  parseError,
+  pdfLoadState,
+  timing,
+  onLoadPdf
 }: {
   readonly isParsing: boolean
   readonly parseError: string | null
+  readonly pdfLoadState: PdfLoadState
+  readonly timing: PdfTimingPanelState
+  readonly onLoadPdf: () => void
 }) {
   return (
     <>
+      <section
+        data-testid='pdf-timing-panel'
+        style={{
+          marginBottom: '24px',
+          padding: '12px 16px',
+          border: '1px solid #e5e7eb',
+          borderRadius: '8px',
+          background: '#fff',
+          fontSize: '13px'
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>计时面板</h2>
+        <p style={{ margin: '0 0 8px', color: '#64748b' }}>
+          三段独立测量，含义不同，不做加总
+        </p>
+        <dl
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto 1fr',
+            gap: '4px 12px',
+            margin: 0
+          }}
+        >
+          <dt>① 文件加载</dt>
+          <dd data-testid='pdf-timing-file-load' style={{ margin: 0 }}>
+            {formatTimingMs(timing.fileLoadMs)}
+          </dd>
+          <dt>② 解析（openDocument）</dt>
+          <dd data-testid='pdf-timing-parse' style={{ margin: 0 }}>
+            {timing.parseFailed ? '解析失败' : formatTimingMs(timing.parseMs)}
+          </dd>
+          <dt>③ reader document-resolution</dt>
+          <dd
+            data-testid='pdf-timing-document-resolution'
+            style={{ margin: 0 }}
+          >
+            {formatTimingMs(timing.documentResolutionMs)}
+          </dd>
+        </dl>
+        {Object.keys(timing.otherStages).length > 0 && (
+          <ul
+            style={{ margin: '8px 0 0', paddingLeft: '16px', color: '#64748b' }}
+          >
+            {Object.entries(timing.otherStages).map(([stage, aggregate]) => (
+              <li key={stage} data-testid={`pdf-timing-extra-${stage}`}>
+                {stage}：平均 {(aggregate.totalMs / aggregate.count).toFixed(1)}{' '}
+                ms（{aggregate.count} 次）
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       {isParsing && (
         <section style={{ marginBottom: '24px' }}>
           <h2>Parsing...</h2>
           <p>Loading file content...</p>
+        </section>
+      )}
+      {pdfLoadState.phase === 'ready' && (
+        <section
+          data-testid='pdf-ready-card'
+          style={{
+            marginBottom: '24px',
+            padding: '16px',
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+            background: '#fff'
+          }}
+        >
+          <h2>待加载</h2>
+          <p>文件：{pdfLoadState.selection.file.name}</p>
+          <p>大小：{pdfLoadState.selection.file.size} bytes</p>
+          <p>读取耗时：{pdfLoadState.elapsedMs.toFixed(1)} ms</p>
+          <button
+            type='button'
+            onClick={onLoadPdf}
+            style={{
+              padding: '8px 16px',
+              border: '1px solid #2563eb',
+              borderRadius: '4px',
+              background: '#2563eb',
+              color: '#fff',
+              cursor: 'pointer'
+            }}
+          >
+            加载文件
+          </button>
         </section>
       )}
       {parseError && (
@@ -569,12 +742,12 @@ function RecentFileStatus({
   file,
   isParsing,
   isSaved,
-  setIsSaved
+  onForget
 }: {
   readonly file: File | null
   readonly isParsing: boolean
   readonly isSaved: boolean
-  readonly setIsSaved: (isSaved: boolean) => void
+  readonly onForget: () => void
 }) {
   if (!file || isParsing) return null
 
@@ -590,11 +763,7 @@ function RecentFileStatus({
       <button
         type='button'
         disabled={!isSaved}
-        onClick={() => {
-          clearRecentFile().then((cleared) => {
-            if (cleared) setIsSaved(false)
-          })
-        }}
+        onClick={onForget}
         style={{
           padding: '4px 8px',
           fontSize: '12px',
@@ -728,6 +897,7 @@ function useEdgeCropState() {
 
 export function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [stagedFile, setStagedFile] = useState<File | null>(null)
   const [document, setDocument] = useState<
     IntermediateDocument | IntermediateDocumentSerialized | null
   >(null)
@@ -736,6 +906,21 @@ export function App() {
   const [textFontScale, setTextFontScale] = useState<ReaderFontScale>(1.5)
   const [layoutFontScale, setLayoutFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
+  const [pdfLoadState, setPdfLoadState] = useState<PdfLoadState>({
+    phase: 'idle'
+  })
+  // 三段计时面板：state 驱动 UI，ref 供异步回调读取最新值（避免闭包过期）
+  const [pdfTiming, setPdfTiming] =
+    useState<PdfTimingPanelState>(INITIAL_PDF_TIMING)
+  const pdfTimingRef = useRef<PdfTimingPanelState>(INITIAL_PDF_TIMING)
+  // 额外阶段的聚合只进 ref，经防抖/首段落盘时才同步进 state——
+  // 否则 Profiler onRender 派生的条目会造成 setState → 提交 → 新条目 的循环
+  const extraTimingStagesRef = useRef<
+    Record<string, { count: number; totalMs: number }>
+  >({})
+  const extraTimingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
@@ -788,12 +973,21 @@ export function App() {
   const [textReadingProgress, setTextReadingProgress] = useState<
     ReaderTextReadingProgress | undefined
   >(undefined)
+  const selectionEpochRef = useRef<FileSelection | null>(null)
+  const selectionAbortControllerRef = useRef<AbortController | null>(null)
+  const openDocumentHandleRef = useRef<OpenDocumentHandle | null>(null)
+  const [viewerLifetimeToken, setViewerLifetimeToken] =
+    useState<ViewerLifetimeToken | null>(null)
+  const viewerLifetimeTokenRef = useRef<ViewerLifetimeToken | null>(null)
+  const mountedRef = useRef(false)
+  const lifecycleGenerationRef = useRef(0)
+  const terminalEnqueuedRef = useRef(false)
+  const switchBarrierRef = useRef<Promise<void>>(Promise.resolve())
+  const pdfRetirementRef = useRef<Promise<void>>(Promise.resolve())
+  const recentFilePersistenceChainRef = useRef<Promise<void>>(Promise.resolve())
   const [layoutReadingProgress, setLayoutReadingProgress] = useState<
     ReaderBookmark | undefined
   >(undefined)
-  const requestIdRef = useRef(0)
-  const manualFileUploadStartedRef = useRef(false)
-  const recentFileSaveChainRef = useRef<Promise<void>>(Promise.resolve())
   const loadedReaderPreferencesFileNameRef = useRef<string | null>(null)
 
   // --- Selection 库集成演示 state ---
@@ -1294,176 +1488,578 @@ export function App() {
     [setEdgeCropEditing]
   )
 
-  const handleFileUpload = useCallback(
-    async (file: File) => {
-      setOcrError(null)
-      setParseError(null)
+  const isCurrentSelection = useCallback((selection: FileSelection) => {
+    return (
+      mountedRef.current && selectionEpochRef.current?.epoch === selection.epoch
+    )
+  }, [])
 
-      const requestId = ++requestIdRef.current
-      setIsParsing(true)
+  const disposeRetiredViewer = useCallback(
+    async ({ handle, token }: RetiredViewerOwnership) => {
+      if (handle === null) return
+      if (token?.mounted) await token.ack
+      await handle.dispose()
+    },
+    []
+  )
 
-      try {
-        const selectedPages = getParserPages(
-          getPageRange(usePageRange, pageRangeStart, pageRangeEnd)
-        )
-        const result = await parseUploadedDocument(file, selectedPages)
+  const appendSwitchBarrier = useCallback(
+    (selection: FileSelection): Promise<void> => {
+      const runBarrier = async () => {
+        if (!mountedRef.current) return
 
-        if (requestId !== requestIdRef.current) {
-          return
+        let retired: RetiredViewerOwnership = { handle: null, token: null }
+        flushSync(() => {
+          retired = {
+            handle: openDocumentHandleRef.current,
+            token: viewerLifetimeTokenRef.current
+          }
+          openDocumentHandleRef.current = null
+          viewerLifetimeTokenRef.current = null
+          setViewerLifetimeToken(null)
+          setDocument(null)
+          setLoadedParserLabel(null)
+        })
+
+        try {
+          await disposeRetiredViewer(retired)
+        } catch (error) {
+          reportLifecycleError(error)
         }
+
+        if (!isCurrentSelection(selection)) return
+      }
+
+      const command = switchBarrierRef.current.then(runBarrier, runBarrier)
+      switchBarrierRef.current = command.catch(reportLifecycleError)
+      return command
+    },
+    [disposeRetiredViewer, isCurrentSelection]
+  )
+
+  // 计时面板的统一更新入口：同步维护 ref 与 state
+  const updatePdfTiming = useCallback(
+    (updater: (current: PdfTimingPanelState) => PdfTimingPanelState) => {
+      const next = updater(pdfTimingRef.current)
+      pdfTimingRef.current = next
+      setPdfTiming(next)
+    },
+    []
+  )
+
+  // Reader 渲染计时回调：document-resolution 记入第三段并输出 console.table。
+  // shell-rendering / page-content-rendering 由 Profiler onRender 在每次提交后发射，
+  // 对其 setState 会形成「更新 → 提交 → 新条目 → 更新」循环，因此直接忽略；
+  // 其余事件驱动阶段（滚动触发的 initial-page-loading 等）聚合到 ref 并防抖落盘。
+  const handleIntermediateDocumentRenderTiming = useCallback(
+    (entry: IntermediateDocumentRenderTimingEntry) => {
+      if (entry.stage === 'document-resolution') {
+        if (pdfTimingRef.current.documentResolutionMs !== null) return
+        updatePdfTiming((current) => ({
+          ...current,
+          documentResolutionMs: entry.durationMs,
+          otherStages: { ...extraTimingStagesRef.current }
+        }))
+        const timing = pdfTimingRef.current
+        if (timing.fileLoadMs !== null && timing.parseMs !== null) {
+          console.table([
+            { 阶段: '① 文件加载', '耗时 (ms)': timing.fileLoadMs },
+            { 阶段: '② 解析 (openDocument)', '耗时 (ms)': timing.parseMs },
+            {
+              阶段: '③ reader document-resolution',
+              '耗时 (ms)': timing.documentResolutionMs
+            }
+          ])
+        }
+        return
+      }
+
+      if (
+        entry.stage === 'shell-rendering' ||
+        entry.stage === 'page-content-rendering'
+      ) {
+        return
+      }
+
+      const existing = extraTimingStagesRef.current[entry.stage]
+      extraTimingStagesRef.current = {
+        ...extraTimingStagesRef.current,
+        [entry.stage]: {
+          count: (existing?.count ?? 0) + 1,
+          totalMs: (existing?.totalMs ?? 0) + entry.durationMs
+        }
+      }
+      if (extraTimingFlushTimerRef.current === null) {
+        extraTimingFlushTimerRef.current = setTimeout(() => {
+          extraTimingFlushTimerRef.current = null
+          updatePdfTiming((current) => ({
+            ...current,
+            otherStages: { ...extraTimingStagesRef.current }
+          }))
+        }, 300)
+      }
+    },
+    [updatePdfTiming]
+  )
+
+  const commitParsedDocument = useCallback(
+    (
+      selection: FileSelection,
+      parsedDocument: ReaderDocument,
+      parserLabel: SupportedParserLabel
+    ) => {
+      if (!isCurrentSelection(selection)) return
+
+      const { file } = selection
+      setUploadedFile(file)
+      setStagedFile(null)
+      setDocument(parsedDocument)
+      setLoadedParserLabel(parserLabel)
+      const readerPreferences = parseReaderPreferences(
+        localStorage.getItem(
+          `${READER_PREFERENCES_STORAGE_PREFIX}${file.name}`
+        ),
+        {
+          renderMode: parserLabel === 'EPUB' ? 'text' : 'layout',
+          selectedTool: 'text-selection',
+          textFontScale: 1.5,
+          layoutFontScale: 1.5,
+          highlightColor: 'rgba(255, 193, 7, 0.35)'
+        }
+      )
+      setRenderMode(readerPreferences.renderMode)
+      setSelectedTool(readerPreferences.selectedTool)
+      setTextFontScale(readerPreferences.textFontScale)
+      setLayoutFontScale(readerPreferences.layoutFontScale)
+      setHighlightColor(readerPreferences.highlightColor)
+      loadedReaderPreferencesFileNameRef.current = file.name
+      setVirtualPaper({ x: 0, y: 0, scale: 1 })
+      setLayoutReadingProgress(
+        parseStoredLayoutReadingProgress(
+          localStorage.getItem(
+            `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
+          )
+        )
+      )
+      setTextReadingProgress(
+        parseStoredTextReadingProgress(
+          localStorage.getItem(
+            `${TEXT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
+          )
+        )
+      )
+
+      const storedHighlights = localStorage.getItem(
+        `hamster-reader-demo:highlights:${file.name}`
+      )
+      const parsedHighlights = parseHighlights(storedHighlights)
+      setRanges(Array.from(parsedHighlights.ranges))
+      setRects(Array.from(parsedHighlights.rects))
+      setPagePaintings(parsedHighlights.paintings)
+      setBookmarks(
+        parseStoredBookmarks(
+          localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
+        )
+      )
+
+      const storedComments = localStorage.getItem(
+        `hamster-reader-demo:comments:${file.name}`
+      )
+      loadedCommentsFileNameRef.current = file.name
+      setComments(parseComments(storedComments))
+
+      const parsedOcr = parseOcrStorage(
+        localStorage.getItem(`${OCR_STORAGE_PREFIX}${file.name}`)
+      )
+      loadedOcrFileNameRef.current = file.name
+      setOcrPages(parsedOcr.pages)
+      setAutomaticOcrEnabled(parsedOcr.mode === 'automatic')
+      setOcrTextsByPage(parsedOcr.textsByPage)
+      setSelectedRangeId(null)
+      setSelectedRectId(null)
+    },
+    [isCurrentSelection]
+  )
+
+  const saveSelectedFile = useCallback(
+    async (selection: FileSelection) => {
+      const saveTask = recentFilePersistenceChainRef.current.then(async () => {
+        if (!isCurrentSelection(selection)) return
+
+        const saved = await saveRecentFile(selection.file)
+        if (isCurrentSelection(selection)) {
+          setHasSavedRecentFile(saved)
+        }
+      })
+      recentFilePersistenceChainRef.current =
+        saveTask.catch(reportLifecycleError)
+      await saveTask
+    },
+    [isCurrentSelection]
+  )
+
+  const startPdfFileRead = useCallback(
+    (
+      selection: FileSelection,
+      abortController: AbortController,
+      pages: number[] | undefined
+    ) => {
+      loadFileToMemory(
+        selection.file,
+        (loaded, total) => {
+          if (!isCurrentSelection(selection)) return
+          setPdfLoadState({
+            phase: 'loading',
+            selection,
+            loaded,
+            total
+          })
+        },
+        abortController.signal
+      )
+        .then((loadedFile) => {
+          if (!isCurrentSelection(selection)) return
+          updatePdfTiming((current) => ({
+            ...current,
+            fileLoadMs: loadedFile.elapsedMs
+          }))
+          setPdfLoadState({
+            phase: 'ready',
+            selection,
+            buffer: loadedFile.buffer,
+            elapsedMs: loadedFile.elapsedMs,
+            pages
+          })
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentSelection(selection)) return
+          setPdfLoadState({ phase: 'error', selection })
+          setParseError(`Failed to load PDF: ${getParserErrorMessage(error)}`)
+        })
+    },
+    [isCurrentSelection, updatePdfTiming]
+  )
+
+  const startNonPdfParse = useCallback(
+    async (selection: FileSelection) => {
+      try {
+        const result = await parseUploadedDocument(selection.file)
+        if (!isCurrentSelection(selection)) return
 
         if (result.status === 'unsupported') {
           setParseError(result.error)
-          setDocument(null)
-          setLoadedParserLabel(null)
           return
         }
-
         if (result.status === 'failed') {
           setParseError(`Failed to parse ${result.label}: ${result.error}`)
-          setDocument(null)
-          setLoadedParserLabel(null)
           return
         }
-
         if (result.document === undefined) {
           setParseError(
             `Failed to parse ${result.label}: received undefined result`
           )
-          setDocument(null)
-          setLoadedParserLabel(null)
           return
         }
 
-        const saveTask = recentFileSaveChainRef.current.then(async () => {
-          if (requestId !== requestIdRef.current) return
-
-          const saved = await saveRecentFile(file)
-          if (requestId === requestIdRef.current) {
-            setHasSavedRecentFile(saved)
-          }
-        })
-        recentFileSaveChainRef.current = saveTask.catch(() => undefined)
-        await saveTask
-        if (requestId !== requestIdRef.current) {
-          return
-        }
-        setUploadedFile(file)
-        setDocument(result.document)
-        setLoadedParserLabel(result.label)
-        const readerPreferences = parseReaderPreferences(
-          localStorage.getItem(
-            `${READER_PREFERENCES_STORAGE_PREFIX}${file.name}`
-          ),
-          {
-            renderMode: result.label === 'EPUB' ? 'text' : 'layout',
-            selectedTool: 'text-selection',
-            textFontScale: 1.5,
-            layoutFontScale: 1.5,
-            highlightColor: 'rgba(255, 193, 7, 0.35)'
-          }
-        )
-        setRenderMode(readerPreferences.renderMode)
-        setSelectedTool(readerPreferences.selectedTool)
-        setTextFontScale(readerPreferences.textFontScale)
-        setLayoutFontScale(readerPreferences.layoutFontScale)
-        setHighlightColor(readerPreferences.highlightColor)
-        loadedReaderPreferencesFileNameRef.current = file.name
-        setVirtualPaper({ x: 0, y: 0, scale: 1 })
-        setLayoutReadingProgress(
-          parseStoredLayoutReadingProgress(
-            localStorage.getItem(
-              `${LAYOUT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
-            )
-          )
-        )
-        setTextReadingProgress(
-          parseStoredTextReadingProgress(
-            localStorage.getItem(
-              `${TEXT_READING_PROGRESS_STORAGE_PREFIX}${file.name}`
-            )
-          )
-        )
-
-        const storedHighlights = localStorage.getItem(
-          `hamster-reader-demo:highlights:${file.name}`
-        )
-        const parsedHighlights = parseHighlights(storedHighlights)
-        setRanges(Array.from(parsedHighlights.ranges))
-        setRects(Array.from(parsedHighlights.rects))
-        setPagePaintings(parsedHighlights.paintings)
-        setBookmarks(
-          parseStoredBookmarks(
-            localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
-          )
-        )
-
-        const storedComments = localStorage.getItem(
-          `hamster-reader-demo:comments:${file.name}`
-        )
-        loadedCommentsFileNameRef.current = file.name
-        setComments(parseComments(storedComments))
-
-        // 恢复该文件持久化的 OCR 开启列表与识别数据（受控回传给 Reader）
-        const parsedOcr = parseOcrStorage(
-          localStorage.getItem(`${OCR_STORAGE_PREFIX}${file.name}`)
-        )
-        loadedOcrFileNameRef.current = file.name
-        setOcrPages(parsedOcr.pages)
-        setAutomaticOcrEnabled(parsedOcr.mode === 'automatic')
-        setOcrTextsByPage(parsedOcr.textsByPage)
-
-        setSelectedRangeId(null)
-        setSelectedRectId(null)
+        await saveSelectedFile(selection)
+        if (!isCurrentSelection(selection)) return
+        commitParsedDocument(selection, result.document, result.label)
       } catch (error) {
-        if (requestId !== requestIdRef.current) {
+        if (!isCurrentSelection(selection)) return
+        setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
+      } finally {
+        if (isCurrentSelection(selection)) setIsParsing(false)
+      }
+    },
+    [commitParsedDocument, isCurrentSelection, saveSelectedFile]
+  )
+
+  const startFileSelection = useCallback(
+    (file: File, source: FileSelectionSource) => {
+      selectionAbortControllerRef.current?.abort()
+      const selection: FileSelection = {
+        epoch: (selectionEpochRef.current?.epoch ?? 0) + 1,
+        file,
+        source
+      }
+      const abortController = new AbortController()
+      selectionEpochRef.current = selection
+      selectionAbortControllerRef.current = abortController
+
+      setOcrError(null)
+      setParseError(null)
+      setStagedFile(file)
+      // 新选择开始时重置三段计时与额外阶段聚合，旧文件的耗时不再保留
+      extraTimingStagesRef.current = {}
+      if (extraTimingFlushTimerRef.current !== null) {
+        clearTimeout(extraTimingFlushTimerRef.current)
+        extraTimingFlushTimerRef.current = null
+      }
+      updatePdfTiming(() => INITIAL_PDF_TIMING)
+
+      const isPdf = getFileExtension(file.name) === 'pdf'
+      if (isPdf) {
+        setIsParsing(false)
+        setPdfLoadState({
+          phase: 'loading',
+          selection,
+          loaded: 0,
+          total: file.size
+        })
+      } else {
+        setPdfLoadState({ phase: 'idle' })
+        setIsParsing(true)
+      }
+
+      appendSwitchBarrier(selection).then(() => {
+        if (!isCurrentSelection(selection)) return
+
+        if (isPdf) {
+          const pages = getParserPages(
+            getPageRange(usePageRange, pageRangeStart, pageRangeEnd)
+          )
+          startPdfFileRead(selection, abortController, pages)
           return
         }
 
-        setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
-        setDocument(null)
-        setLoadedParserLabel(null)
-      } finally {
-        if (requestId === requestIdRef.current) {
-          setIsParsing(false)
-        }
-      }
+        startNonPdfParse(selection).catch(reportLifecycleError)
+      }, reportLifecycleError)
     },
-    [pageRangeEnd, pageRangeStart, usePageRange]
+    [
+      appendSwitchBarrier,
+      isCurrentSelection,
+      pageRangeEnd,
+      pageRangeStart,
+      startNonPdfParse,
+      startPdfFileRead,
+      updatePdfTiming,
+      usePageRange
+    ]
   )
 
-  const handleManualFileUpload = useCallback(
-    (file: File) => {
-      manualFileUploadStartedRef.current = true
-      return handleFileUpload(file)
-    },
-    [handleFileUpload]
-  )
+  const handleLoadPdf = useCallback(() => {
+    if (pdfLoadState.phase !== 'ready') return
 
-  const handleFileUploadRef = useRef(handleFileUpload)
+    const { selection, buffer, elapsedMs, pages } = pdfLoadState
+    if (!isCurrentSelection(selection)) return
 
-  useEffect(() => {
-    handleFileUploadRef.current = handleFileUpload
-  }, [handleFileUpload])
+    if (!configurePdfParserForReader(PdfParser)) {
+      setPdfLoadState({ phase: 'error', selection })
+      setParseError('Failed to parse PDF: parser configuration failed')
+      return
+    }
 
-  useEffect(() => {
-    let active = true
-
-    loadRecentFile().then((file) => {
-      if (active && file && !manualFileUploadStartedRef.current) {
-        setHasSavedRecentFile(true)
-        return handleFileUploadRef.current(file)
-      }
-
-      return undefined
+    setPdfLoadState({
+      phase: 'parsing',
+      selection,
+      elapsedMs,
+      current: 0,
+      total: pages?.length ?? 0
     })
 
-    return () => {
-      active = false
-    }
+    let sourceBuffer: ArrayBuffer | null = buffer
+    const parseStartedAt = performance.now()
+    void (async () => {
+      try {
+        await pdfRetirementRef.current
+        if (!isCurrentSelection(selection) || sourceBuffer === null) return
+
+        const handle = await openPdfDocumentForReader(PdfParser, sourceBuffer, {
+          pages,
+          signal: selectionAbortControllerRef.current?.signal,
+          onProgress: (progress) => {
+            if (!isCurrentSelection(selection)) return
+            setPdfLoadState({
+              phase: 'parsing',
+              selection,
+              elapsedMs,
+              current: Math.min(progress.current, progress.total),
+              total: progress.total
+            })
+          }
+        })
+        sourceBuffer = null
+        if (!isCurrentSelection(selection)) {
+          await handle.dispose()
+          return
+        }
+
+        const token = createViewerLifetimeToken()
+        openDocumentHandleRef.current = handle
+        viewerLifetimeTokenRef.current = token
+        setViewerLifetimeToken(token)
+        updatePdfTiming((current) => ({
+          ...current,
+          parseMs: performance.now() - parseStartedAt
+        }))
+        commitParsedDocument(selection, handle.document, 'PDF')
+        setPdfLoadState({ phase: 'done', selection })
+
+        await saveSelectedFile(selection)
+      } catch (error) {
+        sourceBuffer = null
+        const retirement = getPdfRetirement(error)
+        if (retirement !== null) {
+          pdfRetirementRef.current = retirement.catch(reportLifecycleError)
+        }
+        if (!isCurrentSelection(selection)) return
+        updatePdfTiming((current) => ({
+          ...current,
+          parseFailed: true,
+          parseMs: null
+        }))
+        console.table([
+          {
+            阶段: '① 文件加载',
+            '耗时 (ms)': pdfTimingRef.current.fileLoadMs ?? '—'
+          },
+          { 阶段: '② 解析 (openDocument)', '耗时 (ms)': '解析失败' }
+        ])
+        setPdfLoadState({ phase: 'error', selection })
+        setParseError(`Failed to parse PDF: ${getParserErrorMessage(error)}`)
+      }
+    })()
+  }, [
+    commitParsedDocument,
+    isCurrentSelection,
+    pdfLoadState,
+    saveSelectedFile,
+    updatePdfTiming
+  ])
+
+  const handleForgetRecentFile = useCallback(() => {
+    const epoch = selectionEpochRef.current?.epoch
+    const clearTask = recentFilePersistenceChainRef.current.then(async () => {
+      if (!mountedRef.current || selectionEpochRef.current?.epoch !== epoch)
+        return
+      const cleared = await clearRecentFile()
+      if (
+        cleared &&
+        mountedRef.current &&
+        selectionEpochRef.current?.epoch === epoch
+      ) {
+        setHasSavedRecentFile(false)
+      }
+    })
+    recentFilePersistenceChainRef.current =
+      clearTask.catch(reportLifecycleError)
+  }, [])
+
+  const handleManualFileUpload = useCallback(
+    (file: File) => startFileSelection(file, 'sidebar'),
+    [startFileSelection]
+  )
+
+  const handleReaderFileUpload = useCallback(
+    (file: File) => startFileSelection(file, 'reader-upload'),
+    [startFileSelection]
+  )
+
+  const startFileSelectionRef = useRef(startFileSelection)
+
+  useEffect(() => {
+    startFileSelectionRef.current = startFileSelection
+  }, [startFileSelection])
+
+  useEffect(() => {
+    const restoreEpoch = selectionEpochRef.current?.epoch ?? 0
+
+    loadRecentFile().then((file) => {
+      if (
+        !mountedRef.current ||
+        !file ||
+        (selectionEpochRef.current?.epoch ?? 0) !== restoreEpoch
+      ) {
+        return
+      }
+
+      setHasSavedRecentFile(true)
+      startFileSelectionRef.current(file, 'recent-file')
+    })
+
+    return undefined
+  }, [])
+
+  const handleBoundarySetup = useCallback(() => {
+    lifecycleGenerationRef.current += 1
+    mountedRef.current = true
+  }, [])
+
+  const handleBoundaryCleanup = useCallback(() => {
+    mountedRef.current = false
+    const cleanupGeneration = lifecycleGenerationRef.current
+
+    queueMicrotask(() => {
+      if (
+        mountedRef.current ||
+        lifecycleGenerationRef.current !== cleanupGeneration ||
+        terminalEnqueuedRef.current
+      ) {
+        return
+      }
+      terminalEnqueuedRef.current = true
+
+      const runTerminal = async () => {
+        if (
+          mountedRef.current ||
+          lifecycleGenerationRef.current !== cleanupGeneration
+        ) {
+          return
+        }
+
+        const selection = selectionEpochRef.current
+        if (selection !== null) {
+          selectionEpochRef.current = {
+            ...selection,
+            epoch: selection.epoch + 1
+          }
+        }
+        selectionAbortControllerRef.current?.abort()
+        selectionAbortControllerRef.current = null
+
+        const handle = openDocumentHandleRef.current
+        const token = viewerLifetimeTokenRef.current
+        openDocumentHandleRef.current = null
+        viewerLifetimeTokenRef.current = null
+
+        if (extraTimingFlushTimerRef.current !== null) {
+          clearTimeout(extraTimingFlushTimerRef.current)
+          extraTimingFlushTimerRef.current = null
+        }
+
+        if (token !== null) await token.ack
+        if (handle !== null) await handle.dispose()
+      }
+
+      const terminal = switchBarrierRef.current.then(runTerminal, runTerminal)
+      switchBarrierRef.current = terminal.catch(reportLifecycleError)
+    })
   }, [])
 
   const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
+  let readerLoadingProgress: ReaderLoadingProgress | null
+  switch (pdfLoadState.phase) {
+    case 'loading':
+      readerLoadingProgress = {
+        label: '正在读取文件',
+        current: pdfLoadState.loaded,
+        total: pdfLoadState.total
+      }
+      break
+    case 'parsing':
+      readerLoadingProgress = {
+        label: '正在解析 PDF',
+        current: pdfLoadState.current,
+        total: pdfLoadState.total
+      }
+      break
+    case 'done':
+    case 'error':
+    case 'idle':
+    case 'ready':
+      readerLoadingProgress = null
+      break
+  }
   const activeFontScale =
     renderMode === 'text' ? textFontScale : layoutFontScale
 
@@ -1481,7 +2077,13 @@ export function App() {
       <div className='hamster-demo-sidebar'>
         <div data-testid='demo-sidebar-settings'>
           <h1>Hamster Reader Demo</h1>
-          <ParseStatus isParsing={isParsing} parseError={parseError} />
+          <ParseStatus
+            isParsing={isParsing}
+            parseError={parseError}
+            pdfLoadState={pdfLoadState}
+            timing={pdfTiming}
+            onLoadPdf={handleLoadPdf}
+          />
 
           <section style={{ marginBottom: '24px' }}>
             <h2>Upload {SUPPORTED_FILE_TYPE_LABEL}</h2>
@@ -1551,7 +2153,7 @@ export function App() {
                 </div>
               )}
             </div>
-            {uploadedFile && (
+            {(stagedFile || uploadedFile) && (
               <label
                 style={{
                   display: 'block',
@@ -1564,11 +2166,10 @@ export function App() {
                   type='file'
                   aria-label='Choose another file'
                   accept='.pdf,.txt,.docx,.epub,.md,.markdown,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,image/*'
-                  disabled={isParsing}
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0]
                     if (file) {
-                      void handleManualFileUpload(file)
+                      handleManualFileUpload(file)
                     }
                     event.currentTarget.value = ''
                   }}
@@ -1722,7 +2323,7 @@ export function App() {
             file={uploadedFile}
             isParsing={isParsing}
             isSaved={hasSavedRecentFile}
-            setIsSaved={setHasSavedRecentFile}
+            onForget={handleForgetRecentFile}
           />
 
           {document && (
@@ -1762,43 +2363,39 @@ export function App() {
                 </label>
               </div>
               {renderMode === 'layout' && (
-                <>
-                  <div style={{ marginBottom: '12px' }}>
-                    <label
+                <div style={{ marginBottom: '12px' }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    <span>滑动模式 Touch Pan Mode</span>
+                    <select
+                      value={touchPanMode}
+                      onChange={(e) => {
+                        const nextTouchPanMode = e.currentTarget.value
+                        if (
+                          nextTouchPanMode === 'single-finger' ||
+                          nextTouchPanMode === 'two-finger'
+                        ) {
+                          setTouchPanMode(nextTouchPanMode)
+                        }
+                      }}
+                      data-testid='touch-pan-mode-select'
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
+                        padding: '4px 8px',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px',
+                        background: '#fff'
                       }}
                     >
-                      <span>滑动模式 Touch Pan Mode</span>
-                      <select
-                        value={touchPanMode}
-                        onChange={(e) => {
-                          const nextTouchPanMode = e.currentTarget.value
-                          if (
-                            nextTouchPanMode === 'single-finger' ||
-                            nextTouchPanMode === 'two-finger'
-                          ) {
-                            setTouchPanMode(nextTouchPanMode)
-                          }
-                        }}
-                        data-testid='touch-pan-mode-select'
-                        style={{
-                          padding: '4px 8px',
-                          border: '1px solid #ccc',
-                          borderRadius: '4px',
-                          background: '#fff'
-                        }}
-                      >
-                        <option value='single-finger'>
-                          单指 Single-finger
-                        </option>
-                        <option value='two-finger'>双指 Two-finger</option>
-                      </select>
-                    </label>
-                  </div>
-                </>
+                      <option value='single-finger'>单指 Single-finger</option>
+                      <option value='two-finger'>双指 Two-finger</option>
+                    </select>
+                  </label>
+                </div>
               )}
               <div style={{ marginBottom: '12px' }}>
                 <label
@@ -2309,82 +2906,98 @@ export function App() {
           parseError={parseError}
           isParsing={isParsing}
         />
-        <Reader
-          document={document || undefined}
-          isEpub={loadedParserLabel === 'EPUB'}
-          isPdf={loadedParserLabel === 'PDF'}
-          data={readerData}
-          onDataChange={handleReaderDataChange}
-          edgeCropEditing={edgeCropEditing}
-          onEdgeCropEditingChange={setEdgeCropEditing}
-          onEdgeCropApply={handleEdgeCropApply}
-          renderMode={renderMode}
-          onRenderModeChange={handleRenderModeChange}
-          fontScale={supportsFontScale ? activeFontScale : undefined}
-          onFontScaleChange={
-            renderMode === 'text' ? setTextFontScale : setLayoutFontScale
-          }
-          touchPanMode={touchPanMode}
-          onTouchPanModeChange={setTouchPanMode}
-          onFileUpload={handleManualFileUpload}
-          emptyText='No document loaded'
-          pageRange={getPageRange(usePageRange, pageRangeStart, pageRangeEnd)}
-          overlayRectType='percent'
-          ocr={
-            ocrPages.length > 0
-              ? { enabled: true, pages: ocrPages }
-              : automaticOcrEnabled
-          }
-          onOcrChange={handleOcrChange}
-          ocrTexts={ocrTextsByPage}
-          onOcrTextsChange={handleOcrTextsChange}
-          onOcrError={handleOcrError}
-          ocrDebug={ocrDevMode}
-          onTextSelectionChange={() => {}}
-          onTextSelectionEnd={() => {}}
-          onSelectText={() => {}}
-          useVirtualPaper={useVirtualPaper}
-          selectedRangeId={selectedRangeId}
-          onSelect={handleSelectionSelect}
-          onLinkedDataChange={handleLinkedDataChange}
-          onSelectRange={handleSelectRange}
-          onUpdateRange={handleUpdateRange}
-          onHighlight={handleHighlight}
-          onDragHighlight={handleDragHighlight}
-          onRemoveRange={handleRemoveRange}
-          onHighlightColorChange={setHighlightColor}
-          onSelectionEnd={handleSelectionEnd}
-          selectionRef={selectionRef}
-          highlightColor={highlightColor}
-          selectionColor='rgba(33, 150, 243, 0.2)'
-          autoHighlight={autoHighlight}
-          containMarginX={containMarginX}
-          containMarginTop={containMarginTop}
-          containMarginBottom={containMarginBottom}
-          selectedTool={selectedTool}
-          onSelectedToolChange={handleToolChange}
-          onPagePaintingsChange={handlePagePaintingsChange}
-          showPageBrowser={showPageBrowser}
-          onPageBrowserClose={() => setShowPageBrowser(false)}
-          themeColor={themeColor}
-          drawingStrokeColor={toolColor}
-          onDrawingStrokeColorChange={setToolColor}
-          colors={DEMO_READER_COLORS}
-          comments={comments}
-          onCommentsChange={handleCommentsChange}
-          selectedRectId={selectedRectId}
-          onCreateRect={handleCreateRect}
-          onSelectRect={handleSelectRect}
-          onUpdateRect={handleUpdateRect}
-          onRemoveRect={handleRemoveRect}
-          annotationHistory={{
-            enabled: true,
-            resetKey: uploadedFile?.name ?? 'none'
-          }}
-          onAnnotationHistoryChange={handleAnnotationHistoryChange}
-          onCommentHighlight={handleCommentHighlight}
-          onPageLoadStatusChange={setLoadedPages}
-        />
+        <ViewerLifetimeBoundary
+          token={viewerLifetimeToken}
+          onSetup={handleBoundarySetup}
+          onCleanup={handleBoundaryCleanup}
+        >
+          {pdfLoadState.phase !== 'ready' && (
+            <Reader
+              document={document || undefined}
+              loadingProgress={readerLoadingProgress}
+              isEpub={loadedParserLabel === 'EPUB'}
+              isPdf={loadedParserLabel === 'PDF'}
+              data={readerData}
+              onDataChange={handleReaderDataChange}
+              edgeCropEditing={edgeCropEditing}
+              onEdgeCropEditingChange={setEdgeCropEditing}
+              onEdgeCropApply={handleEdgeCropApply}
+              renderMode={renderMode}
+              onRenderModeChange={handleRenderModeChange}
+              fontScale={supportsFontScale ? activeFontScale : undefined}
+              onFontScaleChange={
+                renderMode === 'text' ? setTextFontScale : setLayoutFontScale
+              }
+              touchPanMode={touchPanMode}
+              onTouchPanModeChange={setTouchPanMode}
+              onFileUpload={handleReaderFileUpload}
+              emptyText='No document loaded'
+              pageRange={getPageRange(
+                usePageRange,
+                pageRangeStart,
+                pageRangeEnd
+              )}
+              overlayRectType='percent'
+              ocr={
+                ocrPages.length > 0
+                  ? { enabled: true, pages: ocrPages }
+                  : automaticOcrEnabled
+              }
+              onOcrChange={handleOcrChange}
+              ocrTexts={ocrTextsByPage}
+              onOcrTextsChange={handleOcrTextsChange}
+              onOcrError={handleOcrError}
+              ocrDebug={ocrDevMode}
+              onTextSelectionChange={() => {}}
+              onTextSelectionEnd={() => {}}
+              onSelectText={() => {}}
+              useVirtualPaper={useVirtualPaper}
+              selectedRangeId={selectedRangeId}
+              onSelect={handleSelectionSelect}
+              onLinkedDataChange={handleLinkedDataChange}
+              onSelectRange={handleSelectRange}
+              onUpdateRange={handleUpdateRange}
+              onHighlight={handleHighlight}
+              onDragHighlight={handleDragHighlight}
+              onRemoveRange={handleRemoveRange}
+              onHighlightColorChange={setHighlightColor}
+              onSelectionEnd={handleSelectionEnd}
+              selectionRef={selectionRef}
+              highlightColor={highlightColor}
+              selectionColor='rgba(33, 150, 243, 0.2)'
+              autoHighlight={autoHighlight}
+              containMarginX={containMarginX}
+              containMarginTop={containMarginTop}
+              containMarginBottom={containMarginBottom}
+              selectedTool={selectedTool}
+              onSelectedToolChange={handleToolChange}
+              onPagePaintingsChange={handlePagePaintingsChange}
+              showPageBrowser={showPageBrowser}
+              onPageBrowserClose={() => setShowPageBrowser(false)}
+              themeColor={themeColor}
+              drawingStrokeColor={toolColor}
+              onDrawingStrokeColorChange={setToolColor}
+              colors={DEMO_READER_COLORS}
+              comments={comments}
+              onCommentsChange={handleCommentsChange}
+              selectedRectId={selectedRectId}
+              onCreateRect={handleCreateRect}
+              onSelectRect={handleSelectRect}
+              onUpdateRect={handleUpdateRect}
+              onRemoveRect={handleRemoveRect}
+              annotationHistory={{
+                enabled: true,
+                resetKey: uploadedFile?.name ?? 'none'
+              }}
+              onAnnotationHistoryChange={handleAnnotationHistoryChange}
+              onCommentHighlight={handleCommentHighlight}
+              onIntermediateDocumentRenderTiming={
+                handleIntermediateDocumentRenderTiming
+              }
+              onPageLoadStatusChange={setLoadedPages}
+            />
+          )}
+        </ViewerLifetimeBoundary>
       </div>
       {highlightDragPreview !== null ? (
         <div
