@@ -1171,8 +1171,9 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('layout mode persists the text crossing the top of the viewport', async () => {
-    // Given: the second text starts at the viewport top after the first text.
+  it('layout mode persists the text crossing the top content inset', async () => {
+    // Given: the first text is inside the fixed top whitespace while the second
+    // text starts at the actual content-reading boundary.
     const { document, pages } = makeDocument({ pageCount: 1 })
     const page = pages.get(1)
     if (!page) throw new Error('Expected page 1 fixture')
@@ -1184,6 +1185,7 @@ describe('IntermediateDocumentViewer', () => {
     render(
       <IntermediateDocumentViewer
         document={document}
+        containMarginTop={40}
         onVirtualPaperTransformChangeEnd={onVirtualPaperTransformChangeEnd}
       />
     )
@@ -1192,8 +1194,8 @@ describe('IntermediateDocumentViewer', () => {
     const first = await screen.findByText('First')
     const second = screen.getByText('Second')
     mockElementRect(wrapper, { left: 0, top: 0, width: 800, height: 600 })
-    mockElementRect(first, { left: 20, top: -20, width: 100, height: 20 })
-    mockElementRect(second, { left: 20, top: 0, width: 100, height: 20 })
+    mockElementRect(first, { left: 20, top: 0, width: 100, height: 20 })
+    mockElementRect(second, { left: 20, top: 40, width: 100, height: 20 })
 
     // When: the user finishes panning the layout surface.
     await act(async () => {
@@ -4166,8 +4168,9 @@ describe('IntermediateDocumentViewer', () => {
     }
   )
 
-  it('text mode persists the text crossing the top of the scroll viewport', async () => {
-    // Given: the second text starts after five characters on the current page.
+  it('text mode persists the text crossing the top content inset', async () => {
+    // Given: the first text is inside the top padding while the second text
+    // starts after five characters at the actual content-reading boundary.
     const onTextReadingProgressChange = vi.fn()
     const { document, pages } = makeDocument({ pageCount: 1 })
     pages
@@ -4181,6 +4184,7 @@ describe('IntermediateDocumentViewer', () => {
         document={document}
         showPageBrowser={true}
         bookmarks={[]}
+        containMarginTop={40}
         onToggleBookmark={vi.fn()}
         onTextReadingProgressChange={onTextReadingProgressChange}
       />
@@ -4195,9 +4199,9 @@ describe('IntermediateDocumentViewer', () => {
     mockElementSize(screen.getByText('First'), {
       width: 100,
       height: 20,
-      top: -20
+      top: 0
     })
-    mockElementSize(secondText, { width: 100, height: 20, top: 0 })
+    mockElementSize(secondText, { width: 100, height: 20, top: 40 })
 
     // When: native scrolling asks the viewer to persist its current position.
     fireEvent.scroll(scrollEl)

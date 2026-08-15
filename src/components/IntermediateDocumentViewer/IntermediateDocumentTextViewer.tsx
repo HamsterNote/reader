@@ -1130,18 +1130,22 @@ export function IntermediateDocumentTextViewer(
     isActive: isReadingProgressMoving,
     signalActivity: signalReadingProgressActivity
   } = useReadingProgressActivity()
-  const captureCurrentTextAnchor = useCallback((scanBelow: boolean = false) => {
-    const viewport = scrollContainerRef.current
-    if (!viewport) return undefined
+  const captureCurrentTextAnchor = useCallback(
+    (scanBelow: boolean = false) => {
+      const viewport = scrollContainerRef.current
+      if (!viewport) return undefined
 
-    return (
-      (scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor)(
-        viewport,
-        textElementsRef.current,
-        textsByPageNumberRef.current
-      ) ?? undefined
-    )
-  }, [])
+      return (
+        (scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor)(
+          viewport,
+          textElementsRef.current,
+          textsByPageNumberRef.current,
+          { topInset: containMarginTop ?? containMarginY }
+        ) ?? undefined
+      )
+    },
+    [containMarginTop, containMarginY]
+  )
   const captureReadingProgress = useCallback(() => {
     if (isInitialProgressRestorePendingRef.current) return undefined
     if (suppressProgrammaticProgressRef.current) return undefined

@@ -98,7 +98,7 @@ describe('text anchors', () => {
         [2, page2Texts],
         [3, page3Texts]
       ]),
-      2
+      { pageNumber: 2 }
     )
 
     // Then: scanning continues downward to the first text instead of jumping to a page top.
