@@ -48,6 +48,9 @@ export type DefaultPopoverContext = {
   readonly onUpdateRange?: (range: ReaderSelectionRange) => void
   /** range 删除回调（对应 Reader 的 onRemoveRange），用于删除高亮 */
   readonly onRemoveRange?: (id: string) => void
+  readonly selectedWord?: string
+  readonly queryWord?: (word: string) => string
+  readonly onOpenDictionary?: (initialWord?: string) => void
   /**
    * 已有高亮评论回调。
    * 提供时 DefaultHighlightPopover 会渲染评论按钮，点击后调用并传入当前选中的 range。
@@ -203,6 +206,10 @@ function HighlightColorPicker({
  * - 背景颜色选择器：设置全局高亮色 + 更新当前选中 range 颜色
  */
 export function DefaultSelectionPopover(props: DefaultPopoverContext) {
+  const selectedWord = props.selectedWord?.trim() ?? ''
+  const definition =
+    selectedWord && props.queryWord ? props.queryWord(selectedWord) : ''
+
   return (
     <div
       className='hamster-reader-popover'
@@ -212,6 +219,18 @@ export function DefaultSelectionPopover(props: DefaultPopoverContext) {
       onMouseDown={(e) => e.preventDefault()}
     >
       <MobileSafeHighlightButton selectionRef={props.selectionRef} />
+      {definition.trim() && props.onOpenDictionary ? (
+        <button
+          type='button'
+          className='hamster-reader-popover-btn'
+          onPointerDown={() => props.onOpenDictionary?.(selectedWord)}
+          onClick={(event) => {
+            if (event.detail === 0) props.onOpenDictionary?.(selectedWord)
+          }}
+        >
+          翻译
+        </button>
+      ) : null}
       <HighlightColorPicker {...props} />
     </div>
   )

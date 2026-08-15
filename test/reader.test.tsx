@@ -2158,8 +2158,21 @@ describe('Reader renderMode', () => {
     const { document } = makeLazyDocument(1)
     render(<Reader document={document} renderMode='text' />)
 
-    // When: Reader 创建默认 selection popover。
-    render(capturedTextViewerProps.selectionPopover as React.ReactElement)
+    // When: viewer 把当前公开选区传给 Reader 创建的默认 popover renderer。
+    const selectionPopover = capturedTextViewerProps.selectionPopover
+    if (typeof selectionPopover !== 'function') {
+      throw new TypeError('Expected selection popover renderer')
+    }
+    render(
+      selectionPopover({
+        id: 'range-1',
+        text: 'reader',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 6 },
+        createdAt: 1,
+        rectsBySelectionId: {}
+      } satisfies ReaderSelectionRange)
+    )
 
     // Then: 用户能够看到确认高亮和颜色设置入口。
     expect(screen.getByRole('button', { name: '高亮' })).toBeInTheDocument()

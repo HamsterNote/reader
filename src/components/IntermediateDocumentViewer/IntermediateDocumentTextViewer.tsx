@@ -16,8 +16,8 @@ import type {
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
-  PointerEvent as ReactPointerEvent,
   ReactNode,
+  PointerEvent as ReactPointerEvent,
   Ref,
   RefObject
 } from 'react'
@@ -42,6 +42,7 @@ import type {
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../../types/selection'
@@ -66,9 +67,11 @@ import {
   isIntermediateImage,
   isIntermediateText
 } from './IntermediateDocumentViewer'
+import { PageBrowser } from './PageBrowser'
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
 import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
+import { ReadingProgress } from './ReadingProgress'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
@@ -80,18 +83,16 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { PageBrowser } from './PageBrowser'
-import { ReadingProgress } from './ReadingProgress'
 import {
-  findTopTextAnchor,
   findTextAnchorAtOrBelow,
+  findTopTextAnchor,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
   hasAnchorableText,
   isTextBookmark,
-  resolveTextAnchorElement,
   resolveBookmarkNavigationHandler,
+  resolveTextAnchorElement,
   type TextAnchorElementRecord
 } from './textAnchor'
 import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'
@@ -848,7 +849,7 @@ export type IntermediateDocumentTextViewerProps = {
   /** 是否启用选区端点放大镜，默认 false。 */
   showSelectionMagnifier?: boolean
   /** 活跃选区 popover；文本模式状态机接入后传给 Selection 包装层。 */
-  selectionPopover?: ReactNode
+  selectionPopover?: ReaderSelectionPopover
   /** 已存在高亮 popover；文本模式状态机接入后按当前高亮解析。 */
   highlightPopover?: ReaderHighlightPopover
   /** 默认高亮 popover 的评论入口；文本模式状态机接入后由 popover 按需调用。 */
@@ -2318,6 +2319,21 @@ export function IntermediateDocumentTextViewer(
     [isPdf]
   )
 
+  const publicActiveSelection = runtimeLinkedData.activeRange
+    ? mapRuntimeRangeToPublic(runtimeLinkedData.activeRange, scopeId)
+    : null
+  const activeSelection = publicActiveSelection
+    ? toTextRange(publicActiveSelection)
+    : null
+  let resolvedSelectionPopover: ReactNode
+  if (typeof selectionPopover === 'function') {
+    resolvedSelectionPopover = activeSelection
+      ? selectionPopover(activeSelection)
+      : undefined
+  } else {
+    resolvedSelectionPopover = selectionPopover
+  }
+
   const handleLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
       const runtimePublicLinkedData = mapRuntimeLinkedDataToPublic(
@@ -2762,9 +2778,9 @@ export function IntermediateDocumentTextViewer(
   if (typeof highlightPopover === 'function') {
     resolvedHighlightPopover = selectedHighlight
       ? highlightPopover(selectedHighlight)
-      : selectionPopover
+      : resolvedSelectionPopover
   } else {
-    resolvedHighlightPopover = highlightPopover ?? selectionPopover
+    resolvedHighlightPopover = highlightPopover ?? resolvedSelectionPopover
   }
   const existingHighlightPopover =
     selectedHighlight && onCommentHighlight ? (
@@ -3112,7 +3128,7 @@ export function IntermediateDocumentTextViewer(
                 visible={true}
                 relative={popoverRelative}
               >
-                {selectionPopover}
+                {resolvedSelectionPopover}
               </PopoverPortal>
             ) : undefined
             return (

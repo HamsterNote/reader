@@ -48,6 +48,11 @@ export type ReaderHighlightPopover =
   | ReactNode
   | ((highlight: ReaderSelectionRange) => ReactNode)
 
+/** 活跃选区 Popover：静态内容，或基于当前选区原始对象渲染的内容。 */
+export type ReaderSelectionPopover =
+  | ReactNode
+  | ((selection: ReaderSelectionRange) => ReactNode)
+
 /** 已确认矩形 Popover：静态内容，或基于当前矩形原始对象渲染的内容。 */
 export type ReaderRectanglePopover =
   | ReactNode

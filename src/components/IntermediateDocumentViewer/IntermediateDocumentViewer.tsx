@@ -67,6 +67,7 @@ import type {
   ReaderMousePosition,
   ReaderRectanglePopover,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
@@ -87,8 +88,8 @@ import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuar
 import { EdgeCropOverlay } from './EdgeCropOverlay'
 import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { hasHighlightRects } from './highlightRectModes'
-import { getReaderImageAlt } from './intermediateImage'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import { getReaderImageAlt } from './intermediateImage'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
 import type { ReaderLayoutZoom } from './nativeLayoutZoom'
 import { PageBrowser } from './PageBrowser'
@@ -126,11 +127,9 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
-import { useReadingProgressActivity } from './useReadingProgressActivity'
 import {
-  findTopTextAnchor,
   findTextAnchorAtOrBelow,
+  findTopTextAnchor,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
@@ -142,7 +141,9 @@ import {
 } from './textAnchor'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { useSelectionGeometryRevision } from './useDerivedTextSelectionRanges'
+import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
 import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
+import { useReadingProgressActivity } from './useReadingProgressActivity'
 
 export {
   getNearestTextElementForPoint,
@@ -628,7 +629,7 @@ export type IntermediateDocumentViewerProps = {
   /** 是否启用选区端点放大镜，默认 false。 */
   showSelectionMagnifier?: boolean
   /** 当某个高亮被选中时，在其上方弹出的 Popover 内容（ReactNode），由调用方完全控制 */
-  selectionPopover?: React.ReactNode
+  selectionPopover?: ReaderSelectionPopover
   /** 被高亮的片段上方弹出的 Popover 内容；renderer 接收当前高亮的原始公开对象。 */
   highlightPopover?: ReaderHighlightPopover
   /** 启动当前高亮的评论流程；Promise 完成后关闭该高亮的 Popover。 */
@@ -7865,6 +7866,23 @@ export function IntermediateDocumentViewer({
       isEpub ? { ...range, rectsBySelectionId: {} } : range,
     [isEpub]
   )
+  const publicActiveSelection = runtimeLinkedData.activeRange
+    ? mapRuntimeRangeToPublic(
+        runtimeLinkedData.activeRange,
+        readerLinkedScopeId
+      )
+    : null
+  const activeSelection = publicActiveSelection
+    ? toLayoutRange(publicActiveSelection)
+    : null
+  let resolvedSelectionPopover: ReactNode
+  if (typeof selectionPopover === 'function') {
+    resolvedSelectionPopover = activeSelection
+      ? selectionPopover(activeSelection)
+      : undefined
+  } else {
+    resolvedSelectionPopover = selectionPopover
+  }
 
   const handleLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
@@ -8483,7 +8501,7 @@ export function IntermediateDocumentViewer({
       highlightColor={highlightColor}
       selectionColor={selectionColor}
       showSelectionMagnifier={showSelectionMagnifier}
-      selectionPopover={selectionPopover}
+      selectionPopover={resolvedSelectionPopover}
       highlightPopover={highlightPopover}
       rectPopover={resolvedRectPopover}
       onCommentHighlight={onCommentHighlight}

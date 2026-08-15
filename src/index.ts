@@ -29,9 +29,9 @@ export type {
   IntermediateDocumentViewerProps,
   NormalizedRect,
   ReaderExtraOcr,
+  ReaderInteractionMode,
   ReaderIntermediateImage,
   ReaderIntermediateImageSerialized,
-  ReaderInteractionMode,
   ReaderOcrOptions,
   ReaderPageRange,
   ReaderSavedSelection,
@@ -88,7 +88,6 @@ export type {
   ReaderCommentThreadNode
 } from './types/comments'
 export type { ReaderFontScale } from './types/fontScale'
-export type { ReaderColorOption } from './types/readerOptions'
 export type {
   ReaderBookmark,
   ReaderData,
@@ -99,6 +98,7 @@ export type {
   ReaderTextReadingProgress,
   ReaderVirtualPaperState
 } from './types/readerData'
+export type { ReaderColorOption } from './types/readerOptions'
 export type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
@@ -110,6 +110,7 @@ export type {
   ReaderLinkedSelectionRange,
   ReaderRectanglePopover,
   ReaderSelectionEndpoint,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRect,
   ReaderSelectionRef
@@ -151,6 +152,8 @@ export type ReaderInteractiveProps = Pick<
   | 'selectionColor'
   | 'showSelectionMagnifier'
   | 'selectionPopover'
+  | 'queryWord'
+  | 'onOpenDictionary'
   | 'highlightPopover'
   | 'onCommentHighlight'
   | 'onCommentRect'

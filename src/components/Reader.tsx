@@ -48,6 +48,7 @@ import type {
   ReaderMousePosition,
   ReaderRectanglePopover,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
@@ -270,7 +271,11 @@ export type ReaderProps = {
   selectionColor?: string
   /** 是否启用 Selection 内置的选区端点放大镜，默认 true。 */
   showSelectionMagnifier?: boolean
-  selectionPopover?: ReactNode
+  selectionPopover?: ReaderSelectionPopover
+  /** 同步查询选中单词；返回空字符串时默认 Popover 不显示翻译入口。 */
+  queryWord?: (word: string) => string
+  /** 调起宿主词典；传入选中单词时可用于初始化词典搜索框。 */
+  onOpenDictionary?: (initialWord?: string) => void
   highlightPopover?: ReaderHighlightPopover
   onCommentHighlight?: (
     highlight: ReaderSelectionRange
@@ -664,6 +669,8 @@ export function Reader({
   selectionColor,
   showSelectionMagnifier = true,
   selectionPopover,
+  queryWord,
+  onOpenDictionary,
   highlightPopover,
   onCommentHighlight,
   onCommentRect,
@@ -1658,9 +1665,12 @@ export function Reader({
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
-              selectionPopover ?? (
+              selectionPopover ?? ((selection) => (
                 <DefaultSelectionPopover
                   selectionRef={popoverSelectionRef}
+                  selectedWord={selection.text}
+                  queryWord={queryWord}
+                  onOpenDictionary={onOpenDictionary}
                   highlightColor={resolvedHighlightColor}
                   onHighlightColorChange={handleHighlightColorChange}
                   selectedRangeId={selectedRangeId}
@@ -1668,7 +1678,7 @@ export function Reader({
                   onUpdateRange={handleUpdateRange}
                   onRemoveRange={onRemoveRange}
                 />
-              )
+              ))
             }
             highlightPopover={
               highlightPopover ??
@@ -1785,9 +1795,12 @@ export function Reader({
           selectionColor={selectionColor}
           showSelectionMagnifier={showSelectionMagnifier}
           selectionPopover={
-            selectionPopover ?? (
+            selectionPopover ?? ((selection) => (
               <DefaultSelectionPopover
                 selectionRef={popoverSelectionRef}
+                selectedWord={selection.text}
+                queryWord={queryWord}
+                onOpenDictionary={onOpenDictionary}
                 highlightColor={resolvedHighlightColor}
                 onHighlightColorChange={handleHighlightColorChange}
                 selectedRangeId={selectedRangeId}
@@ -1795,7 +1808,7 @@ export function Reader({
                 onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
               />
-            )
+            ))
           }
           highlightPopover={
             highlightPopover ??

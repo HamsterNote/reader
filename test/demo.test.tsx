@@ -212,6 +212,8 @@ type MockReaderProps = Record<string, unknown> & {
   onEdgeCropEditingChange?: (editing: boolean) => void
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
   useVirtualPaper?: boolean
+  queryWord?: (word: string) => string
+  onOpenDictionary?: (initialWord?: string) => void
 }
 
 const mockReaderProps: MockReaderProps[] = []
@@ -2077,6 +2079,36 @@ describe('demo parser flow', () => {
         uploadReaderProps = findDocumentReaderProps()
         expect(uploadReaderProps?.autoHighlight).toBe(true)
       })
+    })
+
+    it('toggles dictionary query mock and shows dictionary open events', async () => {
+      // Given: Demo 已加载文档，词典查询 mock 默认关闭。
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Dictionary Demo Document')
+      )
+      render(<App />)
+      await upload(makeFile('dictionary.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const toggle = screen.getByTestId('dictionary-mock-toggle')
+      expect(toggle).not.toBeChecked()
+      expect(findDocumentReaderProps()?.queryWord?.('reader')).toBe('')
+
+      // When: 开启 mock 并模拟 Reader 调起词典事件。
+      fireEvent.click(toggle)
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.queryWord?.('reader')).toContain(
+          'reader'
+        )
+      })
+      act(() => {
+        findDocumentReaderProps()?.onOpenDictionary?.('reader')
+      })
+
+      // Then: 左侧栏展示词典初始化词，便于人工确认事件已唤起。
+      expect(screen.getByTestId('dictionary-event-log')).toHaveTextContent(
+        'reader'
+      )
     })
 
     it('renders selectionPopover with 高亮 and 背景颜色设置', async () => {

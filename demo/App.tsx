@@ -941,6 +941,10 @@ export function App() {
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
+  const [dictionaryMockEnabled, setDictionaryMockEnabled] = useState(false)
+  const [dictionaryInitialWord, setDictionaryInitialWord] = useState<
+    string | undefined
+  >(undefined)
   const [showPageBrowser, setShowPageBrowser] = useState(false)
   const [bookmarks, setBookmarks] = useState<readonly ReaderBookmark[]>([])
   const [themeColor, setThemeColor] = useState('#2563eb')
@@ -2481,6 +2485,31 @@ export function App() {
                 >
                   <input
                     type='checkbox'
+                    checked={dictionaryMockEnabled}
+                    onChange={(event) =>
+                      setDictionaryMockEnabled(event.currentTarget.checked)
+                    }
+                    data-testid='dictionary-mock-toggle'
+                  />
+                  <span>查询单词 Mock</span>
+                </label>
+                <div
+                  data-testid='dictionary-event-log'
+                  style={{ marginTop: '6px', color: '#555' }}
+                >
+                  词典事件：{dictionaryInitialWord ?? '尚未调起'}
+                </div>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
                     checked={edgeCropAll !== undefined}
                     onChange={(event) =>
                       setEdgeCropAll(
@@ -2966,6 +2995,12 @@ export function App() {
               highlightColor={highlightColor}
               selectionColor='rgba(33, 150, 243, 0.2)'
               autoHighlight={autoHighlight}
+              queryWord={(word) =>
+                dictionaryMockEnabled
+                  ? `${word}\nmock definition\nmock example sentence`
+                  : ''
+              }
+              onOpenDictionary={setDictionaryInitialWord}
               containMarginX={containMarginX}
               containMarginTop={containMarginTop}
               containMarginBottom={containMarginBottom}
