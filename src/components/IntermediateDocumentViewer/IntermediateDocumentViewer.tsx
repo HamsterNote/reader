@@ -4458,6 +4458,7 @@ function ViewerContent({
   )
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export function IntermediateDocumentViewer({
   document,
   serializedDocument,

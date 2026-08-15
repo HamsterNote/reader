@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1-beta.1] - 2026-08-15
+
+### Added
+- 新增 `queryWord` / `onOpenDictionary` props：宿主可同步查询选中单词释义，并在需要时调起词典（携带选中单词初始化搜索框）。
+- `selectionPopover` 升级为函数式渲染（新增 `ReaderSelectionPopover` 类型），Layout/Text 两种模式均支持基于当前活跃选区渲染 Popover 内容。
+- 默认选区 Popover 集成「翻译」入口：当 `queryWord` 命中非空释义且提供 `onOpenDictionary` 时显示，点击后以当前选词调起宿主词典。
+- Demo 新增「查询单词 Mock」开关与词典事件日志，便于验证词典集成。
+
+### Changed
+- `selectionPopover` prop 类型由 `ReactNode` 扩展为 `ReaderSelectionPopover`（静态内容，或 `(selection) => ReactNode` 渲染函数）。
+
 ## [1.13.0] - 2026-08-15
 
 ### Fixed

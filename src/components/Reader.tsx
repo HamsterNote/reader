@@ -1665,7 +1665,8 @@ export function Reader({
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
-              selectionPopover ?? ((selection) => (
+              selectionPopover ??
+              ((selection) => (
                 <DefaultSelectionPopover
                   selectionRef={popoverSelectionRef}
                   selectedWord={selection.text}
@@ -1795,7 +1796,8 @@ export function Reader({
           selectionColor={selectionColor}
           showSelectionMagnifier={showSelectionMagnifier}
           selectionPopover={
-            selectionPopover ?? ((selection) => (
+            selectionPopover ??
+            ((selection) => (
               <DefaultSelectionPopover
                 selectionRef={popoverSelectionRef}
                 selectedWord={selection.text}

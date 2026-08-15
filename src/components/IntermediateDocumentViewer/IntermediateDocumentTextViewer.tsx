@@ -146,6 +146,25 @@ function getTextReadingProgressKey(
     : `${progress.currentPageNumber}:page`
 }
 
+function resolveSelectionPopover(
+  selectionPopover: ReaderSelectionPopover | undefined,
+  activeRange: LinkedSelectionRange | null | undefined,
+  scopeId: string,
+  toSelection: (range: ReaderSelectionRange) => ReaderSelectionRange | null
+): ReactNode {
+  if (typeof selectionPopover !== 'function') {
+    return selectionPopover
+  }
+
+  if (!activeRange) {
+    return undefined
+  }
+
+  const publicRange = mapRuntimeRangeToPublic(activeRange, scopeId)
+  const selection = publicRange ? toSelection(publicRange) : null
+  return selection ? selectionPopover(selection) : undefined
+}
+
 function useDocumentGeneration(
   runtimeDocument: object | null,
   pageNumbersKey: string
@@ -2319,20 +2338,12 @@ export function IntermediateDocumentTextViewer(
     [isPdf]
   )
 
-  const publicActiveSelection = runtimeLinkedData.activeRange
-    ? mapRuntimeRangeToPublic(runtimeLinkedData.activeRange, scopeId)
-    : null
-  const activeSelection = publicActiveSelection
-    ? toTextRange(publicActiveSelection)
-    : null
-  let resolvedSelectionPopover: ReactNode
-  if (typeof selectionPopover === 'function') {
-    resolvedSelectionPopover = activeSelection
-      ? selectionPopover(activeSelection)
-      : undefined
-  } else {
-    resolvedSelectionPopover = selectionPopover
-  }
+  const resolvedSelectionPopover = resolveSelectionPopover(
+    selectionPopover,
+    runtimeLinkedData.activeRange,
+    scopeId,
+    toTextRange
+  )
 
   const handleLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
