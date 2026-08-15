@@ -1095,10 +1095,12 @@ export function IntermediateDocumentTextViewer(
     | ((anchor: ReaderTextAnchor, request: TextAnchorRestoreRequest) => boolean)
     | null
   >(null)
+  const textNavigationGenerationRef = useRef(0)
   useDocumentGenerationChange(documentGeneration, () => {
     progressDocumentGenerationRef.current = documentGeneration
     restoreAttemptCleanupRef.current?.()
     restoreAttemptCleanupRef.current = null
+    textNavigationGenerationRef.current += 1
     restoreRequestTokenRef.current += 1
     committedBookmarkRequestTokenRef.current = null
     activeRestoreRequestRef.current = null
@@ -1128,18 +1130,22 @@ export function IntermediateDocumentTextViewer(
     isActive: isReadingProgressMoving,
     signalActivity: signalReadingProgressActivity
   } = useReadingProgressActivity()
-  const captureCurrentTextAnchor = useCallback((scanBelow: boolean = false) => {
-    const viewport = scrollContainerRef.current
-    if (!viewport) return undefined
+  const captureCurrentTextAnchor = useCallback(
+    (scanBelow: boolean = false) => {
+      const viewport = scrollContainerRef.current
+      if (!viewport) return undefined
 
-    return (
-      (scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor)(
-        viewport,
-        textElementsRef.current,
-        textsByPageNumberRef.current
-      ) ?? undefined
-    )
-  }, [])
+      return (
+        (scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor)(
+          viewport,
+          textElementsRef.current,
+          textsByPageNumberRef.current,
+          { topInset: containMarginTop ?? containMarginY }
+        ) ?? undefined
+      )
+    },
+    [containMarginTop, containMarginY]
+  )
   const captureReadingProgress = useCallback(() => {
     if (isInitialProgressRestorePendingRef.current) return undefined
     if (suppressProgrammaticProgressRef.current) return undefined
@@ -1182,11 +1188,18 @@ export function IntermediateDocumentTextViewer(
 
   const cancelTextAnchorRestore = useCallback(() => {
     cancelRestoreAttempt()
+    textNavigationGenerationRef.current += 1
     restoreRequestTokenRef.current += 1
     activeRestoreRequestRef.current = null
     anchorMeasurementRef.current = null
     pendingTextAnchorRef.current = null
   }, [cancelRestoreAttempt])
+
+  const releaseProgrammaticSuppression = useCallback(() => {
+    cancelTextAnchorRestore()
+    isInitialProgressRestorePendingRef.current = false
+    suppressProgrammaticProgressRef.current = false
+  }, [cancelTextAnchorRestore])
 
   useEffect(() => {
     if (!viewerRootElement) return
@@ -1194,11 +1207,6 @@ export function IntermediateDocumentTextViewer(
     const usesNativeScrollEnd = 'onscrollend' in viewerRootElement
     usesNativeScrollEndRef.current = usesNativeScrollEnd
     let frameId: number | null = null
-    const releaseProgrammaticSuppression = () => {
-      cancelTextAnchorRestore()
-      isInitialProgressRestorePendingRef.current = false
-      suppressProgrammaticProgressRef.current = false
-    }
     const handleUserKeyDown = (event: globalThis.KeyboardEvent) => {
       if (
         event.key === 'ArrowDown' ||
@@ -1292,9 +1300,9 @@ export function IntermediateDocumentTextViewer(
       }
     }
   }, [
-    cancelTextAnchorRestore,
     captureReadingProgress,
     onTextReadingProgressChange,
+    releaseProgrammaticSuppression,
     signalReadingProgressActivity,
     viewerRootElement
   ])
@@ -1426,6 +1434,7 @@ export function IntermediateDocumentTextViewer(
     (pageNumber: number, source: 'restore' | 'user' = 'user') => {
       const pageIndex = pageNumbers.indexOf(pageNumber)
       if (pageIndex < 0) return
+      if (source === 'user') releaseProgrammaticSuppression()
       const nextProgress = { currentPageNumber: pageNumber }
       const nextKey = getTextReadingProgressKey(nextProgress)
       readingProgressPageRef.current = pageNumber
@@ -1443,7 +1452,12 @@ export function IntermediateDocumentTextViewer(
         behavior: 'auto'
       })
     },
-    [onTextReadingProgressChange, pageNumbers, virtualizer]
+    [
+      onTextReadingProgressChange,
+      pageNumbers,
+      releaseProgrammaticSuppression,
+      virtualizer
+    ]
   )
   const visiblePageNumbers = useMemo(
     () =>
@@ -1804,7 +1818,7 @@ export function IntermediateDocumentTextViewer(
       const pageIndex = pageNumbers.indexOf(anchor.pageNumber)
       if (pageIndex < 0) return
 
-      cancelRestoreAttempt()
+      cancelTextAnchorRestore()
       const documentGeneration = progressDocumentGenerationRef.current
       const request = {
         token: restoreRequestTokenRef.current + 1,
@@ -1888,7 +1902,6 @@ export function IntermediateDocumentTextViewer(
     },
     [
       alignTextAnchor,
-      cancelRestoreAttempt,
       cancelTextAnchorRestore,
       clearUnloadTimer,
       onTextReadingProgressChange,
@@ -2498,7 +2511,10 @@ export function IntermediateDocumentTextViewer(
   )
 
   const scrollMountedTextPageIntoView = useCallback((pageNumber: number) => {
+    const navigationGeneration = textNavigationGenerationRef.current + 1
+    textNavigationGenerationRef.current = navigationGeneration
     const scrollIntoView = () => {
+      if (textNavigationGenerationRef.current !== navigationGeneration) return
       const pageElement =
         scrollContainerRef.current?.querySelector<HTMLElement>(
           `[data-testid="intermediate-text-page-${pageNumber}"]`
@@ -2509,6 +2525,7 @@ export function IntermediateDocumentTextViewer(
     const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
     if (viewerWindow) {
       viewerWindow.requestAnimationFrame(() => {
+        if (textNavigationGenerationRef.current !== navigationGeneration) return
         viewerWindow.requestAnimationFrame(scrollIntoView)
         viewerWindow.setTimeout(scrollIntoView, 0)
       })
@@ -2528,6 +2545,7 @@ export function IntermediateDocumentTextViewer(
       const pageNumber = resolveTextRangeTargetPageNumber(range)
       if (pageNumber === null) return
 
+      releaseProgrammaticSuppression()
       const pageIndex = pageNumbers.indexOf(pageNumber)
       if (pageIndex === -1) return
 
@@ -2539,7 +2557,13 @@ export function IntermediateDocumentTextViewer(
       virtualizer.scrollToIndex(pageIndex, { align: 'center' })
       scrollMountedTextPageIntoView(pageNumber)
     },
-    [clearUnloadTimer, pageNumbers, scrollMountedTextPageIntoView, virtualizer]
+    [
+      clearUnloadTimer,
+      pageNumbers,
+      releaseProgrammaticSuppression,
+      scrollMountedTextPageIntoView,
+      virtualizer
+    ]
   )
 
   const clearSelections = useCallback(() => {

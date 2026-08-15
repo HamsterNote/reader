@@ -10,6 +10,11 @@ export type TextAnchorElementRecord<Text extends AnchorText = AnchorText> = {
   readonly element: HTMLSpanElement
 }
 
+type TextAnchorSearchOptions = {
+  readonly pageNumber?: number
+  readonly topInset?: number
+}
+
 export function getTextAnchorKey(anchor: ReaderTextAnchor): string {
   return `${anchor.pageNumber}:${anchor.textId}:${anchor.offset}`
 }
@@ -107,21 +112,27 @@ export function findTopTextAnchor(
   viewport: HTMLElement,
   records: ReadonlyMap<string, TextAnchorElementRecord>,
   textsByPageNumber: ReadonlyMap<number, readonly AnchorText[]>,
-  pageNumber?: number
+  options: TextAnchorSearchOptions = {}
 ): ReaderTextAnchor | null {
   const viewportRect = viewport.getBoundingClientRect()
+  const contentTop = viewportRect.top + (options.topInset ?? 0)
   let closestRecord: TextAnchorElementRecord | null = null
   let closestTop = Number.POSITIVE_INFINITY
 
   records.forEach((record) => {
-    if (pageNumber !== undefined && record.pageNumber !== pageNumber) return
-
-    const rect = record.element.getBoundingClientRect()
-    if (rect.bottom <= viewportRect.top || rect.top >= viewportRect.bottom) {
+    if (
+      options.pageNumber !== undefined &&
+      record.pageNumber !== options.pageNumber
+    ) {
       return
     }
 
-    const distanceFromTop = Math.max(0, rect.top - viewportRect.top)
+    const rect = record.element.getBoundingClientRect()
+    if (rect.bottom <= contentTop || rect.top >= viewportRect.bottom) {
+      return
+    }
+
+    const distanceFromTop = Math.max(0, rect.top - contentTop)
     if (distanceFromTop < closestTop) {
       closestRecord = record
       closestTop = distanceFromTop
@@ -147,26 +158,32 @@ export function findTextAnchorAtOrBelow(
   viewport: HTMLElement,
   records: ReadonlyMap<string, TextAnchorElementRecord>,
   textsByPageNumber: ReadonlyMap<number, readonly AnchorText[]>,
-  pageNumber?: number
+  options: TextAnchorSearchOptions = {}
 ): ReaderTextAnchor | null {
   const visibleAnchor = findTopTextAnchor(
     viewport,
     records,
     textsByPageNumber,
-    pageNumber
+    options
   )
   if (visibleAnchor) return visibleAnchor
 
-  const viewportTop = viewport.getBoundingClientRect().top
+  const contentTop =
+    viewport.getBoundingClientRect().top + (options.topInset ?? 0)
   let closestRecord: TextAnchorElementRecord | null = null
   let closestTop = Number.POSITIVE_INFINITY
   records.forEach((record) => {
-    if (pageNumber !== undefined && record.pageNumber < pageNumber) return
+    if (
+      options.pageNumber !== undefined &&
+      record.pageNumber < options.pageNumber
+    ) {
+      return
+    }
 
     const rect = record.element.getBoundingClientRect()
-    if (rect.bottom <= viewportTop) return
+    if (rect.bottom <= contentTop) return
 
-    const distanceFromTop = Math.max(0, rect.top - viewportTop)
+    const distanceFromTop = Math.max(0, rect.top - contentTop)
     if (distanceFromTop < closestTop) {
       closestRecord = record
       closestTop = distanceFromTop

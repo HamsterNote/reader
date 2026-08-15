@@ -29,6 +29,8 @@ export type {
   IntermediateDocumentViewerProps,
   NormalizedRect,
   ReaderExtraOcr,
+  ReaderIntermediateImage,
+  ReaderIntermediateImageSerialized,
   ReaderInteractionMode,
   ReaderOcrOptions,
   ReaderPageRange,
@@ -45,8 +47,6 @@ export type {
   ReaderSelectionPayload,
   ReaderTextSelectionDetail,
   ReaderTouchPanMode,
-  ReaderIntermediateImage,
-  ReaderIntermediateImageSerialized,
   TextElementInfo
 } from './components/IntermediateDocumentViewer'
 export {
@@ -77,6 +77,7 @@ export {
 } from './components/Page'
 export {
   Reader,
+  type ReaderLoadingProgress,
   type ReaderProps,
   type ReaderRenderMode
 } from './components/Reader'

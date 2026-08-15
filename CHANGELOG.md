@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0-beta.2] - 2026-08-14
+
+### Added
+- 合并 origin/main：引入 PDF 文本模式页码分隔标记、原生 Layout 阅读进度持久化、高亮拖拽重构及阅读偏好 v2 等特性。
+
+### Changed
+- Demo 阅读偏好升级为 v2，为 Text/Layout 两种模式分别持久化字号，并持久化当前高亮色。
+
+### Fixed
+- 用 `@system-ui-js/multi-drag` 重构高亮拖拽，统一追踪移出 viewer 的指针，避免浏览器原生手势抢占导致高亮移动失败。
+- 阅读进度在 Layout/Text 模式切换与文档替换时同步捕获并保存最新锚点；Text 阅读进度改为 `scrollend` 防抖后仅持久化最终位置。
+- native Layout 通过其可滚动视口承载平移，滚动到目标范围时将该范围中心与视口中心对齐。
+- 修复 Reader 回调签名格式与模式切换时的锚点同步问题。
+
+## [1.12.0-beta.1] - 2026-08-13
+
+### Added
+- Reader 新增受控 `loadingProgress` prop：宿主传入 `{ label, current, total }` 后，Reader 容器内展示加载阶段标签、整数百分比与原生 `<progress>` 进度条；加载期间临时隐藏上传区、文件信息、文档内容与底栏，根节点同步暴露 `aria-busy`。同时导出 `ReaderLoadingProgress` 类型。
+- Demo 新增 PDF 两阶段加载流程：先将文件流式读入内存并显示读取进度，再以「待加载」卡片等待用户点击「加载文件」后解析渲染；刷新后恢复到同一待加载卡片。
+- Demo 新增加载/解析/渲染三段计时面板，便于诊断长文档渲染瓶颈。
+- Demo 新增文件流式读入内存加载器 `fileMemoryLoader`：支持进度回调、AbortSignal 取消与字节数完整性校验。
+- 新增 PDF 解析器版本兼容封装层 `pdfParserForReader`：为 Reader 关闭 offscreen canvas 与 image decoder 回退。
+- 新增 PDF 流式加载、内存加载器与解析器封装相关测试。
+
+### Changed
+- 移除过时的 `pdf-parser` ambient 类型声明。
+- 更新 README 与 DESIGN 文档：补充 PDF 两阶段加载说明与 Reader Loading Progress 设计契约。
+
+### Fixed
+- 修复文档切换时 PDF 会话未释放，以及「Forget 已保存文件」与持久化队列的竞态。
+- 稳定 Demo 测试的异步 teardown 与持久化队列时序。
+
 ## [1.11.2] - 2026-08-13
 
 ### Fixed
