@@ -869,7 +869,7 @@ export type IntermediateDocumentTextViewerProps = {
  * `intermediate-document` 文本渲染模式的查看器。
  *
  * 文本模式使用 `@tanstack/react-virtual` 的原生滚动虚拟化，只渲染当前
- * 可见视口内的页面 DOM（`overscan: 0`）。与 layout 模式（`VirtualPaper` +
+ * 可见视口及前后各 3 页的页面 DOM（`overscan: 3`）。与 layout 模式（`VirtualPaper` +
  * 全量外壳）不同，文本模式：
  * - 不挂载 `VirtualPaper`，也不渲染 `.virtual-paper-wrapper`；
  * - 不为每个页码渲染占位 DOM，仅渲染虚拟范围命中页；
@@ -1392,7 +1392,7 @@ export function IntermediateDocumentTextViewer(
   // TanStack Virtual 虚拟化器：count = pageNumbers.length，
   // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
   // getItemKey 直接用真实页码（稳定 key，避免页码/索引错位），
-  // overscan: 0 严格保证只渲染可见视口内的页面 DOM。
+  // overscan: 3 会在可见范围前后各额外渲染 3 页，降低连续滚动时的空白闪烁。
   // measureElement 选项：无文本页只渲染很矮的 "Page N" 占位内容，不能把
   // 这个临时高度写回虚拟化器，否则累计总高度会持续塌缩并把全部页面拉进
   // 可视范围。有文本内容后 ResizeObserver 会再次测量并写入真实高度。
@@ -1401,7 +1401,7 @@ export function IntermediateDocumentTextViewer(
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => TEXT_PAGE_ESTIMATED_HEIGHT,
     getItemKey: (index) => getVirtualPageKey(pageNumbers[index] ?? index),
-    overscan: 0,
+    overscan: 3,
     onChange: handleVirtualizerChange,
     measureElement: (el) => {
       if (el.getAttribute('data-page-measurable') !== 'true') {
@@ -1430,6 +1430,7 @@ export function IntermediateDocumentTextViewer(
   })
 
   const virtualItems = virtualizer.getVirtualItems()
+  const visibleRange = virtualizer.range
   const handleReadingProgressSeekPage = useCallback(
     (pageNumber: number, source: 'restore' | 'user' = 'user') => {
       const pageIndex = pageNumbers.indexOf(pageNumber)
@@ -1461,12 +1462,10 @@ export function IntermediateDocumentTextViewer(
   )
   const visiblePageNumbers = useMemo(
     () =>
-      virtualItems
-        .map((item) => pageNumbers[item.index])
-        .filter(
-          (pageNumber): pageNumber is number => typeof pageNumber === 'number'
-        ),
-    [virtualItems, pageNumbers]
+      visibleRange
+        ? pageNumbers.slice(visibleRange.startIndex, visibleRange.endIndex + 1)
+        : [],
+    [pageNumbers, visibleRange]
   )
   const visiblePageNumberSet = useMemo(
     () => new Set(visiblePageNumbers),

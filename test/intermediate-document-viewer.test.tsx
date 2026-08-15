@@ -3400,11 +3400,11 @@ describe('IntermediateDocumentViewer', () => {
 
   // ---- 文本模式虚拟化（T3）----
   // IntermediateDocumentTextViewer 使用 @tanstack/react-virtual 的原生滚动虚拟化，
-  // overscan=0 严格保证只渲染可见视口内的页面 DOM。以下测试验证：
-  // - 视口仅容纳一页时，只有 page 1 存在，page 2/20 不在 DOM 中
+  // overscan=3 会额外挂载可见范围前后各三页。以下测试验证：
+  // - 视口仅容纳一页时，page 1-4 存在，远端 page 5/20 不在 DOM 中
   // - 根节点有正确的 data-testid
   // - 文本模式不挂载 VirtualPaper（无 virtual-paper-wrapper）
-  it('text mode renders only visible virtual pages', async () => {
+  it('text mode renders three overscan pages beyond the visible page', async () => {
     // 20 页文档，确保虚拟化有意义
     const { document } = makeDocument({ pageCount: 20 })
 
@@ -3424,12 +3424,13 @@ describe('IntermediateDocumentViewer', () => {
     // 用真实高度 mock 页 1，让虚拟化器测量稳定（防止 jsdom 0 高度级联）
     mockElementSize(page1, { width: 800, height: 800 })
 
-    // 虚拟化器稳定后：只有 page 1 在 DOM，page 2/20 不存在
+    // 虚拟化器稳定后：可见的 page 1 与后方三页在 DOM，更远页面不存在
     await waitFor(() => {
       expect(screen.getByTestId('intermediate-text-page-1')).toBeInTheDocument()
-      expect(
-        screen.queryByTestId('intermediate-text-page-2')
-      ).not.toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-text-page-2')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-text-page-3')).toBeInTheDocument()
+      expect(screen.getByTestId('intermediate-text-page-4')).toBeInTheDocument()
+      expect(screen.queryByTestId('intermediate-text-page-5')).toBeNull()
       expect(
         screen.queryByTestId('intermediate-text-page-20')
       ).not.toBeInTheDocument()
@@ -4927,7 +4928,7 @@ describe('IntermediateDocumentViewer', () => {
   })
 
   it('text mode keeps virtual row content matched to the scrolled page number', async () => {
-    const { document } = makeDocument({ pageCount: 3 })
+    const { document } = makeDocument({ pageCount: 10 })
 
     render(
       <IntermediateDocumentTextViewer
@@ -4940,7 +4941,7 @@ describe('IntermediateDocumentViewer', () => {
     setScrollContainerSize(scrollEl, {
       width: 800,
       height: 600,
-      scrollHeight: 2400
+      scrollHeight: 8000
     })
 
     const page1 = await screen.findByTestId('intermediate-text-page-1')
@@ -4949,25 +4950,25 @@ describe('IntermediateDocumentViewer', () => {
     await screen.findByText('Page 1 text')
 
     act(() => {
-      scrollEl.scrollTop = 800
+      scrollEl.scrollTop = 3200
       scrollEl.dispatchEvent(new Event('scroll'))
     })
 
-    const page2 = await screen.findByTestId('intermediate-text-page-2')
-    mockElementSize(page2, { width: 800, height: 800 })
+    const page5 = await screen.findByTestId('intermediate-text-page-5')
+    mockElementSize(page5, { width: 800, height: 800 })
 
     await waitFor(() => {
-      expect(page2).toHaveAttribute('data-page-number', '2')
-      expect(screen.getByText('Page 2 text')).toHaveAttribute(
+      expect(page5).toHaveAttribute('data-page-number', '5')
+      expect(screen.getByText('Page 5 text')).toHaveAttribute(
         'data-page-number',
-        '2'
+        '5'
       )
       expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
     })
   })
 
-  it('text mode derives current rectangles from canonical ranges when a preloaded page mounts', async () => {
-    // Given: 第二页文字和 Layout 形态高亮已预加载，但页面 DOM 尚未进入视口。
+  it('text mode derives current rectangles from canonical ranges when an overscan page mounts', async () => {
+    // Given: 第二页位于首屏的 overscan 窗口，并带有 Layout 形态高亮。
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 3 })
     const range = makeReaderRange('page-2-highlight', 'Page 2', 2)
@@ -4994,15 +4995,8 @@ describe('IntermediateDocumentViewer', () => {
       scrollHeight: 2400
     })
     await screen.findByText('Page 1 text')
-    expect(
-      screen.queryByTestId('intermediate-text-page-2')
-    ).not.toBeInTheDocument()
 
-    // When: 虚拟滚动把已预加载的第二页挂载到 DOM。
-    act(() => {
-      scrollEl.scrollTop = 800
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    // When: overscan 把第二页提前挂载到 DOM。
     await screen.findByText('Page 2 text')
 
     // Then: 持久 Layout rect 被忽略，同一 selectionId + offset 锚点获得当前 Text 布局矩形。
@@ -5496,7 +5490,7 @@ describe('IntermediateDocumentViewer', () => {
 
   it('text mode mounts linked Selection only for loaded virtual pages', async () => {
     clearSelectionProps()
-    const { document } = makeDocument({ pageCount: 2 })
+    const { document } = makeDocument({ pageCount: 5 })
     const range = makeReaderRange(
       'text-mode-mounted-range',
       'Text mode mounted range'
@@ -5519,7 +5513,7 @@ describe('IntermediateDocumentViewer', () => {
     mockElementSize(page1, { width: 800, height: 800 })
 
     await waitFor(() => {
-      expect(getAllSelectionProps()).toHaveLength(1)
+      expect(getAllSelectionProps()).toHaveLength(4)
     })
     const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
     const selectionProps = requireSelectionPropsById(runtimeSelectionId)
@@ -5541,9 +5535,8 @@ describe('IntermediateDocumentViewer', () => {
     expect(selectionProps.onHighlight).toBeUndefined()
     expect(selectionProps.rects).toBeUndefined()
     expect(selectionProps.onCreateRect).toBeUndefined()
-    expect(
-      screen.queryByTestId('intermediate-text-page-2')
-    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('intermediate-text-page-4')).toBeInTheDocument()
+    expect(screen.queryByTestId('intermediate-text-page-5')).toBeNull()
     expect(
       screen.queryByTestId('virtual-paper-wrapper')
     ).not.toBeInTheDocument()
