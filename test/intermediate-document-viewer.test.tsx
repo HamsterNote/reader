@@ -2536,6 +2536,49 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
+  it('reports native layout percentage relative to the top content inset', async () => {
+    // Given: 页面没有可用文字，顶部内容边界位于视口顶部下方 40px。
+    const { document, pages } = makeDocument({ pageCount: 1 })
+    pages.get(1)?.getContent.mockResolvedValue([])
+    const onLayoutReadingProgressChange = vi.fn()
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        containMarginTop={40}
+        onLayoutReadingProgressChange={onLayoutReadingProgressChange}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const page = screen.getByTestId('intermediate-page-1')
+    mockElementRect(viewport, { left: 0, top: 0, width: 300, height: 200 })
+    mockElementRect(page, { left: 0, top: 10, width: 100, height: 200 })
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+    })
+
+    // When: 原生视口结束滚动并采集无文字页面的 fallback 进度。
+    onLayoutReadingProgressChange.mockClear()
+    await act(async () => {
+      fireNativeLayoutProgressEvent(viewport)
+    })
+
+    // Then: 百分比按 contentTop(40px) 计算，而不是按 viewportTop(0px) 计算。
+    await waitFor(() => {
+      expect(onLayoutReadingProgressChange).toHaveBeenLastCalledWith({
+        pageNumber: 1,
+        verticalPercentage: 15
+      })
+    })
+  })
+
   it('does not report native progress when content rerenders before scrollend', async () => {
     // Given: 原生视口支持 scrollend，且初始位置已完成采集。
     const { document } = makeDocument({ pageCount: 1 })

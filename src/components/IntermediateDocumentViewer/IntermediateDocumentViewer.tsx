@@ -822,11 +822,11 @@ function completeNativeProgressRestore(
 
 function resolveNativeLayoutBookmark(
   anchor: ReaderTextAnchor | undefined,
-  viewportRect: DOMRect | undefined,
+  contentTop: number,
   topPage: { readonly pageNumber: number; readonly rect: DOMRect } | undefined
 ): ReaderBookmark | undefined {
   if (anchor) return anchor
-  if (!viewportRect || !topPage) return undefined
+  if (!topPage) return undefined
 
   return {
     pageNumber: topPage.pageNumber,
@@ -836,7 +836,7 @@ function resolveNativeLayoutBookmark(
           100,
           Math.max(
             0,
-            ((viewportRect.top - topPage.rect.top) / topPage.rect.height) * 100
+            ((contentTop - topPage.rect.top) / topPage.rect.height) * 100
           )
         ) * 100
       ) / 100
@@ -5485,7 +5485,7 @@ export function IntermediateDocumentViewer({
         : undefined
       const nextBookmark = resolveNativeLayoutBookmark(
         anchor,
-        viewportRect,
+        contentTop,
         topPage
       )
       setCurrentBookmark((value) =>
