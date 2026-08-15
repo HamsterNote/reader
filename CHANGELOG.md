@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.13.0] - 2026-08-15
+
+### Fixed
+- 文本模式忽略精确锚点恢复后已过期的范围滚动，避免恢复阅读进度时产生无效滚动。
+- 文本锚点定位考虑顶部内容边距，避免吸附顶部留白内容。
+- 无文字页面的阅读进度按内容顶部边界计算。
+- 文本模式增加 overscan 缓冲渲染，在可见范围前后各预渲染 3 页，减少连续滚动时的空白闪烁。
 
 ## [1.12.0-beta.2] - 2026-08-14
 
