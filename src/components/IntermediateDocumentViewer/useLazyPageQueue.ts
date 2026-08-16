@@ -5,7 +5,7 @@ import type {
   IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
 /**
  * 懒加载页面队列的参数配置。由 `IntermediateDocumentViewer` 通过
@@ -54,11 +54,13 @@ export interface LazyPageQueueCallbacks {
  * `useLazyPageQueue` 返回的稳定函数集合。
  * - `enqueueInitialPages`：在 shell 就绪后入队前 `initialLoadedPages` 页。
  * - `enqueuePage`：入队单个页码（例如由可见性观察器触发）。
+ * - `replaceRequiredPages`：替换当前必需页面集合，并让离开集合的在途结果失效。
  * - `cancelAll`：清空队列并忽略在途结果。
  */
 export interface LazyPageQueueApi {
   enqueueInitialPages: (pageNumbers: number[]) => void
   enqueuePage: (pageNumber: number) => void
+  replaceRequiredPages: (pageNumbers: readonly number[]) => void
   cancelAll: () => void
 }
 
@@ -123,6 +125,8 @@ export function useLazyPageQueue(
   const queuedPageNumbersRef = useRef<number[]>([])
   // 本 hook 自己写入 loadingPagesRef 的页码集合。借此集合维护「懒队列拥有」的边界：cancelAll 仅清除这些页码。
   const lazyInFlightPagesRef = useRef(new Set<number>())
+  const physicalInFlightPagesRef = useRef(new Set<number>())
+  const pageRequestEpochRef = useRef(new Map<number, number>())
   // 每次取消时递增的代际 token；
   // 在途 async 结果在 resolve 时比对，不匹配则丢弃。
   const generationRef = useRef(0)
@@ -130,6 +134,10 @@ export function useLazyPageQueue(
   // 由 enqueueInitialPages 调用时更新。
   const currentRangePageNumbersRef = useRef<number[]>([])
   const previousRuntimeDocumentRef = useRef<IntermediateDocument | null>(null)
+  const callbacksRef = useRef(callbacks)
+  useLayoutEffect(() => {
+    callbacksRef.current = callbacks
+  }, [callbacks])
   // pumpQueue 的 stable ref，用于解决 startPageLoad <-> pumpQueue 循环依赖。
   // pumpQueueRef.current 始终指向最新的 pumpQueue 实现。
   const pumpQueueRef = useRef<(generation: number) => void>(() => {})
@@ -141,7 +149,9 @@ export function useLazyPageQueue(
    */
   const dequeueNextLoadable = useCallback((): number | undefined => {
     const rangeSet = new Set(currentRangePageNumbersRef.current)
-    while (queuedPageNumbersRef.current.length > 0) {
+    let remainingCandidates = queuedPageNumbersRef.current.length
+    while (remainingCandidates > 0) {
+      remainingCandidates -= 1
       const pageNumber = queuedPageNumbersRef.current.shift()
       if (pageNumber === undefined) {
         continue
@@ -151,17 +161,21 @@ export function useLazyPageQueue(
         continue
       }
       // 已加载 → 跳过
-      if (callbacks.isPageLoaded(pageNumber)) {
+      if (callbacksRef.current.isPageLoaded(pageNumber)) {
         continue
       }
       // 已在途 → 跳过
       if (loadingPagesRef.current.has(pageNumber)) {
         continue
       }
+      if (physicalInFlightPagesRef.current.has(pageNumber)) {
+        queuedPageNumbersRef.current.push(pageNumber)
+        continue
+      }
       return pageNumber
     }
     return undefined
-  }, [callbacks, loadingPagesRef])
+  }, [loadingPagesRef])
 
   /**
    * 实际发起单页加载。读取最新 config/document，
@@ -170,6 +184,8 @@ export function useLazyPageQueue(
   const startPageLoad = useCallback(
     (pageNumber: number, generation: number) => {
       const document = activeDocumentRef.current
+      const requestEpoch = pageRequestEpochRef.current.get(pageNumber) ?? 0
+      pageRequestEpochRef.current.set(pageNumber, requestEpoch)
       // document 可能在 generation 检查之间变为 null
       if (!document) {
         return
@@ -179,7 +195,7 @@ export function useLazyPageQueue(
       if (activeDocumentRef.current !== document) {
         return
       }
-      if (callbacks.isPageLoaded(pageNumber)) {
+      if (callbacksRef.current.isPageLoaded(pageNumber)) {
         return
       }
       if (loadingPagesRef.current.has(pageNumber)) {
@@ -190,18 +206,19 @@ export function useLazyPageQueue(
       try {
         pagePromise = document.getPageByPageNumber(pageNumber)
       } catch {
-        callbacks.onPageError(pageNumber)
+        callbacksRef.current.onPageError(pageNumber)
         return
       }
 
       if (!pagePromise) {
-        callbacks.onPageError(pageNumber)
+        callbacksRef.current.onPageError(pageNumber)
         return
       }
 
       // 标记在途，入队并发计数
       loadingPagesRef.current.add(pageNumber)
       lazyInFlightPagesRef.current.add(pageNumber)
+      physicalInFlightPagesRef.current.add(pageNumber)
 
       pagePromise
         .then((page) => {
@@ -235,7 +252,9 @@ export function useLazyPageQueue(
             if (
               !isMountedRef.current ||
               activeDocumentRef.current !== document ||
-              generationRef.current !== generation
+              generationRef.current !== generation ||
+              pageRequestEpochRef.current.get(pageNumber) !== requestEpoch ||
+              !currentRangePageNumbersRef.current.includes(pageNumber)
             ) {
               return
             }
@@ -244,7 +263,7 @@ export function useLazyPageQueue(
             const images = isIntermediateImage
               ? content.filter(isIntermediateImage)
               : []
-            callbacks.onPageLoaded({
+            callbacksRef.current.onPageLoaded({
               pageNumber,
               useFlowLayout,
               baseImage,
@@ -260,15 +279,21 @@ export function useLazyPageQueue(
           if (
             !isMountedRef.current ||
             activeDocumentRef.current !== document ||
-            generationRef.current !== generation
+            generationRef.current !== generation ||
+            pageRequestEpochRef.current.get(pageNumber) !== requestEpoch ||
+            !currentRangePageNumbersRef.current.includes(pageNumber)
           ) {
             return
           }
-          callbacks.onPageError(pageNumber)
+          callbacksRef.current.onPageError(pageNumber)
         })
         .finally(() => {
+          physicalInFlightPagesRef.current.delete(pageNumber)
           // 清除在途标记（仅当仍在同一 generation）
-          if (generationRef.current === generation) {
+          if (
+            generationRef.current === generation &&
+            pageRequestEpochRef.current.get(pageNumber) === requestEpoch
+          ) {
             loadingPagesRef.current.delete(pageNumber)
             lazyInFlightPagesRef.current.delete(pageNumber)
           }
@@ -276,14 +301,8 @@ export function useLazyPageQueue(
           // 使用 microtask 延迟以避免在 finally 中同步触发新加载
           // 导致 React 批处理问题。
           queueMicrotask(() => {
-            if (
-              !isMountedRef.current ||
-              activeDocumentRef.current !== document ||
-              generationRef.current !== generation
-            ) {
-              return
-            }
-            pumpQueueRef.current(generation)
+            if (!isMountedRef.current || !activeDocumentRef.current) return
+            pumpQueueRef.current(generationRef.current)
           })
         })
       // 注意：startPageLoad 内部不直接 pump；由调用方 pumpQueue 驱动
@@ -292,7 +311,6 @@ export function useLazyPageQueue(
       activeDocumentRef,
       isMountedRef,
       loadingPagesRef,
-      callbacks,
       mode,
       getBaseImageFromPage,
       getPageContentEntries,
@@ -317,7 +335,7 @@ export function useLazyPageQueue(
       }
 
       const concurrency = configRef.current.pageLoadConcurrency
-      while (loadingPagesRef.current.size < concurrency) {
+      while (physicalInFlightPagesRef.current.size < concurrency) {
         const pageNumber = dequeueNextLoadable()
         if (pageNumber === undefined) {
           break
@@ -325,13 +343,7 @@ export function useLazyPageQueue(
         startPageLoad(pageNumber, generation)
       }
     },
-    [
-      configRef,
-      activeDocumentRef,
-      loadingPagesRef,
-      dequeueNextLoadable,
-      startPageLoad
-    ]
+    [configRef, activeDocumentRef, dequeueNextLoadable, startPageLoad]
   )
 
   // 始终将最新 pumpQueue 暴露给 startPageLoad 的 finally 回调（通过 ref 打破循环）
@@ -358,7 +370,7 @@ export function useLazyPageQueue(
       // 去重后入队
       for (const pageNumber of targetPages) {
         if (
-          !callbacks.isPageLoaded(pageNumber) &&
+          !callbacksRef.current.isPageLoaded(pageNumber) &&
           !loadingPagesRef.current.has(pageNumber) &&
           !queuedPageNumbersRef.current.includes(pageNumber)
         ) {
@@ -368,7 +380,7 @@ export function useLazyPageQueue(
 
       pumpQueue(generationRef.current)
     },
-    [configRef, hasRuntimeDocument, callbacks, loadingPagesRef, pumpQueue]
+    [configRef, hasRuntimeDocument, loadingPagesRef, pumpQueue]
   )
 
   /**
@@ -380,17 +392,12 @@ export function useLazyPageQueue(
       if (!hasRuntimeDocument) {
         return
       }
-      if (mode === 'text') {
-        currentRangePageNumbersRef.current = [
-          ...new Set([...currentRangePageNumbersRef.current, pageNumber])
-        ]
-      }
       // 页码不在当前 range → 忽略
       if (!currentRangePageNumbersRef.current.includes(pageNumber)) {
         return
       }
       // 去重
-      if (callbacks.isPageLoaded(pageNumber)) {
+      if (callbacksRef.current.isPageLoaded(pageNumber)) {
         return
       }
       if (loadingPagesRef.current.has(pageNumber)) {
@@ -402,7 +409,29 @@ export function useLazyPageQueue(
       queuedPageNumbersRef.current.push(pageNumber)
       pumpQueue(generationRef.current)
     },
-    [mode, hasRuntimeDocument, callbacks, loadingPagesRef, pumpQueue]
+    [hasRuntimeDocument, loadingPagesRef, pumpQueue]
+  )
+
+  const replaceRequiredPages = useCallback(
+    (pageNumbers: readonly number[]) => {
+      const requiredPages = [...new Set(pageNumbers)]
+      const requiredPageSet = new Set(requiredPages)
+      currentRangePageNumbersRef.current = requiredPages
+      queuedPageNumbersRef.current = queuedPageNumbersRef.current.filter(
+        (pageNumber) => requiredPageSet.has(pageNumber)
+      )
+      lazyInFlightPagesRef.current.forEach((pageNumber) => {
+        if (requiredPageSet.has(pageNumber)) return
+        pageRequestEpochRef.current.set(
+          pageNumber,
+          (pageRequestEpochRef.current.get(pageNumber) ?? 0) + 1
+        )
+        lazyInFlightPagesRef.current.delete(pageNumber)
+        loadingPagesRef.current.delete(pageNumber)
+      })
+      pumpQueue(generationRef.current)
+    },
+    [loadingPagesRef, pumpQueue]
   )
 
   /**
@@ -417,6 +446,7 @@ export function useLazyPageQueue(
       loadingPagesRef.current.delete(pageNumber)
     })
     lazyInFlightPagesRef.current.clear()
+    pageRequestEpochRef.current.clear()
   }, [loadingPagesRef])
 
   // document identity 变化时自动 cancelAll。
@@ -439,8 +469,9 @@ export function useLazyPageQueue(
         loadingPages.delete(pageNumber)
       })
       lazyInFlightPages.clear()
+      pageRequestEpochRef.current.clear()
     }
   }, [loadingPagesRef])
 
-  return { enqueueInitialPages, enqueuePage, cancelAll }
+  return { enqueueInitialPages, enqueuePage, replaceRequiredPages, cancelAll }
 }

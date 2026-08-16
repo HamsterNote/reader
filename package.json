@@ -45,7 +45,7 @@
   "dependencies": {
     "@hamster-note/components": "0.2.1-beta.3",
     "@hamster-note/docx-parser": "^0.1.0",
-    "@hamster-note/epub-parser": "0.3.0-beta.2",
+    "@hamster-note/epub-parser": "0.5.0",
     "@hamster-note/image-parser": "^0.3.0",
     "@hamster-note/markdown-parser": "0.1.2-beta.2",
     "@hamster-note/painting": "0.4.0",
@@ -54,7 +54,6 @@
     "@hamster-note/types": "^0.8.0",
     "@hamster-note/virtual-paper": "1.1.0",
     "@system-ui-js/multi-drag": "^0.4.0",
-    "@tanstack/react-virtual": "^3.14.5",
     "html2canvas": "^1.4.1",
     "use-undo": "^1.2.0"
   },
@@ -85,8 +84,8 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-sonarjs": "^4.0.3",
     "globals": "^15.14.0",
-    "jszip": "^3.10.1",
     "jsdom": "^27.0.0",
+    "jszip": "^3.10.1",
     "prettier": "^3.7.4",
     "prettier-config-standard": "^7.0.0",
     "react": "^19.0.0",

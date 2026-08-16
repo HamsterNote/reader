@@ -11,7 +11,6 @@ import {
   IntermediateText,
   TextDir
 } from '@hamster-note/types'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   act,
   fireEvent,
@@ -25,8 +24,9 @@ import {
   isValidElement,
   type ReactNode,
   type RefObject,
-  useCallback,
-  useRef,
+  startTransition,
+  StrictMode,
+  Suspense,
   useState
 } from 'react'
 import * as sass from 'sass'
@@ -76,6 +76,7 @@ import {
   clearSelectionProps,
   getAllSelectionProps,
   getSelectionRefCallCounts,
+  refreshSelectionImperativeHandle,
   simulateLinkedDataChange,
   simulateLinkedSelect,
   simulateLinkedSelectRange,
@@ -88,7 +89,6 @@ import {
 import {
   intersectionObserverMock,
   mockElementSize,
-  resizeObserverMock,
   setScrollContainerSize
 } from './setup'
 
@@ -564,67 +564,6 @@ const makeSelectionFromRange = (range: Range) =>
     toString: () => range.toString(),
     containsNode: (node: Node) => range.intersectsNode(node)
   }) as unknown as Selection
-
-const TEXT_MODE_ROW_HEIGHTS = [35, 55, 45] as const
-
-function TextModeVirtualizerHarness() {
-  const parentRef = useRef<HTMLDivElement>(null)
-  const virtualizer = useVirtualizer({
-    count: TEXT_MODE_ROW_HEIGHTS.length,
-    estimateSize: (index) => TEXT_MODE_ROW_HEIGHTS[index] ?? 40,
-    getScrollElement: () => parentRef.current,
-    measureElement: (element) => element.getBoundingClientRect().height,
-    overscan: 0
-  })
-
-  const setRowRef = useCallback(
-    (element: HTMLDivElement | null) => {
-      if (!element) {
-        return
-      }
-
-      const index = Number(element.dataset.index)
-      mockElementSize(element, {
-        width: 300,
-        height: TEXT_MODE_ROW_HEIGHTS[index] ?? 40
-      })
-      virtualizer.measureElement(element)
-    },
-    [virtualizer]
-  )
-
-  return (
-    <div
-      ref={parentRef}
-      data-testid='text-mode-scroll-container'
-      style={{ height: 80, overflow: 'auto', width: 300 }}
-    >
-      <div
-        data-testid='text-mode-virtual-spacer'
-        style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
-      >
-        {virtualizer.getVirtualItems().map((virtualItem) => (
-          <div
-            key={virtualItem.key}
-            ref={setRowRef}
-            data-index={virtualItem.index}
-            data-size={virtualItem.size}
-            data-start={virtualItem.start}
-            data-testid={`text-mode-row-${virtualItem.index}`}
-            style={{
-              height: TEXT_MODE_ROW_HEIGHTS[virtualItem.index],
-              position: 'absolute',
-              transform: `translateY(${virtualItem.start}px)`,
-              width: '100%'
-            }}
-          >
-            Row {virtualItem.index}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
 
 describe('selection primitive modules', () => {
   afterEach(() => {
@@ -3373,58 +3312,17 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('text mode virtualizer harness mounts with deterministic measurements', async () => {
-    render(<TextModeVirtualizerHarness />)
-    const scrollContainer = screen.getByTestId('text-mode-scroll-container')
-    setScrollContainerSize(scrollContainer, {
-      width: 300,
-      height: 80,
-      scrollHeight: 135
-    })
-
-    const firstRow = await screen.findByTestId('text-mode-row-0')
-
-    await waitFor(() => {
-      expect(firstRow).toHaveAttribute('data-size', '35')
-      expect(firstRow).toHaveAttribute('data-start', '0')
-      expect(firstRow).toHaveStyle({ transform: 'translateY(0px)' })
-      expect(screen.getByTestId('text-mode-row-1')).toHaveAttribute(
-        'data-start',
-        '35'
-      )
-      expect(screen.getByTestId('text-mode-virtual-spacer')).toHaveStyle({
-        height: '135px'
-      })
-    })
-  })
-
-  // ---- 文本模式虚拟化（T3）----
-  // IntermediateDocumentTextViewer 使用 @tanstack/react-virtual 的原生滚动虚拟化，
-  // overscan=3 会额外挂载可见范围前后各三页。以下测试验证：
-  // - 视口仅容纳一页时，page 1-4 存在，远端 page 5/20 不在 DOM 中
-  // - 根节点有正确的 data-testid
-  // - 文本模式不挂载 VirtualPaper（无 virtual-paper-wrapper）
-  it('text mode renders three overscan pages beyond the visible page', async () => {
-    // 20 页文档，确保虚拟化有意义
+  // ---- 文本模式固定页面窗口（T3）----
+  it('PDF text mode renders four pages and loads the next four-page window', async () => {
+    // Given: PDF Text Mode 有 20 个可加载页面。
     const { document } = makeDocument({ pageCount: 20 })
 
-    render(<IntermediateDocumentTextViewer document={document} />)
+    render(<IntermediateDocumentTextViewer document={document} isPdf />)
 
-    // 根节点存在且有 role='document'
+    // When: 首段加载完成。
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     expect(scrollEl).toHaveAttribute('role', 'document')
-
-    // 视口高度 600px < 估计页高 800px，确保虚拟范围只含第一页
     setScrollContainerSize(scrollEl, { width: 800, height: 600 })
-
-    // 等待页 1 进入虚拟范围
-    const page1 = await screen.findByTestId('intermediate-text-page-1')
-    expect(page1).toHaveAttribute('data-page-number', '1')
-
-    // 用真实高度 mock 页 1，让虚拟化器测量稳定（防止 jsdom 0 高度级联）
-    mockElementSize(page1, { width: 800, height: 800 })
-
-    // 虚拟化器稳定后：可见的 page 1 与后方三页在 DOM，更远页面不存在
     await waitFor(() => {
       expect(screen.getByTestId('intermediate-text-page-1')).toBeInTheDocument()
       expect(screen.getByTestId('intermediate-text-page-2')).toBeInTheDocument()
@@ -3436,10 +3334,65 @@ describe('IntermediateDocumentViewer', () => {
       ).not.toBeInTheDocument()
     })
 
-    // 文本模式不挂载 VirtualPaper
-    expect(
-      screen.queryByTestId('virtual-paper-wrapper')
-    ).not.toBeInTheDocument()
+    // Then: 点击下一段后只挂载 5-8 页，原窗口不会被异步测量反推滚动位置。
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    await screen.findByTestId('intermediate-text-page-5')
+    expect(screen.queryByTestId('intermediate-text-page-1')).toBeNull()
+    expect(screen.getByTestId('intermediate-text-page-8')).toBeInTheDocument()
+    expect(screen.queryByTestId('intermediate-text-page-9')).toBeNull()
+    expect(screen.getByRole('button', { name: '加载上一段' })).toBeEnabled()
+  })
+
+  it('non-PDF text mode loads exactly one page per window', async () => {
+    // Given: EPUB/MOBI 等非 PDF 文本格式有多个中间页。
+    const { document } = makeDocument({ pageCount: 3 })
+    render(<IntermediateDocumentTextViewer document={document} />)
+
+    // When: 首个窗口加载后点击下一段。
+    await screen.findByTestId('intermediate-text-page-1')
+    expect(screen.queryByTestId('intermediate-text-page-2')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+
+    // Then: DOM 中只有第二页，不存在虚拟占位页。
+    await screen.findByTestId('intermediate-text-page-2')
+    expect(screen.queryByTestId('intermediate-text-page-1')).toBeNull()
+    expect(screen.queryByTestId('intermediate-text-page-3')).toBeNull()
+    expect(screen.queryByTestId('virtual-paper-wrapper')).toBeNull()
+  })
+
+  it('text mode opens the previous segment at its bottom', async () => {
+    // Given: the reader has moved from the first one-page segment to the second.
+    const { document } = makeDocument({ pageCount: 3 })
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2000
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    await screen.findByText('Page 1 text')
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    await screen.findByText('Page 2 text')
+    scrollTo.mockClear()
+
+    // When: the user loads the previous segment.
+    fireEvent.click(screen.getByRole('button', { name: '加载上一段' }))
+
+    // Then: the previous segment mounts with the viewport aligned to its bottom.
+    await screen.findByText('Page 1 text')
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 1400 })
+    })
   })
 
   it('PDF text mode marks every visible page boundary with its page number', async () => {
@@ -3535,17 +3488,32 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('text mode reading progress follows the virtual scroll position', async () => {
-    // Given: the Text viewer has twenty estimated 800px pages in a 600px viewport.
-    const { document } = makeDocument({ pageCount: 20 })
-    render(<IntermediateDocumentTextViewer document={document} />)
+  it('text mode reading progress follows native scrolling within a PDF window', async () => {
+    // Given: PDF Text Mode has four source pages mounted in one native window.
+    const { document } = makeDocument({ pageCount: 8 })
+    render(<IntermediateDocumentTextViewer document={document} isPdf={true} />)
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(scrollEl, {
       width: 800,
       height: 600,
-      scrollHeight: 16000
+      scrollHeight: 3200
     })
-    await screen.findByTestId('intermediate-text-page-1')
+    const mountedPages = await Promise.all(
+      [1, 2, 3, 4].map((pageNumber) =>
+        screen.findByTestId(`intermediate-text-page-${pageNumber}`)
+      )
+    )
+    mountedPages.forEach((pageElement, index) => {
+      Object.defineProperty(pageElement, 'getBoundingClientRect', {
+        configurable: true,
+        value: () =>
+          DOMRect.fromRect({
+            y: index * 800 - scrollEl.scrollTop,
+            width: 800,
+            height: 800
+          })
+      })
+    })
     const progress = await screen.findByRole('slider', {
       name: '文本阅读进度'
     })
@@ -3555,25 +3523,34 @@ describe('IntermediateDocumentViewer', () => {
     expect(progress).toHaveAttribute('data-visible', 'false')
     expect(progressLabel).toHaveAttribute('data-visible', 'false')
 
-    // When: native scrolling moves the TanStack virtualizer to page 10.
+    // When: native scrolling crosses from PDF page 1 into page 2.
     act(() => {
-      scrollEl.scrollTop = 7200
+      scrollEl.scrollTop = 850
       scrollEl.dispatchEvent(new Event('scroll'))
     })
 
-    // Then: the slider and its transient label expose the actual visible page number.
+    // Then: the slider exposes the actual page and its position inside that page segment.
     await waitFor(() => {
       expect(progress).toHaveAttribute('aria-orientation', 'vertical')
-      expect(progress).toHaveAttribute('aria-valuenow', '10')
-      expect(progress).toHaveAttribute('data-visible', 'true')
-      expect(within(progress).getByText('第 10 页')).toHaveAttribute(
-        'data-visible',
-        'true'
-      )
+      expect(progress).toHaveAttribute('aria-valuenow', '2')
+      expect(
+        progress.querySelector('.hamster-reader__reading-progress-position')
+      ).toHaveStyle({
+        top: 'clamp(1px, 13.28125%, calc(100% - 1px))'
+      })
     })
 
-    // Then: brief virtualizer sync changes cannot hide the page feedback while
-    // the reader is still within the 500ms scrolling-feedback window.
+    // When: scrolling continues after the page and segment position settle.
+    act(() => {
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+
+    // Then: feedback stays visible during the 500ms native scrolling window.
+    expect(progress).toHaveAttribute('data-visible', 'true')
+    expect(within(progress).getByText('第 2 页')).toHaveAttribute(
+      'data-visible',
+      'true'
+    )
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 300))
     })
@@ -3618,33 +3595,33 @@ describe('IntermediateDocumentViewer', () => {
     setScrollContainerSize(scrollEl, {
       width: 800,
       height: 600,
-      scrollHeight: 8000
+      scrollHeight: 800
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: vi.fn()
     })
 
-    // Then: restoration seeks page 5 without first persisting the default page 1.
+    // Then: restoration mounts page 5 without first persisting the default page 1.
     const progress = await screen.findByRole('slider', {
       name: '文本阅读进度'
     })
     await waitFor(() => {
       expect(progress).toHaveAttribute('aria-valuenow', '5')
-      expect(scrollEl.scrollTop).toBe(3200)
+      expect(screen.getByTestId('intermediate-text-page-5')).toBeInTheDocument()
+      expect(screen.queryByTestId('intermediate-text-page-1')).toBeNull()
     })
 
-    // When: the restored page mounts visible text and reports a late measurement.
+    // When: the restored page mounts visible text in native flow.
     const restoredText = await screen.findByText('Page 5 text')
     mockElementSize(restoredText, { width: 100, height: 20, top: 0 })
-    resizeObserverMock.trigger(screen.getByTestId('intermediate-text-page-5'))
     await act(async () => Promise.resolve())
 
     // Then: initial external restoration remains silent after concrete text exists.
     expect(onTextReadingProgressChange).not.toHaveBeenCalled()
 
-    // When: the user scrolls onward to page 6.
-    act(() => {
-      scrollEl.dispatchEvent(new WheelEvent('wheel'))
-      scrollEl.scrollTop = 4200
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    // When: the user loads page 6.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
     await waitFor(() => {
       expect(progress).toHaveAttribute('aria-valuenow', '6')
     })
@@ -3666,11 +3643,11 @@ describe('IntermediateDocumentViewer', () => {
       />
     )
 
-    // Then: the echo preserves the user's offset within page 6 instead of seeking its top.
-    await waitFor(() => {
-      expect(scrollEl.scrollTop).toBe(4200)
-      expect(scrollTo).toHaveBeenCalledTimes(1)
-    })
+    // Then: the echo keeps the same page window without a second seek.
+    await screen.findByTestId('intermediate-text-page-6')
+    const seekCountAfterUserNavigation = scrollTo.mock.calls.length
+    await act(async () => Promise.resolve())
+    expect(scrollTo).toHaveBeenCalledTimes(seekCountAfterUserNavigation)
 
     // When: the host later restores a different page-only position.
     onTextReadingProgressChange.mockClear()
@@ -3682,17 +3659,13 @@ describe('IntermediateDocumentViewer', () => {
       />
     )
 
-    // Then: every programmatic scroll synchronization remains silent.
-    await waitFor(() => expect(scrollEl.scrollTop).toBe(5600))
+    // Then: every programmatic window synchronization remains silent.
+    await screen.findByTestId('intermediate-text-page-8')
     await act(async () => Promise.resolve())
     expect(onTextReadingProgressChange).not.toHaveBeenCalled()
 
-    // When: a new wheel gesture scrolls beyond the restored position.
-    act(() => {
-      scrollEl.dispatchEvent(new WheelEvent('wheel'))
-      scrollEl.scrollTop = 6400
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    // When: a new user action loads the next page after restore.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
     await waitFor(() => {
       expect(progress).toHaveAttribute('aria-valuenow', '9')
     })
@@ -3705,12 +3678,13 @@ describe('IntermediateDocumentViewer', () => {
   })
 
   it('text mode reports native reading progress only after scrollend', async () => {
-    // Given: Text Mode 已渲染可滚动内容，且浏览器支持原生 scrollend。
+    // Given: PDF Text Mode has four native pages and browser scrollend support.
     const onTextReadingProgressChange = vi.fn()
     const { document } = makeDocument({ pageCount: 10 })
     render(
       <IntermediateDocumentTextViewer
         document={document}
+        isPdf={true}
         onTextReadingProgressChange={onTextReadingProgressChange}
       />
     )
@@ -3718,14 +3692,29 @@ describe('IntermediateDocumentViewer', () => {
     setScrollContainerSize(scrollEl, {
       width: 800,
       height: 600,
-      scrollHeight: 8000
+      scrollHeight: 3200
     })
-    await screen.findByTestId('intermediate-text-page-1')
+    const pages = await Promise.all(
+      [1, 2, 3, 4].map((pageNumber) =>
+        screen.findByTestId(`intermediate-text-page-${pageNumber}`)
+      )
+    )
+    pages.forEach((page, index) => {
+      Object.defineProperty(page, 'getBoundingClientRect', {
+        configurable: true,
+        value: () =>
+          DOMRect.fromRect({
+            y: index * 800 - scrollEl.scrollTop,
+            width: 800,
+            height: 800
+          })
+      })
+    })
     expect('onscrollend' in scrollEl).toBe(true)
 
     // When: 视口仍在滚动，仅触发 scroll。
     act(() => {
-      scrollEl.scrollTop = 3200
+      scrollEl.scrollTop = 850
       scrollEl.dispatchEvent(new Event('scroll'))
     })
     await act(
@@ -3743,10 +3732,10 @@ describe('IntermediateDocumentViewer', () => {
       scrollEl.dispatchEvent(new Event('scrollend'))
     })
 
-    // Then: Text Mode 只发布最终可见页。
+    // Then: Text Mode publishes only the final visible page.
     await waitFor(() => {
       expect(onTextReadingProgressChange).toHaveBeenLastCalledWith({
-        currentPageNumber: 5
+        currentPageNumber: 2
       })
     })
   })
@@ -3801,7 +3790,7 @@ describe('IntermediateDocumentViewer', () => {
     })
     onTextReadingProgressChange.mockClear()
 
-    // When: the controlled host restores the anchor before ResizeObserver reports the page height.
+    // When: the controlled host restores the anchor before the page reaches its final height.
     rerender(
       <IntermediateDocumentTextViewer
         document={document}
@@ -3817,9 +3806,8 @@ describe('IntermediateDocumentViewer', () => {
       configurable: true,
       value: () => DOMRect.fromRect({ width: 800, height: 1600 })
     })
-    resizeObserverMock.trigger(page)
 
-    // Then: measuring the current page does not push the restored text away from the viewport top.
+    // Then: native flow re-layout does not push the restored text away from the viewport top.
     await act(async () => Promise.resolve())
     expect(scrollEl.scrollTop).toBe(1200)
     expect(onTextReadingProgressChange).not.toHaveBeenCalled()
@@ -3911,16 +3899,15 @@ describe('IntermediateDocumentViewer', () => {
     await screen.findByText(secondAnchor.text)
     await waitFor(() => expect(scrollEl.scrollTop).toBe(900))
 
-    // When: the new document reports its first real page height after alignment.
+    // When: the new document reaches its final page height after alignment.
     const secondPage = screen.getByTestId('intermediate-text-page-1')
     expect(secondPage).not.toBe(firstPage)
     Object.defineProperty(secondPage, 'getBoundingClientRect', {
       configurable: true,
       value: () => DOMRect.fromRect({ width: 800, height: 1600 })
     })
-    resizeObserverMock.trigger(secondPage)
 
-    // Then: the previous document's page-size cache cannot displace the new anchor.
+    // Then: the previous document cannot displace the new anchor.
     await act(async () => Promise.resolve())
     expect(scrollEl.scrollTop).toBe(900)
     rectSpy.mockRestore()
@@ -3959,18 +3946,13 @@ describe('IntermediateDocumentViewer', () => {
     )
     const secondText = await screen.findByText('Second doc')
     mockElementSize(secondText, { width: 100, height: 20, top: 0 })
-    resizeObserverMock.trigger(screen.getByTestId('intermediate-text-page-1'))
     await act(async () => Promise.resolve())
 
-    // Then: text mount and late measurement cannot write the restore back.
+    // Then: text mount and native flow layout cannot write the restore back.
     expect(onTextReadingProgressChange).not.toHaveBeenCalled()
 
-    // When: a later wheel gesture moves to page 2.
-    act(() => {
-      scrollEl.dispatchEvent(new WheelEvent('wheel'))
-      scrollEl.scrollTop = 800
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    // When: a later user action loads page 2.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
     await waitFor(() => {
       expect(
         screen.getByRole('slider', { name: '文本阅读进度' })
@@ -3982,6 +3964,516 @@ describe('IntermediateDocumentViewer', () => {
     await waitFor(() => {
       expect(onTextReadingProgressChange).toHaveBeenCalled()
     })
+  })
+
+  it('PDF text mode scopes the active window and loaded content to the new document', async () => {
+    // Given: document A has navigated to its second four-page window.
+    const first = makeDocument({ pageCount: 8 })
+    const second = makeDocument({ pageCount: 8 })
+    first.pages
+      .get(5)
+      ?.getContent.mockResolvedValue([
+        makeText('first-document-page-5', 'First document page 5')
+      ])
+    second.pages
+      .get(2)
+      ?.getContent.mockResolvedValue([
+        makeText('second-document-page-2', 'Second document page 2')
+      ])
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={first.document}
+        isPdf={true}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+      />
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    await screen.findByText('First document page 5')
+
+    // When: the host swaps to document B and restores page 2 in its first window.
+    view.rerender(
+      <IntermediateDocumentTextViewer
+        document={second.document}
+        isPdf={true}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+        textReadingProgress={{ currentPageNumber: 2 }}
+      />
+    )
+
+    // Then: the first render and preload use B's [1, 2, 3, 4] window only.
+    await screen.findByText('Second document page 2')
+    expect(second.document.getPageByPageNumber).toHaveBeenCalledWith(1)
+    expect(second.document.getPageByPageNumber).toHaveBeenCalledWith(2)
+    expect(second.document.getPageByPageNumber).toHaveBeenCalledWith(3)
+    expect(second.document.getPageByPageNumber).toHaveBeenCalledWith(4)
+    expect(second.document.getPageByPageNumber).not.toHaveBeenCalledWith(5)
+    expect(screen.queryByText('First document page 5')).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-text-page-5')
+    ).not.toBeInTheDocument()
+  })
+
+  it('text mode keeps the committed document scope when a replacement render is interrupted', async () => {
+    // Given: document A has an unresolved request and document B suspends after its Viewer renders.
+    const first = makeDocument({ pageCount: 1 })
+    const second = makeDocument({ pageCount: 1 })
+    let resolveFirstContent: (content: IntermediateText[]) => void = () => {}
+    const firstContentPromise = new Promise<IntermediateText[]>((resolve) => {
+      resolveFirstContent = resolve
+    })
+    first.pages.get(1)?.getContent.mockReturnValue(firstContentPromise)
+    const suspendedRender = new Promise<never>(() => {})
+    const onReplacementRenderSuspended = vi.fn()
+    let setDocument: (document: IntermediateDocument) => void = () => {}
+
+    function SuspendAfterViewer({ active }: { readonly active: boolean }) {
+      if (!active) return null
+      onReplacementRenderSuspended()
+      throw suspendedRender
+    }
+
+    function InterruptibleDocumentViewer() {
+      const [currentDocument, setCurrentDocument] = useState(first.document)
+      setDocument = setCurrentDocument
+      const isReplacement = currentDocument === second.document
+      return (
+        <>
+          <IntermediateDocumentTextViewer
+            document={currentDocument}
+            pageLoadConcurrency={1}
+            pagePreloadRadius={0}
+          />
+          <SuspendAfterViewer active={isReplacement} />
+        </>
+      )
+    }
+
+    render(
+      <Suspense fallback={<div>Replacement loading</div>}>
+        <InterruptibleDocumentViewer />
+      </Suspense>
+    )
+    await waitFor(() => {
+      expect(first.pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+    })
+
+    // When: a transition renders B but suspends before that replacement can commit.
+    await act(async () => {
+      startTransition(() => setDocument(second.document))
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(onReplacementRenderSuspended).toHaveBeenCalled()
+    })
+
+    // Then: the abandoned render has not started B's queue or replaced A's committed async scope.
+    expect(second.document.getPageByPageNumber).not.toHaveBeenCalled()
+    await act(async () => {
+      resolveFirstContent([
+        makeText('committed-document-a', 'Committed document A')
+      ])
+      await firstContentPromise
+    })
+    await screen.findByText('Committed document A')
+    expect(second.document.getPageByPageNumber).not.toHaveBeenCalled()
+  })
+
+  it('text mode keeps a pending image anchor when a replacement render is interrupted', async () => {
+    // Given: committed document A is waiting for an image before restoring a precise anchor.
+    const anchor = {
+      pageNumber: 1,
+      textId: 'interrupted-image-anchor',
+      text: 'Committed anchor text',
+      offset: 3
+    } as const
+    const image = {
+      id: 'interrupted-image',
+      src: '/interrupted-image.png',
+      alt: 'Interrupted anchor illustration',
+      polygon: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100]
+      ],
+      opacity: 1
+    } as IntermediateImage
+    const firstPage = {
+      paragraphs: [],
+      getContent: vi.fn(
+        async (): Promise<IntermediateContent[]> => [
+          image,
+          makeText(anchor.textId, anchor.text)
+        ]
+      )
+    }
+    const firstDocument = {
+      id: 'interrupted-anchor-a',
+      title: 'Interrupted Anchor A',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: vi.fn(() => ({ x: 200, y: 300 })),
+      getPageByPageNumber: vi.fn(() => Promise.resolve(firstPage))
+    } as unknown as IntermediateDocument
+    const second = makeDocument({ pageCount: 1 })
+    const suspendedRender = new Promise<never>(() => {})
+    const onReplacementRenderSuspended = vi.fn()
+    let showReplacement: () => void = () => {}
+
+    function SuspendAfterViewer({ active }: { readonly active: boolean }) {
+      if (active) {
+        onReplacementRenderSuspended()
+        throw suspendedRender
+      }
+      return null
+    }
+
+    function InterruptibleAnchorViewer() {
+      const [replacementVisible, setReplacementVisible] = useState(false)
+      showReplacement = () => setReplacementVisible(true)
+      return (
+        <>
+          <IntermediateDocumentTextViewer
+            document={replacementVisible ? second.document : firstDocument}
+            pagePreloadRadius={0}
+            textReadingProgress={
+              replacementVisible
+                ? { currentPageNumber: 1 }
+                : { currentPageNumber: 1, anchor }
+            }
+          />
+          <SuspendAfterViewer active={replacementVisible} />
+        </>
+      )
+    }
+
+    render(
+      <Suspense fallback={<div>Replacement loading</div>}>
+        <InterruptibleAnchorViewer />
+      </Suspense>
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1800
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    const renderedImage = await screen.findByRole('img', {
+      name: 'Interrupted anchor illustration'
+    })
+    Object.defineProperty(renderedImage, 'complete', {
+      configurable: true,
+      value: false
+    })
+    const targetText = screen.getByText(anchor.text)
+    mockElementSize(scrollEl, { width: 800, height: 600, top: 0 })
+    mockElementSize(targetText, { width: 120, height: 20, top: 730 })
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    // When: document B changes the progress identity but suspends before commit.
+    await act(async () => {
+      startTransition(showReplacement)
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(onReplacementRenderSuspended).toHaveBeenCalled()
+    })
+    fireEvent.load(renderedImage)
+
+    // Then: A still owns the pending request and aligns after its image settles.
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenLastCalledWith({ behavior: 'auto', top: 730 })
+    })
+    expect(second.document.getPageByPageNumber).not.toHaveBeenCalled()
+  })
+
+  it('text mode keeps the committed forwarded selection ref when a replacement render is interrupted', async () => {
+    // Given: document A has committed a mounted Selection and exposed its public ref.
+    clearSelectionProps()
+    const first = makeDocument({ pageCount: 1 })
+    const second = makeDocument({ pageCount: 1 })
+    const forwardedRefs: ReaderSelectionRef[] = []
+    const suspendedRender = new Promise<never>(() => {})
+    let showReplacement: () => void = () => {}
+
+    function SuspendReplacement({ active }: { readonly active: boolean }) {
+      if (active) throw suspendedRender
+      return null
+    }
+
+    function InterruptibleSelectionViewer() {
+      const [replacementVisible, setReplacementVisible] = useState(false)
+      showReplacement = () => setReplacementVisible(true)
+      return (
+        <>
+          <IntermediateDocumentTextViewer
+            document={replacementVisible ? second.document : first.document}
+            selectionRef={(selectionRef) => {
+              if (selectionRef) forwardedRefs.push(selectionRef)
+            }}
+          />
+          <SuspendReplacement active={replacementVisible} />
+        </>
+      )
+    }
+
+    render(
+      <Suspense fallback={<div>Replacement loading</div>}>
+        <InterruptibleSelectionViewer />
+      </Suspense>
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const committedSelectionRef = forwardedRefs.at(-1)
+    const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
+
+    // When: B is abandoned, then A's child refreshes its imperative handle alone.
+    await act(async () => {
+      startTransition(showReplacement)
+      await Promise.resolve()
+    })
+    act(() => refreshSelectionImperativeHandle(runtimeSelectionId))
+
+    // Then: the forwarded API still belongs to committed document A.
+    expect(forwardedRefs.at(-1)).toBe(committedSelectionRef)
+    clearSelectionProps()
+  })
+
+  it('text mode aligns a restored page only after its flow image settles', async () => {
+    // Given: controlled progress targets a page whose inline image has not loaded yet.
+    const image = {
+      id: 'late-flow-image',
+      src: '/late-flow-image.png',
+      alt: 'Late flow illustration',
+      polygon: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100]
+      ],
+      opacity: 1
+    } as IntermediateImage
+    const page = {
+      paragraphs: [],
+      getContent: vi.fn(async (): Promise<IntermediateContent[]> => [image])
+    }
+    const imageDocument = {
+      id: 'late-flow-image-document',
+      title: 'Late Flow Image',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: vi.fn(() => ({ x: 200, y: 300 })),
+      getPageByPageNumber: vi.fn(() => Promise.resolve(page))
+    } as unknown as IntermediateDocument
+    render(
+      <IntermediateDocumentTextViewer
+        document={imageDocument}
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1600
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    const renderedImage = await screen.findByRole('img', {
+      name: 'Late flow illustration'
+    })
+    Object.defineProperty(renderedImage, 'complete', {
+      configurable: true,
+      value: false
+    })
+    const pageElement = screen.getByTestId('intermediate-text-page-1')
+    mockElementSize(scrollEl, { width: 800, height: 600, top: 0 })
+    mockElementSize(pageElement, { width: 800, height: 1200, top: 420 })
+
+    // When: text content is present but the image has not reached load/error.
+    await act(async () => Promise.resolve())
+
+    // Then: native alignment remains pending instead of committing stale geometry.
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    // When: the image settles and the final page geometry is available.
+    fireEvent.load(renderedImage)
+
+    // Then: media settlement retries and commits the final native alignment.
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenLastCalledWith({ behavior: 'auto', top: 420 })
+    })
+  })
+
+  it.each(['load', 'error'] as const)(
+    'text mode retries a precise anchor after its flow image emits %s',
+    async (settledEvent) => {
+      // Given: a precise anchor shares a flow page with an unsettled image.
+      const anchor = {
+        pageNumber: 1,
+        textId: 'late-image-anchor',
+        text: 'Anchored after image',
+        offset: 5
+      } as const
+      const image = {
+        id: 'anchor-flow-image',
+        src: '/anchor-flow-image.png',
+        alt: 'Anchor flow illustration',
+        polygon: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100]
+        ],
+        opacity: 1
+      } as IntermediateImage
+      const page = {
+        paragraphs: [],
+        getContent: vi.fn(
+          async (): Promise<IntermediateContent[]> => [
+            image,
+            makeText(anchor.textId, anchor.text)
+          ]
+        )
+      }
+      const imageDocument = {
+        id: `anchor-flow-${settledEvent}`,
+        title: 'Anchor Flow Image',
+        pageCount: 1,
+        pageNumbers: [1],
+        getPageSizeByPageNumber: vi.fn(() => ({ x: 200, y: 300 })),
+        getPageByPageNumber: vi.fn(() => Promise.resolve(page))
+      } as unknown as IntermediateDocument
+      const view = render(
+        <IntermediateDocumentTextViewer document={imageDocument} />
+      )
+      const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+      setScrollContainerSize(scrollEl, {
+        width: 800,
+        height: 600,
+        scrollHeight: 1800
+      })
+      const scrollTo = vi.fn()
+      Object.defineProperty(scrollEl, 'scrollTo', {
+        configurable: true,
+        value: scrollTo
+      })
+      const renderedImage = await screen.findByRole('img', {
+        name: 'Anchor flow illustration'
+      })
+      Object.defineProperty(renderedImage, 'complete', {
+        configurable: true,
+        value: false
+      })
+      const targetText = screen.getByText(anchor.text)
+      mockElementSize(scrollEl, { width: 800, height: 600, top: 0 })
+      mockElementSize(targetText, {
+        width: 120,
+        height: 20,
+        top: 760
+      })
+
+      // When: the host requests the anchor before the image reaches a terminal state.
+      view.rerender(
+        <IntermediateDocumentTextViewer
+          document={imageDocument}
+          textReadingProgress={{ currentPageNumber: 1, anchor }}
+        />
+      )
+      await act(async () => Promise.resolve())
+
+      // Then: alignment remains pending until the final media geometry is known.
+      expect(scrollTo).not.toHaveBeenCalled()
+
+      // When: the image settles through load or error.
+      fireEvent[settledEvent](renderedImage)
+
+      // Then: the precise anchor is retried against the final DOM position.
+      await waitFor(() => {
+        expect(scrollTo).toHaveBeenLastCalledWith({
+          behavior: 'auto',
+          top: 760
+        })
+      })
+    }
+  )
+
+  it('text mode rail wheel cancels a pending image alignment', async () => {
+    // Given: a controlled page alignment is waiting for its flow image.
+    const image = {
+      id: 'rail-cancel-image',
+      src: '/rail-cancel-image.png',
+      alt: 'Rail cancel illustration',
+      polygon: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100]
+      ],
+      opacity: 1
+    } as IntermediateImage
+    const page = {
+      paragraphs: [],
+      getContent: vi.fn(async (): Promise<IntermediateContent[]> => [image])
+    }
+    const imageDocument = {
+      id: 'rail-cancel-document',
+      title: 'Rail Cancel',
+      pageCount: 1,
+      pageNumbers: [1],
+      getPageSizeByPageNumber: vi.fn(() => ({ x: 200, y: 300 })),
+      getPageByPageNumber: vi.fn(() => Promise.resolve(page))
+    } as unknown as IntermediateDocument
+    render(
+      <IntermediateDocumentTextViewer
+        document={imageDocument}
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 1800
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    Object.defineProperty(scrollEl, 'scrollBy', {
+      configurable: true,
+      value: vi.fn()
+    })
+    const renderedImage = await screen.findByRole('img', {
+      name: 'Rail cancel illustration'
+    })
+    Object.defineProperty(renderedImage, 'complete', {
+      configurable: true,
+      value: false
+    })
+    const slider = screen.getByRole('slider', { name: '文本阅读进度' })
+
+    // When: the user wheels over the rail before the image settles.
+    fireEvent.wheel(slider, { deltaY: 120 })
+    fireEvent.load(renderedImage)
+    await act(async () => Promise.resolve())
+
+    // Then: the obsolete programmatic alignment cannot pull the viewport back.
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 
   it('text mode cancels a pending anchor restore when the host switches to page-only progress', async () => {
@@ -4135,12 +4627,8 @@ describe('IntermediateDocumentViewer', () => {
     })
     await screen.findByTestId('intermediate-text-page-1')
 
-    // When: the user scrolls to the next readable page after fallback completes.
-    act(() => {
-      scrollEl.dispatchEvent(new WheelEvent('wheel'))
-      scrollEl.scrollTop = 800
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    // When: the user loads the next readable page after fallback completes.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
     await waitFor(() => {
       expect(
         screen.getByRole('slider', { name: '文本阅读进度' })
@@ -4195,12 +4683,8 @@ describe('IntermediateDocumentViewer', () => {
       })
       await screen.findByTestId('intermediate-text-page-1')
 
-      // When: the user moves to a page that exposes a concrete text anchor.
-      act(() => {
-        scrollEl.dispatchEvent(new WheelEvent('wheel'))
-        scrollEl.scrollTop = 800
-        scrollEl.dispatchEvent(new Event('scroll'))
-      })
+      // When: the user loads a page that exposes a concrete text anchor.
+      fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
       finishNativeTextScroll(scrollEl)
 
       // Then: the unrenderable entry cannot leave progress capture pending forever.
@@ -4267,11 +4751,10 @@ describe('IntermediateDocumentViewer', () => {
     const addBookmark = screen.getByRole('button', { name: '新增书签' })
     await waitFor(() => expect(addBookmark).toBeEnabled())
 
-    // When: TanStack Virtual synchronizes the measured height of the same page.
-    resizeObserverMock.trigger(screen.getByTestId('intermediate-text-page-1'))
+    // When: the same native-flow page finishes a later layout pass.
     await act(async () => Promise.resolve())
 
-    // Then: same-page virtualizer synchronization keeps the captured anchor usable.
+    // Then: the captured anchor remains usable without virtualizer synchronization.
     expect(addBookmark).toBeEnabled()
   })
 
@@ -4409,6 +4892,10 @@ describe('IntermediateDocumentViewer', () => {
       height: 600,
       scrollHeight: 800
     })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: vi.fn()
+    })
     await screen.findByTestId('intermediate-text-page-1')
     fireEvent.click(screen.getByRole('tab', { name: '书签' }))
     const bookmarkButton = screen.getByRole('button', {
@@ -4428,20 +4915,17 @@ describe('IntermediateDocumentViewer', () => {
     })
     expect(bookmarkButton).toHaveAttribute('aria-current', 'location')
 
-    // When: the user later scrolls to concrete text on the next page.
+    // When: the user later loads concrete text on the next page.
     await act(async () => {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve())
       })
     })
-    act(() => {
-      scrollEl.dispatchEvent(new WheelEvent('wheel'))
-      scrollEl.scrollTop = 800
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
     const readableText = await screen.findByText('Readable page')
     mockElementSize(readableText, { width: 100, height: 20, top: 0 })
     act(() => {
+      scrollEl.dispatchEvent(new WheelEvent('wheel'))
       scrollEl.dispatchEvent(new Event('scroll'))
     })
     finishNativeTextScroll(scrollEl)
@@ -4485,6 +4969,16 @@ describe('IntermediateDocumentViewer', () => {
         onToggleBookmark={vi.fn()}
       />
     )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 800
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: vi.fn()
+    })
     await screen.findByText('Second')
 
     // When: the user opens the bookmark tab without navigating again.
@@ -4496,7 +4990,7 @@ describe('IntermediateDocumentViewer', () => {
     ).toHaveAttribute('aria-current', 'location')
   })
 
-  it('text mode reading progress seeks through the TanStack virtualizer', async () => {
+  it('text mode reading progress switches to the selected native page window', async () => {
     // Given: the progress track spans 400px beside a twenty-page Text viewer.
     const { document } = makeDocument({ pageCount: 20 })
     const onTextReadingProgressChange = vi.fn()
@@ -4572,11 +5066,11 @@ describe('IntermediateDocumentViewer', () => {
       )
     })
 
-    // Then: TanStack receives one page-index seek on release.
+    // Then: the selected one-page window mounts and receives one native page-top seek.
     await waitFor(() => {
       expect(scrollTo).toHaveBeenCalledTimes(1)
-      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 7200 })
-      expect(scrollEl.scrollTop).toBe(7200)
+      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 0 })
+      expect(scrollEl.scrollTop).toBe(0)
       expect(progress).toHaveAttribute('aria-valuenow', '10')
       expect(screen.getByText('第 10 页')).toBeInTheDocument()
     })
@@ -4747,45 +5241,30 @@ describe('IntermediateDocumentViewer', () => {
     )
   })
 
-  it('text mode keeps estimated height for empty page placeholders', async () => {
-    // Given: loaded pages have no text while their placeholders report a 22px DOM height.
+  it('text mode keeps empty pages in native flow without virtual placeholders', async () => {
+    // Given: every source page is empty.
     const { document, pages } = makeDocument({ pageCount: 20 })
     pages.forEach((page) => {
       page.getContent.mockResolvedValue([])
     })
-    const originalGetBoundingClientRect =
-      HTMLElement.prototype.getBoundingClientRect
-    const rectSpy = vi
-      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-      .mockImplementation(function getBoundingClientRect(this: HTMLElement) {
-        if (this.classList.contains('hamster-reader__intermediate-text-page')) {
-          return makeDomRect({ left: 0, top: 0, width: 800, height: 22 })
-        }
-        return originalGetBoundingClientRect.call(this)
-      })
 
-    // When: TanStack Virtual measures the initial empty page.
+    // When: Text Mode mounts the initial native page window.
     render(<IntermediateDocumentTextViewer document={document} />)
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(scrollEl, { width: 800, height: 600 })
 
-    // Then: temporary placeholder height cannot collapse the virtual scroll range.
+    // Then: only page 1 exists in normal flow, without virtual measurement metadata.
     await waitFor(() => {
-      expect(screen.getByTestId('intermediate-text-page-1')).toHaveAttribute(
-        'data-page-measurable',
-        'false'
-      )
-      expect(
-        screen.getByTestId('intermediate-text-page-1').parentElement
-      ).toHaveStyle({ height: '16000px' })
+      const page = screen.getByTestId('intermediate-text-page-1')
+      expect(page).not.toHaveAttribute('data-page-measurable')
+      expect(page.style.cssText).toBe('')
       expect(
         screen.queryByTestId('intermediate-text-page-20')
       ).not.toBeInTheDocument()
     })
-    rectSpy.mockRestore()
   })
 
-  it('text mode preloads three adjacent pages while rendering only visible pages', async () => {
+  it('non-PDF text mode preloads three segments while mounting one page', async () => {
     const pageNumbers = Array.from({ length: 20 }, (_, index) => index + 1)
     const thumbnailSpies = new Map<number, ReturnType<typeof vi.fn>>()
     const getContentSpies = new Map<number, ReturnType<typeof vi.fn>>()
@@ -4829,15 +5308,16 @@ describe('IntermediateDocumentViewer', () => {
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(scrollEl, { width: 800, height: 600 })
 
+    // Then: pages 1 through 4 are loaded, while only the active one-page segment is mounted.
     await waitFor(() => {
-      expect(screen.getByText('Visible page 1')).toBeInTheDocument()
+      expect(document.getPageByPageNumber).toHaveBeenCalledTimes(4)
     })
-
+    expect(screen.getByText('Visible page 1')).toBeInTheDocument()
+    expect(screen.queryByText('Visible page 2')).not.toBeInTheDocument()
     expect(document.getPageByPageNumber).toHaveBeenCalledWith(1)
     expect(document.getPageByPageNumber).toHaveBeenCalledWith(2)
     expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
     expect(document.getPageByPageNumber).toHaveBeenCalledWith(4)
-    expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(5)
     expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(20)
     expect(getContentSpies.get(1)).toHaveBeenCalledTimes(1)
     thumbnailSpies.forEach((getThumbnail) => {
@@ -4848,13 +5328,14 @@ describe('IntermediateDocumentViewer', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('text mode retains a complete seven-page preload window around a middle page', async () => {
-    // Given：20 页文档只渲染一个虚拟页，且新窗口无需等待进入防抖。
+  it('PDF text mode preloads three segments around its mounted four pages', async () => {
+    // Given: a PDF starts with pages 1 through 4 mounted and three following segments preloaded.
     const { document } = makeDocument({ pageCount: 20 })
 
     render(
       <IntermediateDocumentTextViewer
         document={document}
+        isPdf={true}
         pageLoadEnterDelayMs={0}
       />
     )
@@ -4863,71 +5344,171 @@ describe('IntermediateDocumentViewer', () => {
     setScrollContainerSize(scrollEl, {
       width: 800,
       height: 600,
-      scrollHeight: 16000
+      scrollHeight: 3200
     })
-    await screen.findByText('Page 1 text')
-
-    // When：滚到中间的第 10 页，随后回到预加载窗口左边界第 7 页。
-    act(() => {
-      scrollEl.scrollTop = 7200
-      scrollEl.dispatchEvent(new Event('scroll'))
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: vi.fn()
     })
     await waitFor(() => {
-      for (let pageNumber = 7; pageNumber <= 13; pageNumber += 1) {
-        expect(document.getPageByPageNumber).toHaveBeenCalledWith(pageNumber)
-      }
+      expect(document.getPageByPageNumber).toHaveBeenCalledTimes(16)
     })
-    act(() => {
-      scrollEl.scrollTop = 4800
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    await screen.findByText('Page 4 text')
+    expect(screen.queryByText('Page 5 text')).not.toBeInTheDocument()
+    expect(document.getPageByPageNumber).toHaveBeenCalledWith(16)
+    expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(17)
 
-    // Then：第 7 页内容仍在缓存中并能立即用于虚拟行，不会被默认上限裁掉。
-    expect(await screen.findByText('Page 7 text')).toBeInTheDocument()
+    // When: the user loads the next segment.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+
+    // Then: only pages 5 through 8 remain mounted, while page 20 enters the expanded preload window.
+    await screen.findByText('Page 8 text')
+    expect(screen.queryByText('Page 1 text')).not.toBeInTheDocument()
+    expect(screen.getByText('Page 5 text')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(document.getPageByPageNumber).toHaveBeenCalledWith(20)
+    })
+    expect(screen.queryByText('Page 9 text')).not.toBeInTheDocument()
   })
 
-  it('text mode cancels delayed preload when a page leaves the virtual window', async () => {
-    // Given：初始窗口已加载，后续虚拟窗口使用默认 500ms 进入防抖。
+  it('text mode cancels delayed loading when a page leaves the native window', async () => {
+    // Given: page 2 is delayed after the user leaves page 1.
     const { document } = makeDocument({ pageCount: 20 })
 
-    render(<IntermediateDocumentTextViewer document={document} />)
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        pagePreloadRadius={0}
+      />
+    )
 
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(scrollEl, {
       width: 800,
       height: 600,
-      scrollHeight: 16000
+      scrollHeight: 800
+    })
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: vi.fn()
     })
     await screen.findByText('Page 1 text')
 
     vi.useFakeTimers()
     try {
-      // When：第 10 页窗口停留 499ms 后移到第 15 页窗口。
+      // When: page 2 is requested, then page 3 replaces it before the delay expires.
+      fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
       act(() => {
-        scrollEl.scrollTop = 7200
-        scrollEl.dispatchEvent(new Event('scroll'))
         vi.advanceTimersByTime(499)
       })
-      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(10)
-
-      act(() => {
-        scrollEl.scrollTop = 11200
-        scrollEl.dispatchEvent(new Event('scroll'))
-        vi.advanceTimersByTime(500)
-      })
+      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(2)
+      fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+      act(() => vi.advanceTimersByTime(500))
       await act(async () => {
         await Promise.resolve()
         await Promise.resolve()
       })
 
-      // Then：已离开的第 10 页没有迟到入队。
-      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(10)
+      // Then: page 2 never enters the queue, while page 3 becomes current.
+      expect(document.getPageByPageNumber).not.toHaveBeenCalledWith(2)
+      expect(document.getPageByPageNumber).toHaveBeenCalledWith(3)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('text mode keeps virtual row content matched to the scrolled page number', async () => {
+  it('text mode preserves the physical concurrency slot until a stale request settles', async () => {
+    // Given: page 1 is still extracting while a one-page Text window is active.
+    const { document, pages } = makeDocument({ pageCount: 3 })
+    let resolvePage1: (content: IntermediateText[]) => void = () => {}
+    const page1Promise = new Promise<IntermediateText[]>((resolve) => {
+      resolvePage1 = resolve
+    })
+    pages.get(1)?.getContent.mockReturnValue(page1Promise)
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        pageLoadConcurrency={1}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 800
+    })
+
+    await waitFor(() => {
+      expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+    })
+
+    // When: navigation replaces page 1 with page 2 before page 1 resolves.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    await act(async () => Promise.resolve())
+
+    // Then: the replacement waits because the unresolved physical request still owns the only slot.
+    expect(pages.get(2)?.getContent).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolvePage1([makeText('stale-page-1', 'Stale page 1 text')])
+      await page1Promise
+    })
+    await screen.findByText('Page 2 text')
+
+    // Then: settling the stale request releases the slot without repopulating the old window.
+    expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+    expect(screen.queryByText('Stale page 1 text')).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId('intermediate-text-page-1')
+    ).not.toBeInTheDocument()
+  })
+
+  it('text mode preserves physical concurrency through StrictMode effect replay', async () => {
+    // Given: StrictMode mounts a one-slot Text queue whose first page stays unresolved.
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    let resolvePage1: (content: IntermediateText[]) => void = () => {}
+    const page1Promise = new Promise<IntermediateText[]>((resolve) => {
+      resolvePage1 = resolve
+    })
+    pages.get(1)?.getContent.mockReturnValue(page1Promise)
+
+    render(
+      <StrictMode>
+        <IntermediateDocumentTextViewer
+          document={document}
+          pageLoadConcurrency={1}
+          pageLoadEnterDelayMs={0}
+          pagePreloadRadius={0}
+        />
+      </StrictMode>
+    )
+    await waitFor(() => {
+      expect(pages.get(1)?.getContent).toHaveBeenCalled()
+    })
+
+    // Then: effect cleanup/setup replay does not start a duplicate physical request.
+    expect(pages.get(1)?.getContent).toHaveBeenCalledTimes(1)
+
+    // When: navigation replaces page 1 while its request still owns the slot.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    await act(async () => Promise.resolve())
+
+    // Then: page 2 waits until the stale physical request truly settles.
+    expect(pages.get(2)?.getContent).not.toHaveBeenCalled()
+    await act(async () => {
+      resolvePage1([makeText('strict-stale-page-1', 'Strict stale page 1')])
+      await page1Promise
+    })
+    await screen.findByText('Page 2 text')
+    expect(pages.get(2)?.getContent).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Strict stale page 1')).not.toBeInTheDocument()
+  })
+
+  it('text mode keeps native window content matched to its page number', async () => {
     const { document } = makeDocument({ pageCount: 10 })
 
     render(
@@ -4949,10 +5530,10 @@ describe('IntermediateDocumentViewer', () => {
 
     await screen.findByText('Page 1 text')
 
-    act(() => {
-      scrollEl.scrollTop = 3200
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
 
     const page5 = await screen.findByTestId('intermediate-text-page-5')
     mockElementSize(page5, { width: 800, height: 800 })
@@ -4967,8 +5548,8 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('text mode derives current rectangles from canonical ranges when an overscan page mounts', async () => {
-    // Given: 第二页位于首屏的 overscan 窗口，并带有 Layout 形态高亮。
+  it('text mode derives current rectangles after a highlighted page window mounts', async () => {
+    // Given: the second page contains a highlight whose current Text rect must be derived.
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 3 })
     const range = makeReaderRange('page-2-highlight', 'Page 2', 2)
@@ -4980,12 +5561,14 @@ describe('IntermediateDocumentViewer', () => {
       value: vi.fn(() => clientRects)
     })
 
+    const selectionRef = createRef<ReaderSelectionRef>()
     render(
       <IntermediateDocumentTextViewer
         document={document}
         ranges={[range]}
         overlayRectType='px'
         pageLoadEnterDelayMs={0}
+        selectionRef={selectionRef}
       />
     )
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
@@ -4996,7 +5579,8 @@ describe('IntermediateDocumentViewer', () => {
     })
     await screen.findByText('Page 1 text')
 
-    // When: overscan 把第二页提前挂载到 DOM。
+    // When: the highlight navigation mounts page 2 in its native window.
+    act(() => selectionRef.current?.scrollToRange(range.id))
     await screen.findByText('Page 2 text')
 
     // Then: 持久 Layout rect 被忽略，同一 selectionId + offset 锚点获得当前 Text 布局矩形。
@@ -5134,8 +5718,8 @@ describe('IntermediateDocumentViewer', () => {
     ).toBe(true)
   })
 
-  it('text mode converts source font sizes to scaled rem values', async () => {
-    // Given: 原始字号为 12px，阅读器字号档位为“大” (1.5)。
+  it('text mode uses the reader font scale for reflowable text', async () => {
+    // Given: 可重排文本携带解析器内部字号，但阅读器字号档位为“大” (1.5)。
     const document = makePerLineTxtDocument(['Scaled text'], 12)
 
     // When: 文本模式按指定倍率渲染。
@@ -5145,9 +5729,9 @@ describe('IntermediateDocumentViewer', () => {
     const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
     setScrollContainerSize(scrollEl, { width: 800, height: 600 })
 
-    // Then: 12 / 16 * 1.5 = 1.125rem。
+    // Then: 可重排正文使用阅读器字号，不把解析器内部单位误当作 px 再缩放。
     expect(await screen.findByText('Scaled text')).toHaveStyle({
-      fontSize: '1.125rem',
+      fontSize: '1.5rem',
       lineHeight: '1.5'
     })
   })
@@ -5280,7 +5864,7 @@ describe('IntermediateDocumentViewer', () => {
     )
   })
 
-  it('text mode paginates large txt documents into virtual synthetic pages', async () => {
+  it('text mode paginates large txt documents into native synthetic page windows', async () => {
     const document = makePerLineTxtDocument(
       Array.from({ length: 501 }, (_, index) => `Line ${index + 1}`)
     )
@@ -5297,22 +5881,16 @@ describe('IntermediateDocumentViewer', () => {
     const page1 = await screen.findByTestId('intermediate-text-page-1')
     mockElementSize(page1, { width: 800, height: 800 })
 
-    act(() => {
-      scrollEl.scrollTop = 800
-      scrollEl.dispatchEvent(new Event('scroll'))
-    })
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
 
     const page2 = await screen.findByTestId('intermediate-text-page-2')
     mockElementSize(page2, { width: 800, height: 800 })
 
     await screen.findByText('Line 501')
 
-    expect(page1).toHaveAttribute('data-page-number', '1')
+    expect(page1).not.toBeInTheDocument()
     expect(page2).toHaveAttribute('data-page-number', '2')
-    expect(page1).not.toHaveClass(
-      'hamster-reader__intermediate-text-page--following'
-    )
-    expect(page2).toHaveClass(
+    expect(page2).not.toHaveClass(
       'hamster-reader__intermediate-text-page--following'
     )
     expect(screen.getByText('Line 501')).toHaveAttribute(
@@ -5488,7 +6066,7 @@ describe('IntermediateDocumentViewer', () => {
     }
   })
 
-  it('text mode mounts linked Selection only for loaded virtual pages', async () => {
+  it('text mode mounts linked Selection only for the current native window', async () => {
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 5 })
     const range = makeReaderRange(
@@ -5513,7 +6091,7 @@ describe('IntermediateDocumentViewer', () => {
     mockElementSize(page1, { width: 800, height: 800 })
 
     await waitFor(() => {
-      expect(getAllSelectionProps()).toHaveLength(4)
+      expect(getAllSelectionProps()).toHaveLength(1)
     })
     const runtimeSelectionId = requireRuntimeSelectionId(':page-1')
     const selectionProps = requireSelectionPropsById(runtimeSelectionId)
@@ -5535,7 +6113,7 @@ describe('IntermediateDocumentViewer', () => {
     expect(selectionProps.onHighlight).toBeUndefined()
     expect(selectionProps.rects).toBeUndefined()
     expect(selectionProps.onCreateRect).toBeUndefined()
-    expect(screen.getByTestId('intermediate-text-page-4')).toBeInTheDocument()
+    expect(screen.queryByTestId('intermediate-text-page-4')).toBeNull()
     expect(screen.queryByTestId('intermediate-text-page-5')).toBeNull()
     expect(
       screen.queryByTestId('virtual-paper-wrapper')
@@ -5589,6 +6167,112 @@ describe('IntermediateDocumentViewer', () => {
       expect.arrayContaining([resolvedHighlightPopover])
     )
     expectPopoverToContain(props.selectionPopover, selectionPopover)
+    clearSelectionProps()
+  })
+
+  it('text mode isolates an unresolved comment operation from the next document', async () => {
+    // Given: document A starts commenting a selected range whose id is reused by document B.
+    clearSelectionProps()
+    const first = makeDocument({ pageCount: 1 })
+    const second = makeDocument({ pageCount: 1 })
+    const sharedRange = makeReaderRange('shared-comment-range', 'Shared range')
+    let resolveFirstComment: (range: ReaderSelectionRange) => void = () => {}
+    const firstCommentPromise = new Promise<ReaderSelectionRange>((resolve) => {
+      resolveFirstComment = resolve
+    })
+    const onCommentHighlight = vi.fn(() => firstCommentPromise)
+    const onSelectRange = vi.fn()
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={first.document}
+        ranges={[sharedRange]}
+        selectedRangeId={sharedRange.id}
+        onCommentHighlight={onCommentHighlight}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const firstSelectionId = requireRuntimeSelectionId(':page-1')
+    const firstPopover = requireSelectionPropsById(firstSelectionId).popover
+    render(<>{firstPopover}</>)
+    const firstCommentButton = document.querySelector<HTMLButtonElement>(
+      '.hamster-reader__highlight-comment-button'
+    )
+    if (!firstCommentButton) throw new Error('Expected comment button')
+    fireEvent.click(firstCommentButton)
+    expect(onCommentHighlight).toHaveBeenCalledWith(sharedRange)
+
+    // When: the host commits document B before A's comment operation settles.
+    clearSelectionProps()
+    view.rerender(
+      <IntermediateDocumentTextViewer
+        document={second.document}
+        ranges={[sharedRange]}
+        selectedRangeId={sharedRange.id}
+        onCommentHighlight={onCommentHighlight}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const secondSelectionId = requireRuntimeSelectionId(':page-1')
+    const secondPopover = requireSelectionPropsById(secondSelectionId).popover
+    render(<>{secondPopover}</>)
+    const commentButtons = document.querySelectorAll<HTMLButtonElement>(
+      '.hamster-reader__highlight-comment-button'
+    )
+    const secondCommentButton = commentButtons.item(commentButtons.length - 1)
+
+    // Then: B is immediately operable and A's late completion cannot clear B.
+    expect(secondCommentButton).toBeEnabled()
+    await act(async () => {
+      resolveFirstComment(sharedRange)
+      await firstCommentPromise
+    })
+    expect(onSelectRange).not.toHaveBeenCalledWith(null)
+    clearSelectionProps()
+  })
+
+  it('text mode ignores a comment completion after unmount', async () => {
+    // Given: a selected comment operation is unresolved when the viewer unmounts.
+    clearSelectionProps()
+    const { document: runtimeDocument } = makeDocument({ pageCount: 1 })
+    const range = makeReaderRange('unmounted-comment-range', 'Unmounted range')
+    let resolveComment: (range: ReaderSelectionRange) => void = () => {}
+    const commentPromise = new Promise<ReaderSelectionRange>((resolve) => {
+      resolveComment = resolve
+    })
+    const onSelectRange = vi.fn()
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={runtimeDocument}
+        ranges={[range]}
+        selectedRangeId={range.id}
+        onCommentHighlight={() => commentPromise}
+        onSelectRange={onSelectRange}
+      />
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const popover = requireSelectionPropsById(
+      requireRuntimeSelectionId(':page-1')
+    ).popover
+    render(<>{popover}</>)
+    const commentButton = document.querySelector<HTMLButtonElement>(
+      '.hamster-reader__highlight-comment-button'
+    )
+    if (!commentButton) throw new Error('Expected comment button')
+    fireEvent.click(commentButton)
+
+    // When: the component unmounts before the host operation resolves.
+    view.unmount()
+    await act(async () => {
+      resolveComment(range)
+      await commentPromise
+    })
+
+    // Then: stale completion cannot emit selection changes to the unmounted host.
+    expect(onSelectRange).not.toHaveBeenCalledWith(null)
     clearSelectionProps()
   })
 
@@ -5845,22 +6529,31 @@ describe('IntermediateDocumentViewer', () => {
     })
   })
 
-  it('text mode selectionRef scrollToRange uses native virtual scrolling', async () => {
+  it('text mode selectionRef scrollToRange centers the target range after switching windows', async () => {
     clearSelectionProps()
     const { document } = makeDocument({ pageCount: 3 })
     const selectionRef = createRef<ReaderSelectionRef>()
-    const targetRange = makeReaderRange(
-      'text-mode-scroll-range',
-      'Scroll target',
-      3
+    const onTextReadingProgressChange = vi.fn()
+    const targetRange = makeReaderRange('text-mode-scroll-range', 'Page 3', 3)
+    const clientRects = Object.assign(
+      [new DOMRect(20, 900, 80, 20), new DOMRect(20, 1400, 120, 20)],
+      {
+      item: (index: number) => clientRects[index] ?? null
+      }
     )
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: vi.fn(() => clientRects)
+    })
 
     render(
       <IntermediateDocumentTextViewer
         document={document}
+        overlayRectType='px'
         ranges={[targetRange]}
         selectionRef={selectionRef}
         pageLoadEnterDelayMs={0}
+        onTextReadingProgressChange={onTextReadingProgressChange}
       />
     )
 
@@ -5875,15 +6568,6 @@ describe('IntermediateDocumentViewer', () => {
       expect(selectionRef.current).not.toBeNull()
     })
 
-    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      'scrollIntoView'
-    )
-    const scrollIntoView = vi.fn()
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: scrollIntoView
-    })
     const scrollTo = vi.fn((options?: ScrollToOptions) => {
       scrollEl.scrollTop = options?.top ?? 0
       scrollEl.dispatchEvent(new Event('scroll'))
@@ -5893,33 +6577,157 @@ describe('IntermediateDocumentViewer', () => {
       value: scrollTo
     })
 
-    try {
-      act(() => {
-        selectionRef.current?.scrollToRange(targetRange.id)
-      })
+    act(() => {
+      selectionRef.current?.scrollToRange(targetRange.id)
+    })
 
-      const page3 = await screen.findByTestId('intermediate-text-page-3')
-      mockElementSize(page3, { width: 800, height: 800, top: 1600 })
-
-      await waitFor(() => {
-        expect(scrollTo).toHaveBeenCalled()
-        expect(scrollIntoView).toHaveBeenCalledWith({
-          block: 'center',
-          inline: 'nearest'
-        })
-      })
-    } finally {
-      if (scrollIntoViewDescriptor) {
-        Object.defineProperty(
-          HTMLElement.prototype,
-          'scrollIntoView',
-          scrollIntoViewDescriptor
-        )
-      } else {
-        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
-      }
+    const page3 = await screen.findByTestId('intermediate-text-page-3')
+    mockElementSize(page3, { width: 800, height: 2000, top: 0 })
+    const selectionContainer = page3.querySelector<HTMLElement>(
+      '.hsn-selection-container'
+    )
+    if (!selectionContainer) {
+      throw new Error('Expected the target selection container')
     }
+    mockElementSize(selectionContainer, { width: 800, height: 2000, top: 0 })
 
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        behavior: 'auto',
+        top: 860
+      })
+      expect(onTextReadingProgressChange).toHaveBeenCalledWith({
+        currentPageNumber: 3
+      })
+    })
+
+    Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    clearSelectionProps()
+  })
+
+  it('PDF text mode aligns an initial page-only restore after its whole window loads', async () => {
+    // Given: page 6 is restored inside the PDF window [5, 6, 7, 8], while page 5 is still loading.
+    const { document, pages } = makeDocument({ pageCount: 8 })
+    let resolvePage5: ((content: IntermediateText[]) => void) | null = null
+    pages.get(5)?.getContent.mockImplementation(
+      () =>
+        new Promise<IntermediateText[]>((resolve) => {
+          resolvePage5 = resolve
+        })
+    )
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        isPdf={true}
+        pageLoadConcurrency={4}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+        textReadingProgress={{ currentPageNumber: 6 }}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 3200
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    const page6 = await screen.findByTestId('intermediate-text-page-6')
+    mockElementSize(scrollEl, { width: 800, height: 600, top: 0 })
+    mockElementSize(page6, { width: 800, height: 800, top: 800 })
+
+    // When: the preceding page finishes and the four-page window becomes geometrically stable.
+    await act(async () => {
+      resolvePage5?.([makeText('page-5-text', 'Page 5')])
+      await Promise.resolve()
+    })
+
+    // Then: the controlled page is aligned, even though reading state already started on page 6.
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        behavior: 'auto',
+        top: 800
+      })
+    })
+  })
+
+  it('text mode centers a pending range after its page content finishes loading', async () => {
+    // Given: 目标页已经切入窗口，但该页正文直到导航重试帧之后才完成加载。
+    clearSelectionProps()
+    const { document, pages } = makeDocument({ pageCount: 2 })
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const targetRange = makeReaderRange('deferred-text-range', 'Page 2', 2)
+    let resolvePageContent: ((content: IntermediateText[]) => void) | null =
+      null
+    pages.get(2)?.getContent.mockImplementation(
+      () =>
+        new Promise<IntermediateText[]>((resolve) => {
+          resolvePageContent = resolve
+        })
+    )
+    const clientRects = Object.assign([new DOMRect(20, 1200, 80, 20)], {
+      item: (index: number) => clientRects[index] ?? null
+    })
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: vi.fn(() => clientRects)
+    })
+
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        overlayRectType='px'
+        ranges={[targetRange]}
+        selectionRef={selectionRef}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2200
+    })
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => expect(selectionRef.current).not.toBeNull())
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+
+    // When: 宿主先发起 range 跳转，随后异步正文才提交到目标页 DOM。
+    act(() => selectionRef.current?.scrollToRange(targetRange.id))
+    await screen.findByTestId('intermediate-text-page-2')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    await act(async () => {
+      resolvePageContent?.([makeText('page-2-text', 'Page 2')])
+      await Promise.resolve()
+    })
+    const page2 = await screen.findByTestId('intermediate-text-page-2')
+    mockElementSize(page2, { width: 800, height: 1800, top: 0 })
+    const selectionContainer = page2.querySelector<HTMLElement>(
+      '.hsn-selection-container'
+    )
+    if (!selectionContainer) {
+      throw new Error('Expected the deferred selection container')
+    }
+    mockElementSize(selectionContainer, { width: 800, height: 1800, top: 0 })
+
+    // Then: 内容提交会重新尝试同一导航，并按真实字符矩形居中。
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        behavior: 'auto',
+        top: 910
+      })
+    })
+
+    Reflect.deleteProperty(Range.prototype, 'getClientRects')
     clearSelectionProps()
   })
 
@@ -6548,6 +7356,7 @@ describe('IntermediateDocumentViewer', () => {
     render(
       <IntermediateDocumentTextViewer
         document={document}
+        isPdf={true}
         initialLoadedPages={2}
         pageLoadConcurrency={2}
         pageLoadEnterDelayMs={0}
@@ -6763,7 +7572,7 @@ describe('IntermediateDocumentViewer', () => {
       expect(computed.getPropertyValue('white-space')).toBe('normal')
     })
 
-    it('text mode page inline style only contains dynamic transform', async () => {
+    it('text mode page uses native flow without inline layout styles', async () => {
       const { document } = makeDocument({ pageCount: 1 })
       render(<IntermediateDocumentTextViewer document={document} />)
 
@@ -6772,11 +7581,7 @@ describe('IntermediateDocumentViewer', () => {
 
       const page = await screen.findByTestId('intermediate-text-page-1')
 
-      const inlineStyle = page.style.cssText
-      expect(inlineStyle).toContain('transform')
-      expect(inlineStyle).not.toContain('padding')
-      expect(inlineStyle).not.toContain('position')
-      expect(inlineStyle).not.toContain('width')
+      expect(page.style.cssText).toBe('')
     })
 
     it('text mode selection wrappers stay content-height driven', async () => {
@@ -7793,7 +8598,7 @@ describe('IntermediateDocumentViewer', () => {
         { width: 800, height: 600 }
       )
 
-      // Then: 纯图片页可测量并显示正文图，且 Text Mode 不读取 thumbnail。
+      // Then: 纯图片页在原生文档流中显示正文图，且 Text Mode 不读取 thumbnail。
       const renderedImage = await screen.findByRole('img', {
         name: 'EPUB text-mode illustration'
       })
@@ -7801,10 +8606,9 @@ describe('IntermediateDocumentViewer', () => {
         'src',
         'data:image/png;base64,text-epub-image'
       )
-      expect(screen.getByTestId('intermediate-text-page-1')).toHaveAttribute(
-        'data-page-measurable',
-        'true'
-      )
+      const textPage = screen.getByTestId('intermediate-text-page-1')
+      expect(textPage).not.toHaveAttribute('data-page-measurable')
+      expect(textPage.style.cssText).toBe('')
       expect(page.getThumbnail).not.toHaveBeenCalled()
     })
 
@@ -8328,43 +9132,44 @@ describe('IntermediateDocumentViewer', () => {
         <IntermediateDocumentViewer document={doc1} initialLoadedPages={1} />
       )
 
-      // 等待 doc1 页 1 入队
+      // Given: doc1 页 1 已经占用唯一的真实加载槽位。
       await waitFor(() => {
         expect(doc1.getPageByPageNumber).toHaveBeenCalledWith(1)
       })
 
-      // 切换到 doc2
+      // When: 在 doc1 请求仍未完成时切换到 doc2。
       rerender(
         <IntermediateDocumentViewer document={doc2} initialLoadedPages={1} />
       )
 
-      // 等待 doc2 页 1 入队
-      await waitFor(() => {
-        expect(doc2.getPageByPageNumber).toHaveBeenCalledWith(1)
-      })
+      // Then: doc2 必须等待旧请求真实结束，不能突破物理并发上限。
+      expect(doc2.getPageByPageNumber).not.toHaveBeenCalled()
 
-      // 解析 doc1 页 1 的 stale 结果
+      // When: doc1 的 stale 请求完成并释放真实槽位。
       deferreds1
         .get(1)
         ?.resolveContent([
           makeText('stale-p1', 'Stale Page 1') as IntermediateContent
         ])
 
-      // 解析 doc2 页 1 的真实结果
+      // Then: doc2 页 1 才开始加载。
+      await waitFor(() => {
+        expect(doc2.getPageByPageNumber).toHaveBeenCalledWith(1)
+      })
+
+      // When: doc2 页 1 返回当前文档内容。
       deferreds2
         .get(1)
         ?.resolveContent([
           makeText('fresh-p1', 'Fresh Page 1') as IntermediateContent
         ])
 
-      // 等待 doc2 页 1 加载完成
+      // Then: 只渲染 doc2 的结果，doc1 的 stale 内容不会回填。
       await waitFor(() => {
         expect(screen.getByTestId('intermediate-page-1').textContent).toContain(
           'Fresh Page 1'
         )
       })
-
-      // doc1 的 stale 结果不应出现
       expect(screen.queryByText('Stale Page 1')).not.toBeInTheDocument()
     })
 

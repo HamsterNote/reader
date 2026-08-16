@@ -1,5 +1,4 @@
 import { DocxParser } from '@hamster-note/docx-parser'
-import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
@@ -74,9 +73,11 @@ vi.mock('@hamster-note/docx-parser', () => ({
   }
 }))
 
+const { epubEncode } = vi.hoisted(() => ({ epubEncode: vi.fn() }))
+
 vi.mock('@hamster-note/epub-parser', () => ({
-  EpubParser: {
-    encode: vi.fn()
+  EpubParser: class {
+    readonly encode = epubEncode
   }
 }))
 
@@ -519,13 +520,7 @@ function makeRuntimeDocument(title: string) {
 }
 
 function mockEpubParserSuccess(document: IntermediateDocument) {
-  const wrapper = Object.create(null) as Awaited<
-    ReturnType<typeof EpubParser.encode>
-  >
-  Object.defineProperty(wrapper, 'getIntermediateDocument', {
-    value: () => document
-  })
-  vi.mocked(EpubParser.encode).mockResolvedValue(wrapper)
+  epubEncode.mockResolvedValue(document)
 }
 
 function makeFile(name: string) {
@@ -674,7 +669,7 @@ describe('demo parser flow', () => {
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
-    expect(EpubParser.encode).not.toHaveBeenCalled()
+    expect(epubEncode).not.toHaveBeenCalled()
   })
 
   it('keeps a PDF in the ready state until the user clicks 加载文件', async () => {
@@ -909,7 +904,7 @@ describe('demo parser flow', () => {
         vi.mocked(PdfParser.encode).mockResolvedValue(document),
       assertParserCall: (file: File) => {
         expect(PdfParser.encode).toHaveBeenCalledWith(file, undefined)
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -924,7 +919,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(TxtParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
       }
@@ -938,7 +933,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(DocxParser.encodeToIntermediate).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
       }
@@ -950,7 +945,7 @@ describe('demo parser flow', () => {
       arrange: (document: IntermediateDocument) =>
         mockEpubParserSuccess(document),
       assertParserCall: (file: File) => {
-        expect(EpubParser.encode).toHaveBeenCalledWith(file)
+        expect(epubEncode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -966,7 +961,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       }
@@ -980,7 +975,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       }
@@ -1047,7 +1042,7 @@ describe('demo parser flow', () => {
       expect(createImagePreviewDocument).toHaveBeenCalledWith(uploadedFile)
       expect(findDocumentReaderProps()?.ocr).toBe(false)
       expect(PdfParser.encode).not.toHaveBeenCalled()
-      expect(EpubParser.encode).not.toHaveBeenCalled()
+      expect(epubEncode).not.toHaveBeenCalled()
       expect(TxtParser.encode).not.toHaveBeenCalled()
       expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -1160,7 +1155,7 @@ describe('demo parser flow', () => {
       ).toBeInTheDocument()
       expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
       expect(PdfParser.encode).not.toHaveBeenCalled()
-      expect(EpubParser.encode).not.toHaveBeenCalled()
+      expect(epubEncode).not.toHaveBeenCalled()
       expect(TxtParser.encode).not.toHaveBeenCalled()
       expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -1168,7 +1163,7 @@ describe('demo parser flow', () => {
   )
 
   it('shows an EPUB parse error when the EPUB parser rejects', async () => {
-    vi.mocked(EpubParser.encode).mockRejectedValue(new Error('bad epub'))
+    epubEncode.mockRejectedValue(new Error('bad epub'))
 
     render(<App />)
     const uploadedFile = makeFile('broken.epub')
@@ -1179,8 +1174,8 @@ describe('demo parser flow', () => {
       screen.getByText('Failed to parse EPUB: bad epub')
     ).toBeInTheDocument()
     expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
-    expect(EpubParser.encode).toHaveBeenCalledTimes(1)
-    expect(EpubParser.encode).toHaveBeenCalledWith(uploadedFile)
+    expect(epubEncode).toHaveBeenCalledTimes(1)
+    expect(epubEncode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
     expect(TxtParser.encode).not.toHaveBeenCalled()
     expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -1200,7 +1195,7 @@ describe('demo parser flow', () => {
     expect(TxtParser.encode).toHaveBeenCalledTimes(1)
     expect(TxtParser.encode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
-    expect(EpubParser.encode).not.toHaveBeenCalled()
+    expect(epubEncode).not.toHaveBeenCalled()
   })
 
   it('shows a parse error when the parser returns undefined', async () => {

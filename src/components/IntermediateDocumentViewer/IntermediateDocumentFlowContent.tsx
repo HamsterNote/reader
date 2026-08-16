@@ -20,6 +20,7 @@ type IntermediateDocumentFlowContentProps = {
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
   preserveSourceFontSize: boolean
+  onImageSettled?: (imageId: string) => void
 }
 
 type ContentRun =
@@ -135,7 +136,8 @@ export function IntermediateDocumentFlowContent({
   isPdf = false,
   setTextRef,
   fontScale,
-  preserveSourceFontSize
+  preserveSourceFontSize,
+  onImageSettled
 }: IntermediateDocumentFlowContentProps) {
   const flowContent = isPdf ? orderPdfContent(content) : content
   const sourceOffsets = isPdf ? createSourceOffsets(content) : undefined
@@ -145,6 +147,7 @@ export function IntermediateDocumentFlowContent({
         <IntermediateDocumentFlowImageContent
           key={`${pageNumber}:image:${run.image.id}`}
           images={[run.image]}
+          onImageSettled={onImageSettled}
         />
       )
     }

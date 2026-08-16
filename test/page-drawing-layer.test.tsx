@@ -58,6 +58,111 @@ describe('PageDrawingLayer', () => {
     expect(onChange.mock.calls[0]?.[0].strokes).toHaveLength(1)
   })
 
+  it('accepts pen input but ignores touch input in stylus-only mode', () => {
+    // Given: stylus-only drawing mode is enabled on the page layer.
+    const onChange = vi.fn<(nextValue: DrawingValue) => void>()
+    render(
+      <PageDrawingLayer
+        enabled={true}
+        pageId='page-1'
+        controllerData={{ ...controllerData, stylusMode: true }}
+        onControllerDataChange={vi.fn()}
+        value={{ strokes: [] }}
+        onChange={onChange}
+      />
+    )
+    const surface = screen.getByTestId('reader-painting-page-1')
+
+    // When: a finger gesture is followed by a pen stroke.
+    fireEvent.pointerDown(surface, {
+      button: 0,
+      clientX: 20,
+      clientY: 30,
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+    fireEvent.pointerMove(document, {
+      button: -1,
+      clientX: 40,
+      clientY: 30,
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+    fireEvent.pointerUp(document, {
+      clientX: 40,
+      clientY: 30,
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+    fireEvent.pointerDown(surface, {
+      button: 0,
+      clientX: 20,
+      clientY: 50,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+    fireEvent.pointerMove(document, {
+      button: -1,
+      clientX: 40,
+      clientY: 50,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+    fireEvent.pointerUp(document, {
+      clientX: 40,
+      clientY: 50,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+
+    // Then: only the pen stroke reaches persisted drawing state.
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange.mock.calls[0]?.[0].strokes).toHaveLength(1)
+  })
+
+  it('prevents native panning for pen input without blocking touch scrolling', () => {
+    // Given: stylus-only mode shares the page with browser-native touch scrolling.
+    render(
+      <PageDrawingLayer
+        enabled={true}
+        pageId='page-1'
+        controllerData={{ ...controllerData, stylusMode: true }}
+        onControllerDataChange={vi.fn()}
+      />
+    )
+    const surface = screen.getByTestId('reader-painting-page-1')
+
+    // When: a finger and a pen each start a gesture on the same surface.
+    const touchAllowed = fireEvent.pointerDown(surface, {
+      button: 0,
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+    fireEvent.pointerUp(document, {
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+    const penAllowed = fireEvent.pointerDown(surface, {
+      button: 0,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+    const penMoveAllowed = fireEvent.pointerMove(document, {
+      button: -1,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+    fireEvent.pointerUp(document, {
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+
+    // Then: touch keeps its browser default action, while pen cannot pan the viewport.
+    expect(touchAllowed).toBe(true)
+    expect(penAllowed).toBe(false)
+    expect(penMoveAllowed).toBe(false)
+  })
+
   it('does not commit a stroke when a second touch joins a pending first touch', () => {
     // Given: drawing is enabled and the first touch has moved below the draw threshold.
     const onChange = vi.fn<(nextValue: DrawingValue) => void>()

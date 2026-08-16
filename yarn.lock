@@ -466,10 +466,10 @@
     htmlparser2 "12.0.0"
     mammoth "1.12.0"
 
-"@hamster-note/epub-parser@0.3.0-beta.2":
-  version "0.3.0-beta.2"
-  resolved "https://registry.yarnpkg.com/@hamster-note/epub-parser/-/epub-parser-0.3.0-beta.2.tgz#1363660025e4215bee6a6f3b04efc3bc55a3c6d4"
-  integrity sha512-foJtQRiJMZkbjTPPAHweH29useFr84s4fKLSVEJfEwzufCVCRgCAMheJzJTsRl/MAJjkM7qgjUVoKbNo4J2c+Q==
+"@hamster-note/epub-parser@0.5.0":
+  version "0.5.0"
+  resolved "https://registry.yarnpkg.com/@hamster-note/epub-parser/-/epub-parser-0.5.0.tgz#c44148145f027ea8a172f771c3dc5523be9ed899"
+  integrity sha512-IuRFTOQv+JrWwcIgSTtry+hDxW6Ap/3GnwtiZcvDo6QESbcmpWYQ1yNDe0ds7178Bc/LuJeinihBXH1SJC/mXA==
   dependencies:
     "@hamster-note/document-parser" "0.3.1"
     "@hamster-note/types" "0.11.0-beta.1"
@@ -1027,18 +1027,6 @@
   dependencies:
     "@system-ui-js/multi-drag-core" "*"
     loglevel "^1.9.2"
-
-"@tanstack/react-virtual@^3.14.5":
-  version "3.14.5"
-  resolved "https://registry.yarnpkg.com/@tanstack/react-virtual/-/react-virtual-3.14.5.tgz#183c959aeb85448899dcb1a4da55213e5d4f6078"
-  integrity sha512-4EKRXh7zBLkbKbFmG3AUVkircuHd+7OdT1pocJSepxtfBd3qnrJgJ5rtPkRYyo9fmyVb2+pI2xPy5oYvMLQy6A==
-  dependencies:
-    "@tanstack/virtual-core" "3.17.3"
-
-"@tanstack/virtual-core@3.17.3":
-  version "3.17.3"
-  resolved "https://registry.yarnpkg.com/@tanstack/virtual-core/-/virtual-core-3.17.3.tgz#71ae7e658fe155392a2dcbf640035febdf2fdb05"
-  integrity sha512-8Np/TFELpI0ySuJoVmjvOrQYXH/8sTX0Biv9szhFhY39xOdAAY+smrMxjxOum/ux3eM8MUJQsEJ0/R0UpvC8dw==
 
 "@techstark/opencv-js@^4.10.0-release.1":
   version "4.10.0-release.1"

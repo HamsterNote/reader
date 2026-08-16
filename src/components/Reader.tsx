@@ -303,7 +303,7 @@ export type ReaderProps = {
   initialLoadedPages?: number
   pageLoadConcurrency?: number
   pageLoadEnterDelayMs?: number
-  /** 当前可见页前后预加载的页数，默认前后各 3 页。 */
+  /** Layout 模式按页、Text 模式按完整段预加载的前后范围，默认各 3。 */
   pagePreloadRadius?: number
   pageUnloadDelayMs?: number
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback

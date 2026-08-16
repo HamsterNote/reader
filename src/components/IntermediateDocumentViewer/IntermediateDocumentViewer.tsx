@@ -91,7 +91,10 @@ import { hasHighlightRects } from './highlightRectModes'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
 import { getReaderImageAlt } from './intermediateImage'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
-import type { ReaderLayoutZoom } from './nativeLayoutZoom'
+import {
+  type ReaderLayoutZoom,
+  resolveNativeLayoutTouchAction
+} from './nativeLayoutZoom'
 import { PageBrowser } from './PageBrowser'
 import {
   getCroppedPreviewPoint,
@@ -681,7 +684,7 @@ export type IntermediateDocumentViewerProps = {
    */
   pageLoadEnterDelayMs?: number
   /**
-   * 可见页前后预加载的页数。省略时默认前后各 `3` 页。
+   * Layout 模式按页、Text 模式按完整段预加载的前后范围。省略时默认各 `3`。
    */
   pagePreloadRadius?: number
   /**
@@ -3349,6 +3352,7 @@ type NativeLayoutViewportProps = Readonly<{
   containMarginTop: number | undefined
   containMarginBottom: number | undefined
   touchPanMode: ReaderTouchPanMode | undefined
+  stylusOnly: boolean
 }>
 
 function NativeLayoutViewport({
@@ -3357,14 +3361,15 @@ function NativeLayoutViewport({
   containMarginX,
   containMarginTop,
   containMarginBottom,
-  touchPanMode
+  touchPanMode,
+  stylusOnly
 }: NativeLayoutViewportProps) {
   return (
     <div
       className='virtual-paper-wrapper hamster-reader__native-layout-viewport'
       data-testid='native-layout-viewport'
       style={{
-        touchAction: touchPanMode === 'two-finger' ? 'none' : 'pan-x pan-y'
+        touchAction: resolveNativeLayoutTouchAction(touchPanMode, stylusOnly)
       }}
     >
       <div
@@ -4054,8 +4059,8 @@ function ViewerContent({
     handleHighlightPointerCancel
   } = useReaderHighlightDrag({
     viewerRootElement,
-    resolveHighlight: resolveHighlightDragTarget,
-    onDragHighlight
+    resolveItem: resolveHighlightDragTarget,
+    onDragItem: onDragHighlight
   })
 
   const enabledInteractions = useMemo(() => {
@@ -4450,6 +4455,7 @@ function ViewerContent({
               containMarginTop={containMarginTop}
               containMarginBottom={containMarginBottom}
               touchPanMode={touchPanMode}
+              stylusOnly={paintingControllerData.stylusMode === true}
             />
           )}
         </>

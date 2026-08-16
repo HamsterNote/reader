@@ -18,16 +18,16 @@ import type {
   ReaderSelectionRef
 } from '../../types/selection'
 import type { ReaderTouchPanMode } from '../IntermediateDocumentViewer'
+import {
+  BottomBarColorControls,
+  BottomBarHistoryControls,
+  BottomBarToolButtons,
+  DrawingBottomBarStack
+} from './DefaultBottomBarControls'
 import { DefaultBottomBarFontScaleControl } from './DefaultBottomBarFontScaleControl'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
 import { DefaultBottomBarModeControls } from './DefaultBottomBarModeControls'
 import { DefaultBottomBarZoomControl } from './DefaultBottomBarZoomControl'
-import {
-  BottomBarHistoryControls,
-  BottomBarToolButtons,
-  BottomBarColorControls,
-  DrawingBottomBarStack
-} from './DefaultBottomBarControls'
 import {
   DEFAULT_BOTTOM_BAR_TOOLS,
   type ReaderLayoutZoom
@@ -101,14 +101,20 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
       data-testid='tool-bottom-bar'
       style={{
         boxSizing: 'border-box',
+        flexWrap: width < 768 ? 'wrap' : 'nowrap',
+        justifyContent: width < 768 ? 'center' : undefined,
         maxWidth: 'calc(100% - 16px)',
-        overflowX: 'auto',
-        whiteSpace: 'nowrap'
+        overflowX: width < 768 ? 'hidden' : 'auto',
+        whiteSpace: width < 768 ? 'normal' : 'nowrap'
       }}
     >
       <BottomBarHistoryControls
         historyStatus={props.historyStatus}
         selectionRef={props.selectionRef}
+      />
+      <DefaultBottomBarFontScaleControl
+        fontScale={visibleFontScale}
+        menus={menus}
       />
       <PopoverSeparator />
       {props.layoutZoom !== undefined && (
@@ -214,10 +220,6 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           />
         </>
       )}
-      <DefaultBottomBarFontScaleControl
-        fontScale={visibleFontScale}
-        menus={menus}
-      />
     </Popover>
   )
 
@@ -232,7 +234,7 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           onPaintingControllerDataChange={props.onPaintingControllerDataChange}
         />
       ) : (
-        readerToolbar
+        <div className='hamster-reader__bottom-bar-stack'>{readerToolbar}</div>
       )}
       <DefaultBottomBarMenus
         fontScale={visibleFontScale}

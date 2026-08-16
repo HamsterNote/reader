@@ -356,6 +356,82 @@ describe('PageBrowser', () => {
     )
   })
 
+  it('drags highlight and bookmark items with their original public objects', () => {
+    // Given: 侧栏同时包含一个高亮与一个精确书签，并接入对应拖动回调。
+    const highlight = makeRange('range-drag', '可拖动高亮')
+    const bookmark: ReaderTextAnchor = {
+      pageNumber: 1,
+      textId: 'paragraph-drag',
+      text: '可拖动书签',
+      offset: 7
+    }
+    const onDragHighlight = vi.fn()
+    const onDragBookmark = vi.fn()
+    renderPageBrowser({
+      showPagesTab: false,
+      ranges: [highlight],
+      bookmarks: [bookmark],
+      onDragHighlight,
+      onDragBookmark
+    })
+
+    // When: 主鼠标分别从两个列表项移动超过正文高亮使用的 4px 阈值。
+    const highlightButton = screen.getByTestId(
+      'page-browser-highlight-range-drag'
+    )
+    if (!('elementFromPoint' in document)) {
+      Object.defineProperty(document, 'elementFromPoint', {
+        configurable: true,
+        value: vi.fn()
+      })
+    }
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(highlightButton)
+    fireEvent.pointerDown(highlightButton, {
+      pointerType: 'mouse',
+      pointerId: 41,
+      isPrimary: true,
+      button: 0,
+      clientX: 20,
+      clientY: 20
+    })
+    fireEvent.pointerMove(highlightButton, {
+      pointerType: 'mouse',
+      pointerId: 41,
+      isPrimary: true,
+      buttons: 1,
+      clientX: 25,
+      clientY: 20
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: '书签' }))
+    const bookmarkButton = screen.getByRole('button', {
+      name: '跳转到书签：可拖动书签'
+    })
+    vi.mocked(document.elementFromPoint).mockReturnValue(bookmarkButton)
+    fireEvent.pointerDown(bookmarkButton, {
+      pointerType: 'mouse',
+      pointerId: 42,
+      isPrimary: true,
+      button: 0,
+      clientX: 20,
+      clientY: 50
+    })
+    fireEvent.pointerMove(bookmarkButton, {
+      pointerType: 'mouse',
+      pointerId: 42,
+      isPrimary: true,
+      buttons: 1,
+      clientX: 25,
+      clientY: 50
+    })
+
+    // Then: 两类回调都收到列表中未经转换的原始对象。
+    expect(onDragHighlight).toHaveBeenCalledOnce()
+    expect(onDragHighlight).toHaveBeenCalledWith(highlight)
+    expect(onDragBookmark).toHaveBeenCalledOnce()
+    expect(onDragBookmark).toHaveBeenCalledWith(bookmark)
+  })
+
   it('confirms rectangle deletion and preserves marker color without navigating', async () => {
     // Given: a colored rectangle highlight and a sidebar delete capability.
     const onDeleteRect = vi.fn()

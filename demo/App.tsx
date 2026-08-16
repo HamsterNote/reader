@@ -232,8 +232,8 @@ export async function parseUploadedDocument(
       }
     case 'epub':
       try {
-        const epubDocument = await EpubParser.encode(file)
-        const document = await convertEpubDocumentForReader(epubDocument, file)
+        const epubDocument = await new EpubParser().encode(file)
+        const document = await convertEpubDocumentForReader(epubDocument)
         return { status: 'parsed', label: 'EPUB', document }
       } catch (error) {
         return {

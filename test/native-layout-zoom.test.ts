@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { computeCenteredScrollPosition } from '../src/components/IntermediateDocumentViewer/nativeLayoutZoom'
+import {
+  computeCenteredScrollPosition,
+  resolveNativeLayoutTouchAction
+} from '../src/components/IntermediateDocumentViewer/nativeLayoutZoom'
 
 describe('computeCenteredScrollPosition', () => {
   it('keeps the viewport center on the same content point after zooming', () => {
@@ -33,5 +36,29 @@ describe('computeCenteredScrollPosition', () => {
 
     // Then: the browser-compatible target does not request negative scrolling.
     expect(result).toEqual({ left: 0, top: 0 })
+  })
+})
+
+describe('resolveNativeLayoutTouchAction', () => {
+  it('keeps two-finger gesture routing when stylus-only drawing is disabled', () => {
+    // Given: two-finger panning is active in regular drawing mode.
+    const touchPanMode = 'two-finger'
+
+    // When: the native viewport touch action is resolved.
+    const result = resolveNativeLayoutTouchAction(touchPanMode, false)
+
+    // Then: browser one-finger panning remains reserved for the custom gesture.
+    expect(result).toBe('none')
+  })
+
+  it('allows one-finger page scrolling while stylus-only drawing is active', () => {
+    // Given: Layout Mode normally reserves touch gestures for two-finger panning.
+    const touchPanMode = 'two-finger'
+
+    // When: the drawing controller enters stylus-only mode.
+    const result = resolveNativeLayoutTouchAction(touchPanMode, true)
+
+    // Then: native one-finger scrolling takes precedence over the pan mode.
+    expect(result).toBe('pan-x pan-y')
   })
 })

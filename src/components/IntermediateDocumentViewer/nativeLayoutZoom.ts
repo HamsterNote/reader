@@ -12,6 +12,15 @@ export type NativeLayoutViewportMetrics = Readonly<{
   clientHeight: number
 }>
 
+export function resolveNativeLayoutTouchAction(
+  touchPanMode: 'single-finger' | 'two-finger' | undefined,
+  stylusOnly: boolean
+): 'none' | 'pan-x pan-y' {
+  return stylusOnly || touchPanMode !== 'two-finger'
+    ? 'pan-x pan-y'
+    : 'none'
+}
+
 /**
  * 缩放前先把视口中心换算为内容坐标，再用新缩放值还原滚动位置。
  * 这样页面中心处的内容在缩放前后会停留在相同的屏幕位置。

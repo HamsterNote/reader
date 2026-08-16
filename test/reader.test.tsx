@@ -517,7 +517,10 @@ describe('Reader public API', () => {
     const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
     const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
 
-    expect(bottomBar.parentElement).toHaveAttribute(
+    expect(bottomBar.parentElement).toHaveClass(
+      'hamster-reader__bottom-bar-stack'
+    )
+    expect(bottomBar.parentElement?.parentElement).toHaveAttribute(
       'data-testid',
       'reader-root'
     )

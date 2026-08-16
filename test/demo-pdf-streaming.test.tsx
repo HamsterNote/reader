@@ -6,14 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
 import {
-  createViewerLifetimeToken,
-  ViewerLifetimeBoundary
-} from '../demo/ViewerLifetimeBoundary'
-import {
   clearRecentFile,
   loadRecentFile,
   saveRecentFile
 } from '../demo/recentFileStorage'
+import {
+  createViewerLifetimeToken,
+  ViewerLifetimeBoundary
+} from '../demo/ViewerLifetimeBoundary'
 
 vi.mock('@hamster-note/pdf-parser', () => ({
   PdfParser: {
@@ -32,7 +32,9 @@ vi.mock('@hamster-note/docx-parser', () => ({
 }))
 
 vi.mock('@hamster-note/epub-parser', () => ({
-  EpubParser: { encode: vi.fn() }
+  EpubParser: class {
+    readonly encode = vi.fn()
+  }
 }))
 
 vi.mock('@hamster-note/markdown-parser', () => ({

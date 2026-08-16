@@ -1,6 +1,12 @@
 import type { DrawingValue } from '@hamster-note/painting'
 import { confirm } from '@hamster-note/components'
-import type { CSSProperties, KeyboardEvent, RefObject } from 'react'
+import type {
+  CSSProperties,
+  KeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  RefObject
+} from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ReaderSelectionRange,
@@ -15,6 +21,7 @@ import {
 import { PageBrowserDrawingPreview } from './PageBrowserDrawingPreview'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import { getBookmarkKey } from './textAnchor'
+import { useHighlightDrag } from './useHighlightDrag'
 import { usePageBrowserDrag } from './usePageBrowserDrag'
 
 type PageBrowserTab = 'pages' | 'highlights' | 'bookmarks'
@@ -68,6 +75,7 @@ type PageBrowserProps = {
   readonly onSelectRange?: (id: string | null) => void
   /** 点击高亮项时触发滚动定位到该 range。 */
   readonly onNavigateToRange?: (id: string) => void
+  readonly onDragHighlight?: (highlight: ReaderSelectionRange) => void
   /** 每个 rangeId 对应的评论数量，用于在高亮项上展示评论计数徽章。 */
   readonly commentCountByRangeId?: Readonly<Record<string, number>>
   /** 矩形框选列表，与 ranges 一起在高亮 tab 中展示。 */
@@ -90,6 +98,7 @@ type PageBrowserProps = {
   readonly currentPageNumber?: number
   readonly activeBookmarkKey?: string
   readonly onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  readonly onDragBookmark?: (bookmark: ReaderBookmark) => void
   readonly isBookmarkNavigationEnabled?: (bookmark: ReaderBookmark) => boolean
   readonly onToggleBookmark?: (bookmark: ReaderBookmark) => void
   readonly bookmarkedPageNumbers?: readonly number[]
@@ -386,6 +395,7 @@ export function PageBrowser({
   selectedRangeId,
   onSelectRange,
   onNavigateToRange,
+  onDragHighlight,
   commentCountByRangeId,
   rects,
   selectedRectId,
@@ -400,6 +410,7 @@ export function PageBrowser({
   currentPageNumber: currentPageNumberProp,
   activeBookmarkKey,
   onNavigateToBookmark,
+  onDragBookmark,
   isBookmarkNavigationEnabled,
   onToggleBookmark,
   bookmarkedPageNumbers,
@@ -437,6 +448,11 @@ export function PageBrowser({
   })()
 
   const navRef = useRef<HTMLElement>(null)
+  const [navElement, setNavElement] = useState<HTMLElement | null>(null)
+  const setNavRef = useCallback((element: HTMLElement | null) => {
+    navRef.current = element
+    setNavElement(element)
+  }, [])
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   const wasOpenRef = useRef(false)
@@ -444,6 +460,7 @@ export function PageBrowser({
   const highlightsScrollRootRef = useRef<HTMLDivElement>(null)
   const bookmarksScrollRootRef = useRef<HTMLDivElement>(null)
   const [dismissedByGesture, setDismissedByGesture] = useState(false)
+  const suppressNextItemClickRef = useRef(false)
   const effectiveOpen = isOpen && !dismissedByGesture
 
   useEffect(() => {
@@ -497,6 +514,75 @@ export function PageBrowser({
     isOpen: effectiveOpen,
     onDismiss: handleDismiss
   })
+  const bookmarkByKey = useMemo(
+    () =>
+      new Map(
+        (bookmarks ?? []).map((bookmark) => [getBookmarkKey(bookmark), bookmark])
+      ),
+    [bookmarks]
+  )
+  type SidebarDragItem =
+    | { readonly kind: 'highlight'; readonly value: ReaderSelectionRange }
+    | { readonly kind: 'bookmark'; readonly value: ReaderBookmark }
+  const resolveSidebarDragItem = useCallback(
+    (clientX: number, clientY: number): SidebarDragItem | null => {
+      const target = navRef.current?.ownerDocument.elementFromPoint(
+        clientX,
+        clientY
+      )
+      if (!(target instanceof Element) || !navElement?.contains(target)) {
+        return null
+      }
+      const rangeId = target.closest<HTMLElement>('[data-range-id]')?.dataset
+        .rangeId
+      if (rangeId) {
+        const range = highlightRanges.find((candidate) => candidate.id === rangeId)
+        return range ? { kind: 'highlight', value: range } : null
+      }
+      const bookmarkKey = target.closest<HTMLElement>('[data-bookmark-key]')
+        ?.dataset.bookmarkKey
+      if (!bookmarkKey) return null
+      const bookmark = bookmarkByKey.get(bookmarkKey)
+      return bookmark ? { kind: 'bookmark', value: bookmark } : null
+    },
+    [bookmarkByKey, highlightRanges, navElement]
+  )
+  const handleSidebarDragItem = useCallback(
+    (item: SidebarDragItem) => {
+      switch (item.kind) {
+        case 'highlight':
+          onDragHighlight?.(item.value)
+          return
+        case 'bookmark':
+          onDragBookmark?.(item.value)
+          return
+      }
+    },
+    [onDragBookmark, onDragHighlight]
+  )
+  const {
+    handleHighlightPointerDown: handleItemPointerDown,
+    handleHighlightPointerMove: handleItemPointerMove,
+    handleHighlightPointerUp: handleItemPointerUp,
+    handleHighlightPointerCancel: handleItemPointerCancel
+  } = useHighlightDrag<SidebarDragItem, HTMLElement>({
+    viewerRootElement: navElement,
+    resolveItem: resolveSidebarDragItem,
+    onDragItem:
+      onDragHighlight || onDragBookmark ? handleSidebarDragItem : undefined
+  })
+  const handleNavPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      suppressNextItemClickRef.current = handleItemPointerUp(event)
+    },
+    [handleItemPointerUp]
+  )
+  const handleNavClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (!suppressNextItemClickRef.current) return
+    suppressNextItemClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }, [])
 
   useEffect(() => {
     const scrollRoot = (() => {
@@ -644,13 +730,18 @@ export function PageBrowser({
 
   return (
     <nav
-      ref={navRef}
+      ref={setNavRef}
       className={className}
       aria-label='Page browser'
       aria-hidden={!effectiveOpen}
       inert={!effectiveOpen}
       data-testid='page-browser'
       style={containerStyle}
+      onPointerDownCapture={handleItemPointerDown}
+      onPointerMoveCapture={handleItemPointerMove}
+      onPointerUpCapture={handleNavPointerUp}
+      onPointerCancelCapture={handleItemPointerCancel}
+      onClickCapture={handleNavClick}
     >
       <div className='hamster-reader__page-browser-toolbar'>
         <span className='hamster-reader__page-browser-title'>页面浏览</span>

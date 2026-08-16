@@ -110,8 +110,9 @@ DOCX, image, TXT, and Markdown Layout views hide it.
   and `特大` in ascending order; the active item exposes `aria-pressed=true`.
 - **Default:** each newly loaded supported document starts at `大` (`1.5`).
 - **Scale mapping:** `特小=0.5`, `小=0.75`, `中=1`, `大=1.5`, `特大=2`.
-  Every source font size is converted to rem with
-  `(sourceFontSize / 16) * scale` so proportional differences are preserved.
+  Reflowable Text mode uses the selected value as its base `rem` size when
+  source font hierarchy is not preserved. Surfaces that preserve source font
+  hierarchy convert each source size with `(sourceFontSize / 16) * scale`.
 - **Dismissal:** selection, outside pointer input, or Escape closes the menu.
 - **Compatibility:** consumers that omit the Reader font scale retain legacy
   pixel sizing; the demo opts into scaling only for supported file formats.
@@ -137,9 +138,14 @@ consumers can see how to implement the `onDragHighlight` integration.
 ## 12. Reflowable Document Spacing
 
 - **Text pages:** every visible page after the first receives `12px` of extra
-  top spacing inside its measured virtual-page box. The first visible page has
-  no leading gap, including when page ranges or hidden pages change the start.
-- **PDF page marker:** PDF Text mode starts every visible virtual page with a
+  top spacing in the native document flow. The first visible page has no leading
+  gap, including when page ranges or hidden pages change the start.
+- **Native page windows:** PDF Text mode mounts four source pages per segment;
+  EPUB and other reflowable formats mount one intermediate page per segment.
+  Only the current segment exists in the DOM, while the three complete segments
+  before and after it are preloaded by default. Loading the previous segment
+  lands at its bottom; loading the next segment lands at its top.
+- **PDF page marker:** PDF Text mode starts every visible page with a
   compact, non-interactive divider labelled `第 n 页`. Its horizontal hairline
   and `11px` label use `--hamster-reader-theme-color`; other reflowable document
   types do not render this marker. The marker remains visible while page content
@@ -166,17 +172,24 @@ consumers can see how to implement the `onDragHighlight` integration.
   their browser-provided scrollbar chrome is visually hidden so it cannot cover
   the custom rail. The first native `scroll` event shows the current page label
   immediately; every subsequent event restarts the idle window, and the label
-  hides only after `500ms` without scrolling.
+  hides only after `500ms` without scrolling. Text mode reserves a right content
+  gutter so transient rail feedback never covers readable document content.
+  Containers wider than `520px` also reserve the additional `1cm` touch offset;
+  narrower containers keep a `64px` gutter and place touch feedback beside the
+  rail, preserving a usable reading measure without dynamic layout shifts.
 - **Mode synchronization:** each rail uses that mode's filtered page list. The
   concrete text crossing the container top supplies the current page and the
   persisted `{ pageNumber, textId, text, offset }` anchor in both modes. Text
-  mode seeks through TanStack Virtual, while Layout mode preserves its
-  VirtualPaper `x` and `scale` and corrects `y` to the resolved text. Both
+  mode switches to the fixed native page window before aligning the mounted
+  page, while Layout mode preserves its VirtualPaper `x` and `scale` and
+  corrects `y` to the resolved text. Both
   resolve `textId` first and fall back to the page-local offset. The rail remains
   page-valued, and non-contiguous page ranges expose actual document numbers.
-- **Highlights:** each page containing a text highlight adds one `4px × 1px`
-  marker at that page's proportional rail position. The marker uses the range's
-  own `markerStyle.backgroundColor`, falling back to the Reader highlight color.
+- **Highlights:** in Text mode, each page containing a text highlight adds one
+  `4px × 1px` marker at the midpoint of that page's equal rail segment. Layout
+  mode retains endpoint interpolation for compatibility. The marker uses the
+  range's own `markerStyle.backgroundColor`, falling back to the Reader
+  highlight color.
 - **Pointer interaction:** mouse, touch, and pen use Pointer Events with pointer
   capture. Pointer down and drag update only local page feedback; navigation is
   committed exactly once on pointer up. Pointer cancel never navigates. Mouse

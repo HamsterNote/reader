@@ -47,6 +47,7 @@ export type IntermediateDocumentTextPageContentProps = {
    * 此处接收页码与已挂载的页面 DOM 元素，供未来 Profiler 集成使用。
    */
   onRenderTiming?: (pageNumber: number, element: Element) => void
+  onImageSettled?: (imageId: string) => void
 }
 
 /**
@@ -74,7 +75,8 @@ function IntermediateDocumentTextPageContentComponent({
   orderedContent,
   isPdf = false,
   setTextRef,
-  fontScale
+  fontScale,
+  onImageSettled
 }: IntermediateDocumentTextPageContentProps) {
   return (
     <IntermediateDocumentFlowContent
@@ -85,6 +87,7 @@ function IntermediateDocumentTextPageContentComponent({
       setTextRef={setTextRef}
       fontScale={fontScale}
       preserveSourceFontSize={false}
+      onImageSettled={onImageSettled}
     />
   )
 }

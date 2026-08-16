@@ -156,6 +156,7 @@ function TextBookmarksList({
           title={canNavigate ? undefined : '当前阅读模式不支持跳转到此书签'}
           tabIndex={isOpen && canNavigate ? 0 : -1}
           data-page-number={bookmark.pageNumber}
+          data-bookmark-key={bookmarkKey}
           onClick={() => onNavigate?.(bookmark)}
         >
           <span className='hamster-reader__highlight-text'>{label}</span>

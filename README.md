@@ -106,7 +106,7 @@ The following optional props control the lazy loading queue:
 | `initialLoadedPages`   | `number` | `1`     | Number of pages to load immediately on mount (before visibility-based queue kicks in).                                                                                       |
 | `pageLoadConcurrency`  | `number` | `3`     | Maximum number of pages loaded concurrently.                                                                                                                                 |
 | `pageLoadEnterDelayMs` | `number` | `500`   | A non-initial page must remain continuously visible for this duration (ms) before its content load is enqueued. Prevents fast-scroll from triggering loads.                  |
-| `pagePreloadRadius`    | `number` | `3`     | Number of adjacent pages to preload on each side of every visible page. The window is clipped safely at the beginning and end of the document.                            |
+| `pagePreloadRadius`    | `number` | `3`     | Layout mode preloads this many adjacent pages on each side. Text mode preloads this many complete segments before and after the mounted segment. The window is clipped safely at document boundaries. |
 | `pageUnloadDelayMs`    | `number` | `5000`  | After a loaded page leaves the visible window, wait this duration (ms) before unloading its content back to an empty shell. Re-entering before the delay cancels the unload. |
 
 #### Render Timing
@@ -214,7 +214,7 @@ const [ocrTexts, setOcrTexts] = useState<Record<number, IntermediateText[]>>({})
 
 ### Text render mode
 
-`Reader` uses `renderMode='layout'` by default. Set `renderMode='text'` to render a flow reading view that mounts and loads only the virtual pages currently visible in the scroll viewport.
+`Reader` uses `renderMode='layout'` by default. Set `renderMode='text'` to render a native flow reading view. PDF documents mount four source pages per segment; EPUB and other reflowable formats mount one intermediate page per segment. Text mode preloads the three complete segments before and after the current segment by default, while keeping only the current segment in the DOM. Previous and next controls replace the mounted segment without virtualized placeholders; loading the previous segment lands at its bottom, while loading the next segment lands at its top.
 
 Text mode renders document text and content-level `IntermediateImage` entries as normal flow content. Each image occupies its own row, and an available image `alt` value is shown as both accessible alternative text and a visible caption. Page base images, thumbnails, and OCR output are not rendered in Text mode. It uses the same linked ranges as layout mode, but derives current text-flow rectangles from each range's `selectionId + offset` anchors instead of rendering the persisted layout rectangles.
 

@@ -273,8 +273,23 @@ afterEach(() => {
   resetElementGeometryMocks()
 })
 
-// Mock pointer capture API for JSDOM
 if (typeof HTMLElement !== 'undefined') {
+  if (!HTMLElement.prototype.scrollTo) {
+    HTMLElement.prototype.scrollTo = function (
+      optionsOrX?: ScrollToOptions | number,
+      y?: number
+    ) {
+      if (optionsOrX === undefined) return
+      if (typeof optionsOrX === 'number') {
+        this.scrollLeft = optionsOrX
+        this.scrollTop = y ?? 0
+        return
+      }
+
+      if (optionsOrX.left !== undefined) this.scrollLeft = optionsOrX.left
+      if (optionsOrX.top !== undefined) this.scrollTop = optionsOrX.top
+    }
+  }
   if (!HTMLElement.prototype.setPointerCapture) {
     HTMLElement.prototype.setPointerCapture = () => {}
   }

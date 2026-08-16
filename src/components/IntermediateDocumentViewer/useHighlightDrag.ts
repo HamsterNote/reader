@@ -12,45 +12,41 @@ import {
   useState
 } from 'react'
 
-import type { ReaderSelectionRange } from '../../types/selection'
 import { forwardHighlightPointerDown } from './forwardHighlightPointerDown'
 
-type HighlightDragStart = {
+type ItemDragStart<Item> = {
   pointerId: number
   pointerType: 'mouse' | 'touch'
   clientX: number
   clientY: number
-  highlight: ReaderSelectionRange
+  item: Item
   triggered: boolean
   longPressTimer: ReturnType<typeof setTimeout> | null
 }
 
-type HighlightDragOptions = {
-  viewerRootElement: HTMLDivElement | null
-  resolveHighlight: (
-    clientX: number,
-    clientY: number
-  ) => ReaderSelectionRange | null
-  onDragHighlight: ((highlight: ReaderSelectionRange) => void) | undefined
+type ItemDragOptions<Item, Element extends HTMLElement> = {
+  viewerRootElement: Element | null
+  resolveItem: (clientX: number, clientY: number) => Item | null
+  onDragItem: ((item: Item) => void) | undefined
 }
 
 const HIGHLIGHT_DRAG_MOVE_TOLERANCE = 4
 const HIGHLIGHT_TOUCH_LONG_PRESS_MS = 500
 
-export function useHighlightDrag({
+export function useHighlightDrag<Item, Element extends HTMLElement = HTMLDivElement>({
   viewerRootElement,
-  resolveHighlight,
-  onDragHighlight
-}: HighlightDragOptions) {
-  const dragStartRef = useRef<HighlightDragStart | null>(null)
+  resolveItem,
+  onDragItem
+}: ItemDragOptions<Item, Element>) {
+  const dragStartRef = useRef<ItemDragStart<Item> | null>(null)
   const dragRef = useRef<Drag | null>(null)
   const dragElementRef = useRef<HTMLElement | null>(null)
   const viewerRootElementRef = useRef(viewerRootElement)
-  const onDragHighlightRef = useRef(onDragHighlight)
+  const onDragItemRef = useRef(onDragItem)
   viewerRootElementRef.current = viewerRootElement
-  onDragHighlightRef.current = onDragHighlight
+  onDragItemRef.current = onDragItem
   const [activePointerType, setActivePointerType] = useState<
-    HighlightDragStart['pointerType'] | null
+    ItemDragStart<Item>['pointerType'] | null
   >(null)
   const [suppressNativeSelection, setSuppressNativeSelection] = useState(false)
 
@@ -64,7 +60,7 @@ export function useHighlightDrag({
     setSuppressNativeSelection(false)
   }, [])
 
-  const activateDrag = useCallback((dragStart: HighlightDragStart) => {
+  const activateDrag = useCallback((dragStart: ItemDragStart<Item>) => {
     if (dragStartRef.current !== dragStart || dragStart.triggered) return
 
     dragStart.triggered = true
@@ -76,7 +72,7 @@ export function useHighlightDrag({
       .getSelection()
       ?.removeAllRanges()
     setActivePointerType(dragStart.pointerType)
-    onDragHighlightRef.current?.(dragStart.highlight)
+    onDragItemRef.current?.(dragStart.item)
   }, [])
 
   const handleTrackedPointerMove = useCallback(
@@ -159,10 +155,10 @@ export function useHighlightDrag({
     if (!viewerRootElement) return
 
     const preventNativeTouchGesture = (event: TouchEvent) => {
-      if (!onDragHighlight || event.touches.length !== 1) return
+      if (!onDragItem || event.touches.length !== 1) return
 
       const touch = event.touches[0]
-      if (!touch || !resolveHighlight(touch.clientX, touch.clientY)) return
+      if (!touch || !resolveItem(touch.clientX, touch.clientY)) return
 
       if (event.cancelable) event.preventDefault()
     }
@@ -179,10 +175,10 @@ export function useHighlightDrag({
         true
       )
     }
-  }, [onDragHighlight, resolveHighlight, viewerRootElement])
+  }, [onDragItem, resolveItem, viewerRootElement])
 
   const handleHighlightPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<Element>) => {
       const pendingDragStart = dragStartRef.current
       if (
         pendingDragStart?.pointerType === 'touch' &&
@@ -195,7 +191,7 @@ export function useHighlightDrag({
       }
       if (pendingDragStart?.triggered) return
       if (
-        !onDragHighlight ||
+        !onDragItem ||
         !event.isPrimary ||
         (event.pointerType !== 'mouse' && event.pointerType !== 'touch') ||
         (event.pointerType === 'mouse' && event.button !== 0)
@@ -204,15 +200,15 @@ export function useHighlightDrag({
       }
       clearDragStart()
 
-      const highlight = resolveHighlight(event.clientX, event.clientY)
-      if (!highlight) return
+      const item = resolveItem(event.clientX, event.clientY)
+      if (!item) return
 
-      const dragStart: HighlightDragStart = {
+      const dragStart: ItemDragStart<Item> = {
         pointerId: event.pointerId,
         pointerType: event.pointerType,
         clientX: event.clientX,
         clientY: event.clientY,
-        highlight,
+        item,
         triggered: false,
         longPressTimer: null
       }
@@ -239,18 +235,18 @@ export function useHighlightDrag({
         clearDragStart()
       }
     },
-    [activateDrag, clearDragStart, onDragHighlight, resolveHighlight]
+    [activateDrag, clearDragStart, onDragItem, resolveItem]
   )
 
   const handleHighlightPointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<Element>) => {
       handleTrackedPointerMove(event.nativeEvent)
     },
     [handleTrackedPointerMove]
   )
 
   const handleHighlightPointerUp = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>): boolean => {
+    (event: ReactPointerEvent<Element>): boolean => {
       const dragStart = dragStartRef.current
       if (!dragStart || event.pointerId !== dragStart.pointerId) return false
 
@@ -262,7 +258,7 @@ export function useHighlightDrag({
   )
 
   const handleHighlightPointerCancel = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<Element>) => {
       const dragStart = dragStartRef.current
       if (!dragStart || event.pointerId !== dragStart.pointerId) return
 
