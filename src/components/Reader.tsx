@@ -583,7 +583,7 @@ function resolveBottomBarLayoutZoom(
 }
 
 function resolveLoadingRatio(total: number, current: number): number {
-  return total <= 0 ? 0 : current / total
+  return total > 0 ? current / total : 0
 }
 
 function resolveVerticalMargins(
