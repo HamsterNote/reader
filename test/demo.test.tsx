@@ -11,6 +11,7 @@ import type {
   ReaderData,
   ReaderEdgeCrop,
   ReaderFontScale,
+  ReaderLineHeight,
   ReaderLinkedSelectionData,
   ReaderLoadingProgress,
   ReaderOcrOptions,
@@ -165,6 +166,8 @@ type MockReaderProps = Record<string, unknown> & {
   onRenderModeChange?: (mode: ReaderRenderMode) => void
   fontScale?: ReaderFontScale
   onFontScaleChange?: (scale: ReaderFontScale) => void
+  lineHeight?: ReaderLineHeight
+  onLineHeightChange?: (lineHeight: ReaderLineHeight) => void
   touchPanMode?: ReaderTouchPanMode
   onTouchPanModeChange?: (mode: ReaderTouchPanMode) => void
   ocr?: boolean | ReaderOcrOptions
@@ -1781,6 +1784,7 @@ describe('demo parser flow', () => {
       expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
       expect(findDocumentReaderProps()).toMatchObject({
         fontScale: 1.5,
+        lineHeight: 1.5,
         highlightColor: 'rgba(255, 193, 7, 0.35)'
       })
     })
@@ -1789,6 +1793,7 @@ describe('demo parser flow', () => {
     const readerProps = findDocumentReaderProps()
     act(() => {
       readerProps?.onFontScaleChange?.(0.75)
+      readerProps?.onLineHeightChange?.(1.8)
       readerProps?.onHighlightColorChange?.('#ff0000')
       readerProps?.onDataChange?.({
         ...readerProps.data,
@@ -1806,7 +1811,7 @@ describe('demo parser flow', () => {
       findDocumentReaderProps()?.onFontScaleChange?.(2)
     })
 
-    // Then: Demo 保存模式、工具、两种模式各自字号及当前高亮色。
+    // Then: Demo 保存模式、工具、两种模式字号、Text 行距及当前高亮色。
     await waitFor(() => {
       expect(findDocumentReaderProps()?.data).toMatchObject({
         renderMode: 'layout',
@@ -1818,10 +1823,11 @@ describe('demo parser flow', () => {
         )
       ).toBe(
         JSON.stringify({
-          version: 2,
+          version: 3,
           renderMode: 'layout',
           selectedTool: 'rect-selection',
           textFontScale: 0.75,
+          textLineHeight: 1.8,
           layoutFontScale: 2,
           highlightColor: '#ff0000'
         })
@@ -1838,6 +1844,7 @@ describe('demo parser flow', () => {
       expect(findDocumentReaderProps()).toMatchObject({
         renderMode: 'text',
         fontScale: 0.75,
+        lineHeight: 1.8,
         highlightColor: '#ff0000'
       })
     })

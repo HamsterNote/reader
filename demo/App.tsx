@@ -15,6 +15,7 @@ import {
   type ReaderData,
   type ReaderEdgeCrop,
   type ReaderFontScale,
+  type ReaderLineHeight,
   type ReaderLinkedSelectionData,
   type ReaderLoadingProgress,
   type ReaderPageRange,
@@ -904,6 +905,7 @@ export function App() {
   const [loadedParserLabel, setLoadedParserLabel] =
     useState<SupportedParserLabel | null>(null)
   const [textFontScale, setTextFontScale] = useState<ReaderFontScale>(1.5)
+  const [textLineHeight, setTextLineHeight] = useState<ReaderLineHeight>(1.5)
   const [layoutFontScale, setLayoutFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
   const [pdfLoadState, setPdfLoadState] = useState<PdfLoadState>({
@@ -1468,11 +1470,19 @@ export function App() {
         renderMode,
         selectedTool,
         textFontScale,
+        textLineHeight,
         layoutFontScale,
         highlightColor
       })
     )
-  }, [highlightColor, layoutFontScale, renderMode, selectedTool, textFontScale])
+  }, [
+    highlightColor,
+    layoutFontScale,
+    renderMode,
+    selectedTool,
+    textFontScale,
+    textLineHeight
+  ])
 
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
@@ -1627,6 +1637,7 @@ export function App() {
           renderMode: parserLabel === 'EPUB' ? 'text' : 'layout',
           selectedTool: 'text-selection',
           textFontScale: 1.5,
+          textLineHeight: 1.5,
           layoutFontScale: 1.5,
           highlightColor: 'rgba(255, 193, 7, 0.35)'
         }
@@ -1634,6 +1645,7 @@ export function App() {
       setRenderMode(readerPreferences.renderMode)
       setSelectedTool(readerPreferences.selectedTool)
       setTextFontScale(readerPreferences.textFontScale)
+      setTextLineHeight(readerPreferences.textLineHeight)
       setLayoutFontScale(readerPreferences.layoutFontScale)
       setHighlightColor(readerPreferences.highlightColor)
       loadedReaderPreferencesFileNameRef.current = file.name
@@ -2954,9 +2966,11 @@ export function App() {
               renderMode={renderMode}
               onRenderModeChange={handleRenderModeChange}
               fontScale={supportsFontScale ? activeFontScale : undefined}
+              lineHeight={textLineHeight}
               onFontScaleChange={
                 renderMode === 'text' ? setTextFontScale : setLayoutFontScale
               }
+              onLineHeightChange={setTextLineHeight}
               touchPanMode={touchPanMode}
               onTouchPanModeChange={setTouchPanMode}
               onFileUpload={handleReaderFileUpload}

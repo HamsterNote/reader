@@ -302,4 +302,29 @@ describe('PdfTextContent', () => {
     // Then: 可见正文不继承透明色，而由 Reader 的正文色统一控制。
     expect(screen.getByText('Visible text').style.color).toBe('')
   })
+
+  it('applies the selected Text mode line height to reconstructed PDF glyphs', () => {
+    // Given: PDF Text Mode 使用 1.8 倍行距。
+    const glyph = makeGlyph({
+      id: 'custom-line-height-character',
+      content: 'Comfortable line spacing',
+      x: 10,
+      y: 10
+    })
+
+    // When: 渲染重建后的 PDF 正文。
+    render(
+      <PdfTextContent
+        pageNumber={1}
+        texts={[glyph]}
+        paragraphs={[]}
+        lineHeight={1.8}
+      />
+    )
+
+    // Then: 用户选择值应用到实际文字 span，而不是继续使用默认值。
+    expect(screen.getByText('Comfortable line spacing')).toHaveStyle({
+      lineHeight: '1.8'
+    })
+  })
 })

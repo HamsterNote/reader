@@ -5,6 +5,7 @@ import type {
 import { Fragment } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
 import { getScaledFontSize } from './textSpanStyle'
 
@@ -14,6 +15,7 @@ type IntermediateDocumentFlowTextContentProps = {
   paragraphs: IntermediateParagraph[]
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   preserveSourceFontSize: boolean
   sourceOffsets?: ReadonlyMap<IntermediateText, number>
 }
@@ -57,6 +59,7 @@ export function IntermediateDocumentFlowTextContent({
   paragraphs,
   setTextRef,
   fontScale,
+  lineHeight = 1.5,
   preserveSourceFontSize,
   sourceOffsets
 }: IntermediateDocumentFlowTextContentProps) {
@@ -96,7 +99,7 @@ export function IntermediateDocumentFlowTextContent({
               data-text-id={text.id}
               data-selection-start-offset={sourceOffsets?.get(text)}
               data-page-number={pageNumber}
-              style={{ fontSize, lineHeight: 1.5 }}
+              style={{ fontSize, lineHeight }}
             >
               {text.content}
             </span>

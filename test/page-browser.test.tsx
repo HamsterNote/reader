@@ -402,6 +402,15 @@ describe('PageBrowser', () => {
       clientX: 25,
       clientY: 20
     })
+    fireEvent.pointerUp(highlightButton, {
+      pointerType: 'mouse',
+      pointerId: 41,
+      isPrimary: true,
+      button: 0,
+      clientX: 25,
+      clientY: 20
+    })
+    fireEvent.click(highlightButton)
 
     fireEvent.click(screen.getByRole('tab', { name: '书签' }))
     const bookmarkButton = screen.getByRole('button', {

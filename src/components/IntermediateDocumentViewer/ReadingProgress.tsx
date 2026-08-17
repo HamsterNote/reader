@@ -15,7 +15,7 @@ type CommonReadingProgressProps = {
   readonly insetBottom?: number
   readonly insetTop?: number
   readonly isMoving: boolean
-  readonly onSeekPage: (pageNumber: number) => void
+  readonly onSeekPage: (pageNumber: number, pageProgress?: number) => void
   readonly pageNumbers: readonly number[]
   readonly ranges: readonly ReaderSelectionRange[]
 }
@@ -159,8 +159,19 @@ export function ReadingProgress(props: ReadingProgressProps) {
       if (event.pointerId !== activePointerIdRef.current) return
 
       const pointerType = activePointerTypeRef.current
+      const pointerProgress = resolveProgressFromPointer(event)
       const pageNumber = resolvePageFromPointer(event)
-      if (commit && pageNumber !== null) onSeekPage(pageNumber)
+      if (commit && pageNumber !== null) {
+        if (props.mode === 'text' && pointerProgress !== null) {
+          const pageIndex = pageNumbers.indexOf(pageNumber)
+          onSeekPage(
+            pageNumber,
+            pointerProgress * pageNumbers.length - pageIndex
+          )
+        } else {
+          onSeekPage(pageNumber)
+        }
+      }
       activePointerIdRef.current = null
       activePointerTypeRef.current = null
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -170,11 +181,9 @@ export function ReadingProgress(props: ReadingProgressProps) {
       setPreviewPageNumber(pointerType === 'mouse' ? pageNumber : null)
       // 鼠标释放后光标通常还停留在轨道上，保留进度让横线停在释放位置；
       // 触摸结束则手指已离开，直接清除。
-      setPointerProgress(
-        pointerType === 'mouse' ? resolveProgressFromPointer(event) : null
-      )
+      setPointerProgress(pointerType === 'mouse' ? pointerProgress : null)
     },
-    [onSeekPage, resolvePageFromPointer]
+    [onSeekPage, pageNumbers, props.mode, resolvePageFromPointer]
   )
 
   const handleKeyDown = useCallback(

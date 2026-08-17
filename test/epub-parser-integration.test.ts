@@ -83,11 +83,7 @@ async function makeMinimalEpubBytes(): Promise<Uint8Array> {
   <head><title>Chapter 1</title></head>
   <body>
     <h1>Chapter 1</h1>
-    <p>Hello EPUB text mode</p>
-    <img src="https://example.com/external.png" alt="External decoration" />
-    <img src="images/chapter.png" alt="Chapter illustration" />
-    <img src="images/chapter.png" alt="Duplicate chapter illustration" />
-    <p>Text after chapter illustration</p>
+    <p>Hello EPUB text mode <img src="https://example.com/external.png" alt="External decoration" /><img src="images/chapter.png" alt="Chapter illustration" /><img src="images/chapter.png" alt="Duplicate chapter illustration" /> Text after chapter illustration</p>
   </body>
 </html>`
   )
@@ -156,12 +152,19 @@ describe('epub parser integration', () => {
     expect(chapterImages).toHaveLength(2)
     expect(chapterImages.every((image) => /^data:image\/png;base64,/.test(image.src))).toBe(true)
     const chapterImageIndexes = chapterImages.map((image) => page1Entries.indexOf(image))
+    const leadingTextIndex = page1Entries.findIndex(
+      (entry) =>
+        isIntermediateText(entry) && entry.content === 'Hello EPUB text mode'
+    )
     const trailingTextIndex = page1Entries.findIndex(
       (entry) =>
         isIntermediateText(entry) &&
         entry.content === 'Text after chapter illustration'
     )
     expect(chapterImageIndexes.every((imageIndex) => imageIndex > -1)).toBe(true)
+    expect(chapterImageIndexes.every((imageIndex) => imageIndex > leadingTextIndex)).toBe(
+      true
+    )
     expect(chapterImageIndexes.every((imageIndex) => trailingTextIndex > imageIndex)).toBe(true)
     expect(page1Text).toContain('Hello EPUB text mode')
     expect(page2Text).toContain('Second chapter text')

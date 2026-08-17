@@ -89,31 +89,33 @@ export function PageDrawingLayer({
     if (!enabled || !stylusOnly || !layer) return
 
     const ownerDocument = layer.ownerDocument
+    const PointerEventConstructor = ownerDocument.defaultView?.PointerEvent
+    if (!PointerEventConstructor) return
     const activePenPointerIds = new Set<number>()
 
     const handlePenPointerDown = (event: PointerEvent) => {
       if (event.pointerType !== 'pen') return
       activePenPointerIds.add(event.pointerId)
-      event.preventDefault()
-    }
-
-    const handlePenPointerMove = (event: PointerEvent) => {
-      if (!activePenPointerIds.has(event.pointerId)) return
-      event.preventDefault()
     }
 
     const handlePenPointerEnd = (event: PointerEvent) => {
-      if (!activePenPointerIds.delete(event.pointerId)) return
-      event.preventDefault()
+      activePenPointerIds.delete(event.pointerId)
     }
 
     layer.addEventListener('pointerdown', handlePenPointerDown, true)
-    ownerDocument.addEventListener('pointermove', handlePenPointerMove, true)
     ownerDocument.addEventListener('pointerup', handlePenPointerEnd, true)
     ownerDocument.addEventListener('pointercancel', handlePenPointerEnd, true)
     return () => {
+      for (const pointerId of activePenPointerIds) {
+        ownerDocument.dispatchEvent(
+          new PointerEventConstructor('pointercancel', {
+            bubbles: true,
+            pointerId,
+            pointerType: 'pen'
+          })
+        )
+      }
       layer.removeEventListener('pointerdown', handlePenPointerDown, true)
-      ownerDocument.removeEventListener('pointermove', handlePenPointerMove, true)
       ownerDocument.removeEventListener('pointerup', handlePenPointerEnd, true)
       ownerDocument.removeEventListener('pointercancel', handlePenPointerEnd, true)
     }

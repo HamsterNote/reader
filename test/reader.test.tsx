@@ -697,6 +697,39 @@ describe('Reader public API', () => {
     expect(onFontScaleChange).toHaveBeenCalledWith(0.5)
   })
 
+  it('offers every Text mode line-height option and reports the selected value', () => {
+    // Given: Text Mode 的字号与行距都由宿主控制。
+    const onLineHeightChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        renderMode='text'
+        fontScale={1.5}
+        lineHeight={1.5}
+        onLineHeightChange={onLineHeightChange}
+      />
+    )
+
+    // When: 用户打开字体设置弹层。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-font-scale'))
+
+    // Then: 弹层同时提供字号与全部五档固定行距。
+    expect(screen.getByText('字号')).toBeInTheDocument()
+    expect(screen.getByText('行间距')).toBeInTheDocument()
+    expect(
+      screen
+        .getAllByRole('menuitem', { name: /^行距 / })
+        .map((item) => item.getAttribute('aria-label'))
+    ).toEqual(['行距 1', '行距 1.2', '行距 1.5', '行距 1.8', '行距 2'])
+
+    // When: 用户选择 1.8 倍行距。
+    fireEvent.click(screen.getByRole('menuitem', { name: '行距 1.8' }))
+
+    // Then: Reader 将精确的受控值回传给宿主，并传给 Text viewer。
+    expect(onLineHeightChange).toHaveBeenCalledWith(1.8)
+    expect(capturedTextViewerProps.lineHeight).toBe(1.5)
+  })
+
   it('updates both uncontrolled drawing and highlight colors from the default bottom bar', async () => {
     // Given: 宿主不控制工具颜色，Reader 使用原有描边默认值。
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)

@@ -2399,6 +2399,99 @@ describe('IntermediateDocumentViewer', () => {
     expect(page).toHaveStyle({ width: '100px' })
   })
 
+  it('avoids CSS zoom for the native document on iPadOS', async () => {
+    // Given: iPadOS renders a native-layout page at 150%.
+    const platformSpy = vi
+      .spyOn(window.navigator, 'platform', 'get')
+      .mockReturnValue('MacIntel')
+    Object.defineProperty(window.navigator, 'maxTouchPoints', {
+      configurable: true,
+      value: 5
+    })
+    const { document } = makeDocument({
+      pageCount: 1,
+      pageSize: { x: 100, y: 150 }
+    })
+
+    // When: the native layout mounts on that device.
+    const { unmount } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={0}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1.5}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const container = viewport.querySelector<HTMLElement>(
+      '.hamster-reader__native-layout-container'
+    )
+    if (!container) {
+      throw new Error('Expected native layout container')
+    }
+
+    // Then: WebKit's Pencil-sensitive CSS zoom path is not used.
+    expect(viewport).toHaveStyle({ overflow: 'auto' })
+    expect(container.style.zoom).toBeFalsy()
+    expect(container).toHaveStyle({
+      transform: 'scale(1.5)',
+      transformOrigin: 'top left'
+    })
+
+    unmount()
+    platformSpy.mockRestore()
+    Reflect.deleteProperty(window.navigator, 'maxTouchPoints')
+  })
+
+  it('matches the iPad transform extent to the scaled native document', async () => {
+    // Given: iPadOS has an 800x1200 intrinsic document at 25% zoom.
+    const platformSpy = vi
+      .spyOn(window.navigator, 'platform', 'get')
+      .mockReturnValue('MacIntel')
+    Object.defineProperty(window.navigator, 'maxTouchPoints', {
+      configurable: true,
+      value: 5
+    })
+    const { document } = makeDocument({ pageCount: 1 })
+    const { rerender, unmount } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={0}
+        useVirtualPaper={false}
+        nativeLayoutZoom={0.25}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    const container = viewport.querySelector<HTMLElement>(
+      '.hamster-reader__native-layout-container'
+    )
+    if (!container) throw new Error('Expected native layout container')
+    setScrollContainerSize(container, { width: 800, height: 1200 })
+
+    // When: the observer measures the intrinsic document and zoom later reaches 300%.
+    const extent = await screen.findByTestId('native-layout-transform-extent')
+    await waitFor(() => {
+      expect(extent).toHaveStyle({ width: '200px', height: '300px' })
+    })
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={0}
+        useVirtualPaper={false}
+        nativeLayoutZoom={3}
+      />
+    )
+
+    // Then: the same sizing wrapper owns the exact enlarged scroll footprint.
+    await waitFor(() => {
+      expect(extent).toHaveStyle({ width: '2400px', height: '3600px' })
+    })
+
+    unmount()
+    platformSpy.mockRestore()
+    Reflect.deleteProperty(window.navigator, 'maxTouchPoints')
+  })
+
   it('reports native layout reading progress by text with percentage fallback', async () => {
     // Given: 第一页有可定位文字，第二页没有文字。
     const { document, pages } = makeDocument({ pageCount: 2 })
@@ -6538,7 +6631,7 @@ describe('IntermediateDocumentViewer', () => {
     const clientRects = Object.assign(
       [new DOMRect(20, 900, 80, 20), new DOMRect(20, 1400, 120, 20)],
       {
-      item: (index: number) => clientRects[index] ?? null
+        item: (index: number) => clientRects[index] ?? null
       }
     )
     Object.defineProperty(Range.prototype, 'getClientRects', {
@@ -8574,7 +8667,7 @@ describe('IntermediateDocumentViewer', () => {
     })
 
     it('renders EPUB IntermediateImage entries in Text Mode', async () => {
-      // Given: Text Mode 页面仅包含 EPUB 正文图片，没有文字或缩略图。
+      // Given: Text Mode 页面包含正文前后文字及 EPUB 图片，没有缩略图参与渲染。
       const image = makeImage(
         'text-epub-image',
         'data:image/png;base64,text-epub-image'
@@ -8582,7 +8675,11 @@ describe('IntermediateDocumentViewer', () => {
       Reflect.set(image, 'alt', 'EPUB text-mode illustration')
       const page = {
         paragraphs: [],
-        getContent: vi.fn(async (): Promise<IntermediateContent[]> => [image]),
+        getContent: vi.fn(async (): Promise<IntermediateContent[]> => [
+          makeText('text-epub-before-image', 'Text before EPUB image'),
+          image,
+          makeText('text-epub-after-image', 'Text after EPUB image')
+        ]),
         getThumbnail: vi.fn(async () => 'data:image/png;base64,thumbnail')
       }
 
@@ -8598,7 +8695,7 @@ describe('IntermediateDocumentViewer', () => {
         { width: 800, height: 600 }
       )
 
-      // Then: 纯图片页在原生文档流中显示正文图，且 Text Mode 不读取 thumbnail。
+      // Then: 正文图片保持在前后文字之间，且 Text Mode 不读取 thumbnail。
       const renderedImage = await screen.findByRole('img', {
         name: 'EPUB text-mode illustration'
       })
@@ -8606,6 +8703,20 @@ describe('IntermediateDocumentViewer', () => {
         'src',
         'data:image/png;base64,text-epub-image'
       )
+      const figure = renderedImage.closest('figure')
+      if (!(figure instanceof HTMLElement)) {
+        throw new Error('Expected the EPUB image to render inside a figure')
+      }
+      const textBeforeImage = screen.getByText('Text before EPUB image')
+      const textAfterImage = screen.getByText('Text after EPUB image')
+      expect(
+        textBeforeImage.compareDocumentPosition(figure) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(
+        figure.compareDocumentPosition(textAfterImage) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
       const textPage = screen.getByTestId('intermediate-text-page-1')
       expect(textPage).not.toHaveAttribute('data-page-measurable')
       expect(textPage.style.cssText).toBe('')
@@ -16404,6 +16515,77 @@ describe('touchPanMode', () => {
     expect(viewport.scrollLeft).toBe(70)
     expect(viewport.scrollTop).toBe(130)
     expect(page).toHaveStyle({ width: '100px' })
+  })
+
+  it('native stylus-only mode scrolls with one finger without drawing', async () => {
+    // Given: native layout owns gestures so a pen cannot trigger browser panning.
+    const { document } = makeDocument({ pageCount: 1 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        useVirtualPaper={false}
+        nativeLayoutZoom={1}
+        selectedTool='drawing'
+        touchPanMode='two-finger'
+        paintingControllerData={{
+          tool: 'pen',
+          minimap: false,
+          strokeColor: '#2563eb',
+          strokeWidth: 3,
+          stylusMode: true
+        }}
+      />
+    )
+    const viewport = await screen.findByTestId('native-layout-viewport')
+    setScrollContainerSize(viewport, {
+      width: 300,
+      height: 200,
+      scrollWidth: 600,
+      scrollHeight: 1000,
+      scrollLeft: 50,
+      scrollTop: 100
+    })
+
+    // When: one touch pointer moves 20px left and 30px up across the drawing surface.
+    const surface = await screen.findByTestId('reader-painting-page-1')
+    surface.addEventListener('pointerdown', (event) => event.stopPropagation())
+    surface.addEventListener('pointermove', (event) => event.stopPropagation())
+    fireEvent.pointerDown(surface, {
+      clientX: 100,
+      clientY: 100,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+    fireEvent.pointerMove(surface, {
+      clientX: 80,
+      clientY: 70,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'touch'
+    })
+
+    // Then: the native viewport follows the finger without requiring native panning.
+    expect(viewport.scrollLeft).toBe(70)
+    expect(viewport.scrollTop).toBe(130)
+
+    fireEvent.pointerDown(surface, {
+      clientX: 80,
+      clientY: 70,
+      isPrimary: true,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+    fireEvent.pointerMove(surface, {
+      clientX: 40,
+      clientY: 30,
+      isPrimary: true,
+      pointerId: 2,
+      pointerType: 'pen'
+    })
+    expect(viewport.scrollLeft).toBe(70)
+    expect(viewport.scrollTop).toBe(130)
   })
 
   describe('page browser', () => {

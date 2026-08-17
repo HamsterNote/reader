@@ -33,7 +33,10 @@ type ItemDragOptions<Item, Element extends HTMLElement> = {
 const HIGHLIGHT_DRAG_MOVE_TOLERANCE = 4
 const HIGHLIGHT_TOUCH_LONG_PRESS_MS = 500
 
-export function useHighlightDrag<Item, Element extends HTMLElement = HTMLDivElement>({
+export function useHighlightDrag<
+  Item,
+  Element extends HTMLElement = HTMLDivElement
+>({
   viewerRootElement,
   resolveItem,
   onDragItem

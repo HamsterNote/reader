@@ -396,7 +396,7 @@
     }
 
     &--stylus-only [data-testid^='reader-painting-'] {
-      touch-action: pan-x pan-y !important;
+      touch-action: none !important;
     }
   }
 
@@ -1819,6 +1819,37 @@
   user-select: none !important;
   -webkit-user-select: none !important;
   -webkit-touch-callout: none;
+}
+
+.hamster-reader__font-menu {
+  --hn-menu-background: transparent;
+}
+
+.hamster-reader__font-menu-heading {
+  padding: 8px 12px 5px;
+  color: var(--hn-color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+
+  &:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--hn-popover-separator, var(--hn-color-border));
+  }
+}
+
+.hamster-reader__font-menu [role='menuitem'] {
+  color: var(--hn-color-text);
+}
+
+.hamster-reader__font-menu-check {
+  color: color-mix(in srgb, var(--hn-color-accent) 55%, var(--hn-color-text));
+}
+
+@media (max-width: 480px) {
+  .hamster-reader__font-menu [role='menuitem'] {
+    min-height: 44px;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ import {
 } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type {
   ReaderBookmark,
   ReaderTextAnchor,
@@ -769,6 +770,7 @@ export type IntermediateDocumentTextViewerProps = {
   serializedDocument?: IntermediateDocumentSerialized | null
   className?: string
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   /** 文本滚动视口的水平内容安全边距。 */
   containMarginX?: number
   /** 文本滚动视口的顶部内容安全边距。 */
@@ -789,6 +791,7 @@ export type IntermediateDocumentTextViewerProps = {
   bookmarks?: readonly ReaderBookmark[]
   /** 添加或删除指定文字锚点书签。 */
   onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  onDragBookmark?: (bookmark: ReaderBookmark) => void
   /** @deprecated 请使用 bookmarks。 */
   bookmarkedPageNumbers?: readonly number[]
   /** @deprecated 请使用 onToggleBookmark。 */
@@ -983,6 +986,7 @@ export function IntermediateDocumentTextViewer(
     serializedDocument,
     className,
     fontScale,
+    lineHeight,
     containMarginX,
     containMarginTop,
     containMarginBottom,
@@ -993,6 +997,7 @@ export function IntermediateDocumentTextViewer(
     commentCountByRangeId,
     bookmarks,
     onToggleBookmark,
+    onDragBookmark,
     bookmarkedPageNumbers,
     onTogglePageBookmark,
     textReadingProgress,
@@ -1557,6 +1562,12 @@ export function IntermediateDocumentTextViewer(
       textPageWindowSize,
       tryPendingTextWindowAlignment
     ]
+  )
+  const handleReadingProgressRailSeek = useCallback(
+    (pageNumber: number, pageProgress = 0) => {
+      handleReadingProgressSeekPage(pageNumber, 'user', 'start', pageProgress)
+    },
+    [handleReadingProgressSeekPage]
   )
   const visiblePageNumberSet = useMemo(
     () => new Set(visiblePageNumbers),
@@ -2690,10 +2701,7 @@ export function IntermediateDocumentTextViewer(
       ...targetRects.map((rect) => rect.y + rect.height)
     )
     const targetPageCenter = (targetTop + targetBottom) / 2
-    const targetCenter =
-      selectionRect.top -
-      viewportRect.top +
-      targetPageCenter
+    const targetCenter = selectionRect.top - viewportRect.top + targetPageCenter
     const top = Math.min(
       Math.max(0, viewport.scrollHeight - viewport.clientHeight),
       Math.max(0, viewport.scrollTop + targetCenter - viewport.clientHeight / 2)
@@ -3250,6 +3258,7 @@ export function IntermediateDocumentTextViewer(
         selectedRangeId={effectiveSelectedRangeId}
         onSelectRange={handlePageLinkedSelectRange}
         onNavigateToRange={scrollToRange}
+        onDragHighlight={onDragHighlight}
         onDeleteRange={onRemoveRange}
         commentCountByRangeId={commentCountByRangeId}
         onDeleteRect={onRemoveRect}
@@ -3266,6 +3275,7 @@ export function IntermediateDocumentTextViewer(
           onToggleBookmark,
           scrollToBookmark
         )}
+        onDragBookmark={onDragBookmark}
         isBookmarkNavigationEnabled={isTextBookmark}
         onToggleBookmark={onToggleBookmark}
         bookmarkedPageNumbers={bookmarkedPageNumbers}
@@ -3286,7 +3296,7 @@ export function IntermediateDocumentTextViewer(
           highlightColor={highlightColor}
           insetTop={containMarginTop ?? containMarginY}
           insetBottom={containMarginBottom ?? containMarginY}
-          onSeekPage={handleReadingProgressSeekPage}
+          onSeekPage={handleReadingProgressRailSeek}
           onUserScrollIntent={releaseProgrammaticSuppression}
         />
       ) : null}
@@ -3426,6 +3436,7 @@ export function IntermediateDocumentTextViewer(
                       isPdf={isPdf}
                       setTextRef={setTextRef}
                       fontScale={fontScale}
+                      lineHeight={lineHeight}
                       onImageSettled={handleImageSettled}
                     />
                   </HamsterSelection>

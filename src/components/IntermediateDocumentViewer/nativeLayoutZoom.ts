@@ -12,13 +12,51 @@ export type NativeLayoutViewportMetrics = Readonly<{
   clientHeight: number
 }>
 
+export type NativeLayoutIntrinsicSize = Readonly<{
+  width: number
+  height: number
+}>
+
+export function computeNativeLayoutTransformExtent(
+  intrinsicSize: NativeLayoutIntrinsicSize,
+  scale: number
+): NativeLayoutIntrinsicSize {
+  return {
+    width: intrinsicSize.width * scale,
+    height: intrinsicSize.height * scale
+  }
+}
+
+export type NativeLayoutScaleStyle =
+  | Readonly<{ zoom: number }>
+  | Readonly<{ transform: string; transformOrigin: 'top left' }>
+
+export function resolveNativeLayoutScaleStyle(
+  scale: number,
+  useTransform: boolean
+): NativeLayoutScaleStyle {
+  return useTransform
+    ? { transform: `scale(${scale})`, transformOrigin: 'top left' }
+    : { zoom: scale }
+}
+
+export function isIPadOS(
+  navigatorData: Pick<Navigator, 'maxTouchPoints' | 'platform' | 'userAgent'>
+): boolean {
+  return (
+    navigatorData.userAgent.includes('iPad') ||
+    (navigatorData.platform === 'MacIntel' &&
+      navigatorData.maxTouchPoints > 1)
+  )
+}
+
 export function resolveNativeLayoutTouchAction(
   touchPanMode: 'single-finger' | 'two-finger' | undefined,
   stylusOnly: boolean
 ): 'none' | 'pan-x pan-y' {
-  return stylusOnly || touchPanMode !== 'two-finger'
-    ? 'pan-x pan-y'
-    : 'none'
+  return stylusOnly || touchPanMode === 'two-finger'
+    ? 'none'
+    : 'pan-x pan-y'
 }
 
 /**
@@ -33,13 +71,21 @@ export function computeCenteredScrollPosition(
     clientHeight
   }: NativeLayoutViewportMetrics,
   previousScale: number,
-  nextScale: number
+  nextScale: number,
+  intrinsicSize?: NativeLayoutIntrinsicSize
 ): CenteredScrollPosition {
-  const contentCenterX = (scrollLeft + clientWidth / 2) / previousScale
+  const previousOffsetX = intrinsicSize
+    ? Math.max(0, (clientWidth - intrinsicSize.width * previousScale) / 2)
+    : 0
+  const nextOffsetX = intrinsicSize
+    ? Math.max(0, (clientWidth - intrinsicSize.width * nextScale) / 2)
+    : 0
+  const contentCenterX =
+    (scrollLeft + clientWidth / 2 - previousOffsetX) / previousScale
   const contentCenterY = (scrollTop + clientHeight / 2) / previousScale
 
   return {
-    left: Math.max(0, contentCenterX * nextScale - clientWidth / 2),
+    left: Math.max(0, contentCenterX * nextScale + nextOffsetX - clientWidth / 2),
     top: Math.max(0, contentCenterY * nextScale - clientHeight / 2)
   }
 }

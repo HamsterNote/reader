@@ -8,6 +8,7 @@ import type { PaintingControllerData } from '@hamster-note/painting'
 import { type RefObject, useEffect } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type {
   ReaderColorOption,
   ReaderPageTool,
@@ -44,6 +45,7 @@ export type DefaultBottomBarProps = {
   readonly isEpub: boolean | undefined
   readonly ocrEnabled: boolean
   readonly fontScale: ReaderFontScale | undefined
+  readonly lineHeight: ReaderLineHeight | undefined
   readonly layoutZoom: ReaderLayoutZoom | undefined
   readonly resolvedLayoutScale: number
   readonly touchPanMode: ReaderTouchPanMode
@@ -58,6 +60,7 @@ export type DefaultBottomBarProps = {
   readonly onRenderModeChange: (mode: ReaderRenderMode) => void
   readonly onOcrChange: (enabled: boolean) => void
   readonly onFontScaleChange: (scale: ReaderFontScale) => void
+  readonly onLineHeightChange: (lineHeight: ReaderLineHeight) => void
   readonly onLayoutZoomChange: (zoom: ReaderLayoutZoom) => void
   readonly onTouchPanModeChange: (mode: ReaderTouchPanMode) => void
   readonly onEdgeCropEditingChange: (editing: boolean) => void
@@ -238,11 +241,13 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
       )}
       <DefaultBottomBarMenus
         fontScale={visibleFontScale}
+        lineHeight={props.renderMode === 'text' ? props.lineHeight : undefined}
         layoutZoom={props.layoutZoom}
         selectedTool={props.selectedTool}
         theme={theme}
         menus={menus}
         onFontScaleChange={props.onFontScaleChange}
+        onLineHeightChange={props.onLineHeightChange}
         onLayoutZoomChange={props.onLayoutZoomChange}
         onSelectedToolChange={props.onSelectedToolChange}
       />

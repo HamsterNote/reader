@@ -5,6 +5,7 @@ import type {
 import { Fragment, useMemo } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
 import { reconstructPdfTextLayout } from './pdfTextLayout'
@@ -16,6 +17,7 @@ type PdfTextContentProps = {
   readonly paragraphs: IntermediateParagraph[]
   readonly setTextRef?: IntermediateDocumentSetTextRef
   readonly fontScale?: ReaderFontScale
+  readonly lineHeight?: ReaderLineHeight
   readonly sourceOffsetBase?: number
   readonly sourceOffsets?: ReadonlyMap<IntermediateText, number>
 }
@@ -26,6 +28,7 @@ export function PdfTextContent({
   paragraphs,
   setTextRef,
   fontScale,
+  lineHeight = 1.5,
   sourceOffsetBase = 0,
   sourceOffsets
 }: PdfTextContentProps) {
@@ -49,6 +52,7 @@ export function PdfTextContent({
         paragraphs={paragraphs}
         setTextRef={setTextRef}
         fontScale={fontScale}
+        lineHeight={lineHeight}
         preserveSourceFontSize={false}
         sourceOffsets={resolvedSourceOffsets}
       />
@@ -102,7 +106,7 @@ export function PdfTextContent({
                           glyph.text.color === 'transparent'
                             ? undefined
                             : glyph.text.color || undefined,
-                        lineHeight: 1.5
+                        lineHeight
                       }}
                     >
                       {glyph.text.content}

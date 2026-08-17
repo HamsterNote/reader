@@ -65,4 +65,48 @@ describe('Reader hydration', () => {
 
     await act(async () => root?.unmount())
   })
+
+  it('hydrates native layout before enabling the iPad transform structure', async () => {
+    // Given: the server has no navigator while the client is an iPadOS browser.
+    const browserWindow = window
+    const browserNavigator = navigator
+    vi.stubGlobal('window', undefined)
+    vi.stubGlobal('navigator', undefined)
+    const html = renderToString(
+      <Reader document={readerDocument} useVirtualPaper={false} />
+    )
+    vi.stubGlobal('window', browserWindow)
+    vi.stubGlobal('navigator', browserNavigator)
+    const platformSpy = vi
+      .spyOn(window.navigator, 'platform', 'get')
+      .mockReturnValue('MacIntel')
+    Object.defineProperty(window.navigator, 'maxTouchPoints', {
+      configurable: true,
+      value: 5
+    })
+    const container = document.createElement('div')
+    container.innerHTML = html
+    document.body.append(container)
+    const recoverableErrors: unknown[] = []
+
+    // When: React hydrates the server markup and then runs client effects.
+    let root: ReturnType<typeof hydrateRoot> | undefined
+    await act(async () => {
+      root = hydrateRoot(
+        container,
+        <Reader document={readerDocument} useVirtualPaper={false} />,
+        { onRecoverableError: (error) => recoverableErrors.push(error) }
+      )
+    })
+
+    // Then: hydration matches and the iPad-only extent appears after effects.
+    expect(recoverableErrors).toEqual([])
+    expect(
+      container.querySelector('[data-testid="native-layout-transform-extent"]')
+    ).not.toBeNull()
+
+    await act(async () => root?.unmount())
+    platformSpy.mockRestore()
+    Reflect.deleteProperty(window.navigator, 'maxTouchPoints')
+  })
 })

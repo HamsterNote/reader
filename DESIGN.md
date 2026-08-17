@@ -106,13 +106,18 @@ DOCX, image, TXT, and Markdown Layout views hide it.
 
 - **Trigger:** a compact secondary button labelled `字体：当前档位`, with the
   current value visible at every responsive width.
-- **Menu:** an anchored menu above the trigger with `特小`, `小`, `中`, `大`,
-  and `特大` in ascending order; the active item exposes `aria-pressed=true`.
+- **Menu:** an anchored typography menu above the trigger. Its `字号` group
+  contains `特小`, `小`, `中`, `大`, and `特大` in ascending order. Text mode
+  also exposes a separate `行间距` group with `1`, `1.2`, `1.5`, `1.8`, and
+  `2`; active items expose `aria-pressed=true`.
 - **Default:** each newly loaded supported document starts at `大` (`1.5`).
 - **Scale mapping:** `特小=0.5`, `小=0.75`, `中=1`, `大=1.5`, `特大=2`.
   Reflowable Text mode uses the selected value as its base `rem` size when
   source font hierarchy is not preserved. Surfaces that preserve source font
   hierarchy convert each source size with `(sourceFontSize / 16) * scale`.
+- **Line height:** Text mode defaults to `1.5`. Font size and line height are
+  independently controlled and persisted; Layout mode does not apply the Text
+  line-height preference.
 - **Dismissal:** selection, outside pointer input, or Escape closes the menu.
 - **Compatibility:** consumers that omit the Reader font scale retain legacy
   pixel sizing; the demo opts into scaling only for supported file formats.

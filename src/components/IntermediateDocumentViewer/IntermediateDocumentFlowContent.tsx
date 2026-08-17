@@ -6,6 +6,7 @@ import type {
 import { Fragment } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import { IntermediateDocumentFlowImageContent } from './IntermediateDocumentFlowImageContent'
 import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
@@ -19,6 +20,7 @@ type IntermediateDocumentFlowContentProps = {
   isPdf?: boolean
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   preserveSourceFontSize: boolean
   onImageSettled?: (imageId: string) => void
 }
@@ -136,6 +138,7 @@ export function IntermediateDocumentFlowContent({
   isPdf = false,
   setTextRef,
   fontScale,
+  lineHeight,
   preserveSourceFontSize,
   onImageSettled
 }: IntermediateDocumentFlowContentProps) {
@@ -163,6 +166,7 @@ export function IntermediateDocumentFlowContent({
             paragraphs={paragraphs}
             setTextRef={setTextRef}
             fontScale={fontScale}
+            lineHeight={lineHeight}
             sourceOffsetBase={run.sourceOffsetBase}
             sourceOffsets={sourceOffsets}
           />
@@ -173,6 +177,7 @@ export function IntermediateDocumentFlowContent({
             paragraphs={paragraphs}
             setTextRef={setTextRef}
             fontScale={fontScale}
+            lineHeight={lineHeight}
             preserveSourceFontSize={preserveSourceFontSize}
           />
         )}

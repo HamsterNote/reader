@@ -517,7 +517,10 @@ export function PageBrowser({
   const bookmarkByKey = useMemo(
     () =>
       new Map(
-        (bookmarks ?? []).map((bookmark) => [getBookmarkKey(bookmark), bookmark])
+        (bookmarks ?? []).map((bookmark) => [
+          getBookmarkKey(bookmark),
+          bookmark
+        ])
       ),
     [bookmarks]
   )
@@ -533,10 +536,12 @@ export function PageBrowser({
       if (!(target instanceof Element) || !navElement?.contains(target)) {
         return null
       }
-      const rangeId = target.closest<HTMLElement>('[data-range-id]')?.dataset
-        .rangeId
+      const rangeId =
+        target.closest<HTMLElement>('[data-range-id]')?.dataset.rangeId
       if (rangeId) {
-        const range = highlightRanges.find((candidate) => candidate.id === rangeId)
+        const range = highlightRanges.find(
+          (candidate) => candidate.id === rangeId
+        )
         return range ? { kind: 'highlight', value: range } : null
       }
       const bookmarkKey = target.closest<HTMLElement>('[data-bookmark-key]')

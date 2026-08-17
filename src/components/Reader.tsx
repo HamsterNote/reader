@@ -26,6 +26,7 @@ import type {
   ReaderCommentChangeDetail
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
+import type { ReaderLineHeight } from '../types/lineHeight'
 import type {
   ReaderBookmark,
   ReaderData,
@@ -213,6 +214,10 @@ export type ReaderProps = {
   fontScale?: ReaderFontScale
   /** 字号倍率变化回调。仅在提供 fontScale、启用字号菜单时触发。 */
   onFontScaleChange?: (scale: ReaderFontScale) => void
+  /** Text Mode 正文行距倍率。 */
+  lineHeight?: ReaderLineHeight
+  /** Text Mode 行距倍率变化回调。 */
+  onLineHeightChange?: (lineHeight: ReaderLineHeight) => void
   onTextSelectionChange?: (
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
@@ -263,6 +268,8 @@ export type ReaderProps = {
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
   onDragHighlight?: (highlight: ReaderSelectionRange) => void
+  /** 从侧栏拖动精确书签时触发，每次手势仅触发一次。 */
+  onDragBookmark?: (bookmark: ReaderBookmark) => void
   /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
   onRemoveRange?: (id: string) => void
   /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
@@ -635,6 +642,8 @@ export function Reader({
   isPdf,
   fontScale,
   onFontScaleChange,
+  lineHeight,
+  onLineHeightChange,
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
@@ -663,6 +672,7 @@ export function Reader({
   onSelectionEnd,
   onHighlight,
   onDragHighlight,
+  onDragBookmark,
   onRemoveRange,
   onHighlightColorChange,
   highlightColor,
@@ -1179,6 +1189,11 @@ export function Reader({
     [onFontScaleChange]
   )
 
+  const handleLineHeightChange = useCallback(
+    (nextLineHeight: ReaderLineHeight) => onLineHeightChange?.(nextLineHeight),
+    [onLineHeightChange]
+  )
+
   const handleTouchPanModeChange = useCallback(
     (nextMode: ReaderTouchPanMode) => {
       if (touchPanMode === undefined) setInternalTouchPanMode(nextMode)
@@ -1621,6 +1636,7 @@ export function Reader({
             isEpub={isEpub}
             isPdf={isPdf}
             fontScale={fontScale}
+            lineHeight={lineHeight}
             containMarginX={containMarginX}
             containMarginTop={resolvedVerticalMargins.top}
             containMarginBottom={resolvedVerticalMargins.bottom}
@@ -1661,6 +1677,7 @@ export function Reader({
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
+            onDragBookmark={onDragBookmark}
             highlightColor={resolvedHighlightColor}
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
@@ -1792,6 +1809,7 @@ export function Reader({
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
           onDragHighlight={onDragHighlight}
+          onDragBookmark={onDragBookmark}
           highlightColor={resolvedHighlightColor}
           selectionColor={selectionColor}
           showSelectionMagnifier={showSelectionMagnifier}
@@ -1998,6 +2016,7 @@ export function Reader({
             isEpub={isEpub}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
+            lineHeight={resolvedRenderMode === 'text' ? lineHeight : undefined}
             layoutZoom={resolveBottomBarLayoutZoom(
               resolvedRenderMode,
               useVirtualPaper,
@@ -2017,6 +2036,7 @@ export function Reader({
             onRenderModeChange={handleRenderModeChange}
             onOcrChange={handleOcrChange}
             onFontScaleChange={handleFontScaleChange}
+            onLineHeightChange={handleLineHeightChange}
             onLayoutZoomChange={handleLayoutZoomChange}
             onTouchPanModeChange={handleTouchPanModeChange}
             onEdgeCropEditingChange={handleEdgeCropEditingChange}

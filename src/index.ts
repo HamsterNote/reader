@@ -88,6 +88,7 @@ export type {
   ReaderCommentThreadNode
 } from './types/comments'
 export type { ReaderFontScale } from './types/fontScale'
+export type { ReaderLineHeight } from './types/lineHeight'
 export type {
   ReaderBookmark,
   ReaderData,
@@ -131,6 +132,8 @@ export type ReaderInteractiveProps = Pick<
   | 'onRenderModeChange'
   | 'fontScale'
   | 'onFontScaleChange'
+  | 'lineHeight'
+  | 'onLineHeightChange'
   | 'touchPanMode'
   | 'onTouchPanModeChange'
   | 'ranges'
