@@ -113,6 +113,7 @@ describe('epub parser integration', () => {
     expect(Reflect.get(epubDocument, 'epubCover')).toMatchObject({
       href: 'OPS/images/cover.png'
     })
+
     // When: 解析结果进入 Reader 转换层。
     const document = await convertEpubDocumentForReader(epubDocument)
     const runtimeDocument = getRuntimeDocument(document)
@@ -150,8 +151,12 @@ describe('epub parser integration', () => {
     expect(coverImages).toHaveLength(1)
     expect(coverImages[0]?.src).toMatch(/^data:image\/png;base64,/)
     expect(chapterImages).toHaveLength(2)
-    expect(chapterImages.every((image) => /^data:image\/png;base64,/.test(image.src))).toBe(true)
-    const chapterImageIndexes = chapterImages.map((image) => page1Entries.indexOf(image))
+    expect(
+      chapterImages.every((image) => /^data:image\/png;base64,/.test(image.src))
+    ).toBe(true)
+    const chapterImageIndexes = chapterImages.map((image) =>
+      page1Entries.indexOf(image)
+    )
     const leadingTextIndex = page1Entries.findIndex(
       (entry) =>
         isIntermediateText(entry) && entry.content === 'Hello EPUB text mode'
@@ -161,15 +166,18 @@ describe('epub parser integration', () => {
         isIntermediateText(entry) &&
         entry.content === 'Text after chapter illustration'
     )
-    expect(chapterImageIndexes.every((imageIndex) => imageIndex > -1)).toBe(true)
-    expect(chapterImageIndexes.every((imageIndex) => imageIndex > leadingTextIndex)).toBe(
+    expect(chapterImageIndexes.every((imageIndex) => imageIndex > -1)).toBe(
       true
     )
-    expect(chapterImageIndexes.every((imageIndex) => trailingTextIndex > imageIndex)).toBe(true)
+    expect(
+      chapterImageIndexes.every((imageIndex) => imageIndex > leadingTextIndex)
+    ).toBe(true)
+    expect(
+      chapterImageIndexes.every((imageIndex) => trailingTextIndex > imageIndex)
+    ).toBe(true)
     expect(page1Text).toContain('Hello EPUB text mode')
     expect(page2Text).toContain('Second chapter text')
     expect(coverPage).toHaveProperty('useFlowLayout', true)
     expect(page1).toHaveProperty('useFlowLayout', true)
   })
-
 })

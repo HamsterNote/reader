@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1-beta.2] - 2026-08-17
+
+### Added
+- 文本模式新增独立行间距设置，支持 `1`、`1.2`、`1.5`、`1.8`、`2` 五档，并通过 `lineHeight` / `onLineHeightChange` 接入受控状态与阅读偏好持久化。
+- 原生 Layout 模式增强 iPad 触控体验，补充固定比例缩放、双指平移及触控反馈布局。
+
+### Changed
+- 重构文本阅读窗口：PDF 按四页分段，EPUB 等可重排格式按单页分段；仅挂载当前分段，并预加载前后三个完整分段。
+- 优化文本模式阅读进度、范围跳转、页面浏览器、高亮标记及内容边距，使其适配原生分段滚动。
+- 升级 `@hamster-note/epub-parser` 至 `0.5.1-beta.2`，移除文本窗口不再使用的 `@tanstack/react-virtual`。
+
+### Fixed
+- 修复 native Layout 缩放、绘图输入方式与 EPUB 内容顺序相关的兼容问题，并补充对应回归测试。
+
 ## [1.13.1-beta.1] - 2026-08-15
 
 ### Added

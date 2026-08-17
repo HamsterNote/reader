@@ -45,8 +45,7 @@ export function isIPadOS(
 ): boolean {
   return (
     navigatorData.userAgent.includes('iPad') ||
-    (navigatorData.platform === 'MacIntel' &&
-      navigatorData.maxTouchPoints > 1)
+    (navigatorData.platform === 'MacIntel' && navigatorData.maxTouchPoints > 1)
   )
 }
 
@@ -54,9 +53,8 @@ export function resolveNativeLayoutTouchAction(
   touchPanMode: 'single-finger' | 'two-finger' | undefined,
   stylusOnly: boolean
 ): 'none' | 'pan-x pan-y' {
-  return stylusOnly || touchPanMode === 'two-finger'
-    ? 'none'
-    : 'pan-x pan-y'
+  if (stylusOnly || touchPanMode === 'two-finger') return 'none'
+  return 'pan-x pan-y'
 }
 
 /**
@@ -85,7 +83,10 @@ export function computeCenteredScrollPosition(
   const contentCenterY = (scrollTop + clientHeight / 2) / previousScale
 
   return {
-    left: Math.max(0, contentCenterX * nextScale + nextOffsetX - clientWidth / 2),
+    left: Math.max(
+      0,
+      contentCenterX * nextScale + nextOffsetX - clientWidth / 2
+    ),
     top: Math.max(0, contentCenterY * nextScale - clientHeight / 2)
   }
 }

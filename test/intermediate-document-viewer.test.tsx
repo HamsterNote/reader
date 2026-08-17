@@ -8675,11 +8675,13 @@ describe('IntermediateDocumentViewer', () => {
       Reflect.set(image, 'alt', 'EPUB text-mode illustration')
       const page = {
         paragraphs: [],
-        getContent: vi.fn(async (): Promise<IntermediateContent[]> => [
-          makeText('text-epub-before-image', 'Text before EPUB image'),
-          image,
-          makeText('text-epub-after-image', 'Text after EPUB image')
-        ]),
+        getContent: vi.fn(async (): Promise<IntermediateContent[]> => {
+          return [
+            makeText('text-epub-before-image', 'Text before EPUB image'),
+            image,
+            makeText('text-epub-after-image', 'Text after EPUB image')
+          ]
+        }),
         getThumbnail: vi.fn(async () => 'data:image/png;base64,thumbnail')
       }
 

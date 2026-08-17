@@ -578,7 +578,12 @@ function resolveBottomBarLayoutZoom(
   useVirtualPaper: boolean,
   layoutZoom: ReaderLayoutZoom
 ): ReaderLayoutZoom | undefined {
-  return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
+  if (renderMode !== 'layout' || useVirtualPaper) return undefined
+  return layoutZoom
+}
+
+function resolveLoadingRatio(total: number, current: number): number {
+  return total <= 0 ? 0 : current / total
 }
 
 function resolveVerticalMargins(
@@ -595,25 +600,35 @@ function resolveVerticalMargins(
     }
   }
 
+  const top = containMarginTop ?? containMarginY
+  const bottom = (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset
   return {
-    top: containMarginTop ?? containMarginY,
-    bottom: (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset,
+    top,
+    bottom,
     legacy: undefined
   }
 }
 
 function resolveLoadingProgress(
   progress: ReaderLoadingProgress | null | undefined
-): { readonly label: string; readonly percent: number } | null {
-  if (!progress) {
-    return null
-  }
-
-  const ratio = progress.total > 0 ? progress.current / progress.total : 0
+): {
+  readonly label: string
+  readonly percent: number
+} | null {
+  if (!progress) return null
   return {
     label: progress.label,
-    percent: Math.min(100, Math.max(0, ratio * 100))
+    percent: Math.min(
+      100,
+      Math.max(0, resolveLoadingRatio(progress.total, progress.current) * 100)
+    )
   }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export function Reader({
@@ -1586,15 +1601,7 @@ export function Reader({
     ]
   )
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
-
-  const rootClassName = className
-    ? `hamster-reader ${className}`
-    : 'hamster-reader'
+  const rootClassName = ['hamster-reader', className].filter(Boolean).join(' ')
   const readerThemeStyle: CSSProperties & {
     '--hamster-reader-theme-color': string
   } = {
@@ -1623,7 +1630,9 @@ export function Reader({
     [onCommentRect, onSelectRect, selectedRectId]
   )
 
-  const resolvedLoadingProgress = resolveLoadingProgress(loadingProgress)
+  const resolvedLoadingProgress = useMemo(() => {
+    return resolveLoadingProgress(loadingProgress)
+  }, [loadingProgress])
   const showUploadZone = !document && !uploadedFile && !resolvedLoadingProgress
   const showFileInfo = !document && uploadedFile && !resolvedLoadingProgress
   const showDocumentContent = document?.title ?? emptyText

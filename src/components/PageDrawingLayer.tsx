@@ -74,6 +74,9 @@ export function PageDrawingLayer({
   const safeCanvasScale =
     Number.isFinite(canvasScale) && canvasScale > 0 ? canvasScale : 1
   const stylusOnly = controllerData.stylusMode === true
+  const enabledInputMethods: 'pen'[] | undefined = stylusOnly
+    ? ['pen']
+    : undefined
   const drawingValue = useMemo(
     () => scaleDrawingValue(sanitizeDrawingValue(value), safeCanvasScale),
     [safeCanvasScale, value]
@@ -117,7 +120,11 @@ export function PageDrawingLayer({
       }
       layer.removeEventListener('pointerdown', handlePenPointerDown, true)
       ownerDocument.removeEventListener('pointerup', handlePenPointerEnd, true)
-      ownerDocument.removeEventListener('pointercancel', handlePenPointerEnd, true)
+      ownerDocument.removeEventListener(
+        'pointercancel',
+        handlePenPointerEnd,
+        true
+      )
     }
   }, [enabled, stylusOnly])
 
@@ -204,7 +211,7 @@ export function PageDrawingLayer({
       <PaintingBoard
         value={drawingValue}
         onChange={handleChange}
-        inputMethods={enabled ? (stylusOnly ? ['pen'] : undefined) : []}
+        inputMethods={enabled ? enabledInputMethods : []}
         cursor={enabled ? undefined : false}
         toolbar={false}
         virtualPaper={false}

@@ -3344,7 +3344,8 @@ function useNativeLayoutViewport(
       previousCentroid = getGesturePoint(event)
     }
     const handlePointerDown = (event: PointerEvent) => {
-      if (!stylusOnly || event.pointerType !== 'touch' || !event.isPrimary) return
+      if (!stylusOnly) return
+      if (event.pointerType !== 'touch' || !event.isPrimary) return
       activeTouchPointer = {
         id: event.pointerId,
         x: event.clientX,
@@ -3353,9 +3354,8 @@ function useNativeLayoutViewport(
       viewport.setPointerCapture(event.pointerId)
     }
     const handlePointerMove = (event: PointerEvent) => {
-      if (event.pointerType !== 'touch' || event.pointerId !== activeTouchPointer?.id) {
-        return
-      }
+      if (event.pointerType !== 'touch') return
+      if (event.pointerId !== activeTouchPointer?.id) return
       event.preventDefault()
       viewport.scrollLeft += activeTouchPointer.x - event.clientX
       viewport.scrollTop += activeTouchPointer.y - event.clientY
