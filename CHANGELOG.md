@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1-beta.3] - 2026-08-18
+
+### Changed
+- 调整 beta 版本发布号到 `1.13.1-beta.3`，同步更新包版本元数据与发布说明。
+- 发布工作流继续通过 tag 触发，beta tag 将以 `beta` dist-tag 发布到 npm。
+
 ## [1.13.1-beta.2] - 2026-08-17
 
 ### Added

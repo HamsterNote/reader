@@ -466,10 +466,10 @@
     htmlparser2 "12.0.0"
     mammoth "1.12.0"
 
-"@hamster-note/epub-parser@0.5.1-beta.2":
-  version "0.5.1-beta.2"
-  resolved "https://registry.yarnpkg.com/@hamster-note/epub-parser/-/epub-parser-0.5.1-beta.2.tgz#631be65ce1c095d9b2077bf0e180d4d7507a861f"
-  integrity sha512-rGM2p9JQmzq1UPRsSQluXpzppY0s/EVS7VnVGQJ0oE32CTgkZMEn80Amwet3Obqcli0owuaoOjhTKvy1MdbPcg==
+"@hamster-note/epub-parser@0.5.1-beta.3":
+  version "0.5.1-beta.3"
+  resolved "https://registry.yarnpkg.com/@hamster-note/epub-parser/-/epub-parser-0.5.1-beta.3.tgz#4ab0d092fecc9227366af14f0bcaeb1a6b337d53"
+  integrity sha512-VInQvSO+mr2x/f95Qiv6QDh1tjuvvMsTgKJXy55bklwHj89FA132YKMTnLoYsJdPMCowQ08ALJGDv5oU7i5G2Q==
   dependencies:
     "@hamster-note/document-parser" "0.3.1"
     "@hamster-note/types" "0.11.0-beta.1"
