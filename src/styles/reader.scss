@@ -1754,7 +1754,7 @@
   }
 
   // 只反转文章页面树。相对定位的 Popover Portal 是 viewport 的兄弟节点，
-  // 因此不会继承此滤镜；只有嵌入媒体与绘图层恢复源颜色，整页底图仍随页面反色。
+  // 因此不会继承此滤镜；彩色媒体、绘图和选区交互层需二次反转以恢复源颜色。
   .hamster-note-document-gutter {
     filter: invert(1);
 
@@ -1762,6 +1762,15 @@
     .hamster-reader__intermediate-flow-image img,
     video,
     .hamster-reader__drawing-layer {
+      filter: invert(1);
+    }
+
+    .hsn-selection-overlay,
+    .hsn-selection-percent-overlay {
+      filter: invert(1);
+    }
+
+    .hsn-selection-handle {
       filter: invert(1);
     }
   }

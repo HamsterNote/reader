@@ -38,7 +38,7 @@ describe('reader styles', () => {
     expect(darkTextSurfaceRule?.[0]).toContain('color: #ffffff')
   })
 
-  it('directly inverts layout pages while restoring only embedded media', () => {
+  it('directly inverts layout pages while restoring colored overlays', () => {
     // Given: the reader styles are compiled as shipped.
     const readerStyles = sass.compile(
       path.resolve(__dirname, '../src/styles/reader.scss')
@@ -51,14 +51,23 @@ describe('reader styles', () => {
     const mediaFilterRule = readerStyles.match(
       /\.hamster-reader--dark-layout \.hamster-note-document-gutter \.hamster-reader__intermediate-page-image,[^{]*\.hamster-reader__drawing-layer\s*\{[^}]*\}/s
     )
+    const selectionFilterRule = readerStyles.match(
+      /\.hamster-reader--dark-layout \.hamster-note-document-gutter \.hsn-selection-overlay,[^{]*\.hsn-selection-percent-overlay\s*\{[^}]*\}/s
+    )
+    const selectionHandleRule = readerStyles.match(
+      /\.hamster-reader--dark-layout \.hamster-note-document-gutter \.hsn-selection-handle\s*\{[^}]*\}/s
+    )
     const layoutSurfaceRule = readerStyles.match(
       /\.hamster-reader--dark-layout \.hamster-reader__content,[^{]*\.hamster-reader__intermediate-document-viewer\s*\{[^}]*\}/s
     )
 
-    // Then: pages use exact inversion, embedded media keeps its colors, and page
-    // base images remain part of the page inversion instead of being restored.
+    // Then: pages use exact inversion, embedded media and selection overlays keep
+    // their colors, and page base images remain part of the page inversion.
     expect(articleFilterRule?.[0]).toContain('filter: invert(1)')
     expect(mediaFilterRule?.[0]).toContain('filter: invert(1)')
+    expect(selectionFilterRule?.[0]).toContain('filter: invert(1)')
+    expect(selectionFilterRule?.[0]).toContain('.hsn-selection-percent-overlay')
+    expect(selectionHandleRule?.[0]).toContain('filter: invert(1)')
     expect(mediaFilterRule?.[0]).toContain(
       '.hamster-reader__intermediate-flow-image img'
     )
