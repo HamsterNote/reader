@@ -1,6 +1,7 @@
 const DATABASE_NAME = 'hamster-reader-demo'
-const DATABASE_VERSION = 1
+const DATABASE_VERSION = 2
 const FILE_STORE_NAME = 'files'
+const PDF_STRUCTURE_STORE_NAME = 'pdf-structures'
 const RECENT_FILE_KEY = 'recent'
 
 function openDatabase(): Promise<IDBDatabase | null> {
@@ -18,6 +19,9 @@ function openDatabase(): Promise<IDBDatabase | null> {
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(FILE_STORE_NAME)) {
         request.result.createObjectStore(FILE_STORE_NAME)
+      }
+      if (!request.result.objectStoreNames.contains(PDF_STRUCTURE_STORE_NAME)) {
+        request.result.createObjectStore(PDF_STRUCTURE_STORE_NAME)
       }
     }
     request.onsuccess = () => resolve(request.result)
@@ -80,6 +84,77 @@ export async function loadRecentFile(): Promise<File | null> {
     transaction.oncomplete = () => {
       database.close()
       resolve(storedValue instanceof File ? storedValue : null)
+    }
+    transaction.onerror = () => {
+      database.close()
+      resolve(null)
+    }
+    transaction.onabort = () => {
+      database.close()
+      resolve(null)
+    }
+  })
+}
+
+export async function savePdfStructureJson(
+  fileName: string,
+  json: string
+): Promise<boolean> {
+  const database = await openDatabase()
+  if (!database) return false
+
+  return new Promise((resolve) => {
+    let transaction: IDBTransaction
+    try {
+      transaction = database.transaction(PDF_STRUCTURE_STORE_NAME, 'readwrite')
+      transaction.objectStore(PDF_STRUCTURE_STORE_NAME).put(json, fileName)
+    } catch {
+      database.close()
+      resolve(false)
+      return
+    }
+
+    transaction.oncomplete = () => {
+      database.close()
+      resolve(true)
+    }
+    transaction.onerror = () => {
+      database.close()
+      resolve(false)
+    }
+    transaction.onabort = () => {
+      database.close()
+      resolve(false)
+    }
+  })
+}
+
+export async function loadPdfStructureJson(
+  fileName: string
+): Promise<string | null> {
+  const database = await openDatabase()
+  if (!database) return null
+
+  return new Promise((resolve) => {
+    let transaction: IDBTransaction
+    let storedValue: unknown
+    try {
+      transaction = database.transaction(PDF_STRUCTURE_STORE_NAME, 'readonly')
+      const request = transaction
+        .objectStore(PDF_STRUCTURE_STORE_NAME)
+        .get(fileName)
+      request.onsuccess = () => {
+        storedValue = request.result
+      }
+    } catch {
+      database.close()
+      resolve(null)
+      return
+    }
+
+    transaction.oncomplete = () => {
+      database.close()
+      resolve(typeof storedValue === 'string' ? storedValue : null)
     }
     transaction.onerror = () => {
       database.close()

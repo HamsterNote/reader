@@ -158,7 +158,9 @@ type PendingTextRangeNavigation = {
 
 type PendingTextWindowAlignment = {
   readonly pageNumber: number
-  readonly alignment: 'start' | 'end'
+  // 'top'：仅用于「加载下一段」，直接把 scrollTop 归零，
+  // 让视口 paddingTop（containMarginTop）自然生效
+  readonly alignment: 'start' | 'end' | 'top'
   readonly navigationGeneration: number
   readonly documentGeneration: symbol
   readonly windowPageNumbers: readonly number[]
@@ -1500,13 +1502,20 @@ export function IntermediateDocumentTextViewer(
 
     const viewportRect = viewport.getBoundingClientRect()
     const pageRect = pageElement.getBoundingClientRect()
-    const top =
-      pending.alignment === 'end'
-        ? Math.max(0, viewport.scrollHeight - viewport.clientHeight)
-        : viewport.scrollTop +
-          pageRect.top -
-          viewportRect.top +
-          pageRect.height * pending.pageProgress
+    let top: number
+    if (pending.alignment === 'end') {
+      top = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+    } else if (pending.alignment === 'top') {
+      // 回到滚动原点：视口 paddingTop（containMarginTop）随之保留，
+      // 首行文字不会贴到容器顶边
+      top = 0
+    } else {
+      top =
+        viewport.scrollTop +
+        pageRect.top -
+        viewportRect.top +
+        pageRect.height * pending.pageProgress
+    }
     viewport.scrollTo({ behavior: 'auto', top })
     pendingTextWindowAlignmentRef.current = null
     restoredProgressPageRef.current = pending.pageNumber
@@ -1517,7 +1526,7 @@ export function IntermediateDocumentTextViewer(
     (
       pageNumber: number,
       source: 'restore' | 'user' = 'user',
-      alignment: 'start' | 'end' = 'start',
+      alignment: 'start' | 'end' | 'top' = 'start',
       pageProgress = 0
     ) => {
       if (!pageNumbers.includes(pageNumber)) return
@@ -3451,7 +3460,13 @@ export function IntermediateDocumentTextViewer(
               className='hamster-reader__intermediate-text-window-button'
               type='button'
               onClick={() =>
-                handleReadingProgressSeekPage(nextWindowPageNumber)
+                // 进入下一段只需保持 scrollTop 为 0（'top' 对齐），
+                // 顶部间隔 props 通过视口 paddingTop 自然生效
+                handleReadingProgressSeekPage(
+                  nextWindowPageNumber,
+                  'user',
+                  'top'
+                )
               }
             >
               加载下一段

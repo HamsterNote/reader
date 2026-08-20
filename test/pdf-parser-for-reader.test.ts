@@ -105,4 +105,66 @@ describe('openPdfDocumentForReader', () => {
     await expect(openedHandle.dispose()).resolves.toBeUndefined()
     expect(dispose).toHaveBeenCalledOnce()
   })
+
+  it('uses cached dimensions only for the initial page scan', async () => {
+    // Given: parser 的 session 暴露真实 getPage，sidecar 已缓存第一页宽高。
+    const realPage = { getViewport: vi.fn(() => ({ width: 1, height: 1 })) }
+    const getPage = vi.fn(async () => realPage)
+    const parser = {
+      loadPdfSession: vi.fn(async () => ({
+        loadingTask: { destroy: vi.fn() },
+        pdf: { numPages: 1, getPage }
+      })),
+      openDocument: vi.fn()
+    }
+    configurePdfParserForReader(parser)
+    const loader = Reflect.get(parser, 'loadPdfSession')
+    if (typeof loader !== 'function') throw new Error('loader missing')
+    parser.openDocument.mockImplementation(async (source: ArrayBuffer) => {
+      const session = await Reflect.apply(loader, parser, [source])
+      const pdf = Reflect.get(session, 'pdf')
+      const cachedPage = await Reflect.apply(
+        Reflect.get(pdf, 'getPage'),
+        pdf,
+        [1]
+      )
+      const contentPage = await Reflect.apply(
+        Reflect.get(pdf, 'getPage'),
+        pdf,
+        [1]
+      )
+      if (typeof cachedPage !== 'object' || cachedPage === null) {
+        throw new Error('cached page missing')
+      }
+      const getViewport = Reflect.get(cachedPage, 'getViewport')
+      if (typeof getViewport !== 'function') {
+        throw new Error('cached viewport missing')
+      }
+      expect(Reflect.apply(getViewport, cachedPage, [])).toEqual({
+        width: 612,
+        height: 792
+      })
+      expect(contentPage).toBe(realPage)
+      return {
+        id: 'cached-pdf',
+        title: 'Cached',
+        pageCount: 1,
+        document: new IntermediateDocument({
+          id: 'cached-pdf',
+          title: 'Cached',
+          pagesMap: new IntermediatePageMap()
+        }),
+        dispose: vi.fn(async () => undefined)
+      }
+    })
+
+    // When: Reader 使用缓存结构打开 PDF。
+    await openPdfDocumentForReader(parser, new ArrayBuffer(4), {
+      cachedPageCount: 1,
+      cachedPages: [{ pageNumber: 1, width: 612, height: 792 }]
+    })
+
+    // Then: 扫描不访问真实页面，后续正文加载只访问一次真实页面。
+    expect(getPage).toHaveBeenCalledOnce()
+  })
 })

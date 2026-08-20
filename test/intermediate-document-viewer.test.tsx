@@ -2443,6 +2443,139 @@ describe('IntermediateDocumentViewer', () => {
     Reflect.deleteProperty(window.navigator, 'maxTouchPoints')
   })
 
+  it('keeps page visibility observation targets stable on iPadOS', async () => {
+    // Given: iPadOS uses the native layout path with several lazy page shells.
+    const platformSpy = vi
+      .spyOn(window.navigator, 'platform', 'get')
+      .mockReturnValue('MacIntel')
+    Object.defineProperty(window.navigator, 'maxTouchPoints', {
+      configurable: true,
+      value: 5
+    })
+    const { document } = makeDocument({ pageCount: 4 })
+
+    let renderResult: ReturnType<typeof render> | undefined
+    let initialPage: HTMLElement | undefined
+    try {
+      renderResult = render(
+        <IntermediateDocumentViewer
+          document={document}
+          initialLoadedPages={1}
+          pageLoadEnterDelayMs={0}
+          pagePreloadRadius={0}
+          overscan={0}
+          useVirtualPaper={false}
+        />
+      )
+      initialPage = screen.getByTestId('intermediate-page-1')
+      await screen.findByText('Page 1 text')
+
+      // When: the native viewport has completed its initial layout effects.
+      const page = screen.getByTestId('intermediate-page-1')
+      const observer = intersectionObserverMock.instances.find((instance) =>
+        instance.observedElements.has(page)
+      )
+
+      // Then: the page observer must retain the currently mounted page node.
+      expect(page).toBe(initialPage)
+      expect(observer).toBeDefined()
+      expect(observer?.observedElements.has(page)).toBe(true)
+      expect(page.isConnected).toBe(true)
+    } finally {
+      renderResult?.unmount()
+      platformSpy.mockRestore()
+      Reflect.deleteProperty(window.navigator, 'maxTouchPoints')
+    }
+  })
+
+  it('re-observes pages when switching between virtual and native layout', async () => {
+    // Given: a native-layout document with a page already registered for visibility.
+    const { document } = makeDocument({ pageCount: 2 })
+    const { rerender } = render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+        overscan={0}
+        useVirtualPaper={false}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    // When: the host switches to the virtual-paper layout and remounts page nodes.
+    rerender(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+        overscan={0}
+        useVirtualPaper
+      />
+    )
+    const page = screen.getByTestId('intermediate-page-1')
+
+    // Then: the new page node is registered with an active observer.
+    await waitFor(() => {
+      expect(
+        intersectionObserverMock.instances.some((instance) =>
+          instance.observedElements.has(page)
+        )
+      ).toBe(true)
+    })
+  })
+
+  it('ignores visibility events from a stale node with the same page number', async () => {
+    // Given: two loaded pages and no preload/overscan protection between them.
+    const { document } = makeDocument({ pageCount: 2 })
+    render(
+      <IntermediateDocumentViewer
+        document={document}
+        initialLoadedPages={1}
+        pageLoadEnterDelayMs={0}
+        pagePreloadRadius={0}
+        overscan={0}
+      />
+    )
+    await screen.findByText('Page 1 text')
+
+    await act(async () => {
+      intersectionObserverMock.trigger(
+        screen.getByTestId('intermediate-page-2'),
+        true
+      )
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+
+    const pageOne = screen.getByTestId('intermediate-page-1')
+    const pageTwo = screen.getByTestId('intermediate-page-2')
+    await act(async () => {
+      intersectionObserverMock.trigger(pageOne, true)
+    })
+
+    // When: an old WebKit observer reports a detached node for page 2.
+    const stalePageTwo = pageTwo.cloneNode(false) as HTMLElement
+    const observer = intersectionObserverMock.instances.find((instance) =>
+      instance.observedElements.has(pageTwo)
+    )
+    expect(observer).toBeDefined()
+
+    vi.useFakeTimers()
+    try {
+      observer?.trigger(stalePageTwo, false)
+      act(() => {
+        vi.advanceTimersByTime(5000)
+      })
+
+      // Then: the current page 2 content remains available.
+      expect(screen.getByText('Page 2 text')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('matches the iPad transform extent to the scaled native document', async () => {
     // Given: iPadOS has an 800x1200 intrinsic document at 25% zoom.
     const platformSpy = vi
@@ -3451,6 +3584,40 @@ describe('IntermediateDocumentViewer', () => {
     expect(screen.queryByTestId('intermediate-text-page-1')).toBeNull()
     expect(screen.queryByTestId('intermediate-text-page-3')).toBeNull()
     expect(screen.queryByTestId('virtual-paper-wrapper')).toBeNull()
+  })
+
+  it('text mode opens the next segment at the scroll origin honoring the top inset', async () => {
+    // Given: Text Mode 设置了顶部间隔，首个分段已挂载。
+    const { document } = makeDocument({ pageCount: 3 })
+    render(
+      <IntermediateDocumentTextViewer
+        document={document}
+        containMarginTop={40}
+        pageLoadEnterDelayMs={0}
+      />
+    )
+    const scrollEl = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(scrollEl, {
+      width: 800,
+      height: 600,
+      scrollHeight: 2000
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(scrollEl, 'scrollTo', {
+      configurable: true,
+      value: scrollTo
+    })
+    await screen.findByText('Page 1 text')
+
+    // When: the user loads the next segment.
+    fireEvent.click(screen.getByRole('button', { name: '加载下一段' }))
+
+    // Then: the viewport stays at the scroll origin so the top inset keeps
+    // the first line off the container edge.
+    await screen.findByText('Page 2 text')
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', top: 0 })
+    })
   })
 
   it('text mode opens the previous segment at its bottom', async () => {

@@ -399,6 +399,8 @@ export type ReaderLoadingProgress = {
   readonly label: string
   readonly current: number
   readonly total: number
+  /** True when the active operation cannot report a meaningful percentage. */
+  readonly indeterminate?: boolean
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -613,11 +615,16 @@ function resolveLoadingProgress(
   progress: ReaderLoadingProgress | null | undefined
 ): {
   readonly label: string
-  readonly percent: number
+  readonly indeterminate: boolean
+  readonly percent: number | null
 } | null {
   if (!progress) return null
+  if (progress.indeterminate) {
+    return { label: progress.label, indeterminate: true, percent: null }
+  }
   return {
     label: progress.label,
+    indeterminate: false,
     percent: Math.min(
       100,
       Math.max(0, resolveLoadingRatio(progress.total, progress.current) * 100)
@@ -1951,15 +1958,19 @@ export function Reader({
             aria-atomic='true'
           >
             <span>{resolvedLoadingProgress.label}</span>
-            <span data-testid='reader-loading-progress-percent'>
-              {resolvedLoadingProgress.percent.toFixed(0)}%
-            </span>
+            {!resolvedLoadingProgress.indeterminate && (
+              <span data-testid='reader-loading-progress-percent'>
+                {resolvedLoadingProgress.percent?.toFixed(0)}%
+              </span>
+            )}
           </div>
           <progress
             aria-label={resolvedLoadingProgress.label}
             className='hamster-reader__loading-progress-bar'
             max={100}
-            value={resolvedLoadingProgress.percent}
+            {...(resolvedLoadingProgress.indeterminate
+              ? { 'aria-valuetext': '处理中' }
+              : { value: resolvedLoadingProgress.percent ?? 0 })}
           />
         </section>
       )}

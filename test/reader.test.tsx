@@ -482,6 +482,27 @@ describe('Reader public API', () => {
     ).toHaveTextContent('100%')
   })
 
+  it('renders indeterminate loading progress without a fake percentage', () => {
+    render(
+      <Reader
+        loadingProgress={{
+          label: '正在解析 EPUB',
+          current: 0,
+          total: 0,
+          indeterminate: true
+        }}
+      />
+    )
+
+    const progress = screen.getByRole('progressbar', { name: '正在解析 EPUB' })
+
+    expect(progress).not.toHaveAttribute('value')
+    expect(progress).toHaveAttribute('aria-valuetext', '处理中')
+    expect(
+      screen.queryByTestId('reader-loading-progress-percent')
+    ).not.toBeInTheDocument()
+  })
+
   it('renders IntermediateDocumentViewer by default for a paged serialized document', () => {
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
 

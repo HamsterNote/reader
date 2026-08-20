@@ -2860,6 +2860,38 @@ describe('demo parser flow', () => {
       expect(await screen.findByText('Second Document')).toBeInTheDocument()
     })
 
+    it('shows an EPUB before its recent-file save finishes', async () => {
+      const save = createDeferred<boolean>()
+      const parse = createDeferred<IntermediateDocument>()
+      const document = makeRuntimeDocument('Large EPUB Document')
+      epubEncode.mockReturnValue(parse.promise)
+      vi.mocked(saveRecentFile).mockReturnValue(save.promise)
+
+      render(<App />)
+      const file = makeFile('large.epub')
+
+      selectFile(file)
+
+      await waitFor(() => {
+        expect(epubEncode).toHaveBeenCalledWith(file)
+      })
+
+      expect(
+        screen.getByTestId('mock-reader-loading-progress').textContent
+      ).toMatch(/正在读取 EPUB: 1\/3|正在解析 EPUB: 0\/0/)
+
+      parse.resolve(document)
+      await waitFor(() => {
+        expect(saveRecentFile).toHaveBeenCalledWith(file)
+      })
+
+      expect(await screen.findByText('Large EPUB Document')).toBeInTheDocument()
+      expect(screen.queryByText('Loading file content...')).not.toBeInTheDocument()
+
+      save.resolve(true)
+      await waitFor(() => expect(saveRecentFile).toHaveBeenCalledOnce())
+    })
+
     it('preserves stored comments while a newly uploaded file is still parsing', async () => {
       const fileName = 'comment-restore.pdf'
       const range = makeLinkedRange('comment-restore-range', 'restored text')

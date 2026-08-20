@@ -3501,6 +3501,8 @@ function NativeLayoutViewport({
     ? computeNativeLayoutTransformExtent(intrinsicSize, transform.scale)
     : null
 
+  // 两种缩放模式共用同一组包装节点，只切换样式；这样设备检测不会重建页面
+  // DOM，也不会让 IntersectionObserver 继续持有已经脱离文档的旧页面节点。
   return (
     <div
       className='virtual-paper-wrapper hamster-reader__native-layout-viewport'
@@ -3510,52 +3512,59 @@ function NativeLayoutViewport({
         touchAction: resolveNativeLayoutTouchAction(touchPanMode, stylusOnly)
       }}
     >
-      {useTransformScale ? (
+      <div
+        data-testid={
+          useTransformScale ? 'native-layout-transform-extent' : undefined
+        }
+        style={
+          useTransformScale
+            ? {
+                display: 'flex',
+                justifyContent: 'center',
+                minWidth: '100%',
+                minHeight: '100%',
+                width: extent?.width,
+                height: extent?.height
+            }
+            : { display: 'contents' }
+        }
+      >
         <div
-          data-testid='native-layout-transform-extent'
-          style={{
-            display: 'flex',
-            justifyContent: 'center',
-            minWidth: '100%',
-            minHeight: '100%',
-            width: extent?.width,
-            height: extent?.height
-          }}
+          data-testid={
+            useTransformScale ? 'native-layout-transform-clip' : undefined
+          }
+          style={
+            useTransformScale
+              ? {
+                  flex: '0 0 auto',
+                  overflow: 'clip',
+                  position: 'relative',
+                  width: extent?.width,
+                  height: extent?.height
+              }
+              : { display: 'contents' }
+          }
         >
           <div
-            data-testid='native-layout-transform-clip'
-            style={{
-              flex: '0 0 auto',
-              overflow: 'clip',
-              position: 'relative',
-              width: extent?.width,
-              height: extent?.height
-            }}
+            className='virtual-paper-container hamster-reader__native-layout-container'
+            ref={containerRef}
+            style={
+              useTransformScale
+                ? {
+                    ...containerStyle,
+                    left: 0,
+                    minHeight: 0,
+                    minWidth: 0,
+                    position: 'absolute',
+                    top: 0
+                  }
+                : containerStyle
+            }
           >
-            <div
-              className='virtual-paper-container hamster-reader__native-layout-container'
-              ref={containerRef}
-              style={{
-                ...containerStyle,
-                left: 0,
-                minHeight: 0,
-                minWidth: 0,
-                position: 'absolute',
-                top: 0
-              }}
-            >
-              {pagesNode}
-            </div>
+            {pagesNode}
           </div>
         </div>
-      ) : (
-        <div
-          className='virtual-paper-container hamster-reader__native-layout-container'
-          style={containerStyle}
-        >
-          {pagesNode}
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -4903,6 +4912,7 @@ export function IntermediateDocumentViewer({
     return previewPageSizes
   }, [effectiveEdgeCrop, pageNumbers, pageSizesByPageNumber])
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
+  const pageVisibilityObserverRef = useRef<IntersectionObserver | null>(null)
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
   // Loading 可在关闭页面时提前隐藏，但底层 Promise 无法取消；独立活动槽必须保留到
@@ -7799,12 +7809,21 @@ export function IntermediateDocumentViewer({
   const setPageRef = useCallback((pageNumber: number) => {
     let callback = stablePageRefCallbacks.current.get(pageNumber)
     if (!callback) {
+      let currentElement: HTMLDivElement | null = null
       callback = (element: HTMLDivElement | null) => {
-        if (element) {
-          pageRefs.current.set(pageNumber, element)
-        } else {
-          pageRefs.current.delete(pageNumber)
+        if (currentElement && currentElement !== element) {
+          pageVisibilityObserverRef.current?.unobserve(currentElement)
         }
+        if (!element) {
+          if (pageRefs.current.get(pageNumber) === currentElement) {
+            pageRefs.current.delete(pageNumber)
+          }
+          currentElement = null
+          return
+        }
+        currentElement = element
+        pageRefs.current.set(pageNumber, element)
+        pageVisibilityObserverRef.current?.observe(element)
       }
       stablePageRefCallbacks.current.set(pageNumber, callback)
     }
@@ -8262,12 +8281,21 @@ export function IntermediateDocumentViewer({
     }
 
     const observer = new IntersectionObserver((entries) => {
+      if (pageVisibilityObserverRef.current !== observer) {
+        return
+      }
       entries.forEach((entry) => {
         const pageNumber = Number(
           (entry.target as HTMLElement).dataset.pageNumber
         )
 
         if (!Number.isFinite(pageNumber)) {
+          return
+        }
+
+        // IntersectionObserver 可能在 DOM 重建后交付旧 target 的迟到事件。
+        // 旧节点不能改变当前页面的可见性或触发资源卸载。
+        if (pageRefs.current.get(pageNumber) !== entry.target) {
           return
         }
 
@@ -8294,6 +8322,7 @@ export function IntermediateDocumentViewer({
         }
       })
     })
+    pageVisibilityObserverRef.current = observer
 
     pageNumbers.forEach((pageNumber) => {
       const element = pageRefs.current.get(pageNumber)
@@ -8305,6 +8334,9 @@ export function IntermediateDocumentViewer({
 
     return () => {
       observer.disconnect()
+      if (pageVisibilityObserverRef.current === observer) {
+        pageVisibilityObserverRef.current = null
+      }
       // 观察者销毁时清除本效应周期内的所有挂起可见性/卸载定时器，防止
       // 卸载/文档切换后仍触发迟到入队或卸载。
       clearAllVisibilityTimers()
