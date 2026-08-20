@@ -67,6 +67,7 @@ import type {
   ReaderMousePosition,
   ReaderRectanglePopover,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
@@ -87,10 +88,18 @@ import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuar
 import { EdgeCropOverlay } from './EdgeCropOverlay'
 import { summarizeHighlightRanges, traceHighlight } from './highlightDebug'
 import { hasHighlightRects } from './highlightRectModes'
-import { getReaderImageAlt } from './intermediateImage'
 import { IntermediateDocumentPageContent } from './IntermediateDocumentPageContent'
+import { getReaderImageAlt } from './intermediateImage'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
-import type { ReaderLayoutZoom } from './nativeLayoutZoom'
+import {
+  computeCenteredScrollPosition,
+  computeNativeLayoutTransformExtent,
+  isIPadOS,
+  type NativeLayoutIntrinsicSize,
+  type ReaderLayoutZoom,
+  resolveNativeLayoutScaleStyle,
+  resolveNativeLayoutTouchAction
+} from './nativeLayoutZoom'
 import { PageBrowser } from './PageBrowser'
 import {
   getCroppedPreviewPoint,
@@ -126,11 +135,9 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
-import { useReadingProgressActivity } from './useReadingProgressActivity'
 import {
-  findTopTextAnchor,
   findTextAnchorAtOrBelow,
+  findTopTextAnchor,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
@@ -142,7 +149,9 @@ import {
 } from './textAnchor'
 // intermediate-document 默认模式的懒加载页面队列 hook
 import { useSelectionGeometryRevision } from './useDerivedTextSelectionRanges'
+import { useHighlightDrag as useReaderHighlightDrag } from './useHighlightDrag'
 import { type LazyPageQueueConfig, useLazyPageQueue } from './useLazyPageQueue'
+import { useReadingProgressActivity } from './useReadingProgressActivity'
 
 export {
   getNearestTextElementForPoint,
@@ -628,7 +637,7 @@ export type IntermediateDocumentViewerProps = {
   /** 是否启用选区端点放大镜，默认 false。 */
   showSelectionMagnifier?: boolean
   /** 当某个高亮被选中时，在其上方弹出的 Popover 内容（ReactNode），由调用方完全控制 */
-  selectionPopover?: React.ReactNode
+  selectionPopover?: ReaderSelectionPopover
   /** 被高亮的片段上方弹出的 Popover 内容；renderer 接收当前高亮的原始公开对象。 */
   highlightPopover?: ReaderHighlightPopover
   /** 启动当前高亮的评论流程；Promise 完成后关闭该高亮的 Popover。 */
@@ -680,7 +689,7 @@ export type IntermediateDocumentViewerProps = {
    */
   pageLoadEnterDelayMs?: number
   /**
-   * 可见页前后预加载的页数。省略时默认前后各 `3` 页。
+   * Layout 模式按页、Text 模式按完整段预加载的前后范围。省略时默认各 `3`。
    */
   pagePreloadRadius?: number
   /**
@@ -725,6 +734,7 @@ export type IntermediateDocumentViewerProps = {
   bookmarks?: readonly ReaderBookmark[]
   /** 添加或删除指定文字书签。 */
   onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  onDragBookmark?: (bookmark: ReaderBookmark) => void
   /** @deprecated 使用 bookmarks。 */
   bookmarkedPageNumbers?: readonly number[]
   /** @deprecated 使用 onToggleBookmark。 */
@@ -1791,6 +1801,7 @@ type ViewerContentProps = PageResources & {
   currentPageNumber: number
   activeBookmarkKey?: string
   onNavigateToBookmark?: (bookmark: ReaderBookmark) => void
+  onDragBookmark?: (bookmark: ReaderBookmark) => void
   onToggleBookmark?: (bookmark: ReaderBookmark) => void
   bookmarkedPageNumbers?: readonly number[]
   onTogglePageBookmark?: (pageNumber: number) => void
@@ -3281,7 +3292,8 @@ function resolveHighlightPopover(
 function useNativeLayoutViewport(
   useVirtualPaper: boolean,
   viewerRootElement: HTMLDivElement | null,
-  touchPanMode: ReaderTouchPanMode | undefined
+  touchPanMode: ReaderTouchPanMode | undefined,
+  stylusOnly: boolean
 ) {
   useEffect(() => {
     if (useVirtualPaper || !viewerRootElement) return
@@ -3294,7 +3306,12 @@ function useNativeLayoutViewport(
       readonly x: number
       readonly y: number
     } | null = null
-    const getCentroid = (event: TouchEvent) => {
+    let activeTouchPointer: {
+      readonly id: number
+      readonly x: number
+      readonly y: number
+    } | null = null
+    const getGesturePoint = (event: TouchEvent) => {
       if (event.touches.length < 2) return null
       const firstTouch = event.touches[0]
       const secondTouch = event.touches[1]
@@ -3305,20 +3322,55 @@ function useNativeLayoutViewport(
       }
     }
     const handleTouchStart = (event: TouchEvent) => {
-      previousCentroid = getCentroid(event)
+      if (stylusOnly) return
+      previousCentroid = getGesturePoint(event)
     }
     const handleTouchMove = (event: TouchEvent) => {
-      if (event.touches.length < 2) return
+      if (stylusOnly) return
+      const nextCentroid = getGesturePoint(event)
+      if (!nextCentroid) {
+        previousCentroid = null
+        return
+      }
       event.preventDefault()
-      const nextCentroid = getCentroid(event)
-      if (touchPanMode === 'two-finger' && previousCentroid && nextCentroid) {
+      if ((stylusOnly || touchPanMode === 'two-finger') && previousCentroid) {
         viewport.scrollLeft += previousCentroid.x - nextCentroid.x
         viewport.scrollTop += previousCentroid.y - nextCentroid.y
       }
       previousCentroid = nextCentroid
     }
     const handleTouchEnd = (event: TouchEvent) => {
-      previousCentroid = getCentroid(event)
+      if (stylusOnly) return
+      previousCentroid = getGesturePoint(event)
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!stylusOnly) return
+      if (event.pointerType !== 'touch' || !event.isPrimary) return
+      activeTouchPointer = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY
+      }
+      viewport.setPointerCapture(event.pointerId)
+    }
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return
+      if (event.pointerId !== activeTouchPointer?.id) return
+      event.preventDefault()
+      viewport.scrollLeft += activeTouchPointer.x - event.clientX
+      viewport.scrollTop += activeTouchPointer.y - event.clientY
+      activeTouchPointer = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY
+      }
+    }
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerId !== activeTouchPointer?.id) return
+      if (viewport.hasPointerCapture(event.pointerId)) {
+        viewport.releasePointerCapture(event.pointerId)
+      }
+      activeTouchPointer = null
     }
     const preventGestureZoom = (event: Event) => event.preventDefault()
     viewport.addEventListener('touchstart', handleTouchStart)
@@ -3327,6 +3379,10 @@ function useNativeLayoutViewport(
     })
     viewport.addEventListener('touchend', handleTouchEnd)
     viewport.addEventListener('touchcancel', handleTouchEnd)
+    viewport.addEventListener('pointerdown', handlePointerDown, true)
+    viewport.addEventListener('pointermove', handlePointerMove, true)
+    viewport.addEventListener('pointerup', handlePointerEnd, true)
+    viewport.addEventListener('pointercancel', handlePointerEnd, true)
     viewport.addEventListener('gesturestart', preventGestureZoom)
     viewport.addEventListener('gesturechange', preventGestureZoom)
 
@@ -3335,10 +3391,14 @@ function useNativeLayoutViewport(
       viewport.removeEventListener('touchmove', handleTouchMove)
       viewport.removeEventListener('touchend', handleTouchEnd)
       viewport.removeEventListener('touchcancel', handleTouchEnd)
+      viewport.removeEventListener('pointerdown', handlePointerDown, true)
+      viewport.removeEventListener('pointermove', handlePointerMove, true)
+      viewport.removeEventListener('pointerup', handlePointerEnd, true)
+      viewport.removeEventListener('pointercancel', handlePointerEnd, true)
       viewport.removeEventListener('gesturestart', preventGestureZoom)
       viewport.removeEventListener('gesturechange', preventGestureZoom)
     }
-  }, [touchPanMode, useVirtualPaper, viewerRootElement])
+  }, [stylusOnly, touchPanMode, useVirtualPaper, viewerRootElement])
 }
 
 type NativeLayoutViewportProps = Readonly<{
@@ -3348,6 +3408,8 @@ type NativeLayoutViewportProps = Readonly<{
   containMarginTop: number | undefined
   containMarginBottom: number | undefined
   touchPanMode: ReaderTouchPanMode | undefined
+  stylusOnly: boolean
+  measurementKey: symbol
 }>
 
 function NativeLayoutViewport({
@@ -3356,36 +3418,152 @@ function NativeLayoutViewport({
   containMarginX,
   containMarginTop,
   containMarginBottom,
-  touchPanMode
+  touchPanMode,
+  stylusOnly,
+  measurementKey
 }: NativeLayoutViewportProps) {
+  const [useTransformScale, setUseTransformScale] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const measuredCycleRef = useRef<symbol | null>(null)
+  const [intrinsicSize, setIntrinsicSize] =
+    useState<NativeLayoutIntrinsicSize | null>(null)
+
+  useEffect(() => {
+    setUseTransformScale(
+      typeof navigator !== 'undefined' && isIPadOS(navigator)
+    )
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!useTransformScale || !containerRef.current) return
+    const container = containerRef.current
+    if (measuredCycleRef.current !== measurementKey) {
+      measuredCycleRef.current = measurementKey
+      setIntrinsicSize(null)
+    }
+    const measure = () => {
+      const nextSize = {
+        width: Math.max(container.scrollWidth, container.offsetWidth),
+        height: Math.max(container.scrollHeight, container.offsetHeight)
+      }
+      if (nextSize.width <= 0 || nextSize.height <= 0) return
+      setIntrinsicSize((currentSize) =>
+        currentSize?.width === nextSize.width &&
+        currentSize.height === nextSize.height
+          ? currentSize
+          : nextSize
+      )
+    }
+    measure()
+    const resizeObserver = new ResizeObserver(measure)
+    resizeObserver.observe(container)
+    let documentGutter: HTMLElement | null = null
+    const bindDocumentGutter = () => {
+      const nextDocumentGutter = container.querySelector<HTMLElement>(
+        '.hamster-note-document-gutter'
+      )
+      if (nextDocumentGutter === documentGutter) {
+        measure()
+        return
+      }
+      if (documentGutter) resizeObserver.unobserve(documentGutter)
+      documentGutter = nextDocumentGutter
+      if (documentGutter) resizeObserver.observe(documentGutter)
+      measure()
+    }
+    bindDocumentGutter()
+    const mutationObserver = new MutationObserver(bindDocumentGutter)
+    mutationObserver.observe(container, { childList: true, subtree: true })
+    return () => {
+      mutationObserver.disconnect()
+      resizeObserver.disconnect()
+    }
+  }, [measurementKey, useTransformScale])
+
+  const containerStyle = {
+    ...buildContainerStyle(
+      containMarginTop,
+      containMarginBottom,
+      transform.scale
+    ),
+    paddingLeft:
+      containMarginX === undefined
+        ? undefined
+        : containMarginX / transform.scale,
+    paddingRight:
+      containMarginX === undefined
+        ? undefined
+        : containMarginX / transform.scale,
+    ...resolveNativeLayoutScaleStyle(transform.scale, useTransformScale)
+  }
+
+  const extent = intrinsicSize
+    ? computeNativeLayoutTransformExtent(intrinsicSize, transform.scale)
+    : null
+
+  // 两种缩放模式共用同一组包装节点，只切换样式；这样设备检测不会重建页面
+  // DOM，也不会让 IntersectionObserver 继续持有已经脱离文档的旧页面节点。
   return (
     <div
       className='virtual-paper-wrapper hamster-reader__native-layout-viewport'
       data-testid='native-layout-viewport'
       style={{
-        touchAction: touchPanMode === 'two-finger' ? 'none' : 'pan-x pan-y'
+        overflow: 'auto',
+        touchAction: resolveNativeLayoutTouchAction(touchPanMode, stylusOnly)
       }}
     >
       <div
-        className='virtual-paper-container hamster-reader__native-layout-container'
-        style={{
-          ...buildContainerStyle(
-            containMarginTop,
-            containMarginBottom,
-            transform.scale
-          ),
-          paddingLeft:
-            containMarginX === undefined
-              ? undefined
-              : containMarginX / transform.scale,
-          paddingRight:
-            containMarginX === undefined
-              ? undefined
-              : containMarginX / transform.scale,
-          zoom: transform.scale
-        }}
+        data-testid={
+          useTransformScale ? 'native-layout-transform-extent' : undefined
+        }
+        style={
+          useTransformScale
+            ? {
+                display: 'flex',
+                justifyContent: 'center',
+                minWidth: '100%',
+                minHeight: '100%',
+                width: extent?.width,
+                height: extent?.height
+            }
+            : { display: 'contents' }
+        }
       >
-        {pagesNode}
+        <div
+          data-testid={
+            useTransformScale ? 'native-layout-transform-clip' : undefined
+          }
+          style={
+            useTransformScale
+              ? {
+                  flex: '0 0 auto',
+                  overflow: 'clip',
+                  position: 'relative',
+                  width: extent?.width,
+                  height: extent?.height
+              }
+              : { display: 'contents' }
+          }
+        >
+          <div
+            className='virtual-paper-container hamster-reader__native-layout-container'
+            ref={containerRef}
+            style={
+              useTransformScale
+                ? {
+                    ...containerStyle,
+                    left: 0,
+                    minHeight: 0,
+                    minWidth: 0,
+                    position: 'absolute',
+                    top: 0
+                  }
+                : containerStyle
+            }
+          >
+            {pagesNode}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -3510,6 +3688,7 @@ function ViewerContent({
   currentPageNumber,
   activeBookmarkKey,
   onNavigateToBookmark,
+  onDragBookmark,
   onToggleBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
@@ -3526,7 +3705,13 @@ function ViewerContent({
   const [measuredContentSize, setMeasuredContentSize] =
     useState<ScopedContentSize | null>(null)
   const popoverContainerRef = useRef<HTMLElement | null>(null)
-  useNativeLayoutViewport(useVirtualPaper, viewerRootElement, touchPanMode)
+  const stylusOnly = paintingControllerData.stylusMode === true
+  useNativeLayoutViewport(
+    useVirtualPaper,
+    viewerRootElement,
+    touchPanMode,
+    stylusOnly
+  )
   const selectionRefsByRuntimeIdRef = useRef(new Map<string, SelectionRef>())
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
@@ -4053,8 +4238,8 @@ function ViewerContent({
     handleHighlightPointerCancel
   } = useReaderHighlightDrag({
     viewerRootElement,
-    resolveHighlight: resolveHighlightDragTarget,
-    onDragHighlight
+    resolveItem: resolveHighlightDragTarget,
+    onDragItem: onDragHighlight
   })
 
   const enabledInteractions = useMemo(() => {
@@ -4368,6 +4553,7 @@ function ViewerContent({
             selectedRangeId={effectiveSelectedRangeId}
             onSelectRange={handleLinkedSelectRange}
             onNavigateToRange={onScrollToRange}
+            onDragHighlight={onDragHighlight}
             onDeleteRange={onRemoveRange}
             commentCountByRangeId={commentCountByRangeId}
             rects={rects}
@@ -4381,6 +4567,7 @@ function ViewerContent({
             currentPageNumber={currentPageNumber}
             activeBookmarkKey={activeBookmarkKey}
             onNavigateToBookmark={onNavigateToBookmark}
+            onDragBookmark={onDragBookmark}
             onToggleBookmark={onToggleBookmark}
             bookmarkedPageNumbers={bookmarkedPageNumbers}
             onTogglePageBookmark={onTogglePageBookmark}
@@ -4449,6 +4636,8 @@ function ViewerContent({
               containMarginTop={containMarginTop}
               containMarginBottom={containMarginBottom}
               touchPanMode={touchPanMode}
+              stylusOnly={stylusOnly}
+              measurementKey={selectionScope}
             />
           )}
         </>
@@ -4457,6 +4646,7 @@ function ViewerContent({
   )
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export function IntermediateDocumentViewer({
   document,
   serializedDocument,
@@ -4558,6 +4748,7 @@ export function IntermediateDocumentViewer({
   comments,
   bookmarks,
   onToggleBookmark,
+  onDragBookmark,
   bookmarkedPageNumbers,
   onTogglePageBookmark,
   onPageLoadStatusChange,
@@ -4721,6 +4912,7 @@ export function IntermediateDocumentViewer({
     return previewPageSizes
   }, [effectiveEdgeCrop, pageNumbers, pageSizesByPageNumber])
   const pageRefs = useRef(new Map<number, HTMLDivElement>())
+  const pageVisibilityObserverRef = useRef<IntersectionObserver | null>(null)
   const loadingPagesRef = useRef(new Set<number>())
   const ocrLoadingPagesRef = useRef(new Set<number>())
   // Loading 可在关闭页面时提前隐藏，但底层 Promise 无法取消；独立活动槽必须保留到
@@ -5538,9 +5730,9 @@ export function IntermediateDocumentViewer({
     [captureCurrentTextAnchor]
   )
   const pendingNativeZoomAnchorRef = useRef<{
-    readonly element: HTMLElement
+    readonly element: HTMLElement | null
     readonly scale: number
-    readonly top: number
+    readonly top: number | null
   } | null>(null)
   const applyNativeLayoutScale = useCallback(
     (nextScale: number) => {
@@ -5554,13 +5746,39 @@ export function IntermediateDocumentViewer({
             textsByPageNumber
           )
         : null
-      const pendingAnchor = anchorElement
+      const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
+        '.hamster-reader__native-layout-viewport'
+      )
+      const viewerWindow = viewport?.ownerDocument.defaultView
+      const previousScale = effectiveScaleRef.current
+      const transformContainer = viewport?.querySelector<HTMLElement>(
+        '[data-testid="native-layout-transform-extent"] .hamster-reader__native-layout-container'
+      )
+      const intrinsicSize = transformContainer
         ? {
-            element: anchorElement,
-            scale: nextScale,
-            top: anchorElement.getBoundingClientRect().top
+            width: Math.max(
+              transformContainer.scrollWidth,
+              transformContainer.offsetWidth
+            ),
+            height: Math.max(
+              transformContainer.scrollHeight,
+              transformContainer.offsetHeight
+            )
           }
+        : undefined
+      const centeredPosition = viewport
+        ? computeCenteredScrollPosition(
+            viewport,
+            previousScale,
+            nextScale,
+            intrinsicSize
+          )
         : null
+      const pendingAnchor = {
+        element: anchorElement,
+        scale: nextScale,
+        top: anchorElement?.getBoundingClientRect().top ?? null
+      }
       pendingNativeZoomAnchorRef.current = pendingAnchor
       setPaperTransform((currentTransform) => ({
         ...currentTransform,
@@ -5568,23 +5786,26 @@ export function IntermediateDocumentViewer({
       }))
       onNativeLayoutScaleChange?.(nextScale)
 
-      const viewport = viewerRootRef.current?.querySelector<HTMLElement>(
-        '.hamster-reader__native-layout-viewport'
-      )
-      const viewerWindow = viewport?.ownerDocument.defaultView
-      if (!pendingAnchor || !viewport || !viewerWindow) return
+      if (!viewport || !viewerWindow || !centeredPosition) return
       viewerWindow.requestAnimationFrame(() => {
         viewerWindow.requestAnimationFrame(() => {
           if (
             pendingNativeZoomAnchorRef.current !== pendingAnchor ||
-            !viewport.isConnected
+            !viewport.isConnected ||
+            effectiveScaleRef.current !== nextScale ||
+            (pendingAnchor.element !== null &&
+              !pendingAnchor.element.isConnected)
           ) {
             return
           }
           pendingNativeZoomAnchorRef.current = null
-          viewport.scrollTop +=
-            pendingAnchor.element.getBoundingClientRect().top -
-            pendingAnchor.top
+          viewport.scrollLeft = centeredPosition.left
+          viewport.scrollTop =
+            pendingAnchor.element && pendingAnchor.top !== null
+              ? viewport.scrollTop +
+                pendingAnchor.element.getBoundingClientRect().top -
+                pendingAnchor.top
+              : centeredPosition.top
         })
       })
     },
@@ -7588,12 +7809,21 @@ export function IntermediateDocumentViewer({
   const setPageRef = useCallback((pageNumber: number) => {
     let callback = stablePageRefCallbacks.current.get(pageNumber)
     if (!callback) {
+      let currentElement: HTMLDivElement | null = null
       callback = (element: HTMLDivElement | null) => {
-        if (element) {
-          pageRefs.current.set(pageNumber, element)
-        } else {
-          pageRefs.current.delete(pageNumber)
+        if (currentElement && currentElement !== element) {
+          pageVisibilityObserverRef.current?.unobserve(currentElement)
         }
+        if (!element) {
+          if (pageRefs.current.get(pageNumber) === currentElement) {
+            pageRefs.current.delete(pageNumber)
+          }
+          currentElement = null
+          return
+        }
+        currentElement = element
+        pageRefs.current.set(pageNumber, element)
+        pageVisibilityObserverRef.current?.observe(element)
       }
       stablePageRefCallbacks.current.set(pageNumber, callback)
     }
@@ -7865,6 +8095,23 @@ export function IntermediateDocumentViewer({
       isEpub ? { ...range, rectsBySelectionId: {} } : range,
     [isEpub]
   )
+  const publicActiveSelection = runtimeLinkedData.activeRange
+    ? mapRuntimeRangeToPublic(
+        runtimeLinkedData.activeRange,
+        readerLinkedScopeId
+      )
+    : null
+  const activeSelection = publicActiveSelection
+    ? toLayoutRange(publicActiveSelection)
+    : null
+  let resolvedSelectionPopover: ReactNode
+  if (typeof selectionPopover === 'function') {
+    resolvedSelectionPopover = activeSelection
+      ? selectionPopover(activeSelection)
+      : undefined
+  } else {
+    resolvedSelectionPopover = selectionPopover
+  }
 
   const handleLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
@@ -8034,12 +8281,21 @@ export function IntermediateDocumentViewer({
     }
 
     const observer = new IntersectionObserver((entries) => {
+      if (pageVisibilityObserverRef.current !== observer) {
+        return
+      }
       entries.forEach((entry) => {
         const pageNumber = Number(
           (entry.target as HTMLElement).dataset.pageNumber
         )
 
         if (!Number.isFinite(pageNumber)) {
+          return
+        }
+
+        // IntersectionObserver 可能在 DOM 重建后交付旧 target 的迟到事件。
+        // 旧节点不能改变当前页面的可见性或触发资源卸载。
+        if (pageRefs.current.get(pageNumber) !== entry.target) {
           return
         }
 
@@ -8066,6 +8322,7 @@ export function IntermediateDocumentViewer({
         }
       })
     })
+    pageVisibilityObserverRef.current = observer
 
     pageNumbers.forEach((pageNumber) => {
       const element = pageRefs.current.get(pageNumber)
@@ -8077,6 +8334,9 @@ export function IntermediateDocumentViewer({
 
     return () => {
       observer.disconnect()
+      if (pageVisibilityObserverRef.current === observer) {
+        pageVisibilityObserverRef.current = null
+      }
       // 观察者销毁时清除本效应周期内的所有挂起可见性/卸载定时器，防止
       // 卸载/文档切换后仍触发迟到入队或卸载。
       clearAllVisibilityTimers()
@@ -8483,7 +8743,7 @@ export function IntermediateDocumentViewer({
       highlightColor={highlightColor}
       selectionColor={selectionColor}
       showSelectionMagnifier={showSelectionMagnifier}
-      selectionPopover={selectionPopover}
+      selectionPopover={resolvedSelectionPopover}
       highlightPopover={highlightPopover}
       rectPopover={resolvedRectPopover}
       onCommentHighlight={onCommentHighlight}
@@ -8542,6 +8802,7 @@ export function IntermediateDocumentViewer({
         onToggleBookmark,
         navigateToBookmark
       )}
+      onDragBookmark={onDragBookmark}
       onToggleBookmark={onToggleBookmark}
       bookmarkedPageNumbers={bookmarkedPageNumbers}
       onTogglePageBookmark={onTogglePageBookmark}

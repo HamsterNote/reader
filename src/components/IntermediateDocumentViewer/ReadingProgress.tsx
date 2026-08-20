@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ReaderSelectionRange } from '../../types/selection'
 import { ReadingProgressHighlights } from './ReadingProgressHighlights'
+import {
+  resolveTextPageFromProgress,
+  resolveTextPageSegmentPosition
+} from './textPageWindow'
 
 type CommonReadingProgressProps = {
   readonly currentPageNumber: number
@@ -11,13 +15,15 @@ type CommonReadingProgressProps = {
   readonly insetBottom?: number
   readonly insetTop?: number
   readonly isMoving: boolean
-  readonly onSeekPage: (pageNumber: number) => void
+  readonly onSeekPage: (pageNumber: number, pageProgress?: number) => void
   readonly pageNumbers: readonly number[]
   readonly ranges: readonly ReaderSelectionRange[]
 }
 
 type TextReadingProgressProps = CommonReadingProgressProps & {
   readonly mode: 'text'
+  readonly onUserScrollIntent?: () => void
+  readonly pageProgress: number
 }
 
 type LayoutReadingProgressProps = CommonReadingProgressProps & {
@@ -78,6 +84,31 @@ const getLayoutPreview = (
   }
 }
 
+const getTextPageProgress = (
+  props: ReadingProgressProps,
+  previewPageNumber: number | null
+): number => {
+  if (props.mode !== 'text') return 0
+  return previewPageNumber === null ? props.pageProgress : 0.5
+}
+
+const getPointerPositionPercent = (
+  props: ReadingProgressProps,
+  displayedPageNumber: number,
+  pointerProgress: number | null,
+  previewPageNumber: number | null
+): number => {
+  if (pointerProgress !== null) return pointerProgress * 100
+  if (props.mode === 'text') {
+    return resolveTextPageSegmentPosition(
+      props.pageNumbers,
+      displayedPageNumber,
+      getTextPageProgress(props, previewPageNumber)
+    )
+  }
+  return getPagePositionPercent(displayedPageNumber, props.pageNumbers)
+}
+
 export function ReadingProgress(props: ReadingProgressProps) {
   const {
     currentPageNumber,
@@ -113,10 +144,14 @@ export function ReadingProgress(props: ReadingProgressProps) {
       const progress = resolveProgressFromPointer(event)
       if (progress === null || pageNumbers.length === 0) return null
 
+      if (props.mode === 'text') {
+        return resolveTextPageFromProgress(pageNumbers, progress)
+      }
+
       const pageIndex = Math.round(progress * (pageNumbers.length - 1))
       return pageNumbers[pageIndex] ?? null
     },
-    [pageNumbers]
+    [pageNumbers, props.mode]
   )
 
   const finishPointer = useCallback(
@@ -124,8 +159,19 @@ export function ReadingProgress(props: ReadingProgressProps) {
       if (event.pointerId !== activePointerIdRef.current) return
 
       const pointerType = activePointerTypeRef.current
+      const pointerProgress = resolveProgressFromPointer(event)
       const pageNumber = resolvePageFromPointer(event)
-      if (commit && pageNumber !== null) onSeekPage(pageNumber)
+      if (commit && pageNumber !== null) {
+        if (props.mode === 'text' && pointerProgress !== null) {
+          const pageIndex = pageNumbers.indexOf(pageNumber)
+          onSeekPage(
+            pageNumber,
+            pointerProgress * pageNumbers.length - pageIndex
+          )
+        } else {
+          onSeekPage(pageNumber)
+        }
+      }
       activePointerIdRef.current = null
       activePointerTypeRef.current = null
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -135,11 +181,9 @@ export function ReadingProgress(props: ReadingProgressProps) {
       setPreviewPageNumber(pointerType === 'mouse' ? pageNumber : null)
       // 鼠标释放后光标通常还停留在轨道上，保留进度让横线停在释放位置；
       // 触摸结束则手指已离开，直接清除。
-      setPointerProgress(
-        pointerType === 'mouse' ? resolveProgressFromPointer(event) : null
-      )
+      setPointerProgress(pointerType === 'mouse' ? pointerProgress : null)
     },
-    [onSeekPage, resolvePageFromPointer]
+    [onSeekPage, pageNumbers, props.mode, resolvePageFromPointer]
   )
 
   const handleKeyDown = useCallback(
@@ -187,6 +231,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
       if (!scrollViewport) return
 
       event.preventDefault()
+      if (props.mode === 'text') props.onUserScrollIntent?.()
       if (
         (event.ctrlKey || event.metaKey) &&
         scrollViewport.classList.contains('virtual-paper-wrapper')
@@ -216,15 +261,17 @@ export function ReadingProgress(props: ReadingProgressProps) {
 
     rail.addEventListener('wheel', handleWheel, { passive: false })
     return () => rail.removeEventListener('wheel', handleWheel)
-  }, [])
+  }, [props])
 
   const displayedPageNumber = previewPageNumber ?? currentPageNumber
   // 光标在轨道上时用原始进度（平滑跟随光标），
   // 否则回落到量化后的页码位置（滚动/键盘导航时指示当前页）。
-  const pointerPositionPercent =
-    pointerProgress !== null
-      ? pointerProgress * 100
-      : getPagePositionPercent(displayedPageNumber, pageNumbers)
+  const pointerPositionPercent = getPointerPositionPercent(
+    props,
+    displayedPageNumber,
+    pointerProgress,
+    previewPageNumber
+  )
   const layoutPreviewRatio = layoutPreview?.size
     ? layoutPreview.size.height / layoutPreview.size.width
     : 4 / 3
@@ -303,6 +350,7 @@ export function ReadingProgress(props: ReadingProgressProps) {
       />
       <ReadingProgressHighlights
         highlightColor={highlightColor}
+        mode={props.mode}
         pageNumbers={pageNumbers}
         ranges={ranges}
       />

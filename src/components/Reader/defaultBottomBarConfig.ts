@@ -1,6 +1,7 @@
 import type { IconName } from '@hamster-note/components'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type { ReaderLayoutZoom } from '../IntermediateDocumentViewer/nativeLayoutZoom'
 import type {
   ReaderColorOption,
@@ -37,6 +38,10 @@ export const DEFAULT_FONT_SCALE_OPTIONS: readonly {
   { label: '中', scale: 1 },
   { label: '大', scale: 1.5 },
   { label: '特大', scale: 2 }
+]
+
+export const DEFAULT_LINE_HEIGHT_OPTIONS: readonly ReaderLineHeight[] = [
+  1, 1.2, 1.5, 1.8, 2
 ]
 
 export const DEFAULT_LAYOUT_ZOOM_OPTIONS: readonly {

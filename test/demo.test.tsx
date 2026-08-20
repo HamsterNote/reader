@@ -1,5 +1,4 @@
 import { DocxParser } from '@hamster-note/docx-parser'
-import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
 import { PdfParser } from '@hamster-note/pdf-parser'
 import type {
@@ -12,6 +11,7 @@ import type {
   ReaderData,
   ReaderEdgeCrop,
   ReaderFontScale,
+  ReaderLineHeight,
   ReaderLinkedSelectionData,
   ReaderLoadingProgress,
   ReaderOcrOptions,
@@ -74,9 +74,11 @@ vi.mock('@hamster-note/docx-parser', () => ({
   }
 }))
 
+const { epubEncode } = vi.hoisted(() => ({ epubEncode: vi.fn() }))
+
 vi.mock('@hamster-note/epub-parser', () => ({
-  EpubParser: {
-    encode: vi.fn()
+  EpubParser: class {
+    readonly encode = epubEncode
   }
 }))
 
@@ -164,6 +166,8 @@ type MockReaderProps = Record<string, unknown> & {
   onRenderModeChange?: (mode: ReaderRenderMode) => void
   fontScale?: ReaderFontScale
   onFontScaleChange?: (scale: ReaderFontScale) => void
+  lineHeight?: ReaderLineHeight
+  onLineHeightChange?: (lineHeight: ReaderLineHeight) => void
   touchPanMode?: ReaderTouchPanMode
   onTouchPanModeChange?: (mode: ReaderTouchPanMode) => void
   ocr?: boolean | ReaderOcrOptions
@@ -212,6 +216,8 @@ type MockReaderProps = Record<string, unknown> & {
   onEdgeCropEditingChange?: (editing: boolean) => void
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
   useVirtualPaper?: boolean
+  queryWord?: (word: string) => string
+  onOpenDictionary?: (initialWord?: string) => void
 }
 
 const mockReaderProps: MockReaderProps[] = []
@@ -517,13 +523,7 @@ function makeRuntimeDocument(title: string) {
 }
 
 function mockEpubParserSuccess(document: IntermediateDocument) {
-  const wrapper = Object.create(null) as Awaited<
-    ReturnType<typeof EpubParser.encode>
-  >
-  Object.defineProperty(wrapper, 'getIntermediateDocument', {
-    value: () => document
-  })
-  vi.mocked(EpubParser.encode).mockResolvedValue(wrapper)
+  epubEncode.mockResolvedValue(document)
 }
 
 function makeFile(name: string) {
@@ -672,7 +672,7 @@ describe('demo parser flow', () => {
     expect(screen.queryByText('Parse Error')).not.toBeInTheDocument()
     expect(PdfParser.encode).toHaveBeenCalledTimes(1)
     expect(PdfParser.encode).toHaveBeenCalledWith(uploadedFile, undefined)
-    expect(EpubParser.encode).not.toHaveBeenCalled()
+    expect(epubEncode).not.toHaveBeenCalled()
   })
 
   it('keeps a PDF in the ready state until the user clicks 加载文件', async () => {
@@ -907,7 +907,7 @@ describe('demo parser flow', () => {
         vi.mocked(PdfParser.encode).mockResolvedValue(document),
       assertParserCall: (file: File) => {
         expect(PdfParser.encode).toHaveBeenCalledWith(file, undefined)
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -922,7 +922,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(TxtParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
       }
@@ -936,7 +936,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(DocxParser.encodeToIntermediate).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(MarkdownParser.encode).not.toHaveBeenCalled()
       }
@@ -948,7 +948,7 @@ describe('demo parser flow', () => {
       arrange: (document: IntermediateDocument) =>
         mockEpubParserSuccess(document),
       assertParserCall: (file: File) => {
-        expect(EpubParser.encode).toHaveBeenCalledWith(file)
+        expect(epubEncode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -964,7 +964,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       }
@@ -978,7 +978,7 @@ describe('demo parser flow', () => {
       assertParserCall: (file: File) => {
         expect(MarkdownParser.encode).toHaveBeenCalledWith(file)
         expect(PdfParser.encode).not.toHaveBeenCalled()
-        expect(EpubParser.encode).not.toHaveBeenCalled()
+        expect(epubEncode).not.toHaveBeenCalled()
         expect(TxtParser.encode).not.toHaveBeenCalled()
         expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       }
@@ -1045,7 +1045,7 @@ describe('demo parser flow', () => {
       expect(createImagePreviewDocument).toHaveBeenCalledWith(uploadedFile)
       expect(findDocumentReaderProps()?.ocr).toBe(false)
       expect(PdfParser.encode).not.toHaveBeenCalled()
-      expect(EpubParser.encode).not.toHaveBeenCalled()
+      expect(epubEncode).not.toHaveBeenCalled()
       expect(TxtParser.encode).not.toHaveBeenCalled()
       expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -1158,7 +1158,7 @@ describe('demo parser flow', () => {
       ).toBeInTheDocument()
       expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
       expect(PdfParser.encode).not.toHaveBeenCalled()
-      expect(EpubParser.encode).not.toHaveBeenCalled()
+      expect(epubEncode).not.toHaveBeenCalled()
       expect(TxtParser.encode).not.toHaveBeenCalled()
       expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
       expect(MarkdownParser.encode).not.toHaveBeenCalled()
@@ -1166,7 +1166,7 @@ describe('demo parser flow', () => {
   )
 
   it('shows an EPUB parse error when the EPUB parser rejects', async () => {
-    vi.mocked(EpubParser.encode).mockRejectedValue(new Error('bad epub'))
+    epubEncode.mockRejectedValue(new Error('bad epub'))
 
     render(<App />)
     const uploadedFile = makeFile('broken.epub')
@@ -1177,8 +1177,8 @@ describe('demo parser flow', () => {
       screen.getByText('Failed to parse EPUB: bad epub')
     ).toBeInTheDocument()
     expect(screen.queryByText('Reader Settings')).not.toBeInTheDocument()
-    expect(EpubParser.encode).toHaveBeenCalledTimes(1)
-    expect(EpubParser.encode).toHaveBeenCalledWith(uploadedFile)
+    expect(epubEncode).toHaveBeenCalledTimes(1)
+    expect(epubEncode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
     expect(TxtParser.encode).not.toHaveBeenCalled()
     expect(DocxParser.encodeToIntermediate).not.toHaveBeenCalled()
@@ -1198,7 +1198,7 @@ describe('demo parser flow', () => {
     expect(TxtParser.encode).toHaveBeenCalledTimes(1)
     expect(TxtParser.encode).toHaveBeenCalledWith(uploadedFile)
     expect(PdfParser.encode).not.toHaveBeenCalled()
-    expect(EpubParser.encode).not.toHaveBeenCalled()
+    expect(epubEncode).not.toHaveBeenCalled()
   })
 
   it('shows a parse error when the parser returns undefined', async () => {
@@ -1784,6 +1784,7 @@ describe('demo parser flow', () => {
       expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
       expect(findDocumentReaderProps()).toMatchObject({
         fontScale: 1.5,
+        lineHeight: 1.5,
         highlightColor: 'rgba(255, 193, 7, 0.35)'
       })
     })
@@ -1792,6 +1793,7 @@ describe('demo parser flow', () => {
     const readerProps = findDocumentReaderProps()
     act(() => {
       readerProps?.onFontScaleChange?.(0.75)
+      readerProps?.onLineHeightChange?.(1.8)
       readerProps?.onHighlightColorChange?.('#ff0000')
       readerProps?.onDataChange?.({
         ...readerProps.data,
@@ -1809,7 +1811,7 @@ describe('demo parser flow', () => {
       findDocumentReaderProps()?.onFontScaleChange?.(2)
     })
 
-    // Then: Demo 保存模式、工具、两种模式各自字号及当前高亮色。
+    // Then: Demo 保存模式、工具、两种模式字号、Text 行距及当前高亮色。
     await waitFor(() => {
       expect(findDocumentReaderProps()?.data).toMatchObject({
         renderMode: 'layout',
@@ -1821,10 +1823,11 @@ describe('demo parser flow', () => {
         )
       ).toBe(
         JSON.stringify({
-          version: 2,
+          version: 3,
           renderMode: 'layout',
           selectedTool: 'rect-selection',
           textFontScale: 0.75,
+          textLineHeight: 1.8,
           layoutFontScale: 2,
           highlightColor: '#ff0000'
         })
@@ -1841,6 +1844,7 @@ describe('demo parser flow', () => {
       expect(findDocumentReaderProps()).toMatchObject({
         renderMode: 'text',
         fontScale: 0.75,
+        lineHeight: 1.8,
         highlightColor: '#ff0000'
       })
     })
@@ -2077,6 +2081,36 @@ describe('demo parser flow', () => {
         uploadReaderProps = findDocumentReaderProps()
         expect(uploadReaderProps?.autoHighlight).toBe(true)
       })
+    })
+
+    it('toggles dictionary query mock and shows dictionary open events', async () => {
+      // Given: Demo 已加载文档，词典查询 mock 默认关闭。
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Dictionary Demo Document')
+      )
+      render(<App />)
+      await upload(makeFile('dictionary.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+      const toggle = screen.getByTestId('dictionary-mock-toggle')
+      expect(toggle).not.toBeChecked()
+      expect(findDocumentReaderProps()?.queryWord?.('reader')).toBe('')
+
+      // When: 开启 mock 并模拟 Reader 调起词典事件。
+      fireEvent.click(toggle)
+      await waitFor(() => {
+        expect(findDocumentReaderProps()?.queryWord?.('reader')).toContain(
+          'reader'
+        )
+      })
+      act(() => {
+        findDocumentReaderProps()?.onOpenDictionary?.('reader')
+      })
+
+      // Then: 左侧栏展示词典初始化词，便于人工确认事件已唤起。
+      expect(screen.getByTestId('dictionary-event-log')).toHaveTextContent(
+        'reader'
+      )
     })
 
     it('renders selectionPopover with 高亮 and 背景颜色设置', async () => {
@@ -2824,6 +2858,38 @@ describe('demo parser flow', () => {
         expect(saveRecentFile).toHaveBeenNthCalledWith(2, secondFile)
       })
       expect(await screen.findByText('Second Document')).toBeInTheDocument()
+    })
+
+    it('shows an EPUB before its recent-file save finishes', async () => {
+      const save = createDeferred<boolean>()
+      const parse = createDeferred<IntermediateDocument>()
+      const document = makeRuntimeDocument('Large EPUB Document')
+      epubEncode.mockReturnValue(parse.promise)
+      vi.mocked(saveRecentFile).mockReturnValue(save.promise)
+
+      render(<App />)
+      const file = makeFile('large.epub')
+
+      selectFile(file)
+
+      await waitFor(() => {
+        expect(epubEncode).toHaveBeenCalledWith(file)
+      })
+
+      expect(
+        screen.getByTestId('mock-reader-loading-progress').textContent
+      ).toMatch(/正在读取 EPUB: 1\/3|正在解析 EPUB: 0\/0/)
+
+      parse.resolve(document)
+      await waitFor(() => {
+        expect(saveRecentFile).toHaveBeenCalledWith(file)
+      })
+
+      expect(await screen.findByText('Large EPUB Document')).toBeInTheDocument()
+      expect(screen.queryByText('Loading file content...')).not.toBeInTheDocument()
+
+      save.resolve(true)
+      await waitFor(() => expect(saveRecentFile).toHaveBeenCalledOnce())
     })
 
     it('preserves stored comments while a newly uploaded file is still parsing', async () => {

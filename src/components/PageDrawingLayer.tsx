@@ -73,6 +73,10 @@ export function PageDrawingLayer({
   const layerRef = useRef<HTMLDivElement>(null)
   const safeCanvasScale =
     Number.isFinite(canvasScale) && canvasScale > 0 ? canvasScale : 1
+  const stylusOnly = controllerData.stylusMode === true
+  const enabledInputMethods: 'pen'[] | undefined = stylusOnly
+    ? ['pen']
+    : undefined
   const drawingValue = useMemo(
     () => scaleDrawingValue(sanitizeDrawingValue(value), safeCanvasScale),
     [safeCanvasScale, value]
@@ -82,6 +86,47 @@ export function PageDrawingLayer({
         onChange(scaleDrawingValue(nextValue, 1 / safeCanvasScale))
       }
     : undefined
+
+  useEffect(() => {
+    const layer = layerRef.current
+    if (!enabled || !stylusOnly || !layer) return
+
+    const ownerDocument = layer.ownerDocument
+    const PointerEventConstructor = ownerDocument.defaultView?.PointerEvent
+    if (!PointerEventConstructor) return
+    const activePenPointerIds = new Set<number>()
+
+    const handlePenPointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'pen') return
+      activePenPointerIds.add(event.pointerId)
+    }
+
+    const handlePenPointerEnd = (event: PointerEvent) => {
+      activePenPointerIds.delete(event.pointerId)
+    }
+
+    layer.addEventListener('pointerdown', handlePenPointerDown, true)
+    ownerDocument.addEventListener('pointerup', handlePenPointerEnd, true)
+    ownerDocument.addEventListener('pointercancel', handlePenPointerEnd, true)
+    return () => {
+      for (const pointerId of activePenPointerIds) {
+        ownerDocument.dispatchEvent(
+          new PointerEventConstructor('pointercancel', {
+            bubbles: true,
+            pointerId,
+            pointerType: 'pen'
+          })
+        )
+      }
+      layer.removeEventListener('pointerdown', handlePenPointerDown, true)
+      ownerDocument.removeEventListener('pointerup', handlePenPointerEnd, true)
+      ownerDocument.removeEventListener(
+        'pointercancel',
+        handlePenPointerEnd,
+        true
+      )
+    }
+  }, [enabled, stylusOnly])
 
   useEffect(() => {
     const layer = layerRef.current
@@ -151,7 +196,9 @@ export function PageDrawingLayer({
   return (
     <div
       ref={layerRef}
-      className='hamster-reader__drawing-layer'
+      className={`hamster-reader__drawing-layer${
+        stylusOnly ? ' hamster-reader__drawing-layer--stylus-only' : ''
+      }`}
       data-testid={`reader-page-drawing-layer-${pageId}`}
       style={{
         pointerEvents: enabled ? 'auto' : 'none',
@@ -164,7 +211,7 @@ export function PageDrawingLayer({
       <PaintingBoard
         value={drawingValue}
         onChange={handleChange}
-        inputMethods={enabled ? undefined : []}
+        inputMethods={enabled ? enabledInputMethods : []}
         cursor={enabled ? undefined : false}
         toolbar={false}
         virtualPaper={false}

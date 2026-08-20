@@ -6,6 +6,7 @@ import type {
 import { Fragment } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import { IntermediateDocumentFlowImageContent } from './IntermediateDocumentFlowImageContent'
 import { IntermediateDocumentFlowTextContent } from './IntermediateDocumentFlowTextContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
@@ -19,7 +20,9 @@ type IntermediateDocumentFlowContentProps = {
   isPdf?: boolean
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   preserveSourceFontSize: boolean
+  onImageSettled?: (imageId: string) => void
 }
 
 type ContentRun =
@@ -135,7 +138,9 @@ export function IntermediateDocumentFlowContent({
   isPdf = false,
   setTextRef,
   fontScale,
-  preserveSourceFontSize
+  lineHeight,
+  preserveSourceFontSize,
+  onImageSettled
 }: IntermediateDocumentFlowContentProps) {
   const flowContent = isPdf ? orderPdfContent(content) : content
   const sourceOffsets = isPdf ? createSourceOffsets(content) : undefined
@@ -145,6 +150,7 @@ export function IntermediateDocumentFlowContent({
         <IntermediateDocumentFlowImageContent
           key={`${pageNumber}:image:${run.image.id}`}
           images={[run.image]}
+          onImageSettled={onImageSettled}
         />
       )
     }
@@ -160,6 +166,7 @@ export function IntermediateDocumentFlowContent({
             paragraphs={paragraphs}
             setTextRef={setTextRef}
             fontScale={fontScale}
+            lineHeight={lineHeight}
             sourceOffsetBase={run.sourceOffsetBase}
             sourceOffsets={sourceOffsets}
           />
@@ -170,6 +177,7 @@ export function IntermediateDocumentFlowContent({
             paragraphs={paragraphs}
             setTextRef={setTextRef}
             fontScale={fontScale}
+            lineHeight={lineHeight}
             preserveSourceFontSize={preserveSourceFontSize}
           />
         )}

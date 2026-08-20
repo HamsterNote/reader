@@ -1,19 +1,25 @@
 import { PdfParser } from '@hamster-note/pdf-parser'
-import { IntermediateDocument } from '@hamster-note/types'
+import {
+  IntermediateDocument,
+  IntermediatePage,
+  IntermediatePageMap
+} from '@hamster-note/types'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode, useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../demo/App'
 import {
+  clearRecentFile,
+  loadPdfStructureJson,
+  loadRecentFile,
+  savePdfStructureJson,
+  saveRecentFile
+} from '../demo/recentFileStorage'
+import {
   createViewerLifetimeToken,
   ViewerLifetimeBoundary
 } from '../demo/ViewerLifetimeBoundary'
-import {
-  clearRecentFile,
-  loadRecentFile,
-  saveRecentFile
-} from '../demo/recentFileStorage'
 
 vi.mock('@hamster-note/pdf-parser', () => ({
   PdfParser: {
@@ -32,7 +38,9 @@ vi.mock('@hamster-note/docx-parser', () => ({
 }))
 
 vi.mock('@hamster-note/epub-parser', () => ({
-  EpubParser: { encode: vi.fn() }
+  EpubParser: class {
+    readonly encode = vi.fn()
+  }
 }))
 
 vi.mock('@hamster-note/markdown-parser', () => ({
@@ -49,7 +57,9 @@ vi.mock('../demo/fileMemoryLoader', () => ({
 
 vi.mock('../demo/recentFileStorage', () => ({
   clearRecentFile: vi.fn(),
+  loadPdfStructureJson: vi.fn(),
   loadRecentFile: vi.fn(),
+  savePdfStructureJson: vi.fn(),
   saveRecentFile: vi.fn()
 }))
 
@@ -112,23 +122,47 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject }
 }
 
-function makeDocument(title: string): IntermediateDocument {
-  return IntermediateDocument.parse({
-    id: title.toLowerCase().replaceAll(' ', '-'),
+function makeDocument(
+  title: string,
+  pageSizes: readonly { readonly width: number; readonly height: number }[] = []
+): IntermediateDocument {
+  const id = title.toLowerCase().replaceAll(' ', '-')
+  return new IntermediateDocument({
+    id,
     title,
-    pages: []
+    pagesMap: IntermediatePageMap.makeByInfoList(
+      pageSizes.map((size, index) => {
+        const pageNumber = index + 1
+        return {
+          id: `${id}-page-${pageNumber}`,
+          pageNumber,
+          size: { x: size.width, y: size.height },
+          getData: async () =>
+            new IntermediatePage({
+              id: `${id}-page-${pageNumber}`,
+              number: pageNumber,
+              width: size.width,
+              height: size.height,
+              content: [],
+              paragraphs: [],
+              getContentFn: async () => []
+            })
+        }
+      })
+    )
   })
 }
 
 function makeHandle(
   title: string,
-  disposal: Promise<void> = Promise.resolve()
+  disposal: Promise<void> = Promise.resolve(),
+  pageSizes: readonly { readonly width: number; readonly height: number }[] = []
 ): TestHandle {
-  const document = makeDocument(title)
+  const document = makeDocument(title, pageSizes)
   const handle: TestHandle = {
     id: document.id,
     title,
-    pageCount: 0,
+    pageCount: pageSizes.length,
     document,
     dispose: vi.fn(async () => {
       lifecycleEvents.push(`dispose-start:${title}`)
@@ -183,12 +217,16 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(PdfParser.openDocument).mockReset()
   vi.mocked(loadRecentFile).mockReset()
+  vi.mocked(loadPdfStructureJson).mockReset()
   vi.mocked(saveRecentFile).mockReset()
+  vi.mocked(savePdfStructureJson).mockReset()
   vi.mocked(clearRecentFile).mockReset()
   lifecycleEvents.length = 0
   handles.length = 0
   vi.mocked(loadRecentFile).mockResolvedValue(null)
+  vi.mocked(loadPdfStructureJson).mockResolvedValue(null)
   vi.mocked(saveRecentFile).mockResolvedValue(true)
+  vi.mocked(savePdfStructureJson).mockResolvedValue(true)
   vi.mocked(clearRecentFile).mockResolvedValue(true)
   vi.mocked(PdfParser.openDocument).mockImplementation(async () => {
     const title = `PDF ${handles.length + 1}`
@@ -411,5 +449,65 @@ describe('demo PDF streaming lifecycle', () => {
     await act(async () => view.unmount())
     await drainMicrotasks()
     await waitFor(() => expect(handles[0]?.dispose).toHaveBeenCalledOnce())
+  })
+
+  it('[p] 首次加载 PDF 后把每页宽高持久化为并列 JSON', async () => {
+    // Given: PDF 尚无结构缓存，parser 返回两页具有真实尺寸的文档。
+    vi.mocked(PdfParser.openDocument).mockResolvedValueOnce(
+      makeHandle('Sized PDF', Promise.resolve(), [
+        { width: 612, height: 792 },
+        { width: 420, height: 595 }
+      ])
+    )
+    render(<App />)
+
+    // When: 用户完成首次 PDF 加载。
+    await openPdf('sized.pdf')
+    await screen.findByText('Sized PDF')
+
+    // Then: sidecar 与 PDF 同名保存，内容包含文件身份和全部页尺寸。
+    await waitFor(() => expect(savePdfStructureJson).toHaveBeenCalledOnce())
+    const [fileName, json] = vi.mocked(savePdfStructureJson).mock.calls[0] ?? []
+    expect(fileName).toBe('sized.pdf')
+    expect(JSON.parse(json ?? '')).toMatchObject({
+      version: 1,
+      file: { name: 'sized.pdf', size: 3 },
+      pageCount: 2,
+      pages: [
+        { pageNumber: 1, width: 612, height: 792 },
+        { pageNumber: 2, width: 420, height: 595 }
+      ]
+    })
+  })
+
+  it('[q] 打开 PDF 前读取同名结构缓存', async () => {
+    // Given: 当前 PDF 已有匹配文件身份的结构 JSON。
+    const file = makeFile('cached.pdf')
+    vi.mocked(loadPdfStructureJson).mockImplementation(async () =>
+      JSON.stringify({
+        version: 1,
+        file: {
+          name: file.name,
+          size: file.size,
+          lastModified: file.lastModified
+        },
+        pageCount: 1,
+        pages: [{ pageNumber: 1, width: 612, height: 792 }]
+      })
+    )
+    render(<App />)
+
+    // When: 用户选择该 PDF 并开始解析。
+    selectFile(file)
+    fireEvent.click(await screen.findByRole('button', { name: '加载文件' }))
+    await screen.findByText('PDF 1')
+
+    // Then: App 在调用 parser 前已读取 sidecar。
+    expect(loadPdfStructureJson).toHaveBeenCalledWith('cached.pdf')
+    expect(
+      vi.mocked(loadPdfStructureJson).mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      vi.mocked(PdfParser.openDocument).mock.invocationCallOrder[0] ?? 0
+    )
   })
 })

@@ -26,6 +26,7 @@ import type {
   ReaderCommentChangeDetail
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
+import type { ReaderLineHeight } from '../types/lineHeight'
 import type {
   ReaderBookmark,
   ReaderData,
@@ -48,6 +49,7 @@ import type {
   ReaderMousePosition,
   ReaderRectanglePopover,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
@@ -212,6 +214,10 @@ export type ReaderProps = {
   fontScale?: ReaderFontScale
   /** 字号倍率变化回调。仅在提供 fontScale、启用字号菜单时触发。 */
   onFontScaleChange?: (scale: ReaderFontScale) => void
+  /** Text Mode 正文行距倍率。 */
+  lineHeight?: ReaderLineHeight
+  /** Text Mode 行距倍率变化回调。 */
+  onLineHeightChange?: (lineHeight: ReaderLineHeight) => void
   onTextSelectionChange?: (
     text: IntermediateText,
     detail: ReaderTextSelectionDetail
@@ -262,6 +268,8 @@ export type ReaderProps = {
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
   onDragHighlight?: (highlight: ReaderSelectionRange) => void
+  /** 从侧栏拖动精确书签时触发，每次手势仅触发一次。 */
+  onDragBookmark?: (bookmark: ReaderBookmark) => void
   /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
   onRemoveRange?: (id: string) => void
   /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
@@ -270,7 +278,11 @@ export type ReaderProps = {
   selectionColor?: string
   /** 是否启用 Selection 内置的选区端点放大镜，默认 true。 */
   showSelectionMagnifier?: boolean
-  selectionPopover?: ReactNode
+  selectionPopover?: ReaderSelectionPopover
+  /** 同步查询选中单词；返回空字符串时默认 Popover 不显示翻译入口。 */
+  queryWord?: (word: string) => string
+  /** 调起宿主词典；传入选中单词时可用于初始化词典搜索框。 */
+  onOpenDictionary?: (initialWord?: string) => void
   highlightPopover?: ReaderHighlightPopover
   onCommentHighlight?: (
     highlight: ReaderSelectionRange
@@ -298,7 +310,7 @@ export type ReaderProps = {
   initialLoadedPages?: number
   pageLoadConcurrency?: number
   pageLoadEnterDelayMs?: number
-  /** 当前可见页前后预加载的页数，默认前后各 3 页。 */
+  /** Layout 模式按页、Text 模式按完整段预加载的前后范围，默认各 3。 */
   pagePreloadRadius?: number
   pageUnloadDelayMs?: number
   onIntermediateDocumentRenderTiming?: IntermediateDocumentRenderTimingCallback
@@ -387,6 +399,8 @@ export type ReaderLoadingProgress = {
   readonly label: string
   readonly current: number
   readonly total: number
+  /** True when the active operation cannot report a meaningful percentage. */
+  readonly indeterminate?: boolean
 }
 
 export const SUPPORTED_UPLOAD_ACCEPT =
@@ -566,7 +580,12 @@ function resolveBottomBarLayoutZoom(
   useVirtualPaper: boolean,
   layoutZoom: ReaderLayoutZoom
 ): ReaderLayoutZoom | undefined {
-  return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
+  if (renderMode !== 'layout' || useVirtualPaper) return undefined
+  return layoutZoom
+}
+
+function resolveLoadingRatio(total: number, current: number): number {
+  return total > 0 ? current / total : 0
 }
 
 function resolveVerticalMargins(
@@ -583,25 +602,40 @@ function resolveVerticalMargins(
     }
   }
 
+  const top = containMarginTop ?? containMarginY
+  const bottom = (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset
   return {
-    top: containMarginTop ?? containMarginY,
-    bottom: (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset,
+    top,
+    bottom,
     legacy: undefined
   }
 }
 
 function resolveLoadingProgress(
   progress: ReaderLoadingProgress | null | undefined
-): { readonly label: string; readonly percent: number } | null {
-  if (!progress) {
-    return null
+): {
+  readonly label: string
+  readonly indeterminate: boolean
+  readonly percent: number | null
+} | null {
+  if (!progress) return null
+  if (progress.indeterminate) {
+    return { label: progress.label, indeterminate: true, percent: null }
   }
-
-  const ratio = progress.total > 0 ? progress.current / progress.total : 0
   return {
     label: progress.label,
-    percent: Math.min(100, Math.max(0, ratio * 100))
+    indeterminate: false,
+    percent: Math.min(
+      100,
+      Math.max(0, resolveLoadingRatio(progress.total, progress.current) * 100)
+    )
   }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export function Reader({
@@ -630,6 +664,8 @@ export function Reader({
   isPdf,
   fontScale,
   onFontScaleChange,
+  lineHeight,
+  onLineHeightChange,
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
@@ -658,12 +694,15 @@ export function Reader({
   onSelectionEnd,
   onHighlight,
   onDragHighlight,
+  onDragBookmark,
   onRemoveRange,
   onHighlightColorChange,
   highlightColor,
   selectionColor,
   showSelectionMagnifier = true,
   selectionPopover,
+  queryWord,
+  onOpenDictionary,
   highlightPopover,
   onCommentHighlight,
   onCommentRect,
@@ -1172,6 +1211,11 @@ export function Reader({
     [onFontScaleChange]
   )
 
+  const handleLineHeightChange = useCallback(
+    (nextLineHeight: ReaderLineHeight) => onLineHeightChange?.(nextLineHeight),
+    [onLineHeightChange]
+  )
+
   const handleTouchPanModeChange = useCallback(
     (nextMode: ReaderTouchPanMode) => {
       if (touchPanMode === undefined) setInternalTouchPanMode(nextMode)
@@ -1564,15 +1608,7 @@ export function Reader({
     ]
   )
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
-
-  const rootClassName = className
-    ? `hamster-reader ${className}`
-    : 'hamster-reader'
+  const rootClassName = ['hamster-reader', className].filter(Boolean).join(' ')
   const readerThemeStyle: CSSProperties & {
     '--hamster-reader-theme-color': string
   } = {
@@ -1601,7 +1637,9 @@ export function Reader({
     [onCommentRect, onSelectRect, selectedRectId]
   )
 
-  const resolvedLoadingProgress = resolveLoadingProgress(loadingProgress)
+  const resolvedLoadingProgress = useMemo(() => {
+    return resolveLoadingProgress(loadingProgress)
+  }, [loadingProgress])
   const showUploadZone = !document && !uploadedFile && !resolvedLoadingProgress
   const showFileInfo = !document && uploadedFile && !resolvedLoadingProgress
   const showDocumentContent = document?.title ?? emptyText
@@ -1614,6 +1652,7 @@ export function Reader({
             isEpub={isEpub}
             isPdf={isPdf}
             fontScale={fontScale}
+            lineHeight={lineHeight}
             containMarginX={containMarginX}
             containMarginTop={resolvedVerticalMargins.top}
             containMarginBottom={resolvedVerticalMargins.bottom}
@@ -1654,13 +1693,18 @@ export function Reader({
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
+            onDragBookmark={onDragBookmark}
             highlightColor={resolvedHighlightColor}
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
-              selectionPopover ?? (
+              selectionPopover ??
+              ((selection) => (
                 <DefaultSelectionPopover
                   selectionRef={popoverSelectionRef}
+                  selectedWord={selection.text}
+                  queryWord={queryWord}
+                  onOpenDictionary={onOpenDictionary}
                   highlightColor={resolvedHighlightColor}
                   onHighlightColorChange={handleHighlightColorChange}
                   selectedRangeId={selectedRangeId}
@@ -1668,7 +1712,7 @@ export function Reader({
                   onUpdateRange={handleUpdateRange}
                   onRemoveRange={onRemoveRange}
                 />
-              )
+              ))
             }
             highlightPopover={
               highlightPopover ??
@@ -1781,13 +1825,18 @@ export function Reader({
           onSelectionEnd={onSelectionEnd}
           onHighlight={onHighlight}
           onDragHighlight={onDragHighlight}
+          onDragBookmark={onDragBookmark}
           highlightColor={resolvedHighlightColor}
           selectionColor={selectionColor}
           showSelectionMagnifier={showSelectionMagnifier}
           selectionPopover={
-            selectionPopover ?? (
+            selectionPopover ??
+            ((selection) => (
               <DefaultSelectionPopover
                 selectionRef={popoverSelectionRef}
+                selectedWord={selection.text}
+                queryWord={queryWord}
+                onOpenDictionary={onOpenDictionary}
                 highlightColor={resolvedHighlightColor}
                 onHighlightColorChange={handleHighlightColorChange}
                 selectedRangeId={selectedRangeId}
@@ -1795,7 +1844,7 @@ export function Reader({
                 onUpdateRange={handleUpdateRange}
                 onRemoveRange={onRemoveRange}
               />
-            )
+            ))
           }
           highlightPopover={
             highlightPopover ??
@@ -1909,15 +1958,19 @@ export function Reader({
             aria-atomic='true'
           >
             <span>{resolvedLoadingProgress.label}</span>
-            <span data-testid='reader-loading-progress-percent'>
-              {resolvedLoadingProgress.percent.toFixed(0)}%
-            </span>
+            {!resolvedLoadingProgress.indeterminate && (
+              <span data-testid='reader-loading-progress-percent'>
+                {resolvedLoadingProgress.percent?.toFixed(0)}%
+              </span>
+            )}
           </div>
           <progress
             aria-label={resolvedLoadingProgress.label}
             className='hamster-reader__loading-progress-bar'
             max={100}
-            value={resolvedLoadingProgress.percent}
+            {...(resolvedLoadingProgress.indeterminate
+              ? { 'aria-valuetext': '处理中' }
+              : { value: resolvedLoadingProgress.percent ?? 0 })}
           />
         </section>
       )}
@@ -1983,6 +2036,7 @@ export function Reader({
             isEpub={isEpub}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
+            lineHeight={resolvedRenderMode === 'text' ? lineHeight : undefined}
             layoutZoom={resolveBottomBarLayoutZoom(
               resolvedRenderMode,
               useVirtualPaper,
@@ -2002,6 +2056,7 @@ export function Reader({
             onRenderModeChange={handleRenderModeChange}
             onOcrChange={handleOcrChange}
             onFontScaleChange={handleFontScaleChange}
+            onLineHeightChange={handleLineHeightChange}
             onLayoutZoomChange={handleLayoutZoomChange}
             onTouchPanModeChange={handleTouchPanModeChange}
             onEdgeCropEditingChange={handleEdgeCropEditingChange}

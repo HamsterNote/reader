@@ -13,11 +13,9 @@ import type {
   IntermediateParagraph,
   IntermediateText
 } from '@hamster-note/types'
-import type { Virtualizer } from '@tanstack/react-virtual'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
-  PointerEvent as ReactPointerEvent,
   ReactNode,
+  PointerEvent as ReactPointerEvent,
   Ref,
   RefObject
 } from 'react'
@@ -26,12 +24,14 @@ import {
   useEffect,
   useId,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
 } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type {
   ReaderBookmark,
   ReaderTextAnchor,
@@ -42,6 +42,7 @@ import type {
   ReaderLinkedSelectionData,
   ReaderMousePosition,
   ReaderSelectionOverlayRectType,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../../types/selection'
@@ -66,9 +67,10 @@ import {
   isIntermediateImage,
   isIntermediateText
 } from './IntermediateDocumentViewer'
+import { PageBrowser } from './PageBrowser'
 import { resolveHiddenPageNumbers } from './pageDisplay'
-import { getPagePreloadWindow } from './pagePreloadWindow'
 import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
+import { ReadingProgress } from './ReadingProgress'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
@@ -80,35 +82,29 @@ import {
   type RuntimeLinkedSelectionTransient,
   runtimePageSelectionId
 } from './selectionAdapter'
-import { PageBrowser } from './PageBrowser'
-import { ReadingProgress } from './ReadingProgress'
 import {
-  findTopTextAnchor,
   findTextAnchorAtOrBelow,
+  findTopTextAnchor,
   getActiveBookmarkKey,
   getBookmarkKey,
   getTextAnchorKey,
   hasAnchorableText,
   isTextBookmark,
-  resolveTextAnchorElement,
   resolveBookmarkNavigationHandler,
+  resolveTextAnchorElement,
   type TextAnchorElementRecord
 } from './textAnchor'
+import { deriveDomSelectionPageRects } from './textHighlightAdapter'
+import {
+  getTextPagePreloadWindow,
+  getTextPageWindow,
+  getTextPageWindowSize
+} from './textPageWindow'
 import { useDerivedTextSelectionRanges } from './useDerivedTextSelectionRanges'
 import { useHighlightDrag } from './useHighlightDrag'
 import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
-
-/**
- * 文本模式下每页的初始高度估计值（px）。
- *
- * 在真实测量前，`useVirtualizer` 用此值计算占位高度与可见范围。
- * 选用 800px：与常见 A4 文本页（约 1100px 物理高度，去 padding 后接近 800px）
- * 一致，且与 layout 模式默认页尺寸（595×842）的量级接近，保证首次渲染范围
- * 稳定。`measureElement` 挂载后会用实际 DOM 高度替换该估计值。
- */
-const TEXT_PAGE_ESTIMATED_HEIGHT = 800
 
 const DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS = 5000
 
@@ -120,6 +116,21 @@ const EMPTY_TEXT_PAGE_IMAGES = new Map<number, string>()
 
 const handleTextPageBrowserVisibilityChange = () => {}
 
+const textDocumentRenderKeys = new WeakMap<IntermediateDocument, number>()
+let nextTextDocumentRenderKey = 1
+
+const getTextDocumentRenderKey = (
+  document: IntermediateDocument | null
+): number => {
+  if (document === null) return 0
+  const existingKey = textDocumentRenderKeys.get(document)
+  if (existingKey !== undefined) return existingKey
+  const nextKey = nextTextDocumentRenderKey
+  nextTextDocumentRenderKey += 1
+  textDocumentRenderKeys.set(document, nextKey)
+  return nextKey
+}
+
 type TextReadingProgressSnapshot = {
   readonly currentPageNumber: number
   readonly anchor?: ReaderTextAnchor
@@ -127,7 +138,7 @@ type TextReadingProgressSnapshot = {
 
 type TextAnchorRestoreRequest = {
   readonly token: number
-  readonly documentGeneration: number
+  readonly documentGeneration: symbol
   readonly anchorKey: string
   readonly source: 'bookmark' | 'restore'
 }
@@ -135,6 +146,25 @@ type TextAnchorRestoreRequest = {
 type PendingTextAnchorRestore = {
   readonly anchor: ReaderTextAnchor
   readonly request: TextAnchorRestoreRequest
+}
+
+type PendingTextRangeNavigation = {
+  readonly rangeId: string
+  readonly pageNumber: number
+  readonly navigationGeneration: number
+  readonly documentGeneration: symbol
+  readonly windowPageNumbers: readonly number[]
+}
+
+type PendingTextWindowAlignment = {
+  readonly pageNumber: number
+  // 'top'：仅用于「加载下一段」，直接把 scrollTop 归零，
+  // 让视口 paddingTop（containMarginTop）自然生效
+  readonly alignment: 'start' | 'end' | 'top'
+  readonly navigationGeneration: number
+  readonly documentGeneration: symbol
+  readonly windowPageNumbers: readonly number[]
+  readonly pageProgress: number
 }
 
 function getTextReadingProgressKey(
@@ -145,23 +175,36 @@ function getTextReadingProgressKey(
     : `${progress.currentPageNumber}:page`
 }
 
-function useDocumentGeneration(
+function resolveSelectionPopover(
+  selectionPopover: ReaderSelectionPopover | undefined,
+  activeRange: LinkedSelectionRange | null | undefined,
+  scopeId: string,
+  toSelection: (range: ReaderSelectionRange) => ReaderSelectionRange | null
+): ReactNode {
+  if (typeof selectionPopover !== 'function') {
+    return selectionPopover
+  }
+
+  if (!activeRange) {
+    return undefined
+  }
+
+  const publicRange = mapRuntimeRangeToPublic(activeRange, scopeId)
+  const selection = publicRange ? toSelection(publicRange) : null
+  return selection ? selectionPopover(selection) : undefined
+}
+
+const useDocumentGeneration = (
   runtimeDocument: object | null,
   pageNumbersKey: string
-): number {
-  const scopeRef = useRef({ runtimeDocument, pageNumbersKey, generation: 0 })
-  if (
-    scopeRef.current.runtimeDocument !== runtimeDocument ||
-    scopeRef.current.pageNumbersKey !== pageNumbersKey
-  ) {
-    scopeRef.current = {
-      runtimeDocument,
-      pageNumbersKey,
-      generation: scopeRef.current.generation + 1
-    }
-  }
-  return scopeRef.current.generation
-}
+): symbol =>
+  useMemo(
+    () =>
+      Symbol(
+        `${pageNumbersKey}:${runtimeDocument === null ? 'empty' : 'document'}`
+      ),
+    [pageNumbersKey, runtimeDocument]
+  )
 
 function useInvalidateRestoreRequest(
   controlledProgressIdentity: string,
@@ -169,23 +212,29 @@ function useInvalidateRestoreRequest(
   restoreRequestTokenRef: RefObject<number>
 ): void {
   const previousIdentityRef = useRef(controlledProgressIdentity)
-  if (previousIdentityRef.current === controlledProgressIdentity) return
+  useLayoutEffect(() => {
+    if (previousIdentityRef.current === controlledProgressIdentity) return
 
-  previousIdentityRef.current = controlledProgressIdentity
-  if (
-    activeRestoreRequestRef.current?.anchorKey !== controlledProgressIdentity
-  ) {
-    restoreRequestTokenRef.current += 1
-    activeRestoreRequestRef.current = null
-  }
+    previousIdentityRef.current = controlledProgressIdentity
+    if (
+      activeRestoreRequestRef.current?.anchorKey !== controlledProgressIdentity
+    ) {
+      restoreRequestTokenRef.current += 1
+      activeRestoreRequestRef.current = null
+    }
+  }, [
+    activeRestoreRequestRef,
+    controlledProgressIdentity,
+    restoreRequestTokenRef
+  ])
 }
 
 function useDocumentGenerationChange(
-  documentGeneration: number,
+  documentGeneration: symbol,
   onChange: () => void
 ): void {
   const appliedGenerationRef = useRef(documentGeneration)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (appliedGenerationRef.current === documentGeneration) return
     appliedGenerationRef.current = documentGeneration
     onChange()
@@ -243,36 +292,13 @@ function useSelectionScope(
   runtimeDocument: IntermediateDocument | null,
   pageNumbersKey: string
 ): symbol {
-  const scopeRef = useRef({
-    runtimeDocument,
-    pageNumbersKey,
-    value: Symbol('intermediate-document-text-selection-scope')
-  })
-  if (
-    scopeRef.current.runtimeDocument !== runtimeDocument ||
-    scopeRef.current.pageNumbersKey !== pageNumbersKey
-  ) {
-    scopeRef.current = {
-      runtimeDocument,
-      pageNumbersKey,
-      value: Symbol('intermediate-document-text-selection-scope')
-    }
-  }
-  return scopeRef.current.value
-}
-
-function syncLastActiveRange(
-  lastActiveRangeRef: React.MutableRefObject<LinkedSelectionRange | null>,
-  scopeRef: React.MutableRefObject<symbol>,
-  selectionScope: symbol,
-  activeRange: LinkedSelectionRange | null | undefined
-): void {
-  if (scopeRef.current !== selectionScope) {
-    scopeRef.current = selectionScope
-    lastActiveRangeRef.current = activeRange ?? null
-  } else if (activeRange) {
-    lastActiveRangeRef.current = activeRange
-  }
+  return useMemo(
+    () =>
+      Symbol(
+        `${pageNumbersKey}:${runtimeDocument === null ? 'empty' : 'document'}:selection`
+      ),
+    [runtimeDocument, pageNumbersKey]
+  )
 }
 
 const getEffectiveTextMaxLoadedPages = (
@@ -746,6 +772,7 @@ export type IntermediateDocumentTextViewerProps = {
   serializedDocument?: IntermediateDocumentSerialized | null
   className?: string
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   /** 文本滚动视口的水平内容安全边距。 */
   containMarginX?: number
   /** 文本滚动视口的顶部内容安全边距。 */
@@ -766,6 +793,7 @@ export type IntermediateDocumentTextViewerProps = {
   bookmarks?: readonly ReaderBookmark[]
   /** 添加或删除指定文字锚点书签。 */
   onToggleBookmark?: (bookmark: ReaderBookmark) => void
+  onDragBookmark?: (bookmark: ReaderBookmark) => void
   /** @deprecated 请使用 bookmarks。 */
   bookmarkedPageNumbers?: readonly number[]
   /** @deprecated 请使用 onToggleBookmark。 */
@@ -785,7 +813,7 @@ export type IntermediateDocumentTextViewerProps = {
   pageLoadConcurrency?: number
   /** 页面进入可加载窗口后、发起加载前的延迟（毫秒），默认 `500`。 */
   pageLoadEnterDelayMs?: number
-  /** 可见页前后预加载的页数，默认前后各 `3` 页。 */
+  /** 当前段前后预加载的段数，默认前后各 `3` 段。 */
   pagePreloadRadius?: number
   /** 页面离开可加载窗口后、卸载内容的延迟（毫秒），默认 `5000`。 */
   pageUnloadDelayMs?: number
@@ -848,7 +876,7 @@ export type IntermediateDocumentTextViewerProps = {
   /** 是否启用选区端点放大镜，默认 false。 */
   showSelectionMagnifier?: boolean
   /** 活跃选区 popover；文本模式状态机接入后传给 Selection 包装层。 */
-  selectionPopover?: ReactNode
+  selectionPopover?: ReaderSelectionPopover
   /** 已存在高亮 popover；文本模式状态机接入后按当前高亮解析。 */
   highlightPopover?: ReaderHighlightPopover
   /** 默认高亮 popover 的评论入口；文本模式状态机接入后由 popover 按需调用。 */
@@ -865,14 +893,83 @@ export type IntermediateDocumentTextViewerProps = {
   popoverRelative?: boolean
 }
 
+type MountedTextPageProgress = {
+  readonly pageNumber: number
+  readonly pageProgress: number
+}
+
+const getMountedTextPageProgress = (
+  viewerRootElement: HTMLElement
+): MountedTextPageProgress | null => {
+  const viewportRect = viewerRootElement.getBoundingClientRect()
+  const mountedPages = Array.from(
+    viewerRootElement.querySelectorAll<HTMLElement>(
+      '[data-testid^="intermediate-text-page-"]'
+    )
+  )
+  const currentPageElement =
+    mountedPages.find(
+      (pageElement) =>
+        pageElement.getBoundingClientRect().bottom > viewportRect.top
+    ) ?? mountedPages.at(-1)
+  if (!currentPageElement) return null
+
+  const pageRect = currentPageElement.getBoundingClientRect()
+  const pageProgress =
+    pageRect.height > 0
+      ? Math.min(
+          1,
+          Math.max(0, (viewportRect.top - pageRect.top) / pageRect.height)
+        )
+      : 0
+  return {
+    pageNumber: Number(currentPageElement.dataset.pageNumber),
+    pageProgress
+  }
+}
+
+const areTextWindowImagesSettled = (
+  viewport: HTMLElement,
+  pageNumbers: readonly number[]
+): boolean =>
+  pageNumbers.every((pageNumber) => {
+    const page = viewport.querySelector<HTMLElement>(
+      `[data-testid="intermediate-text-page-${pageNumber}"]`
+    )
+    if (!page) return false
+    return Array.from(page.querySelectorAll('img')).every(
+      (image) => image.complete || image.dataset.imageSettled === 'true'
+    )
+  })
+
+const getDocumentScopedMap = <Key, Value>(
+  stateGeneration: symbol,
+  documentGeneration: symbol,
+  values: Map<Key, Value>
+): Map<Key, Value> =>
+  stateGeneration === documentGeneration ? values : new Map<Key, Value>()
+
+const getDocumentScopedPageNumber = (
+  stateGeneration: symbol,
+  documentGeneration: symbol,
+  activePageNumber: number,
+  initialPageNumber: number
+): number =>
+  stateGeneration === documentGeneration ? activePageNumber : initialPageNumber
+
+const getInitialObservedProgressKey = (
+  controlledProgress: IntermediateDocumentTextViewerProps['textReadingProgress'],
+  readingProgress: TextReadingProgressSnapshot
+): string =>
+  controlledProgress ? getTextReadingProgressKey(readingProgress) : ''
+
 /**
  * `intermediate-document` 文本渲染模式的查看器。
  *
- * 文本模式使用 `@tanstack/react-virtual` 的原生滚动虚拟化，只渲染当前
- * 可见视口内的页面 DOM（`overscan: 0`）。与 layout 模式（`VirtualPaper` +
- * 全量外壳）不同，文本模式：
+ * 文本模式使用浏览器原生滚动和固定页面窗口。PDF 每段挂载四页，其他文本格式
+ * 每段挂载一页。与 layout 模式（`VirtualPaper` + 全量外壳）不同，文本模式：
  * - 不挂载 `VirtualPaper`，也不渲染 `.virtual-paper-wrapper`；
- * - 不为每个页码渲染占位 DOM，仅渲染虚拟范围命中页；
+ * - 不为每个页码渲染占位 DOM，仅渲染当前页面窗口；
  * - 解析文档与过滤页码时复用 layout 模式的 {@link getRuntimeDocument} /
  *   {@link getVisiblePageNumbers} 纯函数，避免逻辑分叉。
  *
@@ -891,6 +988,7 @@ export function IntermediateDocumentTextViewer(
     serializedDocument,
     className,
     fontScale,
+    lineHeight,
     containMarginX,
     containMarginTop,
     containMarginBottom,
@@ -901,6 +999,7 @@ export function IntermediateDocumentTextViewer(
     commentCountByRangeId,
     bookmarks,
     onToggleBookmark,
+    onDragBookmark,
     bookmarkedPageNumbers,
     onTogglePageBookmark,
     textReadingProgress,
@@ -944,7 +1043,6 @@ export function IntermediateDocumentTextViewer(
     popoverRelative
   } = props
 
-  // 原生滚动容器 ref —— useVirtualizer 通过 getScrollElement 读取其几何尺寸。
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -992,28 +1090,31 @@ export function IntermediateDocumentTextViewer(
     pageLoadEnterDelayMs,
     pageUnloadDelayMs
   })
-  lazyQueueConfigRef.current = {
+  useLayoutEffect(() => {
+    lazyQueueConfigRef.current = {
+      initialLoadedPages,
+      pageLoadConcurrency,
+      pageLoadEnterDelayMs,
+      pageUnloadDelayMs
+    }
+  }, [
     initialLoadedPages,
     pageLoadConcurrency,
     pageLoadEnterDelayMs,
     pageUnloadDelayMs
-  }
+  ])
 
-  const [textsByPageNumber, setTextsByPageNumber] = useState(
+  const [storedTextsByPageNumber, setTextsByPageNumber] = useState(
     () => new Map<number, IntermediateText[]>()
   )
-  const [paragraphsByPageNumber, setParagraphsByPageNumber] = useState(
+  const [storedParagraphsByPageNumber, setParagraphsByPageNumber] = useState(
     () => new Map<number, IntermediateParagraph[]>()
   )
-  const [imagesByPageNumber, setImagesByPageNumber] = useState(
+  const [storedImagesByPageNumber, setImagesByPageNumber] = useState(
     () => new Map<number, IntermediateImage[]>()
   )
-  const [orderedContentByPageNumber, setOrderedContentByPageNumber] = useState(
-    () => new Map<number, IntermediateContent[]>()
-  )
-  textsByPageNumberRef.current = textsByPageNumber
-  imagesByPageNumberRef.current = imagesByPageNumber
-  orderedContentByPageNumberRef.current = orderedContentByPageNumber
+  const [storedOrderedContentByPageNumber, setOrderedContentByPageNumber] =
+    useState(() => new Map<number, IntermediateContent[]>())
 
   // 解析 runtime document，复用 layout 模式的同一份纯函数。
   // 文档缺失（null/undefined）时返回 null。
@@ -1021,6 +1122,7 @@ export function IntermediateDocumentTextViewer(
     () => getRuntimeDocument(document ?? serializedDocument),
     [document, serializedDocument]
   )
+  const documentRenderKey = getTextDocumentRenderKey(runtimeDocument)
 
   // 从 runtimeDocument.pageNumbers 经 pageRange 过滤得到可见页码列表。
   // getVisiblePageNumbers 对无效 range 返回 []，与 layout 模式语义一致。
@@ -1036,11 +1138,32 @@ export function IntermediateDocumentTextViewer(
     runtimeDocument,
     pageNumbersKey
   )
-  const getVirtualPageKey = useCallback(
-    (pageNumber: number) => `${documentGeneration}:${pageNumber}`,
-    [documentGeneration]
+  const contentDocumentGenerationRef = useRef(documentGeneration)
+  const textsByPageNumber = getDocumentScopedMap(
+    contentDocumentGenerationRef.current,
+    documentGeneration,
+    storedTextsByPageNumber
   )
-
+  const paragraphsByPageNumber = getDocumentScopedMap(
+    contentDocumentGenerationRef.current,
+    documentGeneration,
+    storedParagraphsByPageNumber
+  )
+  const imagesByPageNumber = getDocumentScopedMap(
+    contentDocumentGenerationRef.current,
+    documentGeneration,
+    storedImagesByPageNumber
+  )
+  const orderedContentByPageNumber = getDocumentScopedMap(
+    contentDocumentGenerationRef.current,
+    documentGeneration,
+    storedOrderedContentByPageNumber
+  )
+  useLayoutEffect(() => {
+    textsByPageNumberRef.current = textsByPageNumber
+    imagesByPageNumberRef.current = imagesByPageNumber
+    orderedContentByPageNumberRef.current = orderedContentByPageNumber
+  }, [imagesByPageNumber, orderedContentByPageNumber, textsByPageNumber])
   const selectionScope = useSelectionScope(runtimeDocument, pageNumbersKey)
 
   const isRangesControlled = ranges !== undefined
@@ -1051,13 +1174,32 @@ export function IntermediateDocumentTextViewer(
     useState<TextReadingProgressSnapshot>(() =>
       getInitialTextReadingProgress(textReadingProgress, pageNumbers)
     )
+  const textPageWindowSize = getTextPageWindowSize(isPdf)
+  const [activeWindowPageNumber, setActiveWindowPageNumber] = useState(
+    () => readingProgress.currentPageNumber
+  )
+  const activeWindowDocumentGenerationRef = useRef(documentGeneration)
+  const currentActiveWindowPageNumber = getDocumentScopedPageNumber(
+    activeWindowDocumentGenerationRef.current,
+    documentGeneration,
+    activeWindowPageNumber,
+    getInitialTextReadingProgress(textReadingProgress, pageNumbers)
+      .currentPageNumber
+  )
+  const [currentPageProgress, setCurrentPageProgress] = useState(0)
+  const [mediaLayoutRevision, setMediaLayoutRevision] = useState(0)
+  const handleImageSettled = useCallback(() => {
+    setMediaLayoutRevision((revision) => revision + 1)
+  }, [])
   const [fallbackBookmarkKey, setFallbackBookmarkKey] = useState<string>()
   const readingProgressRef =
     useRef<TextReadingProgressSnapshot>(readingProgress)
-  readingProgressRef.current = readingProgress
+  useLayoutEffect(() => {
+    readingProgressRef.current = readingProgress
+  }, [readingProgress])
   const readingProgressPageRef = useRef(readingProgress.currentPageNumber)
   const lastObservedProgressKeyRef = useRef(
-    textReadingProgress ? getTextReadingProgressKey(readingProgress) : ''
+    getInitialObservedProgressKey(textReadingProgress, readingProgress)
   )
   const lastLocallyEmittedProgressKeyRef = useRef('')
   const usesNativeScrollEndRef = useRef(false)
@@ -1084,27 +1226,26 @@ export function IntermediateDocumentTextViewer(
   )
   const pendingTextAnchorRef = useRef<PendingTextAnchorRestore | null>(null)
   const progressDocumentGenerationRef = useRef(documentGeneration)
-  progressDocumentGenerationRef.current = documentGeneration
   const restoreAttemptCleanupRef = useRef<(() => void) | null>(null)
-  const anchorMeasurementRef = useRef<{
-    readonly itemKey: string
-    readonly anchor: ReaderTextAnchor
-    readonly request: TextAnchorRestoreRequest
-  } | null>(null)
   const alignTextAnchorRef = useRef<
     | ((anchor: ReaderTextAnchor, request: TextAnchorRestoreRequest) => boolean)
     | null
   >(null)
   const textNavigationGenerationRef = useRef(0)
+  const pendingTextRangeNavigationRef =
+    useRef<PendingTextRangeNavigation | null>(null)
+  const pendingTextWindowAlignmentRef =
+    useRef<PendingTextWindowAlignment | null>(null)
   useDocumentGenerationChange(documentGeneration, () => {
     progressDocumentGenerationRef.current = documentGeneration
     restoreAttemptCleanupRef.current?.()
     restoreAttemptCleanupRef.current = null
     textNavigationGenerationRef.current += 1
+    pendingTextRangeNavigationRef.current = null
+    pendingTextWindowAlignmentRef.current = null
     restoreRequestTokenRef.current += 1
     committedBookmarkRequestTokenRef.current = null
     activeRestoreRequestRef.current = null
-    anchorMeasurementRef.current = null
     pendingTextAnchorRef.current = null
     textElementsRef.current.clear()
     restoredProgressPageRef.current = null
@@ -1124,6 +1265,9 @@ export function IntermediateDocumentTextViewer(
     isInitialProgressRestorePendingRef.current =
       textReadingProgress !== undefined
     setReadingProgress(nextProgress)
+    activeWindowDocumentGenerationRef.current = documentGeneration
+    setActiveWindowPageNumber(nextProgress.currentPageNumber)
+    setCurrentPageProgress(0)
     onTextAnchorChange?.(undefined)
   })
   const {
@@ -1191,8 +1335,9 @@ export function IntermediateDocumentTextViewer(
     textNavigationGenerationRef.current += 1
     restoreRequestTokenRef.current += 1
     activeRestoreRequestRef.current = null
-    anchorMeasurementRef.current = null
     pendingTextAnchorRef.current = null
+    pendingTextRangeNavigationRef.current = null
+    pendingTextWindowAlignmentRef.current = null
   }, [cancelRestoreAttempt])
 
   const releaseProgrammaticSuppression = useCallback(() => {
@@ -1220,8 +1365,26 @@ export function IntermediateDocumentTextViewer(
         releaseProgrammaticSuppression()
       }
     }
+    const handleUserWheel = () => {
+      releaseProgrammaticSuppression()
+    }
+    const handleUserTouchStart = () => {
+      releaseProgrammaticSuppression()
+    }
     const handleScroll = () => {
       signalReadingProgressActivity()
+      const mountedPageProgress = getMountedTextPageProgress(viewerRootElement)
+      if (mountedPageProgress) {
+        setCurrentPageProgress(mountedPageProgress.pageProgress)
+        if (pageNumbers.includes(mountedPageProgress.pageNumber)) {
+          readingProgressPageRef.current = mountedPageProgress.pageNumber
+          setReadingProgress((current) =>
+            current.currentPageNumber === mountedPageProgress.pageNumber
+              ? current
+              : { currentPageNumber: mountedPageProgress.pageNumber }
+          )
+        }
+      }
       if (usesNativeScrollEnd) {
         nativeScrollPendingRef.current = true
         if (frameId !== null && viewerWindow) {
@@ -1260,16 +1423,12 @@ export function IntermediateDocumentTextViewer(
         passive: true
       })
     }
-    viewerRootElement.addEventListener(
-      'wheel',
-      releaseProgrammaticSuppression,
-      { passive: true }
-    )
-    viewerRootElement.addEventListener(
-      'touchstart',
-      releaseProgrammaticSuppression,
-      { passive: true }
-    )
+    viewerRootElement.addEventListener('wheel', handleUserWheel, {
+      passive: true
+    })
+    viewerRootElement.addEventListener('touchstart', handleUserTouchStart, {
+      passive: true
+    })
     viewerRootElement.addEventListener(
       'pointerdown',
       releaseProgrammaticSuppression
@@ -1282,14 +1441,8 @@ export function IntermediateDocumentTextViewer(
       }
       usesNativeScrollEndRef.current = false
       nativeScrollPendingRef.current = false
-      viewerRootElement.removeEventListener(
-        'wheel',
-        releaseProgrammaticSuppression
-      )
-      viewerRootElement.removeEventListener(
-        'touchstart',
-        releaseProgrammaticSuppression
-      )
+      viewerRootElement.removeEventListener('wheel', handleUserWheel)
+      viewerRootElement.removeEventListener('touchstart', handleUserTouchStart)
       viewerRootElement.removeEventListener(
         'pointerdown',
         releaseProgrammaticSuppression
@@ -1302,138 +1455,81 @@ export function IntermediateDocumentTextViewer(
   }, [
     captureReadingProgress,
     onTextReadingProgressChange,
+    pageNumbers,
     releaseProgrammaticSuppression,
     signalReadingProgressActivity,
     viewerRootElement
   ])
-  const restoreInitialReadingProgress = useCallback(
-    (instance: Virtualizer<HTMLDivElement, HTMLElement>) => {
-      if (textReadingProgress?.anchor) return
-
-      const requestedPageNumber = textReadingProgress?.currentPageNumber
-      if (requestedPageNumber === undefined) return
-
-      const requestedPageIndex = pageNumbers.indexOf(requestedPageNumber)
-      const scrollElement = instance.scrollElement
-      if (requestedPageIndex < 0 || !scrollElement) return
-      if (scrollElement.clientHeight <= 0) return
-
-      const currentItem = instance.getVirtualItemForOffset(
-        instance.scrollOffset ?? 0
+  const visiblePageNumbers = useMemo(
+    () =>
+      getTextPageWindow(
+        pageNumbers,
+        currentActiveWindowPageNumber,
+        textPageWindowSize
+      ),
+    [currentActiveWindowPageNumber, pageNumbers, textPageWindowSize]
+  )
+  const activeWindowStartIndex = Math.max(
+    0,
+    pageNumbers.indexOf(visiblePageNumbers[0] ?? currentActiveWindowPageNumber)
+  )
+  const previousWindowPageNumber = pageNumbers[activeWindowStartIndex - 1]
+  const nextWindowPageNumber =
+    pageNumbers[activeWindowStartIndex + textPageWindowSize]
+  const tryPendingTextWindowAlignment = useCallback(() => {
+    const pending = pendingTextWindowAlignmentRef.current
+    if (
+      !pending ||
+      pending.documentGeneration !== progressDocumentGenerationRef.current ||
+      pending.navigationGeneration !== textNavigationGenerationRef.current ||
+      !pending.windowPageNumbers.every((pageNumber) =>
+        textsByPageNumberRef.current.has(pageNumber)
       )
-      const currentPageNumber =
-        pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
-      readingProgressPageRef.current = requestedPageNumber
-      const requestedProgress = { currentPageNumber: requestedPageNumber }
-      readingProgressRef.current = requestedProgress
-      setReadingProgress(requestedProgress)
-      restoredProgressPageRef.current = requestedPageNumber
-      suppressProgrammaticProgressRef.current = true
-      if (currentPageNumber === requestedPageNumber) {
-        isInitialProgressRestorePendingRef.current = false
-        return
-      }
-      instance.scrollToIndex(requestedPageIndex, {
-        align: 'start',
-        behavior: 'auto'
-      })
-    },
-    [pageNumbers, textReadingProgress]
-  )
-  const handleVirtualizerChange = useCallback(
-    (instance: Virtualizer<HTMLDivElement, HTMLElement>, sync: boolean) => {
-      if (isInitialProgressRestorePendingRef.current) {
-        restoreInitialReadingProgress(instance)
-        return
-      }
-
-      const scrollOffset = instance.scrollOffset ?? 0
-      const currentItem = instance.getVirtualItemForOffset(scrollOffset)
-      const currentPageNumber =
-        pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
-
-      if (sync || currentPageNumber !== readingProgressPageRef.current) {
-        signalReadingProgressActivity()
-      }
-      if (sync && usesNativeScrollEndRef.current) {
-        nativeScrollPendingRef.current = true
-      }
-      const previousPageNumber = readingProgressPageRef.current
-      readingProgressPageRef.current = currentPageNumber
-
-      setReadingProgress((current) => {
-        if (current.currentPageNumber === currentPageNumber) {
-          return current
-        }
-        return { currentPageNumber }
-      })
-      if (currentPageNumber !== previousPageNumber) {
-        const nextProgress = { currentPageNumber }
-        const nextKey = getTextReadingProgressKey(nextProgress)
-        readingProgressRef.current = nextProgress
-        if (
-          !suppressProgrammaticProgressRef.current &&
-          !nativeScrollPendingRef.current &&
-          lastObservedProgressKeyRef.current !== nextKey
-        ) {
-          lastObservedProgressKeyRef.current = nextKey
-          lastLocallyEmittedProgressKeyRef.current = nextKey
-          onTextReadingProgressChange?.(nextProgress)
-        }
-      }
-    },
-    [
-      onTextReadingProgressChange,
-      pageNumbers,
-      restoreInitialReadingProgress,
-      signalReadingProgressActivity
-    ]
-  )
-  // TanStack Virtual 虚拟化器：count = pageNumbers.length，
-  // estimateSize 用稳定的 800px 直到 measureElement 测得真实高度，
-  // getItemKey 直接用真实页码（稳定 key，避免页码/索引错位），
-  // overscan: 0 严格保证只渲染可见视口内的页面 DOM。
-  // measureElement 选项：无文本页只渲染很矮的 "Page N" 占位内容，不能把
-  // 这个临时高度写回虚拟化器，否则累计总高度会持续塌缩并把全部页面拉进
-  // 可视范围。有文本内容后 ResizeObserver 会再次测量并写入真实高度。
-  const virtualizer = useVirtualizer({
-    count: pageNumbers.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => TEXT_PAGE_ESTIMATED_HEIGHT,
-    getItemKey: (index) => getVirtualPageKey(pageNumbers[index] ?? index),
-    overscan: 0,
-    onChange: handleVirtualizerChange,
-    measureElement: (el) => {
-      if (el.getAttribute('data-page-measurable') !== 'true') {
-        return TEXT_PAGE_ESTIMATED_HEIGHT
-      }
-      const measured = el.getBoundingClientRect().height
-      const pendingMeasurement = anchorMeasurementRef.current
-      const pageNumber = Number(el.getAttribute('data-page-number'))
-      const itemKey = getVirtualPageKey(pageNumber)
-      if (
-        measured > 0 &&
-        pendingMeasurement?.request.documentGeneration ===
-          progressDocumentGenerationRef.current &&
-        pendingMeasurement.itemKey === itemKey
-      ) {
-        anchorMeasurementRef.current = null
-        globalThis.queueMicrotask(() => {
-          alignTextAnchorRef.current?.(
-            pendingMeasurement.anchor,
-            pendingMeasurement.request
-          )
-        })
-      }
-      return measured > 0 ? measured : TEXT_PAGE_ESTIMATED_HEIGHT
+    ) {
+      return false
     }
-  })
+    const viewport = scrollContainerRef.current
+    if (
+      !viewport ||
+      !areTextWindowImagesSettled(viewport, pending.windowPageNumbers)
+    ) {
+      return false
+    }
+    const pageElement = viewport?.querySelector<HTMLElement>(
+      `[data-testid="intermediate-text-page-${pending.pageNumber}"]`
+    )
+    if (!viewport || !pageElement) return false
 
-  const virtualItems = virtualizer.getVirtualItems()
+    const viewportRect = viewport.getBoundingClientRect()
+    const pageRect = pageElement.getBoundingClientRect()
+    let top: number
+    if (pending.alignment === 'end') {
+      top = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+    } else if (pending.alignment === 'top') {
+      // 回到滚动原点：视口 paddingTop（containMarginTop）随之保留，
+      // 首行文字不会贴到容器顶边
+      top = 0
+    } else {
+      top =
+        viewport.scrollTop +
+        pageRect.top -
+        viewportRect.top +
+        pageRect.height * pending.pageProgress
+    }
+    viewport.scrollTo({ behavior: 'auto', top })
+    pendingTextWindowAlignmentRef.current = null
+    restoredProgressPageRef.current = pending.pageNumber
+    isInitialProgressRestorePendingRef.current = false
+    return true
+  }, [])
   const handleReadingProgressSeekPage = useCallback(
-    (pageNumber: number, source: 'restore' | 'user' = 'user') => {
-      const pageIndex = pageNumbers.indexOf(pageNumber)
-      if (pageIndex < 0) return
+    (
+      pageNumber: number,
+      source: 'restore' | 'user' = 'user',
+      alignment: 'start' | 'end' | 'top' = 'start',
+      pageProgress = 0
+    ) => {
+      if (!pageNumbers.includes(pageNumber)) return
       if (source === 'user') releaseProgrammaticSuppression()
       const nextProgress = { currentPageNumber: pageNumber }
       const nextKey = getTextReadingProgressKey(nextProgress)
@@ -1441,32 +1537,46 @@ export function IntermediateDocumentTextViewer(
       readingProgressRef.current = nextProgress
       setReadingProgress(nextProgress)
       setFallbackBookmarkKey(undefined)
+      activeWindowDocumentGenerationRef.current = documentGeneration
+      setActiveWindowPageNumber(pageNumber)
+      setCurrentPageProgress(alignment === 'end' ? 1 : pageProgress)
       suppressProgrammaticProgressRef.current = true
       if (source === 'user' && lastObservedProgressKeyRef.current !== nextKey) {
         lastObservedProgressKeyRef.current = nextKey
         lastLocallyEmittedProgressKeyRef.current = nextKey
         onTextReadingProgressChange?.(nextProgress)
       }
-      virtualizer.scrollToIndex(pageIndex, {
-        align: 'start',
-        behavior: 'auto'
-      })
+      const navigationGeneration = textNavigationGenerationRef.current + 1
+      textNavigationGenerationRef.current = navigationGeneration
+      pendingTextRangeNavigationRef.current = null
+      pendingTextWindowAlignmentRef.current = {
+        pageNumber,
+        alignment,
+        navigationGeneration,
+        documentGeneration: progressDocumentGenerationRef.current,
+        pageProgress,
+        windowPageNumbers: getTextPageWindow(
+          pageNumbers,
+          pageNumber,
+          textPageWindowSize
+        )
+      }
+      tryPendingTextWindowAlignment()
     },
     [
       onTextReadingProgressChange,
+      documentGeneration,
       pageNumbers,
       releaseProgrammaticSuppression,
-      virtualizer
+      textPageWindowSize,
+      tryPendingTextWindowAlignment
     ]
   )
-  const visiblePageNumbers = useMemo(
-    () =>
-      virtualItems
-        .map((item) => pageNumbers[item.index])
-        .filter(
-          (pageNumber): pageNumber is number => typeof pageNumber === 'number'
-        ),
-    [virtualItems, pageNumbers]
+  const handleReadingProgressRailSeek = useCallback(
+    (pageNumber: number, pageProgress = 0) => {
+      handleReadingProgressSeekPage(pageNumber, 'user', 'start', pageProgress)
+    },
+    [handleReadingProgressSeekPage]
   )
   const visiblePageNumberSet = useMemo(
     () => new Set(visiblePageNumbers),
@@ -1479,7 +1589,7 @@ export function IntermediateDocumentTextViewer(
       ),
     [pageNumbers]
   )
-  const textLayoutKey = `${fontScale ?? 'default'}:${Array.from(
+  const textLayoutKey = `${fontScale ?? 'default'}:${mediaLayoutRevision}:${Array.from(
     textsByPageNumber.keys()
   ).join(',')}:${Array.from(imagesByPageNumber.keys()).join(
     ','
@@ -1493,7 +1603,9 @@ export function IntermediateDocumentTextViewer(
     layoutKey: textLayoutKey
   })
   const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
-  effectiveRangesRef.current = effectiveRanges
+  useLayoutEffect(() => {
+    effectiveRangesRef.current = effectiveRanges
+  }, [effectiveRanges])
   const lastTextGeometryTraceRef = useRef('')
   useEffect(() => {
     const detail = {
@@ -1524,12 +1636,13 @@ export function IntermediateDocumentTextViewer(
   const emittedLinkedSelectRangeIdsRef = useRef(new Set<string>())
   const emittedLinkedHighlightRangeIdsRef = useRef(new Set<string>())
   const pendingLinkedHighlightScopeRef = useRef(selectionScope)
-  if (pendingLinkedHighlightScopeRef.current !== selectionScope) {
+  useLayoutEffect(() => {
+    if (pendingLinkedHighlightScopeRef.current === selectionScope) return
     pendingLinkedHighlightScopeRef.current = selectionScope
     pendingLinkedHighlightOperationRef.current = null
     emittedLinkedSelectRangeIdsRef.current.clear()
     emittedLinkedHighlightRangeIdsRef.current.clear()
-  }
+  }, [selectionScope])
 
   const isSelectedRangeIdControlled = selectedRangeId !== undefined
   const [internalSelectedRangeId, setInternalSelectedRangeId] = useState<
@@ -1550,6 +1663,16 @@ export function IntermediateDocumentTextViewer(
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
   )
+  const commentOperationTokenRef = useRef(0)
+  const commentOperationDocumentGenerationRef = useRef(documentGeneration)
+  useLayoutEffect(() => {
+    if (commentOperationDocumentGenerationRef.current === documentGeneration) {
+      return
+    }
+    commentOperationDocumentGenerationRef.current = documentGeneration
+    commentOperationTokenRef.current += 1
+    setCommentingRangeId(null)
+  }, [documentGeneration])
 
   const [runtimeLinkedTransientState, setRuntimeLinkedTransientState] =
     useState<{
@@ -1580,17 +1703,19 @@ export function IntermediateDocumentTextViewer(
     ]
   )
   const runtimeLinkedDataRef = useRef(runtimeLinkedData)
-  runtimeLinkedDataRef.current = runtimeLinkedData
   const lastActiveRangeRef = useRef<LinkedSelectionRange | null>(
     runtimeLinkedData.activeRange ?? null
   )
   const lastActiveRangeScopeRef = useRef(selectionScope)
-  syncLastActiveRange(
-    lastActiveRangeRef,
-    lastActiveRangeScopeRef,
-    selectionScope,
-    runtimeLinkedData.activeRange
-  )
+  useLayoutEffect(() => {
+    runtimeLinkedDataRef.current = runtimeLinkedData
+    if (lastActiveRangeScopeRef.current !== selectionScope) {
+      lastActiveRangeScopeRef.current = selectionScope
+      lastActiveRangeRef.current = runtimeLinkedData.activeRange ?? null
+    } else if (runtimeLinkedData.activeRange) {
+      lastActiveRangeRef.current = runtimeLinkedData.activeRange
+    }
+  }, [runtimeLinkedData, selectionScope])
   const popoverOwnerRuntimeId = useMemo(() => {
     if (!selectedHighlight || !runtimeLinkedData.selectedRangeId) {
       return null
@@ -1608,13 +1733,29 @@ export function IntermediateDocumentTextViewer(
 
   const preloadPageNumbers = useMemo(
     () =>
-      getPagePreloadWindow(pageNumbers, visiblePageNumbers, pagePreloadRadius),
-    [pageNumbers, pagePreloadRadius, visiblePageNumbers]
+      getTextPagePreloadWindow(
+        pageNumbers,
+        currentActiveWindowPageNumber,
+        textPageWindowSize,
+        pagePreloadRadius
+      ),
+    [
+      currentActiveWindowPageNumber,
+      pageNumbers,
+      pagePreloadRadius,
+      textPageWindowSize
+    ]
   )
   const preloadPageNumberSet = useMemo(
     () => new Set(preloadPageNumbers),
     [preloadPageNumbers]
   )
+  const preloadPageNumberSetRef = useRef(preloadPageNumberSet)
+  const maxLoadedPagesRef = useRef(maxLoadedPages)
+  useLayoutEffect(() => {
+    preloadPageNumberSetRef.current = preloadPageNumberSet
+    maxLoadedPagesRef.current = maxLoadedPages
+  }, [maxLoadedPages, preloadPageNumberSet])
 
   const cancelPreloadEnter = useCallback((pageNumber: number) => {
     const timer = preloadEnterTimersRef.current.get(pageNumber)
@@ -1664,9 +1805,10 @@ export function IntermediateDocumentTextViewer(
 
   const applyLoadedPageLimit = useCallback(
     (loadedTexts: Map<number, IntermediateText[]>) => {
+      const currentPreloadPageNumberSet = preloadPageNumberSetRef.current
       const cap = getEffectiveTextMaxLoadedPages(
-        maxLoadedPages,
-        preloadPageNumberSet.size
+        maxLoadedPagesRef.current,
+        currentPreloadPageNumberSet.size
       )
       if (!Number.isFinite(cap) || loadedTexts.size <= cap) {
         return loadedTexts
@@ -1677,14 +1819,14 @@ export function IntermediateDocumentTextViewer(
         if (nextTexts.size <= cap) {
           break
         }
-        if (!preloadPageNumberSet.has(pageNumber)) {
+        if (!currentPreloadPageNumberSet.has(pageNumber)) {
           nextTexts.delete(pageNumber)
           clearUnloadTimer(pageNumber)
         }
       }
       return nextTexts
     },
-    [clearUnloadTimer, maxLoadedPages, preloadPageNumberSet]
+    [clearUnloadTimer]
   )
 
   const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
@@ -1747,7 +1889,9 @@ export function IntermediateDocumentTextViewer(
   })
 
   const lazyPageQueueRef = useRef(lazyPageQueue)
-  lazyPageQueueRef.current = lazyPageQueue
+  useLayoutEffect(() => {
+    lazyPageQueueRef.current = lazyPageQueue
+  }, [lazyPageQueue])
 
   const alignTextAnchor = useCallback(
     (anchor: ReaderTextAnchor, request: TextAnchorRestoreRequest): boolean => {
@@ -1761,6 +1905,19 @@ export function IntermediateDocumentTextViewer(
       }
       const viewport = scrollContainerRef.current
       if (!viewport) return false
+      const windowPageNumbers = getTextPageWindow(
+        pageNumbers,
+        anchor.pageNumber,
+        textPageWindowSize
+      )
+      if (
+        !windowPageNumbers.every((pageNumber) =>
+          textsByPageNumberRef.current.has(pageNumber)
+        ) ||
+        !areTextWindowImagesSettled(viewport, windowPageNumbers)
+      ) {
+        return false
+      }
       const element = resolveTextAnchorElement(
         anchor,
         textElementsRef.current,
@@ -1768,16 +1925,6 @@ export function IntermediateDocumentTextViewer(
       )
       if (!element) return false
 
-      const itemKey = getVirtualPageKey(anchor.pageNumber)
-      if (!virtualizer.itemSizeCache.has(itemKey)) {
-        anchorMeasurementRef.current = {
-          itemKey,
-          anchor,
-          request
-        }
-      } else {
-        anchorMeasurementRef.current = null
-      }
       const viewportRect = viewport.getBoundingClientRect()
       const elementRect = element.getBoundingClientRect()
       viewport.scrollTo({
@@ -1809,7 +1956,7 @@ export function IntermediateDocumentTextViewer(
       }
       return true
     },
-    [getVirtualPageKey, onTextReadingProgressChange, virtualizer]
+    [onTextReadingProgressChange, pageNumbers, textPageWindowSize]
   )
   alignTextAnchorRef.current = alignTextAnchor
 
@@ -1835,13 +1982,18 @@ export function IntermediateDocumentTextViewer(
       )
       clearUnloadTimer(anchor.pageNumber)
       pendingTextAnchorRef.current = { anchor, request }
+      lazyPageQueueRef.current.replaceRequiredPages(
+        getTextPagePreloadWindow(
+          pageNumbers,
+          anchor.pageNumber,
+          textPageWindowSize,
+          pagePreloadRadius
+        )
+      )
       if (!textsByPageNumberRef.current.has(anchor.pageNumber)) {
         lazyPageQueueRef.current.enqueuePage(anchor.pageNumber)
       }
-      virtualizer.scrollToIndex(pageIndex, {
-        align: 'start',
-        behavior: 'auto'
-      })
+      setActiveWindowPageNumber(anchor.pageNumber)
       const loadedTexts = textsByPageNumberRef.current.get(anchor.pageNumber)
       if (loadedTexts && !hasAnchorableText(loadedTexts)) {
         cancelTextAnchorRestore()
@@ -1906,7 +2058,8 @@ export function IntermediateDocumentTextViewer(
       clearUnloadTimer,
       onTextReadingProgressChange,
       pageNumbers,
-      virtualizer
+      pagePreloadRadius,
+      textPageWindowSize
     ]
   )
 
@@ -1919,27 +2072,17 @@ export function IntermediateDocumentTextViewer(
 
       const pageIndex = pageNumbers.indexOf(bookmark.pageNumber)
       if (pageIndex < 0) return
-      handleReadingProgressSeekPage(bookmark.pageNumber)
-      setFallbackBookmarkKey(getBookmarkKey(bookmark))
       const verticalRatio =
         Math.min(100, Math.max(0, bookmark.verticalPercentage)) / 100
-      const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
-      viewerWindow?.requestAnimationFrame(() => {
-        const viewport = scrollContainerRef.current
-        const pageElement = viewerRootElement?.querySelector<HTMLElement>(
-          `[data-testid="intermediate-text-page-${bookmark.pageNumber}"]`
-        )
-        if (!viewport || !pageElement) return
-        viewport.scrollTop +=
-          pageElement.getBoundingClientRect().height * verticalRatio
-      })
+      handleReadingProgressSeekPage(
+        bookmark.pageNumber,
+        'user',
+        'start',
+        verticalRatio
+      )
+      setFallbackBookmarkKey(getBookmarkKey(bookmark))
     },
-    [
-      handleReadingProgressSeekPage,
-      pageNumbers,
-      scrollToTextAnchor,
-      viewerRootElement
-    ]
+    [handleReadingProgressSeekPage, pageNumbers, scrollToTextAnchor]
   )
 
   const { onTextSelectionChange, onTextSelectionEnd, onSelectText } = props
@@ -1960,6 +2103,7 @@ export function IntermediateDocumentTextViewer(
   )
 
   useEffect(() => {
+    if (textLayoutKey.length === 0) return
     const pendingRestore = pendingTextAnchorRef.current
     if (
       pendingRestore &&
@@ -2000,6 +2144,7 @@ export function IntermediateDocumentTextViewer(
     alignTextAnchor,
     cancelTextAnchorRestore,
     onTextReadingProgressChange,
+    textLayoutKey,
     textsByPageNumber
   ])
 
@@ -2054,23 +2199,16 @@ export function IntermediateDocumentTextViewer(
       return
     }
 
-    if (restoredProgressPageRef.current === requestedPageNumber) return
-    if (!viewerRootElement || viewerRootElement.clientHeight <= 0) return
-    const currentItem = virtualizer.getVirtualItemForOffset(
-      virtualizer.scrollOffset ?? 0
-    )
-    const currentPageNumber =
-      pageNumbers[currentItem?.index ?? 0] ?? pageNumbers[0] ?? 0
+    if (
+      restoredProgressPageRef.current === requestedPageNumber &&
+      pendingTextWindowAlignmentRef.current === null
+    ) {
+      return
+    }
     readingProgressPageRef.current = requestedPageNumber
     readingProgressRef.current = requestedProgress
     setReadingProgress(requestedProgress)
-    restoredProgressPageRef.current = requestedPageNumber
     suppressProgrammaticProgressRef.current = true
-    if (currentPageNumber === requestedPageNumber) {
-      isInitialProgressRestorePendingRef.current = false
-      return
-    }
-
     isInitialProgressRestorePendingRef.current = true
     handleReadingProgressSeekPage(requestedPageNumber, 'restore')
   }, [
@@ -2078,9 +2216,7 @@ export function IntermediateDocumentTextViewer(
     handleReadingProgressSeekPage,
     pageNumbers,
     scrollToTextAnchor,
-    textReadingProgress,
-    viewerRootElement,
-    virtualizer
+    textReadingProgress
   ])
 
   useEffect(() => {
@@ -2093,6 +2229,11 @@ export function IntermediateDocumentTextViewer(
     const frameId = viewerWindow.requestAnimationFrame(captureReadingProgress)
     return () => viewerWindow.cancelAnimationFrame(frameId)
   }, [captureReadingProgress, textsByPageNumber])
+
+  useEffect(() => {
+    if (textLayoutKey.length === 0) return
+    tryPendingTextWindowAlignment()
+  }, [textLayoutKey, tryPendingTextWindowAlignment])
 
   const removeLoadedTextPage = useCallback((pageNumber: number) => {
     setParagraphsByPageNumber((currentParagraphs) => {
@@ -2223,7 +2364,6 @@ export function IntermediateDocumentTextViewer(
   const selectionRefSettersByRuntimeIdRef = useRef(
     new Map<string, (node: SelectionRef | null) => void>()
   )
-  const syncForwardedSelectionRefRef = useRef<() => void>(() => {})
 
   const selectionRefForRuntimeId = useCallback((selectionId: string) => {
     let setSelectionRef =
@@ -2235,8 +2375,6 @@ export function IntermediateDocumentTextViewer(
         } else {
           selectionRefsByRuntimeIdRef.current.delete(selectionId)
         }
-
-        syncForwardedSelectionRefRef.current()
       }
       selectionRefSettersByRuntimeIdRef.current.set(
         selectionId,
@@ -2317,6 +2455,13 @@ export function IntermediateDocumentTextViewer(
       }
     },
     [isPdf]
+  )
+
+  const resolvedSelectionPopover = resolveSelectionPopover(
+    selectionPopover,
+    runtimeLinkedData.activeRange,
+    scopeId,
+    toTextRange
   )
 
   const handleLinkedDataChange = useCallback(
@@ -2510,30 +2655,91 @@ export function IntermediateDocumentTextViewer(
     schedulePendingLinkedHighlightCleanup
   )
 
-  const scrollMountedTextPageIntoView = useCallback((pageNumber: number) => {
-    const navigationGeneration = textNavigationGenerationRef.current + 1
-    textNavigationGenerationRef.current = navigationGeneration
-    const scrollIntoView = () => {
-      if (textNavigationGenerationRef.current !== navigationGeneration) return
-      const pageElement =
-        scrollContainerRef.current?.querySelector<HTMLElement>(
-          `[data-testid="intermediate-text-page-${pageNumber}"]`
-        )
-      pageElement?.scrollIntoView?.({ block: 'center', inline: 'nearest' })
+  const tryPendingTextRangeNavigation = useCallback(() => {
+    const pending = pendingTextRangeNavigationRef.current
+    if (
+      !pending ||
+      pending.documentGeneration !== progressDocumentGenerationRef.current ||
+      pending.navigationGeneration !== textNavigationGenerationRef.current
+    ) {
+      return false
+    }
+    if (
+      !pending.windowPageNumbers.every((pageNumber) =>
+        textsByPageNumberRef.current.has(pageNumber)
+      )
+    ) {
+      return false
+    }
+    const range = effectiveRangesRef.current.find(
+      (candidate) => candidate.id === pending.rangeId
+    )
+    const viewport = scrollContainerRef.current
+    if (!range) {
+      pendingTextRangeNavigationRef.current = null
+      return false
+    }
+    if (
+      !viewport ||
+      !areTextWindowImagesSettled(viewport, pending.windowPageNumbers)
+    ) {
+      return false
     }
 
-    const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
-    if (viewerWindow) {
-      viewerWindow.requestAnimationFrame(() => {
-        if (textNavigationGenerationRef.current !== navigationGeneration) return
-        viewerWindow.requestAnimationFrame(scrollIntoView)
-        viewerWindow.setTimeout(scrollIntoView, 0)
-      })
-      return
-    }
+    const pageId = `page-${pending.pageNumber}`
+    const pageSelector = `[data-testid="intermediate-text-page-${pending.pageNumber}"]`
+    const selectionContainer = viewport
+      .querySelector<HTMLElement>(pageSelector)
+      ?.querySelector<HTMLElement>('.hsn-selection-container')
+    if (!selectionContainer) return false
+    const targetRects = deriveDomSelectionPageRects({
+      root: viewport,
+      pageSelector,
+      startOffset: range.start.selectionId === pageId ? range.start.offset : 0,
+      endOffset:
+        range.end.selectionId === pageId ? range.end.offset : undefined,
+      overlayRectType: 'px'
+    })
+    if (!targetRects || targetRects.length === 0) return false
 
-    globalThis.setTimeout(scrollIntoView, 0)
-  }, [])
+    const viewportRect = viewport.getBoundingClientRect()
+    const selectionRect = selectionContainer.getBoundingClientRect()
+    // 多行高亮以整段文字的垂直中心为锚点，避免只把第一行滚到中央。
+    const targetTop = Math.min(...targetRects.map((rect) => rect.y))
+    const targetBottom = Math.max(
+      ...targetRects.map((rect) => rect.y + rect.height)
+    )
+    const targetPageCenter = (targetTop + targetBottom) / 2
+    const targetCenter = selectionRect.top - viewportRect.top + targetPageCenter
+    const top = Math.min(
+      Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+      Math.max(0, viewport.scrollTop + targetCenter - viewport.clientHeight / 2)
+    )
+    viewport.scrollTo({ behavior: 'auto', top })
+    const pageProgress = Math.min(
+      1,
+      Math.max(0, targetPageCenter / selectionRect.height)
+    )
+    const nextProgress = { currentPageNumber: pending.pageNumber }
+    const nextKey = getTextReadingProgressKey(nextProgress)
+    readingProgressPageRef.current = pending.pageNumber
+    readingProgressRef.current = nextProgress
+    setReadingProgress(nextProgress)
+    setCurrentPageProgress(pageProgress)
+    suppressProgrammaticProgressRef.current = true
+    if (lastObservedProgressKeyRef.current !== nextKey) {
+      lastObservedProgressKeyRef.current = nextKey
+      lastLocallyEmittedProgressKeyRef.current = nextKey
+      onTextReadingProgressChange?.(nextProgress)
+    }
+    pendingTextRangeNavigationRef.current = null
+    return true
+  }, [onTextReadingProgressChange])
+
+  useEffect(() => {
+    if (textLayoutKey.length === 0) return
+    tryPendingTextRangeNavigation()
+  }, [textLayoutKey, tryPendingTextRangeNavigation])
 
   const scrollToRange = useCallback(
     (rangeId: string) => {
@@ -2550,19 +2756,42 @@ export function IntermediateDocumentTextViewer(
       if (pageIndex === -1) return
 
       clearUnloadTimer(pageNumber)
+      lazyPageQueueRef.current.replaceRequiredPages(
+        getTextPagePreloadWindow(
+          pageNumbers,
+          pageNumber,
+          textPageWindowSize,
+          pagePreloadRadius
+        )
+      )
       if (!textsByPageNumberRef.current.has(pageNumber)) {
         lazyPageQueueRef.current.enqueuePage(pageNumber)
       }
 
-      virtualizer.scrollToIndex(pageIndex, { align: 'center' })
-      scrollMountedTextPageIntoView(pageNumber)
+      setActiveWindowPageNumber(pageNumber)
+      const navigationGeneration = textNavigationGenerationRef.current + 1
+      textNavigationGenerationRef.current = navigationGeneration
+      pendingTextRangeNavigationRef.current = {
+        rangeId: range.id,
+        pageNumber,
+        navigationGeneration,
+        documentGeneration: progressDocumentGenerationRef.current,
+        windowPageNumbers: getTextPageWindow(
+          pageNumbers,
+          pageNumber,
+          textPageWindowSize
+        )
+      }
+      pendingTextWindowAlignmentRef.current = null
+      tryPendingTextRangeNavigation()
     },
     [
       clearUnloadTimer,
+      pagePreloadRadius,
       pageNumbers,
       releaseProgrammaticSuppression,
-      scrollMountedTextPageIntoView,
-      virtualizer
+      textPageWindowSize,
+      tryPendingTextRangeNavigation
     ]
   )
 
@@ -2618,9 +2847,7 @@ export function IntermediateDocumentTextViewer(
     }
   }, [publicSelectionRef, selectionRef])
 
-  syncForwardedSelectionRefRef.current = syncForwardedSelectionRef
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     syncForwardedSelectionRef()
     return () => {
       if (typeof selectionRef === 'function') {
@@ -2696,8 +2923,8 @@ export function IntermediateDocumentTextViewer(
     handleHighlightPointerCancel
   } = useHighlightDrag({
     viewerRootElement,
-    resolveHighlight: resolveHighlightDragTarget,
-    onDragHighlight
+    resolveItem: resolveHighlightDragTarget,
+    onDragItem: onDragHighlight
   })
 
   const handleViewerPointerDown = useCallback(
@@ -2740,20 +2967,51 @@ export function IntermediateDocumentTextViewer(
     if (!selectedHighlight || !onCommentHighlight || commentingRangeId) return
 
     const highlight = selectedHighlight
+    const operationDocumentGeneration = documentGeneration
+    const operationToken = commentOperationTokenRef.current + 1
+    commentOperationTokenRef.current = operationToken
     setCommentingRangeId(highlight.id)
-    onCommentHighlight(highlight).then(
+    let commentResult: Promise<unknown>
+    try {
+      commentResult = onCommentHighlight(highlight)
+    } catch {
+      if (
+        commentOperationDocumentGenerationRef.current ===
+          operationDocumentGeneration &&
+        commentOperationTokenRef.current === operationToken
+      ) {
+        setCommentingRangeId(null)
+      }
+      return
+    }
+    commentResult.then(
       () => {
+        if (
+          commentOperationDocumentGenerationRef.current !==
+            operationDocumentGeneration ||
+          commentOperationTokenRef.current !== operationToken
+        ) {
+          return
+        }
         if (runtimeLinkedDataRef.current.selectedRangeId === highlight.id) {
           handlePageLinkedSelectRange(null)
         }
         setCommentingRangeId(null)
       },
       () => {
+        if (
+          commentOperationDocumentGenerationRef.current !==
+            operationDocumentGeneration ||
+          commentOperationTokenRef.current !== operationToken
+        ) {
+          return
+        }
         setCommentingRangeId(null)
       }
     )
   }, [
     commentingRangeId,
+    documentGeneration,
     handlePageLinkedSelectRange,
     onCommentHighlight,
     selectedHighlight
@@ -2763,9 +3021,9 @@ export function IntermediateDocumentTextViewer(
   if (typeof highlightPopover === 'function') {
     resolvedHighlightPopover = selectedHighlight
       ? highlightPopover(selectedHighlight)
-      : selectionPopover
+      : resolvedSelectionPopover
   } else {
-    resolvedHighlightPopover = highlightPopover ?? selectionPopover
+    resolvedHighlightPopover = highlightPopover ?? resolvedSelectionPopover
   }
   const existingHighlightPopover =
     selectedHighlight && onCommentHighlight ? (
@@ -2837,17 +3095,20 @@ export function IntermediateDocumentTextViewer(
     isMountedRef.current = true
     return () => {
       isMountedRef.current = false
+      commentOperationTokenRef.current += 1
+      pendingTextRangeNavigationRef.current = null
+      pendingTextWindowAlignmentRef.current = null
       cancelRestoreAttempt()
-      anchorMeasurementRef.current = null
       clearAllPreloadEnterTimers()
       clearAllUnloadTimers()
       lazyPageQueueRef.current.cancelAll()
     }
   }, [cancelRestoreAttempt, clearAllPreloadEnterTimers, clearAllUnloadTimers])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeDocumentRef.current = runtimeDocument
     activePageNumbersKeyRef.current = pageNumbersKey
+    contentDocumentGenerationRef.current = documentGeneration
     previousPreloadPageNumbersRef.current = new Set()
     textsByPageNumberRef.current = new Map()
     imagesByPageNumberRef.current = new Map()
@@ -2862,6 +3123,7 @@ export function IntermediateDocumentTextViewer(
     lazyPageQueueRef.current.cancelAll()
   }, [
     runtimeDocument,
+    documentGeneration,
     pageNumbersKey,
     clearAllPreloadEnterTimers,
     clearAllUnloadTimers
@@ -2876,13 +3138,15 @@ export function IntermediateDocumentTextViewer(
     const currentPreloadPages = new Set(preloadPageNumbers)
     const isInitialPreloadSet = previousPreloadPages.size === 0
 
+    lazyPageQueueRef.current.replaceRequiredPages(preloadPageNumbers)
+
     currentPreloadPages.forEach((pageNumber) => {
       clearUnloadTimer(pageNumber)
     })
 
     if (isInitialPreloadSet) {
       lazyPageQueueRef.current.cancelAll()
-      lazyPageQueueRef.current.enqueueInitialPages(preloadPageNumbers)
+      lazyPageQueueRef.current.enqueueInitialPages([...preloadPageNumbers])
       preloadPageNumbers.forEach((pageNumber) => {
         lazyPageQueueRef.current.enqueuePage(pageNumber)
       })
@@ -3003,6 +3267,7 @@ export function IntermediateDocumentTextViewer(
         selectedRangeId={effectiveSelectedRangeId}
         onSelectRange={handlePageLinkedSelectRange}
         onNavigateToRange={scrollToRange}
+        onDragHighlight={onDragHighlight}
         onDeleteRange={onRemoveRange}
         commentCountByRangeId={commentCountByRangeId}
         onDeleteRect={onRemoveRect}
@@ -3019,6 +3284,7 @@ export function IntermediateDocumentTextViewer(
           onToggleBookmark,
           scrollToBookmark
         )}
+        onDragBookmark={onDragBookmark}
         isBookmarkNavigationEnabled={isTextBookmark}
         onToggleBookmark={onToggleBookmark}
         bookmarkedPageNumbers={bookmarkedPageNumbers}
@@ -3028,6 +3294,7 @@ export function IntermediateDocumentTextViewer(
       {pageNumbers.length > 0 ? (
         <ReadingProgress
           mode='text'
+          pageProgress={currentPageProgress}
           pageNumbers={pageNumbers}
           currentPageNumber={
             readingProgress.anchor?.pageNumber ??
@@ -3038,7 +3305,8 @@ export function IntermediateDocumentTextViewer(
           highlightColor={highlightColor}
           insetTop={containMarginTop ?? containMarginY}
           insetBottom={containMarginBottom ?? containMarginY}
-          onSeekPage={handleReadingProgressSeekPage}
+          onSeekPage={handleReadingProgressRailSeek}
+          onUserScrollIntent={releaseProgrammaticSuppression}
         />
       ) : null}
       <div
@@ -3076,18 +3344,23 @@ export function IntermediateDocumentTextViewer(
         onPointerUpCapture={handleViewerPointerUp}
         onPointerCancelCapture={handleViewerPointerCancel}
       >
-        {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
-        <div
-          className='hamster-reader__intermediate-text-spacer'
-          style={{ height: virtualizer.getTotalSize() }}
-        >
-          {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
-          {virtualItems.map((virtualItem) => {
-            const pageNumber = pageNumbers[virtualItem.index]
-            if (typeof pageNumber !== 'number') {
-              return null
-            }
-
+        <div className='hamster-reader__intermediate-text-spacer'>
+          {previousWindowPageNumber !== undefined ? (
+            <button
+              className='hamster-reader__intermediate-text-window-button'
+              type='button'
+              onClick={() =>
+                handleReadingProgressSeekPage(
+                  previousWindowPageNumber,
+                  'user',
+                  'end'
+                )
+              }
+            >
+              加载上一段
+            </button>
+          ) : null}
+          {visiblePageNumbers.map((pageNumber, windowIndex) => {
             const texts = textsByPageNumber.get(pageNumber)
             const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
             const images = imagesByPageNumber.get(pageNumber) ?? []
@@ -3113,29 +3386,20 @@ export function IntermediateDocumentTextViewer(
                 visible={true}
                 relative={popoverRelative}
               >
-                {selectionPopover}
+                {resolvedSelectionPopover}
               </PopoverPortal>
             ) : undefined
             return (
               <div
-                key={virtualItem.key}
-                ref={virtualizer.measureElement}
-                data-index={virtualItem.index}
-                data-page-measurable={
-                  texts !== undefined && (texts.length > 0 || images.length > 0)
-                }
+                key={`${documentRenderKey}:${pageNumbersKey}:${pageNumber}`}
                 data-page-number={pageNumber}
                 data-selection-id={pageSelectionId}
                 data-testid={`intermediate-text-page-${pageNumber}`}
-                // SCSS .hamster-reader__intermediate-text-page 提供
-                // position:absolute / top:0 / left:0 / width:100% / padding:5px，
-                // 仅保留动态 transform（由 TanStack Virtual 计算）
                 className={`hamster-reader__intermediate-text-page${
-                  virtualItem.index > 0
+                  windowIndex > 0
                     ? ' hamster-reader__intermediate-text-page--following'
                     : ''
                 }`}
-                style={{ transform: `translateY(${virtualItem.start}px)` }}
               >
                 {isPdf ? (
                   <div
@@ -3173,7 +3437,6 @@ export function IntermediateDocumentTextViewer(
                     ref={selectionRefForRuntimeId(pageSelectionId)}
                   >
                     <IntermediateDocumentTextPageContent
-                      key={virtualItem.key}
                       pageNumber={pageNumber}
                       texts={texts}
                       paragraphs={paragraphs}
@@ -3182,6 +3445,8 @@ export function IntermediateDocumentTextViewer(
                       isPdf={isPdf}
                       setTextRef={setTextRef}
                       fontScale={fontScale}
+                      lineHeight={lineHeight}
+                      onImageSettled={handleImageSettled}
                     />
                   </HamsterSelection>
                 ) : (
@@ -3190,6 +3455,23 @@ export function IntermediateDocumentTextViewer(
               </div>
             )
           })}
+          {nextWindowPageNumber !== undefined ? (
+            <button
+              className='hamster-reader__intermediate-text-window-button'
+              type='button'
+              onClick={() =>
+                // 进入下一段只需保持 scrollTop 为 0（'top' 对齐），
+                // 顶部间隔 props 通过视口 paddingTop 自然生效
+                handleReadingProgressSeekPage(
+                  nextWindowPageNumber,
+                  'user',
+                  'top'
+                )
+              }
+            >
+              加载下一段
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

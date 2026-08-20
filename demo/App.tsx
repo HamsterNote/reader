@@ -15,6 +15,7 @@ import {
   type ReaderData,
   type ReaderEdgeCrop,
   type ReaderFontScale,
+  type ReaderLineHeight,
   type ReaderLinkedSelectionData,
   type ReaderLoadingProgress,
   type ReaderPageRange,
@@ -45,7 +46,6 @@ import {
   removeHighlightFromComments,
   serializeComments
 } from './commentStorage'
-import { convertEpubDocumentForReader } from './epubForReader'
 import { loadFileToMemory } from './fileMemoryLoader'
 import { parseHighlights, serializeHighlights } from './highlightStorage'
 import { createImagePreviewDocument } from './imagePreview'
@@ -59,12 +59,20 @@ import {
   openPdfDocumentForReader
 } from './pdfParserForReader'
 import {
+  mergePdfStructure,
+  parsePdfStructureJson,
+  serializePdfStructure
+} from './pdfStructureStorage'
+import type { PdfStructure } from './pdfStructureStorage'
+import {
   parseReaderPreferences,
   serializeReaderPreferences
 } from './readerPreferencesStorage'
 import {
   clearRecentFile,
+  loadPdfStructureJson,
   loadRecentFile,
+  savePdfStructureJson,
   saveRecentFile
 } from './recentFileStorage'
 import {
@@ -95,6 +103,7 @@ type PdfLoadState =
       readonly phase: 'ready'
       readonly selection: FileSelection
       readonly buffer: ArrayBuffer
+      readonly cachedStructure: PdfStructure | null
       readonly elapsedMs: number
       readonly pages: number[] | undefined
     }
@@ -121,6 +130,17 @@ type PdfTimingPanelState = {
     Record<string, { readonly count: number; readonly totalMs: number }>
   >
 }
+
+type NonPdfLoadState =
+  | { readonly phase: 'idle' }
+  | {
+      readonly phase: 'loading'
+      readonly selection: FileSelection
+      readonly label: string
+      readonly current: number
+      readonly total: number
+      readonly indeterminate?: boolean
+    }
 
 type RetiringPdfError = {
   readonly retirement: Promise<void>
@@ -216,7 +236,13 @@ export function getParserErrorMessage(error: unknown): string {
 }
 
 export async function parseUploadedDocument(
-  file: File
+  file: File,
+  onProgress?: (progress: {
+    readonly label: string
+    readonly current: number
+    readonly total: number
+    readonly indeterminate?: boolean
+  }) => void
 ): Promise<ParseUploadedDocumentResult> {
   switch (getFileExtension(file.name)) {
     case 'txt':
@@ -232,9 +258,51 @@ export async function parseUploadedDocument(
       }
     case 'epub':
       try {
-        const epubDocument = await EpubParser.encode(file)
-        const document = await convertEpubDocumentForReader(epubDocument, file)
-        return { status: 'parsed', label: 'EPUB', document }
+        // 直接把 runtime 文档交给 Reader，跳过 serialize。Reader 用鸭子类型
+        // getPageByPageNumber 按需懒加载页面；而 serialize 会 Promise.all 一次性
+        // 物化全部章节（图片还会 base64 膨胀），大 epub 因此 OOM 崩溃、浏览器自动刷新。
+        // epub-parser 内部携带另一版 @hamster-note/types，结构一致但类型不同源，需断言。
+        let parserInput: File | Uint8Array = file
+        if (typeof file.stream === 'function') {
+          const reader = file.stream().getReader()
+          const chunks: Uint8Array[] = []
+          let loaded = 0
+          while (true) {
+            const chunk = await reader.read()
+            if (chunk.done) break
+            chunks.push(chunk.value)
+            loaded += chunk.value.byteLength
+            onProgress?.({
+              label: '正在读取 EPUB',
+              current: loaded,
+              total: file.size
+            })
+          }
+
+          const bytes = new Uint8Array(loaded)
+          let offset = 0
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset)
+            offset += chunk.byteLength
+          }
+          parserInput = bytes
+        } else {
+          onProgress?.({ label: '正在读取 EPUB', current: 1, total: 3 })
+        }
+
+        onProgress?.({
+          label: '正在解析 EPUB',
+          current: 0,
+          total: 0,
+          indeterminate: true
+        })
+        const document = await new EpubParser().encode(parserInput)
+        onProgress?.({ label: '正在解析 EPUB', current: 1, total: 1 })
+        return {
+          status: 'parsed',
+          label: 'EPUB',
+          document: document as unknown as ReaderDocument
+        }
       } catch (error) {
         return {
           status: 'failed',
@@ -547,12 +615,14 @@ function trackPrimaryPointer(
 
 function ParseStatus({
   isParsing,
+  hasReaderLoadingProgress,
   parseError,
   pdfLoadState,
   timing,
   onLoadPdf
 }: {
   readonly isParsing: boolean
+  readonly hasReaderLoadingProgress: boolean
   readonly parseError: string | null
   readonly pdfLoadState: PdfLoadState
   readonly timing: PdfTimingPanelState
@@ -612,7 +682,7 @@ function ParseStatus({
           </ul>
         )}
       </section>
-      {isParsing && (
+      {isParsing && !hasReaderLoadingProgress && (
         <section style={{ marginBottom: '24px' }}>
           <h2>Parsing...</h2>
           <p>Loading file content...</p>
@@ -904,8 +974,12 @@ export function App() {
   const [loadedParserLabel, setLoadedParserLabel] =
     useState<SupportedParserLabel | null>(null)
   const [textFontScale, setTextFontScale] = useState<ReaderFontScale>(1.5)
+  const [textLineHeight, setTextLineHeight] = useState<ReaderLineHeight>(1.5)
   const [layoutFontScale, setLayoutFontScale] = useState<ReaderFontScale>(1.5)
   const [isParsing, setIsParsing] = useState(false)
+  const [nonPdfLoadState, setNonPdfLoadState] = useState<NonPdfLoadState>({
+    phase: 'idle'
+  })
   const [pdfLoadState, setPdfLoadState] = useState<PdfLoadState>({
     phase: 'idle'
   })
@@ -941,6 +1015,10 @@ export function App() {
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
   const [autoHighlight, setAutoHighlight] = useState(false)
+  const [dictionaryMockEnabled, setDictionaryMockEnabled] = useState(false)
+  const [dictionaryInitialWord, setDictionaryInitialWord] = useState<
+    string | undefined
+  >(undefined)
   const [showPageBrowser, setShowPageBrowser] = useState(false)
   const [bookmarks, setBookmarks] = useState<readonly ReaderBookmark[]>([])
   const [themeColor, setThemeColor] = useState('#2563eb')
@@ -1464,11 +1542,19 @@ export function App() {
         renderMode,
         selectedTool,
         textFontScale,
+        textLineHeight,
         layoutFontScale,
         highlightColor
       })
     )
-  }, [highlightColor, layoutFontScale, renderMode, selectedTool, textFontScale])
+  }, [
+    highlightColor,
+    layoutFontScale,
+    renderMode,
+    selectedTool,
+    textFontScale,
+    textLineHeight
+  ])
 
   const handleUndo = useCallback(() => {
     selectionRef.current?.undo()
@@ -1623,6 +1709,7 @@ export function App() {
           renderMode: parserLabel === 'EPUB' ? 'text' : 'layout',
           selectedTool: 'text-selection',
           textFontScale: 1.5,
+          textLineHeight: 1.5,
           layoutFontScale: 1.5,
           highlightColor: 'rgba(255, 193, 7, 0.35)'
         }
@@ -1630,6 +1717,7 @@ export function App() {
       setRenderMode(readerPreferences.renderMode)
       setSelectedTool(readerPreferences.selectedTool)
       setTextFontScale(readerPreferences.textFontScale)
+      setTextLineHeight(readerPreferences.textLineHeight)
       setLayoutFontScale(readerPreferences.layoutFontScale)
       setHighlightColor(readerPreferences.highlightColor)
       loadedReaderPreferencesFileNameRef.current = file.name
@@ -1704,20 +1792,23 @@ export function App() {
       abortController: AbortController,
       pages: number[] | undefined
     ) => {
-      loadFileToMemory(
-        selection.file,
-        (loaded, total) => {
-          if (!isCurrentSelection(selection)) return
-          setPdfLoadState({
-            phase: 'loading',
-            selection,
-            loaded,
-            total
-          })
-        },
-        abortController.signal
-      )
-        .then((loadedFile) => {
+      Promise.all([
+        loadFileToMemory(
+          selection.file,
+          (loaded, total) => {
+            if (!isCurrentSelection(selection)) return
+            setPdfLoadState({
+              phase: 'loading',
+              selection,
+              loaded,
+              total
+            })
+          },
+          abortController.signal
+        ),
+        loadPdfStructureJson(selection.file.name)
+      ])
+        .then(([loadedFile, cachedStructureJson]) => {
           if (!isCurrentSelection(selection)) return
           updatePdfTiming((current) => ({
             ...current,
@@ -1727,6 +1818,10 @@ export function App() {
             phase: 'ready',
             selection,
             buffer: loadedFile.buffer,
+            cachedStructure: parsePdfStructureJson(
+              cachedStructureJson,
+              selection.file
+            ),
             elapsedMs: loadedFile.elapsedMs,
             pages
           })
@@ -1743,7 +1838,13 @@ export function App() {
   const startNonPdfParse = useCallback(
     async (selection: FileSelection) => {
       try {
-        const result = await parseUploadedDocument(selection.file)
+        const result = await parseUploadedDocument(
+          selection.file,
+          (progress) => {
+            if (!isCurrentSelection(selection)) return
+            setNonPdfLoadState({ phase: 'loading', selection, ...progress })
+          }
+        )
         if (!isCurrentSelection(selection)) return
 
         if (result.status === 'unsupported') {
@@ -1761,14 +1862,18 @@ export function App() {
           return
         }
 
-        await saveSelectedFile(selection)
-        if (!isCurrentSelection(selection)) return
         commitParsedDocument(selection, result.document, result.label)
+        setNonPdfLoadState({ phase: 'idle' })
+        setIsParsing(false)
+        void saveSelectedFile(selection).catch(reportLifecycleError)
       } catch (error) {
         if (!isCurrentSelection(selection)) return
         setParseError(`Failed to parse file: ${getParserErrorMessage(error)}`)
       } finally {
-        if (isCurrentSelection(selection)) setIsParsing(false)
+        if (isCurrentSelection(selection)) {
+          setIsParsing(false)
+          setNonPdfLoadState({ phase: 'idle' })
+        }
       }
     },
     [commitParsedDocument, isCurrentSelection, saveSelectedFile]
@@ -1809,6 +1914,13 @@ export function App() {
       } else {
         setPdfLoadState({ phase: 'idle' })
         setIsParsing(true)
+        setNonPdfLoadState({
+          phase: 'loading',
+          selection,
+          label: '正在准备文件',
+          current: 0,
+          total: 3
+        })
       }
 
       appendSwitchBarrier(selection).then(() => {
@@ -1840,7 +1952,8 @@ export function App() {
   const handleLoadPdf = useCallback(() => {
     if (pdfLoadState.phase !== 'ready') return
 
-    const { selection, buffer, elapsedMs, pages } = pdfLoadState
+    const { selection, buffer, cachedStructure, elapsedMs, pages } =
+      pdfLoadState
     if (!isCurrentSelection(selection)) return
 
     if (!configurePdfParserForReader(PdfParser)) {
@@ -1865,6 +1978,8 @@ export function App() {
         if (!isCurrentSelection(selection) || sourceBuffer === null) return
 
         const handle = await openPdfDocumentForReader(PdfParser, sourceBuffer, {
+          cachedPageCount: cachedStructure?.pageCount,
+          cachedPages: cachedStructure?.pages,
           pages,
           signal: selectionAbortControllerRef.current?.signal,
           onProgress: (progress) => {
@@ -1895,7 +2010,34 @@ export function App() {
         commitParsedDocument(selection, handle.document, 'PDF')
         setPdfLoadState({ phase: 'done', selection })
 
-        await saveSelectedFile(selection)
+        const scannedPages = handle.document.pageNumbers.flatMap(
+          (pageNumber) => {
+            const size = handle.document.getPageSizeByPageNumber(pageNumber)
+            if (
+              size === undefined ||
+              !Number.isFinite(size.x) ||
+              !Number.isFinite(size.y) ||
+              size.x <= 0 ||
+              size.y <= 0
+            ) {
+              return []
+            }
+            return [{ pageNumber, width: size.x, height: size.y }]
+          }
+        )
+        const structure = mergePdfStructure(
+          cachedStructure,
+          selection.file,
+          handle.pageCount,
+          scannedPages
+        )
+        await Promise.all([
+          savePdfStructureJson(
+            selection.file.name,
+            serializePdfStructure(structure)
+          ),
+          saveSelectedFile(selection)
+        ])
       } catch (error) {
         sourceBuffer = null
         const retirement = getPdfRetirement(error)
@@ -2038,7 +2180,15 @@ export function App() {
 
   const supportsFontScale = parserSupportsFontScale(loadedParserLabel)
   let readerLoadingProgress: ReaderLoadingProgress | null
-  switch (pdfLoadState.phase) {
+  if (nonPdfLoadState.phase === 'loading') {
+    readerLoadingProgress = {
+      label: nonPdfLoadState.label,
+      current: nonPdfLoadState.current,
+      total: nonPdfLoadState.total,
+      indeterminate: nonPdfLoadState.indeterminate
+    }
+  } else {
+    switch (pdfLoadState.phase) {
     case 'loading':
       readerLoadingProgress = {
         label: '正在读取文件',
@@ -2059,6 +2209,7 @@ export function App() {
     case 'ready':
       readerLoadingProgress = null
       break
+    }
   }
   const activeFontScale =
     renderMode === 'text' ? textFontScale : layoutFontScale
@@ -2079,6 +2230,7 @@ export function App() {
           <h1>Hamster Reader Demo</h1>
           <ParseStatus
             isParsing={isParsing}
+            hasReaderLoadingProgress={nonPdfLoadState.phase === 'loading'}
             parseError={parseError}
             pdfLoadState={pdfLoadState}
             timing={pdfTiming}
@@ -2470,6 +2622,31 @@ export function App() {
                   />
                   <span>选中文字后自动高亮</span>
                 </label>
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={dictionaryMockEnabled}
+                    onChange={(event) =>
+                      setDictionaryMockEnabled(event.currentTarget.checked)
+                    }
+                    data-testid='dictionary-mock-toggle'
+                  />
+                  <span>查询单词 Mock</span>
+                </label>
+                <div
+                  data-testid='dictionary-event-log'
+                  style={{ marginTop: '6px', color: '#555' }}
+                >
+                  词典事件：{dictionaryInitialWord ?? '尚未调起'}
+                </div>
               </div>
               <div style={{ marginBottom: '12px' }}>
                 <label
@@ -2925,9 +3102,11 @@ export function App() {
               renderMode={renderMode}
               onRenderModeChange={handleRenderModeChange}
               fontScale={supportsFontScale ? activeFontScale : undefined}
+              lineHeight={textLineHeight}
               onFontScaleChange={
                 renderMode === 'text' ? setTextFontScale : setLayoutFontScale
               }
+              onLineHeightChange={setTextLineHeight}
               touchPanMode={touchPanMode}
               onTouchPanModeChange={setTouchPanMode}
               onFileUpload={handleReaderFileUpload}
@@ -2966,6 +3145,12 @@ export function App() {
               highlightColor={highlightColor}
               selectionColor='rgba(33, 150, 243, 0.2)'
               autoHighlight={autoHighlight}
+              queryWord={(word) =>
+                dictionaryMockEnabled
+                  ? `${word}\nmock definition\nmock example sentence`
+                  : ''
+              }
+              onOpenDictionary={setDictionaryInitialWord}
               containMarginX={containMarginX}
               containMarginTop={containMarginTop}
               containMarginBottom={containMarginBottom}

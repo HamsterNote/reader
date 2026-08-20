@@ -5,7 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.13.1-beta.3] - 2026-08-18
+
+### Changed
+- 调整 beta 版本发布号到 `1.13.1-beta.3`，同步更新包版本元数据与发布说明。
+- 发布工作流继续通过 tag 触发，beta tag 将以 `beta` dist-tag 发布到 npm。
+
+## [1.13.1-beta.2] - 2026-08-17
+
+### Added
+- 文本模式新增独立行间距设置，支持 `1`、`1.2`、`1.5`、`1.8`、`2` 五档，并通过 `lineHeight` / `onLineHeightChange` 接入受控状态与阅读偏好持久化。
+- 原生 Layout 模式增强 iPad 触控体验，补充固定比例缩放、双指平移及触控反馈布局。
+
+### Changed
+- 重构文本阅读窗口：PDF 按四页分段，EPUB 等可重排格式按单页分段；仅挂载当前分段，并预加载前后三个完整分段。
+- 优化文本模式阅读进度、范围跳转、页面浏览器、高亮标记及内容边距，使其适配原生分段滚动。
+- 升级 `@hamster-note/epub-parser` 至 `0.5.1-beta.2`，移除文本窗口不再使用的 `@tanstack/react-virtual`。
+
+### Fixed
+- 修复 native Layout 缩放、绘图输入方式与 EPUB 内容顺序相关的兼容问题，并补充对应回归测试。
+
+## [1.13.1-beta.1] - 2026-08-15
+
+### Added
+- 新增 `queryWord` / `onOpenDictionary` props：宿主可同步查询选中单词释义，并在需要时调起词典（携带选中单词初始化搜索框）。
+- `selectionPopover` 升级为函数式渲染（新增 `ReaderSelectionPopover` 类型），Layout/Text 两种模式均支持基于当前活跃选区渲染 Popover 内容。
+- 默认选区 Popover 集成「翻译」入口：当 `queryWord` 命中非空释义且提供 `onOpenDictionary` 时显示，点击后以当前选词调起宿主词典。
+- Demo 新增「查询单词 Mock」开关与词典事件日志，便于验证词典集成。
+
+### Changed
+- `selectionPopover` prop 类型由 `ReactNode` 扩展为 `ReaderSelectionPopover`（静态内容，或 `(selection) => ReactNode` 渲染函数）。
+
+## [1.13.0] - 2026-08-15
+
+### Fixed
+- 文本模式忽略精确锚点恢复后已过期的范围滚动，避免恢复阅读进度时产生无效滚动。
+- 文本锚点定位考虑顶部内容边距，避免吸附顶部留白内容。
+- 无文字页面的阅读进度按内容顶部边界计算。
+- 文本模式增加 overscan 缓冲渲染，在可见范围前后各预渲染 3 页，减少连续滚动时的空白闪烁。
 
 ## [1.12.0-beta.2] - 2026-08-14
 
@@ -38,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 修复文档切换时 PDF 会话未释放，以及「Forget 已保存文件」与持久化队列的竞态。
 - 稳定 Demo 测试的异步 teardown 与持久化队列时序。
+
+## [1.11.2] - 2026-08-13
+
+### Fixed
+- 修复 native Layout 模式下 `scrollToRange` 跳转到目标范围时仅更新纵向滚动的问题：现在同步计算横向偏移，将范围中心与视口中心水平对齐；目标页 DOM 尺寸不可用时回退到计算出的绝对横纵偏移。
+- 修复 Layout/Text 模式切换时持久化阅读进度与交接锚点不一致的问题：模式切换时 `handoffReadingPosition` 返回最新 `ReaderData`，将最新锚点随 `onDataChange` 一并写入 `textReadingProgress` / `virtualPaper` / `layoutReadingProgress`。
 
 ## [0.11.1-beta.2] - 2026-08-12
 

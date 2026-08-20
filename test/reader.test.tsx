@@ -482,6 +482,27 @@ describe('Reader public API', () => {
     ).toHaveTextContent('100%')
   })
 
+  it('renders indeterminate loading progress without a fake percentage', () => {
+    render(
+      <Reader
+        loadingProgress={{
+          label: '正在解析 EPUB',
+          current: 0,
+          total: 0,
+          indeterminate: true
+        }}
+      />
+    )
+
+    const progress = screen.getByRole('progressbar', { name: '正在解析 EPUB' })
+
+    expect(progress).not.toHaveAttribute('value')
+    expect(progress).toHaveAttribute('aria-valuetext', '处理中')
+    expect(
+      screen.queryByTestId('reader-loading-progress-percent')
+    ).not.toBeInTheDocument()
+  })
+
   it('renders IntermediateDocumentViewer by default for a paged serialized document', () => {
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
 
@@ -517,7 +538,10 @@ describe('Reader public API', () => {
     const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
     const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
 
-    expect(bottomBar.parentElement).toHaveAttribute(
+    expect(bottomBar.parentElement).toHaveClass(
+      'hamster-reader__bottom-bar-stack'
+    )
+    expect(bottomBar.parentElement?.parentElement).toHaveAttribute(
       'data-testid',
       'reader-root'
     )
@@ -692,6 +716,39 @@ describe('Reader public API', () => {
       'rgba(142, 186, 142, 0.35)'
     )
     expect(onFontScaleChange).toHaveBeenCalledWith(0.5)
+  })
+
+  it('offers every Text mode line-height option and reports the selected value', () => {
+    // Given: Text Mode 的字号与行距都由宿主控制。
+    const onLineHeightChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        renderMode='text'
+        fontScale={1.5}
+        lineHeight={1.5}
+        onLineHeightChange={onLineHeightChange}
+      />
+    )
+
+    // When: 用户打开字体设置弹层。
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-font-scale'))
+
+    // Then: 弹层同时提供字号与全部五档固定行距。
+    expect(screen.getByText('字号')).toBeInTheDocument()
+    expect(screen.getByText('行间距')).toBeInTheDocument()
+    expect(
+      screen
+        .getAllByRole('menuitem', { name: /^行距 / })
+        .map((item) => item.getAttribute('aria-label'))
+    ).toEqual(['行距 1', '行距 1.2', '行距 1.5', '行距 1.8', '行距 2'])
+
+    // When: 用户选择 1.8 倍行距。
+    fireEvent.click(screen.getByRole('menuitem', { name: '行距 1.8' }))
+
+    // Then: Reader 将精确的受控值回传给宿主，并传给 Text viewer。
+    expect(onLineHeightChange).toHaveBeenCalledWith(1.8)
+    expect(capturedTextViewerProps.lineHeight).toBe(1.5)
   })
 
   it('updates both uncontrolled drawing and highlight colors from the default bottom bar', async () => {
@@ -2158,8 +2215,21 @@ describe('Reader renderMode', () => {
     const { document } = makeLazyDocument(1)
     render(<Reader document={document} renderMode='text' />)
 
-    // When: Reader 创建默认 selection popover。
-    render(capturedTextViewerProps.selectionPopover as React.ReactElement)
+    // When: viewer 把当前公开选区传给 Reader 创建的默认 popover renderer。
+    const selectionPopover = capturedTextViewerProps.selectionPopover
+    if (typeof selectionPopover !== 'function') {
+      throw new TypeError('Expected selection popover renderer')
+    }
+    render(
+      selectionPopover({
+        id: 'range-1',
+        text: 'reader',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 6 },
+        createdAt: 1,
+        rectsBySelectionId: {}
+      } satisfies ReaderSelectionRange)
+    )
 
     // Then: 用户能够看到确认高亮和颜色设置入口。
     expect(screen.getByRole('button', { name: '高亮' })).toBeInTheDocument()

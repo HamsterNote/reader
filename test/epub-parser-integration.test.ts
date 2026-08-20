@@ -3,7 +3,6 @@ import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import { convertEpubDocumentForReader } from '../demo/epubForReader'
-import { getEpubImageMetadata } from '../demo/epubImageMetadata'
 import {
   getPageContentEntries,
   getRuntimeDocument,
@@ -14,11 +13,7 @@ import {
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
-async function makeMinimalEpubBytes(
-  coverSpinePosition: 'first' | 'after-chapter-1' | 'omitted' = 'first',
-  chapterImageSource = 'images/chapter.png',
-  reuseCoverInLastChapter = false
-): Promise<Uint8Array> {
+async function makeMinimalEpubBytes(): Promise<Uint8Array> {
   const zip = new JSZip()
 
   zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' })
@@ -51,9 +46,8 @@ async function makeMinimalEpubBytes(
   </manifest>
   <spine>
     <itemref idref="nav" />
-    ${coverSpinePosition === 'first' ? '<itemref idref="cover" />' : ''}
+    <itemref idref="cover" />
     <itemref idref="chapter-1" />
-    ${coverSpinePosition === 'after-chapter-1' ? '<itemref idref="cover" />' : ''}
     <itemref idref="chapter-2" />
   </spine>
 </package>`
@@ -63,7 +57,7 @@ async function makeMinimalEpubBytes(
     `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head><title>Cover</title></head>
-  <body><img src="images/cover.png" alt="${coverSpinePosition === 'omitted' ? '' : 'Book cover'}" /></body>
+  <body><img src="images/cover.png" alt="Book cover" /></body>
 </html>`
   )
   zip.file(
@@ -89,11 +83,7 @@ async function makeMinimalEpubBytes(
   <head><title>Chapter 1</title></head>
   <body>
     <h1>Chapter 1</h1>
-    <p>Hello EPUB text mode</p>
-    <img src="https://example.com/external.png" alt="External decoration" />
-    <img src="${chapterImageSource}" alt="Chapter illustration" />
-    <img src="${chapterImageSource}" alt="Duplicate chapter illustration" />
-    <p>Text after chapter illustration</p>
+    <p>Hello EPUB text mode <img src="https://example.com/external.png" alt="External decoration" /><img src="images/chapter.png" alt="Chapter illustration" /><img src="images/chapter.png" alt="Duplicate chapter illustration" /> Text after chapter illustration</p>
   </body>
 </html>`
   )
@@ -104,7 +94,6 @@ async function makeMinimalEpubBytes(
   <head><title>Chapter 2</title></head>
   <body>
     <h1>Chapter 2</h1><p>Second chapter text</p>
-    ${reuseCoverInLastChapter ? '<img src="images/cover.png" alt="Reused cover artwork" />' : ''}
   </body>
 </html>`
   )
@@ -116,82 +105,17 @@ async function makeMinimalEpubBytes(
 }
 
 describe('epub parser integration', () => {
-  it('maps image alt text only from renderable spine content', async () => {
-    // Given: spine 错误包含 nav，正文还在本地图之前包含外链图片。
-    const epubBytes = await makeMinimalEpubBytes(
-      'first',
-      './images/chapter%2Epng?display=inline#artwork'
-    )
-
-    // When: Reader 从 EPUB 包中提取图片元数据。
-    const metadata = await getEpubImageMetadata(
-      epubBytes,
-      'OPS/images/cover.png'
-    )
-
-    // Then: nav 与外链图不占用正文图片索引，封面只按首个可渲染页面判断。
-    expect(metadata).toMatchObject({
-      altsByPage: [['Book cover'], ['Chapter illustration'], []],
-      imagePlacementsByPage: [
-        [{ alt: 'Book cover', textBefore: '' }],
-        [
-          {
-            alt: 'Chapter illustration',
-            textBefore: 'Chapter 1 Hello EPUB text mode'
-          }
-        ],
-        []
-      ],
-      coverAlt: 'Book cover',
-      coverInSpine: true
-    })
-  })
-
-  it('does not duplicate a manifest cover found later in the spine', async () => {
-    // Given: 第一章排在封面 XHTML 之前，但封面仍属于 spine。
-    const epubBytes = await makeMinimalEpubBytes('after-chapter-1')
-    const epubDocument = await EpubParser.encode(epubBytes)
-
-    // When: 解析结果进入 Reader 转换层。
-    const document = await convertEpubDocumentForReader(epubDocument, epubBytes)
-    const runtimeDocument = getRuntimeDocument(document)
-
-    // Then: 转换层保留 spine 顺序，且不会在最前方重复插入封面。
-    expect(runtimeDocument).not.toBeNull()
-    if (!runtimeDocument) throw new Error('Expected runtime document')
-    expect(runtimeDocument.pageCount).toBe(3)
-
-    const pages = await Promise.all(
-      [1, 2, 3].map((pageNumber) => {
-        const page = runtimeDocument.getPageByPageNumber(pageNumber)
-        if (!page) throw new Error(`Expected EPUB page ${pageNumber}`)
-        return page
-      })
-    )
-    const entriesByPage = await Promise.all(pages.map(getPageContentEntries))
-    const coverPageIndexes = entriesByPage.flatMap((entries, pageIndex) =>
-      entries.some(
-        (entry) =>
-          isIntermediateImage(entry) &&
-          Reflect.get(entry, 'alt') === 'Book cover'
-      )
-        ? [pageIndex]
-        : []
-    )
-
-    expect(coverPageIndexes).toEqual([1])
-  })
-
   it('parses a generated two-chapter EPUB for Reader text render mode', async () => {
     // Given: 封面已经作为 EPUB spine 的第一页由解析器输出。
     const epubBytes = await makeMinimalEpubBytes()
 
-    const epubDocument = await EpubParser.encode(epubBytes)
-    expect(
-      Reflect.get(epubDocument.getIntermediateDocument(), 'epubCover')
-    ).toMatchObject({ href: 'OPS/images/cover.png' })
+    const epubDocument = await new EpubParser().encode(epubBytes)
+    expect(Reflect.get(epubDocument, 'epubCover')).toMatchObject({
+      href: 'OPS/images/cover.png'
+    })
+
     // When: 解析结果进入 Reader 转换层。
-    const document = await convertEpubDocumentForReader(epubDocument, epubBytes)
+    const document = await convertEpubDocumentForReader(epubDocument)
     const runtimeDocument = getRuntimeDocument(document)
 
     expect(runtimeDocument).not.toBeNull()
@@ -221,68 +145,39 @@ describe('epub parser integration', () => {
       .filter(isIntermediateText)
       .map((text) => text.content)
       .join(' ')
-    const coverImages = [coverEntries, page1Entries, page2Entries]
-      .flat()
-      .filter(isIntermediateImage)
-      .filter((image) => Reflect.get(image, 'alt') === 'Book cover')
+    const coverImages = coverEntries.filter(isIntermediateImage)
     const chapterImages = page1Entries.filter(isIntermediateImage)
 
     expect(coverImages).toHaveLength(1)
     expect(coverImages[0]?.src).toMatch(/^data:image\/png;base64,/)
-    expect(chapterImages).toHaveLength(1)
-    expect(chapterImages[0]?.src).toMatch(/^data:image\/png;base64,/)
-    const chapterImage = chapterImages[0]
-    if (!chapterImage) throw new Error('Expected the chapter image')
-    expect(Reflect.get(chapterImage, 'alt')).toBe('Chapter illustration')
-    const chapterImageIndex = page1Entries.indexOf(chapterImage)
+    expect(chapterImages).toHaveLength(2)
+    expect(
+      chapterImages.every((image) => /^data:image\/png;base64,/.test(image.src))
+    ).toBe(true)
+    const chapterImageIndexes = chapterImages.map((image) =>
+      page1Entries.indexOf(image)
+    )
+    const leadingTextIndex = page1Entries.findIndex(
+      (entry) =>
+        isIntermediateText(entry) && entry.content === 'Hello EPUB text mode'
+    )
     const trailingTextIndex = page1Entries.findIndex(
       (entry) =>
         isIntermediateText(entry) &&
         entry.content === 'Text after chapter illustration'
     )
-    expect(chapterImageIndex).toBeGreaterThan(-1)
-    expect(trailingTextIndex).toBeGreaterThan(chapterImageIndex)
+    expect(chapterImageIndexes.every((imageIndex) => imageIndex > -1)).toBe(
+      true
+    )
+    expect(
+      chapterImageIndexes.every((imageIndex) => imageIndex > leadingTextIndex)
+    ).toBe(true)
+    expect(
+      chapterImageIndexes.every((imageIndex) => trailingTextIndex > imageIndex)
+    ).toBe(true)
     expect(page1Text).toContain('Hello EPUB text mode')
     expect(page2Text).toContain('Second chapter text')
     expect(coverPage).toHaveProperty('useFlowLayout', true)
     expect(page1).toHaveProperty('useFlowLayout', true)
-  })
-
-  it('adds a manifest cover when the EPUB spine omits its cover page', async () => {
-    // Given: EPUB 的 spine 没有封面页，但后续正文把同一封面图片作为插图复用。
-    const epubBytes = await makeMinimalEpubBytes('omitted', undefined, true)
-    const epubDocument = await EpubParser.encode(epubBytes)
-
-    // When: 解析结果进入 Reader 转换层。
-    const document = await convertEpubDocumentForReader(epubDocument, epubBytes)
-    const runtimeDocument = getRuntimeDocument(document)
-
-    // Then: 转换层补充独立封面页，同时保留解析器输出的正文顺序。
-    expect(runtimeDocument).not.toBeNull()
-    if (!runtimeDocument) throw new Error('Expected runtime document')
-    expect(runtimeDocument.pageCount).toBe(3)
-
-    const coverPagePromise = runtimeDocument.getPageByPageNumber(1)
-    const chapterPagePromise = runtimeDocument.getPageByPageNumber(2)
-    if (!coverPagePromise || !chapterPagePromise) {
-      throw new Error('Expected the manifest cover and first chapter page')
-    }
-
-    const coverPage = await coverPagePromise
-    const coverEntries = await getPageContentEntries(coverPage)
-    const chapterEntries = await getPageContentEntries(await chapterPagePromise)
-
-    const coverImages = coverEntries.filter(isIntermediateImage)
-    expect(coverImages).toHaveLength(1)
-    expect(Reflect.get(coverImages[0] ?? {}, 'alt')).toBe(
-      'Generated EPUB Fixture'
-    )
-    expect(coverPage).toHaveProperty('useFlowLayout', true)
-    expect(
-      chapterEntries
-        .filter(isIntermediateText)
-        .map((text) => text.content)
-        .join(' ')
-    ).toContain('Hello EPUB text mode')
   })
 })

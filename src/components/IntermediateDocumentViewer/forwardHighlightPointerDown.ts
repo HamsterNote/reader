@@ -5,7 +5,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
  * multi-drag 必须从真实 PointerEvent 建立 finger，后续才能统一追踪移出 viewer 的指针。
  */
 export function forwardHighlightPointerDown(
-  event: ReactPointerEvent<HTMLDivElement>,
+  event: ReactPointerEvent<HTMLElement>,
   dragElement: HTMLElement | null
 ): boolean {
   const PointerEventConstructor =

@@ -1,10 +1,18 @@
-import { Icon, Menu, MenuItem, Popover } from '@hamster-note/components'
+import {
+  Icon,
+  Menu,
+  MenuItem,
+  MenuLabel,
+  Popover
+} from '@hamster-note/components'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type { ReaderPageTool } from '../Page'
 import {
   DEFAULT_BOTTOM_BAR_TOOLS,
   DEFAULT_FONT_SCALE_OPTIONS,
+  DEFAULT_LINE_HEIGHT_OPTIONS,
   DEFAULT_LAYOUT_ZOOM_OPTIONS,
   type ReaderLayoutZoom
 } from './defaultBottomBarConfig'
@@ -15,11 +23,13 @@ import type {
 
 type DefaultBottomBarMenusProps = {
   readonly fontScale: ReaderFontScale | undefined
+  readonly lineHeight: ReaderLineHeight | undefined
   readonly selectedTool: ReaderPageTool
   readonly layoutZoom: ReaderLayoutZoom | undefined
   readonly theme: ReturnType<typeof usePrefersColorScheme>
   readonly menus: ReturnType<typeof useBottomBarMenus>
   readonly onFontScaleChange: (scale: ReaderFontScale) => void
+  readonly onLineHeightChange: (lineHeight: ReaderLineHeight) => void
   readonly onSelectedToolChange: (tool: ReaderPageTool) => void
   readonly onLayoutZoomChange: (zoom: ReaderLayoutZoom) => void
 }
@@ -30,13 +40,21 @@ const selectedItemStyle = {
   color: 'var(--hn-color-accent)'
 }
 
+const selectedFontItemStyle = {
+  backgroundColor:
+    'color-mix(in srgb, var(--hn-color-accent) 24%, transparent)',
+  color: 'var(--hn-color-text)'
+}
+
 export function DefaultBottomBarMenus({
   fontScale,
+  lineHeight,
   selectedTool,
   layoutZoom,
   theme,
   menus,
   onFontScaleChange,
+  onLineHeightChange,
   onSelectedToolChange,
   onLayoutZoomChange
 }: DefaultBottomBarMenusProps) {
@@ -71,6 +89,7 @@ export function DefaultBottomBarMenus({
                 >
                   <span
                     aria-hidden='true'
+                    className='hamster-reader__font-menu-check'
                     style={{ visibility: selected ? 'visible' : 'hidden' }}
                   >
                     <Icon name='check' />
@@ -94,7 +113,11 @@ export function DefaultBottomBarMenus({
             id={menus.fontMenuId}
             ref={menus.fontMenuRef}
             aria-label='字号菜单'
+            className='hamster-reader__font-menu'
           >
+            <MenuLabel className='hamster-reader__font-menu-heading'>
+              字号
+            </MenuLabel>
             {DEFAULT_FONT_SCALE_OPTIONS.map(({ label, scale }) => {
               const selected = fontScale === scale
               return (
@@ -103,7 +126,7 @@ export function DefaultBottomBarMenus({
                   aria-pressed={selected}
                   aria-label={label}
                   data-selected={selected}
-                  style={selected ? selectedItemStyle : undefined}
+                  style={selected ? selectedFontItemStyle : undefined}
                   onClick={() => {
                     onFontScaleChange(scale)
                     menus.closeMenusAndRestoreFocus()
@@ -119,6 +142,37 @@ export function DefaultBottomBarMenus({
                 </MenuItem>
               )
             })}
+            {lineHeight !== undefined && (
+              <MenuLabel className='hamster-reader__font-menu-heading'>
+                行间距
+              </MenuLabel>
+            )}
+            {lineHeight !== undefined &&
+              DEFAULT_LINE_HEIGHT_OPTIONS.map((option) => {
+                const selected = lineHeight === option
+                return (
+                  <MenuItem
+                    key={`line-height-${option}`}
+                    aria-pressed={selected}
+                    aria-label={`行距 ${option}`}
+                    data-selected={selected}
+                    style={selected ? selectedFontItemStyle : undefined}
+                    onClick={() => {
+                      onLineHeightChange(option)
+                      menus.closeMenusAndRestoreFocus()
+                    }}
+                  >
+                    <span
+                      aria-hidden='true'
+                      className='hamster-reader__font-menu-check'
+                      style={{ visibility: selected ? 'visible' : 'hidden' }}
+                    >
+                      <Icon name='check' />
+                    </span>
+                    {option}
+                  </MenuItem>
+                )
+              })}
           </Menu>
         </Popover>
       )}

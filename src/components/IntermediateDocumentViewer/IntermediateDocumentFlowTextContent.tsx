@@ -5,6 +5,7 @@ import type {
 import { Fragment } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
 import { getScaledFontSize } from './textSpanStyle'
 
@@ -14,6 +15,7 @@ type IntermediateDocumentFlowTextContentProps = {
   paragraphs: IntermediateParagraph[]
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   preserveSourceFontSize: boolean
   sourceOffsets?: ReadonlyMap<IntermediateText, number>
 }
@@ -40,12 +42,24 @@ const getParagraphGapTextIds = (
   return new Set(paragraphEndTextIds.slice(0, -1))
 }
 
+function getFlowTextFontSize(
+  text: IntermediateText,
+  fontScale: ReaderFontScale | undefined,
+  preserveSourceFontSize: boolean
+): string | undefined {
+  if (preserveSourceFontSize) {
+    return getScaledFontSize(text.fontSize, fontScale)
+  }
+  return fontScale === undefined ? undefined : `${fontScale}rem`
+}
+
 export function IntermediateDocumentFlowTextContent({
   pageNumber,
   texts,
   paragraphs,
   setTextRef,
   fontScale,
+  lineHeight = 1.5,
   preserveSourceFontSize,
   sourceOffsets
 }: IntermediateDocumentFlowTextContentProps) {
@@ -72,8 +86,11 @@ export function IntermediateDocumentFlowTextContent({
           )
         }
 
-        const shouldSetFontSize =
-          preserveSourceFontSize || fontScale !== undefined
+        const fontSize = getFlowTextFontSize(
+          text,
+          fontScale,
+          preserveSourceFontSize
+        )
         return (
           <Fragment key={key}>
             <span
@@ -82,14 +99,7 @@ export function IntermediateDocumentFlowTextContent({
               data-text-id={text.id}
               data-selection-start-offset={sourceOffsets?.get(text)}
               data-page-number={pageNumber}
-              style={
-                shouldSetFontSize
-                  ? {
-                      fontSize: getScaledFontSize(text.fontSize, fontScale),
-                      lineHeight: 1.5
-                    }
-                  : { lineHeight: 1.5 }
-              }
+              style={{ fontSize, lineHeight }}
             >
               {text.content}
             </span>

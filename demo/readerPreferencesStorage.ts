@@ -1,5 +1,6 @@
 import type {
   ReaderFontScale,
+  ReaderLineHeight,
   ReaderPageTool,
   ReaderRenderMode
 } from '@hamster-note/reader'
@@ -8,12 +9,13 @@ export type ReaderPreferences = {
   readonly renderMode: ReaderRenderMode
   readonly selectedTool: ReaderPageTool
   readonly textFontScale: ReaderFontScale
+  readonly textLineHeight: ReaderLineHeight
   readonly layoutFontScale: ReaderFontScale
   readonly highlightColor: string
 }
 
 type StoredReaderPreferences = ReaderPreferences & {
-  readonly version: 2
+  readonly version: 3
 }
 
 function isReaderRenderMode(value: unknown): value is ReaderRenderMode {
@@ -38,6 +40,16 @@ function isReaderFontScale(value: unknown): value is ReaderFontScale {
   )
 }
 
+function isReaderLineHeight(value: unknown): value is ReaderLineHeight {
+  return (
+    value === 1 ||
+    value === 1.2 ||
+    value === 1.5 ||
+    value === 1.8 ||
+    value === 2
+  )
+}
+
 export function parseReaderPreferences(
   raw: string | null,
   fallback: ReaderPreferences
@@ -50,7 +62,7 @@ export function parseReaderPreferences(
       typeof parsed !== 'object' ||
       parsed === null ||
       !('version' in parsed) ||
-      (parsed.version !== 1 && parsed.version !== 2) ||
+      (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) ||
       !('renderMode' in parsed) ||
       !isReaderRenderMode(parsed.renderMode) ||
       !('selectedTool' in parsed) ||
@@ -78,10 +90,29 @@ export function parseReaderPreferences(
       return fallback
     }
 
+    if (parsed.version === 3) {
+      if (
+        !('textLineHeight' in parsed) ||
+        !isReaderLineHeight(parsed.textLineHeight)
+      ) {
+        return fallback
+      }
+
+      return {
+        renderMode: parsed.renderMode,
+        selectedTool: parsed.selectedTool,
+        textFontScale: parsed.textFontScale,
+        textLineHeight: parsed.textLineHeight,
+        layoutFontScale: parsed.layoutFontScale,
+        highlightColor: parsed.highlightColor
+      }
+    }
+
     return {
       renderMode: parsed.renderMode,
       selectedTool: parsed.selectedTool,
       textFontScale: parsed.textFontScale,
+      textLineHeight: fallback.textLineHeight,
       layoutFontScale: parsed.layoutFontScale,
       highlightColor: parsed.highlightColor
     }
@@ -95,7 +126,7 @@ export function serializeReaderPreferences(
   preferences: ReaderPreferences
 ): string {
   const storedPreferences: StoredReaderPreferences = {
-    version: 2,
+    version: 3,
     ...preferences
   }
   return JSON.stringify(storedPreferences)

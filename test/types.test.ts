@@ -6,11 +6,11 @@ import type {
   ReaderAnnotationHistoryOptions,
   ReaderAnnotationHistoryStatus,
   ReaderAnnotationHistoryValue,
+  ReaderColorOption,
   ReaderComment,
   ReaderCommentChangeDetail,
   ReaderCommentChangeSource,
   ReaderCommentThreadNode,
-  ReaderColorOption,
   ReaderData,
   ReaderInteractiveProps,
   ReaderLinkedSelectionRange,
@@ -18,6 +18,7 @@ import type {
   ReaderPageTextSelectionMap,
   ReaderProps,
   ReaderRenderMode,
+  ReaderSelectionPopover,
   ReaderSelectionRange,
   ReaderSelectionRectangle,
   ReaderSelectionRef,
@@ -67,6 +68,16 @@ type CommentsInInteractiveProps =
   'comments' extends keyof ReaderInteractiveProps ? true : false
 type OnCommentsChangeInInteractiveProps =
   'onCommentsChange' extends keyof ReaderInteractiveProps ? true : false
+type QueryWordInReaderProps = 'queryWord' extends keyof ReaderProps
+  ? true
+  : false
+type OpenDictionaryInReaderProps = 'onOpenDictionary' extends keyof ReaderProps
+  ? true
+  : false
+type QueryWordInInteractiveProps =
+  'queryWord' extends keyof ReaderInteractiveProps ? true : false
+type OpenDictionaryInInteractiveProps =
+  'onOpenDictionary' extends keyof ReaderInteractiveProps ? true : false
 
 const _readerCommentShape: AssertTrue<ReaderCommentMatchesExpected> = true
 const _readerCommentReadonly: AssertTrue<ReaderCommentAllReadonly> = true
@@ -75,6 +86,10 @@ const _commentsReaderPropAccepted: AssertTrue<CommentsInReaderProps> = true
 const _onCommentsChangeReaderPropAccepted: AssertTrue<OnCommentsChangeInReaderProps> = true
 const _commentsInteractivePropAccepted: AssertTrue<CommentsInInteractiveProps> = true
 const _onCommentsChangeInteractivePropAccepted: AssertTrue<OnCommentsChangeInInteractiveProps> = true
+const _queryWordReaderPropAccepted: AssertTrue<QueryWordInReaderProps> = true
+const _openDictionaryReaderPropAccepted: AssertTrue<OpenDictionaryInReaderProps> = true
+const _queryWordInteractivePropAccepted: AssertTrue<QueryWordInInteractiveProps> = true
+const _openDictionaryInteractivePropAccepted: AssertTrue<OpenDictionaryInInteractiveProps> = true
 
 const _readerComment: ReaderComment = {
   id: 'comment-1',
@@ -175,6 +190,15 @@ const linkedRange = {
 } satisfies ReaderSelectionRange
 
 const linkedRangeAlias: ReaderLinkedSelectionRange = linkedRange
+const _selectionPopoverRenderer: ReaderSelectionPopover = (selection) =>
+  selection.text
+
+const _dictionaryReaderProps: ReaderProps = {
+  queryWord: (word) => `${word}\n释义`,
+  onOpenDictionary: (initialWord) => {
+    expect(initialWord).toBe('reader')
+  }
+}
 
 /**
  * GREEN 合约测试（T2 text-render-mode）：ReaderProps 现在重新接受 renderMode 属性，
@@ -378,6 +402,16 @@ describe('Reader public selection types', () => {
     expect(linkedRangeAlias.rectsBySelectionId['page-2']).toEqual([
       { x: 1, y: 2, width: 3, height: 4 }
     ])
+  })
+
+  it('exposes dictionary callbacks and a selection-aware popover renderer', () => {
+    expect(_queryWordReaderPropAccepted).toBe(true)
+    expect(_openDictionaryReaderPropAccepted).toBe(true)
+    expect(_queryWordInteractivePropAccepted).toBe(true)
+    expect(_openDictionaryInteractivePropAccepted).toBe(true)
+    expect(_selectionPopoverRenderer(linkedRange)).toBe('t')
+    expect(_dictionaryReaderProps.queryWord?.('reader')).toBe('reader\n释义')
+    _dictionaryReaderProps.onOpenDictionary?.('reader')
   })
 
   /**

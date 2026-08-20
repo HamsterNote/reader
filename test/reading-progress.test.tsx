@@ -16,60 +16,80 @@ const highlightedPage: ReaderSelectionRange = {
   markerStyle: { backgroundColor: 'rgb(220, 38, 38)' }
 }
 
+const multiPageHighlight: ReaderSelectionRange = {
+  id: 'range-pages-1-through-4',
+  text: 'multi-page highlight',
+  start: { selectionId: 'page-1', offset: 0 },
+  end: { selectionId: 'page-4', offset: 9 },
+  createdAt: 2,
+  overlayRectType: 'percent',
+  rectsBySelectionId: {},
+  markerStyle: { backgroundColor: 'rgb(37, 99, 235)' }
+}
+
 describe('ReadingProgress', () => {
-  it('commits a pointer seek only once on release', () => {
-    // Given: a five-page vertical rail with a measurable pointer lane.
-    const onSeekPage = vi.fn()
-    render(
-      <ReadingProgress
-        mode='text'
-        pageNumbers={[1, 2, 3, 4, 5]}
-        currentPageNumber={1}
-        isMoving={false}
-        ranges={[]}
-        onSeekPage={onSeekPage}
-      />
-    )
-    const slider = screen.getByRole('slider', { name: '文本阅读进度' })
-    mockElementSize(slider, { width: 32, height: 400, left: 100, top: 100 })
+  it.each(['mouse', 'touch'] as const)(
+    'commits a proportional %s seek only once on release',
+    (pointerType) => {
+      // Given: a five-page vertical rail with a measurable pointer lane.
+      const onSeekPage = vi.fn()
+      render(
+        <ReadingProgress
+          mode='text'
+          pageProgress={0}
+          pageNumbers={[1, 2, 3, 4, 5]}
+          currentPageNumber={1}
+          isMoving={false}
+          ranges={[]}
+          onSeekPage={onSeekPage}
+        />
+      )
+      const slider = screen.getByRole('slider', { name: '文本阅读进度' })
+      mockElementSize(slider, {
+        width: 32,
+        height: 400,
+        left: 100,
+        top: 100
+      })
 
-    // When: a pen presses at page 2 and drags to page 4.
-    fireEvent.pointerDown(slider, {
-      clientY: 200,
-      isPrimary: true,
-      pointerId: 7,
-      pointerType: 'pen'
-    })
-    fireEvent.pointerMove(slider, {
-      clientY: 400,
-      pointerId: 7,
-      pointerType: 'pen'
-    })
+      // When: a pointer presses at page 2 and ends halfway through page 4.
+      fireEvent.pointerDown(slider, {
+        clientY: 200,
+        isPrimary: true,
+        pointerId: 7,
+        pointerType
+      })
+      fireEvent.pointerMove(slider, {
+        clientY: 380,
+        pointerId: 7,
+        pointerType
+      })
 
-    // Then: feedback follows the pointer without navigating the document.
-    expect(onSeekPage).not.toHaveBeenCalled()
-    expect(within(slider).getByText('第 4 页')).toHaveAttribute(
-      'data-visible',
-      'true'
-    )
-    expect(
-      slider.querySelector('.hamster-reader__reading-progress-position')
-    ).toHaveAttribute('data-page-number', '4')
-    expect(
-      slider.querySelector('.hamster-reader__reading-progress-feedback')
-    ).toHaveAttribute('data-page-number', '4')
+      // Then: feedback follows the pointer without navigating the document.
+      expect(onSeekPage).not.toHaveBeenCalled()
+      expect(within(slider).getByText('第 4 页')).toHaveAttribute(
+        'data-visible',
+        'true'
+      )
+      expect(
+        slider.querySelector('.hamster-reader__reading-progress-position')
+      ).toHaveAttribute('data-page-number', '4')
+      expect(
+        slider.querySelector('.hamster-reader__reading-progress-feedback')
+      ).toHaveAttribute('data-page-number', '4')
 
-    // When: that same pointer is released.
-    fireEvent.pointerUp(slider, {
-      clientY: 400,
-      pointerId: 7,
-      pointerType: 'pen'
-    })
+      // When: that same pointer is released.
+      fireEvent.pointerUp(slider, {
+        clientY: 380,
+        pointerId: 7,
+        pointerType
+      })
 
-    // Then: the final pointed page is committed exactly once.
-    expect(onSeekPage).toHaveBeenCalledTimes(1)
-    expect(onSeekPage).toHaveBeenCalledWith(4)
-  })
+      // Then: the final page and its page-local ratio are committed exactly once.
+      expect(onSeekPage).toHaveBeenCalledTimes(1)
+      expect(onSeekPage).toHaveBeenCalledWith(4, 0.5)
+    }
+  )
 
   it('does not seek when an active pointer is cancelled', () => {
     // Given: an active touch drag on the rail.
@@ -77,6 +97,7 @@ describe('ReadingProgress', () => {
     render(
       <ReadingProgress
         mode='text'
+        pageProgress={0}
         pageNumbers={[2, 4, 8]}
         currentPageNumber={2}
         isMoving={false}
@@ -107,16 +128,19 @@ describe('ReadingProgress', () => {
   it('forwards wheel scrolling through the rail overlay', () => {
     // Given: the rail overlays a sibling native scroll viewport.
     const scrollBy = vi.fn()
+    const onUserScrollIntent = vi.fn()
     render(
       <div>
         <div className='hamster-reader__intermediate-text-viewer' />
         <ReadingProgress
           mode='text'
+          pageProgress={0}
           pageNumbers={[1, 2]}
           currentPageNumber={1}
           isMoving={false}
           ranges={[]}
           onSeekPage={vi.fn()}
+          onUserScrollIntent={onUserScrollIntent}
         />
       </div>
     )
@@ -140,6 +164,7 @@ describe('ReadingProgress', () => {
 
     // Then: the native viewport receives the same wheel delta.
     expect(wheelEvent.defaultPrevented).toBe(true)
+    expect(onUserScrollIntent).toHaveBeenCalledTimes(1)
     expect(scrollBy).toHaveBeenCalledWith({
       behavior: 'auto',
       left: 2,
@@ -419,6 +444,7 @@ describe('ReadingProgress', () => {
     render(
       <ReadingProgress
         mode='text'
+        pageProgress={0.25}
         pageNumbers={[1, 3, 9]}
         currentPageNumber={3}
         isMoving={false}
@@ -429,16 +455,52 @@ describe('ReadingProgress', () => {
     )
     const slider = screen.getByRole('slider', { name: '文本阅读进度' })
 
-    // Then: the page-3 tick uses its range color at the middle of the rail.
+    // Then: the page-3 tick uses its range color at its page-segment midpoint,
+    // while the current position remains one quarter through that segment.
     expect(screen.getByTestId('reading-progress-highlight-3')).toHaveStyle({
       backgroundColor: 'rgb(220, 38, 38)',
       top: '50%'
     })
+    expect(
+      slider.querySelector('.hamster-reader__reading-progress-position')
+    ).toHaveStyle({ top: 'clamp(1px, 41.66666666666667%, calc(100% - 1px))' })
 
     // When: keyboard navigation advances one available page.
     fireEvent.keyDown(slider, { key: 'ArrowDown' })
 
     // Then: it seeks to the next real document page rather than adding one.
     expect(onSeekPage).toHaveBeenCalledWith(9)
+  })
+
+  it('renders a marker for every page crossed by an offscreen text highlight', () => {
+    // Given: a persisted highlight crosses four pages but has no mounted DOM rects.
+    render(
+      <ReadingProgress
+        mode='text'
+        pageProgress={0}
+        pageNumbers={[1, 2, 3, 4, 5]}
+        currentPageNumber={5}
+        isMoving={false}
+        ranges={[multiPageHighlight]}
+        onSeekPage={vi.fn()}
+      />
+    )
+
+    // Then: every crossed page keeps its rail marker while the range is offscreen.
+    expect(
+      screen.getByTestId('reading-progress-highlight-1')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('reading-progress-highlight-2')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('reading-progress-highlight-3')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('reading-progress-highlight-4')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('reading-progress-highlight-5')
+    ).not.toBeInTheDocument()
   })
 })

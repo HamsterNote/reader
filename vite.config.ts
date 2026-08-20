@@ -272,9 +272,12 @@ export default defineConfig(({ mode }) => ({
   optimizeDeps: {
     include: [
       '@hamster-note/document-parser',
+      '@hamster-note/epub-parser',
       '@hamster-note/types',
       '@techstark/opencv-js'
     ],
+    // 本地 parser 版本切换后必须重建预构建产物，避免浏览器继续执行旧版解析逻辑。
+    force: true,
     exclude: [
       '@hamster-note/pdf-parser',
       '@hamster-note/image-parser',

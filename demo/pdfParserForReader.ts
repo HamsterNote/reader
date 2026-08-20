@@ -2,6 +2,7 @@ import type {
   OpenDocumentHandle,
   OpenDocumentOptions
 } from '@hamster-note/pdf-parser'
+import type { PdfPageStructure } from './pdfStructureStorage'
 
 type PdfJsDocumentOverrides = Readonly<Record<string, unknown>>
 
@@ -17,19 +18,90 @@ type PdfParserSessionLoader = (
   overrides?: PdfJsDocumentOverrides
 ) => Promise<unknown>
 
+type PdfOpenOptions = OpenDocumentOptions & {
+  readonly cachedPages?: readonly PdfPageStructure[]
+  readonly cachedPageCount?: number
+}
+
+type CachedScanState = {
+  readonly pageCount: number | undefined
+  readonly pagesByNumber: Map<number, PdfPageStructure>
+}
+
 type PdfPageObjectResolver = (
   page: object,
   objectId: string
 ) => Promise<unknown>
 
 const configuredParsers = new WeakSet<object>()
+const cachedScanByParser = new WeakMap<object, CachedScanState>()
+
+function applyCachedPageSizes(
+  session: unknown,
+  cachedScan: CachedScanState | undefined
+): void {
+  if (
+    cachedScan === undefined ||
+    typeof session !== 'object' ||
+    session === null
+  ) {
+    return
+  }
+
+  const pdf = Reflect.get(session, 'pdf')
+  if (typeof pdf !== 'object' || pdf === null) return
+  if (
+    cachedScan.pageCount !== undefined &&
+    Reflect.get(pdf, 'numPages') !== cachedScan.pageCount
+  ) {
+    return
+  }
+  const getPage = Reflect.get(pdf, 'getPage')
+  if (typeof getPage !== 'function') return
+
+  const getPageWithCachedScan = async (pageNumber: number) => {
+    const cachedPage = cachedScan.pagesByNumber.get(pageNumber)
+    if (cachedPage === undefined) {
+      return Reflect.apply(getPage, pdf, [pageNumber])
+    }
+    cachedScan.pagesByNumber.delete(pageNumber)
+    return {
+      getViewport: () => ({
+        width: cachedPage.width,
+        height: cachedPage.height
+      })
+    }
+  }
+  Reflect.set(pdf, 'getPage', getPageWithCachedScan)
+}
 
 export async function openPdfDocumentForReader(
   parser: PdfParserForReader,
   source: ArrayBuffer,
-  options: OpenDocumentOptions = {}
+  options: PdfOpenOptions = {}
 ): Promise<OpenDocumentHandle> {
-  return parser.openDocument(source, options)
+  const { cachedPageCount, cachedPages, ...parserOptions } = options
+  if (cachedPages === undefined || cachedPages.length === 0) {
+    return parser.openDocument(source, parserOptions)
+  }
+
+  cachedScanByParser.set(parser, {
+    pageCount: cachedPageCount,
+    pagesByNumber: new Map(
+      cachedPages
+        .filter(
+          (page) =>
+            parserOptions.pages === undefined ||
+            parserOptions.pages.includes(page.pageNumber)
+        )
+        .map((page) => [page.pageNumber, page] as const)
+    )
+  })
+  try {
+    return await parser.openDocument(source, parserOptions)
+  } finally {
+    cachedScanByParser.delete(parser)
+  }
 }
 
 export function configurePdfParserForReader(parser: object): boolean {
@@ -38,8 +110,8 @@ export function configurePdfParserForReader(parser: object): boolean {
   const loader = Reflect.get(parser, 'loadPdfSession')
   if (typeof loader !== 'function') return false
 
-  const loadPdfSession: PdfParserSessionLoader = (data, overrides) =>
-    Reflect.apply(loader, parser, [
+  const loadPdfSession: PdfParserSessionLoader = async (data, overrides) => {
+    const session = await Reflect.apply(loader, parser, [
       data,
       {
         ...overrides,
@@ -47,6 +119,9 @@ export function configurePdfParserForReader(parser: object): boolean {
         isImageDecoderSupported: false
       }
     ])
+    applyCachedPageSizes(session, cachedScanByParser.get(parser))
+    return session
+  }
 
   Reflect.set(parser, 'loadPdfSession', loadPdfSession)
 

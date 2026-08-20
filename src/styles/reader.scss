@@ -394,13 +394,20 @@
       height: 100%;
       min-height: 320px;
     }
+
+    &--stylus-only [data-testid^='reader-painting-'] {
+      touch-action: none !important;
+    }
   }
 
   // VirtualPaper 已负责整份文档的缩放和平移。绘图层只填满当前页面，
   // 不继承 painting 组件为独立画布准备的最小高度和边框。
-  &__intermediate-page > &__drawing-layer > div {
-    min-height: 0 !important;
-    border: 0 !important;
+  &__intermediate-page-content-scale > &__drawing-layer {
+    > [data-testid='painting-board'],
+    [data-testid^='reader-painting-'] {
+      min-height: 0 !important;
+      border: 0 !important;
+    }
   }
 
   &__text-item {
@@ -1026,7 +1033,7 @@
       var(--hamster-reader-theme-color, #2563eb) 15%,
       #ffffff
     );
-    color: var(--hamster-reader-theme-color, #2563eb);
+    color: #ffffff;
     font-size: 11px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
@@ -1256,6 +1263,7 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
+    container-type: inline-size;
   }
 
   &__intermediate-text-viewer,
@@ -1317,11 +1325,11 @@
     top: 50%;
     right: 0;
     display: block;
-    // 轨道宽 4px，横线宽 6px：向左多出 2px，便于在轨道外侧也能看清当前位置
     width: 6px;
-    height: 2px;
+    height: 6px;
     box-sizing: border-box;
-    background: var(--hamster-reader-theme-color, #2563eb);
+    border: 1px solid var(--hamster-reader-theme-color, #2563eb);
+    background: transparent;
     transform: translateY(-50%);
   }
 
@@ -1441,26 +1449,30 @@
     transform-origin: top left;
   }
 
-  // 文本模式内部 spacer：高度由 TanStack Virtual 动态设置（inline height），
-  // CSS 只负责 position:relative 作为绝对定位页面的包含块
   &__intermediate-text-spacer {
-    position: relative;
     width: 100%;
+    // 宽容器同时预留页码标签与触摸反馈的额外 1cm 偏移。
+    padding-right: calc(64px + 1cm);
+    box-sizing: border-box;
   }
 
-  // 文本模式单页容器：
-  // 绝对定位（由 inline transform 动态偏移），padding 固定 5px，
-  // 宽度占满 spacer。padding 从 inline style 迁移到 CSS。
+  @container (max-width: 520px) {
+    &__intermediate-text-spacer {
+      padding-right: 64px;
+    }
+
+    &__reading-progress[data-pointer-type='touch']
+      &__reading-progress-feedback-content {
+      right: 10px;
+    }
+  }
+
   &__intermediate-text-page {
-    position: absolute;
-    top: 0;
-    left: 0;
+    position: relative;
     width: 100%;
     padding: 5px;
     box-sizing: border-box;
 
-    // 后续虚拟页把页间距纳入自身盒模型，TanStack Virtual 的测量高度会
-    // 同步包含该间距，不会与下一页发生视觉重叠。
     &--following {
       padding-top: 17px;
     }
@@ -1474,6 +1486,30 @@
       position: relative;
       min-height: 100%;
       height: auto;
+    }
+  }
+
+  &__intermediate-text-window-button {
+    display: block;
+    min-height: 36px;
+    margin: 8px auto;
+    padding: 7px 16px;
+    border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+    border-radius: 6px;
+    background: var(--hn-color-surface, #ffffff);
+    color: var(--hn-color-text-inverse, #ffffff);
+    cursor: pointer;
+    font: inherit;
+
+    &:hover {
+      border-color: var(--hamster-reader-theme-color, #2563eb);
+      background: var(--hamster-reader-theme-color, #2563eb);
+      color: #ffffff;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
     }
   }
 
@@ -1783,6 +1819,37 @@
   user-select: none !important;
   -webkit-user-select: none !important;
   -webkit-touch-callout: none;
+}
+
+.hamster-reader__font-menu {
+  --hn-menu-background: transparent;
+}
+
+.hamster-reader__font-menu-heading {
+  padding: 8px 12px 5px;
+  color: var(--hn-color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+
+  &:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--hn-popover-separator, var(--hn-color-border));
+  }
+}
+
+.hamster-reader__font-menu [role='menuitem'] {
+  color: var(--hn-color-text);
+}
+
+.hamster-reader__font-menu-check {
+  color: color-mix(in srgb, var(--hn-color-accent) 55%, var(--hn-color-text));
+}
+
+@media (max-width: 480px) {
+  .hamster-reader__font-menu [role='menuitem'] {
+    min-height: 44px;
+  }
 }
 
 // ---------------------------------------------------------------------------

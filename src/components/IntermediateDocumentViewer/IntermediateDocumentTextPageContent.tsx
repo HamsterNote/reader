@@ -7,6 +7,7 @@ import type {
 import { memo } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import { IntermediateDocumentFlowContent } from './IntermediateDocumentFlowContent'
 import type { IntermediateDocumentSetTextRef } from './IntermediateDocumentPageContent'
 
@@ -42,11 +43,13 @@ export type IntermediateDocumentTextPageContentProps = {
   /** 文本 span ref 注册回调（与 layout 模式同型）；可选 */
   setTextRef?: IntermediateDocumentSetTextRef
   fontScale?: ReaderFontScale
+  lineHeight?: ReaderLineHeight
   /**
    * 渲染计时回调（预留）；与 layout 模式 onRenderTiming 语义不同，
    * 此处接收页码与已挂载的页面 DOM 元素，供未来 Profiler 集成使用。
    */
   onRenderTiming?: (pageNumber: number, element: Element) => void
+  onImageSettled?: (imageId: string) => void
 }
 
 /**
@@ -74,7 +77,9 @@ function IntermediateDocumentTextPageContentComponent({
   orderedContent,
   isPdf = false,
   setTextRef,
-  fontScale
+  fontScale,
+  lineHeight,
+  onImageSettled
 }: IntermediateDocumentTextPageContentProps) {
   return (
     <IntermediateDocumentFlowContent
@@ -84,7 +89,9 @@ function IntermediateDocumentTextPageContentComponent({
       isPdf={isPdf}
       setTextRef={setTextRef}
       fontScale={fontScale}
+      lineHeight={lineHeight}
       preserveSourceFontSize={false}
+      onImageSettled={onImageSettled}
     />
   )
 }

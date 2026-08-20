@@ -8,6 +8,7 @@ import type { PaintingControllerData } from '@hamster-note/painting'
 import { type RefObject, useEffect } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
+import type { ReaderLineHeight } from '../../types/lineHeight'
 import type {
   ReaderColorOption,
   ReaderPageTool,
@@ -18,16 +19,16 @@ import type {
   ReaderSelectionRef
 } from '../../types/selection'
 import type { ReaderTouchPanMode } from '../IntermediateDocumentViewer'
+import {
+  BottomBarColorControls,
+  BottomBarHistoryControls,
+  BottomBarToolButtons,
+  DrawingBottomBarStack
+} from './DefaultBottomBarControls'
 import { DefaultBottomBarFontScaleControl } from './DefaultBottomBarFontScaleControl'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
 import { DefaultBottomBarModeControls } from './DefaultBottomBarModeControls'
 import { DefaultBottomBarZoomControl } from './DefaultBottomBarZoomControl'
-import {
-  BottomBarHistoryControls,
-  BottomBarToolButtons,
-  BottomBarColorControls,
-  DrawingBottomBarStack
-} from './DefaultBottomBarControls'
 import {
   DEFAULT_BOTTOM_BAR_TOOLS,
   type ReaderLayoutZoom
@@ -44,6 +45,7 @@ export type DefaultBottomBarProps = {
   readonly isEpub: boolean | undefined
   readonly ocrEnabled: boolean
   readonly fontScale: ReaderFontScale | undefined
+  readonly lineHeight: ReaderLineHeight | undefined
   readonly layoutZoom: ReaderLayoutZoom | undefined
   readonly resolvedLayoutScale: number
   readonly touchPanMode: ReaderTouchPanMode
@@ -58,6 +60,7 @@ export type DefaultBottomBarProps = {
   readonly onRenderModeChange: (mode: ReaderRenderMode) => void
   readonly onOcrChange: (enabled: boolean) => void
   readonly onFontScaleChange: (scale: ReaderFontScale) => void
+  readonly onLineHeightChange: (lineHeight: ReaderLineHeight) => void
   readonly onLayoutZoomChange: (zoom: ReaderLayoutZoom) => void
   readonly onTouchPanModeChange: (mode: ReaderTouchPanMode) => void
   readonly onEdgeCropEditingChange: (editing: boolean) => void
@@ -101,14 +104,20 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
       data-testid='tool-bottom-bar'
       style={{
         boxSizing: 'border-box',
+        flexWrap: width < 768 ? 'wrap' : 'nowrap',
+        justifyContent: width < 768 ? 'center' : undefined,
         maxWidth: 'calc(100% - 16px)',
-        overflowX: 'auto',
-        whiteSpace: 'nowrap'
+        overflowX: width < 768 ? 'hidden' : 'auto',
+        whiteSpace: width < 768 ? 'normal' : 'nowrap'
       }}
     >
       <BottomBarHistoryControls
         historyStatus={props.historyStatus}
         selectionRef={props.selectionRef}
+      />
+      <DefaultBottomBarFontScaleControl
+        fontScale={visibleFontScale}
+        menus={menus}
       />
       <PopoverSeparator />
       {props.layoutZoom !== undefined && (
@@ -214,10 +223,6 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           />
         </>
       )}
-      <DefaultBottomBarFontScaleControl
-        fontScale={visibleFontScale}
-        menus={menus}
-      />
     </Popover>
   )
 
@@ -232,15 +237,17 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
           onPaintingControllerDataChange={props.onPaintingControllerDataChange}
         />
       ) : (
-        readerToolbar
+        <div className='hamster-reader__bottom-bar-stack'>{readerToolbar}</div>
       )}
       <DefaultBottomBarMenus
         fontScale={visibleFontScale}
+        lineHeight={props.renderMode === 'text' ? props.lineHeight : undefined}
         layoutZoom={props.layoutZoom}
         selectedTool={props.selectedTool}
         theme={theme}
         menus={menus}
         onFontScaleChange={props.onFontScaleChange}
+        onLineHeightChange={props.onLineHeightChange}
         onLayoutZoomChange={props.onLayoutZoomChange}
         onSelectedToolChange={props.onSelectedToolChange}
       />

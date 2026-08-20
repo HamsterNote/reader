@@ -158,6 +158,7 @@ type WorkerRegistry = {
   selectionPropsById: Map<string, SelectionProps>
   selectionRefsById: Map<string, SelectionRef>
   selectionRefCallCountsById: Map<string, SelectionRefCallCounts>
+  refreshSelectionById: Map<string, () => void>
 }
 
 const workerRegistries = new Map<string, WorkerRegistry>()
@@ -174,7 +175,8 @@ function getWorkerRegistry(): WorkerRegistry {
       lastSelectionProps: null,
       selectionPropsById: new Map(),
       selectionRefsById: new Map(),
-      selectionRefCallCountsById: new Map()
+      selectionRefCallCountsById: new Map(),
+      refreshSelectionById: new Map()
     }
     workerRegistries.set(id, registry)
   }
@@ -218,6 +220,7 @@ export function clearSelectionProps(): void {
   registry.selectionPropsById.clear()
   registry.selectionRefsById.clear()
   registry.selectionRefCallCountsById.clear()
+  registry.refreshSelectionById.clear()
   registry.lastSelectionProps = null
 }
 
@@ -301,6 +304,10 @@ export function simulateSelectionClear(id: string): void {
   getWorkerRegistry().selectionRefsById.get(id)?.clear()
 }
 
+export function refreshSelectionImperativeHandle(id: string): void {
+  getWorkerRegistry().refreshSelectionById.get(id)?.()
+}
+
 export interface UseTextSelectionResult {
   selectedText: string
   startIndex: number
@@ -313,6 +320,10 @@ const noop = () => {}
 
 export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
   (props, ref) => {
+    const [, refreshSelection] = React.useReducer(
+      (value: number) => value + 1,
+      0
+    )
     getWorkerRegistry().lastSelectionProps = props
     const selectionRef = React.useMemo<SelectionRef>(
       () => ({
@@ -374,11 +385,13 @@ export const Selection = React.forwardRef<SelectionRef, SelectionProps>(
       const registry = getWorkerRegistry()
       registry.selectionPropsById.set(props.selectionId, props)
       registry.selectionRefsById.set(props.selectionId, selectionRef)
+      registry.refreshSelectionById.set(props.selectionId, refreshSelection)
 
       return () => {
         const reg = getWorkerRegistry()
         reg.selectionPropsById.delete(props.selectionId)
         reg.selectionRefsById.delete(props.selectionId)
+        reg.refreshSelectionById.delete(props.selectionId)
       }
     }, [props, selectionRef])
 
