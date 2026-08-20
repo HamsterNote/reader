@@ -29,6 +29,8 @@ import type {
  * 使用结构化类型（而非 RefObject）以兼容外部传入的 ref 对象。
  */
 export type DefaultPopoverContext = {
+  /** 是否使用暗色 Popover 主题；未传时保留原有暗色外观。 */
+  readonly darkMode?: boolean
   /**
    * Reader 暴露的命令式 ref，用于调用 confirm() / highlight() 等方法。
    * 结构化类型兼容 RefObject<ReaderSelectionRef | null>。
@@ -55,6 +57,16 @@ export type DefaultPopoverContext = {
   readonly onCommentHighlight?: (
     range: ReaderSelectionRange
   ) => Promise<ReaderSelectionRange>
+}
+
+const getPopoverClassName = (darkMode: boolean | undefined): string => {
+  if (darkMode === true) {
+    return 'hamster-reader-popover hamster-reader-popover--dark'
+  }
+  if (darkMode === false) {
+    return 'hamster-reader-popover hamster-reader-popover--light'
+  }
+  return 'hamster-reader-popover'
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +217,7 @@ function HighlightColorPicker({
 export function DefaultSelectionPopover(props: DefaultPopoverContext) {
   return (
     <div
-      className='hamster-reader-popover'
+      className={getPopoverClassName(props.darkMode)}
       role='toolbar'
       aria-label='选区操作'
       // 阻止 mousedown 默认行为：点击按钮时不会抢走选区焦点、不会折叠选区
@@ -264,7 +276,7 @@ export function DefaultHighlightPopover(props: DefaultPopoverContext) {
 
   return (
     <div
-      className='hamster-reader-popover'
+      className={getPopoverClassName(props.darkMode)}
       role='toolbar'
       aria-label='高亮操作'
       onMouseDown={(e) => e.preventDefault()}
@@ -292,6 +304,7 @@ export function DefaultHighlightPopover(props: DefaultPopoverContext) {
 }
 
 export type DefaultRectanglePopoverProps = {
+  readonly darkMode?: boolean
   readonly rectangle?: ReaderSelectionRectangle
   readonly selectedRectId?: string | null
   readonly highlightColor?: string
@@ -304,6 +317,7 @@ export type DefaultRectanglePopoverProps = {
 }
 
 export function DefaultRectanglePopover({
+  darkMode,
   rectangle,
   selectedRectId,
   highlightColor,
@@ -338,7 +352,7 @@ export function DefaultRectanglePopover({
 
   return (
     <div
-      className='hamster-reader-popover'
+      className={getPopoverClassName(darkMode)}
       role='toolbar'
       aria-label='矩形高亮操作'
       onMouseDown={(event) => event.preventDefault()}

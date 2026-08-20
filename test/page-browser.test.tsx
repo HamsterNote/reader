@@ -338,7 +338,7 @@ describe('PageBrowser', () => {
     fireEvent.click(deleteButton)
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1))
 
-    // Then: the host receives only the range ID after confirmation and the item keeps its marker color.
+    // Then: the host receives only the range ID and CSS owns theme-aware marker mixing.
     expect(confirmMock).toHaveBeenCalledWith({
       title: '删除高亮？',
       description: '删除“这是一个带颜色的高亮文本”高亮后无法恢复。',
@@ -348,12 +348,15 @@ describe('PageBrowser', () => {
     })
     expect(onDeleteRange).toHaveBeenCalledWith('range-1')
     expect(onNavigateToRange).not.toHaveBeenCalled()
-    expect(deleteButton.closest('.hamster-reader__highlight-item')).toHaveStyle(
-      {
-        backgroundColor: 'color-mix(in srgb, #facc15 15%, white)',
-        borderColor: 'color-mix(in srgb, #facc15 30%, white)'
-      }
+    const rangeItem = deleteButton.closest<HTMLElement>(
+      '.hamster-reader__highlight-item'
     )
+    expect(rangeItem).toHaveClass('hamster-reader__highlight-item--colored')
+    expect(rangeItem).toHaveStyle({
+      '--hamster-reader-highlight-color': '#facc15'
+    })
+    expect(rangeItem?.style.backgroundColor).toBe('')
+    expect(rangeItem?.style.borderColor).toBe('')
   })
 
   it('confirms rectangle deletion and preserves marker color without navigating', async () => {
@@ -379,7 +382,7 @@ describe('PageBrowser', () => {
     fireEvent.click(deleteButton)
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1))
 
-    // Then: only the rectangle delete callback runs after confirmation and its colored item remains styled.
+    // Then: only deletion runs and CSS receives the marker token for both themes.
     expect(confirmMock).toHaveBeenCalledWith({
       title: '删除矩形选区？',
       description: '删除第1页矩形选区后无法恢复。',
@@ -389,12 +392,15 @@ describe('PageBrowser', () => {
     })
     expect(onDeleteRect).toHaveBeenCalledWith('rect-colored')
     expect(onNavigateToRect).not.toHaveBeenCalled()
-    expect(deleteButton.closest('.hamster-reader__highlight-item')).toHaveStyle(
-      {
-        backgroundColor: 'color-mix(in srgb, #22c55e 15%, white)',
-        borderColor: 'color-mix(in srgb, #22c55e 30%, white)'
-      }
+    const rectItem = deleteButton.closest<HTMLElement>(
+      '.hamster-reader__highlight-item'
     )
+    expect(rectItem).toHaveClass('hamster-reader__highlight-item--colored')
+    expect(rectItem).toHaveStyle({
+      '--hamster-reader-highlight-color': '#22c55e'
+    })
+    expect(rectItem?.style.backgroundColor).toBe('')
+    expect(rectItem?.style.borderColor).toBe('')
   })
 
   it('aggregates visible rectangle items by page before releasing page protection', () => {

@@ -161,6 +161,7 @@ type MockReaderProps = Record<string, unknown> & {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   emptyText?: string
   renderMode?: ReaderRenderMode
+  darkMode?: boolean
   onRenderModeChange?: (mode: ReaderRenderMode) => void
   fontScale?: ReaderFontScale
   onFontScaleChange?: (scale: ReaderFontScale) => void
@@ -416,6 +417,7 @@ vi.mock('@hamster-note/reader', async (importOriginal) => {
         onUpdateRect: wrappedOnUpdateRect
       }
       const popoverContext = {
+        darkMode: props.darkMode,
         selectionRef: props.selectionRef ?? { current: null },
         highlightColor: props.highlightColor,
         onHighlightColorChange: props.onHighlightColorChange,
@@ -895,6 +897,30 @@ describe('demo parser flow', () => {
     await waitFor(() => {
       expect(toggle).toBeChecked()
       expect(findDocumentReaderProps()?.useVirtualPaper).toBe(true)
+    })
+  })
+
+  it('defaults dark mode off and lets the sidebar enable it', async () => {
+    // Given: a parsed document opens the Demo settings and Reader.
+    vi.mocked(PdfParser.encode).mockResolvedValue(
+      makeRuntimeDocument('Dark Mode Toggle Document')
+    )
+    render(<App />)
+    await upload(makeFile('dark-mode-toggle.pdf'))
+    expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+
+    // Then: the dark mode switch and Reader prop both default to off.
+    const toggle = screen.getByRole('checkbox', { name: '暗色模式 Dark Mode' })
+    expect(toggle).not.toBeChecked()
+    expect(findDocumentReaderProps()?.darkMode).toBe(false)
+
+    // When: the user enables dark mode.
+    fireEvent.click(toggle)
+
+    // Then: the same Reader receives the enabled theme state.
+    await waitFor(() => {
+      expect(toggle).toBeChecked()
+      expect(findDocumentReaderProps()?.darkMode).toBe(true)
     })
   })
 

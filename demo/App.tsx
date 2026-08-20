@@ -937,6 +937,7 @@ export function App() {
   // ocrDevMode：OCR 开发调试模式开关，开启后 OCR 文字可见（黑色 50%）并加红色外框
   const [ocrDevMode, setOcrDevMode] = useState<boolean>(false)
   const [renderMode, setRenderMode] = useState<ReaderRenderMode>('layout')
+  const [darkMode, setDarkMode] = useState(false)
   const [useVirtualPaper, setUseVirtualPaper] = useState(false)
   const [touchPanMode, setTouchPanMode] =
     useState<ReaderTouchPanMode>('single-finger')
@@ -2362,6 +2363,25 @@ export function App() {
                   </select>
                 </label>
               </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <input
+                    type='checkbox'
+                    checked={darkMode}
+                    onChange={(event) =>
+                      setDarkMode(event.currentTarget.checked)
+                    }
+                    data-testid='dark-mode-toggle'
+                  />
+                  <span>暗色模式 Dark Mode</span>
+                </label>
+              </div>
               {renderMode === 'layout' && (
                 <div style={{ marginBottom: '12px' }}>
                   <label
@@ -2923,6 +2943,7 @@ export function App() {
               onEdgeCropEditingChange={setEdgeCropEditing}
               onEdgeCropApply={handleEdgeCropApply}
               renderMode={renderMode}
+              darkMode={darkMode}
               onRenderModeChange={handleRenderModeChange}
               fontScale={supportsFontScale ? activeFontScale : undefined}
               onFontScaleChange={

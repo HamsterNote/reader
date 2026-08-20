@@ -127,6 +127,7 @@ export type ReaderInteractiveProps = Pick<
   | 'onTextSelectionEnd'
   | 'interactionMode'
   | 'renderMode'
+  | 'darkMode'
   | 'onRenderModeChange'
   | 'fontScale'
   | 'onFontScaleChange'
