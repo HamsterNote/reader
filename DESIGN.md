@@ -290,4 +290,31 @@ consumers can see how to implement the `onDragHighlight` integration.
   percentage, while the native `progress` element keeps the phase label as its
   accessible name.
 
+## 18. Reader Dark Mode
+
+- **Ownership and compatibility:** `darkMode` is a host-controlled Reader prop.
+  The Demo always passes its native checkbox value. When an existing host omits
+  the prop, article content remains light while the built-in toolbar continues
+  following the operating-system preference and built-in popovers retain their
+  pre-existing dark appearance. Explicit `false` selects light chrome and
+  explicit `true` selects dark chrome and article content.
+- **Shared chrome:** the built-in bottom toolbar and built-in selection,
+  highlight, and rectangle popovers follow the same `darkMode` value. Custom
+  `bottomBar`, `selectionPopover`, `highlightPopover`, and `rectPopover`
+  surfaces remain the host's theming responsibility.
+- **Layout mode:** the complete article canvas uses direct color inversion.
+  Embedded `img`, `canvas`, `video`, and SVG image content receives the same
+  inversion a second time so media retains its source colors.
+- **Text mode:** the article surface uses pure black (`#000000`) with white
+  (`#ffffff`) text and muted text `#cbd5e1`. Images keep their source colors and
+  receive no filter. The Page Browser uses slate dark surfaces and borders so it
+  does not become a light island over the article.
+- **Popover tokens:** light popovers use a white (`#ffffff`) surface, slate text
+  (`#334155`), and `#cbd5e1` border. Dark popovers use `#1e293b` with
+  `#e2e8f0` text. Interaction sizes, focus behavior, and contrast remain
+  equivalent across themes.
+- **Motion:** theme changes are immediate. No transition is applied because a
+  cross-surface color animation would flash large reading areas without adding
+  interaction meaning.
+
 _(End of minimal design contract)_

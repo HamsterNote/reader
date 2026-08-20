@@ -18,16 +18,16 @@ import type {
   ReaderSelectionRef
 } from '../../types/selection'
 import type { ReaderTouchPanMode } from '../IntermediateDocumentViewer'
+import {
+  BottomBarColorControls,
+  BottomBarHistoryControls,
+  BottomBarToolButtons,
+  DrawingBottomBarStack
+} from './DefaultBottomBarControls'
 import { DefaultBottomBarFontScaleControl } from './DefaultBottomBarFontScaleControl'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
 import { DefaultBottomBarModeControls } from './DefaultBottomBarModeControls'
 import { DefaultBottomBarZoomControl } from './DefaultBottomBarZoomControl'
-import {
-  BottomBarHistoryControls,
-  BottomBarToolButtons,
-  BottomBarColorControls,
-  DrawingBottomBarStack
-} from './DefaultBottomBarControls'
 import {
   DEFAULT_BOTTOM_BAR_TOOLS,
   type ReaderLayoutZoom
@@ -40,6 +40,7 @@ import {
 
 export type DefaultBottomBarProps = {
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
+  readonly darkMode?: boolean
   readonly renderMode: ReaderRenderMode
   readonly isEpub: boolean | undefined
   readonly ocrEnabled: boolean
@@ -71,7 +72,9 @@ export type DefaultBottomBarProps = {
 
 export function DefaultBottomBar(props: DefaultBottomBarProps) {
   const width = useWindowWidth()
-  const theme = usePrefersColorScheme()
+  const preferredTheme = usePrefersColorScheme()
+  const explicitTheme = props.darkMode ? 'dark' : 'light'
+  const theme = props.darkMode === undefined ? preferredTheme : explicitTheme
   const menus = useBottomBarMenus()
   const layoutDisabled = props.renderMode === 'text'
   const visibleFontScale =

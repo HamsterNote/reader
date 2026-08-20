@@ -202,6 +202,11 @@ export type ReaderProps = {
    */
   ocrDebug?: boolean
   renderMode?: ReaderRenderMode
+  /**
+   * 是否启用暗色阅读主题。
+   * 未传时正文保持亮色，内置工具栏与 Popover 保留升级前的主题行为。
+   */
+  darkMode?: boolean
   /** 渲染模式变化回调；未受控时 Reader 同时更新内部模式。 */
   onRenderModeChange?: (mode: ReaderRenderMode) => void
   /** 当前文档是否为 EPUB；EPUB 的 Layout 高亮矩形只实时计算，不写入持久化数据。 */
@@ -625,6 +630,7 @@ export function Reader({
   onOcrTextsChange,
   ocrDebug,
   renderMode,
+  darkMode,
   onRenderModeChange,
   isEpub,
   isPdf,
@@ -1570,9 +1576,13 @@ export function Reader({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  const rootClassName = className
-    ? `hamster-reader ${className}`
-    : 'hamster-reader'
+  const rootClassName = [
+    'hamster-reader',
+    darkMode ? `hamster-reader--dark-${resolvedRenderMode}` : undefined,
+    className
+  ]
+    .filter(Boolean)
+    .join(' ')
   const readerThemeStyle: CSSProperties & {
     '--hamster-reader-theme-color': string
   } = {
@@ -1660,6 +1670,7 @@ export function Reader({
             selectionPopover={
               selectionPopover ?? (
                 <DefaultSelectionPopover
+                  darkMode={darkMode}
                   selectionRef={popoverSelectionRef}
                   highlightColor={resolvedHighlightColor}
                   onHighlightColorChange={handleHighlightColorChange}
@@ -1674,6 +1685,7 @@ export function Reader({
               highlightPopover ??
               ((highlight) => (
                 <DefaultHighlightPopover
+                  darkMode={darkMode}
                   selectionRef={popoverSelectionRef}
                   highlightColor={resolvedHighlightColor}
                   onHighlightColorChange={handleHighlightColorChange}
@@ -1787,6 +1799,7 @@ export function Reader({
           selectionPopover={
             selectionPopover ?? (
               <DefaultSelectionPopover
+                darkMode={darkMode}
                 selectionRef={popoverSelectionRef}
                 highlightColor={resolvedHighlightColor}
                 onHighlightColorChange={handleHighlightColorChange}
@@ -1801,6 +1814,7 @@ export function Reader({
             highlightPopover ??
             ((highlight) => (
               <DefaultHighlightPopover
+                darkMode={darkMode}
                 selectionRef={popoverSelectionRef}
                 highlightColor={resolvedHighlightColor}
                 onHighlightColorChange={handleHighlightColorChange}
@@ -1829,6 +1843,7 @@ export function Reader({
             rectPopover ??
             ((rectangle) => (
               <DefaultRectanglePopover
+                darkMode={darkMode}
                 rectangle={rectangle}
                 highlightColor={resolvedHighlightColor}
                 onHighlightColorChange={handleHighlightColorChange}
@@ -1978,6 +1993,7 @@ export function Reader({
         hasDocumentPages &&
         (bottomBar === undefined ? (
           <DefaultBottomBar
+            darkMode={darkMode}
             bottomBarRef={defaultBottomBarRef}
             renderMode={resolvedRenderMode}
             isEpub={isEpub}

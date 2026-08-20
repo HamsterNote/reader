@@ -220,6 +220,16 @@ Text mode renders document text and content-level `IntermediateImage` entries as
 
 `containMarginX`, `containMarginTop`, and `containMarginBottom` apply directly to the Text-mode scroll viewport in screen pixels. `showPageBrowser` also works in Text mode, but exposes only the highlight and bookmark tabs; the unavailable page-preview tab is not rendered. Store `data.textReadingProgress` from `onDataChange` to restore the exact text at the top of the viewport after reopening a document.
 
+### Dark mode
+
+Pass `darkMode` to theme Reader content together with its built-in bottom toolbar and built-in selection, highlight, and rectangle popovers. In Layout mode the article is directly inverted while embedded images, canvases, videos, and SVG images are inverted a second time to preserve their source colors. Text mode uses black surfaces and white text without filtering images.
+
+```tsx
+<Reader document={document} darkMode={darkMode} />
+```
+
+`darkMode={true}` enables the complete dark theme, while `darkMode={false}` explicitly selects light content and chrome. Omitting the prop preserves compatibility with earlier releases: article content stays light, the built-in toolbar follows the operating-system color preference, and the built-in popovers retain their original dark appearance. Custom `bottomBar`, `selectionPopover`, `highlightPopover`, and `rectPopover` content remains responsible for its own theme.
+
 ### Text, rectangle, and drawing tools
 
 In layout mode, `selectedTool` switches the active page interaction without replacing the virtualized reader. Existing zoom, page-range, OCR, lazy loading, and linked-selection behavior therefore remains available in every tool mode.

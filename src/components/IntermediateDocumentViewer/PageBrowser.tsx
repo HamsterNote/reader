@@ -1,5 +1,5 @@
-import type { DrawingValue } from '@hamster-note/painting'
 import { confirm } from '@hamster-note/components'
+import type { DrawingValue } from '@hamster-note/painting'
 import type { CSSProperties, KeyboardEvent, RefObject } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -18,6 +18,10 @@ import { getBookmarkKey } from './textAnchor'
 import { usePageBrowserDrag } from './usePageBrowserDrag'
 
 type PageBrowserTab = 'pages' | 'highlights' | 'bookmarks'
+
+type HighlightItemStyle = CSSProperties & {
+  readonly '--hamster-reader-highlight-color': string
+}
 
 function TrashIcon() {
   return (
@@ -706,21 +710,21 @@ export function PageBrowser({
               {highlightRanges.map((range) => {
                 const isSelected = selectedRangeId === range.id
                 const commentCount = commentCountByRangeId?.[range.id] ?? 0
-                const highlightColor = range.markerStyle?.backgroundColor as
-                  | string
-                  | undefined
+                const highlightColor = range.markerStyle?.backgroundColor
 
                 const itemClassName = [
                   'hamster-reader__highlight-item',
+                  highlightColor
+                    ? 'hamster-reader__highlight-item--colored'
+                    : '',
                   isSelected ? 'hamster-reader__highlight-item--selected' : ''
                 ]
                   .filter(Boolean)
                   .join(' ')
 
-                const itemStyle: CSSProperties | undefined = highlightColor
+                const itemStyle: HighlightItemStyle | undefined = highlightColor
                   ? {
-                      backgroundColor: `color-mix(in srgb, ${highlightColor} 15%, white)`,
-                      borderColor: `color-mix(in srgb, ${highlightColor} 30%, white)`
+                      '--hamster-reader-highlight-color': highlightColor
                     }
                   : undefined
 
@@ -795,19 +799,19 @@ export function PageBrowser({
                   pageNumber !== null
                     ? `跳转到矩形选区：第${pageNumber}页`
                     : '跳转到矩形选区'
+                const markerColor = rect.markerStyle?.backgroundColor
 
                 const itemClassName = [
                   'hamster-reader__highlight-item',
                   'hamster-reader__highlight-item--rect',
+                  markerColor ? 'hamster-reader__highlight-item--colored' : '',
                   isSelected ? 'hamster-reader__highlight-item--selected' : ''
                 ]
                   .filter(Boolean)
                   .join(' ')
-                const markerColor = rect.markerStyle?.backgroundColor
-                const itemStyle: CSSProperties | undefined = markerColor
+                const itemStyle: HighlightItemStyle | undefined = markerColor
                   ? {
-                      backgroundColor: `color-mix(in srgb, ${markerColor} 15%, white)`,
-                      borderColor: `color-mix(in srgb, ${markerColor} 30%, white)`
+                      '--hamster-reader-highlight-color': markerColor
                     }
                   : undefined
 

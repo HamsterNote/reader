@@ -998,6 +998,19 @@
     );
   }
 
+  &__highlight-item--colored {
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-highlight-color) 15%,
+      #ffffff
+    );
+    border-color: color-mix(
+      in srgb,
+      var(--hamster-reader-highlight-color) 30%,
+      #ffffff
+    );
+  }
+
   &__highlight-item--rect {
     position: relative;
     overflow: hidden;
@@ -1732,6 +1745,210 @@
   }
 }
 
+.hamster-reader--dark-layout {
+  background: #000000;
+
+  .hamster-reader__content,
+  .hamster-reader__intermediate-document-viewer {
+    background: #000000;
+  }
+
+  // 只反转文章页面树。相对定位的 Popover Portal 是 viewport 的兄弟节点，
+  // 因此不会继承此滤镜；只有嵌入媒体与绘图层恢复源颜色，整页底图仍随页面反色。
+  .hamster-note-document-gutter {
+    filter: invert(1);
+
+    .hamster-reader__intermediate-page-image,
+    .hamster-reader__intermediate-flow-image img,
+    video,
+    .hamster-reader__drawing-layer {
+      filter: invert(1);
+    }
+  }
+}
+
+.hamster-reader--dark-layout,
+.hamster-reader--dark-text {
+  .hamster-reader__loading-progress {
+    color: #e2e8f0;
+    background: #1e293b;
+    border-color: #475569;
+  }
+
+  .hamster-reader__loading-progress-bar {
+    color-scheme: dark;
+  }
+
+  .hamster-reader__page-browser {
+    color: #e2e8f0;
+    background: #0f172a;
+    border-right-color: #334155;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.32);
+  }
+
+  .hamster-reader__page-browser-title,
+  .hamster-reader__page-browser-header,
+  .hamster-reader__page-browser-item,
+  .hamster-reader__bookmark-item,
+  .hamster-reader__bookmark-link,
+  .hamster-reader__highlight-item {
+    color: #e2e8f0;
+  }
+
+  .hamster-reader__page-browser-header {
+    border-bottom-color: #334155;
+  }
+
+  .hamster-reader__page-browser-close,
+  .hamster-reader__highlight-delete,
+  .hamster-reader__bookmark-delete {
+    color: #cbd5e1;
+
+    &:hover {
+      background: #334155;
+    }
+  }
+
+  .hamster-reader__page-browser-tabs {
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 24%,
+      #0f172a
+    );
+  }
+
+  .hamster-reader__page-browser-tab:not(
+      .hamster-reader__page-browser-tab--active
+    ) {
+    color: #bfdbfe;
+  }
+
+  .hamster-reader__bookmark-toggle,
+  .hamster-reader__bookmark-item,
+  .hamster-reader__highlight-item,
+  .hamster-reader__page-browser-preview {
+    background: #1e293b;
+    border-color: #475569;
+  }
+
+  .hamster-reader__bookmark-toggle {
+    color: #cbd5e1;
+
+    &[aria-pressed='true'] {
+      color: #bfdbfe;
+      border-color: var(--hamster-reader-theme-color, #2563eb);
+      background: color-mix(
+        in srgb,
+        var(--hamster-reader-theme-color, #2563eb) 22%,
+        #1e293b
+      );
+    }
+  }
+
+  .hamster-reader__bookmark-item:hover,
+  .hamster-reader__highlight-item:hover {
+    background: #334155;
+    border-color: #64748b;
+  }
+
+  .hamster-reader__bookmark-link--active,
+  .hamster-reader__bookmark-link--active:hover,
+  .hamster-reader__highlight-item--selected {
+    border-color: var(--hamster-reader-theme-color, #2563eb);
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 22%,
+      #1e293b
+    );
+  }
+
+  .hamster-reader__highlight-item--colored {
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-highlight-color) 20%,
+      #1e293b
+    );
+    border-color: color-mix(
+      in srgb,
+      var(--hamster-reader-highlight-color) 35%,
+      #475569
+    );
+  }
+
+  .hamster-reader__highlight-item--colored.hamster-reader__highlight-item--selected {
+    border-color: var(--hamster-reader-theme-color, #2563eb);
+    box-shadow: inset 0 0 0 1px
+      color-mix(
+        in srgb,
+        var(--hamster-reader-highlight-color) 50%,
+        transparent
+      );
+  }
+
+  .hamster-reader__highlight-comment-badge {
+    color: #bfdbfe;
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 28%,
+      #1e293b
+    );
+  }
+
+  .hamster-reader__highlight-delete:hover,
+  .hamster-reader__bookmark-delete:hover {
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #ef4444;
+  }
+
+  .hamster-reader__delete-confirm-yes {
+    color: #86efac;
+    background: #14532d;
+    border-color: #22c55e;
+  }
+
+  .hamster-reader__delete-confirm-no {
+    color: #cbd5e1;
+    background: #334155;
+    border-color: #64748b;
+  }
+
+  .hamster-reader__highlight-empty {
+    color: #94a3b8;
+  }
+
+  .hamster-reader__page-browser-placeholder,
+  .hamster-reader__highlight-rect-preview,
+  .hamster-reader__highlight-rect-placeholder {
+    background: #1e293b;
+  }
+}
+
+.hamster-reader--dark-text {
+  background: #000000;
+  color: #ffffff;
+
+  .hamster-reader__content,
+  .hamster-reader__intermediate-document-text-viewer,
+  .hamster-reader__intermediate-text-viewer,
+  .hamster-reader__intermediate-text-page,
+  .hamster-reader__intermediate-page--flow {
+    background: #000000;
+    color: #ffffff;
+  }
+
+  .hamster-reader__intermediate-text,
+  .hamster-reader__pdf-text-content,
+  .hamster-reader__pdf-text-paragraph {
+    color: #ffffff !important;
+  }
+
+  .hamster-reader__intermediate-flow-image figcaption {
+    color: #cbd5e1;
+  }
+
+}
+
 // Skeleton shimmer animation (global, scoped to keyframes only)
 @keyframes skeleton-shimmer {
   0% {
@@ -1915,14 +2132,39 @@
 // 视觉参考：@hamster-note/notes 的 .hn-note-popover 系列
 // （src/lib/styles.css lines 523-596）—— 暗色背景、圆角按钮、淡入动画。
 .hamster-reader-popover {
+  --hamster-reader-popover-surface: #1e293b;
+  --hamster-reader-popover-text: #e2e8f0;
+  --hamster-reader-popover-hover-surface: rgba(255, 255, 255, 0.14);
+  --hamster-reader-popover-hover-text: #ffffff;
+  --hamster-reader-popover-border: #475569;
+  --hamster-reader-popover-danger: #fca5a5;
+  --hamster-reader-popover-danger-hover: #ef4444;
+  --hamster-reader-popover-danger-surface: rgba(239, 68, 68, 0.2);
+  --hamster-reader-popover-swatch-border: rgba(255, 255, 255, 0.2);
+
   display: flex;
   align-items: center;
   gap: 0.15rem;
   padding: 0.3rem;
+  border: 0;
   border-radius: 10px;
-  background: #1e293b;
+  background: var(--hamster-reader-popover-surface);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28);
   animation: hamster-reader-popover-in 0.12s ease;
+
+  &--light {
+    --hamster-reader-popover-surface: #ffffff;
+    --hamster-reader-popover-text: #334155;
+    --hamster-reader-popover-hover-surface: #f1f5f9;
+    --hamster-reader-popover-hover-text: #0f172a;
+    --hamster-reader-popover-border: #cbd5e1;
+    --hamster-reader-popover-danger: #dc2626;
+    --hamster-reader-popover-danger-hover: #b91c1c;
+    --hamster-reader-popover-danger-surface: #fee2e2;
+    --hamster-reader-popover-swatch-border: rgba(15, 23, 42, 0.2);
+
+    border: 1px solid var(--hamster-reader-popover-border);
+  }
 
   // 淡入动画
   @keyframes hamster-reader-popover-in {
@@ -1946,7 +2188,7 @@
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: #e2e8f0;
+  color: var(--hamster-reader-popover-text);
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
@@ -1955,17 +2197,17 @@
     color 0.12s ease;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.14);
-    color: #ffffff;
+    background: var(--hamster-reader-popover-hover-surface);
+    color: var(--hamster-reader-popover-hover-text);
   }
 
   // 删除按钮的红色修饰符
   &--danger {
-    color: #fca5a5;
+    color: var(--hamster-reader-popover-danger);
 
     &:hover {
-      background: rgba(239, 68, 68, 0.2);
-      color: #ef4444;
+      background: var(--hamster-reader-popover-danger-surface);
+      color: var(--hamster-reader-popover-danger-hover);
     }
   }
 }
@@ -1982,11 +2224,11 @@
   transition: background 0.12s ease;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.14);
+    background: var(--hamster-reader-popover-hover-surface);
   }
 
   &-label {
-    color: #e2e8f0;
+    color: var(--hamster-reader-popover-text);
     font-size: 0.8rem;
     font-weight: 600;
     user-select: none;
@@ -2006,11 +2248,11 @@
       padding: 0;
     }
     &::-webkit-color-swatch {
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid var(--hamster-reader-popover-swatch-border);
       border-radius: 4px;
     }
     &::-moz-color-swatch {
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid var(--hamster-reader-popover-swatch-border);
       border-radius: 4px;
     }
   }

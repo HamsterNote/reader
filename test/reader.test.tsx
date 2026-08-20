@@ -3083,6 +3083,69 @@ describe('Reader prop forwarding', () => {
     expect(capturedViewerProps.onCommentHighlight).toBe(onCommentHighlight)
   })
 
+  it('applies dark mode to each render mode and the built-in popover', async () => {
+    // Given: a Reader uses the host-controlled dark theme in Layout mode.
+    const document = makeDocument({ pages: [makePage(1)] })
+    const view = render(<Reader document={document} darkMode />)
+    expect(screen.getByTestId('reader-root')).toHaveClass(
+      'hamster-reader--dark-layout'
+    )
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+
+    // When: Selection renders the built-in popover.
+    const [selectionProps] = getAllSelectionProps()
+    const popoverView = render(selectionProps?.popover)
+
+    // Then: the portal-safe popover receives its own dark theme class.
+    expect(popoverView.container.firstElementChild).toHaveClass(
+      'hamster-reader-popover--dark'
+    )
+
+    // When: the host changes the same Reader to Text mode.
+    view.rerender(<Reader document={document} renderMode='text' darkMode />)
+
+    // Then: the root switches to the Text-specific dark surface contract.
+    expect(screen.getByTestId('reader-root')).toHaveClass(
+      'hamster-reader--dark-text'
+    )
+    expect(screen.getByTestId('reader-root')).not.toHaveClass(
+      'hamster-reader--dark-layout'
+    )
+  })
+
+  it('distinguishes omitted and explicit light themes for compatibility', async () => {
+    // Given: an existing host omits darkMode as it did before this API existed.
+    const document = makeDocument({ pages: [makePage(1)] })
+    const omittedView = render(<Reader document={document} />)
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [omittedSelectionProps] = getAllSelectionProps()
+    const omittedPopover = render(omittedSelectionProps?.popover)
+
+    // Then: content stays light and the default Popover retains its original dark base.
+    expect(screen.getByTestId('reader-root')).not.toHaveClass(
+      'hamster-reader--dark-layout'
+    )
+    expect(omittedPopover.container.firstElementChild).toHaveClass(
+      'hamster-reader-popover'
+    )
+    expect(omittedPopover.container.firstElementChild).not.toHaveClass(
+      'hamster-reader-popover--light'
+    )
+    omittedPopover.unmount()
+    omittedView.unmount()
+
+    // When: a host explicitly selects light mode.
+    render(<Reader document={document} darkMode={false} />)
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const [lightSelectionProps] = getAllSelectionProps()
+    const lightPopover = render(lightSelectionProps?.popover)
+
+    // Then: the portal-safe Popover receives the explicit light modifier.
+    expect(lightPopover.container.firstElementChild).toHaveClass(
+      'hamster-reader-popover--light'
+    )
+  })
+
   it('renders an existing highlight popover from the original range reference', async () => {
     // Given: the selected highlight has its own color, which differs from the
     // current global color used for newly-created highlights.
