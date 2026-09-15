@@ -1,0 +1,357 @@
+/*
+ * 开屏加载动画（HAM-13）
+ * 暖橙 / 琥珀主色；浅色干净白底，深色主题深色背景 + 同色系柔光。
+ * 仓鼠圆脸（圆头 + 双耳 + 双眼 + 鼓起颊囊）全部使用纯 CSS 绘制，
+ * 颊囊带呼吸动画，下方 loading 圆点依次跳动。
+ * 退出时整体轻微缩小并淡出（约 400ms，与 App.tsx 中
+ * SPLASH_EXIT_MS 保持一致），并尊重 prefers-reduced-motion。
+ */
+
+/* 深浅两套配色变量：显式跟随 App 的 darkMode（通过 --light / --dark 修饰类），
+ * 无显式主题时由 prefers-color-scheme 媒体查询兜底 */
+.hn-splash,
+.hn-splash--light {
+  /* 浅色：干净白底 + 暖橙点缀 */
+  --hn-splash-bg: #fffaf3;
+  --hn-splash-glow: rgba(245, 158, 11, 0.16);
+  --hn-splash-title: #b45309;
+  --hn-splash-subtitle: #a8a29e;
+
+  /* 仓鼠配色（浅色下稍亮） */
+  --hn-hamster-fur: #f7c876;
+  --hn-hamster-fur-deep: #f2b45e;
+  --hn-hamster-ear-inner: #f9b3a3;
+  --hn-hamster-cheek: #ffe4b8;
+  --hn-hamster-eye: #4a3523;
+  --hn-hamster-nose: #e8785e;
+
+  --hn-splash-dot: #f59e0b;
+}
+
+/* 深色：深色背景 + 琥珀柔光 */
+.hn-splash--dark {
+  --hn-splash-bg: #161006;
+  --hn-splash-glow: rgba(251, 191, 36, 0.13);
+  --hn-splash-title: #fcd34d;
+  --hn-splash-subtitle: #8a7b63;
+
+  --hn-hamster-fur: #e9b262;
+  --hn-hamster-fur-deep: #dfa14c;
+  --hn-hamster-ear-inner: #d98a78;
+  --hn-hamster-cheek: #f9d9a6;
+  --hn-hamster-eye: #33241a;
+  --hn-hamster-nose: #e06b52;
+
+  --hn-splash-dot: #fbbf24;
+}
+
+/* 兜底：无显式主题类时跟随系统偏好 */
+@media (prefers-color-scheme: dark) {
+  .hn-splash:not(.hn-splash--light):not(.hn-splash--dark) {
+    --hn-splash-bg: #161006;
+    --hn-splash-glow: rgba(251, 191, 36, 0.13);
+    --hn-splash-title: #fcd34d;
+    --hn-splash-subtitle: #8a7b63;
+
+    --hn-hamster-fur: #e9b262;
+    --hn-hamster-fur-deep: #dfa14c;
+    --hn-hamster-ear-inner: #d98a78;
+    --hn-hamster-cheek: #f9d9a6;
+    --hn-hamster-eye: #33241a;
+    --hn-hamster-nose: #e06b52;
+
+    --hn-splash-dot: #fbbf24;
+  }
+}
+
+/* 全屏覆盖层：初始即展示，退出后由 React 卸载，不阻挡后续操作 */
+.hn-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--hn-splash-bg);
+  /* 同色系柔和光晕，营造暖感氛围 */
+  background-image:
+    radial-gradient(
+      closest-side at 50% 38%,
+      var(--hn-splash-glow),
+      transparent 75%
+    ),
+    radial-gradient(
+      closest-side at 50% 70%,
+      var(--hn-splash-glow),
+      transparent 90%
+    );
+  opacity: 1;
+  transform: scale(1);
+  /* 退出过渡：轻微缩小 + 淡出，时长与 SPLASH_EXIT_MS 一致 */
+  transition:
+    opacity 400ms ease,
+    transform 400ms ease;
+}
+
+/* 退出状态：由组件添加，动画结束后卸载 */
+.hn-splash--exiting {
+  opacity: 0;
+  transform: scale(0.96);
+  pointer-events: none;
+}
+
+/* 内容容器：纵向居中排布 */
+.hn-splash__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 24px;
+  text-align: center;
+}
+
+/* ---------- 纯 CSS 仓鼠圆脸 ---------- */
+
+.hn-hamster {
+  position: relative;
+  width: 124px;
+  height: 112px;
+}
+
+/* 双耳（外耳 + 内耳） */
+.hn-hamster__ear {
+  position: absolute;
+  top: 0;
+  width: 38px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--hn-hamster-fur-deep);
+}
+
+.hn-hamster__ear::after {
+  content: '';
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: var(--hn-hamster-ear-inner);
+}
+
+.hn-hamster__ear--left {
+  left: 6px;
+  transform: rotate(-18deg);
+}
+
+.hn-hamster__ear--right {
+  right: 6px;
+  transform: rotate(18deg);
+}
+
+/* 圆头 */
+.hn-hamster__head {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 104px;
+  height: 92px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: linear-gradient(
+    180deg,
+    var(--hn-hamster-fur) 0%,
+    var(--hn-hamster-fur-deep) 100%
+  );
+  box-shadow: 0 10px 28px var(--hn-splash-glow);
+}
+
+/* 双眼（带高光点） */
+.hn-hamster__eye {
+  position: absolute;
+  top: 36px;
+  width: 12px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--hn-hamster-eye);
+}
+
+.hn-hamster__eye::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.hn-hamster__eye--left {
+  left: 24px;
+}
+
+.hn-hamster__eye--right {
+  right: 24px;
+}
+
+/* 鼓起的颊囊（左右各一，呼吸式鼓动） */
+.hn-hamster__cheek {
+  position: absolute;
+  bottom: 10px;
+  width: 26px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--hn-hamster-cheek);
+  opacity: 0.95;
+  animation: hn-cheek-breathe 1.6s ease-in-out infinite;
+}
+
+.hn-hamster__cheek--left {
+  left: 12px;
+}
+
+.hn-hamster__cheek--right {
+  right: 12px;
+  /* 两侧错开相位，呼吸更自然 */
+  animation-delay: 0.25s;
+}
+
+/* 小鼻子 */
+.hn-hamster__nose {
+  position: absolute;
+  left: 50%;
+  top: 52px;
+  width: 9px;
+  height: 7px;
+  transform: translateX(-50%);
+  border-radius: 50% 50% 60% 60%;
+  background: var(--hn-hamster-nose);
+}
+
+/* 嘴：两条向下的小弧线 */
+.hn-hamster__mouth {
+  position: absolute;
+  left: 50%;
+  top: 59px;
+  width: 18px;
+  height: 9px;
+  transform: translateX(-50%);
+  border-right: 2px solid var(--hn-hamster-nose);
+  border-left: 2px solid var(--hn-hamster-nose);
+  border-bottom: 2px solid var(--hn-hamster-nose);
+  border-radius: 0 0 50% 50%;
+  opacity: 0.9;
+}
+
+/* 颊囊呼吸动画：轻微放大回弹 */
+@keyframes hn-cheek-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.16);
+  }
+}
+
+/* ---------- 主操作按钮（ready 阶段的「开始阅读」） ---------- */
+
+.hn-splash__action {
+  /* 足够触控尺寸（≥ 44px 高度） */
+  min-width: 148px;
+  min-height: 44px;
+  padding: 10px 28px;
+  border: none;
+  border-radius: 999px;
+  background: var(--hn-splash-dot);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  box-shadow: 0 6px 18px var(--hn-splash-glow);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    filter 160ms ease;
+}
+
+.hn-splash__action:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.hn-splash__action:active {
+  transform: translateY(0);
+}
+
+/* 清晰可见的键盘焦点指示 */
+.hn-splash__action:focus-visible {
+  outline: 3px solid var(--hn-splash-title);
+  outline-offset: 3px;
+}
+
+/* ---------- 文案 ---------- */
+
+.hn-splash__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--hn-splash-title);
+}
+
+.hn-splash__subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--hn-splash-subtitle);
+}
+
+/* ---------- loading 圆点：依次跳动 ---------- */
+
+.hn-splash__dots {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+}
+
+.hn-splash__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--hn-splash-dot);
+  animation: hn-splash-dot-bounce 1.2s ease-in-out infinite;
+}
+
+/* 依次起跳 */
+.hn-splash__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.hn-splash__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes hn-splash-dot-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.55;
+  }
+  40% {
+    transform: translateY(-7px);
+    opacity: 1;
+  }
+}
+
+/* ---------- 无障碍：减少动效 ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .hn-splash {
+    transition: none;
+  }
+
+  .hn-hamster__cheek,
+  .hn-splash__dot {
+    animation: none;
+  }
+}
