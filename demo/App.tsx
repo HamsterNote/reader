@@ -72,6 +72,7 @@ import {
   ViewerLifetimeBoundary,
   type ViewerLifetimeToken
 } from './ViewerLifetimeBoundary'
+import './styles/splash-screen.css'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
@@ -895,6 +896,155 @@ function useEdgeCropState() {
 // App 组件
 // ---------------------------------------------------------------------------
 
+// 开屏动画最短展示时长，避免文件秒开时动画闪烁
+const SPLASH_MIN_VISIBLE_MS = 800
+// 开屏退出动画时长，与 splash-screen.css 中 .hn-splash 的 transition 时长保持一致
+const SPLASH_EXIT_MS = 400
+
+/**
+ * 开屏加载动画（HAM-13）：挂载即展示；两条退出路径任一满足即退出——
+ * 1. pdfLoadState 首次进入 done / error（最近文件恢复或手动加载完成/失败）；
+ * 2. restoreSettled 为 true 且 phase 仍为 idle
+ *    （最近文件恢复检查已完成、但无可加载文件，避免空启动永久阻塞）。
+ * 退出时先等满最短展示时长，再做约 400ms 缩小淡出，最后卸载。
+ * 减少动效（prefers-reduced-motion）时跳过过渡立即卸载。
+ */
+function SplashScreen({
+  phase,
+  restoreSettled,
+  darkMode,
+  onStartReading
+}: {
+  readonly phase: PdfLoadState['phase']
+  readonly restoreSettled: boolean
+  readonly darkMode: boolean
+  // 文件已读取待解析（ready）时，开屏内提供「开始阅读」入口，
+  // 直接复用 App 既有的 handleLoadPdf，不复制任何解析逻辑
+  readonly onStartReading: () => void
+}) {
+  const [exiting, setExiting] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  // 退出请求：一旦触发即持久化（state，而非 ref 守卫）。
+  // StrictMode 的 effect replay 会 clear 已注册的定时器并重新 setup，
+  // 若用 ref 做一次性守卫，第二次 setup 会因守卫已置位而直接 return，
+  // 定时器再也无法重建，开屏永不退出；改用 state 后 replay 的 setup
+  // 会读到同样的已触发状态并重新注册定时器，退出流程得以完成
+  const [exitRequested, setExitRequested] = useState(false)
+  // 只在首次挂载时记录一次，挂载时间即为开屏动画的开始时间
+  const mountTimeRef = useRef<number | null>(null)
+  if (mountTimeRef.current === null) {
+    mountTimeRef.current = Date.now()
+  }
+
+  // 路径一：首次进入终态（done / error）退出；
+  // 路径二：最近文件恢复检查完成但无可加载文件（仍为 idle）也要退出
+  const shouldExit =
+    phase === 'done' ||
+    phase === 'error' ||
+    (restoreSettled && phase === 'idle')
+
+  useEffect(() => {
+    // 一旦触发就持久化：后续 phase 变化（如用户重新加载文件）不能取消退出
+    if (shouldExit) {
+      setExitRequested(true)
+    }
+  }, [shouldExit])
+
+  useEffect(() => {
+    if (!exitRequested) return
+
+    // 所有定时器统一登记，cleanup 中一并清理；
+    // StrictMode replay 的第二次 setup 会走到这里重新注册，
+    // 因此 cleanup 清掉旧定时器不会导致流程丢失
+    const timers: Array<ReturnType<typeof setTimeout>> = []
+
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    const elapsed = Date.now() - (mountTimeRef.current ?? Date.now())
+    // 不足最短展示时长则补足，防止秒开闪烁
+    const waitMs = Math.max(SPLASH_MIN_VISIBLE_MS - elapsed, 0)
+
+    if (prefersReducedMotion) {
+      // 用户偏好减少动效：不做过渡，到点直接卸载
+      timers.push(setTimeout(() => setDismissed(true), waitMs))
+    } else {
+      timers.push(setTimeout(() => setExiting(true), waitMs))
+      timers.push(setTimeout(() => setDismissed(true), waitMs + SPLASH_EXIT_MS))
+    }
+
+    return () => {
+      for (const timer of timers) {
+        clearTimeout(timer)
+      }
+    }
+  }, [exitRequested])
+
+  if (dismissed) return null
+
+  // 深浅主题显式跟随 App 的 darkMode；无显式主题时由 CSS 的
+  // prefers-color-scheme 媒体查询兜底
+  const themeClass = darkMode ? ' hn-splash--dark' : ' hn-splash--light'
+
+  return (
+    <div
+      className={
+        exiting
+          ? `hn-splash hn-splash--exiting${themeClass}`
+          : `hn-splash${themeClass}`
+      }
+      role='status'
+      aria-live='polite'
+      aria-label='应用正在加载'
+      data-testid='splash-screen'
+    >
+      <div className='hn-splash__content'>
+        {/* 纯 CSS 仓鼠圆脸：圆头 + 双耳 + 双眼 + 鼓起颊囊 */}
+        <div className='hn-hamster' aria-hidden='true'>
+          <div className='hn-hamster__ear hn-hamster__ear--left' />
+          <div className='hn-hamster__ear hn-hamster__ear--right' />
+          <div className='hn-hamster__head'>
+            <div className='hn-hamster__eye hn-hamster__eye--left' />
+            <div className='hn-hamster__eye hn-hamster__eye--right' />
+            <div className='hn-hamster__cheek hn-hamster__cheek--left' />
+            <div className='hn-hamster__cheek hn-hamster__cheek--right' />
+            <div className='hn-hamster__nose' />
+            <div className='hn-hamster__mouth' />
+          </div>
+        </div>
+        <p className='hn-splash__title'>仓鼠笔记</p>
+        {phase === 'ready' ? (
+          // 文件已读取完成：开屏仍覆盖全屏，底层「加载文件」按钮不可点，
+          // 在这里给出同样语义的操作，走既有 handleLoadPdf 流程
+          <>
+            <p className='hn-splash__subtitle'>已准备好，随时开始</p>
+            <button
+              type='button'
+              className='hn-splash__action'
+              onClick={onStartReading}
+              data-testid='splash-start-reading'
+            >
+              开始阅读
+            </button>
+          </>
+        ) : (
+          <>
+            <p className='hn-splash__subtitle'>正在加载，请稍候</p>
+            {/* loading 圆点依次跳动 */}
+            <div className='hn-splash__dots' aria-hidden='true'>
+              <span className='hn-splash__dot' />
+              <span className='hn-splash__dot' />
+              <span className='hn-splash__dot' />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [stagedFile, setStagedFile] = useState<File | null>(null)
@@ -923,6 +1073,9 @@ export function App() {
   )
   const [parseError, setParseError] = useState<string | null>(null)
   const [hasSavedRecentFile, setHasSavedRecentFile] = useState(false)
+  // 开屏退出条件之一：最近文件恢复检查是否已完成（无论有没有可恢复文件）。
+  // 仅在恢复完成且仍处 idle 时允许开屏退出，避免空启动被全屏覆盖层永久阻塞
+  const [recentRestoreSettled, setRecentRestoreSettled] = useState(false)
   const [pageRangeStart, setPageRangeStart] = useState<number>(1)
   const [pageRangeEnd, setPageRangeEnd] = useState<number>(3)
   const [usePageRange, setUsePageRange] = useState<boolean>(false)
@@ -1964,21 +2117,35 @@ export function App() {
 
   useEffect(() => {
     const restoreEpoch = selectionEpochRef.current?.epoch ?? 0
+    // StrictMode 下 effect 会「挂载 → 清理 → 再挂载」，
+    // 用取消标记避免卸载/清理后仍触发 setState
+    let cancelled = false
 
-    loadRecentFile().then((file) => {
-      if (
-        !mountedRef.current ||
-        !file ||
-        (selectionEpochRef.current?.epoch ?? 0) !== restoreEpoch
-      ) {
-        return
-      }
+    loadRecentFile()
+      .then((file) => {
+        if (
+          cancelled ||
+          !mountedRef.current ||
+          !file ||
+          (selectionEpochRef.current?.epoch ?? 0) !== restoreEpoch
+        ) {
+          return
+        }
 
-      setHasSavedRecentFile(true)
-      startFileSelectionRef.current(file, 'recent-file')
-    })
+        setHasSavedRecentFile(true)
+        startFileSelectionRef.current(file, 'recent-file')
+      })
+      .finally(() => {
+        // 无论是否恢复到文件，都标记恢复检查已完成，
+        // 作为开屏动画「无可加载文件」的退出触发条件
+        if (!cancelled) {
+          setRecentRestoreSettled(true)
+        }
+      })
 
-    return undefined
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const handleBoundarySetup = useCallback(() => {
@@ -2075,6 +2242,15 @@ export function App() {
         trackPrimaryPointer(event, latestPrimaryPointerRef)
       }
     >
+      {/* 开屏动画：首次进入 done / error，或最近文件恢复检查完成但无可加载文件后，
+          自行退出并卸载；ready 阶段在开屏内提供「开始阅读」入口，
+          直接复用 handleLoadPdf，避免覆盖层挡住底层按钮造成死锁（HAM-13） */}
+      <SplashScreen
+        phase={pdfLoadState.phase}
+        restoreSettled={recentRestoreSettled}
+        darkMode={darkMode}
+        onStartReading={handleLoadPdf}
+      />
       <div className='hamster-demo-sidebar'>
         <div data-testid='demo-sidebar-settings'>
           <h1>Hamster Reader Demo</h1>
@@ -2107,7 +2283,11 @@ export function App() {
               </label>
               {usePageRange && (
                 <div
-                  style={{ display: 'flex', gap: '12px', alignItems: 'center' }}
+                  style={{
+                    display: 'flex',
+                    gap: '12px',
+                    alignItems: 'center'
+                  }}
                 >
                   <label
                     style={{
@@ -2174,7 +2354,11 @@ export function App() {
                     }
                     event.currentTarget.value = ''
                   }}
-                  style={{ display: 'block', marginTop: '6px', width: '100%' }}
+                  style={{
+                    display: 'block',
+                    marginTop: '6px',
+                    width: '100%'
+                  }}
                 />
               </label>
             )}
