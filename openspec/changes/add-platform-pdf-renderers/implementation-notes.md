@@ -423,19 +423,24 @@ Validation on the final native-reader commit:
   cleaned and authority invariants pass. This harness compiles the oldarch seam;
   it is not a full New Architecture application or device rendering test.
 
-Reproducible Linux bootstrap uses Linus's issue attachment
-`01a14dfa-4f2e-70c1-a3c0-28dc4e78cb94` (ham46-gradle-bootstrap-evidence.tar.gz).
-After downloading/extracting it with the Multica CLI and configuring an existing
-JDK17/Android SDK, run from the workspace with bash:
+The initial Linux bootstrap came from Linus's issue attachment
+`01a14dfa-4f2e-70c1-a3c0-28dc4e78cb94`. Its maintained version is now checked into
+native-reader at `packages/native-reader/scripts/android-fault-matrix/`, with
+`bootstrap.py`, the production isolation adapter and a README. After configuring
+an existing JDK17/Android SDK, run from the native-reader repository root:
 
 ```sh
-python3 attachments/gradle-lab/bootstrap.py --repo native-reader \
-  --workdir gradle-android-run-02 \
-  --distribution "$HOME/.cache/gradle-distributions/gradle-9.3.1-bin.zip" \
-  --revision 47f54c9021441a2680337fbd1faa01999e9669fd
+python3 packages/native-reader/scripts/android-fault-matrix/bootstrap.py \
+  --repo . --revision "$(git rev-parse HEAD)" --workdir ../android-verification
 ```
 
-Choose a new workdir for each execution. The official Gradle9.3.1 ZIP is
+The workdir must be new and disjoint from the repository. Only committed files
+at the explicit full Git SHA are tested. The bootstrap downloads the official
+distribution by default; `--distribution /path/to/gradle-9.3.1-bin.zip` can reuse
+an independently acquired ZIP, verified before and after private copying. The
+README includes download/checksum/transfer instructions for another machine.
+No issue attachment or machine-specific cache path is required. Network access
+to dependency repositories is still required. The official Gradle9.3.1 ZIP is
 137037885 bytes with SHA256
 `b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06`.
 The bootstrap verifies/copies only this distribution, uses fresh dependency
@@ -473,3 +478,55 @@ autolinking/C++ sources and the built APK identity checked by the existing
 consumer verifier. This consumer uses the normal local Gradle cache; it is
 separate from the clean-cache Robolectric evidence above. The APK is not run on
 a device, and this does not establish runtime private-port/menu/handle behavior.
+
+### Android lifecycle matrix and checked-in bootstrap
+
+The checked-in bootstrap was executed against native-reader
+`3a7b1640fbb4f9f2ca8052edf03c92253a50287c` using the official SHA256-verified
+Gradle ZIP. It created a fresh source checkout, pnpm store and Gradle state,
+compiled production Kotlin/Java and the complete test suite, and completed
+`:harness:testDebugUnitTest` successfully in 3m12s. The matrix contains 89 test
+methods, including 28 PDF methods. The production isolation API verified source
+authority digests and removed its owned root; the isolation parent was empty.
+Native-reader `5be2d826301a7364c978c166ea33e39c822b1acd` adds only README
+descriptions after that verified code/test commit.
+
+HNPdfViewTest constructs and mounts the real production WebView with all actual
+APK runtime assets. It covers file-access settings, denied network/unknown and
+document-main-frame requests, exact postMessage origin, boot-before-full-I/O,
+wrong port/session/generation, duplicate boot, navigation revocation, stale
+events, cleared configuration, background and repeated teardown. Fault injection
+controls the public AndroidX transport API and source-open boundary; the I/O
+executor runs deterministically. It does not execute a WebView engine.
+
+These tests exposed an untransferred MessagePort leak: retirement previously
+closed only the native endpoint while the endpoint awaiting JavaScript transfer
+remained in an evaluation callback. The host now owns and closes both endpoints
+until successful transfer, then closes only its native endpoint on retirement.
+Failed evaluation, disposal before transfer and late callbacks are covered.
+This is a WebMessageChannel, with no TCP listener, loopback bind or numeric port.
+
+Document tests now cover exact 32 MiB input with <=64 KiB reads, cancellation
+racing an active read, partial-buffer zeroing, and interrupted callers without
+source reads or lost interrupt status. Source tests reject absent/noninteger/
+oversized content metadata before descriptor open and exercise actual app-file
+reads, host-byte preservation, cancellation and metadata mismatch. Robolectric's
+ShadowLinux fstat(FileDescriptor) returns stat(null), so that metadata boundary
+is explicitly controlled in the file test; kernel O_NOFOLLOW/fstat and real
+content-provider behavior still require platform validation. Initial fixture
+API/shadow failures were corrected before the successful full run.
+
+The source/staged integrity closure now contains 55 entries. Staging/mutation
+checks, changed-code ESLint and release safety pass (97 tests, 2 Windows-only
+skips). Chromium desktop/mobile and Firefox pass 21/21; offline rootless Noble
+WebKit passes 7/7. Native runtime/vendor pins are unchanged. Tasks 4.2-4.7 and
+all device-dependent acceptance remain unchecked; total progress stays 15/33.
+
+The final 687-file isolated tarball at `5be2d82` passes the actual offline
+consumer against all 205 resources, private bytes, canvas/text/thumbnail, bounds,
+host ownership and worker teardown. SHA256:
+`22c5fad5e9d3fa433961cfcdd18272f45d388ade9a9864ef56fc46c9886b749d`.
+The same artifact passes `verifyAndroidConsumer`: newArchEnabled=true, x86_64,
+autolinking/Codegen/C++, APK identity checks and all 125 assembleDebug tasks
+complete successfully in 1m24s. This uses the normal local Gradle cache, distinct
+from the fresh-cache fault matrix, and does not execute the APK on a device.
