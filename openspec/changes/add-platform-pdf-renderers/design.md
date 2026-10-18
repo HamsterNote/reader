@@ -89,6 +89,8 @@ WebViewAssetLoader 对未命中路径返回显式拒绝，不能 null 后回退�
 
 Bridge 复用私有 port 机制，不复用 Foliate 命令解释器；PDF 协议独立版本/消息白名单/有限 text 与 rect 数量、session/generation/command 校验。不得新增 `addJavascriptInterface` 或公开 `ReactNativeWebView` fallback。secure-WebView ABI 保持原有 string postMessage/onMessage；新模式需要维护源 patch、`stage-secure-webview.mjs` 和生成完整性测试，不能只手改 generated Java/Kotlin。
 
+Android 实现使用独立 `HNPdfView`，静态资源的 MIME 以 integrity-pinned manifest 为唯一生产来源，只校验封闭的 MIME 白名单，不按扩展名另建映射。真实 staged manifest 的每一项都必须经过资源响应回归，包括无扩展名的 `READER_LICENSE`。私有 port boot 校验成功后才允许完整 source I/O：file 需在 app-owned canonical 根内，content 需同 UID provider 或现有 OS read grant；均先检查已知大小和 32 MiB 上限，再通过有界 regular descriptor 获取私有快照。动态地址使用随机 token，返回完整 200，撤销时清零快照并关闭 port，不改动 host 文件。native 菜单策略使用 public ActionMode callback 包装并保留原 callback/handles，设备行为证据仍是独立验收条件。
+
 ### 8. Pages 与占位 Popover
 
 Pages 默认在宽屏左侧展示，窄屏可折叠为左侧 rail；点击页面后收起窄屏 rail。页码始终可用，thumbnail 失败局部降级；按可见项请求并限并发/缓存，具体上限在实现性能验证中调整。页码保持物理页序，不使用 PDF 内印刷标签替代编号。

@@ -371,3 +371,105 @@ that failure). Run Chromium/Firefox with explicit `--project` flags and WebKit
 through the documented Podman command; host WebKit is not acceptance evidence.
 Hash checks occur at build/sync time. They are not browser per-request SRI:
 the deployment must still serve the verified resource closure unchanged.
+
+## Android private source and transport implementation
+
+PR9 now contains the Android implementation at native-reader `47f54c9`, still
+based on `agent/ham-46-pdf-web`, independently of iOS PR8. The earlier static-only
+checkpoint above is historical. Its READER_LICENSE MIME mismatch is fixed:
+the pinned manifest is the only production MIME authority, with a closed
+allowlist. The Robolectric regression consumes all 205 actual generated runtime
+entries and checks MIME, exact size and SHA256, including READER_LICENSE.
+
+The integrity closure now has 54 entries. Canonical workspace and generated
+Android packages both register HNPdfViewManager and stage the PDF assets.
+HNPdfSource requires app-scoped canonical files or granted/same-UID content,
+known positive size <=32 MiB, regular descriptors and consistent metadata.
+HNPdfDocument creates a bounded private snapshot only after the selected host
+has bound its private port and emitted a validated boot. The dispatch probe
+remains boolean-only and does not authorize this read. Random exact document
+URLs have no-store/nosniff headers and return complete 200 responses. Revocation
+invalidates old URLs and zeroes bytes, including existing response streams.
+
+The independent native host uses an exact top-level HTTPS page and a native
+WebMessageChannel, without addJavascriptInterface or a public bridge. It
+validates protocol/schema/session/generation/command IDs and bounded payloads,
+matches requests, caps pending thumbnails, and reports ready after adapter draw.
+RN Pages/Popover consume the shared model; selection coordinates use WebView
+scale/density followed by measured RN offsets. Detach/background/source changes
+retire the host, cancel reads and close the port. All three file access switches
+remain false; existing EPUB code and CSP/private bridge gates are unchanged.
+The ActionMode callback wrapper removes menu items using public APIs while
+retaining native selection callbacks. This behavior is NOT device-validated.
+
+Validation on the final native-reader commit:
+
+- 396 library Jest tests, workspace typecheck, Bob build, public consumer types
+  and changed-code ESLint pass. Metro Android export passes; this is JS bundle
+  evidence only.
+- Secure-WebView staging/integrity/mutation and release lifecycle checks pass;
+  release safety reports 7 static + 90 Node passes and 2 Windows-only skips.
+- Chromium desktop/mobile and Firefox pass 21/21; offline rootless Podman
+  WebKit passes 7/7. The additional two tests execute the actual Android shared
+  shell through MessageChannel with real PDF canvas/text/thumbnail/disposal and
+  wrong-MIME rejection. They do NOT run native WebView or prove menu/handles.
+- The actual 686-file isolated tarball passes the offline consumer against all
+  205 assets, canvas/text/thumbnail, bounds, host ownership and worker teardown.
+  SHA256: `70ef31ad25ac4045ffba6b1848792ca4af113b789632808d73990a0e632228c6`.
+- The official isolated Android fault matrix passes on a fresh checkout of
+  `47f54c9021441a2680337fbd1faa01999e9669fd`: production Kotlin/Java and all test
+  classes compile, and `:harness:testDebugUnitTest` ends BUILD SUCCESSFUL.
+  This includes the real manifest regression. The owned isolation root is
+  cleaned and authority invariants pass. This harness compiles the oldarch seam;
+  it is not a full New Architecture application or device rendering test.
+
+Reproducible Linux bootstrap uses Linus's issue attachment
+`01a14dfa-4f2e-70c1-a3c0-28dc4e78cb94` (ham46-gradle-bootstrap-evidence.tar.gz).
+After downloading/extracting it with the Multica CLI and configuring an existing
+JDK17/Android SDK, run from the workspace with bash:
+
+```sh
+python3 attachments/gradle-lab/bootstrap.py --repo native-reader \
+  --workdir gradle-android-run-02 \
+  --distribution "$HOME/.cache/gradle-distributions/gradle-9.3.1-bin.zip" \
+  --revision 47f54c9021441a2680337fbd1faa01999e9669fd
+```
+
+Choose a new workdir for each execution. The official Gradle9.3.1 ZIP is
+137037885 bytes with SHA256
+`b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06`.
+The bootstrap verifies/copies only this distribution, uses fresh dependency
+state and invokes the production isolation API without function injection.
+Inherited proxy settings are written only into the disposable harness.
+The test task forwards explicitly configured HTTP(S) proxy properties because
+Robolectric downloads its Android runtime from the test JVM. The first attempt
+without this forwarding compiled but stalled on that download; its exact owned
+test worker was terminated and the wrapper collected the failure/cleanup.
+
+Task 4.1 is complete, bringing progress to 15/33. Tasks 4.2-4.7 remain unchecked:
+source/port/RN/menu/lifecycle code and unit/browser coverage are implemented,
+but native-host rendering and fault/instrumentation evidence are incomplete.
+No usable Android device/KVM or iOS Xcode/device evidence exists; no waiver has
+been assumed. Native long-press/handles, iOS tasks, Web touch selection and
+cross-platform acceptance remain open. No persistent server or CI wait ran.
+
+The MIME negative control also ran through the production isolation API in a
+separate disposable checkout. Only HNPdfAssets was restored byte-for-byte from
+`f2a65f9` (Git blob `68080631a8281a850e7b363b042232d401049a7d`), its integrity
+manifest regenerated, and the test task filtered to
+`HNPdfAssetsTest.everyRealStagedManifestEntryIsServedWithItsAuthoritativeMimeAndBytes`.
+Production and test compilation succeeded, then the real-manifest constructor
+failed with IOException at test line84: `1 test completed, 1 failed`. The fixed
+final commit passes the same test within the full fault matrix. No runtime
+assets or assertions were modified for this comparison, and both runs used
+fresh owned Gradle state with official distribution checksum enforcement.
+
+The final tarball also passes the existing `verifyAndroidConsumer` API using
+the configured JDK17/SDK36/NDK27.1.12297006. It installs the SHA256-verified
+artifact in the independent versioned RN consumer and runs
+`./gradlew :app:assembleDebug -PnewArchEnabled=true -PreactNativeArchitectures=x86_64`.
+All 125 tasks execute successfully (BUILD SUCCESSFUL in1m11s), with generated
+autolinking/C++ sources and the built APK identity checked by the existing
+consumer verifier. This consumer uses the normal local Gradle cache; it is
+separate from the clean-cache Robolectric evidence above. The APK is not run on
+a device, and this does not establish runtime private-port/menu/handle behavior.

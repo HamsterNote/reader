@@ -30,7 +30,7 @@
 
 ## 4. Android（native-reader，高）
 
-- [ ] 4.1 [高] 在 secure-WebView 源 patch/生成链新增独立 PDF host 模式，加载 reader 打包的 PDF.js 产物并维护 exact manifest/MIME/CSP；以 staging 完整性、打包和 Android 编译验证，禁止只编辑 generated 输出。
+- [x] 4.1 [高] 在 secure-WebView 源 patch/生成链新增独立 PDF host 模式，加载 reader 打包的 PDF.js 产物并维护 exact manifest/MIME/CSP；以 staging 完整性、打包和 Android 编译验证，禁止只编辑 generated 输出。
 - [ ] 4.2 [高] 实现限定 `https://appassets.androidplatform.net/pdf-runtime/...` 静态路径与 `/pdf-document/<session>/document.pdf` 动态授权，file/content URI 仅映射当前文档，未命中显式拒绝；以离线渲染及 traversal/编码分隔符/未知资产/旧 token/错误 MIME 请求验证无源泄露与网络 fallback。
 - [ ] 4.3 [高] 复用私有 main-frame port 机制建立独立 PDF 消息协议，校验 origin/frame/schema/version/session/generation/command 及负载上限；以错来源、过期事件、畸形选区和重复命令测试验证状态与宿主能力不被改变。
 - [ ] 4.4 [中高] 接线 page/thumbnail/selection 事件到 RN Pages 与 Popover，处理 WebView 到 RN 的偏移/缩放；以 file/content URI、多页跳转、旋转/缩放选文与快速换源验证位置和状态同步。
