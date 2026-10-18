@@ -259,3 +259,59 @@ device; software emulation booted then lost services/watchdog stability and
 cannot support menu/handles acceptance. iOS still needs Xcode/runtime access.
 Tasks 1.6, 3.*, 4.*, 5.3 and 6.* remain open. No npm publication, persistent
 development server or CI-completion claim is made.
+
+## iOS implementation draft (HAM-46 continuation)
+
+Native-reader PR8 (`agent/ham-46-pdf-ios`, commit `732eff6`) is stacked on
+PR7's `agent/ham-46-pdf-web` branch. PR6/7 bases are unchanged. The optional
+independent `@hamster-note/pdfkit@0.1.0` Expo package has a podspec, Swift
+module/view, TS wrapper, Expo autolinking metadata and a development-client demo
+dependency. Its iOS 16.4 deployment target matches the installed Expo 57 SDK.
+Missing/incompatible native registration stays unsupported without further I/O.
+
+Implementation status by task (none is native acceptance):
+
+- 3.1: package/build/autolinking and missing-capability JS checks pass; Swift
+  build and real consumer native linking remain unverified.
+- 3.2: native file grant, regular-file metadata and 32 MiB checks precede a
+  bounded private snapshot; PDFKit validates complete content and encryption.
+  `ready` is emitted only from PDFView's page drawing callback, not binding.
+  Page navigation and JS protocol tests pass; actual native fixtures are pending.
+- 3.3: native thumbnails are at most 112x150, cached at most 24; JS caps four
+  thumbnail requests, bounds commands and settles outstanding work on disposal.
+  Wrong-page/stale/delayed thumbnail JS tests pass; PDFPage output is unverified.
+- 3.4: selection lines are clipped and converted PDFPage -> PDFView -> ExpoView;
+  RN adds measured reader offsets. The RN integration test covers offsets and
+  keyed source replacement. Zoom/scroll/rotation dismiss selection. Device
+  coordinates and cross-page handle interaction remain unverified.
+- 3.5: scoped public responder/menu filtering, legacy menu dismissal and
+  UIEditMenuInteraction dismissal are implemented without removing gestures or
+  handles. No claim that these suppress every OS menu until device evidence.
+- 3.6: generation checks, read cancellation, native detachment, private in-memory
+  cache cleanup and security-scope/descriptor release are implemented. Link/action
+  annotations are removed only from the private PDFDocument; host files are never
+  saved or deleted. Native replacement/background/resource behavior is pending.
+
+Linux validation: 396 library tests plus one RN coordinate/replacement test,
+workspace typechecks, changed-code ESLint, Bob, `pnpm bundle:ios` (Metro/Hermes
+export only), public consumer types, release safety 7 static + 90 Node passes
+with 2 Windows-only skips, and `pnpm test:pdfkit-package` (actual independent
+tarball installed offline, Expo metadata resolves HamsterPdfKitModule from the
+external consumer). The five Swift XCTest cases are checked in but NOT run.
+No Xcode/Swift toolchain is available on this Linux runtime.
+
+Actual isolated native-reader artifact: 674 files,
+SHA256 `03bf3d63b9429d80857534931733859f9e2f07042a9c806cd597544a1f32d538`.
+`verify-pdf-consumer.mjs` passes 203 offline runtime assets, private bytes,
+canvas/text/thumbnail bounds, host ownership and worker teardown on that tarball.
+Expo Web regression passes 15 Chromium/Firefox tests plus 5 WebKit tests.
+
+The WebKit command exposed a Yarn executable shim issue: `command -v node`
+can refer to a temporary shell wrapper, even after realpath. The script now
+uses `node -p 'process.execPath'` before deriving the mounted Node installation.
+The documented Yarn commands were rerun successfully for reader (4/4) and
+native-reader (5/5), with the same network-isolated Noble container and cache.
+
+Progress remains 14/33. Tasks 3.1-3.6 stay unchecked because their required native
+build/host/device evidence is incomplete. Android implementation is next on a
+separate platform branch. No device waiver, npm publish or CI wait occurred.

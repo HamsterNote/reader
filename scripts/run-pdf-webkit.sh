@@ -4,7 +4,9 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(realpath "${PDF_WEBKIT_REPO:-$script_dir/..}")"
 browser_dir="${PDF_WEBKIT_BROWSERS_PATH:-$script_dir/../node_modules/.cache/playwright-noble}"
 image="${PDF_WEBKIT_IMAGE:-localhost/ham40-webkit:noble}"
-node_root="$(dirname -- "$(dirname -- "$(command -v node)")")"
+# Yarn prepends a temporary executable shim; ask Node for the actual binary.
+node_binary="$(realpath -- "$(node -p 'process.execPath')")"
+node_root="$(dirname -- "$(dirname -- "$node_binary")")"
 mkdir -p "$browser_dir"
 browser_dir="$(realpath "$browser_dir")"
 
