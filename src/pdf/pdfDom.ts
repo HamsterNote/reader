@@ -352,7 +352,8 @@ export function createPdfDomSession(options: PdfDomOptions): PdfDomSession {
       release(slot)
       dimensions(slot)
     })
-    slots[currentPage - 1]?.node.scrollIntoView({ block: 'start' })
+    const slot = slots[currentPage - 1]
+    if (slot) viewport.scrollTop = slot.node.offsetTop
     refresh()
   }
   const resize = new ResizeObserver(relayout)
@@ -535,7 +536,7 @@ export function createPdfDomSession(options: PdfDomOptions): PdfDomSession {
         return false
       clearSelection()
       publishPage(pageNumber)
-      slots[pageNumber - 1].node.scrollIntoView({ block: 'start' })
+      viewport.scrollTop = slots[pageNumber - 1].node.offsetTop
       refresh()
       return true
     },
