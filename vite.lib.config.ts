@@ -6,9 +6,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     lib: {
-      entry: 'src/index.ts',
+      entry: {
+        index: 'src/index.ts',
+        'pdf-contracts': 'src/pdf-contracts.ts'
+      },
       formats: ['es'],
-      fileName: 'index',
+      fileName: (_format, entryName) => `${entryName}.js`,
       cssFileName: 'style'
     },
     rollupOptions: {

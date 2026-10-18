@@ -12,7 +12,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./style.css": "./dist/style.css"
+    "./style.css": "./dist/style.css",
+    "./pdf-contracts": {
+      "types": "./dist/pdf-contracts.d.ts",
+      "import": "./dist/pdf-contracts.js",
+      "default": "./dist/pdf-contracts.js"
+    }
   },
   "files": [
     "dist"
