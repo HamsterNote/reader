@@ -91,6 +91,7 @@ export function createPdfDomSession(options: PdfDomOptions): PdfDomSession {
   const slots: PageSlot[] = []
   const wanted = new Set<number>()
   const pendingThumbnails = new Map<number, Promise<PdfThumbnail | null>>()
+  const thumbnailResolvers = new Set<(value: PdfThumbnail | null) => void>()
   const thumbnails = new Map<number, PdfThumbnail>()
   const thumbnailQueue: (() => void)[] = []
   const thumbnailTasks = new Set<RenderTask>()
@@ -474,7 +475,12 @@ export function createPdfDomSession(options: PdfDomOptions): PdfDomSession {
     if (pending) return pending
     if (pendingThumbnails.size >= 64) return null
     const result = new Promise<PdfThumbnail | null>((resolve) => {
-      thumbnailQueue.push(() => runThumbnail(pageNumber, resolve))
+      const finish = (value: PdfThumbnail | null) => {
+        thumbnailResolvers.delete(finish)
+        resolve(value)
+      }
+      thumbnailResolvers.add(finish)
+      thumbnailQueue.push(() => runThumbnail(pageNumber, finish))
     })
     pendingThumbnails.set(pageNumber, result)
     pumpThumbnails()
@@ -496,8 +502,9 @@ export function createPdfDomSession(options: PdfDomOptions): PdfDomSession {
     slots.forEach(release)
     thumbnailTasks.forEach((task) => task.cancel())
     thumbnails.clear()
+    thumbnailResolvers.forEach((resolve) => resolve(null))
+    thumbnailResolvers.clear()
     pendingThumbnails.clear()
-    pumpThumbnails()
     thumbnailQueue.splice(0)
     viewport.replaceChildren()
     // Allow PDF.js to acknowledge termination before closing its owned port.

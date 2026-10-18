@@ -2,6 +2,7 @@ import { Icon } from '@hamster-note/components'
 import { useEffect, useRef, useState } from 'react'
 
 import type { PdfPageState, PdfSelection, PdfThumbnail } from '../pdf-contracts'
+import { getPdfPopoverPosition } from '../pdf-contracts'
 import type { ReaderSourceLoadState } from '../types/source'
 import { createPdfDomSession, type PdfDomSession } from './pdfDom'
 import './pdf.css'
@@ -148,18 +149,11 @@ export default function PdfReader(props: PdfReaderProps) {
     session?.goToPage(number).catch(() => undefined)
     if (root.current && root.current.clientWidth < 640) setPagesOpen(false)
   }
-  const rect = selection?.rects[0]
-  let selectionTop = 0
-  if (rect) selectionTop = rect.y >= 44 ? rect.y - 42 : rect.y + rect.height + 6
-  const left = rect
-    ? Math.max(4, Math.min(rect.x, (root.current?.clientWidth ?? 80) - 80))
-    : 0
-  const top = rect
-    ? Math.max(
-        4,
-        Math.min(selectionTop, (root.current?.clientHeight ?? 42) - 42)
-      )
-    : 0
+  const position = getPdfPopoverPosition(
+    selection,
+    root.current?.clientWidth ?? 0,
+    root.current?.clientHeight ?? 0
+  )
   return (
     <div
       ref={root}
@@ -250,12 +244,12 @@ export default function PdfReader(props: PdfReaderProps) {
           {error}
         </div>
       )}
-      {selection && rect && (
+      {position && (
         <div
           className='hn-pdf-popover'
           role='dialog'
           aria-label='Text selection'
-          style={{ left, top }}
+          style={position}
         >
           <button
             type='button'

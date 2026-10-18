@@ -266,3 +266,45 @@ test('corrupt replacement clears old content and cleanup preserves the host blob
   await expect(page.getByTestId('source-state')).toHaveText('idle')
   await expect(page.getByTestId('pdf-reader')).toHaveCount(0)
 })
+
+test('main demo routes renamed uploads through the PDF source renderer', async ({
+  page
+}, info) => {
+  const external: string[] = []
+  await page.route('**/*', (route) => {
+    const uri = route.request().url()
+    if (
+      uri.startsWith('http://127.0.0.1:5589/') ||
+      uri.startsWith('blob:') ||
+      uri.startsWith('data:')
+    )
+      return route.continue()
+    external.push(uri)
+    return route.abort()
+  })
+  await page.goto('/')
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles({ name: 'misleading.epub', mimeType: '', buffer: bytes })
+  await expect(page.getByTestId('pdf-source-state')).toHaveText('ready')
+  await expect(page.getByTestId('pdf-reader')).toBeVisible()
+  await expect(page.locator('[data-pdf-page="1"] .textLayer')).toContainText(
+    'Selectable PDF content page 1'
+  )
+  await expect(
+    page.getByRole('button', { name: 'Load PDF', exact: true })
+  ).toHaveCount(0)
+  await page.screenshot({
+    path: info.outputPath('main-demo-pdf.png'),
+    fullPage: true
+  })
+  await page.getByLabel('Choose another file').setInputFiles({
+    name: 'broken.pdf',
+    mimeType: '',
+    buffer: Buffer.from('%PDF-invalid')
+  })
+  await expect(page.getByTestId('pdf-source-state')).toHaveText('error')
+  await expect(page.locator('.hn-pdf-viewport canvas')).toHaveCount(0)
+  expect(external).toEqual([])
+})

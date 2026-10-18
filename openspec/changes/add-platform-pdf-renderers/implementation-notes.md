@@ -135,3 +135,26 @@ package/artifact, not `../reader/src`.
 Tracked progress is 7/33: 1.1-1.5, 2.1 and 2.2. Remaining tasks, including
 thumbnail replacement/failure acceptance, RN Pages/Popover, native platforms,
 Expo Web iframe, demo migration and end-to-end device acceptance, stay open.
+
+## Web continuation: thumbnails and main demo
+
+Task 2.3 is now verified: 32 cached thumbnails, two concurrent renders and 64
+pending requests remain bounded. New lifecycle tests cover local thumbnail
+failure, invalid page requests, disposal with active AND queued thumbnails,
+late completion and repeated disposal. Fixed unresolved queued promises on
+dispose; every retired thumbnail request now settles with null.
+
+Task 5.1 is implemented in the actual main demo. Default upload dispatch reads
+the five-byte signature independent of filename/MIME, sends original owned
+bytes to Reader source, and does not enter the old PDF parser or annotation
+history. Non-PDF retains the existing document parser path. Explicit
+LegacyPdfDemo regression harness retains old parser/document lifecycle tests.
+The demo clears its private input bytes on replacement/unmount.
+
+Validation: 55 suites / 878 unit tests; typecheck; build:all; pack:check
+(382 files); packed offline consumer; 12 Chromium desktop/mobile and Firefox
+browser tests passed. Main-demo browser evidence covers misleading .epub name,
+real canvas/text, ready, corrupt replacement/error and zero external requests.
+Shared Popover geometry is now a pure contract helper; the exact npm artifact
+also includes its generated neutral TypeScript source for RN artifact consumers.
+WebKit and native device gaps described above remain open. Overall 9/33.

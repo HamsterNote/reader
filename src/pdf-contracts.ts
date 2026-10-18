@@ -105,3 +105,23 @@ export function isPdfPageNumber(value: number, pageCount: number): boolean {
     value <= pageCount
   )
 }
+
+/** Shared temporary overlay geometry, in reader-local logical coordinates. */
+export function getPdfPopoverPosition(
+  selection: PdfSelection | null,
+  width: number,
+  height: number
+): { left: number; top: number } | null {
+  const rect = selection?.rects[0]
+  if (!rect || width <= 0 || height <= 0) return null
+  return {
+    left: Math.max(4, Math.min(rect.x, width - 80)),
+    top: Math.max(
+      4,
+      Math.min(
+        rect.y >= 44 ? rect.y - 42 : rect.y + rect.height + 6,
+        height - 42
+      )
+    )
+  }
+}

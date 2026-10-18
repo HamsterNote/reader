@@ -52,6 +52,13 @@ native-reader 的 `ReaderChrome.tsx` 复用加载/错误/外壳布局，通过 P
 
 ### 4. 中立 PDF 契约与生命周期
 
+Web Blob HEAD 在 Chromium/Firefox 均不可用。Expo Web 分流只允许同源 blob 的
+`Range: bytes=0-4`；读取 body 前要求 206、精确 Content-Range 的已知正整数总大小
+和 128 MiB Web 上限，以及 Content-Length=min(5,total)。不支持 Range 即失败，
+不回退完整读取。它只返回 PDF 候选和大小；非 PDF 继续完整 Foliate gate，PDF
+等独立静态 iframe 的 CSP/窗口/origin/session 握手通过后才传完整私有 bytes。
+native 仍保持先元数据/32 MiB 后最多五字节的顺序。
+
 新增契约属于提议而非现有 API：`PdfMetadata { pageCount }`、`PdfPageState { pageNumber }`、`PdfSelection { sessionId, selectionId, text, rects, coordinateSpace: 'reader' }`，rect 使用 reader 内容区域左上角为原点、逻辑点/CSS px，非物理像素；pageNumber 统一 1-based。引擎内 index 转换只发生在适配器。source identity、session/generation 随每次打开重置，thumbnail、导航、错误、选区响应必须携带同一身份。ready 需要首屏页面实际呈现，不等同于 bridge bind 或文档解析成功。
 
 PageState 通过新可选事件向宿主暴露，临时选区只存在内存；不扩展已有 ReaderData 高亮持久化格式。引擎侧 rect 先转换到其视图坐标，宿主再减去 reader 根偏移并处理 safe-area/iframe/WebView 边界，禁止重复加缩放或 DPR。跨页选区可报告多 rect，以可见首个 rect 定位 Popover。

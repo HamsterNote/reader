@@ -895,9 +895,31 @@ function useEdgeCropState() {
 // App 组件
 // ---------------------------------------------------------------------------
 
-export function App() {
+/** Explicit regression harness for consumers that still own parsed PDF documents. */
+export function LegacyPdfDemo() {
+  return <App legacyPdfParser />
+}
+
+export function App({
+  legacyPdfParser = false
+}: { legacyPdfParser?: boolean } = {}) {
+  const [pdfSource, setPdfSource] = useState<Uint8Array | null>(null)
+  const [sourceStatus, setSourceStatus] = useState('idle')
+  useEffect(
+    () => () => {
+      pdfSource?.fill(0)
+    },
+    [pdfSource]
+  )
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [stagedFile, setStagedFile] = useState<File | null>(null)
+  const sourceInput = useMemo(
+    () =>
+      pdfSource
+        ? { kind: 'bytes' as const, bytes: pdfSource, name: stagedFile?.name }
+        : undefined,
+    [pdfSource, stagedFile?.name]
+  )
   const [document, setDocument] = useState<
     IntermediateDocument | IntermediateDocumentSerialized | null
   >(null)
@@ -1775,6 +1797,31 @@ export function App() {
     [commitParsedDocument, isCurrentSelection, saveSelectedFile]
   )
 
+  const startPdfSource = useCallback(
+    async (selection: FileSelection) => {
+      const { file } = selection
+      const prefix = new Uint8Array(await file.slice(0, 5).arrayBuffer())
+      const candidate =
+        prefix.length === 5 &&
+        prefix.every((value, index) => value === [37, 80, 68, 70, 45][index])
+      prefix.fill(0)
+      if (!isCurrentSelection(selection)) return true
+      if (!candidate) return false
+      setPdfLoadState({ phase: 'idle' })
+      setIsParsing(false)
+      setSourceStatus('loading')
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      if (!isCurrentSelection(selection)) {
+        bytes.fill(0)
+        return true
+      }
+      setPdfSource(bytes)
+      await saveSelectedFile(selection)
+      return true
+    },
+    [isCurrentSelection, saveSelectedFile]
+  )
+
   const startFileSelection = useCallback(
     (file: File, source: FileSelectionSource) => {
       selectionAbortControllerRef.current?.abort()
@@ -1790,6 +1837,7 @@ export function App() {
       setOcrError(null)
       setParseError(null)
       setStagedFile(file)
+      setPdfSource(null)
       // 新选择开始时重置三段计时与额外阶段聚合，旧文件的耗时不再保留
       extraTimingStagesRef.current = {}
       if (extraTimingFlushTimerRef.current !== null) {
@@ -1812,8 +1860,27 @@ export function App() {
         setIsParsing(true)
       }
 
-      appendSwitchBarrier(selection).then(() => {
+      appendSwitchBarrier(selection).then(async () => {
         if (!isCurrentSelection(selection)) return
+
+        if (!legacyPdfParser) {
+          try {
+            if (await startPdfSource(selection)) return
+          } catch (error) {
+            if (isCurrentSelection(selection)) {
+              setIsParsing(false)
+              setPdfLoadState({ phase: 'idle' })
+              setParseError(
+                `Failed to read file: ${getParserErrorMessage(error)}`
+              )
+            }
+            return
+          }
+          setPdfLoadState({ phase: 'idle' })
+          setIsParsing(true)
+          await startNonPdfParse(selection)
+          return
+        }
 
         if (isPdf) {
           const pages = getParserPages(
@@ -1828,6 +1895,8 @@ export function App() {
     },
     [
       appendSwitchBarrier,
+      legacyPdfParser,
+      startPdfSource,
       isCurrentSelection,
       pageRangeEnd,
       pageRangeStart,
@@ -2063,6 +2132,45 @@ export function App() {
   }
   const activeFontScale =
     renderMode === 'text' ? textFontScale : layoutFontScale
+
+  if (pdfSource)
+    return (
+      <main
+        className='hamster-demo-pdf'
+        style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}
+      >
+        <header
+          style={{
+            minHeight: 48,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '0 12px',
+            flexWrap: 'wrap'
+          }}
+        >
+          <strong>Hamster Reader</strong>
+          <input
+            type='file'
+            aria-label='Choose another file'
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) startFileSelection(file, 'sidebar')
+              event.target.value = ''
+            }}
+          />
+          <output data-testid='pdf-source-state' aria-live='polite'>
+            {sourceStatus}
+          </output>
+        </header>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <Reader
+            source={sourceInput}
+            onStateChange={(state) => setSourceStatus(state.status)}
+          />
+        </div>
+      </main>
+    )
 
   return (
     <main

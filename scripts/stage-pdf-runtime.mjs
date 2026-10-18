@@ -39,6 +39,7 @@ copyFileSync(
 copyFileSync(join(upstream, 'LICENSE'), join(target, 'LICENSE'))
 copyFileSync('src/pdf/pdf.css', join(target, 'pdf.css'))
 copyFileSync('scripts/sync-pdf-runtime.mjs', 'dist/sync-pdf-runtime.mjs')
+copyFileSync('src/pdf-contracts.ts', 'dist/pdf-contracts.source.ts')
 const mime = (name) => {
   if (name.endsWith('.js') || name.endsWith('.mjs')) return 'text/javascript'
   if (name.endsWith('.wasm')) return 'application/wasm'
