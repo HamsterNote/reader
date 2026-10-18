@@ -84,13 +84,21 @@ host blob URLs or modifying host bytes. `ready` requires a displayed page.
 The legacy `document`/`data` API retains its existing annotation capabilities;
 it does not reconstruct a PDF source. Roll back by restoring the previous
 package and its paired assets, or stop supplying `source`. No saved-data
-migration is needed. The main demo still uses its legacy parser flow at this
-checkpoint; `test/browser/pdf.html` exercises the new source path.
+migration is needed. Main demo uploads use the source renderer for PDF,
+including misleading filenames. Non-PDF uploads retain the existing parser;
+`LegacyPdfDemo` is an explicit regression harness for the old PDF document API.
 
-This change currently supplies the DOM renderer. Native-reader integration,
-iOS PDFKit development-client builds and Android secure-WebView PDF hosting
-remain separate pending work. Native input keeps its 32 MiB bound; no matching
-native-reader release or device/menu acceptance is claimed here.
+This change supplies the DOM renderer and neutral contracts. Native-reader's
+separate Web iframe consumes an integrity-pinned npm artifact; native iOS
+PDFKit and Android secure-WebView hosts remain pending. Native input keeps its
+32 MiB bound; no npm release or device/menu acceptance is claimed here.
+
+PDF browser tests include Chromium, Firefox and rootless Noble WebKit. For a
+machine with the documented Podman image and Node 24, run
+`yarn test:pdf:webkit --install` once, then `yarn test:pdf:webkit`.
+Environment prerequisites, exact versions and the native-reader command are
+recorded in `openspec/changes/add-platform-pdf-renderers/implementation-notes.md`.
+Playwright WebKit is not actual Safari or mobile long-press/handles evidence.
 
 #### Unified Reader data
 
@@ -470,7 +478,7 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 The browser Demo persists annotation metadata to localStorage keyed by filename. Layout and text-mode annotations share `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }` under `hamster-reader-demo:highlights:{filename}`. Layout reading progress is stored as a precise text anchor or `{ pageNumber, verticalPercentage }` fallback under `hamster-reader-demo:layout-reading-progress:{filename}`. Text reading progress is stored as `{ currentPageNumber, anchor? }` under `hamster-reader-demo:text-reading-progress:{filename}`, and precise `ReaderBookmark[]` anchors use `hamster-reader-demo:bookmarks:{filename}`. Comments are stored under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare highlight arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Legacy numeric Demo bookmarks are also ignored because they do not contain a text ID, text, or page-local offset and therefore cannot be safely converted to a precise bookmark. The library-level deprecated page-number bookmark API remains compatible. If the Demo has old metadata that cannot prove its location, recreate that annotation or bookmark instead.
 
-After a file parses successfully, the Demo stores that source `File` in browser-local IndexedDB. PDF files use a two-phase flow: the Demo first reads the selected file into memory with byte progress, then shows a pending card; parsing and rendering begin only after you click **加载文件**. On reload, a saved PDF is restored to the same pending card instead of being parsed automatically. The Demo labels successful persistence beside the uploaded-file details and provides a **Forget saved file** button. Clearing the saved file does not dispose the document currently being read or delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all Demo storage.
+For legacy parser documents, the Demo stores the source `File` in browser-local IndexedDB after parsing. `LegacyPdfDemo` retains its two-phase PDF pending/load flow for compatibility tests. Default PDF uploads now open directly through the source renderer and keep only temporary reader state; they do not add PDF annotations or source persistence. The legacy Demo labels successful persistence beside uploaded-file details and provides a **Forget saved file** button. Clearing a saved legacy file does not dispose the document currently being read or delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all legacy Demo storage.
 
 ### Programmatic Control
 

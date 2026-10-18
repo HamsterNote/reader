@@ -158,3 +158,104 @@ real canvas/text, ready, corrupt replacement/error and zero external requests.
 Shared Popover geometry is now a pure contract helper; the exact npm artifact
 also includes its generated neutral TypeScript source for RN artifact consumers.
 WebKit and native device gaps described above remain open. Overall 9/33.
+
+## RN chrome and Expo Web continuation
+
+Tasks 2.4, 2.5, 5.2, 5.4 and 5.5 are implemented and verified for the two Web
+surfaces. Overall progress is 14/33. RN Pages uses a virtualized FlatList with
+stable thumbnail dimensions, explicit current/expanded accessibility states,
+compact collapse on navigation and page-number fallback. React Popover geometry
+uses the exact neutral helper from the reader artifact, including iframe/root
+offsets. Repeated placeholder presses do not mutate annotations, storage or undo.
+RN Web zoom commits on blur/submit: its TextInput does not implement
+onEndEditing. PDF navigation/relayout uses viewport-local scrolling so the
+embedded reader cannot scroll the outer app or hide its toolbar.
+
+Native-reader Web dispatch probes only same-origin Blob URLs. Chromium and
+Firefox reject HEAD on Blob URLs, while Range bytes=0-4 returns bounded 206
+metadata. Dispatch verifies Content-Range, Content-Length and the 128 MiB Web
+bound before consuming at most five bytes; it never falls back to full fetch.
+The PDF shell must load with its exact URL/title/initial CSP and boot handshake
+before full source access. Non-PDF still requires all Foliate gates. Native
+scheme/known-size/32 MiB/five-byte rules are unchanged. Specifications explicitly
+record both probe exceptions. Complete EPUB source/private-bridge/CSP gates are
+not weakened; regression observers count the single candidate Range separately
+while still requiring zero full reads/copies/Foliate opens on rejected gates.
+
+The Web shell is independently packaged with strict protocol/version/schema,
+window/origin/session/generation/command validation and bounded payloads. It
+receives only private transferred bytes. Source replacement cancels fetch,
+settles pending requests, removes listeners/frame and closes the worker; host
+URLs/files stay owned by the caller. Tests include loading-time replacement,
+late worker/message delivery, corrupt replacement, repeat open, missing-shell
+zero full-read behavior, script canaries and out-of-range requests.
+
+Native-reader vendors an actual reader npm archive with immutable source SHA,
+package/PDF.js versions and archive SHA-256 in vendor/reader-pdf.json. Staging
+checks the archive, every asset and neutral contract source; the final runtime
+has 203 manifest entries (198 reader assets, four shell/protocol files and the
+reader MIT license). No cross-repo source imports are required. The installed
+consumer sync command requires only Node builtins and rejects hash mutation,
+traversal, symlinked source/target ancestors and stale target files. Isolated
+release stages PDF assets inside its owned copy; library validation does not
+stage into source. The existing release-safety contract now explicitly rejects
+PDF staging in validation chains as well as Foliate staging.
+
+Validation recorded during this continuation:
+
+- Reader: 878 unit tests, typecheck, build:all, pack:check (382 files), changed
+  lint, DOM-free consumer types/bundle and exact packed offline adapter consumer.
+- Native-reader: 384 library JS tests, 18 demo tests, library/demo typechecks,
+  Bob module/commonjs/declaration build and public consumer typecheck. The formal
+  package test entry also passes its seven static safety contracts, 90 Node
+  safety cases (two Windows-only skips), secure staging and lifecycle checks.
+- Three focused PDF consumer sync safety tests pass. Actual isolated native
+  tarball consumer verifies 203 exact offline assets, private bytes, canvas
+  pixels/text/thumbnail, page bounds, unchanged host bytes and worker teardown.
+  Artifact filename/hash are emitted by isolated-release and passed verbatim
+  to scripts/verify-pdf-consumer.mjs.
+- Reader browser matrix: four cases per Chromium desktop/mobile, Firefox and
+  Linux WebKit. Expo Web: five cases per same matrix. These use actual packaged
+  workers/canvas/text. Desktop drag and contextmenu cancellation pass; mobile
+  selection is DOM Range, not physical long-press/handles evidence.
+- Existing Foliate exported-browser suite: 35 passed, 37 intentional skips;
+  the two probe-accounting failures were corrected and rerun, both passed.
+- The reader change and three changed native specifications pass strict
+  OpenSpec validation. Existing act/watchman/build warnings are not device proof.
+
+### Reproducible rootless WebKit
+
+Adapted Linus's issue attachment environment scripts to existing scripts/:
+run-pdf-webkit.sh and playwright.pdf-webkit.config.cjs. The native static export
+uses a Node-only test server because this Noble image has no Python. Tests run
+in rootless Podman with --network=none, cleared inherited localhost proxies and
+only loopback test servers. No host system packages are installed.
+
+Prerequisites: Node 24, installed checkout dependencies and existing Noble image
+localhost/ham40-webkit:noble (Ubuntu 24.04.5), image ID
+460dd4b4d955fca9667063af3d134a9ae9fdd7841c96fc36f3bb3588af5ca6c2.
+This is a same-machine reproducible environment, not a fresh-machine installer.
+PDF_WEBKIT_IMAGE may select an equivalently prepared Noble image. The browser
+must be downloaded inside Noble; host Ubuntu 26.04 builds have incompatible ABI.
+Reader uses Playwright 1.61.0/WebKit 2311; native-reader uses 1.63.0/WebKit 2359.
+Installation disables browser GC to preserve other versions in a shared cache.
+The default cache is checkout-local node_modules/.cache/playwright-noble;
+PDF_WEBKIT_BROWSERS_PATH can reuse an existing Noble cache.
+
+```sh
+# From reader; first install needs network, test execution is network-isolated.
+yarn test:pdf:webkit --install
+yarn test:pdf:webkit
+# From reader, targeting an independently installed native-reader checkout.
+PDF_WEBKIT_REPO=../native-reader yarn test:pdf:webkit --install
+PDF_WEBKIT_REPO=../native-reader yarn test:pdf:webkit
+```
+
+Final Web changes must rerun this entry as well as Chromium/Firefox. Screenshots
+are under each checkout's test-results/pdf-webkit. Linux WebKit is NOT Safari
+or iOS PDFKit evidence. Native platform code is still pending; no device waiver
+has been accepted. Linus found a usable JDK/Android SDK, but no KVM or connected
+device; software emulation booted then lost services/watchdog stability and
+cannot support menu/handles acceptance. iOS still needs Xcode/runtime access.
+Tasks 1.6, 3.*, 4.*, 5.3 and 6.* remain open. No npm publication, persistent
+development server or CI-completion claim is made.

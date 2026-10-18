@@ -16,8 +16,8 @@
 - [x] 2.1 [reader，中] 锁定兼容 `pdfjs-dist` 与 worker 精确版本，建立 adapter/runtime 的显式导出和离线资源打包（按版本需要包含 cMap/font/WASM）；以 library build、pack 检查和断网 consumer 加载验证无 CDN 请求与 worker 版本冲突。
 - [x] 2.2 [reader，高] 实现独立 PDF.js document/page canvas + text layer，按可见窗口调度/回收页面，关闭脚本/eval/外部文档 action；以多页、旋转、缩放、扫描件与损坏文件测试验证渲染/选文一致和稳定错误。
 - [x] 2.3 [reader，中] 实现 PDF 页数/当前页/跳页和按需缩略图接口，缓存与并发设定有限上限；以首页/末页/越界、连续滚动和替换期间 thumbnail 测试验证无串页及局部失败降级。
-- [ ] 2.4 [两仓，中] 在 DOM 与 RN 外壳分别接入中立 Pages 展示模型，宽屏左栏、窄屏可折叠左栏、页码与当前项可访问状态；以两类视口验证打开/跳页/收起、缩略图占位尺寸和页码降级可用。
-- [ ] 2.5 [两仓，中] 新增独立 React 选区 Popover 及共享临时状态逻辑，仅显示“高亮”；用 callback/storage spies 验证重复点击不画 annotation、不触发高亮/存储/undo、EPUB 原有高亮回归正常。
+- [x] 2.4 [两仓，中] 在 DOM 与 RN 外壳分别接入中立 Pages 展示模型，宽屏左栏、窄屏可折叠左栏、页码与当前项可访问状态；以两类视口验证打开/跳页/收起、缩略图占位尺寸和页码降级可用。
+- [x] 2.5 [两仓，中] 新增独立 React 选区 Popover 及共享临时状态逻辑，仅显示“高亮”；用 callback/storage spies 验证重复点击不画 annotation、不触发高亮/存储/undo、EPUB 原有高亮回归正常。
 
 ## 3. iOS（native-reader，高）
 
@@ -41,10 +41,10 @@
 ## 5. Web（reader + native-reader，中高）
 
 - [x] 5.1 [reader，中] demo 本地上传 PDF 使用新 source/PDF.js 路径，EPUB 与旧 document 输入保留原路径；以离线浏览器 E2E 和误扩展名 fixture 验证 renderer 分流、原始文件所有权与 loading/ready/error。
-- [ ] 5.2 [native-reader，中高] `NativeReader.web.tsx` 增加独立 PDF iframe 接线，消费 reader 精确版本 runtime，校验 window/origin/session 消息，传私有 bytes/blob 而非任意 URI；以 Expo Web export/外部 consumer 和错窗口/错来源消息测试验证。
+- [x] 5.2 [native-reader，中高] `NativeReader.web.tsx` 增加独立 PDF iframe 接线，消费 reader 精确版本 runtime，校验 window/origin/session 消息，传私有 bytes/blob 而非任意 URI；以 Expo Web export/外部 consumer 和错窗口/错来源消息测试验证。
 - [ ] 5.3 [两仓，中] 以 DOM Range/selectionchange 输出 PDF text layer 选区和 reader-local rect，PDF surface 内阻止 contextmenu；浏览器 E2E 验证拖选/长按可用、右键不弹原生菜单、周围页面及 EPUB 行为未变。
-- [ ] 5.4 [两仓，中] 联调 Pages、缩略图与 React Popover 在宽/窄视口、缩放/旋转及边缘选区的位置；以 Chromium/Firefox/WebKit 浏览器测试记录通过或缺口，WebKit 不冒充真实 Safari 证据。
-- [ ] 5.5 [两仓，中高] 销毁 PDF loading/render/worker、iframe、监听器与 reader-owned blob URL，禁用 PDF 脚本和外部 action；以加载期间切源/卸载、源 URL 所有权、网络 canary 与重复打开 E2E 验证。
+- [x] 5.4 [两仓，中] 联调 Pages、缩略图与 React Popover 在宽/窄视口、缩放/旋转及边缘选区的位置；以 Chromium/Firefox/WebKit 浏览器测试记录通过或缺口，WebKit 不冒充真实 Safari 证据。
+- [x] 5.5 [两仓，中高] 销毁 PDF loading/render/worker、iframe、监听器与 reader-owned blob URL，禁用 PDF 脚本和外部 action；以加载期间切源/卸载、源 URL 所有权、网络 canary 与重复打开 E2E 验证。
 
 ## 6. Cross-platform acceptance and handoff（跨仓，中高）
 

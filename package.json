@@ -36,6 +36,7 @@
     "url": "https://github.com/HamsterNote/reader/issues"
   },
   "scripts": {
+    "test:pdf:webkit": "bash scripts/run-pdf-webkit.sh",
     "dev": "yarn build:pdf-runtime && vite",
     "build:lib": "yarn build:lib:js && yarn build:pdf-runtime && yarn build:lib:types && yarn build:lib:styles",
     "build:pdf-runtime": "vite build --config vite.pdf.config.ts && node scripts/stage-pdf-runtime.mjs",
