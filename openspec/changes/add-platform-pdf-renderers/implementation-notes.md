@@ -315,3 +315,59 @@ native-reader (5/5), with the same network-isolated Noble container and cache.
 Progress remains 14/33. Tasks 3.1-3.6 stay unchecked because their required native
 build/host/device evidence is incomplete. Android implementation is next on a
 separate platform branch. No device waiver, npm publish or CI wait occurred.
+
+## Android static-host draft checkpoint
+
+PR9 (`agent/ham-46-pdf-android`, commit `f2a65f9`) is based on PR7's Web/RN
+branch, separately from iOS PR8. Product-owned HNPdfAssets/HNPdfView/manager
+sources enter the existing secure-WebView staging/integrity chain (48 fixed
+entries). The generated package registers a separate PDF view and Gradle stages
+the manifest-exact PDF runtime into its own APK asset namespace. Existing EPUB
+security gates are unchanged.
+
+The HTTPS host rejects remote, encoded, traversal and unknown resources without
+network fallback; each allowed APK resource is bounded and checked for exact
+size, SHA256 and MIME, with CSP/nosniff headers. All three file access switches
+and content access are disabled. No source property, document read API, private
+port, public PDF capability or RN native binding exists at this checkpoint.
+Native PDFs still fail unsupported. This is partial task 4.1; it stays unchecked.
+
+Staging/integrity/mutation checks and three runtime-sync safety tests pass.
+Release safety reports 7 static and 90 Node passes, with 2 Windows-only skips.
+Web regression passes 15 Chromium/Firefox and 5 rootless Podman WebKit cases.
+The isolated 656-file native-reader tarball has 205 runtime assets and SHA256
+`4f8d4b346f8ecaeed7652cdaf30aa2f57f2b691de708d806e83d79641f3ada03`;
+its actual offline consumer passes resource closure, canvas/text/thumbnail,
+bounds, host-byte ownership and worker teardown checks.
+
+Four new Robolectric resource-policy tests are NOT compiled or run. The official
+isolated `test:android-fault-matrix:raw` command started with JDK 17.0.20.1 but
+its clean Gradle 9.3.1 download progressed only about 2.6 MiB over several
+minutes. The owned download process was cancelled before compilation; no shared
+Gradle state was injected into the isolated gate. A reproducible distribution
+bootstrap is needed. Android native build, rendering, menu suppression and
+selection handles remain unverified. No KVM/usable emulator/device or iOS
+Xcode evidence is available. Progress remains 14/33.
+
+## Reader sync destination security fix
+
+PR26 review reproduced target symlinks overwriting files outside the consumer's
+public directory. The sync tool now checks every existing destination ancestor,
+runtime directory, asset and manifest before any write, rejecting symlinks and
+unexpected file types. It checks resolved parent containment and replaces files
+via exclusively created temporary files and rename, rather than truncating
+existing linked files. The output directory must remain exclusively controlled
+during synchronization; portable Node path checks are not a sandbox against a
+concurrent process renaming ancestor directories.
+
+`yarn test:pdf:consumer` packs and extracts the actual artifact, rejects five
+symlink cases (ancestor, runtime root, nested directory, asset and manifest),
+checks outside sentinels remain unchanged, then verifies successful offline
+rendering with all 198 exact runtime resources. Changed-script ESLint passes.
+The rootless Podman WebKit suite was rerun successfully (4/4).
+The default browser command still attempts host WebKit, which cannot launch
+because host libraries are missing (12 Chromium/Firefox cases passed before
+that failure). Run Chromium/Firefox with explicit `--project` flags and WebKit
+through the documented Podman command; host WebKit is not acceptance evidence.
+Hash checks occur at build/sync time. They are not browser per-request SRI:
+the deployment must still serve the verified resource closure unchanged.

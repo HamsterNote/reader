@@ -1,14 +1,25 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile
+} from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chromium } from '@playwright/test'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 
-const temporary = await mkdtemp(join(tmpdir(), 'reader-pdf-consumer-'))
+const temporary = await realpath(
+  await mkdtemp(join(tmpdir(), 'reader-pdf-consumer-'))
+)
 let server
 let browser
 const run = (command, args) => {
@@ -28,6 +39,47 @@ try {
   )
   run('tar', ['-xzf', join(temporary, pack.filename), '-C', temporary])
   const dist = join(temporary, 'package/dist')
+  const sourceManifest = JSON.parse(
+    await readFile(join(dist, 'pdf-runtime/manifest.json'), 'utf8')
+  )
+  const nestedAsset = sourceManifest.files.find((file) =>
+    file.path.includes('/')
+  )
+  assert(nestedAsset, 'Fixture must cover a nested destination')
+  const cases = [
+    ['ancestor', 'public'],
+    ['root', 'public/pdf-runtime'],
+    [
+      'nested-directory',
+      `public/pdf-runtime/${nestedAsset.path.split('/')[0]}`
+    ],
+    ['asset', `public/pdf-runtime/${sourceManifest.files[0].path}`],
+    ['manifest', 'public/pdf-runtime/manifest.json']
+  ]
+  for (const [name, linkPath] of cases) {
+    const fixture = join(temporary, `symlink-${name}`)
+    const outside = join(fixture, 'outside')
+    const link = join(fixture, linkPath)
+    const fileLink = name === 'asset' || name === 'manifest'
+    await mkdir(outside, { recursive: true })
+    await mkdir(join(link, '..'), { recursive: true })
+    const sentinel = join(outside, 'sentinel')
+    await writeFile(sentinel, 'must remain unchanged')
+    await symlink(
+      fileLink ? sentinel : outside,
+      link,
+      fileLink ? 'file' : 'dir'
+    )
+    const result = spawnSync(
+      process.execPath,
+      [join(dist, 'sync-pdf-runtime.mjs'), '--target', join(fixture, 'public')],
+      { encoding: 'utf8' }
+    )
+    assert.notEqual(result.status, 0, `Accepted ${name} symlink`)
+    assert.match(result.stderr, /PDF target symlinks are forbidden/)
+    assert.equal(await readFile(sentinel, 'utf8'), 'must remain unchanged')
+    assert.deepEqual(await readdir(outside), ['sentinel'])
+  }
   run(process.execPath, [
     join(dist, 'sync-pdf-runtime.mjs'),
     '--target',
@@ -157,7 +209,7 @@ try {
   assert(evidence.hostBytesIntact)
   assert.deepEqual(external, [])
   console.log(
-    `Packed offline consumer passed: ${manifest.files.length} integrity-checked assets, canvas/text/thumbnail, bounds and idempotent cleanup`
+    `Packed offline consumer passed: 5 target symlink regressions, ${manifest.files.length} integrity-checked assets, canvas/text/thumbnail, bounds and idempotent cleanup`
   )
 } finally {
   await browser?.close()
