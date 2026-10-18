@@ -8,7 +8,8 @@ export default defineConfig({
     lib: {
       entry: {
         index: 'src/index.ts',
-        'pdf-contracts': 'src/pdf-contracts.ts'
+        'pdf-contracts': 'src/pdf-contracts.ts',
+        'pdf-dom': 'src/pdf/pdfDom.ts'
       },
       formats: ['es'],
       fileName: (_format, entryName) => `${entryName}.js`,

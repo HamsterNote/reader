@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import type { Plugin } from 'vite'
 import { defineConfig } from 'vitest/config'
+import { pdfRuntimePlugin } from './scripts/pdfRuntimePlugin'
 
 const pdfParserStandardFontsPath = fileURLToPath(
   new URL(
@@ -211,6 +212,7 @@ function onnxRuntimeWebAssetsPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => ({
   plugins: [
+    pdfRuntimePlugin(),
     pdfParserStandardFontsPlugin(),
     onnxRuntimeWebAssetsPlugin(),
     react()

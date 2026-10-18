@@ -17,7 +17,12 @@
       "types": "./dist/pdf-contracts.d.ts",
       "import": "./dist/pdf-contracts.js",
       "default": "./dist/pdf-contracts.js"
-    }
+    },
+    "./pdf-dom": {
+      "types": "./dist/pdf/pdfDom.d.ts",
+      "import": "./dist/pdf-dom.js"
+    },
+    "./pdf-runtime/manifest.json": "./dist/pdf-runtime/manifest.json"
   },
   "files": [
     "dist"
@@ -31,8 +36,9 @@
     "url": "https://github.com/HamsterNote/reader/issues"
   },
   "scripts": {
-    "dev": "vite",
-    "build:lib": "yarn build:lib:js && yarn build:lib:types && yarn build:lib:styles",
+    "dev": "yarn build:pdf-runtime && vite",
+    "build:lib": "yarn build:lib:js && yarn build:pdf-runtime && yarn build:lib:types && yarn build:lib:styles",
+    "build:pdf-runtime": "vite build --config vite.pdf.config.ts && node scripts/stage-pdf-runtime.mjs",
     "build:lib:js": "vite build --config vite.lib.config.ts",
     "build:lib:types": "tsc --project tsconfig.build.json",
     "build:lib:styles": "node scripts/build-styles.mjs",
@@ -43,6 +49,8 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:pdf:browser": "playwright test --config playwright.pdf.config.ts",
+    "test:pdf:consumer": "node scripts/verify-pdf-runtime.mjs",
     "preview": "vite preview",
     "prepublishOnly": "yarn build:lib",
     "pack:check": "node scripts/check-pack.mjs"
@@ -61,6 +69,7 @@
     "@system-ui-js/multi-drag": "^0.4.0",
     "@tanstack/react-virtual": "^3.14.5",
     "html2canvas": "^1.4.1",
+    "pdfjs-dist": "5.4.530",
     "use-undo": "^1.2.0"
   },
   "peerDependencies": {
@@ -71,6 +80,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@hamster-note/selection": "0.3.0",
+    "@playwright/test": "1.61.0",
     "@system-ui-js/development-base": "^0.1.2",
     "@testing-library/dom": "^10.0.0",
     "@testing-library/jest-dom": "^6.0.0",
@@ -90,8 +100,9 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-sonarjs": "^4.0.3",
     "globals": "^15.14.0",
-    "jszip": "^3.10.1",
     "jsdom": "^27.0.0",
+    "jszip": "^3.10.1",
+    "pdf-lib": "1.17.1",
     "prettier": "^3.7.4",
     "prettier-config-standard": "^7.0.0",
     "react": "^19.0.0",

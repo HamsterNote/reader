@@ -32,9 +32,65 @@ export function App() {
 
 ### How It Works
 
-`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
+The existing `document` API is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
 
 The renderer lazily loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release, designed for long documents without blocking the main thread.
+
+#### Local PDF and EPUB source
+
+The new `source` API accepts a stable `PdfSource` object containing owned-by-host
+`Uint8Array` bytes (`{ kind: 'bytes', bytes }`) or a local blob URI
+(`{ kind: 'uri', uri }`). Keep the object stable until replacing the document.
+PDF signature detection ignores filename/MIME hints and selects an independent
+PDF.js renderer. EPUB sources use the existing EPUB parser/viewer. Remote HTTP(S)
+sources are rejected without requests. Supplying both `source` and `document`
+reports `CONFLICTING_READER_INPUT` before reading either input.
+
+Stage the exact package's worker, cMaps, fonts, WASM and ICC assets into the
+consumer's public directory before building it:
+
+```sh
+node node_modules/@hamster-note/reader/dist/sync-pdf-runtime.mjs --target public
+```
+
+Import `@hamster-note/reader/style.css` as above, then render:
+
+```tsx
+<Reader
+  source={source}
+  pdfAssetBaseUrl={new URL('/pdf-runtime/', window.location.origin).href}
+  onStateChange={(state) => console.log(state.status)}
+  onPdfPageChange={(page) => console.log(page.pageNumber, page.pageCount)}
+/>
+```
+
+The optional `pdfAssetBaseUrl` defaults to `/pdf-runtime/` on the page's origin;
+use an explicit same-origin directory ending in `/` for subdirectory deployments.
+The sync command validates all 198 assets against the bundled SHA-256 manifest.
+PDF.js and its worker are pinned to 5.4.530; do not substitute a CDN worker.
+`@hamster-note/reader/pdf-dom` exposes the DOM adapter and
+`@hamster-note/reader/pdf-contracts` exposes DOM-free types for platform hosts.
+
+PDF Pages uses physical 1-based page numbers and lazy thumbnails. Canvas/text
+surfaces are limited to five, with two simultaneous main renders, two thumbnail
+renders and a 32-entry thumbnail cache. PDF text selection shows a temporary
+Popover with only a no-op “高亮” button; it does not call `onDataChange`, storage,
+annotation history or undo. Scanned pages have no OCR. Password-protected PDFs
+report a categorized error without prompting. Document scripts, XFA, eval and
+external actions are not enabled. Context-menu suppression is scoped to the PDF
+surface. Clearing/changing source releases reader resources without revoking
+host blob URLs or modifying host bytes. `ready` requires a displayed page.
+
+The legacy `document`/`data` API retains its existing annotation capabilities;
+it does not reconstruct a PDF source. Roll back by restoring the previous
+package and its paired assets, or stop supplying `source`. No saved-data
+migration is needed. The main demo still uses its legacy parser flow at this
+checkpoint; `test/browser/pdf.html` exercises the new source path.
+
+This change currently supplies the DOM renderer. Native-reader integration,
+iOS PDFKit development-client builds and Android secure-WebView PDF hosting
+remain separate pending work. Native input keeps its 32 MiB bound; no matching
+native-reader release or device/menu acceptance is claimed here.
 
 #### Unified Reader data
 

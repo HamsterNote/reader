@@ -5,16 +5,16 @@
 ## 1. Shared contracts and compatibility（跨仓，中高）
 
 - [x] 1.1 [reader，中] 新增无 DOM 依赖的 PDF source、metadata/page/selection 与 session 契约子入口，统一 1-based 页码和 reader-local 逻辑坐标；以类型测试和 RN consumer bundle 检查验证不引入 ReactDOM/painting。
-- [ ] 1.2 [reader，中] 为 `Reader.tsx` 增加本地 source 分流入口和页面状态回调，定义 source/document 同传错误，保留旧 document/data/onDataChange API；以旧 API 回归、输入冲突及 PDF/EPUB 互换测试验证。
-- [ ] 1.3 [native-reader，高] 更新 `types.ts`、`formatDetection.ts` 与入口分流，增加 PDF fixed-layout 支持及 design 所述最多 4 KiB 签名 probe；分别验证误扩展名、缺 MIME、远程零请求、超过 32 MiB 和未具备平台能力的错误路径。
-- [ ] 1.4 [native-reader，高] 将 Foliate gate 与 PDF gate 分开接线，保留非 PDF 的完整 Foliate 预检；以 gate 失败测试验证除明确签名 probe 外不进行后续 source I/O、复制/transfer/session 创建，不把 bind 当 ready。
-- [ ] 1.5 [native-reader，中] 同步 `openspec/specs/local-multi-format-reading`、`reader-component-api`、`foliate-reader-security` 的 PDF 支持、签名 probe 例外和安全门禁适用范围；验证规格与 1.3/1.4 测试预期一致，现有 EPUB CSP/private bridge 场景仍通过。
+- [x] 1.2 [reader，中] 为 `Reader.tsx` 增加本地 source 分流入口和页面状态回调，定义 source/document 同传错误，保留旧 document/data/onDataChange API；以旧 API 回归、输入冲突及 PDF/EPUB 互换测试验证。
+- [x] 1.3 [native-reader，高] 更新 `types.ts`、`formatDetection.ts` 与入口分流，增加 PDF fixed-layout 支持及 design 所述本地 scheme → 已知正整数大小 → 32 MiB → 最多五字节的布尔签名 probe；分别验证误扩展名、缺 MIME、远程零请求、超过 32 MiB 和未具备平台能力的错误路径。探测不授予后续读取、复制、transfer 或 session 权限。
+- [x] 1.4 [native-reader，高] 将 Foliate gate 与 PDF gate 分开接线，保留非 PDF 的完整 Foliate 预检；以 gate 失败测试验证除明确签名 probe 外不进行后续 source I/O、复制/transfer/session 创建，不把 bind 当 ready。
+- [x] 1.5 [native-reader，中] 同步 `openspec/specs/local-multi-format-reading`、`reader-component-api`、`foliate-reader-security` 的 PDF 支持、签名 probe 例外和安全门禁适用范围；验证规格与 1.3/1.4 测试预期一致，现有 EPUB CSP/private bridge 场景仍通过。
 - [ ] 1.6 [两仓，中] 接入统一 generation 与 teardown 语义，独立保存 PDF 临时页码/选区，禁止进入 EPUB annotation history；以 A->B、PDF->EPUB、source 清空和重复卸载测试验证迟到事件无副作用、host source 未删除。
 
 ## 2. Shared PDF.js runtime and React interactions（reader，中高）
 
-- [ ] 2.1 [reader，中] 锁定兼容 `pdfjs-dist` 与 worker 精确版本，建立 adapter/runtime 的显式导出和离线资源打包（按版本需要包含 cMap/font/WASM）；以 library build、pack 检查和断网 consumer 加载验证无 CDN 请求与 worker 版本冲突。
-- [ ] 2.2 [reader，高] 实现独立 PDF.js document/page canvas + text layer，按可见窗口调度/回收页面，关闭脚本/eval/外部文档 action；以多页、旋转、缩放、扫描件与损坏文件测试验证渲染/选文一致和稳定错误。
+- [x] 2.1 [reader，中] 锁定兼容 `pdfjs-dist` 与 worker 精确版本，建立 adapter/runtime 的显式导出和离线资源打包（按版本需要包含 cMap/font/WASM）；以 library build、pack 检查和断网 consumer 加载验证无 CDN 请求与 worker 版本冲突。
+- [x] 2.2 [reader，高] 实现独立 PDF.js document/page canvas + text layer，按可见窗口调度/回收页面，关闭脚本/eval/外部文档 action；以多页、旋转、缩放、扫描件与损坏文件测试验证渲染/选文一致和稳定错误。
 - [ ] 2.3 [reader，中] 实现 PDF 页数/当前页/跳页和按需缩略图接口，缓存与并发设定有限上限；以首页/末页/越界、连续滚动和替换期间 thumbnail 测试验证无串页及局部失败降级。
 - [ ] 2.4 [两仓，中] 在 DOM 与 RN 外壳分别接入中立 Pages 展示模型，宽屏左栏、窄屏可折叠左栏、页码与当前项可访问状态；以两类视口验证打开/跳页/收起、缩略图占位尺寸和页码降级可用。
 - [ ] 2.5 [两仓，中] 新增独立 React 选区 Popover 及共享临时状态逻辑，仅显示“高亮”；用 callback/storage spies 验证重复点击不画 annotation、不触发高亮/存储/undo、EPUB 原有高亮回归正常。

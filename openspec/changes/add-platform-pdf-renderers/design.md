@@ -44,9 +44,9 @@ native-reader 的 `ReaderChrome.tsx` 复用加载/错误/外壳布局，通过 P
 
 ### 3. 内容检测和安全门禁顺序
 
-先验证 source scheme、native 元数据和大小，不访问 HTTP(S)。native 使用最小的 reader-owned 本地 source probe（有界签名读取，最多 4 KiB）识别 PDF 候选；完整解析由目标引擎验证，扩展名/MIME 仅作提示。PDF 候选先做该平台能力检查，再打开完整文档；非 PDF 候选必须重新走现有 Foliate 全部门禁，不能因已经做过签名 probe 就创建 Foliate session 或传输完整文件。
+先验证本地 file/content scheme，再检查已知正整数大小及 32 MiB 上限；任一条件失败即拒绝且不读签名，不访问 HTTP(S)。native 仅在偏移零最多读五字节，与现有 detector 的 `%PDF-` 规则一致；不采用原提议的 4 KiB。probe 只返回是否为 PDF 候选的布尔值，不返回字节或任何后续读取、复制、transfer、session 授权。完整解析由目标引擎验证，扩展名/MIME 仅作提示。PDF 候选先做该平台能力检查，再打开完整文档；非 PDF 候选必须重新走现有 Foliate 全部门禁。
 
-这是对 native-reader 当前“Foliate 门禁失败前零 source I/O”契约的明确、有限调整：仅准许通用入口的有界签名 probe；失败后仍禁止后续读取、复制、传输和 session 创建。实施时需更新 `local-multi-format-reading` 的 PDF 拒绝与 Native platform gate 场景、`reader-component-api` 的本地 source 行为，以及 `foliate-reader-security` 中 pre-source/ownership/bounded transfer 的适用范围与 probe 例外。旧 HAM-35 的设备证据豁免不自动适用于 HAM-46；EPUB 的 CSP/private relay 约束保持有效。
+这是对 native-reader 当前“Foliate 门禁失败前零 source I/O”契约的明确、有限调整，已在 HAM-46 实施前记录并获认可：仅准许通用入口上述五字节候选探测；失败后仍禁止后续读取、复制、传输和 session 创建。同步 `local-multi-format-reading`、`reader-component-api` 的分流场景，并在 `foliate-reader-security` 明确入口探测的适用范围。其既有 EPUB CSP、private bridge 与完整读取授权规则原文不改。旧 HAM-35 的设备证据豁免不自动适用于 HAM-46。
 
 替代方案：按扩展名直接绕过 Foliate 门禁会误分流；让 PDFKit 依赖 Foliate WKWebView 的 CSP probe 会错误阻断纯原生 PDF 阅读。采用独立 PDF 能力检查与显式签名 probe 例外。
 
@@ -92,7 +92,7 @@ Pages 默认在宽屏左侧展示，窄屏可折叠为左侧 rail；点击页面
 
 - [iOS/Android 菜单实现受系统版本影响] -> 把“菜单不出现且 handles 可调整”的真实宿主验证列为高难度任务和平台验收，编译或 mock 通过不能替代行为证据。
 - [跨仓 package 依赖及双版本 worker] -> 先完成不导入 DOM 的契约子入口和 adapter 打包，再接 Expo consumer；consumer 包内检查资源闭包与版本一致性。
-- [原 source 零 I/O 规格与内容分流冲突] -> 明确限制为 4 KiB probe 例外并同步冲突规格/测试，不隐式绕过 EPUB gate。
+- [原 source 零 I/O 规格与内容分流冲突] -> 限制为经本地 scheme、已知正整数大小和 32 MiB 预检后的五字节布尔探测；同步冲突规格/测试，不隐式绕过 EPUB gate。
 - [PDF 大文件/text layer/thumbnail 占内存] -> 保留 native 32 MiB 上限、窗口渲染、取消/销毁和有界缓存；无扫描 PDF 文字识别承诺。
 - [旧 reader PDF 批注功能强于一期] -> 新 source/PDF path 不继承旧 annotation 能力，旧 document consumers 保留兼容；文档明确两条路径，避免数据误迁移。
 - [本机不是 Apple/Android 设备环境] -> 本次只验证提案；未来 tasks 中单列编译、模拟器/设备和浏览器证据，不宣称已验证菜单、PDFKit 或离线 runtime。

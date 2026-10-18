@@ -17,6 +17,17 @@ The reader SHALL select a separate PDF reading path for detected local PDF bytes
 - **WHEN** a consumer opens an EPUB with the current supported public API
 - **THEN** the existing EPUB renderer, navigation and reading flow behavior remain available
 
+### Requirement: Native candidate dispatch has a five-byte limit
+Native dispatch SHALL validate local file/content scheme, then known positive integer size, then the 32 MiB bound, before reading at most five prefix bytes matching `%PDF-` at offset zero. Failed prerequisites SHALL prohibit the read. The probe SHALL return only a boolean candidate decision, never source bytes or an authorization for later reading, copying, transfer, or session creation. Non-PDF candidates SHALL still require every existing Foliate CSP/private bridge/complete-source gate unchanged. PDF candidates SHALL require their independent platform PDF capability before further access, and their engine SHALL validate complete content. Remote sources SHALL incur zero requests. Retired probes SHALL not read again or affect new sources.
+
+#### Scenario: Dispatch prerequisites fail
+- **WHEN** the scheme is remote or invalid, size is unknown or invalid, or size exceeds 32 MiB
+- **THEN** no signature bytes are read and neither renderer is authorized
+
+#### Scenario: Candidate probe does not authorize a renderer
+- **WHEN** the probe matches a misnamed PDF without MIME while Foliate is unavailable, or returns false for a non-PDF source
+- **THEN** its only result is PDF versus Foliate candidate selection; an unavailable selected capability reports unsupported without further reads, copies, transfers or sessions
+
 ### Requirement: Controlled local PDF source and stable state
 The reader SHALL accept local PDF input without opening a picker itself, expose idle/loading/ready/categorized-error through the surrounding reader contract, and report ready only after a PDF page is displayed and valid page metadata exists. Native PDF sources SHALL retain the existing 32 MiB limit. Remote HTTP(S) sources SHALL be rejected without requests. Unreadable, corrupt and encrypted/password-required files SHALL report stable read, invalid/render or drm/unsupported errors and clear stale content. No password prompt or remote fallback is required in this phase.
 
