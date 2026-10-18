@@ -412,8 +412,8 @@ export function createPdfDomSession(options: PdfDomOptions): PdfDomSession {
       scale: Math.min(112 / natural.width, 150 / natural.height)
     })
     const canvas = window.document.createElement('canvas')
-    canvas.width = Math.ceil(view.width)
-    canvas.height = Math.ceil(view.height)
+    canvas.width = Math.min(112, Math.ceil(view.width))
+    canvas.height = Math.min(150, Math.ceil(view.height))
     const context = canvas.getContext('2d')
     if (!context) return null
     const task = page.render({ canvas, canvasContext: context, viewport: view })
