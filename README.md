@@ -32,9 +32,73 @@ export function App() {
 
 ### How It Works
 
-`Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
+The existing `document` API is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
 
 The renderer lazily loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release, designed for long documents without blocking the main thread.
+
+#### Local PDF and EPUB source
+
+The new `source` API accepts a stable `PdfSource` object containing owned-by-host
+`Uint8Array` bytes (`{ kind: 'bytes', bytes }`) or a local blob URI
+(`{ kind: 'uri', uri }`). Keep the object stable until replacing the document.
+PDF signature detection ignores filename/MIME hints and selects an independent
+PDF.js renderer. EPUB sources use the existing EPUB parser/viewer. Remote HTTP(S)
+sources are rejected without requests. Supplying both `source` and `document`
+reports `CONFLICTING_READER_INPUT` before reading either input.
+
+Stage the exact package's worker, cMaps, fonts, WASM and ICC assets into the
+consumer's public directory before building it:
+
+```sh
+node node_modules/@hamster-note/reader/dist/sync-pdf-runtime.mjs --target public
+```
+
+Import `@hamster-note/reader/style.css` as above, then render:
+
+```tsx
+<Reader
+  source={source}
+  pdfAssetBaseUrl={new URL('/pdf-runtime/', window.location.origin).href}
+  onStateChange={(state) => console.log(state.status)}
+  onPdfPageChange={(page) => console.log(page.pageNumber, page.pageCount)}
+/>
+```
+
+The optional `pdfAssetBaseUrl` defaults to `/pdf-runtime/` on the page's origin;
+use an explicit same-origin directory ending in `/` for subdirectory deployments.
+The sync command validates all 198 assets against the bundled SHA-256 manifest.
+PDF.js and its worker are pinned to 5.4.530; do not substitute a CDN worker.
+`@hamster-note/reader/pdf-dom` exposes the DOM adapter and
+`@hamster-note/reader/pdf-contracts` exposes DOM-free types for platform hosts.
+
+PDF Pages uses physical 1-based page numbers and lazy thumbnails. Canvas/text
+surfaces are limited to five, with two simultaneous main renders, two thumbnail
+renders and a 32-entry thumbnail cache. PDF text selection shows a temporary
+Popover with only a no-op “高亮” button; it does not call `onDataChange`, storage,
+annotation history or undo. Scanned pages have no OCR. Password-protected PDFs
+report a categorized error without prompting. Document scripts, XFA, eval and
+external actions are not enabled. Context-menu suppression is scoped to the PDF
+surface. Clearing/changing source releases reader resources without revoking
+host blob URLs or modifying host bytes. `ready` requires a displayed page.
+
+The legacy `document`/`data` API retains its existing annotation capabilities;
+it does not reconstruct a PDF source. Roll back by restoring the previous
+package and its paired assets, or stop supplying `source`. No saved-data
+migration is needed. Main demo uploads use the source renderer for PDF,
+including misleading filenames. Non-PDF uploads retain the existing parser;
+`LegacyPdfDemo` is an explicit regression harness for the old PDF document API.
+
+This change supplies the DOM renderer and neutral contracts. Native-reader's
+separate Web iframe consumes an integrity-pinned npm artifact; native iOS
+PDFKit and Android secure-WebView hosts remain pending. Native input keeps its
+32 MiB bound; no npm release or device/menu acceptance is claimed here.
+
+PDF browser tests include Chromium, Firefox and rootless Noble WebKit. For a
+machine with the documented Podman image and Node 24, run
+`yarn test:pdf:webkit --install` once, then `yarn test:pdf:webkit`.
+Environment prerequisites, exact versions and the native-reader command are
+recorded in `openspec/changes/add-platform-pdf-renderers/implementation-notes.md`.
+Playwright WebKit is not actual Safari or mobile long-press/handles evidence.
 
 #### Unified Reader data
 
@@ -414,7 +478,7 @@ The existing `onTextSelectionChange`, `onTextSelectionEnd`, and `onSelectText` c
 
 The browser Demo persists annotation metadata to localStorage keyed by filename. Layout and text-mode annotations share `{ version: 4, ranges: ReaderSelectionRange[], rects: ReaderSelectionRectangle[], paintings: Record<string, DrawingValue> }` under `hamster-reader-demo:highlights:{filename}`. Layout reading progress is stored as a precise text anchor or `{ pageNumber, verticalPercentage }` fallback under `hamster-reader-demo:layout-reading-progress:{filename}`. Text reading progress is stored as `{ currentPageNumber, anchor? }` under `hamster-reader-demo:text-reading-progress:{filename}`, and precise `ReaderBookmark[]` anchors use `hamster-reader-demo:bookmarks:{filename}`. Comments are stored under `hamster-reader-demo:comments:{filename}` as `{ version: 2, comments: ReaderComment[] }`. On read, the Demo migrates legacy comment formats (`Record<highlightId, CommentItem[]>` and `Record<highlightId, string>`) into the version 2 shape. Older unversioned bare highlight arrays, or legacy objects with flat numeric `start`/`end` and `rects`, are ignored and return `[]`. Legacy numeric Demo bookmarks are also ignored because they do not contain a text ID, text, or page-local offset and therefore cannot be safely converted to a precise bookmark. The library-level deprecated page-number bookmark API remains compatible. If the Demo has old metadata that cannot prove its location, recreate that annotation or bookmark instead.
 
-After a file parses successfully, the Demo stores that source `File` in browser-local IndexedDB. PDF files use a two-phase flow: the Demo first reads the selected file into memory with byte progress, then shows a pending card; parsing and rendering begin only after you click **加载文件**. On reload, a saved PDF is restored to the same pending card instead of being parsed automatically. The Demo labels successful persistence beside the uploaded-file details and provides a **Forget saved file** button. Clearing the saved file does not dispose the document currently being read or delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all Demo storage.
+For legacy parser documents, the Demo stores the source `File` in browser-local IndexedDB after parsing. `LegacyPdfDemo` retains its two-phase PDF pending/load flow for compatibility tests. Default PDF uploads now open directly through the source renderer and keep only temporary reader state; they do not add PDF annotations or source persistence. The legacy Demo labels successful persistence beside uploaded-file details and provides a **Forget saved file** button. Clearing a saved legacy file does not dispose the document currently being read or delete its filename-keyed annotation metadata; use the browser's site-data controls to remove all legacy Demo storage.
 
 ### Programmatic Control
 

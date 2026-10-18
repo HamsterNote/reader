@@ -39,7 +39,7 @@ import {
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { App } from '../demo/App'
+import { LegacyPdfDemo as App } from '../demo/App'
 import { loadFileToMemory } from '../demo/fileMemoryLoader'
 import { createImagePreviewDocument } from '../demo/imagePreview'
 import { configurePdfParserForReader } from '../demo/pdfParserForReader'

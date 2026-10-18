@@ -1,4 +1,5 @@
 @use './reader';
+@use '../pdf/pdf.css';
 
 /* dev 模式下 Vite 会通过 package export inline 依赖 CSS；
    lib build 时 scripts/build-styles.mjs 会解析对应 export，移除此 @import 并追加真实 CSS，

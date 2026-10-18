@@ -25,6 +25,9 @@ import type {
   ReaderComment,
   ReaderCommentChangeDetail
 } from '../types/comments'
+import type { PdfPageState, PdfSource } from '../pdf-contracts'
+import type { ReaderSourceLoadState } from '../types/source'
+import { SourceReader } from './SourceReader'
 import type { ReaderFontScale } from '../types/fontScale'
 import type {
   ReaderBookmark,
@@ -163,6 +166,12 @@ const resolveBottomBarHistoryStatus = ({
 }
 
 export type ReaderProps = {
+  /** Original local PDF/EPUB input; mutually exclusive with document. */
+  source?: PdfSource
+  /** Same-origin directory populated by the PDF runtime sync command. */
+  pdfAssetBaseUrl?: string
+  onStateChange?: (state: ReaderSourceLoadState) => void
+  onPdfPageChange?: (page: PdfPageState) => void
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   /** 宿主提供的受控加载进度；传入时在 Reader 容器内显示并暂时隐藏上传区。 */
   loadingProgress?: ReaderLoadingProgress | null
@@ -609,7 +618,40 @@ function resolveLoadingProgress(
   }
 }
 
-export function Reader({
+export function Reader(props: ReaderProps) {
+  const stateCallback = useRef(props.onStateChange)
+  stateCallback.current = props.onStateChange
+  useEffect(() => {
+    if (!props.source && !props.document)
+      stateCallback.current?.({ status: 'idle' })
+  }, [props.source, props.document])
+  if (props.source && props.document != null) {
+    return <ReaderInputError onStateChange={props.onStateChange} />
+  }
+  return props.source ? (
+    <SourceReader {...props} source={props.source} />
+  ) : (
+    <LegacyReader {...props} />
+  )
+}
+
+function ReaderInputError({
+  onStateChange
+}: Pick<ReaderProps, 'onStateChange'>) {
+  useEffect(() => {
+    onStateChange?.({
+      status: 'error',
+      error: {
+        category: 'invalid',
+        code: 'SOURCE_DOCUMENT_CONFLICT',
+        message: 'Provide either source or document.'
+      }
+    })
+  }, [onStateChange])
+  return <div role='alert'>Provide either source or document.</div>
+}
+
+export function LegacyReader({
   document,
   loadingProgress,
   data,
