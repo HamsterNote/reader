@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { EpubParser } from '@hamster-note/epub-parser'
+import type { IntermediateDocument } from '@hamster-note/types'
 import { describe, expect, it } from 'vitest'
 
 import { convertEpubDocumentForReader } from '../../demo/epubForReader'
@@ -25,10 +26,9 @@ function readFixture(relativePath: string): Uint8Array {
   return readFileSync(join(FIXTURE_ROOT, relativePath))
 }
 
-async function getPageTexts(document: {
-  pageCount: number
-  getPageByPageNumber: (n: number) => Promise<unknown> | null
-}): Promise<string[]> {
+async function getPageTexts(
+  document: Pick<IntermediateDocument, 'pageCount' | 'getPageByPageNumber'>
+): Promise<string[]> {
   const texts: string[] = []
   for (let n = 1; n <= document.pageCount; n += 1) {
     const pagePromise = document.getPageByPageNumber(n)

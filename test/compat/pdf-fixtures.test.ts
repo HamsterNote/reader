@@ -34,6 +34,7 @@ async function getPdfPageTexts(source: ArrayBuffer): Promise<{
     const pageSizes: Array<{ width: number; height: number }> = []
     for (let n = 1; n <= handle.pageCount; n += 1) {
       const page = await handle.document.getPageByPageNumber(n)
+      if (!page) throw new Error(`missing page ${n}`)
       const entries = await page.getContent()
       pageTexts.push(
         (entries as Array<{ content?: unknown }>)

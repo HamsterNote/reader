@@ -6,9 +6,11 @@
 
 ## 1. 共同前置：兼容契约与样本
 
-- [ ] 1.1 固定 `237c0d51a4fc76d8c6f233bd2598ac7a14d12500` 的 EPUB/PDF 样本与同文件 v2/v3/v4 高亮 JSON，包含跨页、重复文本、封面、图片顺序、多栏、连字、旋转、px/percent 和绘图；交付来源清单及旧读入器 round-trip 测试，验证旧版本可正常读取全部合法样本。
-- [ ] 1.2 基于 `src/types/selection.ts`、`readerData.ts`、`DESIGN.md` 和现有测试固定格式/模式/工具交互矩阵，覆盖高亮、矩形、绘图、评论、历史、书签、进度、裁切、隐藏页和拖拽；交付每项 UI、回调、存储断言，明确基线不适用项及依据。
-- [ ] 1.3 定义引擎适配器及 version/sessionId/requestId/revision 桥接协议，包含 ready、restore、change、ack、error、dispose；以契约测试验证初始化不清空数据、旧会话拒绝、重复事件幂等和错误恢复。
+- [x] 1.1 固定 `237c0d51a4fc76d8c6f233bd2598ac7a14d12500` 的 EPUB/PDF 样本与同文件 v2/v3/v4 高亮 JSON，包含跨页、重复文本、封面、图片顺序、多栏、连字、旋转、px/percent 和绘图；交付来源清单及旧读入器 round-trip 测试，验证旧版本可正常读取全部合法样本。
+- [x] 1.2 基于 `src/types/selection.ts`、`readerData.ts`、`DESIGN.md` 和现有测试固定格式/模式/工具交互矩阵，覆盖高亮、矩形、绘图、评论、历史、书签、进度、裁切、隐藏页和拖拽；交付每项 UI、回调、存储断言，明确基线不适用项及依据。
+- [x] 1.3 定义引擎适配器及 version/sessionId/requestId/revision 桥接协议，包含 ready、restore、change、ack、error、dispose；以契约测试验证初始化不清空数据、旧会话拒绝、重复事件幂等和错误恢复。
+
+> 第 1 组交付物：`contracts/sample-manifest.md`、`contracts/interaction-matrix.md`、`contracts/bridge-protocol.md`；样本与生成器在 `test/compat/`；协议参考实现在 `src/bridge/`，契约测试在 `test/bridge-contract.test.ts`。（HAM-87 完成）
 
 ## 2. 主线 A：EPUB 对齐 native-reader
 

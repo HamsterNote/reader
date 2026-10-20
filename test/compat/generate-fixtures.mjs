@@ -14,10 +14,7 @@ import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
 import { PDFDocument, StandardFonts, degrees } from 'pdf-lib'
 
-const FIXTURE_ROOT = join(
-  dirname(fileURLToPath(import.meta.url)),
-  'fixtures'
-)
+const FIXTURE_ROOT = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
 // 固定 zip / pdf 元数据时间戳，保证同一脚本重复运行产出逐字节一致。
 const FIXED_DATE = new Date('2026-01-01T00:00:00.000Z')
@@ -477,7 +474,16 @@ function buildSinglePageRange({
   rectsBySelectionId,
   selectionStyle
 }) {
-  return { id, needle, page, occurrence, createdAt, overlayRectType, rectsBySelectionId, selectionStyle }
+  return {
+    id,
+    needle,
+    page,
+    occurrence,
+    createdAt,
+    overlayRectType,
+    rectsBySelectionId,
+    selectionStyle
+  }
 }
 
 function resolveSinglePageRange(spec, pageTexts) {
@@ -495,7 +501,10 @@ function resolveSinglePageRange(spec, pageTexts) {
     id: spec.id,
     text: spec.needle,
     start: { selectionId: `page-${spec.page}`, offset },
-    end: { selectionId: `page-${spec.page}`, offset: offset + spec.needle.length },
+    end: {
+      selectionId: `page-${spec.page}`,
+      offset: offset + spec.needle.length
+    },
     createdAt: spec.createdAt,
     overlayRectType: spec.overlayRectType,
     rectsBySelectionId: spec.rectsBySelectionId,
