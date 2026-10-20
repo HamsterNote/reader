@@ -1,0 +1,112 @@
+{
+  "version": 3,
+  "ranges": [
+    {
+      "id": "epub-range-cross-page",
+      "text": "第一章独有结尾。第二章",
+      "start": {
+        "selectionId": "page-2",
+        "offset": 20
+      },
+      "end": {
+        "selectionId": "page-3",
+        "offset": 3
+      },
+      "createdAt": 1735689600000,
+      "overlayRectType": "percent",
+      "rectsBySelectionId": {
+        "page-2": [
+          {
+            "x": 12.5,
+            "y": 40.25,
+            "width": 70,
+            "height": 6.5
+          }
+        ],
+        "page-3": [
+          {
+            "x": 8,
+            "y": 10,
+            "width": 30.5,
+            "height": 6.5
+          }
+        ]
+      },
+      "markerStyle": {
+        "backgroundColor": "rgba(255, 193, 7, 0.35)"
+      }
+    },
+    {
+      "id": "epub-range-duplicate-first",
+      "text": "重复的段落文本。",
+      "start": {
+        "selectionId": "page-2",
+        "offset": 12
+      },
+      "end": {
+        "selectionId": "page-2",
+        "offset": 20
+      },
+      "createdAt": 1735689601000,
+      "overlayRectType": "px",
+      "rectsBySelectionId": {
+        "page-2": [
+          {
+            "x": 24,
+            "y": 128,
+            "width": 112,
+            "height": 18
+          }
+        ]
+      },
+      "selectionStyle": {
+        "backgroundColor": "rgba(33, 150, 243, 0.25)"
+      }
+    }
+  ],
+  "rects": [
+    {
+      "id": "epub-rect-page-2-px",
+      "createdAt": 1735689602000,
+      "overlayRectType": "px",
+      "start": {
+        "x": 24,
+        "y": 96
+      },
+      "end": {
+        "x": 180,
+        "y": 132
+      },
+      "rect": {
+        "x": 24,
+        "y": 96,
+        "width": 156,
+        "height": 36
+      },
+      "selectionId": "page-2"
+    },
+    {
+      "id": "epub-rect-page-3-percent",
+      "createdAt": 1735689603000,
+      "overlayRectType": "percent",
+      "start": {
+        "x": 10.5,
+        "y": 20.25
+      },
+      "end": {
+        "x": 60,
+        "y": 40
+      },
+      "rect": {
+        "x": 10.5,
+        "y": 20.25,
+        "width": 49.5,
+        "height": 19.75
+      },
+      "selectionId": "page-3",
+      "markerStyle": {
+        "border": "1px solid #2563eb"
+      }
+    }
+  ]
+}
