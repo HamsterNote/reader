@@ -4,6 +4,30 @@ import { afterEach } from 'vitest'
 
 import { installMatchMediaMock } from './mocks/matchMedia'
 
+// pdfjs-dist（HAM-89 主线 B）在模块加载期执行 `new DOMMatrix()`；
+// node/jsdom 均无此全局，补最小构造实现（测试只做文本提取与几何换算，
+// 不触发 canvas 渲染路径）。
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  class DOMMatrixPolyfill {
+    a = 1
+    b = 0
+    c = 0
+    d = 1
+    e = 0
+    f = 0
+    constructor(init?: readonly number[]) {
+      if (Array.isArray(init)) {
+        ;[this.a, this.b, this.c, this.d, this.e, this.f] = init
+      }
+    }
+  }
+  Object.defineProperty(globalThis, 'DOMMatrix', {
+    value: DOMMatrixPolyfill,
+    configurable: true,
+    writable: true
+  })
+}
+
 installMatchMediaMock()
 
 let observerInstances: MockIntersectionObserver[] = []
