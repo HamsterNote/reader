@@ -85,11 +85,11 @@ async function buildEpub({ title, manifestExtra = '', spineItems, files }) {
 
   const manifestItems =
     spineItems
-      .map(
-        ({ id, href }) =>
-          `    <item id="${id}" href="${href}" media-type="application/xhtml+xml" />`
+      .map(({ id, href, properties }) => {
+        const propertiesAttr = properties ? ` properties="${properties}"` : ''
+        return `    <item id="${id}" href="${href}" media-type="application/xhtml+xml"${propertiesAttr} />`
         // EPUB 要求全部内容资源在 manifest 声明，否则解析器丢弃图片。
-      )
+      })
       .join('\n') +
     '\n    <item id="img-cover" href="images/cover.png" media-type="image/png" />' +
     '\n    <item id="img-chapter" href="images/chapter.png" media-type="image/png" />'
@@ -140,7 +140,7 @@ async function buildEpubCoverAndImageOrder() {
     title: 'Fixture Cover And Image Order',
     spineItems: [
       { id: 'cover', href: 'cover.xhtml' },
-      { id: 'nav', href: 'nav.xhtml', inSpine: false },
+      { id: 'nav', href: 'nav.xhtml', inSpine: false, properties: 'nav' },
       { id: 'chapter1', href: 'chapter1.xhtml' },
       { id: 'chapter2', href: 'chapter2.xhtml' }
     ],
@@ -181,7 +181,7 @@ async function buildEpubSpineOmitsCover() {
       '    <meta name="cover" content="cover-image" />\n' +
       '    <item id="cover-image" href="images/cover.png" media-type="image/png" properties="cover-image" />',
     spineItems: [
-      { id: 'nav', href: 'nav.xhtml', inSpine: false },
+      { id: 'nav', href: 'nav.xhtml', inSpine: false, properties: 'nav' },
       { id: 'chapter1', href: 'chapter1.xhtml' },
       { id: 'chapter2', href: 'chapter2.xhtml' }
     ],
@@ -214,7 +214,7 @@ async function buildEpubDuplicateText() {
     title: 'Fixture Duplicate Text',
     spineItems: [
       { id: 'cover', href: 'cover.xhtml' },
-      { id: 'nav', href: 'nav.xhtml', inSpine: false },
+      { id: 'nav', href: 'nav.xhtml', inSpine: false, properties: 'nav' },
       { id: 'chapter1', href: 'chapter1.xhtml' },
       { id: 'chapter2', href: 'chapter2.xhtml' },
       { id: 'chapter3', href: 'chapter3.xhtml' }
