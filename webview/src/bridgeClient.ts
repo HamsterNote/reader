@@ -23,6 +23,13 @@ export type WebBridgeOptions = {
   readonly sessionId: string
   readonly sourceToken: string
   readonly post: (raw: string) => void
+  /**
+   * 当前 Web 上下文唯一的客户端标识，作为 requestId 前缀。
+   * 页面重载会创建新客户端：没有它，新客户端会从 0 重新计数，
+   * 与宿主幂等表里的旧 requestId 冲突，导致新写入被当成重复投递丢弃。
+   * 默认随机生成；测试可注入固定值。
+   */
+  readonly clientId?: string
   readonly retryTimeoutMs?: number
   readonly timers?: WebBridgeTimers
   readonly onOpen?: (payload: BridgeOpenPayload) => void
@@ -50,6 +57,27 @@ type PendingWrite = {
 
 const DEFAULT_RETRY_TIMEOUT_MS = 3000
 
+let fallbackCounter = 0
+
+function createClientId(): string {
+  const cryptoApi: Crypto | undefined = globalThis.crypto
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return `c-${cryptoApi.randomUUID()}`
+  }
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    cryptoApi.getRandomValues(bytes)
+    let hex = ''
+    for (const byte of bytes) {
+      hex += byte.toString(16).padStart(2, '0')
+    }
+    return `c-${hex}`
+  }
+  // 无 crypto 的极端环境：计数 + 时间戳，保证同进程内两次加载不同。
+  fallbackCounter += 1
+  return `c-${Date.now().toString(36)}-${fallbackCounter}`
+}
+
 function defaultTimers(): WebBridgeTimers {
   return {
     setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
@@ -64,6 +92,7 @@ export function createWebBridgeClient(
 ): WebBridgeClient {
   const timers = options.timers ?? defaultTimers()
   const retryTimeoutMs = options.retryTimeoutMs ?? DEFAULT_RETRY_TIMEOUT_MS
+  const clientId = options.clientId ?? createClientId()
   let revision: number | null = null
   let started = false
   let closed = false
@@ -93,7 +122,9 @@ export function createWebBridgeClient(
     return {
       version: READER_BRIDGE_PROTOCOL_VERSION,
       sessionId: options.sessionId,
-      requestId: `${options.sessionId}-${requestCounter}`,
+      // requestId 以客户端标识为前缀：只有同一客户端重发同一消息才复用
+      // requestId（见 armRetry），重载后的新客户端不会撞上宿主的幂等表。
+      requestId: `${clientId}-${requestCounter}`,
       type,
       payload
     }

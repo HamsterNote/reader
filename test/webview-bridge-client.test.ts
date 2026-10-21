@@ -75,7 +75,8 @@ describe('createWebBridgeClient', () => {
       type: 'ready',
       sourceToken
     })
-    expect(sent[0]?.requestId).toMatch(/^session-1-/)
+    expect(typeof sent[0]?.requestId).toBe('string')
+    expect(sent[0]?.requestId).not.toBe('')
   })
 
   it('does not write before restore and continues from the restored revision', () => {
@@ -213,5 +214,28 @@ describe('createWebBridgeClient', () => {
     bridge.handleMessage(hostMessage('dispose', {}))
     bridge.sendChange({ ranges: [1] })
     expect(sent).toHaveLength(1)
+  })
+
+  it('namespaces requestIds per client instance so a reloaded page never collides', () => {
+    // 回归：页面重载后新客户端曾从 0 重新计数，requestId 与宿主幂等表
+    // 冲突，新修改被当成重复投递静默丢弃（HAM-90 评审问题 3）。
+    const first = createHarness()
+    first.bridge.start()
+    first.bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    first.bridge.sendChange({ ranges: [1] })
+
+    const reloaded = createHarness()
+    reloaded.bridge.start()
+    reloaded.bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 1 })
+    )
+    reloaded.bridge.sendChange({ ranges: [2] })
+
+    const firstIds = first.sent.map((message) => message['requestId'])
+    for (const message of reloaded.sent) {
+      expect(firstIds).not.toContain(message['requestId'])
+    }
   })
 })

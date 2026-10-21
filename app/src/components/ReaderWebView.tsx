@@ -64,10 +64,10 @@ export function ReaderWebView({
   const sessionId = useMemo(() => randomUUID(), [])
   const sourceToken = useMemo(() => randomUUID(), [])
 
+  // 宿主会话随文档创建一次，不随 WebView 重载（generation）重建：
+  // 会话内的已确认快照、幂等表与在途持久化队列在重载后仍然有效，
+  // 页面重新 ready 时 restore 总是取最新确认数据，而不是打开时的旧 prop。
   useEffect(() => {
-    openedRef.current = false
-    setState('loading')
-    setStatusText('正在加载阅读资源…')
     const session = createReaderHostSession({
       sessionId,
       sourceToken,
@@ -83,6 +83,17 @@ export function ReaderWebView({
       }
     })
     sessionRef.current = session
+    return () => {
+      session.dispose()
+      sessionRef.current = null
+    }
+  }, [record, sessionId, sourceToken, store])
+
+  // WebView 每次（重）加载都只重置握手状态与超时；会话保持不变。
+  useEffect(() => {
+    openedRef.current = false
+    setState('loading')
+    setStatusText('正在加载阅读资源…')
     const timer = setTimeout(() => {
       if (openedRef.current) return
       setState('error')
@@ -90,10 +101,8 @@ export function ReaderWebView({
     }, HANDSHAKE_TIMEOUT_MS)
     return () => {
       clearTimeout(timer)
-      session.dispose()
-      sessionRef.current = null
     }
-  }, [generation, record, sessionId, sourceToken, store])
+  }, [generation])
 
   const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
     const pending = sessionRef.current?.handleRawMessage(event.nativeEvent.data)

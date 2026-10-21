@@ -58,11 +58,23 @@ yarn host:ios       # 需要 macOS + Xcode
 
 - `src/host/readerHostSession.ts`：绑定 HAM-87 契约状态机，固定
   `open → restore` 顺序，重载后重发最后确认快照。
+- `app/src/components/ReaderWebView.tsx`：宿主会话随文档创建一次，WebView
+  手动重载只重建页面；会话内的已确认快照、幂等表与在途持久化队列保持有效，
+  重载后的 `ready` 总是拿到最新确认数据。
+- `webview/src/hostMessageChannel.ts`：宿主 → Web 消息同时监听
+  document（Android，不冒泡的 MessageEvent）与 window（iOS），按事件对象
+  去重；缺一通道时 Android 上 Web 端收不到 open/restore/ack。
+- `webview/src/bridgeClient.ts`：requestId 以每个 Web 上下文随机生成的
+  clientId 为前缀；页面重载后的新客户端不会与宿主幂等表里的旧 requestId
+  冲突，只有同一客户端重发同一消息才复用 requestId。
 - `src/bridge/hostSession.ts`：增加异步持久化入口
   `handleWebMessageAsync`；ack 在落盘后返回，落盘失败回滚快照。
 - `src/host/readerDataStore.ts`：每个文件一个键
   `reader.host.v1.doc.<fileId>`，索引单独存放；单文件索引损坏不影响其他文件。
-- 文件 ID 由文件名、大小、修改时间经 SHA-256 生成，不把用户文件名拼进路径。
+- 文件 ID 由文件名、大小、修改时间与文件内容摘要（原生流式 MD5，
+  `FileSystem.getInfoAsync(uri, { md5: true })`）经 SHA-256 生成，
+  不把用户文件名拼进路径；同名同尺寸同时间但内容不同的文件得到不同 ID，
+  不共用缓存副本与标注数据。
 - 旧 JSON 导入支持 v2/v3/v4 顶层结构；原对象保留在 `snapshot.data.highlights`
   交给 Web 层现有 `parseHighlights`。
 - 大文件只传递受控本地 URL；桥接消息上限 1 MiB，不会整包 base64 复制文档。
@@ -83,7 +95,9 @@ yarn host:ios       # 需要 macOS + Xcode
 
 ## 本地已验证
 
-- `yarn test:run`：62 个文件、959 例通过（含新增 43 例宿主/桥接测试）。
+- `yarn test:run`：64 个文件、968 例通过（含宿主/桥接/安全测试，以及
+  Android document 消息通道、两类 WebView 重载、同元数据异内容文件身份的
+  回归测试）。
 - `yarn typecheck`、`yarn typecheck:host`、`npx eslint .` 通过。
 - `npx expo config --type public` 通过。
 - `npx expo export --platform android` 成功，bundle 内含 `webreader.zip`。

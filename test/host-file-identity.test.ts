@@ -29,7 +29,12 @@ describe('detectDocumentFormat', () => {
 
 describe('createDocumentFileId', () => {
   it('is stable for identical metadata and differs when metadata changes', async () => {
-    const input = { fileName: '书.epub', size: 10, modifiedAt: 1000 }
+    const input = {
+      fileName: '书.epub',
+      size: 10,
+      modifiedAt: 1000,
+      contentDigest: 'a'.repeat(32)
+    }
     const first = await createDocumentFileId(input, digest)
     const second = await createDocumentFileId(input, digest)
     const other = await createDocumentFileId(
@@ -41,19 +46,55 @@ describe('createDocumentFileId', () => {
     expect(first).toMatch(/^f_[a-f0-9]{32}$/)
   })
 
+  it('gives different ids to same-metadata files with different content', async () => {
+    // 回归：两个目录里同名同尺寸同时间但内容不同的 book.pdf 曾得到相同
+    // ID，共用缓存与标注数据，实际打开的是先选的那份文件。
+    const base = { fileName: 'book.pdf', size: 2048, modifiedAt: 1700000000 }
+    const first = await createDocumentFileId(
+      { ...base, contentDigest: 'b'.repeat(32) },
+      digest
+    )
+    const second = await createDocumentFileId(
+      { ...base, contentDigest: 'c'.repeat(32) },
+      digest
+    )
+    const again = await createDocumentFileId(
+      { ...base, contentDigest: 'b'.repeat(32) },
+      digest
+    )
+    expect(first).not.toBe(second)
+    expect(first).toBe(again)
+  })
+
   it('rejects invalid digests and non-finite sizes', async () => {
     await expect(
       createDocumentFileId(
-        { fileName: 'a.epub', size: 1, modifiedAt: 1 },
+        {
+          fileName: 'a.epub',
+          size: 1,
+          modifiedAt: 1,
+          contentDigest: 'a'.repeat(32)
+        },
         async () => 'not-a-digest'
       )
     ).rejects.toThrow('SHA-256')
     await expect(
       createDocumentFileId(
-        { fileName: 'a.epub', size: Number.NaN, modifiedAt: 1 },
+        {
+          fileName: 'a.epub',
+          size: Number.NaN,
+          modifiedAt: 1,
+          contentDigest: 'a'.repeat(32)
+        },
         digest
       )
     ).rejects.toThrow('文件大小无效')
+    await expect(
+      createDocumentFileId(
+        { fileName: 'a.epub', size: 1, modifiedAt: 1, contentDigest: '' },
+        digest
+      )
+    ).rejects.toThrow('文件内容摘要无效')
   })
 
   it('rejects path-like ids', () => {

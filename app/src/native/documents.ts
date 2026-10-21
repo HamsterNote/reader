@@ -53,8 +53,14 @@ export async function pickAndCacheDocument(
   // 使用选择器给出的原始修改时间；缓存副本的 mtime 每次复制都会变化，
   // 用它生成 ID 会导致重启后无法恢复同一文件的标注。
   const modifiedAt = asset.lastModified
+  // 原生流式 MD5：同名同尺寸同时间但内容不同的两个文件必须得到不同 ID，
+  // 否则会共用缓存副本与标注数据（读到先选的那份文件）。
+  const contentInfo = await FileSystem.getInfoAsync(asset.uri, { md5: true })
+  if (!contentInfo.exists || !contentInfo.md5) {
+    throw new Error('无法读取所选文件内容')
+  }
   const fileId = await createDocumentFileId(
-    { fileName: asset.name, size, modifiedAt },
+    { fileName: asset.name, size, modifiedAt, contentDigest: contentInfo.md5 },
     digest
   )
 

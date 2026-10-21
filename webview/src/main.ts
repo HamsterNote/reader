@@ -2,6 +2,7 @@ import './webview.css'
 
 import type { BridgeRestorePayload } from '../../src/bridge/protocol'
 import { createWebBridgeClient } from './bridgeClient'
+import { listenHostMessages } from './hostMessageChannel'
 import { createPdfWorkerFromAsset } from './pdfWorker'
 
 type HostBootstrap = {
@@ -209,8 +210,10 @@ function boot(): void {
     }
   })
 
-  window.addEventListener('message', (event: MessageEvent) => {
-    bridge.handleMessage(event.data)
+  // Android 的 MessageEvent 派发到 document 且不冒泡，iOS 派发到 window；
+  // listenHostMessages 同时挂两个目标并按事件去重。
+  listenHostMessages((data) => {
+    bridge.handleMessage(data)
   })
 
   bridge.start()
