@@ -663,6 +663,19 @@ These shortcuts are ignored when the active element is an `input`, `textarea`, o
 - `yarn preview`: preview the demo build.
 - `yarn prepublishOnly`: build the library before publish.
 
+## Expo 宿主
+
+仓库同时提供 Expo dev client 宿主（`app/`），EPUB/PDF 在应用内 WebView 中打开。
+
+```bash
+yarn build:webview       # 构建 Web 阅读入口与阅读资源，生成 app/assets/webreader.zip
+yarn verify:webview      # 校验资源清单
+yarn typecheck:host
+yarn host:android        # 或 macOS 上 yarn host:ios
+```
+
+构建、安全边界、已验证明细与未验证平台见 `docs/expo-host.md`。
+
 ## 发版规则
 
 - Push a `vX.Y.Z` tag for stable releases.
