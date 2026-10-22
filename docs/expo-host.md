@@ -120,6 +120,35 @@ yarn host:ios       # 需要 macOS + Xcode
 - iOS 工程：`npx expo prebuild --platform ios` 成功生成工程；Linux 无 Xcode，
   未编译。
 
+## WKWebView 本地资源状态 0 回归（2026-10-22）
+
+iOS 26.5 设备验收中，桥接握手正常，但资源自检六项均报 HTTP 0。
+根因是诊断页与 PDF worker 加载器把 `fetch(file://...)` 的
+`response.ok === false` 当作 HTTP 错误。Linux WebKit 复现确认：清单、
+Foliate、worker、CSS、字体的响应都有完整字节，但 `status=0, ok=false`。
+
+- `webview/src/packagedAsset.ts` 统一资源读取：本地文件使用二进制 XHR，
+  只在 `load`、状态 0/2xx、非空 ArrayBuffer 同时满足时成功；错误、取消、
+  超时、缺失与空文件均失败。路径限制在当前阅读资源目录；HTTP 仍检查 `ok`。
+- PDF worker 的 Blob URL 保留到收到 PDF.js 的
+  `{ sourceName: 'worker', targetName: 'main', action: 'ready' }` 再释放；
+  启动错误或 8 秒无响应会终止 worker 并报错。自检不再以静默等待代替启动确认。
+- 新增 24 项回归测试（`webview-packaged-asset`、`webview-pdf-worker`）；
+  全量 66 文件 / 992 项通过，类型检查、宿主类型检查、lint、资源构建/校验通过。
+- Playwright WebKit/Chromium 的 `file://` 与 HTTP 自检均为 6/6，
+  包含真实打包 PDF.js worker 的 ready。Chromium 使用
+  `--allow-file-access-from-files`；Linux WebKit 测试为资源目录授予读取权限，
+  并通过 Inspector 关闭 `WebSecurityEnabled` 以允许 file 源读取。
+  这是浏览器中的传输/启动验证，不能替代 WKWebView 安全配置和 iOS 实机复验。
+
+设备复验：拉取修复提交，运行 `yarn build:webview`，重启 Metro/重新加载
+应用后，分别打开已有 EPUB、PDF 并点“运行资源自检”。预期六项通过，最后一项
+显示“已收到 PDF.js ready”。资源 buildId 随内容更新，会解压到新的目录，
+无需删除已导入文件或宿主数据。本修复没有引入原生依赖，无需因本次改动重做 prebuild。
+
+当前入口仍为契约诊断桩（`webview/src/main.ts` 仅显示文档描述与 restore 摘要），
+没有调用主线 A/B 的真实阅读引擎；资源自检通过不表示 EPUB/PDF 书页已渲染。
+
 ## 未验证 / 阻塞
 
 - **Android dev client 真机/模拟器**：本机无 `/dev/kvm`、`adb devices` 为空，

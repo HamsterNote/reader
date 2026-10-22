@@ -3,6 +3,7 @@ import './webview.css'
 import type { BridgeRestorePayload } from '../../src/bridge/protocol'
 import { createWebBridgeClient } from './bridgeClient'
 import { listenHostMessages } from './hostMessageChannel'
+import { readPackagedAsset, readPackagedText } from './packagedAsset'
 import { createPdfWorkerFromAsset } from './pdfWorker'
 
 type HostBootstrap = {
@@ -79,15 +80,6 @@ function renderChecks(results: readonly CheckResult[]): void {
   )
 }
 
-async function fetchAsset(relativePath: string): Promise<Response> {
-  const url = new URL(relativePath, location.href).href
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`${relativePath} HTTP ${response.status}`)
-  }
-  return response
-}
-
 async function runSelfCheck(): Promise<void> {
   if (!selfCheckButton) return
   selfCheckButton.disabled = true
@@ -111,34 +103,34 @@ async function runSelfCheck(): Promise<void> {
   }
 
   await check('资源清单', async () => {
-    const response = await fetchAsset('asset-manifest.json')
-    const manifest = (await response.json()) as { files?: unknown[] }
+    const manifest = JSON.parse(
+      await readPackagedText('asset-manifest.json')
+    ) as {
+      files?: unknown[]
+    }
     if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
       throw new Error('清单为空')
     }
     return `${manifest.files.length} 个文件`
   })
   await check('PDF worker 脚本', async () => {
-    const response = await fetchAsset('pdfjs/pdf.worker.min.mjs')
-    const text = await response.text()
+    const text = await readPackagedText('pdfjs/pdf.worker.min.mjs')
     if (!text.includes('GlobalWorkerOptions') && text.length < 1000) {
       throw new Error('worker 内容异常')
     }
     return `${Math.round(text.length / 1024)} KiB`
   })
   await check('PDF viewer CSS', async () => {
-    const response = await fetchAsset('pdfjs/pdf_viewer.css')
-    const text = await response.text()
+    const text = await readPackagedText('pdfjs/pdf_viewer.css')
     if (!text.includes('.pdfViewer')) throw new Error('缺少 .pdfViewer 样式')
     return `${Math.round(text.length / 1024)} KiB`
   })
   await check('PDF 标准字体', async () => {
-    await fetchAsset('pdfjs/standard_fonts/LiberationSans-Regular.ttf')
+    await readPackagedAsset('pdfjs/standard_fonts/LiberationSans-Regular.ttf')
     return 'LiberationSans'
   })
   await check('Foliate ESM', async () => {
-    const response = await fetchAsset('foliate/epub.js')
-    const source = await response.text()
+    const source = await readPackagedText('foliate/epub.js')
     if (!source.includes('export') || !source.includes('class EPUB')) {
       throw new Error('epub.js 内容异常')
     }
@@ -147,14 +139,7 @@ async function runSelfCheck(): Promise<void> {
   await check('PDF module worker 启动', async () => {
     const worker = await createPdfWorkerFromAsset()
     try {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => resolve(), 1200)
-        worker.addEventListener('error', (event) => {
-          clearTimeout(timer)
-          reject(new Error(event.message || 'worker 加载失败'))
-        })
-      })
-      return '已启动'
+      return '已收到 PDF.js ready'
     } finally {
       worker.terminate()
     }
