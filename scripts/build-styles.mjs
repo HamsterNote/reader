@@ -15,10 +15,14 @@ const dependencyStyles = [
   {
     specifier: '@hamster-note/selection/style.css',
     marker: '.hsn-selection-container'
+  },
+  {
+    specifier: 'pdfjs-dist/web/pdf_viewer.css',
+    marker: '.pdfViewer'
   }
 ]
 const dependencyImportPattern =
-  /^[ \t]*@import[ \t]+url\(['"]@hamster-note\/(?:components\/styles|selection\/style)\.css['"]\);[ \t]*$/gm
+  /^[ \t]*@import[ \t]+url\(['"](?:@hamster-note\/(?:components\/styles|selection\/style)\.css|pdfjs-dist\/web\/pdf_viewer\.css)['"]\);[ \t]*$/gm
 
 function buildReaderCss() {
   const result = compile(readerStylesPath, {
