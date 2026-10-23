@@ -414,6 +414,16 @@ async function run(browserType, mobile, format, version, attack = false) {
         JSON.parse(localStorage.getItem('host-snapshot'))
       )
     }
+    await page.locator('body').evaluate(async (body) => {
+      await Promise.allSettled(
+        body
+          .getAnimations({ subtree: true })
+          .filter((animation) =>
+            Number.isFinite(animation.effect?.getTiming().iterations ?? 1)
+          )
+          .map((animation) => animation.finished)
+      )
+    })
     await page.screenshot({ path: resolve(output, `${label}.png`) })
     await page.reload()
     await page.locator(`[data-engine=${format}]`).waitFor()
