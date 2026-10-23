@@ -15,6 +15,7 @@ import type {
   ReaderSelectionRectangle
 } from '../types/selection'
 import { PageDrawingLayer } from '../components/PageDrawingLayer'
+import { PdfRectangleAnnotation } from './PdfRectangleAnnotation'
 import type { OverlayRectUnit, PageVisualSize } from './pdfOverlayGeometry'
 import { projectStoredRectToViewport } from './pdfOverlayGeometry'
 import { captureViewportRectAsStored } from './pdfOverlayGeometry'
@@ -54,6 +55,9 @@ export type PdfPageOverlayLayerProps = {
   readonly onSelectRange?: (id: string | null) => void
   readonly onSelectRect?: (id: string | null) => void
   readonly onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  readonly onDraftRect?: (rect: ReaderSelectionRectangle) => void
+  readonly draftRectangle?: ReaderSelectionRectangle | null
+  readonly onUpdateRect?: (rect: ReaderSelectionRectangle) => void
 }
 
 type RectDraft = {
@@ -90,7 +94,10 @@ export function PdfPageOverlayLayer({
   pagePaintings,
   onSelectRange,
   onSelectRect,
-  onCreateRect
+  onCreateRect,
+  onDraftRect,
+  draftRectangle,
+  onUpdateRect
 }: PdfPageOverlayLayerProps) {
   const pageId = `page-${pageNumber}`
   const [rectDraft, setRectDraft] = useState<RectDraft | null>(null)
@@ -248,7 +255,8 @@ export function PdfPageOverlayLayer({
       geometry.visual
     )
 
-    onCreateRect?.({
+    const emit = onDraftRect ?? onCreateRect
+    emit?.({
       id: nextRectId(),
       createdAt: Date.now(),
       overlayRectType,
@@ -280,6 +288,7 @@ export function PdfPageOverlayLayer({
         tool === 'rect-selection' ? handleRectPointerMove : undefined
       }
       onPointerUp={tool === 'rect-selection' ? handleRectPointerUp : undefined}
+      onPointerCancel={() => setRectDraft(null)}
       style={{
         pointerEvents:
           tool === 'rect-selection' || tool === 'drawing' ? 'auto' : 'none'
@@ -325,37 +334,21 @@ export function PdfPageOverlayLayer({
         })
       })}
 
-      {pageRects.map((rect) => {
-        const projected = projectStoredRectToViewport(
-          rect.rect,
-          rect.overlayRectType,
-          geometry.scaleOneViewport,
-          geometry.viewport,
-          geometry.visual
-        )
-        const borderColor =
-          typeof rect.selectionStyle?.borderColor === 'string'
-            ? rect.selectionStyle.borderColor
-            : 'rgba(25, 118, 210, 0.9)'
-        return (
-          <div
-            key={rect.id}
-            className={`hamster-reader__pdf-rect-annotation${
-              selectedRectId === rect.id
-                ? ' hamster-reader__pdf-rect-annotation--selected'
-                : ''
-            }`}
-            data-rect-id={rect.id}
-            style={{
-              left: projected.left,
-              top: projected.top,
-              width: projected.width,
-              height: projected.height,
-              borderColor
-            }}
-          />
-        )
-      })}
+      {[
+        ...pageRects,
+        ...(draftRectangle?.selectionId === pageId ? [draftRectangle] : [])
+      ].map((rect) => (
+        <PdfRectangleAnnotation
+          key={rect.id}
+          rectangle={rect}
+          selected={
+            selectedRectId === rect.id || draftRectangle?.id === rect.id
+          }
+          pageDiv={pageDiv}
+          geometry={geometry}
+          onUpdate={onUpdateRect}
+        />
+      ))}
 
       {rectDraft && (
         <div

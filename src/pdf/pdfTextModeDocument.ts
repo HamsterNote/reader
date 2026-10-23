@@ -41,7 +41,7 @@ const buildPagePolygon = (
         number
       ]
   )
-  return [projected[0], projected[1], projected[2], projected[3]]
+  return projected as IntermediateText['polygon']
 }
 
 const buildPageTexts = (
@@ -55,6 +55,7 @@ const buildPageTexts = (
     .filter((span) => span.canonicalText !== '')
     .map((span) => {
       const item = items[span.itemIndex]
+      if (!item) throw new Error('PDF text mapping references a missing item')
       const fontSize =
         item.height > 0
           ? item.height

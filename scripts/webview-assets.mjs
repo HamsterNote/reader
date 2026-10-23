@@ -18,6 +18,8 @@ export const REQUIRED_WEBVIEW_FILES = [
   'pdfjs/pdf.worker.min.mjs',
   'pdfjs/pdf_viewer.mjs',
   'pdfjs/pdf_viewer.css',
+  'pdfjs/wasm/openjpeg.wasm',
+  'pdfjs/wasm/qcms_bg.wasm',
   'pdfjs/standard_fonts/LiberationSans-Regular.ttf',
   'pdfjs/standard_fonts/FoxitSerif.pfb',
   'pdfjs/cmaps/Adobe-GB1-UCS2.bcmap',

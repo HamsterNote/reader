@@ -59,6 +59,11 @@ async function prepareStaticAssets() {
     join(pdfjsRoot, 'web/images'),
     join(outDir, 'pdfjs/images')
   )
+  await copyDirectory(
+    join(pdfjsRoot, 'web/images'),
+    join(outDir, 'assets/images')
+  )
+  await copyDirectory(join(pdfjsRoot, 'wasm'), join(outDir, 'pdfjs/wasm'))
 }
 
 async function createZip() {

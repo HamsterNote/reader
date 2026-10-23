@@ -17,6 +17,8 @@ import { EpubCompatIndex, type UnlocatableReason } from './epubCompatIndex'
 import { openEpubPackage, type EpubPackage } from './epubPackage'
 import { buildLegacyEpubModel, type LegacyEpubModel } from './legacyEpubModel'
 import type { SerializedSelection } from './epubCompatIndex'
+import { restrictPublicationResources } from './publicationSecurity'
+import type { ReaderTextAnchor } from '../types/readerData'
 
 export type EpubEngineTocEntry = {
   readonly label: string
@@ -74,6 +76,7 @@ export type EpubEngineOptions = {
   readonly onError?: (error: EpubEngineError) => void
   readonly onRelocate?: (location: EpubEngineLocation) => void
   readonly onSelection?: (payload: SerializedSelection | null) => void
+  readonly onDocumentLoad?: (doc: Document, pageNumber: number) => void
   /** 点击已绘高亮（overlayer hitTest），携带文档坐标矩形。 */
   readonly onHighlightActivate?: (
     id: string,
@@ -96,6 +99,18 @@ export type EpubEngine = {
   readonly clearRanges: () => void
   /** 当前选区 → 旧端点结构；无选区或节降级时 null。 */
   readonly serializeCurrentSelection: () => SerializedSelection | null
+  readonly getSelectionRange: () => Range | null
+  readonly selectRange: (id: string) => Promise<Range | null>
+  readonly serializeRange: (range: Range) => SerializedSelection | null
+  readonly clearSelection: () => void
+  readonly setActiveRange: (id: string | null) => void
+  readonly rangeIdAtPoint: (
+    doc: Document,
+    x: number,
+    y: number
+  ) => string | null
+  readonly captureTextAnchor: () => ReaderTextAnchor | undefined
+  readonly goToAnchor: (anchor: ReaderTextAnchor) => Promise<void>
   /** 取消加载、释放 object URL / 视图 / 归档；之后不再产生任何事件。 */
   readonly destroy: () => Promise<void>
 }
@@ -119,6 +134,8 @@ export const createEpubEngine = (
   let book: FoliateBook | null = null
   let coverUrl: string | null = null
   let fontScale = options.fontScale ?? DEFAULT_FONT_SCALE
+  let currentAnchor: ReaderTextAnchor | undefined
+  let activeRangeId: string | null = null
   // foliate section 下标 ↔ 兼容索引章节下标（href 对应；导航项在 spine 时错位）。
   let chapterIndexBySection: readonly (number | null)[] = []
   let sectionIndexByChapter: readonly (number | null)[] = []
@@ -202,7 +219,9 @@ export const createEpubEngine = (
       overlayer.remove(`epub-range:${sectionIndex}:${id}`)
     }
     if (!compat) return true
-    for (const [id, entry] of ranges) {
+    for (const [id, entry] of Array.from(ranges).filter(
+      ([key]) => key !== activeRangeId
+    )) {
       if (entry.reason !== null) continue
       const location = compat.locateRange(entry.data)
       if (location.status !== 'located') {
@@ -227,6 +246,10 @@ export const createEpubEngine = (
     const chapterIndex = chapterIndexBySection[sectionIndex]
     if (chapterIndex === null || chapterIndex === undefined) return
     liveDocs.set(chapterIndex, doc)
+    const pageNumber =
+      model?.pages.find((page) => page.chapterIndex === chapterIndex)
+        ?.pageNumber ?? 1
+    options.onDocumentLoad?.(doc, pageNumber)
     const healthy = compat.attachSectionDocument(chapterIndex, doc)
     if (!healthy) {
       // 节降级：只把锚定到本节的已定位高亮重新标记为不可定位，
@@ -288,6 +311,16 @@ export const createEpubEngine = (
     const page = model.pages.find(
       (entry) => entry.chapterIndex === chapterIndex
     )
+    const position =
+      detail.range && compat?.serializeRange(chapterIndex, detail.range)
+    currentAnchor = page
+      ? {
+          pageNumber: page.pageNumber,
+          textId: `${page.pageId}-text`,
+          text: position?.text ?? page.text.slice(0, 80),
+          offset: position?.start.offset ?? 0
+        }
+      : undefined
     options.onRelocate?.({
       chapterIndex,
       pageNumber: page?.pageNumber ?? null,
@@ -381,6 +414,8 @@ export const createEpubEngine = (
     if (!book || !view.renderer) {
       throw new Error('foliate view did not provide book/renderer')
     }
+    if (book.transformTarget) restrictPublicationResources(book.transformTarget)
+    view.addEventListener('external-link', (event) => event.preventDefault())
     buildSectionMaps(book, pack)
 
     const renderer = view.renderer
@@ -460,7 +495,12 @@ export const createEpubEngine = (
   const goToPage = async (pageNumber: number): Promise<boolean> => {
     if (destroyed || !model || !view?.renderer) return false
     const page = model.pages.find((entry) => entry.pageNumber === pageNumber)
-    if (!page || page.chapterIndex === null) return false
+    if (!page) return false
+    if (page.chapterIndex === null) {
+      currentAnchor = undefined
+      options.onRelocate?.({ chapterIndex: -1, pageNumber, fraction: 0 })
+      return true
+    }
     const sectionIndex = sectionIndexByChapter[page.chapterIndex]
     if (sectionIndex === null || sectionIndex === undefined) return false
     await view.renderer.goTo({ index: sectionIndex })
@@ -580,6 +620,81 @@ export const createEpubEngine = (
       drawAllLiveSections()
     },
     serializeCurrentSelection,
+    rangeIdAtPoint: (doc, x, y) => {
+      if (!compat) return null
+      for (const [id, entry] of ranges) {
+        const located = compat.locateRange(entry.data)
+        if (located.status !== 'located') continue
+        const hit = located.parts.some(
+          (part) =>
+            part.range.startContainer.ownerDocument === doc &&
+            Array.from(part.range.getClientRects()).some(
+              (rect) =>
+                x >= rect.left &&
+                x <= rect.right &&
+                y >= rect.top &&
+                y <= rect.bottom
+            )
+        )
+        if (hit) return id
+      }
+      return null
+    },
+    clearSelection: () => {
+      for (const doc of liveDocs.values()) doc.getSelection()?.removeAllRanges()
+    },
+    setActiveRange: (id) => {
+      activeRangeId = id
+      drawAllLiveSections()
+    },
+    getSelectionRange: () => {
+      for (const doc of liveDocs.values()) {
+        const selection = doc.getSelection()
+        if (selection && !selection.isCollapsed && selection.rangeCount) {
+          return selection.getRangeAt(0)
+        }
+      }
+      return null
+    },
+    serializeRange: (range) => {
+      for (const [chapter, doc] of liveDocs) {
+        if (range.startContainer.ownerDocument === doc)
+          return compat?.serializeRange(chapter, range) ?? null
+      }
+      return null
+    },
+    selectRange: async (id) => {
+      if (!(await goToRange(id)) || !compat) return null
+      const entry = ranges.get(id)
+      if (!entry) return null
+      const location = compat.locateRange(entry.data)
+      if (location.status !== 'located') return null
+      const range = location.parts.find(
+        (part) =>
+          liveDocs.get(part.chapterIndex) ===
+          part.range.startContainer.ownerDocument
+      )?.range
+      if (!range) return null
+      const selection = range.startContainer.ownerDocument?.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return range
+    },
+    captureTextAnchor: () => currentAnchor,
+    goToAnchor: async (anchor) => {
+      await goToPage(anchor.pageNumber)
+      if (!compat || !view?.renderer) return
+      const text = compat.pageText(anchor.pageNumber) ?? ''
+      const offset = Math.min(anchor.offset, Math.max(0, text.length - 1))
+      const endpoint = { selectionId: `page-${anchor.pageNumber}`, offset }
+      const located = compat.locateRange({
+        start: endpoint,
+        end: { ...endpoint, offset: offset + 1 },
+        text: text.slice(offset, offset + 1)
+      })
+      if (located.status === 'located' && located.parts[0])
+        await view.renderer.scrollToAnchor(located.parts[0].range)
+    },
     destroy
   }
 }

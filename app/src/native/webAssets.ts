@@ -3,6 +3,8 @@ import { Asset } from 'expo-asset'
 import * as FileSystem from 'expo-file-system/legacy'
 import { fromByteArray, toByteArray } from 'base64-js'
 import { strFromU8, unzipSync } from 'fflate'
+import { assertSafeFileId } from '../../../src/host/fileIdentity'
+import type { HostDocumentRecord } from '../../../src/host/readerDataStore'
 
 const WEB_ROOT = `${FileSystem.documentDirectory ?? ''}webreader/`
 const REQUIRED_ENTRIES = [
@@ -109,4 +111,45 @@ export async function preparePackagedWebReader(): Promise<PackagedWebReader> {
 
   const entryUrl = `${targetDir}index.html`
   return { entryUrl, baseUrl: targetDir, buildId: manifest.buildId }
+}
+
+/** WKWebView can read only this document and its packaged engine assets. */
+export async function stageReaderDocument(
+  baseUrl: string,
+  record: HostDocumentRecord
+) {
+  const fileId = assertSafeFileId(record.fileId)
+  const buildId = baseUrl.split('/').filter(Boolean).at(-1)
+  if (!buildId || !/^[a-f0-9]{16}$/.test(buildId))
+    throw new Error('Invalid reading asset directory')
+  const target = `${FileSystem.documentDirectory ?? ''}reader-sessions/${fileId}/${buildId}/`
+  const marker = await FileSystem.getInfoAsync(`${target}session-ready`)
+  if (!marker.exists) {
+    await FileSystem.deleteAsync(target, { idempotent: true })
+    await FileSystem.makeDirectoryAsync(target.slice(0, -buildId.length - 1), {
+      intermediates: true
+    })
+    await FileSystem.copyAsync({ from: baseUrl, to: target })
+    await FileSystem.writeAsStringAsync(`${target}session-ready`, buildId)
+  }
+  const publicationUrl = `${target}publication.${record.format}`
+  const publication = await FileSystem.getInfoAsync(publicationUrl)
+  if (
+    !publication.exists ||
+    (record.size > 0 && publication.size !== record.size)
+  ) {
+    const pending = `${publicationUrl}.pending`
+    await FileSystem.deleteAsync(pending, { idempotent: true })
+    await FileSystem.copyAsync({ from: record.cachedUri, to: pending })
+    await FileSystem.deleteAsync(publicationUrl, { idempotent: true })
+    await FileSystem.moveAsync({ from: pending, to: publicationUrl })
+  }
+  return { baseUrl: target, entryUrl: `${target}index.html`, publicationUrl }
+}
+
+export async function removeStagedDocument(fileId: string): Promise<void> {
+  await FileSystem.deleteAsync(
+    `${FileSystem.documentDirectory ?? ''}reader-sessions/${assertSafeFileId(fileId)}/`,
+    { idempotent: true }
+  )
 }

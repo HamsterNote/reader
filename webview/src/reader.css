@@ -1,0 +1,33 @@
+html,
+body,
+#reader {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+body {
+  font-family: system-ui, sans-serif;
+  color: #202327;
+  background: #fff;
+}
+#reader {
+  position: relative;
+}
+#reader > .hamster-reader {
+  width: 100%;
+  height: 100%;
+}
+.reader-outline-toggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #ced3d6;
+  border-radius: 4px;
+  background: #fff;
+  color: #202327;
+  z-index: 20;
+  font-size: 20px;
+}

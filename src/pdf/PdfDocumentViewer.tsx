@@ -22,7 +22,7 @@ import { createPortal } from 'react-dom'
 
 import { EventBus, PDFLinkService, PDFViewer } from './pdfViewerLib'
 
-import type { ReaderTextAnchor } from '../types/readerData'
+import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRectangle
@@ -43,12 +43,18 @@ import type { PdfPageOverlayGeometry } from './PdfPageOverlayLayer'
 import { PdfPageOverlayLayer } from './PdfPageOverlayLayer'
 import { edgeCropToClipPath } from './pdfOverlayGeometry'
 import type { OverlayRectUnit } from './pdfOverlayGeometry'
-import type { ReaderEdgeCrop } from '../types/readerData'
+import type { ReaderPageEdgeCrop } from '../types/readerData'
+import { resolvePageEdgeCrop } from '../components/IntermediateDocumentViewer/pageDisplay'
+import { EdgeCropOverlay } from '../components/IntermediateDocumentViewer/EdgeCropOverlay'
 import type { PdfPageSelectionContext } from './pdfSelectionSerializer'
 import { serializePdfTextSelection } from './pdfSelectionSerializer'
 import type { SerializedPdfSelection } from './pdfSelectionSerializer'
 import type { CanonicalPageText } from './pdfTextMapping'
-import { buildCanonicalPageText, enhanceTextLayer } from './pdfTextMapping'
+import {
+  buildCanonicalPageText,
+  enhanceTextLayer,
+  canonicalRangeToDomRange
+} from './pdfTextMapping'
 
 export type PdfViewerTool = 'text-selection' | 'rect-selection' | 'drawing'
 
@@ -68,10 +74,12 @@ export type PdfDocumentViewerProps = {
   readonly className?: string
   readonly scale?: number
   readonly defaultScale?: number
+  readonly fitWidth?: boolean
   readonly onScaleChange?: (scale: number) => void
   readonly currentPageNumber?: number
   readonly onPageChange?: (pageNumber: number) => void
   readonly onPagesLoaded?: (pageCount: number) => void
+  readonly onTextLayerReady?: (loadedPages: readonly number[]) => void
   readonly onLoadingProgress?: (
     loaded: number,
     total: number | undefined
@@ -88,6 +96,9 @@ export type PdfDocumentViewerProps = {
   readonly onHighlight?: (range: ReaderSelectionRange) => void
   readonly onSelectRange?: (id: string | null) => void
   readonly onCreateRect?: (rect: ReaderSelectionRectangle) => void
+  readonly onDraftRect?: (rect: ReaderSelectionRectangle) => void
+  readonly draftRectangle?: ReaderSelectionRectangle | null
+  readonly onUpdateRect?: (rect: ReaderSelectionRectangle) => void
   readonly onSelectRect?: (id: string | null) => void
   readonly onPagePaintingChange?: (
     pageId: string,
@@ -113,19 +124,26 @@ export type PdfDocumentViewerProps = {
   /** 隐藏页（数字或 'page-N'，与 ReaderData.hiddenPages 同契约）。 */
   readonly hiddenPages?: readonly (number | string)[]
   /** 裁切（0..1 分数；页级覆盖由宿主合并后传入单页值亦可）。 */
-  readonly edgeCrop?: ReaderEdgeCrop
+  readonly edgeCrop?: ReaderPageEdgeCrop
+  readonly edgeCropEditing?: boolean
+  readonly onEdgeCropApply?: React.ComponentProps<
+    typeof EdgeCropOverlay
+  >['onApply']
+  readonly onEdgeCropHidePage?: (pageNumber: number) => void
 }
 
 export type PdfDocumentViewerRef = {
   readonly scrollToPage: (pageNumber: number) => void
   readonly setScale: (scale: number) => void
   readonly captureTextAnchor: () => ReaderTextAnchor | null
-  readonly scrollToAnchor: (anchor: ReaderTextAnchor) => void
+  readonly scrollToAnchor: (anchor: ReaderBookmark) => Promise<void>
   readonly scrollToRange: (rangeId: string) => void
   readonly getCanonicalPageText: (pageNumber: number) => string | undefined
   /** 把当前原生选区转为公开 range 并触发 onHighlight。 */
   readonly confirmSelection: () => void
   readonly clearSelection: () => void
+  readonly selectRange: (id: string) => Range | null
+  readonly serializeSelection: () => SerializedPdfSelection | null
 }
 
 type TextLayerRenderedEvent = {
@@ -210,10 +228,12 @@ export const PdfDocumentViewer = forwardRef<
     className,
     scale,
     defaultScale = 1,
+    fitWidth = false,
     onScaleChange,
     currentPageNumber,
     onPageChange,
     onPagesLoaded,
+    onTextLayerReady,
     onLoadingProgress,
     onError,
     tool = 'text-selection',
@@ -227,6 +247,9 @@ export const PdfDocumentViewer = forwardRef<
     onHighlight,
     onSelectRange,
     onCreateRect,
+    onDraftRect,
+    draftRectangle,
+    onUpdateRect,
     onSelectRect,
     onPagePaintingChange,
     onPagePaintingsChange,
@@ -237,7 +260,10 @@ export const PdfDocumentViewer = forwardRef<
     onTextSelectionChange,
     onTextAnchorChange,
     hiddenPages,
-    edgeCrop
+    edgeCrop,
+    edgeCropEditing,
+    onEdgeCropApply,
+    onEdgeCropHidePage
   } = props
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -255,11 +281,59 @@ export const PdfDocumentViewer = forwardRef<
   const [geometryVersion, setGeometryVersion] = useState(0)
   const [overlayPages, setOverlayPages] = useState<readonly number[]>([])
   // 事件回调经 ref 读取，避免 init effect 闭包过期。
-  const callbacksRef = useRef({ onPageChange, onScaleChange, onPagesLoaded })
-  callbacksRef.current = { onPageChange, onScaleChange, onPagesLoaded }
+  const callbacksRef = useRef({
+    onPageChange,
+    onScaleChange,
+    onPagesLoaded,
+    onTextLayerReady
+  })
+  callbacksRef.current = {
+    onPageChange,
+    onScaleChange,
+    onPagesLoaded,
+    onTextLayerReady
+  }
   // pagesinit 时的初始缩放：受控 scale 优先于 defaultScale。
   const initialScaleRef = useRef(scale ?? defaultScale)
   initialScaleRef.current = scale ?? defaultScale
+  const fitWidthRef = useRef(fitWidth)
+  fitWidthRef.current = fitWidth
+  const pendingAnchor = useRef<{
+    anchor: ReaderBookmark
+    done: () => void
+  } | null>(null)
+  const restoreAnchor = () => {
+    const pending = pendingAnchor.current
+    if (!pending) return
+    const context = selectionContextsRef.current.get(pending.anchor.pageNumber)
+    if (!context) return
+    const anchor = pending.anchor
+    if ('offset' in anchor) {
+      const spans = Array.from(
+        context.textLayerDiv.querySelectorAll<HTMLElement>(
+          '[data-selection-start-offset]'
+        )
+      )
+      const target =
+        spans.find((span) => span.dataset.textId === anchor.textId) ??
+        spans.find(
+          (span) =>
+            Number(span.dataset.selectionStartOffset) +
+              (span.textContent?.length ?? 0) >
+            anchor.offset
+        )
+      target?.scrollIntoView({ block: 'start' })
+    } else {
+      const container = containerRef.current
+      if (container)
+        container.scrollTop +=
+          context.pageDiv.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          (context.pageDiv.clientHeight * anchor.verticalPercentage) / 100
+    }
+    pendingAnchor.current = null
+    pending.done()
+  }
 
   // text layer 增强（注入三件套 + 注册选区上下文）。幂等：可在
   // textlayerrendered 与 DOM 重组后重复调用。通过 ref 供 init effect 使用；
@@ -292,6 +366,10 @@ export const PdfDocumentViewer = forwardRef<
           scaleOneViewport: geometry.scaleOneViewport,
           visual: geometry.visual
         })
+        restoreAnchor()
+        callbacksRef.current.onTextLayerReady?.([
+          ...selectionContextsRef.current.keys()
+        ])
       } else if (!matched) {
         // 瞬态重组中不匹配：摘除上下文，等下一次 DOM 变化重试。
         selectionContextsRef.current.delete(pageNumber)
@@ -398,6 +476,10 @@ export const PdfDocumentViewer = forwardRef<
     // （子节点数 + 文本长度）避免叠加层 portal 变化触发的观察回调死循环。
     const enhancedSignatures = new WeakMap<HTMLElement, string>()
     const textLayerObserver = new MutationObserver(() => {
+      for (const [pageNumber, context] of selectionContextsRef.current) {
+        if (!viewerElement.contains(context.textLayerDiv))
+          selectionContextsRef.current.delete(pageNumber)
+      }
       // pdf.js 5.4 在 l10n 完成后会移除 page div 的 data-page-number，
       // 页号改用 pageView div 身份比对（与 viewer 内部状态一致）。
       const pageNumberByDiv = new Map<HTMLElement, number>()
@@ -443,13 +525,21 @@ export const PdfDocumentViewer = forwardRef<
       // pdf.js 默认 currentScaleValue='auto'（自适应宽度），且 setDocument
       // 内部在 pagesinit 之后还会按 _currentScaleValue 重设一次缩放；
       // 必须写 currentScaleValue 才能固定契约默认 scale=1（或受控值）。
-      viewer.currentScaleValue = String(initialScaleRef.current)
+      viewer.currentScaleValue = fitWidthRef.current
+        ? 'page-width'
+        : String(initialScaleRef.current)
       setOverlayPages(
         Array.from({ length: viewer.pagesCount }, (_, index) => index + 1)
       )
     }
     const handlePageRendered = () => bumpGeometry()
     const handleRotation = () => bumpGeometry()
+    const resize = new ResizeObserver(() => {
+      if (fitWidthRef.current && viewer.pagesCount)
+        viewer.currentScaleValue = 'page-width'
+      viewer.update()
+    })
+    resize.observe(container)
 
     eventBus.on('textlayerrendered', handleTextLayerRendered)
     eventBus.on('pagechanging', handlePageChanging)
@@ -468,12 +558,20 @@ export const PdfDocumentViewer = forwardRef<
       eventBus.off('pagerendered', handlePageRendered)
       eventBus.off('rotationchanging', handleRotation)
       textLayerObserver.disconnect()
+      resize.disconnect()
+      pendingAnchor.current?.done()
+      pendingAnchor.current = null
       setViewerDocument(viewer, null)
       viewerRef.current = null
       eventBusRef.current = null
       linkServiceRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    if (fitWidth && viewerRef.current?.pagesCount)
+      viewerRef.current.currentScaleValue = 'page-width'
+  }, [fitWidth])
 
   // 打开/切换文档：PdfSessionManager 保证旧加载结果不更新后续文档。
   useEffect(() => {
@@ -579,13 +677,14 @@ export const PdfDocumentViewer = forwardRef<
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
-    const clipPath = edgeCropToClipPath(edgeCrop)
     for (let pageNumber = 1; pageNumber <= viewer.pagesCount; pageNumber++) {
       const pageView = viewer.getPageView(pageNumber - 1)
       if (!pageView) continue
-      pageView.div.style.clipPath = clipPath ?? ''
+      pageView.div.style.clipPath = edgeCropEditing
+        ? ''
+        : (edgeCropToClipPath(resolvePageEdgeCrop(edgeCrop, pageNumber)) ?? '')
     }
-  }, [edgeCrop, geometryVersion, status])
+  }, [edgeCrop, edgeCropEditing, geometryVersion, status])
 
   const serializeCurrentSelection =
     useCallback((): SerializedPdfSelection | null => {
@@ -638,9 +737,12 @@ export const PdfDocumentViewer = forwardRef<
     const pageNumber = viewer.currentPageNumber
     const context = selectionContextsRef.current.get(pageNumber)
     if (!context) return null
-    const firstSpan = context.textLayerDiv.querySelector<HTMLElement>(
-      '[data-selection-start-offset]'
-    )
+    const top = containerRef.current?.getBoundingClientRect().top ?? 0
+    const firstSpan = Array.from(
+      context.textLayerDiv.querySelectorAll<HTMLElement>(
+        '[data-selection-start-offset]'
+      )
+    ).find((span) => span.getBoundingClientRect().bottom >= top)
     if (!firstSpan) return null
     return {
       pageNumber,
@@ -654,8 +756,19 @@ export const PdfDocumentViewer = forwardRef<
     const eventBus = eventBusRef.current
     if (!eventBus || !onTextAnchorChange) return
     const emit = () => onTextAnchorChange(captureTextAnchor())
+    const container = containerRef.current
+    let frame = 0
+    const onScroll = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(emit)
+    }
+    container?.addEventListener('scroll', onScroll)
     eventBus.on('pagechanging', emit)
-    return () => eventBus.off('pagechanging', emit)
+    return () => {
+      eventBus.off('pagechanging', emit)
+      container?.removeEventListener('scroll', onScroll)
+      cancelAnimationFrame(frame)
+    }
   }, [onTextAnchorChange, captureTextAnchor, status])
 
   useImperativeHandle(
@@ -673,13 +786,14 @@ export const PdfDocumentViewer = forwardRef<
       captureTextAnchor,
       scrollToAnchor: (anchor) => {
         const viewer = viewerRef.current
-        if (!viewer) return
+        if (!viewer) return Promise.resolve()
+        pendingAnchor.current?.done()
+        const promise = new Promise<void>((done) => {
+          pendingAnchor.current = { anchor, done }
+        })
         viewer.currentPageNumber = anchor.pageNumber
-        const context = selectionContextsRef.current.get(anchor.pageNumber)
-        const target = context?.textLayerDiv.querySelector<HTMLElement>(
-          `[data-text-id="${anchor.textId}"]`
-        )
-        target?.scrollIntoView({ block: 'start' })
+        restoreAnchor()
+        return promise
       },
       scrollToRange: (rangeId) => {
         const viewer = viewerRef.current
@@ -708,6 +822,36 @@ export const PdfDocumentViewer = forwardRef<
         containerRef.current?.ownerDocument.defaultView
           ?.getSelection()
           ?.removeAllRanges()
+      },
+      serializeSelection: serializeCurrentSelection,
+      selectRange: (id) => {
+        const stored = ranges.find((range) => range.id === id)
+        if (!stored) return null
+        const first = selectionContextsRef.current.get(
+          Number(stored.start.selectionId.slice(5))
+        )
+        const last = selectionContextsRef.current.get(
+          Number(stored.end.selectionId.slice(5))
+        )
+        if (!first || !last) return null
+        const start = canonicalRangeToDomRange(
+          first.canonical,
+          stored.start.offset,
+          first.canonical.text.length,
+          first.textLayerDiv
+        )
+        const end = canonicalRangeToDomRange(
+          last.canonical,
+          0,
+          stored.end.offset,
+          last.textLayerDiv
+        )
+        if (!start || !end) return null
+        start.setEnd(end.endContainer, end.endOffset)
+        const selection = first.textLayerDiv.ownerDocument.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(start)
+        return start
       }
     }),
     [
@@ -733,6 +877,14 @@ export const PdfDocumentViewer = forwardRef<
       const pageId = `page-${pageNumber}`
       return [
         <PdfOverlayPortal key={pageId} pageDiv={pageView.div}>
+          {edgeCropEditing && (
+            <EdgeCropOverlay
+              pageNumber={pageNumber}
+              edgeCrop={edgeCrop}
+              onApply={onEdgeCropApply}
+              onHidePage={onEdgeCropHidePage}
+            />
+          )}
           <PdfPageOverlayLayer
             pageNumber={pageNumber}
             pageDiv={pageView.div}
@@ -758,6 +910,9 @@ export const PdfDocumentViewer = forwardRef<
             onSelectRange={onSelectRange}
             onSelectRect={onSelectRect}
             onCreateRect={onCreateRect}
+            onDraftRect={onDraftRect}
+            draftRectangle={draftRectangle}
+            onUpdateRect={onUpdateRect}
           />
         </PdfOverlayPortal>
       ]
@@ -782,7 +937,14 @@ export const PdfDocumentViewer = forwardRef<
     onSelectRange,
     onSelectRect,
     onCreateRect,
-    getPageGeometry
+    onDraftRect,
+    draftRectangle,
+    onUpdateRect,
+    getPageGeometry,
+    edgeCropEditing,
+    edgeCrop,
+    onEdgeCropApply,
+    onEdgeCropHidePage
   ])
 
   const rootClassName = className

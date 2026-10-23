@@ -27,6 +27,7 @@ type ReaderWebViewProps = {
   readonly store: ReaderDataStore
   readonly entryUrl: string
   readonly baseUrl: string
+  readonly publicationUrl?: string
 }
 
 type HostState = 'loading' | 'connected' | 'error'
@@ -53,7 +54,8 @@ export function ReaderWebView({
   record,
   store,
   entryUrl,
-  baseUrl
+  baseUrl,
+  publicationUrl
 }: ReaderWebViewProps) {
   const webRef = useRef<WebView>(null)
   const sessionRef = useRef<ReaderHostSession | null>(null)
@@ -74,7 +76,7 @@ export function ReaderWebView({
       descriptor: {
         fileId: record.fileId,
         format: record.format,
-        fileUrl: record.cachedUri
+        fileUrl: publicationUrl ?? record.cachedUri
       },
       confirmedSnapshot: record.snapshot,
       persist: (snapshot) => store.saveSnapshot(record.fileId, snapshot),
@@ -87,7 +89,7 @@ export function ReaderWebView({
       session.dispose()
       sessionRef.current = null
     }
-  }, [record, sessionId, sourceToken, store])
+  }, [record, sessionId, sourceToken, store, publicationUrl])
 
   // WebView 每次（重）加载都只重置握手状态与超时；会话保持不变。
   useEffect(() => {

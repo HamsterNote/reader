@@ -141,6 +141,7 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
     getPageView(index: number): FakePageView | undefined {
       return this.pageViews[index]
     }
+    update() {}
   }
 
   return {

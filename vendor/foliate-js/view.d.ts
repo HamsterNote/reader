@@ -19,6 +19,7 @@ export interface FoliateSection {
 }
 
 export interface FoliateBook {
+  readonly transformTarget?: EventTarget
   readonly metadata?: { readonly title?: string; readonly language?: string }
   readonly sections: readonly FoliateSection[]
   readonly toc?: readonly FoliateTocItem[]

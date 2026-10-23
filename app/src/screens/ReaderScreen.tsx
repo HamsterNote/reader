@@ -15,6 +15,7 @@ import type {
   ReaderDataStore
 } from '../../../src/host/readerDataStore'
 import { ReaderWebView } from '../components/ReaderWebView'
+import { stageReaderDocument } from '../native/webAssets'
 
 type ReaderScreenProps = {
   readonly record: HostDocumentRecord
@@ -28,12 +29,32 @@ type ReaderScreenProps = {
 export function ReaderScreen({
   record,
   store,
-  entryUrl,
   baseUrl,
   onBack,
   onRecordUpdated
 }: ReaderScreenProps) {
   const [importing, setImporting] = useState(false)
+  const [staged, setStaged] = useState<Awaited<
+    ReturnType<typeof stageReaderDocument>
+  > | null>(null)
+  const [stageError, setStageError] = useState<string | null>(null)
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    let active = true
+    setStaged(null)
+    setStageError(null)
+    stageReaderDocument(baseUrl, record)
+      .then((result) => {
+        if (active) setStaged(result)
+      })
+      .catch((error: unknown) => {
+        if (active)
+          setStageError(error instanceof Error ? error.message : String(error))
+      })
+    return () => {
+      active = false
+    }
+  }, [baseUrl, record, retry])
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
@@ -67,6 +88,28 @@ export function ReaderScreen({
     }
   }
 
+  let content = <ActivityIndicator />
+  if (staged) {
+    content = (
+      <ReaderWebView
+        key={`${record.fileId}:${record.legacyImport?.importedAt ?? 0}`}
+        record={record}
+        store={store}
+        entryUrl={staged.entryUrl}
+        baseUrl={staged.baseUrl}
+        publicationUrl={staged.publicationUrl}
+      />
+    )
+  } else if (stageError) {
+    content = (
+      <View>
+        <Text role='alert'>{stageError}</Text>
+        <Pressable onPress={() => setRetry((value) => value + 1)}>
+          <Text>重试</Text>
+        </Pressable>
+      </View>
+    )
+  }
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -92,13 +135,7 @@ export function ReaderScreen({
           )}
         </Pressable>
       </View>
-      <ReaderWebView
-        key={record.fileId}
-        record={record}
-        store={store}
-        entryUrl={entryUrl}
-        baseUrl={baseUrl}
-      />
+      {content}
     </View>
   )
 }

@@ -7,7 +7,7 @@ Expo SDK 54 dev client that hosts the Web reader in a `react-native-webview`.
 yarn install --frozen-lockfile
 yarn build:webview          # writes app/assets/webreader.zip
 yarn verify:webview
-cd app && npx expo prebuild
+yarn host:prebuild
 yarn host:android           # or: yarn host:ios on macOS
 ```
 
@@ -15,5 +15,6 @@ yarn host:android           # or: yarn host:ios on macOS
 reader until the zip exists. See `../docs/expo-host.md` for architecture, security
 rules and the verification matrix.
 
-Reading resource self-check: open the app and press “运行资源自检”; the standalone
-URL `index.html?selftest=1` runs the same checks automatically.
+The production entry now renders the EPUB/PDF reader. The former diagnostic entry
+is retained as source in `webview/diagnostics.html`, outside the production bundle.
+See `../docs/integration-acceptance.md` for current results and unpassed gates.

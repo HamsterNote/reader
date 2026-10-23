@@ -1,7 +1,17 @@
 import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
   root: 'webview',
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@hamster-note/reader': fileURLToPath(
+        new URL('./src/index.ts', import.meta.url)
+      )
+    }
+  },
   base: './',
   build: {
     outDir: '../webview-dist',

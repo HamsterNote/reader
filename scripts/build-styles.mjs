@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { compile } from 'sass'
@@ -57,6 +57,11 @@ function writeBundledCss() {
 
   mkdirSync(dirname(distStylePath), { recursive: true })
   writeFileSync(distStylePath, bundledCss)
+  cpSync(
+    dirname(require.resolve('pdfjs-dist/web/pdf_viewer.css')) + '/images',
+    'dist/images',
+    { recursive: true }
+  )
 }
 
 writeBundledCss()

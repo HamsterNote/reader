@@ -131,9 +131,10 @@ export function enhanceTextLayer(
     const elementText = (element.textContent ?? '').normalize('NFKC')
     let found: CanonicalTextSpan | null = null
     for (let i = spanPointer; i < page.spans.length; i++) {
-      if (page.spans[i].canonicalText === '') continue
-      if (page.spans[i].canonicalText === elementText) {
-        found = page.spans[i]
+      const candidate = page.spans[i]
+      if (!candidate || candidate.canonicalText === '') continue
+      if (candidate.canonicalText === elementText) {
+        found = candidate
         spanPointer = i + 1
         break
       }
@@ -221,8 +222,8 @@ export function domPositionToCanonicalOffset(
   // dom → canonical 逆映射：取满足 canonicalToDom[o] <= domOffset 的最大 o，
   // 即“覆盖该 dom 位置的簇的结束边界”，保证连字簇整体归入已选范围。
   let result = span.canonicalStart
-  for (let o = 0; o < span.canonicalToDom.length; o++) {
-    if (span.canonicalToDom[o] <= domOffset) {
+  for (const [o, position] of span.canonicalToDom.entries()) {
+    if (position <= domOffset) {
       result = span.canonicalStart + o
     } else {
       break
@@ -245,16 +246,14 @@ export function canonicalOffsetToDomPosition(
   const nonEmptySpans = page.spans.filter(
     (candidate) => candidate.canonicalText !== ''
   )
+  const lastSpan = nonEmptySpans.at(-1)
   const span =
     nonEmptySpans.find(
       (candidate) =>
         canonicalOffset >= candidate.canonicalStart &&
         canonicalOffset < candidate.canonicalEnd
     ) ??
-    (nonEmptySpans.length > 0 &&
-    canonicalOffset === nonEmptySpans[nonEmptySpans.length - 1].canonicalEnd
-      ? nonEmptySpans[nonEmptySpans.length - 1]
-      : null) ??
+    (canonicalOffset === lastSpan?.canonicalEnd ? lastSpan : null) ??
     null
   if (!span) return null
 

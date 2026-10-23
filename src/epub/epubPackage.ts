@@ -160,7 +160,10 @@ export const isNavigationManifestItem = (item: {
   mediaType?: string
   properties?: string
 }): boolean => {
-  const fileName = item.href.split('#')[0].toLowerCase().split('/').pop()
+  const fileName = (item.href.split('#')[0] ?? '')
+    .toLowerCase()
+    .split('/')
+    .pop()
   const mediaType = String(
     item['media-type'] ?? item.mediaType ?? ''
   ).toLowerCase()

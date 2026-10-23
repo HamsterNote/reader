@@ -1,5 +1,8 @@
 # Expo 宿主（HAM-90, tasks 4.1–4.5）
 
+> 下文的验证结果记录 HAM-90 诊断入口阶段。HAM-91 已接入真实阅读入口，并调整
+> 文件级资源根；当前行为、命令和未通过门槛以 `integration-acceptance.md` 为准。
+
 reader 的 Expo dev client 宿主与 WebView 桥接。Web 阅读层仍是原 reader 库的
 消费方；宿主只负责选文件、受控缓存、文件级持久化、WebView 生命周期和安全边界。
 EPUB/PDF 引擎由主线 A/B 通过 `ReaderEngineAdapter` 接入，本分支提供契约桩与

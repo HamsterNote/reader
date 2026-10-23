@@ -14,6 +14,7 @@ import {
   type ReaderComment,
   type ReaderData,
   type ReaderEdgeCrop,
+  type ReaderEngineSource,
   type ReaderFontScale,
   type ReaderLinkedSelectionData,
   type ReaderLoadingProgress,
@@ -74,6 +75,9 @@ import {
 } from './ViewerLifetimeBoundary'
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
+
+const newEnginesEnabled = () =>
+  new URLSearchParams(window.location.search).get('engines') === 'next'
 
 type FileSelectionSource = 'reader-upload' | 'sidebar' | 'recent-file'
 
@@ -994,6 +998,9 @@ export function App() {
   // --- Selection 库集成演示 state ---
   // ranges 列表：受控模式，Reader 内部不修改，由 onSelect 回调外部追加
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
+  const [engineSource, setEngineSource] = useState<
+    ReaderEngineSource | undefined
+  >()
   useEffect(() => {
     traceHighlight('mode.render', {
       mode: renderMode,
@@ -1764,6 +1771,11 @@ export function App() {
 
         await saveSelectedFile(selection)
         if (!isCurrentSelection(selection)) return
+        if (newEnginesEnabled() && result.label === 'EPUB') {
+          const data = new Uint8Array(await selection.file.arrayBuffer())
+          if (!isCurrentSelection(selection)) return
+          setEngineSource({ format: 'epub', data })
+        }
         commitParsedDocument(selection, result.document, result.label)
       } catch (error) {
         if (!isCurrentSelection(selection)) return
@@ -1777,6 +1789,7 @@ export function App() {
 
   const startFileSelection = useCallback(
     (file: File, source: FileSelectionSource) => {
+      setEngineSource(undefined)
       selectionAbortControllerRef.current?.abort()
       const selection: FileSelection = {
         epoch: (selectionEpochRef.current?.epoch ?? 0) + 1,
@@ -1865,6 +1878,9 @@ export function App() {
         await pdfRetirementRef.current
         if (!isCurrentSelection(selection) || sourceBuffer === null) return
 
+        const engineBytes = newEnginesEnabled()
+          ? new Uint8Array(sourceBuffer.slice(0))
+          : null
         const handle = await openPdfDocumentForReader(PdfParser, sourceBuffer, {
           pages,
           signal: selectionAbortControllerRef.current?.signal,
@@ -1894,6 +1910,15 @@ export function App() {
           parseMs: performance.now() - parseStartedAt
         }))
         commitParsedDocument(selection, handle.document, 'PDF')
+        if (engineBytes)
+          setEngineSource({
+            format: 'pdf',
+            data: engineBytes,
+            workerSrc: new URL(
+              'pdfjs-worker/pdf.worker.min.mjs',
+              window.document.baseURI
+            ).href
+          })
         setPdfLoadState({ phase: 'done', selection })
 
         await saveSelectedFile(selection)
@@ -2933,6 +2958,7 @@ export function App() {
         >
           {pdfLoadState.phase !== 'ready' && (
             <Reader
+              engineSource={engineSource}
               document={document || undefined}
               loadingProgress={readerLoadingProgress}
               isEpub={loadedParserLabel === 'EPUB'}

@@ -1,6 +1,7 @@
 import * as Crypto from 'expo-crypto'
 import * as DocumentPicker from 'expo-document-picker'
 import * as FileSystem from 'expo-file-system/legacy'
+import { removeStagedDocument } from './webAssets'
 
 import {
   createDocumentFileId,
@@ -119,6 +120,7 @@ export async function removeDocument(
   record: HostDocumentRecord
 ): Promise<void> {
   await store.remove(record.fileId)
+  await removeStagedDocument(record.fileId)
   if (record.cachedUri.startsWith(FILE_ROOT)) {
     await FileSystem.deleteAsync(record.cachedUri, { idempotent: true })
   }
