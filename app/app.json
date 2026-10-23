@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Hamster Reader",
+    "slug": "hamster-reader",
+    "version": "0.1.0",
+    "scheme": "hamsterreader",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hamsternote.reader"
+    },
+    "android": {
+      "package": "com.hamsternote.reader",
+      "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "plugins": ["expo-document-picker"],
+    "assetBundlePatterns": ["assets/**/*"],
+    "experiments": {
+      "autolinkingModuleResolution": true
+    }
+  }
+}

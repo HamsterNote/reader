@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' file: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' file: blob:; style-src 'self' 'unsafe-inline' file:; img-src 'self' data: blob: file:; font-src 'self' data: file:; worker-src 'self' blob: file:; connect-src 'self' file: blob: data:; frame-src 'self' file: blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Hamster Reader</title>
+  </head>
+  <body>
+    <main id="app">
+      <header>
+        <h1>Hamster Reader</h1>
+        <span id="connection" class="badge">连接中…</span>
+      </header>
+      <section id="document" class="card">
+        <h2>文档</h2>
+        <p id="document-info">等待宿主下发文档…</p>
+      </section>
+      <section class="card">
+        <h2>宿主数据</h2>
+        <p id="restore-info">等待 restore…</p>
+        <p id="pending-info" class="muted"></p>
+      </section>
+      <section class="card">
+        <h2>阅读资源自检</h2>
+        <p class="muted">
+          校验随应用打包的 Foliate ESM、PDF worker、字体与 CSS；不依赖网络。
+        </p>
+        <button id="run-self-check" type="button">运行资源自检</button>
+        <ul id="self-check-results" class="checks"></ul>
+      </section>
+      <footer>
+        <span>协议 v1</span>
+        <span id="session-label" class="muted"></span>
+      </footer>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
