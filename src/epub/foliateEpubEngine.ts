@@ -77,6 +77,7 @@ export type EpubEngineOptions = {
   readonly onRelocate?: (location: EpubEngineLocation) => void
   readonly onSelection?: (payload: SerializedSelection | null) => void
   readonly onDocumentLoad?: (doc: Document, pageNumber: number) => void
+  readonly onDocumentUnload?: (doc: Document) => void
   /** 点击已绘高亮（overlayer hitTest），携带文档坐标矩形。 */
   readonly onHighlightActivate?: (
     id: string,
@@ -102,6 +103,16 @@ export type EpubEngine = {
   readonly getSelectionRange: () => Range | null
   readonly selectRange: (id: string) => Promise<Range | null>
   readonly serializeRange: (range: Range) => SerializedSelection | null
+  readonly updateRangeEndpoint: (
+    id: string,
+    range: Range,
+    end: boolean
+  ) => SerializedSelection | null
+  readonly getRangePart: (id: string) => Range | null
+  readonly setHiddenPages: (
+    pages: readonly (number | string)[],
+    editing?: boolean
+  ) => Promise<void>
   readonly clearSelection: () => void
   readonly setActiveRange: (id: string | null) => void
   readonly rangeIdAtPoint: (
@@ -135,7 +146,11 @@ export const createEpubEngine = (
   let coverUrl: string | null = null
   let fontScale = options.fontScale ?? DEFAULT_FONT_SCALE
   let currentAnchor: ReaderTextAnchor | undefined
+  let displayedPage: number | undefined
   let activeRangeId: string | null = null
+  let hiddenPages = new Set<number>()
+  let cropEditing = false
+  const originalLinear = new Map<number, string | undefined>()
   // foliate section 下标 ↔ 兼容索引章节下标（href 对应；导航项在 spine 时错位）。
   let chapterIndexBySection: readonly (number | null)[] = []
   let sectionIndexByChapter: readonly (number | null)[] = []
@@ -148,6 +163,30 @@ export const createEpubEngine = (
   // 已加载但尚未补画叠加的 foliate section（'load' 时 getContents 未就绪）。
   const pendingOverlayDraw = new Set<number>()
   const docListeners: [Document, string, EventListener][] = []
+  let turning = false
+  const turnAtBoundary = async (doc: Document, forward: boolean) => {
+    if (destroyed || turning || cropEditing || !view?.renderer) return false
+    const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
+    const viewport = options.container.getBoundingClientRect()
+    if (
+      !frame ||
+      (forward
+        ? frame.bottom > viewport.bottom + 2
+        : frame.top < viewport.top - 2)
+    )
+      return false
+    turning = true
+    try {
+      if (forward) await view.renderer.next()
+      else await view.renderer.prev()
+    } catch (error) {
+      if (!destroyed)
+        options.onError?.({ code: 'render-failed', message: String(error) })
+    } finally {
+      turning = false
+    }
+    return true
+  }
 
   let resolveReady!: (info: EpubEngineBookInfo) => void
   let rejectReady!: (error: Error) => void
@@ -241,10 +280,31 @@ export const createEpubEngine = (
     return true
   }
 
+  const releaseLiveDocuments = (replacingChapter: number) => {
+    // Foliate recycles its single reflowable iframe. Do not retain its Window/listeners.
+    for (const [oldChapter, oldDoc] of liveDocs) {
+      if (
+        oldChapter !== replacingChapter &&
+        oldDoc.defaultView?.frameElement?.isConnected
+      )
+        continue
+      options.onDocumentUnload?.(oldDoc)
+      for (let i = docListeners.length - 1; i >= 0; i--) {
+        const [owner, type, listener] = docListeners[i]
+        if (owner !== oldDoc) continue
+        owner.removeEventListener(type, listener)
+        docListeners.splice(i, 1)
+      }
+      compat?.detachSectionDocument(oldChapter)
+      liveDocs.delete(oldChapter)
+    }
+  }
+
   const onSectionLoad = (doc: Document, sectionIndex: number) => {
     if (destroyed || !compat) return
     const chapterIndex = chapterIndexBySection[sectionIndex]
     if (chapterIndex === null || chapterIndex === undefined) return
+    releaseLiveDocuments(chapterIndex)
     liveDocs.set(chapterIndex, doc)
     const pageNumber =
       model?.pages.find((page) => page.chapterIndex === chapterIndex)
@@ -290,11 +350,49 @@ export const createEpubEngine = (
         })
       }
     }
+    const onWheel = (event: Event) => {
+      const wheel = event as WheelEvent
+      if (
+        wheel.ctrlKey ||
+        wheel.buttons ||
+        !wheel.deltaY ||
+        Math.abs(wheel.deltaX) > Math.abs(wheel.deltaY)
+      )
+        return
+      void turnAtBoundary(doc, wheel.deltaY > 0)
+    }
+    let touchStart: { y: number; time: number } | null = null
+    const onTouchStart = (event: Event) => {
+      const touches = (event as TouchEvent).touches
+      touchStart =
+        touches.length === 1
+          ? { y: touches[0].clientY, time: Date.now() }
+          : null
+    }
+    const onTouchEnd = (event: Event) => {
+      const start = touchStart
+      touchStart = null
+      const end = (event as TouchEvent).changedTouches[0]
+      if (
+        !start ||
+        !end ||
+        Date.now() - start.time > 450 ||
+        Math.abs(end.clientY - start.y) < 50
+      )
+        return
+      void turnAtBoundary(doc, end.clientY < start.y)
+    }
     doc.addEventListener('selectionchange', onSelectionChange)
     doc.addEventListener('click', onClick)
+    doc.addEventListener('wheel', onWheel, { passive: true })
+    doc.addEventListener('touchstart', onTouchStart, { passive: true })
+    doc.addEventListener('touchend', onTouchEnd, { passive: true })
     docListeners.push(
       [doc, 'selectionchange', onSelectionChange],
-      [doc, 'click', onClick]
+      [doc, 'click', onClick],
+      [doc, 'wheel', onWheel],
+      [doc, 'touchstart', onTouchStart],
+      [doc, 'touchend', onTouchEnd]
     )
   }
 
@@ -321,6 +419,7 @@ export const createEpubEngine = (
           offset: position?.start.offset ?? 0
         }
       : undefined
+    displayedPage = page?.pageNumber
     options.onRelocate?.({
       chapterIndex,
       pageNumber: page?.pageNumber ?? null,
@@ -494,11 +593,24 @@ export const createEpubEngine = (
 
   const goToPage = async (pageNumber: number): Promise<boolean> => {
     if (destroyed || !model || !view?.renderer) return false
-    const page = model.pages.find((entry) => entry.pageNumber === pageNumber)
+    if (!model.pages.some((entry) => entry.pageNumber === pageNumber))
+      return false
+    const visible = model.pages.filter(
+      (entry) => cropEditing || !hiddenPages.has(entry.pageNumber)
+    )
+    const page =
+      visible.find((entry) => entry.pageNumber === pageNumber) ??
+      visible.find((entry) => entry.pageNumber > pageNumber) ??
+      visible.at(-1)
     if (!page) return false
     if (page.chapterIndex === null) {
       currentAnchor = undefined
-      options.onRelocate?.({ chapterIndex: -1, pageNumber, fraction: 0 })
+      displayedPage = page.pageNumber
+      options.onRelocate?.({
+        chapterIndex: -1,
+        pageNumber: page.pageNumber,
+        fraction: 0
+      })
       return true
     }
     const sectionIndex = sectionIndexByChapter[page.chapterIndex]
@@ -511,6 +623,10 @@ export const createEpubEngine = (
     if (destroyed || !book || !view?.renderer) return false
     const resolved = book.resolveHref(href)
     if (!resolved) return false
+    const chapter = chapterIndexBySection[resolved.index]
+    const page = model?.pages.find((entry) => entry.chapterIndex === chapter)
+    if (page && hiddenPages.has(page.pageNumber) && !cropEditing)
+      return goToPage(page.pageNumber)
     await view.renderer.goTo({ index: resolved.index, anchor: resolved.anchor })
     return true
   }
@@ -544,6 +660,7 @@ export const createEpubEngine = (
       doc.removeEventListener(type, listener)
     }
     docListeners.length = 0
+    for (const doc of liveDocs.values()) options.onDocumentUnload?.(doc)
     liveDocs.clear()
     ranges.clear()
     try {
@@ -569,6 +686,20 @@ export const createEpubEngine = (
 
   void boot()
 
+  const getRangePart = (id: string): Range | null => {
+    const entry = ranges.get(id)
+    if (!entry || !compat) return null
+    const located = compat.locateRange(entry.data)
+    if (located.status !== 'located') return null
+    const visibleDocs =
+      view?.renderer?.getContents().map((item) => item.doc) ?? []
+    return (
+      located.parts.find((part) =>
+        visibleDocs.includes(part.range.startContainer.ownerDocument!)
+      )?.range ?? null
+    )
+  }
+
   return {
     ready,
     goToPage,
@@ -588,6 +719,11 @@ export const createEpubEngine = (
     showRanges: (rangeList) => {
       const located: string[] = []
       const unlocatable: { id: string; reason: UnlocatableReason }[] = []
+      for (const id of ranges.keys()) {
+        view?.renderer?.getContents().forEach((contents) => {
+          contents.overlayer?.remove(`epub-range:${contents.index}:${id}`)
+        })
+      }
       ranges.clear()
       if (compat) {
         for (const data of rangeList) {
@@ -620,6 +756,42 @@ export const createEpubEngine = (
       drawAllLiveSections()
     },
     serializeCurrentSelection,
+    getRangePart,
+    updateRangeEndpoint: (id, range, end) => {
+      const entry = ranges.get(id)
+      if (!entry || !compat) return null
+      for (const [chapter, doc] of liveDocs) {
+        if (range.startContainer.ownerDocument === doc)
+          return compat.updateEndpoint(entry.data, range, chapter, end)
+      }
+      return null
+    },
+    setHiddenPages: async (pages, editing = false) => {
+      hiddenPages = new Set(
+        pages.map((page) =>
+          typeof page === 'number' ? page : Number(page.slice(5))
+        )
+      )
+      cropEditing = editing
+      book?.sections.forEach((section, index) => {
+        if (!originalLinear.has(index))
+          originalLinear.set(index, section.linear)
+        const chapter = chapterIndexBySection[index]
+        const page = model?.pages.find(
+          (entry) => entry.chapterIndex === chapter
+        )
+        section.linear =
+          page && hiddenPages.has(page.pageNumber) && !editing
+            ? 'no'
+            : originalLinear.get(index)
+      })
+      if (
+        !editing &&
+        displayedPage !== undefined &&
+        hiddenPages.has(displayedPage)
+      )
+        await goToPage(displayedPage)
+    },
     rangeIdAtPoint: (doc, x, y) => {
       if (!compat) return null
       for (const [id, entry] of ranges) {
@@ -667,13 +839,7 @@ export const createEpubEngine = (
       if (!(await goToRange(id)) || !compat) return null
       const entry = ranges.get(id)
       if (!entry) return null
-      const location = compat.locateRange(entry.data)
-      if (location.status !== 'located') return null
-      const range = location.parts.find(
-        (part) =>
-          liveDocs.get(part.chapterIndex) ===
-          part.range.startContainer.ownerDocument
-      )?.range
+      const range = getRangePart(id)
       if (!range) return null
       const selection = range.startContainer.ownerDocument?.getSelection()
       selection?.removeAllRanges()

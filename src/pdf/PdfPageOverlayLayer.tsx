@@ -16,16 +16,19 @@ import type {
 } from '../types/selection'
 import { PageDrawingLayer } from '../components/PageDrawingLayer'
 import { PdfRectangleAnnotation } from './PdfRectangleAnnotation'
-import type { OverlayRectUnit, PageVisualSize } from './pdfOverlayGeometry'
+import type {
+  OverlayRectUnit,
+  PageVisualSize,
+  OverlayViewport
+} from './pdfOverlayGeometry'
 import { projectStoredRectToViewport } from './pdfOverlayGeometry'
 import { captureViewportRectAsStored } from './pdfOverlayGeometry'
-import type { PageViewport } from './pdfjsRuntime'
 import { deriveRectsForCanonicalRange } from './pdfSelectionSerializer'
 import type { PdfPageSelectionContext } from './pdfSelectionSerializer'
 
 export type PdfPageOverlayGeometry = {
-  readonly viewport: PageViewport
-  readonly scaleOneViewport: PageViewport
+  readonly viewport: OverlayViewport
+  readonly scaleOneViewport: OverlayViewport
   readonly visual: PageVisualSize
 }
 

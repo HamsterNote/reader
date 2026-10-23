@@ -37,6 +37,79 @@ const loadV4Ranges = (): readonly EpubEngineRange[] => {
 }
 
 describe('epub engine session: lifecycle and race isolation', () => {
+  it('skips a hidden prepended cover even though it has no text anchor', async () => {
+    const fake = makeFakeView({
+      sectionHrefs: ['OPS/chapter1.xhtml', 'OPS/chapter2.xhtml']
+    })
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/spine-omits-cover.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    expect(await engine.goToPage(1)).toBe(true)
+    expect(engine.captureTextAnchor()).toBeUndefined()
+    const calls = fake.handle.renderer.goToCalls.length
+    engine.setHiddenPages([1])
+    expect(fake.handle.renderer.goToCalls.length).toBe(calls + 1)
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 0 })
+    await engine.destroy()
+  })
+
+  it('skips hidden chapters in natural navigation and restores them for crop editing', async () => {
+    const fake = makeFakeView()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    engine.setHiddenPages(['page-3'])
+    expect(fake.handle.view.book?.sections[2].linear).toBe('no')
+    await engine.goToPage(3)
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 3 })
+    engine.setHiddenPages([3], true)
+    expect(fake.handle.view.book?.sections[2].linear).toBe('yes')
+    await engine.goToPage(3)
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 2 })
+    engine.setHiddenPages([])
+    expect(fake.handle.view.book?.sections[2].linear).toBe('yes')
+    await engine.destroy()
+  })
+
+  it('unhooks recycled chapter documents before binding the next chapter', async () => {
+    const fake = makeFakeView()
+    const onSelection = vi.fn()
+    const onDocumentUnload = vi.fn()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub'),
+        onSelection,
+        onDocumentUnload
+      },
+      fake.factory
+    )
+    await engine.ready
+    const first = document.implementation.createHTMLDocument()
+    const second = document.implementation.createHTMLDocument()
+    fake.handle.emit('load', { doc: first, index: 1 })
+    first.dispatchEvent(new Event('selectionchange'))
+    expect(onSelection).toHaveBeenCalledTimes(1)
+    fake.handle.emit('load', { doc: second, index: 2 })
+    expect(onDocumentUnload).toHaveBeenCalledWith(first)
+    first.dispatchEvent(new Event('selectionchange'))
+    expect(onSelection).toHaveBeenCalledTimes(1)
+    second.dispatchEvent(new Event('selectionchange'))
+    expect(onSelection).toHaveBeenCalledTimes(2)
+    await engine.destroy()
+    expect(onDocumentUnload).toHaveBeenCalledWith(second)
+  })
+
   beforeEach(() => {
     document.body.innerHTML = ''
   })

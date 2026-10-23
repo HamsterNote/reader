@@ -16,6 +16,28 @@
     height: 100%;
   }
 }
+.hamster-reader__epub-tools-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.hamster-reader__epub-tools-page {
+  position: absolute;
+}
+.hamster-reader__engine-hidden-page {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #9ca3af;
+  background: #f8f9fa;
+  color: #4b5563;
+  visibility: visible;
+}
+.pdfViewer .page[data-reader-hidden='true'] > * {
+  visibility: hidden;
+}
 .hamster-reader__engine-handle {
   width: 14px;
   height: 14px;

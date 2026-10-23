@@ -18,6 +18,45 @@ import {
 
 const SNAPSHOT_DEBOUNCE_MS = 100
 
+function magnifierCaptureSource(source: HTMLElement, owner: Document) {
+  if (source.ownerDocument === owner)
+    return { element: source, release: () => {} }
+  // Publication CSP disallows child frames, including html2canvas's internal clone.
+  // Copy computed presentation into the trusted reader document for rasterization.
+  const wrapper = owner.createElement('div')
+  const box = source.getBoundingClientRect()
+  Object.assign(wrapper.style, {
+    position: 'fixed',
+    left: '-100000px',
+    top: '0',
+    width: `${box.width}px`,
+    height: `${box.height}px`,
+    pointerEvents: 'none',
+    overflow: 'hidden'
+  })
+  wrapper.setAttribute('aria-hidden', 'true')
+  const clone = owner.importNode(source, true)
+  const originals = [source, ...source.querySelectorAll<HTMLElement>('*')]
+  const copies = [clone, ...clone.querySelectorAll<HTMLElement>('*')]
+  originals.forEach((element, index) => {
+    const computed = source.ownerDocument.defaultView?.getComputedStyle(element)
+    if (!computed) return
+    for (const key of Array.from(computed))
+      copies[index].style.setProperty(key, computed.getPropertyValue(key))
+  })
+  Object.assign(clone.style, {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    margin: '0',
+    width: `${box.width}px`,
+    height: `${box.height}px`
+  })
+  wrapper.append(clone)
+  owner.body.append(wrapper)
+  return { element: wrapper, release: () => wrapper.remove() }
+}
+
 export type { MagnifierPoint } from './rangeMagnifierGeometry'
 export {
   resolveMagnifierPosition,
@@ -85,32 +124,46 @@ export const RangeMagnifierProvider = ({
     (page: HTMLElement) => {
       const captureGeneration = captureGenerationRef.current + 1
       captureGenerationRef.current = captureGeneration
-      const sourceRect = page.getBoundingClientRect()
+      const source = page.getBoundingClientRect()
+      const frame =
+        page.ownerDocument.defaultView?.frameElement?.getBoundingClientRect()
+      const sourceRect = new DOMRect(
+        source.x + (frame?.x ?? 0),
+        source.y + (frame?.y ?? 0),
+        source.width,
+        source.height
+      )
       const deviceScale = page.ownerDocument.defaultView?.devicePixelRatio ?? 1
+      const captureSource = magnifierCaptureSource(
+        page,
+        rootElement?.ownerDocument ?? page.ownerDocument
+      )
 
-      html2canvas(page, {
+      html2canvas(captureSource.element, {
         backgroundColor: null,
         ignoreElements: (element) =>
           element.classList.contains('hsn-selection-handle'),
         logging: false,
         scale: deviceScale,
         useCORS: true
-      }).then(
-        (canvas) => {
-          if (captureGenerationRef.current !== captureGeneration) return
+      })
+        .finally(captureSource.release)
+        .then(
+          (canvas) => {
+            if (captureGenerationRef.current !== captureGeneration) return
 
-          snapshotRef.current = { canvas, sourceRect }
-          const currentPoint = pointRef.current
-          const output = canvasRef.current
-          if (currentPoint && output)
-            drawMagnifierSnapshot(output, snapshotRef.current, currentPoint)
-        },
-        () => {
-          if (captureGenerationRef.current === captureGeneration) end()
-        }
-      )
+            snapshotRef.current = { canvas, sourceRect }
+            const currentPoint = pointRef.current
+            const output = canvasRef.current
+            if (currentPoint && output)
+              drawMagnifierSnapshot(output, snapshotRef.current, currentPoint)
+          },
+          () => {
+            if (captureGenerationRef.current === captureGeneration) end()
+          }
+        )
     },
-    [end]
+    [end, rootElement]
   )
 
   const scheduleCapture = useCallback(() => {
@@ -150,9 +203,14 @@ export const RangeMagnifierProvider = ({
     (source: HTMLElement, point: MagnifierPoint) => {
       const lens = lensRef.current
       const page = source.closest<HTMLElement>(
-        '.hamster-reader__intermediate-page, .hamster-reader__intermediate-text-page'
+        '.hamster-reader__intermediate-page, .hamster-reader__intermediate-text-page, .pdfViewer .page, [data-engine-page]'
       )
-      if (!lens || !page) return
+      const captureSource =
+        page ??
+        (source.ownerDocument.defaultView?.frameElement
+          ? source
+          : source.querySelector<HTMLElement>('.pdfViewer .page'))
+      if (!lens || !captureSource) return
 
       if (captureTimerRef.current !== null) {
         clearTimeout(captureTimerRef.current)
@@ -162,8 +220,8 @@ export const RangeMagnifierProvider = ({
       pageRef.current = null
       lens.hidden = false
       move(point)
-      pageRef.current = page
-      capture(page)
+      pageRef.current = captureSource
+      capture(captureSource)
     },
     [capture, move]
   )

@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  type ComponentProps,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -30,6 +31,7 @@ import {
   type PdfDocumentViewerRef
 } from '../pdf/PdfDocumentViewer'
 import type { IntermediateDocumentViewerProps } from './IntermediateDocumentViewer'
+import { engineSelectionSegments } from './selection/engineSelectionSegments'
 import { useAnnotationHistory } from './Reader/useAnnotationHistory'
 import { PageBrowser } from './IntermediateDocumentViewer/PageBrowser'
 import { ReadingProgress } from './IntermediateDocumentViewer/ReadingProgress'
@@ -39,6 +41,8 @@ import { EngineSelectionControls } from './EngineSelectionControls'
 import { EngineHighlightInteractions } from './EngineHighlightInteractions'
 import { PopoverPortal } from './PopoverPortal'
 import { EpubOutline } from './EpubOutline'
+import { EngineEpubLayoutLayer } from './EngineEpubLayoutLayer'
+import { RangeMagnifierProvider } from './IntermediateDocumentViewer/RangeMagnifier'
 
 type Props = IntermediateDocumentViewerProps & {
   readonly engineSource?: ReaderEngineSource
@@ -51,27 +55,81 @@ type Props = IntermediateDocumentViewerProps & {
 
 const pageNumberOf = (id: string) => Number(id.slice(5))
 
+function endpointVisible(
+  range: ReaderSelectionRange | undefined,
+  format: string | undefined,
+  page: number,
+  end: boolean
+) {
+  return (
+    !range ||
+    format !== 'epub' ||
+    range[end ? 'end' : 'start'].selectionId === `page-${page}`
+  )
+}
+
+function prependedCoverVisible(book: EpubEngineBookInfo | null, page: number) {
+  return Boolean(book?.cover && page === 1 && book.coverPrepended)
+}
+
+function EpubSurface({
+  book,
+  page,
+  mode,
+  bindCover,
+  onNavigate,
+  ...layout
+}: Omit<ComponentProps<typeof EngineEpubLayoutLayer>, 'doc'> & {
+  book: EpubEngineBookInfo | null
+  page: number
+  mode: ReaderRenderMode
+  doc: Document | null
+  bindCover: (element: HTMLButtonElement | null) => void
+  onNavigate: (page: number) => void
+}) {
+  const cover = prependedCoverVisible(book, page)
+  return (
+    <>
+      {book?.cover && cover && (
+        <button
+          ref={bindCover}
+          type='button'
+          className='hamster-reader__epub-cover'
+          aria-label='进入正文'
+          onClick={() => {
+            if (
+              !layout.viewer.selectedRectId &&
+              !layout.viewer.edgeCropEditing &&
+              (layout.viewer.selectedTool ?? 'text-selection') ===
+                'text-selection'
+            )
+              onNavigate(2)
+          }}
+        >
+          <img
+            className='hamster-reader__epub-cover'
+            src={book.cover.url}
+            alt={book.cover.alt ?? '封面'}
+          />
+        </button>
+      )}
+      {layout.doc && mode === 'layout' && (
+        <EngineEpubLayoutLayer
+          {...layout}
+          doc={layout.doc}
+          pageElement={cover ? layout.pageElement : null}
+          pageNumber={cover ? 1 : layout.pageNumber}
+        />
+      )}
+    </>
+  )
+}
+
 function controlledSelection(
   value: string | null | undefined,
   fallback: string | null
 ) {
   return value === undefined ? fallback : value
-}
-
-function canEditEndpoints(
-  mouse: boolean,
-  format: ReaderEngineSource['format'] | undefined,
-  range: ReaderSelectionRange | undefined
-) {
-  // A Range in one iframe cannot represent both ends of a cross-chapter highlight.
-  return (
-    mouse &&
-    !(
-      format === 'epub' &&
-      range &&
-      range.start.selectionId !== range.end.selectionId
-    )
-  )
 }
 
 function annotationPopup<T>(
@@ -112,6 +170,10 @@ export function EngineDocumentViewer(props: Props) {
   const root = useRef<HTMLDivElement>(null)
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null)
   const [epubDocument, setEpubDocument] = useState<Document | null>(null)
+  const [epubPage, setEpubPage] = useState(1)
+  const [coverElement, setCoverElement] = useState<HTMLButtonElement | null>(
+    null
+  )
   const bindRoot = useCallback((element: HTMLDivElement | null) => {
     root.current = element
     setRootElement(element)
@@ -191,11 +253,14 @@ export function EngineDocumentViewer(props: Props) {
       setInternalRectId(next.selectedRectId)
     historyRef.current.setCheckpoint(next, reason)
   }
+  const activationGeneration = useRef(0)
   const activate = useCallback((id: string | null) => {
+    const token = ++activationGeneration.current
     setInternalSelected(id)
     latest.current.onSelectRange?.(id)
     latest.current.onLinkedSelectRange?.(id)
     if (!id) {
+      activating.current = false
       setNativeRange(null)
       epub.current?.setActiveRange(null)
       epub.current?.clearSelection()
@@ -204,11 +269,19 @@ export function EngineDocumentViewer(props: Props) {
     }
     activating.current = true
     if (epub.current) {
-      epub.current.selectRange(id).then((range) => {
-        setNativeRange(range)
-        epub.current?.setActiveRange(range ? id : null)
-        activating.current = false
-      })
+      const engine = epub.current
+      engine
+        .selectRange(id)
+        .then((range) => {
+          if (token !== activationGeneration.current || epub.current !== engine)
+            return
+          setNativeRange(range)
+          epub.current?.setActiveRange(range ? id : null)
+          activating.current = false
+        })
+        .catch(() => {
+          if (token === activationGeneration.current) activating.current = false
+        })
     } else {
       setNativeRange(pdf.current?.selectRange(id) ?? null)
       activating.current = false
@@ -286,6 +359,34 @@ export function EngineDocumentViewer(props: Props) {
   }
   const confirmRef = useRef(confirm)
   confirmRef.current = confirm
+  const selectionCallbackGeneration = useRef({ change: 0, end: 0 })
+  const emitSelectionCallbacks = useCallback(async (end = false) => {
+    const kind = end ? 'end' : 'change'
+    const token = ++selectionCallbackGeneration.current[kind]
+    const detail = serialize()
+    const native = root.current?.ownerDocument.getSelection()
+    const range =
+      epub.current?.getSelectionRange() ??
+      (native?.rangeCount ? native.getRangeAt(0) : null)
+    const selection = range?.startContainer.ownerDocument?.getSelection()
+    if (!detail || !selection || !latest.current.document) return
+    const startPage = pageNumberOf(detail.start.selectionId)
+    const { texts, segments } = await engineSelectionSegments(
+      latest.current.document,
+      detail
+    ).catch(() => ({ texts: [], segments: [] }))
+    if (token !== selectionCallbackGeneration.current[kind] || !texts[0]) return
+    const payload = {
+      text: texts[0],
+      texts,
+      selectedText: detail.text,
+      pageNumber: startPage,
+      selection
+    }
+    if (end) latest.current.onTextSelectionEnd?.(texts[0], payload)
+    else latest.current.onTextSelectionChange?.(texts[0], payload)
+    if (end) latest.current.onSelectText?.(selection, segments, detail.text)
+  }, [])
   const selectionChanged = useCallback(() => {
     if (editing.current || activating.current) return
     const selection = root.current?.ownerDocument.getSelection()
@@ -295,8 +396,9 @@ export function EngineDocumentViewer(props: Props) {
     const detail = serialize()
     if (detail && range) {
       setNativeRange(range.cloneRange())
+      void emitSelectionCallbacks()
     } else if (!values.current.selected) setNativeRange(null)
-  }, [])
+  }, [emitSelectionCallbacks])
   const publishPosition = useCallback((pageNumber: number) => {
     setPage(pageNumber)
     if (!restored.current || !progressEnabled.current) return
@@ -318,10 +420,7 @@ export function EngineDocumentViewer(props: Props) {
   const navigate = useCallback(
     (pageNumber: number) => {
       progressEnabled.current = true
-      if (epub.current)
-        epub.current
-          .goToPage(pageNumber)
-          .then(() => publishPosition(pageNumber))
+      if (epub.current) epub.current.goToPage(pageNumber).catch(() => undefined)
       else pdf.current?.scrollToPage(pageNumber)
     },
     [publishPosition]
@@ -375,7 +474,7 @@ export function EngineDocumentViewer(props: Props) {
   useEffect(() => {
     if (source?.format !== 'epub' || !epubContainer.current) return
     let cancelled = false
-    const listeners: Array<() => void> = []
+    const listeners = new Map<Document, () => void>()
     restored.current = false
     progressEnabled.current = false
     setError(null)
@@ -389,6 +488,8 @@ export function EngineDocumentViewer(props: Props) {
       onHighlightActivate: activate,
       onDocumentLoad: (doc, pageNumber) => {
         setEpubDocument(doc)
+        setEpubPage(pageNumber)
+        setNativeRange(null)
         latest.current.onPageLoadStatusChange?.([pageNumber])
         const forward = (event: PointerEvent) =>
           forwardPublicationPointer(root.current, event)
@@ -418,6 +519,7 @@ export function EngineDocumentViewer(props: Props) {
               { x: event.clientX, y: event.clientY },
               selection
             )
+          void emitSelectionCallbacks(true)
           if (latest.current.autoHighlight && !values.current.selected)
             confirmRef.current()
         }
@@ -428,7 +530,7 @@ export function EngineDocumentViewer(props: Props) {
         }
         doc.addEventListener('wheel', interacted, { passive: true })
         doc.addEventListener('keydown', interacted)
-        listeners.push(() => {
+        listeners.set(doc, () => {
           for (const type of pointerEvents)
             doc.removeEventListener(type, forward, true)
           doc.removeEventListener('pointerdown', down, true)
@@ -437,17 +539,37 @@ export function EngineDocumentViewer(props: Props) {
           doc.removeEventListener('keydown', interacted)
         })
       },
+      onDocumentUnload: (doc) => {
+        listeners.get(doc)?.()
+        listeners.delete(doc)
+      },
       onError: (failure) => setError(failure.message),
       onRelocate: (location) => {
         if (location.pageNumber) publishPosition(location.pageNumber)
+        const id = values.current.selected
+        if (id && !editing.current) {
+          const part = engine.getRangePart(id)
+          setNativeRange(part?.cloneRange() ?? null)
+          if (part) {
+            const selection = part.startContainer.ownerDocument?.getSelection()
+            activating.current = true
+            selection?.removeAllRanges()
+            selection?.addRange(part)
+            engine.setActiveRange(id)
+            activating.current = false
+          }
+        }
       }
     })
     epub.current = engine
     engine.ready
       .then(async (info) => {
         if (cancelled) return
-        setBook(info)
         setPageCount(info.pageCount)
+        await engine.setHiddenPages(
+          latest.current.hiddenPages ?? [],
+          latest.current.edgeCropEditing
+        )
         if (
           info.coverPrepended &&
           !latest.current.layoutReadingProgress &&
@@ -459,16 +581,39 @@ export function EngineDocumentViewer(props: Props) {
         await restorePositionRef.current()
         if (cancelled) return
         restored.current = true
+        setBook(info)
       })
       .catch(() => undefined)
     return () => {
       cancelled = true
       restored.current = false
       listeners.forEach((remove) => remove())
+      listeners.clear()
       epub.current = null
       engine.destroy().catch(() => undefined)
     }
-  }, [source, retry, activate, publishPosition, selectionChanged])
+  }, [
+    source,
+    retry,
+    activate,
+    publishPosition,
+    selectionChanged,
+    emitSelectionCallbacks
+  ])
+  useEffect(
+    () => () => {
+      activationGeneration.current++
+      selectionCallbackGeneration.current.change++
+      selectionCallbackGeneration.current.end++
+      activating.current = false
+    },
+    [source]
+  )
+  useEffect(() => {
+    epub.current
+      ?.setHiddenPages(props.hiddenPages ?? [], props.edgeCropEditing)
+      .catch(() => undefined)
+  }, [props.hiddenPages, props.edgeCropEditing, book])
   useEffect(() => {
     epub.current?.setFontScale(props.fontScale ?? 1)
   }, [props.fontScale])
@@ -604,264 +749,300 @@ export function EngineDocumentViewer(props: Props) {
     },
     [epubDocument]
   )
-  return (
-    <div
-      ref={bindRoot}
-      className='hamster-reader__engine-viewer'
-      data-engine={source?.format}
-      onPointerDown={(event) => {
-        progressEnabled.current = true
-        setMouse(event.pointerType === 'mouse')
-      }}
-      onWheel={() => {
-        progressEnabled.current = true
-      }}
-      onPointerUp={() => {
-        if (
-          source?.format === 'pdf' &&
-          props.autoHighlight &&
-          !selected &&
-          props.selectedTool === 'text-selection'
+  const draftRect = (rectangle: ReaderSelectionRectangle) => {
+    activate(null)
+    setInternalRectId(null)
+    props.onSelectRect?.(null)
+    setDraftRectangle(rectangle)
+  }
+  const updateRect = (rectangle: ReaderSelectionRectangle) => {
+    if (draftRectangle?.id === rectangle.id) return setDraftRectangle(rectangle)
+    apply(
+      {
+        ...snapshot(),
+        rects: rects.map((item) =>
+          item.id === rectangle.id ? rectangle : item
         )
-          confirm()
-      }}
+      },
+      'update-rect'
+    )
+    props.onUpdateRect?.(rectangle)
+  }
+  const selectRect = (id: string | null) => {
+    activate(null)
+    setInternalRectId(id)
+    props.onSelectRect?.(id)
+  }
+  return (
+    <RangeMagnifierProvider
+      rootElement={rootElement}
+      enabled={props.showSelectionMagnifier ?? true}
     >
-      <EngineHighlightInteractions
-        element={
-          source?.format === 'epub' ? (epubDocument?.body ?? null) : rootElement
-        }
-        resolveHighlight={resolveHighlight}
-        onDragHighlight={
-          props.onDragHighlight
-            ? (range) => {
-                setNativeRange(null)
-                epub.current?.setActiveRange(null)
-                props.onDragHighlight?.(range)
-              }
-            : undefined
-        }
-      />
-      {source?.format === 'epub' ? (
-        <div ref={epubContainer} className='hamster-reader__epub-container' />
-      ) : (
-        <PdfDocumentViewer
-          key={retry}
-          ref={pdf}
-          source={pdfSource}
-          workerSrc={source?.workerSrc}
-          documentOptions={source?.documentOptions}
-          scale={
-            typeof props.nativeLayoutZoom === 'number'
-              ? props.nativeLayoutZoom
-              : props.scale
+      <div
+        ref={bindRoot}
+        className='hamster-reader__engine-viewer'
+        data-engine={source?.format}
+        onPointerDown={(event) => {
+          progressEnabled.current = true
+          setMouse(event.pointerType === 'mouse')
+          if (source?.format === 'pdf') {
+            const selection = root.current?.ownerDocument.getSelection()
+            if (selection)
+              props.onSelectionStart?.(
+                { x: event.clientX, y: event.clientY },
+                selection
+              )
           }
-          defaultScale={props.defaultScale}
-          fitWidth={props.nativeLayoutZoom === 'fit-width'}
+        }}
+        onWheel={() => {
+          progressEnabled.current = true
+        }}
+        onPointerUp={(event) => {
+          if (source?.format === 'pdf') {
+            const selection = root.current?.ownerDocument.getSelection()
+            if (selection && !selection.isCollapsed) {
+              props.onSelectionEnd?.(
+                { x: event.clientX, y: event.clientY },
+                selection
+              )
+              void emitSelectionCallbacks(true)
+            }
+          }
+          if (
+            source?.format === 'pdf' &&
+            props.autoHighlight &&
+            !selected &&
+            props.selectedTool === 'text-selection'
+          )
+            confirm()
+        }}
+      >
+        <EngineHighlightInteractions
+          element={
+            source?.format === 'epub'
+              ? (epubDocument?.body ?? null)
+              : rootElement
+          }
+          resolveHighlight={resolveHighlight}
+          onDragHighlight={
+            props.onDragHighlight
+              ? (range) => {
+                  setNativeRange(null)
+                  epub.current?.setActiveRange(null)
+                  props.onDragHighlight?.(range)
+                }
+              : undefined
+          }
+        />
+        {source?.format === 'epub' ? (
+          <div ref={epubContainer} className='hamster-reader__epub-container' />
+        ) : (
+          <PdfDocumentViewer
+            key={retry}
+            ref={pdf}
+            source={pdfSource}
+            workerSrc={source?.workerSrc}
+            documentOptions={source?.documentOptions}
+            scale={
+              typeof props.nativeLayoutZoom === 'number'
+                ? props.nativeLayoutZoom
+                : props.scale
+            }
+            defaultScale={props.defaultScale}
+            fitWidth={props.nativeLayoutZoom === 'fit-width'}
+            ranges={ranges}
+            rects={rects}
+            selectedRangeId={nativeRange ? selected : null}
+            selectedRectId={selectedRect}
+            onSelectRange={activate}
+            onSelectRect={selectRect}
+            onTextSelectionChange={selectionChanged}
+            onPagesLoaded={onPdfReady}
+            onTextLayerReady={onPdfTextReady}
+            onPageChange={publishPosition}
+            onTextAnchorChange={(anchor) => {
+              if (anchor) publishPosition(anchor.pageNumber)
+            }}
+            onScaleChange={props.onNativeLayoutScaleChange}
+            onError={(failure) => setError(failure.message)}
+            tool={props.selectedTool}
+            overlayRectType={props.overlayRectType}
+            highlightColor={props.highlightColor}
+            hiddenPages={props.hiddenPages}
+            edgeCrop={props.edgeCrop}
+            edgeCropEditing={props.edgeCropEditing}
+            onEdgeCropApply={props.onEdgeCropApply}
+            onEdgeCropHidePage={props.onEdgeCropHidePage}
+            pagePaintings={props.pagePaintings}
+            paintingControllerData={props.paintingControllerData}
+            onPaintingControllerDataChange={
+              props.onPaintingControllerDataChange
+            }
+            paintingTool={props.paintingTool}
+            drawingStrokeColor={props.drawingStrokeColor}
+            onPagePaintingChange={props.onPagePaintingChange}
+            onCreateRect={(rectangle) => {
+              apply(
+                {
+                  ...snapshot(),
+                  rects: [...rects, rectangle],
+                  selectedRectId: rectangle.id
+                },
+                'create-rect'
+              )
+              props.onCreateRect?.(rectangle)
+            }}
+            draftRectangle={draftRectangle}
+            onDraftRect={draftRect}
+            onUpdateRect={updateRect}
+          />
+        )}
+        {source?.format === 'epub' && (
+          <EpubSurface
+            book={book}
+            page={page}
+            mode={mode}
+            bindCover={setCoverElement}
+            onNavigate={navigate}
+            doc={epubDocument}
+            pageElement={coverElement}
+            pageNumber={epubPage}
+            viewer={{ ...props, rects, selectedRectId: selectedRect }}
+            draftRectangle={draftRectangle}
+            onDraftRect={draftRect}
+            onUpdateRect={updateRect}
+            onSelectRect={selectRect}
+          />
+        )}
+        {unlocatable.length > 0 && (
+          <div role='status' className='hamster-reader__engine-notice'>
+            {unlocatable.length} 条高亮无法定位，原数据已保留
+          </div>
+        )}
+        {error && (
+          <div role='alert' className='hamster-reader__engine-error'>
+            <p>{error}</p>
+            <button
+              type='button'
+              onClick={() => {
+                setError(null)
+                setRetry((value) => value + 1)
+              }}
+            >
+              重试
+            </button>
+          </div>
+        )}
+        <PageBrowser
+          outline={
+            book && (
+              <EpubOutline
+                items={book.toc}
+                onNavigate={(href) => {
+                  progressEnabled.current = true
+                  epub.current?.goToTocHref(href).catch(() => undefined)
+                }}
+              />
+            )
+          }
+          isOpen={props.showPageBrowser ?? false}
+          pageNumbers={pageNumbers}
+          pageSizesByPageNumber={new Map()}
+          baseImagesByPageNumber={new Map()}
+          onPageVisibilityChange={() => undefined}
+          onNavigateToPage={navigate}
+          onClose={props.onPageBrowserClose}
+          showPagesTab={mode === 'layout'}
           ranges={ranges}
           rects={rects}
-          selectedRangeId={nativeRange ? selected : null}
+          selectedRangeId={selected}
           selectedRectId={selectedRect}
           onSelectRange={activate}
-          onSelectRect={(id) => {
-            activate(null)
-            setInternalRectId(id)
-            latest.current.onSelectRect?.(id)
+          onNavigateToRange={(id) => {
+            if (epub.current) epub.current.goToRange(id)
+            else pdf.current?.scrollToRange(id)
           }}
-          onTextSelectionChange={selectionChanged}
-          onPagesLoaded={onPdfReady}
-          onTextLayerReady={onPdfTextReady}
-          onPageChange={publishPosition}
-          onTextAnchorChange={(anchor) => {
-            if (anchor) publishPosition(anchor.pageNumber)
+          onDeleteRange={props.onRemoveRange}
+          onDeleteRect={props.onRemoveRect}
+          onSelectRect={props.onSelectRect}
+          onNavigateToRect={(id) => {
+            const rectangle = rects.find((item) => item.id === id)
+            if (rectangle?.selectionId)
+              navigate(pageNumberOf(rectangle.selectionId))
           }}
-          onScaleChange={props.onNativeLayoutScaleChange}
-          onError={(failure) => setError(failure.message)}
-          tool={props.selectedTool}
-          overlayRectType={props.overlayRectType}
-          highlightColor={props.highlightColor}
-          hiddenPages={props.hiddenPages}
-          edgeCrop={props.edgeCrop}
-          edgeCropEditing={props.edgeCropEditing}
-          onEdgeCropApply={props.onEdgeCropApply}
-          onEdgeCropHidePage={props.onEdgeCropHidePage}
-          pagePaintings={props.pagePaintings}
-          paintingControllerData={props.paintingControllerData}
-          onPaintingControllerDataChange={props.onPaintingControllerDataChange}
-          paintingTool={props.paintingTool}
-          drawingStrokeColor={props.drawingStrokeColor}
-          onPagePaintingChange={props.onPagePaintingChange}
-          onCreateRect={(rectangle) => {
-            apply(
-              {
-                ...snapshot(),
-                rects: [...rects, rectangle],
-                selectedRectId: rectangle.id
-              },
-              'create-rect'
-            )
-            props.onCreateRect?.(rectangle)
-          }}
-          draftRectangle={draftRectangle}
-          onDraftRect={(rectangle) => {
-            activate(null)
-            setInternalRectId(null)
-            props.onSelectRect?.(null)
-            setDraftRectangle(rectangle)
-          }}
-          onUpdateRect={(rectangle) => {
-            if (draftRectangle?.id === rectangle.id) {
-              setDraftRectangle(rectangle)
-              return
-            }
-            apply(
-              {
-                ...snapshot(),
-                rects: rects.map((item) =>
-                  item.id === rectangle.id ? rectangle : item
-                )
-              },
-              'update-rect'
-            )
-            props.onUpdateRect?.(rectangle)
-          }}
-        />
-      )}
-      {book?.cover && page === 1 && book.coverPrepended && (
-        <button
-          type='button'
-          className='hamster-reader__epub-cover'
-          aria-label='进入正文'
-          onClick={() => navigate(2)}
-        >
-          <img
-            className='hamster-reader__epub-cover'
-            src={book.cover.url}
-            alt={book.cover.alt ?? '封面'}
-          />
-        </button>
-      )}
-      {unlocatable.length > 0 && (
-        <div role='status' className='hamster-reader__engine-notice'>
-          {unlocatable.length} 条高亮无法定位，原数据已保留
-        </div>
-      )}
-      {error && (
-        <div role='alert' className='hamster-reader__engine-error'>
-          <p>{error}</p>
-          <button
-            type='button'
-            onClick={() => {
-              setError(null)
-              setRetry((value) => value + 1)
-            }}
-          >
-            重试
-          </button>
-        </div>
-      )}
-      <PageBrowser
-        outline={
-          book && (
-            <EpubOutline
-              items={book.toc}
-              onNavigate={(href) => {
-                progressEnabled.current = true
-                epub.current?.goToTocHref(href).catch(() => undefined)
-              }}
-            />
-          )
-        }
-        isOpen={props.showPageBrowser ?? false}
-        pageNumbers={pageNumbers}
-        pageSizesByPageNumber={new Map()}
-        baseImagesByPageNumber={new Map()}
-        onPageVisibilityChange={() => undefined}
-        onNavigateToPage={navigate}
-        onClose={props.onPageBrowserClose}
-        showPagesTab={mode === 'layout'}
-        ranges={ranges}
-        rects={rects}
-        selectedRangeId={selected}
-        selectedRectId={selectedRect}
-        onSelectRange={activate}
-        onNavigateToRange={(id) => {
-          if (epub.current) epub.current.goToRange(id)
-          else pdf.current?.scrollToRange(id)
-        }}
-        onDeleteRange={props.onRemoveRange}
-        onDeleteRect={props.onRemoveRect}
-        onSelectRect={props.onSelectRect}
-        onNavigateToRect={(id) => {
-          const rectangle = rects.find((item) => item.id === id)
-          if (rectangle?.selectionId)
-            navigate(pageNumberOf(rectangle.selectionId))
-        }}
-        commentCountByRangeId={
-          props.commentCountByRangeId ??
-          (props.comments
-            ? getCommentCountByHighlightId(props.comments)
-            : undefined)
-        }
-        commentCountByRectId={props.commentCountByRectId}
-        bookmarks={props.bookmarks}
-        onToggleBookmark={props.onToggleBookmark}
-        onNavigateToBookmark={navigateBookmark}
-        currentPageNumber={page}
-        currentBookmark={
-          epub.current?.captureTextAnchor() ??
-          pdf.current?.captureTextAnchor() ?? {
-            pageNumber: page,
-            verticalPercentage: 0
+          commentCountByRangeId={
+            props.commentCountByRangeId ??
+            (props.comments
+              ? getCommentCountByHighlightId(props.comments)
+              : undefined)
           }
-        }
-        visiblePageNumbers={new Set([page])}
-        pagePaintings={props.pagePaintings}
-        themeColor={props.themeColor}
-      />
-      <ReadingProgress
-        mode='text'
-        pageNumbers={pageNumbers}
-        currentPageNumber={page}
-        ranges={ranges}
-        isMoving={false}
-        onSeekPage={navigate}
-        insetBottom={props.containMarginBottom}
-        insetTop={props.containMarginTop}
-      />
-      <EngineSelectionControls
-        range={props.showPageBrowser ? null : nativeRange}
-        containerRef={root}
-        showHandles={canEditEndpoints(mouse, source?.format, current)}
-        onEditingChange={(value) => {
-          editing.current = value
-        }}
-        onUpdate={(range) => {
-          setNativeRange(range.cloneRange())
-          const detail = epub.current?.serializeRange(range) ?? serialize()
-          if (current && detail)
-            emitRange(
-              {
-                ...current,
-                ...detail,
-                rectsBySelectionId:
-                  (detail as SerializedPdfSelection).rectsBySelectionId ??
-                  current.rectsBySelectionId
-              },
-              true
-            )
-        }}
-      >
-        {popup}
-      </EngineSelectionControls>
-      <PopoverPortal
-        containerRef={root}
-        selectionKind='selected'
-        visible={
-          !props.showPageBrowser && Boolean(currentRectangle ?? draftRectangle)
-        }
-      >
-        {rectanglePopup}
-      </PopoverPortal>
-    </div>
+          commentCountByRectId={props.commentCountByRectId}
+          bookmarks={props.bookmarks}
+          onToggleBookmark={props.onToggleBookmark}
+          onNavigateToBookmark={navigateBookmark}
+          currentPageNumber={page}
+          currentBookmark={
+            epub.current?.captureTextAnchor() ??
+            pdf.current?.captureTextAnchor() ?? {
+              pageNumber: page,
+              verticalPercentage: 0
+            }
+          }
+          visiblePageNumbers={new Set([page])}
+          pagePaintings={props.pagePaintings}
+          themeColor={props.themeColor}
+        />
+        <ReadingProgress
+          mode='text'
+          pageNumbers={pageNumbers}
+          currentPageNumber={page}
+          ranges={ranges}
+          isMoving={false}
+          onSeekPage={navigate}
+          insetBottom={props.containMarginBottom}
+          insetTop={props.containMarginTop}
+        />
+        <EngineSelectionControls
+          range={props.showPageBrowser ? null : nativeRange}
+          containerRef={root}
+          showHandles={mouse}
+          showStart={endpointVisible(current, source?.format, epubPage, false)}
+          showEnd={endpointVisible(current, source?.format, epubPage, true)}
+          onEditingChange={(value) => {
+            editing.current = value
+          }}
+          onUpdate={(range, end) => {
+            setNativeRange(range.cloneRange())
+            const detail =
+              epub.current && current
+                ? epub.current.updateRangeEndpoint(current.id, range, end)
+                : (epub.current?.serializeRange(range) ?? serialize())
+            if (current && detail)
+              emitRange(
+                {
+                  ...current,
+                  ...detail,
+                  rectsBySelectionId:
+                    (detail as SerializedPdfSelection).rectsBySelectionId ??
+                    current.rectsBySelectionId
+                },
+                true
+              )
+          }}
+        >
+          {popup}
+        </EngineSelectionControls>
+        <PopoverPortal
+          containerRef={root}
+          selectionKind='selected'
+          visible={
+            !props.showPageBrowser &&
+            Boolean(currentRectangle ?? draftRectangle)
+          }
+        >
+          {rectanglePopup}
+        </PopoverPortal>
+      </div>
+    </RangeMagnifierProvider>
   )
 }

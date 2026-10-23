@@ -113,8 +113,8 @@ export class PdfDocumentSession {
         ? {
             data:
               source.data instanceof Uint8Array
-                ? source.data
-                : new Uint8Array(source.data)
+                ? source.data.slice()
+                : new Uint8Array(source.data.slice(0))
           }
         : { url: source.url }),
       isEvalSupported: false,

@@ -419,7 +419,14 @@ export const PdfDocumentViewer = forwardRef<
   )
 
   const getPageGeometry = useCallback(
-    (pageNumber: number): PdfPageOverlayGeometry | null => {
+    (
+      pageNumber: number
+    ):
+      | (PdfPageOverlayGeometry & {
+          viewport: PageViewport
+          scaleOneViewport: PageViewport
+        })
+      | null => {
       const viewer = viewerRef.current
       if (!viewer) return null
       const pageView = viewer.getPageView(pageNumber - 1)
@@ -448,6 +455,7 @@ export const PdfDocumentViewer = forwardRef<
     const container = containerRef.current
     const viewerElement = viewerElementRef.current
     if (!container || !viewerElement) return
+    sessionManagerRef.current = new PdfSessionManager()
     if (workerSrc) configurePdfJsWorker(workerSrc)
     const eventBus = new EventBus()
     const linkService = new PDFLinkService({ eventBus })
@@ -669,9 +677,13 @@ export const PdfDocumentViewer = forwardRef<
     for (let pageNumber = 1; pageNumber <= viewer.pagesCount; pageNumber++) {
       const pageView = viewer.getPageView(pageNumber - 1)
       if (!pageView) continue
-      pageView.div.style.display = hidden.has(pageNumber) ? 'none' : ''
+      const isHidden = hidden.has(pageNumber)
+      pageView.div.style.display = isHidden && !edgeCropEditing ? 'none' : ''
+      pageView.div.dataset.readerHidden = String(
+        isHidden && Boolean(edgeCropEditing)
+      )
     }
-  }, [hiddenPages, geometryVersion, status])
+  }, [hiddenPages, edgeCropEditing, geometryVersion, status])
 
   // 裁切：clip-path 只裁可视区域，叠加层坐标不受影响（3.3 裁切对齐）。
   useEffect(() => {
@@ -875,9 +887,15 @@ export const PdfDocumentViewer = forwardRef<
       const geometry = getPageGeometry(pageNumber)
       if (!geometry) return []
       const pageId = `page-${pageNumber}`
+      const hidden = normalizeHiddenPageNumbers(hiddenPages).has(pageNumber)
       return [
         <PdfOverlayPortal key={pageId} pageDiv={pageView.div}>
-          {edgeCropEditing && (
+          {hidden && edgeCropEditing && (
+            <div className='hamster-reader__engine-hidden-page'>
+              当前 第 {pageNumber} 页 已隐藏
+            </div>
+          )}
+          {!hidden && edgeCropEditing && (
             <EdgeCropOverlay
               pageNumber={pageNumber}
               edgeCrop={edgeCrop}
@@ -943,6 +961,7 @@ export const PdfDocumentViewer = forwardRef<
     getPageGeometry,
     edgeCropEditing,
     edgeCrop,
+    hiddenPages,
     onEdgeCropApply,
     onEdgeCropHidePage
   ])

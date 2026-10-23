@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { act, render } from '@testing-library/react'
-import { createRef } from 'react'
+import { createRef, StrictMode } from 'react'
 import type { RefObject } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -202,6 +202,26 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it('StrictMode 重放后仍可打开同一份字节，保留调用方数据', async () => {
+    const data = readFixture('pdf/two-column.pdf')
+    const length = data.byteLength
+    const onError = vi.fn()
+    const view = render(
+      <StrictMode>
+        <PdfDocumentViewer source={{ data }} onError={onError} />
+      </StrictMode>
+    )
+    await vi.waitFor(() => {
+      expect(view.getByTestId('pdf-document-viewer').dataset.status).toBe(
+        'ready'
+      )
+      expect(latestViewer().pagesCount).toBe(2)
+    })
+    expect(onError).not.toHaveBeenCalled()
+    expect(data.byteLength).toBe(length)
+    expect(hoisted.viewerInstances[0].document).toBeNull()
+  })
+
   it('以官方 PDFViewer 展示：链接组件接入，内置标注编辑器关闭', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)

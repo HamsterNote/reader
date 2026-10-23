@@ -56,6 +56,7 @@ const parsePageNumber = (selectionId: string): number | null => {
 export class EpubCompatIndex {
   readonly #model: LegacyEpubModel
   readonly #sectionIndexes: (SectionTextIndex | null)[]
+  readonly #staticIndexes: (SectionTextIndex | null)[]
 
   private constructor(
     model: LegacyEpubModel,
@@ -63,6 +64,7 @@ export class EpubCompatIndex {
   ) {
     this.#model = model
     this.#sectionIndexes = sectionIndexes
+    this.#staticIndexes = [...sectionIndexes]
   }
 
   /**
@@ -100,6 +102,36 @@ export class EpubCompatIndex {
     const next = buildSectionTextIndex(doc, current.legacyText)
     this.#sectionIndexes[chapterIndex] = next
     return next.healthy
+  }
+
+  detachSectionDocument(chapterIndex: number): void {
+    this.#sectionIndexes[chapterIndex] = this.#staticIndexes[chapterIndex]
+  }
+
+  /** Only replace the dragged endpoint; a local iframe Range is not the whole highlight. */
+  updateEndpoint(
+    original: LegacyRangeLike,
+    localRange: Range,
+    chapterIndex: number,
+    end: boolean
+  ): SerializedSelection | null {
+    const local = this.serializeRange(chapterIndex, localRange)
+    if (!local) return null
+    const start = end ? original.start : local.start
+    const finish = end ? local.end : original.end
+    const startPage = parsePageNumber(start.selectionId)
+    const endPage = parsePageNumber(finish.selectionId)
+    if (startPage === null || endPage === null || startPage > endPage)
+      return null
+    const startText = this.pageText(startPage)
+    const endText = this.pageText(endPage)
+    if (startText === null || endText === null) return null
+    const text =
+      startPage === endPage
+        ? startText.slice(start.offset, finish.offset)
+        : startText.slice(start.offset) + endText.slice(0, finish.offset)
+    const next = { start, end: finish, text }
+    return text && !this.#verifyTextContract(next) ? next : null
   }
 
   sectionStatus(chapterIndex: number): 'healthy' | 'degraded' | 'missing' {

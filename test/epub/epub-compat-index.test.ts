@@ -32,6 +32,50 @@ const buildIndex = async (
 }
 
 describe('epub compat index: legacy highlight location', () => {
+  it('edits each cross-chapter endpoint without replacing the other endpoint', async () => {
+    const { index, pkg } = await buildIndex('epub/duplicate-text.epub')
+    try {
+      const original = parseHighlights(
+        readFileSync(
+          join(FIXTURE_ROOT, 'highlights/epub-duplicate-text.v4.json'),
+          'utf8'
+        )
+      ).ranges.find(
+        (range) => range.start.selectionId !== range.end.selectionId
+      )!
+      const located = index.locateRange(original)
+      if (located.status !== 'located')
+        throw new Error('cross chapter fixture must locate')
+      const first = located.parts[0]
+      const last = located.parts[1]
+      const startRange = first.range.cloneRange()
+      startRange.setStart(startRange.startContainer, startRange.startOffset + 1)
+      const startEdit = index.updateEndpoint(
+        original,
+        startRange,
+        first.chapterIndex,
+        false
+      )!
+      expect(startEdit.end).toEqual(original.end)
+      expect(startEdit.start.offset).toBe(original.start.offset + 1)
+      expect(index.locateRange(startEdit).status).toBe('located')
+      const endRange = last.range.cloneRange()
+      endRange.setEnd(endRange.endContainer, endRange.endOffset - 1)
+      const endEdit = index.updateEndpoint(
+        startEdit,
+        endRange,
+        last.chapterIndex,
+        true
+      )!
+      expect(endEdit.start).toEqual(startEdit.start)
+      expect(endEdit.end.offset).toBe(original.end.offset - 1)
+      expect(index.locateRange(endEdit).status).toBe('located')
+      expect(original.start.offset).toBe(startEdit.start.offset - 1)
+    } finally {
+      await pkg.destroy()
+    }
+  })
+
   it.each([2, 3, 4] as const)(
     'v%i highlight JSON: every range locates against duplicate-text.epub',
     async (version) => {

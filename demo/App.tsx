@@ -1061,7 +1061,7 @@ export function App() {
         setRenderMode(nextData.renderMode)
       }
 
-      if (nextData.selectedTool) {
+      if (nextData.selectedTool && nextData.selectedTool !== selectedTool) {
         setSelectedTool(nextData.selectedTool)
         setSelectedRangeId(null)
         setSelectedRectId(null)
@@ -1105,7 +1105,7 @@ export function App() {
         setHiddenPages(nextData.hiddenPages)
       }
     },
-    [uploadedFile?.name]
+    [selectedTool, uploadedFile?.name]
   )
   // 评论面板开关状态 + 当前激活的高亮 ID（用于自动勾选评论绑定）
   const [isCommentPanelOpen, setIsCommentPanelOpen] = useState(false)

@@ -9,7 +9,7 @@ export interface FoliateTocItem {
 
 export interface FoliateSection {
   readonly id: string
-  readonly linear?: string
+  linear?: string
   readonly load: () => Promise<unknown>
   readonly unload: () => void
   readonly createDocument: () => Promise<Document>

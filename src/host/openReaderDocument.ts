@@ -1,4 +1,4 @@
-import { IntermediateDocument } from '@hamster-note/types'
+import { IntermediateDocument, TextDir } from '@hamster-note/types'
 import { openEpubPackage } from '../epub/epubPackage'
 import { buildLegacyEpubModel } from '../epub/legacyEpubModel'
 import { PdfDocumentSession } from '../pdf/pdfDocumentSession'
@@ -22,7 +22,32 @@ export async function openReaderDocument(
             id: page.pageId,
             number: page.pageNumber,
             width: 600,
-            height: 800
+            height: 800,
+            texts: page.text
+              ? [
+                  {
+                    id: `${page.pageId}-text`,
+                    content: page.text,
+                    fontSize: 16,
+                    fontFamily: '',
+                    fontWeight: 400,
+                    italic: false,
+                    color: '#000000',
+                    polygon: [
+                      [0, 0],
+                      [600, 0],
+                      [600, 800],
+                      [0, 800]
+                    ],
+                    lineHeight: 20,
+                    ascent: 16,
+                    descent: 4,
+                    dir: TextDir.LTR,
+                    skew: 0,
+                    isEOL: false
+                  }
+                ]
+              : []
           }))
         }),
         dispose: async () => undefined

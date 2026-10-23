@@ -8,6 +8,11 @@
 
 import type { PageViewport } from './pdfjsRuntime'
 
+export type OverlayViewport = Pick<
+  PageViewport,
+  'scale' | 'convertToPdfPoint' | 'convertToViewportPoint'
+>
+
 export type StoredOverlayRect = {
   readonly x: number
   readonly y: number
@@ -50,8 +55,8 @@ const storedToScaleOneVisual = (
 export function projectStoredRectToViewport(
   rect: StoredOverlayRect,
   unit: OverlayRectUnit,
-  scaleOneViewport: PageViewport,
-  viewport: PageViewport,
+  scaleOneViewport: OverlayViewport,
+  viewport: OverlayViewport,
   visual: PageVisualSize
 ): ViewportOverlayRect {
   const visualRect = storedToScaleOneVisual(rect, unit, visual)
@@ -82,8 +87,8 @@ export function projectStoredRectToViewport(
  */
 export function captureViewportRectAsStored(
   rect: ViewportOverlayRect,
-  viewport: PageViewport,
-  scaleOneViewport: PageViewport,
+  viewport: OverlayViewport,
+  scaleOneViewport: OverlayViewport,
   unit: OverlayRectUnit,
   visual: PageVisualSize
 ): StoredOverlayRect {

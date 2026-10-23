@@ -2475,6 +2475,38 @@ describe('demo parser flow', () => {
       expect(refObj.current?.scrollToRange).toHaveBeenCalledTimes(1)
     })
 
+    it('progress updates preserve the selection when the current tool is unchanged', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Progress Selection')
+      )
+      render(<App />)
+      await upload(makeFile('progress-selection.pdf'))
+      await screen.findByText('Reader Settings')
+      act(() =>
+        findDocumentReaderProps()?.onHighlight?.(
+          makeLinkedRange('progress-range', 'keep selected')
+        )
+      )
+      fireEvent.click(await screen.findByText('keep selected'))
+      const props = findDocumentReaderProps()!
+      expect(props.selectedRangeId).toBe('progress-range')
+      act(() =>
+        props.onDataChange?.({
+          ...props.data,
+          selectedTool: 'text-selection',
+          layoutReadingProgress: { pageNumber: 1, verticalPercentage: 25 }
+        })
+      )
+      expect(findDocumentReaderProps()?.selectedRangeId).toBe('progress-range')
+      act(() =>
+        findDocumentReaderProps()?.onDataChange?.({
+          ...props.data,
+          selectedTool: 'drawing'
+        })
+      )
+      expect(findDocumentReaderProps()?.selectedRangeId).toBeNull()
+    })
+
     it('clicking the same sidebar highlight twice keeps it selected and calls scrollToRange twice', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Double Click Document')
