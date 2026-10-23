@@ -9,8 +9,12 @@
   `page-N`、既有 px/percent 坐标及绘图 JSON。补入的封面仍为 `page-1`。
 - 跨章节高亮在当前 iframe 只显示所属端点的手柄，编辑时只替换该端点；另一端、
   ID、createdAt 和样式保留。文本仍遵守旧版首章后缀加末章前缀契约。
-- 手柄连接放大镜。EPUB 的已净化正文复制计算样式后在 reader 文档中栅格化，
-  避免 html2canvas 的内部 iframe 被出版物 CSP 拦截；不放宽出版物 CSP。
+- 手柄连接放大镜。EPUB 通过静态呈现树在 reader 文档中栅格化，避免
+  html2canvas 的内部 iframe 被出版物 CSP 拦截；不放宽出版物 CSP。
+  审核发现直接导入正文会让样式和资源请求离开 iframe 策略，现改为只创建
+  div/br、文本节点和已解码图片的 canvas，不复制出版物 DOM、属性或样式表。
+  样式仅允许无资源 URL 的排版属性，字体限通用族，临时树使用 Shadow DOM 隔开
+  宿主选择器，并以 containment 限制定位范围。
 - 映射旧 `onSelectionStart/End`、`onTextSelectionChange/End` 和 `onSelectText`。
   旧 detail 返回原文本对象，segments 保留每个文本的切片和局部偏移；结束事件与
   change 使用独立异步代际，切书后丢弃旧结果。
@@ -27,11 +31,11 @@
 | --- | --- |
 | `yarn typecheck` / `yarn typecheck:host` | 通过 |
 | `yarn lint` | 通过 |
-| `yarn test:run` | 82 文件、1126 项通过 |
-| 最终受影响测试：`yarn test:run test/epub test/engine-selection-segments.test.ts test/pdf-viewer` | 15 文件、126 项通过 |
+| `yarn test:run` | 安全修复后 83 文件、1130 项通过 |
+| 放大镜受影响测试：`magnifier-capture-source`、`range-magnifier*`、`text-selection-magnifier` | 6 文件、16 项通过 |
 | `yarn build` | 库 JS、类型、CSS 与 Demo 构建通过 |
 | `yarn build:webview` / `yarn verify:webview` | 通过，293 个资源，zip 约 15.4 MiB |
-| `yarn pack:check` | 通过，285 个发布文件 |
+| `yarn pack:check` | 通过，287 个发布文件 |
 | `node scripts/check-delivery.mjs` | tarball 旧 API/CSS 消费者、Vite 客户端及打包 SSR 通过；移除必需 WASM 后校验正确失败 |
 
 保留既有 act/font、OCR/OpenCV 大包和 externalized 警告；检查使用当前锁定依赖，
@@ -59,6 +63,29 @@ READER_BROWSER_OUTPUT=../ham103-browser/interactions node scripts/check-engine-i
 路径使用鼠标指针，两种宽度均有截图。移动宽度的 tap/触摸滑动由 Chromium 模拟，
 不等价于 iOS/Android 长按选择。章节切换 setup 使用 Foliate 的公开 renderer API，
 隐藏页自然翻章另用真实滚轮/触摸输入。图像和日志在 issue 附件中，不依赖本机路径。
+
+## P1 隔离边界回归
+
+```bash
+READER_MAGNIFIER_SECURITY=1 READER_BROWSER_OUTPUT=../ham103-security/browser node scripts/check-engine-interactions.mjs
+```
+
+Chromium 1280×800 与 390×844 共 2/2 通过。在没有额外宿主 CSP 的 Demo 中导入
+含攻击内容的真实 EPUB，确认攻击 style、HTTPS 图片和 computed background URL
+仍在出版物内，且原 `frame-src 'none'` 保持生效；拖动跨章高亮首尾手柄前、过程中、
+结束后，宿主颜色保持黑色，MutationObserver 未发现瞬时颜色泄漏，探针请求为零。
+覆盖 stylesheet/import、img/srcset、SVG image、computed background/border/list/cursor、
+伪元素 content 和同名宿主惰性字体；所有探针请求由浏览器 route 中止，不访问外部服务。
+同时断言放大镜非空字形像素、本地已解码图片确实转为 canvas，以及端点数据正确保存。
+
+负向对照临时运行修复前的截图函数：同一桌面用例在首次手柄拖动时检测到宿主
+`rgb(255, 0, 0)` 瞬时污染与多种探针请求，按预期失败；随后恢复修复代码。
+普通 EPUB/PDF 交互另复跑 4/4 通过。最初将攻击样本跑完整交互时移动触摸翻章有一次
+超时，因此安全用例在双端点验证后独立结束，普通样本仍完整执行触摸翻章检查。
+
+静态放大镜快照不保留出版物自定义字体、CSS 背景图片、伪元素、内联 SVG/MathML
+或交互控件；不可读的图片像素直接省略。复杂排版与快照几何的保真仍有局限，
+本次不能据此认定原生性能或所有排版样本已验收。出版物本身的显示不作上述替换。
 
 ## 未通过项与回滚
 

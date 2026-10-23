@@ -4,6 +4,13 @@ import { resolve } from 'node:path'
 import { PDFDocument } from 'pdf-lib'
 import { createServer } from 'vite'
 import { chromium } from 'playwright'
+import {
+  assertMagnifierSecurity,
+  monitorMagnifierSecurity,
+  securityFixture
+} from './magnifier-security-fixture.mjs'
+
+const security = process.env.READER_MAGNIFIER_SECURITY === '1'
 
 const repo = resolve(import.meta.dirname, '..')
 const output = resolve(
@@ -73,7 +80,18 @@ async function uploadFixture(page, format, fixtureName) {
     `test/compat/fixtures/${format}/${fixtureName}`
   )
   if (format === 'epub') {
-    await page.locator('input[type=file]').first().setInputFiles(fixturePath)
+    await page
+      .locator('input[type=file]')
+      .first()
+      .setInputFiles(
+        security
+          ? {
+              name: fixtureName,
+              mimeType: 'application/epub+zip',
+              buffer: await securityFixture(fixturePath)
+            }
+          : fixturePath
+      )
     return
   }
   const original = await PDFDocument.load(await readFile(fixturePath))
@@ -221,7 +239,7 @@ async function checkPrependedCover(page, label, result) {
     'prepended cover: rectangle saves as page-1 and activates; hiding the cover exits it during reading'
   )
 }
-async function editEndpoint(page, label, end) {
+async function editEndpoint(page, label, end, result) {
   const handle = page.getByRole('button', {
     name: end ? '调整高亮终点' : '调整高亮起点'
   })
@@ -257,6 +275,12 @@ async function editEndpoint(page, label, end) {
     return ink > 10
   })
   await screenshot(page, label, `cross-${end ? 'end' : 'start'}-magnifier`)
+  if (security)
+    await assertMagnifierSecurity(
+      page,
+      result,
+      `during ${end ? 'end' : 'start'} drag`
+    )
   await page.mouse.up()
   await page.waitForFunction(
     () => document.querySelector('[data-testid=range-magnifier]')?.hidden
@@ -264,6 +288,7 @@ async function editEndpoint(page, label, end) {
 }
 // eslint-disable-next-line sonarjs/cognitive-complexity -- Keep the acceptance workflow and assertions in execution order.
 async function run(mobile, format) {
+  if (security && format !== 'epub') return
   const label = `chromium-${mobile ? 'mobile' : 'desktop'}-${format}`
   if (
     process.env.READER_BROWSER_CASE &&
@@ -309,6 +334,7 @@ async function run(mobile, format) {
       { fixtureName, initial }
     )
     await page.goto(`${base}/?engines=next`)
+    if (security) await monitorMagnifierSecurity(page, result)
     await uploadFixture(page, format, fixtureName)
     await page.locator(`[data-engine=${format}]`).waitFor()
     await page.getByTestId('render-mode-select').selectOption('layout')
@@ -395,16 +421,20 @@ async function run(mobile, format) {
     await page.getByRole('button', { name: '调整矩形下右角' }).waitFor()
     result.checks.push('saved rectangle activates from text tool')
     if (format === 'epub') {
+      if (security)
+        await assertMagnifierSecurity(page, result, 'before magnifier')
       await page
         .locator('[aria-label="Select highlight"]')
         .first()
         .evaluate((button) => button.click())
-      await editEndpoint(page, label, false)
+      await editEndpoint(page, label, false, result)
       let cross = (await saved(page, fixtureName)).ranges[0]
       assert.equal(cross.start.offset, initial.ranges[0].start.offset + 1)
       assert.deepEqual(cross.end, initial.ranges[0].end)
       await chapter(page, 3)
-      await editEndpoint(page, label, true)
+      await editEndpoint(page, label, true, result)
+      if (security)
+        await assertMagnifierSecurity(page, result, 'after magnifier')
       cross = (await saved(page, fixtureName)).ranges[0]
       assert.equal(cross.end.offset, initial.ranges[0].end.offset - 1)
       assert.equal(cross.start.offset, initial.ranges[0].start.offset + 1)
@@ -413,6 +443,11 @@ async function run(mobile, format) {
       result.checks.push(
         'both cross-chapter endpoints edited independently; magnifier contains rendered pixels'
       )
+      if (security) {
+        assert.equal(result.errors.length, 0, result.errors.join('\n'))
+        result.passed = true
+        return
+      }
       const beforeRecycle = await saved(page, fixtureName)
       await page.evaluate(() => {
         window.__oldChapter = document

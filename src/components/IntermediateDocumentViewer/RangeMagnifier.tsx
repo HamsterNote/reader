@@ -9,6 +9,7 @@ import {
   useRef
 } from 'react'
 import { createPortal } from 'react-dom'
+import { magnifierCaptureSource } from './magnifierCaptureSource'
 import {
   drawMagnifierSnapshot,
   type MagnifierPoint,
@@ -17,45 +18,6 @@ import {
 } from './rangeMagnifierGeometry'
 
 const SNAPSHOT_DEBOUNCE_MS = 100
-
-function magnifierCaptureSource(source: HTMLElement, owner: Document) {
-  if (source.ownerDocument === owner)
-    return { element: source, release: () => {} }
-  // Publication CSP disallows child frames, including html2canvas's internal clone.
-  // Copy computed presentation into the trusted reader document for rasterization.
-  const wrapper = owner.createElement('div')
-  const box = source.getBoundingClientRect()
-  Object.assign(wrapper.style, {
-    position: 'fixed',
-    left: '-100000px',
-    top: '0',
-    width: `${box.width}px`,
-    height: `${box.height}px`,
-    pointerEvents: 'none',
-    overflow: 'hidden'
-  })
-  wrapper.setAttribute('aria-hidden', 'true')
-  const clone = owner.importNode(source, true)
-  const originals = [source, ...source.querySelectorAll<HTMLElement>('*')]
-  const copies = [clone, ...clone.querySelectorAll<HTMLElement>('*')]
-  originals.forEach((element, index) => {
-    const computed = source.ownerDocument.defaultView?.getComputedStyle(element)
-    if (!computed) return
-    for (const key of Array.from(computed))
-      copies[index].style.setProperty(key, computed.getPropertyValue(key))
-  })
-  Object.assign(clone.style, {
-    position: 'absolute',
-    left: '0',
-    top: '0',
-    margin: '0',
-    width: `${box.width}px`,
-    height: `${box.height}px`
-  })
-  wrapper.append(clone)
-  owner.body.append(wrapper)
-  return { element: wrapper, release: () => wrapper.remove() }
-}
 
 export type { MagnifierPoint } from './rangeMagnifierGeometry'
 export {
