@@ -11,6 +11,7 @@ import type {
   ReaderComment,
   ReaderData,
   ReaderEdgeCrop,
+  ReaderEngineSource,
   ReaderFontScale,
   ReaderLinkedSelectionData,
   ReaderLoadingProgress,
@@ -158,6 +159,7 @@ const mockCallbacks: {
   ) => void
 } = {}
 type MockReaderProps = Record<string, unknown> & {
+  engineSource?: ReaderEngineSource
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   emptyText?: string
   renderMode?: ReaderRenderMode
@@ -531,6 +533,9 @@ function mockEpubParserSuccess(document: IntermediateDocument) {
 function makeFile(name: string) {
   const file = new File(['pdf'], name, { type: 'application/pdf' })
   Object.defineProperty(file, 'size', { value: 3 })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: async () => new Uint8Array([112, 100, 102]).buffer
+  })
   return file
 }
 
@@ -1021,6 +1026,16 @@ describe('demo parser flow', () => {
 
       expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
       expect(await screen.findByText(caseData.title)).toBeInTheDocument()
+
+      const source = findDocumentReaderProps()?.engineSource
+      if (caseData.label === 'EPUB' || caseData.label === 'PDF') {
+        expect(source?.format).toBe(caseData.label.toLowerCase())
+        expect(source?.data.byteLength).toBe(uploadedFile.size)
+        if (caseData.label === 'EPUB')
+          expect(source?.data).toEqual(new Uint8Array([112, 100, 102]))
+      } else {
+        expect(source).toBeUndefined()
+      }
 
       const shell = screen.getByTestId('reader-demo-root')
       expect(shell).toHaveClass('hamster-demo-shell')

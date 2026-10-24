@@ -333,7 +333,7 @@ async function run(mobile, format) {
       },
       { fixtureName, initial }
     )
-    await page.goto(`${base}/?engines=next`)
+    await page.goto(`${base}/`)
     if (security) await monitorMagnifierSecurity(page, result)
     await uploadFixture(page, format, fixtureName)
     await page.locator(`[data-engine=${format}]`).waitFor()

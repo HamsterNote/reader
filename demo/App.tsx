@@ -76,9 +76,6 @@ import {
 
 type ReaderDocument = IntermediateDocument | IntermediateDocumentSerialized
 
-const newEnginesEnabled = () =>
-  new URLSearchParams(window.location.search).get('engines') === 'next'
-
 type FileSelectionSource = 'reader-upload' | 'sidebar' | 'recent-file'
 
 type FileSelection = {
@@ -1771,7 +1768,7 @@ export function App() {
 
         await saveSelectedFile(selection)
         if (!isCurrentSelection(selection)) return
-        if (newEnginesEnabled() && result.label === 'EPUB') {
+        if (result.label === 'EPUB') {
           const data = new Uint8Array(await selection.file.arrayBuffer())
           if (!isCurrentSelection(selection)) return
           setEngineSource({ format: 'epub', data })
@@ -1878,9 +1875,7 @@ export function App() {
         await pdfRetirementRef.current
         if (!isCurrentSelection(selection) || sourceBuffer === null) return
 
-        const engineBytes = newEnginesEnabled()
-          ? new Uint8Array(sourceBuffer.slice(0))
-          : null
+        const engineBytes = new Uint8Array(sourceBuffer.slice(0))
         const handle = await openPdfDocumentForReader(PdfParser, sourceBuffer, {
           pages,
           signal: selectionAbortControllerRef.current?.signal,
@@ -1910,15 +1905,14 @@ export function App() {
           parseMs: performance.now() - parseStartedAt
         }))
         commitParsedDocument(selection, handle.document, 'PDF')
-        if (engineBytes)
-          setEngineSource({
-            format: 'pdf',
-            data: engineBytes,
-            workerSrc: new URL(
-              'pdfjs-worker/pdf.worker.min.mjs',
-              window.document.baseURI
-            ).href
-          })
+        setEngineSource({
+          format: 'pdf',
+          data: engineBytes,
+          workerSrc: new URL(
+            'pdfjs-worker/pdf.worker.min.mjs',
+            window.document.baseURI
+          ).href
+        })
         setPdfLoadState({ phase: 'done', selection })
 
         await saveSelectedFile(selection)

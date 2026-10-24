@@ -34,6 +34,8 @@ export function App() {
 
 `Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
 
+The browser Demo and Expo host use Foliate for EPUB and the official PDF.js viewer for PDF by default. Library consumers can supply `engineSource={{ format: 'epub', data: bytes }}` (or `format: 'pdf'`, with `workerSrc` when needed) alongside the compatibility `document`. Memoize the source per file; original bytes stay outside persisted `ReaderData`. EPUB uses Foliate in both modes; PDF Text keeps the compatible text view. Existing `document`-only consumers and other formats retain the shared renderer. Setup, acceptance evidence, backups and rollback are documented in `docs/ham91-final-acceptance.md`.
+
 The renderer lazily loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release, designed for long documents without blocking the main thread.
 
 #### Unified Reader data

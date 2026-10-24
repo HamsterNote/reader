@@ -1,5 +1,8 @@
 # HAM-91 集成验收记录
 
+> 2026-10-24 最终汇总见 `docs/ham91-final-acceptance.md`：iOS 已验收，Android
+> 人工豁免，Demo 默认路由已切换。以下保留 2026-10-23 当时的历史结果与限制。
+
 日期：2026-10-23。基线 `237c0d51a4fc76d8c6f233bd2598ac7a14d12500`。
 分支 `agent/ham-91-integration`，合入 EPUB `622befc`、PDF `233db4f`、
 Expo `587f26f`。本记录交付可测试的集成实现，**不是完整矩阵通过声明**。
