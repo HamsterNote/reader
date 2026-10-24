@@ -212,6 +212,106 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it('uses non-hidden in-range pages for navigation, bookmarks, callbacks and crop-mode fallback', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onPageChange = vi.fn()
+    const props = {
+      source,
+      hiddenPages: [1],
+      pageRange: { start: 1, end: 2 },
+      onPageChange
+    }
+    const view = renderViewer(props, ref)
+    await act(async () => {})
+    expect(latestViewer().currentPageNumber).toBe(2)
+    act(() => {
+      ref.current!.scrollToPage(2)
+      ref.current!.scrollToPage(1)
+    })
+    expect(latestViewer().currentPageNumber).toBe(2)
+    await act(async () => {
+      await ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        verticalPercentage: 50
+      })
+    })
+    expect(latestViewer().currentPageNumber).toBe(2)
+    act(() => {
+      latestViewer().currentPageNumber = 1
+      latestViewer().eventBus.dispatch('pagechanging', { pageNumber: 1 })
+    })
+    expect(latestViewer().currentPageNumber).toBe(2)
+    expect(onPageChange).not.toHaveBeenCalledWith(1)
+    act(() =>
+      latestViewer().eventBus.dispatch('pagechanging', { pageNumber: 2 })
+    )
+    expect(onPageChange).toHaveBeenLastCalledWith(2)
+    view.rerender(<PdfDocumentViewer {...props} edgeCropEditing ref={ref} />)
+    act(() => ref.current!.scrollToPage(1))
+    expect(latestViewer().currentPageNumber).toBe(1)
+    act(() =>
+      latestViewer().eventBus.dispatch('pagechanging', { pageNumber: 1 })
+    )
+    expect(onPageChange).toHaveBeenLastCalledWith(1)
+    onPageChange.mockClear()
+    view.rerender(
+      <PdfDocumentViewer {...props} currentPageNumber={1} ref={ref} />
+    )
+    expect(latestViewer().currentPageNumber).toBe(2)
+    expect(latestViewer().getPageView(0)!.div.style.display).toBe('none')
+    expect(onPageChange).not.toHaveBeenCalledWith(1)
+    view.rerender(
+      <PdfDocumentViewer {...props} hiddenPages={[1, 2]} ref={ref} />
+    )
+    act(() =>
+      latestViewer().eventBus.dispatch('pagechanging', { pageNumber: 1 })
+    )
+    expect(onPageChange).not.toHaveBeenCalledWith(1)
+  })
+
+  it('filters hidden pages before restoration in the pagesloaded callback', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    let restoredPage: number | undefined
+    renderViewer(
+      {
+        source,
+        hiddenPages: ['page-1'],
+        onPagesLoaded: () => {
+          ref.current!.scrollToPage(2)
+          ref.current!.scrollToPage(1)
+          restoredPage = latestViewer().currentPageNumber
+        }
+      },
+      ref
+    )
+    await act(async () => {})
+    expect(restoredPage).toBe(2)
+  })
+
+  it('settles a pending bookmark if its page becomes hidden before text loads', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source }, ref)
+    await act(async () => {})
+    let settled = false
+    act(() => {
+      ref
+        .current!.scrollToAnchor({ pageNumber: 2, verticalPercentage: 50 })
+        .then(() => {
+          settled = true
+        })
+    })
+    expect(settled).toBe(false)
+    view.rerender(
+      <PdfDocumentViewer source={source} hiddenPages={[2]} ref={ref} />
+    )
+    await act(async () => {})
+    expect(settled).toBe(true)
+    expect(latestViewer().currentPageNumber).toBe(1)
+  })
+
   it('allows in-range restoration immediately in the pagesloaded callback', async () => {
     const source = { data: readFixture('pdf/two-column.pdf') }
     const ref = createRef<PdfDocumentViewerRef>()
@@ -698,7 +798,7 @@ describe('PdfDocumentViewer 接线', () => {
     expect(latestViewer().document).not.toBeNull()
   })
 
-  it('受控页码与缩放写入 viewer；隐藏页 display:none', async () => {
+  it('受控页码不会进入隐藏页；缩放与隐藏展示生效', async () => {
     const onPageChange = vi.fn()
     const ref = createRef<PdfDocumentViewerRef>()
     const { rerender } = renderViewer({ onPageChange }, ref)
@@ -716,7 +816,7 @@ describe('PdfDocumentViewer 接线', () => {
     )
     await act(async () => {})
 
-    expect(latestViewer().currentPageNumber).toBe(2)
+    expect(latestViewer().currentPageNumber).toBe(1)
     expect(latestViewer().currentScale).toBe(2)
     expect(latestViewer().getPageView(1)!.div.style.display).toBe('none')
     expect(latestViewer().getPageView(0)!.div.style.display).toBe('')

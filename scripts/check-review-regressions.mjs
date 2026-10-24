@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { createServer } from 'vite'
 import { chromium } from 'playwright'
 import { PDFDocument } from 'pdf-lib'
+import JSZip from 'jszip'
 
 const repo = resolve(import.meta.dirname, '..')
 const output = resolve(
@@ -70,6 +71,111 @@ async function confirm(page) {
   )
   return page.evaluate(() => window.readerRegression.state.ranges.at(-1))
 }
+
+async function checkSpineNavigation(page, epub, label, result) {
+  const zip = await JSZip.loadAsync(epub)
+  const opfFile = zip.file(/\.opf$/)[0]
+  const opf = await page.evaluate(
+    (xml) => {
+      const doc = new DOMParser().parseFromString(xml, 'application/xml')
+      const spine = doc.getElementsByTagNameNS('*', 'spine')[0]
+      const nav = doc.createElementNS(spine.namespaceURI, 'itemref')
+      nav.setAttribute('idref', 'nav')
+      const chapter = [...spine.children].find(
+        (item) => item.getAttribute('idref') === 'chapter2'
+      )
+      if (!chapter) throw new Error('Missing chapter2 fixture')
+      spine.insertBefore(nav, chapter)
+      return new XMLSerializer().serializeToString(doc)
+    },
+    await opfFile.async('string')
+  )
+  zip.file(opfFile.name, opf)
+  await open(page, 'epub', await zip.generateAsync({ type: 'uint8array' }), {
+    pageRange: { start: 2, end: 3 }
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 1
+  )
+  await page.evaluate(async () => {
+    await document.querySelector('foliate-view').renderer.next()
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 3
+  )
+  await page.evaluate(async () => {
+    await document.querySelector('foliate-view').renderer.prev()
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 1
+  )
+  await page.evaluate(async () => {
+    const view = document.querySelector('foliate-view')
+    const doc = view.renderer.getContents()[0].doc
+    const link = doc.createElement('a')
+    link.href = 'nav.xhtml'
+    link.textContent = 'Navigation document'
+    doc.body.append(link)
+    link.click()
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    )
+    link.remove()
+  })
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.querySelector('foliate-view').renderer.getContents()[0].index
+    ),
+    1
+  )
+  await update(page, { edgeCropEditing: true })
+  await page.evaluate(async () => {
+    await document.querySelector('foliate-view').renderer.next()
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 3
+  )
+  await update(page, {
+    pageRange: { start: 2, end: 2 },
+    edgeCropEditing: false
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 1
+  )
+  assert.equal(
+    await page.evaluate(
+      () => document.querySelector('foliate-view').book.sections[2].linear
+    ),
+    'no'
+  )
+  await page.screenshot({
+    path: resolve(output, `${label}-spine-nav-excluded.png`)
+  })
+  await update(page, { pageRange: undefined })
+  await page.evaluate(async () => {
+    await document.querySelector('foliate-view').renderer.next()
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 2
+  )
+  result.checks.push(
+    'spine navigation document: next/prev skip it, body link rejected, crop edit and single-page range stay bounded; clearing range restores original spine'
+  )
+}
+
 async function run(mobile) {
   const label = mobile ? 'mobile' : 'desktop'
   const page = await browser.newPage({
@@ -159,6 +265,7 @@ async function run(mobile) {
     result.checks.push(
       'EPUB pageRange, internal link, crop editing, empty range, range update; original chapter IDs'
     )
+    await checkSpineNavigation(page, epub, label, result)
 
     const compat = Buffer.from(
       await readFile(resolve(repo, 'test/compat/fixtures/pdf/ligature.pdf'))

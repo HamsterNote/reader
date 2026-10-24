@@ -638,6 +638,7 @@ export const createEpubEngine = (
     if (!resolved) return false
     const chapter = chapterIndexBySection[resolved.index]
     const page = model?.pages.find((entry) => entry.chapterIndex === chapter)
+    if (rangePages && !page) return false
     if (page && !isPageVisible(page.pageNumber))
       return goToPage(page.pageNumber)
     await view.renderer.goTo({ index: resolved.index, anchor: resolved.anchor })
@@ -803,10 +804,8 @@ export const createEpubEngine = (
         const page = model?.pages.find(
           (entry) => entry.chapterIndex === chapter
         )
-        section.linear =
-          page && !isPageVisible(page.pageNumber)
-            ? 'no'
-            : originalLinear.get(index)
+        const visible = page ? isPageVisible(page.pageNumber) : !rangePages
+        section.linear = visible ? originalLinear.get(index) : 'no'
       })
       if (displayedPage !== undefined && !isPageVisible(displayedPage))
         await goToPage(displayedPage)

@@ -194,6 +194,16 @@ type OverlayPortalProps = {
   readonly children: ReactNode
 }
 
+const filterHiddenPages = (
+  pages: readonly number[],
+  hiddenPages: readonly (number | string)[] | undefined,
+  editing = false
+): readonly number[] => {
+  if (editing) return pages
+  const hidden = normalizeHiddenPageNumbers(hiddenPages)
+  return pages.filter((page) => !hidden.has(page))
+}
+
 /**
  * 叠加层 portal 容器。pdf.js 缩放/重渲染时会清空 page div 的子节点——
  * 若 React portal 直接挂在 page div 上，卸载时 removeChild 会与 pdf.js
@@ -289,13 +299,16 @@ export const PdfDocumentViewer = forwardRef<
   const [ocrDocument, setOcrDocument] = useState<PDFDocumentProxy | null>(null)
   const [renderedPages, setRenderedPages] = useState<readonly number[]>([])
   const allowedPages = getVisiblePageNumbers([...overlayPages], pageRange)
-  const readablePages = allowedPages.filter(
-    (page) => !normalizeHiddenPageNumbers(hiddenPages).has(page)
-  )
-  const visiblePagesRef = useRef(allowedPages)
-  visiblePagesRef.current = allowedPages
-  const pageRangeRef = useRef(pageRange)
-  pageRangeRef.current = pageRange
+  const readablePages = filterHiddenPages(allowedPages, hiddenPages)
+  const navigablePages = edgeCropEditing ? allowedPages : readablePages
+  const visiblePagesRef = useRef(navigablePages)
+  visiblePagesRef.current = navigablePages
+  const navigationOptionsRef = useRef({
+    pageRange,
+    hiddenPages,
+    edgeCropEditing
+  })
+  navigationOptionsRef.current = { pageRange, hiddenPages, edgeCropEditing }
   const ocrTexts = usePdfOcr(ocrDocument, renderedPages, readablePages, props)
   const ocrTextsRef = useRef(ocrTexts)
   ocrTextsRef.current = ocrTexts
@@ -575,9 +588,11 @@ export const PdfDocumentViewer = forwardRef<
         { length: viewer.pagesCount },
         (_, index) => index + 1
       )
-      visiblePagesRef.current = getVisiblePageNumbers(
-        pages,
-        pageRangeRef.current
+      const navigation = navigationOptionsRef.current
+      visiblePagesRef.current = filterHiddenPages(
+        getVisiblePageNumbers(pages, navigation.pageRange),
+        navigation.hiddenPages,
+        navigation.edgeCropEditing
       )
       setOverlayPages(pages)
     }
@@ -723,7 +738,14 @@ export const PdfDocumentViewer = forwardRef<
     if (viewer.currentPageNumber !== currentPageNumber) {
       viewer.currentPageNumber = currentPageNumber
     }
-  }, [currentPageNumber, geometryVersion, pageRange, overlayPages])
+  }, [
+    currentPageNumber,
+    geometryVersion,
+    pageRange,
+    overlayPages,
+    hiddenPages,
+    edgeCropEditing
+  ])
 
   // 隐藏页：display:none 占位（矩阵 §9：阅读时省略隐藏页）。
   useEffect(() => {
@@ -741,7 +763,14 @@ export const PdfDocumentViewer = forwardRef<
         isHidden && Boolean(edgeCropEditing)
       )
     }
-    const visible = allowedPages
+    const visible = visiblePagesRef.current
+    if (
+      pendingAnchor.current &&
+      !visible.includes(pendingAnchor.current.anchor.pageNumber)
+    ) {
+      pendingAnchor.current.done()
+      pendingAnchor.current = null
+    }
     if (visible.length && !visible.includes(viewer.currentPageNumber)) {
       viewer.currentPageNumber =
         visible.find((page) => page >= viewer.currentPageNumber) ??
@@ -862,6 +891,7 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     if (!viewer || viewer.pagesCount === 0) return null
     const pageNumber = viewer.currentPageNumber
+    if (!visiblePagesRef.current.includes(pageNumber)) return null
     const context = selectionContextsRef.current.get(pageNumber)
     if (!context) return null
     const top = containerRef.current?.getBoundingClientRect().top ?? 0
