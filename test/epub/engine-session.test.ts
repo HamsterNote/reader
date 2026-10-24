@@ -37,6 +37,72 @@ const loadV4Ranges = (): readonly EpubEngineRange[] => {
 }
 
 describe('epub engine session: lifecycle and race isolation', () => {
+  it.each([2, 4])(
+    'reconciles actual section %i instead of a stale in-range page when restoring a range',
+    async (index) => {
+      const fake = makeFakeView({
+        sectionHrefs: [
+          'OPS/cover.xhtml',
+          'OPS/chapter1.xhtml',
+          'OPS/nav.xhtml',
+          'OPS/chapter2.xhtml',
+          'OPS/chapter3.xhtml'
+        ]
+      })
+      const engine = createEpubEngine(
+        {
+          container: document.createElement('div'),
+          source: readFixture('epub/duplicate-text.epub')
+        },
+        fake.factory
+      )
+      await engine.ready
+      fake.handle.emit('relocate', { index: 1, fraction: 0 })
+      vi.spyOn(fake.handle.renderer, 'getContents').mockReturnValue([{ index }])
+      const calls = fake.handle.renderer.goToCalls.length
+      await engine.setHiddenPages([], false, { start: 2, end: 2 })
+      expect(fake.handle.renderer.goToCalls).toHaveLength(calls + 1)
+      expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 1 })
+      await engine.destroy()
+    }
+  )
+
+  it('clears stale location when no readable page remains and recovers when the range is restored', async () => {
+    const fake = makeFakeView()
+    const onRelocate = vi.fn()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub'),
+        onRelocate
+      },
+      fake.factory
+    )
+    await engine.ready
+    fake.handle.emit('relocate', { index: 1, fraction: 0 })
+    vi.spyOn(fake.handle.renderer, 'getContents').mockReturnValue([
+      { index: 1 }
+    ])
+    expect(engine.captureTextAnchor()?.pageNumber).toBe(2)
+    const calls = fake.handle.renderer.goToCalls.length
+    await engine.setHiddenPages([2], false, { start: 2, end: 2 })
+    expect(fake.handle.renderer.goToCalls).toHaveLength(calls)
+    expect(engine.captureTextAnchor()).toBeUndefined()
+    expect(fake.handle.view.style.visibility).toBe('hidden')
+    expect(onRelocate).toHaveBeenLastCalledWith({
+      chapterIndex: -1,
+      pageNumber: null,
+      fraction: 0
+    })
+    fake.handle.emit('relocate', { index: 1, fraction: 0.5 })
+    expect(engine.captureTextAnchor()).toBeUndefined()
+    expect(onRelocate.mock.calls.at(-1)?.[0].pageNumber).toBeNull()
+    await engine.setHiddenPages([], false, { start: 3, end: 3 })
+    expect(fake.handle.view.style.visibility).toBe('')
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 2 })
+    await engine.destroy()
+  })
+
   it('excludes unmapped spine navigation documents and refuses their links only while a range is active', async () => {
     const fake = makeFakeView({
       sectionHrefs: [

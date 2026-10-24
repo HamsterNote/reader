@@ -22,6 +22,7 @@ const state = {
   ocrPages: [] as number[],
   images: [] as string[],
   segments: [] as string[],
+  positions: [] as number[],
   errors: [] as string[]
 }
 function render() {
@@ -46,6 +47,7 @@ const api = {
     state.ocrPages = []
     state.images = []
     state.segments = []
+    state.positions = []
     state.errors = []
     const source = { format, data: new Uint8Array(bytes) }
     const opened = await openReaderDocument(source, `review-${format}`)
@@ -57,6 +59,10 @@ const api = {
       useVirtualPaper: false,
       selectionRef: selection,
       onHighlight: (range) => state.ranges.push(range),
+      onDataChange: (data) => {
+        if (data.layoutReadingProgress)
+          state.positions.push(data.layoutReadingProgress.pageNumber)
+      },
       onSelectText: (_selection, segments) => {
         state.segments = segments.map((segment) => segment.selectedText)
       },

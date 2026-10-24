@@ -164,15 +164,63 @@ async function checkSpineNavigation(page, epub, label, result) {
   })
   await update(page, { pageRange: undefined })
   await page.evaluate(async () => {
-    await document.querySelector('foliate-view').renderer.next()
+    const renderer = document.querySelector('foliate-view').renderer
+    renderer.getContents()[0].doc.dispatchEvent(new Event('keydown'))
+    await renderer.next()
   })
   await page.waitForFunction(
     () =>
       document.querySelector('foliate-view')?.renderer?.getContents()[0]
         ?.index === 2
   )
+  const positionCount = await page.evaluate(
+    () => window.readerRegression.state.positions.length
+  )
+  await update(page, { pageRange: { start: 2, end: 2 } })
+  await page.waitForFunction(
+    (count) =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 1 && window.readerRegression.state.positions.length > count,
+    positionCount
+  )
+  const positions = await page.evaluate(
+    (count) => window.readerRegression.state.positions.slice(count),
+    positionCount
+  )
+  assert(positions.length > 0 && positions.every((number) => number === 2))
+  await page.screenshot({
+    path: resolve(output, `${label}-spine-nav-range-restored.png`)
+  })
+  const restoredPositionCount = await page.evaluate(
+    () => window.readerRegression.state.positions.length
+  )
+  await update(page, { data: { hiddenPages: [2] } })
+  await page.waitForFunction(
+    () => document.querySelector('foliate-view')?.style.visibility === 'hidden'
+  )
+  assert.equal(
+    await page.locator('.hamster-reader__epub-container').isVisible(),
+    false
+  )
+  assert.equal(
+    await page.evaluate(() => window.readerRegression.state.positions.length),
+    restoredPositionCount
+  )
+  await update(page, {
+    data: { hiddenPages: [] },
+    pageRange: { start: 3, end: 3 }
+  })
+  await page.waitForFunction(
+    (count) =>
+      document.querySelector('foliate-view')?.renderer?.getContents()[0]
+        ?.index === 3 &&
+      document.querySelector('foliate-view').style.visibility === '' &&
+      window.readerRegression.state.positions.length > count &&
+      window.readerRegression.state.positions.at(-1) === 3,
+    restoredPositionCount
+  )
   result.checks.push(
-    'spine navigation document: next/prev skip it, body link rejected, crop edit and single-page range stay bounded; clearing range restores original spine'
+    'spine navigation document: next/prev skip it, body link rejected, crop edit and single-page range stay bounded; clearing range restores original spine; re-enabling range returns actual section and persisted position callback to page 2; no readable pages hides content without publishing stale progress and recovers on a valid range'
   )
 }
 
