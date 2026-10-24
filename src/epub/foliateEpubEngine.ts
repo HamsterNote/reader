@@ -7,6 +7,8 @@
 
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js'
 import '../../vendor/foliate-js/view.js'
+import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
+import type { ReaderPageRange } from '../components/IntermediateDocumentViewer'
 import type {
   FoliateBook,
   FoliateRelocateDetail,
@@ -111,7 +113,8 @@ export type EpubEngine = {
   readonly getRangePart: (id: string) => Range | null
   readonly setHiddenPages: (
     pages: readonly (number | string)[],
-    editing?: boolean
+    editing?: boolean,
+    pageRange?: ReaderPageRange
   ) => Promise<void>
   readonly clearSelection: () => void
   readonly setActiveRange: (id: string | null) => void
@@ -149,6 +152,10 @@ export const createEpubEngine = (
   let displayedPage: number | undefined
   let activeRangeId: string | null = null
   let hiddenPages = new Set<number>()
+  let rangePages: ReadonlySet<number> | undefined
+  const isPageVisible = (page: number) =>
+    (!rangePages || rangePages.has(page)) &&
+    (cropEditing || !hiddenPages.has(page))
   let cropEditing = false
   const originalLinear = new Map<number, string | undefined>()
   // foliate section 下标 ↔ 兼容索引章节下标（href 对应；导航项在 spine 时错位）。
@@ -515,6 +522,12 @@ export const createEpubEngine = (
     }
     if (book.transformTarget) restrictPublicationResources(book.transformTarget)
     view.addEventListener('external-link', (event) => event.preventDefault())
+    view.addEventListener('link', (event) => {
+      if (!rangePages) return
+      event.preventDefault()
+      const { href } = (event as CustomEvent<{ href: string }>).detail
+      goToTocHref(href).catch((error: unknown) => fail('render-failed', error))
+    })
     buildSectionMaps(book, pack)
 
     const renderer = view.renderer
@@ -595,8 +608,8 @@ export const createEpubEngine = (
     if (destroyed || !model || !view?.renderer) return false
     if (!model.pages.some((entry) => entry.pageNumber === pageNumber))
       return false
-    const visible = model.pages.filter(
-      (entry) => cropEditing || !hiddenPages.has(entry.pageNumber)
+    const visible = model.pages.filter((entry) =>
+      isPageVisible(entry.pageNumber)
     )
     const page =
       visible.find((entry) => entry.pageNumber === pageNumber) ??
@@ -625,7 +638,7 @@ export const createEpubEngine = (
     if (!resolved) return false
     const chapter = chapterIndexBySection[resolved.index]
     const page = model?.pages.find((entry) => entry.chapterIndex === chapter)
-    if (page && hiddenPages.has(page.pageNumber) && !cropEditing)
+    if (page && !isPageVisible(page.pageNumber))
       return goToPage(page.pageNumber)
     await view.renderer.goTo({ index: resolved.index, anchor: resolved.anchor })
     return true
@@ -635,6 +648,8 @@ export const createEpubEngine = (
     if (destroyed || !view?.renderer || !compat) return false
     const entry = ranges.get(id)
     if (!entry || entry.reason !== null) return false
+    if (!isPageVisible(Number(entry.data.start.selectionId.slice(5))))
+      return false
     const firstPart = compat.locateRange(entry.data)
     if (firstPart.status !== 'located' || firstPart.parts.length === 0) {
       return false
@@ -766,13 +781,21 @@ export const createEpubEngine = (
       }
       return null
     },
-    setHiddenPages: async (pages, editing = false) => {
+    setHiddenPages: async (pages, editing = false, pageRange) => {
       hiddenPages = new Set(
         pages.map((page) =>
           typeof page === 'number' ? page : Number(page.slice(5))
         )
       )
       cropEditing = editing
+      rangePages = pageRange
+        ? new Set(
+            getVisiblePageNumbers(
+              model?.pages.map((page) => page.pageNumber) ?? [],
+              pageRange
+            )
+          )
+        : undefined
       book?.sections.forEach((section, index) => {
         if (!originalLinear.has(index))
           originalLinear.set(index, section.linear)
@@ -781,15 +804,11 @@ export const createEpubEngine = (
           (entry) => entry.chapterIndex === chapter
         )
         section.linear =
-          page && hiddenPages.has(page.pageNumber) && !editing
+          page && !isPageVisible(page.pageNumber)
             ? 'no'
             : originalLinear.get(index)
       })
-      if (
-        !editing &&
-        displayedPage !== undefined &&
-        hiddenPages.has(displayedPage)
-      )
+      if (displayedPage !== undefined && !isPageVisible(displayedPage))
         await goToPage(displayedPage)
     },
     rangeIdAtPoint: (doc, x, y) => {

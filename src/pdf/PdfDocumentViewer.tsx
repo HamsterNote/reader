@@ -46,6 +46,10 @@ import type { OverlayRectUnit } from './pdfOverlayGeometry'
 import type { ReaderPageEdgeCrop } from '../types/readerData'
 import { resolvePageEdgeCrop } from '../components/IntermediateDocumentViewer/pageDisplay'
 import { EdgeCropOverlay } from '../components/IntermediateDocumentViewer/EdgeCropOverlay'
+import type { ReaderPageRange } from '../components/IntermediateDocumentViewer'
+import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
+import { usePdfOcr, type PdfOcrOptions } from './usePdfOcr'
+import { PdfOcrTextLayer } from './PdfOcrTextLayer'
 import type { PdfPageSelectionContext } from './pdfSelectionSerializer'
 import { serializePdfTextSelection } from './pdfSelectionSerializer'
 import type { SerializedPdfSelection } from './pdfSelectionSerializer'
@@ -65,7 +69,7 @@ export type PdfViewerError = {
   readonly message: string
 }
 
-export type PdfDocumentViewerProps = {
+export type PdfDocumentViewerProps = PdfOcrOptions & {
   readonly source: PdfDocumentSource | null
   /** pdfjs worker 资产 URL（宿主提供；不设置时沿用全局配置）。 */
   readonly workerSrc?: string
@@ -123,6 +127,7 @@ export type PdfDocumentViewerProps = {
   readonly onTextAnchorChange?: (anchor: ReaderTextAnchor | null) => void
   /** 隐藏页（数字或 'page-N'，与 ReaderData.hiddenPages 同契约）。 */
   readonly hiddenPages?: readonly (number | string)[]
+  readonly pageRange?: ReaderPageRange
   /** 裁切（0..1 分数；页级覆盖由宿主合并后传入单页值亦可）。 */
   readonly edgeCrop?: ReaderPageEdgeCrop
   readonly edgeCropEditing?: boolean
@@ -260,6 +265,7 @@ export const PdfDocumentViewer = forwardRef<
     onTextSelectionChange,
     onTextAnchorChange,
     hiddenPages,
+    pageRange,
     edgeCrop,
     edgeCropEditing,
     onEdgeCropApply,
@@ -280,14 +286,37 @@ export const PdfDocumentViewer = forwardRef<
   const [status, setStatus] = useState<PdfViewerStatus>('idle')
   const [geometryVersion, setGeometryVersion] = useState(0)
   const [overlayPages, setOverlayPages] = useState<readonly number[]>([])
+  const [ocrDocument, setOcrDocument] = useState<PDFDocumentProxy | null>(null)
+  const [renderedPages, setRenderedPages] = useState<readonly number[]>([])
+  const allowedPages = getVisiblePageNumbers([...overlayPages], pageRange)
+  const readablePages = allowedPages.filter(
+    (page) => !normalizeHiddenPageNumbers(hiddenPages).has(page)
+  )
+  const visiblePagesRef = useRef(allowedPages)
+  visiblePagesRef.current = allowedPages
+  const pageRangeRef = useRef(pageRange)
+  pageRangeRef.current = pageRange
+  const ocrTexts = usePdfOcr(ocrDocument, renderedPages, readablePages, props)
+  const ocrTextsRef = useRef(ocrTexts)
+  ocrTextsRef.current = ocrTexts
+  const withOcr = (canonical: CanonicalPageText): CanonicalPageText =>
+    buildCanonicalPageText(canonical.pageNumber, [
+      ...canonical.spans.map((span) => ({ str: span.domText })),
+      ...(ocrTextsRef.current.get(canonical.pageNumber) ?? []).map((text) => ({
+        str: text.content,
+        textId: text.id
+      }))
+    ])
   // 事件回调经 ref 读取，避免 init effect 闭包过期。
   const callbacksRef = useRef({
+    onOcrError: props.onOcrError,
     onPageChange,
     onScaleChange,
     onPagesLoaded,
     onTextLayerReady
   })
   callbacksRef.current = {
+    onOcrError: props.onOcrError,
     onPageChange,
     onScaleChange,
     onPagesLoaded,
@@ -359,9 +388,9 @@ export const PdfDocumentViewer = forwardRef<
       if (matched && pageView && geometry) {
         selectionContextsRef.current.set(pageNumber, {
           pageNumber,
-          textLayerDiv,
+          textLayerDiv: pageView.div,
           pageDiv: pageView.div,
-          canonical,
+          canonical: withOcr(canonical),
           viewport: geometry.viewport,
           scaleOneViewport: geometry.scaleOneViewport,
           visual: geometry.visual
@@ -408,6 +437,7 @@ export const PdfDocumentViewer = forwardRef<
       if (!document) return null
       const page = await document.getPage(pageNumber)
       const textContent = await page.getTextContent()
+      if (documentRef.current !== document) return null
       const canonical = buildCanonicalPageText(
         pageNumber,
         textContent.items.filter((item): item is TextItem => 'str' in item)
@@ -519,7 +549,12 @@ export const PdfDocumentViewer = forwardRef<
     })
 
     const handlePageChanging = (event: { pageNumber: number }) => {
-      callbacksRef.current.onPageChange?.(event.pageNumber)
+      const visible = visiblePagesRef.current
+      if (visible.includes(event.pageNumber))
+        callbacksRef.current.onPageChange?.(event.pageNumber)
+      else if (visible.length)
+        viewer.currentPageNumber =
+          visible.find((page) => page >= event.pageNumber) ?? visible.at(-1)!
     }
     const handleScaleChanging = (event: { scale: number }) => {
       callbacksRef.current.onScaleChange?.(event.scale)
@@ -536,11 +571,22 @@ export const PdfDocumentViewer = forwardRef<
       viewer.currentScaleValue = fitWidthRef.current
         ? 'page-width'
         : String(initialScaleRef.current)
-      setOverlayPages(
-        Array.from({ length: viewer.pagesCount }, (_, index) => index + 1)
+      const pages = Array.from(
+        { length: viewer.pagesCount },
+        (_, index) => index + 1
       )
+      visiblePagesRef.current = getVisiblePageNumbers(
+        pages,
+        pageRangeRef.current
+      )
+      setOverlayPages(pages)
     }
-    const handlePageRendered = () => bumpGeometry()
+    const handlePageRendered = (event: { pageNumber: number }) => {
+      setRenderedPages((pages) =>
+        pages.includes(event.pageNumber) ? pages : [...pages, event.pageNumber]
+      )
+      bumpGeometry()
+    }
     const handleRotation = () => bumpGeometry()
     const resize = new ResizeObserver(() => {
       if (fitWidthRef.current && viewer.pagesCount)
@@ -587,6 +633,8 @@ export const PdfDocumentViewer = forwardRef<
     if (!viewer) return
 
     if (!source) {
+      setOcrDocument(null)
+      setRenderedPages([])
       documentRef.current = null
       canonicalCacheRef.current.clear()
       selectionContextsRef.current.clear()
@@ -602,6 +650,8 @@ export const PdfDocumentViewer = forwardRef<
 
     let cancelled = false
     setStatus('loading')
+    setOcrDocument(null)
+    setRenderedPages([])
     canonicalCacheRef.current.clear()
     selectionContextsRef.current.clear()
 
@@ -613,6 +663,7 @@ export const PdfDocumentViewer = forwardRef<
       .then(({ session }) => {
         if (cancelled) return
         documentRef.current = session.document
+        setOcrDocument(session.document)
         setStatus('ready')
         viewerRef.current?.setDocument(session.document)
         linkServiceRef.current?.setDocument(session.document)
@@ -663,11 +714,16 @@ export const PdfDocumentViewer = forwardRef<
   // 受控页码。
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!viewer || currentPageNumber === undefined) return
+    if (
+      !viewer ||
+      currentPageNumber === undefined ||
+      !visiblePagesRef.current.includes(currentPageNumber)
+    )
+      return
     if (viewer.currentPageNumber !== currentPageNumber) {
       viewer.currentPageNumber = currentPageNumber
     }
-  }, [currentPageNumber, geometryVersion])
+  }, [currentPageNumber, geometryVersion, pageRange, overlayPages])
 
   // 隐藏页：display:none 占位（矩阵 §9：阅读时省略隐藏页）。
   useEffect(() => {
@@ -678,12 +734,71 @@ export const PdfDocumentViewer = forwardRef<
       const pageView = viewer.getPageView(pageNumber - 1)
       if (!pageView) continue
       const isHidden = hidden.has(pageNumber)
-      pageView.div.style.display = isHidden && !edgeCropEditing ? 'none' : ''
+      const inRange = allowedPages.includes(pageNumber)
+      pageView.div.style.display =
+        !inRange || (isHidden && !edgeCropEditing) ? 'none' : ''
       pageView.div.dataset.readerHidden = String(
         isHidden && Boolean(edgeCropEditing)
       )
     }
-  }, [hiddenPages, edgeCropEditing, geometryVersion, status])
+    const visible = allowedPages
+    if (visible.length && !visible.includes(viewer.currentPageNumber)) {
+      viewer.currentPageNumber =
+        visible.find((page) => page >= viewer.currentPageNumber) ??
+        visible.at(-1)!
+      viewer
+        .getPageView(viewer.currentPageNumber - 1)
+        ?.div.scrollIntoView?.({ block: 'start' })
+    }
+    for (const page of selectionContextsRef.current.keys()) {
+      if (!visible.includes(page)) selectionContextsRef.current.delete(page)
+    }
+  }, [
+    hiddenPages,
+    pageRange,
+    edgeCropEditing,
+    geometryVersion,
+    status,
+    overlayPages
+  ])
+
+  useEffect(() => {
+    let cancelled = false
+    for (const pageNumber of ocrTexts.keys()) {
+      getCanonical(pageNumber)
+        .then((canonical) => {
+          const pageView = viewerRef.current?.getPageView(pageNumber - 1)
+          const geometry = getPageGeometry(pageNumber)
+          if (cancelled || !canonical || !pageView || !geometry) return
+          selectionContextsRef.current.set(pageNumber, {
+            pageNumber,
+            pageDiv: pageView.div,
+            textLayerDiv: pageView.div,
+            canonical: withOcr(canonical),
+            ...geometry
+          })
+          callbacksRef.current.onTextLayerReady?.([
+            ...selectionContextsRef.current.keys()
+          ])
+          bumpGeometry()
+        })
+        .catch((error: unknown) => {
+          if (!cancelled)
+            callbacksRef.current.onOcrError?.(error, { pageNumber })
+        })
+    }
+    for (const [pageNumber, context] of selectionContextsRef.current) {
+      const canonical = canonicalCacheRef.current.get(pageNumber)
+      if (canonical)
+        selectionContextsRef.current.set(pageNumber, {
+          ...context,
+          canonical: withOcr(canonical)
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [ocrTexts])
 
   // 裁切：clip-path 只裁可视区域，叠加层坐标不受影响（3.3 裁切对齐）。
   useEffect(() => {
@@ -788,7 +903,7 @@ export const PdfDocumentViewer = forwardRef<
     () => ({
       scrollToPage: (pageNumber) => {
         const viewer = viewerRef.current
-        if (!viewer) return
+        if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return
         viewer.currentPageNumber = pageNumber
       },
       setScale: (nextScale) => {
@@ -798,7 +913,8 @@ export const PdfDocumentViewer = forwardRef<
       captureTextAnchor,
       scrollToAnchor: (anchor) => {
         const viewer = viewerRef.current
-        if (!viewer) return Promise.resolve()
+        if (!viewer || !visiblePagesRef.current.includes(anchor.pageNumber))
+          return Promise.resolve()
         pendingAnchor.current?.done()
         const promise = new Promise<void>((done) => {
           pendingAnchor.current = { anchor, done }
@@ -813,9 +929,12 @@ export const PdfDocumentViewer = forwardRef<
         if (!viewer || !range) return
         const match = /^page-([1-9]\d*)$/.exec(range.start.selectionId)
         if (!match) return
-        viewer.currentPageNumber = Number(match[1])
+        const page = Number(match[1])
+        if (visiblePagesRef.current.includes(page))
+          viewer.currentPageNumber = page
       },
       getCanonicalPageText: (pageNumber) =>
+        selectionContextsRef.current.get(pageNumber)?.canonical.text ??
         canonicalCacheRef.current.get(pageNumber)?.text,
       confirmSelection: () => {
         const detail = serializeCurrentSelection()
@@ -882,6 +1001,7 @@ export const PdfDocumentViewer = forwardRef<
     if (!viewer) return null
 
     return overlayPages.flatMap((pageNumber) => {
+      if (!allowedPages.includes(pageNumber)) return []
       const pageView = viewer.getPageView(pageNumber - 1)
       if (!pageView) return []
       const geometry = getPageGeometry(pageNumber)
@@ -890,6 +1010,18 @@ export const PdfDocumentViewer = forwardRef<
       const hidden = normalizeHiddenPageNumbers(hiddenPages).has(pageNumber)
       return [
         <PdfOverlayPortal key={pageId} pageDiv={pageView.div}>
+          {ocrTexts.has(pageNumber) && (
+            <PdfOcrTextLayer
+              texts={ocrTexts.get(pageNumber)!}
+              pageNumber={pageNumber}
+              offset={
+                canonicalCacheRef.current.get(pageNumber)?.text.length ?? 0
+              }
+              viewport={geometry.viewport}
+              scaleOneViewport={geometry.scaleOneViewport}
+              debug={props.ocrDebug}
+            />
+          )}
           {hidden && edgeCropEditing && (
             <div className='hamster-reader__engine-hidden-page'>
               当前 第 {pageNumber} 页 已隐藏
@@ -963,7 +1095,10 @@ export const PdfDocumentViewer = forwardRef<
     edgeCrop,
     hiddenPages,
     onEdgeCropApply,
-    onEdgeCropHidePage
+    onEdgeCropHidePage,
+    ocrTexts,
+    props.ocrDebug,
+    pageRange
   ])
 
   const rootClassName = className

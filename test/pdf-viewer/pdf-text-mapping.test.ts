@@ -1,5 +1,5 @@
 // HAM-89 / tasks.md 3.2：canonical 端点 ↔ text layer DOM 映射（jsdom）。
-// 覆盖：属性注入、偏移正逆映射、连字簇（NFKC 长度变化）、跨页选区序列化。
+// 覆盖：属性注入、UTF-16 偏移正逆映射、兼容字符、跨页选区序列化。
 
 import { describe, expect, it } from 'vitest'
 
@@ -35,11 +35,16 @@ describe('buildCanonicalPageText', () => {
     expect(page.spans[1].canonicalStart).toBe(20)
   })
 
-  it('连字簇：dom 1 字符 → canonical 2 字符，映射表记录簇边界', () => {
-    const page = buildCanonicalPageText(1, [{ str: 'ﬁ x' }])
-    expect(page.text).toBe('fi x')
-    expect(page.spans[0].canonicalToDom).toEqual([0, 1, 1, 2, 3])
-  })
+  it.each(['ﬁ x', '⑩ x', 'Ⅷ x', 'e\u0301 x'])(
+    'preserves raw TextItem.str %s and UTF-16 boundaries',
+    (str) => {
+      const page = buildCanonicalPageText(1, [{ str }])
+      expect(page.text).toBe(str)
+      expect(page.spans[0].canonicalToDom).toEqual(
+        Array.from({ length: str.length + 1 }, (_, i) => i)
+      )
+    }
+  )
 })
 
 describe('enhanceTextLayer', () => {
@@ -85,7 +90,7 @@ describe('enhanceTextLayer', () => {
     expect(div.children[1].getAttribute('data-text-id')).toBeNull()
   })
 
-  it('DOM 显示原始 str、canonical 已 NFKC 时仍能匹配（连字）', () => {
+  it('matches raw ligatures without changing public offsets', () => {
     const page = buildCanonicalPageText(1, [{ str: 'ﬁ x' }])
     const div = makeTextLayerDiv(['ﬁ x'])
     expect(enhanceTextLayer(div, page)).toBe(true)
@@ -112,18 +117,15 @@ describe('domPositionToCanonicalOffset / canonicalOffsetToDomPosition', () => {
     expect(position?.offset).toBe(2)
   })
 
-  it('连字簇：dom 端点归入簇末 canonical 边界', () => {
+  it('restores and serializes offsets after an unexpanded compatibility character', () => {
     const page = buildCanonicalPageText(1, [{ str: 'ﬁ x' }])
     const div = makeTextLayerDiv(['ﬁ x'])
     enhanceTextLayer(div, page)
 
     const textNode = (div.children[0] as HTMLElement).firstChild as Text
-    // dom offset 1（连字字形之后）→ canonical 2（'fi' 之后）。
-    expect(domPositionToCanonicalOffset(textNode, 1, page)).toBe(2)
-    // dom offset 2（空格之后）→ canonical 3。
-    expect(domPositionToCanonicalOffset(textNode, 2, page)).toBe(3)
+    expect(domPositionToCanonicalOffset(textNode, 1, page)).toBe(1)
+    expect(domPositionToCanonicalOffset(textNode, 2, page)).toBe(2)
 
-    // canonical 1（f/i 之间）→ dom 1（簇末，字形不可分割）。
     const midCluster = canonicalOffsetToDomPosition(page, 1, div)
     expect(midCluster?.offset).toBe(1)
   })

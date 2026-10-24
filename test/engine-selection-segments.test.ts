@@ -48,6 +48,33 @@ function fixture() {
 }
 
 describe('engine legacy selection callbacks', () => {
+  it('reports OCR text and its original ID after the native text offsets', async () => {
+    const document = fixture()
+    const [page] = await document.pages
+    const native = (await page.getContent())[0]
+    if (!('content' in native)) throw new Error('Expected text fixture')
+    const ocr = { ...native, id: 'ocr-1-word', content: 'Scanned text' }
+    const result = await engineSelectionSegments(
+      document,
+      {
+        start: { selectionId: 'page-1', offset: 10 },
+        end: { selectionId: 'page-1', offset: 16 },
+        text: 'canned'
+      },
+      { 1: [ocr] }
+    )
+    expect(result.texts).toEqual([ocr])
+    expect(result.segments).toEqual([
+      {
+        ...ocr,
+        pageNumber: 1,
+        selectedText: 'canned',
+        startCharIndex: 1,
+        endCharIndex: 7
+      }
+    ])
+  })
+
   it('preserves original text objects and emits per-text offsets across pages', async () => {
     const document = fixture()
     const [first, second] = await document.pages

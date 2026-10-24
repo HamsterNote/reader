@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { getDocument } from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { IntermediateText } from '@hamster-note/types'
+import { PdfParser } from '@hamster-note/pdf-parser'
 import { describe, expect, it } from 'vitest'
 
 import type { TextItem } from '../../src/pdf/pdfjsRuntime'
@@ -53,6 +54,80 @@ async function getCanonicalTexts(
 }
 
 describe('pdfjs 官方链路：canonical 页文本与契约样本逐字一致', () => {
+  it.each(['2469', '247D', '2167'])(
+    'keeps legacy offsets through old-reader round trips for ToUnicode %s',
+    async (unicode) => {
+      const source = Buffer.from(readFixtureArrayBuffer('pdf/ligature.pdf'))
+      const from = Buffer.from('<FB01>')
+      const position = source.indexOf(from)
+      expect(position).toBeGreaterThan(0)
+      Buffer.from(`<${unicode}>`).copy(source, position)
+      const old = await PdfParser.openDocument(
+        source.buffer.slice(
+          source.byteOffset,
+          source.byteOffset + source.byteLength
+        )
+      )
+      const document = await getDocument({
+        data: new Uint8Array(source),
+        isEvalSupported: false
+      }).promise
+      try {
+        const page = await old.document.getPageByPageNumber(1)
+        const legacyText = (await page!.getContent())
+          .filter(
+            (item): item is IntermediateText =>
+              'content' in item && typeof item.content === 'string'
+          )
+          .map((item) => item.content)
+          .join('')
+        const [canonical] = await getCanonicalTexts(document)
+        expect(canonical).toBe(legacyText)
+        const facade = await createPdfTextModeDocument(
+          document,
+          'compatibility-character'
+        )
+        expect(
+          (await facade.document.getPageByPageNumber(1))!.content
+            .map((item) => (item as IntermediateText).content)
+            .join('')
+        ).toBe(legacyText)
+        const offset = legacyText.indexOf('x')
+        for (const version of [2, 3, 4]) {
+          const range = {
+            id: 'old-x',
+            createdAt: 123,
+            text: 'x',
+            start: { selectionId: 'page-1', offset },
+            end: { selectionId: 'page-1', offset: offset + 1 },
+            rectsBySelectionId: {}
+          }
+          const restored = parseHighlights(
+            JSON.stringify({ version, ranges: [range] })
+          )
+          expect(
+            canonical.slice(
+              restored.ranges[0].start.offset,
+              restored.ranges[0].end.offset
+            )
+          ).toBe('x')
+          const output = parseHighlights(
+            JSON.stringify({ version: 4, ...restored })
+          )
+          expect(output.ranges[0]).toEqual(range)
+          expect(
+            legacyText.slice(
+              output.ranges[0].start.offset,
+              output.ranges[0].end.offset
+            )
+          ).toBe('x')
+        }
+      } finally {
+        await old.dispose()
+        await document.destroy()
+      }
+    }
+  )
   it('two-column.pdf 保持绘制顺序拼接（多栏）', async () => {
     const document = await openFixture('pdf/two-column.pdf')
     try {

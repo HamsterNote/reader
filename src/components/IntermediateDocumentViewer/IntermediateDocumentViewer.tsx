@@ -92,9 +92,11 @@ import { IntermediateDocumentPageContent } from './IntermediateDocumentPageConte
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
 import type { ReaderLayoutZoom } from './nativeLayoutZoom'
 import { PageBrowser } from './PageBrowser'
+import { fetchOcrContent, prefixOcrTextIds } from './ocrContent'
 import {
   getCroppedPreviewPoint,
   getPageCropGeometry,
+  getVisiblePageNumbers,
   resolveHiddenPageNumbers,
   resolvePageEdgeCrop
 } from './pageDisplay'
@@ -1068,25 +1070,7 @@ const TWO_FINGER_TOUCH_ENABLED_INTERACTIONS = [
   VirtualPaperInteractionMode.TouchTwoFingerPan
 ]
 
-export const getVisiblePageNumbers = (
-  allPageNumbers: number[],
-  pageRange: ReaderPageRange | undefined
-) => {
-  if (!pageRange) {
-    return allPageNumbers
-  }
-
-  const start = Math.trunc(pageRange.start)
-  const end = Math.trunc(pageRange.end)
-
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) {
-    return []
-  }
-
-  return allPageNumbers.filter(
-    (pageNumber) => pageNumber >= start && pageNumber <= end
-  )
-}
+export { getVisiblePageNumbers } from './pageDisplay'
 
 function normalizeScaleValue(
   value: number | undefined,
@@ -1552,11 +1536,6 @@ const getBaseImageFromPage = async (page: unknown, scale?: number) => {
   }
 }
 
-const getImageParserInput = async (imageSource: string) => {
-  const response = await fetch(imageSource)
-  return response.blob()
-}
-
 // OCR 固定使用原尺寸页面图像（IntermediatePage.getThumbnail(1)，即 viewport scale=1）。
 // 展示缩略图按当前缩放比例渲染，分辨率随缩放变化，且其像素坐标空间与页面坐标空间
 // （page.width/height 基于 scale=1）不一致，直接 OCR 会导致文本层多边形位置偏移。
@@ -1600,15 +1579,6 @@ export const getPageContentEntries = async (
   return []
 }
 
-// OCR 文本统一设为透明：作为隐形文本层叠加在底图上，
-// 仅供选择/搜索，避免与底图文字重复显示。
-const prefixOcrTextIds = (texts: IntermediateText[], pageNumber: number) =>
-  texts.map((text) => ({
-    ...text,
-    id: `ocr-${pageNumber}-${text.id}`,
-    color: 'transparent'
-  }))
-
 // 已移除自定义 SVG 选区 overlay 的拖拽 hook；文本选择改回浏览器原生 Selection。
 
 // 组合根节点 className：ocrDebug 时附加调试修饰类（驱动 OCR 文本红色外框样式）
@@ -1622,22 +1592,6 @@ const buildViewerRootClassName = (ocrDebug: boolean, className?: string) =>
   ]
     .filter(Boolean)
     .join(' ')
-
-// OCR 内容获取：优先外挂 extraOCR，否则回退到内置 image-parser
-const fetchOcrContent = async (
-  ocrImageSource: string,
-  extraOCR?: ReaderExtraOcr
-): Promise<IntermediateContent[]> => {
-  if (extraOCR) {
-    const ocrPage = await extraOCR(ocrImageSource)
-    return await ocrPage.getContent()
-  }
-  const { ImageParser } = await import('@hamster-note/image-parser')
-  const input = await getImageParserInput(ocrImageSource)
-  const ocrDocument = await ImageParser.encode(input)
-  const ocrPages = await ocrDocument.pages
-  return ocrPages[0]?.content ?? []
-}
 
 // 编辑模式下页面以未裁切尺寸显示，effectiveEdgeCrop 为 undefined
 const resolveEffectiveEdgeCrop = (

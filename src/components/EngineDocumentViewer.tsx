@@ -32,6 +32,7 @@ import {
 } from '../pdf/PdfDocumentViewer'
 import type { IntermediateDocumentViewerProps } from './IntermediateDocumentViewer'
 import { engineSelectionSegments } from './selection/engineSelectionSegments'
+import type { IntermediateText } from '@hamster-note/types'
 import { useAnnotationHistory } from './Reader/useAnnotationHistory'
 import { PageBrowser } from './IntermediateDocumentViewer/PageBrowser'
 import { ReadingProgress } from './IntermediateDocumentViewer/ReadingProgress'
@@ -41,6 +42,7 @@ import { EngineSelectionControls } from './EngineSelectionControls'
 import { EngineHighlightInteractions } from './EngineHighlightInteractions'
 import { PopoverPortal } from './PopoverPortal'
 import { EpubOutline } from './EpubOutline'
+import { getVisiblePageNumbers } from './IntermediateDocumentViewer/pageDisplay'
 import { EngineEpubLayoutLayer } from './EngineEpubLayoutLayer'
 import { RangeMagnifierProvider } from './IntermediateDocumentViewer/RangeMagnifier'
 
@@ -78,6 +80,7 @@ function EpubSurface({
   mode,
   bindCover,
   onNavigate,
+  allowedPages,
   ...layout
 }: Omit<ComponentProps<typeof EngineEpubLayoutLayer>, 'doc'> & {
   book: EpubEngineBookInfo | null
@@ -86,7 +89,9 @@ function EpubSurface({
   doc: Document | null
   bindCover: (element: HTMLButtonElement | null) => void
   onNavigate: (page: number) => void
+  allowedPages: readonly number[]
 }) {
+  if (!allowedPages.includes(page)) return null
   const cover = prependedCoverVisible(book, page)
   return (
     <>
@@ -125,11 +130,38 @@ function EpubSurface({
   )
 }
 
+function emptyPageDisplay(count: number, pages: readonly number[]) {
+  return count > 0 && pages.length === 0 ? 'none' : undefined
+}
+
 function controlledSelection(
   value: string | null | undefined,
   fallback: string | null
 ) {
   return value === undefined ? fallback : value
+}
+
+function enginePageNumbers(pageCount: number, props: Props) {
+  return getVisiblePageNumbers(
+    Array.from({ length: pageCount }, (_, index) => index + 1),
+    props.pageRange
+  ).filter(
+    (number) =>
+      props.edgeCropEditing ||
+      !(props.hiddenPages ?? []).some(
+        (hidden) => hidden === number || hidden === `page-${number}`
+      )
+  )
+}
+
+function useGeneratedOcr(source: ReaderEngineSource | undefined) {
+  const generated = useRef<{
+    source: typeof source
+    texts: Record<number, readonly IntermediateText[]>
+  }>({ source, texts: {} })
+  if (generated.current.source !== source)
+    generated.current = { source, texts: {} }
+  return generated
 }
 
 function annotationPopup<T>(
@@ -183,6 +215,11 @@ export function EngineDocumentViewer(props: Props) {
   const pdf = useRef<PdfDocumentViewerRef>(null)
   const latest = useRef(props)
   latest.current = props
+  const generatedOcr = useGeneratedOcr(source)
+  const publishOcr = useCallback((page: number, texts: IntermediateText[]) => {
+    generatedOcr.current.texts[page] = texts
+    latest.current.onOcrTextsChange?.(page, texts)
+  }, [])
   const [retry, setRetry] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [book, setBook] = useState<EpubEngineBookInfo | null>(null)
@@ -373,7 +410,8 @@ export function EngineDocumentViewer(props: Props) {
     const startPage = pageNumberOf(detail.start.selectionId)
     const { texts, segments } = await engineSelectionSegments(
       latest.current.document,
-      detail
+      detail,
+      { ...generatedOcr.current.texts, ...latest.current.ocrTexts }
     ).catch(() => ({ texts: [], segments: [] }))
     if (token !== selectionCallbackGeneration.current[kind] || !texts[0]) return
     const payload = {
@@ -568,7 +606,8 @@ export function EngineDocumentViewer(props: Props) {
         setPageCount(info.pageCount)
         await engine.setHiddenPages(
           latest.current.hiddenPages ?? [],
-          latest.current.edgeCropEditing
+          latest.current.edgeCropEditing,
+          latest.current.pageRange
         )
         if (
           info.coverPrepended &&
@@ -611,9 +650,13 @@ export function EngineDocumentViewer(props: Props) {
   )
   useEffect(() => {
     epub.current
-      ?.setHiddenPages(props.hiddenPages ?? [], props.edgeCropEditing)
+      ?.setHiddenPages(
+        props.hiddenPages ?? [],
+        props.edgeCropEditing,
+        props.pageRange
+      )
       .catch(() => undefined)
-  }, [props.hiddenPages, props.edgeCropEditing, book])
+  }, [props.hiddenPages, props.edgeCropEditing, props.pageRange, book])
   useEffect(() => {
     epub.current?.setFontScale(props.fontScale ?? 1)
   }, [props.fontScale])
@@ -702,15 +745,7 @@ export function EngineDocumentViewer(props: Props) {
     () => (source ? { data: source.data.slice() } : null),
     [source, retry]
   )
-  const pageNumbers = Array.from(
-    { length: pageCount },
-    (_, index) => index + 1
-  ).filter(
-    (number) =>
-      !(props.hiddenPages ?? []).some(
-        (hidden) => hidden === number || hidden === `page-${number}`
-      )
-  )
+  const pageNumbers = enginePageNumbers(pageCount, props)
   const current = ranges.find((range) => range.id === selected)
   const currentRectangle = rects.find((item) => item.id === selectedRect)
   const rectanglePopup = annotationPopup(
@@ -835,7 +870,13 @@ export function EngineDocumentViewer(props: Props) {
           }
         />
         {source?.format === 'epub' ? (
-          <div ref={epubContainer} className='hamster-reader__epub-container' />
+          <div
+            ref={epubContainer}
+            className='hamster-reader__epub-container'
+            style={{
+              display: emptyPageDisplay(pageCount, pageNumbers)
+            }}
+          />
         ) : (
           <PdfDocumentViewer
             key={retry}
@@ -869,6 +910,13 @@ export function EngineDocumentViewer(props: Props) {
             overlayRectType={props.overlayRectType}
             highlightColor={props.highlightColor}
             hiddenPages={props.hiddenPages}
+            pageRange={props.pageRange}
+            ocr={props.ocr}
+            extraOCR={props.extraOCR}
+            ocrTexts={props.ocrTexts}
+            onOcrTextsChange={publishOcr}
+            onOcrError={props.onOcrError}
+            ocrDebug={props.ocrDebug}
             edgeCrop={props.edgeCrop}
             edgeCropEditing={props.edgeCropEditing}
             onEdgeCropApply={props.onEdgeCropApply}
@@ -899,6 +947,7 @@ export function EngineDocumentViewer(props: Props) {
         )}
         {source?.format === 'epub' && (
           <EpubSurface
+            allowedPages={pageNumbers}
             book={book}
             page={page}
             mode={mode}
@@ -938,6 +987,7 @@ export function EngineDocumentViewer(props: Props) {
             book && (
               <EpubOutline
                 items={book.toc}
+                pageNumbers={pageNumbers}
                 onNavigate={(href) => {
                   progressEnabled.current = true
                   epub.current?.goToTocHref(href).catch(() => undefined)

@@ -37,6 +37,46 @@ const loadV4Ranges = (): readonly EpubEngineRange[] => {
 }
 
 describe('epub engine session: lifecycle and race isolation', () => {
+  it('limits chapters to original page numbers even while crop editing', async () => {
+    const fake = makeFakeView()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    await engine.setHiddenPages([], false, { start: 2, end: 2 })
+    expect(
+      fake.handle.view.book?.sections.map((section) => section.linear)
+    ).toEqual(['no', 'yes', 'no', 'no'])
+    await engine.goToPage(1)
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 1 })
+    await engine.goToPage(4)
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 1 })
+    const link = new CustomEvent('link', {
+      cancelable: true,
+      detail: { href: 'chapter3.xhtml' }
+    })
+    fake.handle.view.dispatchEvent(link)
+    await Promise.resolve()
+    expect(link.defaultPrevented).toBe(true)
+    expect(fake.handle.renderer.goToCalls.at(-1)).toEqual({ index: 1 })
+    await engine.setHiddenPages([2], true, { start: 2, end: 2 })
+    expect(
+      fake.handle.view.book?.sections.map((section) => section.linear)
+    ).toEqual(['no', 'yes', 'no', 'no'])
+    await engine.setHiddenPages([], false, { start: 3, end: 2 })
+    expect(await engine.goToPage(2)).toBe(false)
+    await engine.setHiddenPages([])
+    expect(
+      fake.handle.view.book?.sections.every(
+        (section) => section.linear === 'yes'
+      )
+    ).toBe(true)
+    await engine.destroy()
+  })
   it('skips a hidden prepended cover even though it has no text anchor', async () => {
     const fake = makeFakeView({
       sectionHrefs: ['OPS/chapter1.xhtml', 'OPS/chapter2.xhtml']

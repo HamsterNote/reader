@@ -14,6 +14,15 @@ import { act, render } from '@testing-library/react'
 import { createRef, StrictMode } from 'react'
 import type { RefObject } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { IntermediatePage, TextDir } from '@hamster-note/types'
+import { PDFDocument } from 'pdf-lib'
+import { ImageParser } from '@hamster-note/image-parser'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { parseHighlights } from '../../demo/highlightStorage'
+
+vi.mock('@hamster-note/image-parser', () => ({
+  ImageParser: { encode: vi.fn() }
+}))
 
 import type { ReaderSelectionRange } from '../../src/types/selection'
 import type {
@@ -158,6 +167,7 @@ const readFixture = (name: string): Uint8Array =>
   new Uint8Array(readFileSync(join(FIXTURE_ROOT, name)))
 
 afterEach(() => {
+  vi.restoreAllMocks()
   hoisted.viewerInstances.splice(0)
   hoisted.linkServiceInstances.splice(0)
 })
@@ -202,6 +212,318 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it('allows in-range restoration immediately in the pagesloaded callback', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    let restoredPage: number | undefined
+    renderViewer(
+      {
+        source,
+        pageRange: { start: 1, end: 2 },
+        onPagesLoaded: () => {
+          ref.current!.scrollToPage(2)
+          restoredPage = latestViewer().currentPageNumber
+        }
+      },
+      ref
+    )
+    await act(async () => {})
+    expect(restoredPage).toBe(2)
+  })
+
+  it('applies pageRange to display, crop editing and imperative navigation without renumbering', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source, pageRange: { start: 2, end: 2 } }, ref)
+    await act(async () => {})
+    expect(latestViewer().getPageView(0)!.div.style.display).toBe('none')
+    expect(latestViewer().getPageView(1)!.div.style.display).toBe('')
+    expect(latestViewer().currentPageNumber).toBe(2)
+    act(() => ref.current!.scrollToPage(1))
+    expect(latestViewer().currentPageNumber).toBe(2)
+    view.rerender(
+      <PdfDocumentViewer
+        source={source}
+        pageRange={{ start: 2, end: 2 }}
+        hiddenPages={[2]}
+        edgeCropEditing
+        ref={ref}
+      />
+    )
+    expect(latestViewer().getPageView(0)!.div.style.display).toBe('none')
+    expect(latestViewer().getPageView(1)!.div.style.display).toBe('')
+    view.rerender(
+      <PdfDocumentViewer
+        source={source}
+        pageRange={{ start: 3, end: 2 }}
+        ref={ref}
+      />
+    )
+    expect(latestViewer().getPageView(1)!.div.style.display).toBe('none')
+    view.rerender(<PdfDocumentViewer source={source} ref={ref} />)
+    expect(latestViewer().getPageView(0)!.div.style.display).toBe('')
+  })
+
+  async function scannedSource() {
+    const document = await PDFDocument.create()
+    document.addPage([400, 300])
+    document.addPage([400, 300])
+    return { data: new Uint8Array(await document.save()) }
+  }
+  const ocrPage = () =>
+    IntermediatePage.parse({
+      id: 'ocr-result',
+      number: 1,
+      width: 400,
+      height: 300,
+      texts: [
+        {
+          id: 'word',
+          content: 'Scanned text',
+          fontSize: 20,
+          fontFamily: '',
+          fontWeight: 400,
+          italic: false,
+          color: '#000000',
+          polygon: [
+            [20, 20],
+            [140, 20],
+            [140, 40],
+            [20, 40]
+          ],
+          lineHeight: 20,
+          ascent: 16,
+          descent: 4,
+          dir: TextDir.LTR,
+          skew: 0,
+          isEOL: false
+        }
+      ]
+    })
+  async function prepareOcrImage() {
+    const document = latestViewer().document as PDFDocumentProxy
+    const render = vi.fn((_options: { viewport: { scale: number } }) => ({
+      promise: Promise.resolve()
+    }))
+    for (let number = 1; number <= document.numPages; number++) {
+      const page = await document.getPage(number)
+      vi.spyOn(page, 'render').mockImplementation(
+        render as unknown as typeof page.render
+      )
+    }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      {} as CanvasRenderingContext2D
+    )
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
+      'data:image/png;base64,AA=='
+    )
+    return render
+  }
+
+  it('manually OCRs a scanned page, emits transparent texts, selects/highlights and restores old-readable ranges', async () => {
+    const source = await scannedSource()
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source }, ref)
+    await act(async () => {})
+    const rasterize = await prepareOcrImage()
+    const extraOCR = vi.fn(async () => ocrPage())
+    const onOcrTextsChange = vi.fn()
+    const onHighlight = vi.fn()
+    const props = {
+      source,
+      ocr: { enabled: true, pages: [2] },
+      extraOCR,
+      onOcrTextsChange,
+      onHighlight
+    }
+    view.rerender(<PdfDocumentViewer {...props} ref={ref} />)
+    await vi.waitFor(() => expect(onOcrTextsChange).toHaveBeenCalledTimes(1))
+    expect(extraOCR).toHaveBeenCalledWith('data:image/png;base64,AA==')
+    expect(rasterize.mock.calls[0][0].viewport.scale).toBe(1)
+    const [page, texts] = onOcrTextsChange.mock.calls[0]
+    expect(page).toBe(2)
+    expect(texts[0]).toMatchObject({
+      id: 'ocr-2-word',
+      content: 'Scanned text',
+      color: 'transparent'
+    })
+    const span = view.container.querySelector<HTMLElement>('[data-ocr=true]')!
+    expect(span.dataset.pageNumber).toBe('2')
+    expect(span.style.color).toBe('transparent')
+    await vi.waitFor(() =>
+      expect(ref.current!.getCanonicalPageText(2)).toBe('Scanned text')
+    )
+    document
+      .getSelection()!
+      .setBaseAndExtent(span.firstChild!, 0, span.firstChild!, 7)
+    act(() => ref.current!.confirmSelection())
+    expect(onHighlight).toHaveBeenCalledTimes(1)
+    const range = onHighlight.mock.calls[0][0] as ReaderSelectionRange
+    expect(range).toMatchObject({
+      text: 'Scanned',
+      start: { selectionId: 'page-2', offset: 0 },
+      end: { selectionId: 'page-2', offset: 7 }
+    })
+    const persisted = parseHighlights(
+      JSON.stringify({ version: 4, ranges: [range], rects: [], paintings: {} })
+    )
+    view.rerender(
+      <PdfDocumentViewer
+        {...props}
+        ranges={persisted.ranges}
+        ocrTexts={{ 2: texts }}
+        ref={ref}
+      />
+    )
+    await vi.waitFor(() =>
+      expect(ref.current!.selectRange(range.id)?.toString()).toBe('Scanned')
+    )
+    expect(onOcrTextsChange).toHaveBeenCalledTimes(1)
+    expect(
+      view.container.querySelector('[data-testid=pdf-ocr-page-1]')
+    ).toBeNull()
+  })
+
+  it('restores controlled OCR without a provider, and hides it when disabled', async () => {
+    const source = await scannedSource()
+    const texts =
+      (await ocrPage().getContent()) as import('@hamster-note/types').IntermediateText[]
+    const extraOCR = vi.fn()
+    const ref = createRef<PdfDocumentViewerRef>()
+    const props = { source, ocr: true, ocrTexts: { 1: texts, 2: [] }, extraOCR }
+    const view = renderViewer(props, ref)
+    await vi.waitFor(() =>
+      expect(view.container.querySelector('[data-ocr=true]')).not.toBeNull()
+    )
+    expect(extraOCR).not.toHaveBeenCalled()
+    view.rerender(<PdfDocumentViewer {...props} ocr={false} ref={ref} />)
+    expect(view.container.querySelector('[data-ocr=true]')).toBeNull()
+  })
+
+  it('uses built-in image-parser only for rendered pages', async () => {
+    const source = await scannedSource()
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source }, ref)
+    await act(async () => {})
+    await prepareOcrImage()
+    const { IntermediateDocument } = await import('@hamster-note/types')
+    vi.mocked(ImageParser.encode).mockResolvedValue(
+      IntermediateDocument.parse({
+        id: 'builtin',
+        title: '',
+        pages: [await IntermediatePage.serialize(ocrPage())]
+      })
+    )
+    view.rerender(<PdfDocumentViewer source={source} ocr ref={ref} />)
+    act(() =>
+      latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 1 })
+    )
+    await vi.waitFor(() =>
+      expect(view.container.querySelector('[data-ocr=true]')).not.toBeNull()
+    )
+    expect(ImageParser.encode).toHaveBeenCalledTimes(1)
+    expect(
+      view.container.querySelector('[data-testid=pdf-ocr-page-2]')
+    ).toBeNull()
+  })
+
+  it('reports OCR failures once and retries after toggling the page', async () => {
+    const source = await scannedSource()
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source }, ref)
+    await act(async () => {})
+    await prepareOcrImage()
+    const failure = new Error('provider unavailable')
+    const extraOCR = vi.fn().mockRejectedValue(failure)
+    const onOcrError = vi.fn()
+    const props = {
+      source,
+      extraOCR,
+      onOcrError,
+      ocr: { enabled: true, pages: [1] }
+    }
+    view.rerender(<PdfDocumentViewer {...props} ref={ref} />)
+    await vi.waitFor(() =>
+      expect(onOcrError).toHaveBeenCalledWith(failure, { pageNumber: 1 })
+    )
+    expect(extraOCR).toHaveBeenCalledTimes(1)
+    view.rerender(<PdfDocumentViewer {...props} ocr={false} ref={ref} />)
+    view.rerender(<PdfDocumentViewer {...props} ref={ref} />)
+    await vi.waitFor(() => expect(extraOCR).toHaveBeenCalledTimes(2))
+  })
+
+  it('drops OCR results after page closure and does not overlap the next request', async () => {
+    const source = await scannedSource()
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source }, ref)
+    await act(async () => {})
+    await prepareOcrImage()
+    let finish: (page: IntermediatePage) => void = () => {}
+    const pending = new Promise<IntermediatePage>((resolve) => {
+      finish = resolve
+    })
+    const extraOCR = vi
+      .fn()
+      .mockReturnValueOnce(pending)
+      .mockImplementation(async () => ocrPage())
+    const onOcrTextsChange = vi.fn()
+    const props = { source, extraOCR, onOcrTextsChange }
+    view.rerender(
+      <PdfDocumentViewer
+        {...props}
+        ocr={{ enabled: true, pages: [1] }}
+        ref={ref}
+      />
+    )
+    await vi.waitFor(() => expect(extraOCR).toHaveBeenCalledTimes(1))
+    view.rerender(
+      <PdfDocumentViewer
+        {...props}
+        ocr={{ enabled: true, pages: [2] }}
+        ref={ref}
+      />
+    )
+    expect(extraOCR).toHaveBeenCalledTimes(1)
+    await act(async () => finish(ocrPage()))
+    await vi.waitFor(() => expect(onOcrTextsChange).toHaveBeenCalledTimes(1))
+    expect(onOcrTextsChange.mock.calls[0][0]).toBe(2)
+    expect(extraOCR).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores an OCR result after switching documents', async () => {
+    const source = await scannedSource()
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source }, ref)
+    await act(async () => {})
+    await prepareOcrImage()
+    let finish: (page: IntermediatePage) => void = () => {}
+    const extraOCR = vi.fn(
+      () =>
+        new Promise<IntermediatePage>((resolve) => {
+          finish = resolve
+        })
+    )
+    const onOcrTextsChange = vi.fn()
+    view.rerender(
+      <PdfDocumentViewer
+        source={source}
+        ocr={{ enabled: true, pages: [1] }}
+        extraOCR={extraOCR}
+        onOcrTextsChange={onOcrTextsChange}
+        ref={ref}
+      />
+    )
+    await vi.waitFor(() => expect(extraOCR).toHaveBeenCalledTimes(1))
+    view.rerender(
+      <PdfDocumentViewer
+        source={{ data: readFixture('pdf/two-column.pdf') }}
+        ref={ref}
+      />
+    )
+    await act(async () => finish(ocrPage()))
+    expect(onOcrTextsChange).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-ocr=true]')).toBeNull()
+  })
   it('StrictMode 重放后仍可打开同一份字节，保留调用方数据', async () => {
     const data = readFixture('pdf/two-column.pdf')
     const length = data.byteLength

@@ -12,7 +12,8 @@ import type { ReaderSelectedTextSegment } from './selectionPayloadSerializer'
 
 export async function engineSelectionSegments(
   document: IntermediateDocument | IntermediateDocumentSerialized,
-  detail: SerializedSelection
+  detail: SerializedSelection,
+  ocrTexts?: Readonly<Record<number, readonly IntermediateText[]>>
 ) {
   const segments: ReaderSelectedTextSegment[] = []
   const texts: IntermediateText[] = []
@@ -23,9 +24,10 @@ export async function engineSelectionSegments(
   )
   for (const page of pages) {
     let offset = 0
-    for (const text of (await getPageContentEntries(page)).filter(
-      isIntermediateText
-    )) {
+    for (const text of [
+      ...(await getPageContentEntries(page)).filter(isIntermediateText),
+      ...(ocrTexts?.[page.number] ?? [])
+    ]) {
       const start = Math.max(
         0,
         page.number === startPage ? detail.start.offset - offset : 0

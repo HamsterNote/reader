@@ -3,7 +3,7 @@
 // 公开页 ID 为 `page-N`（N 为原 PDF 页号），端点 offset 为页内全部文本项
 // 无分隔符拼接后的字符偏移。pdfjs-dist 5.4.530 的 getTextContent 已在核心层
 // 完成连字等 Unicode 规范化（如 U+FB01 → "fi"），与旧 @hamster-note/pdf-parser
-// 输出逐字一致；本模块仍按 item 做 NFKC 防御并在映射表中处理长度变化。
+// 输出逐字一致；公开坐标严格沿用 TextItem.str，不额外进行 Unicode 归一化。
 
 import type { TextItem } from './pdfjsRuntime'
 
@@ -14,16 +14,16 @@ export const TEXT_LAYER_START_OFFSET_ATTR = 'data-selection-start-offset'
 
 export type CanonicalTextSpan = {
   readonly itemIndex: number
+  readonly textId?: string
   /** pdf.js 原始 item 文本（text layer DOM 中显示的内容）。 */
   readonly domText: string
-  /** NFKC 规范化后的文本，参与页内拼接。 */
+  /** 与 TextItem.str 一致的公开文本，参与页内拼接。 */
   readonly canonicalText: string
   readonly canonicalStart: number
   readonly canonicalEnd: number
   /**
    * canonical 偏移 → dom 偏移的端点映射表，长度 canonicalText.length + 1。
-   * 恒等映射时等于 [0,1,2,...]；发生 NFKC 长度变化时簇内中间边界映射到
-   * 簇末尾（保守取端点，保证 slice 出的文本不丢字符）。
+   * TextItem.str 与 text layer 同源，使用 UTF-16 恒等映射 [0,1,2,...]。
    */
   readonly canonicalToDom: readonly number[]
 }
@@ -35,37 +35,7 @@ export type CanonicalPageText = {
   readonly spans: readonly CanonicalTextSpan[]
 }
 
-type TextItemLike = Pick<TextItem, 'str'>
-
-const buildSpanMap = (
-  domText: string,
-  canonicalText: string
-): readonly number[] => {
-  if (domText === canonicalText) {
-    return Array.from({ length: canonicalText.length + 1 }, (_, i) => i)
-  }
-
-  // 按 code point 对齐：逐簇 NFKC，簇首边界已由上一簇末尾（或初始 0）
-  // 覆盖，簇内其余边界一律映射到簇末（保守端点，slice 不丢字符）。
-  const map: number[] = [0]
-  let canonicalIndex = 0
-  let domIndex = 0
-  for (const char of domText) {
-    const cluster = char.normalize('NFKC')
-    domIndex += char.length
-    for (let i = 0; i < cluster.length; i++) {
-      canonicalIndex += 1
-      map.push(domIndex)
-    }
-  }
-  // 防御：长度不符时退回恒等截断，保证映射表长度契约不被破坏。
-  if (canonicalIndex !== canonicalText.length) {
-    return Array.from({ length: canonicalText.length + 1 }, (_, i) =>
-      Math.min(i, domText.length)
-    )
-  }
-  return map
-}
+type TextItemLike = Pick<TextItem, 'str'> & { readonly textId?: string }
 
 export function buildCanonicalPageText(
   pageNumber: number,
@@ -77,14 +47,15 @@ export function buildCanonicalPageText(
 
   for (const item of items) {
     const domText = item.str
-    const canonicalText = domText.normalize('NFKC')
+    const canonicalText = domText
     spans.push({
       itemIndex,
+      ...(item.textId ? { textId: item.textId } : {}),
       domText,
       canonicalText,
       canonicalStart: offset,
       canonicalEnd: offset + canonicalText.length,
-      canonicalToDom: buildSpanMap(domText, canonicalText)
+      canonicalToDom: Array.from({ length: domText.length + 1 }, (_, i) => i)
     })
     offset += canonicalText.length
     itemIndex += 1
@@ -100,7 +71,7 @@ export const canonicalTextId = (
 
 /**
  * 把 canonical 端点表注入官方 text layer 的 DOM：逐元素与 canonical span
- * 顺序匹配（NFKC 后的 textContent 逐字相等），命中元素写入
+ * 顺序匹配（textContent 与 TextItem.str 逐字相等），命中元素写入
  * data-text-id / data-page-number / data-selection-start-offset。
  * 返回 false 表示存在无法匹配的 span（调用方保持原样，不得静默近似）。
  */
@@ -128,7 +99,7 @@ export function enhanceTextLayer(
   let matched = true
   let spanPointer = 0
   for (const element of elements) {
-    const elementText = (element.textContent ?? '').normalize('NFKC')
+    const elementText = element.textContent ?? ''
     let found: CanonicalTextSpan | null = null
     for (let i = spanPointer; i < page.spans.length; i++) {
       const candidate = page.spans[i]
@@ -145,7 +116,7 @@ export function enhanceTextLayer(
     }
     element.setAttribute(
       TEXT_LAYER_TEXT_ID_ATTR,
-      canonicalTextId(page.pageNumber, found.itemIndex)
+      found.textId ?? canonicalTextId(page.pageNumber, found.itemIndex)
     )
     element.setAttribute(TEXT_LAYER_PAGE_NUMBER_ATTR, String(page.pageNumber))
     element.setAttribute(
@@ -173,7 +144,8 @@ const findEnhancedSpan = (
   const span =
     page.spans.find(
       (candidate) =>
-        canonicalTextId(page.pageNumber, candidate.itemIndex) === itemId
+        (candidate.textId ??
+          canonicalTextId(page.pageNumber, candidate.itemIndex)) === itemId
     ) ?? null
   return span ? { element: host, span } : null
 }
@@ -219,8 +191,7 @@ export function domPositionToCanonicalOffset(
   const domOffset = getTextOffsetWithin(context.element, node, offset)
   const { span } = context
 
-  // dom → canonical 逆映射：取满足 canonicalToDom[o] <= domOffset 的最大 o，
-  // 即“覆盖该 dom 位置的簇的结束边界”，保证连字簇整体归入已选范围。
+  // Both public and DOM offsets count UTF-16 code units from the same str.
   let result = span.canonicalStart
   for (const [o, position] of span.canonicalToDom.entries()) {
     if (position <= domOffset) {
@@ -257,9 +228,10 @@ export function canonicalOffsetToDomPosition(
     null
   if (!span) return null
 
-  const element = textLayerDiv.querySelector<HTMLElement>(
-    `[${TEXT_LAYER_TEXT_ID_ATTR}="${canonicalTextId(page.pageNumber, span.itemIndex)}"]`
-  )
+  const textId = span.textId ?? canonicalTextId(page.pageNumber, span.itemIndex)
+  const element = Array.from(
+    textLayerDiv.querySelectorAll<HTMLElement>(`[${TEXT_LAYER_TEXT_ID_ATTR}]`)
+  ).find((entry) => entry.getAttribute(TEXT_LAYER_TEXT_ID_ATTR) === textId)
   if (!element) return null
 
   const domOffset = span.canonicalToDom[canonicalOffset - span.canonicalStart]

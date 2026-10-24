@@ -5,6 +5,10 @@
 Android 按修勾 2026-10-23 的“安卓不测”指示豁免，未执行项不记为通过。
 本次不创建 PR，交由父任务安排人工评审。
 
+PR #28 复审后的 offset、pageRange、PDF OCR 修复另见
+`docs/ham91-review-fixes.md`。下文原生证据及未变更 WebView 的说明属于
+`ce8c741` 及之前的历史交付，不代表复审补丁已经完成设备验收。
+
 ## 默认入口与兼容边界
 
 - Demo 不再读取 `engines` 查询参数。选择 EPUB 后直接使用 Foliate，两种模式均走
