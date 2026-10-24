@@ -1,0 +1,83 @@
+--- a/apple/RNCWebViewImpl.m
++++ b/apple/RNCWebViewImpl.m
+@@ -26,6 +26,21 @@
+ NSString *const CUSTOM_SELECTOR = @"_CUSTOM_SELECTOR_";
+ 
+ #if TARGET_OS_IOS
++// Reader patch: full suppression must also cover WKContentView's edit menu.
++static BOOL RNCShouldSuppressSystemEditMenu(NSArray *menuItems, NSArray *suppressedItems)
++{
++  if (menuItems != nil) {
++    return menuItems.count == 0;
++  }
++  NSSet *systemItems = [NSSet setWithArray:@[
++    @"copy", @"lookup", @"translate", @"share", @"cut", @"paste", @"replace",
++    @"select", @"selectAll", @"bold", @"italic", @"underline"
++  ]];
++  return [systemItems isSubsetOfSet:[NSSet setWithArray:suppressedItems ?: @[]]];
++}
++#endif
++
++#if TARGET_OS_IOS
+ // runtime trick to remove WKWebView keyboard default toolbar
+ // see: http://stackoverflow.com/questions/19033292/ios-7-uiwebview-keyboard-issue/19042279#19042279
+ @interface _SwizzleHelperWK : UIView
+@@ -94,12 +109,20 @@
+   return NO;
+ }
+ - (void)buildMenuWithBuilder:(id<UIMenuBuilder>)builder API_AVAILABLE(ios(13.0))  {
++    [super buildMenuWithBuilder:builder];
++#if TARGET_OS_IOS
++    if (RNCShouldSuppressSystemEditMenu(self.menuItems, self.suppressMenuItems)) {
++      [builder removeMenuForIdentifier:UIMenuLookup];
++      [builder removeMenuForIdentifier:UIMenuShare];
++      [builder removeMenuForIdentifier:UIMenuStandardEdit];
++      return;
++    }
++#endif
+     if (@available(iOS 16.0, *)) {
+       if(self.menuItems){
+         [builder removeMenuForIdentifier:UIMenuLookup];
+       }
+     }
+-    [super buildMenuWithBuilder:builder];
+ }
+ #else // TARGET_OS_OSX
+ - (void)scrollWheel:(NSEvent *)theEvent {
+@@ -885,6 +908,36 @@
+ }
+ 
+ #if !TARGET_OS_OSX
++#if TARGET_OS_IOS
++- (void)dismissSystemEditMenusInView:(UIView *)view API_AVAILABLE(ios(16.0))
++{
++  for (id<UIInteraction> interaction in view.interactions) {
++    if ([interaction isKindOfClass:[UIEditMenuInteraction class]]) {
++      [(UIEditMenuInteraction *)interaction dismissMenu];
++    }
++  }
++  for (UIView *subview in view.subviews) {
++    [self dismissSystemEditMenusInView:subview];
++  }
++}
++
++- (void)webView:(WKWebView *)webView willPresentEditMenuWithAnimator:(id<UIEditMenuInteractionAnimating>)animator API_AVAILABLE(ios(16.4))
++{
++  if (!RNCShouldSuppressSystemEditMenu(_menuItems, _suppressMenuItems)) {
++    return;
++  }
++  // Use public interaction APIs; keep the DOM selection and its handles intact.
++  __weak RNCWebViewImpl *weakSelf = self;
++  [animator addCompletion:^{
++    RNCWebViewImpl *strongSelf = weakSelf;
++    if (strongSelf && RNCShouldSuppressSystemEditMenu(strongSelf.menuItems, strongSelf.suppressMenuItems)) {
++      [strongSelf dismissSystemEditMenusInView:webView];
++    }
++  }];
++  [self dismissSystemEditMenusInView:webView];
++}
++#endif
++
+ -(void)setMenuItems:(NSArray<NSDictionary *> *)menuItems {
+     _menuItems = menuItems;
+     _webView.menuItems = menuItems;

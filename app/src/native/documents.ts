@@ -2,6 +2,10 @@ import * as Crypto from 'expo-crypto'
 import * as DocumentPicker from 'expo-document-picker'
 import * as FileSystem from 'expo-file-system/legacy'
 import { removeStagedDocument } from './webAssets'
+import {
+  documentCachePath,
+  resolveDocumentCacheUri
+} from '../../../src/host/documentCachePath'
 
 import {
   createDocumentFileId,
@@ -66,8 +70,11 @@ export async function pickAndCacheDocument(
   )
 
   await ensureFileRoot()
-  const extension: string = format
-  const cachedUri = `${FILE_ROOT}${fileId}.${extension}`
+  const cachedUri = resolveDocumentCacheUri(
+    FileSystem.documentDirectory,
+    fileId,
+    format
+  )
   const cachedInfo = await FileSystem.getInfoAsync(cachedUri)
   if (!cachedInfo.exists) {
     await FileSystem.copyAsync({ from: asset.uri, to: cachedUri })
@@ -81,7 +88,7 @@ export async function pickAndCacheDocument(
     format,
     size,
     modifiedAt,
-    cachedUri,
+    cachedUri: documentCachePath(fileId, format),
     importedAt,
     snapshot: existing?.snapshot ?? { data: null, progress: null, revision: 0 },
     ...(existing?.legacyImport ? { legacyImport: existing.legacyImport } : {})
@@ -121,7 +128,12 @@ export async function removeDocument(
 ): Promise<void> {
   await store.remove(record.fileId)
   await removeStagedDocument(record.fileId)
-  if (record.cachedUri.startsWith(FILE_ROOT)) {
-    await FileSystem.deleteAsync(record.cachedUri, { idempotent: true })
-  }
+  await FileSystem.deleteAsync(
+    resolveDocumentCacheUri(
+      FileSystem.documentDirectory,
+      record.fileId,
+      record.format
+    ),
+    { idempotent: true }
+  )
 }

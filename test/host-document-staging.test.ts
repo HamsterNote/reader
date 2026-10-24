@@ -42,7 +42,7 @@ describe('native document staging boundary', () => {
       '0123456789abcdef'
     )
     expect(fs.copyAsync).toHaveBeenCalledWith({
-      from: record.cachedUri,
+      from: `file:///documents/reader-files/${record.fileId}.epub`,
       to: `${target}publication.epub.pending`
     })
     expect(fs.moveAsync).toHaveBeenCalledWith({
@@ -78,4 +78,28 @@ describe('native document staging boundary', () => {
     ).rejects.toThrow()
     expect(fs.copyAsync).not.toHaveBeenCalled()
   })
+  it.each(['epub', 'pdf'] as const)(
+    'reopens a relocated %s cache without reimporting or trusting the old container',
+    async (format) => {
+      const relocated = {
+        ...record,
+        format,
+        cachedUri: `file:///old-container/Documents/reader-files/${record.fileId}.${format}`,
+        snapshot: {
+          data: { highlights: { ranges: [{ id: 'retained' }] } },
+          progress: { page: 2 },
+          revision: 8
+        }
+      }
+      await stageReaderDocument(base, relocated)
+      expect(fs.copyAsync).toHaveBeenCalledWith({
+        from: `file:///documents/reader-files/${record.fileId}.${format}`,
+        to: `${target}publication.${format}.pending`
+      })
+      expect(fs.copyAsync).not.toHaveBeenCalledWith(
+        expect.objectContaining({ from: relocated.cachedUri })
+      )
+      expect(relocated.snapshot.revision).toBe(8)
+    }
+  )
 })

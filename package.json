@@ -46,9 +46,10 @@
     "check:browser": "node scripts/check-reader-browser.mjs",
     "host:start": "cd app && npx expo start --dev-client",
     "host:android": "yarn build:webview && cd app && npx expo run:android",
-    "host:ios": "yarn build:webview && cd app && npx expo run:ios",
-    "host:ios:offline": "yarn build:webview && cd app && npx expo run:ios --configuration Release --no-bundler",
-    "host:prebuild": "cd app && npx expo prebuild",
+    "prepare:ios": "node scripts/apply-ios-webview-patch.mjs",
+    "host:ios": "yarn build:webview && yarn prepare:ios && cd app && npx expo run:ios",
+    "host:ios:offline": "yarn build:webview && yarn prepare:ios && cd app && npx expo run:ios --configuration Release --no-bundler",
+    "host:prebuild": "yarn prepare:ios && cd app && npx expo prebuild",
     "typecheck:host": "tsc --project app/tsconfig.json --noEmit",
     "host:check": "yarn build:webview && yarn verify:webview && yarn typecheck:host"
   },

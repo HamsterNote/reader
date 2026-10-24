@@ -4,6 +4,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import { fromByteArray, toByteArray } from 'base64-js'
 import { strFromU8, unzipSync } from 'fflate'
 import { assertSafeFileId } from '../../../src/host/fileIdentity'
+import { resolveDocumentCacheUri } from '../../../src/host/documentCachePath'
 import type { HostDocumentRecord } from '../../../src/host/readerDataStore'
 
 const WEB_ROOT = `${FileSystem.documentDirectory ?? ''}webreader/`
@@ -140,7 +141,14 @@ export async function stageReaderDocument(
   ) {
     const pending = `${publicationUrl}.pending`
     await FileSystem.deleteAsync(pending, { idempotent: true })
-    await FileSystem.copyAsync({ from: record.cachedUri, to: pending })
+    await FileSystem.copyAsync({
+      from: resolveDocumentCacheUri(
+        FileSystem.documentDirectory,
+        fileId,
+        record.format
+      ),
+      to: pending
+    })
     await FileSystem.deleteAsync(publicationUrl, { idempotent: true })
     await FileSystem.moveAsync({ from: pending, to: publicationUrl })
   }

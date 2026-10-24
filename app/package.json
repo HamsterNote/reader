@@ -6,8 +6,8 @@
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
-    "ios": "expo run:ios",
-    "prebuild": "expo prebuild"
+    "ios": "node ../scripts/apply-ios-webview-patch.mjs && expo run:ios",
+    "prebuild": "node ../scripts/apply-ios-webview-patch.mjs && expo prebuild"
   },
   "dependencies": {
     "expo": "54.0.37",

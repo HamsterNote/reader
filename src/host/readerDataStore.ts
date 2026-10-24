@@ -23,7 +23,7 @@ export type HostDocumentRecord = {
   readonly format: HostDocumentFormat
   readonly size: number
   readonly modifiedAt: number
-  /** 宿主受控缓存中的只读文件 URI。 */
+  /** 应用文档目录内的相对缓存路径；旧记录可能保存已失效的绝对 URI。 */
   readonly cachedUri: string
   readonly importedAt: number
   readonly snapshot: BridgeHostSnapshot

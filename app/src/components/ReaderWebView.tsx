@@ -34,15 +34,14 @@ type ReaderWebViewProps = {
   readonly store: ReaderDataStore
   readonly entryUrl: string
   readonly baseUrl: string
-  readonly publicationUrl?: string
+  readonly publicationUrl: string
 }
 
 type HostState = 'loading' | 'connected' | 'error'
 
 const HANDSHAKE_TIMEOUT_MS = 8000
-const READER_MENU_ITEMS: [] = []
-// Fabric compares empty menuItems with its empty default and can skip the
-// native setter. A non-empty suppression list also covers that initial mount.
+// The pinned iOS patch uses this full list to suppress WKContentView menus,
+// without installing react-native-webview's custom long-press recognizer.
 const SUPPRESSED_READER_MENU_ITEMS: WebViewProps['suppressMenuItems'] = [
   'copy',
   'lookup',
@@ -100,7 +99,7 @@ export function ReaderWebView({
       descriptor: {
         fileId: record.fileId,
         format: record.format,
-        fileUrl: publicationUrl ?? record.cachedUri
+        fileUrl: publicationUrl
       },
       confirmedSnapshot: record.snapshot,
       persist: (snapshot) => store.saveSnapshot(record.fileId, snapshot),
@@ -184,7 +183,6 @@ export function ReaderWebView({
         mixedContentMode='never'
         setSupportMultipleWindows={false}
         javaScriptCanOpenWindowsAutomatically={false}
-        menuItems={READER_MENU_ITEMS}
         suppressMenuItems={SUPPRESSED_READER_MENU_ITEMS}
         allowingReadAccessToURL={baseUrl}
         onShouldStartLoadWithRequest={handleNavigation}
