@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile, cp, copyFile } from 'node:fs/promises'
 import { resolve, extname } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { chromium, webkit } from 'playwright'
 import JSZip from 'jszip'
 
@@ -10,6 +11,7 @@ const output = resolve(
   process.env.READER_BROWSER_OUTPUT ?? resolve(repo, '../ham91-browser')
 )
 await mkdir(output, { recursive: true })
+const offline = process.env.READER_BROWSER_OFFLINE === '1'
 const contentTypes = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -42,9 +44,24 @@ const server = createServer(async (request, response) => {
     response.writeHead(404).end()
   }
 })
-await new Promise((done) => server.listen(0, '127.0.0.1', done))
-const base = `http://127.0.0.1:${server.address().port}`
-const report = { command: 'yarn check:browser', cases: [] }
+let base
+if (offline) {
+  const staged = resolve(output, 'reader')
+  await cp(resolve(repo, 'webview-dist'), staged, { recursive: true })
+  for (const [format, fixture] of [
+    ['epub', 'epub/duplicate-text.epub'],
+    ['pdf', 'pdf/two-column.pdf']
+  ])
+    await copyFile(
+      resolve(repo, 'test/compat/fixtures', fixture),
+      resolve(staged, `publication.${format}`)
+    )
+  base = pathToFileURL(resolve(staged, 'index.html')).href
+} else {
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  base = `http://127.0.0.1:${server.address().port}`
+}
+const report = { command: 'yarn check:browser', offline, cases: [] }
 const malicious = await JSZip.loadAsync(
   await readFile(resolve(repo, 'test/compat/fixtures/epub/duplicate-text.epub'))
 )
@@ -57,6 +74,66 @@ for (const file of Object.values(malicious.files).filter(
 }
 const maliciousBytes = await malicious.generateAsync({ type: 'nodebuffer' })
 
+async function checkPdfHighlightInk(page, rangeId, label) {
+  const highlight = page.locator(`[data-range-id="${rangeId}"]`).first()
+  await highlight.waitFor({ state: 'visible' })
+  await highlight.scrollIntoViewIfNeeded()
+  const clip = await highlight.boundingBox()
+  assert(clip && clip.width > 0 && clip.height > 0)
+  const marked = await page.screenshot({ clip })
+  const hidden = await page.addStyleTag({
+    content:
+      '.hamster-reader__pdf-highlight-rect { visibility: hidden !important; }'
+  })
+  let plain
+  try {
+    plain = await page.screenshot({ clip })
+  } finally {
+    await hidden.evaluate((element) => element.remove())
+  }
+  const ink = await page.evaluate(
+    async ({ marked, plain }) => {
+      const pixels = async (png) => {
+        const image = new Image()
+        image.src = `data:image/png;base64,${png}`
+        await image.decode()
+        const canvas = document.createElement('canvas')
+        canvas.width = image.width
+        canvas.height = image.height
+        const context = canvas.getContext('2d')
+        context.drawImage(image, 0, 0)
+        return context.getImageData(0, 0, image.width, image.height).data
+      }
+      const before = await pixels(plain)
+      const after = await pixels(marked)
+      let original = 0
+      let readable = 0
+      let tinted = 0
+      for (let i = 0; i < before.length; i += 4) {
+        if (before[i] < 100 && before[i + 1] < 100 && before[i + 2] < 100) {
+          original++
+          if (after[i] < 170 && after[i + 1] < 170 && after[i + 2] < 170)
+            readable++
+        }
+        if (after[i] - after[i + 2] > 30) tinted++
+      }
+      return { original, readable, tinted }
+    },
+    { marked: marked.toString('base64'), plain: plain.toString('base64') }
+  )
+  await writeFile(resolve(output, `${label}-highlight-ink.png`), marked)
+  assert(
+    ink.original > 10,
+    `highlight sample must cover real PDF glyphs: ${JSON.stringify(ink)}`
+  )
+  assert(ink.tinted > 10, 'restored highlight must visibly tint the page')
+  assert(
+    ink.readable / ink.original > 0.9,
+    'highlight must preserve underlying PDF glyphs'
+  )
+  return ink
+}
+
 // eslint-disable-next-line sonarjs/cognitive-complexity -- Keep this acceptance scenario sequential.
 async function run(browserType, mobile, format, version, attack = false) {
   const label = `${browserType.name()}-${mobile ? 'mobile' : 'desktop'}-${format}-v${version}${attack ? '-security' : ''}`
@@ -67,7 +144,12 @@ async function run(browserType, mobile, format, version, attack = false) {
     return
   let browser
   try {
-    browser = await browserType.launch({ headless: true })
+    browser = await browserType.launch({
+      headless: true,
+      ...(offline && browserType === chromium
+        ? { args: ['--allow-file-access-from-files'] }
+        : {})
+    })
   } catch (error) {
     report.cases.push({
       label,
@@ -86,6 +168,11 @@ async function run(browserType, mobile, format, version, attack = false) {
   })
   page.setDefaultTimeout(15000)
   const errors = []
+  const networkRequests = []
+  if (offline) await page.context().setOffline(true)
+  page.on('request', (request) => {
+    if (/^https?:/.test(request.url())) networkRequests.push(request.url())
+  })
   page.on('pageerror', (error) => errors.push(error.message))
   const highlights = JSON.parse(
     await readFile(
@@ -130,7 +217,7 @@ async function run(browserType, mobile, format, version, attack = false) {
         })
       )
     await page.addInitScript(
-      ({ format, initial }) => {
+      ({ format, initial, publicationUrl }) => {
         const sessionId = 'browser-session'
         const sourceToken = 'browser-secret'
         let saved = JSON.parse(
@@ -160,7 +247,7 @@ async function run(browserType, mobile, format, version, attack = false) {
                   document: {
                     fileId: `book-${format}`,
                     format,
-                    fileUrl: `${location.origin}/publication.${format}`
+                    fileUrl: publicationUrl
                   }
                 })
                 deliver('restore', saved)
@@ -181,7 +268,11 @@ async function run(browserType, mobile, format, version, attack = false) {
           }
         }
       },
-      { format, initial }
+      {
+        format,
+        initial,
+        publicationUrl: new URL(`publication.${format}`, base).href
+      }
     )
     await page.goto(base)
     await page.locator(`[data-engine=${format}]`).waitFor()
@@ -254,11 +345,16 @@ async function run(browserType, mobile, format, version, attack = false) {
           ? [...document.querySelectorAll('p')].find((p) =>
               p.textContent.includes('第一章独有结尾。')
             )
-          : document.querySelector('.textLayer [data-selection-start-offset]')
+          : document.querySelectorAll(
+              '.textLayer [data-selection-start-offset]'
+            )[1]
       const node = target.firstChild
       const range = document.createRange()
       range.setStart(node, 0)
-      range.setEnd(node, Math.min(5, node.textContent.length))
+      range.setEnd(
+        node,
+        Math.min(format === 'pdf' ? 18 : 5, node.textContent.length)
+      )
       const selection = getSelection()
       selection.removeAllRanges()
       selection.addRange(range)
@@ -361,9 +457,9 @@ async function run(browserType, mobile, format, version, attack = false) {
           .locator('.pdfViewer .page')
           .first()
           .boundingBox()
-        await page.mouse.move(pageBox.x + 200, pageBox.y + 120)
+        await page.mouse.move(pageBox.x + 200, pageBox.y + 300)
         await page.mouse.down()
-        await page.mouse.move(pageBox.x + 280, pageBox.y + 180, { steps: 6 })
+        await page.mouse.move(pageBox.x + 280, pageBox.y + 360, { steps: 6 })
         await page.mouse.up()
         await page.getByRole('button', { name: '高亮', exact: true }).click()
         await page.waitForFunction(
@@ -444,6 +540,16 @@ async function run(browserType, mobile, format, version, attack = false) {
       ),
       saved.data.highlights
     )
+    if (format === 'pdf')
+      result.highlightInk = await checkPdfHighlightInk(page, added.id, label)
+    if (offline) {
+      result.networkRequests = networkRequests
+      assert.deepEqual(
+        networkRequests,
+        [],
+        'offline reader must not request HTTP resources'
+      )
+    }
     assert.equal(errors.length, 0, errors.join('\n'))
     result.passed = true
     result.savedRange = added
@@ -467,10 +573,10 @@ try {
           await run(browserType, mobile, format, version)
       }
     }
-    await run(browserType, false, 'epub', 4, true)
+    if (!offline) await run(browserType, false, 'epub', 4, true)
   }
 } finally {
-  await new Promise((done) => server.close(done))
+  if (server.listening) await new Promise((done) => server.close(done))
   await writeFile(
     resolve(output, 'report.json'),
     JSON.stringify(report, null, 2)

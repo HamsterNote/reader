@@ -9,10 +9,17 @@ import {
   TouchableOpacity,
   View
 } from 'react-native'
-import { WebView, type WebViewMessageEvent } from 'react-native-webview'
+import {
+  WebView,
+  type WebViewMessageEvent,
+  type WebViewProps
+} from 'react-native-webview'
 
 import { READER_BRIDGE_PROTOCOL_VERSION } from '../../../src/bridge/protocol'
-import { decideReaderNavigation } from '../../../src/host/navigationPolicy'
+import {
+  decideReaderNavigation,
+  type ReaderNavigationContext
+} from '../../../src/host/navigationPolicy'
 import type {
   HostDocumentRecord,
   ReaderDataStore
@@ -33,6 +40,23 @@ type ReaderWebViewProps = {
 type HostState = 'loading' | 'connected' | 'error'
 
 const HANDSHAKE_TIMEOUT_MS = 8000
+const READER_MENU_ITEMS: [] = []
+// Fabric compares empty menuItems with its empty default and can skip the
+// native setter. A non-empty suppression list also covers that initial mount.
+const SUPPRESSED_READER_MENU_ITEMS: WebViewProps['suppressMenuItems'] = [
+  'copy',
+  'lookup',
+  'translate',
+  'share',
+  'cut',
+  'paste',
+  'replace',
+  'select',
+  'selectAll',
+  'bold',
+  'italic',
+  'underline'
+]
 
 function buildBootstrapScript(sessionId: string, sourceToken: string): string {
   const payload = JSON.stringify({ sessionId, sourceToken }).replace(
@@ -121,8 +145,8 @@ export function ReaderWebView({
   }, [])
 
   const handleNavigation = useCallback(
-    (request: { readonly url: string }): boolean => {
-      const decision = decideReaderNavigation(request.url, entryUrl)
+    (request: ReaderNavigationContext & { readonly url: string }): boolean => {
+      const decision = decideReaderNavigation(request.url, entryUrl, request)
       if (decision.action === 'allow') return true
       if (decision.action === 'external') {
         // 外链不进入阅读 WebView；交给系统浏览器，且仅在用户操作后发生。
@@ -160,6 +184,8 @@ export function ReaderWebView({
         mixedContentMode='never'
         setSupportMultipleWindows={false}
         javaScriptCanOpenWindowsAutomatically={false}
+        menuItems={READER_MENU_ITEMS}
+        suppressMenuItems={SUPPRESSED_READER_MENU_ITEMS}
         allowingReadAccessToURL={baseUrl}
         onShouldStartLoadWithRequest={handleNavigation}
         onMessage={handleMessage}

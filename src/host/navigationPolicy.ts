@@ -1,6 +1,6 @@
-// 宿主 WebView 顶层导航策略。只允许阅读入口自身的 file:// 页面；
+// 宿主 WebView 导航策略。只允许阅读入口自身的 file:// 页面；
 // 外部 http(s) 链接交给宿主显式打开，不进入 WebView；其余协议一律拒绝。
-// 子资源（脚本/worker/图片）不经过该策略，由 WebView 的本地访问设置限制。
+// WKWebView 也会上报章节 iframe 导航；它们需要单独验证主文档与 blob 来源。
 
 export type ReaderNavigationDecision =
   | { readonly action: 'allow' }
@@ -8,6 +8,38 @@ export type ReaderNavigationDecision =
   | { readonly action: 'block'; readonly reason: string }
 
 const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:'])
+
+export type ReaderNavigationContext = {
+  readonly isTopFrame?: boolean
+  readonly mainDocumentURL?: string
+}
+
+function isReaderChapter(
+  candidate: URL,
+  entry: URL,
+  context: ReaderNavigationContext
+): boolean {
+  if (context.isTopFrame !== false || entry.protocol !== 'file:') return false
+  let main: URL
+  try {
+    main = new URL(context.mainDocumentURL ?? '')
+  } catch {
+    return false
+  }
+  if (
+    main.protocol !== entry.protocol ||
+    main.host !== entry.host ||
+    main.pathname !== entry.pathname ||
+    main.search !== entry.search
+  )
+    return false
+  // File origins serialize as file:// or null across WebKit/Chromium. Only
+  // local object URLs are accepted, never remote-origin blobs. Publication
+  // markup is sanitized before object URL creation and cannot create frames.
+  return /^blob:(?:file:\/\/\/|null\/)[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}(?:#.*)?$/i.test(
+    candidate.href
+  )
+}
 
 function normalizePathname(pathname: string): string {
   // URL.pathname 保留百分号编码；统一解码后再检查 ..，避免编码绕过。
@@ -31,7 +63,8 @@ function isWithinDirectory(candidatePath: string, basePath: string): boolean {
  */
 export function decideReaderNavigation(
   rawUrl: string,
-  entryUrl: string
+  entryUrl: string,
+  context: ReaderNavigationContext = {}
 ): ReaderNavigationDecision {
   let candidate: URL
   let entry: URL
@@ -46,7 +79,16 @@ export function decideReaderNavigation(
     return { action: 'allow' }
   }
 
+  if (
+    candidate.protocol === 'blob:' &&
+    isReaderChapter(candidate, entry, context)
+  ) {
+    return { action: 'allow' }
+  }
+
   if (EXTERNAL_PROTOCOLS.has(candidate.protocol)) {
+    if (context.isTopFrame === false)
+      return { action: 'block', reason: '不允许外部子帧导航' }
     return { action: 'external', url: candidate.toString() }
   }
 

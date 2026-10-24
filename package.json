@@ -47,6 +47,7 @@
     "host:start": "cd app && npx expo start --dev-client",
     "host:android": "yarn build:webview && cd app && npx expo run:android",
     "host:ios": "yarn build:webview && cd app && npx expo run:ios",
+    "host:ios:offline": "yarn build:webview && cd app && npx expo run:ios --configuration Release --no-bundler",
     "host:prebuild": "cd app && npx expo prebuild",
     "typecheck:host": "tsc --project app/tsconfig.json --noEmit",
     "host:check": "yarn build:webview && yarn verify:webview && yarn typecheck:host"

@@ -19,6 +19,8 @@
   position: absolute;
   pointer-events: none;
   border-radius: 2px;
+  // Preserve glyphs even when WebKit isolates the overlay's blend backdrop.
+  opacity: 0.35;
   mix-blend-mode: multiply;
 }
 
