@@ -37,6 +37,138 @@ const loadV4Ranges = (): readonly EpubEngineRange[] => {
 }
 
 describe('epub engine session: lifecycle and race isolation', () => {
+  it.each([
+    { range: { start: 3, end: 3 }, expectedIndex: 3, visible: true },
+    { range: { start: 9, end: 10 }, expectedIndex: 1, visible: false },
+    { range: undefined, expectedIndex: 1, visible: true }
+  ])(
+    'keeps the latest range $range after an older section load completes',
+    async ({ range, expectedIndex, visible }) => {
+      const fake = makeFakeView({
+        sectionHrefs: [
+          'OPS/cover.xhtml',
+          'OPS/chapter1.xhtml',
+          'OPS/nav.xhtml',
+          'OPS/chapter2.xhtml',
+          'OPS/chapter3.xhtml'
+        ]
+      })
+      const onRelocate = vi.fn()
+      const engine = createEpubEngine(
+        {
+          container: document.createElement('div'),
+          source: readFixture('epub/duplicate-text.epub'),
+          onRelocate
+        },
+        fake.factory
+      )
+      await engine.ready
+      let currentIndex = 2
+      let release!: () => void
+      const pendingLoad = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      vi.spyOn(fake.handle.renderer, 'getContents').mockImplementation(() => [
+        { index: currentIndex }
+      ])
+      const goTo = vi
+        .spyOn(fake.handle.renderer, 'goTo')
+        .mockImplementation(async (target) => {
+          const { index } = target as { index: number }
+          if (index === 1) await pendingLoad
+          currentIndex = index
+          fake.handle.emit('relocate', { index, fraction: 0 })
+        })
+      const older = engine.setHiddenPages([], false, { start: 2, end: 2 })
+      expect(goTo).toHaveBeenCalledWith({ index: 1 })
+      const latest = engine.setHiddenPages([], false, range)
+      await Promise.resolve()
+      release()
+      await Promise.all([older, latest])
+      expect(currentIndex).toBe(expectedIndex)
+      expect(fake.handle.view.style.visibility).toBe(visible ? '' : 'hidden')
+      if (visible) {
+        expect(engine.captureTextAnchor()?.pageNumber).toBe(
+          expectedIndex === 3 ? 3 : 2
+        )
+        expect(onRelocate.mock.calls.at(-1)?.[0].pageNumber).toBe(
+          expectedIndex === 3 ? 3 : 2
+        )
+      } else {
+        expect(engine.captureTextAnchor()).toBeUndefined()
+        expect(onRelocate.mock.calls.at(-1)?.[0].pageNumber).toBeNull()
+      }
+      await engine.destroy()
+    }
+  )
+
+  it('skips superseded queued ranges and recovers after an older navigation rejects', async () => {
+    const fake = makeFakeView()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    let currentIndex = 0
+    let reject!: (error: Error) => void
+    const pendingLoad = new Promise<void>((_resolve, rejectLoad) => {
+      reject = rejectLoad
+    })
+    vi.spyOn(fake.handle.renderer, 'getContents').mockImplementation(() => [
+      { index: currentIndex }
+    ])
+    const goTo = vi.spyOn(fake.handle.renderer, 'goTo')
+    goTo.mockImplementationOnce(() => pendingLoad)
+    goTo.mockImplementation(async (target) => {
+      currentIndex = (target as { index: number }).index
+      fake.handle.emit('relocate', { index: currentIndex, fraction: 0 })
+    })
+    const older = engine.setHiddenPages([], false, { start: 2, end: 2 })
+    const rejected = expect(older).rejects.toThrow('load failed')
+    const skipped = engine.setHiddenPages([], false, { start: 4, end: 4 })
+    const latest = engine.setHiddenPages([], false, { start: 3, end: 3 })
+    expect(fake.handle.view.style.visibility).toBe('hidden')
+    reject(new Error('load failed'))
+    await Promise.all([rejected, skipped, latest])
+    expect(goTo.mock.calls).toEqual([[{ index: 1 }], [{ index: 2 }]])
+    expect(currentIndex).toBe(2)
+    expect(engine.captureTextAnchor()?.pageNumber).toBe(3)
+    expect(fake.handle.view.style.visibility).toBe('')
+    await engine.destroy()
+  })
+
+  it('does not start queued range navigation after the engine is destroyed', async () => {
+    const fake = makeFakeView()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    vi.spyOn(fake.handle.renderer, 'getContents').mockReturnValue([
+      { index: 0 }
+    ])
+    let release!: () => void
+    const pendingLoad = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const goTo = vi
+      .spyOn(fake.handle.renderer, 'goTo')
+      .mockReturnValue(pendingLoad)
+    const older = engine.setHiddenPages([], false, { start: 2, end: 2 })
+    const latest = engine.setHiddenPages([], false, { start: 3, end: 3 })
+    await engine.destroy()
+    release()
+    await Promise.all([older, latest])
+    expect(goTo).toHaveBeenCalledTimes(1)
+    expect(fake.handle.view.style.visibility).toBe('hidden')
+  })
+
   it.each([2, 4])(
     'reconciles actual section %i instead of a stale in-range page when restoring a range',
     async (index) => {

@@ -222,6 +222,108 @@ async function checkSpineNavigation(page, epub, label, result) {
   result.checks.push(
     'spine navigation document: next/prev skip it, body link rejected, crop edit and single-page range stay bounded; clearing range restores original spine; re-enabling range returns actual section and persisted position callback to page 2; no readable pages hides content without publishing stale progress and recovers on a valid range'
   )
+  await checkConcurrentRangeRestore(page, label, result)
+}
+
+async function checkConcurrentRangeRestore(page, label, result) {
+  await update(page, { pageRange: undefined })
+  await page.evaluate(async () => {
+    await document.querySelector('foliate-view').renderer.prev()
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view').renderer.getContents()[0].index ===
+      2
+  )
+  await page.evaluate(() => {
+    const view = document.querySelector('foliate-view')
+    const earlier = view.book.sections[1]
+    const later = view.book.sections[3]
+    const originalEarlierLoad = earlier.load.bind(earlier)
+    const originalLaterLoad = later.load.bind(later)
+    let release
+    let earlierRelocated
+    let laterRelocated
+    const gate = new Promise((resolve) => (release = resolve))
+    const earlierFinished = new Promise(
+      (resolve) => (earlierRelocated = resolve)
+    )
+    const laterFinished = new Promise((resolve) => (laterRelocated = resolve))
+    const state = { started: false, laterStarted: false }
+    const relocated = ({ detail }) => {
+      if (detail.index === 1) earlierRelocated()
+      if (detail.index === 3) laterRelocated()
+    }
+    view.renderer.addEventListener('relocate', relocated)
+    earlier.load = async () => {
+      state.started = true
+      await gate
+      return originalEarlierLoad()
+    }
+    later.load = () => {
+      state.laterStarted = true
+      return originalLaterLoad()
+    }
+    window.readerRangeRace = {
+      state,
+      async release() {
+        // Concurrent implementations must settle the newer navigation first;
+        // a serialized implementation starts it after the older load finishes.
+        if (state.laterStarted) await laterFinished
+        release()
+        await earlierFinished
+      },
+      cleanup() {
+        earlier.load = originalEarlierLoad
+        later.load = originalLaterLoad
+        view.renderer.removeEventListener('relocate', relocated)
+      }
+    }
+  })
+  const positionCount = await page.evaluate(
+    () => window.readerRegression.state.positions.length
+  )
+  await update(page, { pageRange: { start: 2, end: 2 } })
+  await page.waitForFunction(() => window.readerRangeRace.state.started)
+  await update(page, { pageRange: { start: 3, end: 3 } })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('foliate-view').book.sections[1].linear === 'no'
+  )
+  await page.evaluate(async () => {
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    )
+    await window.readerRangeRace.release()
+  })
+  await page.waitForFunction((count) => {
+    const view = document.querySelector('foliate-view')
+    const contents = view.renderer.getContents()[0]
+    return (
+      contents.index === 3 &&
+      contents.doc.body.textContent.includes('第二章') &&
+      view.style.visibility === '' &&
+      window.readerRegression.state.positions.length > count &&
+      window.readerRegression.state.positions.at(-1) === 3
+    )
+  }, positionCount)
+  assert.equal(await page.locator('foliate-view').isVisible(), true)
+  assert(
+    await page.evaluate(
+      (count) =>
+        window.readerRegression.state.positions
+          .slice(count)
+          .every((number) => number === 3),
+      positionCount
+    )
+  )
+  await page.screenshot({
+    path: resolve(output, `${label}-range-load-race.png`)
+  })
+  await page.evaluate(() => window.readerRangeRace.cleanup())
+  result.checks.push(
+    'delayed original section.load: restoring page 2 from navigation then changing to page 3 keeps final actual section, visible chapter and persisted position on page 3 after the older load completes'
+  )
 }
 
 async function run(mobile) {

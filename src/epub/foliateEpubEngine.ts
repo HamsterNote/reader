@@ -153,6 +153,8 @@ export const createEpubEngine = (
   let activeRangeId: string | null = null
   let hiddenPages = new Set<number>()
   let rangePages: ReadonlySet<number> | undefined
+  let restrictionGeneration = 0
+  let restrictionNavigation: Promise<void> | undefined
   const isPageVisible = (page: number) =>
     (!rangePages || rangePages.has(page)) &&
     (cropEditing || !hiddenPages.has(page))
@@ -637,6 +639,53 @@ export const createEpubEngine = (
     return true
   }
 
+  const reconcilePageVisibility = async (generation: number) => {
+    if (
+      destroyed ||
+      generation !== restrictionGeneration ||
+      !model ||
+      !view?.renderer
+    )
+      return
+    const firstVisible = model.pages.find((page) =>
+      isPageVisible(page.pageNumber)
+    )
+    const wasEmpty = view.style.visibility === 'hidden'
+    if (!firstVisible) {
+      view.style.visibility = 'hidden'
+      currentAnchor = undefined
+      displayedPage = undefined
+      options.onRelocate?.({
+        chapterIndex: -1,
+        pageNumber: null,
+        fraction: 0
+      })
+      return
+    }
+    const displayed = model.pages.find(
+      (page) => page.pageNumber === displayedPage
+    )
+    const contents = view.renderer.getContents()[0]
+    const chapter = contents && chapterIndexBySection[contents.index]
+    const rendererPage =
+      chapter !== null && chapter !== undefined
+        ? model.pages.find((page) => page.chapterIndex === chapter)
+        : undefined
+    // Only a virtual cover is independent of the renderer's actual section.
+    const current =
+      displayed?.chapterIndex === null || !contents ? displayed : rendererPage
+    if (
+      (current && !isPageVisible(current.pageNumber)) ||
+      (!current && rangePages) ||
+      wasEmpty
+    ) {
+      view.style.visibility = 'hidden'
+      await goToPage(current?.pageNumber ?? firstVisible.pageNumber)
+    }
+    if (!destroyed && generation === restrictionGeneration && view)
+      view.style.visibility = ''
+  }
+
   const goToTocHref = async (href: string): Promise<boolean> => {
     if (destroyed || !book || !view?.renderer) return false
     const resolved = book.resolveHref(href)
@@ -788,6 +837,7 @@ export const createEpubEngine = (
       return null
     },
     setHiddenPages: async (pages, editing = false, pageRange) => {
+      if (destroyed) return
       hiddenPages = new Set(
         pages.map((page) =>
           typeof page === 'number' ? page : Number(page.slice(5))
@@ -814,39 +864,21 @@ export const createEpubEngine = (
         section.linear = visible ? originalLinear.get(index) : 'no'
       })
       if (!model || !view?.renderer) return
-      const firstVisible = model.pages.find((page) =>
-        isPageVisible(page.pageNumber)
-      )
-      const wasEmpty = view.style.visibility === 'hidden'
-      view.style.visibility = firstVisible ? '' : 'hidden'
-      if (!firstVisible) {
-        currentAnchor = undefined
-        displayedPage = undefined
-        options.onRelocate?.({
-          chapterIndex: -1,
-          pageNumber: null,
-          fraction: 0
-        })
-        return
+      const generation = ++restrictionGeneration
+      // Foliate loads cannot be cancelled. Drain the in-flight navigation before
+      // reconciling the latest restrictions, keeping obsolete content hidden.
+      if (restrictionNavigation) view.style.visibility = 'hidden'
+      const reconcile = () => reconcilePageVisibility(generation)
+      const navigation = restrictionNavigation
+        ? restrictionNavigation.catch(() => undefined).then(reconcile)
+        : reconcile()
+      restrictionNavigation = navigation
+      try {
+        await navigation
+      } finally {
+        if (restrictionNavigation === navigation)
+          restrictionNavigation = undefined
       }
-      const displayed = model.pages.find(
-        (page) => page.pageNumber === displayedPage
-      )
-      const contents = view.renderer.getContents()[0]
-      const chapter = contents && chapterIndexBySection[contents.index]
-      const rendererPage =
-        chapter !== null && chapter !== undefined
-          ? model.pages.find((page) => page.chapterIndex === chapter)
-          : undefined
-      // Only a virtual cover is independent of the renderer's actual section.
-      const current =
-        displayed?.chapterIndex === null || !contents ? displayed : rendererPage
-      if (
-        (current && !isPageVisible(current.pageNumber)) ||
-        (!current && rangePages) ||
-        wasEmpty
-      )
-        await goToPage(current?.pageNumber ?? firstVisible.pageNumber)
     },
     rangeIdAtPoint: (doc, x, y) => {
       if (!compat) return null
