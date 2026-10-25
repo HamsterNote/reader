@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPUB Foliate Harness (HAM-88)</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        height: 100vh;
+      }
+      #sidebar {
+        border-right: 1px solid #ddd;
+        padding: 8px;
+        overflow-y: auto;
+        font-size: 13px;
+      }
+      #sidebar button {
+        display: block;
+        margin: 2px 0;
+        width: 100%;
+        text-align: left;
+      }
+      #toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 6px 10px;
+        border-bottom: 1px solid #ddd;
+        flex-wrap: wrap;
+        font-size: 13px;
+      }
+      #main {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      #cover {
+        text-align: center;
+        padding: 8px;
+        border-bottom: 1px solid #eee;
+      }
+      #cover img {
+        max-height: 200px;
+      }
+      #book {
+        flex: 1;
+        position: relative;
+        overflow: hidden;
+      }
+      #log {
+        height: 120px;
+        overflow-y: auto;
+        border-top: 1px solid #ddd;
+        font: 11px/1.5 monospace;
+        padding: 4px 8px;
+        white-space: pre-wrap;
+      }
+      .hl-item {
+        border: 1px solid #eee;
+        margin: 2px 0;
+        padding: 2px 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="sidebar">
+      <h4>样本书籍</h4>
+      <div id="fixtures"></div>
+      <h4>目录</h4>
+      <div id="toc">（未打开）</div>
+      <h4>高亮</h4>
+      <div id="highlights"></div>
+    </div>
+    <div id="main">
+      <div id="toolbar">
+        <button id="font-minus">A-</button>
+        <span id="font-scale">100%</span>
+        <button id="font-plus">A+</button>
+        <button id="flow-toggle">切换 flow</button>
+        <button id="restore-v4">恢复 v4 高亮</button>
+        <button id="highlight-selection">高亮当前选区</button>
+        <button id="race-ab">竞态 A→B</button>
+        <button id="open-corrupt">打开损坏文件</button>
+        <span id="location"></span>
+      </div>
+      <div id="cover" hidden></div>
+      <div id="book"></div>
+      <div id="log"></div>
+    </div>
+    <script type="module" src="./epubFoliateHarness.ts"></script>
+  </body>
+</html>

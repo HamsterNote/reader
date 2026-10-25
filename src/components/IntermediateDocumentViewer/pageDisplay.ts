@@ -1,5 +1,17 @@
 import type { ReaderEdgeCrop, ReaderPageEdgeCrop } from '../../types/readerData'
 import { parsePublicPageId } from './rangeJumpHelpers'
+import type { ReaderPageRange } from './IntermediateDocumentViewer'
+
+export const getVisiblePageNumbers = (
+  allPageNumbers: number[],
+  pageRange: ReaderPageRange | undefined
+) => {
+  if (!pageRange) return allPageNumbers
+  const start = Math.trunc(pageRange.start)
+  const end = Math.trunc(pageRange.end)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return []
+  return allPageNumbers.filter((page) => page >= start && page <= end)
+}
 
 const MAX_AXIS_CROP = 0.99
 

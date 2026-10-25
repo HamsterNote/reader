@@ -1,0 +1,26 @@
+{
+  "name": "hamster-reader-host",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "node ../scripts/apply-ios-webview-patch.mjs && expo run:ios",
+    "prebuild": "node ../scripts/apply-ios-webview-patch.mjs && expo prebuild"
+  },
+  "dependencies": {
+    "expo": "54.0.37",
+    "expo-asset": "~12.0.10",
+    "expo-crypto": "~15.0.7",
+    "expo-dev-client": "~6.0.18",
+    "expo-document-picker": "~14.0.7",
+    "expo-file-system": "~19.0.17",
+    "expo-status-bar": "~3.0.8",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-webview": "13.15.0",
+    "expo-system-ui": "~6.0.9"
+  }
+}

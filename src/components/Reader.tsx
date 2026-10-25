@@ -13,6 +13,8 @@ import {
   type CSSProperties,
   type ReactNode,
   type Ref,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -26,6 +28,12 @@ import type {
   ReaderCommentChangeDetail
 } from '../types/comments'
 import type { ReaderFontScale } from '../types/fontScale'
+import type { ReaderEngineSource } from '../types/engineSource'
+const EngineDocumentViewer = lazy(() =>
+  import('./EngineDocumentViewer').then((module) => ({
+    default: module.EngineDocumentViewer
+  }))
+)
 import type {
   ReaderBookmark,
   ReaderData,
@@ -164,6 +172,8 @@ const resolveBottomBarHistoryStatus = ({
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
+  /** Original EPUB/PDF bytes opt into the new display engines; document remains the compatibility index. */
+  engineSource?: ReaderEngineSource
   /** 宿主提供的受控加载进度；传入时在 Reader 容器内显示并暂时隐藏上传区。 */
   loadingProgress?: ReaderLoadingProgress | null
   /** 可持久化阅读数据的统一入口；其中字段优先于对应的旧版扁平 props。 */
@@ -609,7 +619,12 @@ function resolveLoadingProgress(
   }
 }
 
+function viewerForSource(source: ReaderEngineSource | undefined) {
+  return source ? EngineDocumentViewer : IntermediateDocumentViewer
+}
+
 export function Reader({
+  engineSource,
   document,
   loadingProgress,
   data,
@@ -639,7 +654,7 @@ export function Reader({
   onTextSelectionChange,
   onTextSelectionEnd,
   onSelectText,
-  useVirtualPaper = true,
+  useVirtualPaper: useVirtualPaperProp = true,
   scale,
   defaultScale,
   onScaleChange,
@@ -728,6 +743,8 @@ export function Reader({
   popoverRelative,
   bottomBar
 }: ReaderProps) {
+  const useVirtualPaper = !engineSource && useVirtualPaperProp
+  const LayoutViewer = viewerForSource(engineSource)
   const [isDragging, setIsDragging] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
   const [internalPagePaintings, setInternalPagePaintings] =
@@ -1614,10 +1631,10 @@ export function Reader({
   const resolvedLoadingProgress = resolveLoadingProgress(loadingProgress)
   const showUploadZone = !document && !uploadedFile && !resolvedLoadingProgress
   const showFileInfo = !document && uploadedFile && !resolvedLoadingProgress
-  const showDocumentContent = document?.title ?? emptyText
+  const showDocumentContent = document?.title || emptyText
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
-      if (resolvedRenderMode === 'text') {
+      if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
         return (
           <IntermediateDocumentTextViewer
             document={document}
@@ -1724,180 +1741,186 @@ export function Reader({
       }
 
       return (
-        <IntermediateDocumentViewer
-          document={document}
-          isEpub={isEpub}
-          isPdf={isPdf}
-          fontScale={fontScale}
-          overscan={overscanPages}
-          pageRange={pageRange}
-          hiddenPages={data?.hiddenPages}
-          edgeCrop={data?.edgeCrop}
-          edgeCropEditing={resolvedEdgeCropEditing}
-          onEdgeCropApply={onEdgeCropApply}
-          onEdgeCropHidePage={handleEdgeCropHidePage}
-          ocr={resolvedOcr}
-          extraOCR={extraOCR}
-          onOcrError={onOcrError}
-          ocrTexts={ocrTexts}
-          onOcrTextsChange={onOcrTextsChange}
-          ocrDebug={ocrDebug}
-          onTextSelectionChange={onTextSelectionChange}
-          onTextSelectionEnd={onTextSelectionEnd}
-          onSelectText={onSelectText}
-          useVirtualPaper={useVirtualPaper}
-          nativeLayoutZoom={layoutZoom}
-          onNativeLayoutScaleChange={setResolvedLayoutScale}
-          scale={whenEnabled(
-            useVirtualPaper && resolvedVirtualPaperState === undefined,
-            scale
-          )}
-          defaultScale={whenEnabled(
-            useVirtualPaper && resolvedVirtualPaperState === undefined,
-            defaultScale
-          )}
-          defaultVirtualPaperTransform={whenEnabled(
-            useVirtualPaper,
-            resolvedVirtualPaperState
-          )}
-          onVirtualPaperTransformChangeEnd={
-            handleVirtualPaperTransformChangeEnd
-          }
-          layoutReadingProgress={whenEnabled(
-            !useVirtualPaper,
-            resolvedLayoutReadingProgress
-          )}
-          onLayoutReadingProgressChange={handleLayoutReadingProgressChange}
-          onTextAnchorChange={handleTextAnchorChange}
-          readingPositionRef={handleReadingPositionRef}
-          onScaleChange={onScaleChange}
-          minScale={minScale}
-          maxScale={maxScale}
-          maxLoadedPages={maxLoadedPages}
-          interactionMode={interactionMode}
-          touchPanMode={resolvedTouchPanMode}
-          ranges={resolvedRanges}
-          defaultRanges={defaultRanges}
-          selectedRangeId={selectedRangeId}
-          defaultSelectedRangeId={defaultSelectedRangeId}
-          onSelect={handleSelect}
-          onLinkedDataChange={onLinkedDataChange}
-          onLinkedSelect={onLinkedSelect}
-          onLinkedUpdateRange={onLinkedUpdateRange}
-          onLinkedSelectRange={onLinkedSelectRange}
-          onSelectRange={onSelectRange}
-          onUpdateRange={handleUpdateRange}
-          onRemoveRange={onRemoveRange}
-          onRemoveRect={onRemoveRect}
-          onSelectionStart={onSelectionStart}
-          onSelectionEnd={onSelectionEnd}
-          onHighlight={onHighlight}
-          onDragHighlight={onDragHighlight}
-          highlightColor={resolvedHighlightColor}
-          selectionColor={selectionColor}
-          showSelectionMagnifier={showSelectionMagnifier}
-          selectionPopover={
-            selectionPopover ?? (
-              <DefaultSelectionPopover
-                darkMode={darkMode}
-                selectionRef={popoverSelectionRef}
-                highlightColor={resolvedHighlightColor}
-                onHighlightColorChange={handleHighlightColorChange}
-                selectedRangeId={selectedRangeId}
-                ranges={resolvedRanges}
-                onUpdateRange={handleUpdateRange}
-                onRemoveRange={onRemoveRange}
-              />
-            )
-          }
-          highlightPopover={
-            highlightPopover ??
-            ((highlight) => (
-              <DefaultHighlightPopover
-                darkMode={darkMode}
-                selectionRef={popoverSelectionRef}
-                highlightColor={resolvedHighlightColor}
-                onHighlightColorChange={handleHighlightColorChange}
-                selectedRangeId={highlight.id}
-                ranges={resolvedRanges}
-                onUpdateRange={handleUpdateRange}
-                onRemoveRange={onRemoveRange}
-                onCommentHighlight={whenEnabled(
-                  onCommentHighlight !== undefined,
-                  handleDefaultCommentHighlight
-                )}
-              />
-            ))
-          }
-          onCommentHighlight={whenEnabled(
-            highlightPopover !== undefined,
-            onCommentHighlight
-          )}
-          autoHighlight={autoHighlight}
-          selectionRef={resolvedSelectionRef}
-          overlayRectType={overlayRectType}
-          tool={resolvedSelectionTool}
-          rects={resolvedRects}
-          selectedRectId={selectedRectId}
-          rectPopover={
-            rectPopover ??
-            ((rectangle) => (
-              <DefaultRectanglePopover
-                darkMode={darkMode}
-                rectangle={rectangle}
-                highlightColor={resolvedHighlightColor}
-                onHighlightColorChange={handleHighlightColorChange}
-                onUpdateRect={handleUpdateRect}
-                onRemoveRect={onRemoveRect}
-                onCommentRect={whenEnabled(
-                  onCommentRect !== undefined,
-                  handleDefaultCommentRect
-                )}
-              />
-            ))
-          }
-          onCreateRect={handleCreateRect}
-          onSelectRect={onSelectRect}
-          onUpdateRect={handleUpdateRect}
-          annotationHistory={normalizedAnnotationHistory}
-          onAnnotationHistoryChange={onAnnotationHistoryChange}
-          onAnnotationHistoryStatusChange={setHistoryStatus}
-          initialLoadedPages={initialLoadedPages}
-          pageLoadConcurrency={pageLoadConcurrency}
-          pageLoadEnterDelayMs={pageLoadEnterDelayMs}
-          pagePreloadRadius={pagePreloadRadius}
-          pageUnloadDelayMs={pageUnloadDelayMs}
-          onIntermediateDocumentRenderTiming={
-            onIntermediateDocumentRenderTiming
-          }
-          containMarginX={containMarginX}
-          containMarginTop={resolvedVerticalMargins.top}
-          containMarginBottom={resolvedVerticalMargins.bottom}
-          containMarginY={resolvedVerticalMargins.legacy}
-          selectedTool={resolvedSelectedTool}
-          paintingTool={resolvedPaintingTool}
-          drawingStrokeColor={resolvedDrawingStrokeColor}
-          paintingControllerData={resolvedPaintingControllerData}
-          onPaintingControllerDataChange={handlePaintingControllerDataChange}
-          pagePaintings={resolvedPagePaintings}
-          onPagePaintingChange={handlePagePaintingChange}
-          showPageBrowser={showPageBrowser}
-          onPageBrowserClose={onPageBrowserClose}
-          themeColor={themeColor}
-          commentCountByRangeId={commentCountByRangeId}
-          commentCountByRectId={commentCountByRectId}
-          comments={comments}
-          onCommentsChange={onCommentsChange}
-          bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
-          onToggleBookmark={whenEnabled(
-            usesPreciseBookmarks && canTogglePreciseBookmarks,
-            handleToggleBookmark
-          )}
-          bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
-          onTogglePageBookmark={onTogglePageBookmark}
-          onPageLoadStatusChange={onPageLoadStatusChange}
-          popoverRelative={popoverRelative}
-        />
+        <Suspense fallback={<div role='status'>正在加载文档…</div>}>
+          <LayoutViewer
+            engineSource={engineSource}
+            engineRenderMode={resolvedRenderMode}
+            textReadingProgress={resolvedTextReadingProgress}
+            onTextReadingProgressChange={handleTextReadingProgressChange}
+            document={document}
+            isEpub={isEpub}
+            isPdf={isPdf}
+            fontScale={fontScale}
+            overscan={overscanPages}
+            pageRange={pageRange}
+            hiddenPages={data?.hiddenPages}
+            edgeCrop={data?.edgeCrop}
+            edgeCropEditing={resolvedEdgeCropEditing}
+            onEdgeCropApply={onEdgeCropApply}
+            onEdgeCropHidePage={handleEdgeCropHidePage}
+            ocr={resolvedOcr}
+            extraOCR={extraOCR}
+            onOcrError={onOcrError}
+            ocrTexts={ocrTexts}
+            onOcrTextsChange={onOcrTextsChange}
+            ocrDebug={ocrDebug}
+            onTextSelectionChange={onTextSelectionChange}
+            onTextSelectionEnd={onTextSelectionEnd}
+            onSelectText={onSelectText}
+            useVirtualPaper={useVirtualPaper}
+            nativeLayoutZoom={layoutZoom}
+            onNativeLayoutScaleChange={setResolvedLayoutScale}
+            scale={whenEnabled(
+              useVirtualPaper && resolvedVirtualPaperState === undefined,
+              scale
+            )}
+            defaultScale={whenEnabled(
+              useVirtualPaper && resolvedVirtualPaperState === undefined,
+              defaultScale
+            )}
+            defaultVirtualPaperTransform={whenEnabled(
+              useVirtualPaper,
+              resolvedVirtualPaperState
+            )}
+            onVirtualPaperTransformChangeEnd={
+              handleVirtualPaperTransformChangeEnd
+            }
+            layoutReadingProgress={whenEnabled(
+              !useVirtualPaper,
+              resolvedLayoutReadingProgress
+            )}
+            onLayoutReadingProgressChange={handleLayoutReadingProgressChange}
+            onTextAnchorChange={handleTextAnchorChange}
+            readingPositionRef={handleReadingPositionRef}
+            onScaleChange={onScaleChange}
+            minScale={minScale}
+            maxScale={maxScale}
+            maxLoadedPages={maxLoadedPages}
+            interactionMode={interactionMode}
+            touchPanMode={resolvedTouchPanMode}
+            ranges={resolvedRanges}
+            defaultRanges={defaultRanges}
+            selectedRangeId={selectedRangeId}
+            defaultSelectedRangeId={defaultSelectedRangeId}
+            onSelect={handleSelect}
+            onLinkedDataChange={onLinkedDataChange}
+            onLinkedSelect={onLinkedSelect}
+            onLinkedUpdateRange={onLinkedUpdateRange}
+            onLinkedSelectRange={onLinkedSelectRange}
+            onSelectRange={onSelectRange}
+            onUpdateRange={handleUpdateRange}
+            onRemoveRange={onRemoveRange}
+            onRemoveRect={onRemoveRect}
+            onSelectionStart={onSelectionStart}
+            onSelectionEnd={onSelectionEnd}
+            onHighlight={onHighlight}
+            onDragHighlight={onDragHighlight}
+            highlightColor={resolvedHighlightColor}
+            selectionColor={selectionColor}
+            showSelectionMagnifier={showSelectionMagnifier}
+            selectionPopover={
+              selectionPopover ?? (
+                <DefaultSelectionPopover
+                  darkMode={darkMode}
+                  selectionRef={popoverSelectionRef}
+                  highlightColor={resolvedHighlightColor}
+                  onHighlightColorChange={handleHighlightColorChange}
+                  selectedRangeId={selectedRangeId}
+                  ranges={resolvedRanges}
+                  onUpdateRange={handleUpdateRange}
+                  onRemoveRange={onRemoveRange}
+                />
+              )
+            }
+            highlightPopover={
+              highlightPopover ??
+              ((highlight) => (
+                <DefaultHighlightPopover
+                  darkMode={darkMode}
+                  selectionRef={popoverSelectionRef}
+                  highlightColor={resolvedHighlightColor}
+                  onHighlightColorChange={handleHighlightColorChange}
+                  selectedRangeId={highlight.id}
+                  ranges={resolvedRanges}
+                  onUpdateRange={handleUpdateRange}
+                  onRemoveRange={onRemoveRange}
+                  onCommentHighlight={whenEnabled(
+                    onCommentHighlight !== undefined,
+                    handleDefaultCommentHighlight
+                  )}
+                />
+              ))
+            }
+            onCommentHighlight={whenEnabled(
+              highlightPopover !== undefined,
+              onCommentHighlight
+            )}
+            autoHighlight={autoHighlight}
+            selectionRef={resolvedSelectionRef}
+            overlayRectType={overlayRectType}
+            tool={resolvedSelectionTool}
+            rects={resolvedRects}
+            selectedRectId={selectedRectId}
+            rectPopover={
+              rectPopover ??
+              ((rectangle) => (
+                <DefaultRectanglePopover
+                  darkMode={darkMode}
+                  rectangle={rectangle}
+                  highlightColor={resolvedHighlightColor}
+                  onHighlightColorChange={handleHighlightColorChange}
+                  onUpdateRect={handleUpdateRect}
+                  onRemoveRect={onRemoveRect}
+                  onCommentRect={whenEnabled(
+                    onCommentRect !== undefined,
+                    handleDefaultCommentRect
+                  )}
+                />
+              ))
+            }
+            onCreateRect={handleCreateRect}
+            onSelectRect={onSelectRect}
+            onUpdateRect={handleUpdateRect}
+            annotationHistory={normalizedAnnotationHistory}
+            onAnnotationHistoryChange={onAnnotationHistoryChange}
+            onAnnotationHistoryStatusChange={setHistoryStatus}
+            initialLoadedPages={initialLoadedPages}
+            pageLoadConcurrency={pageLoadConcurrency}
+            pageLoadEnterDelayMs={pageLoadEnterDelayMs}
+            pagePreloadRadius={pagePreloadRadius}
+            pageUnloadDelayMs={pageUnloadDelayMs}
+            onIntermediateDocumentRenderTiming={
+              onIntermediateDocumentRenderTiming
+            }
+            containMarginX={containMarginX}
+            containMarginTop={resolvedVerticalMargins.top}
+            containMarginBottom={resolvedVerticalMargins.bottom}
+            containMarginY={resolvedVerticalMargins.legacy}
+            selectedTool={resolvedSelectedTool}
+            paintingTool={resolvedPaintingTool}
+            drawingStrokeColor={resolvedDrawingStrokeColor}
+            paintingControllerData={resolvedPaintingControllerData}
+            onPaintingControllerDataChange={handlePaintingControllerDataChange}
+            pagePaintings={resolvedPagePaintings}
+            onPagePaintingChange={handlePagePaintingChange}
+            showPageBrowser={showPageBrowser}
+            onPageBrowserClose={onPageBrowserClose}
+            themeColor={themeColor}
+            commentCountByRangeId={commentCountByRangeId}
+            commentCountByRectId={commentCountByRectId}
+            comments={comments}
+            onCommentsChange={onCommentsChange}
+            bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
+            onToggleBookmark={whenEnabled(
+              usesPreciseBookmarks && canTogglePreciseBookmarks,
+              handleToggleBookmark
+            )}
+            bookmarkedPageNumbers={resolvedBookmarkedPageNumbers}
+            onTogglePageBookmark={onTogglePageBookmark}
+            onPageLoadStatusChange={onPageLoadStatusChange}
+            popoverRelative={popoverRelative}
+          />
+        </Suspense>
       )
     }
 

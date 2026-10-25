@@ -1,6 +1,6 @@
 import { confirm } from '@hamster-note/components'
 import type { DrawingValue } from '@hamster-note/painting'
-import type { CSSProperties, KeyboardEvent, RefObject } from 'react'
+import type { CSSProperties, KeyboardEvent, RefObject, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ReaderSelectionRange,
@@ -46,6 +46,7 @@ function TrashIcon() {
 type PageSize = { readonly width: number; readonly height: number }
 
 type PageBrowserProps = {
+  readonly outline?: ReactNode
   readonly isOpen: boolean
   readonly pageNumbers: readonly number[]
   readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
@@ -375,6 +376,7 @@ function getRectPreviewGeometry(
 }
 
 export function PageBrowser({
+  outline,
   isOpen,
   pageNumbers,
   pageSizesByPageNumber,
@@ -669,6 +671,7 @@ export function PageBrowser({
           <span aria-hidden='true'>×</span>
         </button>
       </div>
+      {outline}
       <PageBrowserTabs
         activeTab={activeTab}
         isOpen={effectiveOpen}

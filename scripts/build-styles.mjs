@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { compile } from 'sass'
@@ -15,10 +15,14 @@ const dependencyStyles = [
   {
     specifier: '@hamster-note/selection/style.css',
     marker: '.hsn-selection-container'
+  },
+  {
+    specifier: 'pdfjs-dist/web/pdf_viewer.css',
+    marker: '.pdfViewer'
   }
 ]
 const dependencyImportPattern =
-  /^[ \t]*@import[ \t]+url\(['"]@hamster-note\/(?:components\/styles|selection\/style)\.css['"]\);[ \t]*$/gm
+  /^[ \t]*@import[ \t]+url\(['"](?:@hamster-note\/(?:components\/styles|selection\/style)\.css|pdfjs-dist\/web\/pdf_viewer\.css)['"]\);[ \t]*$/gm
 
 function buildReaderCss() {
   const result = compile(readerStylesPath, {
@@ -53,6 +57,11 @@ function writeBundledCss() {
 
   mkdirSync(dirname(distStylePath), { recursive: true })
   writeFileSync(distStylePath, bundledCss)
+  cpSync(
+    dirname(require.resolve('pdfjs-dist/web/pdf_viewer.css')) + '/images',
+    'dist/images',
+    { recursive: true }
+  )
 }
 
 writeBundledCss()

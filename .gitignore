@@ -28,3 +28,11 @@ manifest.txt
 # Playwright MCP logs and screenshots
 .playwright-mcp/
 *.png
+
+# Expo host
+webview-dist/
+app/assets/webreader.zip
+app/assets/webreader-manifest.json
+app/android/
+app/ios/
+app/.expo/

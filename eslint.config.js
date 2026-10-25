@@ -5,9 +5,20 @@ export default [
     ignores: [
       'dist/**',
       'demo-dist/**',
+      'webview-dist/**',
+      'app/android/**',
+      'app/ios/**',
+      'app/.expo/**',
+      'app/assets/**',
+      'vendor/**',
       'package/dist/**',
       '.yalc/**',
-      '.omo/**'
+      '.omo/**',
+      // 第三方 vendored 资产保持上游原样（vendor/foliate-js/MANIFEST.md 锁定
+      // sha256），不参与本仓库 lint/format。
+      'vendor/foliate-js/**/*.js',
+      // pdf.js 是 reader 自有桩（非上游文件），仍受 lint 约束。
+      '!vendor/foliate-js/pdf.js'
     ]
   },
   ...baseConfig

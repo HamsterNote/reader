@@ -12,7 +12,13 @@ export default defineConfig({
       cssFileName: 'style'
     },
     rollupOptions: {
-      external: ['react', 'react-dom', /^@hamster-note\//, /^@system-ui-js\//]
+      external: [
+        'react',
+        'react-dom',
+        /^pdfjs-dist(?:\/|$)/,
+        /^@hamster-note\//,
+        /^@system-ui-js\//
+      ]
     }
   }
 })

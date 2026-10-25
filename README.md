@@ -34,6 +34,8 @@ export function App() {
 
 `Reader` is parser-agnostic. It accepts an intermediate document (produced by parser packages such as `@hamster-note/pdf-parser`, `@hamster-note/docx-parser`, etc.) and renders it through the intermediate-document renderer. Layout pages use VirtualPaper reading mode by default, with contain mode disabled for continuous document navigation.
 
+The browser Demo and Expo host use Foliate for EPUB and the official PDF.js viewer for PDF by default. Library consumers can supply `engineSource={{ format: 'epub', data: bytes }}` (or `format: 'pdf'`, with `workerSrc` when needed) alongside the compatibility `document`. Memoize the source per file; original bytes stay outside persisted `ReaderData`. EPUB uses Foliate in both modes; PDF Text keeps the compatible text view. Existing `document`-only consumers and other formats retain the shared renderer. Setup, acceptance evidence, backups and rollback are documented in `docs/ham91-final-acceptance.md`.
+
 The renderer lazily loads page content on demand via a visibility-debounced queue with concurrency control and offscreen-release, designed for long documents without blocking the main thread.
 
 #### Unified Reader data
@@ -662,6 +664,19 @@ These shortcuts are ignored when the active element is an `input`, `textarea`, o
 - `yarn test:run`: run Vitest once.
 - `yarn preview`: preview the demo build.
 - `yarn prepublishOnly`: build the library before publish.
+
+## Expo 宿主
+
+仓库同时提供 Expo dev client 宿主（`app/`），EPUB/PDF 在应用内 WebView 中打开。
+
+```bash
+yarn build:webview       # 构建 Web 阅读入口与阅读资源，生成 app/assets/webreader.zip
+yarn verify:webview      # 校验资源清单
+yarn typecheck:host
+yarn host:android        # 或 macOS 上 yarn host:ios
+```
+
+构建、安全边界、已验证明细与未验证平台见 `docs/expo-host.md`。
 
 ## 发版规则
 
