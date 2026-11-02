@@ -8,7 +8,9 @@
 }
 .hamster-reader__epub-container {
   position: absolute;
-  inset: 0;
+  inset: 0 0 var(--epub-bottom-inset, 0px);
+  overflow: hidden;
+  overscroll-behavior: none;
   background: #fff;
   foliate-view {
     display: block;
@@ -18,7 +20,7 @@
 }
 .hamster-reader__epub-tools-viewport {
   position: absolute;
-  inset: 0;
+  inset: 0 0 var(--epub-bottom-inset, 0px);
   overflow: hidden;
   pointer-events: none;
 }
@@ -90,5 +92,58 @@
     color: inherit;
     padding: 6px 0;
     cursor: pointer;
+  }
+}
+
+.hamster-reader__engine-viewer[data-engine='epub'] {
+  overflow: hidden;
+  overscroll-behavior: none;
+  > .hamster-reader__epub-cover {
+    bottom: var(--epub-bottom-inset, 0px);
+    height: auto;
+  }
+}
+.hamster-reader__epub-pagination {
+  position: absolute;
+  bottom: 32px;
+  right: 16px;
+  z-index: 20;
+  button {
+    min-width: 44px;
+    min-height: 44px;
+    &:focus-visible {
+      outline: 2px solid #1677cf;
+      outline-offset: 2px;
+    }
+  }
+}
+// Keep the shared toolbar to the left of the pagination group. On narrow
+// screens use two rows, measuring both for the publication's usable height.
+.hamster-reader__epub-bottom-bar {
+  position: absolute;
+  left: 16px;
+  right: 136px;
+  bottom: 32px;
+  z-index: 20;
+  width: auto;
+  pointer-events: none;
+  > *,
+  .hamster-reader__bottom-bar-stack > * {
+    position: static !important;
+    transform: none !important;
+    max-width: 100% !important;
+    pointer-events: auto;
+  }
+  .hamster-reader__bottom-bar-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    height: auto;
+    pointer-events: none;
+  }
+  @media (max-width: 767px) {
+    right: 16px;
+    bottom: 96px;
   }
 }

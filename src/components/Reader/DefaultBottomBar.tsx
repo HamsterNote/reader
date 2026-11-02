@@ -43,6 +43,7 @@ export type DefaultBottomBarProps = {
   readonly darkMode?: boolean
   readonly renderMode: ReaderRenderMode
   readonly isEpub: boolean | undefined
+  readonly epubPagination?: boolean
   readonly ocrEnabled: boolean
   readonly fontScale: ReaderFontScale | undefined
   readonly layoutZoom: ReaderLayoutZoom | undefined
@@ -224,18 +225,25 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
     </Popover>
   )
 
+  const toolbarStack =
+    props.selectedTool === 'drawing' ? (
+      <DrawingBottomBarStack
+        bottomBarRef={props.bottomBarRef}
+        readerToolbar={readerToolbar}
+        paintingControllerData={props.paintingControllerData}
+        theme={theme}
+        onPaintingControllerDataChange={props.onPaintingControllerDataChange}
+      />
+    ) : (
+      readerToolbar
+    )
+
   return (
     <>
-      {props.selectedTool === 'drawing' ? (
-        <DrawingBottomBarStack
-          bottomBarRef={props.bottomBarRef}
-          readerToolbar={readerToolbar}
-          paintingControllerData={props.paintingControllerData}
-          theme={theme}
-          onPaintingControllerDataChange={props.onPaintingControllerDataChange}
-        />
+      {props.epubPagination ? (
+        <div className='hamster-reader__epub-bottom-bar'>{toolbarStack}</div>
       ) : (
-        readerToolbar
+        toolbarStack
       )}
       <DefaultBottomBarMenus
         fontScale={visibleFontScale}

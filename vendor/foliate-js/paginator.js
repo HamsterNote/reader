@@ -360,6 +360,7 @@ class View {
         }
     }
     expand() {
+        this.container.dispatchEvent(new Event('before-reflow'))
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
@@ -584,7 +585,7 @@ export class Paginator extends HTMLElement {
             }
         })
         const checkPointerSelection = debounce((range, sel) => {
-            if (!sel.rangeCount) return
+            if (this.hasAttribute('manual-navigation') || !sel.rangeCount) return
             const selRange = sel.getRangeAt(0)
             const backward = selectionIsBackward(sel)
             if (backward && selRange.compareBoundaryPoints(Range.START_TO_START, range) < 0)
@@ -600,7 +601,7 @@ export class Paginator extends HTMLElement {
             doc.addEventListener('keydown', () => isKeyboardSelecting = true)
             doc.addEventListener('keyup', () => isKeyboardSelecting = false)
             doc.addEventListener('selectionchange', () => {
-                if (this.scrolled) return
+                if (this.scrolled || this.hasAttribute('manual-navigation')) return
                 const range = this.#lastVisibleRange
                 if (!range) return
                 const sel = doc.getSelection()
@@ -614,7 +615,7 @@ export class Paginator extends HTMLElement {
                     this.#scrollToAnchor(selRange)
                 }
             })
-            doc.addEventListener('focusin', e => this.scrolled ? null :
+            doc.addEventListener('focusin', e => this.scrolled || this.hasAttribute('manual-navigation') ? null :
                 // NOTE: `requestAnimationFrame` is needed in WebKit
                 requestAnimationFrame(() => this.#scrollToAnchor(e.target)))
         })
@@ -752,7 +753,8 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth }
     }
     render() {
-        if (!this.#view) return
+        if (!this.#view || this.clientWidth <= 0 || this.clientHeight <= 0) return
+        this.dispatchEvent(new Event('before-reflow'))
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
@@ -821,6 +823,7 @@ export class Paginator extends HTMLElement {
         })
     }
     #onTouchStart(e) {
+        if (this.hasAttribute('manual-navigation')) return
         const touch = e.changedTouches[0]
         this.#touchState = {
             x: touch?.screenX, y: touch?.screenY,
@@ -829,6 +832,7 @@ export class Paginator extends HTMLElement {
         }
     }
     #onTouchMove(e) {
+        if (this.hasAttribute('manual-navigation')) return
         const state = this.#touchState
         if (state.pinched) return
         state.pinched = globalThis.visualViewport.scale > 1
@@ -851,6 +855,7 @@ export class Paginator extends HTMLElement {
         this.scrollBy(dx, dy)
     }
     #onTouchEnd() {
+        if (this.hasAttribute('manual-navigation')) return
         this.#touchScrolled = false
         if (this.scrolled) return
 
@@ -1060,6 +1065,7 @@ export class Paginator extends HTMLElement {
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
+        try {
         const prev = dir === -1
         const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
         if (shouldGo) await this.#goTo({
@@ -1067,7 +1073,7 @@ export class Paginator extends HTMLElement {
             anchor: prev ? () => 1 : () => 0,
         })
         if (shouldGo || !this.hasAttribute('animated')) await wait(100)
-        this.#locked = false
+        } finally { this.#locked = false }
     }
     prev(distance) {
         return this.#turnPage(-1, distance)

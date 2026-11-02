@@ -25,7 +25,7 @@ const EXPECTED_ASSETS: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'paginator.js',
-    '51cec81572d5d182e231fe68ce9c3b5489a0976b36172060516336ba893565ea'
+    '47b432ecae5c46c4590bd403a7795cc6bbd435d9a5d9d3765186d87264d89b1c'
   ],
   [
     'fixed-layout.js',

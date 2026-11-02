@@ -897,6 +897,7 @@ export function Reader({
   const bottomBarInset = useBottomBarInset({
     rootRef: readerRootRef,
     bottomBarRef: defaultBottomBarRef,
+    layoutKey: resolvedSelectedTool,
     enabled: hasDocumentPages && bottomBar === undefined
   })
   const resolvedVerticalMargins = resolveVerticalMargins(
@@ -1745,6 +1746,7 @@ export function Reader({
           <LayoutViewer
             engineSource={engineSource}
             engineRenderMode={resolvedRenderMode}
+            engineDarkMode={darkMode}
             textReadingProgress={resolvedTextReadingProgress}
             onTextReadingProgressChange={handleTextReadingProgressChange}
             document={document}
@@ -2019,7 +2021,8 @@ export function Reader({
             darkMode={darkMode}
             bottomBarRef={defaultBottomBarRef}
             renderMode={resolvedRenderMode}
-            isEpub={isEpub}
+            isEpub={isEpub || engineSource?.format === 'epub'}
+            epubPagination={engineSource?.format === 'epub'}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
             layoutZoom={resolveBottomBarLayoutZoom(

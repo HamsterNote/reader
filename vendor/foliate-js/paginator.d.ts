@@ -1,3 +1,16 @@
-// 最小类型声明：paginator.js 只经 view.js 动态加载，无直接引用面。
+import type { FoliateBook, FoliateRenderer } from './view.js'
 
-export {}
+/** reader patch: manual-navigation disables gesture/selection/focus navigation.
+ * before-reflow is emitted before viewport, font or image layout changes.
+ */
+export class Paginator extends HTMLElement implements FoliateRenderer {
+  open: FoliateRenderer['open']
+  destroy: FoliateRenderer['destroy']
+  goTo: FoliateRenderer['goTo']
+  scrollToAnchor: NonNullable<FoliateRenderer['scrollToAnchor']>
+  setStyles: NonNullable<FoliateRenderer['setStyles']>
+  getContents: FoliateRenderer['getContents']
+  next: FoliateRenderer['next']
+  prev: FoliateRenderer['prev']
+  sections: FoliateBook['sections']
+}

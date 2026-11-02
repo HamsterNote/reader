@@ -1,4 +1,15 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  useLayoutReadingProgressSave,
+  useTextReadingProgressSave
+} from '../src/components/Reader/useLayoutReadingProgressSave'
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  within
+} from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ReadingProgress } from '../src/components/IntermediateDocumentViewer/ReadingProgress'
@@ -442,3 +453,45 @@ describe('ReadingProgress', () => {
     expect(onSeekPage).toHaveBeenCalledWith(9)
   })
 })
+
+it.each(['layout', 'text'] as const)(
+  'persists consecutive offsets within one EPUB chapter in %s mode',
+  (mode) => {
+    vi.useFakeTimers()
+    try {
+      const saved = vi.fn()
+      const { result, unmount } = renderHook(() => ({
+        layout: useLayoutReadingProgressSave('epub-A', {}, saved),
+        text: useTextReadingProgressSave('epub-A', {}, saved)
+      }))
+      for (const offset of [100, 200]) {
+        const anchor = {
+          pageNumber: 2,
+          textId: 'page-2-text',
+          text: '正文',
+          offset
+        }
+        act(() => {
+          if (mode === 'layout') result.current.layout(anchor)
+          else result.current.text({ currentPageNumber: 2, anchor })
+          vi.advanceTimersByTime(101)
+        })
+      }
+      expect(saved).toHaveBeenCalledTimes(2)
+      const anchor = {
+        pageNumber: 2,
+        textId: 'page-2-text',
+        text: '正文',
+        offset: 200
+      }
+      expect(saved).toHaveBeenLastCalledWith(
+        mode === 'layout'
+          ? { layoutReadingProgress: anchor }
+          : { textReadingProgress: { currentPageNumber: 2, anchor } }
+      )
+      unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+)
