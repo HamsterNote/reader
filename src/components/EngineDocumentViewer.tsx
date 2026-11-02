@@ -55,7 +55,20 @@ type Props = IntermediateDocumentViewerProps & {
   ) => void
 }
 
+type ActiveSelection =
+  | { kind: 'text'; range: Range; rangeId: string | null }
+  | { kind: 'rectangle'; id: string }
+  | null
+
 const pageNumberOf = (id: string) => Number(id.slice(5))
+
+let fallbackRangeIdCounter = 0
+function nextRangeId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function')
+    return `range-${globalThis.crypto.randomUUID()}`
+  // LAN HTTP previews do not expose randomUUID (a secure-context API).
+  return `range-${Date.now().toString(36)}-${++fallbackRangeIdCounter}`
+}
 
 function endpointVisible(
   range: ReaderSelectionRange | undefined,
@@ -226,7 +239,18 @@ export function EngineDocumentViewer(props: Props) {
   const [unlocatable, setUnlocatable] = useState<readonly string[]>([])
   const [pageCount, setPageCount] = useState(0)
   const [page, setPage] = useState(1)
-  const [nativeRange, setNativeRange] = useState<Range | null>(null)
+  const [activeSelection, setActiveSelection] = useState<ActiveSelection>(null)
+  const nativeRange =
+    activeSelection?.kind === 'text' ? activeSelection.range : null
+  const setNativeRange = useCallback(
+    (range: Range | null, rangeId: string | null = null) => {
+      setActiveSelection((current) => {
+        if (range) return { kind: 'text', range, rangeId }
+        return current?.kind === 'text' ? null : current
+      })
+    },
+    []
+  )
   const [internalRanges, setInternalRanges] = useState(
     props.defaultRanges ?? []
   )
@@ -304,6 +328,9 @@ export function EngineDocumentViewer(props: Props) {
       pdf.current?.clearSelection()
       return
     }
+    setInternalRectId(null)
+    latest.current.onSelectRect?.(null)
+    setDraftRectangle(null)
     activating.current = true
     if (epub.current) {
       const engine = epub.current
@@ -312,7 +339,7 @@ export function EngineDocumentViewer(props: Props) {
         .then((range) => {
           if (token !== activationGeneration.current || epub.current !== engine)
             return
-          setNativeRange(range)
+          setNativeRange(range, id)
           epub.current?.setActiveRange(range ? id : null)
           activating.current = false
         })
@@ -320,7 +347,7 @@ export function EngineDocumentViewer(props: Props) {
           if (token === activationGeneration.current) activating.current = false
         })
     } else {
-      setNativeRange(pdf.current?.selectRange(id) ?? null)
+      setNativeRange(pdf.current?.selectRange(id) ?? null, id)
       activating.current = false
     }
   }, [])
@@ -331,7 +358,12 @@ export function EngineDocumentViewer(props: Props) {
         )
       : [...values.current.ranges, range]
     apply(
-      { ...snapshot(), ranges: next, selectedRangeId: range.id },
+      {
+        ...snapshot(),
+        ranges: next,
+        selectedRangeId: range.id,
+        selectedRectId: null
+      },
       update ? 'update-range' : 'highlight'
     )
     if (update) {
@@ -383,7 +415,7 @@ export function EngineDocumentViewer(props: Props) {
     if (!detail || !detail.text) return
     const range: ReaderSelectionRange = {
       ...detail,
-      id: `range-${globalThis.crypto.randomUUID()}`,
+      id: nextRangeId(),
       createdAt: Date.now(),
       rectsBySelectionId:
         (detail as SerializedPdfSelection).rectsBySelectionId ?? {},
@@ -433,9 +465,29 @@ export function EngineDocumentViewer(props: Props) {
       (selection?.rangeCount ? selection.getRangeAt(0) : null)
     const detail = serialize()
     if (detail && range) {
-      setNativeRange(range.cloneRange())
+      const current = values.current.ranges.find(
+        (item) => item.id === values.current.selected
+      )
+      const sameRange =
+        current &&
+        current.start.selectionId === detail.start.selectionId &&
+        current.start.offset === detail.start.offset &&
+        current.end.selectionId === detail.end.selectionId &&
+        current.end.offset === detail.end.offset
+      if (values.current.selected && !sameRange) {
+        setInternalSelected(null)
+        latest.current.onSelectRange?.(null)
+        latest.current.onLinkedSelectRange?.(null)
+        epub.current?.setActiveRange(null)
+      }
+      if (values.current.selectedRect) {
+        setInternalRectId(null)
+        latest.current.onSelectRect?.(null)
+      }
+      setDraftRectangle(null)
+      setNativeRange(range.cloneRange(), sameRange ? current.id : null)
       void emitSelectionCallbacks()
-    } else if (!values.current.selected) setNativeRange(null)
+    } else setNativeRange(null)
   }, [emitSelectionCallbacks])
   const publishPosition = useCallback((pageNumber: number) => {
     setPage(pageNumber)
@@ -504,7 +556,7 @@ export function EngineDocumentViewer(props: Props) {
     const id = values.current.selected
     if (id && !editing.current) {
       activating.current = true
-      setNativeRange(pdf.current?.selectRange(id) ?? null)
+      setNativeRange(pdf.current?.selectRange(id) ?? null, id)
       activating.current = false
     }
   }, [])
@@ -587,7 +639,7 @@ export function EngineDocumentViewer(props: Props) {
         const id = values.current.selected
         if (id && !editing.current) {
           const part = engine.getRangePart(id)
-          setNativeRange(part?.cloneRange() ?? null)
+          setNativeRange(part?.cloneRange() ?? null, id)
           if (part) {
             const selection = part.startContainer.ownerDocument?.getSelection()
             activating.current = true
@@ -666,12 +718,22 @@ export function EngineDocumentViewer(props: Props) {
   }, [ranges, book])
   useEffect(() => {
     if (!selected) {
-      setNativeRange(null)
+      setActiveSelection((current) =>
+        current?.kind === 'text' && current.rangeId ? null : current
+      )
       epub.current?.setActiveRange(null)
       return
     }
     activate(selected)
   }, [selected, activate])
+  useEffect(() => {
+    setActiveSelection((current) => {
+      if (selectedRect) return { kind: 'rectangle', id: selectedRect }
+      return current?.kind === 'rectangle' && current.id !== draftRectangle?.id
+        ? null
+        : current
+    })
+  }, [selectedRect, draftRectangle])
 
   useImperativeHandle(
     props.readingPositionRef,
@@ -693,6 +755,7 @@ export function EngineDocumentViewer(props: Props) {
         'clear'
       )
       setNativeRange(null)
+      setActiveSelection(null)
       setDraftRectangle(null)
       epub.current?.clearSelection()
       epub.current?.setActiveRange(null)
@@ -789,6 +852,7 @@ export function EngineDocumentViewer(props: Props) {
     setInternalRectId(null)
     props.onSelectRect?.(null)
     setDraftRectangle(rectangle)
+    setActiveSelection({ kind: 'rectangle', id: rectangle.id })
   }
   const updateRect = (rectangle: ReaderSelectionRectangle) => {
     if (draftRectangle?.id === rectangle.id) return setDraftRectangle(rectangle)
@@ -807,6 +871,8 @@ export function EngineDocumentViewer(props: Props) {
     activate(null)
     setInternalRectId(id)
     props.onSelectRect?.(id)
+    setDraftRectangle(null)
+    setActiveSelection(id ? { kind: 'rectangle', id } : null)
   }
   return (
     <RangeMagnifierProvider
@@ -934,11 +1000,13 @@ export function EngineDocumentViewer(props: Props) {
                 {
                   ...snapshot(),
                   rects: [...rects, rectangle],
+                  selectedRangeId: null,
                   selectedRectId: rectangle.id
                 },
                 'create-rect'
               )
               props.onCreateRect?.(rectangle)
+              setActiveSelection({ kind: 'rectangle', id: rectangle.id })
             }}
             draftRectangle={draftRectangle}
             onDraftRect={draftRect}
@@ -1062,7 +1130,7 @@ export function EngineDocumentViewer(props: Props) {
             editing.current = value
           }}
           onUpdate={(range, end) => {
-            setNativeRange(range.cloneRange())
+            setNativeRange(range.cloneRange(), current?.id ?? null)
             const detail =
               epub.current && current
                 ? epub.current.updateRangeEndpoint(current.id, range, end)
@@ -1087,6 +1155,7 @@ export function EngineDocumentViewer(props: Props) {
           selectionKind='selected'
           visible={
             !props.showPageBrowser &&
+            activeSelection?.kind === 'rectangle' &&
             Boolean(currentRectangle ?? draftRectangle)
           }
         >
