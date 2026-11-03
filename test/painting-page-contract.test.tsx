@@ -1,6 +1,12 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { mockPaintingCanvas } from './fixtures/painting'
+import {
+  emptyDrawing,
+  mockPaintingCanvas,
+  pageGeometry,
+  paintingPointer
+} from './fixtures/painting'
+import { PageDrawingLayer } from '../src/components/PageDrawingLayer'
 
 afterEach(() => vi.restoreAllMocks())
 import { migrateLegacyDocument } from '@hamster-note/painting/core'
@@ -123,3 +129,67 @@ it('the official page surface displays complete saved history on disabled first 
   })
   expectCompleteHistory()
 })
+
+it.each(['keyboard', 'button'] as const)(
+  'disabling a reader text draft prevents %s persistence across remounts',
+  (submit) => {
+    mockPaintingCanvas()
+    const settings = {
+      ...createEditor(emptyDrawing).getSnapshot('tools'),
+      activeTool: 'text' as const
+    }
+    let saved = emptyDrawing
+    const onChange = vi.fn((document: typeof emptyDrawing) => {
+      saved = document
+    })
+    const surface = (enabled: boolean, key = 'initial') => (
+      <PageDrawingLayer
+        key={key}
+        pageId='page-1'
+        enabled={enabled}
+        geometry={pageGeometry}
+        settings={settings}
+        value={saved}
+        onChange={onChange}
+      />
+    )
+    const view = render(surface(true))
+    const beginText = () => {
+      const target = screen.getByTestId('layered-surface')
+      paintingPointer(target, 'down', 40, 50, 'mouse')
+      paintingPointer(target, 'up', 40, 50, 'mouse')
+      return screen.getByRole('textbox', { name: '文字内容' })
+    }
+    const draft = beginText()
+    fireEvent.change(draft, { target: { value: 'Discard this draft' } })
+    const button = screen.getByRole('button', { name: '完成' })
+    view.rerender(surface(false))
+    if (submit === 'keyboard') {
+      fireEvent.keyDown(draft, { key: 'Enter', ctrlKey: true })
+    } else {
+      fireEvent.click(button)
+    }
+    expect(onChange).not.toHaveBeenCalled()
+    expect(saved.objects).toHaveLength(0)
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(view.container.querySelector('foreignObject')).toBeNull()
+
+    view.rerender(surface(false, 'remounted'))
+    expect(onChange).not.toHaveBeenCalled()
+    expect(saved.objects).toHaveLength(0)
+    view.rerender(surface(true, 'remounted'))
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    fireEvent.change(beginText(), { target: { value: 'New valid text' } })
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(saved.objects).toHaveLength(1)
+    expect(saved.objects[0]).toMatchObject({
+      kind: 'text',
+      content: 'New valid text'
+    })
+    view.rerender(surface(false, 'saved-remount'))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(saved.objects).toHaveLength(1)
+    expect(view.container.querySelector('[data-object-id]')).toBeInTheDocument()
+  }
+)
