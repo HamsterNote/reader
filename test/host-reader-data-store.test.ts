@@ -11,13 +11,23 @@ import {
 
 class MemoryStorage implements HostStorage {
   readonly values = new Map<string, string>()
+  /** 按 key 注入写入失败（模拟中断/磁盘错误）。 */
+  failWrite?: (key: string) => boolean
+  /** 按 key 注入半写（模拟非原子写入只落了一部分内容）。 */
+  truncateWrite?: (key: string) => boolean
 
   async read(key: string): Promise<string | null> {
     return this.values.get(key) ?? null
   }
 
   async write(key: string, value: string): Promise<void> {
-    this.values.set(key, value)
+    if (this.failWrite?.(key) === true) {
+      throw new Error(`写入失败：${key}`)
+    }
+    this.values.set(
+      key,
+      this.truncateWrite?.(key) === true ? value.slice(0, 8) : value
+    )
   }
 
   async remove(key: string): Promise<void> {
@@ -171,5 +181,276 @@ describe('parseLegacyHighlightsJson', () => {
         '{"version":4,"ranges":[],"rects":[],"paintings":{}}'
       ).version
     ).toBe(4)
+  })
+})
+
+const DOC_KEY = 'reader.host.v1.doc.'
+const SNAPSHOT_KEY = 'reader.host.v2.snapshot.'
+
+const legacyRecord = (): HostDocumentRecord => record()
+
+async function storeWithLegacyRecord(storage = new MemoryStorage()) {
+  const store = new ReaderDataStore(storage)
+  await store.upsert(
+    record({
+      snapshot: {
+        data: {
+          highlights: { version: 4, ranges: [], rects: [], paintings: {} }
+        },
+        progress: { page: 2 },
+        revision: 5
+      }
+    })
+  )
+  return { store, storage }
+}
+
+describe('ReaderDataStore v2 snapshot key', () => {
+  it('writes the v2 key and leaves the legacy record byte-identical', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    const legacyBytes = storage.values.get(`${DOC_KEY}${fileId}`)
+
+    await store.saveSnapshot(fileId, {
+      data: {
+        annotations: { version: 5, ranges: [], rects: [], paintings: {} }
+      },
+      progress: { page: 9 },
+      revision: 6
+    })
+
+    expect(storage.values.get(`${DOC_KEY}${fileId}`)).toBe(legacyBytes)
+    expect(
+      JSON.parse(storage.values.get(`${SNAPSHOT_KEY}${fileId}`) ?? '')
+    ).toEqual({
+      data: {
+        annotations: { version: 5, ranges: [], rects: [], paintings: {} }
+      },
+      progress: { page: 9 },
+      revision: 6
+    })
+
+    const loaded = await new ReaderDataStore(storage).get(fileId)
+    expect(loaded?.snapshotSource).toBe('v2')
+    expect(loaded?.snapshot.revision).toBe(6)
+  })
+
+  it('prefers the v2 snapshot and falls back to the legacy record per file', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    const otherId = 'f_ffffffffffffffffffffffffffffffff'
+    await store.upsert(
+      record({ fileId: otherId, fileName: 'other.pdf', format: 'pdf' })
+    )
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    expect((await store.get(fileId))?.snapshotSource).toBe('v2')
+    expect((await store.get(otherId))?.snapshotSource).toBe('legacy')
+    expect((await store.get(otherId))?.snapshot.revision).toBe(0)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${otherId}`)).toBe(false)
+  })
+
+  it('round-trips readerData, comments and extension fields without loss', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    const data = {
+      annotations: {
+        version: 5,
+        ranges: [{ id: 'r1', text: 'x' }],
+        rects: [],
+        paintings: {}
+      },
+      comments: [{ id: 'c1', content: '批注' }],
+      readerData: { renderMode: 'text', edgeCrop: { pages: {} } },
+      viewport: { scale: 1.25, page: 3 },
+      extension: { vendor: 'x', nested: [1, 2, 3] }
+    }
+
+    await store.saveSnapshot(fileId, {
+      data,
+      progress: { page: 3 },
+      revision: 7
+    })
+
+    const reopened = new ReaderDataStore(storage)
+    expect((await reopened.get(fileId))?.snapshot).toEqual({
+      data,
+      progress: { page: 3 },
+      revision: 7
+    })
+  })
+
+  it('keeps a corrupt v2 snapshot, never falls back to overwriting it', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    const legacyBytes = storage.values.get(`${DOC_KEY}${fileId}`)
+    const corrupt = '{"revision":6,"data":'
+    storage.values.set(`${SNAPSHOT_KEY}${fileId}`, corrupt)
+
+    const loaded = await store.get(fileId)
+    expect(loaded?.snapshotSource).toBe('corrupt')
+    expect(loaded?.snapshotError).toContain('损坏')
+    // 展示/删除仍可用的旧记录值，不会被当成“缺失”迁移。
+    expect(loaded?.snapshot.revision).toBe(5)
+
+    await expect(
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 8 })
+    ).rejects.toThrow('损坏')
+    await expect(
+      store.importLegacyJson(
+        fileId,
+        '{"version":4,"ranges":[],"rects":[],"paintings":{}}',
+        'x.json',
+        1
+      )
+    ).rejects.toThrow()
+
+    expect(storage.values.get(`${SNAPSHOT_KEY}${fileId}`)).toBe(corrupt)
+    expect(storage.values.get(`${DOC_KEY}${fileId}`)).toBe(legacyBytes)
+  })
+
+  it('recovers a complete pending copy left by an interrupted commit', async () => {
+    const { storage } = await storeWithLegacyRecord()
+    const pending = JSON.stringify({
+      data: { annotations: {} },
+      progress: null,
+      revision: 9
+    })
+    storage.values.set(`${SNAPSHOT_KEY}${fileId}.pending`, pending)
+
+    const loaded = await new ReaderDataStore(storage).get(fileId)
+    expect(loaded?.snapshot.revision).toBe(9)
+    expect(storage.values.get(`${SNAPSHOT_KEY}${fileId}`)).toBe(pending)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+  })
+
+  it('drops an incomplete pending copy and keeps the last complete state', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+    storage.values.set(`${SNAPSHOT_KEY}${fileId}.pending`, '{"revis')
+
+    const loaded = await new ReaderDataStore(storage).get(fileId)
+    expect(loaded?.snapshot.revision).toBe(6)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+  })
+
+  it('isolates a failed commit: previous snapshot stays visible, retry succeeds', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    storage.failWrite = (key) => key === `${SNAPSHOT_KEY}${fileId}`
+    await expect(
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 7 })
+    ).rejects.toThrow('写入失败')
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+    expect((await store.get(fileId))?.snapshot.revision).toBe(6)
+
+    storage.failWrite = undefined
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 7
+    })
+    expect((await store.get(fileId))?.snapshot.revision).toBe(7)
+  })
+
+  it('rejects a half-written pending copy without touching the committed snapshot', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+    const committed = storage.values.get(`${SNAPSHOT_KEY}${fileId}`)
+
+    storage.truncateWrite = (key) => key === `${SNAPSHOT_KEY}${fileId}.pending`
+    await expect(
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 7 })
+    ).rejects.toThrow('校验失败')
+
+    storage.truncateWrite = undefined
+    expect(storage.values.get(`${SNAPSHOT_KEY}${fileId}`)).toBe(committed)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+    expect((await store.get(fileId))?.snapshot.revision).toBe(6)
+  })
+
+  it('serializes concurrent saves for the same file', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+
+    await Promise.all([
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 6 }),
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 7 }),
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 8 })
+    ])
+
+    expect((await store.get(fileId))?.snapshot.revision).toBe(8)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+  })
+
+  it('does not project the v2 snapshot back into the legacy record on upsert', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    const legacyBytes = storage.values.get(`${DOC_KEY}${fileId}`)
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    await store.upsert({ ...legacyRecord(), fileName: 'renamed.epub' })
+
+    const raw = storage.values.get(`${DOC_KEY}${fileId}`) ?? ''
+    expect(raw).not.toContain('"revision":6')
+    expect(JSON.parse(raw).snapshot.revision).toBe(5)
+    expect(JSON.parse(raw).fileName).toBe('renamed.epub')
+    expect((await store.get(fileId))?.snapshot.revision).toBe(6)
+
+    // 元数据未变时旧记录字节完全不变。
+    await store.upsert(legacyRecord())
+    expect(storage.values.get(`${DOC_KEY}${fileId}`)).toBe(legacyBytes)
+  })
+
+  it('removes the v2 key along with the legacy record', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    await store.remove(fileId)
+
+    expect(storage.values.has(`${DOC_KEY}${fileId}`)).toBe(false)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}`)).toBe(false)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+    expect(await store.list()).toEqual([])
+  })
+
+  it('refuses legacy import once the v2 snapshot exists', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+    const snapshotBytes = storage.values.get(`${SNAPSHOT_KEY}${fileId}`)
+
+    await expect(
+      store.importLegacyJson(
+        fileId,
+        '{"version":4,"ranges":[],"rects":[],"paintings":{}}',
+        'notes.json',
+        1
+      )
+    ).rejects.toThrow('新格式')
+
+    expect(storage.values.get(`${SNAPSHOT_KEY}${fileId}`)).toBe(snapshotBytes)
   })
 })

@@ -28,16 +28,43 @@ export type HostDocumentRecord = {
   readonly importedAt: number
   readonly snapshot: BridgeHostSnapshot
   readonly legacyImport?: LegacyHighlightsImport
+  /** 读取时标注：快照来自新键（v2）、旧记录（legacy）或新键损坏（corrupt）。不落盘。 */
+  readonly snapshotSource?: 'v2' | 'legacy' | 'corrupt'
+  /**
+   * 新键存在但不可用时的说明；此时 `snapshot` 仍是旧记录的值，
+   * 且该文件的保存入口必须拒绝写入（保留原件，不自动降级）。
+   */
+  readonly snapshotError?: string
 }
 
-export type HostDocumentSummary = Omit<HostDocumentRecord, 'snapshot'>
+export type HostDocumentSummary = Omit<
+  HostDocumentRecord,
+  'snapshot' | 'snapshotSource' | 'snapshotError'
+>
 
 const INDEX_KEY = 'reader.host.v1.index'
 const DOCUMENT_KEY_PREFIX = 'reader.host.v1.doc.'
+/** v2 新权威快照键：值为完整 BridgeHostSnapshot，旧记录只读冻结。 */
+const SNAPSHOT_KEY_PREFIX = 'reader.host.v2.snapshot.'
+/** 提交中副本：写入成功并回读校验后才替换目标键。 */
+const SNAPSHOT_PENDING_SUFFIX = '.pending'
 const LEGACY_JSON_MAX_BYTES = 10 * 1024 * 1024
+
+type StoredSnapshotRead =
+  | { readonly status: 'ok'; readonly snapshot: BridgeHostSnapshot }
+  | { readonly status: 'missing' }
+  | { readonly status: 'corrupt'; readonly reason: string }
 
 function documentKey(fileId: string): string {
   return `${DOCUMENT_KEY_PREFIX}${assertSafeFileId(fileId)}`
+}
+
+function snapshotKey(fileId: string): string {
+  return `${SNAPSHOT_KEY_PREFIX}${assertSafeFileId(fileId)}`
+}
+
+function pendingSnapshotKey(fileId: string): string {
+  return `${snapshotKey(fileId)}${SNAPSHOT_PENDING_SUFFIX}`
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -186,6 +213,88 @@ export class ReaderDataStore {
     )
   }
 
+  private async removeQuietly(key: string): Promise<void> {
+    try {
+      await this.storage.remove(key)
+    } catch {
+      // 清理失败不影响已提交状态：读取优先完整目标键，残留副本下次写入再清。
+    }
+  }
+
+  /**
+   * 读取新键：完整目标 > 可恢复的提交副本 > 缺失。
+   *
+   * 目标键不完整（中断/半写）时用完整副本补全；副本也不完整则丢弃并回退到
+   * 旧记录，绝不把半写 JSON 当成有效数据，也不把新键损坏误判为“缺失”。
+   */
+  private async readStoredSnapshot(
+    fileId: string
+  ): Promise<StoredSnapshotRead> {
+    const key = snapshotKey(fileId)
+    const pendingKey = pendingSnapshotKey(fileId)
+    const raw = await this.storage.read(key)
+
+    if (raw !== null) {
+      const snapshot = parseSnapshotText(raw)
+      if (snapshot !== null) {
+        await this.removeQuietly(pendingKey)
+        return { status: 'ok', snapshot }
+      }
+      const recovered = await this.recoverPending(fileId, pendingKey)
+      if (recovered !== null) return { status: 'ok', snapshot: recovered }
+      return { status: 'corrupt', reason: '新快照 JSON 损坏且无可恢复副本' }
+    }
+
+    const recovered = await this.recoverPending(fileId, pendingKey)
+    if (recovered !== null) return { status: 'ok', snapshot: recovered }
+    return { status: 'missing' }
+  }
+
+  private async recoverPending(
+    fileId: string,
+    pendingKey: string
+  ): Promise<BridgeHostSnapshot | null> {
+    const pending = await this.storage.read(pendingKey)
+    if (pending === null) return null
+    const snapshot = parseSnapshotText(pending)
+    if (snapshot === null) {
+      await this.removeQuietly(pendingKey)
+      return null
+    }
+    // 副本已完整落盘、目标缺失或不完整：补全目标后清理副本。
+    await this.storage.write(snapshotKey(fileId), pending)
+    await this.removeQuietly(pendingKey)
+    return snapshot
+  }
+
+  /**
+   * 完整替换新键：先写副本并回读校验，再写目标键。任何一步失败都恢复为
+   * “只能看到完整旧状态”，不会留下可被读成有效数据的半写 JSON。
+   */
+  private async commitSnapshot(
+    fileId: string,
+    snapshot: BridgeHostSnapshot
+  ): Promise<void> {
+    const key = snapshotKey(fileId)
+    const pendingKey = pendingSnapshotKey(fileId)
+    const value = JSON.stringify(snapshot)
+
+    await this.storage.write(pendingKey, value)
+    const echo = await this.storage.read(pendingKey)
+    if (echo !== value) {
+      await this.removeQuietly(pendingKey)
+      throw new Error('快照写入校验失败，已保留上一次完整数据')
+    }
+
+    try {
+      await this.storage.write(key, value)
+    } catch (error) {
+      await this.removeQuietly(pendingKey)
+      throw error
+    }
+    await this.removeQuietly(pendingKey)
+  }
+
   list(): Promise<HostDocumentSummary[]> {
     return this.runExclusive(async () => {
       await this.loadIndex()
@@ -199,7 +308,22 @@ export class ReaderDataStore {
     return this.runExclusive(async () => {
       assertSafeFileId(fileId)
       await this.loadIndex()
-      return this.cache.get(fileId) ?? null
+      const record = this.cache.get(fileId)
+      if (!record) return null
+
+      const stored = await this.readStoredSnapshot(fileId)
+      if (stored.status === 'ok') {
+        return { ...record, snapshot: stored.snapshot, snapshotSource: 'v2' }
+      }
+      if (stored.status === 'corrupt') {
+        // 新键损坏：保留旧记录值供展示/删除，但标记错误，禁止任何保存覆盖。
+        return {
+          ...record,
+          snapshotSource: 'corrupt',
+          snapshotError: stored.reason
+        }
+      }
+      return { ...record, snapshotSource: 'legacy' }
     })
   }
 
@@ -207,11 +331,16 @@ export class ReaderDataStore {
     return this.runExclusive(async () => {
       assertSafeFileId(record.fileId)
       await this.loadIndex()
+      // v1 记录的 snapshot 是旧格式原件：已有记录沿用磁盘值；新记录用调用方给
+      // 的初始快照。v2 快照绝不投影回旧记录，旧 blob 因此保持逐字节不变。
+      const legacySnapshot =
+        this.cache.get(record.fileId)?.snapshot ?? record.snapshot
+      const persisted = toLegacyRecord(record, legacySnapshot)
       await this.storage.write(
         documentKey(record.fileId),
-        JSON.stringify(record)
+        JSON.stringify(persisted)
       )
-      this.cache.set(record.fileId, record)
+      this.cache.set(record.fileId, persisted)
       await this.persistIndex()
     })
   }
@@ -220,13 +349,16 @@ export class ReaderDataStore {
     return this.runExclusive(async () => {
       assertSafeFileId(fileId)
       await this.loadIndex()
-      const record = this.cache.get(fileId)
-      if (!record) {
+      if (!this.cache.has(fileId)) {
         throw new Error(`文档不存在：${fileId}`)
       }
-      const next = { ...record, snapshot }
-      await this.storage.write(documentKey(fileId), JSON.stringify(next))
-      this.cache.set(fileId, next)
+      const stored = await this.readStoredSnapshot(fileId)
+      if (stored.status === 'corrupt') {
+        throw new Error(
+          `该文件的标注数据已损坏，已保留原数据：${stored.reason}`
+        )
+      }
+      await this.commitSnapshot(fileId, snapshot)
     })
   }
 
@@ -243,6 +375,15 @@ export class ReaderDataStore {
       if (!record) {
         throw new Error(`文档不存在：${fileId}`)
       }
+      const stored = await this.readStoredSnapshot(fileId)
+      if (stored.status === 'ok') {
+        throw new Error('该文档已使用新格式存储，不能再用旧数据覆盖')
+      }
+      if (stored.status === 'corrupt') {
+        throw new Error(
+          `该文件的标注数据已损坏，已保留原数据：${stored.reason}`
+        )
+      }
       const { version, value } = parseLegacyHighlightsJson(raw)
       const next: HostDocumentRecord = {
         ...record,
@@ -253,9 +394,10 @@ export class ReaderDataStore {
         },
         legacyImport: { importedAt, sourceFileName, version }
       }
-      await this.storage.write(documentKey(fileId), JSON.stringify(next))
-      this.cache.set(fileId, next)
-      return next
+      const persisted = toLegacyRecord(next, next.snapshot)
+      await this.storage.write(documentKey(fileId), JSON.stringify(persisted))
+      this.cache.set(fileId, persisted)
+      return persisted
     })
   }
 
@@ -264,10 +406,36 @@ export class ReaderDataStore {
       assertSafeFileId(fileId)
       await this.loadIndex()
       await this.storage.remove(documentKey(fileId))
+      await this.storage.remove(snapshotKey(fileId))
+      await this.removeQuietly(pendingSnapshotKey(fileId))
       this.cache.delete(fileId)
       await this.persistIndex()
     })
   }
+}
+
+/** 构造要落盘的 v1 记录：快照字段固定为旧原件，计算型字段不落盘。 */
+function toLegacyRecord(
+  record: HostDocumentRecord,
+  legacySnapshot: BridgeHostSnapshot
+): HostDocumentRecord {
+  return {
+    fileId: record.fileId,
+    fileName: record.fileName,
+    format: record.format,
+    size: record.size,
+    modifiedAt: record.modifiedAt,
+    cachedUri: record.cachedUri,
+    importedAt: record.importedAt,
+    snapshot: legacySnapshot,
+    ...(record.legacyImport === undefined
+      ? {}
+      : { legacyImport: record.legacyImport })
+  }
+}
+
+function parseSnapshotText(raw: string): BridgeHostSnapshot | null {
+  return parseStoredSnapshot(safeParse(raw))
 }
 
 function safeParse(raw: string): unknown {
