@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  annotationStorageV5Key,
+  parseAnnotationStorageV5,
   parseHighlights,
+  readAnnotationStorageV5,
+  serializeAnnotationStorageV5,
   serializeHighlights,
+  writeAnnotationStorageV5,
+  type AnnotationStorageV5,
   type ReaderSelectionRange,
   type ReaderSelectionRectangle
 } from '../demo/highlightStorage'
@@ -347,5 +353,263 @@ describe('highlight storage helpers', () => {
     const parsed = parseHighlights(serialized)
 
     expect(parsed).toEqual({ ranges, rects, paintings })
+  })
+})
+
+// V5 新权威容器：ranges / rects 字段语义与旧容器一致，paintings 保存画库的
+// 完整 EditorDocument，存储层原样透传，不做字段裁剪。
+const editorDocumentPage1 = {
+  schemaVersion: 3,
+  documentRevision: 7,
+  objects: [
+    {
+      id: 'obj-pen-1',
+      kind: 'freehand',
+      createdAt: 1720000000000,
+      brush: { color: '#ff8800', width: 3, pressureEnabled: true },
+      transform: { a: 1, b: 0, c: 0, d: 1, e: 12.5, f: 40.25 },
+      samples: [
+        { x: 12.5, y: 40.25, pressure: 0.4, t: 0 },
+        { x: 13.75, y: 41.5, pressure: 0.9, t: 16 }
+      ]
+    },
+    {
+      id: 'obj-text-1',
+      kind: 'text',
+      content: '迁移后的文字',
+      style: { fontSize: 14, color: '#123456' },
+      position: { x: 30.125, y: 80.5 },
+      transform: { a: 0, b: 1, c: -1, d: 0, e: 30.125, f: 80.5 }
+    },
+    {
+      id: 'obj-image-1',
+      kind: 'image',
+      assetId: 'asset-9',
+      transform: { a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 },
+      crop: { x: 0, y: 0, width: 100, height: 50 }
+    }
+  ]
+}
+
+const editorDocumentPage2 = {
+  schemaVersion: 3,
+  documentRevision: 2,
+  objects: []
+}
+
+const v5Storage: AnnotationStorageV5 = {
+  version: 5,
+  ranges: [linkedRangeA, linkedRangeB],
+  rects: [rectA],
+  paintings: {
+    'page-1': editorDocumentPage1,
+    'page-2': editorDocumentPage2
+  }
+}
+
+function createBackend(initial: Record<string, string> = {}) {
+  const store = new Map(Object.entries(initial))
+  return {
+    store,
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value)
+    }
+  }
+}
+
+describe('annotation storage v5', () => {
+  it('builds the dedicated web key for a file', () => {
+    expect(annotationStorageV5Key('book.pdf')).toBe(
+      'hamster-reader-demo:annotations:v5:book.pdf'
+    )
+  })
+
+  it('serializes the exact v5 envelope', () => {
+    const serialized = serializeAnnotationStorageV5(
+      v5Storage.ranges,
+      v5Storage.rects,
+      v5Storage.paintings
+    )
+
+    expect(JSON.parse(serialized)).toEqual({
+      version: 5,
+      ranges: v5Storage.ranges,
+      rects: v5Storage.rects,
+      paintings: v5Storage.paintings
+    })
+  })
+
+  it('round-trips complete editor documents without dropping fields', () => {
+    const serialized = serializeAnnotationStorageV5(
+      v5Storage.ranges,
+      v5Storage.rects,
+      v5Storage.paintings
+    )
+
+    const result = parseAnnotationStorageV5(serialized)
+
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    // 深比较全部字段：笔刷、变换、samples、文字内容、图片资产与裁切都必须原样保留。
+    expect(result.storage).toEqual(v5Storage)
+  })
+
+  it('keeps ranges and rects semantics identical to the legacy reader', () => {
+    const legacyRaw = JSON.stringify({
+      version: 4,
+      ranges: [linkedRangeA, linkedRangeB],
+      rects: [rectA, rectB],
+      paintings: {}
+    })
+    const legacy = parseHighlights(legacyRaw)
+
+    const result = parseAnnotationStorageV5(
+      JSON.stringify({
+        version: 5,
+        ranges: [linkedRangeA, linkedRangeB],
+        rects: [rectA, rectB],
+        paintings: { 'page-1': editorDocumentPage1 }
+      })
+    )
+
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.storage.ranges).toEqual(legacy.ranges)
+    expect(result.storage.rects).toEqual(legacy.rects)
+  })
+
+  it('treats a missing, empty or blank key as missing, never as empty data', () => {
+    expect(parseAnnotationStorageV5(null)).toEqual({ status: 'missing' })
+    expect(parseAnnotationStorageV5('')).toEqual({ status: 'missing' })
+    expect(parseAnnotationStorageV5('   ')).toEqual({ status: 'missing' })
+  })
+
+  it('treats an empty v5 container as valid so deleted annotations stay deleted', () => {
+    const result = parseAnnotationStorageV5(
+      JSON.stringify({ version: 5, ranges: [], rects: [], paintings: {} })
+    )
+
+    expect(result).toEqual({
+      status: 'ok',
+      storage: { version: 5, ranges: [], rects: [], paintings: {} }
+    })
+  })
+
+  it('reports corrupt json instead of falling back to empty data', () => {
+    expect(parseAnnotationStorageV5('{"version":5,')).toEqual({
+      status: 'invalid',
+      reason: 'corrupt-json'
+    })
+  })
+
+  it('reports an unsupported version instead of falling back to empty data', () => {
+    expect(
+      parseAnnotationStorageV5(
+        JSON.stringify({ version: 6, ranges: [], rects: [], paintings: {} })
+      )
+    ).toEqual({ status: 'invalid', reason: 'unsupported-version' })
+
+    // 旧 v4 形状出现在新键里同样属于不受支持的版本，不能当成缺失去迁移覆盖。
+    expect(
+      parseAnnotationStorageV5(
+        JSON.stringify({ version: 4, ranges: [], rects: [], paintings: {} })
+      )
+    ).toEqual({ status: 'invalid', reason: 'unsupported-version' })
+  })
+
+  it('rejects malformed entries instead of silently dropping them', () => {
+    const base = { version: 5, ranges: [linkedRangeA], rects: [rectA] }
+    const cases: unknown[] = [
+      { ...base, paintings: { 'page-1': { noSchemaVersion: true } } },
+      { ...base, paintings: { 'page-1': 'corrupt' } },
+      { ...base, paintings: { 'page-1': null } },
+      { ...base, paintings: { page1: editorDocumentPage1 } },
+      { ...base, paintings: [] },
+      {
+        ...base,
+        paintings: { 'page-1': editorDocumentPage1 },
+        rects: [{ id: 1 }]
+      },
+      {
+        ...base,
+        paintings: { 'page-1': editorDocumentPage1 },
+        ranges: [
+          { ...linkedRangeA, start: { selectionId: 'internal-1', offset: 0 } }
+        ]
+      },
+      { ...base, paintings: {}, ranges: 'nope' },
+      { version: 5, ranges: [], rects: [] }
+    ]
+
+    for (const value of cases) {
+      expect(parseAnnotationStorageV5(JSON.stringify(value))).toEqual({
+        status: 'invalid',
+        reason: 'invalid-shape'
+      })
+    }
+  })
+
+  it('refuses to overwrite corrupt new data without an explicit recovery', () => {
+    const corrupt = '{"version":5,"ranges":['
+    const backend = createBackend({ 'annotations:v5': corrupt })
+
+    const result = writeAnnotationStorageV5(
+      backend,
+      'annotations:v5',
+      v5Storage
+    )
+
+    expect(result).toEqual({ status: 'refused', reason: 'corrupt-json' })
+    expect(backend.store.get('annotations:v5')).toBe(corrupt)
+  })
+
+  it('refuses to overwrite an unsupported version until recovery is confirmed', () => {
+    const future = JSON.stringify({ version: 9, ranges: [], rects: [] })
+    const backend = createBackend({ 'annotations:v5': future })
+
+    expect(readAnnotationStorageV5(backend, 'annotations:v5')).toEqual({
+      status: 'invalid',
+      reason: 'unsupported-version'
+    })
+
+    expect(
+      writeAnnotationStorageV5(backend, 'annotations:v5', v5Storage).status
+    ).toBe('refused')
+    expect(backend.store.get('annotations:v5')).toBe(future)
+
+    const recovered = writeAnnotationStorageV5(
+      backend,
+      'annotations:v5',
+      v5Storage,
+      { overwriteInvalid: true }
+    )
+    expect(recovered).toEqual({ status: 'saved' })
+    expect(readAnnotationStorageV5(backend, 'annotations:v5')).toEqual({
+      status: 'ok',
+      storage: v5Storage
+    })
+  })
+
+  it('reports a storage failure instead of pretending the write succeeded', () => {
+    const backend = createBackend({
+      'annotations:v5': serializeAnnotationStorageV5([], [], {})
+    })
+    const quotaError = new Error('QuotaExceededError')
+    backend.setItem = () => {
+      throw quotaError
+    }
+
+    const result = writeAnnotationStorageV5(
+      backend,
+      'annotations:v5',
+      v5Storage
+    )
+
+    expect(result).toEqual({ status: 'failed', error: quotaError })
+    // 失败时旧值必须原样保留，重开后仍是上一个完整状态。
+    expect(backend.store.get('annotations:v5')).toBe(
+      serializeAnnotationStorageV5([], [], {})
+    )
   })
 })
