@@ -177,7 +177,14 @@ export function createBridgeHostSession(
    */
   const completeClose = async (): Promise<void> => {
     if (!closing || !webDrained) return
-    await asyncQueue
+    // ready 之后仍可能有排在后面的 change（同批投递）：队列直到稳定才 dispose。
+    let observed: Promise<unknown> = asyncQueue
+    let stable = false
+    while (!stable) {
+      await observed
+      stable = observed === asyncQueue
+      observed = asyncQueue
+    }
     if (!closing) return
     closing = false
     disposed = true

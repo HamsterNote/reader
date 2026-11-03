@@ -49,6 +49,46 @@ function setClosingShield(active: boolean): void {
   document.body.appendChild(shield)
 }
 
+// 进行中的指针手势计数与提交后的稳定点。关闭前必须等它归零，否则 ready
+// 会早于手势提交，change 排到 dispose 之后被丢掉。
+let activePointers = 0
+let pointerSettled: Promise<void> = Promise.resolve()
+const pointerIdleWaiters: Array<() => void> = []
+
+window.addEventListener(
+  'pointerdown',
+  () => {
+    activePointers += 1
+  },
+  true
+)
+
+const endPointer = (): void => {
+  activePointers = Math.max(0, activePointers - 1)
+  if (activePointers > 0) return
+  // 同一次事件派发里的提交（pointerup → onChange → sendChange）会在本任务
+  // 内完成；这里只等一个任务边界确认，不猜测手势时长。
+  pointerSettled = pointerSettled.then(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 0)
+      })
+  )
+  for (const wake of pointerIdleWaiters.splice(0)) wake()
+}
+window.addEventListener('pointerup', endPointer, true)
+window.addEventListener('pointercancel', endPointer, true)
+
+/** 关闭前静默：等现有手势结束并把提交写入入队，之后才允许 flush/ready。 */
+async function waitForInputQuiesce(): Promise<void> {
+  if (activePointers > 0) {
+    await new Promise<void>((resolve) => {
+      pointerIdleWaiters.push(resolve)
+    })
+  }
+  await pointerSettled
+}
+
 let generation = 0
 let descriptor: BridgeOpenPayload | null = null
 let snapshot: BridgeRestorePayload | null = null
@@ -176,6 +216,7 @@ const bridge =
           // 关闭冲刷期间冻结输入；恢复（resume）时解除。
           setClosingShield(draining)
         },
+        onQuiesce: waitForInputQuiesce,
         onError: (error) => {
           if (error.code !== 'REVISION_MISMATCH')
             root.render(<div role='alert'>{error.message}</div>)

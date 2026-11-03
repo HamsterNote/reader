@@ -12,6 +12,13 @@ type Timers = {
   readonly pending: () => number
 }
 
+/** 等一轮任务边界：让 promise 链（quiesce → flush → ready）全部跑完。 */
+function settle(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve)
+  })
+}
+
 function createTimers(): Timers {
   let nextHandle = 1
   const callbacks = new Map<number, () => void>()
@@ -338,9 +345,10 @@ describe('createWebBridgeClient close handshake', () => {
     bridge.sendChange({ annotations: { version: 5 } })
 
     bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    // 先跑完 quiesce（未配置时立即通过）再触发冲刷超时。
+    await settle()
     timers.fireAll()
-    await Promise.resolve()
-    await Promise.resolve()
+    await settle()
 
     expect(sent.at(-1)).toMatchObject({
       type: 'error',
@@ -389,5 +397,71 @@ describe('createWebBridgeClient drain signal', () => {
     bridge.handleMessage(hostMessage('command', { name: 'flush' }))
     bridge.handleMessage(hostMessage('dispose', {}))
     expect(states).toEqual([true, false, true, false])
+  })
+})
+
+describe('createWebBridgeClient input quiesce', () => {
+  it('does not report ready until the in-flight gesture has committed', async () => {
+    const sent: Record<string, unknown>[] = []
+    const timers = createTimers()
+    let releaseQuiesce = (): void => undefined
+    const quiesce = new Promise<void>((resolve) => {
+      releaseQuiesce = resolve
+    })
+    const bridge = createWebBridgeClient({
+      sessionId,
+      sourceToken,
+      post: (raw) => sent.push(JSON.parse(raw)),
+      timers: timers.api,
+      onQuiesce: () => quiesce
+    })
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    sent.length = 0
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+
+    // pointerup 提交发生在关闭开始之后。
+    bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    const change = sent.at(-1) ?? {}
+    bridge.handleMessage(
+      hostMessage('ack', { requestId: change['requestId'], revision: 1 })
+    )
+    await settle()
+    // 写入已 ack 但输入仍静默中：不能提前 ready。
+    expect(sent.some((message) => message['type'] === 'ready')).toBe(false)
+
+    releaseQuiesce()
+    await settle()
+    expect(sent.at(-1)).toMatchObject({ type: 'ready' })
+    expect(
+      sent.findIndex((message) => message['type'] === 'change')
+    ).toBeLessThan(sent.findIndex((message) => message['type'] === 'ready'))
+  })
+
+  it('cancels the close when the input never quiesces', async () => {
+    const sent: Record<string, unknown>[] = []
+    const timers = createTimers()
+    const bridge = createWebBridgeClient({
+      sessionId,
+      sourceToken,
+      post: (raw) => sent.push(JSON.parse(raw)),
+      timers: timers.api,
+      onQuiesce: () => new Promise<void>(() => undefined)
+    })
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+
+    timers.fireAll()
+    await settle()
+
+    expect(sent.at(-1)).toMatchObject({
+      type: 'error',
+      payload: { message: '关闭前输入未静默，已取消关闭' }
+    })
   })
 })

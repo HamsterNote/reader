@@ -92,7 +92,8 @@ function createPostQueue(): PostQueue {
 async function createChain(
   store: ReaderDataStore,
   targetFileId: string,
-  sessionId: string
+  sessionId: string,
+  bridgeOptions: { readonly onQuiesce?: () => Promise<void> } = {}
 ): Promise<{
   readonly bridge: WebBridgeClient
   readonly host: ReaderHostSession
@@ -107,7 +108,8 @@ async function createChain(
     sessionId,
     sourceToken,
     clientId: 'client-1',
-    post: (raw) => queue.push(raw)
+    post: (raw) => queue.push(raw),
+    ...bridgeOptions
   })
   const host = createReaderHostSession({
     sessionId,
@@ -512,5 +514,47 @@ describe('snapshot chain: edits made while closing', () => {
     )
     expect(stored.revision).toBe(2)
     expect(stored.data.readerData.hiddenPages).toEqual([3])
+  })
+})
+
+describe('snapshot chain: gesture finishing after the close starts', () => {
+  it('keeps the stroke committed after flush but before dispose', async () => {
+    const storage = new MemoryStorage()
+    const store = new ReaderDataStore(storage)
+    await store.upsert(record(fileId, 'book.pdf'))
+    let releaseQuiesce = (): void => undefined
+    const quiesce = new Promise<void>((resolve) => {
+      releaseQuiesce = resolve
+    })
+    const chain = await createChain(store, fileId, 'session-gesture', {
+      onQuiesce: () => quiesce
+    })
+    chain.bridge.start()
+    await deliver(chain.host, chain.posted)
+
+    const closing = chain.host.close(2000)
+    // 关闭已经开始，此时 pointerup 才提交笔迹（onChange → sendChange）。
+    chain.bridge.sendChange(
+      serializeReaderSnapshot({
+        ...emptySnapshot,
+        data: { ...emptySnapshot.data, hiddenPages: [7] }
+      })
+    )
+    // 输入未静默前不能报告 ready。
+    expect(
+      chain.queue.items.some((raw) => raw.includes('"type":"ready"'))
+    ).toBe(false)
+
+    releaseQuiesce()
+    const result = await pumpUntilSettled(chain.host, chain.queue, closing)
+
+    expect(result).toEqual({ status: 'closed' })
+    const stored = JSON.parse(
+      storage.values.get(`${SNAPSHOT_KEY}${fileId}`) ?? 'null'
+    )
+    // 笔迹在 dispose 前落盘，没有被“先 ready 后提交”的顺序丢掉。
+    expect(stored.revision).toBe(1)
+    expect(stored.data.readerData.hiddenPages).toEqual([7])
+    expect(chain.sent.at(-1)?.type).toBe('dispose')
   })
 })

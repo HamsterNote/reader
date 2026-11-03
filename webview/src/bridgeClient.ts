@@ -44,6 +44,11 @@ export type WebBridgeOptions = {
    * 但不应再产生新的编辑手势。
    */
   readonly onDrainingChange?: (draining: boolean) => void
+  /**
+   * 关闭冲刷前的输入静默：UI 必须冻结输入，并等正在进行的手势完成提交
+   * （提交产生的 change 会先入队）。未提供时视为已静默。
+   */
+  readonly onQuiesce?: () => Promise<void>
 }
 
 export type WebBridgeClient = {
@@ -159,6 +164,33 @@ export function createWebBridgeClient(
         timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS
       )
       idleWaiters.push(finish)
+    })
+  }
+
+  /**
+   * 关闭前的输入静默等待：等 UI 冻结输入并结束（提交）当前手势。
+   * 超时视为未静默，由调用方发 error 取消关闭，不猜测手势是否结束。
+   */
+  const waitForQuiesce = (): Promise<boolean> => {
+    const quiesce = options.onQuiesce
+    if (quiesce === undefined) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const timeout: { handle?: unknown } = {}
+      const finish = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        if (timeout.handle !== undefined) timers.clearTimeout(timeout.handle)
+        resolve(ok)
+      }
+      timeout.handle = timers.setTimeout(
+        () => finish(false),
+        DEFAULT_FLUSH_TIMEOUT_MS
+      )
+      quiesce().then(
+        () => finish(true),
+        () => finish(false)
+      )
     })
   }
 
@@ -292,21 +324,33 @@ export function createWebBridgeClient(
       case 'command': {
         const command = message.payload as BridgeCommandPayload
         if (command?.name === BRIDGE_COMMAND_FLUSH) {
-          // 宿主准备关闭：先冻结 UI 输入，再冲刷全部未确认写入（含冻结前
-          // 正在进行的手势提交）；全部 ack 后回 ready，才允许宿主 dispose。
+          // 宿主准备关闭：先冻结输入并等当前手势提交（onQuiesce），再冲刷
+          // 全部未确认写入；全部 ack 后回 ready，才允许宿主 dispose。
           setDraining(true)
-          flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
+          waitForQuiesce().then((quiesced) => {
             if (closed) return
-            if (saved) {
-              post(buildMessage('ready', {}))
-            } else {
+            if (!quiesced) {
               post(
                 buildMessage('error', {
                   code: 'ENGINE_FAILURE',
-                  message: '关闭前仍有未确认写入，已取消关闭'
+                  message: '关闭前输入未静默，已取消关闭'
                 })
               )
+              return
             }
+            return flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
+              if (closed) return
+              if (saved) {
+                post(buildMessage('ready', {}))
+              } else {
+                post(
+                  buildMessage('error', {
+                    code: 'ENGINE_FAILURE',
+                    message: '关闭前仍有未确认写入，已取消关闭'
+                  })
+                )
+              }
+            })
           })
         } else if (command?.name === BRIDGE_COMMAND_RESUME) {
           setDraining(false)
