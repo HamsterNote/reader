@@ -160,6 +160,21 @@ function MobileSafeHighlightButton({
  * 1. 调用 onHighlightColorChange 更新全局高亮色（影响后续新建的高亮）
  * 2. 如果当前有选中的 range，通过 onUpdateRange 更新该 range 的 markerStyle
  */
+// Toolbar highlight colors include alpha, while <input type=color> needs hex.
+function colorInputValue(color: string | undefined): string | undefined {
+  if (color?.startsWith('#')) return color
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(color ?? '')
+  return rgb
+    ? '#' +
+        rgb
+          .slice(1)
+          .map((channel) =>
+            Math.min(255, Number(channel)).toString(16).padStart(2, '0')
+          )
+          .join('')
+    : undefined
+}
+
 function HighlightColorPicker({
   highlightColor,
   onHighlightColorChange,
@@ -169,10 +184,8 @@ function HighlightColorPicker({
 }: DefaultPopoverContext) {
   const selectedRange = ranges?.find((range) => range.id === selectedRangeId)
   const rangeColor = selectedRange?.markerStyle?.backgroundColor
-  const fallbackColor = highlightColor?.startsWith('#')
-    ? highlightColor
-    : '#ffc107'
-  const colorValue = rangeColor?.startsWith('#') ? rangeColor : fallbackColor
+  const colorValue =
+    colorInputValue(rangeColor) ?? colorInputValue(highlightColor) ?? '#ffc107'
 
   return (
     <label className='hamster-reader-popover-color'>
@@ -343,12 +356,10 @@ export function DefaultRectanglePopover({
   }, [commenting, onCommentRect, rectangle])
 
   const rectangleColor = rectangle?.markerStyle?.backgroundColor
-  const fallbackColor = highlightColor?.startsWith('#')
-    ? highlightColor
-    : '#ffc107'
-  const colorValue = rectangleColor?.startsWith('#')
-    ? rectangleColor
-    : fallbackColor
+  const colorValue =
+    colorInputValue(rectangleColor) ??
+    colorInputValue(highlightColor) ??
+    '#ffc107'
 
   return (
     <div

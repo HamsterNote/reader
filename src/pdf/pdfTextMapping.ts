@@ -79,21 +79,26 @@ export function enhanceTextLayer(
   textLayerDiv: HTMLElement,
   page: CanonicalPageText
 ): boolean {
-  // 防御：属性只落在叶级 span 上；容器自身若被瞬态 DOM 污染则清理。
-  for (const attr of [
-    TEXT_LAYER_TEXT_ID_ATTR,
-    TEXT_LAYER_PAGE_NUMBER_ATTR,
-    TEXT_LAYER_START_OFFSET_ATTR
-  ]) {
-    textLayerDiv.removeAttribute(attr)
+  const spans = Array.from(textLayerDiv.querySelectorAll<HTMLElement>('span'))
+  // DOM regrouping can turn an enhanced leaf into a wrapper. Remove stale
+  // mappings before matching so endpoints always resolve to current leaves.
+  for (const element of [textLayerDiv, ...spans]) {
+    for (const attr of [
+      TEXT_LAYER_TEXT_ID_ATTR,
+      TEXT_LAYER_PAGE_NUMBER_ATTR,
+      TEXT_LAYER_START_OFFSET_ATTR
+    ]) {
+      element.removeAttribute(attr)
+    }
   }
 
-  const elements = Array.from(textLayerDiv.children).filter(
+  // Tagged PDFs wrap text spans in nested .markedContent spans. Only the
+  // leaf spans correspond to TextItems; matching the wrappers loses the body.
+  const elements = spans.filter(
     (child): child is HTMLElement =>
       child instanceof HTMLElement &&
       child.textContent !== '' &&
-      // 已含增强后代的容器元素不参与匹配（pdf.js 重组瞬态）。
-      !child.querySelector(`[${TEXT_LAYER_TEXT_ID_ATTR}]`)
+      !child.querySelector('span')
   )
 
   let matched = true

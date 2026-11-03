@@ -194,3 +194,9 @@ export type ReaderInteractiveProps = Pick<
   | 'onEdgeCropEditingChange'
   | 'bottomBar'
 >
+
+export type { EditorDocument, PageGeometry } from '@hamster-note/painting/core'
+export type {
+  LayeredEditorTool,
+  LayeredToolsSnapshot
+} from '@hamster-note/painting/core'

@@ -32,6 +32,7 @@ import type {
 
 type StubViewport = {
   scale: number
+  transform: [number, number, number, number, number, number]
   width: number
   height: number
   convertToPdfPoint: (x: number, y: number) => number[]
@@ -72,6 +73,7 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
     height = 300
   ): StubViewport => ({
     scale,
+    transform: [scale, 0, 0, -scale, 0, height * scale],
     width: width * scale,
     height: height * scale,
     convertToPdfPoint: (x: number, y: number) => [
@@ -205,7 +207,7 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
   act(() => {
     viewer.eventBus.dispatch('textlayerrendered', {
       pageNumber,
-      source: { div: textLayerDiv }
+      source: { div: pageView.div }
     })
   })
   return textLayerDiv
@@ -743,7 +745,25 @@ describe('PdfDocumentViewer 接线', () => {
     ])
     await act(async () => {})
 
-    const spans = textLayer.querySelectorAll('span')
+    // Real PDFPageView events include canvas/annotation siblings, while tagged
+    // PDFs nest their text spans. Re-rendering must retain a usable context.
+    const wrapper = document.createElement('span')
+    wrapper.className = 'markedContent'
+    wrapper.append(...Array.from(textLayer.children))
+    textLayer.append(wrapper)
+    const pageDiv = textLayer.parentElement!
+    const annotation = document.createElement('div')
+    annotation.innerHTML = '<span>Not canonical PDF text</span>'
+    pageDiv.append(annotation)
+    act(() =>
+      latestViewer().eventBus.dispatch('textlayerrendered', {
+        pageNumber: 1,
+        source: { div: pageDiv }
+      })
+    )
+    await act(async () => {})
+
+    const spans = textLayer.querySelectorAll('span[data-text-id]')
     expect(spans[0].getAttribute('data-text-id')).toBe('page-1-item-0')
     expect(spans[1].getAttribute('data-selection-start-offset')).toBe('20')
 

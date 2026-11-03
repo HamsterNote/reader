@@ -93,6 +93,8 @@ export function ReaderWebView({
   // 会话内的已确认快照、幂等表与在途持久化队列在重载后仍然有效，
   // 页面重新 ready 时 restore 总是取最新确认数据，而不是打开时的旧 prop。
   useEffect(() => {
+    // 新快照键损坏：不建立会话、不渲染阅读器，也不允许任何保存覆盖原件。
+    if (record.snapshotError !== undefined) return
     const session = createReaderHostSession({
       sessionId,
       sourceToken,
@@ -166,68 +168,83 @@ export function ReaderWebView({
 
   return (
     <View style={styles.container}>
-      <WebView
-        ref={webRef}
-        key={`${record.fileId}-${generation}`}
-        source={{ uri: entryUrl }}
-        originWhitelist={['*']}
-        injectedJavaScriptBeforeContentLoaded={buildBootstrapScript(
-          sessionId,
-          sourceToken
-        )}
-        javaScriptEnabled
-        domStorageEnabled
-        allowFileAccess
-        allowFileAccessFromFileURLs
-        allowUniversalAccessFromFileURLs={false}
-        mixedContentMode='never'
-        setSupportMultipleWindows={false}
-        javaScriptCanOpenWindowsAutomatically={false}
-        suppressMenuItems={SUPPRESSED_READER_MENU_ITEMS}
-        allowingReadAccessToURL={baseUrl}
-        onShouldStartLoadWithRequest={handleNavigation}
-        onMessage={handleMessage}
-        onError={({ nativeEvent }) => {
-          setState('error')
-          setStatusText(`WebView 错误：${nativeEvent.description}`)
-        }}
-        onHttpError={({ nativeEvent }) => {
-          setState('error')
-          setStatusText(`资源加载失败：HTTP ${nativeEvent.statusCode}`)
-        }}
-        onLoadEnd={() => {
-          if (!openedRef.current) setStatusText('页面已加载，等待桥接握手…')
-        }}
-        style={styles.webview}
-      />
-      {state !== 'connected' ? (
+      {record.snapshotError !== undefined ? (
         <View style={styles.overlay} pointerEvents='box-none'>
           <View style={styles.panel}>
-            {state === 'loading' ? (
-              <ActivityIndicator size='small' color='#8b5e3c' />
-            ) : null}
-            <Text style={styles.status}>{statusText}</Text>
-            {state === 'error' ? (
-              <>
-                <TouchableOpacity style={styles.button} onPress={retry}>
-                  <Text style={styles.buttonText}>重载 WebView</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.linkButton}
-                  onPress={() =>
-                    Alert.alert(
-                      '浏览记录',
-                      '宿主已确认的数据不受 WebView 重载影响；未确认的修改会丢失。'
-                    )
-                  }
-                >
-                  <Text style={styles.linkText}>数据会怎样？</Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
+            <Text style={styles.status}>
+              该文档的标注数据无法读取：{record.snapshotError}
+            </Text>
+            <Text style={styles.linkText}>
+              原始数据已保留，未自动退回旧格式。请勿继续编辑；可在书库删除该文档的阅读数据后重新打开。
+            </Text>
           </View>
         </View>
-      ) : null}
+      ) : (
+        <>
+          <WebView
+            ref={webRef}
+            key={`${record.fileId}-${generation}`}
+            source={{ uri: entryUrl }}
+            originWhitelist={['*']}
+            injectedJavaScriptBeforeContentLoaded={buildBootstrapScript(
+              sessionId,
+              sourceToken
+            )}
+            javaScriptEnabled
+            domStorageEnabled
+            allowFileAccess
+            allowFileAccessFromFileURLs
+            allowUniversalAccessFromFileURLs={false}
+            mixedContentMode='never'
+            setSupportMultipleWindows={false}
+            javaScriptCanOpenWindowsAutomatically={false}
+            suppressMenuItems={SUPPRESSED_READER_MENU_ITEMS}
+            allowingReadAccessToURL={baseUrl}
+            onShouldStartLoadWithRequest={handleNavigation}
+            onMessage={handleMessage}
+            onError={({ nativeEvent }) => {
+              setState('error')
+              setStatusText(`WebView 错误：${nativeEvent.description}`)
+            }}
+            onHttpError={({ nativeEvent }) => {
+              setState('error')
+              setStatusText(`资源加载失败：HTTP ${nativeEvent.statusCode}`)
+            }}
+            onLoadEnd={() => {
+              if (!openedRef.current) setStatusText('页面已加载，等待桥接握手…')
+            }}
+            style={styles.webview}
+          />
+          {state !== 'connected' ? (
+            <View style={styles.overlay} pointerEvents='box-none'>
+              <View style={styles.panel}>
+                {state === 'loading' ? (
+                  <ActivityIndicator size='small' color='#8b5e3c' />
+                ) : null}
+                <Text style={styles.status}>{statusText}</Text>
+                {state === 'error' ? (
+                  <>
+                    <TouchableOpacity style={styles.button} onPress={retry}>
+                      <Text style={styles.buttonText}>重载 WebView</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.linkButton}
+                      onPress={() =>
+                        Alert.alert(
+                          '浏览记录',
+                          '宿主已确认的数据不受 WebView 重载影响；未确认的修改会丢失。'
+                        )
+                      }
+                    >
+                      <Text style={styles.linkText}>数据会怎样？</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+        </>
+      )}
     </View>
   )
 }

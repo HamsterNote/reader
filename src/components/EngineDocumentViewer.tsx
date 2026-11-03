@@ -4,6 +4,7 @@ import {
   type ReactNode,
   type CSSProperties,
   type ComponentProps,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -65,7 +66,20 @@ type Props = IntermediateDocumentViewerProps & {
   ) => void
 }
 
+type ActiveSelection =
+  | { kind: 'text'; range: Range; rangeId: string | null }
+  | { kind: 'rectangle'; id: string }
+  | null
+
 const pageNumberOf = (id: string) => Number(id.slice(5))
+
+let fallbackRangeIdCounter = 0
+function nextRangeId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function')
+    return `range-${globalThis.crypto.randomUUID()}`
+  // LAN HTTP previews do not expose randomUUID (a secure-context API).
+  return `range-${Date.now().toString(36)}-${++fallbackRangeIdCounter}`
+}
 
 function endpointVisible(
   range: ReaderSelectionRange | undefined,
@@ -238,7 +252,18 @@ export function EngineDocumentViewer(props: Props) {
   const [unlocatable, setUnlocatable] = useState<readonly string[]>([])
   const [pageCount, setPageCount] = useState(0)
   const [page, setPage] = useState(1)
-  const [nativeRange, setNativeRange] = useState<Range | null>(null)
+  const [activeSelection, setActiveSelection] = useState<ActiveSelection>(null)
+  const nativeRange =
+    activeSelection?.kind === 'text' ? activeSelection.range : null
+  const setNativeRange = useCallback(
+    (range: Range | null, rangeId: string | null = null) => {
+      setActiveSelection((current) => {
+        if (range) return { kind: 'text', range, rangeId }
+        return current?.kind === 'text' ? null : current
+      })
+    },
+    []
+  )
   const [internalRanges, setInternalRanges] = useState(
     props.defaultRanges ?? []
   )
@@ -256,6 +281,16 @@ export function EngineDocumentViewer(props: Props) {
   const activating = useRef(false)
   const restored = useRef(false)
   const progressEnabled = useRef(false)
+  useEffect(() => {
+    if (!rootElement) return
+    // Native capture runs before PDF portal/drag listeners can stop the event.
+    const down = (event: PointerEvent) => {
+      progressEnabled.current = true
+      setMouse(event.pointerType === 'mouse')
+    }
+    rootElement.addEventListener('pointerdown', down, true)
+    return () => rootElement.removeEventListener('pointerdown', down, true)
+  }, [rootElement])
   const ranges = props.ranges ?? internalRanges
   const rects = props.rects ?? internalRects
   const selected = controlledSelection(props.selectedRangeId, internalSelected)
@@ -322,6 +357,9 @@ export function EngineDocumentViewer(props: Props) {
       pdf.current?.clearSelection()
       return
     }
+    setInternalRectId(null)
+    latest.current.onSelectRect?.(null)
+    setDraftRectangle(null)
     activating.current = true
     if (epub.current) {
       const engine = epub.current
@@ -330,7 +368,7 @@ export function EngineDocumentViewer(props: Props) {
         .then((range) => {
           if (token !== activationGeneration.current || epub.current !== engine)
             return
-          setNativeRange(range)
+          setNativeRange(range, id)
           epub.current?.setActiveRange(range ? id : null)
           activating.current = false
         })
@@ -338,7 +376,7 @@ export function EngineDocumentViewer(props: Props) {
           if (token === activationGeneration.current) activating.current = false
         })
     } else {
-      setNativeRange(pdf.current?.selectRange(id) ?? null)
+      setNativeRange(pdf.current?.selectRange(id) ?? null, id)
       activating.current = false
     }
   }, [])
@@ -349,7 +387,12 @@ export function EngineDocumentViewer(props: Props) {
         )
       : [...values.current.ranges, range]
     apply(
-      { ...snapshot(), ranges: next, selectedRangeId: range.id },
+      {
+        ...snapshot(),
+        ranges: next,
+        selectedRangeId: range.id,
+        selectedRectId: null
+      },
       update ? 'update-range' : 'highlight'
     )
     if (update) {
@@ -378,17 +421,25 @@ export function EngineDocumentViewer(props: Props) {
     null
   const confirmRectangle = () => {
     if (!draftRectangle) return
+    const color = latest.current.highlightColor ?? '#ffc107'
+    const rectangle = {
+      ...draftRectangle,
+      markerStyle: {
+        ...draftRectangle.markerStyle,
+        backgroundColor: color
+      }
+    }
     apply(
       {
         ...snapshot(),
-        rects: [...values.current.rects, draftRectangle],
+        rects: [...values.current.rects, rectangle],
         selectedRangeId: null,
-        selectedRectId: draftRectangle.id
+        selectedRectId: rectangle.id
       },
       'create-rect'
     )
-    latest.current.onCreateRect?.(draftRectangle)
-    latest.current.onSelectRect?.(draftRectangle.id)
+    latest.current.onCreateRect?.(rectangle)
+    latest.current.onSelectRect?.(rectangle.id)
     setDraftRectangle(null)
   }
   const confirm = () => {
@@ -401,7 +452,7 @@ export function EngineDocumentViewer(props: Props) {
     if (!detail || !detail.text) return
     const range: ReaderSelectionRange = {
       ...detail,
-      id: `range-${globalThis.crypto.randomUUID()}`,
+      id: nextRangeId(),
       createdAt: Date.now(),
       rectsBySelectionId:
         (detail as SerializedPdfSelection).rectsBySelectionId ?? {},
@@ -451,9 +502,29 @@ export function EngineDocumentViewer(props: Props) {
       (selection?.rangeCount ? selection.getRangeAt(0) : null)
     const detail = serialize()
     if (detail && range) {
-      setNativeRange(range.cloneRange())
+      const current = values.current.ranges.find(
+        (item) => item.id === values.current.selected
+      )
+      const sameRange =
+        current &&
+        current.start.selectionId === detail.start.selectionId &&
+        current.start.offset === detail.start.offset &&
+        current.end.selectionId === detail.end.selectionId &&
+        current.end.offset === detail.end.offset
+      if (values.current.selected && !sameRange) {
+        setInternalSelected(null)
+        latest.current.onSelectRange?.(null)
+        latest.current.onLinkedSelectRange?.(null)
+        epub.current?.setActiveRange(null)
+      }
+      if (values.current.selectedRect) {
+        setInternalRectId(null)
+        latest.current.onSelectRect?.(null)
+      }
+      setDraftRectangle(null)
+      setNativeRange(range.cloneRange(), sameRange ? current.id : null)
       void emitSelectionCallbacks()
-    } else if (!values.current.selected) setNativeRange(null)
+    } else setNativeRange(null)
   }, [emitSelectionCallbacks])
   const publishPosition = useCallback((pageNumber: number) => {
     setPage(pageNumber)
@@ -522,7 +593,7 @@ export function EngineDocumentViewer(props: Props) {
     const id = values.current.selected
     if (id && !editing.current) {
       activating.current = true
-      setNativeRange(pdf.current?.selectRange(id) ?? null)
+      setNativeRange(pdf.current?.selectRange(id) ?? null, id)
       activating.current = false
     }
   }, [])
@@ -614,7 +685,7 @@ export function EngineDocumentViewer(props: Props) {
         const id = values.current.selected
         if (id && !editing.current) {
           const part = engine.getRangePart(id)
-          setNativeRange(part?.cloneRange() ?? null)
+          setNativeRange(part?.cloneRange() ?? null, id)
           if (part) {
             const selection = part.startContainer.ownerDocument?.getSelection()
             activating.current = true
@@ -694,12 +765,22 @@ export function EngineDocumentViewer(props: Props) {
   }, [ranges, book])
   useEffect(() => {
     if (!selected) {
-      setNativeRange(null)
+      setActiveSelection((current) =>
+        current?.kind === 'text' && current.rangeId ? null : current
+      )
       epub.current?.setActiveRange(null)
       return
     }
     activate(selected)
   }, [selected, activate])
+  useEffect(() => {
+    setActiveSelection((current) => {
+      if (selectedRect) return { kind: 'rectangle', id: selectedRect }
+      return current?.kind === 'rectangle' && current.id !== draftRectangle?.id
+        ? null
+        : current
+    })
+  }, [selectedRect, draftRectangle])
 
   useEffect(() => {
     if (source?.format !== 'epub' || !rootElement) return
@@ -740,6 +821,7 @@ export function EngineDocumentViewer(props: Props) {
         'clear'
       )
       setNativeRange(null)
+      setActiveSelection(null)
       setDraftRectangle(null)
       epub.current?.clearSelection()
       epub.current?.setActiveRange(null)
@@ -836,6 +918,7 @@ export function EngineDocumentViewer(props: Props) {
     setInternalRectId(null)
     props.onSelectRect?.(null)
     setDraftRectangle(rectangle)
+    setActiveSelection({ kind: 'rectangle', id: rectangle.id })
   }
   const updateRect = (rectangle: ReaderSelectionRectangle) => {
     if (draftRectangle?.id === rectangle.id) return setDraftRectangle(rectangle)
@@ -854,6 +937,31 @@ export function EngineDocumentViewer(props: Props) {
     activate(null)
     setInternalRectId(id)
     props.onSelectRect?.(id)
+    setDraftRectangle(null)
+    setActiveSelection(id ? { kind: 'rectangle', id } : null)
+  }
+  const dismissPdfSelectionOutside = (event: ReactPointerEvent) => {
+    if (event.button !== 0) return
+    const target = event.target as Element
+    // Popovers are portals whose React events still bubble through this root.
+    // Handles and annotation hits must retain/transfer selection normally.
+    if (
+      target.closest('.hsn-selection-popover, .hamster-reader__engine-handle')
+    )
+      return
+    const annotations = root.current?.querySelectorAll<HTMLElement>(
+      '[data-range-id], [data-rect-id]'
+    )
+    const hit = Array.from(annotations ?? []).some((element) => {
+      const box = element.getBoundingClientRect()
+      return (
+        event.clientX >= box.left &&
+        event.clientX <= box.right &&
+        event.clientY >= box.top &&
+        event.clientY <= box.bottom
+      )
+    })
+    if (!hit) selectRect(null)
   }
   return (
     <RangeMagnifierProvider
@@ -866,9 +974,10 @@ export function EngineDocumentViewer(props: Props) {
         data-engine={source?.format}
         style={epubViewportStyle(source, paginationInset, props)}
         onPointerDown={(event) => {
-          progressEnabled.current = true
-          setMouse(event.pointerType === 'mouse')
           if (source?.format === 'pdf') {
+            // Clear before the browser starts its next native text gesture;
+            // never preventDefault, so a fresh drag selection remains intact.
+            dismissPdfSelectionOutside(event)
             const selection = root.current?.ownerDocument.getSelection()
             if (selection)
               props.onSelectionStart?.(
@@ -970,10 +1079,8 @@ export function EngineDocumentViewer(props: Props) {
             onEdgeCropApply={props.onEdgeCropApply}
             onEdgeCropHidePage={props.onEdgeCropHidePage}
             pagePaintings={props.pagePaintings}
-            paintingControllerData={props.paintingControllerData}
-            onPaintingControllerDataChange={
-              props.onPaintingControllerDataChange
-            }
+            paintingSettings={props.paintingSettings}
+            onPaintingSettingsChange={props.onPaintingSettingsChange}
             paintingTool={props.paintingTool}
             drawingStrokeColor={props.drawingStrokeColor}
             onPagePaintingChange={props.onPagePaintingChange}
@@ -982,11 +1089,13 @@ export function EngineDocumentViewer(props: Props) {
                 {
                   ...snapshot(),
                   rects: [...rects, rectangle],
+                  selectedRangeId: null,
                   selectedRectId: rectangle.id
                 },
                 'create-rect'
               )
               props.onCreateRect?.(rectangle)
+              setActiveSelection({ kind: 'rectangle', id: rectangle.id })
             }}
             draftRectangle={draftRectangle}
             onDraftRect={draftRect}
@@ -1120,7 +1229,7 @@ export function EngineDocumentViewer(props: Props) {
             editing.current = value
           }}
           onUpdate={(range, end) => {
-            setNativeRange(range.cloneRange())
+            setNativeRange(range.cloneRange(), current?.id ?? null)
             const detail =
               epub.current && current
                 ? epub.current.updateRangeEndpoint(current.id, range, end)
@@ -1145,6 +1254,7 @@ export function EngineDocumentViewer(props: Props) {
           selectionKind='selected'
           visible={
             !props.showPageBrowser &&
+            activeSelection?.kind === 'rectangle' &&
             Boolean(currentRectangle ?? draftRectangle)
           }
         >

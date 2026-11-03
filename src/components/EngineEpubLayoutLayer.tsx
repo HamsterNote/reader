@@ -1,3 +1,5 @@
+import { createPaintingSettings } from '../painting/paintingSettings'
+import { createPageGeometry } from '@hamster-note/painting/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { IntermediateDocumentViewerProps } from './IntermediateDocumentViewer'
 import type { ReaderSelectionRectangle } from '../types/selection'
@@ -125,7 +127,16 @@ export function EngineEpubLayoutLayer({
   ])
   const geometry = useMemo(() => {
     const viewport = identityViewport
-    return { viewport, scaleOneViewport: viewport, visual: size }
+    return {
+      viewport,
+      scaleOneViewport: viewport,
+      visual: size,
+      drawing: createPageGeometry({
+        ...size,
+        referenceTransform: [1, 0, 0, 1, 0, 0],
+        viewportTransform: [1, 0, 0, 1, 0, 0]
+      })
+    }
   }, [size])
   const pageId = `page-${pageNumber}`
   return (
@@ -159,17 +170,15 @@ export function EngineEpubLayoutLayer({
                 selectedRectId={viewer.selectedRectId}
                 highlightColor={viewer.highlightColor ?? '#ffc107'}
                 selectionContexts={emptyContexts}
-                paintingControllerData={
-                  viewer.paintingControllerData ?? {
-                    tool: viewer.paintingTool ?? 'pen',
-                    minimap: false,
-                    strokeWidth: 3,
-                    strokeColor: viewer.drawingStrokeColor ?? '#2563eb'
-                  }
+                paintingSettings={
+                  viewer.paintingSettings ??
+                  createPaintingSettings(
+                    viewer.paintingTool,
+                    viewer.drawingStrokeColor
+                  )
                 }
-                onPaintingControllerDataChange={
-                  viewer.onPaintingControllerDataChange ??
-                  ignoreControllerChange
+                onPaintingSettingsChange={
+                  viewer.onPaintingSettingsChange ?? ignoreControllerChange
                 }
                 pagePaintings={viewer.pagePaintings ?? {}}
                 onPaintingChange={viewer.onPagePaintingChange}

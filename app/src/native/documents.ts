@@ -81,6 +81,12 @@ export async function pickAndCacheDocument(
   }
 
   const existing = await store.get(fileId)
+  // 新快照键损坏：不重建、不 upsert，避免把错误状态洗成旧快照后放行编辑。
+  if (existing?.snapshotError !== undefined) {
+    throw new Error(
+      `该文件的标注数据已损坏，已保留原数据：${existing.snapshotError}`
+    )
+  }
   const importedAt = existing?.importedAt ?? Date.now()
   const record: HostDocumentRecord = {
     fileId,
@@ -94,7 +100,9 @@ export async function pickAndCacheDocument(
     ...(existing?.legacyImport ? { legacyImport: existing.legacyImport } : {})
   }
   await store.upsert(record)
-  return { record }
+  // 返回权威记录（含 snapshotSource/snapshotError），而不是手工拼的对象。
+  const persisted = await store.get(fileId)
+  return { record: persisted ?? record }
 }
 
 /**

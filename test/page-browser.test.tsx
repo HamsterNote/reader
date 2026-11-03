@@ -1,4 +1,6 @@
-import type { DrawingValue } from '@hamster-note/painting'
+import { drawingFixture, mockPaintingCanvas } from './fixtures/painting'
+beforeEach(mockPaintingCanvas)
+import type { EditorDocument } from '@hamster-note/painting'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   afterAll,
@@ -427,7 +429,7 @@ describe('PageBrowser', () => {
   })
 
   it('overlays the page drawing in the same crop coordinate system', () => {
-    const drawing: DrawingValue = {
+    const drawing: EditorDocument = drawingFixture({
       strokes: [
         {
           id: 'stroke-1',
@@ -440,7 +442,7 @@ describe('PageBrowser', () => {
           ]
         }
       ]
-    }
+    })
     renderPageBrowser({
       rects: [makeRect('rect-1')],
       pagePaintings: { 'page-1': drawing }
@@ -450,9 +452,12 @@ describe('PageBrowser', () => {
     const drawingPreview = screen.getByTestId(
       'page-browser-rect-drawing-page-1-rect-1'
     )
-    const svg = drawingPreview.querySelector('svg')
-    expect(svg).toHaveAttribute('viewBox', '0 0 100 200')
-    expect(svg).toHaveAttribute('preserveAspectRatio', 'none')
+    expect(
+      drawingPreview.querySelector('[data-testid="page-drawing-surface"]')
+    ).not.toBeNull()
+    expect(
+      drawingPreview.querySelector('[data-testid^="reader-page-drawing-layer"]')
+    ).toHaveStyle({ pointerEvents: 'none' })
     expect(drawingPreview).toHaveStyle({
       width: '200%',
       height: '400%',

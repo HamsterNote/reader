@@ -1,9 +1,10 @@
+import { createPaintingSettings } from '../../painting/paintingSettings'
 import { Loading } from '@hamster-note/components'
 import type {
-  DrawingTool,
-  DrawingValue,
-  PaintingControllerData
-} from '@hamster-note/painting'
+  LayeredEditorTool,
+  EditorDocument,
+  LayeredToolsSnapshot
+} from '@hamster-note/painting/core'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
@@ -73,7 +74,7 @@ import type {
   ReaderSelectionTool
 } from '../../types/selection'
 import { FLOW_LAYOUT_PAGE_WIDTH, type ReaderPageTool } from '../Page'
-import { hasDrawingStrokes, PageDrawingLayer } from '../PageDrawingLayer'
+import { hasDrawingObjects, PageDrawingLayer } from '../PageDrawingLayer'
 import { PopoverPortal } from '../PopoverPortal'
 import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
 import { isPointOnSelectionText } from '../selection/caretResolver'
@@ -700,12 +701,12 @@ export type IntermediateDocumentViewerProps = {
   /** @deprecated 使用 containMarginTop 和 containMarginBottom */
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
-  paintingTool?: DrawingTool
+  paintingTool?: LayeredEditorTool
   drawingStrokeColor?: string
-  paintingControllerData?: PaintingControllerData
-  onPaintingControllerDataChange?: (data: PaintingControllerData) => void
-  pagePaintings?: Record<string, DrawingValue>
-  onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
+  paintingSettings?: LayeredToolsSnapshot
+  onPaintingSettingsChange?: (data: LayeredToolsSnapshot) => void
+  pagePaintings?: Record<string, EditorDocument>
+  onPagePaintingChange?: (pageId: string, nextValue: EditorDocument) => void
   /** 是否显示从左侧滑入的页面浏览纵栏，默认 false */
   showPageBrowser?: boolean
   /** 页面浏览纵栏被左滑关闭时触发。 */
@@ -1723,11 +1724,10 @@ type ViewerContentProps = PageResources & {
   containMarginBottom?: number
   containMarginY?: number
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
-  paintingControllerData: PaintingControllerData
-  onPaintingControllerDataChange: (data: PaintingControllerData) => void
-  pagePaintings?: Record<string, DrawingValue>
-  onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
-  drawingScale: number
+  paintingSettings: LayeredToolsSnapshot
+  onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
+  pagePaintings?: Record<string, EditorDocument>
+  onPagePaintingChange?: (pageId: string, nextValue: EditorDocument) => void
   showPageBrowser: boolean
   previewEnabled: boolean
   onPageBrowserClose?: () => void
@@ -1766,7 +1766,7 @@ type PendingTextAnchorOperation = {
   readonly token: symbol
 }
 
-function ignorePaintingControllerChange() {}
+function ignorePaintingSettingsChange() {}
 
 const getVirtualPaperStateKey = (state: ReaderVirtualPaperState): string =>
   `${state.x}:${state.y}:${state.scale}:${state.anchor ? getTextAnchorKey(state.anchor) : ''}`
@@ -1888,12 +1888,10 @@ type IntermediateDocumentPagesProps = PageResources & {
     actualDuration: number
   ) => void
   selectedTool?: 'text-selection' | 'rect-selection' | 'drawing'
-  paintingControllerData: PaintingControllerData
-  onPaintingControllerDataChange: (data: PaintingControllerData) => void
-  pagePaintings?: Record<string, DrawingValue>
-  onPagePaintingChange?: (pageId: string, nextValue: DrawingValue) => void
-  drawingScale: number
-  cancelDrawingOnMultiTouch: boolean
+  paintingSettings: LayeredToolsSnapshot
+  onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
+  pagePaintings?: Record<string, EditorDocument>
+  onPagePaintingChange?: (pageId: string, nextValue: EditorDocument) => void
   readerScale: number
   popoverRelative?: boolean
 }
@@ -2265,12 +2263,9 @@ function IntermediateDocumentPages({
   onRectPointerUp,
   onPageRenderTiming,
   selectedTool,
-  paintingControllerData,
-  onPaintingControllerDataChange,
+  paintingSettings,
   pagePaintings,
   onPagePaintingChange,
-  drawingScale,
-  cancelDrawingOnMultiTouch,
   readerScale,
   popoverRelative
 }: IntermediateDocumentPagesProps) {
@@ -2444,15 +2439,13 @@ function IntermediateDocumentPages({
                 </HamsterSelection>
                 {ocrLoadingBadge}
                 {(selectedTool === 'drawing' ||
-                  hasDrawingStrokes(pagePaintings?.[publicPageId])) && (
+                  hasDrawingObjects(pagePaintings?.[publicPageId])) && (
                   <PageDrawingLayer
                     enabled={selectedTool === 'drawing'}
                     pageId={publicPageId}
-                    controllerData={paintingControllerData}
-                    onControllerDataChange={onPaintingControllerDataChange}
+                    settings={paintingSettings}
                     value={pagePaintings?.[publicPageId]}
-                    canvasScale={drawingScale * pagePreviewScale}
-                    cancelDrawingOnMultiTouch={cancelDrawingOnMultiTouch}
+                    pageSize={shellPageSize}
                     onChange={
                       onPagePaintingChange
                         ? (nextValue) =>
@@ -3445,11 +3438,10 @@ function ViewerContent({
   containMarginBottom,
   containMarginY,
   selectedTool,
-  paintingControllerData,
-  onPaintingControllerDataChange,
+  paintingSettings,
+  onPaintingSettingsChange,
   pagePaintings,
   onPagePaintingChange,
-  drawingScale,
   showPageBrowser,
   previewEnabled,
   onPageBrowserClose,
@@ -4248,12 +4240,10 @@ function ViewerContent({
       onRectPointerUp={handleRectPointerUp}
       onPageRenderTiming={onPageRenderTiming}
       selectedTool={selectedTool}
-      paintingControllerData={paintingControllerData}
-      onPaintingControllerDataChange={onPaintingControllerDataChange}
+      paintingSettings={paintingSettings}
+      onPaintingSettingsChange={onPaintingSettingsChange}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
-      drawingScale={drawingScale}
-      cancelDrawingOnMultiTouch={!useVirtualPaper}
       readerScale={useVirtualPaper ? committedReaderScale : 1}
       popoverRelative={popoverRelative}
     />
@@ -4500,8 +4490,8 @@ export function IntermediateDocumentViewer({
   selectedTool,
   paintingTool,
   drawingStrokeColor,
-  paintingControllerData,
-  onPaintingControllerDataChange,
+  paintingSettings,
+  onPaintingSettingsChange,
   pagePaintings,
   onPagePaintingChange,
   showPageBrowser = false,
@@ -4519,18 +4509,14 @@ export function IntermediateDocumentViewer({
 }: IntermediateDocumentViewerProps) {
   // 编辑模式下页面以未裁切尺寸显示，effectiveEdgeCrop 为 undefined
   const effectiveEdgeCrop = resolveEffectiveEdgeCrop(edgeCropEditing, edgeCrop)
-  const resolvedPaintingControllerData = useMemo<PaintingControllerData>(
+  const resolvedPaintingSettings = useMemo<LayeredToolsSnapshot>(
     () =>
-      paintingControllerData ?? {
-        tool: paintingTool ?? 'pen',
-        minimap: false,
-        strokeColor: drawingStrokeColor ?? '#2563eb',
-        strokeWidth: 3
-      },
-    [drawingStrokeColor, paintingControllerData, paintingTool]
+      paintingSettings ??
+      createPaintingSettings(paintingTool, drawingStrokeColor),
+    [drawingStrokeColor, paintingSettings, paintingTool]
   )
-  const handlePaintingControllerDataChange =
-    onPaintingControllerDataChange ?? ignorePaintingControllerChange
+  const handlePaintingSettingsChange =
+    onPaintingSettingsChange ?? ignorePaintingSettingsChange
   // Render timing controller: stable across renders, callback identity
   // does not cause re-renders. Stored in ref for Tasks 5-7 pipeline
   // instrumentation.
@@ -8473,11 +8459,10 @@ export function IntermediateDocumentViewer({
       containMarginBottom={containMarginBottom}
       containMarginY={containMarginY}
       selectedTool={selectedTool}
-      paintingControllerData={resolvedPaintingControllerData}
-      onPaintingControllerDataChange={handlePaintingControllerDataChange}
+      paintingSettings={resolvedPaintingSettings}
+      onPaintingSettingsChange={handlePaintingSettingsChange}
       pagePaintings={pagePaintings}
       onPagePaintingChange={onPagePaintingChange}
-      drawingScale={virtualPaperTransform.scale}
       showPageBrowser={showPageBrowser}
       previewEnabled={isPdf}
       onPageBrowserClose={onPageBrowserClose}

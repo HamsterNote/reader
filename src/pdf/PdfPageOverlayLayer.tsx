@@ -4,9 +4,10 @@
 // 重挂载，按持久化数据重建（回页恢复）。
 
 import type {
-  DrawingValue,
-  PaintingControllerData
-} from '@hamster-note/painting'
+  EditorDocument,
+  LayeredToolsSnapshot,
+  PageGeometry
+} from '@hamster-note/painting/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 
@@ -30,6 +31,7 @@ export type PdfPageOverlayGeometry = {
   readonly viewport: OverlayViewport
   readonly scaleOneViewport: OverlayViewport
   readonly visual: PageVisualSize
+  readonly drawing: PageGeometry | null
 }
 
 export type PdfPageOverlayLayerProps = {
@@ -40,21 +42,19 @@ export type PdfPageOverlayLayerProps = {
   readonly overlayRectType: OverlayRectUnit
   readonly ranges: readonly ReaderSelectionRange[]
   readonly rects: readonly ReaderSelectionRectangle[]
-  readonly painting: DrawingValue | undefined
+  readonly painting: EditorDocument | undefined
   readonly selectedRangeId?: string | null
   readonly selectedRectId?: string | null
   readonly highlightColor: string
   readonly selectionContexts: ReadonlyMap<number, PdfPageSelectionContext>
-  readonly paintingControllerData: PaintingControllerData
-  readonly onPaintingControllerDataChange: (
-    data: PaintingControllerData
-  ) => void
+  readonly paintingSettings: LayeredToolsSnapshot
+  readonly onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
   readonly onPaintingChange?: (
     pageId: string,
-    nextValue: DrawingValue,
-    nextPaintings: Record<string, DrawingValue>
+    nextValue: EditorDocument,
+    nextPaintings: Record<string, EditorDocument>
   ) => void
-  readonly pagePaintings: Record<string, DrawingValue>
+  readonly pagePaintings: Record<string, EditorDocument>
   readonly onSelectRange?: (id: string | null) => void
   readonly onSelectRect?: (id: string | null) => void
   readonly onCreateRect?: (rect: ReaderSelectionRectangle) => void
@@ -91,8 +91,7 @@ export function PdfPageOverlayLayer({
   selectedRectId,
   highlightColor,
   selectionContexts,
-  paintingControllerData,
-  onPaintingControllerDataChange,
+  paintingSettings,
   onPaintingChange,
   pagePaintings,
   onSelectRange,
@@ -116,13 +115,31 @@ export function PdfPageOverlayLayer({
   })
   const pageRects = rects.filter((rect) => rect.selectionId === pageId)
 
-  // 高亮/矩形命中检测：挂在 pageDiv 捕获阶段，overlay 自身不收指针事件，
-  // 文本选择手势永远直达 text layer（契约：原生选区不被拦截）。
+  // Annotation hits take priority over rectangle creation. In text mode the
+  // event continues to the native text layer so drag selection still works.
   useEffect(() => {
-    if (tool !== 'text-selection') return
+    if (tool === 'drawing') return
     if (!onSelectRange && !onSelectRect) return
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return
+      // Let the handle's React gesture receive the event at the root.
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.hamster-reader__engine-handle')
+      )
+        return
+      const select = (
+        callback: ((id: string | null) => void) | undefined,
+        id: string
+      ) => {
+        callback?.(id)
+        if (tool === 'rect-selection') {
+          event.preventDefault()
+          // Stop before the portal's delegated React rectangle gesture handler.
+          event.stopPropagation()
+        }
+      }
       const pageBox = pageDiv.getBoundingClientRect()
       const point = {
         left: event.clientX - pageBox.left,
@@ -155,7 +172,7 @@ export function PdfPageOverlayLayer({
           )
         })
         if (hit) {
-          onSelectRange?.(range.id)
+          select(onSelectRange, range.id)
           return
         }
       }
@@ -174,14 +191,15 @@ export function PdfPageOverlayLayer({
           point.top >= projected.top &&
           point.top <= projected.top + projected.height
         ) {
-          onSelectRect?.(rect.id)
+          select(onSelectRect, rect.id)
           return
         }
       }
     }
 
-    pageDiv.addEventListener('pointerdown', handlePointerDown)
-    return () => pageDiv.removeEventListener('pointerdown', handlePointerDown)
+    pageDiv.addEventListener('pointerdown', handlePointerDown, true)
+    return () =>
+      pageDiv.removeEventListener('pointerdown', handlePointerDown, true)
   }, [
     tool,
     pageDiv,
@@ -271,7 +289,7 @@ export function PdfPageOverlayLayer({
   }
 
   const handlePaintingChange = onPaintingChange
-    ? (nextValue: DrawingValue) => {
+    ? (nextValue: EditorDocument) => {
         onPaintingChange(pageId, nextValue, {
           ...pagePaintings,
           [pageId]: nextValue
@@ -349,6 +367,7 @@ export function PdfPageOverlayLayer({
           }
           pageDiv={pageDiv}
           geometry={geometry}
+          highlightColor={highlightColor}
           onUpdate={onUpdateRect}
         />
       ))}
@@ -360,7 +379,8 @@ export function PdfPageOverlayLayer({
             left: Math.min(rectDraft.startX, rectDraft.currentX),
             top: Math.min(rectDraft.startY, rectDraft.currentY),
             width: Math.abs(rectDraft.currentX - rectDraft.startX),
-            height: Math.abs(rectDraft.currentY - rectDraft.startY)
+            height: Math.abs(rectDraft.currentY - rectDraft.startY),
+            borderColor: highlightColor
           }}
         />
       )}
@@ -369,12 +389,10 @@ export function PdfPageOverlayLayer({
         <PageDrawingLayer
           enabled={tool === 'drawing'}
           pageId={pageId}
-          controllerData={paintingControllerData}
-          onControllerDataChange={onPaintingControllerDataChange}
+          settings={paintingSettings}
           value={painting}
           onChange={handlePaintingChange}
-          canvasScale={geometry.viewport.scale}
-          cancelDrawingOnMultiTouch
+          geometry={geometry.drawing}
         />
       )}
     </div>
