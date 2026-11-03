@@ -35,7 +35,8 @@ RN 移除的 `StyleSheet.absoluteFillObject` 改用 `absoluteFill`；测试的�
 `patches/react-native-webview-13.16.1-ios-edit-menu.patch` 从 13.15.0 等价移植，
 三个目标区域在新版源码中兼容，补丁内容不需调整。仍先调用父类构建菜单，再抑制
 Lookup/Share/StandardEdit，并通过公开 `UIEditMenuInteraction` API 隐藏 WKContentView
-的系统菜单，保留 DOM 选区和原生手柄。
+的系统菜单，不负责选择 Web 层的手柄策略。PDF Text 使用自绘 `PdfTextHandle`；
+原生手柄能力不能由此补丁推定，具体模式的验收见 `docs/ham144-pdf-text-selection.md`。
 
 `prepare:ios` 仅接受 13.16.1，检查完整应用/反向应用，支持重复运行；版本不符或
 任一目标区域冲突时失败，不静默跳过。
@@ -79,7 +80,7 @@ npx expo run:ios --configuration Release --no-bundler
 能进入书库并打开 PDF/EPUB。再验证前后台往返、系统文件选择器返回、冷/热启动
 `hamsterreader://` 链接、已有书籍/标注恢复、WebView 重载与持久化、明暗主题。
 
-随后补做 HAM-130 5.2：PDF Text 长按、原生选区手柄、页边拖选不翻页、系统编辑菜单
+随后补做 HAM-130 5.2：PDF Text 长按、自绘圆形选区手柄显示与拖动、页边拖选不翻页、系统编辑菜单
 全抑制与高亮 Popover、侧栏滚动、横竖屏、同原页翻两屏后关闭重开；回归 EPUB 共用外壳。
 记录设备/系统版本、Release 构建日志、启动与交互证据。
 

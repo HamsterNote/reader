@@ -61,6 +61,12 @@ PDF 内部位置为原 pageNumber + 当前列的稳定 ReaderTextAnchor，临时
 
 共享限制器只拦截正文滚动路径，按钮/输入编辑/侧栏独立滚动不受影响；PDF 在普通 DOM 上绑定，EPUB 仍须在 iframe 及引擎层阻止手势与选区自动翻页。禁止以全局 touch-action:none 替代完整选择验证。翻页后清理未提交的临时 DOM 选区及 Popover，已保存高亮继续存在；页内新增、调整、删除、跳转和关联评论保持原契约。既存跨页高亮需按源范围恢复，不新增跨可视页拖选手势。
 
+## HAM-144 实施后策略澄清（2026-11-03）
+
+PDF Text 的 `HamsterSelection.renderHandle` 明确使用 `PdfTextHandle`，再交给 `RangeHandle` 绘制 20px 圆形按钮；草稿和已保存范围均按源字符端点判断所在列，只显示当前可视列内的端点，避免将裁切边缘伪装成可编辑源端点。selection 0.3.0 在粗指针设备实现自己的长按选择流程。此实现与归档任务 5.2、`reader-data-compatibility` 原先笼统的“原生手柄”文字不一致；HAM-144 按授权将 PDF Text 明确为自绘手柄例外，并同步主规格及可观察验收判据。EPUB 与 PDF Layout 的选择策略不在该例外范围。
+
+`buttonOnlyInput` 限制正文 touchmove/wheel/滚动按键，不承担原生/自绘手柄切换；iOS WebView 编辑菜单补丁抑制系统菜单，不决定 Web 层手柄渲染。HAM-142 的模拟器证据与上述代码路径一致，详见 `docs/ham144-pdf-text-selection.md`。本次澄清不修改运行代码。
+
 ## Risks / Trade-offs
 
 - [分栏 Range 几何与选择库对多片段支持不足] → 在活动可视窗口过滤/裁切 Range 片段，添加源 span 跨列与高亮端点回归；真实浏览器是验收依据，jsdom 只测状态和映射。

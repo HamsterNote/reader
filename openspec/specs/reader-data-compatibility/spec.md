@@ -25,8 +25,12 @@
 - **THEN** 控件和回调语义保持一致，已确认操作按既有历史规则可撤销重做，持久化内容与界面一致
 
 #### Scenario: Native touch selection
-- **WHEN** 用户在移动设备长按选字并激活已有高亮
+- **WHEN** 用户在移动设备的 EPUB 或 PDF Layout 长按选字并激活已有高亮
 - **THEN** 使用原生文字选择手柄及既有 Popover 流程，不与滚动或矩形工具产生重复操作
+
+#### Scenario: PDF Text touch selection
+- **WHEN** 用户在移动设备的 PDF Text 长按选字或调整已有高亮
+- **THEN** 使用自绘圆形端点手柄及既有 Popover 流程；只显示当前可视列内的源端点，拖动保留原页字符映射，不触发正文滚动、自动翻页或系统编辑菜单
 
 ### Requirement: Existing consumers and formats remain usable
 系统 SHALL 保留现有 Web 库入口、公开数据类型与回调契约，以及非 EPUB/PDF 文档的原有阅读路径。
