@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import type { ReaderSelectionRange } from '../src/types/selection'
 import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
-import { setScrollContainerSize } from './setup'
+import {
+  mockElementSize,
+  resizeObserverMock,
+  setScrollContainerSize
+} from './setup'
 
 function makeText(): IntermediateText {
   return {
@@ -77,6 +81,85 @@ afterEach(() => {
 })
 
 describe('Text Mode highlight drag', () => {
+  it.each([false, true])(
+    'keeps stored layout rectangles for unchanged highlights (isPdf=%s)',
+    async (isPdf) => {
+      const highlight = makeHighlight()
+      const onLinkedDataChange = vi.fn()
+      mockTextRangeGeometry()
+      render(
+        <IntermediateDocumentTextViewer
+          document={makeDocument()}
+          isPdf={isPdf}
+          ranges={[highlight]}
+          overlayRectType='px'
+          onLinkedDataChange={onLinkedDataChange}
+        />
+      )
+      const viewer = screen.getByTestId('intermediate-document-text-viewer')
+      await act(async () => {
+        setScrollContainerSize(viewer, { width: 800, height: 600 })
+      })
+      await screen.findByTestId('intermediate-text-page-1')
+      const container = viewer.querySelector<HTMLElement>(
+        '.hsn-selection-container'
+      )
+      if (!container) throw new Error('Expected selection container')
+      mockElementSize(container, { width: 800, height: 600 })
+      await act(async () => {
+        resizeObserverMock.trigger(viewer)
+      })
+      await waitFor(() => {
+        expect(getAllSelectionProps()[0]?.linkedData?.items[0]).toBeDefined()
+      })
+      const selection = getAllSelectionProps()[0]
+      if (!selection.linkedData) throw new Error('Expected linked selection')
+      expect(
+        Object.values(selection.linkedData.items[0].rectsBySelectionId).flat()
+      ).not.toHaveLength(0)
+      expect(selection.linkedData.items[0].rectsBySelectionId).not.toEqual(
+        highlight.rectsBySelectionId
+      )
+
+      // A mount/selection-state notification contains Text-mode display geometry.
+      // Echoing it to persistence must retain the original Layout geometry.
+      act(() => {
+        selection.onLinkedDataChange?.({
+          ...selection.linkedData!,
+          activeRange: null,
+          selectedRangeId: null
+        })
+      })
+      expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ items: [highlight] })
+      )
+
+      // New/edited selections still discard their Text-only rectangles.
+      const edited = {
+        ...selection.linkedData.items[0],
+        end: { ...selection.linkedData.items[0].end, offset: 3 }
+      }
+      act(() => {
+        selection.onLinkedDataChange?.({
+          ...selection.linkedData!,
+          items: [edited],
+          activeRange: edited,
+          selectedRangeId: edited.id
+        })
+      })
+      expect(onLinkedDataChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          items: [
+            expect.objectContaining({
+              end: { selectionId: 'page-1', offset: 3 },
+              rectsBySelectionId: {}
+            })
+          ]
+        })
+      )
+    }
+  )
+
   it('emits the public highlight after primary mouse movement passes four pixels', async () => {
     // Given: Text Mode 已经根据字符锚点重建出一个持久高亮。
     const highlight = makeHighlight()

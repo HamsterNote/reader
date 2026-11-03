@@ -1661,6 +1661,8 @@ export function IntermediateDocumentTextViewer(
     ','
   )}:${visiblePageNumbers.join(',')}`
   const storedRanges = isRangesControlled ? ranges : internalRanges
+  const storedRangesRef = useRef<ReaderSelectionRange[]>(storedRanges)
+  storedRangesRef.current = storedRanges
   const effectiveRanges = useDerivedTextSelectionRanges({
     ranges: storedRanges,
     root: viewerRootElement,
@@ -2555,7 +2557,9 @@ export function IntermediateDocumentTextViewer(
         scopeId
       )
       const existingRanges = new Map(
-        effectiveRangesRef.current.map((range) => [range.id, range])
+        // Text-flow rectangles are display-only. Keep the stored Layout
+        // geometry for unchanged annotations when forwarding linked state.
+        storedRangesRef.current.map((range) => [range.id, range])
       )
       const activeRangeId = runtimePublicLinkedData.activeRange?.id
       const items = runtimePublicLinkedData.items.flatMap((range) => {
