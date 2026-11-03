@@ -87,12 +87,30 @@ export type AnnotationStorageV5InvalidReason =
   | 'corrupt-json'
   | 'unsupported-version'
   | 'invalid-shape'
+  | 'invalid-document'
+  | 'unvalidated-document'
+
+/**
+ * 画库文档校验器：必须由调用方注入正式发布包的 `readLayeredDocument(...).ok`
+ * 适配函数。存储层不认识文档内部结构，只有通过该函数校验的文档才算权威数据。
+ */
+export type AnnotationDocumentValidator = (document: unknown) => boolean
+
+export type AnnotationStorageV5ReadOptions = {
+  readonly validateDocument?: AnnotationDocumentValidator
+}
+
+export type AnnotationStorageV5WriteOptions = AnnotationStorageV5ReadOptions & {
+  /** 仅在用户显式确认恢复时置 true；自动保存与迁移路径永不开启。 */
+  readonly overwriteInvalid?: boolean
+}
 
 /**
  * 读取结果三态：
- * - `missing`：键不存在或为空，只有这种状态允许启动旧数据迁移；
+ * - `missing`：键确实不存在，只有这种状态允许启动旧数据迁移；
  * - `ok`：容器完整有效（空集合也算有效，不得用旧数据补齐）；
- * - `invalid`：键存在但不可用，调用方必须保留原件并报错，不得写回。
+ * - `invalid`：键存在但不可用（含空白/损坏 JSON、未知版本、坏文档、缺校验器），
+ *   调用方必须保留原件并报错，不得写回。
  */
 export type AnnotationStorageV5ReadResult =
   | { readonly status: 'missing' }
@@ -108,6 +126,11 @@ export type AnnotationStorageV5WriteResult =
       readonly status: 'refused'
       readonly reason: AnnotationStorageV5InvalidReason
     }
+  /** 本次要写入的内容本身不可信，未落盘。 */
+  | {
+      readonly status: 'invalid-input'
+      readonly reason: AnnotationStorageV5InvalidReason
+    }
   | { readonly status: 'failed'; readonly error: unknown }
 
 /** localStorage 兼容的最小后端；写入失败（如 quota）必须抛出，不能静默截断。 */
@@ -121,9 +144,12 @@ export function annotationStorageV5Key(fileName: string): string {
 }
 
 export function parseAnnotationStorageV5(
-  raw: string | null
+  raw: string | null,
+  options: AnnotationStorageV5ReadOptions = {}
 ): AnnotationStorageV5ReadResult {
-  if (raw === null || raw.trim() === '') return { status: 'missing' }
+  // 只有键确实不存在才算 missing；空白字符串是已存在但损坏的值，
+  // 若在此判成 missing，自动迁移会重新覆盖并复活已删除的标注。
+  if (raw === null) return { status: 'missing' }
 
   let parsed: unknown
   try {
@@ -149,6 +175,13 @@ export function parseAnnotationStorageV5(
   const storage = parseAnnotationStorageV5Shape(parsed)
   if (storage === null) return { status: 'invalid', reason: 'invalid-shape' }
 
+  const documentsReason = checkAnnotationDocuments(
+    storage.paintings,
+    options.validateDocument
+  )
+  if (documentsReason !== null)
+    return { status: 'invalid', reason: documentsReason }
+
   return { status: 'ok', storage }
 }
 
@@ -168,24 +201,33 @@ export function serializeAnnotationStorageV5(
 
 export function readAnnotationStorageV5(
   backend: AnnotationStorageV5Backend,
-  key: string
+  key: string,
+  options: AnnotationStorageV5ReadOptions = {}
 ): AnnotationStorageV5ReadResult {
-  return parseAnnotationStorageV5(backend.getItem(key))
+  return parseAnnotationStorageV5(backend.getItem(key), options)
 }
 
 /**
  * 单次 `setItem` 提交整容器：成功即完整替换，异常即失败且旧值不变。
  *
- * 已存在的值损坏或版本不受支持时默认拒绝覆盖（`refused`），调用方必须先让
- * 用户显式确认恢复，才可传 `overwriteInvalid: true`。
+ * 写入前先校验本次内容（文档必须通过注入的校验器）；已存在的值损坏、未知版本
+ * 或文档不合格时默认拒绝覆盖（`refused`），只有用户显式确认恢复才可传
+ * `overwriteInvalid: true`。
  */
 export function writeAnnotationStorageV5(
   backend: AnnotationStorageV5Backend,
   key: string,
   storage: AnnotationStorageV5,
-  options: { readonly overwriteInvalid?: boolean } = {}
+  options: AnnotationStorageV5WriteOptions = {}
 ): AnnotationStorageV5WriteResult {
-  const current = readAnnotationStorageV5(backend, key)
+  const inputReason = checkAnnotationDocuments(
+    storage.paintings,
+    options.validateDocument
+  )
+  if (inputReason !== null)
+    return { status: 'invalid-input', reason: inputReason }
+
+  const current = readAnnotationStorageV5(backend, key, options)
   if (current.status === 'invalid' && options.overwriteInvalid !== true) {
     return { status: 'refused', reason: current.reason }
   }
@@ -203,6 +245,29 @@ export function writeAnnotationStorageV5(
   } catch (error) {
     return { status: 'failed', error }
   }
+}
+
+// 非空 paintings 必须有校验器且逐页通过；空集合本身有效，不需要校验器。
+function checkAnnotationDocuments(
+  paintings: AnnotationPaintingsV5,
+  validateDocument: AnnotationDocumentValidator | undefined
+): AnnotationStorageV5InvalidReason | null {
+  const documents = Object.values(paintings)
+  if (documents.length === 0) return null
+  if (validateDocument === undefined) return 'unvalidated-document'
+
+  for (const document of documents) {
+    let valid = false
+    try {
+      valid = validateDocument(document)
+    } catch {
+      // 校验器抛错等同于不接受该文档，不能让异常逃逸并伪装成成功。
+      valid = false
+    }
+    if (!valid) return 'invalid-document'
+  }
+
+  return null
 }
 
 // V5 是权威数据源，校验比旧容器严格：任何一条 range / rect / 绘图页无法解析
@@ -234,7 +299,9 @@ function parseAnnotationStorageV5Shape(
   const parsedPaintings: AnnotationPaintingsV5 = {}
   for (const [pageId, document] of Object.entries(paintings)) {
     if (!isPublicPageSelectionId(pageId)) return null
-    if (!isAnnotationDocumentV5(document)) return null
+    // 文档内部结构由注入的画库校验器判定；这里只要求它确实是对象，
+    // 不能凭 schemaVersion 字段就把坏文档/未来文档当成有效权威数据。
+    if (!isPlainRecord(document)) return null
     parsedPaintings[pageId] = document
   }
 
@@ -244,12 +311,6 @@ function parseAnnotationStorageV5Shape(
     rects: parsedRects,
     paintings: parsedPaintings
   }
-}
-
-// 文档内部结构由画库负责，这里只确认它确实是带 schemaVersion 的对象；
-// 具体版本号即便高于 reader 已知值也原样保留，交由库的正式读取能力判断。
-function isAnnotationDocumentV5(value: unknown): value is AnnotationDocumentV5 {
-  return isPlainRecord(value) && typeof value['schemaVersion'] === 'number'
 }
 
 function parseHighlightsStorage(value: unknown): PersistedHighlights {
