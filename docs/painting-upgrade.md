@@ -1,6 +1,6 @@
 # Painting integration
 
-The reader integration uses the published `@hamster-note/painting@0.8.1` package, pinned exactly in `package.json` and `yarn.lock`.
+The reader integration uses the published `@hamster-note/painting@0.8.2` package, pinned exactly in `package.json` and `yarn.lock`.
 
 ## Public drawing API
 
@@ -30,13 +30,14 @@ Drawing changes, highlights, rectangles, history, file restoration and clear now
 
 Older apps continue to display the preserved pre-upgrade state; they cannot display subsequent drawing changes. There is no reverse projection or dual write.
 
-The draft still requires the independently owned host persistence work (2.5/2.6) and bridge integration (2.7): the authoritative host key is `reader.host.v2.snapshot.<fileId>` with `data.annotations`. The host must advance confirmed state only after a successful durable write and acknowledgment. The current host snapshot path still uses the old serializer; do not merge this draft until that path is replaced.
+Host persistence (2.5/2.6) is delivered independently in PR #34. Host `data.annotations` production and bridge migration/ack integration (2.7) are explicit follow-up work and are not included in this Web/consumer integration PR. The intended authoritative host key is `reader.host.v2.snapshot.<fileId>`. The host must advance confirmed state only after a successful durable write and acknowledgment. Its snapshot producer still uses the legacy serializer until that follow-up replaces the write path; this PR does not claim complete host migration or end-to-end persistence acceptance.
 
 ## Verification and remaining gate
 
-- `yarn typecheck`, `yarn lint`, `yarn build:lib`, and `yarn host:check` pass. The full test run has 1256 passing tests and the one library failure below. Follow-up targeted storage/demo tests also pass.
+- `yarn typecheck`, `yarn lint`, `yarn build:lib`, and `yarn host:check` pass. The 0.8.2 full regression run passes all 90 test files / 1258 tests.
 - `test/annotation-store.test.ts` checks v2/v3/v4 migration, all-page atomicity, mandatory validator wiring, quota retry, corrupt/new-key precedence, file isolation, and byte preservation. The demo tests additionally cover UI errors/retry, clear/reopen, drawing/history saves, and retired-file callbacks.
 - `yarn test:run` exercises the actual installed package, including mixed invalid pen styles, controlled echoes, complete objects, stroke colors, cancellation, and shared consumers.
 - `yarn check:painting` runs real pdf.js with Chromium at DPR 1/2/3, scale 50/100/200%, before/after scrolling, and navigation/remount. It writes a JSON report and exits unsuccessfully if any contract fails.
-- On 0.8.1, a surface first mounted with `enabled=false` fails to display saved objects. `test/painting-page-contract.test.tsx` and the browser's disabled-remount cases deliberately remain failing until painting fixes the presentation lifecycle. No reader workaround is included.
+- The published 0.8.2 package fixes the disabled-first-mount presentation defect. `test/painting-page-contract.test.tsx` verifies complete saved ink, shapes, text, and images on disabled first mount and remount. Chromium checks all saved object IDs after disabled remount, at every DPR, without changing the document. No reader implementation workaround is needed.
+- On 0.8.2, all 18 Chromium positioning cases pass with maximum error approximately 0.000013 CSS px; all three disabled-remount checks display all six saved objects. The browser report records the actual installed package version and any runtime errors.
 - The browser matrix covers mouse input and the checked viewport combinations. Rotation/crop fixtures, touch/pen on real devices, iOS/Android WebView, and durable host/bridge fault injection still require acceptance runs. The Web store and demo quota paths are covered by automated tests.

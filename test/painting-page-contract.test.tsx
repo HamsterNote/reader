@@ -1,5 +1,8 @@
-import { render, screen } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+import { mockPaintingCanvas } from './fixtures/painting'
+
+afterEach(() => vi.restoreAllMocks())
 import { migrateLegacyDocument } from '@hamster-note/painting/core'
 import {
   createEditor,
@@ -36,27 +39,50 @@ it('the released migrator accepts a valid pen', () => {
   ).toBe(true)
 })
 
-it('the official page surface displays saved objects with input disabled on first mount', () => {
-  const controller = createEditor({
-    schemaVersion: 3,
-    documentRevision: 1,
-    objects: [
+it('the official page surface displays complete saved history on disabled first mount and remount', async () => {
+  mockPaintingCanvas()
+  const migrated = migrateLegacyDocument({
+    strokes: [
       {
-        kind: 'shape',
-        objectId: 'saved-shape',
-        objectRevision: 0,
-        transformRevision: 0,
-        transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 },
-        shapeType: 'line',
+        id: 'saved-ink',
+        tool: 'pen',
+        width: 3,
         points: [
           { x: 10, y: 20 },
           { x: 30, y: 40 }
-        ],
-        style: { color: '#d02080', width: 3, opacity: 1 }
+        ]
+      },
+      {
+        id: 'saved-shape',
+        tool: 'line',
+        points: [
+          { x: 10, y: 20 },
+          { x: 30, y: 40 }
+        ]
+      },
+      {
+        id: 'saved-text',
+        tool: 'text',
+        text: 'Saved annotation',
+        points: [
+          { x: 10, y: 50 },
+          { x: 200, y: 80 }
+        ]
+      },
+      {
+        id: 'saved-image',
+        tool: 'image',
+        src: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E',
+        points: [
+          { x: 10, y: 90 },
+          { x: 50, y: 130 }
+        ]
       }
     ]
   })
-  render(
+  if (!migrated.ok) throw new Error(migrated.error.path)
+  const controller = createEditor(migrated.value)
+  const element = (
     <PageDrawingSurface
       pageId='page-1'
       controller={controller}
@@ -68,9 +94,32 @@ it('the official page surface displays saved objects with input disabled on firs
       }}
     />
   )
-  expect(
-    screen
+  const expected = migrated.value.objects
+    .map((object) => object.objectId)
+    .sort()
+  const expectCompleteHistory = () => {
+    const nodes = screen
       .getByTestId('page-drawing-surface')
-      .querySelector('[data-object-id="saved-shape"]')
-  ).not.toBeNull()
+      .querySelectorAll('[data-object-id]')
+    expect(
+      [
+        ...new Set(
+          Array.from(nodes, (node) => node.getAttribute('data-object-id'))
+        )
+      ].sort()
+    ).toEqual(expected)
+    expect(controller.getSnapshot('document')).toEqual(migrated.value)
+  }
+  let first: ReturnType<typeof render> | undefined
+  await act(async () => {
+    first = render(element)
+  })
+  expectCompleteHistory()
+  await act(async () => {
+    first?.unmount()
+  })
+  await act(async () => {
+    render(element)
+  })
+  expectCompleteHistory()
 })

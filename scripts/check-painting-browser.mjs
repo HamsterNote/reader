@@ -137,11 +137,33 @@ try {
         { timeout: 1500 }
       )
       .catch(() => null)
-    const readOnlyCount = await page
+    const readOnlyIds = await page
       .getByTestId('pdf-overlay-page-1')
       .locator('[data-object-id]')
-      .count()
-    report.cases.push({ dpr, disabledRemount: readOnlyCount > 0 })
+      .evaluateAll((nodes) =>
+        [
+          ...new Set(nodes.map((node) => node.getAttribute('data-object-id')))
+        ].sort()
+      )
+    const expectedIds = JSON.parse(saved)
+      ['page-1'].objects.map((object) => object.objectId)
+      .sort()
+    assert.deepEqual(
+      readOnlyIds,
+      expectedIds,
+      'disabled remount must display every saved object'
+    )
+    assert.equal(
+      await page.locator('#paintings').textContent(),
+      saved,
+      'read-only remount must not rewrite the document'
+    )
+    report.cases.push({
+      dpr,
+      disabledRemount: true,
+      readOnlyObjectCount: readOnlyIds.length,
+      expectedObjectCount: expectedIds.length
+    })
     await context.close()
   }
   assert.deepEqual(report.errors, [])
