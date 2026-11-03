@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { canonicalizePdfSelectionRange } from '../src/components/IntermediateDocumentViewer/pdfSelectionOffsets'
+import {
+  canonicalizePdfSelectionRange,
+  canonicalizePdfSelectionRanges
+} from '../src/components/IntermediateDocumentViewer/pdfSelectionOffsets'
 import { deriveTextSelectionRanges } from '../src/components/IntermediateDocumentViewer/textHighlightAdapter'
 import type { ReaderSelectionRange } from '../src/types/selection'
 
@@ -293,5 +296,44 @@ describe('Text highlight adapter', () => {
 
     // Then: 无法表示成单一 canonical 区间的范围不会被持久化为伪造端点。
     expect(canonicalRange).toBeNull()
+  })
+
+  it('splits a reordered PDF selection without including the source gap', () => {
+    const { root } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="0">Left</span> <span data-selection-start-offset="12">Right</span>'
+    )
+    const ranges = canonicalizePdfSelectionRanges(
+      {
+        ...storedRange,
+        text: 'eft Rig',
+        start: { selectionId: 'page-1', offset: 1 },
+        end: { selectionId: 'page-1', offset: 8 }
+      },
+      root
+    )
+    expect(ranges).toMatchObject([
+      {
+        id: storedRange.id,
+        text: 'eft',
+        start: { offset: 1 },
+        end: { offset: 4 }
+      },
+      {
+        id: `${storedRange.id}:pdf-12-15`,
+        text: 'Rig',
+        start: { offset: 12 },
+        end: { offset: 15 }
+      }
+    ])
+    expect(
+      canonicalizePdfSelectionRanges(
+        {
+          ...storedRange,
+          start: { selectionId: 'page-1', offset: 1 },
+          end: { selectionId: 'page-1', offset: 8 }
+        },
+        root
+      ).map((range) => range.id)
+    ).toEqual(ranges.map((range) => range.id))
   })
 })

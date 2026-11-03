@@ -3,10 +3,14 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
-import type { ReaderSelectionRange } from '../src/types/selection'
+import type {
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../src/types/selection'
 import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
 import {
   mockElementSize,
@@ -38,8 +42,8 @@ function makeText(): IntermediateText {
   } as IntermediateText
 }
 
-function makeDocument(): IntermediateDocument {
-  const page = { getContent: vi.fn(async () => [makeText()]) }
+function makeDocument(texts = [makeText()]): IntermediateDocument {
+  const page = { getContent: vi.fn(async () => texts) }
   return {
     id: 'text-drag-document',
     title: 'Text drag document',
@@ -81,6 +85,79 @@ afterEach(() => {
 })
 
 describe('Text Mode highlight drag', () => {
+  it('confirms every reordered PDF fragment through the public highlight callback', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const onHighlight = vi.fn()
+    const right = {
+      ...makeText(),
+      id: 'right',
+      content: 'Right',
+      polygon: [
+        [60, 20],
+        [100, 20],
+        [100, 36],
+        [60, 36]
+      ]
+    } as IntermediateText
+    const left = { ...makeText(), id: 'left', content: 'Left' }
+    mockTextRangeGeometry()
+    render(
+      <IntermediateDocumentTextViewer
+        document={makeDocument([right, left])}
+        isPdf
+        selectionRef={selectionRef}
+        onHighlight={onHighlight}
+        overlayRectType='px'
+      />
+    )
+    const viewer = screen.getByTestId('intermediate-document-text-viewer')
+    await act(async () =>
+      setScrollContainerSize(viewer, { width: 800, height: 600 })
+    )
+    await screen.findByTestId('intermediate-text-page-1')
+    expect(
+      Array.from(
+        viewer.querySelectorAll('[data-selection-start-offset]'),
+        (element) => element.textContent
+      )
+    ).toEqual(['Left', 'Right'])
+    const selection = getAllSelectionProps()[0]
+    if (!selection.linkedData || !selection.selectionId)
+      throw new Error('Expected linked selection')
+    act(() =>
+      selection.onLinkedDataChange?.({
+        ...selection.linkedData!,
+        activeRange: {
+          ...makeHighlight(),
+          text: 'Left Right',
+          start: { selectionId: selection.selectionId!, offset: 0 },
+          end: { selectionId: selection.selectionId!, offset: 10 }
+        }
+      })
+    )
+    act(() => selectionRef.current?.confirm())
+    const emitted = onHighlight.mock.calls.map(
+      ([range]) => range as ReaderSelectionRange
+    )
+    expect(
+      emitted.map(({ text, start, end }) => ({ text, start, end }))
+    ).toEqual([
+      {
+        text: 'Left',
+        start: { selectionId: 'page-1', offset: 5 },
+        end: { selectionId: 'page-1', offset: 9 }
+      },
+      {
+        text: 'Right',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 5 }
+      }
+    ])
+    for (const range of emitted)
+      expect(range.rectsBySelectionId['page-1']).not.toHaveLength(0)
+    expect(new Set(emitted.map(({ id }) => id)).size).toBe(2)
+  })
+
   it.each([false, true])(
     'keeps stored layout rectangles for unchanged highlights (isPdf=%s)',
     async (isPdf) => {
@@ -134,7 +211,7 @@ describe('Text Mode highlight drag', () => {
         expect.objectContaining({ items: [highlight] })
       )
 
-      // New/edited selections still discard their Text-only rectangles.
+      // PDF edits persist source-page geometry; other text views stay anchor-only.
       const edited = {
         ...selection.linkedData.items[0],
         end: { ...selection.linkedData.items[0].end, offset: 3 }
@@ -152,7 +229,13 @@ describe('Text Mode highlight drag', () => {
           items: [
             expect.objectContaining({
               end: { selectionId: 'page-1', offset: 3 },
-              rectsBySelectionId: {}
+              rectsBySelectionId: isPdf
+                ? {
+                    'page-1': [
+                      expect.objectContaining({ x: 10, y: 20, height: 16 })
+                    ]
+                  }
+                : {}
             })
           ]
         })

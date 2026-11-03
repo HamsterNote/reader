@@ -78,7 +78,8 @@ import {
 } from './IntermediateDocumentViewer'
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
-import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
+import { canonicalizePdfSelectionRanges } from './pdfSelectionOffsets'
+import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
@@ -2518,36 +2519,46 @@ export function IntermediateDocumentTextViewer(
     [onSelect]
   )
 
-  const emitPendingLinkedHighlight = useCallback(
-    (range: ReaderSelectionRange) => {
+  const emitPendingLinkedHighlights = useCallback(
+    (ranges: ReaderSelectionRange[]) => {
       const pendingOperation = pendingLinkedHighlightOperationRef.current
-      if (!pendingOperation || pendingOperation.has(range.id)) {
-        return
-      }
-
+      if (!pendingOperation) return
+      const added = ranges.filter((range) => !pendingOperation.has(range.id))
+      if (added.length === 0) return
       pendingLinkedHighlightOperationRef.current = null
-      if (emittedLinkedHighlightRangeIdsRef.current.has(range.id)) {
-        return
+      for (const range of added) {
+        if (emittedLinkedHighlightRangeIdsRef.current.has(range.id)) continue
+        emittedLinkedHighlightRangeIdsRef.current.add(range.id)
+        onHighlight?.(range)
       }
-
-      emittedLinkedHighlightRangeIdsRef.current.add(range.id)
-      onHighlight?.(range)
     },
     [onHighlight]
   )
 
-  const toTextRange = useCallback(
-    (range: ReaderSelectionRange): ReaderSelectionRange | null => {
-      const canonicalRange = isPdf
-        ? canonicalizePdfSelectionRange(range, viewerRootRef.current)
-        : range
-      if (!canonicalRange) return null
-      return {
-        ...canonicalRange,
-        rectsBySelectionId: {}
-      }
+  const toTextRanges = useCallback(
+    (range: ReaderSelectionRange): ReaderSelectionRange[] => {
+      if (!isPdf) return [{ ...range, rectsBySelectionId: {} }]
+      const pageSizes = new Map(
+        Array.from(textsByPageNumberRef.current.keys()).flatMap(
+          (pageNumber) => {
+            const size = runtimeDocument?.getPageSizeByPageNumber(pageNumber)
+            return size
+              ? [[pageNumber, { width: size.x, height: size.y }] as const]
+              : []
+          }
+        )
+      )
+      return canonicalizePdfSelectionRanges(range, viewerRootRef.current).map(
+        (canonicalRange) =>
+          deriveLayoutSelectionRange({
+            range: canonicalRange,
+            textsByPageNumber: textsByPageNumberRef.current,
+            pageSizesByPageNumber: pageSizes,
+            overlayRectType
+          })
+      )
     },
-    [isPdf]
+    [isPdf, overlayRectType, runtimeDocument]
   )
 
   const handleLinkedDataChange = useCallback(
@@ -2562,14 +2573,16 @@ export function IntermediateDocumentTextViewer(
         storedRangesRef.current.map((range) => [range.id, range])
       )
       const activeRangeId = runtimePublicLinkedData.activeRange?.id
-      const items = runtimePublicLinkedData.items.flatMap((range) => {
+      const convertedItems = runtimePublicLinkedData.items.flatMap((range) => {
         const existingRange = existingRanges.get(range.id)
         if (existingRange && range.id !== activeRangeId) return [existingRange]
-        const textRange = toTextRange(range)
-        return textRange ? [textRange] : []
+        return toTextRanges(range)
       })
+      const items = Array.from(
+        new Map(convertedItems.map((range) => [range.id, range])).values()
+      )
       const activeRange = runtimePublicLinkedData.activeRange
-        ? toTextRange(runtimePublicLinkedData.activeRange)
+        ? (toTextRanges(runtimePublicLinkedData.activeRange)[0] ?? null)
         : runtimePublicLinkedData.activeRange
       const publicLinkedData: ReaderLinkedSelectionData = {
         ...runtimePublicLinkedData,
@@ -2603,22 +2616,17 @@ export function IntermediateDocumentTextViewer(
         setInternalSelectedRangeId(publicLinkedData.selectedRangeId)
       }
 
-      for (const range of publicLinkedData.items) {
-        emitPendingLinkedHighlight(range)
-        if (!pendingLinkedHighlightOperationRef.current) {
-          break
-        }
-      }
+      emitPendingLinkedHighlights(publicLinkedData.items)
     },
     [
-      emitPendingLinkedHighlight,
+      emitPendingLinkedHighlights,
       isRangesControlled,
       isSelectedRangeIdControlled,
       onLinkedDataChange,
       isEpub,
       scopeId,
       selectionScope,
-      toTextRange
+      toTextRanges
     ]
   )
 
@@ -2627,25 +2635,26 @@ export function IntermediateDocumentTextViewer(
       const publicRange = mapRuntimeRangeToPublic(range, scopeId)
 
       if (publicRange) {
-        const textRange = toTextRange(publicRange)
-        if (!textRange) return
-        traceHighlight('text.callback.select', {
-          mode: 'text',
-          isEpub,
-          ranges: summarizeHighlightRanges([textRange])
-        })
-        onLinkedSelect?.(textRange)
-        emitLinkedSelectOnce(textRange)
-        emitPendingLinkedHighlight(textRange)
+        const textRanges = toTextRanges(publicRange)
+        for (const textRange of textRanges) {
+          traceHighlight('text.callback.select', {
+            mode: 'text',
+            isEpub,
+            ranges: summarizeHighlightRanges([textRange])
+          })
+          onLinkedSelect?.(textRange)
+          emitLinkedSelectOnce(textRange)
+        }
+        emitPendingLinkedHighlights(textRanges)
       }
     },
     [
       emitLinkedSelectOnce,
-      emitPendingLinkedHighlight,
+      emitPendingLinkedHighlights,
       onLinkedSelect,
       isEpub,
       scopeId,
-      toTextRange
+      toTextRanges
     ]
   )
 
@@ -2654,22 +2663,23 @@ export function IntermediateDocumentTextViewer(
       const publicRange = mapRuntimeRangeToPublic(range, scopeId)
 
       if (publicRange) {
-        const textRange = toTextRange(publicRange)
-        if (!textRange) return
-        traceHighlight('text.callback.update', {
-          mode: 'text',
-          isEpub,
-          ranges: summarizeHighlightRanges([textRange])
-        })
-        if (!isRangesControlled) {
-          setInternalRanges((currentRanges) =>
-            currentRanges.map((currentRange) =>
-              currentRange.id === textRange.id ? textRange : currentRange
+        const textRanges = toTextRanges(publicRange)
+        for (const textRange of textRanges) {
+          traceHighlight('text.callback.update', {
+            mode: 'text',
+            isEpub,
+            ranges: summarizeHighlightRanges([textRange])
+          })
+          if (!isRangesControlled) {
+            setInternalRanges((currentRanges) =>
+              currentRanges.map((currentRange) =>
+                currentRange.id === textRange.id ? textRange : currentRange
+              )
             )
-          )
+          }
+          onLinkedUpdateRange?.(textRange)
+          onUpdateRange?.(textRange)
         }
-        onLinkedUpdateRange?.(textRange)
-        onUpdateRange?.(textRange)
       }
     },
     [
@@ -2678,7 +2688,7 @@ export function IntermediateDocumentTextViewer(
       onLinkedUpdateRange,
       onUpdateRange,
       scopeId,
-      toTextRange
+      toTextRanges
     ]
   )
 

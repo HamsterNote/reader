@@ -10,6 +10,48 @@ type DomAnchoredSegment = {
   readonly domEnd: number
   readonly canonicalStart: number
   readonly canonicalEnd: number
+  readonly text: string
+}
+
+/** Visual PDF reading order can differ from the source text stream. Represent
+ * a discontiguous selection as separate annotations, never a wider source range
+ * that would also mark unselected text (or silently reject the selection). */
+export function canonicalizePdfSelectionRanges(
+  range: ReaderSelectionRange,
+  root: HTMLElement | null
+): ReaderSelectionRange[] {
+  const continuous = canonicalizePdfSelectionRange(range, root)
+  if (continuous) return [continuous]
+  if (!root || range.start.selectionId !== range.end.selectionId) return []
+  const segments = getSelectionSegments(range.start.selectionId, root)
+  if (!segments) return []
+
+  const parts: Array<{ start: number; end: number; text: string }> = []
+  for (const segment of segments) {
+    const start = Math.max(range.start.offset, segment.domStart)
+    const end = Math.min(range.end.offset, segment.domEnd)
+    if (end <= start) continue
+    const sourceStart = segment.canonicalStart + start - segment.domStart
+    const sourceEnd = segment.canonicalStart + end - segment.domStart
+    const text = segment.text.slice(
+      start - segment.domStart,
+      end - segment.domStart
+    )
+    const previous = parts.at(-1)
+    if (previous?.end === sourceStart) {
+      previous.end = sourceEnd
+      previous.text += text
+    } else {
+      parts.push({ start: sourceStart, end: sourceEnd, text })
+    }
+  }
+  return parts.map((part, index) => ({
+    ...range,
+    id: index === 0 ? range.id : `${range.id}:pdf-${part.start}-${part.end}`,
+    text: part.text,
+    start: { ...range.start, offset: part.start },
+    end: { ...range.end, offset: part.end }
+  }))
 }
 
 export function canonicalizePdfSelectionRange(
@@ -128,7 +170,8 @@ function getDomAnchoredSegments(root: HTMLElement): DomAnchoredSegment[] {
       {
         ...bounds,
         canonicalStart,
-        canonicalEnd: canonicalStart + textLength
+        canonicalEnd: canonicalStart + textLength,
+        text: anchor.textContent ?? ''
       }
     ]
   })
