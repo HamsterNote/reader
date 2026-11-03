@@ -2654,7 +2654,7 @@ describe('IntermediateDocumentViewer', () => {
     const cancelFrame = vi
       .spyOn(window, 'cancelAnimationFrame')
       .mockImplementation((frameId) => {
-        frameCallbacks.delete(frameId)
+        if (frameId != null) frameCallbacks.delete(frameId)
       })
     const { document } = makeDocument({ pageCount: 1 })
     const onLayoutReadingProgressChange = vi.fn()
@@ -2710,7 +2710,7 @@ describe('IntermediateDocumentViewer', () => {
     const cancelFrame = vi
       .spyOn(window, 'cancelAnimationFrame')
       .mockImplementation((frameId) => {
-        frameCallbacks.delete(frameId)
+        if (frameId != null) frameCallbacks.delete(frameId)
       })
     const { document } = makeDocument({ pageCount: 1 })
     const firstProgressChange = vi.fn()

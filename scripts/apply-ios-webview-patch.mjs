@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 const require = createRequire(import.meta.url)
 const patchFile = resolve(
   import.meta.dirname,
-  '../patches/react-native-webview-13.15.0-ios-edit-menu.patch'
+  '../patches/react-native-webview-13.16.1-ios-edit-menu.patch'
 )
 
 export function applyIosWebViewPatch(
@@ -16,9 +16,9 @@ export function applyIosWebViewPatch(
   const { version } = JSON.parse(
     readFileSync(resolve(dependencyRoot, 'package.json'), 'utf8')
   )
-  if (version !== '13.15.0')
+  if (version !== '13.16.1')
     throw new Error(
-      `iOS edit-menu patch requires react-native-webview 13.15.0; found ${version}`
+      `iOS edit-menu patch requires react-native-webview 13.16.1; found ${version}`
     )
 
   // --no-index applies to the installed dependency, without changing Git's index.

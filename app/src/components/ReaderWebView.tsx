@@ -280,7 +280,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
   webview: { flex: 1, backgroundColor: 'transparent' },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24

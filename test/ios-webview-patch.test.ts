@@ -13,14 +13,14 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const patchFile = resolve(
-  'patches/react-native-webview-13.15.0-ios-edit-menu.patch'
+  'patches/react-native-webview-13.16.1-ios-edit-menu.patch'
 )
 const script = pathToFileURL(
   resolve('scripts/apply-ios-webview-patch.mjs')
 ).href
 const fixtures: string[] = []
 
-function fixture(version = '13.15.0'): string {
+function fixture(version = '13.16.1'): string {
   const root = mkdtempSync(resolve(tmpdir(), 'reader-ios-patch-'))
   fixtures.push(root)
   mkdirSync(resolve(root, 'apple'))
@@ -81,7 +81,7 @@ describe('pinned iOS WebView patch delivery', () => {
   it('rejects unsupported versions without changing native sources', () => {
     const root = fixture('13.16.0')
     const before = readFileSync(resolve(root, 'apple/RNCWebViewImpl.m'), 'utf8')
-    expect(() => apply(root)).toThrow('requires react-native-webview 13.15.0')
+    expect(() => apply(root)).toThrow('requires react-native-webview 13.16.1')
     expect(readFileSync(resolve(root, 'apple/RNCWebViewImpl.m'), 'utf8')).toBe(
       before
     )
