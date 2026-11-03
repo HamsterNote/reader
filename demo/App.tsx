@@ -48,7 +48,11 @@ import {
 } from './commentStorage'
 import { convertEpubDocumentForReader } from './epubForReader'
 import { loadFileToMemory } from './fileMemoryLoader'
-import { parseHighlights, serializeHighlights } from './highlightStorage'
+import {
+  createAnnotationStore,
+  isPaintingDocument,
+  type ReaderAnnotations
+} from '../src/storage/annotationStore'
 import { createImagePreviewDocument } from './imagePreview'
 import {
   type DemoOcrMode,
@@ -442,30 +446,6 @@ function parseStoredLayoutReadingProgress(
   } catch {
     return undefined
   }
-}
-
-function persistHighlights(
-  fileName: string | undefined,
-  ranges: ReaderSelectionRange[],
-  rects: ReaderSelectionRectangle[],
-  paintings: Record<string, EditorDocument>
-) {
-  if (!fileName) return
-  const persisted = parseHighlights(
-    serializeHighlights(ranges, rects, paintings)
-  )
-  traceHighlight('demo.storage.write', {
-    fileName,
-    ranges: summarizeHighlightRanges(Array.from(persisted.ranges))
-  })
-  localStorage.setItem(
-    `hamster-reader-demo:highlights:${fileName}`,
-    serializeHighlights(
-      Array.from(persisted.ranges),
-      Array.from(persisted.rects),
-      persisted.paintings
-    )
-  )
 }
 
 function useAnnotationHistoryShortcuts(
@@ -897,6 +877,52 @@ function useEdgeCropState() {
 // ---------------------------------------------------------------------------
 
 export function App() {
+  const annotationStore = useMemo(
+    () => createAnnotationStore(localStorage, isPaintingDocument),
+    []
+  )
+  const annotationFileRef = useRef<string | null>(null)
+  const pendingAnnotationsRef = useRef<{
+    fileName: string
+    storage: ReaderAnnotations
+  } | null>(null)
+  const [annotationError, setAnnotationError] = useState<string | null>(null)
+  const failedRestoreRef = useRef<{
+    selection: FileSelection
+    document: ReaderDocument
+    label: SupportedParserLabel
+  } | null>(null)
+  const persistAnnotations = useCallback(
+    (
+      fileName: string | undefined,
+      ranges: readonly ReaderSelectionRange[],
+      rects: readonly ReaderSelectionRectangle[],
+      paintings: Record<string, EditorDocument>
+    ) => {
+      if (!fileName || annotationFileRef.current !== fileName) return false
+      const storage: ReaderAnnotations = {
+        version: 5,
+        ranges,
+        rects,
+        paintings
+      }
+      const result = annotationStore.save(fileName, storage)
+      if (result.status === 'saved') {
+        pendingAnnotationsRef.current = null
+        setAnnotationError(null)
+        traceHighlight('demo.storage.write', {
+          fileName,
+          ranges: summarizeHighlightRanges(Array.from(ranges))
+        })
+        return true
+      }
+      pendingAnnotationsRef.current = { fileName, storage }
+      setAnnotationError('标注保存失败，修改尚未保存，请重试。')
+      return false
+    },
+    [annotationStore]
+  )
+
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [stagedFile, setStagedFile] = useState<File | null>(null)
   const [document, setDocument] = useState<
@@ -1131,7 +1157,7 @@ export function App() {
 
   // onAnnotationHistoryChange 是 undo/redo 以及所有 history-managed 变更的
   // 唯一正规状态更新路径。从此快照中更新 ranges/rects/selectedRangeId/selectedRectId，
-  // 并通过 localStorage v3 helpers 持久化。
+  // 并只向 V5 权威键持久化。
   // reset 源（文件切换）不持久化，因为文件上传处理器会从 localStorage 加载数据。
   const handleAnnotationHistoryChange = useCallback(
     (
@@ -1152,7 +1178,7 @@ export function App() {
       setSelectedRectId(next.selectedRectId)
       setHistoryStatus(detail.status)
       if (detail.source !== 'reset') {
-        persistHighlights(
+        persistAnnotations(
           uploadedFile?.name,
           next.ranges as ReaderSelectionRange[],
           next.rects as ReaderSelectionRectangle[],
@@ -1160,7 +1186,13 @@ export function App() {
         )
       }
     },
-    [loadedParserLabel, pagePaintings, renderMode, uploadedFile?.name]
+    [
+      persistAnnotations,
+      loadedParserLabel,
+      pagePaintings,
+      renderMode,
+      uploadedFile?.name
+    ]
   )
 
   // onSelect 回调：点击高亮按钮后输出高亮数据到控制台
@@ -1191,12 +1223,19 @@ export function App() {
           existingIndex === -1
             ? [...prev, range]
             : prev.map((item) => (item.id === range.id ? range : item))
-        persistHighlights(uploadedFile?.name, nextRanges, rects, pagePaintings)
+        persistAnnotations(uploadedFile?.name, nextRanges, rects, pagePaintings)
         return nextRanges
       })
       setSelectedRangeId(range.id)
     },
-    [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
+    [
+      persistAnnotations,
+      loadedParserLabel,
+      pagePaintings,
+      rects,
+      renderMode,
+      uploadedFile?.name
+    ]
   )
 
   const handleLinkedDataChange = useCallback(
@@ -1212,9 +1251,16 @@ export function App() {
 
       setRanges(next.items)
       setSelectedRangeId(next.selectedRangeId)
-      persistHighlights(uploadedFile?.name, next.items, rects, pagePaintings)
+      persistAnnotations(uploadedFile?.name, next.items, rects, pagePaintings)
     },
-    [loadedParserLabel, pagePaintings, rects, renderMode, uploadedFile?.name]
+    [
+      persistAnnotations,
+      loadedParserLabel,
+      pagePaintings,
+      rects,
+      renderMode,
+      uploadedFile?.name
+    ]
   )
 
   const handleDragHighlight = useCallback((highlight: ReaderSelectionRange) => {
@@ -1252,11 +1298,11 @@ export function App() {
     (range: ReaderSelectionRange) => {
       setRanges((prev) => {
         const newRanges = prev.map((r) => (r.id === range.id ? range : r))
-        persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
+        persistAnnotations(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
     },
-    [rects, pagePaintings, uploadedFile?.name]
+    [persistAnnotations, rects, pagePaintings, uploadedFile?.name]
   )
 
   // onCommentHighlight：立即 resolve Promise 让 Reader 关闭 popover，
@@ -1314,30 +1360,41 @@ export function App() {
     (id: string) => {
       setRects((prev) => {
         const newRects = prev.filter((r) => r.id !== id)
-        persistHighlights(uploadedFile?.name, ranges, newRects, pagePaintings)
+        persistAnnotations(uploadedFile?.name, ranges, newRects, pagePaintings)
         return newRects
       })
       if (selectedRectId === id) {
         setSelectedRectId(null)
       }
     },
-    [ranges, pagePaintings, selectedRectId, uploadedFile?.name]
+    [
+      persistAnnotations,
+      ranges,
+      pagePaintings,
+      selectedRectId,
+      uploadedFile?.name
+    ]
   )
 
-  // 清空全部：通过 selectionRef.current?.clear() 触发 library 的 clear 命令，
-  // library 会创建 checkpoint 并通过 onAnnotationHistoryChange 回传空快照。
+  // 清空完整新容器；历史管理范围/矩形，绘图集合独立清空。
   const handleClearAllRanges = useCallback(() => {
     selectionRef.current?.clear()
+    setRanges([])
+    setRects([])
+    setPagePaintings({})
+    setSelectedRangeId(null)
+    setSelectedRectId(null)
+    persistAnnotations(uploadedFile?.name, [], [], {})
     setComments([])
     setIsCommentPanelOpen(false)
     setActiveHighlightId(null)
-  }, [])
+  }, [persistAnnotations, uploadedFile?.name])
 
   const handleRemoveRange = useCallback(
     (id: string) => {
       setRanges((prev) => {
         const newRanges = prev.filter((r) => r.id !== id)
-        persistHighlights(uploadedFile?.name, newRanges, rects, pagePaintings)
+        persistAnnotations(uploadedFile?.name, newRanges, rects, pagePaintings)
         return newRanges
       })
       setComments((prev) => removeHighlightFromComments(prev, id))
@@ -1349,6 +1406,7 @@ export function App() {
       }
     },
     [
+      persistAnnotations,
       rects,
       pagePaintings,
       selectedRangeId,
@@ -1360,10 +1418,11 @@ export function App() {
   // 包装 setPagePaintings：pagePaintings 不走 annotation history，需独立持久化。
   const handlePagePaintingsChange = useCallback(
     (next: Record<string, EditorDocument>) => {
+      if (annotationFileRef.current !== uploadedFile?.name) return
       setPagePaintings(next)
-      persistHighlights(uploadedFile?.name, ranges, rects, next)
+      persistAnnotations(uploadedFile?.name, ranges, rects, next)
     },
-    [ranges, rects, uploadedFile?.name]
+    [persistAnnotations, ranges, rects, uploadedFile?.name]
   )
 
   // 侧边栏文字高亮项点击：始终选中并滚动到该 range（不做 toggle-off）
@@ -1616,6 +1675,23 @@ export function App() {
       if (!isCurrentSelection(selection)) return
 
       const { file } = selection
+      const restored = annotationStore.open(file.name)
+      if (restored.status !== 'ready') {
+        failedRestoreRef.current = {
+          selection,
+          document: parsedDocument,
+          label: parserLabel
+        }
+        annotationFileRef.current = null
+        setAnnotationError(restored.message)
+        setDocument(null)
+        return
+      }
+      failedRestoreRef.current = null
+      annotationFileRef.current = file.name
+      pendingAnnotationsRef.current = null
+      setAnnotationError(null)
+
       setUploadedFile(file)
       setStagedFile(null)
       setDocument(parsedDocument)
@@ -1654,13 +1730,9 @@ export function App() {
         )
       )
 
-      const storedHighlights = localStorage.getItem(
-        `hamster-reader-demo:highlights:${file.name}`
-      )
-      const parsedHighlights = parseHighlights(storedHighlights)
-      setRanges(Array.from(parsedHighlights.ranges))
-      setRects(Array.from(parsedHighlights.rects))
-      setPagePaintings(parsedHighlights.paintings)
+      setRanges(Array.from(restored.storage.ranges))
+      setRects(Array.from(restored.storage.rects))
+      setPagePaintings(restored.storage.paintings)
       setBookmarks(
         parseStoredBookmarks(
           localStorage.getItem(`${BOOKMARK_STORAGE_PREFIX}${file.name}`)
@@ -1683,7 +1755,7 @@ export function App() {
       setSelectedRangeId(null)
       setSelectedRectId(null)
     },
-    [isCurrentSelection]
+    [annotationStore, isCurrentSelection]
   )
 
   const saveSelectedFile = useCallback(
@@ -1797,6 +1869,10 @@ export function App() {
       selectionEpochRef.current = selection
       selectionAbortControllerRef.current = abortController
 
+      annotationFileRef.current = null
+      failedRestoreRef.current = null
+      pendingAnnotationsRef.current = null
+      setAnnotationError(null)
       setOcrError(null)
       setParseError(null)
       setStagedFile(file)
@@ -2783,7 +2859,8 @@ export function App() {
           />
         </div>
 
-        {ranges.length + rects.length > 0 && (
+        {(ranges.length + rects.length > 0 ||
+          Object.keys(pagePaintings).length > 0) && (
           <div
             data-testid='demo-sidebar-highlights'
             style={{ marginTop: '12px' }}
@@ -2797,7 +2874,9 @@ export function App() {
               }}
             >
               <span style={{ fontSize: '14px', fontWeight: 600 }}>
-                已创建高亮 ({ranges.length + rects.length})
+                {ranges.length + rects.length > 0
+                  ? `已创建高亮 (${ranges.length + rects.length})`
+                  : `已创建绘图 (${Object.keys(pagePaintings).length})`}
               </span>
               <button
                 type='button'
@@ -2945,12 +3024,48 @@ export function App() {
           parseError={parseError}
           isParsing={isParsing}
         />
+        {annotationError && (
+          <div role='alert' data-testid='annotation-storage-error'>
+            {annotationError}
+            {pendingAnnotationsRef.current && (
+              <button
+                onClick={() => {
+                  const pending = pendingAnnotationsRef.current
+                  if (pending)
+                    persistAnnotations(
+                      pending.fileName,
+                      pending.storage.ranges,
+                      pending.storage.rects,
+                      pending.storage.paintings
+                    )
+                }}
+              >
+                重试保存
+              </button>
+            )}
+            {failedRestoreRef.current && (
+              <button
+                onClick={() => {
+                  const failed = failedRestoreRef.current
+                  if (failed)
+                    commitParsedDocument(
+                      failed.selection,
+                      failed.document,
+                      failed.label
+                    )
+                }}
+              >
+                重试恢复
+              </button>
+            )}
+          </div>
+        )}
         <ViewerLifetimeBoundary
           token={viewerLifetimeToken}
           onSetup={handleBoundarySetup}
           onCleanup={handleBoundaryCleanup}
         >
-          {pdfLoadState.phase !== 'ready' && (
+          {pdfLoadState.phase !== 'ready' && !failedRestoreRef.current && (
             <Reader
               engineSource={engineSource}
               document={document || undefined}

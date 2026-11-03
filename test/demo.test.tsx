@@ -40,6 +40,10 @@ import {
 import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import legacyDrawingFixture from './compat/fixtures/highlights/pdf-two-column.v4.json'
+import { annotationStorageV5Key } from '../src/storage/highlightStorage'
+import { migrateLegacyDocument } from '@hamster-note/painting/core'
+
 import { App } from '../demo/App'
 import { loadFileToMemory } from '../demo/fileMemoryLoader'
 import { createImagePreviewDocument } from '../demo/imagePreview'
@@ -1133,7 +1137,7 @@ describe('demo parser flow', () => {
         nextHighlight
       ])
     })
-    const persisted = localStorage.getItem(highlightStorageKey(fileName))
+    const persisted = localStorage.getItem(annotationStorageV5Key(fileName))
     expect(persisted).toContain('"selectionId":"page-2"')
     expect(persisted).toContain('"rectsBySelectionId"')
     expect(persisted).toContain('"overlayRectType":"percent"')
@@ -2413,10 +2417,10 @@ describe('demo parser flow', () => {
       })
 
       const stored = JSON.parse(
-        localStorage.getItem(highlightStorageKey('delete.pdf')) || '{}'
+        localStorage.getItem(annotationStorageV5Key('delete.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 4,
+        version: 5,
         ranges: [],
         rects: [],
         paintings: {}
@@ -3399,10 +3403,10 @@ describe('demo parser flow', () => {
       expect(screen.getByText('hello highlight')).toBeInTheDocument()
 
       const stored = JSON.parse(
-        localStorage.getItem(highlightStorageKey('highlight.pdf')) || '{}'
+        localStorage.getItem(annotationStorageV5Key('highlight.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 4,
+        version: 5,
         ranges: [makeLinkedRange('range-1', 'hello highlight')],
         rects: [],
         paintings: {}
@@ -3462,7 +3466,9 @@ describe('demo parser flow', () => {
       render(<App />)
       await upload(makeFile('legacy.pdf'))
 
-      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(
+        await screen.findByTestId('annotation-storage-error')
+      ).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
       expect(screen.queryByText('legacy highlight')).not.toBeInTheDocument()
     })
@@ -3497,10 +3503,10 @@ describe('demo parser flow', () => {
         expect(screen.getByText('after update')).toBeInTheDocument()
       })
       const stored = JSON.parse(
-        localStorage.getItem(highlightStorageKey('update.pdf')) || '{}'
+        localStorage.getItem(annotationStorageV5Key('update.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 4,
+        version: 5,
         ranges: [updatedRange],
         rects: [],
         paintings: {}
@@ -3529,10 +3535,10 @@ describe('demo parser flow', () => {
         expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
       })
       const stored = JSON.parse(
-        localStorage.getItem(highlightStorageKey('clear.pdf')) || '{}'
+        localStorage.getItem(annotationStorageV5Key('clear.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 4,
+        version: 5,
         ranges: [],
         rects: [],
         paintings: {}
@@ -3563,13 +3569,15 @@ describe('demo parser flow', () => {
 
       await waitFor(() => {
         expect(
-          localStorage.getItem(highlightStorageKey('runtime.pdf'))
+          localStorage.getItem(annotationStorageV5Key('runtime.pdf'))
         ).not.toBe(null)
       })
-      const storedRaw = localStorage.getItem(highlightStorageKey('runtime.pdf'))
+      const storedRaw = localStorage.getItem(
+        annotationStorageV5Key('runtime.pdf')
+      )
       expect(storedRaw).not.toContain('reader-linked-1')
       expect(JSON.parse(storedRaw || '{}')).toEqual({
-        version: 4,
+        version: 5,
         ranges: [],
         rects: [],
         paintings: {}
@@ -3619,7 +3627,7 @@ describe('demo parser flow', () => {
       expect(screen.queryByText('file A highlight')).not.toBeInTheDocument()
     })
 
-    it('yields empty array for invalid JSON or wrong shape', async () => {
+    it('reports corrupt legacy input without creating a new key', async () => {
       localStorage.setItem(
         highlightStorageKey('corrupt.pdf'),
         '{ not valid json ]'
@@ -3636,15 +3644,28 @@ describe('demo parser flow', () => {
       const { unmount } = render(<App />)
       await upload(makeFile('corrupt.pdf'))
 
-      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(
+        await screen.findByTestId('annotation-storage-error')
+      ).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      expect(
+        localStorage.getItem(annotationStorageV5Key('corrupt.pdf'))
+      ).toBeNull()
+      expect(localStorage.getItem(highlightStorageKey('corrupt.pdf'))).toBe(
+        '{ not valid json ]'
+      )
       unmount()
 
       render(<App />)
       await upload(makeFile('wrong-shape.pdf'))
 
-      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(
+        await screen.findByTestId('annotation-storage-error')
+      ).toBeInTheDocument()
       expect(screen.queryByText(/已创建高亮/)).not.toBeInTheDocument()
+      expect(
+        localStorage.getItem(annotationStorageV5Key('wrong-shape.pdf'))
+      ).toBeNull()
     })
 
     it('ignores stale parser results applying older highlights to a newer file', async () => {
@@ -3688,6 +3709,228 @@ describe('demo parser flow', () => {
 
       expect(screen.queryByText('Stale Document')).not.toBeInTheDocument()
       expect(screen.queryByText('stale text')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('authoritative V5 demo storage', () => {
+    it('migrates all pages, saves drawings and clear only to V5, and reopens the authoritative empty state', async () => {
+      const fileName = 'drawing-upgrade.pdf'
+      const legacy = {
+        ...legacyDrawingFixture,
+        paintings: {
+          'page-1': legacyDrawingFixture.paintings['page-1'],
+          'page-99': legacyDrawingFixture.paintings['page-1']
+        }
+      }
+      const oldBytes = JSON.stringify(legacy, null, 2)
+      localStorage.setItem(highlightStorageKey(fileName), oldBytes)
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Upgraded Document')
+      )
+      const first = render(<App />)
+      await upload(makeFile(fileName))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const paintings = findDocumentReaderProps()?.data?.pagePaintings
+      expect(Object.keys(paintings ?? {})).toEqual(['page-1', 'page-99'])
+      const migrated = migrateLegacyDocument(legacy.paintings['page-1'])
+      if (!migrated.ok) throw new Error('fixture migration failed')
+      expect(paintings?.['page-1']).toEqual(migrated.value)
+      act(() =>
+        findDocumentReaderProps()?.onPagePaintingsChange?.({
+          'page-2': migrated.value
+        })
+      )
+      expect(
+        JSON.parse(localStorage.getItem(annotationStorageV5Key(fileName))!)
+      ).toMatchObject({
+        version: 5,
+        paintings: { 'page-2': migrated.value }
+      })
+      act(() =>
+        findDocumentReaderProps()?.onHighlight?.(
+          makeLinkedRange('post-migration', 'new annotation')
+        )
+      )
+      await waitFor(() =>
+        expect(screen.getByTestId('undo-btn')).not.toBeDisabled()
+      )
+      fireEvent.click(screen.getByTestId('undo-btn'))
+      fireEvent.click(screen.getByTestId('redo-btn'))
+      expect(
+        JSON.parse(localStorage.getItem(annotationStorageV5Key(fileName))!)
+          .paintings
+      ).toEqual({ 'page-2': migrated.value })
+      expect(localStorage.getItem(highlightStorageKey(fileName))).toBe(oldBytes)
+      fireEvent.click(screen.getByText('清空全部'))
+      await waitFor(() =>
+        expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual({})
+      )
+      expect(
+        JSON.parse(localStorage.getItem(annotationStorageV5Key(fileName))!)
+      ).toEqual({
+        version: 5,
+        ranges: [],
+        rects: [],
+        paintings: {}
+      })
+      expect(localStorage.getItem(highlightStorageKey(fileName))).toBe(oldBytes)
+      first.unmount()
+      render(<App />)
+      await upload(makeFile(fileName))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      expect(findDocumentReaderProps()?.data).toMatchObject({
+        ranges: [],
+        rects: [],
+        pagePaintings: {}
+      })
+      expect(localStorage.getItem(highlightStorageKey(fileName))).toBe(oldBytes)
+    })
+
+    it('ignores a retired file drawing callback after switching files', async () => {
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Isolation Document')
+      )
+      render(<App />)
+      await upload(makeFile('drawing-a.pdf'))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const retired = findDocumentReaderProps()?.onPagePaintingsChange
+      const beforeA = localStorage.getItem(
+        annotationStorageV5Key('drawing-a.pdf')
+      )
+      await upload(makeFile('drawing-b.pdf'))
+      await waitFor(() =>
+        expect(findDocumentReaderProps()?.annotationHistory?.resetKey).toBe(
+          'drawing-b.pdf'
+        )
+      )
+      const beforeB = localStorage.getItem(
+        annotationStorageV5Key('drawing-b.pdf')
+      )
+      const migrated = migrateLegacyDocument(
+        legacyDrawingFixture.paintings['page-1']
+      )
+      if (!migrated.ok) throw new Error('fixture migration failed')
+      act(() => retired?.({ 'page-1': migrated.value }))
+      expect(findDocumentReaderProps()?.data?.pagePaintings).toEqual({})
+      expect(
+        localStorage.getItem(annotationStorageV5Key('drawing-a.pdf'))
+      ).toBe(beforeA)
+      expect(
+        localStorage.getItem(annotationStorageV5Key('drawing-b.pdf'))
+      ).toBe(beforeB)
+    })
+
+    it.each(['{broken', JSON.stringify({ version: 6 })])(
+      'blocks editing and preserves corrupt/unknown authoritative data: %s',
+      async (bad) => {
+        const fileName = 'invalid-new.pdf'
+        const oldBytes = JSON.stringify(legacyDrawingFixture)
+        localStorage.setItem(highlightStorageKey(fileName), oldBytes)
+        localStorage.setItem(annotationStorageV5Key(fileName), bad)
+        vi.mocked(PdfParser.encode).mockResolvedValue(
+          makeRuntimeDocument('Blocked Document')
+        )
+        render(<App />)
+        await upload(makeFile(fileName))
+        expect(
+          await screen.findByTestId('annotation-storage-error')
+        ).toBeInTheDocument()
+        expect(screen.queryByText('Blocked Document')).not.toBeInTheDocument()
+        expect(localStorage.getItem(annotationStorageV5Key(fileName))).toBe(bad)
+        expect(localStorage.getItem(highlightStorageKey(fileName))).toBe(
+          oldBytes
+        )
+        fireEvent.click(screen.getByText('重试恢复'))
+        expect(localStorage.getItem(annotationStorageV5Key(fileName))).toBe(bad)
+      }
+    )
+
+    it('reports failed migration storage, then retries before enabling the document', async () => {
+      const fileName = 'quota-migrate.pdf'
+      const oldBytes = JSON.stringify(legacyDrawingFixture)
+      localStorage.setItem(highlightStorageKey(fileName), oldBytes)
+      const realSetItem = Storage.prototype.setItem
+      let fail = true
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+        this: Storage,
+        key,
+        value
+      ) {
+        if (key === annotationStorageV5Key(fileName) && fail)
+          throw new Error('quota')
+        realSetItem.call(this, key, value)
+      })
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Retry Document')
+      )
+      render(<App />)
+      await upload(makeFile(fileName))
+      expect(
+        await screen.findByTestId('annotation-storage-error')
+      ).toHaveTextContent('迁移保存失败')
+      expect(screen.queryByText('Retry Document')).not.toBeInTheDocument()
+      expect(localStorage.getItem(annotationStorageV5Key(fileName))).toBeNull()
+      fail = false
+      fireEvent.click(screen.getByText('重试恢复'))
+      expect(await screen.findByText('Retry Document')).toBeInTheDocument()
+      expect(
+        JSON.parse(localStorage.getItem(annotationStorageV5Key(fileName))!)
+          .version
+      ).toBe(5)
+      expect(localStorage.getItem(highlightStorageKey(fileName))).toBe(oldBytes)
+    })
+
+    it('retains the last saved record on quota failure and retries the pending complete drawing snapshot', async () => {
+      const fileName = 'quota-save.pdf'
+      vi.mocked(PdfParser.encode).mockResolvedValue(
+        makeRuntimeDocument('Quota Document')
+      )
+      render(<App />)
+      await upload(makeFile(fileName))
+      expect(await screen.findByText('Reader Settings')).toBeInTheDocument()
+      const before = localStorage.getItem(annotationStorageV5Key(fileName))
+      const realSetItem = Storage.prototype.setItem
+      let fail = true
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+        this: Storage,
+        key,
+        value
+      ) {
+        if (key === annotationStorageV5Key(fileName) && fail)
+          throw new Error('quota')
+        realSetItem.call(this, key, value)
+      })
+      const migrated = migrateLegacyDocument(
+        legacyDrawingFixture.paintings['page-1']
+      )
+      if (!migrated.ok) throw new Error('fixture migration failed')
+      act(() =>
+        findDocumentReaderProps()?.onPagePaintingsChange?.({
+          'page-1': migrated.value
+        })
+      )
+      expect(
+        await screen.findByTestId('annotation-storage-error')
+      ).toHaveTextContent('尚未保存')
+      expect(localStorage.getItem(annotationStorageV5Key(fileName))).toBe(
+        before
+      )
+      fail = false
+      fireEvent.click(screen.getByText('重试保存'))
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId('annotation-storage-error')
+        ).not.toBeInTheDocument()
+      )
+      expect(
+        JSON.parse(localStorage.getItem(annotationStorageV5Key(fileName))!)
+      ).toEqual({
+        version: 5,
+        ranges: [],
+        rects: [],
+        paintings: { 'page-1': migrated.value }
+      })
+      expect(localStorage.getItem(highlightStorageKey(fileName))).toBeNull()
     })
   })
 
@@ -3969,10 +4212,10 @@ describe('demo parser flow', () => {
       })
 
       const stored = JSON.parse(
-        localStorage.getItem(highlightStorageKey('undo-remove.pdf')) || '{}'
+        localStorage.getItem(annotationStorageV5Key('undo-remove.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 4,
+        version: 5,
         ranges: [],
         rects: [],
         paintings: {}
@@ -4014,9 +4257,10 @@ describe('demo parser flow', () => {
       expect(screen.getByTestId('redo-btn')).not.toBeDisabled()
       expect(
         JSON.parse(
-          localStorage.getItem(highlightStorageKey('redo-restore.pdf')) || '{}'
+          localStorage.getItem(annotationStorageV5Key('redo-restore.pdf')) ||
+            '{}'
         )
-      ).toEqual({ version: 4, ranges: [], rects: [], paintings: {} })
+      ).toEqual({ version: 5, ranges: [], rects: [], paintings: {} })
 
       fireEvent.click(screen.getByTestId('redo-btn'))
 
@@ -4027,10 +4271,10 @@ describe('demo parser flow', () => {
       expect(screen.getByTestId('redo-btn')).toBeDisabled()
 
       const stored = JSON.parse(
-        localStorage.getItem(highlightStorageKey('redo-restore.pdf')) || '{}'
+        localStorage.getItem(annotationStorageV5Key('redo-restore.pdf')) || '{}'
       )
       expect(stored).toEqual({
-        version: 4,
+        version: 5,
         ranges: [makeLinkedRange('redo-range', 'redo text')],
         rects: [],
         paintings: {}
@@ -4120,7 +4364,9 @@ describe('demo parser flow', () => {
 
       const onPagePaintingsChange = findDocumentReaderProps()
         ?.onPagePaintingsChange as (paintings: unknown) => void
-      const mockPaintings = { 'page-1': { shapes: [] } }
+      const migrated = migrateLegacyDocument({ strokes: [] })
+      if (!migrated.ok) throw new Error('fixture migration failed')
+      const mockPaintings = { 'page-1': migrated.value }
       act(() => {
         onPagePaintingsChange(mockPaintings)
       })

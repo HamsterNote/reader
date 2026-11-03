@@ -18,25 +18,25 @@ PDF integration passes the intrinsic page's scale-1 viewport dimensions and tran
 
 Other page consumers pass their intrinsic dimensions and displayed layout dimensions to the same geometry API. Preview and reading modes use the same surface with input disabled.
 
-## Storage prerequisite
+## V5 storage and recovery
 
-This integration is a draft until the storage work lands. It must **not** be merged with the existing v4 write paths still active.
+Web demo uses the authoritative `hamster-reader-demo:annotations:v5:<fileName>` key. Its complete container is `{ version: 5, ranges, rects, paintings }`; `paintings` stores complete library documents. `createAnnotationStore(backend, validateDocument)` binds its mandatory validator at construction. The demo passes `readLayeredDocument(value).ok` from the official package. Omitting that argument is a compile error and throws at runtime.
 
-The required final storage behavior is:
+Only a missing new key permits migration. The store reads v2/v3/v4 ranges and rectangles with the existing field rules and passes each original drawing payload directly to `migrateLegacyDocument(unknown)`, including unmounted pages. It commits the complete file with one new-key write after every page succeeds. It never writes, deletes, or rebuilds the original `hamster-reader-demo:highlights:<fileName>` blob. Repeated opening uses the authoritative new record without repeating migration.
 
-- Web: authoritative `hamster-reader-demo:annotations:v5:<fileName>`.
-- Host: authoritative `reader.host.v2.snapshot.<fileId>`, using `data.annotations`.
-- Only a missing new key permits one complete-file migration through `migrateLegacyDocument(unknown)`. A corrupt or unsupported new key is an error. Production storage must bind the published `readLayeredDocument` validator when constructed.
-- Every save, import, delete and clear writes the new format only. Empty new data remains authoritative. The original v4 blob stays byte-for-byte unchanged.
-- The host advances confirmed state only after a successful durable write and bridge acknowledgment.
+A corrupt/unknown new key or failed migration blocks document activation and shows a recovery error. Retry restores the same selected document. Failed saves retain the complete pending snapshot in memory, display an unsaved error, and offer retry; they never report a durable success. Reloading before a successful retry loses those pending changes. The previous saved record and legacy blob remain intact. There is no automatic destructive recovery from corrupt authoritative data.
+
+Drawing changes, highlights, rectangles, history, file restoration and clear now share the new store. A saved empty container remains authoritative on reopening, so old annotations cannot reappear. The clear action also clears drawings and is available for drawing-only documents. Retired-file drawing callbacks cannot change the active file's state.
 
 Older apps continue to display the preserved pre-upgrade state; they cannot display subsequent drawing changes. There is no reverse projection or dual write.
 
-Tasks 2.3/2.4 await storage PR #33; host persistence and acknowledgment work also remains outstanding. The current typecheck errors in `test/highlightStorage.test.ts` reflect its old serializer fixtures and must be resolved together with that storage integration.
+The draft still requires the independently owned host persistence work (2.5/2.6) and bridge integration (2.7): the authoritative host key is `reader.host.v2.snapshot.<fileId>` with `data.annotations`. The host must advance confirmed state only after a successful durable write and acknowledgment. The current host snapshot path still uses the old serializer; do not merge this draft until that path is replaced.
 
 ## Verification and remaining gate
 
+- `yarn typecheck`, `yarn lint`, `yarn build:lib`, and `yarn host:check` pass. The full test run has 1256 passing tests and the one library failure below. Follow-up targeted storage/demo tests also pass.
+- `test/annotation-store.test.ts` checks v2/v3/v4 migration, all-page atomicity, mandatory validator wiring, quota retry, corrupt/new-key precedence, file isolation, and byte preservation. The demo tests additionally cover UI errors/retry, clear/reopen, drawing/history saves, and retired-file callbacks.
 - `yarn test:run` exercises the actual installed package, including mixed invalid pen styles, controlled echoes, complete objects, stroke colors, cancellation, and shared consumers.
 - `yarn check:painting` runs real pdf.js with Chromium at DPR 1/2/3, scale 50/100/200%, before/after scrolling, and navigation/remount. It writes a JSON report and exits unsuccessfully if any contract fails.
 - On 0.8.1, a surface first mounted with `enabled=false` fails to display saved objects. `test/painting-page-contract.test.tsx` and the browser's disabled-remount cases deliberately remain failing until painting fixes the presentation lifecycle. No reader workaround is included.
-- The browser matrix covers mouse input and the checked viewport combinations. Rotation/crop fixtures, touch/pen on real devices, iOS/Android WebView, and persistence fault injection still require acceptance runs.
+- The browser matrix covers mouse input and the checked viewport combinations. Rotation/crop fixtures, touch/pen on real devices, iOS/Android WebView, and durable host/bridge fault injection still require acceptance runs. The Web store and demo quota paths are covered by automated tests.

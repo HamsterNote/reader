@@ -27,7 +27,7 @@ type HighlightsStorageV4 = {
   readonly version: 4
   readonly ranges: readonly ReaderSelectionRange[]
   readonly rects: readonly ReaderSelectionRectangle[]
-  readonly paintings: ReaderPagePaintingMap
+  readonly paintings: Readonly<Record<string, unknown>>
 }
 
 const PUBLIC_PAGE_SELECTION_ID_PATTERN = /^page-[1-9]\d*$/
@@ -51,7 +51,7 @@ export function parseHighlights(raw: string | null): PersistedHighlights {
 export function serializeHighlights(
   ranges: ReaderSelectionRange[],
   rects: ReaderSelectionRectangle[],
-  paintings: ReaderPagePaintingMap
+  paintings: Readonly<Record<string, unknown>>
 ): string {
   const storage: HighlightsStorageV4 = { version: 4, ranges, rects, paintings }
   return JSON.stringify(storage)
@@ -338,15 +338,12 @@ function parseHighlightsStorageV4(
   return { ...base, paintings: parsePaintings(value['paintings']) }
 }
 
-// parsePaintings：顶层必须是 plain object；每个 value 必须是 plain object 才保留。
-// 深度校验 DrawingValue 内部结构交给 library 的 sanitizeDrawingValue，
-// demo 持久化层只负责过滤明显损坏的条目，避免脏数据写入 localStorage。
+// 历史读取入口保留原有顶层过滤语义。新版迁移编排直接把原始页负载交给
+// painting.migrateLegacyDocument，不使用此过滤结果迁移或保存绘图。
 function parsePaintings(value: unknown): ReaderPagePaintingMap {
   if (!isPlainRecord(value)) return {}
 
-  // 宽松校验：每个 value 必须是 plain object 才保留 entry。
-  // 深度结构校验（DrawingStroke 字段等）交给 library 的 sanitizeDrawingValue，
-  // demo 持久化层只过滤明显损坏条目，避免脏数据写入 localStorage。
+  // 仅供尚未迁入 V5 的历史读取调用点使用。
   const parsed: Record<string, unknown> = {}
   for (const [key, drawingValue] of Object.entries(value)) {
     if (!isPlainRecord(drawingValue)) continue

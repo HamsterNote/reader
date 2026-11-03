@@ -116,6 +116,29 @@ describe('PageDrawingLayer using the published library', () => {
           object.brushSnapshot.color
       )
     ).toEqual(['#cc1122', '#22aa33'])
+    const nextPage = (
+      <PageDrawingLayer
+        enabled
+        pageId='page-2'
+        settings={createPaintingSettings('freehand', '#22aa33')}
+        geometry={pageGeometry}
+        onChange={onChange}
+      />
+    )
+    view.rerender(nextPage)
+    expect(onChange).toHaveBeenCalledTimes(2)
+    draw()
+    expect(onChange.mock.lastCall?.[0].objects).toMatchObject([
+      { brushSnapshot: { color: '#22aa33' } }
+    ])
+    view.unmount()
+    render(nextPage)
+    expect(onChange).toHaveBeenCalledTimes(3)
+    draw()
+    expect(onChange).toHaveBeenCalledTimes(4)
+    expect(onChange.mock.lastCall?.[0].objects).toMatchObject([
+      { brushSnapshot: { color: '#22aa33' } }
+    ])
   })
 
   it('cancels partial touch ink when a second finger joins', () => {
