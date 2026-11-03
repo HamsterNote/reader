@@ -126,7 +126,7 @@ async function activate(page, id, point) {
   await page.getByRole('toolbar', { name: '高亮操作' }).waitFor()
 }
 
-async function assertIndexes(page, raw) {
+async function assertIndexes(page, raw, expectedOffsets) {
   const result = await page.evaluate(async (raw) => {
     const { legacyPageTextFromChapter } =
       await import('/src/epub/legacyText.ts')
@@ -160,12 +160,25 @@ async function assertIndexes(page, raw) {
     JSON.stringify(result)
   )
   assert.deepEqual(result[0], result[1])
+  for (const index of result)
+    assert.deepEqual(
+      index.offsets,
+      expectedOffsets,
+      'fixed historical OS offsets'
+    )
   return result[0]
 }
 
-async function checkJourney(page, file, raw, screenshot, pageId) {
+async function checkJourney(
+  page,
+  file,
+  raw,
+  screenshot,
+  pageId,
+  expectedOffsets
+) {
   await openBody(page, file)
-  const index = await assertIndexes(page, raw)
+  const index = await assertIndexes(page, raw, expectedOffsets)
   console.log(file.name, 'index healthy')
   const offset = await selectOS(page)
   assert.deepEqual((await snapshot(page)).ranges, [])
@@ -186,11 +199,11 @@ async function checkJourney(page, file, raw, screenshot, pageId) {
   assert.equal(second.text, 'OS')
   assert.deepEqual(second.start, {
     selectionId: pageId,
-    offset: index.offsets.start
+    offset: expectedOffsets.start
   })
   assert.deepEqual(second.end, {
     selectionId: pageId,
-    offset: index.offsets.end
+    offset: expectedOffsets.end
   })
   assert.equal(
     (await snapshot(page)).events.filter((event) => event.type === 'add')
@@ -255,7 +268,12 @@ export async function runLargeSectionChecks(
     {
       label: 'large-code-section',
       path: resolve(repo, 'test/compat/fixtures/epub/large-code-section.epub'),
-      chapter: 'part0000.xhtml'
+      chapter: 'part0000.xhtml',
+      pageId: 'page-2',
+      // Authored prefix: "$ install tools" (15) + heading (14) +
+      // "这个原创段落讨论 " (9). OS occupies the next two characters.
+      // This oracle must not be derived from buildSectionTextIndex().
+      osOffsets: { start: 38, end: 40 }
     }
   ]
   if (userBook) {
@@ -312,7 +330,8 @@ export async function runLargeSectionChecks(
               output,
               `${book.label}-${controlled ? 'controlled' : 'internal'}`
             ),
-            book.pageId ?? 'page-2'
+            book.pageId ?? 'page-2',
+            book.osOffsets
           )
           if (book.legacyLength)
             assert.equal(result.index.legacyLength, book.legacyLength)

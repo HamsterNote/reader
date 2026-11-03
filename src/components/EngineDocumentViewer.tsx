@@ -318,6 +318,8 @@ export function EngineDocumentViewer(props: Props) {
     null
   )
   const pendingRemoval = useRef(new Set<string>())
+  const rangeActionGeneration = useRef(0)
+  const rangeActionToken = rangeActionGeneration.current
   const nativeRange =
     activeSelection?.kind === 'text' ? activeSelection.range : null
   const setNativeRange = useCallback(
@@ -426,12 +428,16 @@ export function EngineDocumentViewer(props: Props) {
   }
   const activationGeneration = useRef(0)
   const activate = useCallback((id: string | null) => {
-    if (
-      id &&
-      (pendingRemoval.current.has(id) ||
-        !values.current.ranges.some((item) => item.id === id))
-    )
-      return
+    if (id) {
+      if (!values.current.ranges.some((item) => item.id === id)) return
+      // The host may reject deletion and retain the authoritative range.
+      // A new activation starts a fresh session; captured actions from before
+      // deletion remain invalidated by rangeActionGeneration.
+      if (pendingRemoval.current.has(id)) {
+        if (latest.current.ranges === undefined) return
+        pendingRemoval.current.delete(id)
+      }
+    }
     nativeEdit.current = null
     editing.current = false
     const token = ++activationGeneration.current
@@ -1160,6 +1166,7 @@ export function EngineDocumentViewer(props: Props) {
     )
       return
     pendingRemoval.current.add(id)
+    ++rangeActionGeneration.current
     cancelSelection()
     setInternalSelected(null)
     latest.current.onSelectRange?.(null)
@@ -1187,6 +1194,7 @@ export function EngineDocumentViewer(props: Props) {
       const target = values.current.ranges.find((item) => item.id === range.id)
       if (
         !target ||
+        rangeActionToken !== rangeActionGeneration.current ||
         activeText.current?.range !== nativeRange ||
         activeText.current?.rangeId !== range.id
       )
@@ -1204,6 +1212,7 @@ export function EngineDocumentViewer(props: Props) {
     },
     onRemoveRange: (id) => {
       if (
+        rangeActionToken === rangeActionGeneration.current &&
         activeText.current?.range === nativeRange &&
         activeText.current?.rangeId === id
       )
@@ -1556,12 +1565,14 @@ export function EngineDocumentViewer(props: Props) {
           showStart={endpointVisible(current, source?.format, epubPage, false)}
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
           onEditingChange={(value) => {
+            if (rangeActionToken !== rangeActionGeneration.current) return
             editing.current = value
           }}
           onUpdate={(range, end) => {
             const active = activeText.current
             if (
               !active ||
+              rangeActionToken !== rangeActionGeneration.current ||
               active.range !== nativeRange ||
               active.range.startContainer.ownerDocument !==
                 range.startContainer.ownerDocument

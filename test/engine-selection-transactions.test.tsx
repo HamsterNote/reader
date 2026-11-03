@@ -243,6 +243,61 @@ describe('engine selection transactions', () => {
     expect(screen.queryByRole('toolbar', { name: '高亮操作' })).toBeNull()
     expect(onUpdate).not.toHaveBeenCalled()
   })
+  it('reactivates a host-retained range after rejected deletion and retries without accepting old actions', async () => {
+    const onUpdate = vi.fn(),
+      onRemove = vi.fn()
+    // An engine may reuse the same Range. Session invalidation must not depend
+    // on getting a different DOM object on the next activation.
+    vi.mocked(engine.selectRange).mockResolvedValue(native)
+    const props = {
+      engineSource: source,
+      selectedTool: 'text-selection' as const,
+      onUpdateRange: onUpdate,
+      onRemoveRange: onRemove
+    }
+    const view = render(
+      <EngineDocumentViewer {...props} ranges={[original, second]} />
+    )
+    await activate()
+    const lateEdit = mocks.controls!.onUpdate
+    const lateEditing = mocks.controls!.onEditingChange
+    const staleMenu = (
+      mocks.controls!.children as ReactElement<DefaultPopoverContext>
+    ).props
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+    expect(onRemove).toHaveBeenCalledExactlyOnceWith('H1')
+    // The host rejects the request and echoes its retained authoritative data.
+    view.rerender(
+      <EngineDocumentViewer {...props} ranges={[{ ...original }, second]} />
+    )
+    expect(screen.queryByRole('toolbar', { name: '高亮操作' })).toBeNull()
+    await activate()
+    act(() => {
+      lateEditing(true)
+      lateEdit(native, true)
+      staleMenu.onUpdateRange!({
+        ...original,
+        markerStyle: { backgroundColor: '#000000' }
+      })
+      staleMenu.onRemoveRange!('H1')
+    })
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(onRemove).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('toolbar', { name: '高亮操作' })).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Highlight color'), {
+      target: { value: '#00ff00' }
+    })
+    expect(onUpdate).toHaveBeenCalledExactlyOnceWith({
+      ...original,
+      markerStyle: { ...original.markerStyle, backgroundColor: '#00ff00' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+    expect(onRemove.mock.calls).toEqual([['H1'], ['H1']])
+    view.rerender(<EngineDocumentViewer {...props} ranges={[second]} />)
+    act(() => options.onHighlightActivate?.('H1', { x: 0, y: 0 }))
+    expect(screen.queryByRole('toolbar', { name: '高亮操作' })).toBeNull()
+    await activate('H2')
+  })
 })
 
 it('commits only a valid endpoint edit, preserves identity/style, and discards unmappable edits', async () => {

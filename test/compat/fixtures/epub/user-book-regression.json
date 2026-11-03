@@ -4,6 +4,7 @@
   "chapter": "OEBPS/Text/part0000.xhtml",
   "legacyLength": 128624,
   "pageId": "page-3",
+  "osOffsets": { "start": 4745, "end": 4747 },
   "attachmentId": "01a1a0c2-b849-7e06-b515-27bd0bd714b8",
   "localPath": "ham138-dev-assets/user-book.epub"
 }
