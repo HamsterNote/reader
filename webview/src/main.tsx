@@ -8,7 +8,11 @@ import { createPdfWorkerFromAsset } from './pdfWorker'
 import { packagedPdfOptions } from './pdfAssets'
 import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
-import { restoreReaderSnapshot } from '../../src/host/readerSnapshot'
+import {
+  restoreReaderSnapshot,
+  serializeReaderSnapshot,
+  type ReaderSnapshot
+} from '../../src/host/readerSnapshot'
 import type {
   BridgeOpenPayload,
   BridgeRestorePayload
@@ -46,6 +50,19 @@ async function release() {
   }
 }
 
+/**
+ * 旧 v4 快照一次性迁移：完整结果先写新键并等 ack，确认后才进入正常会话。
+ * 未确认即抛错，保留旧原件由错误页重试，不会半写。
+ */
+async function commitMigratedAnnotations(
+  initial: ReaderSnapshot
+): Promise<void> {
+  if (!initial.migrated || bridge === null) return
+  bridge.sendChange(serializeReaderSnapshot(initial))
+  const saved = await bridge.flushPending(FLUSH_PENDING_TIMEOUT_MS)
+  if (!saved) throw new Error('标注迁移未确认，已保留旧数据，请重试')
+}
+
 async function display(
   token: number,
   document: BridgeOpenPayload['document'],
@@ -77,12 +94,15 @@ async function display(
       await release()
       return
     }
+    const initial = restoreReaderSnapshot(restored.data, restored.progress)
+    await commitMigratedAnnotations(initial)
+    if (token !== generation) return
     root.render(
       <ReaderSurface
         key={`${document.fileId}:${token}`}
         source={source}
         document={documentHandle.document}
-        initial={restoreReaderSnapshot(restored.data, restored.progress)}
+        initial={initial}
         onChange={(data) => {
           if (token === generation) bridge?.sendChange(data)
         }}
@@ -127,14 +147,8 @@ const bridge =
         },
         onDispose: () => {
           generation++
-          // 正常关闭：先等未确认写入落盘并 ack，再释放引擎。
-          // flushPending 返回 false 表示超时/会话已关闭——不伪造已保存。
-          work = work
-            .then(async () => {
-              await bridge?.flushPending(FLUSH_PENDING_TIMEOUT_MS)
-              await release()
-            })
-            .catch(() => undefined)
+          // 宿主已确认未确认写入全部落盘（见 command flush 握手），直接释放引擎。
+          work = work.then(release).catch(() => undefined)
         },
         onError: (error) => {
           if (error.code !== 'REVISION_MISMATCH')

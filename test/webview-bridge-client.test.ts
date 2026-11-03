@@ -294,3 +294,65 @@ describe('createWebBridgeClient flushPending', () => {
     await expect(flushed).resolves.toBe(false)
   })
 })
+
+describe('createWebBridgeClient close handshake', () => {
+  it('flushes pending writes and answers ready on a flush command', async () => {
+    const { bridge, sent } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+    const change = sent.at(-1) ?? {}
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    // 冲刷中不接受新编辑。
+    bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    expect(bridge.getPendingCount()).toBe(1)
+
+    bridge.handleMessage(
+      hostMessage('ack', { requestId: change['requestId'], revision: 1 })
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const response = sent.at(-1) ?? {}
+    expect(response['type']).toBe('ready')
+    expect(bridge.getPendingCount()).toBe(0)
+  })
+
+  it('answers error instead of ready when flushing times out', async () => {
+    const { bridge, sent, timers } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    timers.fireAll()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(sent.at(-1)).toMatchObject({
+      type: 'error',
+      payload: { code: 'ENGINE_FAILURE' }
+    })
+  })
+
+  it('resumes editing when the host cancels the close', () => {
+    const { bridge } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    bridge.handleMessage(hostMessage('command', { name: 'resume' }))
+
+    const before = bridge.getPendingCount()
+    bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    // 恢复编辑后新写入会进入 pending（排在在途那一笔之后），不再被丢弃。
+    expect(bridge.getPendingCount()).toBe(before + 1)
+  })
+})

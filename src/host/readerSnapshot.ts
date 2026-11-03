@@ -13,6 +13,11 @@ export type ReaderSnapshot = {
   readonly data: ReaderData
   readonly comments: readonly ReaderComment[]
   readonly extra: Readonly<Record<string, unknown>>
+  /**
+   * 本次读取是否把旧 v4 `highlights` 一次性迁移成了 V5。
+   * 为 true 时调用方必须把完整迁移结果写入新键后再进入正常会话。
+   */
+  readonly migrated: boolean
 }
 
 const EMPTY_ANNOTATIONS: ReaderAnnotations = {
@@ -54,7 +59,10 @@ export function restoreReaderSnapshot(
     comments: parseComments(
       envelope['comments'] ? JSON.stringify(envelope['comments']) : null
     ),
-    extra: envelope
+    extra: envelope,
+    migrated:
+      envelope['annotations'] === undefined &&
+      envelope['highlights'] !== undefined
   }
 }
 

@@ -4,6 +4,7 @@
 
 import {
   createBridgeHostSession,
+  type BridgeCloseResult,
   type BridgeHostSession,
   type BridgeHostSnapshot
 } from '../bridge/hostSession'
@@ -43,8 +44,11 @@ export type ReaderHostSession = {
   readonly getSnapshot: () => BridgeHostSnapshot
   /** 文档切换/关闭：先通知 Web 释放资源，再使会话失效。 */
   readonly dispose: () => void
-  /** 关闭前先等已接收写入落盘并 ack，再下发 dispose。 */
-  readonly sendDispose: () => Promise<void>
+  /**
+   * 关闭握手：请求 Web 冲刷未确认写入，等其确认与本地落盘完成后下发 dispose。
+   * 返回 `unconfirmed` 时会话仍可用，调用方必须阻止关闭并提示用户重试。
+   */
+  readonly close: (timeoutMs?: number) => Promise<BridgeCloseResult>
 }
 
 export function createReaderHostSession(
@@ -53,9 +57,11 @@ export function createReaderHostSession(
   const session: BridgeHostSession = createBridgeHostSession({
     sessionId: options.sessionId,
     confirmedSnapshot: options.confirmedSnapshot,
-    persist: options.persist
+    persist: options.persist,
+    send: options.sendToWeb
   })
   let disposed = false
+  let closing = false
   let outboundCounter = 0
 
   const nextRequestId = (prefix: string): string => {
@@ -112,25 +118,22 @@ export function createReaderHostSession(
       }
       // Web 第一次 ready（或重载后的 ready）之前先补发文档描述，
       // 随后状态机返回最后确认快照，顺序固定为 open → restore。
-      if (transport.message.type === 'ready') sendOpen()
+      if (transport.message.type === 'ready' && !closing) sendOpen()
       const messages = await session.handleWebMessageAsync(transport.message)
       sendAll(messages)
       return { accepted: true }
     },
     getSnapshot: () => session.getSnapshot(),
-    sendDispose: async () => {
-      if (disposed) return
-      // 立即拒绝新消息，但先等在途写入完成（落盘后 ack 才可能发出）。
-      disposed = true
-      await session.drain()
-      options.sendToWeb({
-        version: READER_BRIDGE_PROTOCOL_VERSION,
-        sessionId: options.sessionId,
-        requestId: nextRequestId('dispose'),
-        type: 'dispose',
-        payload: {}
-      })
-      session.dispose()
+    close: async (timeoutMs) => {
+      if (disposed) return { status: 'closed' }
+      closing = true
+      const result = await session.close(timeoutMs)
+      if (result.status === 'closed') {
+        disposed = true
+      } else {
+        closing = false
+      }
+      return result
     },
     dispose: () => {
       session.dispose()

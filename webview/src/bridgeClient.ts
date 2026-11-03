@@ -3,9 +3,12 @@
 // 处理 ack/error/dispose。协议定义见 src/bridge/protocol.ts。
 
 import {
+  BRIDGE_COMMAND_FLUSH,
+  BRIDGE_COMMAND_RESUME,
   parseBridgeMessage,
   READER_BRIDGE_PROTOCOL_VERSION,
   type BridgeAckPayload,
+  type BridgeCommandPayload,
   type BridgeErrorPayload,
   type BridgeMessage,
   type BridgeMessageType,
@@ -102,6 +105,7 @@ export function createWebBridgeClient(
   let revision: number | null = null
   let started = false
   let closed = false
+  let draining = false
   let requestCounter = 0
   let inFlight: {
     readonly message: BridgeMessage
@@ -121,6 +125,30 @@ export function createWebBridgeClient(
     const waiters = idleWaiters
     idleWaiters = []
     for (const resolve of waiters) resolve(saved)
+  }
+
+  /**
+   * 等待 pending + in-flight 全部 ack。超时/会话关闭返回 false——
+   * 调用方不得据此声称已保存。
+   */
+  const flushPendingNow = (timeoutMs?: number): Promise<boolean> => {
+    if (closed) return Promise.resolve(false)
+    if (isIdle()) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const timeout: { handle?: unknown } = {}
+      const finish = (saved: boolean): void => {
+        if (settled) return
+        settled = true
+        if (timeout.handle !== undefined) timers.clearTimeout(timeout.handle)
+        resolve(saved)
+      }
+      timeout.handle = timers.setTimeout(
+        () => finish(false),
+        timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS
+      )
+      idleWaiters.push(finish)
+    })
   }
 
   const post = (message: BridgeMessage): void => {
@@ -186,7 +214,8 @@ export function createWebBridgeClient(
   }
 
   const enqueue = (write: PendingWrite): void => {
-    if (closed) return
+    // 关闭冲刷期间不再接受新编辑；已排队/在途的写入照常发送并等待 ack。
+    if (closed || draining) return
     if (write.type === 'change') pendingChange = write
     else pendingProgress = write
     flush()
@@ -248,6 +277,29 @@ export function createWebBridgeClient(
         }
         break
       }
+      case 'command': {
+        const command = message.payload as BridgeCommandPayload
+        if (command?.name === BRIDGE_COMMAND_FLUSH) {
+          // 宿主准备关闭：停止接受新编辑，冲刷完未确认写入再用 ready 应答。
+          draining = true
+          flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
+            if (closed) return
+            if (saved) {
+              post(buildMessage('ready', {}))
+            } else {
+              post(
+                buildMessage('error', {
+                  code: 'ENGINE_FAILURE',
+                  message: '关闭前仍有未确认写入，已取消关闭'
+                })
+              )
+            }
+          })
+        } else if (command?.name === BRIDGE_COMMAND_RESUME) {
+          draining = false
+        }
+        break
+      }
       case 'dispose': {
         closed = true
         clearRetry()
@@ -286,25 +338,7 @@ export function createWebBridgeClient(
         (pendingChange ? 1 : 0) + (pendingProgress ? 1 : 0) + (inFlight ? 1 : 0)
       return pending
     },
-    flushPending: (timeoutMs) => {
-      if (closed) return Promise.resolve(false)
-      if (isIdle()) return Promise.resolve(true)
-      return new Promise<boolean>((resolve) => {
-        let settled = false
-        const timeout: { handle?: unknown } = {}
-        const finish = (saved: boolean): void => {
-          if (settled) return
-          settled = true
-          if (timeout.handle !== undefined) timers.clearTimeout(timeout.handle)
-          resolve(saved)
-        }
-        timeout.handle = timers.setTimeout(
-          () => finish(false),
-          timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS
-        )
-        idleWaiters.push(finish)
-      })
-    }
+    flushPending: flushPendingNow
   }
 }
 

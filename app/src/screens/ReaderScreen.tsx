@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,10 @@ import type {
   HostDocumentRecord,
   ReaderDataStore
 } from '../../../src/host/readerDataStore'
-import { ReaderWebView } from '../components/ReaderWebView'
+import {
+  ReaderWebView,
+  type ReaderWebViewHandle
+} from '../components/ReaderWebView'
 import { stageReaderDocument } from '../native/webAssets'
 
 type ReaderScreenProps = {
@@ -34,6 +37,8 @@ export function ReaderScreen({
   onRecordUpdated
 }: ReaderScreenProps) {
   const [importing, setImporting] = useState(false)
+  const readerRef = useRef<ReaderWebViewHandle>(null)
+  const closingRef = useRef(false)
   const [staged, setStaged] = useState<Awaited<
     ReturnType<typeof stageReaderDocument>
   > | null>(null)
@@ -56,16 +61,35 @@ export function ReaderScreen({
     }
   }, [baseUrl, record, retry])
 
+  const closeReader = useCallback(async (): Promise<void> => {
+    if (closingRef.current) return
+    closingRef.current = true
+    try {
+      const result = await readerRef.current?.close()
+      if (result !== undefined && result.status !== 'closed') {
+        // 未确认写入：阻止关闭，保留会话与磁盘原件，提示重试。
+        Alert.alert(
+          '数据尚未保存',
+          `${result.reason}。已停留在当前页面，请稍后重试。`
+        )
+        return
+      }
+      onBack()
+    } finally {
+      closingRef.current = false
+    }
+  }, [onBack])
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
       'hardwareBackPress',
       () => {
-        onBack()
+        void closeReader()
         return true
       }
     )
     return () => subscription.remove()
-  }, [onBack])
+  }, [closeReader])
 
   const importLegacy = async (): Promise<void> => {
     setImporting(true)
@@ -93,6 +117,7 @@ export function ReaderScreen({
     content = (
       <ReaderWebView
         key={`${record.fileId}:${record.legacyImport?.importedAt ?? 0}`}
+        ref={readerRef}
         record={record}
         store={store}
         entryUrl={staged.entryUrl}
@@ -113,7 +138,7 @@ export function ReaderScreen({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={onBack} hitSlop={12}>
+        <Pressable onPress={() => void closeReader()} hitSlop={12}>
           <Text style={styles.back}>返回</Text>
         </Pressable>
         <View style={styles.headerMain}>

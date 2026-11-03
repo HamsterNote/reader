@@ -101,8 +101,10 @@ describe('engine host snapshot compatibility', () => {
         )
         expect(saved['readerData']).toEqual(readerData)
         expect(saved['customOwnerField']).toBe('keep')
+        // 迁移过一次后，新信封只剩 annotations，再读不再是迁移状态。
         expect(restoreReaderSnapshot(saved)).toEqual({
           ...changed,
+          migrated: false,
           extra: saved
         })
         expect(JSON.stringify(highlights)).toBe(original)
