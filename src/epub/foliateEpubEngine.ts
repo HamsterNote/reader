@@ -1,3 +1,4 @@
+import type { ViewportNavigationState } from '../components/reading/navigation'
 // HAM-88 任务 2.2/2.4/2.5：EPUB 主展示引擎适配器（foliate-js）。
 // 职责：foliate-view 装配（打开、目录、封面、字体、flow）、高亮叠加、
 // 选区反向序列化、切书竞态隔离与资源释放。
@@ -5,7 +6,7 @@
 // foliate 的 CFI/DOM Range 只是可重建的内部缓存，不出本模块。
 // 集成接线（Reader 路由、底栏、存储）属于 HAM-91，本模块不改动。
 
-import { buttonOnlyInput } from './buttonOnlyInput'
+import { buttonOnlyInput } from '../components/reading/buttonOnlyInput'
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js'
 import '../../vendor/foliate-js/view.js'
 import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
@@ -69,11 +70,7 @@ export type ShowRangesReport = {
   }[]
 }
 
-export type EpubNavigationState = {
-  readonly canPrevious: boolean
-  readonly canNext: boolean
-  readonly busy: boolean
-}
+export type EpubNavigationState = ViewportNavigationState
 
 export type EpubEngineOptions = {
   readonly container: HTMLElement

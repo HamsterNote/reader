@@ -362,6 +362,14 @@ export const PdfDocumentViewer = forwardRef<
     anchor: ReaderBookmark
     done: () => void
   } | null>(null)
+  // Layout captures at text-item granularity. Retain a restored Text character
+  // while the viewport stays at that exact position, including a quick round trip.
+  const restoredTextPosition = useRef<{
+    anchor: ReaderTextAnchor
+    top: number
+    left: number
+    scale: number
+  } | null>(null)
   const restoreAnchor = () => {
     const pending = pendingAnchor.current
     if (!pending) return
@@ -383,6 +391,14 @@ export const PdfDocumentViewer = forwardRef<
             anchor.offset
         )
       target?.scrollIntoView({ block: 'start' })
+      const container = containerRef.current
+      if (target && container && viewerRef.current)
+        restoredTextPosition.current = {
+          anchor,
+          top: container.scrollTop,
+          left: container.scrollLeft,
+          scale: viewerRef.current.currentScale
+        }
     } else {
       const container = containerRef.current
       if (container)
@@ -669,6 +685,7 @@ export const PdfDocumentViewer = forwardRef<
       resize.disconnect()
       pendingAnchor.current?.done()
       pendingAnchor.current = null
+      restoredTextPosition.current = null
       setViewerDocument(viewer, null)
       viewerRef.current = null
       eventBusRef.current = null
@@ -686,6 +703,9 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     if (!viewer) return
 
+    restoredTextPosition.current = null
+    pendingAnchor.current?.done()
+    pendingAnchor.current = null
     if (!source) {
       setOcrDocument(null)
       setRenderedPages([])
@@ -940,6 +960,19 @@ export const PdfDocumentViewer = forwardRef<
     if (!viewer || viewer.pagesCount === 0) return null
     const pageNumber = viewer.currentPageNumber
     if (!visiblePagesRef.current.includes(pageNumber)) return null
+    const pending = pendingAnchor.current?.anchor
+    if (pending && 'offset' in pending) return pending
+    const restored = restoredTextPosition.current
+    const container = containerRef.current
+    if (
+      restored &&
+      restored.anchor.pageNumber === pageNumber &&
+      restored.top === container?.scrollTop &&
+      restored.left === container.scrollLeft &&
+      restored.scale === viewer.currentScale
+    )
+      return restored.anchor
+    restoredTextPosition.current = null
     const context = selectionContextsRef.current.get(pageNumber)
     if (!context) return null
     const top = containerRef.current?.getBoundingClientRect().top ?? 0
@@ -982,6 +1015,9 @@ export const PdfDocumentViewer = forwardRef<
       scrollToPage: (pageNumber) => {
         const viewer = viewerRef.current
         if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return
+        restoredTextPosition.current = null
+        pendingAnchor.current?.done()
+        pendingAnchor.current = null
         viewer.currentPageNumber = pageNumber
       },
       setScale: (nextScale) => {
@@ -994,6 +1030,7 @@ export const PdfDocumentViewer = forwardRef<
         if (!viewer || !visiblePagesRef.current.includes(anchor.pageNumber))
           return Promise.resolve()
         pendingAnchor.current?.done()
+        restoredTextPosition.current = null
         const promise = new Promise<void>((done) => {
           pendingAnchor.current = { anchor, done }
         })
@@ -1002,9 +1039,12 @@ export const PdfDocumentViewer = forwardRef<
         return promise
       },
       scrollToRange: (rangeId) => {
+        restoredTextPosition.current = null
         const viewer = viewerRef.current
         const range = ranges.find((candidate) => candidate.id === rangeId)
         if (!viewer || !range) return
+        pendingAnchor.current?.done()
+        pendingAnchor.current = null
         const match = /^page-([1-9]\d*)$/.exec(range.start.selectionId)
         if (!match) return
         const page = Number(match[1])

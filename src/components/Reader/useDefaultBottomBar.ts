@@ -15,6 +15,18 @@ export function useWindowWidth(): number {
   return width
 }
 
+/**
+ * 解析 Reader 的生效主题：显式 `darkMode` 优先，未提供时跟随系统偏好。
+ * 底栏、EPUB 引擎与 PDF Text 翻页控件共用这一条规则，避免主题分叉。
+ */
+export function resolveReaderTheme(
+  darkMode: boolean | undefined,
+  preferred: PopoverTheme
+): PopoverTheme {
+  if (darkMode === undefined) return preferred
+  return darkMode ? 'dark' : 'light'
+}
+
 export function usePrefersColorScheme(): PopoverTheme {
   const [scheme, setScheme] = useState<PopoverTheme>('dark')
 

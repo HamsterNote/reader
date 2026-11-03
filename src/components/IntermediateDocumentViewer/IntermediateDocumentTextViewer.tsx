@@ -1,3 +1,13 @@
+import { PdfTextHandle } from '../../pdf/PdfTextHandle'
+import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
+import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
+import { useReadingViewport } from '../reading/useReadingViewport'
+import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
+import {
+  resolveReaderTheme,
+  usePrefersColorScheme
+} from '../Reader/useDefaultBottomBar'
+import type { CSSProperties } from 'react'
 import type {
   LinkedSelectionData,
   LinkedSelectionRange,
@@ -100,6 +110,86 @@ import type { LazyPageQueueConfig } from './useLazyPageQueue'
 import { useLazyPageQueue } from './useLazyPageQueue'
 import { useReadingProgressActivity } from './useReadingProgressActivity'
 
+function useTextReadingViewport(
+  props: IntermediateDocumentTextViewerProps,
+  root: HTMLElement | null,
+  controlsRef: RefObject<HTMLDivElement | null>
+) {
+  return useReadingViewport({
+    root,
+    controlsRef,
+    enabled: Boolean(props.isPdf),
+    bottomInset: props.containMarginBottom ?? props.containMarginY ?? 0,
+    topInset: props.containMarginTop ?? props.containMarginY ?? 0,
+    horizontalInset: props.containMarginX ?? 0
+  })
+}
+
+function getSessionLoadedPages(
+  active: IntermediateDocument | null,
+  current: IntermediateDocument | null,
+  activePages: string,
+  currentPages: string,
+  loaded: Map<number, IntermediateText[]>
+) {
+  return active === current && activePages === currentPages
+    ? loaded
+    : EMPTY_LOADED_PAGES
+}
+
+function getRenderedTextItems(
+  isPdf: boolean,
+  pdfItems: ReturnType<typeof getPdfVirtualItems>,
+  scrollItems: ReturnType<
+    Virtualizer<HTMLDivElement, HTMLElement>['getVirtualItems']
+  >
+) {
+  return isPdf ? pdfItems : scrollItems
+}
+
+function getPdfVirtualItems(
+  pages: readonly number[],
+  page: number,
+  key: string
+) {
+  const index = pages.indexOf(page)
+  return index < 0 ? [] : [{ key, index, start: 0 }]
+}
+
+function getTextReadingClasses(isPdf: boolean) {
+  return {
+    shell: `hamster-reader__intermediate-text-shell${isPdf ? ' hamster-reader__pdf-text-shell' : ''}`,
+    viewport: isPdf ? 'hamster-reader__pdf-text-viewport' : ''
+  }
+}
+
+function getTextSpacerStyle(
+  isPdf: boolean,
+  viewportHeight: number,
+  scrollHeight: number
+) {
+  return { height: isPdf ? viewportHeight : scrollHeight }
+}
+
+function getTextViewportStyle(
+  props: IntermediateDocumentTextViewerProps,
+  viewport: { width: number; height: number; bottomInset: number }
+): CSSProperties {
+  const style: CSSProperties = {
+    paddingLeft: props.containMarginX,
+    paddingRight: props.containMarginX,
+    paddingTop: props.containMarginTop ?? props.containMarginY,
+    paddingBottom: props.containMarginBottom ?? props.containMarginY
+  }
+  if (props.isPdf)
+    Object.assign(style, {
+      paddingBottom: viewport.bottomInset,
+      '--pdf-text-width': `${viewport.width}px`,
+      '--pdf-text-height': `${viewport.height}px`
+    })
+  return style
+}
+
 /**
  * 文本模式下每页的初始高度估计值（px）。
  *
@@ -111,6 +201,8 @@ import { useReadingProgressActivity } from './useReadingProgressActivity'
 const TEXT_PAGE_ESTIMATED_HEIGHT = 800
 
 const DEFAULT_TEXT_PAGE_UNLOAD_DELAY_MS = 5000
+
+const EMPTY_LOADED_PAGES = new Map<number, unknown>()
 
 const EMPTY_SELECTION_RANGES: SelectionRange[] = []
 
@@ -742,6 +834,7 @@ export type IntermediateDocumentTextViewerProps = {
   isEpub?: boolean
   /** 当前文档是否为 PDF；文本模式据此启用基于 box 的段落重建。 */
   isPdf?: boolean
+  onRequestLayout?: () => void
   /** 已序列化的中间文档；与 `document` 二选一，文本模式同样支持。 */
   serializedDocument?: IntermediateDocumentSerialized | null
   className?: string
@@ -760,6 +853,11 @@ export type IntermediateDocumentTextViewerProps = {
   onPageBrowserClose?: () => void
   /** 页面浏览侧栏主题色。 */
   themeColor?: string
+  /**
+   * 显式深色主题；未提供时翻页控件跟随系统偏好。与 layout 模式、默认底栏
+   * 共用 Reader 的主题 API。
+   */
+  darkMode?: boolean
   /** 每个文本高亮对应的评论数量。 */
   commentCountByRangeId?: Readonly<Record<string, number>>
   /** container 顶部文字对应的精确书签。 */
@@ -891,13 +989,13 @@ export function IntermediateDocumentTextViewer(
     serializedDocument,
     className,
     fontScale,
-    containMarginX,
     containMarginTop,
     containMarginBottom,
     containMarginY,
     showPageBrowser = false,
     onPageBrowserClose,
     themeColor,
+    darkMode,
     commentCountByRangeId,
     bookmarks,
     onToggleBookmark,
@@ -945,6 +1043,19 @@ export function IntermediateDocumentTextViewer(
   } = props
 
   // 原生滚动容器 ref —— useVirtualizer 通过 getScrollElement 读取其几何尺寸。
+  const paginationControlsRef = useRef<HTMLDivElement>(null)
+  const pdfEnqueueRef = useRef<(page: number) => void>(() => {})
+  const pdfClearDraftRef = useRef<(preserveSelected?: boolean) => void>(
+    () => {}
+  )
+  const [pdfLoadErrors, setPdfLoadErrors] = useState<ReadonlySet<number>>(
+    new Set()
+  )
+  const pdfNavigationRef = useRef<ReturnType<
+    typeof usePdfTextPagination
+  > | null>(null)
+  const preferredTheme = usePrefersColorScheme()
+  const paginationTheme = resolveReaderTheme(darkMode, preferredTheme)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -1132,6 +1243,7 @@ export function IntermediateDocumentTextViewer(
   } = useReadingProgressActivity()
   const captureCurrentTextAnchor = useCallback(
     (scanBelow: boolean = false) => {
+      if (isPdf) return pdfNavigationRef.current?.capture()
       const viewport = scrollContainerRef.current
       if (!viewport) return undefined
 
@@ -1144,7 +1256,7 @@ export function IntermediateDocumentTextViewer(
         ) ?? undefined
       )
     },
-    [containMarginTop, containMarginY]
+    [containMarginTop, containMarginY, isPdf]
   )
   const captureReadingProgress = useCallback(() => {
     if (isInitialProgressRestorePendingRef.current) return undefined
@@ -1202,7 +1314,7 @@ export function IntermediateDocumentTextViewer(
   }, [cancelTextAnchorRestore])
 
   useEffect(() => {
-    if (!viewerRootElement) return
+    if (isPdf || !viewerRootElement) return
     const viewerWindow = viewerRootElement.ownerDocument.defaultView
     const usesNativeScrollEnd = 'onscrollend' in viewerRootElement
     usesNativeScrollEndRef.current = usesNativeScrollEnd
@@ -1300,6 +1412,7 @@ export function IntermediateDocumentTextViewer(
       }
     }
   }, [
+    isPdf,
     captureReadingProgress,
     onTextReadingProgressChange,
     releaseProgrammaticSuppression,
@@ -1342,6 +1455,7 @@ export function IntermediateDocumentTextViewer(
   )
   const handleVirtualizerChange = useCallback(
     (instance: Virtualizer<HTMLDivElement, HTMLElement>, sync: boolean) => {
+      if (isPdf) return
       if (isInitialProgressRestorePendingRef.current) {
         restoreInitialReadingProgress(instance)
         return
@@ -1383,6 +1497,7 @@ export function IntermediateDocumentTextViewer(
       }
     },
     [
+      isPdf,
       onTextReadingProgressChange,
       pageNumbers,
       restoreInitialReadingProgress,
@@ -1397,6 +1512,7 @@ export function IntermediateDocumentTextViewer(
   // 这个临时高度写回虚拟化器，否则累计总高度会持续塌缩并把全部页面拉进
   // 可视范围。有文本内容后 ResizeObserver 会再次测量并写入真实高度。
   const virtualizer = useVirtualizer({
+    enabled: !isPdf,
     count: pageNumbers.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => TEXT_PAGE_ESTIMATED_HEIGHT,
@@ -1429,9 +1545,68 @@ export function IntermediateDocumentTextViewer(
     }
   })
 
-  const virtualItems = virtualizer.getVirtualItems()
+  const readingViewport = useTextReadingViewport(
+    props,
+    viewerRootElement,
+    paginationControlsRef
+  )
+  const pdfPagination = usePdfTextPagination({
+    enabled: isPdf,
+    generation: documentGeneration,
+    root: viewerRootElement,
+    pages: pageNumbers,
+    progress: textReadingProgress,
+    loaded: getSessionLoadedPages(
+      activeDocumentRef.current,
+      runtimeDocument,
+      activePageNumbersKeyRef.current,
+      pageNumbersKey,
+      textsByPageNumber
+    ),
+    errors: pdfLoadErrors,
+    width: readingViewport.layoutWidth,
+    height: readingViewport.layoutHeight,
+    layoutKey: fontScale,
+    enqueue: (page) => pdfEnqueueRef.current(page),
+    onTurn: (preserveSelected) => pdfClearDraftRef.current(preserveSelected),
+    onCommit: (next, publish) => {
+      isInitialProgressRestorePendingRef.current = false
+      readingProgressPageRef.current = next.currentPageNumber
+      readingProgressRef.current = next
+      setReadingProgress((current) =>
+        getTextReadingProgressKey(current) === getTextReadingProgressKey(next)
+          ? current
+          : next
+      )
+      onTextAnchorChange?.(next.anchor)
+      const key = getTextReadingProgressKey(next)
+      if (publish && lastLocallyEmittedProgressKeyRef.current !== key) {
+        lastLocallyEmittedProgressKeyRef.current = key
+        lastObservedProgressKeyRef.current = key
+        onTextReadingProgressChange?.(next)
+      }
+    }
+  })
+  pdfNavigationRef.current = pdfPagination
+  const virtualItems = getRenderedTextItems(
+    isPdf,
+    getPdfVirtualItems(
+      pageNumbers,
+      pdfPagination.pageNumber,
+      getVirtualPageKey(pdfPagination.pageNumber)
+    ),
+    virtualizer.getVirtualItems()
+  )
   const handleReadingProgressSeekPage = useCallback(
     (pageNumber: number, source: 'restore' | 'user' = 'user') => {
+      if (isPdf) {
+        pdfNavigationRef.current?.navigate(
+          pageNumber,
+          undefined,
+          source === 'user'
+        )
+        return
+      }
       const pageIndex = pageNumbers.indexOf(pageNumber)
       if (pageIndex < 0) return
       if (source === 'user') releaseProgrammaticSuppression()
@@ -1453,6 +1628,7 @@ export function IntermediateDocumentTextViewer(
       })
     },
     [
+      isPdf,
       onTextReadingProgressChange,
       pageNumbers,
       releaseProgrammaticSuppression,
@@ -1479,7 +1655,7 @@ export function IntermediateDocumentTextViewer(
       ),
     [pageNumbers]
   )
-  const textLayoutKey = `${fontScale ?? 'default'}:${Array.from(
+  const textLayoutKey = `${pdfPagination.revision}:${fontScale ?? 'default'}:${Array.from(
     textsByPageNumber.keys()
   ).join(',')}:${Array.from(imagesByPageNumber.keys()).join(
     ','
@@ -1606,11 +1782,30 @@ export function IntermediateDocumentTextViewer(
     selectedHighlight
   ])
 
-  const preloadPageNumbers = useMemo(
-    () =>
-      getPagePreloadWindow(pageNumbers, visiblePageNumbers, pagePreloadRadius),
-    [pageNumbers, pagePreloadRadius, visiblePageNumbers]
-  )
+  const preloadPageNumbers = useMemo(() => {
+    const window = getPagePreloadWindow(
+      pageNumbers,
+      visiblePageNumbers,
+      pagePreloadRadius
+    )
+    if (!isPdf) return window
+    const active = pdfPagination.pageNumber
+    const ordered = window.sort(
+      (a, b) => Math.abs(a - active) - Math.abs(b - active)
+    )
+    const cap =
+      typeof maxLoadedPages === 'number' && maxLoadedPages > 0
+        ? maxLoadedPages
+        : 5
+    return ordered.slice(0, cap)
+  }, [
+    pageNumbers,
+    pagePreloadRadius,
+    visiblePageNumbers,
+    isPdf,
+    pdfPagination.pageNumber,
+    maxLoadedPages
+  ])
   const preloadPageNumberSet = useMemo(
     () => new Set(preloadPageNumbers),
     [preloadPageNumbers]
@@ -1679,12 +1874,19 @@ export function IntermediateDocumentTextViewer(
         }
         if (!preloadPageNumberSet.has(pageNumber)) {
           nextTexts.delete(pageNumber)
+          if (isPdf) releasePdfTextPage(runtimeDocument, pageNumber)
           clearUnloadTimer(pageNumber)
         }
       }
       return nextTexts
     },
-    [clearUnloadTimer, maxLoadedPages, preloadPageNumberSet]
+    [
+      clearUnloadTimer,
+      maxLoadedPages,
+      preloadPageNumberSet,
+      isPdf,
+      runtimeDocument
+    ]
   )
 
   const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
@@ -1697,6 +1899,12 @@ export function IntermediateDocumentTextViewer(
     isIntermediateImage,
     callbacks: {
       onPageLoaded: ({ pageNumber, texts, images, paragraphs, content }) => {
+        if (isPdf)
+          setPdfLoadErrors((current) => {
+            const next = new Set(current)
+            next.delete(pageNumber)
+            return next
+          })
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
@@ -1720,6 +1928,10 @@ export function IntermediateDocumentTextViewer(
         })
       },
       onPageError: (pageNumber) => {
+        if (isPdf) {
+          setPdfLoadErrors((current) => new Set(current).add(pageNumber))
+          return
+        }
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
@@ -1748,6 +1960,7 @@ export function IntermediateDocumentTextViewer(
 
   const lazyPageQueueRef = useRef(lazyPageQueue)
   lazyPageQueueRef.current = lazyPageQueue
+  pdfEnqueueRef.current = lazyPageQueue.enqueuePage
 
   const alignTextAnchor = useCallback(
     (anchor: ReaderTextAnchor, request: TextAnchorRestoreRequest): boolean => {
@@ -1815,6 +2028,14 @@ export function IntermediateDocumentTextViewer(
 
   const scrollToTextAnchor = useCallback(
     (anchor: ReaderTextAnchor, source: 'bookmark' | 'restore' = 'bookmark') => {
+      if (isPdf) {
+        pdfNavigationRef.current?.navigate(
+          anchor.pageNumber,
+          anchor,
+          source === 'bookmark'
+        )
+        return
+      }
       const pageIndex = pageNumbers.indexOf(anchor.pageNumber)
       if (pageIndex < 0) return
 
@@ -1906,7 +2127,8 @@ export function IntermediateDocumentTextViewer(
       clearUnloadTimer,
       onTextReadingProgressChange,
       pageNumbers,
-      virtualizer
+      virtualizer,
+      isPdf
     ]
   )
 
@@ -1923,6 +2145,7 @@ export function IntermediateDocumentTextViewer(
       setFallbackBookmarkKey(getBookmarkKey(bookmark))
       const verticalRatio =
         Math.min(100, Math.max(0, bookmark.verticalPercentage)) / 100
+      if (isPdf) return
       const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
       viewerWindow?.requestAnimationFrame(() => {
         const viewport = scrollContainerRef.current
@@ -1938,7 +2161,8 @@ export function IntermediateDocumentTextViewer(
       handleReadingProgressSeekPage,
       pageNumbers,
       scrollToTextAnchor,
-      viewerRootElement
+      viewerRootElement,
+      isPdf
     ]
   )
 
@@ -2003,7 +2227,7 @@ export function IntermediateDocumentTextViewer(
     textsByPageNumber
   ])
 
-  useEffect(() => {
+  const restoreScrollReadingProgress = useCallback(() => {
     const requestedProgress = resolveRequestedTextReadingProgress(
       textReadingProgress,
       pageNumbers
@@ -2084,7 +2308,11 @@ export function IntermediateDocumentTextViewer(
   ])
 
   useEffect(() => {
-    if (textsByPageNumber.size === 0) return
+    if (!isPdf) restoreScrollReadingProgress()
+  }, [isPdf, restoreScrollReadingProgress])
+
+  useEffect(() => {
+    if (isPdf || textsByPageNumber.size === 0) return
     const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
     if (!viewerWindow) {
       captureReadingProgress()
@@ -2092,9 +2320,10 @@ export function IntermediateDocumentTextViewer(
     }
     const frameId = viewerWindow.requestAnimationFrame(captureReadingProgress)
     return () => viewerWindow.cancelAnimationFrame(frameId)
-  }, [captureReadingProgress, textsByPageNumber])
+  }, [isPdf, captureReadingProgress, textsByPageNumber])
 
   const removeLoadedTextPage = useCallback((pageNumber: number) => {
+    releasePdfTextPage(activeDocumentRef.current, pageNumber)
     setParagraphsByPageNumber((currentParagraphs) => {
       if (!currentParagraphs.has(pageNumber)) {
         return currentParagraphs
@@ -2541,6 +2770,22 @@ export function IntermediateDocumentTextViewer(
         (candidate) => candidate.id === rangeId
       )
       if (!range) return
+      if (isPdf) {
+        const pageNumber = parsePublicPageId(range.start.selectionId)
+        if (pageNumber !== null)
+          pdfNavigationRef.current?.navigate(
+            pageNumber,
+            {
+              pageNumber,
+              textId: '',
+              text: range.text,
+              offset: range.start.offset
+            },
+            true,
+            true
+          )
+        return
+      }
 
       const pageNumber = resolveTextRangeTargetPageNumber(range)
       if (pageNumber === null) return
@@ -2558,6 +2803,7 @@ export function IntermediateDocumentTextViewer(
       scrollMountedTextPageIntoView(pageNumber)
     },
     [
+      isPdf,
       clearUnloadTimer,
       pageNumbers,
       releaseProgrammaticSuppression,
@@ -2589,6 +2835,15 @@ export function IntermediateDocumentTextViewer(
     runtimeLinkedDataRef.current = nextLinkedData
     handleLinkedDataChange(nextLinkedData)
   }, [handleLinkedDataChange, isRangesControlled, isSelectedRangeIdControlled])
+
+  pdfClearDraftRef.current = (preserveSelected) => {
+    viewerRootElement?.ownerDocument.getSelection()?.removeAllRanges()
+    lastActiveRangeRef.current = null
+    setRuntimeLinkedTransientState({ scope: selectionScope, transient: {} })
+    if (preserveSelected) return
+    if (!isSelectedRangeIdControlled) setInternalSelectedRangeId(null)
+    onSelectRange?.(null)
+  }
 
   const publicSelectionRef = useMemo<ReaderSelectionRef>(
     () => ({
@@ -2846,6 +3101,7 @@ export function IntermediateDocumentTextViewer(
   }, [cancelRestoreAttempt, clearAllPreloadEnterTimers, clearAllUnloadTimers])
 
   useEffect(() => {
+    setPdfLoadErrors(new Set())
     activeDocumentRef.current = runtimeDocument
     activePageNumbersKeyRef.current = pageNumbersKey
     previousPreloadPageNumbersRef.current = new Set()
@@ -2883,13 +3139,16 @@ export function IntermediateDocumentTextViewer(
     if (isInitialPreloadSet) {
       lazyPageQueueRef.current.cancelAll()
       lazyPageQueueRef.current.enqueueInitialPages(preloadPageNumbers)
+      if (isPdf) lazyPageQueueRef.current.enqueuePage(pdfPagination.pageNumber)
       preloadPageNumbers.forEach((pageNumber) => {
         lazyPageQueueRef.current.enqueuePage(pageNumber)
       })
     } else {
       currentPreloadPages.forEach((pageNumber) => {
         if (!previousPreloadPages.has(pageNumber)) {
-          schedulePreloadEnter(pageNumber)
+          if (isPdf && pageNumber === pdfPagination.pageNumber)
+            lazyPageQueueRef.current.enqueuePage(pageNumber)
+          else schedulePreloadEnter(pageNumber)
         }
       })
     }
@@ -2925,6 +3184,9 @@ export function IntermediateDocumentTextViewer(
     removeLoadedTextPage,
     runtimeDocument,
     preloadPageNumbers,
+    isPdf,
+    pageNumbers,
+    pdfPagination.pageNumber,
     schedulePreloadEnter
   ])
 
@@ -2985,9 +3247,32 @@ export function IntermediateDocumentTextViewer(
 
   // 文档标题用于无障碍标签；缺失时回退到静态文案。
   const title = runtimeDocument?.title
+  const textClasses = getTextReadingClasses(isPdf)
 
   return (
-    <div className='hamster-reader__intermediate-text-shell'>
+    <div className={textClasses.shell}>
+      {
+        <PdfTextReadingControls
+          enabled={isPdf}
+          controlsRef={paginationControlsRef}
+          navigation={pdfPagination.navigation}
+          ready={pdfPagination.ready}
+          unlocatable={pdfPagination.unlocatable}
+          theme={paginationTheme}
+          empty={!pageNumbers.length}
+          failed={pdfLoadErrors.has(pdfPagination.pageNumber)}
+          onPrevious={() => pdfPagination.turn(false)}
+          onNext={() => pdfPagination.turn(true)}
+          onRetry={() => {
+            setPdfLoadErrors((current) => {
+              const next = new Set(current)
+              next.delete(pdfPagination.pageNumber)
+              return next
+            })
+            lazyPageQueueRef.current.enqueuePage(pdfPagination.pageNumber)
+          }}
+        />
+      }
       <PageBrowser
         isOpen={showPageBrowser}
         pageNumbers={pageNumbers}
@@ -3049,6 +3334,7 @@ export function IntermediateDocumentTextViewer(
           // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）
           'hamster-reader__intermediate-text-viewer',
           'hamster-reader__intermediate-text-scroll',
+          textClasses.viewport,
           // 添加 layout 模式的 viewer class，使 buildSelectionPayload 的
           // getSelectionViewerRoot 能在文本模式下找到 viewer root — 不影响布局
           // 因为 SCSS .hamster-reader__intermediate-text-viewer / -text-scroll
@@ -3065,12 +3351,7 @@ export function IntermediateDocumentTextViewer(
           .join(' ')}
         data-testid='intermediate-document-text-viewer'
         data-title={title}
-        style={{
-          paddingLeft: containMarginX,
-          paddingRight: containMarginX,
-          paddingTop: containMarginTop ?? containMarginY,
-          paddingBottom: containMarginBottom ?? containMarginY
-        }}
+        style={getTextViewportStyle(props, readingViewport)}
         onPointerDownCapture={handleViewerPointerDown}
         onPointerMoveCapture={handleViewerPointerMove}
         onPointerUpCapture={handleViewerPointerUp}
@@ -3079,7 +3360,11 @@ export function IntermediateDocumentTextViewer(
         {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
         <div
           className='hamster-reader__intermediate-text-spacer'
-          style={{ height: virtualizer.getTotalSize() }}
+          style={getTextSpacerStyle(
+            isPdf,
+            readingViewport.height,
+            virtualizer.getTotalSize()
+          )}
         >
           {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
           {virtualItems.map((virtualItem) => {
@@ -3100,7 +3385,7 @@ export function IntermediateDocumentTextViewer(
               <PopoverPortal
                 containerRef={popoverContainerRef}
                 selectionKind='selected'
-                visible={true}
+                visible={!isPdf || !showPageBrowser}
                 relative={popoverRelative}
               >
                 {existingHighlightPopover}
@@ -3110,7 +3395,7 @@ export function IntermediateDocumentTextViewer(
               <PopoverPortal
                 containerRef={popoverContainerRef}
                 selectionKind='active'
-                visible={true}
+                visible={!isPdf || !showPageBrowser}
                 relative={popoverRelative}
               >
                 {selectionPopover}
@@ -3119,7 +3404,7 @@ export function IntermediateDocumentTextViewer(
             return (
               <div
                 key={virtualItem.key}
-                ref={virtualizer.measureElement}
+                ref={isPdf ? undefined : virtualizer.measureElement}
                 data-index={virtualItem.index}
                 data-page-measurable={
                   texts !== undefined && (texts.length > 0 || images.length > 0)
@@ -3131,7 +3416,7 @@ export function IntermediateDocumentTextViewer(
                 // position:absolute / top:0 / left:0 / width:100% / padding:5px，
                 // 仅保留动态 transform（由 TanStack Virtual 计算）
                 className={`hamster-reader__intermediate-text-page${
-                  virtualItem.index > 0
+                  !isPdf && virtualItem.index > 0
                     ? ' hamster-reader__intermediate-text-page--following'
                     : ''
                 }`}
@@ -3146,7 +3431,20 @@ export function IntermediateDocumentTextViewer(
                     第 {pageNumber} 页
                   </div>
                 ) : null}
-                {texts ? (
+                {isPdf &&
+                texts &&
+                !texts.some((text) => text.content.trim()) ? (
+                  <div role='status' className='hamster-reader__pdf-text-empty'>
+                    第 {pageNumber} 页没有可提取的文字
+                    {props.onRequestLayout && (
+                      <button type='button' onClick={props.onRequestLayout}>
+                        返回 Layout
+                      </button>
+                    )}
+                  </div>
+                ) : null}
+                {texts &&
+                !(isPdf && !texts.some((text) => text.content.trim())) ? (
                   <HamsterSelection
                     selectionId={pageSelectionId}
                     linkedMode
@@ -3169,6 +3467,22 @@ export function IntermediateDocumentTextViewer(
                     selectionPopover={pageSelectionPopover}
                     overlayRectType={overlayRectType}
                     tool='text'
+                    renderHandle={
+                      isPdf
+                        ? (handle) => (
+                            <PdfTextHandle
+                              handle={handle}
+                              linkedData={runtimeLinkedData}
+                              root={viewerRootElement}
+                              selectionId={pageSelectionId}
+                              pageNumber={pageNumber}
+                              width={readingViewport.width}
+                              column={pdfPagination.column}
+                              magnifierEnabled={showSelectionMagnifier}
+                            />
+                          )
+                        : undefined
+                    }
                     showSelectionMagnifier={showSelectionMagnifier}
                     ref={selectionRefForRuntimeId(pageSelectionId)}
                   >

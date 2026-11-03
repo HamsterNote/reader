@@ -81,6 +81,42 @@ const buildPageTexts = (
   return { texts, canonical }
 }
 
+const releaseCallbacks = new WeakMap<
+  IntermediateDocument,
+  (page: number) => void
+>()
+
+/** Viewer eviction also releases the PDF-only canonical index. */
+export function releasePdfTextPage(
+  document: IntermediateDocument | null,
+  page: number
+) {
+  if (document) releaseCallbacks.get(document)?.(page)
+}
+
+// IntermediatePageMap caches fulfilled *and rejected* promises indefinitely.
+// Text already has a bounded viewer cache and queue; bypass that second cache
+// so offscreen eviction and failed extraction can actually release/retry.
+class LazyPdfTextDocument extends IntermediateDocument {
+  constructor(
+    pagesMap: IntermediatePageMap,
+    id: string,
+    private readonly loaders: ReadonlyMap<
+      number,
+      () => Promise<IntermediatePage>
+    >
+  ) {
+    super({ id, title: '', pagesMap })
+  }
+  override getPageByPageNumber(pageNumber: number) {
+    return this.loaders.get(pageNumber)?.()
+  }
+  override getPageById(id: string) {
+    const match = /^page-([1-9]\d*)$/.exec(id)
+    return match ? this.getPageByPageNumber(Number(match[1])) : undefined
+  }
+}
+
 export type PdfTextModeDocument = {
   readonly document: IntermediateDocument
   readonly getCanonicalPageText: (
@@ -107,40 +143,40 @@ export async function createPdfTextModeDocument(
     )
   )
 
-  const pagesMap = IntermediatePageMap.makeByInfoList(
-    pdfPages.map((pdfPage, index) => {
-      const pageNumber = index + 1
-      const scaleOneViewport = pdfPage.getViewport({ scale: 1 })
-      return {
-        id: `page-${pageNumber}`,
-        pageNumber,
-        size: { x: scaleOneViewport.width, y: scaleOneViewport.height },
-        getData: async () => {
-          const textContent = await pdfPage.getTextContent()
-          const { texts, canonical } = buildPageTexts(
-            textContent.items.filter(isTextItem),
-            pageNumber,
-            scaleOneViewport
-          )
-          canonicalByPage.set(pageNumber, canonical)
-          return new IntermediatePage({
-            id: `page-${pageNumber}`,
-            number: pageNumber,
-            width: scaleOneViewport.width,
-            height: scaleOneViewport.height,
-            texts
-          })
-        }
+  const infoList = pdfPages.map((pdfPage, index) => {
+    const pageNumber = index + 1
+    const scaleOneViewport = pdfPage.getViewport({ scale: 1 })
+    return {
+      id: `page-${pageNumber}`,
+      pageNumber,
+      size: { x: scaleOneViewport.width, y: scaleOneViewport.height },
+      getData: async () => {
+        const textContent = await pdfPage.getTextContent()
+        const { texts, canonical } = buildPageTexts(
+          textContent.items.filter(isTextItem),
+          pageNumber,
+          scaleOneViewport
+        )
+        canonicalByPage.set(pageNumber, canonical)
+        return new IntermediatePage({
+          id: `page-${pageNumber}`,
+          number: pageNumber,
+          width: scaleOneViewport.width,
+          height: scaleOneViewport.height,
+          texts
+        })
       }
-    })
+    }
+  })
+  const pagesMap = IntermediatePageMap.makeByInfoList(infoList)
+  const textDocument = new LazyPdfTextDocument(
+    pagesMap,
+    documentId,
+    new Map(infoList.map((info) => [info.pageNumber, info.getData]))
   )
-
+  releaseCallbacks.set(textDocument, (page) => canonicalByPage.delete(page))
   return {
-    document: new IntermediateDocument({
-      id: documentId,
-      title: '',
-      pagesMap
-    }),
+    document: textDocument,
     getCanonicalPageText: (pageNumber) => canonicalByPage.get(pageNumber)
   }
 }

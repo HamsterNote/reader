@@ -1,3 +1,7 @@
+import {
+  measurePdfTextColumns,
+  pdfTextAnchorColumn
+} from '../../src/pdf/pdfTextPagination'
 // HAM-89 / tasks.md 3.2：canonical 端点 ↔ text layer DOM 映射（jsdom）。
 // 覆盖：属性注入、UTF-16 偏移正逆映射、兼容字符、跨页选区序列化。
 
@@ -178,4 +182,53 @@ describe('canonicalRangeToDomRange', () => {
     expect(range).not.toBeNull()
     expect(range!.toString()).toBe('lo wor')
   })
+})
+
+it('keeps repeated raw ligatures canonical when display spaces and column fragments are added', () => {
+  const page = buildCanonicalPageText(1, [
+    { str: 'ﬁ x' },
+    { str: 'ﬁ x' },
+    { str: 'tail' }
+  ])
+  const content = makeTextLayerDiv(['ﬁ x', 'ﬁ x', 'tail'])
+  enhanceTextLayer(content, page)
+  const spans = Array.from(content.querySelectorAll('span'))
+  content.insertBefore(document.createTextNode(' '), spans[1])
+  const previous = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: function (this: Range) {
+      const element =
+        this.startContainer.nodeType === Node.ELEMENT_NODE
+          ? this.startContainer
+          : this.startContainer.parentElement
+      const index = spans.indexOf(element as HTMLSpanElement)
+      return [new DOMRect(index * 324, 0, 40, 20)]
+    }
+  })
+  try {
+    expect(
+      measurePdfTextColumns(content, 1, 300).map(
+        (column) => column.anchor?.offset
+      )
+    ).toEqual([0, 3, 6])
+    expect(
+      pdfTextAnchorColumn(
+        content,
+        { pageNumber: 1, textId: 'page-1-item-1', text: 'ﬁ x', offset: 4 },
+        300
+      )
+    ).toBe(1)
+    expect(
+      domPositionToCanonicalOffset(spans[1].firstChild as Text, 1, page)
+    ).toBe(4)
+    expect(page.text).toBe('ﬁ xﬁ xtail')
+  } finally {
+    if (previous)
+      Object.defineProperty(Range.prototype, 'getClientRects', previous)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+  }
 })
