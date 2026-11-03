@@ -12,6 +12,13 @@ type Timers = {
   readonly pending: () => number
 }
 
+/** 等一轮任务边界：让 promise 链（quiesce → flush → ready）全部跑完。 */
+function settle(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve)
+  })
+}
+
 function createTimers(): Timers {
   let nextHandle = 1
   const callbacks = new Map<number, () => void>()
@@ -237,5 +244,224 @@ describe('createWebBridgeClient', () => {
     for (const message of reloaded.sent) {
       expect(firstIds).not.toContain(message['requestId'])
     }
+  })
+})
+
+describe('createWebBridgeClient flushPending', () => {
+  it('resolves only after the pending write is acknowledged', async () => {
+    const { bridge, sent, timers } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+    const flushed = bridge.flushPending(1000)
+    expect(bridge.getPendingCount()).toBe(1)
+
+    const change = sent.at(-1) ?? {}
+    bridge.handleMessage(
+      hostMessage('ack', {
+        requestId: change['requestId'],
+        revision: 1
+      })
+    )
+
+    await expect(flushed).resolves.toBe(true)
+    expect(bridge.getPendingCount()).toBe(0)
+    expect(timers.pending()).toBe(0)
+  })
+
+  it('reports an unconfirmed flush on timeout without clearing the write', async () => {
+    const { bridge, timers } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+
+    const flushed = bridge.flushPending(1000)
+    timers.fireAll()
+
+    await expect(flushed).resolves.toBe(false)
+    // 超时只说明“未确认”，写入仍会重发，不能被当成已保存。
+    expect(bridge.getPendingCount()).toBeGreaterThan(0)
+  })
+
+  it('reports an unconfirmed flush when the session is disposed', async () => {
+    const { bridge } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+
+    const flushed = bridge.flushPending(1000)
+    bridge.handleMessage(hostMessage('dispose', {}))
+
+    await expect(flushed).resolves.toBe(false)
+  })
+})
+
+describe('createWebBridgeClient close handshake', () => {
+  it('queues edits made during the drain and answers ready only after all acks', async () => {
+    const { bridge, sent } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+    const first = sent.at(-1) ?? {}
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    // 冻结前/冻结瞬间产生的编辑继续入队，纳入 ack 屏障而不是被丢弃。
+    bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    expect(bridge.getPendingCount()).toBe(2)
+
+    bridge.handleMessage(
+      hostMessage('ack', { requestId: first['requestId'], revision: 1 })
+    )
+    await Promise.resolve()
+    // 第一笔 ack 后第二笔发出，但还不能报告 ready。
+    const second = sent.at(-1) ?? {}
+    expect(second['type']).toBe('change')
+    expect(bridge.getPendingCount()).toBe(1)
+
+    bridge.handleMessage(
+      hostMessage('ack', { requestId: second['requestId'], revision: 2 })
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(sent.at(-1)).toMatchObject({ type: 'ready' })
+    expect(bridge.getPendingCount()).toBe(0)
+  })
+
+  it('answers error instead of ready when flushing times out', async () => {
+    const { bridge, sent, timers } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    // 先跑完 quiesce（未配置时立即通过）再触发冲刷超时。
+    await settle()
+    timers.fireAll()
+    await settle()
+
+    expect(sent.at(-1)).toMatchObject({
+      type: 'error',
+      payload: { code: 'ENGINE_FAILURE' }
+    })
+  })
+
+  it('resumes editing when the host cancels the close', () => {
+    const { bridge } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    bridge.handleMessage(hostMessage('command', { name: 'resume' }))
+
+    const before = bridge.getPendingCount()
+    bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    // 恢复编辑后新写入会进入 pending（排在在途那一笔之后），不再被丢弃。
+    expect(bridge.getPendingCount()).toBe(before + 1)
+  })
+})
+
+describe('createWebBridgeClient drain signal', () => {
+  it('announces drain start, resume and dispose to the UI', () => {
+    const states: boolean[] = []
+    const bridge = createWebBridgeClient({
+      sessionId,
+      sourceToken,
+      post: () => undefined,
+      timers: createTimers().api,
+      onDrainingChange: (draining) => states.push(draining)
+    })
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    expect(states).toEqual([true])
+
+    bridge.handleMessage(hostMessage('command', { name: 'resume' }))
+    expect(states).toEqual([true, false])
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    bridge.handleMessage(hostMessage('dispose', {}))
+    expect(states).toEqual([true, false, true, false])
+  })
+})
+
+describe('createWebBridgeClient input quiesce', () => {
+  it('does not report ready until the in-flight gesture has committed', async () => {
+    const sent: Record<string, unknown>[] = []
+    const timers = createTimers()
+    let releaseQuiesce = (): void => undefined
+    const quiesce = new Promise<void>((resolve) => {
+      releaseQuiesce = resolve
+    })
+    const bridge = createWebBridgeClient({
+      sessionId,
+      sourceToken,
+      post: (raw) => sent.push(JSON.parse(raw)),
+      timers: timers.api,
+      onQuiesce: () => quiesce
+    })
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    sent.length = 0
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+
+    // pointerup 提交发生在关闭开始之后。
+    bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    const change = sent.at(-1) ?? {}
+    bridge.handleMessage(
+      hostMessage('ack', { requestId: change['requestId'], revision: 1 })
+    )
+    await settle()
+    // 写入已 ack 但输入仍静默中：不能提前 ready。
+    expect(sent.some((message) => message['type'] === 'ready')).toBe(false)
+
+    releaseQuiesce()
+    await settle()
+    expect(sent.at(-1)).toMatchObject({ type: 'ready' })
+    expect(
+      sent.findIndex((message) => message['type'] === 'change')
+    ).toBeLessThan(sent.findIndex((message) => message['type'] === 'ready'))
+  })
+
+  it('cancels the close when the input never quiesces', async () => {
+    const sent: Record<string, unknown>[] = []
+    const timers = createTimers()
+    const bridge = createWebBridgeClient({
+      sessionId,
+      sourceToken,
+      post: (raw) => sent.push(JSON.parse(raw)),
+      timers: timers.api,
+      onQuiesce: () => new Promise<void>(() => undefined)
+    })
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+
+    timers.fireAll()
+    await settle()
+
+    expect(sent.at(-1)).toMatchObject({
+      type: 'error',
+      payload: { message: '关闭前输入未静默，已取消关闭' }
+    })
   })
 })

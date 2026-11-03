@@ -1,5 +1,13 @@
 import { randomUUID } from 'expo-crypto'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -16,6 +24,7 @@ import {
 } from 'react-native-webview'
 
 import { READER_BRIDGE_PROTOCOL_VERSION } from '../../../src/bridge/protocol'
+import type { BridgeCloseResult } from '../../../src/bridge/hostSession'
 import {
   decideReaderNavigation,
   type ReaderNavigationContext
@@ -73,13 +82,18 @@ function buildBootstrapScript(sessionId: string, sourceToken: string): string {
   `
 }
 
-export function ReaderWebView({
-  record,
-  store,
-  entryUrl,
-  baseUrl,
-  publicationUrl
-}: ReaderWebViewProps) {
+/** 关闭握手入口：宿主 UI 必须先 await close() 再卸载 WebView。 */
+export type ReaderWebViewHandle = {
+  readonly close: () => Promise<BridgeCloseResult>
+}
+
+export const ReaderWebView = forwardRef<
+  ReaderWebViewHandle,
+  ReaderWebViewProps
+>(function ReaderWebView(
+  { record, store, entryUrl, baseUrl, publicationUrl },
+  ref
+) {
   const webRef = useRef<WebView>(null)
   const sessionRef = useRef<ReaderHostSession | null>(null)
   const openedRef = useRef(false)
@@ -88,6 +102,19 @@ export function ReaderWebView({
   const [statusText, setStatusText] = useState('正在加载阅读资源…')
   const sessionId = useMemo(() => randomUUID(), [])
   const sourceToken = useMemo(() => randomUUID(), [])
+
+  // 关闭握手入口：UI 先 await close()，成功后才允许卸载 WebView。
+  useImperativeHandle(
+    ref,
+    () => ({
+      close: async (): Promise<BridgeCloseResult> => {
+        const session = sessionRef.current
+        if (session === null) return { status: 'closed' }
+        return session.close()
+      }
+    }),
+    []
+  )
 
   // 宿主会话随文档创建一次，不随 WebView 重载（generation）重建：
   // 会话内的已确认快照、幂等表与在途持久化队列在重载后仍然有效，
@@ -247,7 +274,7 @@ export function ReaderWebView({
       )}
     </View>
   )
-}
+})
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },

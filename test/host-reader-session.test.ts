@@ -271,10 +271,20 @@ describe('ReaderHostSession', () => {
     expect(restore?.payload).toMatchObject({ data: null, revision: 0 })
   })
 
-  it('stops accepting messages after dispose', async () => {
+  it('closes only after the web confirms its flush', async () => {
     const harness = createHarness()
     await ready(harness)
-    harness.session.sendDispose()
+    harness.sent.length = 0
+
+    const closing = harness.session.close(1000)
+    // 先请求 Web 冲刷；此时不解散会话，写入仍会被接收。
+    expect(harness.sent.at(-1)?.type).toBe('command')
+    expect(harness.sent.at(-1)?.payload).toMatchObject({ name: 'flush' })
+
+    await harness.session.handleRawMessage(
+      raw('ready', {}, { requestId: 'web-flushed' })
+    )
+    await expect(closing).resolves.toEqual({ status: 'closed' })
     expect(harness.sent.at(-1)?.type).toBe('dispose')
 
     const result = await harness.session.handleRawMessage(
@@ -282,6 +292,75 @@ describe('ReaderHostSession', () => {
     )
     expect(result.accepted).toBe(false)
     expect(result.rejection?.code).toBe('STALE_SESSION')
+  })
+
+  it('keeps both interleaved writes when closing with a pending persist', async () => {
+    let releaseFirst = (): void => undefined
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const harness = createHarness({
+      persist: (snapshot) =>
+        snapshot.revision === 1 ? firstGate : Promise.resolve()
+    })
+    await ready(harness)
+    harness.sent.length = 0
+
+    const first = harness.session.handleRawMessage(
+      raw(
+        'change',
+        { data: { annotations: 1 }, revision: 1 },
+        {
+          requestId: 'c1'
+        }
+      )
+    )
+    const second = harness.session.handleRawMessage(
+      raw(
+        'change',
+        { data: { annotations: 2 }, revision: 2 },
+        {
+          requestId: 'c2'
+        }
+      )
+    )
+    const closing = harness.session.close(1000)
+
+    releaseFirst()
+    await first
+    await second
+    // Web 在这一刻才报告冲刷完成（第二笔 ack 之后）。
+    await harness.session.handleRawMessage(
+      raw('ready', {}, { requestId: 'web-flushed' })
+    )
+    await expect(closing).resolves.toEqual({ status: 'closed' })
+
+    expect(harness.persisted.map((entry) => entry.revision)).toEqual([1, 2])
+    expect(harness.sent.map((message) => message.type)).toEqual([
+      'command',
+      'ack',
+      'ack',
+      'dispose'
+    ])
+  })
+
+  it('cancels the close and keeps the session usable when flushing times out', async () => {
+    const harness = createHarness({
+      persist: () => new Promise<void>(() => undefined)
+    })
+    await ready(harness)
+    harness.sent.length = 0
+
+    const closing = harness.session.close(5)
+    await expect(closing).resolves.toEqual({
+      status: 'unconfirmed',
+      reason: '关闭超时：仍有未确认写入未落盘'
+    })
+    // 撤回 close：通知 Web 恢复编辑，会话仍可接收写入。
+    expect(harness.sent.at(-1)).toMatchObject({
+      type: 'command',
+      payload: { name: 'resume' }
+    })
   })
 
   it('serializes concurrent async writes', async () => {

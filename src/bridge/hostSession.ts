@@ -8,11 +8,14 @@
 // 同步 `handleWebMessage` 保持 HAM-87 契约，只接受同步 persist。
 
 import {
+  BRIDGE_COMMAND_FLUSH,
+  BRIDGE_COMMAND_RESUME,
   buildBridgeError,
   parseBridgeMessage,
   parseRevisionedPayload,
   READER_BRIDGE_PROTOCOL_VERSION,
   type BridgeAckPayload,
+  type BridgeCommandPayload,
   type BridgeErrorCode,
   type BridgeMessage,
   type BridgeRestorePayload
@@ -35,7 +38,14 @@ export type BridgeHostSessionOptions = {
    * 返回 Promise 时必须使用 `handleWebMessageAsync`，确保 ack 在落盘后发出。
    */
   readonly persist: (snapshot: BridgeHostSnapshot) => unknown
+  /** 主动消息出口（关闭握手的 command/dispose）；缺省时 close 直接返回失败。 */
+  readonly send?: (message: BridgeMessage) => void
 }
+
+/** 关闭握手结果：closed 表示已落盘并通知 Web；unconfirmed 表示仍有未确认写入。 */
+export type BridgeCloseResult =
+  | { readonly status: 'closed' }
+  | { readonly status: 'unconfirmed'; readonly reason: string }
 
 export type BridgeHostSession = {
   /**
@@ -54,6 +64,11 @@ export type BridgeHostSession = {
    * 不改变 revision，也不触发持久化。
    */
   readonly resendRestore: () => BridgeMessage[]
+  /**
+   * 关闭握手：请求 Web 冲刷未确认写入（command flush），等其确认与本地持久化
+   * 队列都清空后才下发 dispose 并失效。超时/失败返回 unconfirmed 且会话保持可用。
+   */
+  readonly close: (timeoutMs?: number) => Promise<BridgeCloseResult>
   /** 结束会话；之后所有该会话消息按 STALE_SESSION 拒绝。 */
   readonly dispose: () => void
 }
@@ -85,6 +100,12 @@ export function createBridgeHostSession(
   }
   let restoreSent = false
   let disposed = false
+  // 关闭握手：closing 期间仍接收 Web 写入；webDrained 表示 Web 已冲干净。
+  let closing = false
+  let webDrained = false
+  let closePromise: Promise<BridgeCloseResult> | null = null
+  let settleClose: ((result: BridgeCloseResult) => void) | null = null
+  let closeTimer: ReturnType<typeof setTimeout> | null = null
   // 已持久化的 requestId → ack payload，用于重复投递幂等应答。
   const persistedRequestIds = new Map<string, BridgeAckPayload>()
   let outboundCounter = 0
@@ -125,6 +146,55 @@ export function createBridgeHostSession(
       progress: snapshot.progress,
       revision: snapshot.revision
     })
+
+  const clearCloseTimer = (): void => {
+    if (closeTimer !== null) {
+      clearTimeout(closeTimer)
+      closeTimer = null
+    }
+  }
+
+  /** 关闭失败：撤回 flush 请求，让 Web 继续编辑，会话保持可用。 */
+  const abortClose = (reason: string): void => {
+    if (!closing) return
+    closing = false
+    webDrained = false
+    clearCloseTimer()
+    options.send?.(
+      buildOutbound<BridgeCommandPayload>('command', {
+        name: BRIDGE_COMMAND_RESUME
+      })
+    )
+    const resolve = settleClose
+    settleClose = null
+    closePromise = null
+    resolve?.({ status: 'unconfirmed', reason })
+  }
+
+  /**
+   * Web 已冲干净且本地持久化队列为空 → 下发 dispose 并失效。
+   * 顺序保证：所有 ack 先于 dispose，Web 不会因为关闭丢掉已接收的写入。
+   */
+  const completeClose = async (): Promise<void> => {
+    if (!closing || !webDrained) return
+    // ready 之后仍可能有排在后面的 change（同批投递）：队列直到稳定才 dispose。
+    let observed: Promise<unknown> = asyncQueue
+    let stable = false
+    while (!stable) {
+      await observed
+      stable = observed === asyncQueue
+      observed = asyncQueue
+    }
+    if (!closing) return
+    closing = false
+    disposed = true
+    clearCloseTimer()
+    options.send?.(buildOutbound('dispose', {}))
+    const resolve = settleClose
+    settleClose = null
+    closePromise = null
+    resolve?.({ status: 'closed' })
+  }
 
   // change/progress 共享写入路径：restore 前置校验、requestId 幂等、
   // revision 递增校验，全部通过后恰好持久化一次并应答 ack。
@@ -278,6 +348,12 @@ export function createBridgeHostSession(
       // WebView 首次启动或异常重载都会发 ready；宿主重新下发最后确认快照，
       // restore 完成前 Web 层不得发送 change/progress。
       case 'ready': {
+        // 关闭握手中 Web 用 ready 表示“未确认写入已冲干净”，不回 restore。
+        if (closing) {
+          webDrained = true
+          void completeClose()
+          return []
+        }
         restoreSent = true
         return [buildRestore()]
       }
@@ -289,7 +365,16 @@ export function createBridgeHostSession(
         )
       }
       // Web 层上报引擎错误：宿主不改快照，等下一次 ready 重发 restore。
+      // 关闭握手期间则视为冲刷失败，撤回关闭。
       case 'error': {
+        if (closing) {
+          const payload = message.payload as { message?: unknown }
+          abortClose(
+            typeof payload.message === 'string'
+              ? payload.message
+              : '关闭前仍有未确认写入'
+          )
+        }
         return []
       }
       default: {
@@ -339,6 +424,32 @@ export function createBridgeHostSession(
     return result
   }
 
+  const close = (timeoutMs = 5000): Promise<BridgeCloseResult> => {
+    if (disposed) return Promise.resolve({ status: 'closed' })
+    if (closePromise !== null) return closePromise
+    if (options.send === undefined) {
+      return Promise.resolve({
+        status: 'unconfirmed',
+        reason: '宿主未提供关闭握手通道'
+      })
+    }
+    closing = true
+    webDrained = false
+    const promise = new Promise<BridgeCloseResult>((resolve) => {
+      settleClose = resolve
+    })
+    closePromise = promise
+    options.send(
+      buildOutbound<BridgeCommandPayload>('command', {
+        name: BRIDGE_COMMAND_FLUSH
+      })
+    )
+    closeTimer = setTimeout(() => {
+      abortClose('关闭超时：仍有未确认写入未落盘')
+    }, timeoutMs)
+    return promise
+  }
+
   return {
     handleWebMessage,
     handleWebMessageAsync,
@@ -347,7 +458,9 @@ export function createBridgeHostSession(
       restoreSent = true
       return [buildRestore()]
     },
+    close,
     dispose: () => {
+      if (settleClose !== null) abortClose('会话已关闭')
       disposed = true
     }
   }

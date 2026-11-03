@@ -8,7 +8,11 @@ import { createPdfWorkerFromAsset } from './pdfWorker'
 import { packagedPdfOptions } from './pdfAssets'
 import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
-import { restoreReaderSnapshot } from '../../src/host/readerSnapshot'
+import {
+  restoreReaderSnapshot,
+  serializeReaderSnapshot,
+  type ReaderSnapshot
+} from '../../src/host/readerSnapshot'
 import type {
   BridgeOpenPayload,
   BridgeRestorePayload
@@ -22,6 +26,69 @@ if (!rootElement) throw new Error('Missing reader root')
 const root = createRoot(rootElement)
 const host = window.__READER_HOST__
 const post = window.ReactNativeWebView?.postMessage
+// 关闭前等待未确认写入的时间上限；超时仍释放，但不声称已保存。
+const FLUSH_PENDING_TIMEOUT_MS = 2000
+const CLOSING_SHIELD_ID = 'reader-closing-shield'
+
+/**
+ * 关闭冲刷期间冻结输入：盖一层透明遮罩，阻止新的手势/点击。
+ * 冻结前已经开始的手势仍会提交，其写入继续入队并被 ack 屏障覆盖。
+ */
+function setClosingShield(active: boolean): void {
+  const existing = document.getElementById(CLOSING_SHIELD_ID)
+  if (!active) {
+    existing?.remove()
+    return
+  }
+  if (existing !== null) return
+  const shield = document.createElement('div')
+  shield.id = CLOSING_SHIELD_ID
+  shield.setAttribute('aria-busy', 'true')
+  shield.style.cssText =
+    'position:fixed;inset:0;z-index:2147483000;background:rgba(255,255,255,0.01);cursor:progress;touch-action:none;'
+  document.body.appendChild(shield)
+}
+
+// 进行中的指针手势计数与提交后的稳定点。关闭前必须等它归零，否则 ready
+// 会早于手势提交，change 排到 dispose 之后被丢掉。
+let activePointers = 0
+let pointerSettled: Promise<void> = Promise.resolve()
+const pointerIdleWaiters: Array<() => void> = []
+
+window.addEventListener(
+  'pointerdown',
+  () => {
+    activePointers += 1
+  },
+  true
+)
+
+const endPointer = (): void => {
+  activePointers = Math.max(0, activePointers - 1)
+  if (activePointers > 0) return
+  // 同一次事件派发里的提交（pointerup → onChange → sendChange）会在本任务
+  // 内完成；这里只等一个任务边界确认，不猜测手势时长。
+  pointerSettled = pointerSettled.then(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 0)
+      })
+  )
+  for (const wake of pointerIdleWaiters.splice(0)) wake()
+}
+window.addEventListener('pointerup', endPointer, true)
+window.addEventListener('pointercancel', endPointer, true)
+
+/** 关闭前静默：等现有手势结束并把提交写入入队，之后才允许 flush/ready。 */
+async function waitForInputQuiesce(): Promise<void> {
+  if (activePointers > 0) {
+    await new Promise<void>((resolve) => {
+      pointerIdleWaiters.push(resolve)
+    })
+  }
+  await pointerSettled
+}
+
 let generation = 0
 let descriptor: BridgeOpenPayload | null = null
 let snapshot: BridgeRestorePayload | null = null
@@ -42,6 +109,19 @@ async function release() {
     if (GlobalWorkerOptions.workerPort === previousWorker)
       GlobalWorkerOptions.workerPort = null
   }
+}
+
+/**
+ * 旧 v4 快照一次性迁移：完整结果先写新键并等 ack，确认后才进入正常会话。
+ * 未确认即抛错，保留旧原件由错误页重试，不会半写。
+ */
+async function commitMigratedAnnotations(
+  initial: ReaderSnapshot
+): Promise<void> {
+  if (!initial.migrated || bridge === null) return
+  bridge.sendChange(serializeReaderSnapshot(initial))
+  const saved = await bridge.flushPending(FLUSH_PENDING_TIMEOUT_MS)
+  if (!saved) throw new Error('标注迁移未确认，已保留旧数据，请重试')
 }
 
 async function display(
@@ -75,12 +155,15 @@ async function display(
       await release()
       return
     }
+    const initial = restoreReaderSnapshot(restored.data, restored.progress)
+    await commitMigratedAnnotations(initial)
+    if (token !== generation) return
     root.render(
       <ReaderSurface
         key={`${document.fileId}:${token}`}
         source={source}
         document={documentHandle.document}
-        initial={restoreReaderSnapshot(restored.data, restored.progress)}
+        initial={initial}
         onChange={(data) => {
           if (token === generation) bridge?.sendChange(data)
         }}
@@ -125,8 +208,15 @@ const bridge =
         },
         onDispose: () => {
           generation++
+          setClosingShield(false)
+          // 宿主已确认未确认写入全部落盘（见 command flush 握手），直接释放引擎。
           work = work.then(release).catch(() => undefined)
         },
+        onDrainingChange: (draining) => {
+          // 关闭冲刷期间冻结输入；恢复（resume）时解除。
+          setClosingShield(draining)
+        },
+        onQuiesce: waitForInputQuiesce,
         onError: (error) => {
           if (error.code !== 'REVISION_MISMATCH')
             root.render(<div role='alert'>{error.message}</div>)

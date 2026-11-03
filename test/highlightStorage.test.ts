@@ -6,7 +6,6 @@ import {
   parseHighlights,
   readAnnotationStorageV5,
   serializeAnnotationStorageV5,
-  serializeHighlights,
   writeAnnotationStorageV5,
   type AnnotationStorageV5,
   type ReaderSelectionRange,
@@ -99,22 +98,6 @@ describe('highlight storage helpers', () => {
       ranges: [linkedRangeA, linkedRangeB],
       rects: [rectA, rectB],
       paintings: {}
-    })
-  })
-
-  it('serializes ranges and rects with the exact v4 envelope', () => {
-    const ranges = [linkedRangeA, linkedRangeB]
-    const rects = [rectA, rectB]
-    const paintings = {}
-
-    // serializeHighlights 现在签名 3 参，第三参 paintings 默认 {} 即可
-    const serialized = serializeHighlights(ranges, rects, paintings)
-
-    expect(JSON.parse(serialized)).toEqual({
-      version: 4,
-      ranges,
-      rects,
-      paintings
     })
   })
 
@@ -322,26 +305,7 @@ describe('highlight storage helpers', () => {
     })
   })
 
-  it('serializes ranges, rects and paintings with the v4 envelope', () => {
-    // serializeHighlights 接收 paintings 第三参，输出 v4 envelope
-    const ranges = [linkedRangeA]
-    const rects = [rectA]
-    const paintings = {
-      'page-1': paintingPage1
-    }
-
-    const serialized = serializeHighlights(ranges, rects, paintings)
-
-    expect(JSON.parse(serialized)).toEqual({
-      version: 4,
-      ranges,
-      rects,
-      paintings
-    })
-  })
-
-  it('round-trips paintings through serializeHighlights then parseHighlights', () => {
-    // 端到端：序列化再解析，paintings 字段应保持一致
+  it('round-trips v4 paintings through parse and a v4-shaped fixture', () => {
     const paintings = {
       'page-1': paintingPage1,
       'page-2': paintingPage2
@@ -349,8 +313,10 @@ describe('highlight storage helpers', () => {
     const ranges = [linkedRangeA, linkedRangeB]
     const rects = [rectA, rectB]
 
-    const serialized = serializeHighlights(ranges, rects, paintings)
-    const parsed = parseHighlights(serialized)
+    // 写入端已删除：用固定 v4 夹具证明读入仍然逐字段保真。
+    const parsed = parseHighlights(
+      JSON.stringify({ version: 4, ranges, rects, paintings })
+    )
 
     expect(parsed).toEqual({ ranges, rects, paintings })
   })

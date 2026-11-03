@@ -78,6 +78,14 @@ export type BridgeErrorPayload = {
   readonly requestId?: string
 }
 
+/** Host→Web command 名称：关闭前请求 Web 冲刷未确认写入 / 取消该请求。 */
+export const BRIDGE_COMMAND_FLUSH = 'flush'
+export const BRIDGE_COMMAND_RESUME = 'resume'
+
+export type BridgeCommandPayload = {
+  readonly name: typeof BRIDGE_COMMAND_FLUSH | typeof BRIDGE_COMMAND_RESUME
+}
+
 /** open 的 payload：文档描述。文件内容经宿主受控 URL/描述符交付，不走消息体。 */
 export type BridgeOpenPayload = {
   readonly document: {

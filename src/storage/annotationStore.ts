@@ -32,24 +32,39 @@ export type OpenAnnotationsResult =
 export const isPaintingDocument: AnnotationDocumentValidator = (value) =>
   readLayeredDocument(value).ok
 
-function toAnnotations(storage: AnnotationStorageV5): ReaderAnnotations {
+/**
+ * 把已经通过画库校验器的 V5 容器转成 ReaderAnnotations。
+ * 只能用于 `parseAnnotationStorageV5` / `readAnnotationStorageV5` 返回的
+ * `ok` 结果，否则会把未验证的文档当成合法文档。
+ */
+export function toAnnotations(storage: AnnotationStorageV5): ReaderAnnotations {
   // Every value has passed the bound published document validator.
   return storage as unknown as ReaderAnnotations
 }
 
-function migrateLegacyAnnotations(raw: string | null): ReaderAnnotations {
+/**
+ * 把旧 v2/v3/v4 容器（已解析值或原始 JSON 字符串）迁移成 V5：范围/矩形沿用旧
+ * 读入器，绘图逐页交给画库 `migrateLegacyDocument`，任何一页失败即整次失败。
+ * reader 不识别旧对象类型，也不自行修补。
+ */
+export function migrateLegacyContainer(value: unknown): ReaderAnnotations {
   let source: Record<string, unknown> = { version: 4 }
-  if (raw !== null) {
-    const parsed: unknown = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+  let raw: string | null = null
+  if (typeof value === 'string') {
+    raw = value
+    source = parseLegacySource(value)
+  } else if (value !== undefined && value !== null) {
+    if (typeof value !== 'object' || Array.isArray(value))
       throw new Error('旧标注容器无效')
-    source = parsed as Record<string, unknown>
-    if (![2, 3, 4].includes(source.version as number))
+    source = value as Record<string, unknown>
+    raw = JSON.stringify(value)
+    if (![2, 3, 4].includes(source['version'] as number))
       throw new Error('不支持的旧标注版本')
   }
   const legacy = parseHighlights(raw)
   const paintings: Record<string, EditorDocument> = {}
-  const legacyPaintings = source.paintings === undefined ? {} : source.paintings
+  const legacyPaintings =
+    source['paintings'] === undefined ? {} : source['paintings']
   if (
     typeof legacyPaintings !== 'object' ||
     legacyPaintings === null ||
@@ -73,6 +88,22 @@ function migrateLegacyAnnotations(raw: string | null): ReaderAnnotations {
     rects: legacy.rects,
     paintings
   }
+}
+
+function parseLegacySource(raw: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(raw)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    throw new Error('旧标注容器无效')
+  const source = parsed as Record<string, unknown>
+  if (![2, 3, 4].includes(source['version'] as number))
+    throw new Error('不支持的旧标注版本')
+  return source
+}
+
+function migrateLegacyAnnotations(raw: string | null): ReaderAnnotations {
+  return raw === null
+    ? migrateLegacyContainer(undefined)
+    : migrateLegacyContainer(raw)
 }
 
 /** The mandatory validator is bound once; individual reads/writes cannot omit it. */

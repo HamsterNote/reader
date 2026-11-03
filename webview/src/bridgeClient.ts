@@ -3,9 +3,12 @@
 // 处理 ack/error/dispose。协议定义见 src/bridge/protocol.ts。
 
 import {
+  BRIDGE_COMMAND_FLUSH,
+  BRIDGE_COMMAND_RESUME,
   parseBridgeMessage,
   READER_BRIDGE_PROTOCOL_VERSION,
   type BridgeAckPayload,
+  type BridgeCommandPayload,
   type BridgeErrorPayload,
   type BridgeMessage,
   type BridgeMessageType,
@@ -36,6 +39,16 @@ export type WebBridgeOptions = {
   readonly onRestore?: (payload: BridgeRestorePayload) => void
   readonly onError?: (payload: BridgeErrorPayload) => void
   readonly onDispose?: () => void
+  /**
+   * 关闭冲刷开始/结束。UI 必须据此冻结输入；冻结期间产生的修改仍会入队，
+   * 但不应再产生新的编辑手势。
+   */
+  readonly onDrainingChange?: (draining: boolean) => void
+  /**
+   * 关闭冲刷前的输入静默：UI 必须冻结输入，并等正在进行的手势完成提交
+   * （提交产生的 change 会先入队）。未提供时视为已静默。
+   */
+  readonly onQuiesce?: () => Promise<void>
 }
 
 export type WebBridgeClient = {
@@ -48,6 +61,11 @@ export type WebBridgeClient = {
   readonly dispose: () => void
   readonly getRevision: () => number | null
   readonly getPendingCount: () => number
+  /**
+   * 等待未确认写入（pending + in-flight）全部收到 ack。
+   * 超时或会话已关闭返回 false——调用方不得据此声称已保存。
+   */
+  readonly flushPending: (timeoutMs?: number) => Promise<boolean>
 }
 
 type PendingWrite = {
@@ -56,6 +74,7 @@ type PendingWrite = {
 }
 
 const DEFAULT_RETRY_TIMEOUT_MS = 3000
+const DEFAULT_FLUSH_TIMEOUT_MS = 2000
 
 let fallbackCounter = 0
 
@@ -96,6 +115,13 @@ export function createWebBridgeClient(
   let revision: number | null = null
   let started = false
   let closed = false
+  let draining = false
+
+  const setDraining = (value: boolean): void => {
+    if (draining === value) return
+    draining = value
+    options.onDrainingChange?.(value)
+  }
   let requestCounter = 0
   let inFlight: {
     readonly message: BridgeMessage
@@ -104,6 +130,69 @@ export function createWebBridgeClient(
   let retryHandle: unknown
   let pendingChange: PendingWrite | null = null
   let pendingProgress: PendingWrite | null = null
+  let idleWaiters: Array<(saved: boolean) => void> = []
+
+  /** 未确认写入全部 ack（或会话关闭）。 */
+  const isIdle = (): boolean =>
+    inFlight === null && pendingChange === null && pendingProgress === null
+
+  const settleIdle = (saved: boolean): void => {
+    if (!isIdle()) return
+    const waiters = idleWaiters
+    idleWaiters = []
+    for (const resolve of waiters) resolve(saved)
+  }
+
+  /**
+   * 等待 pending + in-flight 全部 ack。超时/会话关闭返回 false——
+   * 调用方不得据此声称已保存。
+   */
+  const flushPendingNow = (timeoutMs?: number): Promise<boolean> => {
+    if (closed) return Promise.resolve(false)
+    if (isIdle()) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const timeout: { handle?: unknown } = {}
+      const finish = (saved: boolean): void => {
+        if (settled) return
+        settled = true
+        if (timeout.handle !== undefined) timers.clearTimeout(timeout.handle)
+        resolve(saved)
+      }
+      timeout.handle = timers.setTimeout(
+        () => finish(false),
+        timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS
+      )
+      idleWaiters.push(finish)
+    })
+  }
+
+  /**
+   * 关闭前的输入静默等待：等 UI 冻结输入并结束（提交）当前手势。
+   * 超时视为未静默，由调用方发 error 取消关闭，不猜测手势是否结束。
+   */
+  const waitForQuiesce = (): Promise<boolean> => {
+    const quiesce = options.onQuiesce
+    if (quiesce === undefined) return Promise.resolve(true)
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const timeout: { handle?: unknown } = {}
+      const finish = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        if (timeout.handle !== undefined) timers.clearTimeout(timeout.handle)
+        resolve(ok)
+      }
+      timeout.handle = timers.setTimeout(
+        () => finish(false),
+        DEFAULT_FLUSH_TIMEOUT_MS
+      )
+      quiesce().then(
+        () => finish(true),
+        () => finish(false)
+      )
+    })
+  }
 
   const post = (message: BridgeMessage): void => {
     options.post(
@@ -168,6 +257,8 @@ export function createWebBridgeClient(
   }
 
   const enqueue = (write: PendingWrite): void => {
+    // 关闭冲刷期间的修改继续入队并纳入 ack 屏障，不能静默丢弃；
+    // 真正阻止新输入的是 UI 侧的冻结遮罩（onDrainingChange）。
     if (closed) return
     if (write.type === 'change') pendingChange = write
     else pendingProgress = write
@@ -180,6 +271,7 @@ export function createWebBridgeClient(
     revision = payload.revision
     inFlight = null
     flush()
+    settleIdle(true)
   }
 
   const start = (): void => {
@@ -229,11 +321,50 @@ export function createWebBridgeClient(
         }
         break
       }
+      case 'command': {
+        const command = message.payload as BridgeCommandPayload
+        if (command?.name === BRIDGE_COMMAND_FLUSH) {
+          // 宿主准备关闭：先冻结输入并等当前手势提交（onQuiesce），再冲刷
+          // 全部未确认写入；全部 ack 后回 ready，才允许宿主 dispose。
+          setDraining(true)
+          waitForQuiesce().then((quiesced) => {
+            if (closed) return
+            if (!quiesced) {
+              post(
+                buildMessage('error', {
+                  code: 'ENGINE_FAILURE',
+                  message: '关闭前输入未静默，已取消关闭'
+                })
+              )
+              return
+            }
+            return flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
+              if (closed) return
+              if (saved) {
+                post(buildMessage('ready', {}))
+              } else {
+                post(
+                  buildMessage('error', {
+                    code: 'ENGINE_FAILURE',
+                    message: '关闭前仍有未确认写入，已取消关闭'
+                  })
+                )
+              }
+            })
+          })
+        } else if (command?.name === BRIDGE_COMMAND_RESUME) {
+          setDraining(false)
+        }
+        break
+      }
       case 'dispose': {
         closed = true
         clearRetry()
         pendingChange = null
         pendingProgress = null
+        inFlight = null
+        settleIdle(false)
+        setDraining(false)
         options.onDispose?.()
         break
       }
@@ -258,13 +389,15 @@ export function createWebBridgeClient(
       pendingChange = null
       pendingProgress = null
       inFlight = null
+      setDraining(false)
     },
     getRevision: () => revision,
     getPendingCount: () => {
       const pending =
         (pendingChange ? 1 : 0) + (pendingProgress ? 1 : 0) + (inFlight ? 1 : 0)
       return pending
-    }
+    },
+    flushPending: flushPendingNow
   }
 }
 
