@@ -6,8 +6,10 @@ import {
   type ComponentProps,
   type PointerEvent as ReactPointerEvent,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -44,7 +46,11 @@ import {
 import type { IntermediateDocumentViewerProps } from './IntermediateDocumentViewer'
 import { engineSelectionSegments } from './selection/engineSelectionSegments'
 import type { IntermediateText } from '@hamster-note/types'
-import { useAnnotationHistory } from './Reader/useAnnotationHistory'
+import {
+  AnnotationHistoryContext,
+  type AnnotationHistoryController,
+  useAnnotationHistory
+} from './Reader/useAnnotationHistory'
 import { PageBrowser } from './IntermediateDocumentViewer/PageBrowser'
 import { ReadingProgress } from './IntermediateDocumentViewer/ReadingProgress'
 import { isTextBookmark } from './IntermediateDocumentViewer/textAnchor'
@@ -277,6 +283,10 @@ function epubViewportStyle(
 }
 
 /** Shared reader UI over Foliate and the official PDFViewer. No storage owner here. */
+function sharedHistoryPresent(history: AnnotationHistoryController | null) {
+  return history?.getStatus().enabled ? history.getPresent() : undefined
+}
+
 export function EngineDocumentViewer(props: Props) {
   const { engineSource: source, engineRenderMode: mode = 'layout' } = props
   const preferredTheme = usePrefersColorScheme()
@@ -332,12 +342,13 @@ export function EngineDocumentViewer(props: Props) {
     },
     []
   )
+  const sharedHistory = useContext(AnnotationHistoryContext)
   const [internalRanges, setInternalRanges] = useState(
-    props.defaultRanges ?? []
+    sharedHistory?.getPresent().ranges ?? props.defaultRanges ?? []
   )
   const [internalRects, setInternalRects] = useState<
     ReaderSelectionRectangle[]
-  >([])
+  >(() => sharedHistory?.getPresent().rects ?? [])
   const [internalSelected, setInternalSelected] = useState<string | null>(
     props.defaultSelectedRangeId ?? null
   )
@@ -365,8 +376,10 @@ export function EngineDocumentViewer(props: Props) {
     rootElement.addEventListener('pointerdown', down, true)
     return () => rootElement.removeEventListener('pointerdown', down, true)
   }, [rootElement])
-  const ranges = props.ranges ?? internalRanges
-  const rects = props.rects ?? internalRects
+  // The file owner also supplies uncontrolled content after a source reset.
+  const sharedPresent = sharedHistoryPresent(sharedHistory)
+  const ranges = props.ranges ?? sharedPresent?.ranges ?? internalRanges
+  const rects = props.rects ?? sharedPresent?.rects ?? internalRects
   const selected = controlledSelection(props.selectedRangeId, internalSelected)
   const selectedRect = controlledSelection(props.selectedRectId, internalRectId)
   const values = useRef({ ranges, rects, selected, selectedRect })
@@ -397,8 +410,11 @@ export function EngineDocumentViewer(props: Props) {
     latest.current.onAnnotationHistoryStatusChange?.(JSON.parse(statusKey))
   }, [statusKey])
   const resetKey = props.annotationHistory?.resetKey
+  useLayoutEffect(() => {
+    pendingRemoval.current.clear()
+  }, [source, resetKey])
   useEffect(() => {
-    historyRef.current.reset(snapshot(), 'reset')
+    if (!sharedHistory) historyRef.current.reset(snapshot(), 'reset')
   }, [source, resetKey])
   const annotationsKey = JSON.stringify(snapshot())
   useEffect(() => {
@@ -411,7 +427,8 @@ export function EngineDocumentViewer(props: Props) {
       )
     )
       return
-    historyRef.current.syncSilent(JSON.parse(annotationsKey))
+    if (!sharedHistory)
+      historyRef.current.syncSilent(JSON.parse(annotationsKey))
   }, [annotationsKey])
 
   const apply = (
@@ -1015,7 +1032,9 @@ export function EngineDocumentViewer(props: Props) {
   useEffect(() => {
     epub.current?.setFontScale(props.fontScale ?? 1)
   }, [props.fontScale])
-  useEffect(() => {
+  // Child layout effects run before the Reader owner's external-content check.
+  // Record only host-accepted deletions while the preceding snapshot still exists.
+  useLayoutEffect(() => {
     for (const id of pendingRemoval.current) {
       if (!ranges.some((item) => item.id === id)) {
         if (latest.current.ranges !== undefined)
@@ -1023,6 +1042,8 @@ export function EngineDocumentViewer(props: Props) {
         pendingRemoval.current.delete(id)
       }
     }
+  }, [ranges])
+  useEffect(() => {
     const activeId = activeText.current?.rangeId
     if (activeId && !ranges.some((item) => item.id === activeId))
       cancelSelection()
@@ -1108,6 +1129,7 @@ export function EngineDocumentViewer(props: Props) {
       if (position.scale) pdf.current?.setScale(position.scale)
     },
     undo: () => {
+      historyRef.current.cancelInput()
       if ((props.ranges || props.rects) && !props.onAnnotationHistoryChange)
         return false
       const result = historyRef.current.undo()
@@ -1120,6 +1142,7 @@ export function EngineDocumentViewer(props: Props) {
       return result.applied
     },
     redo: () => {
+      historyRef.current.cancelInput()
       if ((props.ranges || props.rects) && !props.onAnnotationHistoryChange)
         return false
       const result = historyRef.current.redo()

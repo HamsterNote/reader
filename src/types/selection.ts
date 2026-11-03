@@ -9,6 +9,7 @@ import type {
   SelectionTool
 } from '@hamster-note/selection'
 import type { ReactNode } from 'react'
+import type { ReaderPagePaintingMap } from '../components/Page'
 
 /**
  * Reader 公开 linked selection 端点。
@@ -61,8 +62,9 @@ export type ReaderLinkedSelectionData = Omit<
   activeRange?: ReaderLinkedSelectionRange | null
 }
 
-/** Reader annotation history tracks text ranges, rectangles, and active IDs only. */
+/** File annotation snapshot. Omitted pagePaintings preserves the current drawings. */
 export type ReaderAnnotationHistoryValue = {
+  readonly pagePaintings?: ReaderPagePaintingMap
   readonly ranges: ReaderSelectionRange[]
   readonly rects: ReaderSelectionRectangle[]
   readonly selectedRangeId: string | null
@@ -70,6 +72,7 @@ export type ReaderAnnotationHistoryValue = {
 }
 
 export type ReaderAnnotationHistoryChangeSource =
+  | 'drawing'
   | 'select'
   | 'highlight'
   | 'update-range'

@@ -1,4 +1,8 @@
-import type { EditorDocument } from '@hamster-note/painting/core'
+import { DrawingInputContext } from '../src/painting/DrawingInputContext'
+import type {
+  EditorDocument,
+  LayeredEditorController
+} from '@hamster-note/painting/core'
 import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PageDrawingLayer } from '../src/components/PageDrawingLayer'
@@ -12,6 +16,22 @@ import {
   paintingPointer
 } from './fixtures/painting'
 
+const editors = vi.hoisted(() => [] as LayeredEditorController[])
+vi.mock('@hamster-note/painting/layered', async (original) => {
+  const actual =
+    await original<typeof import('@hamster-note/painting/layered')>()
+  return {
+    ...actual,
+    createEditor: (...args: Parameters<typeof actual.createEditor>) => {
+      const editor = actual.createEditor(...args)
+      editors.push(editor)
+      return editor
+    }
+  }
+})
+beforeEach(() => {
+  editors.length = 0
+})
 beforeEach(mockPaintingCanvas)
 afterEach(() => vi.restoreAllMocks())
 const settings = createPaintingSettings()
@@ -302,4 +322,183 @@ describe('PageDrawingLayer using the published library', () => {
     )
     expect(surface().querySelectorAll('[data-object-id]')).toHaveLength(501)
   })
+})
+
+it.each(['line', 'rect', 'ellipse'] as const)(
+  'commits one complete %s gesture and no move notifications',
+  (tool) => {
+    const onChange = vi.fn()
+    render(
+      <PageDrawingLayer
+        enabled
+        pageId='page-1'
+        settings={createPaintingSettings(tool)}
+        geometry={pageGeometry}
+        onChange={onChange}
+      />
+    )
+    paintingPointer(surface(), 'down', 20, 30)
+    paintingPointer(window, 'move', 40, 50)
+    paintingPointer(window, 'move', 70, 80)
+    expect(onChange).not.toHaveBeenCalled()
+    paintingPointer(window, 'up', 90, 100)
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange.mock.lastCall?.[0].objects).toHaveLength(1)
+  }
+)
+
+it('edits an entire object, erases multiple objects, deletes, and clears as atomic public commands', () => {
+  const value = drawingFixture({
+    strokes: [
+      {
+        id: 'a',
+        tool: 'line',
+        points: [
+          { x: 20, y: 30 },
+          { x: 100, y: 30 }
+        ]
+      },
+      {
+        id: 'b',
+        tool: 'line',
+        points: [
+          { x: 20, y: 60 },
+          { x: 100, y: 60 }
+        ]
+      }
+    ]
+  })
+  const onChange = vi.fn()
+  render(
+    <PageDrawingLayer
+      enabled
+      pageId='page-1'
+      settings={settings}
+      value={value}
+      geometry={pageGeometry}
+      onChange={onChange}
+    />
+  )
+  const editor = editors.at(-1)!
+  const commit = (edit: Parameters<typeof editor.editObjects>[0]) =>
+    act(() => {
+      const result = editor.editObjects(edit)
+      if (!result.ok) throw new Error(JSON.stringify(result.error))
+    })
+  const a = value.objects[0]!
+  const transformed = {
+    ...a,
+    transform: { ...a.transform, tx: a.transform.tx + 50 },
+    objectRevision: a.objectRevision + 1,
+    transformRevision: a.transformRevision + 1
+  }
+  commit({
+    expectedDocumentRevision: editor.getSnapshot('document').documentRevision,
+    upsert: [transformed]
+  })
+  expect(onChange).toHaveBeenCalledTimes(1)
+  expect(onChange.mock.lastCall?.[0].objects[0]).toMatchObject({
+    objectId: a.objectId,
+    transform: transformed.transform
+  })
+  // One eraser transaction can remove multiple objects; no per-object checkpoints.
+  commit({
+    expectedDocumentRevision: editor.getSnapshot('document').documentRevision,
+    removeIds: value.objects.map((o) => o.objectId)
+  })
+  expect(onChange).toHaveBeenCalledTimes(2)
+  act(() => {
+    editor.undo()
+  })
+  expect(editor.getSnapshot('document').objects).toEqual([
+    transformed,
+    value.objects[1]
+  ])
+  commit({
+    expectedDocumentRevision: editor.getSnapshot('document').documentRevision,
+    removeIds: [a.objectId]
+  })
+  const beforeClear = editor.getSnapshot('document')
+  commit({
+    expectedDocumentRevision: beforeClear.documentRevision,
+    removeIds: beforeClear.objects.map((o) => o.objectId)
+  })
+  expect(editor.getSnapshot('document').objects).toHaveLength(0)
+  act(() => {
+    editor.undo()
+  })
+  expect(editor.getSnapshot('document').objects).toEqual(beforeClear.objects)
+})
+
+it('commits an eraser sweep once, and emits nothing for an empty or cancelled sweep', () => {
+  const value = drawingFixture({
+    strokes: [
+      {
+        id: 'a',
+        tool: 'line',
+        points: [
+          { x: 20, y: 30 },
+          { x: 100, y: 30 }
+        ]
+      },
+      {
+        id: 'b',
+        tool: 'line',
+        points: [
+          { x: 20, y: 60 },
+          { x: 100, y: 60 }
+        ]
+      }
+    ]
+  })
+  const changed = vi.fn()
+  render(
+    <PageDrawingLayer
+      enabled
+      pageId='page-1'
+      settings={createPaintingSettings('eraser')}
+      value={value}
+      geometry={pageGeometry}
+      onChange={changed}
+    />
+  )
+  paintingPointer(surface(), 'down', 40, 30)
+  paintingPointer(window, 'move', 40, 60)
+  expect(changed).not.toHaveBeenCalled()
+  paintingPointer(window, 'cancel', 40, 60)
+  expect(changed).not.toHaveBeenCalled()
+  paintingPointer(surface(), 'down', 40, 30)
+  paintingPointer(window, 'move', 40, 60)
+  paintingPointer(window, 'up', 40, 60)
+  expect(changed).toHaveBeenCalledTimes(1)
+  expect(changed.mock.lastCall?.[0].objects).toHaveLength(0)
+  paintingPointer(surface(), 'down', 300, 300)
+  paintingPointer(window, 'up', 350, 350)
+  expect(changed).toHaveBeenCalledTimes(1)
+})
+
+it('invalidates active input synchronously before replay, including a late pointerup', () => {
+  const inputs = new Set<() => void>()
+  const changed = vi.fn()
+  render(
+    <DrawingInputContext.Provider value={inputs}>
+      <PageDrawingLayer
+        enabled
+        pageId='page-1'
+        settings={settings}
+        geometry={pageGeometry}
+        onChange={changed}
+      />
+    </DrawingInputContext.Provider>
+  )
+  paintingPointer(surface(), 'down', 20, 30)
+  paintingPointer(window, 'move', 40, 40)
+  act(() => {
+    for (const cancel of inputs) cancel()
+  })
+  paintingPointer(window, 'up', 60, 60)
+  expect(changed).not.toHaveBeenCalled()
+  draw()
+  expect(changed).toHaveBeenCalledTimes(1)
+  expect(changed.mock.lastCall?.[0].objects).toHaveLength(1)
 })

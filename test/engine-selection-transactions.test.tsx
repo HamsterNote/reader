@@ -1,5 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { createRef, type ComponentProps, type ReactElement } from 'react'
+import {
+  createRef,
+  type ComponentProps,
+  type ReactElement,
+  useState
+} from 'react'
+import { Reader } from '../src/components/Reader'
+import type { ReaderEngineSource } from '../src/types/engineSource'
 import type { DefaultPopoverContext } from '../src/components/DefaultPopover'
 import type { EngineSelectionControls } from '../src/components/EngineSelectionControls'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,6 +60,8 @@ const original: ReaderSelectionRange = {
 const second: ReaderSelectionRange = { ...original, id: 'H2' }
 
 beforeEach(() => {
+  mocks.factory.mockReset()
+  mocks.controls = null
   doc = document.implementation.createHTMLDocument()
   doc.body.innerHTML = '<p>Alpha beta gamma</p>'
   native = doc.createRange()
@@ -90,6 +99,223 @@ async function activate(id = 'H1') {
   await act(async () => options.onHighlightActivate?.(id, { x: 0, y: 0 }))
   await screen.findByRole('toolbar', { name: '高亮操作' })
 }
+
+const compatibilityIndex = {
+  id: 'shared-index',
+  title: 'Shared index',
+  pages: [{ id: 'page-1', number: 1, width: 600, height: 800, content: [] }]
+}
+
+function ControlledDeletionHost({
+  response,
+  selectionRef,
+  onHistory,
+  onRemove
+}: {
+  response: 'accept' | 'delayed' | 'reject'
+  selectionRef: ComponentProps<typeof Reader>['selectionRef']
+  onHistory: NonNullable<
+    ComponentProps<typeof Reader>['onAnnotationHistoryChange']
+  >
+  onRemove: (id: string) => void
+}) {
+  const [ranges, setRanges] = useState([original, second])
+  return (
+    <>
+      <button
+        onClick={() =>
+          setRanges((items) => items.filter((item) => item.id !== 'H1'))
+        }
+      >
+        accept deletion
+      </button>
+      <output data-testid='host-ranges'>{JSON.stringify(ranges)}</output>
+      <Reader
+        document={compatibilityIndex}
+        engineSource={source}
+        bottomBar={null}
+        ranges={ranges}
+        annotationHistory
+        selectionRef={selectionRef}
+        onUpdateRange={(next) =>
+          setRanges((items) =>
+            items.map((item) => (item.id === next.id ? next : item))
+          )
+        }
+        onRemoveRange={(id) => {
+          onRemove(id)
+          if (response === 'accept')
+            setRanges((items) => items.filter((item) => item.id !== id))
+          else if (response === 'reject')
+            setRanges((items) => items.map((item) => ({ ...item })))
+        }}
+        onAnnotationHistoryChange={(next, detail) => {
+          onHistory(next, detail)
+          if (detail.source === 'undo' || detail.source === 'redo')
+            setRanges(next.ranges)
+        }}
+      />
+    </>
+  )
+}
+
+describe('Reader with the native viewer and a controlled host', () => {
+  it.each([false, true])(
+    'isolates source-only file changes with identical page-1 content (index=%s)',
+    async (withIndex) => {
+      const ref = createRef<ReaderSelectionRef>()
+      const onHistory = vi.fn()
+      function Host({ file }: { file: ReaderEngineSource }) {
+        const [ranges, setRanges] = useState([original])
+        return (
+          <Reader
+            document={withIndex ? compatibilityIndex : undefined}
+            engineSource={file}
+            bottomBar={null}
+            ranges={ranges}
+            annotationHistory
+            selectionRef={ref}
+            onUpdateRange={(next) => setRanges([next])}
+            onAnnotationHistoryChange={(next, detail) => {
+              onHistory(next, detail)
+              if (detail.source !== 'reset') setRanges(next.ranges)
+            }}
+          />
+        )
+      }
+      const view = await act(async () => render(<Host file={source} />))
+      await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
+      await activate()
+      fireEvent.change(screen.getByLabelText('Highlight color'), {
+        target: { value: '#00ff00' }
+      })
+      expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
+      act(() => expect(ref.current?.undo()).toBe(true))
+      expect(ref.current?.getAnnotationHistoryState().futureCount).toBe(1)
+      const fileB = { ...source, data: new Uint8Array([2]) }
+      view.rerender(<Host file={fileB} />)
+      await waitFor(() => expect(mocks.factory).toHaveBeenCalledTimes(2))
+      expect(ref.current?.getAnnotationHistoryState()).toMatchObject({
+        pastCount: 0,
+        futureCount: 0,
+        canUndo: false,
+        canRedo: false
+      })
+      const calls = onHistory.mock.calls.length
+      act(() => {
+        expect(ref.current?.undo()).toBe(false)
+        expect(ref.current?.redo()).toBe(false)
+      })
+      expect(onHistory).toHaveBeenCalledTimes(calls)
+      // B has the same public ID but gets its own baseline and editable history.
+      await activate()
+      fireEvent.change(screen.getByLabelText('Highlight color'), {
+        target: { value: '#0000ff' }
+      })
+      act(() => expect(ref.current?.undo()).toBe(true))
+      expect(onHistory.mock.lastCall?.[0].ranges).toEqual([original])
+      expect(ref.current?.canUndo()).toBe(false)
+    }
+  )
+
+  it.each(['accept', 'delayed', 'reject'] as const)(
+    'reconciles controlled deletion before external replacement (%s)',
+    async (response) => {
+      const ref = createRef<ReaderSelectionRef>()
+      const onHistory = vi.fn()
+      const onRemove = vi.fn()
+      await act(async () =>
+        render(
+          <ControlledDeletionHost
+            response={response}
+            selectionRef={ref}
+            onHistory={onHistory}
+            onRemove={onRemove}
+          />
+        )
+      )
+      await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
+      await activate()
+      fireEvent.change(screen.getByLabelText('Highlight color'), {
+        target: { value: '#00ff00' }
+      })
+      expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
+      const edited = {
+        ...original,
+        markerStyle: { ...original.markerStyle, backgroundColor: '#00ff00' }
+      }
+      fireEvent.click(screen.getByRole('button', { name: '删除' }))
+      expect(onRemove).toHaveBeenCalledExactlyOnceWith('H1')
+      if (response === 'delayed') {
+        expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
+        fireEvent.click(screen.getByRole('button', { name: 'accept deletion' }))
+      }
+      const accepted = response !== 'reject'
+      expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(
+        accepted ? 2 : 1
+      )
+      expect(
+        onHistory.mock.calls.filter(([, detail]) => detail.source === 'clear')
+      ).toHaveLength(accepted ? 1 : 0)
+      act(() => expect(ref.current?.undo()).toBe(true))
+      expect(
+        JSON.parse(screen.getByTestId('host-ranges').textContent!)
+      ).toEqual(accepted ? [edited, second] : [original, second])
+      expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(
+        accepted ? 1 : 0
+      )
+      if (accepted) {
+        act(() => expect(ref.current?.undo()).toBe(true))
+        expect(
+          JSON.parse(screen.getByTestId('host-ranges').textContent!)
+        ).toEqual([original, second])
+        act(() => {
+          expect(ref.current?.redo()).toBe(true)
+          expect(ref.current?.redo()).toBe(true)
+        })
+        expect(
+          JSON.parse(screen.getByTestId('host-ranges').textContent!)
+        ).toEqual([second])
+      }
+    }
+  )
+
+  it('uses the new source baseline for uncontrolled native annotations', async () => {
+    const ref = createRef<ReaderSelectionRef>()
+    const props = {
+      defaultRanges: [original],
+      annotationHistory: true,
+      selectionRef: ref,
+      bottomBar: null
+    }
+    const view = await act(async () =>
+      render(<Reader {...props} engineSource={source} />)
+    )
+    await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
+    await activate()
+    fireEvent.change(screen.getByLabelText('Highlight color'), {
+      target: { value: '#00ff00' }
+    })
+    expect(ref.current?.canUndo()).toBe(true)
+    view.rerender(
+      <Reader
+        {...props}
+        engineSource={{ ...source, data: new Uint8Array([2]) }}
+      />
+    )
+    await waitFor(() => expect(mocks.factory).toHaveBeenCalledTimes(2))
+    expect(ref.current?.canUndo()).toBe(false)
+    await activate()
+    expect(screen.getByLabelText('Highlight color')).toHaveValue('#ff0000')
+    fireEvent.change(screen.getByLabelText('Highlight color'), {
+      target: { value: '#0000ff' }
+    })
+    act(() => expect(ref.current?.undo()).toBe(true))
+    await activate()
+    expect(screen.getByLabelText('Highlight color')).toHaveValue('#ff0000')
+    expect(ref.current?.canUndo()).toBe(false)
+  })
+})
 
 describe('engine selection transactions', () => {
   it('merges color into only the active ID and records undo/redo internally', async () => {

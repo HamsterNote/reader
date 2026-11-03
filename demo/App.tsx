@@ -1180,12 +1180,14 @@ export function App() {
       setSelectedRangeId(next.selectedRangeId)
       setSelectedRectId(next.selectedRectId)
       setHistoryStatus(detail.status)
-      if (detail.source !== 'reset') {
+      if (next.pagePaintings !== undefined && detail.source !== 'drawing')
+        setPagePaintings(next.pagePaintings)
+      if (detail.source !== 'reset' && detail.source !== 'drawing') {
         persistAnnotations(
           uploadedFile?.name,
           next.ranges as ReaderSelectionRange[],
           next.rects as ReaderSelectionRectangle[],
-          pagePaintings
+          next.pagePaintings ?? pagePaintings
         )
       }
     },

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createServer } from 'vite'
 import { chromium } from 'playwright'
@@ -9,7 +9,11 @@ const output = resolve(repo, '../painting-reader-browser')
 await mkdir(output, { recursive: true })
 const server = await createServer({
   root: repo,
-  server: { host: '127.0.0.1', port: 0 }
+  server: {
+    host: '127.0.0.1',
+    port: 0,
+    fs: { allow: [repo, await realpath(resolve(repo, 'node_modules'))] }
+  }
 })
 const packageVersion = JSON.parse(
   await readFile(
@@ -163,6 +167,127 @@ try {
       disabledRemount: true,
       readOnlyObjectCount: readOnlyIds.length,
       expectedObjectCount: expectedIds.length
+    })
+    await context.close()
+  }
+  // Exercise the actual file-level owner, toolbar and controlled replay in all drawing paths.
+  for (const format of ['pdf', 'epub', 'generic']) {
+    const context = await browser.newContext({
+      viewport: { width: 1100, height: 850 },
+      hasTouch: true
+    })
+    const page = await context.newPage()
+    page.on('pageerror', (error) => report.errors.push(error.message))
+    await page.goto(
+      `http://127.0.0.1:${address.port}/test/browser/painting.html?history=${format}`
+    )
+    const surface = page
+      .getByTestId('reader-page-drawing-layer-page-1')
+      .getByTestId('page-drawing-surface')
+      .first()
+    await surface.waitFor({ state: 'visible' })
+    const ink = page.locator('#history-paintings')
+    const draw = async (touch = false) => {
+      await surface.scrollIntoViewIfNeeded()
+      const box = await surface.boundingBox()
+      const x = box.x + Math.min(100, box.width * 0.2)
+      const y = Math.max(60, box.y + 70)
+      if (touch) {
+        const session = await context.newCDPSession(page)
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchStart',
+          touchPoints: [{ x, y }]
+        })
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [{ x: x + 30, y: y + 20 }]
+        })
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchEnd',
+          touchPoints: []
+        })
+        await session.detach()
+      } else {
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await page.mouse.move(x + 30, y + 20, { steps: 6 })
+        await page.mouse.up()
+      }
+    }
+    const undo = page.getByTestId('tool-bottom-bar-undo')
+    const redo = page.getByTestId('tool-bottom-bar-redo')
+    assert(await undo.isDisabled())
+    await draw()
+    await page.screenshot({ path: resolve(output, `history-${format}.png`) })
+    await page.waitForFunction(
+      () => document.querySelector('#history-saves').textContent === '1'
+    )
+    const first = await ink.textContent()
+    await draw(true)
+    await page.waitForFunction(
+      () => document.querySelector('#history-saves').textContent === '2'
+    )
+    const both = await ink.textContent()
+    await undo.click()
+    assert.equal(
+      await ink.textContent(),
+      first,
+      'touch stroke is one history item'
+    )
+    await redo.click()
+    assert.equal(await ink.textContent(), both)
+    // A command during raw input cancels the draft before replay; late up cannot commit it.
+    const activeBox = await surface.boundingBox()
+    const activeX = activeBox.x + Math.min(100, activeBox.width * 0.2)
+    const activeY = Math.max(60, activeBox.y + 70)
+    await page.mouse.move(activeX, activeY)
+    await page.mouse.down()
+    await page.mouse.move(activeX + 10, activeY + 10)
+    await page
+      .getByRole('button', { name: 'ref undo', exact: true })
+      .evaluate((button) => button.click())
+    await page.mouse.up()
+    assert.equal(
+      await ink.textContent(),
+      first,
+      'active input must be cancelled before undo'
+    )
+    assert.equal(
+      await page.locator('#history-saves').textContent(),
+      '2',
+      'late pointerup must not save ghost ink'
+    )
+    assert(await redo.isEnabled())
+    await redo.click()
+    assert.equal(await ink.textContent(), both)
+    // Unmount the affected page, then replay without its local controller.
+    await page
+      .getByRole('button', { name: 'hide first page', exact: true })
+      .click()
+    await page.getByRole('button', { name: 'ref undo', exact: true }).click()
+    assert.equal(await ink.textContent(), first)
+    await page
+      .getByRole('button', { name: 'hide first page', exact: true })
+      .click()
+    await page.getByRole('button', { name: 'page one', exact: true }).click()
+    await surface.waitFor({ state: 'visible' })
+    assert(await redo.isEnabled())
+    await draw()
+    await page.waitForFunction(
+      () => document.querySelector('#history-saves').textContent === '3'
+    )
+    assert(await redo.isDisabled(), 'new ink discards future')
+    assert.equal(
+      await page.locator('#history-saves').textContent(),
+      '3',
+      'replays do not use ordinary save callbacks'
+    )
+    report.cases.push({
+      format,
+      unifiedHistory: true,
+      mouse: true,
+      touch: true,
+      unmountedReplay: true
     })
     await context.close()
   }

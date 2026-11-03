@@ -1,3 +1,5 @@
+import { paintingContentKey } from '../painting/paintingContent'
+import { DrawingInputContext } from '../painting/DrawingInputContext'
 import {
   createEditor,
   createPageGeometry,
@@ -66,6 +68,8 @@ export function PageDrawingLayer({
   geometry,
   pageSize
 }: PageDrawingLayerProps) {
+  const drawingInputs = useContext(DrawingInputContext)
+  const [, refreshSession] = useState(0)
   const documentIdentity = useContext(DrawingDocumentContext)
   const root = useRef<HTMLDivElement>(null)
   const latestChange = useRef(onChange)
@@ -98,6 +102,17 @@ export function PageDrawingLayer({
   }
   session.current!.input = value
   const controller = session.current!.controller
+  useLayoutEffect(() => {
+    if (!drawingInputs) return
+    const cancel = () => {
+      session.current = null
+      refreshSession((n) => n + 1)
+    }
+    drawingInputs.add(cancel)
+    return () => {
+      drawingInputs.delete(cancel)
+    }
+  }, [drawingInputs])
   const [layout, setLayout] = useState({ width: 0, height: 0 })
 
   // Generic document pages pass their base dimensions. PDF callers pass library geometry directly.
@@ -155,11 +170,18 @@ export function PageDrawingLayer({
 
   useEffect(() => {
     if (!controller) return
+    let contentKey = paintingContentKey({
+      [pageId]: controller.getSnapshot('document')
+    })
     return controller.subscribe('document', () => {
       if (session.current?.controller !== controller) return
-      latestChange.current?.(controller.getSnapshot('document'))
+      const next = controller.getSnapshot('document')
+      const nextKey = paintingContentKey({ [pageId]: next })
+      if (nextKey === contentKey) return
+      contentKey = nextKey
+      latestChange.current?.(next)
     })
-  }, [controller])
+  }, [controller, pageId])
 
   return (
     <div

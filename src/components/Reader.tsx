@@ -1,3 +1,9 @@
+import {
+  AnnotationHistoryContext,
+  paintingContentKey,
+  useAnnotationHistory
+} from './Reader/useAnnotationHistory'
+import { DrawingInputContext } from '../painting/DrawingInputContext'
 import { DrawingDocumentContext } from '../painting/DrawingDocumentContext'
 import {
   createPaintingSettings,
@@ -180,7 +186,7 @@ const resolveBottomBarHistoryStatus = ({
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
-  /** Original EPUB/PDF bytes opt into the new display engines; document remains the compatibility index. */
+  /** Native EPUB/PDF bytes can render without document; provide the compatibility index for derived PDF text mode. */
   engineSource?: ReaderEngineSource
   /** 宿主提供的受控加载进度；传入时在 Reader 容器内显示并暂时隐藏上传区。 */
   loadingProgress?: ReaderLoadingProgress | null
@@ -639,6 +645,15 @@ function viewerForSource(source: ReaderEngineSource | undefined) {
   return source ? EngineDocumentViewer : IntermediateDocumentViewer
 }
 
+function resolveHistoryDefaultRanges(
+  enabled: boolean | undefined,
+  controlled: ReaderSelectionRange[] | undefined,
+  present: ReaderSelectionRange[],
+  defaults: ReaderSelectionRange[] | undefined
+) {
+  return enabled && controlled === undefined ? present : defaults
+}
+
 export function Reader({
   engineSource,
   document,
@@ -845,14 +860,139 @@ export function Reader({
   )
   const normalizedAnnotationHistory =
     normalizeAnnotationHistoryOptions(annotationHistory)
-  const [historyStatus, setHistoryStatus] =
-    useState<ReaderAnnotationHistoryStatus>({
-      enabled: normalizedAnnotationHistory.enabled ?? false,
-      canUndo: false,
-      canRedo: false,
-      pastCount: 0,
-      futureCount: 0
-    })
+  const drawingInputs = useMemo(() => new Set<() => void>(), [])
+  const cancelDrawingInputs = useCallback(() => {
+    for (const cancel of drawingInputs) cancel()
+  }, [drawingInputs])
+  const applyHistoryPaintings = (next: ReaderAnnotationHistoryValue) => {
+    setHistoryStatus(history.getStatus())
+    if (next.pagePaintings === undefined) return
+    pagePaintingsRef.current = next.pagePaintings
+    if (data?.pagePaintings === undefined && pagePaintings === undefined)
+      setInternalPagePaintings(next.pagePaintings)
+  }
+  const history = useAnnotationHistory({
+    enabled: normalizedAnnotationHistory.enabled === true,
+    initialValue: {
+      ranges: resolvedRanges ?? defaultRanges ?? [],
+      rects: resolvedRects ?? [],
+      selectedRangeId: selectedRangeId ?? defaultSelectedRangeId ?? null,
+      selectedRectId: selectedRectId ?? null,
+      pagePaintings: resolvedPagePaintings
+    },
+    onChange: (next, detail) => {
+      setHistoryStatus(detail.status)
+      onAnnotationHistoryChange?.(next, detail)
+    },
+    beforeApply: cancelDrawingInputs,
+    canApply: (target) =>
+      (onAnnotationHistoryChange !== undefined ||
+        (resolvedRanges === undefined &&
+          resolvedRects === undefined &&
+          data?.pagePaintings === undefined &&
+          pagePaintings === undefined)) &&
+      // The generic viewer retains its existing uncontrolled rectangle restriction.
+      (engineSource !== undefined ||
+        resolvedRects !== undefined ||
+        target.rects.length === 0),
+    onApply: applyHistoryPaintings
+  })
+  const [historyStatus, setHistoryStatus] = useState(history.getStatus())
+  useEffect(() => {
+    setHistoryStatus((current) => ({
+      ...current,
+      enabled: normalizedAnnotationHistory.enabled ?? false
+    }))
+  }, [normalizedAnnotationHistory.enabled])
+  const historyIdentity = useRef({
+    enabled: normalizedAnnotationHistory.enabled,
+    document,
+    engineSource,
+    resetKey: normalizedAnnotationHistory.resetKey
+  })
+  const externalHistoryKey = JSON.stringify({
+    ranges: resolvedRanges,
+    rects: resolvedRects,
+    pagePaintings: resolvedPagePaintings
+  })
+  const lastHistoryInput = useRef(externalHistoryKey)
+  useLayoutEffect(() => {
+    const fileChanged =
+      historyIdentity.current.document !== document ||
+      historyIdentity.current.engineSource !== engineSource
+    const identityChanged =
+      historyIdentity.current.enabled !== normalizedAnnotationHistory.enabled ||
+      fileChanged ||
+      historyIdentity.current.resetKey !== normalizedAnnotationHistory.resetKey
+    historyIdentity.current = {
+      enabled: normalizedAnnotationHistory.enabled,
+      document,
+      engineSource,
+      resetKey: normalizedAnnotationHistory.resetKey
+    }
+    if (!identityChanged && lastHistoryInput.current === externalHistoryKey)
+      return
+    lastHistoryInput.current = externalHistoryKey
+    const current = history.getPresent()
+    const next = {
+      ...current,
+      ranges:
+        resolvedRanges ??
+        (fileChanged ? (defaultRanges ?? []) : current.ranges),
+      rects: resolvedRects ?? (fileChanged ? [] : current.rects),
+      selectedRangeId:
+        selectedRangeId ??
+        (fileChanged
+          ? (defaultSelectedRangeId ?? null)
+          : current.selectedRangeId),
+      selectedRectId:
+        selectedRectId ?? (fileChanged ? null : current.selectedRectId),
+      pagePaintings: fileChanged
+        ? (data?.pagePaintings ?? pagePaintings ?? defaultPagePaintings ?? {})
+        : resolvedPagePaintings
+    }
+    if (
+      fileChanged &&
+      data?.pagePaintings === undefined &&
+      pagePaintings === undefined
+    ) {
+      pagePaintingsRef.current = next.pagePaintings
+      setInternalPagePaintings(next.pagePaintings)
+    }
+    const sameContent =
+      JSON.stringify(current.ranges) === JSON.stringify(next.ranges) &&
+      JSON.stringify(current.rects) === JSON.stringify(next.rects) &&
+      paintingContentKey(current.pagePaintings) ===
+        paintingContentKey(next.pagePaintings)
+    if (identityChanged || !sameContent) {
+      cancelDrawingInputs()
+      history.reset(next, 'reset')
+    }
+  }, [
+    document,
+    engineSource,
+    normalizedAnnotationHistory.resetKey,
+    normalizedAnnotationHistory.enabled,
+    data?.pagePaintings,
+    pagePaintings,
+    defaultPagePaintings,
+    externalHistoryKey,
+    history,
+    cancelDrawingInputs,
+    resolvedRanges,
+    resolvedRects,
+    resolvedPagePaintings,
+    defaultRanges,
+    selectedRangeId,
+    defaultSelectedRangeId,
+    selectedRectId
+  ])
+  const historyDefaultRanges = resolveHistoryDefaultRanges(
+    normalizedAnnotationHistory.enabled,
+    resolvedRanges,
+    history.getPresent().ranges,
+    defaultRanges
+  )
   const resolvedRenderMode =
     data?.renderMode ?? renderMode ?? internalRenderMode
   const previousRenderModeRef = useRef(resolvedRenderMode)
@@ -904,7 +1044,8 @@ export function Reader({
     highlightColor ??
     internalHighlightColor ??
     getTranslucentColor(resolvedDrawingStrokeColor)
-  const hasDocumentPages = documentHasPages(document)
+  const hasDocumentPages =
+    engineSource !== undefined || documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
     rootRef: readerRootRef,
     bottomBarRef: defaultBottomBarRef,
@@ -923,9 +1064,11 @@ export function Reader({
     status: historyStatus,
     renderMode: resolvedRenderMode,
     hasHistoryChangeHandler: onAnnotationHistoryChange !== undefined,
-    hasControlledAnnotations: [resolvedRanges, resolvedRects].some(
-      (value) => value !== undefined
-    )
+    hasControlledAnnotations: [
+      resolvedRanges,
+      resolvedRects,
+      data?.pagePaintings ?? pagePaintings
+    ].some((value) => value !== undefined)
   })
   const resolvedSelectionTool =
     tool ?? (resolvedSelectedTool === 'rect-selection' ? 'rect' : 'text')
@@ -971,13 +1114,6 @@ export function Reader({
     typeof selectionRef === 'function'
       ? handleSelectionRef
       : (selectionRef ?? defaultSelectionRef)
-
-  useEffect(() => {
-    setHistoryStatus((current) => ({
-      ...current,
-      enabled: normalizedAnnotationHistory.enabled ?? false
-    }))
-  }, [normalizedAnnotationHistory.enabled])
 
   const handoffReadingPosition = useCallback(
     (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode): ReaderData => {
@@ -1453,6 +1589,15 @@ export function Reader({
 
   const handlePagePaintingChange = useCallback(
     (pageId: string, nextValue: EditorDocument) => {
+      if (
+        paintingContentKey({
+          [pageId]: pagePaintingsRef.current[pageId] ?? nextValue
+        }) === paintingContentKey({ [pageId]: nextValue }) &&
+        pagePaintingsRef.current[pageId] !== undefined
+      )
+        return
+      if (nextValue.objects.length === 0 && !pagePaintingsRef.current[pageId])
+        return
       const nextPaintings: ReaderPagePaintingMap = {
         ...pagePaintingsRef.current,
         [pageId]: nextValue
@@ -1463,11 +1608,17 @@ export function Reader({
         setInternalPagePaintings(nextPaintings)
       }
 
+      // Publish the checkpoint before host callbacks can echo controlled props.
+      history.setCheckpoint(
+        { ...history.getPresent(), pagePaintings: nextPaintings },
+        'drawing'
+      )
       onPagePaintingChange?.(pageId, nextValue, nextPaintings)
       onPagePaintingsChange?.(nextPaintings)
     },
     [
       data?.pagePaintings,
+      history,
       onPagePaintingChange,
       onPagePaintingsChange,
       pagePaintings
@@ -1643,9 +1794,12 @@ export function Reader({
   )
 
   const resolvedLoadingProgress = resolveLoadingProgress(loadingProgress)
-  const showUploadZone = !document && !uploadedFile && !resolvedLoadingProgress
-  const showFileInfo = !document && uploadedFile && !resolvedLoadingProgress
-  const showDocumentContent = document?.title || emptyText
+  const showUploadZone =
+    !engineSource && !document && !uploadedFile && !resolvedLoadingProgress
+  const showFileInfo =
+    !engineSource && !document && uploadedFile && !resolvedLoadingProgress
+  const showDocumentContent =
+    engineSource !== undefined || document?.title || emptyText
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
       if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
@@ -1681,7 +1835,7 @@ export function Reader({
             className={className}
             maxLoadedPages={maxLoadedPages}
             ranges={resolvedRanges}
-            defaultRanges={defaultRanges}
+            defaultRanges={historyDefaultRanges}
             selectedRangeId={selectedRangeId}
             defaultSelectedRangeId={defaultSelectedRangeId}
             onSelect={handleSelect}
@@ -1822,7 +1976,7 @@ export function Reader({
             interactionMode={interactionMode}
             touchPanMode={resolvedTouchPanMode}
             ranges={resolvedRanges}
-            defaultRanges={defaultRanges}
+            defaultRanges={historyDefaultRanges}
             selectedRangeId={selectedRangeId}
             defaultSelectedRangeId={defaultSelectedRangeId}
             onSelect={handleSelect}
@@ -1955,170 +2109,184 @@ export function Reader({
   }
 
   return (
-    <DrawingDocumentContext.Provider value={document}>
-      <div
-        ref={readerRootRef}
-        className={rootClassName}
-        data-testid='reader-root'
-        style={readerThemeStyle}
-        aria-busy={resolvedLoadingProgress ? true : undefined}
-      >
-        {resolvedLoadingProgress && (
-          <section
-            className='hamster-reader__loading-progress'
-            data-testid='reader-loading-progress'
+    <AnnotationHistoryContext.Provider value={history}>
+      <DrawingInputContext.Provider value={drawingInputs}>
+        <DrawingDocumentContext.Provider value={document}>
+          <div
+            ref={readerRootRef}
+            className={rootClassName}
+            data-testid='reader-root'
+            style={readerThemeStyle}
+            aria-busy={resolvedLoadingProgress ? true : undefined}
           >
-            <div
-              className='hamster-reader__loading-progress-heading'
-              role='status'
-              aria-live='polite'
-              aria-atomic='true'
-            >
-              <span>{resolvedLoadingProgress.label}</span>
-              <span data-testid='reader-loading-progress-percent'>
-                {resolvedLoadingProgress.percent.toFixed(0)}%
-              </span>
-            </div>
-            <progress
-              aria-label={resolvedLoadingProgress.label}
-              className='hamster-reader__loading-progress-bar'
-              max={100}
-              value={resolvedLoadingProgress.percent}
-            />
-          </section>
-        )}
-
-        {showUploadZone && (
-          <button
-            type='button'
-            className={`hamster-reader__upload-zone ${isDragging ? 'hamster-reader__upload-zone--dragging' : ''}`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={handleClick}
-            data-testid='upload-zone'
-          >
-            <input
-              ref={fileInputRef}
-              type='file'
-              accept={SUPPORTED_UPLOAD_ACCEPT}
-              onChange={handleInputChange}
-              className='hamster-reader__file-input'
-              data-testid='file-input'
-            />
-            <div className='hamster-reader__upload-content'>
-              <svg
-                className='hamster-reader__upload-icon'
-                viewBox='0 0 24 24'
-                fill='none'
-                stroke='currentColor'
-                strokeWidth='2'
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                aria-label='Upload'
+            {resolvedLoadingProgress && (
+              <section
+                className='hamster-reader__loading-progress'
+                data-testid='reader-loading-progress'
               >
-                <title>Upload icon</title>
-                <path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' />
-                <polyline points='17 8 12 3 7 8' />
-                <line x1='12' y1='3' x2='12' y2='15' />
-              </svg>
-              <p className='hamster-reader__upload-text'>
-                {isDragging
-                  ? 'Drop document here'
-                  : 'Click or drag document to upload'}
-              </p>
-              <p className='hamster-reader__upload-hint'>
-                Supports {SUPPORTED_UPLOAD_COPY} files
-              </p>
-            </div>
-          </button>
-        )}
+                <div
+                  className='hamster-reader__loading-progress-heading'
+                  role='status'
+                  aria-live='polite'
+                  aria-atomic='true'
+                >
+                  <span>{resolvedLoadingProgress.label}</span>
+                  <span data-testid='reader-loading-progress-percent'>
+                    {resolvedLoadingProgress.percent.toFixed(0)}%
+                  </span>
+                </div>
+                <progress
+                  aria-label={resolvedLoadingProgress.label}
+                  className='hamster-reader__loading-progress-bar'
+                  max={100}
+                  value={resolvedLoadingProgress.percent}
+                />
+              </section>
+            )}
 
-        {showDocumentContent && !showFileInfo && !resolvedLoadingProgress && (
-          <div className='hamster-reader__content' data-testid='reader-content'>
-            {renderDocumentContent()}
-          </div>
-        )}
+            {showUploadZone && (
+              <button
+                type='button'
+                className={`hamster-reader__upload-zone ${isDragging ? 'hamster-reader__upload-zone--dragging' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={handleClick}
+                data-testid='upload-zone'
+              >
+                <input
+                  ref={fileInputRef}
+                  type='file'
+                  accept={SUPPORTED_UPLOAD_ACCEPT}
+                  onChange={handleInputChange}
+                  className='hamster-reader__file-input'
+                  data-testid='file-input'
+                />
+                <div className='hamster-reader__upload-content'>
+                  <svg
+                    className='hamster-reader__upload-icon'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    aria-label='Upload'
+                  >
+                    <title>Upload icon</title>
+                    <path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' />
+                    <polyline points='17 8 12 3 7 8' />
+                    <line x1='12' y1='3' x2='12' y2='15' />
+                  </svg>
+                  <p className='hamster-reader__upload-text'>
+                    {isDragging
+                      ? 'Drop document here'
+                      : 'Click or drag document to upload'}
+                  </p>
+                  <p className='hamster-reader__upload-hint'>
+                    Supports {SUPPORTED_UPLOAD_COPY} files
+                  </p>
+                </div>
+              </button>
+            )}
 
-        {!resolvedLoadingProgress &&
-          hasDocumentPages &&
-          (bottomBar === undefined ? (
-            <DefaultBottomBar
-              darkMode={darkMode}
-              bottomBarRef={defaultBottomBarRef}
-              renderMode={resolvedRenderMode}
-              isEpub={isEpub || engineSource?.format === 'epub'}
-              epubPagination={hasViewportPagination(
-                engineSource?.format,
-                isPdf,
-                resolvedRenderMode
+            {showDocumentContent &&
+              !showFileInfo &&
+              !resolvedLoadingProgress && (
+                <div
+                  className='hamster-reader__content'
+                  data-testid='reader-content'
+                >
+                  {renderDocumentContent()}
+                </div>
               )}
-              ocrEnabled={resolvedOcrEnabled}
-              fontScale={fontScale}
-              layoutZoom={resolveBottomBarLayoutZoom(
-                resolvedRenderMode,
-                useVirtualPaper,
-                layoutZoom
-              )}
-              resolvedLayoutScale={resolvedLayoutScale}
-              touchPanMode={resolvedTouchPanMode}
-              edgeCropEditing={resolvedEdgeCropEditing}
-              selectedTool={resolvedSelectedTool}
-              colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
-              drawingStrokeColor={resolvedDrawingStrokeColor}
-              highlightColor={resolvedHighlightColor}
-              paintingSettings={resolvedPaintingSettings}
-              onPaintingSettingsChange={handlePaintingSettingsChange}
-              historyStatus={bottomBarHistoryStatus}
-              selectionRef={popoverSelectionRef}
-              onRenderModeChange={handleRenderModeChange}
-              onOcrChange={handleOcrChange}
-              onFontScaleChange={handleFontScaleChange}
-              onLayoutZoomChange={handleLayoutZoomChange}
-              onTouchPanModeChange={handleTouchPanModeChange}
-              onEdgeCropEditingChange={handleEdgeCropEditingChange}
-              onSelectedToolChange={handleSelectedToolChange}
-              onDrawingStrokeColorChange={handleDrawingStrokeColorChange}
-              onHighlightColorChange={handleHighlightColorChange}
-            />
-          ) : (
-            bottomBar
-          ))}
 
-        {showFileInfo && (
-          <div className='hamster-reader__file-info' data-testid='file-info'>
-            <svg
-              className='hamster-reader__file-icon'
-              viewBox='0 0 24 24'
-              fill='none'
-              stroke='currentColor'
-              strokeWidth='2'
-              strokeLinecap='round'
-              strokeLinejoin='round'
-              aria-label='File'
-            >
-              <title>File icon</title>
-              <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
-              <polyline points='14 2 14 8 20 8' />
-            </svg>
-            <div className='hamster-reader__file-details'>
-              <p className='hamster-reader__file-name'>{uploadedFile.name}</p>
-              <p className='hamster-reader__file-meta'>
-                {formatFileSize(uploadedFile.size)} •{' '}
-                {uploadedFile.type || 'unknown type'}
-              </p>
-            </div>
-            <button
-              type='button'
-              className='hamster-reader__upload-another'
-              onClick={handleClick}
-              data-testid='upload-another-btn'
-            >
-              Upload Another
-            </button>
+            {!resolvedLoadingProgress &&
+              hasDocumentPages &&
+              (bottomBar === undefined ? (
+                <DefaultBottomBar
+                  darkMode={darkMode}
+                  bottomBarRef={defaultBottomBarRef}
+                  renderMode={resolvedRenderMode}
+                  isEpub={isEpub || engineSource?.format === 'epub'}
+                  epubPagination={hasViewportPagination(
+                    engineSource?.format,
+                    isPdf,
+                    resolvedRenderMode
+                  )}
+                  ocrEnabled={resolvedOcrEnabled}
+                  fontScale={fontScale}
+                  layoutZoom={resolveBottomBarLayoutZoom(
+                    resolvedRenderMode,
+                    useVirtualPaper,
+                    layoutZoom
+                  )}
+                  resolvedLayoutScale={resolvedLayoutScale}
+                  touchPanMode={resolvedTouchPanMode}
+                  edgeCropEditing={resolvedEdgeCropEditing}
+                  selectedTool={resolvedSelectedTool}
+                  colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
+                  drawingStrokeColor={resolvedDrawingStrokeColor}
+                  highlightColor={resolvedHighlightColor}
+                  paintingSettings={resolvedPaintingSettings}
+                  onPaintingSettingsChange={handlePaintingSettingsChange}
+                  historyStatus={bottomBarHistoryStatus}
+                  selectionRef={popoverSelectionRef}
+                  onRenderModeChange={handleRenderModeChange}
+                  onOcrChange={handleOcrChange}
+                  onFontScaleChange={handleFontScaleChange}
+                  onLayoutZoomChange={handleLayoutZoomChange}
+                  onTouchPanModeChange={handleTouchPanModeChange}
+                  onEdgeCropEditingChange={handleEdgeCropEditingChange}
+                  onSelectedToolChange={handleSelectedToolChange}
+                  onDrawingStrokeColorChange={handleDrawingStrokeColorChange}
+                  onHighlightColorChange={handleHighlightColorChange}
+                />
+              ) : (
+                bottomBar
+              ))}
+
+            {showFileInfo && (
+              <div
+                className='hamster-reader__file-info'
+                data-testid='file-info'
+              >
+                <svg
+                  className='hamster-reader__file-icon'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='2'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  aria-label='File'
+                >
+                  <title>File icon</title>
+                  <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+                  <polyline points='14 2 14 8 20 8' />
+                </svg>
+                <div className='hamster-reader__file-details'>
+                  <p className='hamster-reader__file-name'>
+                    {uploadedFile.name}
+                  </p>
+                  <p className='hamster-reader__file-meta'>
+                    {formatFileSize(uploadedFile.size)} •{' '}
+                    {uploadedFile.type || 'unknown type'}
+                  </p>
+                </div>
+                <button
+                  type='button'
+                  className='hamster-reader__upload-another'
+                  onClick={handleClick}
+                  data-testid='upload-another-btn'
+                >
+                  Upload Another
+                </button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-    </DrawingDocumentContext.Provider>
+        </DrawingDocumentContext.Provider>
+      </DrawingInputContext.Provider>
+    </AnnotationHistoryContext.Provider>
   )
 }
