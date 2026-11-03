@@ -49,6 +49,11 @@ const SNAPSHOT_KEY_PREFIX = 'reader.host.v2.snapshot.'
 /** 提交中副本：写入成功并回读校验后才替换目标键。 */
 const SNAPSHOT_PENDING_SUFFIX = '.pending'
 const LEGACY_JSON_MAX_BYTES = 10 * 1024 * 1024
+const EMPTY_SNAPSHOT: BridgeHostSnapshot = {
+  data: null,
+  progress: null,
+  revision: 0
+}
 
 type StoredSnapshotRead =
   | { readonly status: 'ok'; readonly snapshot: BridgeHostSnapshot }
@@ -178,12 +183,18 @@ export class ReaderDataStore {
 
   constructor(private readonly storage: HostStorage) {}
 
+  /**
+   * 锁顺序固定为：**先 fileId 队列（`runForFile`），再全局索引锁
+   * （`runExclusive`）**。任何同时需要两者的操作（目前只有 `remove`）必须按
+   * 此顺序获取；`runExclusive` 内部**不得**再获取 fileId 队列，否则死锁。
+   */
   private runExclusive<T>(task: () => Promise<T>): Promise<T> {
     const result = this.queue.then(task, task)
     this.queue = result.catch(() => undefined)
     return result
   }
 
+  /** 见 `runExclusive` 上的锁顺序说明：fileId 队列在外层。 */
   private runForFile<T>(fileId: string, task: () => Promise<T>): Promise<T> {
     const previous = this.fileQueues.get(fileId) ?? Promise.resolve()
     const result = previous.then(task, task)
@@ -374,9 +385,13 @@ export class ReaderDataStore {
       assertSafeFileId(record.fileId)
       await this.loadIndex()
       // v1 记录的 snapshot 是旧格式原件：已有记录沿用磁盘值；新记录用调用方给
-      // 的初始快照。v2 快照绝不投影回旧记录，旧 blob 因此保持逐字节不变。
+      // 的初始快照，但从未迁移的旧原件来源之外（v2/损坏）读到的快照绝不写回
+      // v1——否则删除后重新选择文件会把已删数据当旧数据复活。
       const legacySnapshot =
-        this.cache.get(record.fileId)?.snapshot ?? record.snapshot
+        this.cache.get(record.fileId)?.snapshot ??
+        (record.snapshotSource === 'v2' || record.snapshotSource === 'corrupt'
+          ? EMPTY_SNAPSHOT
+          : record.snapshot)
       const persisted = toLegacyRecord(record, legacySnapshot)
       await this.storage.write(
         documentKey(record.fileId),
@@ -444,15 +459,19 @@ export class ReaderDataStore {
   }
 
   remove(fileId: string): Promise<void> {
-    return this.runExclusive(async () => {
-      assertSafeFileId(fileId)
-      await this.loadIndex()
-      await this.storage.remove(documentKey(fileId))
-      await this.storage.remove(snapshotKey(fileId))
-      await this.removeQuietly(pendingSnapshotKey(fileId))
-      this.cache.delete(fileId)
-      await this.persistIndex()
-    })
+    // 顺序：fileId 队列 → 全局索引锁（见 runExclusive 注释）。
+    // 必须与 saveSnapshot/get 互斥，否则删除后仍在途的保存会把 v2 键写回来。
+    return this.runForFile(fileId, () =>
+      this.runExclusive(async () => {
+        assertSafeFileId(fileId)
+        await this.loadIndex()
+        await this.storage.remove(documentKey(fileId))
+        await this.storage.remove(snapshotKey(fileId))
+        await this.removeQuietly(pendingSnapshotKey(fileId))
+        this.cache.delete(fileId)
+        await this.persistIndex()
+      })
+    )
   }
 }
 

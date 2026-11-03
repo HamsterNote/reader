@@ -555,3 +555,100 @@ describe('ReaderDataStore failure recovery and per-file queues', () => {
     expect((await store.get(fileId))?.snapshot.revision).toBe(1)
   })
 })
+
+describe('ReaderDataStore delete vs in-flight and stale writes', () => {
+  it('serializes remove behind an in-flight save of the same file', async () => {
+    const storage = new GatedStorage()
+    const { store } = await storeWithLegacyRecord(storage)
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    storage.gate = { key: `${SNAPSHOT_KEY}${fileId}.pending`, wait: gate }
+
+    const saving = store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 7
+    })
+    const removing = store.remove(fileId)
+    release()
+    await Promise.all([saving, removing])
+
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}`)).toBe(false)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+    expect(storage.values.has(`${DOC_KEY}${fileId}`)).toBe(false)
+    expect(await store.get(fileId)).toBeNull()
+  })
+
+  it('does not revive deleted content when the file is re-added and imported', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+    await store.remove(fileId)
+
+    // 删除后未重新建立记录：导入必须拒绝，不能凭空复活。
+    await expect(
+      store.importLegacyJson(
+        fileId,
+        '{"version":4,"ranges":[],"rects":[],"paintings":{}}',
+        'notes.json',
+        1
+      )
+    ).rejects.toThrow('文档不存在')
+
+    // 重新打开（选择文件）建立空记录后再导入：revision 0，只含导入内容。
+    await store.upsert(record())
+    const imported = await store.importLegacyJson(
+      fileId,
+      '{"version":4,"ranges":[],"rects":[],"paintings":{}}',
+      'notes.json',
+      1
+    )
+
+    expect(imported.snapshot.revision).toBe(0)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}`)).toBe(false)
+    const loaded = await store.get(fileId)
+    expect(loaded?.snapshotSource).toBe('legacy')
+    expect(loaded?.snapshot.revision).toBe(0)
+    expect(loaded?.snapshot.data).toEqual({
+      highlights: { version: 4, ranges: [], rects: [], paintings: {} }
+    })
+  })
+
+  it('does not rebuild the v2 key or revive its content from a stale record', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+    const stale = await store.get(fileId)
+    if (stale === null) throw new Error('stale record missing')
+    expect(stale.snapshotSource).toBe('v2')
+
+    await store.remove(fileId)
+    // 模拟 pickAndCacheDocument 的交错：删除后才 upsert 它先前 get 到的记录。
+    await store.upsert({ ...stale, cachedUri: 'reader-files/book.epub' })
+
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}`)).toBe(false)
+    const persisted: unknown = JSON.parse(
+      storage.values.get(`${DOC_KEY}${fileId}`) ?? 'null'
+    )
+    expect(persisted).toMatchObject({
+      snapshot: { data: null, progress: null, revision: 0 }
+    })
+    const loaded = await store.get(fileId)
+    expect(loaded?.snapshotSource).toBe('legacy')
+    expect(loaded?.snapshot.revision).toBe(0)
+  })
+})
