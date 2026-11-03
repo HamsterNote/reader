@@ -1,6 +1,6 @@
 # HAM-138：EPUB 选区与高亮验收
 
-实现 change：`add-epub-selection-popover`。基于 reader `a082bed3143b3a8c801b08b20e8370b523c042e4`，人类验收已通过，按交付指令同步规格、归档并提交 PR。
+实现 change：`add-epub-selection-popover`。实现最初基于 reader `a082bed3143b3a8c801b08b20e8370b523c042e4`，交付前已合入 main `061c362` 并重新验证。人类验收已通过，按交付指令同步规格、归档并提交 PR。
 
 ## 已实现
 
@@ -18,12 +18,12 @@
 | 检查 | 结果 |
 | --- | --- |
 | `yarn typecheck` | 通过 |
-| `yarn test:run` | 93 个文件、1307 项通过，包含非引擎阅读入口及默认按钮回归 |
+| `yarn test:run` | 97 个文件、1353 项通过，包含非引擎阅读入口及默认按钮回归 |
 | `yarn build:all` | 通过；保留现有大 chunk 提示 |
 | `READER_USER_EPUB=ham138-dev-assets/user-book.epub node scripts/check-engine-interactions.mjs` | EPUB/PDF × 桌面/触屏模拟 4 组、EPUB/PDF × 受控/内部模式选区 4 组、原书/大章节样本 × 受控/内部模式 4 组，共 12 组全部通过 |
 | 选区浏览器覆盖 | 新增、激活切换、改色、鼠标端点修改/取消、删除、撤销重做、窄屏；EPUB 另含保存重开、字体/窗口重排与切章返回 |
-| 改动产品文件、新增验证入口及测试的 ESLint | 通过；未运行或宣称全仓 lint 通过 |
-| `openspec validate add-epub-selection-popover --strict`、`git diff --check` | 通过 |
+| `yarn lint`、`yarn pack:check` | 全仓 ESLint 通过；打包检查通过（319 文件） |
+| `openspec validate --all --strict --no-interactive`、`git diff --check` | 归档后 5 项严格校验通过，差异检查通过 |
 | iOS / Android WebView 实机 | 人类已确认 4.4 验收通过；设备/系统/WebView 版本未附 |
 
 Chromium 的触屏尺寸、touch 事件和 pointerdown/click 模拟不能证明系统原生长按菜单及手柄可用。实现按已激活高亮端点附近的触摸开始编辑，并在另一端变化时取消；原生交互按本次人类验收结论记录，未冒充工程侧自动化实测。
