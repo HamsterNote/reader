@@ -46,10 +46,23 @@ yarn check:web-selection
 同一命令的浏览器回归已扩展为 8 组，包括原始 PDF 和构造 PDF 的如下真实鼠标场景：
 
 1. 工具栏选蓝色，拖选正文并保存；点空白后 popover/手柄为 0，原生选区折叠，蓝色高亮仍显示，computed opacity 为 1。
-2. 工具栏换玫瑰色，框选并保存；点空白后矩形保留，背景和边框均为 `rgba(207, 156, 171, 0.35)`，popover/手柄为 0。
+2. 工具栏换玫瑰色，框选并保存；点空白后矩形保留，边框为 `rgba(207, 156, 171, 0.35)`，popover/手柄为 0。后续验收要求矩形只描边，当前背景透明。
 3. 文字标注 → 矩形标注 → 文字标注，点击切换时始终保留一个正确 popover；从已选矩形再拖选 `2009`，仍能显示文字 popover 并保存为玫瑰色，原蓝色标注保持不变。
 
 新增截图：`original-pdf-colors-deselected.png`、`original-pdf-colors-rectangle-selected.png`、`original-pdf-colors-changed-and-dismissed.png`；报告同时记录实际 computed 颜色与取消选中后的 popover 数量。修改文件为 `src/components/EngineDocumentViewer.tsx`、`src/components/DefaultPopover.tsx`、`src/pdf/PdfPageOverlayLayer.tsx`、`src/pdf/PdfRectangleAnnotation.tsx`、`src/styles/pdf-viewer.scss`、浏览器脚本及本记录。PDF、Reader 及矩形手柄相关 9 个测试文件共 205 项通过，typecheck、修改文件 ESLint 和 demo 构建通过。
+
+## 工具激活、首次手柄与滚动修复
+
+- 标注命中原先只在文字工具下启用；矩形工具的 overlay 会先开始新框。现在非绘图工具均先对已有标注做几何命中，在 PDF 页的原生捕获阶段完成选择，早于 portal 的 React 框选处理，避免点击或轻微移动产生新草稿。手柄事件继续交给其原有拖动逻辑。
+- 首次点文字高亮时，原生高亮拖动监听会停止冒泡；工具激活时，标注命中还会阻止事件到达 portal 的 React 捕获监听。原来在 React 冒泡阶段设置的鼠标状态因此未初始化，两个手柄被隐藏。现在在 viewer DOM 根的原生捕获阶段记录输入类型，刷新后第一次鼠标点击即可显示手柄。
+- 矩形草稿、保存、选中及悬停均只描边。保存的 `markerStyle.backgroundColor` 继续作为标注颜色数据与默认边框颜色使用，但渲染背景明确透明，也覆盖旧数据的填充颜色；文字高亮仍保留工具栏颜色及其 alpha。
+- 仅隐藏 PDF 滚动容器的原生滚动条，保留 `overflow: auto` 及原生滚动事件，继续由 PDF.js 和阅读进度条处理滚动位置。
+
+`check:web-selection` 在构造 PDF 和原 PDF 的颜色/取消选中场景后，新增持久化恢复路径：分别保存文字工具、矩形工具状态并刷新，重新加载同一 PDF，第一次 viewer 鼠标输入直接点已有文字标注，断言两个手柄与删除 popover；矩形工具下再点击矩形并移动 2px，断言无新草稿、无重复 popover、保存数量不变、背景透明，再拖动角手柄验证可调整大小。随后检查原生滚动条隐藏、滚轮滚动同步进度、拖动自定义条定位，以及浏览器触控滑动后实际 scrollTop 增加。选区由鼠标生成，触控使用 Chromium CDP 的触摸事件。
+
+本轮改动：`src/components/EngineDocumentViewer.tsx`、`src/pdf/PdfPageOverlayLayer.tsx`、`src/pdf/PdfRectangleAnnotation.tsx`、`src/styles/pdf-viewer.scss`、`scripts/check-web-selection.mjs`、本记录。
+
+本轮在同一服务上完整运行 `yarn check:web-selection`，8 组全部通过，包含原 PDF 的新四项与此前文字高亮、单一 popover、目录第 46 页跳转、工具栏换色、点击空白取消选中。原 PDF 自定义进度条定位物理第 32 页，滚轮与触控均可继续滚动。PDF/Reader/矩形手柄 205 项测试、typecheck、修改文件 ESLint、Prettier 与 demo 构建通过。截图包括 `original-pdf-tools-first-click-handles.png`、`original-pdf-tools-active-text.png`、`original-pdf-tools-active-outline.png` 和 `original-pdf-tools-custom-scroll.png`；JSON 报告和截图回传 HAM-128。浏览器范围仍为 Chromium，Safari 未验证。
 
 ## 人工验证服务
 

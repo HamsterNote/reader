@@ -53,8 +53,10 @@ export function PdfRectangleAnnotation({
         top: projected.top,
         width: projected.width,
         height: projected.height,
-        backgroundColor: highlightColor,
         ...rectangle.markerStyle,
+        // Persisted marker colors still determine the stroke, never a fill.
+        background: 'none',
+        backgroundColor: 'transparent',
         borderColor: color
       }}
     >

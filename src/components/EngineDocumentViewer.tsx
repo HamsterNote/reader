@@ -269,6 +269,16 @@ export function EngineDocumentViewer(props: Props) {
   const activating = useRef(false)
   const restored = useRef(false)
   const progressEnabled = useRef(false)
+  useEffect(() => {
+    if (!rootElement) return
+    // Native capture runs before PDF portal/drag listeners can stop the event.
+    const down = (event: PointerEvent) => {
+      progressEnabled.current = true
+      setMouse(event.pointerType === 'mouse')
+    }
+    rootElement.addEventListener('pointerdown', down, true)
+    return () => rootElement.removeEventListener('pointerdown', down, true)
+  }, [rootElement])
   const ranges = props.ranges ?? internalRanges
   const rects = props.rects ?? internalRects
   const selected = controlledSelection(props.selectedRangeId, internalSelected)
@@ -916,8 +926,6 @@ export function EngineDocumentViewer(props: Props) {
         className='hamster-reader__engine-viewer'
         data-engine={source?.format}
         onPointerDown={(event) => {
-          progressEnabled.current = true
-          setMouse(event.pointerType === 'mouse')
           if (source?.format === 'pdf') {
             // Clear before the browser starts its next native text gesture;
             // never preventDefault, so a fresh drag selection remains intact.

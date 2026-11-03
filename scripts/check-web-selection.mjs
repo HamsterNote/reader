@@ -427,13 +427,13 @@ async function pdfAnnotationEditing(file, original = false) {
       }
     })
     assert.deepEqual(rectStyle, {
-      background: 'rgba(207, 156, 171, 0.35)',
+      background: 'rgba(0, 0, 0, 0)',
       border: 'rgba(207, 156, 171, 0.35)',
       opacity: '1'
     })
     assert.equal(
       (await saved(page, name)).rects[0].markerStyle.backgroundColor,
-      rectStyle.background
+      rectStyle.border
     )
     await page.screenshot({ path: resolve(output, `${label}-deselected.png`) })
 
@@ -473,10 +473,7 @@ async function pdfAnnotationEditing(file, original = false) {
     await dismiss(blank.x, blank.y)
     const data = await saved(page, name)
     assert.equal(data.ranges.length, 2)
-    assert.equal(
-      data.ranges[1].markerStyle.backgroundColor,
-      rectStyle.background
-    )
+    assert.equal(data.ranges[1].markerStyle.backgroundColor, rectStyle.border)
     assert.equal(
       data.ranges[0].markerStyle.backgroundColor,
       textStyle.background,
@@ -486,12 +483,14 @@ async function pdfAnnotationEditing(file, original = false) {
     await page.screenshot({
       path: resolve(output, `${label}-changed-and-dismissed.png`)
     })
+    const tools = await pdfToolRestoration(page, file, original, name)
     assert.deepEqual(errors, [])
     results.push({
       label,
       passed: true,
       textStyle,
       rectStyle,
+      tools,
       popoversAfterDismiss: await popup.count()
     })
   } catch (error) {
@@ -500,6 +499,188 @@ async function pdfAnnotationEditing(file, original = false) {
     throw error
   } finally {
     await page.close()
+  }
+}
+
+async function pdfToolRestoration(page, file, original, name) {
+  const label = original ? 'original-pdf-tools' : 'pdf-tools'
+  const prefs = `hamster-reader-demo:preferences:${name}`
+  const selectTool = async (tool) => {
+    await page.getByTestId(`tool-bottom-bar-${tool}`).click()
+    await page.waitForFunction(
+      ({ prefs, tool }) =>
+        JSON.parse(localStorage.getItem(prefs))?.selectedTool === tool,
+      { prefs, tool }
+    )
+  }
+  const reopen = async (tool) => {
+    await selectTool(tool)
+    await page.reload()
+    await page.locator('input[type=file]').first().setInputFiles(file)
+    await page.getByRole('button', { name: '加载文件', exact: true }).click()
+    const sheet = page.locator('.pdfViewer .page').nth(original ? 1 : 0)
+    await sheet.waitFor({ timeout: 60000 })
+    await sheet.scrollIntoViewIfNeeded()
+    await sheet
+      .locator('.textLayer [data-selection-start-offset]')
+      .first()
+      .waitFor()
+    assert.equal(
+      await page
+        .getByTestId(`tool-bottom-bar-${tool}`)
+        .getAttribute('aria-pressed'),
+      'true'
+    )
+    return sheet
+  }
+  const start = page.getByRole('button', { name: '调整高亮起点', exact: true })
+  const end = page.getByRole('button', { name: '调整高亮终点', exact: true })
+  const clickText = async (sheet) => {
+    const annotation = sheet.locator('[data-range-id]').first()
+    await annotation.scrollIntoViewIfNeeded()
+    const box = await annotation.boundingBox()
+    await page.mouse.click(box.x + 20, box.y + box.height / 2)
+    await page.getByRole('button', { name: '删除', exact: true }).waitFor()
+    await start.waitFor()
+    await end.waitFor()
+    assert.equal(
+      await page.locator('.hamster-reader__pdf-rect-draft').count(),
+      0
+    )
+  }
+  let sheet = await reopen('text-selection')
+  // First viewer mouse input after reload goes directly to the saved text.
+  await clickText(sheet)
+  await page.screenshot({
+    path: resolve(output, `${label}-first-click-handles.png`)
+  })
+  sheet = await reopen('rect-selection')
+  await clickText(sheet)
+  await page.screenshot({ path: resolve(output, `${label}-active-text.png`) })
+  const rectangle = sheet.locator('[data-rect-id]').first()
+  await rectangle.scrollIntoViewIfNeeded()
+  const box = await rectangle.boundingBox()
+  await page.mouse.move(box.x + 30, box.y + 30)
+  await page.mouse.down()
+  // A small mouse movement on an annotation must not start a new rectangle.
+  await page.mouse.move(box.x + 32, box.y + 32, { steps: 2 })
+  assert.equal(await page.locator('.hamster-reader__pdf-rect-draft').count(), 0)
+  await page.mouse.up()
+  await rectangle.locator('.hamster-reader__engine-handle').first().waitFor()
+  assert.equal(await page.locator('.hsn-selection-popover').count(), 1)
+  // The annotation is hit-tested by geometry and does not receive DOM events.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  assert.equal(
+    await rectangle.evaluate(
+      (element) => getComputedStyle(element).backgroundColor
+    ),
+    'rgba(0, 0, 0, 0)'
+  )
+  await page.screenshot({
+    path: resolve(output, `${label}-active-outline.png`)
+  })
+  const corner = rectangle.getByRole('button', { name: '调整矩形下右角' })
+  const cornerBox = await corner.boundingBox()
+  const beforeResize = (await saved(page, name)).rects[0].rect
+  await page.mouse.move(
+    cornerBox.x + cornerBox.width / 2,
+    cornerBox.y + cornerBox.height / 2
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    cornerBox.x + cornerBox.width / 2 + 20,
+    cornerBox.y + cornerBox.height / 2 + 20,
+    { steps: 5 }
+  )
+  await page.mouse.up()
+  await page.waitForFunction(
+    ({ name, width }) =>
+      JSON.parse(localStorage.getItem(`hamster-reader-demo:highlights:${name}`))
+        .rects[0].rect.width > width,
+    { name, width: beforeResize.width }
+  )
+  assert.equal((await saved(page, name)).rects.length, 1)
+  assert.equal((await saved(page, name)).ranges.length, 2)
+
+  await selectTool('text-selection')
+  const scroller = page.locator('.hamster-reader__pdf-viewer-container')
+  const nativeScrollbar = await scroller.evaluate((element) => ({
+    width: getComputedStyle(element).scrollbarWidth,
+    webkitDisplay: getComputedStyle(element, '::-webkit-scrollbar').display
+  }))
+  assert.deepEqual(nativeScrollbar, { width: 'none', webkitDisplay: 'none' })
+  const rail = page.locator('.hamster-reader__reading-progress')
+  const beforeWheelPage = Number(await rail.getAttribute('aria-valuenow'))
+  const beforeWheel = await scroller.evaluate((element) => element.scrollTop)
+  const viewport = await scroller.boundingBox()
+  await page.mouse.move(viewport.x + viewport.width - 100, viewport.y + 500)
+  await page.mouse.wheel(0, 2300)
+  await page.waitForFunction(
+    (before) =>
+      Number(
+        document
+          .querySelector('.hamster-reader__reading-progress')
+          .getAttribute('aria-valuenow')
+      ) > before,
+    beforeWheelPage
+  )
+  assert(
+    (await scroller.evaluate((element) => element.scrollTop)) > beforeWheel
+  )
+  const railBox = await rail.boundingBox()
+  const pages = Number(await rail.getAttribute('aria-valuemax'))
+  const target = original ? 32 : 2
+  const targetY = railBox.y + (railBox.height * (target - 1)) / (pages - 1)
+  await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + 5)
+  await page.mouse.down()
+  await page.mouse.move(railBox.x + railBox.width / 2, targetY, { steps: 10 })
+  await page.mouse.up()
+  await page.waitForFunction(
+    (target) =>
+      document
+        .querySelector('.hamster-reader__reading-progress')
+        .getAttribute('aria-valuenow') === String(target),
+    target
+  )
+  const targetBox = await page
+    .locator('.pdfViewer .page')
+    .nth(target - 1)
+    .boundingBox()
+  assert(targetBox.y < 1000 && targetBox.y + targetBox.height > 0)
+
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+  const beforeTouch = await scroller.evaluate((element) => element.scrollTop)
+  const x = viewport.x + viewport.width - 100
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x, y: 750 }]
+  })
+  for (const y of [650, 550, 450, 350, 250, 150])
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x, y }]
+    })
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchEnd',
+    touchPoints: []
+  })
+  await page.waitForFunction(
+    (before) =>
+      document.querySelector('.hamster-reader__pdf-viewer-container')
+        .scrollTop >
+      before + 20,
+    beforeTouch
+  )
+  await cdp.detach()
+  await page.screenshot({ path: resolve(output, `${label}-custom-scroll.png`) })
+  return {
+    firstClickHandles: 2,
+    rectToolHits: true,
+    outlineOnly: true,
+    nativeScrollbar,
+    wheelAndTouchScroll: true,
+    customSeekPage: target
   }
 }
 
