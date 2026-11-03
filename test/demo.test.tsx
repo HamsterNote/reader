@@ -1829,7 +1829,7 @@ describe('demo parser flow', () => {
       expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
       expect(findDocumentReaderProps()).toMatchObject({
         fontScale: 1.5,
-        highlightColor: 'rgba(255, 193, 7, 0.35)'
+        highlightColor: 'rgba(125, 158, 192, 0.35)'
       })
     })
 

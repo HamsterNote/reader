@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复首次进入阅读页且未主动选色时高亮/选区仍显示默认黄色：未受控的高亮颜色改为从底栏颜色列表首项（默认选中色）派生，Demo 的初始高亮色与阅读偏好回退值同步改用该颜色；新增公开辅助函数 `getDefaultBottomBarHighlightColor`。
+
 ## [1.12.0-beta.2] - 2026-08-14
 
 ### Added

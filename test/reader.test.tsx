@@ -724,6 +724,7 @@ describe('Reader public API', () => {
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
 
     expect(capturedViewerProps.drawingStrokeColor).toBe('#2563eb')
+    expect(capturedViewerProps.highlightColor).toBe('rgba(125, 158, 192, 0.35)')
 
     // When: 用户选择绿色工具颜色。
     fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
@@ -778,6 +779,15 @@ describe('Reader public API', () => {
       />
     )
 
+    // Then: 首次进入时高亮颜色即底栏默认选中色，选中态与之同源。
+    expect(screen.getByTestId('tool-bottom-bar-color-blue')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(capturedTextViewerProps.highlightColor).toBe(
+      'rgba(125, 158, 192, 0.35)'
+    )
+
     // When: 用户选择绿色。
     fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
 
@@ -821,6 +831,9 @@ describe('Reader public API', () => {
         onHighlightColorChange={onHighlightColorChange}
       />
     )
+
+    // Then: 首次加载的默认高亮色取自同一颜色列表的首项。
+    expect(capturedViewerProps.highlightColor).toBe('rgba(18, 52, 86, 0.35)')
 
     // When: 用户选择自定义颜色。
     fireEvent.click(screen.getByTestId('tool-bottom-bar-color-brand'))

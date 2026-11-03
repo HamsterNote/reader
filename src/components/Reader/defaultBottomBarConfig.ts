@@ -60,6 +60,18 @@ export function getFontScaleLabel(fontScale: ReaderFontScale): string {
   )
 }
 
+/**
+ * 底栏颜色列表首项即默认选中项。高亮默认色从这里派生，保证
+ * “首次进入未主动选色”的高亮颜色与底栏默认选中色同源。
+ */
+export function getDefaultBottomBarHighlightColor(
+  colors: readonly ReaderColorOption[] | undefined = DEFAULT_BOTTOM_BAR_COLORS
+): string {
+  return getTranslucentColor(
+    colors?.[0]?.color ?? DEFAULT_BOTTOM_BAR_COLORS[0].color
+  )
+}
+
 export function getTranslucentColor(hex: string): string {
   const match = /^#([0-9a-fA-F]{6})$/.exec(hex)
   if (!match) return hex

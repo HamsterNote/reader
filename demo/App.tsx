@@ -28,6 +28,7 @@ import {
   type ReaderTextReadingProgress,
   type ReaderTouchPanMode,
   type ReaderVirtualPaperState,
+  getDefaultBottomBarHighlightColor,
   summarizeHighlightRanges,
   traceHighlight
 } from '@hamster-note/reader'
@@ -972,10 +973,12 @@ export function App() {
   const [showPageBrowser, setShowPageBrowser] = useState(false)
   const [bookmarks, setBookmarks] = useState<readonly ReaderBookmark[]>([])
   const [themeColor, setThemeColor] = useState('#2563eb')
-  const [highlightColor, setHighlightColor] = useState(
-    'rgba(255, 193, 7, 0.35)'
+  const [highlightColor, setHighlightColor] = useState(() =>
+    getDefaultBottomBarHighlightColor(DEMO_READER_COLORS)
   )
-  const [toolColor, setToolColor] = useState('#7d9ec0')
+  const [toolColor, setToolColor] = useState<string>(
+    DEMO_READER_COLORS[0].color
+  )
   const [containMarginX, setContainMarginX] = useState<number>(0)
   const [containMarginTop, setContainMarginTop] = useState<number>(0)
   const [containMarginBottom, setContainMarginBottom] = useState<number>(0)
@@ -1705,7 +1708,7 @@ export function App() {
           selectedTool: 'text-selection',
           textFontScale: 1.5,
           layoutFontScale: 1.5,
-          highlightColor: 'rgba(255, 193, 7, 0.35)'
+          highlightColor: getDefaultBottomBarHighlightColor(DEMO_READER_COLORS)
         }
       )
       setRenderMode(readerPreferences.renderMode)

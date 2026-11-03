@@ -97,7 +97,10 @@ import type {
   ReaderPageTool
 } from './Page'
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
-import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
+import {
+  DEFAULT_BOTTOM_BAR_COLORS,
+  getDefaultBottomBarHighlightColor
+} from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
 import {
   useLayoutReadingProgressSave,
@@ -790,9 +793,9 @@ export function Reader({
     useState('#2563eb')
   const [internalPaintingSettings, setInternalPaintingSettings] =
     useState<LayeredToolsSnapshot>(() => createPaintingSettings())
-  const [internalHighlightColor, setInternalHighlightColor] = useState<
-    string | undefined
-  >(undefined)
+  const [internalHighlightColor, setInternalHighlightColor] = useState<string>(
+    () => getDefaultBottomBarHighlightColor(colors)
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const readerRootRef = useRef<HTMLDivElement>(null)
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
