@@ -20,7 +20,6 @@
   pointer-events: none;
   border-radius: 2px;
   // Preserve glyphs even when WebKit isolates the overlay's blend backdrop.
-  opacity: 0.35;
   mix-blend-mode: multiply;
 }
 
@@ -31,7 +30,8 @@
 .hamster-reader__pdf-rect-annotation {
   position: absolute;
   pointer-events: none;
-  border: 2px solid rgba(25, 118, 210, 0.9);
+  border: 2px solid;
+  mix-blend-mode: multiply;
   border-radius: 2px;
   box-sizing: border-box;
 }
@@ -42,8 +42,7 @@
 
 .hamster-reader__pdf-rect-draft {
   position: absolute;
-  border: 1px dashed rgba(25, 118, 210, 0.9);
-  background: rgba(25, 118, 210, 0.12);
+  border: 1px dashed;
   pointer-events: none;
   box-sizing: border-box;
 }

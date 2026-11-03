@@ -34,6 +34,23 @@ yarn check:web-selection
 
 本轮：`src/pdf/PdfDocumentViewer.tsx`、`src/pdf/pdfTextMapping.ts`、`src/pdf/pdfSourceLinks.ts`、`test/pdf-viewer/pdf-document-viewer.test.tsx`、`test/pdf-viewer/pdf-text-mapping.test.ts`、`test/pdf-viewer/pdf-source-links.test.ts`、`scripts/check-web-selection.mjs`、本记录。PR 还包含此前的 `src/components/EngineDocumentViewer.tsx` 和 `package.json` 修改。
 
+## 验收后的取消选中与颜色修复
+
+原三项验收后，新增“点击空白无法取消选中”和文字/矩形颜色问题：
+
+- 原 PDF 实测：保存文字高亮后点页内空白，popover 仍显示。PDF 标注只处理命中，空白指针事件没有取消选中路径；仅清理原生选区也没有清除持久标注的选中 ID。现在在 viewer 的主按钮 pointerdown 中检查文字/矩形标注命中；空白位置统一清除文字、矩形、草稿及原生选区，保留保存数据。命中其他标注时保留原有切换流程，排除 portal popover 与手柄，且不阻止浏览器的新拖选手势。
+- 文字高亮的工具栏颜色已经包含 alpha（例如蓝色为 `rgba(125, 158, 192, 0.35)`），PDF CSS 又乘 `opacity: 0.35`，实际透明度降到 0.1225。移除额外 opacity，精确使用工具栏颜色及其 alpha，保留 multiply 混合以便看清文字。
+- 矩形保存时此前未写入颜色，显示又由固定蓝色覆盖。现在确认时把工具栏颜色写入 `markerStyle.backgroundColor`，边框默认跟随自身背景色，预览和无旧样式的标注也使用当前颜色；选中边框仅在显式提供 selectionStyle 时使用专用样式。后续换工具栏颜色不会重染已保存标注。
+- Popover 的颜色输入此前仅识别十六进制，工具栏 RGBA 会误显示成黄色。现在将其 RGB 分量转换为颜色控件所需的 hex 值，持久化和绘制仍保留原 RGBA。
+
+同一命令的浏览器回归已扩展为 8 组，包括原始 PDF 和构造 PDF 的如下真实鼠标场景：
+
+1. 工具栏选蓝色，拖选正文并保存；点空白后 popover/手柄为 0，原生选区折叠，蓝色高亮仍显示，computed opacity 为 1。
+2. 工具栏换玫瑰色，框选并保存；点空白后矩形保留，背景和边框均为 `rgba(207, 156, 171, 0.35)`，popover/手柄为 0。
+3. 文字标注 → 矩形标注 → 文字标注，点击切换时始终保留一个正确 popover；从已选矩形再拖选 `2009`，仍能显示文字 popover 并保存为玫瑰色，原蓝色标注保持不变。
+
+新增截图：`original-pdf-colors-deselected.png`、`original-pdf-colors-rectangle-selected.png`、`original-pdf-colors-changed-and-dismissed.png`；报告同时记录实际 computed 颜色与取消选中后的 popover 数量。修改文件为 `src/components/EngineDocumentViewer.tsx`、`src/components/DefaultPopover.tsx`、`src/pdf/PdfPageOverlayLayer.tsx`、`src/pdf/PdfRectangleAnnotation.tsx`、`src/styles/pdf-viewer.scss`、浏览器脚本及本记录。PDF、Reader 及矩形手柄相关 9 个测试文件共 205 项通过，typecheck、修改文件 ESLint 和 demo 构建通过。
+
 ## 人工验证服务
 
 - 地址：`http://192.168.0.145:5577/`（本机也可用 `http://localhost:5577/`）。上传原 PDF 后点击“加载文件”，第 2 页可测试三个场景。

@@ -1,6 +1,7 @@
 import {
   type ReactNode,
   type ComponentProps,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -392,17 +393,25 @@ export function EngineDocumentViewer(props: Props) {
     null
   const confirmRectangle = () => {
     if (!draftRectangle) return
+    const color = latest.current.highlightColor ?? '#ffc107'
+    const rectangle = {
+      ...draftRectangle,
+      markerStyle: {
+        ...draftRectangle.markerStyle,
+        backgroundColor: color
+      }
+    }
     apply(
       {
         ...snapshot(),
-        rects: [...values.current.rects, draftRectangle],
+        rects: [...values.current.rects, rectangle],
         selectedRangeId: null,
-        selectedRectId: draftRectangle.id
+        selectedRectId: rectangle.id
       },
       'create-rect'
     )
-    latest.current.onCreateRect?.(draftRectangle)
-    latest.current.onSelectRect?.(draftRectangle.id)
+    latest.current.onCreateRect?.(rectangle)
+    latest.current.onSelectRect?.(rectangle.id)
     setDraftRectangle(null)
   }
   const confirm = () => {
@@ -874,6 +883,29 @@ export function EngineDocumentViewer(props: Props) {
     setDraftRectangle(null)
     setActiveSelection(id ? { kind: 'rectangle', id } : null)
   }
+  const dismissPdfSelectionOutside = (event: ReactPointerEvent) => {
+    if (event.button !== 0) return
+    const target = event.target as Element
+    // Popovers are portals whose React events still bubble through this root.
+    // Handles and annotation hits must retain/transfer selection normally.
+    if (
+      target.closest('.hsn-selection-popover, .hamster-reader__engine-handle')
+    )
+      return
+    const annotations = root.current?.querySelectorAll<HTMLElement>(
+      '[data-range-id], [data-rect-id]'
+    )
+    const hit = Array.from(annotations ?? []).some((element) => {
+      const box = element.getBoundingClientRect()
+      return (
+        event.clientX >= box.left &&
+        event.clientX <= box.right &&
+        event.clientY >= box.top &&
+        event.clientY <= box.bottom
+      )
+    })
+    if (!hit) selectRect(null)
+  }
   return (
     <RangeMagnifierProvider
       rootElement={rootElement}
@@ -887,6 +919,9 @@ export function EngineDocumentViewer(props: Props) {
           progressEnabled.current = true
           setMouse(event.pointerType === 'mouse')
           if (source?.format === 'pdf') {
+            // Clear before the browser starts its next native text gesture;
+            // never preventDefault, so a fresh drag selection remains intact.
+            dismissPdfSelectionOutside(event)
             const selection = root.current?.ownerDocument.getSelection()
             if (selection)
               props.onSelectionStart?.(

@@ -343,6 +343,177 @@ async function pdfSelection(withoutUUID) {
   }
 }
 
+async function pdfAnnotationEditing(file, original = false) {
+  const label = original ? 'original-pdf-colors' : 'pdf-colors'
+  const name = original ? file.split('/').at(-1) : file.name
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1000 }
+  })
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const popup = page.locator('.hsn-selection-popover')
+  const dismiss = async (x, y) => {
+    await page.mouse.click(x, y)
+    await popup.waitFor({ state: 'hidden', timeout: 5000 })
+    assert.equal(
+      await page.locator('.hamster-reader__engine-handle').count(),
+      0
+    )
+    assert.equal(await page.evaluate(() => getSelection().isCollapsed), true)
+  }
+  try {
+    await page.goto(base)
+    await page.locator('input[type=file]').first().setInputFiles(file)
+    await page.getByRole('button', { name: '加载文件', exact: true }).click()
+    const sheet = page.locator('.pdfViewer .page').nth(original ? 1 : 0)
+    await sheet.waitFor({ timeout: 60000 })
+    await sheet.scrollIntoViewIfNeeded()
+    await sheet
+      .locator('.textLayer [data-selection-start-offset]')
+      .first()
+      .waitFor()
+    await page.getByTestId('tool-bottom-bar-color-blue').click()
+    await dragText(page, original ? 'Modernizing JavaScript' : 0, sheet)
+    await page.getByRole('button', { name: '高亮', exact: true }).click()
+    await page.getByRole('button', { name: '删除', exact: true }).waitFor()
+    assert.equal(
+      await page.getByLabel('Highlight color', { exact: true }).inputValue(),
+      '#7d9ec0'
+    )
+    const text = sheet.locator('.hamster-reader__pdf-highlight-rect').first()
+    const textBox = await text.boundingBox()
+    const blank = { x: textBox.x + 650, y: textBox.y + 180 }
+    await dismiss(blank.x, blank.y)
+    const textStyle = await text.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        background: style.backgroundColor,
+        opacity: style.opacity,
+        visibility: style.visibility
+      }
+    })
+    assert.deepEqual(textStyle, {
+      background: 'rgba(125, 158, 192, 0.35)',
+      opacity: '1',
+      visibility: 'visible'
+    })
+    assert.equal(
+      (await saved(page, name)).ranges[0].markerStyle.backgroundColor,
+      textStyle.background
+    )
+
+    await page.getByTestId('tool-bottom-bar-color-rose').click()
+    await page.getByTestId('tool-bottom-bar-rect-selection').click()
+    const x = textBox.x + 400,
+      y = textBox.y + 100
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + 100, y + 60, { steps: 10 })
+    await page.mouse.up()
+    await page.getByRole('button', { name: '高亮', exact: true }).click()
+    const rectangle = sheet.locator('[data-rect-id]').first()
+    await rectangle.locator('.hamster-reader__engine-handle').first().waitFor()
+    assert.equal(
+      await page.getByLabel('Highlight color', { exact: true }).inputValue(),
+      '#cf9cab'
+    )
+    await dismiss(blank.x, blank.y)
+    const rectStyle = await rectangle.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        background: style.backgroundColor,
+        border: style.borderColor,
+        opacity: style.opacity
+      }
+    })
+    assert.deepEqual(rectStyle, {
+      background: 'rgba(207, 156, 171, 0.35)',
+      border: 'rgba(207, 156, 171, 0.35)',
+      opacity: '1'
+    })
+    assert.equal(
+      (await saved(page, name)).rects[0].markerStyle.backgroundColor,
+      rectStyle.background
+    )
+    await page.screenshot({ path: resolve(output, `${label}-deselected.png`) })
+
+    await page.getByTestId('tool-bottom-bar-text-selection').click()
+    await page.mouse.click(textBox.x + 20, textBox.y + textBox.height / 2)
+    await page.getByRole('button', { name: '删除', exact: true }).waitFor()
+    // Clicking another annotation must transfer selection, not dismiss it.
+    await page.mouse.click(x + 30, y + 30)
+    await rectangle.locator('.hamster-reader__engine-handle').first().waitFor()
+    assert.equal(await popup.count(), 1)
+    await page.screenshot({
+      path: resolve(output, `${label}-rectangle-selected.png`)
+    })
+    await page.mouse.click(textBox.x + 20, textBox.y + textBox.height / 2)
+    await rectangle
+      .locator('.hamster-reader__engine-handle')
+      .first()
+      .waitFor({ state: 'hidden' })
+    assert.equal(
+      await page.getByLabel('Highlight color', { exact: true }).inputValue(),
+      '#7d9ec0'
+    )
+    assert.equal(await popup.count(), 1)
+    await dismiss(blank.x, blank.y)
+
+    // New text must still be selectable after dismissal or a saved rectangle.
+    await page.mouse.click(x + 30, y + 30)
+    await rectangle.locator('.hamster-reader__engine-handle').first().waitFor()
+    await dragText(page, original ? '2009' : 1, sheet)
+    assert.equal(await popup.count(), 1)
+    assert.equal(
+      await page.getByRole('button', { name: '删除', exact: true }).count(),
+      0
+    )
+    await page.getByRole('button', { name: '高亮', exact: true }).click()
+    await page.getByRole('button', { name: '删除', exact: true }).waitFor()
+    await dismiss(blank.x, blank.y)
+    const data = await saved(page, name)
+    assert.equal(data.ranges.length, 2)
+    assert.equal(
+      data.ranges[1].markerStyle.backgroundColor,
+      rectStyle.background
+    )
+    assert.equal(
+      data.ranges[0].markerStyle.backgroundColor,
+      textStyle.background,
+      'switching toolbar color must preserve saved colors'
+    )
+    assert.equal(data.rects.length, 1)
+    await page.screenshot({
+      path: resolve(output, `${label}-changed-and-dismissed.png`)
+    })
+    assert.deepEqual(errors, [])
+    results.push({
+      label,
+      passed: true,
+      textStyle,
+      rectStyle,
+      popoversAfterDismiss: await popup.count()
+    })
+  } catch (error) {
+    await page.screenshot({ path: resolve(output, `${label}-error.png`) })
+    console.error(await textStyleSnapshot(page))
+    throw error
+  } finally {
+    await page.close()
+  }
+}
+
+async function textStyleSnapshot(page) {
+  return page
+    .locator('.hamster-reader__pdf-highlight-rect')
+    .evaluateAll((elements) =>
+      elements.map((element) => ({
+        background: getComputedStyle(element).backgroundColor,
+        opacity: getComputedStyle(element).opacity
+      }))
+    )
+}
+
 async function tocFixture() {
   const zip = await JSZip.loadAsync(
     await readFile('test/compat/fixtures/epub/duplicate-text.epub')
@@ -447,8 +618,11 @@ try {
   await pdfSelection(false)
   await pdfSelection(true)
   await printedPdf(await printedPdfFixture())
-  if (process.env.READER_ORIGINAL_PDF)
+  await pdfAnnotationEditing(await printedPdfFixture())
+  if (process.env.READER_ORIGINAL_PDF) {
     await printedPdf(resolve(process.env.READER_ORIGINAL_PDF), true)
+    await pdfAnnotationEditing(resolve(process.env.READER_ORIGINAL_PDF), true)
+  }
   await epubNavigation(await tocFixture())
   await writeFile(
     resolve(output, 'report.json'),

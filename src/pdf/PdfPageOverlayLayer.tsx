@@ -349,6 +349,7 @@ export function PdfPageOverlayLayer({
           }
           pageDiv={pageDiv}
           geometry={geometry}
+          highlightColor={highlightColor}
           onUpdate={onUpdateRect}
         />
       ))}
@@ -360,7 +361,9 @@ export function PdfPageOverlayLayer({
             left: Math.min(rectDraft.startX, rectDraft.currentX),
             top: Math.min(rectDraft.startY, rectDraft.currentY),
             width: Math.abs(rectDraft.currentX - rectDraft.startX),
-            height: Math.abs(rectDraft.currentY - rectDraft.startY)
+            height: Math.abs(rectDraft.currentY - rectDraft.startY),
+            borderColor: highlightColor,
+            backgroundColor: highlightColor
           }}
         />
       )}
