@@ -88,6 +88,7 @@ export type {
   ReaderCommentChangeSource,
   ReaderCommentThreadNode
 } from './types/comments'
+export { getDefaultBottomBarHighlightColor } from './components/Reader/defaultBottomBarConfig'
 export type { ReaderFontScale } from './types/fontScale'
 export type { ReaderColorOption } from './types/readerOptions'
 export type {

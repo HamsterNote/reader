@@ -16,7 +16,7 @@ Drawing history notifications have source `drawing` and precede ordinary drawing
 
 ## Verification
 
-- `yarn test:run`: 100 files / 1381 tests pass, including Reader, both viewer histories, published painting contracts, the WebView save router and the mixed-history bridge/ack/reopen chain. Native transaction tests render the real Reader and EngineDocumentViewer with a controlled host to cover source-only file switches and accepted/delayed/rejected deletion ordering.
+- `yarn test:run`: 100 files / 1385 tests pass, including Reader, both viewer histories, published painting contracts, the WebView save router and the mixed-history bridge/ack/reopen chain. Native transaction tests render the real Reader and EngineDocumentViewer with a controlled host to cover source-only file switches and accepted/delayed/rejected deletion ordering.
 - `yarn typecheck`, `yarn build:lib`, `yarn host:check` and ESLint on the changed code pass.
 - `yarn check:painting`: 18 PDF positioning cases at DPR 1/2/3 and 50/100/200% zoom, three disabled remount cases, and three complete Reader history cases (PDF Layout, EPUB, generic pages) pass. The history cases use real Chromium mouse and CDP touch input, toolbar and ref commands, unmounted-page replay, active-input cancellation/late pointerup, and redo invalidation after new ink. Maximum positioning error is below 0.00002 CSS px. This is browser verification; no physical iOS/Android device run was performed.
 - No migration or reverse projection was introduced; schema 3 documents still use the established V5 annotation container and host acknowledgment chain.

@@ -720,10 +720,15 @@ describe('Reader public API', () => {
   })
 
   it('updates both uncontrolled drawing and highlight colors from the default bottom bar', async () => {
-    // Given: 宿主不控制工具颜色，Reader 使用原有描边默认值。
+    // Given: 宿主不控制工具颜色，Reader 默认选中预设蓝色。
     render(<Reader document={makeDocument({ pages: [makePage(1)] })} />)
 
-    expect(capturedViewerProps.drawingStrokeColor).toBe('#2563eb')
+    expect(capturedViewerProps.drawingStrokeColor).toBe('#7d9ec0')
+    expect(capturedViewerProps.highlightColor).toBe('rgba(125, 158, 192, 0.35)')
+    expect(screen.getByTestId('tool-bottom-bar-color-blue')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
 
     // When: 用户选择绿色工具颜色。
     fireEvent.click(screen.getByTestId('tool-bottom-bar-color-green'))
@@ -734,8 +739,86 @@ describe('Reader public API', () => {
       expect(capturedViewerProps.highlightColor).toBe(
         'rgba(142, 186, 142, 0.35)'
       )
+      expect(screen.getByTestId('tool-bottom-bar-color-green')).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
     })
   })
+
+  it.each(['layout', 'text'] as const)(
+    'derives the initial %s highlight and selected swatch from the controlled stroke color',
+    (renderMode) => {
+      const document = makeDocument({ pages: [makePage(1)] })
+      const { rerender } = render(
+        <Reader
+          document={document}
+          renderMode={renderMode}
+          drawingStrokeColor='#8eba8e'
+        />
+      )
+      const viewerProps = () =>
+        renderMode === 'text' ? capturedTextViewerProps : capturedViewerProps
+
+      expect(viewerProps().highlightColor).toBe('rgba(142, 186, 142, 0.35)')
+      expect(screen.getByTestId('tool-bottom-bar-color-green')).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      expect(screen.getByTestId('tool-bottom-bar-color-blue')).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      )
+
+      rerender(
+        <Reader
+          document={document}
+          renderMode={renderMode}
+          drawingStrokeColor='#cf9cab'
+        />
+      )
+      expect(viewerProps().highlightColor).toBe('rgba(207, 156, 171, 0.35)')
+      expect(screen.getByTestId('tool-bottom-bar-color-rose')).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+    }
+  )
+
+  it.each(['layout', 'text'] as const)(
+    'follows a stroke outside the palette and prioritizes an explicit highlight in %s mode',
+    (renderMode) => {
+      const document = makeDocument({ pages: [makePage(1)] })
+      const { rerender } = render(
+        <Reader
+          document={document}
+          renderMode={renderMode}
+          drawingStrokeColor='#2563eb'
+        />
+      )
+      const viewerProps = () =>
+        renderMode === 'text' ? capturedTextViewerProps : capturedViewerProps
+
+      expect(viewerProps().highlightColor).toBe('rgba(37, 99, 235, 0.35)')
+      for (const swatch of screen.getAllByTestId(/^tool-bottom-bar-color-/)) {
+        expect(swatch).toHaveAttribute('aria-pressed', 'false')
+      }
+
+      rerender(
+        <Reader
+          document={document}
+          renderMode={renderMode}
+          drawingStrokeColor='#2563eb'
+          highlightColor='rgba(142, 186, 142, 0.35)'
+        />
+      )
+      expect(viewerProps().highlightColor).toBe('rgba(142, 186, 142, 0.35)')
+      expect(screen.getByTestId('tool-bottom-bar-color-green')).toHaveAttribute(
+        'aria-pressed',
+        renderMode === 'text' ? 'true' : 'false'
+      )
+    }
+  )
 
   it('keeps both color rows synchronized with custom drawing colors', async () => {
     const onHighlightColorChange = vi.fn()
@@ -776,6 +859,15 @@ describe('Reader public API', () => {
         renderMode='text'
         onDrawingStrokeColorChange={onDrawingStrokeColorChange}
       />
+    )
+
+    // Then: 首次进入时高亮颜色即底栏默认选中色，选中态与之同源。
+    expect(screen.getByTestId('tool-bottom-bar-color-blue')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(capturedTextViewerProps.highlightColor).toBe(
+      'rgba(125, 158, 192, 0.35)'
     )
 
     // When: 用户选择绿色。
@@ -820,6 +912,14 @@ describe('Reader public API', () => {
         onDrawingStrokeColorChange={onDrawingStrokeColorChange}
         onHighlightColorChange={onHighlightColorChange}
       />
+    )
+
+    // Then: 首次加载的默认高亮色取自同一颜色列表的首项。
+    expect(capturedViewerProps.highlightColor).toBe('rgba(18, 52, 86, 0.35)')
+    expect(capturedViewerProps.drawingStrokeColor).toBe('#123456')
+    expect(screen.getByTestId('tool-bottom-bar-color-brand')).toHaveAttribute(
+      'aria-pressed',
+      'true'
     )
 
     // When: 用户选择自定义颜色。

@@ -60,6 +60,18 @@ export function getFontScaleLabel(fontScale: ReaderFontScale): string {
   )
 }
 
+/**
+ * 从预设列表首项派生高亮色，供宿主初始化与底栏同源的颜色。
+ * Reader 未受控的描边默认取该首项；显式描边色的高亮回退由 Reader 单独解析。
+ */
+export function getDefaultBottomBarHighlightColor(
+  colors: readonly ReaderColorOption[] | undefined = DEFAULT_BOTTOM_BAR_COLORS
+): string {
+  return getTranslucentColor(
+    colors?.[0]?.color ?? DEFAULT_BOTTOM_BAR_COLORS[0].color
+  )
+}
+
 export function getTranslucentColor(hex: string): string {
   const match = /^#([0-9a-fA-F]{6})$/.exec(hex)
   if (!match) return hex

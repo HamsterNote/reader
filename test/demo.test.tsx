@@ -1739,7 +1739,8 @@ describe('demo parser flow', () => {
       touchPanMode: 'single-finger',
       edgeCropEditing: false,
       selectedTool: 'text-selection',
-      drawingStrokeColor: '#7d9ec0'
+      drawingStrokeColor: '#7d9ec0',
+      highlightColor: 'rgba(125, 158, 192, 0.35)'
     })
     expect(initialProps?.data).toMatchObject({
       renderMode: 'layout',
@@ -1829,7 +1830,7 @@ describe('demo parser flow', () => {
       expect(screen.getByTestId('selection-tool-select')).toHaveValue('drawing')
       expect(findDocumentReaderProps()).toMatchObject({
         fontScale: 1.5,
-        highlightColor: 'rgba(255, 193, 7, 0.35)'
+        highlightColor: 'rgba(125, 158, 192, 0.35)'
       })
     })
 

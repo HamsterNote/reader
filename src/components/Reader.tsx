@@ -103,7 +103,10 @@ import type {
   ReaderPageTool
 } from './Page'
 import { DefaultBottomBar } from './Reader/DefaultBottomBar'
-import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
+import {
+  DEFAULT_BOTTOM_BAR_COLORS,
+  getTranslucentColor
+} from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
 import {
   useLayoutReadingProgressSave,
@@ -365,7 +368,7 @@ export type ReaderProps = {
   paintingTool?: LayeredEditorTool
   /** PaintingBoard 工具变化回调；未受控时 Reader 同时更新内部工具。 */
   onPaintingToolChange?: (tool: LayeredEditorTool) => void
-  /** 绘制图形的描边颜色，默认 '#2563eb' */
+  /** 绘制图形的描边颜色，默认取初始 colors 首项（缺省为 '#7d9ec0'）。 */
   drawingStrokeColor?: string
   colors?: readonly ReaderColorOption[]
   /** 绘图颜色变化回调；未受控时 Reader 同时更新内部颜色。 */
@@ -801,13 +804,12 @@ export function Reader({
   const [internalEdgeCropEditing, setInternalEdgeCropEditing] = useState(false)
   const [internalSelectedTool, setInternalSelectedTool] =
     useState<ReaderPageTool>('text-selection')
-  const [internalDrawingStrokeColor, setInternalDrawingStrokeColor] =
-    useState('#2563eb')
+  const [internalDrawingStrokeColor, setInternalDrawingStrokeColor] = useState(
+    () => colors?.[0]?.color ?? DEFAULT_BOTTOM_BAR_COLORS[0].color
+  )
   const [internalPaintingSettings, setInternalPaintingSettings] =
     useState<LayeredToolsSnapshot>(() => createPaintingSettings())
-  const [internalHighlightColor, setInternalHighlightColor] = useState<
-    string | undefined
-  >(undefined)
+  const [internalHighlightColor, setInternalHighlightColor] = useState<string>()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const readerRootRef = useRef<HTMLDivElement>(null)
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
@@ -1037,7 +1039,11 @@ export function Reader({
       ),
     [internalPaintingSettings, resolvedDrawingStrokeColor, resolvedPaintingTool]
   )
-  const resolvedHighlightColor = highlightColor ?? internalHighlightColor
+  // 未主动选高亮色时跟随当前描边色；Text 底栏也使用该解析结果判定选中态。
+  const resolvedHighlightColor =
+    highlightColor ??
+    internalHighlightColor ??
+    getTranslucentColor(resolvedDrawingStrokeColor)
   const hasDocumentPages =
     engineSource !== undefined || documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
