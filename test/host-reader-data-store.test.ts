@@ -350,7 +350,8 @@ describe('ReaderDataStore v2 snapshot key', () => {
     await expect(
       store.saveSnapshot(fileId, { data: null, progress: null, revision: 7 })
     ).rejects.toThrow('写入失败')
-    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+    // 替换未确认前副本不删除：全部后端都可能已丢掉旧目标，副本是唯一完整状态。
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(true)
     expect((await store.get(fileId))?.snapshot.revision).toBe(6)
 
     storage.failWrite = undefined
@@ -452,5 +453,105 @@ describe('ReaderDataStore v2 snapshot key', () => {
     ).rejects.toThrow('新格式')
 
     expect(storage.values.get(`${SNAPSHOT_KEY}${fileId}`)).toBe(snapshotBytes)
+  })
+})
+
+class DropTargetStorage extends MemoryStorage {
+  dropOnWrite?: string
+
+  override async write(key: string, value: string): Promise<void> {
+    if (this.dropOnWrite === key) {
+      // 模拟真实原生后端：先删除旧目标，再移动失败。
+      this.values.delete(key)
+      throw new Error('move failed')
+    }
+    await super.write(key, value)
+  }
+}
+
+class GatedStorage extends MemoryStorage {
+  gate?: { readonly key: string; readonly wait: Promise<void> }
+
+  override async write(key: string, value: string): Promise<void> {
+    if (this.gate?.key === key) await this.gate.wait
+    await super.write(key, value)
+  }
+}
+
+describe('ReaderDataStore failure recovery and per-file queues', () => {
+  it('recovers the complete state when the backend drops the target before failing', async () => {
+    const storage = new DropTargetStorage()
+    const { store } = await storeWithLegacyRecord(storage)
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    storage.dropOnWrite = `${SNAPSHOT_KEY}${fileId}`
+    await expect(
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 7 })
+    ).rejects.toThrow('move failed')
+
+    // 目标已被后端删除，副本必须保留，不能被当成失败清理掉。
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(true)
+
+    storage.dropOnWrite = undefined
+    const reopened = new ReaderDataStore(storage)
+    const loaded = await reopened.get(fileId)
+    // 重开得到完整状态（不是 legacy/revision 0）。
+    expect(loaded?.snapshotSource).toBe('v2')
+    expect(loaded?.snapshot.revision).toBe(7)
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+  })
+
+  it('keeps the previous confirmed state when the target write reports failure but the old target survives', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    await store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 6
+    })
+
+    storage.failWrite = (key) => key === `${SNAPSHOT_KEY}${fileId}`
+    await expect(
+      store.saveSnapshot(fileId, { data: null, progress: null, revision: 7 })
+    ).rejects.toThrow('写入失败')
+    expect((await store.get(fileId))?.snapshot.revision).toBe(6)
+    // 旧目标有效 → 副本被清理，读回仍是已确认的 6。
+    expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+  })
+
+  it('does not block other files while one file write is in flight', async () => {
+    const storage = new GatedStorage()
+    const store = new ReaderDataStore(storage)
+    const otherId = 'f_ffffffffffffffffffffffffffffffff'
+    await store.upsert(record())
+    await store.upsert(
+      record({ fileId: otherId, fileName: 'other.pdf', format: 'pdf' })
+    )
+
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    storage.gate = { key: `${SNAPSHOT_KEY}${fileId}.pending`, wait: gate }
+
+    const blocked = store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 1
+    })
+    // B 文件的保存不等待 A 文件的挂起写入。
+    await store.saveSnapshot(otherId, {
+      data: null,
+      progress: null,
+      revision: 1
+    })
+    expect((await store.get(otherId))?.snapshot.revision).toBe(1)
+
+    release()
+    await blocked
+    expect((await store.get(fileId))?.snapshot.revision).toBe(1)
   })
 })

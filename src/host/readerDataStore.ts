@@ -169,7 +169,11 @@ export function parseLegacyHighlightsJson(raw: string): {
 
 export class ReaderDataStore {
   private readonly cache = new Map<string, HostDocumentRecord>()
+  /** 每个文件的快照读写队列：A 文件挂起不阻塞 B 文件。 */
+  private readonly fileQueues = new Map<string, Promise<unknown>>()
   private indexLoaded = false
+  private indexLoading: Promise<void> | null = null
+  /** 索引/元数据队列：只保护 cache 与 index 键的更新。 */
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly storage: HostStorage) {}
@@ -177,6 +181,19 @@ export class ReaderDataStore {
   private runExclusive<T>(task: () => Promise<T>): Promise<T> {
     const result = this.queue.then(task, task)
     this.queue = result.catch(() => undefined)
+    return result
+  }
+
+  private runForFile<T>(fileId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.fileQueues.get(fileId) ?? Promise.resolve()
+    const result = previous.then(task, task)
+    const settled = result.catch(() => undefined)
+    this.fileQueues.set(fileId, settled)
+    settled.then(() => {
+      if (this.fileQueues.get(fileId) === settled) {
+        this.fileQueues.delete(fileId)
+      }
+    })
     return result
   }
 
@@ -198,8 +215,16 @@ export class ReaderDataStore {
     }
   }
 
-  private async loadIndex(): Promise<void> {
-    if (this.indexLoaded) return
+  private loadIndex(): Promise<void> {
+    if (this.indexLoaded) return Promise.resolve()
+    // 多个文件的队列可能同时首次访问：共用同一次加载，避免重复读/清空 cache。
+    this.indexLoading ??= this.readIndexOnce().finally(() => {
+      this.indexLoading = null
+    })
+    return this.indexLoading
+  }
+
+  private async readIndexOnce(): Promise<void> {
     const raw = await this.storage.read(INDEX_KEY)
     this.cache.clear()
     if (raw !== null) await this.loadIndexEntries(raw)
@@ -224,8 +249,9 @@ export class ReaderDataStore {
   /**
    * 读取新键：完整目标 > 可恢复的提交副本 > 缺失。
    *
-   * 目标键不完整（中断/半写）时用完整副本补全；副本也不完整则丢弃并回退到
-   * 旧记录，绝不把半写 JSON 当成有效数据，也不把新键损坏误判为“缺失”。
+   * 目标键不完整（中断/半写/替换后丢失）时用完整副本补全；副本也不完整则
+   * 丢弃并回退到旧记录，绝不把半写 JSON 当成有效数据，也不把新键损坏误判为
+   * “缺失”。
    */
   private async readStoredSnapshot(
     fileId: string
@@ -250,6 +276,12 @@ export class ReaderDataStore {
     return { status: 'missing' }
   }
 
+  /**
+   * 目标缺失或不完整时用完整副本恢复。
+   *
+   * 补写失败不丢副本：直接返回副本内容（本进程可见新状态），副本留待下次
+   * 写入或读取重试；只有副本本身不完整才删除。
+   */
   private async recoverPending(
     fileId: string,
     pendingKey: string
@@ -261,15 +293,21 @@ export class ReaderDataStore {
       await this.removeQuietly(pendingKey)
       return null
     }
-    // 副本已完整落盘、目标缺失或不完整：补全目标后清理副本。
-    await this.storage.write(snapshotKey(fileId), pending)
+    try {
+      await this.storage.write(snapshotKey(fileId), pending)
+    } catch {
+      // 目标暂时写不回去：保留副本，本次仍返回完整副本数据。
+      return snapshot
+    }
     await this.removeQuietly(pendingKey)
     return snapshot
   }
 
   /**
-   * 完整替换新键：先写副本并回读校验，再写目标键。任何一步失败都恢复为
-   * “只能看到完整旧状态”，不会留下可被读成有效数据的半写 JSON。
+   * 完整替换新键：先写副本并回读校验，再写目标键。
+   *
+   * 目标替换失败或结果未知时**保留副本**——非原子后端可能已先删除旧目标，
+   * 副本是唯一能证明“完整状态”的材料，不能在确认目标之前删除。
    */
   private async commitSnapshot(
     fileId: string,
@@ -282,15 +320,19 @@ export class ReaderDataStore {
     await this.storage.write(pendingKey, value)
     const echo = await this.storage.read(pendingKey)
     if (echo !== value) {
+      // 副本本身不完整，无法作为恢复材料，删除后保持上一完整状态。
       await this.removeQuietly(pendingKey)
       throw new Error('快照写入校验失败，已保留上一次完整数据')
     }
 
-    try {
-      await this.storage.write(key, value)
-    } catch (error) {
-      await this.removeQuietly(pendingKey)
-      throw error
+    // 目标替换失败时**不清理副本**：非原子后端可能已先删除旧目标，
+    // 副本是最后一份完整状态，只能在目标内容确认之后删除。
+    await this.storage.write(key, value)
+
+    const current = await this.storage.read(key)
+    if (current !== value) {
+      // 目标内容未确认：同样保留副本，供重开时恢复。
+      throw new Error('快照替换未确认，已保留可恢复副本')
     }
     await this.removeQuietly(pendingKey)
   }
@@ -305,7 +347,7 @@ export class ReaderDataStore {
   }
 
   get(fileId: string): Promise<HostDocumentRecord | null> {
-    return this.runExclusive(async () => {
+    return this.runForFile(fileId, async () => {
       assertSafeFileId(fileId)
       await this.loadIndex()
       const record = this.cache.get(fileId)
@@ -346,7 +388,7 @@ export class ReaderDataStore {
   }
 
   saveSnapshot(fileId: string, snapshot: BridgeHostSnapshot): Promise<void> {
-    return this.runExclusive(async () => {
+    return this.runForFile(fileId, async () => {
       assertSafeFileId(fileId)
       await this.loadIndex()
       if (!this.cache.has(fileId)) {

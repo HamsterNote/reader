@@ -37,6 +37,7 @@ const fileId = `f_${'a'.repeat(32)}`
 async function storedDocument(format: 'epub' | 'pdf') {
   const values = new Map<string, string>()
   const storage = {
+    values,
     read: async (key: string) => values.get(key) ?? null,
     write: async (key: string, value: string) => {
       values.set(key, value)
@@ -89,7 +90,9 @@ describe('native cache records across container relocation', () => {
       const selected = await pickAndCacheDocument(store)
       expect(selected?.record).toEqual({
         ...record,
-        cachedUri: `reader-files/${fileId}.${format}`
+        cachedUri: `reader-files/${fileId}.${format}`,
+        // 返回的是重新读取的权威记录，因此带上读取时标注。
+        snapshotSource: 'legacy'
       })
       expect(native.getInfo).toHaveBeenCalledWith(
         `file:///new-container/Documents/reader-files/${fileId}.${format}`
@@ -110,5 +113,38 @@ describe('native cache records across container relocation', () => {
     )
     expect(native.removeStaged).toHaveBeenCalledWith(fileId)
     expect(await store.get(fileId)).toBeNull()
+  })
+})
+
+describe('reopening a document with a corrupt v2 snapshot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    native.getInfo.mockResolvedValue({ exists: true, md5: 'b'.repeat(32) })
+  })
+
+  it('refuses the selection instead of silently rewriting the legacy record', async () => {
+    const { store, record, storage } = await storedDocument('pdf')
+    const legacyKey = `reader.host.v1.doc.${fileId}`
+    const legacyBytes = storage.values.get(legacyKey)
+    const indexBytes = storage.values.get('reader.host.v1.index')
+    storage.values.set(`reader.host.v2.snapshot.${fileId}`, '{"revision":')
+
+    native.pick.mockResolvedValue({
+      canceled: false,
+      assets: [
+        {
+          name: record.fileName,
+          uri: 'file:///picker/book',
+          size: 1024,
+          lastModified: 1
+        }
+      ]
+    })
+
+    await expect(pickAndCacheDocument(store)).rejects.toThrow('损坏')
+    // 损坏状态不会被 upsert 洗成旧快照，两个键都保持原样。
+    expect(storage.values.get(legacyKey)).toBe(legacyBytes)
+    expect(storage.values.get('reader.host.v1.index')).toBe(indexBytes)
+    expect((await store.get(fileId))?.snapshotError).toContain('损坏')
   })
 })
