@@ -45,6 +45,14 @@ jobs:
         run: |
           yarn test:run
 
+      - name: Verify Expo host and iOS prebuild
+        run: |
+          yarn host:check
+          yarn prepare:ios
+          cd app
+          npx expo install --check
+          npx expo prebuild --platform ios --no-install
+
       - name: Build (lib + demo)
         run: |
           yarn build:all

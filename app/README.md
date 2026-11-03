@@ -1,6 +1,6 @@
 # Hamster Reader Expo host
 
-Expo SDK 54 dev client that hosts the Web reader in a `react-native-webview`.
+Expo SDK 57 dev client that hosts the Web reader in a `react-native-webview`.
 
 ```bash
 # from repository root
@@ -17,9 +17,14 @@ reader until the zip exists. See `../docs/expo-host.md` for architecture, securi
 rules and the verification matrix.
 
 The iOS scripts apply the pinned react-native-webview patch automatically.
+After upgrading from SDK 54, regenerate the native project with
+`yarn host:prebuild --platform ios --clean` before building on macOS. This runs
+the UIScene config plugin; Metro reload cannot update the native lifecycle.
+Only use `--clean` when native directories contain no manual changes.
 When building an existing Xcode workspace directly, run `yarn prepare:ios` from
 the repository root first, then rebuild the native app. Metro reload alone does
 not install this fix. The script rejects unsupported or divergent native sources.
+See `../docs/ham140-ios-scene.md` for the lifecycle change and pending device checks.
 
 Publication cache records use paths relative to the current Documents directory.
 Legacy absolute URIs are resolved by stable file ID in the current container, so

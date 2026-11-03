@@ -6,18 +6,15 @@
     "scheme": "hamsterreader",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hamsternote.reader"
     },
     "android": {
       "package": "com.hamsternote.reader",
-      "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize"
     },
-    "plugins": ["expo-document-picker"],
-    "assetBundlePatterns": ["assets/**/*"],
+    "plugins": ["expo-document-picker", "./plugins/with-ios-scene.cjs"],
     "experiments": {
       "autolinkingModuleResolution": true
     }

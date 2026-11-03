@@ -12,18 +12,22 @@ EPUB/PDF 引擎由主线 A/B 通过 `ReaderEngineAdapter` 接入，本分支提�
 
 | 组件                               | 版本                                           |
 | ---------------------------------- | ---------------------------------------------- |
-| Expo SDK                           | 54.0.37                                        |
-| React Native                       | 0.81.5                                         |
-| React                              | 19.1.0                                         |
-| expo-dev-client                    | ~6.0.18                                        |
-| react-native-webview               | 13.15.0                                        |
-| expo-file-system                   | ~19.0.17                                       |
+| Expo SDK                           | 57.0.31                                        |
+| React Native                       | 0.86.3                                         |
+| React                              | 19.2.3                                         |
+| expo-dev-client                    | ~57.0.20                                       |
+| react-native-webview               | 13.16.1                                        |
+| expo-file-system                   | ~57.0.7                                        |
 | pdfjs-dist（worker/字体/CSS 来源） | 5.4.530（`@hamster-note/pdf-parser` 传递依赖） |
 | foliate-js                         | `78914aef4466eb960965702401634c2cb348e9b1`     |
 
 `npx expo install --check` 无过时依赖。foliate-js 源文件与本机 pin 记录在
 `vendor/foliate-js/`（MIT，见同目录 `LICENSE`、`PIN.md`）；`pdfjs-dist`
 （Apache-2.0）的 `LICENSE` 一并打包到 `webview-dist/pdfjs/`。
+
+HAM-140 将宿主从 SDK 54 升级到 SDK 57，并通过 config plugin 启用 SDK 自带的
+`ExpoAppSceneDelegate`。SDK 57 模板仍默认使用旧生命周期，必须重新 prebuild；
+具体原理、验证范围和 macOS 验收步骤见 `ham140-ios-scene.md`。
 
 ## 构建命令
 
@@ -38,7 +42,7 @@ yarn build:webview
 yarn verify:webview
 
 # 3. 生成原生工程（首次或配置变化后）
-cd app && npx expo prebuild
+yarn host:prebuild
 
 # 4. 构建并安装 dev client
 yarn host:android   # 需要 Android SDK + JDK 17
