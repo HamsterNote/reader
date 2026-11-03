@@ -183,7 +183,7 @@ const resolveBottomBarHistoryStatus = ({
 
 export type ReaderProps = {
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
-  /** Original EPUB/PDF bytes opt into the new display engines; document remains the compatibility index. */
+  /** Native EPUB/PDF bytes can render without document; provide the compatibility index for derived PDF text mode. */
   engineSource?: ReaderEngineSource
   /** 宿主提供的受控加载进度；传入时在 Reader 容器内显示并暂时隐藏上传区。 */
   loadingProgress?: ReaderLoadingProgress | null
@@ -905,6 +905,7 @@ export function Reader({
   const historyIdentity = useRef({
     enabled: normalizedAnnotationHistory.enabled,
     document,
+    engineSource,
     resetKey: normalizedAnnotationHistory.resetKey
   })
   const externalHistoryKey = JSON.stringify({
@@ -914,7 +915,9 @@ export function Reader({
   })
   const lastHistoryInput = useRef(externalHistoryKey)
   useLayoutEffect(() => {
-    const fileChanged = historyIdentity.current.document !== document
+    const fileChanged =
+      historyIdentity.current.document !== document ||
+      historyIdentity.current.engineSource !== engineSource
     const identityChanged =
       historyIdentity.current.enabled !== normalizedAnnotationHistory.enabled ||
       fileChanged ||
@@ -922,6 +925,7 @@ export function Reader({
     historyIdentity.current = {
       enabled: normalizedAnnotationHistory.enabled,
       document,
+      engineSource,
       resetKey: normalizedAnnotationHistory.resetKey
     }
     if (!identityChanged && lastHistoryInput.current === externalHistoryKey)
@@ -964,6 +968,7 @@ export function Reader({
     }
   }, [
     document,
+    engineSource,
     normalizedAnnotationHistory.resetKey,
     normalizedAnnotationHistory.enabled,
     data?.pagePaintings,
@@ -1033,7 +1038,8 @@ export function Reader({
     [internalPaintingSettings, resolvedDrawingStrokeColor, resolvedPaintingTool]
   )
   const resolvedHighlightColor = highlightColor ?? internalHighlightColor
-  const hasDocumentPages = documentHasPages(document)
+  const hasDocumentPages =
+    engineSource !== undefined || documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
     rootRef: readerRootRef,
     bottomBarRef: defaultBottomBarRef,
@@ -1782,9 +1788,12 @@ export function Reader({
   )
 
   const resolvedLoadingProgress = resolveLoadingProgress(loadingProgress)
-  const showUploadZone = !document && !uploadedFile && !resolvedLoadingProgress
-  const showFileInfo = !document && uploadedFile && !resolvedLoadingProgress
-  const showDocumentContent = document?.title || emptyText
+  const showUploadZone =
+    !engineSource && !document && !uploadedFile && !resolvedLoadingProgress
+  const showFileInfo =
+    !engineSource && !document && uploadedFile && !resolvedLoadingProgress
+  const showDocumentContent =
+    engineSource !== undefined || document?.title || emptyText
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
       if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
