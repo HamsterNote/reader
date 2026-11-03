@@ -6,8 +6,9 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRect
 } from '../../types/selection'
-import { getTextBbox } from './pageContentGeometry'
+import { getPolygonTextGeometry, getTextBbox } from './pageContentGeometry'
 import { parsePublicPageId } from './rangeJumpHelpers'
+import { sourceTextGeometry } from './sourceTextGeometry'
 import { deriveDomSelectionPageRects } from './textHighlightAdapter'
 import {
   getTextLogicalLines,
@@ -158,14 +159,63 @@ function sliceTextRects(
   startOffset: number,
   endOffset: number
 ): ReaderSelectionRect[] {
+  const sourceGeometry = sourceTextGeometry.get(text)
+  if (sourceGeometry) return sourceGeometry(startOffset, endOffset)
+  return sliceLocalTextRects(text, startOffset, endOffset).map((rect) =>
+    projectTextRect(text, rect)
+  )
+}
+
+// Slice in the text's own axes, then project all four corners into the
+// page. Use both polygon edges: PDF viewport projection can reverse their
+// winding, so a rotation angle alone loses the direction of the height axis.
+function projectTextRect(
+  text: IntermediateText,
+  rect: ReaderSelectionRect
+): ReaderSelectionRect {
+  const bbox = getTextBbox(text)
+  const polygon = getPolygonTextGeometry(text.polygon) ? text.polygon : null
+  if (!polygon) return { ...rect, x: bbox.x + rect.x, y: bbox.y + rect.y }
+
+  const [origin, along, , down] = polygon
+  const corners = [
+    [rect.x, rect.y],
+    [rect.x + rect.width, rect.y],
+    [rect.x + rect.width, rect.y + rect.height],
+    [rect.x, rect.y + rect.height]
+  ].map(([x, y]) => [
+    origin[0] +
+      (x / bbox.width) * (along[0] - origin[0]) +
+      (y / bbox.height) * (down[0] - origin[0]),
+    origin[1] +
+      (x / bbox.width) * (along[1] - origin[1]) +
+      (y / bbox.height) * (down[1] - origin[1])
+  ])
+  const xs = corners.map(([x]) => x)
+  const ys = corners.map(([, y]) => y)
+  const x = Math.min(...xs)
+  const y = Math.min(...ys)
+  return {
+    x,
+    y,
+    width: Math.max(...xs) - x,
+    height: Math.max(...ys) - y
+  }
+}
+
+function sliceLocalTextRects(
+  text: IntermediateText,
+  startOffset: number,
+  endOffset: number
+): ReaderSelectionRect[] {
   const bbox = getTextBbox(text)
   if (text.vertical || text.dir === TextDir.TTB) {
     const startRatio = startOffset / text.content.length
     const endRatio = endOffset / text.content.length
     return [
       {
-        x: bbox.x,
-        y: bbox.y + bbox.height * startRatio,
+        x: 0,
+        y: bbox.height * startRatio,
         width: bbox.width,
         height: bbox.height * (endRatio - startRatio)
       }
@@ -208,12 +258,12 @@ function sliceTextRects(
       startRatio = relativeStart / fallbackTextLength
       endRatio = relativeEnd / fallbackTextLength
     }
-    const y = bbox.y + lineHeight * lineIndex
+    const y = lineHeight * lineIndex
 
     if (text.dir === TextDir.RTL) {
       return [
         {
-          x: bbox.x + bbox.width * (1 - endRatio),
+          x: bbox.width * (1 - endRatio),
           y,
           width: bbox.width * (endRatio - startRatio),
           height: lineHeight
@@ -223,7 +273,7 @@ function sliceTextRects(
 
     return [
       {
-        x: bbox.x + bbox.width * startRatio,
+        x: bbox.width * startRatio,
         y,
         width: bbox.width * (endRatio - startRatio),
         height: lineHeight

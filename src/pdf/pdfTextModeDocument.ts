@@ -12,6 +12,7 @@ import {
 } from '@hamster-note/types'
 
 import type { PageViewport, PDFDocumentProxy, TextItem } from './pdfjsRuntime'
+import { registerPdfTextSelectionGeometry } from './pdfTextSelectionGeometry'
 import {
   buildCanonicalPageText,
   canonicalTextId,
@@ -155,6 +156,12 @@ export async function createPdfTextModeDocument(
         const { texts, canonical } = buildPageTexts(
           textContent.items.filter(isTextItem),
           pageNumber,
+          scaleOneViewport
+        )
+        await registerPdfTextSelectionGeometry(
+          texts,
+          canonical,
+          textContent,
           scaleOneViewport
         )
         canonicalByPage.set(pageNumber, canonical)

@@ -1,5 +1,7 @@
 import { PdfTextHandle } from '../../pdf/PdfTextHandle'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
+import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeometry'
+import type { ReaderEngineSource } from '../../types/engineSource'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
@@ -80,6 +82,7 @@ import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
 import { canonicalizePdfSelectionRanges } from './pdfSelectionOffsets'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
+import { releaseSourceTextGeometry } from './sourceTextGeometry'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
@@ -835,6 +838,7 @@ export type IntermediateDocumentTextViewerProps = {
   isEpub?: boolean
   /** 当前文档是否为 PDF；文本模式据此启用基于 box 的段落重建。 */
   isPdf?: boolean
+  pdfSource?: ReaderEngineSource
   onRequestLayout?: () => void
   /** 已序列化的中间文档；与 `document` 二选一，文本模式同样支持。 */
   serializedDocument?: IntermediateDocumentSerialized | null
@@ -1124,6 +1128,14 @@ export function IntermediateDocumentTextViewer(
     () => new Map<number, IntermediateContent[]>()
   )
   textsByPageNumberRef.current = textsByPageNumber
+  useEffect(
+    () => () => {
+      for (const texts of textsByPageNumberRef.current.values()) {
+        releaseSourceTextGeometry(texts)
+      }
+    },
+    [document, serializedDocument]
+  )
   imagesByPageNumberRef.current = imagesByPageNumber
   orderedContentByPageNumberRef.current = orderedContentByPageNumber
 
@@ -1876,6 +1888,7 @@ export function IntermediateDocumentTextViewer(
           break
         }
         if (!preloadPageNumberSet.has(pageNumber)) {
+          releaseSourceTextGeometry(nextTexts.get(pageNumber))
           nextTexts.delete(pageNumber)
           if (isPdf) releasePdfTextPage(runtimeDocument, pageNumber)
           clearUnloadTimer(pageNumber)
@@ -1892,12 +1905,16 @@ export function IntermediateDocumentTextViewer(
     ]
   )
 
+  const getContentWithPdfGeometry = usePdfTextSelectionGeometry(
+    isPdf ? props.pdfSource : undefined,
+    getTextContentEntries
+  )
   const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
     mode: 'text',
     activeDocumentRef,
     isMountedRef,
     loadingPagesRef,
-    getPageContentEntries: getTextContentEntries,
+    getPageContentEntries: getContentWithPdfGeometry,
     isIntermediateText,
     isIntermediateImage,
     callbacks: {
@@ -2327,6 +2344,7 @@ export function IntermediateDocumentTextViewer(
 
   const removeLoadedTextPage = useCallback((pageNumber: number) => {
     releasePdfTextPage(activeDocumentRef.current, pageNumber)
+    releaseSourceTextGeometry(textsByPageNumberRef.current.get(pageNumber))
     setParagraphsByPageNumber((currentParagraphs) => {
       if (!currentParagraphs.has(pageNumber)) {
         return currentParagraphs

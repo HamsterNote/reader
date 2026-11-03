@@ -1646,6 +1646,7 @@ export function Reader({
         return (
           <IntermediateDocumentTextViewer
             document={document}
+            pdfSource={engineSource}
             isEpub={isEpub}
             isPdf={isPdf}
             darkMode={darkMode}
