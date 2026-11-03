@@ -128,34 +128,42 @@ const buildKeptChars = (tokens: readonly Token[]): KeptChar[] => {
   }
 
   let lineHasContent = false
-  for (const token of tokens) {
-    if (token.type === 'boundary') {
-      // 行尾裁剪：丢弃未落地的空白 run。
-      pendingReal = null
-      pendingAny = false
-      lineHasContent = false
-      continue
-    }
-    if (token.type === 'space') {
-      pendingAny = true
-      continue
-    }
-    const data = token.node.data
+  const appendText = (node: Text) => {
+    const data = node.data
     for (let index = 0; index < data.length; index += 1) {
+      // Legacy text splits on source newlines before trimming/collapsing each
+      // line, then joins without separators. Treating LF as ordinary whitespace
+      // inserts spaces around pre/code blocks and degrades the entire section.
+      if (data[index] === '\n') {
+        pendingReal = null
+        pendingAny = false
+        lineHasContent = false
+        continue
+      }
       if (/\s/.test(data[index])) {
-        if (!pendingReal) pendingReal = { node: token.node, offset: index }
+        if (!pendingReal) pendingReal = { node, offset: index }
         pendingAny = true
         continue
       }
       flushPending(lineHasContent)
       kept.push({
         kind: 'real',
-        node: token.node,
+        node,
         offset: index,
         char: data[index]
       })
       lineHasContent = true
     }
+  }
+  for (const token of tokens) {
+    if (token.type === 'boundary') {
+      // 行尾裁剪：丢弃未落地的空白 run。
+      pendingReal = null
+      pendingAny = false
+      lineHasContent = false
+    } else if (token.type === 'space') {
+      pendingAny = true
+    } else appendText(token.node)
   }
   return kept
 }
@@ -327,16 +335,22 @@ export const buildSectionTextIndex = (
     if (!body.contains(container) && container !== body) return null
 
     const endpoint = normalizeEndpoint(container, offset)
-    let count = 0
-    for (let index = 0; index < kept.length; index += 1) {
-      const char = kept[index]
-      if (char.kind === 'virtual') {
-        if (shouldCountVirtual(kept[index + 1], endpoint, edge)) count += 1
-      } else if (isRealCharBefore(char, endpoint)) {
-        count += 1
-      }
+    // Kept characters (including virtual gaps) follow DOM order. Find the
+    // boundary of the prefix before the endpoint instead of comparing every
+    // character in the chapter on each selectionchange/relocate event.
+    let left = 0
+    let right = kept.length
+    while (left < right) {
+      const middle = Math.floor((left + right) / 2)
+      const char = kept[middle]
+      const before =
+        char.kind === 'virtual'
+          ? shouldCountVirtual(kept[middle + 1], endpoint, edge)
+          : isRealCharBefore(char, endpoint)
+      if (before) left = middle + 1
+      else right = middle
     }
-    return count
+    return left
   }
 
   const offsetsFromRange = (

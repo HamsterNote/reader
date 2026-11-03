@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { openEpubPackage } from '../../src/epub/epubPackage'
 import { legacyPageTextFromChapter } from '../../src/epub/legacyText'
@@ -84,7 +84,9 @@ describe('section text index: fixture chapters', () => {
     ['epub/duplicate-text.epub', 0],
     ['epub/duplicate-text.epub', 1],
     ['epub/duplicate-text.epub', 2],
-    ['epub/duplicate-text.epub', 3]
+    ['epub/duplicate-text.epub', 3],
+    ['epub/large-code-section.epub', 0],
+    ['epub/large-code-section.epub', 1]
   ] as const)(
     '%s chapter %i stays healthy and round-trips',
     async (fixture, chapterIndex) => {
@@ -192,7 +194,18 @@ describe('section text index: normalization equivalence with the regex pipeline'
     ['<p>foo</p><img src="a.png"/><p>bar</p>', 'foobar'],
     ['<p>foo <img src="a.png"/> bar</p>', 'foo bar'],
     // 实体：受限解码（amp/nbsp 解码，未知实体保留原样）。
-    ['<p>a &amp; b&#160;c</p>', 'a & b c']
+    ['<p>a &amp; b&#160;c</p>', 'a & b c'],
+    // Literal source newlines are line boundaries in the legacy regex pipeline,
+    // including inside pre/code and across inline element boundaries.
+    [
+      '<pre>\n<code>$ install tools</code>\n</pre>\n<p>Next paragraph OS</p>',
+      '$ install toolsNext paragraph OS'
+    ],
+    [
+      '<p> alpha \n beta <span>gamma\n delta</span> </p>',
+      'alphabeta gammadelta'
+    ],
+    ['<pre> one\r\n  two\r\nthree </pre>', 'onetwothree']
   ]
 
   it.each(cases.map(([body, expected], i) => ({ i, body, expected })))(
@@ -268,5 +281,79 @@ describe('section text index: normalization equivalence with the regex pipeline'
     const range = doc.createRange()
     range.selectNodeContents(doc.getElementsByTagName('p')[0])
     expect(index.offsetsFromRange(range)).toBeNull()
+  })
+})
+
+describe('EPUB Popover cross-node selection contract', () => {
+  it('bounds DOM comparisons for a selection inside a large chapter', () => {
+    const xml = `<html xmlns="http://www.w3.org/1999/xhtml"><body>${Array.from(
+      { length: 600 },
+      (_, index) => `<p>row-${index} ${'body text '.repeat(10)}</p>`
+    ).join('\n')}</body></html>`
+    const doc = parseChapter(xml)
+    const legacy = legacyPageTextFromChapter(xml)
+    const index = buildSectionTextIndex(doc, legacy)
+    expect(index.healthy).toBe(true)
+    const node = doc.querySelectorAll('p')[500].firstChild!
+    const range = doc.createRange()
+    range.setStart(node, 3)
+    range.setEnd(node, 12)
+    const compare = vi.spyOn(Node.prototype, 'compareDocumentPosition')
+    try {
+      const offset = legacy.indexOf('row-500 ')
+      expect(index.offsetsFromRange(range)).toEqual({
+        start: offset + 3,
+        end: offset + 12
+      })
+      expect(compare.mock.calls.length).toBeLessThan(64)
+    } finally {
+      compare.mockRestore()
+    }
+  })
+
+  it('maps forward, backward and element endpoints across strong/em/span and collapsed whitespace', () => {
+    const xml =
+      '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Alpha <strong>bravo</strong> <em>charlie</em><span> delta</span>   echo.</p><p>Second <span>paragraph</span> with repeated text.</p></body></html>'
+    // Use a live document with a Selection, as in Foliate's iframe.
+    const iframe = document.createElement('iframe')
+    document.body.append(iframe)
+    const doc = iframe.contentDocument!
+    doc.documentElement.innerHTML = parseChapter(xml).documentElement.innerHTML
+    const index = buildSectionTextIndex(doc, legacyPageTextFromChapter(xml))
+    const paragraphs = doc.querySelectorAll('p')
+    const selection = doc.getSelection()!
+    try {
+      expect(index.healthy).toBe(true)
+      selection.setBaseAndExtent(
+        paragraphs[0].firstChild!,
+        1,
+        paragraphs[1].lastChild!,
+        10
+      )
+      const forward = index.offsetsFromRange(selection.getRangeAt(0))
+      expect(forward).toEqual({ start: 1, end: 57 })
+      expect(index.legacyText.slice(forward!.start, forward!.end)).toBe(
+        'lpha bravo charlie delta echo.Second paragraph with repe'
+      )
+      selection.setBaseAndExtent(
+        paragraphs[1].lastChild!,
+        10,
+        paragraphs[0].firstChild!,
+        1
+      )
+      expect(index.offsetsFromRange(selection.getRangeAt(0))).toEqual(forward)
+      const elementRange = doc.createRange()
+      elementRange.setStart(paragraphs[0], 1)
+      elementRange.setEnd(paragraphs[1], 2)
+      expect(index.offsetsFromRange(elementRange)).toEqual({
+        start: 6,
+        end: 47
+      })
+      const foreign = document.createRange()
+      foreign.selectNodeContents(document.body)
+      expect(index.offsetsFromRange(foreign)).toBeNull()
+    } finally {
+      iframe.remove()
+    }
   })
 })

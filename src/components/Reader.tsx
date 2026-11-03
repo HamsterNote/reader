@@ -1756,6 +1756,12 @@ export function Reader({
             engineSource={engineSource}
             engineRenderMode={resolvedRenderMode}
             engineDarkMode={darkMode}
+            enginePopoverContext={{
+              onHighlightColorChange: handleHighlightColorChange,
+              onCommentHighlight: onCommentHighlight
+                ? handleDefaultCommentHighlight
+                : undefined
+            }}
             textReadingProgress={resolvedTextReadingProgress}
             onTextReadingProgressChange={handleTextReadingProgressChange}
             document={document}
@@ -1830,37 +1836,41 @@ export function Reader({
             selectionColor={selectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
-              selectionPopover ?? (
-                <DefaultSelectionPopover
-                  darkMode={darkMode}
-                  selectionRef={popoverSelectionRef}
-                  highlightColor={resolvedHighlightColor}
-                  onHighlightColorChange={handleHighlightColorChange}
-                  selectedRangeId={selectedRangeId}
-                  ranges={resolvedRanges}
-                  onUpdateRange={handleUpdateRange}
-                  onRemoveRange={onRemoveRange}
-                />
-              )
+              engineSource
+                ? selectionPopover
+                : (selectionPopover ?? (
+                    <DefaultSelectionPopover
+                      darkMode={darkMode}
+                      selectionRef={popoverSelectionRef}
+                      highlightColor={resolvedHighlightColor}
+                      onHighlightColorChange={handleHighlightColorChange}
+                      selectedRangeId={selectedRangeId}
+                      ranges={resolvedRanges}
+                      onUpdateRange={handleUpdateRange}
+                      onRemoveRange={onRemoveRange}
+                    />
+                  ))
             }
             highlightPopover={
-              highlightPopover ??
-              ((highlight) => (
-                <DefaultHighlightPopover
-                  darkMode={darkMode}
-                  selectionRef={popoverSelectionRef}
-                  highlightColor={resolvedHighlightColor}
-                  onHighlightColorChange={handleHighlightColorChange}
-                  selectedRangeId={highlight.id}
-                  ranges={resolvedRanges}
-                  onUpdateRange={handleUpdateRange}
-                  onRemoveRange={onRemoveRange}
-                  onCommentHighlight={whenEnabled(
-                    onCommentHighlight !== undefined,
-                    handleDefaultCommentHighlight
-                  )}
-                />
-              ))
+              engineSource
+                ? highlightPopover
+                : (highlightPopover ??
+                  ((highlight) => (
+                    <DefaultHighlightPopover
+                      darkMode={darkMode}
+                      selectionRef={popoverSelectionRef}
+                      highlightColor={resolvedHighlightColor}
+                      onHighlightColorChange={handleHighlightColorChange}
+                      selectedRangeId={highlight.id}
+                      ranges={resolvedRanges}
+                      onUpdateRange={handleUpdateRange}
+                      onRemoveRange={onRemoveRange}
+                      onCommentHighlight={whenEnabled(
+                        onCommentHighlight !== undefined,
+                        handleDefaultCommentHighlight
+                      )}
+                    />
+                  )))
             }
             onCommentHighlight={whenEnabled(
               highlightPopover !== undefined,

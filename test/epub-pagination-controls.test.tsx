@@ -44,6 +44,7 @@ beforeEach(() => {
     setFontScale: vi.fn(),
     showRanges: vi.fn(() => ({ located: [], unlocatable: [] })),
     setActiveRange: vi.fn(),
+    clearSelection: vi.fn(),
     captureTextAnchor: () => ({
       pageNumber: 2,
       textId: 'page-2-text',

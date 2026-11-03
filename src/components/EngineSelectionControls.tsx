@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { useRangeMagnifier } from './IntermediateDocumentViewer/RangeMagnifier'
@@ -40,14 +40,35 @@ export function EngineSelectionControls({
   readonly onEditingChange: (editing: boolean) => void
 }) {
   const magnifier = useRangeMagnifier()
+  const latestRange = useRef(range)
+  latestRange.current = range
   const [rects, setRects] = useState<DOMRect[]>([])
   const [dragging, setDragging] = useState(false)
+  const popup = useRef<HTMLDivElement>(null)
+  const [popupSize, setPopupSize] = useState({ width: 0, height: 0 })
+  useLayoutEffect(() => {
+    const element = popup.current
+    if (!element) return
+    const measure = () => {
+      const box = element.getBoundingClientRect()
+      setPopupSize((previous) =>
+        previous.width === box.width && previous.height === box.height
+          ? previous
+          : { width: box.width, height: box.height }
+      )
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [children, dragging, rects.length])
   const popupPointerTarget = useRef<Node | null>(null)
   const drag = useRef<{
     pointer: number
     end: boolean
     original: Range
     current: Range
+    valid: boolean
   } | null>(null)
   const callbacks = useRef({ onUpdate, onEditingChange, magnifier })
   callbacks.current = { onUpdate, onEditingChange, magnifier }
@@ -61,8 +82,31 @@ export function EngineSelectionControls({
       setDragging(false)
       callbacks.current.onEditingChange(false)
       callbacks.current.magnifier?.end()
-      if (event?.type === 'pointerup')
-        callbacks.current.onUpdate(active.current, active.end)
+      if (
+        event?.type === 'pointerup' &&
+        active.valid &&
+        active.current.startContainer.isConnected
+      ) {
+        if (
+          active.current.compareBoundaryPoints(
+            Range.START_TO_START,
+            active.original
+          ) ||
+          active.current.compareBoundaryPoints(
+            Range.END_TO_END,
+            active.original
+          )
+        )
+          callbacks.current.onUpdate(active.current, active.end)
+      } else if (
+        latestRange.current === range &&
+        active.original.startContainer.isConnected
+      ) {
+        const selection =
+          active.original.startContainer.ownerDocument?.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(active.original)
+      }
     }
     // Range materialization may replace the handle before pointerup.
     owner.addEventListener('pointerup', finish, true)
@@ -75,7 +119,7 @@ export function EngineSelectionControls({
       owner.defaultView?.removeEventListener('blur', blur)
       finish()
     }
-  }, [containerRef])
+  }, [containerRef, range])
   useEffect(() => {
     if (!range) {
       setRects([])
@@ -83,7 +127,9 @@ export function EngineSelectionControls({
     }
     let frame = 0
     const sync = () => {
-      const next = rangeViewportRects(drag.current?.current ?? range)
+      const next = range.startContainer.isConnected
+        ? rangeViewportRects(drag.current?.current ?? range)
+        : []
       setRects((previous) =>
         JSON.stringify(previous) === JSON.stringify(next) ? previous : next
       )
@@ -92,25 +138,42 @@ export function EngineSelectionControls({
     sync()
     return () => cancelAnimationFrame(frame)
   }, [range])
-  const first = rects[0]
-  const last = rects.at(-1)
-  if (!range || !first || !last) return null
   const box = containerRef.current?.getBoundingClientRect()
-  const x = Math.max(
-    box?.left ?? 8,
-    Math.min(first.left, (box?.right ?? innerWidth) - 220)
+  const left = Math.max(8, box?.left ?? 8)
+  const right = Math.min(innerWidth - 8, box?.right ?? innerWidth - 8)
+  const top = Math.max(8, box?.top ?? 8)
+  const bottom = Math.min(innerHeight - 8, box?.bottom ?? innerHeight - 8)
+  const visible = (rect: DOMRect) =>
+    rect.right > left &&
+    rect.left < right &&
+    rect.bottom > top &&
+    rect.top < bottom
+  const visibleRects = rects.filter(visible)
+  const first = visibleRects[0]
+  const last = visibleRects.at(-1)
+  if (!range || !first || !last) return null
+  const width = Math.max(0, right - left)
+  const height = Math.max(0, bottom - top)
+  const x = Math.max(left, Math.min(first.left, right - popupSize.width))
+  const above = first.top - popupSize.height - 12
+  const y = Math.max(
+    top,
+    Math.min(above >= top ? above : last.bottom + 12, bottom - popupSize.height)
   )
-  const y = first.top > 60 ? first.top - 48 : last.bottom + 12
   return createPortal(
     <>
       {!dragging && children && (
         <div
+          ref={popup}
           className='hsn-selection-popover hamster-reader__engine-popover'
           style={{
             position: 'fixed',
             left: x,
             top: y,
-            maxWidth: Math.max(120, (box?.width ?? innerWidth) - 16),
+            maxWidth: width,
+            maxHeight: height,
+            overflow: 'auto',
+            boxSizing: 'border-box',
             transform: 'none',
             margin: 0,
             zIndex: 10000
@@ -136,7 +199,11 @@ export function EngineSelectionControls({
       )}
       {showHandles &&
         [false, true]
-          .filter((end) => (end ? showEnd : showStart))
+          .filter((end) =>
+            end
+              ? showEnd && visible(rects.at(-1)!)
+              : showStart && visible(rects[0])
+          )
           .map((end) => (
             <button
               key={String(end)}
@@ -158,7 +225,8 @@ export function EngineSelectionControls({
                   pointer: event.pointerId,
                   end,
                   original: range.cloneRange(),
-                  current: range.cloneRange()
+                  current: range.cloneRange(),
+                  valid: true
                 }
                 setDragging(true)
                 onEditingChange(true)
@@ -203,38 +271,19 @@ export function EngineSelectionControls({
                   !node ||
                   offset === undefined ||
                   node.nodeType !== Node.TEXT_NODE
-                )
+                ) {
+                  active.valid = false
                   return
+                }
                 const next = active.original.cloneRange()
                 if (active.end) next.setEnd(node, offset)
                 else next.setStart(node, offset)
-                if (next.collapsed) return
+                active.valid = !next.collapsed
+                if (!active.valid) return
                 active.current = next
                 const selection = doc.getSelection()
                 selection?.removeAllRanges()
                 selection?.addRange(next)
-              }}
-              onPointerUp={(event) => {
-                const active = drag.current
-                if (!active || active.pointer !== event.pointerId) return
-                drag.current = null
-                setDragging(false)
-                onEditingChange(false)
-                magnifier?.end()
-                onUpdate(active.current, active.end)
-              }}
-              onPointerCancel={() => {
-                const original = drag.current?.original
-                if (original) {
-                  const selection =
-                    original.startContainer.ownerDocument?.getSelection()
-                  selection?.removeAllRanges()
-                  selection?.addRange(original)
-                }
-                drag.current = null
-                setDragging(false)
-                onEditingChange(false)
-                magnifier?.end()
               }}
             />
           ))}
