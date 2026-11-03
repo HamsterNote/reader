@@ -11,8 +11,14 @@ import {
   TextDir
 } from '@hamster-note/types'
 
-import type { PageViewport, PDFDocumentProxy, TextItem } from './pdfjsRuntime'
+import type {
+  PageViewport,
+  PDFDocumentProxy,
+  TextContent,
+  TextItem
+} from './pdfjsRuntime'
 import { registerPdfTextSelectionGeometry } from './pdfTextSelectionGeometry'
+import { sourceTextGeometry } from '../components/IntermediateDocumentViewer/sourceTextGeometry'
 import {
   buildCanonicalPageText,
   canonicalTextId,
@@ -87,6 +93,41 @@ const releaseCallbacks = new WeakMap<
   (page: number) => void
 >()
 
+const geometryPreparers = new WeakMap<object, () => Promise<void>>()
+
+/** Only the Text viewer prepares measurement DOM for a page it actually owns.
+ * Generic facade access (including pagesMap.getPages) stays free of geometry.
+ */
+export function preparePdfTextPageGeometry(
+  page: unknown
+): Promise<void> | undefined {
+  if (typeof page === 'object' && page !== null) {
+    return geometryPreparers.get(page)?.()
+  }
+}
+
+function createGeometryPreparer(
+  texts: readonly IntermediateText[],
+  canonical: CanonicalPageText,
+  textContent: TextContent,
+  viewport: PageViewport
+): () => Promise<void> {
+  let preparing: Promise<void> | undefined
+  return () => {
+    if (texts.every((text) => sourceTextGeometry.has(text)))
+      return Promise.resolve()
+    preparing ??= registerPdfTextSelectionGeometry(
+      texts,
+      canonical,
+      textContent,
+      viewport
+    ).finally(() => {
+      preparing = undefined
+    })
+    return preparing
+  }
+}
+
 /** Viewer eviction also releases the PDF-only canonical index. */
 export function releasePdfTextPage(
   document: IntermediateDocument | null,
@@ -158,20 +199,24 @@ export async function createPdfTextModeDocument(
           pageNumber,
           scaleOneViewport
         )
-        await registerPdfTextSelectionGeometry(
-          texts,
-          canonical,
-          textContent,
-          scaleOneViewport
-        )
         canonicalByPage.set(pageNumber, canonical)
-        return new IntermediatePage({
+        const page = new IntermediatePage({
           id: `page-${pageNumber}`,
           number: pageNumber,
           width: scaleOneViewport.width,
           height: scaleOneViewport.height,
           texts
         })
+        geometryPreparers.set(
+          page,
+          createGeometryPreparer(
+            texts,
+            canonical,
+            textContent,
+            scaleOneViewport
+          )
+        )
+        return page
       }
     }
   })

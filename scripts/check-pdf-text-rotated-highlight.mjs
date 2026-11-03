@@ -155,6 +155,164 @@ try {
     }
     cases.push({ overlayRectType, range: saved, checks })
   }
+  // Observe real Reader ownership, retaining keys so GC cannot hide missed
+  // deletion. TextLayer.render also detects duplicate detached DOM builds.
+  await page.evaluate(() => {
+    window.facadeDocumentPrototype = Object.getPrototypeOf(
+      Object.getPrototypeOf(window.readerRegression.document)
+    )
+    window.readerRegression.update({ document: null, engineSource: undefined })
+  })
+  await page.evaluate(async () => {
+    const { sourceTextGeometry } =
+      await import('/src/components/IntermediateDocumentViewer/sourceTextGeometry.ts')
+    const { PdfDocumentSession } =
+      await import('/src/pdf/pdfDocumentSession.ts')
+    const originalSet = sourceTextGeometry.set
+    const originalRender = window.pdfjsLib.TextLayer.prototype.render
+    const originalOpen = PdfDocumentSession.open
+    const documentPrototype = window.facadeDocumentPrototype
+    const pages = Object.getOwnPropertyDescriptor(documentPrototype, 'pages')
+    const keys = []
+    let builds = 0
+    let opens = 0
+    let allPageReads = 0
+    Object.defineProperty(documentPrototype, 'pages', {
+      ...pages,
+      get() {
+        allPageReads++
+        return pages.get.call(this)
+      }
+    })
+    sourceTextGeometry.set = function (text, slice) {
+      keys.push(text)
+      return originalSet.call(this, text, slice)
+    }
+    window.pdfjsLib.TextLayer.prototype.render = function (...args) {
+      builds++
+      return originalRender.apply(this, args)
+    }
+    PdfDocumentSession.open = function (...args) {
+      opens++
+      return originalOpen.apply(this, args)
+    }
+    window.geometryLifecycle = {
+      snapshot: () => ({
+        builds,
+        opens,
+        allPageReads,
+        registrations: keys.length,
+        active: keys
+          .filter((key) => sourceTextGeometry.has(key))
+          .map((key) => key.id)
+      }),
+      restore: () => {
+        sourceTextGeometry.set = originalSet
+        window.pdfjsLib.TextLayer.prototype.render = originalRender
+        PdfDocumentSession.open = originalOpen
+        Object.defineProperty(documentPrototype, 'pages', pages)
+      }
+    }
+  })
+  const lifecycleBytes = [
+    ...(await readFile(
+      resolve(repo, 'test/compat/fixtures/pdf/two-column.pdf')
+    ))
+  ]
+  await page.evaluate(
+    (bytes) =>
+      window.readerRegression.open('pdf', bytes, {
+        isPdf: true,
+        renderMode: 'text',
+        pagePreloadRadius: 0,
+        maxLoadedPages: 1,
+        pageUnloadDelayMs: 0
+      }),
+    lifecycleBytes
+  )
+  await page
+    .locator('.hsn-selection-content [data-text-id="page-1-item-0"]')
+    .waitFor()
+  const firstPage = await page.evaluate(() =>
+    window.geometryLifecycle.snapshot()
+  )
+  assert.equal(
+    firstPage.builds,
+    1,
+    'Reader mount must build only the current text page measurement layer'
+  )
+  assert.equal(firstPage.registrations, 4)
+  assert.equal(
+    firstPage.opens,
+    1,
+    'facade geometry must reuse the original PDF session'
+  )
+  assert.equal(firstPage.active.length, 4)
+  assert.equal(
+    firstPage.allPageReads,
+    0,
+    'Reader metadata checks must not invoke the loading pages getter'
+  )
+
+  // Even an explicit all-pages read must not attach measurement resources to
+  // the fulfilled promises in the facade's independent pagesMap cache.
+  await page.evaluate(async () => {
+    const pages = await window.readerRegression.document.pages
+    window.cachedFacadePages = pages
+    window.readerRegression.update({ fontScale: 1.25 })
+    await document.fonts.ready
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    )
+  })
+  const cachedPages = await page.evaluate(() =>
+    window.geometryLifecycle.snapshot()
+  )
+  assert.deepEqual(
+    cachedPages,
+    { ...firstPage, allPageReads: 1 },
+    'generic pages access and Reader rerender must not rebuild measurement layers'
+  )
+
+  await page.getByRole('button', { name: '下一页', exact: true }).click()
+  await page.waitForFunction(() => {
+    const state = window.geometryLifecycle.snapshot()
+    return state.active.length === 1 && state.active[0] === 'page-2-item-0'
+  })
+  const secondPage = await page.evaluate(() =>
+    window.geometryLifecycle.snapshot()
+  )
+  assert.equal(secondPage.builds, 2)
+  assert.equal(secondPage.registrations, 5)
+  assert.equal(secondPage.opens, 1)
+  await page.evaluate(() =>
+    window.readerRegression.update({ renderMode: 'layout' })
+  )
+  await page.waitForFunction(
+    () => window.geometryLifecycle.snapshot().active.length === 0
+  )
+  const exited = await page.evaluate(() => window.geometryLifecycle.snapshot())
+  const cachedGeometryCount = await page.evaluate(async () => {
+    const { sourceTextGeometry } =
+      await import('/src/components/IntermediateDocumentViewer/sourceTextGeometry.ts')
+    return window.cachedFacadePages
+      .flatMap((page) => page.content)
+      .filter((text) => sourceTextGeometry.has(text)).length
+  })
+  assert.equal(
+    cachedGeometryCount,
+    0,
+    'strongly cached facade pages must retain no measurement geometry'
+  )
+  const lifecycle = {
+    firstPage,
+    cachedPages,
+    secondPage,
+    exited,
+    cachedGeometryCount
+  }
+  await page.evaluate(() => window.geometryLifecycle.restore())
+
   // Exercise the Demo's legacy parser too; its polygons omit page rotation.
   await page.goto(base)
   await page
@@ -242,7 +400,8 @@ try {
     scenario:
       'Text Rotat [0,5) → shared annotation → PDF → reopen at a different zoom',
     cases,
-    demo: { range: demoRange, alignmentDeltaPx: demoAlignment }
+    demo: { range: demoRange, alignmentDeltaPx: demoAlignment },
+    lifecycle
   }
   await writeFile(
     resolve(output, 'rotated-report.json'),

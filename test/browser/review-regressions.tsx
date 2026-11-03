@@ -37,6 +37,9 @@ function render() {
 const api = {
   state,
   selection,
+  get document() {
+    return props.document
+  },
   async open(format: 'pdf' | 'epub', bytes: number[], initial: Props = {}) {
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))

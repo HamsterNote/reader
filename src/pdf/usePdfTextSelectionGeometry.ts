@@ -9,6 +9,7 @@ import { PdfDocumentSession } from './pdfDocumentSession'
 import { configurePdfJsWorker } from './pdfjsRuntime'
 import { buildCanonicalPageText } from './pdfTextMapping'
 import { registerPdfTextSelectionGeometry } from './pdfTextSelectionGeometry'
+import { preparePdfTextPageGeometry } from './pdfTextModeDocument'
 
 // Legacy parser documents also need official glyph geometry: their polygons
 // can be axis-aligned even when the source PDF page is rotated.
@@ -17,12 +18,11 @@ export function usePdfTextSelectionGeometry(
   getContent: (page: unknown) => Promise<IntermediateContent[]>
 ) {
   const stateRef = useRef<{
-    source: ReaderEngineSource
+    source: ReaderEngineSource | undefined
     session?: Promise<PdfDocumentSession>
     closed: boolean
   } | null>(null)
   useEffect(() => {
-    if (source?.format !== 'pdf') return
     const state: NonNullable<typeof stateRef.current> = {
       source,
       closed: false
@@ -52,7 +52,17 @@ export function usePdfTextSelectionGeometry(
         !state ||
         state.closed ||
         state.source !== source ||
-        texts.every((text) => sourceTextGeometry.has(text)) ||
+        texts.every((text) => sourceTextGeometry.has(text))
+      )
+        return content
+      const preparation = preparePdfTextPageGeometry(page)
+      if (preparation) {
+        await preparation
+        if (state.closed) releaseSourceTextGeometry(texts)
+        return content
+      }
+      if (
+        state.source?.format !== 'pdf' ||
         typeof page !== 'object' ||
         page === null ||
         !('number' in page) ||
