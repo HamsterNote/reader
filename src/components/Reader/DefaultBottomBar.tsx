@@ -229,6 +229,7 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
         bottomBarRef={props.bottomBarRef}
         readerToolbar={readerToolbar}
         paintingSettings={props.paintingSettings}
+        colors={props.colors}
         theme={theme}
         onPaintingSettingsChange={props.onPaintingSettingsChange}
       />

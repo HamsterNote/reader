@@ -47,6 +47,9 @@ export function useBottomBarInset({
     const observer = new ResizeObserver(measure)
     observer.observe(root)
     observer.observe(bottomBar)
+    bottomBar
+      .querySelectorAll('[role="toolbar"]')
+      .forEach((toolbar) => observer.observe(toolbar))
     measure()
 
     return () => observer.disconnect()

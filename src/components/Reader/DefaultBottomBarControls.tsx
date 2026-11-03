@@ -1,9 +1,16 @@
-import { Button, Icon } from '@hamster-note/components'
+import {
+  Button,
+  Icon,
+  type IconName,
+  Popover,
+  PopoverSeparator
+} from '@hamster-note/components'
 import type {
   LayeredEditorTool,
   LayeredToolsSnapshot
 } from '@hamster-note/painting/core'
-import type { ReactNode, RefObject } from 'react'
+import type { CSSProperties, ReactNode, RefObject } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type {
   ReaderAnnotationHistoryStatus,
@@ -15,6 +22,7 @@ import type {
   ReaderRenderMode
 } from '../../types/readerOptions'
 import {
+  DEFAULT_BOTTOM_BAR_COLORS,
   getTranslucentColor,
   type DEFAULT_BOTTOM_BAR_TOOLS
 } from './defaultBottomBarConfig'
@@ -78,45 +86,77 @@ export function BottomBarToolButtons(props: BottomBarToolButtonsProps) {
   ))
 }
 
-const DRAWING_TOOLS: readonly (readonly [LayeredEditorTool, string])[] = [
-  ['freehand', '自由笔'],
-  ['line', '直线'],
-  ['rect', '矩形'],
-  ['ellipse', '椭圆'],
-  ['polygon', '多边形'],
-  ['bezier', '贝塞尔'],
-  ['text', '文字'],
-  ['image', '图片'],
-  ['selection', '选择'],
-  ['lasso', '套索'],
-  ['eraser', '橡皮擦']
+const DRAWING_TOOLS: readonly {
+  readonly tool: LayeredEditorTool
+  readonly icon: IconName
+  readonly label: string
+}[] = [
+  { tool: 'freehand', icon: 'pen', label: '自由笔' },
+  { tool: 'line', icon: 'line', label: '直线' },
+  { tool: 'rect', icon: 'rectangle', label: '矩形' },
+  { tool: 'ellipse', icon: 'ellipse', label: '椭圆' },
+  { tool: 'polygon', icon: 'polygon', label: '多边形' },
+  { tool: 'bezier', icon: 'curve', label: '贝塞尔' },
+  { tool: 'text', icon: 'type', label: '文字' },
+  { tool: 'image', icon: 'image', label: '图片' },
+  { tool: 'selection', icon: 'mouse', label: '选择' },
+  { tool: 'lasso', icon: 'lasso', label: '套索' },
+  { tool: 'eraser', icon: 'eraser', label: '橡皮擦' }
 ]
 
 type DrawingBottomBarStackProps = {
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
   readonly readerToolbar: ReactNode
   readonly paintingSettings: LayeredToolsSnapshot
+  readonly colors: readonly ReaderColorOption[]
   readonly theme: 'light' | 'dark'
   readonly onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
 }
 
 export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const [toolbarHeight, setToolbarHeight] = useState(42)
+  useEffect(() => {
+    const toolbar = toolbarRef.current
+    if (!toolbar) return
+    const observer = new ResizeObserver(([entry]) => {
+      setToolbarHeight(
+        entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height
+      )
+    })
+    observer.observe(toolbar)
+    return () => observer.disconnect()
+  }, [])
+  const paintingColor =
+    props.paintingSettings.activeTool === 'freehand'
+      ? props.paintingSettings.settings.freehand.color
+      : props.paintingSettings.settings.shape.color
+
   return (
     <div
       ref={props.bottomBarRef}
       className='hamster-reader__bottom-bar-stack hamster-reader__bottom-bar-stack--drawing'
+      style={
+        { '--drawing-toolbar-height': `${toolbarHeight}px` } as CSSProperties
+      }
     >
       {props.readerToolbar}
-      <div
+      <Popover
+        ref={toolbarRef}
+        relative
+        theme={props.theme}
         role='toolbar'
         aria-label='绘图工具'
-        data-theme={props.theme}
         className='hamster-reader__drawing-toolbar'
       >
-        {DRAWING_TOOLS.map(([tool, label]) => (
-          <button
+        {DRAWING_TOOLS.map(({ tool, icon, label }) => (
+          <Button
             key={tool}
             type='button'
+            size='small'
+            variant={
+              props.paintingSettings.activeTool === tool ? 'primary' : 'ghost'
+            }
             aria-label={label}
             aria-pressed={props.paintingSettings.activeTool === tool}
             onClick={() =>
@@ -126,33 +166,32 @@ export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
               })
             }
           >
-            {label}
-          </button>
+            <Icon name={icon} />
+          </Button>
         ))}
-        <label>
-          绘图颜色
-          <input
-            type='color'
-            aria-label='绘图颜色'
-            value={props.paintingSettings.settings.freehand.color}
-            onChange={(event) =>
-              props.onPaintingSettingsChange({
-                ...props.paintingSettings,
-                settings: {
-                  freehand: {
-                    ...props.paintingSettings.settings.freehand,
-                    color: event.target.value
-                  },
-                  shape: {
-                    ...props.paintingSettings.settings.shape,
-                    color: event.target.value
-                  }
-                }
-              })
-            }
-          />
-        </label>
-        <label>
+        <PopoverSeparator />
+        <BottomBarColorControls
+          colors={props.colors ?? DEFAULT_BOTTOM_BAR_COLORS}
+          renderMode='drawing'
+          drawingStrokeColor={paintingColor}
+          highlightColor={undefined}
+          onDrawingStrokeColorChange={(color) =>
+            props.onPaintingSettingsChange({
+              ...props.paintingSettings,
+              settings: {
+                freehand: {
+                  ...props.paintingSettings.settings.freehand,
+                  color
+                },
+                shape: { ...props.paintingSettings.settings.shape, color }
+              }
+            })
+          }
+          colorAriaLabel={(name) => `绘图${name}颜色`}
+          onHighlightColorChange={undefined}
+        />
+        <PopoverSeparator />
+        <label className='hamster-reader__drawing-stroke-width'>
           笔宽
           <input
             type='number'
@@ -181,16 +220,17 @@ export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
             }}
           />
         </label>
-      </div>
+      </Popover>
     </div>
   )
 }
 
 type BottomBarColorControlsProps = {
   readonly colors: readonly ReaderColorOption[]
-  readonly renderMode: ReaderRenderMode
+  readonly renderMode: ReaderRenderMode | 'drawing'
   readonly drawingStrokeColor: string
   readonly highlightColor: string | undefined
+  readonly colorAriaLabel?: (name: string) => string
   readonly onDrawingStrokeColorChange: (color: string) => void
   readonly onHighlightColorChange: ((color: string) => void) | undefined
 }
@@ -208,10 +248,14 @@ export function BottomBarColorControls(props: BottomBarColorControlsProps) {
         key={name}
         type='button'
         className='hamster-reader__bottom-bar-color'
-        aria-label={`${name}工具颜色`}
+        aria-label={props.colorAriaLabel?.(name) ?? `${name}工具颜色`}
         aria-pressed={isSelected}
         data-testid={`tool-bottom-bar-color-${name}`}
         onClick={() => {
+          if (props.renderMode === 'drawing') {
+            props.onDrawingStrokeColorChange(color)
+            return
+          }
           if (props.renderMode === 'text') {
             props.onHighlightColorChange?.(highlightColor)
             return
