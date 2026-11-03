@@ -4,9 +4,10 @@
 // 重挂载，按持久化数据重建（回页恢复）。
 
 import type {
-  DrawingValue,
-  PaintingControllerData
-} from '@hamster-note/painting'
+  EditorDocument,
+  LayeredToolsSnapshot,
+  PageGeometry
+} from '@hamster-note/painting/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 
@@ -30,6 +31,7 @@ export type PdfPageOverlayGeometry = {
   readonly viewport: OverlayViewport
   readonly scaleOneViewport: OverlayViewport
   readonly visual: PageVisualSize
+  readonly drawing: PageGeometry | null
 }
 
 export type PdfPageOverlayLayerProps = {
@@ -40,21 +42,19 @@ export type PdfPageOverlayLayerProps = {
   readonly overlayRectType: OverlayRectUnit
   readonly ranges: readonly ReaderSelectionRange[]
   readonly rects: readonly ReaderSelectionRectangle[]
-  readonly painting: DrawingValue | undefined
+  readonly painting: EditorDocument | undefined
   readonly selectedRangeId?: string | null
   readonly selectedRectId?: string | null
   readonly highlightColor: string
   readonly selectionContexts: ReadonlyMap<number, PdfPageSelectionContext>
-  readonly paintingControllerData: PaintingControllerData
-  readonly onPaintingControllerDataChange: (
-    data: PaintingControllerData
-  ) => void
+  readonly paintingSettings: LayeredToolsSnapshot
+  readonly onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
   readonly onPaintingChange?: (
     pageId: string,
-    nextValue: DrawingValue,
-    nextPaintings: Record<string, DrawingValue>
+    nextValue: EditorDocument,
+    nextPaintings: Record<string, EditorDocument>
   ) => void
-  readonly pagePaintings: Record<string, DrawingValue>
+  readonly pagePaintings: Record<string, EditorDocument>
   readonly onSelectRange?: (id: string | null) => void
   readonly onSelectRect?: (id: string | null) => void
   readonly onCreateRect?: (rect: ReaderSelectionRectangle) => void
@@ -91,8 +91,7 @@ export function PdfPageOverlayLayer({
   selectedRectId,
   highlightColor,
   selectionContexts,
-  paintingControllerData,
-  onPaintingControllerDataChange,
+  paintingSettings,
   onPaintingChange,
   pagePaintings,
   onSelectRange,
@@ -290,7 +289,7 @@ export function PdfPageOverlayLayer({
   }
 
   const handlePaintingChange = onPaintingChange
-    ? (nextValue: DrawingValue) => {
+    ? (nextValue: EditorDocument) => {
         onPaintingChange(pageId, nextValue, {
           ...pagePaintings,
           [pageId]: nextValue
@@ -390,12 +389,10 @@ export function PdfPageOverlayLayer({
         <PageDrawingLayer
           enabled={tool === 'drawing'}
           pageId={pageId}
-          controllerData={paintingControllerData}
-          onControllerDataChange={onPaintingControllerDataChange}
+          settings={paintingSettings}
           value={painting}
           onChange={handlePaintingChange}
-          canvasScale={geometry.viewport.scale}
-          cancelDrawingOnMultiTouch
+          geometry={geometry.drawing}
         />
       )}
     </div>

@@ -1,180 +1,184 @@
 import {
-  type DrawingValue,
-  normalizeDrawingValue,
-  PaintingBoard,
-  type PaintingControllerData
-} from '@hamster-note/painting'
-import { useEffect, useMemo, useRef } from 'react'
+  createEditor,
+  createPageGeometry,
+  PageDrawingSurface,
+  readLayeredDocument,
+  serializeLayeredDocument,
+  type EditorDocument,
+  type LayeredEditorController,
+  type PageGeometry
+} from '@hamster-note/painting/layered'
+import type { LayeredToolsSnapshot } from '@hamster-note/painting/core'
+import {
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { DrawingDocumentContext } from '../painting/DrawingDocumentContext'
 
 export type PageDrawingLayerProps = {
   readonly enabled: boolean
   readonly pageId: string
-  readonly controllerData: PaintingControllerData
-  readonly onControllerDataChange: (data: PaintingControllerData) => void
-  readonly value?: DrawingValue
-  readonly onChange?: (nextValue: DrawingValue) => void
-  readonly canvasScale?: number
-  readonly cancelDrawingOnMultiTouch?: boolean
+  readonly settings: LayeredToolsSnapshot
+  readonly value?: EditorDocument
+  readonly onChange?: (document: EditorDocument) => void
+  readonly geometry?: PageGeometry | null
+  readonly pageSize?: { readonly width: number; readonly height: number }
 }
 
-/**
- * 将外部持久化数据统一迁移到 painting 当前的数据结构。
- * PaintingBoard 产生的 text、image 等新笔迹字段会由官方迁移器完整保留。
- */
-export function sanitizeDrawingValue(value: unknown): DrawingValue {
-  const normalized =
-    typeof value === 'object' && value !== null
-      ? normalizeDrawingValue(value)
-      : normalizeDrawingValue(undefined)
+const EMPTY_DOCUMENT: EditorDocument = {
+  schemaVersion: 3,
+  documentRevision: 0,
+  objects: []
+}
+const IDENTITY = [1, 0, 0, 1, 0, 0] as const
 
-  return {
-    ...normalized,
-    strokes: normalized.strokes.slice(0, 500).map((stroke) => ({
-      ...stroke,
-      points: stroke.points.slice(0, 20_000),
-      dashArray: stroke.dashArray?.slice(0, 32)
-    }))
-  }
+export function hasDrawingObjects(value: EditorDocument | undefined): boolean {
+  if (value === undefined) return false
+  const result = readLayeredDocument(value)
+  return !result.ok || result.value.objects.length > 0
 }
 
-function scaleDrawingValue(value: DrawingValue, scale: number): DrawingValue {
-  return {
-    strokes: value.strokes.map((stroke) => ({
-      ...stroke,
-      points: stroke.points.map((point) => ({
-        ...point,
-        x: point.x * scale,
-        y: point.y * scale
-      }))
-    }))
-  }
+function documentKey(document: EditorDocument): string {
+  const result = serializeLayeredDocument(document)
+  if (!result.ok)
+    throw new Error(`Invalid painting document: ${result.error.path}`)
+  return result.value
 }
 
-export function hasDrawingStrokes(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'strokes' in value &&
-    Array.isArray(value.strokes) &&
-    value.strokes.length > 0
-  )
+type PageSession = {
+  documentIdentity: unknown
+  pageId: string
+  input: EditorDocument | undefined
+  controller: LayeredEditorController | null
 }
 
+/** New document integration only. Persistence migration belongs to the storage entry point. */
 export function PageDrawingLayer({
   enabled,
   pageId,
-  controllerData,
-  onControllerDataChange,
+  settings,
   value,
   onChange,
-  canvasScale = 1,
-  cancelDrawingOnMultiTouch = false
+  geometry,
+  pageSize
 }: PageDrawingLayerProps) {
-  const layerRef = useRef<HTMLDivElement>(null)
-  const safeCanvasScale =
-    Number.isFinite(canvasScale) && canvasScale > 0 ? canvasScale : 1
-  const drawingValue = useMemo(
-    () => scaleDrawingValue(sanitizeDrawingValue(value), safeCanvasScale),
-    [safeCanvasScale, value]
+  const documentIdentity = useContext(DrawingDocumentContext)
+  const root = useRef<HTMLDivElement>(null)
+  const latestChange = useRef(onChange)
+  latestChange.current = onChange
+  const parsed = useMemo(
+    () => readLayeredDocument(value ?? EMPTY_DOCUMENT),
+    [value]
   )
-  const handleChange = onChange
-    ? (nextValue: DrawingValue) => {
-        onChange(scaleDrawingValue(nextValue, 1 / safeCanvasScale))
-      }
-    : undefined
+  const session = useRef<PageSession | null>(null)
+  const current = session.current
+  const changedInput = current && current.input !== value
+  const changedDocument =
+    changedInput &&
+    (!parsed.ok ||
+      !current.controller ||
+      documentKey(parsed.value) !==
+        documentKey(current.controller.getSnapshot('document')))
+  if (
+    !current ||
+    current.documentIdentity !== documentIdentity ||
+    current.pageId !== pageId ||
+    changedDocument
+  ) {
+    session.current = {
+      documentIdentity,
+      pageId,
+      input: value,
+      controller: parsed.ok ? createEditor(parsed.value) : null
+    }
+  }
+  session.current!.input = value
+  const controller = session.current!.controller
+  const [layout, setLayout] = useState({ width: 0, height: 0 })
+
+  // Generic document pages pass their base dimensions. PDF callers pass library geometry directly.
+  useEffect(() => {
+    if (geometry !== undefined || !root.current) return
+    const node = root.current
+    const update = () => {
+      const computed = node.ownerDocument.defaultView!.getComputedStyle(node)
+      const width =
+        (computed.width.endsWith('px') ? parseFloat(computed.width) : 0) ||
+        node.clientWidth ||
+        pageSize?.width ||
+        0
+      const height =
+        (computed.height.endsWith('px') ? parseFloat(computed.height) : 0) ||
+        node.clientHeight ||
+        pageSize?.height ||
+        0
+      setLayout((previous) =>
+        previous.width === width && previous.height === height
+          ? previous
+          : { width, height }
+      )
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [geometry, pageSize?.width, pageSize?.height])
+
+  const pageGeometry = useMemo(() => {
+    if (geometry !== undefined) return geometry
+    if (!pageSize || layout.width <= 0 || layout.height <= 0) return null
+    return createPageGeometry({
+      width: pageSize.width,
+      height: pageSize.height,
+      referenceTransform: IDENTITY,
+      viewportTransform: [
+        layout.width / pageSize.width,
+        0,
+        0,
+        layout.height / pageSize.height,
+        0,
+        0
+      ]
+    })
+  }, [geometry, pageSize?.width, pageSize?.height, layout.width, layout.height])
+
+  useLayoutEffect(() => {
+    if (!controller) return
+    controller.setFreehandSettings(settings.settings.freehand)
+    controller.setShapeSettings(settings.settings.shape)
+    controller.setTool(settings.activeTool)
+  }, [controller, settings])
 
   useEffect(() => {
-    const layer = layerRef.current
-    if (!enabled || !cancelDrawingOnMultiTouch || !layer) return
-
-    const ownerDocument = layer.ownerDocument
-    const PointerEventConstructor = ownerDocument.defaultView?.PointerEvent
-    if (!PointerEventConstructor) return
-
-    const activeTouchPointerIds = new Set<number>()
-    const dispatchedCancelPointerIds = new Set<number>()
-    let isMultiTouchGesture = false
-
-    const cancelDrawingPointers = () => {
-      for (const pointerId of activeTouchPointerIds) {
-        dispatchedCancelPointerIds.add(pointerId)
-        ownerDocument.dispatchEvent(
-          new PointerEventConstructor('pointercancel', {
-            bubbles: true,
-            pointerId,
-            pointerType: 'touch'
-          })
-        )
-      }
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.pointerType !== 'touch') return
-
-      if (activeTouchPointerIds.size === 0 && !isMultiTouchGesture) {
-        activeTouchPointerIds.add(event.pointerId)
-        return
-      }
-
-      cancelDrawingPointers()
-      activeTouchPointerIds.add(event.pointerId)
-      isMultiTouchGesture = true
-      event.stopImmediatePropagation()
-    }
-
-    const handlePointerEnd = (event: PointerEvent) => {
-      if (event.pointerType !== 'touch') return
-      if (
-        event.type === 'pointercancel' &&
-        dispatchedCancelPointerIds.delete(event.pointerId)
-      ) {
-        return
-      }
-
-      activeTouchPointerIds.delete(event.pointerId)
-      if (activeTouchPointerIds.size === 0) {
-        isMultiTouchGesture = false
-      }
-    }
-
-    layer.addEventListener('pointerdown', handlePointerDown, true)
-    ownerDocument.addEventListener('pointerup', handlePointerEnd, true)
-    ownerDocument.addEventListener('pointercancel', handlePointerEnd, true)
-    return () => {
-      cancelDrawingPointers()
-      layer.removeEventListener('pointerdown', handlePointerDown, true)
-      ownerDocument.removeEventListener('pointerup', handlePointerEnd, true)
-      ownerDocument.removeEventListener('pointercancel', handlePointerEnd, true)
-    }
-  }, [cancelDrawingOnMultiTouch, enabled])
+    if (!controller) return
+    return controller.subscribe('document', () => {
+      if (session.current?.controller !== controller) return
+      latestChange.current?.(controller.getSnapshot('document'))
+    })
+  }, [controller])
 
   return (
     <div
-      ref={layerRef}
+      ref={root}
       className='hamster-reader__drawing-layer'
       data-testid={`reader-page-drawing-layer-${pageId}`}
-      style={{
-        pointerEvents: enabled ? 'auto' : 'none',
-        width: `${safeCanvasScale * 100}%`,
-        height: `${safeCanvasScale * 100}%`,
-        transform: `scale(${1 / safeCanvasScale})`,
-        transformOrigin: 'top left'
-      }}
+      style={{ pointerEvents: enabled && parsed.ok ? 'auto' : 'none' }}
     >
-      <PaintingBoard
-        value={drawingValue}
-        onChange={handleChange}
-        inputMethods={enabled ? undefined : []}
-        cursor={enabled ? undefined : false}
-        toolbar={false}
-        virtualPaper={false}
-        controller={{
-          boardId: pageId,
-          data: controllerData,
-          onDataChange: onControllerDataChange
-        }}
-        testID={`reader-painting-${pageId}`}
-      />
+      {!parsed.ok ? (
+        <span role='alert'>绘图数据无法恢复：{parsed.error.path}</span>
+      ) : null}
+      {controller && pageGeometry ? (
+        <PageDrawingSurface
+          pageId={pageId}
+          controller={controller}
+          geometry={pageGeometry}
+          enabled={enabled}
+        />
+      ) : null}
     </div>
   )
 }

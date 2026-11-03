@@ -1,4 +1,4 @@
-import type { DrawingValue } from '@hamster-note/painting'
+import type { EditorDocument } from '@hamster-note/painting/core'
 
 import type {
   ReaderSelectionRange,
@@ -66,7 +66,7 @@ export type ReaderData = {
   /** Layout 与 Text 模式共享的规范化高亮数据。Text 模式会实时重算渲染矩形。 */
   readonly ranges?: ReaderSelectionRange[]
   readonly rects?: ReaderSelectionRectangle[]
-  readonly pagePaintings?: Record<string, DrawingValue>
+  readonly pagePaintings?: Record<string, EditorDocument>
   readonly virtualPaper?: ReaderVirtualPaperState
   /** 原生 Layout 缩放模式的阅读进度：优先记录文字，无文字时记录页内百分比。 */
   readonly layoutReadingProgress?: ReaderBookmark

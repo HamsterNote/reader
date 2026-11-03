@@ -32,6 +32,7 @@ import type {
 
 type StubViewport = {
   scale: number
+  transform: [number, number, number, number, number, number]
   width: number
   height: number
   convertToPdfPoint: (x: number, y: number) => number[]
@@ -72,6 +73,7 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
     height = 300
   ): StubViewport => ({
     scale,
+    transform: [scale, 0, 0, -scale, 0, height * scale],
     width: width * scale,
     height: height * scale,
     convertToPdfPoint: (x: number, y: number) => [

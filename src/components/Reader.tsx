@@ -1,8 +1,13 @@
+import { DrawingDocumentContext } from '../painting/DrawingDocumentContext'
+import {
+  createPaintingSettings,
+  withPaintingColor
+} from '../painting/paintingSettings'
 import type {
-  DrawingTool,
-  DrawingValue,
-  PaintingControllerData
-} from '@hamster-note/painting'
+  LayeredEditorTool,
+  EditorDocument,
+  LayeredToolsSnapshot
+} from '@hamster-note/painting/core'
 import type { SelectionRange, SelectionRect } from '@hamster-note/selection'
 import type {
   IntermediateDocument,
@@ -351,9 +356,9 @@ export type ReaderProps = {
   selectedTool?: ReaderPageTool
   /** 页面工具变化回调；未受控时 Reader 同时更新内部工具。 */
   onSelectedToolChange?: (tool: ReaderPageTool) => void
-  paintingTool?: DrawingTool
+  paintingTool?: LayeredEditorTool
   /** PaintingBoard 工具变化回调；未受控时 Reader 同时更新内部工具。 */
-  onPaintingToolChange?: (tool: DrawingTool) => void
+  onPaintingToolChange?: (tool: LayeredEditorTool) => void
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
   colors?: readonly ReaderColorOption[]
@@ -371,7 +376,7 @@ export type ReaderProps = {
   defaultPageRectSelections?: ReaderPageRectSelectionMap
   onPagePaintingChange?: (
     pageId: string,
-    nextValue: DrawingValue,
+    nextValue: EditorDocument,
     nextPaintings: ReaderPagePaintingMap
   ) => void
   onPagePaintingsChange?: (nextPaintings: ReaderPagePaintingMap) => void
@@ -775,13 +780,8 @@ export function Reader({
     useState<ReaderPageTool>('text-selection')
   const [internalDrawingStrokeColor, setInternalDrawingStrokeColor] =
     useState('#2563eb')
-  const [internalPaintingControllerData, setInternalPaintingControllerData] =
-    useState<PaintingControllerData>({
-      tool: 'pen',
-      minimap: false,
-      strokeColor: '#2563eb',
-      strokeWidth: 3
-    })
+  const [internalPaintingSettings, setInternalPaintingSettings] =
+    useState<LayeredToolsSnapshot>(() => createPaintingSettings())
   const [internalHighlightColor, setInternalHighlightColor] = useState<
     string | undefined
   >(undefined)
@@ -879,18 +879,15 @@ export function Reader({
   const resolvedDrawingStrokeColor =
     drawingStrokeColor ?? internalDrawingStrokeColor
   const resolvedPaintingTool =
-    paintingTool ?? internalPaintingControllerData.tool
-  const resolvedPaintingControllerData = useMemo<PaintingControllerData>(
-    () => ({
-      ...internalPaintingControllerData,
-      tool: resolvedPaintingTool,
-      strokeColor: resolvedDrawingStrokeColor
-    }),
-    [
-      internalPaintingControllerData,
-      resolvedDrawingStrokeColor,
-      resolvedPaintingTool
-    ]
+    paintingTool ?? internalPaintingSettings.activeTool
+  const resolvedPaintingSettings = useMemo<LayeredToolsSnapshot>(
+    () =>
+      withPaintingColor(
+        internalPaintingSettings,
+        resolvedDrawingStrokeColor,
+        resolvedPaintingTool
+      ),
+    [internalPaintingSettings, resolvedDrawingStrokeColor, resolvedPaintingTool]
   )
   const resolvedHighlightColor = highlightColor ?? internalHighlightColor
   const hasDocumentPages = documentHasPages(document)
@@ -1270,18 +1267,18 @@ export function Reader({
     [drawingStrokeColor, onDrawingStrokeColorChange]
   )
 
-  const handlePaintingControllerDataChange = useCallback(
-    (nextData: PaintingControllerData) => {
-      setInternalPaintingControllerData(nextData)
+  const handlePaintingSettingsChange = useCallback(
+    (nextData: LayeredToolsSnapshot) => {
+      setInternalPaintingSettings(nextData)
 
-      if (nextData.tool !== resolvedPaintingTool) {
-        onPaintingToolChange?.(nextData.tool)
+      if (nextData.activeTool !== resolvedPaintingTool) {
+        onPaintingToolChange?.(nextData.activeTool)
       }
       if (
-        nextData.strokeColor !== undefined &&
-        nextData.strokeColor !== resolvedDrawingStrokeColor
+        nextData.settings.freehand.color !== undefined &&
+        nextData.settings.freehand.color !== resolvedDrawingStrokeColor
       ) {
-        handleDrawingStrokeColorChange(nextData.strokeColor)
+        handleDrawingStrokeColorChange(nextData.settings.freehand.color)
       }
     },
     [
@@ -1439,7 +1436,7 @@ export function Reader({
   )
 
   const handlePagePaintingChange = useCallback(
-    (pageId: string, nextValue: DrawingValue) => {
+    (pageId: string, nextValue: EditorDocument) => {
       const nextPaintings: ReaderPagePaintingMap = {
         ...pagePaintingsRef.current,
         [pageId]: nextValue
@@ -1901,8 +1898,8 @@ export function Reader({
             selectedTool={resolvedSelectedTool}
             paintingTool={resolvedPaintingTool}
             drawingStrokeColor={resolvedDrawingStrokeColor}
-            paintingControllerData={resolvedPaintingControllerData}
-            onPaintingControllerDataChange={handlePaintingControllerDataChange}
+            paintingSettings={resolvedPaintingSettings}
+            onPaintingSettingsChange={handlePaintingSettingsChange}
             pagePaintings={resolvedPagePaintings}
             onPagePaintingChange={handlePagePaintingChange}
             showPageBrowser={showPageBrowser}
@@ -1930,164 +1927,166 @@ export function Reader({
   }
 
   return (
-    <div
-      ref={readerRootRef}
-      className={rootClassName}
-      data-testid='reader-root'
-      style={readerThemeStyle}
-      aria-busy={resolvedLoadingProgress ? true : undefined}
-    >
-      {resolvedLoadingProgress && (
-        <section
-          className='hamster-reader__loading-progress'
-          data-testid='reader-loading-progress'
-        >
-          <div
-            className='hamster-reader__loading-progress-heading'
-            role='status'
-            aria-live='polite'
-            aria-atomic='true'
+    <DrawingDocumentContext.Provider value={document}>
+      <div
+        ref={readerRootRef}
+        className={rootClassName}
+        data-testid='reader-root'
+        style={readerThemeStyle}
+        aria-busy={resolvedLoadingProgress ? true : undefined}
+      >
+        {resolvedLoadingProgress && (
+          <section
+            className='hamster-reader__loading-progress'
+            data-testid='reader-loading-progress'
           >
-            <span>{resolvedLoadingProgress.label}</span>
-            <span data-testid='reader-loading-progress-percent'>
-              {resolvedLoadingProgress.percent.toFixed(0)}%
-            </span>
-          </div>
-          <progress
-            aria-label={resolvedLoadingProgress.label}
-            className='hamster-reader__loading-progress-bar'
-            max={100}
-            value={resolvedLoadingProgress.percent}
-          />
-        </section>
-      )}
+            <div
+              className='hamster-reader__loading-progress-heading'
+              role='status'
+              aria-live='polite'
+              aria-atomic='true'
+            >
+              <span>{resolvedLoadingProgress.label}</span>
+              <span data-testid='reader-loading-progress-percent'>
+                {resolvedLoadingProgress.percent.toFixed(0)}%
+              </span>
+            </div>
+            <progress
+              aria-label={resolvedLoadingProgress.label}
+              className='hamster-reader__loading-progress-bar'
+              max={100}
+              value={resolvedLoadingProgress.percent}
+            />
+          </section>
+        )}
 
-      {showUploadZone && (
-        <button
-          type='button'
-          className={`hamster-reader__upload-zone ${isDragging ? 'hamster-reader__upload-zone--dragging' : ''}`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={handleClick}
-          data-testid='upload-zone'
-        >
-          <input
-            ref={fileInputRef}
-            type='file'
-            accept={SUPPORTED_UPLOAD_ACCEPT}
-            onChange={handleInputChange}
-            className='hamster-reader__file-input'
-            data-testid='file-input'
-          />
-          <div className='hamster-reader__upload-content'>
+        {showUploadZone && (
+          <button
+            type='button'
+            className={`hamster-reader__upload-zone ${isDragging ? 'hamster-reader__upload-zone--dragging' : ''}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={handleClick}
+            data-testid='upload-zone'
+          >
+            <input
+              ref={fileInputRef}
+              type='file'
+              accept={SUPPORTED_UPLOAD_ACCEPT}
+              onChange={handleInputChange}
+              className='hamster-reader__file-input'
+              data-testid='file-input'
+            />
+            <div className='hamster-reader__upload-content'>
+              <svg
+                className='hamster-reader__upload-icon'
+                viewBox='0 0 24 24'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='2'
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                aria-label='Upload'
+              >
+                <title>Upload icon</title>
+                <path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' />
+                <polyline points='17 8 12 3 7 8' />
+                <line x1='12' y1='3' x2='12' y2='15' />
+              </svg>
+              <p className='hamster-reader__upload-text'>
+                {isDragging
+                  ? 'Drop document here'
+                  : 'Click or drag document to upload'}
+              </p>
+              <p className='hamster-reader__upload-hint'>
+                Supports {SUPPORTED_UPLOAD_COPY} files
+              </p>
+            </div>
+          </button>
+        )}
+
+        {showDocumentContent && !showFileInfo && !resolvedLoadingProgress && (
+          <div className='hamster-reader__content' data-testid='reader-content'>
+            {renderDocumentContent()}
+          </div>
+        )}
+
+        {!resolvedLoadingProgress &&
+          hasDocumentPages &&
+          (bottomBar === undefined ? (
+            <DefaultBottomBar
+              darkMode={darkMode}
+              bottomBarRef={defaultBottomBarRef}
+              renderMode={resolvedRenderMode}
+              isEpub={isEpub || engineSource?.format === 'epub'}
+              epubPagination={engineSource?.format === 'epub'}
+              ocrEnabled={resolvedOcrEnabled}
+              fontScale={fontScale}
+              layoutZoom={resolveBottomBarLayoutZoom(
+                resolvedRenderMode,
+                useVirtualPaper,
+                layoutZoom
+              )}
+              resolvedLayoutScale={resolvedLayoutScale}
+              touchPanMode={resolvedTouchPanMode}
+              edgeCropEditing={resolvedEdgeCropEditing}
+              selectedTool={resolvedSelectedTool}
+              colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
+              drawingStrokeColor={resolvedDrawingStrokeColor}
+              highlightColor={resolvedHighlightColor}
+              paintingSettings={resolvedPaintingSettings}
+              onPaintingSettingsChange={handlePaintingSettingsChange}
+              historyStatus={bottomBarHistoryStatus}
+              selectionRef={popoverSelectionRef}
+              onRenderModeChange={handleRenderModeChange}
+              onOcrChange={handleOcrChange}
+              onFontScaleChange={handleFontScaleChange}
+              onLayoutZoomChange={handleLayoutZoomChange}
+              onTouchPanModeChange={handleTouchPanModeChange}
+              onEdgeCropEditingChange={handleEdgeCropEditingChange}
+              onSelectedToolChange={handleSelectedToolChange}
+              onDrawingStrokeColorChange={handleDrawingStrokeColorChange}
+              onHighlightColorChange={handleHighlightColorChange}
+            />
+          ) : (
+            bottomBar
+          ))}
+
+        {showFileInfo && (
+          <div className='hamster-reader__file-info' data-testid='file-info'>
             <svg
-              className='hamster-reader__upload-icon'
+              className='hamster-reader__file-icon'
               viewBox='0 0 24 24'
               fill='none'
               stroke='currentColor'
               strokeWidth='2'
               strokeLinecap='round'
               strokeLinejoin='round'
-              aria-label='Upload'
+              aria-label='File'
             >
-              <title>Upload icon</title>
-              <path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' />
-              <polyline points='17 8 12 3 7 8' />
-              <line x1='12' y1='3' x2='12' y2='15' />
+              <title>File icon</title>
+              <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+              <polyline points='14 2 14 8 20 8' />
             </svg>
-            <p className='hamster-reader__upload-text'>
-              {isDragging
-                ? 'Drop document here'
-                : 'Click or drag document to upload'}
-            </p>
-            <p className='hamster-reader__upload-hint'>
-              Supports {SUPPORTED_UPLOAD_COPY} files
-            </p>
+            <div className='hamster-reader__file-details'>
+              <p className='hamster-reader__file-name'>{uploadedFile.name}</p>
+              <p className='hamster-reader__file-meta'>
+                {formatFileSize(uploadedFile.size)} •{' '}
+                {uploadedFile.type || 'unknown type'}
+              </p>
+            </div>
+            <button
+              type='button'
+              className='hamster-reader__upload-another'
+              onClick={handleClick}
+              data-testid='upload-another-btn'
+            >
+              Upload Another
+            </button>
           </div>
-        </button>
-      )}
-
-      {showDocumentContent && !showFileInfo && !resolvedLoadingProgress && (
-        <div className='hamster-reader__content' data-testid='reader-content'>
-          {renderDocumentContent()}
-        </div>
-      )}
-
-      {!resolvedLoadingProgress &&
-        hasDocumentPages &&
-        (bottomBar === undefined ? (
-          <DefaultBottomBar
-            darkMode={darkMode}
-            bottomBarRef={defaultBottomBarRef}
-            renderMode={resolvedRenderMode}
-            isEpub={isEpub || engineSource?.format === 'epub'}
-            epubPagination={engineSource?.format === 'epub'}
-            ocrEnabled={resolvedOcrEnabled}
-            fontScale={fontScale}
-            layoutZoom={resolveBottomBarLayoutZoom(
-              resolvedRenderMode,
-              useVirtualPaper,
-              layoutZoom
-            )}
-            resolvedLayoutScale={resolvedLayoutScale}
-            touchPanMode={resolvedTouchPanMode}
-            edgeCropEditing={resolvedEdgeCropEditing}
-            selectedTool={resolvedSelectedTool}
-            colors={colors ?? DEFAULT_BOTTOM_BAR_COLORS}
-            drawingStrokeColor={resolvedDrawingStrokeColor}
-            highlightColor={resolvedHighlightColor}
-            paintingControllerData={resolvedPaintingControllerData}
-            onPaintingControllerDataChange={handlePaintingControllerDataChange}
-            historyStatus={bottomBarHistoryStatus}
-            selectionRef={popoverSelectionRef}
-            onRenderModeChange={handleRenderModeChange}
-            onOcrChange={handleOcrChange}
-            onFontScaleChange={handleFontScaleChange}
-            onLayoutZoomChange={handleLayoutZoomChange}
-            onTouchPanModeChange={handleTouchPanModeChange}
-            onEdgeCropEditingChange={handleEdgeCropEditingChange}
-            onSelectedToolChange={handleSelectedToolChange}
-            onDrawingStrokeColorChange={handleDrawingStrokeColorChange}
-            onHighlightColorChange={handleHighlightColorChange}
-          />
-        ) : (
-          bottomBar
-        ))}
-
-      {showFileInfo && (
-        <div className='hamster-reader__file-info' data-testid='file-info'>
-          <svg
-            className='hamster-reader__file-icon'
-            viewBox='0 0 24 24'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='2'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-label='File'
-          >
-            <title>File icon</title>
-            <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
-            <polyline points='14 2 14 8 20 8' />
-          </svg>
-          <div className='hamster-reader__file-details'>
-            <p className='hamster-reader__file-name'>{uploadedFile.name}</p>
-            <p className='hamster-reader__file-meta'>
-              {formatFileSize(uploadedFile.size)} •{' '}
-              {uploadedFile.type || 'unknown type'}
-            </p>
-          </div>
-          <button
-            type='button'
-            className='hamster-reader__upload-another'
-            onClick={handleClick}
-            data-testid='upload-another-btn'
-          >
-            Upload Another
-          </button>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </DrawingDocumentContext.Provider>
   )
 }

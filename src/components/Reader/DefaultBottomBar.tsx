@@ -4,7 +4,7 @@ import {
   Popover,
   PopoverSeparator
 } from '@hamster-note/components'
-import type { PaintingControllerData } from '@hamster-note/painting'
+import type { LayeredToolsSnapshot } from '@hamster-note/painting/core'
 import { type RefObject, useEffect } from 'react'
 
 import type { ReaderFontScale } from '../../types/fontScale'
@@ -54,7 +54,7 @@ export type DefaultBottomBarProps = {
   readonly colors: readonly ReaderColorOption[]
   readonly drawingStrokeColor: string
   readonly highlightColor: string | undefined
-  readonly paintingControllerData: PaintingControllerData
+  readonly paintingSettings: LayeredToolsSnapshot
   readonly historyStatus: ReaderAnnotationHistoryStatus
   readonly selectionRef: RefObject<ReaderSelectionRef | null>
   readonly onRenderModeChange: (mode: ReaderRenderMode) => void
@@ -65,9 +65,7 @@ export type DefaultBottomBarProps = {
   readonly onEdgeCropEditingChange: (editing: boolean) => void
   readonly onSelectedToolChange: (tool: ReaderPageTool) => void
   readonly onDrawingStrokeColorChange: (color: string) => void
-  readonly onPaintingControllerDataChange: (
-    data: PaintingControllerData
-  ) => void
+  readonly onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
   readonly onHighlightColorChange: ((color: string) => void) | undefined
 }
 
@@ -230,9 +228,9 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
       <DrawingBottomBarStack
         bottomBarRef={props.bottomBarRef}
         readerToolbar={readerToolbar}
-        paintingControllerData={props.paintingControllerData}
+        paintingSettings={props.paintingSettings}
         theme={theme}
-        onPaintingControllerDataChange={props.onPaintingControllerDataChange}
+        onPaintingSettingsChange={props.onPaintingSettingsChange}
       />
     ) : (
       readerToolbar

@@ -1,8 +1,12 @@
+import {
+  createPaintingSettings,
+  withPaintingColor
+} from '../painting/paintingSettings'
 import type {
-  DrawingTool,
-  DrawingValue,
-  PaintingControllerData
-} from '@hamster-note/painting'
+  LayeredEditorTool,
+  EditorDocument,
+  LayeredToolsSnapshot
+} from '@hamster-note/painting/core'
 import {
   Selection,
   type SelectionRange,
@@ -17,7 +21,7 @@ import type {
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ReaderPageTool } from '../types/readerOptions'
-import { PageDrawingLayer, sanitizeDrawingValue } from './PageDrawingLayer'
+import { PageDrawingLayer } from './PageDrawingLayer'
 
 export type { ReaderPageTool } from '../types/readerOptions'
 
@@ -42,7 +46,7 @@ export type ReaderFlowLayoutPage = IntermediatePageSerialized & {
   useFlowLayout?: boolean
 }
 
-export type ReaderPagePaintingMap = Record<string, DrawingValue>
+export type ReaderPagePaintingMap = Record<string, EditorDocument>
 
 export type ReaderPageTextSelectionMap = Record<
   string,
@@ -57,13 +61,13 @@ export type ReaderPageRectSelectionMap = Record<
 export type PageProps = {
   page: ReaderFlowLayoutPage
   selectedTool?: ReaderPageTool
-  paintingValue?: DrawingValue
-  paintingTool?: DrawingTool
+  paintingValue?: EditorDocument
+  paintingTool?: LayeredEditorTool
   /** 绘制图形的描边颜色，默认 '#2563eb' */
   drawingStrokeColor?: string
   textSelections?: readonly SelectionRange[]
   rectSelections?: readonly SelectionRect[]
-  onPaintingChange?: (nextValue: DrawingValue) => void
+  onPaintingChange?: (nextValue: EditorDocument) => void
   onTextSelectionsChange?: (nextSelections: readonly SelectionRange[]) => void
   onRectSelectionsChange?: (nextSelections: readonly SelectionRect[]) => void
   onTextSelectionUpdate?: (nextSelection: SelectionRange) => void
@@ -290,7 +294,7 @@ export function Page({
   page,
   selectedTool = 'text-selection',
   paintingValue,
-  paintingTool = 'pen',
+  paintingTool = 'freehand',
   drawingStrokeColor = '#2563eb',
   textSelections = EMPTY_TEXT_SELECTIONS,
   rectSelections = EMPTY_RECT_SELECTIONS,
@@ -304,27 +308,18 @@ export function Page({
   const selectionRef = useRef<SelectionRef>(null)
   const confirmationTimerRef = useRef<number | null>(null)
   const selectionTool = getSelectionTool(selectedTool)
-  const drawingValue = useMemo(
-    () => sanitizeDrawingValue(paintingValue),
-    [paintingValue]
-  )
   const contentCount = getPageTexts(page).length
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [selectedRectId, setSelectedRectId] = useState<string | null>(null)
-  const [paintingControllerData, setPaintingControllerData] =
-    useState<PaintingControllerData>({
-      tool: paintingTool,
-      minimap: false,
-      strokeColor: drawingStrokeColor,
-      strokeWidth: 3
-    })
+  const [paintingSettings, setPaintingSettings] =
+    useState<LayeredToolsSnapshot>(() =>
+      createPaintingSettings(paintingTool, drawingStrokeColor)
+    )
 
   useEffect(() => {
-    setPaintingControllerData((current) => ({
-      ...current,
-      tool: paintingTool,
-      strokeColor: drawingStrokeColor
-    }))
+    setPaintingSettings((current) =>
+      withPaintingColor(current, drawingStrokeColor, paintingTool)
+    )
   }, [drawingStrokeColor, paintingTool])
 
   useEffect(() => {
@@ -419,7 +414,7 @@ export function Page({
           </div>
           <div>
             <dt>Strokes</dt>
-            <dd>{drawingValue.strokes.length}</dd>
+            <dd>{paintingValue?.objects.length ?? 0}</dd>
           </div>
         </dl>
       </header>
@@ -477,8 +472,8 @@ export function Page({
           <PageDrawingLayer
             enabled={selectedTool === 'drawing'}
             pageId={page.id}
-            controllerData={paintingControllerData}
-            onControllerDataChange={setPaintingControllerData}
+            settings={paintingSettings}
+            pageSize={{ width: page.width, height: page.height }}
             value={paintingValue}
             onChange={onPaintingChange}
           />
