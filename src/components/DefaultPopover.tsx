@@ -206,7 +206,10 @@ function HighlightColorPicker({
             if (selectedRange) {
               onUpdateRange({
                 ...selectedRange,
-                markerStyle: { backgroundColor: newColor }
+                markerStyle: {
+                  ...selectedRange.markerStyle,
+                  backgroundColor: newColor
+                }
               })
             }
           }
@@ -237,7 +240,7 @@ export function DefaultSelectionPopover(props: DefaultPopoverContext) {
       onMouseDown={(e) => e.preventDefault()}
     >
       <MobileSafeHighlightButton selectionRef={props.selectionRef} />
-      <HighlightColorPicker {...props} />
+      <HighlightColorPicker {...props} selectedRangeId={null} />
     </div>
   )
 }

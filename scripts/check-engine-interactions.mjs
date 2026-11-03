@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { runSelectionChecks } from './check-selection-popover.mjs'
+import { runLargeSectionChecks } from './check-large-epub-selection.mjs'
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { PDFDocument } from 'pdf-lib'
@@ -37,32 +39,60 @@ async function saved(page, file) {
   return page.evaluate(
     (file) =>
       JSON.parse(
-        localStorage.getItem(`hamster-reader-demo:highlights:${file}`)
+        localStorage.getItem(`hamster-reader-demo:annotations:v5:${file}`)
       ),
     file
   )
 }
 async function chapter(page, number) {
-  await page.waitForFunction(
-    () =>
-      document.querySelector('foliate-view')?.renderer?.getContents().length > 0
-  )
-  await page.evaluate(async (number) => {
-    const view = document.querySelector('foliate-view')
-    await view.renderer.goTo({ index: number - 1 })
+  const settled = () =>
+    page.waitForFunction(() =>
+      ['上一页', '下一页'].some((label) => {
+        const button = document.querySelector(`[aria-label="${label}"]`)
+        return button && !button.disabled
+      })
+    )
+  await settled()
+  const progress = page.getByLabel('文本阅读进度', { exact: true })
+  const maximum = Number(await progress.getAttribute('aria-valuemax'))
+  if (number === maximum) await progress.press('End')
+  else {
+    await progress.press('Home')
+    await settled()
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[aria-label="文本阅读进度"]')
+          .getAttribute('aria-valuenow') === '1'
+    )
+    for (let current = 2; current <= number; current++) {
+      await progress.press('ArrowDown')
+      await settled()
+      await page.waitForFunction(
+        (current) =>
+          Number(
+            document
+              .querySelector('[aria-label="文本阅读进度"]')
+              .getAttribute('aria-valuenow')
+          ) === current,
+        current
+      )
+    }
+  }
+  await page.waitForFunction((number) => {
+    const contents = document
+      .querySelector('foliate-view')
+      ?.renderer?.getContents()[0]
+    const frame = contents?.doc?.defaultView?.frameElement
+    const box = frame?.getBoundingClientRect()
+    return (
+      contents?.index === number - 1 &&
+      frame?.isConnected &&
+      box?.width > 0 &&
+      box?.height > 0
+    )
   }, number)
-  await page.waitForFunction(
-    (number) =>
-      document.querySelector('foliate-view')?.renderer?.getContents()[0]
-        ?.index ===
-      number - 1,
-    number
-  )
-  await page.waitForFunction(() => {
-    const next = document.querySelector('[aria-label="下一页"]')
-    const previous = document.querySelector('[aria-label="上一页"]')
-    return next && previous && !(next.disabled && previous.disabled)
-  })
+  await settled()
 }
 async function drag(page, from, to) {
   await page.mouse.move(from.x, from.y)
@@ -230,8 +260,9 @@ async function checkPrependedCover(page, label, result) {
   await page.getByRole('button', { name: '高亮', exact: true }).click()
   await page.waitForFunction(
     (name) =>
-      JSON.parse(localStorage.getItem(`hamster-reader-demo:highlights:${name}`))
-        ?.rects.length > 0,
+      JSON.parse(
+        localStorage.getItem(`hamster-reader-demo:annotations:v5:${name}`)
+      )?.rects.length > 0,
     name
   )
   assert.equal((await saved(page, name)).rects.at(-1).selectionId, 'page-1')
@@ -261,42 +292,32 @@ async function editEndpoint(page, label, end, result) {
     name: end ? '调整高亮终点' : '调整高亮起点'
   })
   await handle.waitFor()
-  const original = (await saved(page, 'duplicate-text.epub')).ranges.find(
-    (range) => range.id === 'epub-range-cross-page'
-  )
-  const canonicalOffset = end
-    ? original.end.offset - 1
-    : original.start.offset + 1
-  const target = await page.evaluate(
-    ({ canonicalOffset }) => {
-      const doc = document
-        .querySelector('foliate-view')
-        .renderer.getContents()[0].doc
-      const range = doc.createRange()
-      // Native selection is transient across chapter navigation. Locate the
-      // fixture's canonical endpoint in its real text nodes instead.
-      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
-      let remaining = canonicalOffset
-      let found = false
-      while (walker.nextNode()) {
-        const node = walker.currentNode
-        if (!node.textContent.trim()) continue
-        if (remaining <= node.length) {
-          range.setStart(node, remaining)
-          found = true
-          break
-        }
-        remaining -= node.length
-      }
-      if (!found)
-        throw new Error(`Missing fixture character ${canonicalOffset}`)
-      range.collapse(true)
-      const box = range.getBoundingClientRect()
-      const frame = doc.defaultView.frameElement.getBoundingClientRect()
-      return { x: box.x + frame.x, y: box.y + frame.y + box.height / 2 }
-    },
-    { canonicalOffset }
-  )
+  const target = await page.evaluate(async (end) => {
+    const [{ buildSectionTextIndex }, { legacyPageTextFromChapter }] =
+      await Promise.all([
+        import('/src/epub/sectionTextIndex.ts'),
+        import('/src/epub/legacyText.ts')
+      ])
+    const doc = document
+      .querySelector('foliate-view')
+      .renderer.getContents()[0].doc
+    const stored = JSON.parse(
+      localStorage.getItem(
+        'hamster-reader-demo:annotations:v5:duplicate-text.epub'
+      )
+    ).ranges.find((range) => range.id === 'epub-range-cross-page')
+    const text = legacyPageTextFromChapter(
+      new XMLSerializer().serializeToString(doc)
+    )
+    const index = buildSectionTextIndex(doc, text)
+    const offset = end ? stored.end.offset - 1 : stored.start.offset + 1
+    const range = index.rangeFromOffsets(offset, offset)
+    if (!range)
+      throw new Error('canonical endpoint must map to a live DOM caret')
+    const box = range.getBoundingClientRect()
+    const frame = doc.defaultView.frameElement.getBoundingClientRect()
+    return { x: box.x + frame.x, y: box.y + frame.y + box.height / 2 }
+  }, end)
   const box = await handle.boundingBox()
   await page.mouse.move(box.x + 7, box.y + 7)
   await page.mouse.down()
@@ -399,11 +420,14 @@ async function run(mobile, format) {
         ? await page.locator('.hamster-reader__epub-tools-page').boundingBox()
         : await page.locator('.pdfViewer .page').first().boundingBox()
     const start = {
-      x: Math.max(viewport.x + 30, pageBox.x + 70),
-      y: Math.max(viewport.y + 100, pageBox.y + 100)
+      x: Math.max(viewport.x + 30, pageBox.x + pageBox.width * 0.5),
+      y: Math.min(
+        viewport.y + viewport.height - 200,
+        pageBox.y + pageBox.height * 0.5
+      )
     }
     const end = {
-      x: Math.min(viewport.x + viewport.width - 30, start.x + 80),
+      x: Math.min(viewport.x + viewport.width - 80, start.x + 80),
       y: start.y + 60
     }
     await chooseTool(page, 'rect-selection')
@@ -412,7 +436,9 @@ async function run(mobile, format) {
     await page.waitForFunction(
       ({ fixtureName, count }) =>
         JSON.parse(
-          localStorage.getItem(`hamster-reader-demo:highlights:${fixtureName}`)
+          localStorage.getItem(
+            `hamster-reader-demo:annotations:v5:${fixtureName}`
+          )
         ).rects.length === count,
       { fixtureName, count: initial.rects.length + 1 }
     )
@@ -421,13 +447,21 @@ async function run(mobile, format) {
     const cornerBox = await corner.boundingBox()
     await drag(
       page,
-      { x: cornerBox.x + 7, y: cornerBox.y + 7 },
-      { x: cornerBox.x + 22, y: cornerBox.y + 22 }
+      {
+        x: cornerBox.x + cornerBox.width / 2,
+        y: cornerBox.y + cornerBox.height / 2
+      },
+      {
+        x: cornerBox.x + cornerBox.width / 2 - 15,
+        y: cornerBox.y + cornerBox.height / 2 - 15
+      }
     )
     await page.waitForFunction(
       ({ fixtureName, original }) =>
         JSON.parse(
-          localStorage.getItem(`hamster-reader-demo:highlights:${fixtureName}`)
+          localStorage.getItem(
+            `hamster-reader-demo:annotations:v5:${fixtureName}`
+          )
         ).rects.at(-1).rect.width !== original.rect.width,
       { fixtureName, original: rectangle }
     )
@@ -443,12 +477,30 @@ async function run(mobile, format) {
       'rectangle create/confirm/corner edit/undo/redo; stable id and createdAt'
     )
     await chooseTool(page, 'drawing')
-    await drag(page, { x: start.x, y: end.y + 40 }, { x: end.x, y: end.y + 70 })
+    const painting = page.getByTestId(
+      `reader-page-drawing-layer-${format === 'epub' ? 'page-2' : 'page-1'}`
+    )
+    await painting.waitFor()
+    await painting.locator('svg').first().waitFor()
+    const paintingBox = await painting.boundingBox()
+    await drag(
+      page,
+      {
+        x: paintingBox.x + paintingBox.width * 0.6,
+        y: paintingBox.y + paintingBox.height * 0.6
+      },
+      {
+        x: paintingBox.x + paintingBox.width * 0.7,
+        y: paintingBox.y + paintingBox.height * 0.7
+      }
+    )
     await page.waitForFunction(
       ({ fixtureName, pageId }) =>
         JSON.parse(
-          localStorage.getItem(`hamster-reader-demo:highlights:${fixtureName}`)
-        ).paintings?.[pageId]?.strokes.length > 0,
+          localStorage.getItem(
+            `hamster-reader-demo:annotations:v5:${fixtureName}`
+          )
+        ).paintings?.[pageId]?.objects?.length > 0,
       { fixtureName, pageId: format === 'epub' ? 'page-2' : 'page-1' }
     )
     await screenshot(page, label, 'drawing')
@@ -474,6 +526,22 @@ async function run(mobile, format) {
       assert.equal(cross.start.offset, initial.ranges[0].start.offset + 1)
       assert.deepEqual(cross.end, initial.ranges[0].end)
       await chapter(page, 3)
+      // Navigation cancels the old UI transaction. Reactivate the visible end
+      // fragment and prove that this does not jump back to the start chapter.
+      const fragment = await page.evaluate(() => {
+        const doc = document
+          .querySelector('foliate-view')
+          .renderer.getContents()[0].doc
+        const range = doc.createRange()
+        range.selectNodeContents(doc.querySelector('h1'))
+        const box = range.getBoundingClientRect(),
+          frame = doc.defaultView.frameElement.getBoundingClientRect()
+        return {
+          x: box.x + frame.x + box.width / 2,
+          y: box.y + frame.y + box.height / 2
+        }
+      })
+      await page.mouse.click(fragment.x, fragment.y)
       await editEndpoint(page, label, true, result)
       if (security)
         await assertMagnifierSecurity(page, result, 'after magnifier')
@@ -586,13 +654,14 @@ async function run(mobile, format) {
             ?.index !== 1
       )
       await chapter(page, 4)
-      const frame = page
-        .frames()
-        .find(
-          (frame) =>
-            frame !== page.mainFrame() && frame.url().startsWith('blob:')
-        )
-      await frame.locator('body').hover()
+      const framePoint = await page.evaluate(() => {
+        const frame = document
+          .querySelector('foliate-view')
+          .renderer.getContents()[0]
+          .doc.defaultView.frameElement.getBoundingClientRect()
+        return { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }
+      })
+      await page.mouse.move(framePoint.x, framePoint.y)
       await page.mouse.wheel(0, -1200)
       await page.evaluate(
         () =>
@@ -611,8 +680,8 @@ async function run(mobile, format) {
       await page.getByRole('button', { name: '上一页', exact: true }).click()
       await page.waitForFunction(
         () =>
-          document.querySelector('foliate-view')?.renderer?.getContents()[0]
-            ?.index === 2
+          document.querySelector('foliate-view').renderer.getContents()[0]
+            .index === 2
       )
       await page.waitForFunction(
         () => !document.querySelector('[aria-label="上一页"]').disabled
@@ -620,11 +689,11 @@ async function run(mobile, format) {
       await page.getByRole('button', { name: '上一页', exact: true }).click()
       await page.waitForFunction(
         () =>
-          document.querySelector('foliate-view')?.renderer?.getContents()[0]
-            ?.index === 0
+          document.querySelector('foliate-view').renderer.getContents()[0]
+            .index === 0
       )
       result.checks.push(
-        'wheel leaves reading position unchanged; previous buttons skip hidden chapter'
+        'wheel does not turn pages; explicit previous button skips the hidden chapter'
       )
       await touchSkipHidden(page, mobile, result)
     } else {
@@ -642,6 +711,25 @@ async function run(mobile, format) {
     result.passed = true
   } catch (error) {
     result.failure = error.stack
+    result.saved = await saved(page, fixtureName)
+    result.selectionDebug = await page.evaluate(() => {
+      const doc = document
+        .querySelector('foliate-view')
+        ?.renderer?.getContents()[0]?.doc
+      const selection = doc?.getSelection()
+      return {
+        native: selection?.toString(),
+        anchor: selection?.anchorNode?.nodeName,
+        anchorOffset: selection?.anchorOffset,
+        focus: selection?.focusNode?.nodeName,
+        focusOffset: selection?.focusOffset,
+        popup: document.querySelector('.hamster-reader__engine-popover')
+          ?.outerHTML,
+        handles: [
+          ...document.querySelectorAll('.hamster-reader__engine-handle')
+        ].map((n) => n.outerHTML)
+      }
+    })
     result.debug = await page.evaluate(() => ({
       pdf: document
         .querySelector('[data-testid=pdf-document-viewer]')
@@ -672,6 +760,18 @@ async function run(mobile, format) {
 }
 
 try {
+  if (!security && !process.env.READER_BROWSER_CASE) {
+    try {
+      report.selection = await runSelectionChecks(base, output)
+      report.largeEpub = await runLargeSectionChecks(base, output)
+    } catch (error) {
+      report.cases.push({
+        label: 'selection-popover',
+        passed: false,
+        failure: error.stack
+      })
+    }
+  }
   for (const mobile of [false, true])
     for (const format of ['epub', 'pdf']) await run(mobile, format)
 } finally {

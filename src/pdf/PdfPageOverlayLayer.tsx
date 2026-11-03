@@ -133,9 +133,11 @@ export function PdfPageOverlayLayer({
         callback: ((id: string | null) => void) | undefined,
         id: string
       ) => {
+        // Keep the materialized range while clicking an existing annotation.
+        // Otherwise the native pointer default collapses it after activation.
+        event.preventDefault()
         callback?.(id)
         if (tool === 'rect-selection') {
-          event.preventDefault()
           // Stop before the portal's delegated React rectangle gesture handler.
           event.stopPropagation()
         }

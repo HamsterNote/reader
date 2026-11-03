@@ -259,3 +259,40 @@ describe('epub compat index: unlocatable ranges are preserved as-is', () => {
     await pkg.destroy()
   })
 })
+
+it('rejects empty, reversed and unmappable endpoint edits without changing the historic range', async () => {
+  const { index, pkg } = await buildIndex('epub/duplicate-text.epub')
+  try {
+    const original = parseHighlights(
+      readFileSync(
+        join(FIXTURE_ROOT, 'highlights/epub-duplicate-text.v4.json'),
+        'utf8'
+      )
+    ).ranges[0]
+    const before = JSON.stringify(original)
+    const location = index.locateRange(original)
+    if (location.status !== 'located') throw new Error('fixture must locate')
+    const part = location.parts[0]
+    const empty = part.range.cloneRange()
+    empty.collapse(true)
+    expect(
+      index.updateEndpoint(original, empty, part.chapterIndex, false)
+    ).toBeNull()
+    const foreign = document.createRange()
+    foreign.selectNodeContents(document.body)
+    expect(
+      index.updateEndpoint(original, foreign, part.chapterIndex, false)
+    ).toBeNull()
+    expect(
+      index.updateEndpoint(
+        { ...original, end: { ...original.start, offset: 0 } },
+        part.range,
+        part.chapterIndex,
+        false
+      )
+    ).toBeNull()
+    expect(JSON.stringify(original)).toBe(before)
+  } finally {
+    await pkg.destroy()
+  }
+})

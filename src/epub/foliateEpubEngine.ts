@@ -406,7 +406,7 @@ export const createEpubEngine = (
       options.onSelection?.(serializeCurrentSelection())
     }
     const onClick = (event: Event) => {
-      if (destroyed) return
+      if (destroyed || !doc.getSelection()?.isCollapsed) return
       const renderer = view?.renderer
       const contents = renderer
         ?.getContents()
@@ -419,7 +419,7 @@ export const createEpubEngine = (
       })
       const [key] = hit ?? []
       if (!key) return
-      const id = key.split(':').at(-1)
+      const id = key.slice(`epub-range:${sectionIndex}:`.length)
       if (id && ranges.has(id)) {
         options.onHighlightActivate?.(id, {
           x: mouse.clientX,
@@ -994,6 +994,13 @@ export const createEpubEngine = (
       })
     },
     clearRanges: () => {
+      for (const id of ranges.keys()) {
+        view?.renderer
+          ?.getContents()
+          .forEach((contents) =>
+            contents.overlayer?.remove(`epub-range:${contents.index}:${id}`)
+          )
+      }
       ranges.clear()
       drawAllLiveSections()
     },
@@ -1097,7 +1104,12 @@ export const createEpubEngine = (
       return null
     },
     selectRange: async (id) => {
-      if (!(await goToRange(id)) || !compat) return null
+      if (
+        ((virtualCoverActive || !getRangePart(id)) && !(await goToRange(id))) ||
+        destroyed ||
+        !compat
+      )
+        return null
       const entry = ranges.get(id)
       if (!entry) return null
       const range = getRangePart(id)
