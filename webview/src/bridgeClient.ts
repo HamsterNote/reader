@@ -39,6 +39,11 @@ export type WebBridgeOptions = {
   readonly onRestore?: (payload: BridgeRestorePayload) => void
   readonly onError?: (payload: BridgeErrorPayload) => void
   readonly onDispose?: () => void
+  /**
+   * 关闭冲刷开始/结束。UI 必须据此冻结输入；冻结期间产生的修改仍会入队，
+   * 但不应再产生新的编辑手势。
+   */
+  readonly onDrainingChange?: (draining: boolean) => void
 }
 
 export type WebBridgeClient = {
@@ -106,6 +111,12 @@ export function createWebBridgeClient(
   let started = false
   let closed = false
   let draining = false
+
+  const setDraining = (value: boolean): void => {
+    if (draining === value) return
+    draining = value
+    options.onDrainingChange?.(value)
+  }
   let requestCounter = 0
   let inFlight: {
     readonly message: BridgeMessage
@@ -214,8 +225,9 @@ export function createWebBridgeClient(
   }
 
   const enqueue = (write: PendingWrite): void => {
-    // 关闭冲刷期间不再接受新编辑；已排队/在途的写入照常发送并等待 ack。
-    if (closed || draining) return
+    // 关闭冲刷期间的修改继续入队并纳入 ack 屏障，不能静默丢弃；
+    // 真正阻止新输入的是 UI 侧的冻结遮罩（onDrainingChange）。
+    if (closed) return
     if (write.type === 'change') pendingChange = write
     else pendingProgress = write
     flush()
@@ -280,8 +292,9 @@ export function createWebBridgeClient(
       case 'command': {
         const command = message.payload as BridgeCommandPayload
         if (command?.name === BRIDGE_COMMAND_FLUSH) {
-          // 宿主准备关闭：停止接受新编辑，冲刷完未确认写入再用 ready 应答。
-          draining = true
+          // 宿主准备关闭：先冻结 UI 输入，再冲刷全部未确认写入（含冻结前
+          // 正在进行的手势提交）；全部 ack 后回 ready，才允许宿主 dispose。
+          setDraining(true)
           flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
             if (closed) return
             if (saved) {
@@ -296,7 +309,7 @@ export function createWebBridgeClient(
             }
           })
         } else if (command?.name === BRIDGE_COMMAND_RESUME) {
-          draining = false
+          setDraining(false)
         }
         break
       }
@@ -307,6 +320,7 @@ export function createWebBridgeClient(
         pendingProgress = null
         inFlight = null
         settleIdle(false)
+        setDraining(false)
         options.onDispose?.()
         break
       }
@@ -331,6 +345,7 @@ export function createWebBridgeClient(
       pendingChange = null
       pendingProgress = null
       inFlight = null
+      setDraining(false)
     },
     getRevision: () => revision,
     getPendingCount: () => {

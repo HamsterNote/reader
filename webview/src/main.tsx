@@ -28,6 +28,27 @@ const host = window.__READER_HOST__
 const post = window.ReactNativeWebView?.postMessage
 // 关闭前等待未确认写入的时间上限；超时仍释放，但不声称已保存。
 const FLUSH_PENDING_TIMEOUT_MS = 2000
+const CLOSING_SHIELD_ID = 'reader-closing-shield'
+
+/**
+ * 关闭冲刷期间冻结输入：盖一层透明遮罩，阻止新的手势/点击。
+ * 冻结前已经开始的手势仍会提交，其写入继续入队并被 ack 屏障覆盖。
+ */
+function setClosingShield(active: boolean): void {
+  const existing = document.getElementById(CLOSING_SHIELD_ID)
+  if (!active) {
+    existing?.remove()
+    return
+  }
+  if (existing !== null) return
+  const shield = document.createElement('div')
+  shield.id = CLOSING_SHIELD_ID
+  shield.setAttribute('aria-busy', 'true')
+  shield.style.cssText =
+    'position:fixed;inset:0;z-index:2147483000;background:rgba(255,255,255,0.01);cursor:progress;touch-action:none;'
+  document.body.appendChild(shield)
+}
+
 let generation = 0
 let descriptor: BridgeOpenPayload | null = null
 let snapshot: BridgeRestorePayload | null = null
@@ -147,8 +168,13 @@ const bridge =
         },
         onDispose: () => {
           generation++
+          setClosingShield(false)
           // 宿主已确认未确认写入全部落盘（见 command flush 握手），直接释放引擎。
           work = work.then(release).catch(() => undefined)
+        },
+        onDrainingChange: (draining) => {
+          // 关闭冲刷期间冻结输入；恢复（resume）时解除。
+          setClosingShield(draining)
         },
         onError: (error) => {
           if (error.code !== 'REVISION_MISMATCH')

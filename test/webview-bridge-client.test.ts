@@ -296,28 +296,36 @@ describe('createWebBridgeClient flushPending', () => {
 })
 
 describe('createWebBridgeClient close handshake', () => {
-  it('flushes pending writes and answers ready on a flush command', async () => {
+  it('queues edits made during the drain and answers ready only after all acks', async () => {
     const { bridge, sent } = createHarness()
     bridge.start()
     bridge.handleMessage(
       hostMessage('restore', { data: null, progress: null, revision: 0 })
     )
     bridge.sendChange({ annotations: { version: 5 } })
-    const change = sent.at(-1) ?? {}
+    const first = sent.at(-1) ?? {}
 
     bridge.handleMessage(hostMessage('command', { name: 'flush' }))
-    // 冲刷中不接受新编辑。
+    // 冻结前/冻结瞬间产生的编辑继续入队，纳入 ack 屏障而不是被丢弃。
     bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
+    expect(bridge.getPendingCount()).toBe(2)
+
+    bridge.handleMessage(
+      hostMessage('ack', { requestId: first['requestId'], revision: 1 })
+    )
+    await Promise.resolve()
+    // 第一笔 ack 后第二笔发出，但还不能报告 ready。
+    const second = sent.at(-1) ?? {}
+    expect(second['type']).toBe('change')
     expect(bridge.getPendingCount()).toBe(1)
 
     bridge.handleMessage(
-      hostMessage('ack', { requestId: change['requestId'], revision: 1 })
+      hostMessage('ack', { requestId: second['requestId'], revision: 2 })
     )
     await Promise.resolve()
     await Promise.resolve()
 
-    const response = sent.at(-1) ?? {}
-    expect(response['type']).toBe('ready')
+    expect(sent.at(-1)).toMatchObject({ type: 'ready' })
     expect(bridge.getPendingCount()).toBe(0)
   })
 
@@ -354,5 +362,32 @@ describe('createWebBridgeClient close handshake', () => {
     bridge.sendChange({ annotations: { version: 5, ranges: [1] } })
     // 恢复编辑后新写入会进入 pending（排在在途那一笔之后），不再被丢弃。
     expect(bridge.getPendingCount()).toBe(before + 1)
+  })
+})
+
+describe('createWebBridgeClient drain signal', () => {
+  it('announces drain start, resume and dispose to the UI', () => {
+    const states: boolean[] = []
+    const bridge = createWebBridgeClient({
+      sessionId,
+      sourceToken,
+      post: () => undefined,
+      timers: createTimers().api,
+      onDrainingChange: (draining) => states.push(draining)
+    })
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    expect(states).toEqual([true])
+
+    bridge.handleMessage(hostMessage('command', { name: 'resume' }))
+    expect(states).toEqual([true, false])
+
+    bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+    bridge.handleMessage(hostMessage('dispose', {}))
+    expect(states).toEqual([true, false, true, false])
   })
 })

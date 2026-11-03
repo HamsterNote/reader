@@ -260,6 +260,14 @@ describe('snapshot chain: reader surface payload → bridge → host ack', () =>
   })
 })
 
+/** 等下一笔 Web → 宿主消息（事件驱动，不轮询计时器）。 */
+async function waitForMessage(queue: PostQueue): Promise<string> {
+  await queue.wait()
+  const raw = queue.shift()
+  if (raw === undefined) throw new Error('队列无消息')
+  return raw
+}
+
 /** 投递 posted 队列直到 promise 结束（关闭握手会连续产生多轮消息）。 */
 async function pumpUntilSettled<T>(
   host: ReaderHostSession,
@@ -426,5 +434,83 @@ describe('snapshot chain: closing with an interleaved write', () => {
     expect(stored.data.annotations).toBeDefined()
     expect(chain.sent.at(-1)?.type).toBe('dispose')
     expect(storage.values.has(`${SNAPSHOT_KEY}${fileId}.pending`)).toBe(false)
+  })
+})
+
+describe('snapshot chain: edits made while closing', () => {
+  it('persists an edit made during the close wait', async () => {
+    const { storage, store, chain } = await openChain('session-close-edit')
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const save = store.saveSnapshot.bind(store)
+    store.saveSnapshot = (id, snapshot) =>
+      snapshot.revision === 1
+        ? gate.then(() => save(id, snapshot))
+        : save(id, snapshot)
+
+    chain.bridge.sendChange(serializeReaderSnapshot(emptySnapshot))
+    const firstRaw = chain.queue.shift()
+    if (firstRaw === undefined) throw new Error('缺少第一笔写入')
+    const first = chain.host.handleRawMessage(firstRaw)
+    const closing = chain.host.close(2000)
+    // 关闭等待期间界面仍在产生修改：必须入队并纳入 ack 屏障。
+    chain.bridge.sendChange(
+      serializeReaderSnapshot({
+        ...emptySnapshot,
+        data: { ...emptySnapshot.data, hiddenPages: [2] }
+      })
+    )
+
+    release()
+    await first
+    const result = await pumpUntilSettled(chain.host, chain.queue, closing)
+
+    expect(result).toEqual({ status: 'closed' })
+    const stored = JSON.parse(
+      storage.values.get(`${SNAPSHOT_KEY}${fileId}`) ?? 'null'
+    )
+    expect(stored.revision).toBe(2)
+    expect(stored.data.readerData.hiddenPages).toEqual([2])
+  })
+
+  it('keeps an edit made during a timed-out close', async () => {
+    const { storage, store, chain } = await openChain('session-close-timeout')
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const save = store.saveSnapshot.bind(store)
+    store.saveSnapshot = (id, snapshot) =>
+      snapshot.revision === 1
+        ? gate.then(() => save(id, snapshot))
+        : save(id, snapshot)
+
+    chain.bridge.sendChange(serializeReaderSnapshot(emptySnapshot))
+    const firstRaw = chain.queue.shift()
+    if (firstRaw === undefined) throw new Error('缺少第一笔写入')
+    const first = chain.host.handleRawMessage(firstRaw)
+    const closing = chain.host.close(0)
+    chain.bridge.sendChange(
+      serializeReaderSnapshot({
+        ...emptySnapshot,
+        data: { ...emptySnapshot.data, hiddenPages: [3] }
+      })
+    )
+
+    const result = await pumpUntilSettled(chain.host, chain.queue, closing)
+    expect(result.status).toBe('unconfirmed')
+
+    // 恢复后可继续落盘：关闭等待期间的修改没有被丢弃。
+    release()
+    await first
+    await chain.host.handleRawMessage(await waitForMessage(chain.queue))
+
+    const stored = JSON.parse(
+      storage.values.get(`${SNAPSHOT_KEY}${fileId}`) ?? 'null'
+    )
+    expect(stored.revision).toBe(2)
+    expect(stored.data.readerData.hiddenPages).toEqual([3])
   })
 })
