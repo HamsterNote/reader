@@ -1,8 +1,8 @@
 import { Button, Icon } from '@hamster-note/components'
-import {
-  PaintingController,
-  type PaintingControllerData
-} from '@hamster-note/painting'
+import type {
+  LayeredEditorTool,
+  LayeredToolsSnapshot
+} from '@hamster-note/painting/core'
 import type { ReactNode, RefObject } from 'react'
 
 import type {
@@ -78,14 +78,26 @@ export function BottomBarToolButtons(props: BottomBarToolButtonsProps) {
   ))
 }
 
+const DRAWING_TOOLS: readonly (readonly [LayeredEditorTool, string])[] = [
+  ['freehand', '自由笔'],
+  ['line', '直线'],
+  ['rect', '矩形'],
+  ['ellipse', '椭圆'],
+  ['polygon', '多边形'],
+  ['bezier', '贝塞尔'],
+  ['text', '文字'],
+  ['image', '图片'],
+  ['selection', '选择'],
+  ['lasso', '套索'],
+  ['eraser', '橡皮擦']
+]
+
 type DrawingBottomBarStackProps = {
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
   readonly readerToolbar: ReactNode
-  readonly paintingControllerData: PaintingControllerData
+  readonly paintingSettings: LayeredToolsSnapshot
   readonly theme: 'light' | 'dark'
-  readonly onPaintingControllerDataChange: (
-    data: PaintingControllerData
-  ) => void
+  readonly onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
 }
 
 export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
@@ -95,19 +107,81 @@ export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
       className='hamster-reader__bottom-bar-stack hamster-reader__bottom-bar-stack--drawing'
     >
       {props.readerToolbar}
-      <PaintingController
-        data={props.paintingControllerData}
-        onDataChange={props.onPaintingControllerDataChange}
-        theme={props.theme}
-        edgeOffset={80}
-        multiBoard
-        relative
-        style={{
-          boxSizing: 'border-box',
-          maxWidth: 'calc(100% - 16px)',
-          overflowX: 'auto'
-        }}
-      />
+      <div
+        role='toolbar'
+        aria-label='绘图工具'
+        data-theme={props.theme}
+        className='hamster-reader__drawing-toolbar'
+      >
+        {DRAWING_TOOLS.map(([tool, label]) => (
+          <button
+            key={tool}
+            type='button'
+            aria-label={label}
+            aria-pressed={props.paintingSettings.activeTool === tool}
+            onClick={() =>
+              props.onPaintingSettingsChange({
+                ...props.paintingSettings,
+                activeTool: tool
+              })
+            }
+          >
+            {label}
+          </button>
+        ))}
+        <label>
+          绘图颜色
+          <input
+            type='color'
+            aria-label='绘图颜色'
+            value={props.paintingSettings.settings.freehand.color}
+            onChange={(event) =>
+              props.onPaintingSettingsChange({
+                ...props.paintingSettings,
+                settings: {
+                  freehand: {
+                    ...props.paintingSettings.settings.freehand,
+                    color: event.target.value
+                  },
+                  shape: {
+                    ...props.paintingSettings.settings.shape,
+                    color: event.target.value
+                  }
+                }
+              })
+            }
+          />
+        </label>
+        <label>
+          笔宽
+          <input
+            type='number'
+            aria-label='绘图笔宽'
+            min={0.5}
+            max={200}
+            step={0.5}
+            value={
+              props.paintingSettings.activeTool === 'freehand'
+                ? props.paintingSettings.settings.freehand.nominalSize
+                : props.paintingSettings.settings.shape.width
+            }
+            onChange={(event) => {
+              const width = event.target.valueAsNumber
+              if (!Number.isFinite(width) || width <= 0) return
+              props.onPaintingSettingsChange({
+                ...props.paintingSettings,
+                settings: {
+                  freehand: {
+                    ...props.paintingSettings.settings.freehand,
+                    nominalSize: width
+                  },
+                  shape: { ...props.paintingSettings.settings.shape, width }
+                }
+              })
+            }}
+          />
+        </label>
+      </div>
     </div>
   )
 }

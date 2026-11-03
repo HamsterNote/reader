@@ -1,5 +1,5 @@
 import { confirm } from '@hamster-note/components'
-import type { DrawingValue } from '@hamster-note/painting'
+import type { EditorDocument } from '@hamster-note/painting/core'
 import type { CSSProperties, KeyboardEvent, RefObject, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -7,7 +7,7 @@ import type {
   ReaderSelectionRectangle
 } from '../../types/selection'
 import type { ReaderBookmark } from '../../types/readerData'
-import { hasDrawingStrokes } from '../PageDrawingLayer'
+import { hasDrawingObjects } from '../PageDrawingLayer'
 import {
   PageBookmarkButton,
   PageBrowserBookmarksPanel
@@ -51,7 +51,7 @@ type PageBrowserProps = {
   readonly pageNumbers: readonly number[]
   readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
   readonly baseImagesByPageNumber: ReadonlyMap<number, string>
-  readonly pagePaintings?: Readonly<Record<string, DrawingValue>>
+  readonly pagePaintings?: Readonly<Record<string, EditorDocument>>
   readonly onPageVisibilityChange: (
     pageNumber: number,
     isVisible: boolean
@@ -851,7 +851,7 @@ export function PageBrowser({
                           {publicPageId &&
                             pageSize &&
                             drawingValue &&
-                            hasDrawingStrokes(drawingValue) && (
+                            hasDrawingObjects(drawingValue) && (
                               <PageBrowserDrawingPreview
                                 pageId={`${publicPageId}-${rect.id}`}
                                 pageSize={pageSize}

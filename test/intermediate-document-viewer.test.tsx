@@ -1,6 +1,12 @@
+import {
+  drawingFixture,
+  mockPaintingCanvas,
+  paintingPointer
+} from './fixtures/painting'
+beforeEach(mockPaintingCanvas)
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { DrawingValue } from '@hamster-note/painting'
+import type { EditorDocument } from '@hamster-note/painting'
 import {
   type IntermediateContent,
   IntermediateDocument,
@@ -3206,7 +3212,7 @@ describe('IntermediateDocumentViewer', () => {
       pageCount: 1,
       pageSize: { x: 100, y: 150 }
     })
-    const drawing: DrawingValue = {
+    const drawing: EditorDocument = drawingFixture({
       strokes: [
         {
           id: 'native-stroke',
@@ -3217,7 +3223,7 @@ describe('IntermediateDocumentViewer', () => {
           ]
         }
       ]
-    }
+    })
     const { rerender } = render(
       <IntermediateDocumentViewer
         document={document}
@@ -3244,43 +3250,41 @@ describe('IntermediateDocumentViewer', () => {
       />
     )
     const layer = await screen.findByTestId('reader-page-drawing-layer-page-1')
-    const path = screen
-      .getByTestId('reader-painting-page-1')
-      .querySelector('path')
-
-    fireEvent.pointerDown(screen.getByTestId('reader-painting-page-1'), {
-      button: 0,
-      clientX: 150,
-      clientY: 90,
-      pointerId: 1,
-      pointerType: 'pen'
+    const surface = screen.getByTestId('layered-surface')
+    const geometry = screen.getByTestId('page-drawing-surface')
+    expect(layer).toHaveStyle({ pointerEvents: 'auto' })
+    await waitFor(() =>
+      expect(
+        geometry.querySelector('[data-object-id="native-stroke"]')
+      ).not.toBeNull()
+    )
+    // Native layout scales the entire page in CSS; the library uses its DOM box.
+    Object.defineProperties(geometry, {
+      offsetWidth: { configurable: true, value: 100 },
+      offsetHeight: { configurable: true, value: 150 }
     })
-    fireEvent.pointerMove(globalThis.document, {
-      button: -1,
-      clientX: 210,
-      clientY: 90,
-      pointerId: 1,
-      pointerType: 'pen'
+    vi.spyOn(geometry, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 150,
+      height: 225,
+      right: 150,
+      bottom: 225,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
     })
-    fireEvent.pointerUp(globalThis.document, {
-      clientX: 210,
-      clientY: 90,
-      pointerId: 1,
-      pointerType: 'pen'
-    })
-
-    // Then: the inverse layer scale preserves SVG geometry and normalizes visual input.
-    expect(layer).toHaveStyle({
-      width: '150%',
-      height: '150%',
-      transform: `scale(${1 / 1.5})`
-    })
-    expect(path).toHaveAttribute('d', 'M 15 18 L 60 66')
-    const nextDrawing = onPagePaintingChange.mock.calls.at(-1)?.[1]
-    const points = nextDrawing?.strokes.at(-1)?.points
-    expect(points?.at(0)).toEqual(expect.objectContaining({ x: 100, y: 60 }))
-    expect(points?.at(-1)).toEqual(expect.objectContaining({ x: 140, y: 60 }))
-    expect((points?.at(-1)?.x ?? 0) - (points?.at(0)?.x ?? 0)).toBe(40)
+    paintingPointer(surface, 'down', 150, 90)
+    paintingPointer(window, 'move', 210, 90)
+    paintingPointer(window, 'up', 210, 90)
+    const nextDrawing = onPagePaintingChange.mock.calls.at(
+      -1
+    )?.[1] as EditorDocument
+    const object = nextDrawing.objects.at(-1)
+    expect(object?.kind).toBe('freehand')
+    if (object?.kind !== 'freehand') throw new Error('Expected freehand commit')
+    expect(object.samples[0]).toMatchObject({ x: 100, y: 60 })
+    expect(object.samples.at(-1)).toMatchObject({ x: 140, y: 60 })
   })
 
   it('restores the top native-flow text after selecting a fixed zoom', async () => {

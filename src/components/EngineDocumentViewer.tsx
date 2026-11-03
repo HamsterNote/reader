@@ -1090,10 +1090,8 @@ export function EngineDocumentViewer(props: Props) {
             onEdgeCropApply={props.onEdgeCropApply}
             onEdgeCropHidePage={props.onEdgeCropHidePage}
             pagePaintings={props.pagePaintings}
-            paintingControllerData={props.paintingControllerData}
-            onPaintingControllerDataChange={
-              props.onPaintingControllerDataChange
-            }
+            paintingSettings={props.paintingSettings}
+            onPaintingSettingsChange={props.onPaintingSettingsChange}
             paintingTool={props.paintingTool}
             drawingStrokeColor={props.drawingStrokeColor}
             onPagePaintingChange={props.onPagePaintingChange}

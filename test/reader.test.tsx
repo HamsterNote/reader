@@ -1,4 +1,6 @@
-import type { DrawingValue } from '@hamster-note/painting'
+import { drawingFixture, mockPaintingCanvas } from './fixtures/painting'
+beforeEach(mockPaintingCanvas)
+import type { EditorDocument } from '@hamster-note/painting'
 import {
   IntermediateDocument,
   type IntermediateDocumentSerialized,
@@ -16,7 +18,6 @@ import {
 import userEvent from '@testing-library/user-event'
 import { createRef, type RefObject, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
   SUPPORTED_UPLOAD_COPY
@@ -933,8 +934,8 @@ describe('Reader public API', () => {
   })
 
   it('keeps the full layout viewer when drawing mode is enabled', async () => {
-    const pagePaintings: Record<string, DrawingValue> = {
-      'page-1': {
+    const pagePaintings: Record<string, EditorDocument> = {
+      'page-1': drawingFixture({
         strokes: [
           {
             id: 'stroke-1',
@@ -947,7 +948,7 @@ describe('Reader public API', () => {
             ]
           }
         ]
-      }
+      })
     }
     render(
       <Reader
@@ -974,18 +975,18 @@ describe('Reader public API', () => {
       'drawing'
     )
     expect(
-      await screen.findByTestId('reader-painting-page-1')
+      await screen.findByTestId('page-drawing-surface')
     ).toBeInTheDocument()
     expect(capturedViewerProps.pageRange).toEqual({ start: 1, end: 1 })
     expect(capturedViewerProps.scale).toBe(2)
-    expect(screen.getByTestId('reader-page-drawing-layer-page-1')).toHaveStyle({
-      width: '200%',
-      height: '200%',
-      transform: 'scale(0.5)'
-    })
-    expect(
-      screen.getByTestId('reader-painting-page-1').querySelector('path')
-    ).toHaveAttribute('d', 'M 20 24 L 80 88')
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId('page-drawing-surface')
+          .querySelector('[data-object-id="stroke-1"]')
+      ).not.toBeNull()
+    )
+    expect(capturedViewerProps.pagePaintings).toEqual(pagePaintings)
   })
 
   it('lets selection modes receive pointer input through the drawing layer', async () => {
@@ -1012,68 +1013,46 @@ describe('Reader public API', () => {
     ).toHaveStyle({ pointerEvents: 'auto' })
   })
 
-  it('bounds persisted drawing data before rendering viewer pages', async () => {
-    const oversizedDrawing: DrawingValue = {
+  it('preserves every valid object without truncating the document', async () => {
+    const value = drawingFixture({
       strokes: Array.from({ length: 501 }, (_, index) => ({
         id: `stroke-${index}`,
-        tool: 'pen',
-        points: [{ x: index, y: index }]
+        tool: 'line',
+        points: [
+          { x: index, y: index },
+          { x: index + 1, y: index + 1 }
+        ]
       }))
-    }
-
+    })
     render(
       <Reader
         document={makeDocument({ pages: [makePage(1)] })}
         selectedTool='drawing'
-        pagePaintings={{ 'page-1': oversizedDrawing }}
+        pagePaintings={{ 'page-1': value }}
       />
     )
-
-    expect(await screen.findByTestId('reader-painting-page-1')).toHaveAttribute(
-      'data-stroke-count',
-      '500'
+    const surface = await screen.findByTestId('page-drawing-surface')
+    await waitFor(() =>
+      expect(surface.querySelectorAll('[data-object-id]')).toHaveLength(501)
     )
   })
 
-  it('ignores malformed persisted drawing entries without crashing', async () => {
-    const malformedDrawing = JSON.parse(
-      '{"strokes":[null,{"id":"broken","points":null}]}'
-    ) as DrawingValue
-
+  it('reports invalid documents without saving an empty replacement', async () => {
+    const onChange = vi.fn()
     render(
       <Reader
         document={makeDocument({ pages: [makePage(1)] })}
         selectedTool='drawing'
-        pagePaintings={{ 'page-1': malformedDrawing }}
+        pagePaintings={{
+          'page-1': { schemaVersion: 99 } as unknown as EditorDocument
+        }}
+        onPagePaintingsChange={onChange}
       />
     )
-
-    expect(await screen.findByTestId('reader-painting-page-1')).toHaveAttribute(
-      'data-stroke-count',
-      '0'
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '绘图数据无法恢复'
     )
-  })
-
-  it('bounds persisted drawing dash arrays before rendering', () => {
-    // Given: one otherwise-valid stroke contains an attacker-controlled style array.
-    const drawing: DrawingValue = {
-      strokes: [
-        {
-          id: 'oversized-dash-array',
-          tool: 'pen',
-          points: [{ x: 10, y: 20 }],
-          dashArray: Array.from({ length: 10_000 }, (_, index) => index + 1)
-        }
-      ]
-    }
-
-    // When: persisted page data crosses the drawing boundary.
-    const sanitized = sanitizeDrawingValue(drawing)
-
-    // Then: only a small, fixed prefix is retained for rendering.
-    expect(sanitized.strokes[0]?.dashArray).toEqual(
-      Array.from({ length: 32 }, (_, index) => index + 1)
-    )
+    expect(onChange).not.toHaveBeenCalled()
   })
 
   it('renders current serialized page content with container-scaled text geometry', () => {
@@ -1156,8 +1135,8 @@ describe('Reader public API', () => {
       throw new Error('Expected viewer painting update callback')
     }
 
-    const pageOneValue: DrawingValue = { strokes: [] }
-    const pageTwoValue: DrawingValue = { strokes: [] }
+    const pageOneValue: EditorDocument = drawingFixture({ strokes: [] })
+    const pageTwoValue: EditorDocument = drawingFixture({ strokes: [] })
     act(() => {
       updatePainting('page-1', pageOneValue)
       updatePainting('page-2', pageTwoValue)
@@ -1314,8 +1293,8 @@ describe('Reader renderMode', () => {
     const onPagePaintingChange = vi.fn()
     const onPageBrowserClose = vi.fn()
     const rects = [makeReaderRect('text-mode-rect')]
-    const pagePaintings: Record<string, DrawingValue> = {
-      'page-1': { strokes: [] }
+    const pagePaintings: Record<string, EditorDocument> = {
+      'page-1': drawingFixture({ strokes: [] })
     }
     const doc = makeDocument({ pages: [makePage(1)] })
 
@@ -1356,7 +1335,7 @@ describe('Reader renderMode', () => {
         showPageBrowser={true}
         onPageBrowserClose={onPageBrowserClose}
         themeColor='#123456'
-        paintingTool='pen'
+        paintingTool='freehand'
         drawingStrokeColor='#654321'
         pagePaintings={pagePaintings}
         onPagePaintingChange={onPagePaintingChange}
@@ -2671,8 +2650,8 @@ describe('Reader prop forwarding', () => {
       selectionId: 'page-1',
       rect: { x: 10, y: 20, width: 20, height: 20 }
     }
-    const dataPaintings: Record<string, DrawingValue> = {
-      'page-1': { strokes: [] }
+    const dataPaintings: Record<string, EditorDocument> = {
+      'page-1': drawingFixture({ strokes: [] })
     }
     const edgeCrop = {
       all: { top: 0.1, right: 0.2, bottom: 0.3, left: 0.05 },
@@ -3894,11 +3873,11 @@ describe('Reader annotation history', () => {
     const selectionRef = createRef<ReaderSelectionRef>()
     const onAnnotationHistoryChange = vi.fn()
     const onPagePaintingsChange = vi.fn()
-    const pagePaintings: Record<string, DrawingValue> = {
-      'page-1': { strokes: [] }
+    const pagePaintings: Record<string, EditorDocument> = {
+      'page-1': drawingFixture({ strokes: [] })
     }
-    const nextPaintings: Record<string, DrawingValue> = {
-      'page-1': {
+    const nextPaintings: Record<string, EditorDocument> = {
+      'page-1': drawingFixture({
         strokes: [
           {
             id: 'stroke-1',
@@ -3906,7 +3885,7 @@ describe('Reader annotation history', () => {
             points: [{ x: 1, y: 2 }]
           }
         ]
-      }
+      })
     }
     const { document } = makeLazyDocument(1)
 

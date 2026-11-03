@@ -1,13 +1,15 @@
+import { createPaintingSettings } from '../painting/paintingSettings'
 // HAM-89 / tasks.md 3.1–3.5：PDF 主展示切换到 pdfjs-dist 官方 viewer。
 // 官方 PDFViewer/PDFLinkService/EventBus 负责页面、文本层、链接、缩放与
 // 渲染队列（懒加载）；reader 叠加层负责高亮/矩形/绘图。本组件不修改公共
 // Reader 路由与 demo 入口，接线由集成任务（HAM-91）完成。
 
 import type {
-  DrawingTool,
-  DrawingValue,
-  PaintingControllerData
-} from '@hamster-note/painting'
+  LayeredEditorTool,
+  EditorDocument,
+  LayeredToolsSnapshot
+} from '@hamster-note/painting/core'
+import { createPageGeometry } from '@hamster-note/painting/core'
 import {
   forwardRef,
   useCallback,
@@ -95,7 +97,7 @@ export type PdfDocumentViewerProps = PdfOcrOptions & {
   readonly highlightColor?: string
   readonly ranges?: readonly ReaderSelectionRange[]
   readonly rects?: readonly ReaderSelectionRectangle[]
-  readonly pagePaintings?: Record<string, DrawingValue>
+  readonly pagePaintings?: Record<string, EditorDocument>
   readonly selectedRangeId?: string | null
   readonly selectedRectId?: string | null
   readonly onHighlight?: (range: ReaderSelectionRange) => void
@@ -107,16 +109,16 @@ export type PdfDocumentViewerProps = PdfOcrOptions & {
   readonly onSelectRect?: (id: string | null) => void
   readonly onPagePaintingChange?: (
     pageId: string,
-    nextValue: DrawingValue,
-    nextPaintings: Record<string, DrawingValue>
+    nextValue: EditorDocument,
+    nextPaintings: Record<string, EditorDocument>
   ) => void
-  readonly onPagePaintingsChange?: (next: Record<string, DrawingValue>) => void
-  readonly paintingControllerData?: PaintingControllerData
-  readonly onPaintingControllerDataChange?: (
-    data: PaintingControllerData
+  readonly onPagePaintingsChange?: (
+    next: Record<string, EditorDocument>
   ) => void
+  readonly paintingSettings?: LayeredToolsSnapshot
+  readonly onPaintingSettingsChange?: (data: LayeredToolsSnapshot) => void
   /** 未受控 controllerData 时的默认绘图工具（默认 'pen'）。 */
-  readonly paintingTool?: DrawingTool
+  readonly paintingTool?: LayeredEditorTool
   /** 未受控 controllerData 时的默认笔触颜色（默认 '#2563eb'）。 */
   readonly drawingStrokeColor?: string
   /** 原生选区变化（text 为拼接文本，detail 含公开端点与矩形）。 */
@@ -269,10 +271,10 @@ export const PdfDocumentViewer = forwardRef<
     onSelectRect,
     onPagePaintingChange,
     onPagePaintingsChange,
-    paintingControllerData,
+    paintingSettings,
     paintingTool,
     drawingStrokeColor,
-    onPaintingControllerDataChange,
+    onPaintingSettingsChange,
     onTextSelectionChange,
     onTextAnchorChange,
     hiddenPages,
@@ -322,6 +324,21 @@ export const PdfDocumentViewer = forwardRef<
       }))
     ])
   // 事件回调经 ref 读取，避免 init effect 闭包过期。
+  const paintingsState = useRef({
+    source,
+    supplied: pagePaintings,
+    current: pagePaintings
+  })
+  if (
+    paintingsState.current.source !== source ||
+    paintingsState.current.supplied !== pagePaintings
+  ) {
+    paintingsState.current = {
+      source,
+      supplied: pagePaintings,
+      current: pagePaintings
+    }
+  }
   const callbacksRef = useRef({
     onOcrError: props.onOcrError,
     onPageChange,
@@ -423,15 +440,11 @@ export const PdfDocumentViewer = forwardRef<
 
   // 与 IntermediateDocumentViewer 同一约定：未受控时使用静态默认控制面，
   // 变更被忽略（宿主不受控即不关心工具状态）。
-  const resolvedPaintingControllerData = useMemo<PaintingControllerData>(
+  const resolvedPaintingSettings = useMemo<LayeredToolsSnapshot>(
     () =>
-      paintingControllerData ?? {
-        tool: paintingTool ?? 'pen',
-        minimap: false,
-        strokeColor: drawingStrokeColor ?? '#2563eb',
-        strokeWidth: 3
-      },
-    [drawingStrokeColor, paintingControllerData, paintingTool]
+      paintingSettings ??
+      createPaintingSettings(paintingTool, drawingStrokeColor),
+    [drawingStrokeColor, paintingSettings, paintingTool]
   )
 
   // workerSrc 变化时更新全局 worker 配置。
@@ -483,6 +496,26 @@ export const PdfDocumentViewer = forwardRef<
       return {
         viewport,
         scaleOneViewport,
+        drawing: createPageGeometry({
+          width: scaleOneViewport.width,
+          height: scaleOneViewport.height,
+          referenceTransform: scaleOneViewport.transform as [
+            number,
+            number,
+            number,
+            number,
+            number,
+            number
+          ],
+          viewportTransform: viewport.transform as [
+            number,
+            number,
+            number,
+            number,
+            number,
+            number
+          ]
+        }),
         visual: {
           width: scaleOneViewport.width,
           height: scaleOneViewport.height
@@ -1093,12 +1126,17 @@ export const PdfDocumentViewer = forwardRef<
             selectedRectId={selectedRectId}
             highlightColor={highlightColor}
             selectionContexts={selectionContextsRef.current}
-            paintingControllerData={resolvedPaintingControllerData}
-            onPaintingControllerDataChange={
-              onPaintingControllerDataChange ?? ignoreControllerDataChange
+            paintingSettings={resolvedPaintingSettings}
+            onPaintingSettingsChange={
+              onPaintingSettingsChange ?? ignoreControllerDataChange
             }
             pagePaintings={pagePaintings}
-            onPaintingChange={(id, nextValue, nextPaintings) => {
+            onPaintingChange={(id, nextValue) => {
+              const nextPaintings = {
+                ...paintingsState.current.current,
+                [id]: nextValue
+              }
+              paintingsState.current.current = nextPaintings
               onPagePaintingChange?.(id, nextValue, nextPaintings)
               onPagePaintingsChange?.(nextPaintings)
             }}
@@ -1125,8 +1163,8 @@ export const PdfDocumentViewer = forwardRef<
     selectedRangeId,
     selectedRectId,
     highlightColor,
-    resolvedPaintingControllerData,
-    onPaintingControllerDataChange,
+    resolvedPaintingSettings,
+    onPaintingSettingsChange,
     onPagePaintingChange,
     onPagePaintingsChange,
     onSelectRange,

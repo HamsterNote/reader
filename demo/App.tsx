@@ -1,7 +1,7 @@
 import { DocxParser } from '@hamster-note/docx-parser'
 import { EpubParser } from '@hamster-note/epub-parser'
 import { MarkdownParser } from '@hamster-note/markdown-parser'
-import type { DrawingValue } from '@hamster-note/painting'
+import type { EditorDocument } from '@hamster-note/painting/core'
 import { type OpenDocumentHandle, PdfParser } from '@hamster-note/pdf-parser'
 import {
   type ReaderAnnotationHistoryChangeDetail as AnnotationHistoryChangeDetail,
@@ -448,7 +448,7 @@ function persistHighlights(
   fileName: string | undefined,
   ranges: ReaderSelectionRange[],
   rects: ReaderSelectionRectangle[],
-  paintings: Record<string, DrawingValue>
+  paintings: Record<string, EditorDocument>
 ) {
   if (!fileName) return
   const persisted = parseHighlights(
@@ -1014,7 +1014,7 @@ export function App() {
   const [selectedTool, setSelectedTool] =
     useState<ReaderPageTool>('text-selection')
   const [pagePaintings, setPagePaintings] = useState<
-    Record<string, DrawingValue>
+    Record<string, EditorDocument>
   >({})
   const [loadedPages, setLoadedPages] = useState<number[]>([])
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
@@ -1359,7 +1359,7 @@ export function App() {
 
   // 包装 setPagePaintings：pagePaintings 不走 annotation history，需独立持久化。
   const handlePagePaintingsChange = useCallback(
-    (next: Record<string, DrawingValue>) => {
+    (next: Record<string, EditorDocument>) => {
       setPagePaintings(next)
       persistHighlights(uploadedFile?.name, ranges, rects, next)
     },
