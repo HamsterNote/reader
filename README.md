@@ -289,6 +289,8 @@ Public page ids are always `page-${pageNumber}` (for example, `page-1`, `page-2`
 
 `ReaderSelectionRange` is the only persisted highlight shape in both render modes. In text mode, `start.selectionId + start.offset` and `end.selectionId + end.offset` act as stable character anchors. The mounted text pages derive runtime rectangles again whenever font scale, line wrapping, page content, or container size changes. Persisted `rectsBySelectionId` remains available to layout mode and is never treated as current text-flow geometry.
 
+PDF reading order can differ from source order. When one selection spans disjoint source intervals, Reader emits one range per interval with `selectionGroup: { id: string, index: number }` (zero-based reading order). Persist this optional metadata with each range. Clicking any member selects the whole group in either mode; the PDF keeps separate rectangles and selection callbacks report only the original source fragments, excluding intervening unselected text. Ranges without this metadata remain independent. In browsers with one native DOM range, the PDF paints the logical group with its annotation overlays and copies the complete group text.
+
 ### Quick Start (linked selection)
 
 ```tsx

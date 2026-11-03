@@ -48,6 +48,36 @@ function fixture() {
 }
 
 describe('engine legacy selection callbacks', () => {
+  it('restores every grouped source span in reading order without selecting the gap', async () => {
+    const result = await engineSelectionSegments(fixture(), {
+      start: { selectionId: 'page-1', offset: 6 },
+      end: { selectionId: 'page-1', offset: 3 },
+      text: 'etlp',
+      sourceRanges: [
+        {
+          start: { selectionId: 'page-1', offset: 6 },
+          end: { selectionId: 'page-1', offset: 8 }
+        },
+        {
+          start: { selectionId: 'page-1', offset: 1 },
+          end: { selectionId: 'page-1', offset: 3 }
+        }
+      ]
+    })
+    expect(
+      result.segments.map(
+        ({ id, startCharIndex, endCharIndex, selectedText }) => [
+          id,
+          startCharIndex,
+          endCharIndex,
+          selectedText
+        ]
+      )
+    ).toEqual([
+      ['b', 1, 3, 'et'],
+      ['a', 1, 3, 'lp']
+    ])
+  })
   it('reports OCR text and its original ID after the native text offsets', async () => {
     const document = fixture()
     const [page] = await document.pages

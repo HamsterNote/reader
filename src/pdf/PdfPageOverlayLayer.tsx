@@ -26,6 +26,7 @@ import { projectStoredRectToViewport } from './pdfOverlayGeometry'
 import { captureViewportRectAsStored } from './pdfOverlayGeometry'
 import { deriveRectsForCanonicalRange } from './pdfSelectionSerializer'
 import type { PdfPageSelectionContext } from './pdfSelectionSerializer'
+import { getSelectionGroup } from '../components/selection/selectionGroups'
 
 export type PdfPageOverlayGeometry = {
   readonly viewport: OverlayViewport
@@ -114,6 +115,8 @@ export function PdfPageOverlayLayer({
     return ids.includes(pageId)
   })
   const pageRects = rects.filter((rect) => rect.selectionId === pageId)
+  const selectedGroup = getSelectionGroup(ranges, selectedRangeId)
+  const selectedGroupIds = new Set(selectedGroup.map((range) => range.id))
 
   // Annotation hits take priority over rectangle creation. In text mode the
   // event continues to the native text layer so drag selection still works.
@@ -328,6 +331,10 @@ export function PdfPageOverlayLayer({
           )[pageId] ??
           []
         return storedRects.map((stored, index) => {
+          const selectedClass =
+            selectedGroup.length > 1
+              ? ' hamster-reader__pdf-highlight-rect--group-selected'
+              : ' hamster-reader__pdf-highlight-rect--selected'
           const projected = projectStoredRectToViewport(
             stored,
             range.overlayRectType ?? overlayRectType,
@@ -339,18 +346,21 @@ export function PdfPageOverlayLayer({
             <div
               key={`${range.id}-${index}`}
               className={`hamster-reader__pdf-highlight-rect${
-                selectedRangeId === range.id
-                  ? ' hamster-reader__pdf-highlight-rect--selected'
-                  : ''
+                selectedGroupIds.has(range.id) ? selectedClass : ''
               }`}
               data-range-id={range.id}
+              data-selected={
+                selectedGroupIds.has(range.id) ? 'true' : undefined
+              }
               style={{
                 left: projected.left,
                 top: projected.top,
                 width: projected.width,
                 height: projected.height,
                 backgroundColor:
-                  range.markerStyle?.backgroundColor ?? highlightColor
+                  selectedGroup.length > 1 && selectedGroupIds.has(range.id)
+                    ? 'rgba(0, 120, 215, 0.3)'
+                    : (range.markerStyle?.backgroundColor ?? highlightColor)
               }}
             />
           )

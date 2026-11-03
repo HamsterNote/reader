@@ -9,6 +9,7 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../../src/types/selection'
+import type { ReaderSelectedTextSegment } from '../../src/components/selection/selectionPayloadSerializer'
 import '../../src/styles/index.scss'
 
 configurePdfJsWorker(`${location.origin}/pdfjs-worker/pdf.worker.min.mjs`)
@@ -22,6 +23,7 @@ const state = {
   ocrPages: [] as number[],
   images: [] as string[],
   segments: [] as string[],
+  sourceSegments: [] as ReaderSelectedTextSegment[],
   positions: [] as number[],
   errors: [] as string[]
 }
@@ -50,6 +52,7 @@ const api = {
     state.ocrPages = []
     state.images = []
     state.segments = []
+    state.sourceSegments = []
     state.positions = []
     state.errors = []
     const source = { format, data: new Uint8Array(bytes) }
@@ -68,6 +71,7 @@ const api = {
       },
       onSelectText: (_selection, segments) => {
         state.segments = segments.map((segment) => segment.selectedText)
+        state.sourceSegments = segments
       },
       onOcrTextsChange: (page) => state.ocrPages.push(page),
       onOcrError: (error) => state.errors.push(String(error)),

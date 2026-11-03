@@ -2,8 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   canonicalizePdfSelectionRange,
-  canonicalizePdfSelectionRanges
+  canonicalizePdfSelectionRanges,
+  combinePdfTextSelectionGroups,
+  restorePdfTextSelection
 } from '../src/components/IntermediateDocumentViewer/pdfSelectionOffsets'
+import { getSelectionGroup } from '../src/components/selection/selectionGroups'
+import {
+  parseAnnotationStorageV5,
+  serializeAnnotationStorageV5
+} from '../src/storage/highlightStorage'
 import { deriveTextSelectionRanges } from '../src/components/IntermediateDocumentViewer/textHighlightAdapter'
 import type { ReaderSelectionRange } from '../src/types/selection'
 
@@ -335,5 +342,56 @@ describe('Text highlight adapter', () => {
         root
       ).map((range) => range.id)
     ).toEqual(ranges.map((range) => range.id))
+  })
+
+  it('persists a cross-paragraph group and restores its exact source ranges from either member', () => {
+    const { root } = makeAnchoredViewerRoot(
+      '<p><span data-selection-start-offset="0">Left</span></p><p><span data-selection-start-offset="12">Right</span></p><p><span data-selection-start-offset="4">omitted!</span></p>'
+    )
+    const original = {
+      ...storedRange,
+      text: 'eftRig',
+      start: { selectionId: 'page-1', offset: 1 },
+      end: { selectionId: 'page-1', offset: 7 }
+    }
+    const members = canonicalizePdfSelectionRanges(original, root)
+    expect(members.map((range) => range.selectionGroup)).toEqual([
+      { id: original.id, index: 0 },
+      { id: original.id, index: 1 }
+    ])
+    const read = parseAnnotationStorageV5(
+      serializeAnnotationStorageV5(members, [], {})
+    )
+    if (read.status !== 'ok') throw new Error('Expected persisted group')
+    expect(read.storage.ranges).toEqual(members)
+    const persisted = [...read.storage.ranges].reverse()
+    for (const clicked of persisted) {
+      expect(getSelectionGroup(persisted, clicked.id)).toEqual(members)
+      const restored = restorePdfTextSelection(persisted, clicked.id, root)!
+      expect(restored.toString()).toBe(original.text)
+      const combined = combinePdfTextSelectionGroups(persisted, root)
+      expect(combined).toHaveLength(1)
+      expect(combined[0]).toMatchObject({
+        start: original.start,
+        end: original.end
+      })
+      expect(
+        canonicalizePdfSelectionRanges(combined[0]!, root).map(
+          ({ start, end }) => [start.offset, end.offset]
+        )
+      ).toEqual([
+        [1, 4],
+        [12, 15]
+      ])
+    }
+    // Coincident independent highlights never join a group; legacy data is unchanged.
+    const independent = {
+      ...members[0]!,
+      id: 'independent',
+      selectionGroup: undefined
+    }
+    expect(
+      getSelectionGroup([...members, independent], independent.id)
+    ).toEqual([independent])
   })
 })

@@ -36,6 +36,16 @@
   visibility: hidden;
 }
 
+// Chromium has one native Range. A disjoint logical selection is painted by
+// its exact annotation rectangles; suppress the first span's native paint.
+.hamster-reader__pdf-viewer:has(
+    .hamster-reader__pdf-highlight-rect--group-selected
+  )
+  .textLayer
+  ::selection {
+  background: transparent;
+}
+
 .hamster-reader__pdf-rect-annotation {
   position: absolute;
   pointer-events: none;

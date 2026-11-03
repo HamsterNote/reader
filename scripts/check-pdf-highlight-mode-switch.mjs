@@ -223,6 +223,29 @@ try {
           document.getSelection()?.toString().replace(/\n/g, '') === expected,
         range.text
       )
+      // The second span overlaps the earlier independent Right highlight.
+      // The dedicated group regression uses non-overlapping paragraphs to
+      // exercise activation through both members without ambiguous hits.
+      if (crossSpan && range.id === added[0].id) {
+        assert.equal(
+          await page
+            .locator('.hamster-reader__pdf-highlight-rect--group-selected')
+            .count(),
+          2,
+          'clicking either source fragment must select the whole group'
+        )
+        const copied = await page.evaluate(() => {
+          const data = new DataTransfer()
+          document.dispatchEvent(
+            new ClipboardEvent('copy', {
+              clipboardData: data,
+              cancelable: true
+            })
+          )
+          return data.getData('text/plain')
+        })
+        assert.equal(copied, added.map((member) => member.text).join(''))
+      }
       await page
         .locator('.pdfViewer .page')
         .first()

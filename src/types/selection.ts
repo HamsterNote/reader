@@ -34,6 +34,9 @@ export type ReaderLinkedSelectionRange = Omit<
 > & {
   start: ReaderSelectionEndpoint
   end: ReaderSelectionEndpoint
+  /** Disjoint PDF source ranges created by one selection, in reading order.
+   * Persist with the range; absence means an independent annotation. */
+  selectionGroup?: { readonly id: string; readonly index: number }
   /** Layout 模式可持久化的页面坐标；Text 与 EPUB 可保持为空并按字符锚点实时计算。 */
   rectsBySelectionId: Record<string, ReaderSelectionRect[]>
 }

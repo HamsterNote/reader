@@ -25,6 +25,11 @@ export type PdfPageSelectionContext = {
 }
 
 export type SerializedPdfSelection = {
+  /** Exact disjoint source spans of a restored logical selection. */
+  readonly sourceRanges?: readonly {
+    readonly start: { readonly selectionId: string; readonly offset: number }
+    readonly end: { readonly selectionId: string; readonly offset: number }
+  }[]
   readonly start: { readonly selectionId: string; readonly offset: number }
   readonly end: { readonly selectionId: string; readonly offset: number }
   /** 跨页按契约拼接：起点页选中后缀 + 终点页选中前缀（无分隔符）。 */

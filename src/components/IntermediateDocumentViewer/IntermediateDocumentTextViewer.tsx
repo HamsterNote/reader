@@ -80,7 +80,12 @@ import {
 } from './IntermediateDocumentViewer'
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
-import { canonicalizePdfSelectionRanges } from './pdfSelectionOffsets'
+import {
+  canonicalizePdfSelectionRanges,
+  combinePdfTextSelectionGroups,
+  restorePdfTextSelection
+} from './pdfSelectionOffsets'
+import { getSelectionGroup } from '../selection/selectionGroups'
 import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
 import { releaseSourceTextGeometry } from './sourceTextGeometry'
 import { parsePublicPageId } from './rangeJumpHelpers'
@@ -1676,13 +1681,18 @@ export function IntermediateDocumentTextViewer(
   const storedRanges = isRangesControlled ? ranges : internalRanges
   const storedRangesRef = useRef<ReaderSelectionRange[]>(storedRanges)
   storedRangesRef.current = storedRanges
-  const effectiveRanges = useDerivedTextSelectionRanges({
+  const derivedRanges = useDerivedTextSelectionRanges({
     ranges: storedRanges,
     root: viewerRootElement,
     pageNumbers,
     overlayRectType,
     layoutKey: textLayoutKey
   })
+  const effectiveRanges = combinePdfTextSelectionGroups(
+    derivedRanges,
+    viewerRootElement,
+    isPdf
+  )
   const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
   effectiveRangesRef.current = effectiveRanges
   const lastTextGeometryTraceRef = useRef('')
@@ -1732,9 +1742,7 @@ export function IntermediateDocumentTextViewer(
   const selectedHighlight = useMemo(
     () =>
       effectiveSelectedRangeId
-        ? (storedRanges.find(
-            (range) => range.id === effectiveSelectedRangeId
-          ) ?? null)
+        ? (getSelectionGroup(storedRanges, effectiveSelectedRangeId)[0] ?? null)
         : null,
     [effectiveSelectedRangeId, storedRanges]
   )
@@ -1756,7 +1764,10 @@ export function IntermediateDocumentTextViewer(
       buildRuntimeLinkedSelectionData({
         scopeId,
         ranges: effectiveRanges,
-        selectedRangeId: effectiveSelectedRangeId,
+        selectedRangeId: isPdf
+          ? (getSelectionGroup(storedRanges, effectiveSelectedRangeId)[0]?.id ??
+            effectiveSelectedRangeId)
+          : effectiveSelectedRangeId,
         pageNumbers,
         overlayRectType,
         transient: runtimeLinkedTransient
@@ -1767,7 +1778,9 @@ export function IntermediateDocumentTextViewer(
       overlayRectType,
       pageNumbers,
       runtimeLinkedTransient,
-      scopeId
+      scopeId,
+      isPdf,
+      storedRanges
     ]
   )
   const runtimeLinkedDataRef = useRef(runtimeLinkedData)
@@ -2593,7 +2606,8 @@ export function IntermediateDocumentTextViewer(
       const activeRangeId = runtimePublicLinkedData.activeRange?.id
       const convertedItems = runtimePublicLinkedData.items.flatMap((range) => {
         const existingRange = existingRanges.get(range.id)
-        if (existingRange && range.id !== activeRangeId) return [existingRange]
+        if (existingRange && range.id !== activeRangeId)
+          return getSelectionGroup(storedRangesRef.current, existingRange.id)
         return toTextRanges(range)
       })
       const items = Array.from(
@@ -2712,13 +2726,43 @@ export function IntermediateDocumentTextViewer(
 
   const handleLinkedSelectRange = useCallback(
     (id: string | null) => {
+      if (
+        isPdf &&
+        id &&
+        viewerRootRef.current &&
+        getSelectionGroup(storedRangesRef.current, id).length > 1
+      ) {
+        const restored = restorePdfTextSelection(
+          storedRangesRef.current,
+          id,
+          viewerRootRef.current
+        )
+        if (restored) {
+          // Existing Text highlights use the linked overlay for selection.
+          // Materialize the whole group only to build the source payload;
+          // retaining a native range makes upstream treat it as a new draft.
+          try {
+            emitSelectionEnd()
+          } finally {
+            viewerRootRef.current.ownerDocument
+              .getSelection()
+              ?.removeAllRanges()
+          }
+        }
+      }
       if (!isSelectedRangeIdControlled) {
         setInternalSelectedRangeId(id)
       }
       onLinkedSelectRange?.(id)
       onSelectRange?.(id)
     },
-    [isSelectedRangeIdControlled, onLinkedSelectRange, onSelectRange]
+    [
+      emitSelectionEnd,
+      isPdf,
+      isSelectedRangeIdControlled,
+      onLinkedSelectRange,
+      onSelectRange
+    ]
   )
 
   const handlePageLinkedDataChange = useCallback(
