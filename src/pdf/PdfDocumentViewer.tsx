@@ -52,6 +52,7 @@ import { usePdfOcr, type PdfOcrOptions } from './usePdfOcr'
 import { PdfOcrTextLayer } from './PdfOcrTextLayer'
 import type { PdfPageSelectionContext } from './pdfSelectionSerializer'
 import { serializePdfTextSelection } from './pdfSelectionSerializer'
+import { bindPdfSourceLinks } from './pdfSourceLinks'
 import type { SerializedPdfSelection } from './pdfSelectionSerializer'
 import type { CanonicalPageText } from './pdfTextMapping'
 import {
@@ -519,7 +520,12 @@ export const PdfDocumentViewer = forwardRef<
     linkServiceRef.current = linkService
 
     const handleTextLayerRendered = (event: TextLayerRenderedEvent) => {
-      enhancePageTextLayerRef.current?.(event.pageNumber, event.source.div)
+      // PDF.js emits the PDFPageView, whose div also contains canvas and
+      // annotation layers. Enhancing that div can delete a valid context.
+      const layer = event.source.div.matches('.textLayer')
+        ? event.source.div
+        : event.source.div.querySelector<HTMLElement>('.textLayer')
+      if (layer) enhancePageTextLayerRef.current?.(event.pageNumber, layer)
     }
 
     // pdf.js 5.x text layer 在 textlayerrendered 之后仍会重组 DOM（可能整体
@@ -664,6 +670,7 @@ export const PdfDocumentViewer = forwardRef<
     }
 
     let cancelled = false
+    let removeSourceLinks: (() => void) | undefined
     setStatus('loading')
     setOcrDocument(null)
     setRenderedPages([])
@@ -682,6 +689,13 @@ export const PdfDocumentViewer = forwardRef<
         setStatus('ready')
         viewerRef.current?.setDocument(session.document)
         linkServiceRef.current?.setDocument(session.document)
+        if (containerRef.current && linkServiceRef.current) {
+          removeSourceLinks = bindPdfSourceLinks(
+            containerRef.current,
+            session.document,
+            linkServiceRef.current
+          )
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -700,6 +714,7 @@ export const PdfDocumentViewer = forwardRef<
 
     return () => {
       cancelled = true
+      removeSourceLinks?.()
     }
   }, [source])
 
