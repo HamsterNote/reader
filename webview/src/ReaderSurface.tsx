@@ -112,11 +112,13 @@ export function ReaderSurface({
         onAnnotationHistoryChange={(next, detail) => {
           setRangeId(next.selectedRangeId)
           setRectId(next.selectedRectId)
-          if (detail.source !== 'reset')
+          if (detail.source !== 'reset' && detail.source !== 'drawing')
             dataChange({
               ...current.current.data,
               ranges: next.ranges,
-              rects: next.rects
+              rects: next.rects,
+              pagePaintings:
+                next.pagePaintings ?? current.current.data.pagePaintings
             })
         }}
         fontScale={

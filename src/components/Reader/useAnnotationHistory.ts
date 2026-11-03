@@ -1,6 +1,4 @@
-import { useCallback } from 'react'
-import useUndo from 'use-undo'
-
+import { createContext, useContext, useMemo, useReducer, useRef } from 'react'
 import type {
   ReaderAnnotationHistoryChangeDetail,
   ReaderAnnotationHistoryChangeSource,
@@ -9,7 +7,6 @@ import type {
 } from '../../types/selection'
 
 export type AnnotationHistoryApplySource = 'undo' | 'redo'
-
 export type AnnotationHistoryApplyTargetResult =
   | {
       readonly applied: true
@@ -23,8 +20,8 @@ export type AnnotationHistoryApplyTargetResult =
       readonly target?: undefined
       readonly detail?: undefined
     }
-
 export type AnnotationHistoryController = {
+  readonly cancelInput: () => void
   readonly setCheckpoint: (
     next: ReaderAnnotationHistoryValue,
     source: ReaderAnnotationHistoryChangeSource
@@ -53,259 +50,175 @@ export type AnnotationHistoryController = {
     source: AnnotationHistoryApplySource
   ) => ReaderAnnotationHistoryValue | undefined
 }
-
-type UseAnnotationHistoryOptions = {
+export const AnnotationHistoryContext =
+  createContext<AnnotationHistoryController | null>(null)
+type Options = {
   readonly enabled: boolean
   readonly initialValue: ReaderAnnotationHistoryValue
   readonly onChange?: (
     next: ReaderAnnotationHistoryValue,
     detail: ReaderAnnotationHistoryChangeDetail
   ) => void
+  readonly beforeApply?: () => void
+  readonly canApply?: (target: ReaderAnnotationHistoryValue) => boolean
+  readonly onApply?: (target: ReaderAnnotationHistoryValue) => void
+}
+type History = {
+  past: ReaderAnnotationHistoryValue[]
+  present: ReaderAnnotationHistoryValue
+  future: ReaderAnnotationHistoryValue[]
 }
 
-const isSameAnnotationSnapshot = (
-  left: ReaderAnnotationHistoryValue,
-  right: ReaderAnnotationHistoryValue
-) => JSON.stringify(left) === JSON.stringify(right)
-
-const makeStatus = (
-  enabled: boolean,
-  pastCount: number,
-  futureCount: number
-): ReaderAnnotationHistoryStatus => ({
-  enabled,
-  canUndo: enabled && pastCount > 0,
-  canRedo: enabled && futureCount > 0,
-  pastCount: enabled ? pastCount : 0,
-  futureCount: enabled ? futureCount : 0
-})
-
-export function useAnnotationHistory({
-  enabled,
-  initialValue,
-  onChange
-}: UseAnnotationHistoryOptions): AnnotationHistoryController {
-  const [history, actions] = useUndo<ReaderAnnotationHistoryValue>(
-    initialValue,
-    { useCheckpoints: true }
+export { paintingContentKey } from '../../painting/paintingContent'
+import { paintingContentKey } from '../../painting/paintingContent'
+const sameContent = (
+  a: ReaderAnnotationHistoryValue,
+  b: ReaderAnnotationHistoryValue
+) =>
+  JSON.stringify(a.ranges) === JSON.stringify(b.ranges) &&
+  JSON.stringify(a.rects) === JSON.stringify(b.rects) &&
+  paintingContentKey(a.pagePaintings) === paintingContentKey(b.pagePaintings)
+const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+function snapshot(
+  next: ReaderAnnotationHistoryValue,
+  previous?: ReaderAnnotationHistoryValue
+): ReaderAnnotationHistoryValue {
+  const input = next.pagePaintings ?? previous?.pagePaintings ?? {}
+  const pagePaintings = Object.fromEntries(
+    Object.entries(input).map(([id, doc]) => {
+      const saved = previous?.pagePaintings?.[id]
+      const unchanged =
+        saved &&
+        (doc === saved || JSON.stringify(doc) === JSON.stringify(saved))
+      return [id, unchanged ? saved : copy(doc)]
+    })
   )
+  return { ...copy({ ...next, pagePaintings: undefined }), pagePaintings }
+}
 
-  const getStatus = useCallback(
-    () => makeStatus(enabled, history.past.length, history.future.length),
-    [enabled, history.future.length, history.past.length]
-  )
-
-  const notifyChange = useCallback(
-    (
-      next: ReaderAnnotationHistoryValue,
-      source: ReaderAnnotationHistoryChangeSource,
-      status: ReaderAnnotationHistoryStatus
-    ) => {
-      onChange?.(next, { source, status })
-    },
-    [onChange]
-  )
-
-  const getPresent = useCallback(() => history.present, [history.present])
-
-  const getTarget = useCallback(
-    (source: AnnotationHistoryApplySource) => {
-      if (!enabled) {
-        return undefined
-      }
-
-      if (source === 'undo') {
-        return history.past.at(-1)
-      }
-
-      return history.future[0]
-    },
-    [enabled, history.future, history.past]
-  )
-
-  const setCheckpoint = useCallback(
-    (
-      next: ReaderAnnotationHistoryValue,
-      source: ReaderAnnotationHistoryChangeSource
-    ) => {
-      if (!enabled || isSameAnnotationSnapshot(history.present, next)) {
-        return
-      }
-
-      const status = makeStatus(enabled, history.past.length + 1, 0)
-
-      actions.set(next, true)
-      notifyChange(next, source, status)
-    },
-    [actions, enabled, history.past.length, history.present, notifyChange]
-  )
-
-  const syncPresent = useCallback(
-    (
-      next: ReaderAnnotationHistoryValue,
-      source: ReaderAnnotationHistoryChangeSource
-    ) => {
-      if (!enabled || isSameAnnotationSnapshot(history.present, next)) {
-        return
-      }
-
-      const status = makeStatus(enabled, history.past.length, 0)
-
-      actions.set(next, false)
-      notifyChange(next, source, status)
-    },
-    [actions, enabled, history.past.length, history.present, notifyChange]
-  )
-
-  const reset = useCallback(
-    (
-      next: ReaderAnnotationHistoryValue,
-      source: ReaderAnnotationHistoryChangeSource
-    ) => {
-      if (!enabled) {
-        return
-      }
-
-      const status = makeStatus(enabled, 0, 0)
-
-      actions.reset(next)
-      notifyChange(next, source, status)
-    },
-    [actions, enabled, notifyChange]
-  )
-
-  const syncSilent = useCallback(
-    (next: ReaderAnnotationHistoryValue) => {
-      if (!enabled || isSameAnnotationSnapshot(history.present, next)) {
-        return
-      }
-
-      actions.set(next, false)
-    },
-    [actions, enabled, history.present]
-  )
-
-  const undo = useCallback((): AnnotationHistoryApplyTargetResult => {
-    const target = getTarget('undo')
-
-    if (!target) {
-      return { applied: false, source: 'undo' }
+/** A ref serializes commits within a React batch. Only the file owner keeps an active stack. */
+export function useAnnotationHistory(
+  options: Options
+): AnnotationHistoryController {
+  const inherited = useContext(AnnotationHistoryContext)
+  const latest = useRef(options)
+  latest.current = options
+  const initial = useRef<History | null>(null)
+  if (!initial.current && !inherited)
+    initial.current = {
+      past: [],
+      present: snapshot(options.initialValue),
+      future: []
     }
-
-    const status = makeStatus(
-      enabled,
-      Math.max(0, history.past.length - 1),
-      history.future.length + 1
-    )
-    const detail = {
-      source: 'undo',
-      status
-    } satisfies ReaderAnnotationHistoryChangeDetail
-
-    actions.undo()
-    notifyChange(target, 'undo', status)
-
-    return { applied: true, source: 'undo', target, detail }
-  }, [
-    actions,
-    enabled,
-    getTarget,
-    history.future.length,
-    history.past.length,
-    notifyChange
-  ])
-
-  const redo = useCallback((): AnnotationHistoryApplyTargetResult => {
-    const target = getTarget('redo')
-
-    if (!target) {
-      return { applied: false, source: 'redo' }
+  const state = initial as { current: History }
+  const [, render] = useReducer((n: number) => n + 1, 0)
+  const controller = useMemo<AnnotationHistoryController>(() => {
+    const getTarget = (source: AnnotationHistoryApplySource) => {
+      if (!latest.current.enabled) return undefined
+      return source === 'undo'
+        ? state.current.past.at(-1)
+        : state.current.future[0]
     }
-
-    const status = makeStatus(
-      enabled,
-      history.past.length + 1,
-      Math.max(0, history.future.length - 1)
-    )
-    const detail = {
-      source: 'redo',
-      status
-    } satisfies ReaderAnnotationHistoryChangeDetail
-
-    actions.redo()
-    notifyChange(target, 'redo', status)
-
-    return { applied: true, source: 'redo', target, detail }
-  }, [
-    actions,
-    enabled,
-    getTarget,
-    history.future.length,
-    history.past.length,
-    notifyChange
-  ])
-
-  const applyTargetSilently = useCallback(
-    (
+    const getStatus = (): ReaderAnnotationHistoryStatus => {
+      const { enabled, canApply } = latest.current
+      const { past, future } = state.current
+      return {
+        enabled,
+        canUndo:
+          enabled && past.length > 0 && (canApply?.(past.at(-1)!) ?? true),
+        canRedo:
+          enabled && future.length > 0 && (canApply?.(future[0]!) ?? true),
+        pastCount: enabled ? past.length : 0,
+        futureCount: enabled ? future.length : 0
+      }
+    }
+    const notify = (
+      next: ReaderAnnotationHistoryValue,
+      source: ReaderAnnotationHistoryChangeSource
+    ) => latest.current.onChange?.(next, { source, status: getStatus() })
+    const sync = (
+      next: ReaderAnnotationHistoryValue,
+      source?: ReaderAnnotationHistoryChangeSource
+    ) => {
+      if (!latest.current.enabled) return
+      const value = snapshot(next, state.current.present)
+      if (JSON.stringify(value) === JSON.stringify(state.current.present))
+        return
+      state.current.present = value
+      render()
+      if (source) notify(value, source)
+    }
+    const applyTargetSilently = (
       source: AnnotationHistoryApplySource
     ): AnnotationHistoryApplyTargetResult => {
+      latest.current.beforeApply?.()
       const target = getTarget(source)
-
-      if (!target) {
+      if (!target || latest.current.canApply?.(target) === false)
         return { applied: false, source }
-      }
-
-      const isUndo = source === 'undo'
-      const status = makeStatus(
-        enabled,
-        isUndo ? Math.max(0, history.past.length - 1) : history.past.length + 1,
-        isUndo
-          ? history.future.length + 1
-          : Math.max(0, history.future.length - 1)
-      )
-      const detail = {
+      const current = state.current
+      state.current =
+        source === 'undo'
+          ? {
+              past: current.past.slice(0, -1),
+              present: target,
+              future: [current.present, ...current.future]
+            }
+          : {
+              past: [...current.past, current.present],
+              present: target,
+              future: current.future.slice(1)
+            }
+      latest.current.onApply?.(target)
+      render()
+      return {
+        applied: true,
         source,
-        status
-      } satisfies ReaderAnnotationHistoryChangeDetail
-
-      if (isUndo) {
-        actions.undo()
-      } else {
-        actions.redo()
+        target,
+        detail: { source, status: getStatus() }
       }
-
-      return { applied: true, source, target, detail }
-    },
-    [actions, enabled, getTarget, history.future.length, history.past.length]
-  )
-
-  const applyTarget = useCallback(
-    (
-      source: AnnotationHistoryApplySource,
-      apply: (target: ReaderAnnotationHistoryValue) => void
-    ) => {
-      const result = source === 'undo' ? undo() : redo()
-
-      if (result.applied) {
-        apply(result.target)
-      }
-
+    }
+    const run = (source: AnnotationHistoryApplySource) => {
+      const result = applyTargetSilently(source)
+      if (result.applied) notify(result.target, source)
       return result
-    },
-    [redo, undo]
-  )
-
-  return {
-    setCheckpoint,
-    syncPresent,
-    syncSilent,
-    reset,
-    undo,
-    redo,
-    applyTarget,
-    applyTargetSilently,
-    getStatus,
-    getPresent,
-    getTarget
-  }
+    }
+    return {
+      cancelInput: () => latest.current.beforeApply?.(),
+      getTarget,
+      getStatus,
+      getPresent: () => state.current.present,
+      setCheckpoint: (next, source) => {
+        if (!latest.current.enabled) return
+        const current = state.current
+        const value = snapshot(next, current.present)
+        if (sameContent(current.present, value)) {
+          sync(value)
+          return
+        }
+        state.current = {
+          past: [...current.past, current.present],
+          present: value,
+          future: []
+        }
+        render()
+        notify(value, source)
+      },
+      syncSilent: (next) => sync(next),
+      syncPresent: sync,
+      reset: (next, source) => {
+        state.current = { past: [], present: snapshot(next), future: [] }
+        render()
+        if (latest.current.enabled) notify(state.current.present, source)
+      },
+      applyTargetSilently,
+      undo: () => run('undo'),
+      redo: () => run('redo'),
+      applyTarget: (source, apply) => {
+        const result = run(source)
+        if (result.applied) apply(result.target)
+        return result
+      }
+    }
+  }, [])
+  return inherited ?? controller
 }

@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { useAnnotationHistory } from '../src/components/Reader/useAnnotationHistory'
+import type {
+  ReaderAnnotationHistoryValue,
+  ReaderAnnotationHistoryChangeSource
+} from '../src/types/selection'
+import { drawingFixture } from './fixtures/painting'
+import { describe, expect, it, vi } from 'vitest'
 
 import type {
   HostDocumentRecord,
@@ -557,4 +564,110 @@ describe('snapshot chain: gesture finishing after the close starts', () => {
     expect(stored.data.readerData.hiddenPages).toEqual([7])
     expect(chain.sent.at(-1)?.type).toBe('dispose')
   })
+})
+
+it('persists mixed history targets once per commit/replay, acknowledges them, and reopens all page attributes', async () => {
+  const { storage, store, chain } = await openChain('mixed-history')
+  const a = drawingFixture({
+    strokes: [
+      { id: 'ink-a', tool: 'pen', color: '#123456', points: [{ x: 10, y: 20 }] }
+    ]
+  })
+  const b = drawingFixture({
+    strokes: [
+      {
+        id: 'shape-b',
+        tool: 'rect',
+        color: '#abcdef',
+        points: [
+          { x: 30, y: 40 },
+          { x: 70, y: 90 }
+        ]
+      }
+    ]
+  })
+  const range = {
+    id: 'h',
+    createdAt: 1,
+    text: 'H',
+    start: { selectionId: 'page-1', offset: 0 },
+    end: { selectionId: 'page-1', offset: 1 },
+    rectsBySelectionId: {}
+  }
+  const rectangle = {
+    id: 'r',
+    createdAt: 2,
+    overlayRectType: 'percent' as const,
+    selectionId: 'page-1',
+    start: { x: 10, y: 20 },
+    end: { x: 40, y: 60 },
+    rect: { x: 10, y: 20, width: 30, height: 40 }
+  }
+  const notify = vi.fn((next: ReaderAnnotationHistoryValue) =>
+    chain.bridge.sendChange(
+      serializeReaderSnapshot({
+        ...emptySnapshot,
+        data: {
+          ...emptySnapshot.data,
+          ranges: next.ranges,
+          rects: next.rects,
+          pagePaintings: next.pagePaintings
+        }
+      })
+    )
+  )
+  const { result } = renderHook(() =>
+    useAnnotationHistory({
+      enabled: true,
+      initialValue: {
+        ranges: [],
+        rects: [],
+        pagePaintings: {},
+        selectedRangeId: null,
+        selectedRectId: null
+      },
+      onChange: notify
+    })
+  )
+  const commit = async (
+    patch: Partial<ReaderAnnotationHistoryValue>,
+    source: ReaderAnnotationHistoryChangeSource
+  ) => {
+    act(() =>
+      result.current.setCheckpoint(
+        { ...result.current.getPresent(), ...patch },
+        source
+      )
+    )
+    await deliver(chain.host, chain.posted)
+  }
+  await commit({ pagePaintings: { 'page-1': a } }, 'drawing')
+  await commit({ ranges: [range] }, 'highlight')
+  await commit({ rects: [rectangle] }, 'create-rect')
+  await commit({ pagePaintings: { 'page-1': a, 'page-2': b } }, 'drawing')
+  for (let i = 0; i < 4; i++) {
+    act(() => {
+      expect(result.current.undo().applied).toBe(true)
+    })
+    await deliver(chain.host, chain.posted)
+  }
+  for (let i = 0; i < 4; i++) {
+    act(() => {
+      expect(result.current.redo().applied).toBe(true)
+    })
+    await deliver(chain.host, chain.posted)
+  }
+  expect(notify).toHaveBeenCalledTimes(12)
+  expect(chain.bridge.getRevision()).toBe(12)
+  expect(chain.posted).toHaveLength(0)
+  const stored = JSON.parse(storage.values.get(`${SNAPSHOT_KEY}${fileId}`)!)
+  const reopened = restoreReaderSnapshot(stored.data)
+  expect(reopened.data).toMatchObject({
+    ranges: [range],
+    rects: [rectangle],
+    pagePaintings: JSON.parse(JSON.stringify({ 'page-1': a, 'page-2': b }))
+  })
+  expect(JSON.stringify(stored)).not.toContain('pastCount')
+  const nextSession = await createChain(store, fileId, 'reopened-history')
+  expect(nextSession.host.getSnapshot().data).toEqual(stored.data)
 })

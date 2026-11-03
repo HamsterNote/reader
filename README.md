@@ -509,18 +509,23 @@ The browser Demo persists comments in localStorage (see Demo Browser Storage) an
 
 `Reader` can track undoable snapshots of annotation state. This is an opt-in feature; it is disabled by default.
 
-The snapshot only includes text ranges, rectangle selections, and their active IDs:
+The snapshot includes text ranges, rectangle selections, drawings, and active IDs:
 
 ```ts
 {
   ranges: ReaderSelectionRange[]
   rects: ReaderSelectionRectangle[]
+  pagePaintings?: ReaderPagePaintingMap
   selectedRangeId: string | null
   selectedRectId: string | null
 }
 ```
 
-Drawing state, `pagePaintings`, and comments are intentionally excluded and are not affected by undo/redo.
+`pagePaintings?: ReaderPagePaintingMap` extends this value with complete documents for all pages. Omitting it preserves current drawings; `{}` explicitly clears them. Reader uses one file history for drawing, text, and rectangle commits, including unloaded pages. Comments remain outside history.
+
+A complete stroke or shape creates one entry. Supported object edits and eraser gestures each create one entry, even when they affect multiple objects. Cancellation, empty edits, revision-only changes, zoom, and tool settings preserve redo. A valid new annotation edit clears the entire redo branch. Existing `selectionRef.clear()` still clears only text/rectangle annotations.
+
+Drawing commits emit history source `drawing` before the ordinary drawing callbacks. Hosts that save through `onPagePaintingsChange` should treat `drawing` as a status notification. On undo/redo, atomically apply `ranges`, `rects`, and `pagePaintings` from the history target and save once. Replay does not emit ordinary drawing callbacks. See `docs/drawing-history.md`.
 
 ### Props
 
@@ -547,6 +552,7 @@ type ReaderAnnotationHistoryChangeDetail = {
 
 `source` is one of:
 
+- `'drawing'` — a complete drawing edit was committed
 - `'select'` — a new text range was selected
 - `'highlight'` — a range was confirmed via the ref API or auto-highlight
 - `'update-range'` — an existing range was updated (for example, by dragging a handle)
@@ -593,11 +599,11 @@ Use `resetKey` to clear the undo/redo stacks when the user opens a different fil
 />
 ```
 
-A change to `resetKey` drops `past` and `future`, sets `present` to the current ranges/rects/selections, and fires `onAnnotationHistoryChange` with source `'reset'`.
+A change to `resetKey` drops `past` and `future`, sets `present` to the current ranges/rects/drawings/selections, and fires `onAnnotationHistoryChange` with source `'reset'`.
 
 ### Controlled mode
 
-In controlled mode, the host keeps the `ranges` and `rects` state and echoes it back through props. `onAnnotationHistoryChange` is the canonical update path when history is enabled.
+In controlled mode, the host keeps the `ranges`, `rects`, and `pagePaintings` state and echoes it back through props. `onAnnotationHistoryChange` is the canonical update path when history is enabled.
 
 ```tsx
 import { useRef, useState } from 'react'
@@ -613,16 +619,20 @@ export function App({ document }) {
   const selectionRef = useRef<ReaderSelectionRef>(null)
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
   const [rects, setRects] = useState<ReaderSelectionRectangle[]>([])
+  const [pagePaintings, setPagePaintings] = useState<NonNullable<ReaderAnnotationHistoryValue['pagePaintings']>>({})
 
   return (
     <Reader
       document={document}
       ranges={ranges}
       rects={rects}
+      pagePaintings={pagePaintings}
+      onPagePaintingsChange={setPagePaintings}
       annotationHistory={{ enabled: true, resetKey: document.id }}
       onAnnotationHistoryChange={(next: ReaderAnnotationHistoryValue) => {
         setRanges(next.ranges)
         setRects(next.rects)
+        if (next.pagePaintings !== undefined) setPagePaintings(next.pagePaintings)
       }}
     />
   )

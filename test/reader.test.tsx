@@ -1189,8 +1189,12 @@ describe('Reader public API', () => {
       throw new Error('Expected viewer painting update callback')
     }
 
-    const pageOneValue: EditorDocument = drawingFixture({ strokes: [] })
-    const pageTwoValue: EditorDocument = drawingFixture({ strokes: [] })
+    const pageOneValue: EditorDocument = drawingFixture({
+      strokes: [{ id: 'ink', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const pageTwoValue: EditorDocument = drawingFixture({
+      strokes: [{ id: 'ink', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
     act(() => {
       updatePainting('page-1', pageOneValue)
       updatePainting('page-2', pageTwoValue)
@@ -3637,6 +3641,7 @@ describe('Reader annotation history', () => {
       {
         ranges: [initialRange],
         rects: [initialRect],
+        pagePaintings: {},
         selectedRangeId: initialRange.id,
         selectedRectId: initialRect.id
       },
@@ -3680,30 +3685,24 @@ describe('Reader annotation history', () => {
 
   it('disables layout history commands while Reader is in text mode', async () => {
     const { document } = makeLazyDocument(1)
-
-    render(<Reader document={document} annotationHistory />)
+    const ref = createRef<ReaderSelectionRef>()
+    render(<Reader document={document} annotationHistory selectionRef={ref} />)
     await screen.findByText('Page 1 text')
-
-    const updateHistoryStatus =
-      capturedViewerProps.onAnnotationHistoryStatusChange
-    if (typeof updateHistoryStatus !== 'function') {
-      throw new Error('Expected internal annotation history status callback')
-    }
-
+    const a = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const update = capturedViewerProps.onPagePaintingChange as (
+      id: string,
+      doc: EditorDocument
+    ) => void
     act(() => {
-      updateHistoryStatus({
-        enabled: true,
-        canUndo: true,
-        canRedo: true,
-        pastCount: 1,
-        futureCount: 1
-      })
+      update('page-1', a)
+      update('page-2', a)
+      requireReaderSelectionRef(ref).undo()
     })
     expect(screen.getByTestId('tool-bottom-bar-undo')).toBeEnabled()
     expect(screen.getByTestId('tool-bottom-bar-redo')).toBeEnabled()
-
     fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
-
     await waitFor(() => {
       expect(screen.getByTestId('tool-bottom-bar-undo')).toBeDisabled()
       expect(screen.getByTestId('tool-bottom-bar-redo')).toBeDisabled()
@@ -3892,7 +3891,13 @@ describe('Reader annotation history', () => {
     })
     await waitFor(() => {
       expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
-        { ranges: [], rects: [], selectedRangeId: null, selectedRectId: null },
+        {
+          ranges: [],
+          rects: [],
+          pagePaintings: {},
+          selectedRangeId: null,
+          selectedRectId: null
+        },
         expect.objectContaining({ source: 'clear' })
       )
     })
@@ -3976,7 +3981,7 @@ describe('Reader annotation history', () => {
     ).toEqual(expect.objectContaining({ canUndo: true, pastCount: 1 }))
   })
 
-  it('excludes pagePaintings from history entries and undo replay', async () => {
+  it('includes drawings in the same history as text annotations', async () => {
     const selectionRef = createRef<ReaderSelectionRef>()
     const onAnnotationHistoryChange = vi.fn()
     const onPagePaintingsChange = vi.fn()
@@ -4018,8 +4023,11 @@ describe('Reader annotation history', () => {
 
     expect(onPagePaintingsChange).toHaveBeenCalledTimes(1)
     expect(onPagePaintingsChange).toHaveBeenLastCalledWith(nextPaintings)
-    expect(onAnnotationHistoryChange).not.toHaveBeenCalled()
-    expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(false)
+    expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pagePaintings: nextPaintings }),
+      expect.objectContaining({ source: 'drawing' })
+    )
+    expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(true)
 
     const runtimeSelectionId = requireRuntimeSelectionId()
     act(() => {
@@ -4031,7 +4039,7 @@ describe('Reader annotation history', () => {
     })
     await waitFor(() => {
       expect(onAnnotationHistoryChange).toHaveBeenLastCalledWith(
-        expect.not.objectContaining({ pagePaintings: expect.anything() }),
+        expect.objectContaining({ pagePaintings: nextPaintings }),
         expect.objectContaining({ source: 'select' })
       )
     })
@@ -4042,6 +4050,331 @@ describe('Reader annotation history', () => {
 
     expect(onPagePaintingsChange).toHaveBeenCalledTimes(1)
     expect(capturedViewerProps.pagePaintings).toBe(pagePaintings)
+  })
+
+  it('replays A, highlight, rectangle, B in one chronological file history', async () => {
+    const ref = createRef<ReaderSelectionRef>()
+    const doc = makeLazyDocument(2).document
+    const observed = vi.fn()
+    function Controlled() {
+      const [value, setValue] = useState<
+        import('../src/types/selection').ReaderAnnotationHistoryValue
+      >({
+        ranges: [],
+        rects: [],
+        pagePaintings: {},
+        selectedRangeId: null,
+        selectedRectId: null
+      })
+      return (
+        <Reader
+          document={doc}
+          data={value}
+          annotationHistory
+          selectionRef={ref}
+          onPagePaintingsChange={(pagePaintings) =>
+            setValue((current) => ({ ...current, pagePaintings }))
+          }
+          onAnnotationHistoryChange={(next, detail) => {
+            observed(next, detail)
+            if (detail.source !== 'drawing') setValue(next)
+          }}
+        />
+      )
+    }
+    render(<Controlled />)
+    await screen.findByText('Page 1 text')
+    const a = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const b = drawingFixture({
+      strokes: [{ id: 'b', tool: 'pen', points: [{ x: 3, y: 4 }] }]
+    })
+    act(() =>
+      (
+        capturedViewerProps.onPagePaintingChange as (
+          id: string,
+          doc: EditorDocument
+        ) => void
+      )('page-1', a)
+    )
+    const id = requireRuntimeSelectionId()
+    act(() =>
+      simulateLinkedDataChange(id, {
+        ...requireLinkedData(id),
+        items: [makeRuntimeRange(id, 'h', 'H')],
+        selectedRangeId: 'h'
+      })
+    )
+    act(() =>
+      getSelectionPropsById(id)?.onCreateRect?.({
+        ...makeReaderRect('r'),
+        selectionId: id
+      })
+    )
+    act(() =>
+      (
+        capturedViewerProps.onPagePaintingChange as (
+          id: string,
+          doc: EditorDocument
+        ) => void
+      )('page-2', b)
+    )
+    expect(
+      requireReaderSelectionRef(ref).getAnnotationHistoryState().pastCount
+    ).toBe(4)
+    const targets = [
+      { pages: ['page-1'], ranges: 1, rects: 1 },
+      { pages: ['page-1'], ranges: 1, rects: 0 },
+      { pages: ['page-1'], ranges: 0, rects: 0 },
+      { pages: [], ranges: 0, rects: 0 }
+    ]
+    for (const target of targets) {
+      act(() => {
+        expect(requireReaderSelectionRef(ref).undo()).toBe(true)
+      })
+      const next = observed.mock.lastCall![0]
+      expect(Object.keys(next.pagePaintings)).toEqual(target.pages)
+      expect(next.ranges).toHaveLength(target.ranges)
+      expect(next.rects).toHaveLength(target.rects)
+    }
+    for (let i = 0; i < 4; i++)
+      act(() => {
+        expect(requireReaderSelectionRef(ref).redo()).toBe(true)
+      })
+    expect(capturedViewerProps.pagePaintings).toEqual({
+      'page-1': a,
+      'page-2': b
+    })
+    // A new non-drawing annotation also replaces the whole drawing future.
+    act(() => {
+      requireReaderSelectionRef(ref).undo()
+    })
+    act(() =>
+      simulateLinkedDataChange(id, {
+        ...requireLinkedData(id),
+        items: [makeRuntimeRange(id, 'h', 'Replacement')],
+        selectedRangeId: 'h'
+      })
+    )
+    expect(requireReaderSelectionRef(ref).canRedo()).toBe(false)
+  })
+
+  it('replays two batched page commits, retains redo on no-ops, and discards all future on new ink', async () => {
+    const selectionRef = createRef<ReaderSelectionRef>()
+    const changed = vi.fn()
+    const historyChanged = vi.fn()
+    const { document } = makeLazyDocument(2)
+    render(
+      <Reader
+        document={document}
+        annotationHistory
+        selectionRef={selectionRef}
+        onPagePaintingsChange={changed}
+        onAnnotationHistoryChange={historyChanged}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    const update = capturedViewerProps.onPagePaintingChange as (
+      id: string,
+      doc: EditorDocument
+    ) => void
+    const a = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const b = drawingFixture({
+      strokes: [{ id: 'b', tool: 'pen', points: [{ x: 3, y: 4 }] }]
+    })
+    act(() => {
+      update('page-1', a)
+      update('page-2', b)
+    })
+    expect(
+      requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+        .pastCount
+    ).toBe(2)
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+    expect(capturedViewerProps.pagePaintings).toEqual({ 'page-1': a })
+    const saves = changed.mock.calls.length
+    act(() => {
+      update('page-1', { ...a, documentRevision: 999 })
+      update('page-9', drawingFixture({ strokes: [] }))
+    })
+    expect(changed).toHaveBeenCalledTimes(saves)
+    expect(requireReaderSelectionRef(selectionRef).canRedo()).toBe(true)
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).redo()).toBe(true)
+    })
+    expect(capturedViewerProps.pagePaintings).toEqual({
+      'page-1': a,
+      'page-2': b
+    })
+    const runtimeSelectionId = requireRuntimeSelectionId()
+    act(() =>
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...requireLinkedData(runtimeSelectionId),
+        items: [makeRuntimeRange(runtimeSelectionId, 'h', 'H')],
+        selectedRangeId: 'h'
+      })
+    )
+    act(() => {
+      requireReaderSelectionRef(selectionRef).undo()
+      requireReaderSelectionRef(selectionRef).undo()
+    })
+    expect(
+      requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+        .futureCount
+    ).toBe(2)
+    act(() => update('page-1', b))
+    expect(requireReaderSelectionRef(selectionRef).canRedo()).toBe(false)
+    expect(historyChanged.mock.lastCall?.[0].pagePaintings).toEqual({
+      'page-1': b
+    })
+    // Replay uses the history callback, never ordinary drawing save callbacks.
+    expect(changed).toHaveBeenCalledTimes(saves + 1)
+  })
+
+  it('resets on a true external replacement, keeps equal controlled echoes, and isolates files', async () => {
+    const ref = createRef<ReaderSelectionRef>()
+    const first = makeLazyDocument(1).document
+    const second = makeLazyDocument(1).document
+    const a = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const b = drawingFixture({
+      strokes: [{ id: 'b', tool: 'pen', points: [{ x: 3, y: 4 }] }]
+    })
+    const onHistory = vi.fn()
+    const view = render(
+      <Reader
+        document={first}
+        annotationHistory
+        selectionRef={ref}
+        pagePaintings={{}}
+        onAnnotationHistoryChange={onHistory}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    act(() =>
+      (
+        capturedViewerProps.onPagePaintingChange as (
+          id: string,
+          doc: EditorDocument
+        ) => void
+      )('page-1', a)
+    )
+    view.rerender(
+      <Reader
+        document={first}
+        annotationHistory
+        selectionRef={ref}
+        pagePaintings={JSON.parse(JSON.stringify({ 'page-1': a }))}
+        onAnnotationHistoryChange={onHistory}
+      />
+    )
+    expect(requireReaderSelectionRef(ref).canUndo()).toBe(true)
+    act(() => {
+      requireReaderSelectionRef(ref).undo()
+    })
+    view.rerender(
+      <Reader
+        document={first}
+        annotationHistory
+        selectionRef={ref}
+        pagePaintings={{}}
+        onAnnotationHistoryChange={onHistory}
+      />
+    )
+    expect(requireReaderSelectionRef(ref).canRedo()).toBe(true)
+    view.rerender(
+      <Reader
+        document={first}
+        annotationHistory
+        selectionRef={ref}
+        pagePaintings={{ 'page-1': b }}
+        onAnnotationHistoryChange={onHistory}
+      />
+    )
+    expect(
+      requireReaderSelectionRef(ref).getAnnotationHistoryState()
+    ).toMatchObject({ pastCount: 0, futureCount: 0 })
+    view.rerender(
+      <Reader
+        document={second}
+        annotationHistory
+        selectionRef={ref}
+        onAnnotationHistoryChange={onHistory}
+      />
+    )
+    expect(capturedViewerProps.pagePaintings).toEqual({})
+    expect(requireReaderSelectionRef(ref).canUndo()).toBe(false)
+  })
+
+  it('requires a history handler for controlled drawing replay and retains history across modes', async () => {
+    const ref = createRef<ReaderSelectionRef>()
+    const doc = makeLazyDocument(1).document
+    const a = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const view = render(
+      <Reader
+        document={doc}
+        annotationHistory
+        selectionRef={ref}
+        pagePaintings={{}}
+      />
+    )
+    await screen.findByText('Page 1 text')
+    act(() =>
+      (
+        capturedViewerProps.onPagePaintingChange as (
+          id: string,
+          doc: EditorDocument
+        ) => void
+      )('page-1', a)
+    )
+    expect(requireReaderSelectionRef(ref).canUndo()).toBe(false)
+    act(() => {
+      expect(requireReaderSelectionRef(ref).undo()).toBe(false)
+    })
+    expect(
+      requireReaderSelectionRef(ref).getAnnotationHistoryState().pastCount
+    ).toBe(1)
+    view.rerender(
+      <Reader document={doc} annotationHistory selectionRef={ref} />
+    )
+    act(() =>
+      (
+        capturedViewerProps.onPagePaintingChange as (
+          id: string,
+          doc: EditorDocument
+        ) => void
+      )('page-2', a)
+    )
+    view.rerender(
+      <Reader
+        document={doc}
+        annotationHistory
+        selectionRef={ref}
+        renderMode='text'
+      />
+    )
+    view.rerender(
+      <Reader
+        document={doc}
+        annotationHistory
+        selectionRef={ref}
+        renderMode='layout'
+      />
+    )
+    await screen.findByText('Page 1 text')
+    expect(requireReaderSelectionRef(ref).canUndo()).toBe(true)
+    act(() => {
+      expect(requireReaderSelectionRef(ref).undo()).toBe(true)
+    })
+    expect(capturedViewerProps.pagePaintings).toEqual({ 'page-1': a })
   })
 
   it('undoes and redoes an uncontrolled text range mutation through selectionRef', async () => {
@@ -4206,6 +4539,7 @@ describe('Reader annotation history', () => {
     act(() => {
       expect(publicRef.undo()).toBe(true)
     })
+    expect(requireReaderSelectionRef(selectionRef).canRedo()).toBe(false)
     act(() => {
       expect(publicRef.redo()).toBe(false)
     })

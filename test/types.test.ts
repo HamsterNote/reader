@@ -252,6 +252,7 @@ const _bookmarkInteractiveProps: ReaderInteractiveProps = {
 
 type AnnotationHistoryKeys = keyof ReaderAnnotationHistoryValue
 type AnnotationHistoryExpectedKeys =
+  | 'pagePaintings'
   | 'ranges'
   | 'rects'
   | 'selectedRangeId'
@@ -264,12 +265,12 @@ type AnnotationHistoryHasExpectedKeys =
   Exclude<AnnotationHistoryExpectedKeys, AnnotationHistoryKeys> extends never
     ? true
     : false
-type AnnotationHistoryHasNoPagePaintings =
-  'pagePaintings' extends AnnotationHistoryKeys ? false : true
+type AnnotationHistoryHasPagePaintings =
+  'pagePaintings' extends AnnotationHistoryKeys ? true : false
 
 const _annotationHistoryOnlyExpectedKeys: AssertTrue<AnnotationHistoryHasOnlyExpectedKeys> = true
 const _annotationHistoryExpectedKeys: AssertTrue<AnnotationHistoryHasExpectedKeys> = true
-const _annotationHistoryHasNoPagePaintings: AssertTrue<AnnotationHistoryHasNoPagePaintings> = true
+const _annotationHistoryHasNoPagePaintings: AssertTrue<AnnotationHistoryHasPagePaintings> = true
 
 const _annotationHistoryValue: ReaderAnnotationHistoryValue = {
   ranges: [linkedRange],

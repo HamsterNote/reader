@@ -35,6 +35,7 @@ import React, {
   type ReactNode,
   type Ref,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useImperativeHandle,
@@ -76,7 +77,10 @@ import type {
 import { FLOW_LAYOUT_PAGE_WIDTH, type ReaderPageTool } from '../Page'
 import { hasDrawingObjects, PageDrawingLayer } from '../PageDrawingLayer'
 import { PopoverPortal } from '../PopoverPortal'
-import { useAnnotationHistory } from '../Reader/useAnnotationHistory'
+import {
+  AnnotationHistoryContext,
+  useAnnotationHistory
+} from '../Reader/useAnnotationHistory'
 import { isPointOnSelectionText } from '../selection/caretResolver'
 import {
   buildSelectionPayload,
@@ -4966,6 +4970,7 @@ export function IntermediateDocumentViewer({
     [effectiveRects, readerLinkedScopeId]
   )
 
+  const sharedHistory = useContext(AnnotationHistoryContext)
   const annotationHistoryEnabled = annotationHistory?.enabled === true
   const currentAnnotationHistorySnapshot = useCallback(
     () =>
@@ -5054,6 +5059,7 @@ export function IntermediateDocumentViewer({
 
   const runAnnotationHistory = useCallback(
     (source: 'undo' | 'redo') => {
+      annotationHistoryController.cancelInput()
       const target = annotationHistoryController.getTarget(source)
       if (!target) return false
 
@@ -5106,6 +5112,7 @@ export function IntermediateDocumentViewer({
   ])
 
   useEffect(() => {
+    if (sharedHistory) return
     const historyRects = isRectsControlled
       ? effectiveRects
       : annotationHistoryController.getPresent().rects
@@ -5129,6 +5136,7 @@ export function IntermediateDocumentViewer({
 
   useEffect(() => {
     if (
+      sharedHistory ||
       lastAnnotationHistoryResetKeyRef.current === annotationHistory?.resetKey
     ) {
       return

@@ -1,3 +1,4 @@
+import { drawingFixture } from './fixtures/painting'
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -28,6 +29,7 @@ const makeValue = (
   selectedRangeId: string | null = null
 ): ReaderAnnotationHistoryValue => ({
   ranges,
+  pagePaintings: {},
   rects: [],
   selectedRangeId,
   selectedRectId: null
@@ -237,7 +239,7 @@ describe('useAnnotationHistory', () => {
       pastCount: 0,
       futureCount: 0
     })
-    expect(result.current.getPresent()).toEqual(initialValue)
+    expect(result.current.getPresent()).toEqual(secondValue)
     expect(undoResult).toEqual({ applied: false, source: 'undo' })
     expect(onChange).not.toHaveBeenCalled()
   })
@@ -251,4 +253,87 @@ describe('useAnnotationHistory', () => {
     expect(controller.undo()).toEqual({ applied: false, source: 'undo' })
     expect(controller.redo()).toEqual({ applied: false, source: 'redo' })
   })
+})
+
+it('keeps a complete immutable drawing map, merges legacy targets, and serializes batched commits', () => {
+  const { result } = renderHistory()
+  const a = { schemaVersion: 3 as const, documentRevision: 0, objects: [] }
+  // A schema document may contain no objects; use actual migrated ink for content edits.
+  const ink = structuredClone(
+    drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+  )
+  const second = drawingFixture({
+    strokes: [{ id: 'b', tool: 'pen', points: [{ x: 3, y: 4 }] }]
+  })
+  act(() => {
+    result.current.setCheckpoint(
+      { ...initialValue, pagePaintings: { 'page-1': ink } },
+      'drawing'
+    )
+    result.current.setCheckpoint(
+      {
+        ...result.current.getPresent(),
+        pagePaintings: {
+          ...result.current.getPresent().pagePaintings,
+          'page-2': second
+        }
+      },
+      'drawing'
+    )
+  })
+  expect(result.current.getStatus().pastCount).toBe(2)
+  expect(result.current.getTarget('undo')?.pagePaintings?.['page-1']).toBe(
+    result.current.getPresent().pagePaintings?.['page-1']
+  )
+  const original = structuredClone(ink)
+  ;(ink as { documentRevision: number }).documentRevision = 99
+  expect(result.current.getPresent().pagePaintings?.['page-1']).toEqual(
+    original
+  )
+  const legacyValue = { ...firstValue }
+  delete legacyValue.pagePaintings
+  act(() => result.current.setCheckpoint(legacyValue, 'highlight'))
+  expect(result.current.getPresent().pagePaintings?.['page-1']).toEqual(
+    original
+  )
+  act(() =>
+    result.current.setCheckpoint(
+      { ...firstValue, pagePaintings: {} },
+      'drawing'
+    )
+  )
+  expect(result.current.getPresent().pagePaintings).toEqual({})
+  act(() => {
+    result.current.undo()
+    result.current.syncSilent({
+      ...result.current.getPresent(),
+      selectedRangeId: null
+    })
+    result.current.setCheckpoint(
+      {
+        ...result.current.getPresent(),
+        pagePaintings: {
+          ...result.current.getPresent().pagePaintings,
+          empty: a
+        }
+      },
+      'drawing'
+    )
+  })
+  expect(result.current.getStatus()).toMatchObject({
+    canRedo: true,
+    futureCount: 1
+  })
+  act(() =>
+    result.current.setCheckpoint(
+      {
+        ...secondValue,
+        pagePaintings: result.current.getPresent().pagePaintings
+      },
+      'highlight'
+    )
+  )
+  expect(result.current.getStatus().canRedo).toBe(false)
 })

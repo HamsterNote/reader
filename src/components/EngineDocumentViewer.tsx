@@ -6,6 +6,7 @@ import {
   type ComponentProps,
   type PointerEvent as ReactPointerEvent,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -44,7 +45,10 @@ import {
 import type { IntermediateDocumentViewerProps } from './IntermediateDocumentViewer'
 import { engineSelectionSegments } from './selection/engineSelectionSegments'
 import type { IntermediateText } from '@hamster-note/types'
-import { useAnnotationHistory } from './Reader/useAnnotationHistory'
+import {
+  AnnotationHistoryContext,
+  useAnnotationHistory
+} from './Reader/useAnnotationHistory'
 import { PageBrowser } from './IntermediateDocumentViewer/PageBrowser'
 import { ReadingProgress } from './IntermediateDocumentViewer/ReadingProgress'
 import { isTextBookmark } from './IntermediateDocumentViewer/textAnchor'
@@ -332,12 +336,13 @@ export function EngineDocumentViewer(props: Props) {
     },
     []
   )
+  const sharedHistory = useContext(AnnotationHistoryContext)
   const [internalRanges, setInternalRanges] = useState(
-    props.defaultRanges ?? []
+    sharedHistory?.getPresent().ranges ?? props.defaultRanges ?? []
   )
   const [internalRects, setInternalRects] = useState<
     ReaderSelectionRectangle[]
-  >([])
+  >(() => sharedHistory?.getPresent().rects ?? [])
   const [internalSelected, setInternalSelected] = useState<string | null>(
     props.defaultSelectedRangeId ?? null
   )
@@ -398,7 +403,7 @@ export function EngineDocumentViewer(props: Props) {
   }, [statusKey])
   const resetKey = props.annotationHistory?.resetKey
   useEffect(() => {
-    historyRef.current.reset(snapshot(), 'reset')
+    if (!sharedHistory) historyRef.current.reset(snapshot(), 'reset')
   }, [source, resetKey])
   const annotationsKey = JSON.stringify(snapshot())
   useEffect(() => {
@@ -411,7 +416,8 @@ export function EngineDocumentViewer(props: Props) {
       )
     )
       return
-    historyRef.current.syncSilent(JSON.parse(annotationsKey))
+    if (!sharedHistory)
+      historyRef.current.syncSilent(JSON.parse(annotationsKey))
   }, [annotationsKey])
 
   const apply = (
@@ -1108,6 +1114,7 @@ export function EngineDocumentViewer(props: Props) {
       if (position.scale) pdf.current?.setScale(position.scale)
     },
     undo: () => {
+      historyRef.current.cancelInput()
       if ((props.ranges || props.rects) && !props.onAnnotationHistoryChange)
         return false
       const result = historyRef.current.undo()
@@ -1120,6 +1127,7 @@ export function EngineDocumentViewer(props: Props) {
       return result.applied
     },
     redo: () => {
+      historyRef.current.cancelInput()
       if ((props.ranges || props.rects) && !props.onAnnotationHistoryChange)
         return false
       const result = historyRef.current.redo()
