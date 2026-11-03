@@ -23,6 +23,8 @@ export type FakeRenderer = {
   getContents(): readonly unknown[]
   goTo(target: unknown): Promise<void>
   scrollToAnchor(): Promise<void>
+  next: Mock
+  prev: Mock
   destroy(): void
 }
 
@@ -61,6 +63,8 @@ export const makeFakeView = (options?: {
     styles: [],
     goToCalls: [],
     destroyed: false,
+    next: vi.fn(() => Promise.resolve()),
+    prev: vi.fn(() => Promise.resolve()),
     setAttribute(name, value) {
       this.attrs[name] = value
     },

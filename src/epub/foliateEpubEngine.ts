@@ -5,6 +5,7 @@
 // foliate 的 CFI/DOM Range 只是可重建的内部缓存，不出本模块。
 // 集成接线（Reader 路由、底栏、存储）属于 HAM-91，本模块不改动。
 
+import { buttonOnlyInput } from './buttonOnlyInput'
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js'
 import '../../vendor/foliate-js/view.js'
 import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
@@ -68,12 +69,19 @@ export type ShowRangesReport = {
   }[]
 }
 
+export type EpubNavigationState = {
+  readonly canPrevious: boolean
+  readonly canNext: boolean
+  readonly busy: boolean
+}
+
 export type EpubEngineOptions = {
   readonly container: HTMLElement
   readonly source: Uint8Array | Blob
   readonly flow?: 'paginated' | 'scrolled'
   readonly fontScale?: number
   readonly selectionColor?: string
+  readonly onNavigationState?: (state: EpubNavigationState) => void
   readonly onReady?: (info: EpubEngineBookInfo) => void
   readonly onError?: (error: EpubEngineError) => void
   readonly onRelocate?: (location: EpubEngineLocation) => void
@@ -90,6 +98,9 @@ export type EpubEngineOptions = {
 export type EpubEngine = {
   /** open 完成 resolve；失败 reject（同时走 onError）。 */
   readonly ready: Promise<EpubEngineBookInfo>
+  readonly previousPage: () => Promise<boolean>
+  readonly nextPage: () => Promise<boolean>
+  readonly navigationState: () => EpubNavigationState
   readonly goToPage: (pageNumber: number) => Promise<boolean>
   readonly goToTocHref: (href: string) => Promise<boolean>
   /** 跳转并滚动到已加入的高亮。 */
@@ -149,6 +160,7 @@ export const createEpubEngine = (
   let coverUrl: string | null = null
   let fontScale = options.fontScale ?? DEFAULT_FONT_SCALE
   let currentAnchor: ReaderTextAnchor | undefined
+  let virtualCoverActive = false
   let displayedPage: number | undefined
   let activeRangeId: string | null = null
   let hiddenPages = new Set<number>()
@@ -172,29 +184,86 @@ export const createEpubEngine = (
   // 已加载但尚未补画叠加的 foliate section（'load' 时 getContents 未就绪）。
   const pendingOverlayDraw = new Set<number>()
   const docListeners: [Document, string, EventListener][] = []
+  let positioning = 0
   let turning = false
-  const turnAtBoundary = async (doc: Document, forward: boolean) => {
-    if (destroyed || turning || cropEditing || !view?.renderer) return false
-    const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
-    const viewport = options.container.getBoundingClientRect()
-    if (
-      !frame ||
-      (forward
-        ? frame.bottom > viewport.bottom + 2
-        : frame.top < viewport.top - 2)
-    )
-      return false
-    turning = true
-    try {
-      if (forward) await view.renderer.next()
-      else await view.renderer.prev()
-    } catch (error) {
-      if (!destroyed)
-        options.onError?.({ code: 'render-failed', message: String(error) })
-    } finally {
-      turning = false
+  let opened = false
+  let reflowing = false
+  let reflowFrame = 0
+  let frozenAnchor: ReaderTextAnchor | undefined
+  let lastDetail: FoliateRelocateDetail | undefined
+  let pendingDetail: FoliateRelocateDetail | undefined
+  const inputCleanups = new Map<Document, () => void>()
+  const removeContainerInput = buttonOnlyInput(options.container)
+
+  const readablePages = () =>
+    model?.pages.filter((page) => {
+      if (!isPageVisible(page.pageNumber)) return false
+      if (page.chapterIndex === null) return true
+      const index = sectionIndexByChapter[page.chapterIndex]
+      return index != null && book?.sections[index]?.linear !== 'no'
+    }) ?? []
+  const sectionStart = () =>
+    view?.isFixedLayout || (lastDetail?.fraction ?? 0) < 0.00001
+  const sectionEnd = () =>
+    view?.isFixedLayout ||
+    (lastDetail?.fraction ?? 0) + (lastDetail?.size ?? 1) >= 1 - 0.00001
+  const navigationState = (): EpubNavigationState => {
+    const pages = readablePages()
+    const index = pages.findIndex((page) => page.pageNumber === displayedPage)
+    const virtualCover = index >= 0 && pages[index].chapterIndex === null
+    return {
+      canPrevious:
+        index >= 0 && (index > 0 || (!virtualCover && !sectionStart())),
+      canNext:
+        index >= 0 &&
+        (index < pages.length - 1 || (!virtualCover && !sectionEnd())),
+      busy:
+        !opened ||
+        turning ||
+        reflowing ||
+        positioning > 0 ||
+        !!restrictionNavigation
     }
-    return true
+  }
+  const publishNavigation = () => {
+    if (!destroyed) options.onNavigationState?.(navigationState())
+  }
+
+  // Freeze the public character anchor while Foliate lays out its stable DOM Range.
+  const onReflow = () => {
+    if (
+      destroyed ||
+      turning ||
+      positioning ||
+      restrictionNavigation ||
+      !opened ||
+      !currentAnchor
+    )
+      return
+    if (view?.renderer?.getContents()[0]?.index !== lastDetail?.index) return
+    if (!reflowing) frozenAnchor = currentAnchor
+    reflowing = true
+    publishNavigation()
+    cancelAnimationFrame(reflowFrame)
+    reflowFrame = requestAnimationFrame(() => {
+      reflowFrame = requestAnimationFrame(async () => {
+        if (destroyed) return
+        try {
+          if (frozenAnchor) await restoreLiveAnchor(frozenAnchor)
+          redrawLiveOverlays()
+        } catch (error) {
+          if (!destroyed)
+            options.onError?.({ code: 'render-failed', message: String(error) })
+        } finally {
+          if (!destroyed) {
+            currentAnchor = frozenAnchor
+            frozenAnchor = undefined
+            reflowing = false
+            publishNavigation()
+          }
+        }
+      })
+    })
   }
 
   let resolveReady!: (info: EpubEngineBookInfo) => void
@@ -216,7 +285,7 @@ export const createEpubEngine = (
     const renderer = view?.renderer
     if (!renderer) return
     const selection = options.selectionColor ?? 'rgba(0, 120, 215, 0.3)'
-    renderer.setStyles(
+    renderer.setStyles?.(
       `html { font-size: ${Math.round(BASE_FONT_SIZE_PX * fontScale)}px !important; }\n` +
         `::selection { background: ${selection} !important; }`
     )
@@ -297,6 +366,8 @@ export const createEpubEngine = (
         oldDoc.defaultView?.frameElement?.isConnected
       )
         continue
+      inputCleanups.get(oldDoc)?.()
+      inputCleanups.delete(oldDoc)
       options.onDocumentUnload?.(oldDoc)
       for (let i = docListeners.length - 1; i >= 0; i--) {
         const [owner, type, listener] = docListeners[i]
@@ -345,11 +416,11 @@ export const createEpubEngine = (
         .find((entry) => entry.index === sectionIndex)
       if (!contents) return
       const mouse = event as MouseEvent
-      const hit = contents.overlayer.hitTest({
+      const hit = contents.overlayer?.hitTest({
         x: mouse.clientX,
         y: mouse.clientY
       })
-      const [key] = hit
+      const [key] = hit ?? []
       if (!key) return
       const id = key.split(':').at(-1)
       if (id && ranges.has(id)) {
@@ -359,54 +430,22 @@ export const createEpubEngine = (
         })
       }
     }
-    const onWheel = (event: Event) => {
-      const wheel = event as WheelEvent
-      if (
-        wheel.ctrlKey ||
-        wheel.buttons ||
-        !wheel.deltaY ||
-        Math.abs(wheel.deltaX) > Math.abs(wheel.deltaY)
-      )
-        return
-      void turnAtBoundary(doc, wheel.deltaY > 0)
-    }
-    let touchStart: { y: number; time: number } | null = null
-    const onTouchStart = (event: Event) => {
-      const touches = (event as TouchEvent).touches
-      touchStart =
-        touches.length === 1
-          ? { y: touches[0].clientY, time: Date.now() }
-          : null
-    }
-    const onTouchEnd = (event: Event) => {
-      const start = touchStart
-      touchStart = null
-      const end = (event as TouchEvent).changedTouches[0]
-      if (
-        !start ||
-        !end ||
-        Date.now() - start.time > 450 ||
-        Math.abs(end.clientY - start.y) < 50
-      )
-        return
-      void turnAtBoundary(doc, end.clientY < start.y)
-    }
+    inputCleanups.set(doc, buttonOnlyInput(doc))
     doc.addEventListener('selectionchange', onSelectionChange)
     doc.addEventListener('click', onClick)
-    doc.addEventListener('wheel', onWheel, { passive: true })
-    doc.addEventListener('touchstart', onTouchStart, { passive: true })
-    doc.addEventListener('touchend', onTouchEnd, { passive: true })
     docListeners.push(
       [doc, 'selectionchange', onSelectionChange],
-      [doc, 'click', onClick],
-      [doc, 'wheel', onWheel],
-      [doc, 'touchstart', onTouchStart],
-      [doc, 'touchend', onTouchEnd]
+      [doc, 'click', onClick]
     )
   }
 
   const onRelocate = (detail: FoliateRelocateDetail) => {
-    if (destroyed || !model) return
+    if (destroyed || !model || virtualCoverActive) return
+    if (turning) {
+      pendingDetail = detail
+      return
+    }
+    lastDetail = detail
     if (
       pendingOverlayDraw.has(detail.index) &&
       drawSectionAnnotations(detail.index)
@@ -425,15 +464,18 @@ export const createEpubEngine = (
     if (page && !isPageVisible(page.pageNumber)) return
     const position =
       detail.range && compat?.serializeRange(chapterIndex, detail.range)
-    currentAnchor = page
-      ? {
-          pageNumber: page.pageNumber,
-          textId: `${page.pageId}-text`,
-          text: position?.text ?? page.text.slice(0, 80),
-          offset: position?.start.offset ?? 0
-        }
-      : undefined
+    if (!reflowing)
+      currentAnchor = page?.text
+        ? {
+            pageNumber: page.pageNumber,
+            textId: `${page.pageId}-text`,
+            text: position?.text ?? page.text.slice(0, 80),
+            offset: position?.start.offset ?? 0
+          }
+        : undefined
     displayedPage = page?.pageNumber
+    publishNavigation()
+    if (reflowing) return
     options.onRelocate?.({
       chapterIndex,
       pageNumber: page?.pageNumber ?? null,
@@ -469,6 +511,9 @@ export const createEpubEngine = (
         (section) => section.id === chapter.href
       )
       return index >= 0 ? index : null
+    })
+    bySection.forEach((chapter, index) => {
+      if (chapter === null) foliateBook.sections[index].linear = 'no'
     })
     chapterIndexBySection = bySection
     sectionIndexByChapter = byChapter
@@ -542,7 +587,17 @@ export const createEpubEngine = (
       onSectionLoad(event.detail.doc, event.detail.index)
     )
     renderer.addEventListener('relocate', (event) => onRelocate(event.detail))
-    renderer.setAttribute('flow', options.flow ?? 'scrolled')
+    if (view.isFixedLayout) {
+      renderer.open({
+        ...book,
+        rendition: { ...book.rendition, spread: 'none' }
+      })
+      renderer.setAttribute('zoom', 'fit-page')
+    }
+    renderer.setAttribute('flow', options.flow ?? 'paginated')
+    renderer.setAttribute('max-column-count', '1')
+    renderer.setAttribute('manual-navigation', '')
+    renderer.addEventListener('before-reflow', onReflow)
     applyStyles()
     options.container.append(view)
     return true
@@ -577,6 +632,8 @@ export const createEpubEngine = (
           : null,
       toc: mapToc(book.toc, book, model)
     }
+    opened = true
+    publishNavigation()
     resolveReady(info)
     options.onReady?.(info)
   }
@@ -623,9 +680,11 @@ export const createEpubEngine = (
       visible.find((entry) => entry.pageNumber > pageNumber) ??
       visible.at(-1)
     if (!page) return false
+    virtualCoverActive = page.chapterIndex === null
     if (page.chapterIndex === null) {
       currentAnchor = undefined
       displayedPage = page.pageNumber
+      publishNavigation()
       options.onRelocate?.({
         chapterIndex: -1,
         pageNumber: page.pageNumber,
@@ -684,6 +743,7 @@ export const createEpubEngine = (
     }
     if (!destroyed && generation === restrictionGeneration && view)
       view.style.visibility = ''
+    publishNavigation()
   }
 
   const goToTocHref = async (href: string): Promise<boolean> => {
@@ -695,6 +755,7 @@ export const createEpubEngine = (
     if (rangePages && !page) return false
     if (page && !isPageVisible(page.pageNumber))
       return goToPage(page.pageNumber)
+    virtualCoverActive = false
     await view.renderer.goTo({ index: resolved.index, anchor: resolved.anchor })
     return true
   }
@@ -711,6 +772,7 @@ export const createEpubEngine = (
     }
     const sectionIndex = sectionIndexByChapter[firstPart.parts[0].chapterIndex]
     if (sectionIndex === null || sectionIndex === undefined) return false
+    virtualCoverActive = false
     // 两阶段：先切节（此间 load/relocate 把活文档接入兼容索引），
     // 再用活文档重建 Range 做精确滚动——静态文档的 Range 不能跨文档锚定。
     await view.renderer.goTo({ index: sectionIndex })
@@ -719,13 +781,17 @@ export const createEpubEngine = (
     if (livePart.status !== 'located' || livePart.parts.length === 0) {
       return true
     }
-    await view.renderer.scrollToAnchor(livePart.parts[0].range)
+    await view.renderer.scrollToAnchor?.(livePart.parts[0].range)
     return true
   }
 
   const destroy = async () => {
     if (destroyed) return
     destroyed = true
+    cancelAnimationFrame(reflowFrame)
+    removeContainerInput()
+    inputCleanups.forEach((remove) => remove())
+    inputCleanups.clear()
     for (const [doc, type, listener] of docListeners) {
       doc.removeEventListener(type, listener)
     }
@@ -770,13 +836,122 @@ export const createEpubEngine = (
     )
   }
 
+  const restoreLiveAnchor = async (anchor: ReaderTextAnchor) => {
+    if (!compat || !view?.renderer || destroyed) return
+    const text = compat.pageText(anchor.pageNumber) ?? ''
+    const offset = Math.max(
+      0,
+      Math.min(anchor.offset, Math.max(0, text.length - 1))
+    )
+    const endpoint = { selectionId: `page-${anchor.pageNumber}`, offset }
+    const located = compat.locateRange({
+      start: endpoint,
+      end: { ...endpoint, offset: offset + 1 },
+      text: text.slice(offset, offset + 1)
+    })
+    if (located.status === 'located' && located.parts[0]) {
+      await view.renderer.scrollToAnchor?.(located.parts[0].range)
+      // A restored anchor may sit in the middle of a newly sized page. Keep
+      // that exact character for subsequent reflows, rather than its earlier page start.
+      if (!destroyed && displayedPage === anchor.pageNumber)
+        currentAnchor = { ...anchor, offset }
+    }
+  }
+
+  const restoreFailedTurn = async (
+    page: number | undefined,
+    anchor: ReaderTextAnchor | undefined
+  ) => {
+    if (destroyed || !page) return
+    try {
+      await goToPage(page)
+      if (anchor) await restoreLiveAnchor(anchor)
+    } catch {
+      // Retain the successful public location even when rendering remains unavailable.
+    }
+  }
+
+  const turnRenderer = async (forward: boolean) => {
+    const pages = readablePages()
+    const index = pages.findIndex((page) => page.pageNumber === displayedPage)
+    const current = pages[index]
+    const adjacent = pages[index + (forward ? 1 : -1)]
+    if (
+      current.chapterIndex === null ||
+      (!forward && sectionStart() && adjacent?.chapterIndex === null) ||
+      view?.isFixedLayout
+    ) {
+      if (adjacent) await goToPage(adjacent.pageNumber)
+      return
+    }
+    if (forward) await view?.renderer?.next()
+    else await view?.renderer?.prev()
+  }
+
+  const turnPage = async (forward: boolean): Promise<boolean> => {
+    const state = navigationState()
+    if (
+      destroyed ||
+      state.busy ||
+      !(forward ? state.canNext : state.canPrevious) ||
+      !view?.renderer
+    )
+      return false
+    const savedAnchor = currentAnchor
+    const savedPage = displayedPage
+    const savedDetail = lastDetail
+    turning = true
+    pendingDetail = undefined
+    publishNavigation()
+    try {
+      await turnRenderer(forward)
+      if (destroyed) return false
+      turning = false
+      if (pendingDetail) onRelocate(pendingDetail)
+      return true
+    } catch (error) {
+      await restoreFailedTurn(savedPage, savedAnchor)
+      currentAnchor = savedAnchor
+      displayedPage = savedPage
+      lastDetail = savedDetail
+      if (!destroyed)
+        options.onError?.({ code: 'render-failed', message: String(error) })
+      return false
+    } finally {
+      turning = false
+      pendingDetail = undefined
+      publishNavigation()
+    }
+  }
+
+  const explicitNavigation = async <T>(
+    action: () => Promise<T>
+  ): Promise<T> => {
+    positioning++
+    cancelAnimationFrame(reflowFrame)
+    reflowing = false
+    frozenAnchor = undefined
+    publishNavigation()
+    try {
+      return await action()
+    } finally {
+      positioning--
+      publishNavigation()
+    }
+  }
+
   return {
     ready,
-    goToPage,
-    goToTocHref,
-    goToRange,
+    previousPage: () => turnPage(false),
+    nextPage: () => turnPage(true),
+    navigationState,
+    goToPage: (page) => explicitNavigation(() => goToPage(page)),
+    goToTocHref: (href) => explicitNavigation(() => goToTocHref(href)),
+    goToRange: (id) => explicitNavigation(() => goToRange(id)),
     setFontScale: (scale: number) => {
       if (destroyed || scale <= 0) return
+      if (fontScale === scale) return
+      onReflow()
       fontScale = scale
       applyStyles()
       // 字体变化只重算显示坐标；持久化端点不动（ranges 存的是旧端点）。
@@ -860,7 +1035,7 @@ export const createEpubEngine = (
           chapter !== null && chapter !== undefined
             ? model?.pages.find((entry) => entry.chapterIndex === chapter)
             : undefined
-        const visible = page ? isPageVisible(page.pageNumber) : !rangePages
+        const visible = page ? isPageVisible(page.pageNumber) : false
         section.linear = visible ? originalLinear.get(index) : 'no'
       })
       if (!model || !view?.renderer) return
@@ -878,6 +1053,7 @@ export const createEpubEngine = (
       } finally {
         if (restrictionNavigation === navigation)
           restrictionNavigation = undefined
+        publishNavigation()
       }
     },
     rangeIdAtPoint: (doc, x, y) => {
@@ -935,20 +1111,11 @@ export const createEpubEngine = (
       return range
     },
     captureTextAnchor: () => currentAnchor,
-    goToAnchor: async (anchor) => {
-      await goToPage(anchor.pageNumber)
-      if (!compat || !view?.renderer) return
-      const text = compat.pageText(anchor.pageNumber) ?? ''
-      const offset = Math.min(anchor.offset, Math.max(0, text.length - 1))
-      const endpoint = { selectionId: `page-${anchor.pageNumber}`, offset }
-      const located = compat.locateRange({
-        start: endpoint,
-        end: { ...endpoint, offset: offset + 1 },
-        text: text.slice(offset, offset + 1)
-      })
-      if (located.status === 'located' && located.parts[0])
-        await view.renderer.scrollToAnchor(located.parts[0].range)
-    },
+    goToAnchor: (anchor) =>
+      explicitNavigation(async () => {
+        await goToPage(anchor.pageNumber)
+        await restoreLiveAnchor(anchor)
+      }),
     destroy
   }
 }

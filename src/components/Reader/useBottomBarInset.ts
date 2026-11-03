@@ -3,6 +3,7 @@ import { type RefObject, useEffect, useState } from 'react'
 type BottomBarInsetElements = {
   readonly rootRef: RefObject<HTMLDivElement | null>
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
+  readonly layoutKey?: string
   readonly enabled: boolean
 }
 
@@ -15,7 +16,8 @@ type BottomBarInsetElements = {
 export function useBottomBarInset({
   rootRef,
   bottomBarRef,
-  enabled
+  enabled,
+  layoutKey
 }: BottomBarInsetElements): number {
   const [inset, setInset] = useState(0)
 
@@ -48,7 +50,7 @@ export function useBottomBarInset({
     measure()
 
     return () => observer.disconnect()
-  }, [bottomBarRef, enabled, rootRef])
+  }, [bottomBarRef, enabled, rootRef, layoutKey])
 
   return inset
 }

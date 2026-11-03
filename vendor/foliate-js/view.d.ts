@@ -23,7 +23,7 @@ export interface FoliateBook {
   readonly metadata?: { readonly title?: string; readonly language?: string }
   readonly sections: readonly FoliateSection[]
   readonly toc?: readonly FoliateTocItem[]
-  readonly rendition?: { readonly layout?: string }
+  readonly rendition?: { readonly layout?: string; readonly spread?: string }
   readonly resolveHref: (
     href: string
   ) => { index: number; anchor: (doc: Document) => Element | number } | null
@@ -87,11 +87,11 @@ export interface FoliateRenderer {
     anchor?: FoliateAnchor
     select?: boolean
   }): Promise<void>
-  scrollToAnchor(
+  scrollToAnchor?(
     anchor: number | Range | Element,
     select?: boolean
   ): Promise<void>
-  setStyles(styles: string | readonly [string, string]): void
+  setStyles?(styles: string | readonly [string, string]): void
   getContents(): readonly FoliateRendererContents[]
   next(distance?: number): Promise<void>
   prev(distance?: number): Promise<void>

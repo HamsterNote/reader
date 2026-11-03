@@ -5,6 +5,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import JSZip from 'jszip'
 
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
@@ -235,7 +236,7 @@ describe('epub engine session: lifecycle and race isolation', () => {
     await engine.destroy()
   })
 
-  it('excludes unmapped spine navigation documents and refuses their links only while a range is active', async () => {
+  it('excludes unmapped spine navigation documents from sequential reading and restricts explicit links while a range is active', async () => {
     const fake = makeFakeView({
       sectionHrefs: [
         'OPS/cover.xhtml',
@@ -270,7 +271,7 @@ describe('epub engine session: lifecycle and race isolation', () => {
     await engine.setHiddenPages([], true, { start: 2, end: 3 })
     expect(fake.handle.view.book?.sections[2].linear).toBe('no')
     await engine.setHiddenPages([])
-    expect(fake.handle.view.book?.sections[2].linear).toBe('yes')
+    expect(fake.handle.view.book?.sections[2].linear).toBe('no')
     expect(await engine.goToTocHref('nav.xhtml')).toBe(true)
     await engine.destroy()
   })
@@ -588,4 +589,246 @@ describe('epub engine session: lifecycle and race isolation', () => {
     expect(reportAfter.unlocatable).toEqual(reportBefore.unlocatable)
     await engine.destroy()
   })
+})
+
+describe('EPUB visual page navigation', () => {
+  it('uses single-column pagination and serializes turns, recovering from failure', async () => {
+    const fake = makeFakeView()
+    const error = vi.fn()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub'),
+        onError: error
+      },
+      fake.factory
+    )
+    expect(engine.navigationState().busy).toBe(true)
+    await engine.ready
+    expect(fake.handle.renderer.attrs).toMatchObject({
+      flow: 'paginated',
+      'max-column-count': '1',
+      'manual-navigation': ''
+    })
+    fake.handle.emit('relocate', { index: 1, fraction: 0.25, size: 0.25 })
+    let release!: () => void
+    fake.handle.renderer.next.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    const turn = engine.nextPage()
+    expect(engine.navigationState().busy).toBe(true)
+    expect(await engine.nextPage()).toBe(false)
+    expect(fake.handle.renderer.next).toHaveBeenCalledTimes(1)
+    release()
+    expect(await turn).toBe(true)
+    fake.handle.renderer.prev.mockRejectedValueOnce(new Error('page failed'))
+    expect(await engine.previousPage()).toBe(false)
+    expect(error).toHaveBeenCalledWith({
+      code: 'render-failed',
+      message: 'Error: page failed'
+    })
+    expect(engine.navigationState().busy).toBe(false)
+    expect(await engine.previousPage()).toBe(true)
+    await engine.destroy()
+  })
+
+  it('clamps book boundaries and recomputes them after hidden-page restrictions', async () => {
+    const fake = makeFakeView()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    fake.handle.emit('relocate', { index: 0, fraction: 0, size: 1 })
+    expect(engine.navigationState().canPrevious).toBe(false)
+    expect(await engine.previousPage()).toBe(false)
+    fake.handle.emit('relocate', { index: 3, fraction: 0.75, size: 0.25 })
+    expect(engine.navigationState().canNext).toBe(false)
+    expect(await engine.nextPage()).toBe(false)
+    await engine.setHiddenPages([1, 4], false, { start: 2, end: 3 })
+    expect(
+      fake.handle.view.book?.sections.map((section) => section.linear)
+    ).toEqual(['no', 'yes', 'yes', 'no'])
+    fake.handle.emit('relocate', { index: 1, fraction: 0, size: 0.5 })
+    expect(engine.navigationState()).toEqual({
+      canPrevious: false,
+      canNext: true,
+      busy: false
+    })
+    fake.handle.emit('relocate', { index: 2, fraction: 0.5, size: 0.5 })
+    expect(engine.navigationState().canNext).toBe(false)
+    await engine.destroy()
+  })
+
+  it('blocks wheel, touch pan and scroll keys in a live document and cleans up on destroy', async () => {
+    const fake = makeFakeView()
+    const engine = createEpubEngine(
+      {
+        container: document.createElement('div'),
+        source: readFixture('epub/duplicate-text.epub')
+      },
+      fake.factory
+    )
+    await engine.ready
+    const doc = new DOMParser().parseFromString(
+      '<html><body><p>Cover</p></body></html>',
+      'text/html'
+    )
+    fake.handle.emit('load', { index: 0, doc })
+    for (const type of ['wheel', 'touchmove', 'keydown']) {
+      const event =
+        type === 'keydown'
+          ? new KeyboardEvent(type, { key: 'PageDown', cancelable: true })
+          : new Event(type, { cancelable: true })
+      doc.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(true)
+    }
+    expect(fake.handle.renderer.next).not.toHaveBeenCalled()
+    await engine.destroy()
+    const event = new Event('wheel', { cancelable: true })
+    doc.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+it('visits a prepended cover exactly once and returns to the first readable chapter', async () => {
+  const fake = makeFakeView({
+    sectionHrefs: ['OPS/chapter1.xhtml', 'OPS/chapter2.xhtml']
+  })
+  const onRelocate = vi.fn()
+  const engine = createEpubEngine(
+    {
+      container: document.createElement('div'),
+      source: readFixture('epub/spine-omits-cover.epub'),
+      onRelocate
+    },
+    fake.factory
+  )
+  await engine.ready
+  vi.spyOn(fake.handle.renderer, 'goTo').mockImplementation(async (target) => {
+    fake.handle.emit('relocate', {
+      index: (target as { index: number }).index,
+      fraction: 0,
+      size: 0.5
+    })
+  })
+  await engine.goToPage(1)
+  expect(engine.navigationState()).toEqual({
+    canPrevious: false,
+    canNext: true,
+    busy: false
+  })
+  expect(engine.captureTextAnchor()).toBeUndefined()
+  // A late renderer relocate under the synthetic cover must not dismiss it.
+  fake.handle.emit('relocate', { index: 0, fraction: 0, size: 0.5 })
+  expect(onRelocate.mock.calls.at(-1)?.[0].pageNumber).toBe(1)
+  expect(await engine.nextPage()).toBe(true)
+  expect(onRelocate.mock.calls.at(-1)?.[0].pageNumber).toBe(2)
+  expect(await engine.previousPage()).toBe(true)
+  expect(onRelocate.mock.calls.at(-1)?.[0].pageNumber).toBe(1)
+  expect(await engine.previousPage()).toBe(false)
+  expect(fake.handle.renderer.prev).not.toHaveBeenCalled()
+  await engine.destroy()
+})
+
+it('never sequentially visits navigation-only spine entries without a compatibility page', async () => {
+  const fake = makeFakeView({
+    sectionHrefs: [
+      'OPS/cover.xhtml',
+      'OPS/chapter1.xhtml',
+      'OPS/nav.xhtml',
+      'OPS/chapter2.xhtml',
+      'OPS/chapter3.xhtml'
+    ]
+  })
+  const engine = createEpubEngine(
+    {
+      container: document.createElement('div'),
+      source: readFixture('epub/duplicate-text.epub')
+    },
+    fake.factory
+  )
+  await engine.ready
+  expect(fake.handle.view.book?.sections[2].linear).toBe('no')
+  await engine.setHiddenPages([])
+  expect(fake.handle.view.book?.sections[2].linear).toBe('no')
+  await engine.destroy()
+})
+
+it('discards transient relocations from a failed turn instead of publishing false progress', async () => {
+  const fake = makeFakeView()
+  const onRelocate = vi.fn()
+  const engine = createEpubEngine(
+    {
+      container: document.createElement('div'),
+      source: readFixture('epub/duplicate-text.epub'),
+      onRelocate
+    },
+    fake.factory
+  )
+  await engine.ready
+  fake.handle.emit('relocate', { index: 1, fraction: 0.25, size: 0.25 })
+  const anchor = engine.captureTextAnchor()
+  onRelocate.mockClear()
+  fake.handle.renderer.next.mockImplementationOnce(async () => {
+    fake.handle.emit('relocate', { index: 1, fraction: 1, size: 0.25 })
+    throw new Error('next chapter unavailable')
+  })
+  expect(await engine.nextPage()).toBe(false)
+  expect(engine.captureTextAnchor()).toEqual(anchor)
+  expect(onRelocate).not.toHaveBeenCalled()
+  expect(engine.navigationState().busy).toBe(false)
+  await engine.destroy()
+})
+
+it('keeps the requested restored character through reflow when it is inside a visual page', async () => {
+  const bytes = readFixture('epub/duplicate-text.epub')
+  const zip = await JSZip.loadAsync(bytes)
+  const xml = await zip.file('OPS/chapter1.xhtml')!.async('string')
+  const doc = new DOMParser().parseFromString(xml, 'text/html')
+  const fake = makeFakeView()
+  const onRelocate = vi.fn()
+  const engine = createEpubEngine(
+    { container: document.createElement('div'), source: bytes, onRelocate },
+    fake.factory
+  )
+  await engine.ready
+  fake.handle.emit('load', { index: 1, doc })
+  vi.spyOn(fake.handle.renderer, 'getContents').mockReturnValue([
+    { index: 1, doc }
+  ])
+  const range = doc.createRange()
+  const node = doc.querySelector('h1')!.firstChild!
+  range.setStart(node, 0)
+  range.setEnd(node, 1)
+  const relocate = () =>
+    fake.handle.emit('relocate', { index: 1, fraction: 0, size: 0.5, range })
+  vi.spyOn(fake.handle.renderer, 'goTo').mockImplementation(async () => {
+    relocate()
+  })
+  vi.spyOn(fake.handle.renderer, 'scrollToAnchor').mockImplementation(
+    async () => {
+      relocate()
+    }
+  )
+  await engine.goToAnchor({
+    pageNumber: 2,
+    textId: 'page-2-text',
+    text: '正文',
+    offset: 10
+  })
+  expect(engine.captureTextAnchor()?.offset).toBe(10)
+  onRelocate.mockClear()
+  fake.handle.emit('before-reflow', {})
+  expect(engine.navigationState().busy).toBe(true)
+  await vi.waitFor(() => expect(engine.navigationState().busy).toBe(false))
+  expect(engine.captureTextAnchor()?.offset).toBe(10)
+  expect(onRelocate).not.toHaveBeenCalled()
+  await engine.destroy()
 })

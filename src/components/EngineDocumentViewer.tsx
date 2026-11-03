@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  type CSSProperties,
   type ComponentProps,
   useCallback,
   useEffect,
@@ -8,6 +9,9 @@ import {
   useRef,
   useState
 } from 'react'
+import { buttonOnlyInput } from '../epub/buttonOnlyInput'
+import { Button, Popover } from '@hamster-note/components'
+import { usePrefersColorScheme } from './Reader/useDefaultBottomBar'
 import type { ReaderEngineSource } from '../types/engineSource'
 import type { ReaderRenderMode } from '../types/readerOptions'
 import type {
@@ -24,7 +28,8 @@ import type {
 import {
   createEpubEngine,
   type EpubEngine,
-  type EpubEngineBookInfo
+  type EpubEngineBookInfo,
+  type EpubNavigationState
 } from '../epub/foliateEpubEngine'
 import {
   PdfDocumentViewer,
@@ -47,6 +52,7 @@ import { EngineEpubLayoutLayer } from './EngineEpubLayoutLayer'
 import { RangeMagnifierProvider } from './IntermediateDocumentViewer/RangeMagnifier'
 
 type Props = IntermediateDocumentViewerProps & {
+  readonly engineDarkMode?: boolean
   readonly engineSource?: ReaderEngineSource
   readonly engineRenderMode?: ReaderRenderMode
   readonly textReadingProgress?: ReaderTextReadingProgress
@@ -79,7 +85,6 @@ function EpubSurface({
   page,
   mode,
   bindCover,
-  onNavigate,
   allowedPages,
   ...layout
 }: Omit<ComponentProps<typeof EngineEpubLayoutLayer>, 'doc'> & {
@@ -87,8 +92,7 @@ function EpubSurface({
   page: number
   mode: ReaderRenderMode
   doc: Document | null
-  bindCover: (element: HTMLButtonElement | null) => void
-  onNavigate: (page: number) => void
+  bindCover: (element: HTMLDivElement | null) => void
   allowedPages: readonly number[]
 }) {
   if (!allowedPages.includes(page)) return null
@@ -96,27 +100,13 @@ function EpubSurface({
   return (
     <>
       {book?.cover && cover && (
-        <button
-          ref={bindCover}
-          type='button'
-          className='hamster-reader__epub-cover'
-          aria-label='进入正文'
-          onClick={() => {
-            if (
-              !layout.viewer.selectedRectId &&
-              !layout.viewer.edgeCropEditing &&
-              (layout.viewer.selectedTool ?? 'text-selection') ===
-                'text-selection'
-            )
-              onNavigate(2)
-          }}
-        >
+        <div ref={bindCover} className='hamster-reader__epub-cover'>
           <img
             className='hamster-reader__epub-cover'
             src={book.cover.url}
             alt={book.cover.alt ?? '封面'}
           />
-        </button>
+        </div>
       )}
       {layout.doc && mode === 'layout' && (
         <EngineEpubLayoutLayer
@@ -196,16 +186,40 @@ function forwardPublicationPointer(
   )
 }
 
+function epubTheme(darkMode: boolean | undefined, preferred: 'dark' | 'light') {
+  if (darkMode === undefined) return preferred
+  return darkMode ? 'dark' : 'light'
+}
+
+function epubViewportStyle(
+  source: ReaderEngineSource | undefined,
+  inset: number,
+  props: Props
+): CSSProperties | undefined {
+  if (source?.format !== 'epub') return undefined
+  return {
+    '--epub-bottom-inset': `${Math.max(inset, (props.containMarginBottom ?? props.containMarginY ?? 0) + 8)}px`
+  } as CSSProperties
+}
+
 /** Shared reader UI over Foliate and the official PDFViewer. No storage owner here. */
 export function EngineDocumentViewer(props: Props) {
   const { engineSource: source, engineRenderMode: mode = 'layout' } = props
+  const preferredTheme = usePrefersColorScheme()
+  const theme = epubTheme(props.engineDarkMode, preferredTheme)
+  const [navigation, setNavigation] = useState<EpubNavigationState>({
+    canPrevious: false,
+    canNext: false,
+    busy: true
+  })
+  const [epubReady, setEpubReady] = useState(false)
+  const pagination = useRef<HTMLDivElement>(null)
+  const [paginationInset, setPaginationInset] = useState(0)
   const root = useRef<HTMLDivElement>(null)
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null)
   const [epubDocument, setEpubDocument] = useState<Document | null>(null)
   const [epubPage, setEpubPage] = useState(1)
-  const [coverElement, setCoverElement] = useState<HTMLButtonElement | null>(
-    null
-  )
+  const [coverElement, setCoverElement] = useState<HTMLDivElement | null>(null)
   const bindRoot = useCallback((element: HTMLDivElement | null) => {
     root.current = element
     setRootElement(element)
@@ -516,11 +530,17 @@ export function EngineDocumentViewer(props: Props) {
     restored.current = false
     progressEnabled.current = false
     setError(null)
+    setEpubReady(false)
+    setBook(null)
+    setEpubDocument(null)
     const engine = createEpubEngine({
       container: epubContainer.current,
       source: source.data,
       fontScale: latest.current.fontScale,
-      flow: 'scrolled',
+      flow: 'paginated',
+      onNavigationState: (state) => {
+        if (!cancelled) setNavigation(state)
+      },
       selectionColor: latest.current.selectionColor,
       onSelection: selectionChanged,
       onHighlightActivate: activate,
@@ -581,8 +601,11 @@ export function EngineDocumentViewer(props: Props) {
         listeners.get(doc)?.()
         listeners.delete(doc)
       },
-      onError: (failure) => setError(failure.message),
+      onError: (failure) => {
+        if (!cancelled) setError(failure.message)
+      },
       onRelocate: (location) => {
+        if (cancelled) return
         if (location.pageNumber) publishPosition(location.pageNumber)
         const id = values.current.selected
         if (id && !editing.current) {
@@ -621,6 +644,7 @@ export function EngineDocumentViewer(props: Props) {
         if (cancelled) return
         restored.current = true
         setBook(info)
+        setEpubReady(true)
       })
       .catch(() => undefined)
     return () => {
@@ -672,6 +696,40 @@ export function EngineDocumentViewer(props: Props) {
     }
     activate(selected)
   }, [selected, activate])
+
+  useEffect(() => {
+    if (source?.format !== 'epub' || !pagination.current || !rootElement) return
+    const controls = pagination.current
+    const measure = () => {
+      const rootBox = rootElement.getBoundingClientRect()
+      const box = controls.getBoundingClientRect()
+      if (rootBox.height > 0 && box.height > 0)
+        setPaginationInset(Math.ceil(rootBox.bottom - box.top + 8))
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(rootElement)
+    observer.observe(controls)
+    measure()
+    return () => observer.disconnect()
+  }, [source?.format, rootElement])
+  useEffect(() => {
+    if (source?.format !== 'epub' || !rootElement) return
+    // Empty paper and tool overlays also must not scroll the host. Sidebars
+    // remain independent scroll regions and are deliberately excluded.
+    const paper = (event: Event) => {
+      const target = event.target as Element | null
+      return !target?.closest?.(
+        '[role="dialog"], [role="complementary"], .hamster-reader__page-browser, .hamster-reader__epub-pagination'
+      )
+    }
+    return buttonOnlyInput(rootElement, paper)
+  }, [source?.format, rootElement])
+
+  const turnEpub = (forward: boolean) => {
+    setError(null)
+    progressEnabled.current = true
+    epub.current?.[forward ? 'nextPage' : 'previousPage']()
+  }
 
   useImperativeHandle(
     props.readingPositionRef,
@@ -817,6 +875,7 @@ export function EngineDocumentViewer(props: Props) {
         ref={bindRoot}
         className='hamster-reader__engine-viewer'
         data-engine={source?.format}
+        style={epubViewportStyle(source, paginationInset, props)}
         onPointerDown={(event) => {
           progressEnabled.current = true
           setMouse(event.pointerType === 'mouse')
@@ -952,7 +1011,6 @@ export function EngineDocumentViewer(props: Props) {
             page={page}
             mode={mode}
             bindCover={setCoverElement}
-            onNavigate={navigate}
             doc={epubDocument}
             pageElement={coverElement}
             pageNumber={epubPage}
@@ -962,6 +1020,40 @@ export function EngineDocumentViewer(props: Props) {
             onUpdateRect={updateRect}
             onSelectRect={selectRect}
           />
+        )}
+        {source?.format === 'epub' && (
+          <div ref={pagination} className='hamster-reader__epub-pagination'>
+            <Popover
+              relative
+              theme={theme}
+              role='group'
+              aria-label='翻页'
+              style={{ position: 'static', transform: 'none' }}
+            >
+              <Button
+                type='button'
+                size='small'
+                variant='ghost'
+                aria-label='上一页'
+                disabled={
+                  !epubReady || navigation.busy || !navigation.canPrevious
+                }
+                onClick={() => turnEpub(false)}
+              >
+                ←
+              </Button>
+              <Button
+                type='button'
+                size='small'
+                variant='ghost'
+                aria-label='下一页'
+                disabled={!epubReady || navigation.busy || !navigation.canNext}
+                onClick={() => turnEpub(true)}
+              >
+                →
+              </Button>
+            </Popover>
+          </div>
         )}
         {unlocatable.length > 0 && (
           <div role='status' className='hamster-reader__engine-notice'>

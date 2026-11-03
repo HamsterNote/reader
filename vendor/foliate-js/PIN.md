@@ -7,4 +7,12 @@
 
 The source tarball was fetched from
 `https://codeload.github.com/johnfactotum/foliate-js/tar.gz/78914aef4466eb960965702401634c2cb348e9b1`
-and copied verbatim. The reference repository `native-reader` pins the same commit.
+and copied with the reader patches listed below. The reference repository `native-reader` pins the same commit.
+
+## reader patch (HAM-129)
+
+`paginator.js`: opt-in `manual-navigation` disables touch, selection-edge and
+focus-triggered navigation; `before-reflow` notifies the adapter before viewport,
+font or image layout changes; ignore zero-size viewport renders; always release
+the navigation lock after a failed turn. Other consumers retain default gestures.
+The patched hash is recorded in MANIFEST.md and checked by the asset test.
