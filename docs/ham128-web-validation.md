@@ -8,7 +8,7 @@
 - 原文件的正文在 PDF.js 嵌套的 `span.markedContent` 内，旧映射只遍历 text layer 的直接子节点，无法序列化正文选区，因此文字 popover 消失。另一个问题是 `textlayerrendered` 的 `source.div` 实际为整个 PDFPageView，包含 canvas 和注释层；将它当文字层增强会删除有效选区上下文。现在只增强实际 `.textLayer`，按叶级 span 映射，并清除 DOM 重组遗留的端点属性。测试改用真实的事件容器，覆盖嵌套文字和重复增强。
 - 文字、矩形和矩形草稿使用一个活动选区状态；新文字选区撤销矩形选中态，保留已保存的标注。此轮保留该互斥逻辑，修复导致正文选区为空的文字层映射。
 - 第 3 项并非 EPUB 或 reader 拼出了错误 base URL。原 PDF 的 `getOutline()` 为 null、命名 destinations 为空，目录是页面内 `/Link` 注释，其 `/URI` 已经是 `https://undefined/part-2.html#浏览器博弈论`。文件来自网页阅读模式打印合并，各章节 `§` 链接保留了包装在 `chrome-extension:` URL 中的原始网页地址；章节内部分原生 `/Dest` 页引用在合并后也已失效。
-- 新增 `pdfSourceLinks.ts`：仅遇到 host 为 `undefined` 的 HTTP(S) 链接时，懒加载文件内源地址和 `§` 标题位置，按源路径与规范化标题锚点恢复 PDF 内部 XYZ 跳转，使用物理页码而非失效的 `/Dest`。重复标题不任意取第一个；无法内部匹配时，仅在源 origin 唯一时修复外链。正常外链与原生 PDF destinations 不变，切换文件时取消索引及点击处理。没有硬编码原文件域名。
+- 新增 `pdfSourceLinks.ts`：仅遇到 host 为 `undefined` 的 HTTP(S) 链接时，懒加载文件内源地址和 `§` 标题位置，按源路径与规范化标题锚点恢复 PDF 内部 XYZ 跳转，使用物理页码而非失效的 `/Dest`。只有唯一内部目标可跳转；目标缺失、歧义或无效锚点均阻止导航。正常外链与原生 PDF destinations 不变，切换文件时取消索引及点击处理。没有硬编码原文件域名。
 
 ## 浏览器回归
 
@@ -63,6 +63,15 @@ yarn check:web-selection
 本轮改动：`src/components/EngineDocumentViewer.tsx`、`src/pdf/PdfPageOverlayLayer.tsx`、`src/pdf/PdfRectangleAnnotation.tsx`、`src/styles/pdf-viewer.scss`、`scripts/check-web-selection.mjs`、本记录。
 
 本轮在同一服务上完整运行 `yarn check:web-selection`，8 组全部通过，包含原 PDF 的新四项与此前文字高亮、单一 popover、目录第 46 页跳转、工具栏换色、点击空白取消选中。原 PDF 自定义进度条定位物理第 32 页，滚轮与触控均可继续滚动。PDF/Reader/矩形手柄 205 项测试、typecheck、修改文件 ESLint、Prettier 与 demo 构建通过。截图包括 `original-pdf-tools-first-click-handles.png`、`original-pdf-tools-active-text.png`、`original-pdf-tools-active-outline.png` 和 `original-pdf-tools-custom-scroll.png`；JSON 报告和截图回传 HAM-128。浏览器范围仍为 Chromium，Safari 未验证。
+
+## 目录恢复失败分支审核修复
+
+- 删除“源 origin 唯一时改写成外链”的回退与对应 origin 收集。索引期间的点击始终阻止浏览器默认导航；索引完成后只对唯一命中的内部目标调用 `goToDestination`，不再自动 `anchor.click()`，无法恢复时保持阻止。
+- `fragmentKey` 返回 `null` 表示解码失败或非空锚点规范化后无有效字符；只有真正空锚点返回空串并可匹配章节起点。目标查找及源标题索引均处理无效状态，避免无效源锚点重复注册空键、把正常章节目标标为歧义。
+- `test/pdf-viewer/pdf-source-links.test.ts` 新增 10 个参数化案例：同源缺失/重复目标在索引完成前后均不导航；两种非法编码、两种无有效字符锚点不误跳；无锚点及显式 `#` 仍正确跳章节；两种无效源锚点不污染章节键。已有有效目标的提前点击测试增加“不合成 anchor.click”的断言。
+- 新测试在修复前复现 6 个失败分支；修复后链接测试 14 项通过，完整 PDF 测试 7 个文件、79 项通过，typecheck、修改文件 ESLint 和 Prettier 通过。同一服务再次运行含原 PDF 的 `yarn check:web-selection`，8 组通过，目录仍跳到物理第 46 页，无外部请求或新标签页，之前标注/工具/滚动场景也通过。
+
+本轮改动：`src/pdf/pdfSourceLinks.ts`、`test/pdf-viewer/pdf-source-links.test.ts`、本记录。
 
 ## 人工验证服务
 

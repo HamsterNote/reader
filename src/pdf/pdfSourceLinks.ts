@@ -11,7 +11,6 @@ type LinkAnnotation = {
 
 type SourceLinks = {
   destinations: Map<string, Destination | null>
-  origin: string | null
 }
 
 function httpUrl(value: string | null | undefined): URL | null {
@@ -37,13 +36,16 @@ function sourceUrl(annotation: LinkAnnotation): URL | null {
   }
 }
 
-function fragmentKey(hash: string): string {
+function fragmentKey(hash: string): string | null {
+  // Only a genuinely absent/empty fragment may match a chapter destination.
+  if (!hash) return ''
   try {
-    return decodeURIComponent(hash)
+    const key = decodeURIComponent(hash)
       .toLocaleLowerCase()
       .replace(/[^\p{L}\p{N}]/gu, '')
+    return key || null
   } catch {
-    return ''
+    return null
   }
 }
 
@@ -100,17 +102,14 @@ function recordHeading(
   source: URL | null,
   heading: { title: string; dest: Destination }
 ) {
+  const sourceKey = fragmentKey(source?.hash ?? '')
   if (source) {
     addDestination(index, `${section.pathname}#`, heading.dest)
-    if (source.hash)
-      addDestination(
-        index,
-        `${section.pathname}#${fragmentKey(source.hash)}`,
-        heading.dest
-      )
+    if (sourceKey)
+      addDestination(index, `${section.pathname}#${sourceKey}`, heading.dest)
   }
   const key = fragmentKey(heading.title)
-  if (key && key !== fragmentKey(source?.hash ?? ''))
+  if (key && key !== sourceKey)
     addDestination(index, `${section.pathname}#${key}`, heading.dest)
 }
 
@@ -130,7 +129,6 @@ async function readPageHeadings(
 
 function indexPageHeadings(
   index: SourceLinks,
-  origins: Set<string>,
   section: URL | null,
   markers: LinkAnnotation[],
   items: TextItem[],
@@ -139,7 +137,6 @@ function indexPageHeadings(
   for (const marker of markers) {
     const source = sourceUrl(marker)
     if (source) {
-      origins.add(source.origin)
       section = source
     }
     if (!section) continue
@@ -154,24 +151,15 @@ export async function indexPdfSourceLinks(
   doc: PDFDocumentProxy,
   isCancelled: () => boolean = () => false
 ): Promise<SourceLinks> {
-  const index: SourceLinks = { destinations: new Map(), origin: null }
-  const origins = new Set<string>()
+  const index: SourceLinks = { destinations: new Map() }
   let section: URL | null = null
   for (let number = 1; number <= doc.numPages; number++) {
     if (isCancelled()) break
     const page = await doc.getPage(number)
     const { markers, items } = await readPageHeadings(page)
     if (isCancelled()) break
-    section = indexPageHeadings(
-      index,
-      origins,
-      section,
-      markers,
-      items,
-      number - 1
-    )
+    section = indexPageHeadings(index, section, markers, items, number - 1)
   }
-  if (origins.size === 1) index.origin = [...origins][0]
   return index
 }
 
@@ -192,20 +180,14 @@ export function bindPdfSourceLinks(
   const repair = (anchor: HTMLAnchorElement) => {
     const url = httpUrl(anchor.href)
     if (!index || url?.hostname !== 'undefined') return
-    const dest = index.destinations.get(
-      `${url.pathname}#${fragmentKey(url.hash)}`
-    )
+    const key = fragmentKey(url.hash)
+    if (key === null) return
+    const dest = index.destinations.get(`${url.pathname}#${key}`)
     if (dest) {
       local.set(anchor, dest)
       anchor.href = service.getDestinationHash(dest)
       anchor.removeAttribute('target')
       anchor.removeAttribute('title')
-    } else if (index.origin) {
-      anchor.href = new URL(
-        url.pathname + url.search + url.hash,
-        index.origin
-      ).href
-      anchor.title = anchor.href
     }
   }
   const repairAll = () =>
@@ -234,12 +216,13 @@ export function bindPdfSourceLinks(
     } else if (httpUrl(anchor.href)?.hostname === 'undefined') {
       event.preventDefault()
       event.stopPropagation()
-      // eslint-disable-next-line sonarjs/void-use -- deferred click after the document index is ready
+      // eslint-disable-next-line sonarjs/void-use -- defer only internal navigation until indexing finishes
       void load()
         .then(() => {
           if (cancelled || !anchor.isConnected) return
           repair(anchor)
-          if (httpUrl(anchor.href)?.hostname !== 'undefined') anchor.click()
+          const target = local.get(anchor)
+          if (target) return service.goToDestination(target)
         })
         .catch(() => undefined)
     }
