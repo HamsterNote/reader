@@ -15,10 +15,9 @@ try {
   const base =
     externalBase ?? `http://127.0.0.1:${server.httpServer.address().port}`
   const html = externalBase
-    ? (await (await fetch(base)).text()).replace(
-        '/demo/main.tsx',
-        '/test/browser/review-regressions.tsx'
-      )
+    ? (await (await fetch(base)).text())
+        .replace('<body>', '<body style="margin:0">')
+        .replace('/demo/main.tsx', '/test/browser/review-regressions.tsx')
     : await server.transformIndexHtml(
         '/rotated-highlight.html',
         '<html><body style="margin:0"><div id="root"></div><script type="module" src="/test/browser/review-regressions.tsx"></script></body></html>'
@@ -33,6 +32,7 @@ try {
     route.fulfill({ contentType: 'text/html', body: html })
   )
   await page.goto(`${base}/rotated-highlight.html`)
+  await page.addStyleTag({ content: '.hamster-reader { height: 100%; }' })
   await page.waitForFunction(() => window.readerRegression)
   const bytes = [
     ...(await readFile(resolve(repo, 'test/compat/fixtures/pdf/rotated.pdf')))
@@ -58,6 +58,12 @@ try {
       await page.screenshot({ path: resolve(output, 'rotated-failure.png') })
       throw error
     })
+    await page.evaluate(async () => {
+      await document.fonts.ready
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      )
+    })
     await text.evaluate((element) => {
       const range = document.createRange()
       range.setStart(element.firstChild, 0)
@@ -68,9 +74,7 @@ try {
       document.dispatchEvent(new Event('selectionchange'))
       element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
     })
-    await page.evaluate(() =>
-      window.readerRegression.selection.current.highlight()
-    )
+    await page.getByRole('button', { name: '高亮', exact: true }).click()
     await page.waitForFunction(
       () => window.readerRegression.state.ranges.length === 1
     )
