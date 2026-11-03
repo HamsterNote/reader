@@ -2,6 +2,8 @@
 
 本地实现覆盖 OpenSpec `pdf-text-viewport-pagination`：共享翻页控件、正文矩形测量、输入限制和导航状态类型；PDF 使用自己的 DOM 分栏、原页加载和 canonical 字符端点，EPUB 继续使用 Foliate。TXT 保留虚拟滚动。公开数据继续保存 PDF 原页与字符锚点，不保存列号。
 
+**2026-11-03 HAM-144 补充结论：** PDF Text 使用 selection 组件的触摸长按和 Reader 自绘圆形手柄；原文“原生选区手柄”判据不符合该分支实现，现更正为可见端点的自绘手柄外观、拖动调整、页边不翻页及系统菜单抑制。HAM-142 在 Xcode 27.2 / iPhone 18 Pro / iOS 27.2 模拟器的已有截图与 AX 证据支持这些项目；详见 [手柄策略与逐项证据](ham144-pdf-text-selection.md)。iOS/Android 真机仍未验证，5.2 保持未勾选。以下分支、命令及“未执行”记录属于初次实施时的历史快照，以本补充及后文设备矩阵为最新状态。
+
 分支：`agent/agent/32b448bcafab`，起点 `3cc037460957bfe7c12c15f50476d4693d7cdc76`。未提交、未推送、未开 PR、未归档 OpenSpec。
 
 任务进度 **14/15**。仅 **5.2 iOS/Android WebView 实机验收** 未完成；本地实现与自动化验收已完成。WebKit 环境缺失单独记录，未将未启动用例标记为通过。
@@ -42,7 +44,7 @@ PDF Text 单个原页含 1100 个词、8789 个 UTF-16 字符；960×700 时有 
 | PDF / Long source page | Chromium 通过：7 屏、同页前进两屏/回退、跨列源 span、全文逐字符唯一覆盖；`pdf-text/report.json` 的 `screens`、`evidence`。 |
 | PDF / Source page and range boundaries | 浏览器原页前进/反向末列、书末禁用通过；Vitest 覆盖隐藏页、pageRange、全隐藏范围和禁止循环。 |
 | PDF / No extractable text | 浏览器第 2 原页空状态、返回 Layout 入口通过；组件测试覆盖整册扫描页逐原页导航，无伪造字符锚点。 |
-| PDF / Inputs and selection | Chromium 滚轮/横滚、空白输入、全部滚动按键、CDP 滑动不翻页通过；按钮 Enter/Space、评论编辑、侧栏独立滚动、页边拖选通过。原生长按/手柄待实机。 |
+| PDF / Inputs and selection | Chromium 滚轮/横滚、空白输入、全部滚动按键、CDP 滑动不翻页通过；按钮 Enter/Space、评论编辑、侧栏独立滚动、页边拖选通过。HAM-142 补充 iOS 模拟器长按、自绘手柄与页边拖选证据，见 HAM-144 记录；真机仍待验。 |
 | PDF / Responsive and busy controls | 960/320/横屏 740×320 的正文/控件矩形、字号变更和连续 resize 通过；同步双击只前进一屏，单测覆盖 busy 门控与边界。 |
 | PDF / Explicit navigation | 书签 offset 3000、历史/新增高亮定位、进度轨道 Home/End 的原页首列通过；selectionRef/页码接线沿同一导航方法。PDF Text 本来不提供独立章节目录。 |
 | PDF / Resume and reflow within source page | 关闭重开恢复第三屏、字号中/特大/大、宽窄及连续 resize、临时零尺寸均保留锚点；每次重排检查锚点字符实际位于可视窗口。延迟字体 loadingdone 由受控单测覆盖。 |
@@ -83,9 +85,10 @@ PDF Text 单个原页含 1100 个词、8789 个 UTF-16 字符；960×700 时有 
 
 ## 待补验收
 
-- iOS：设备型号、系统版本、WebView 版本未取得，未执行。
-- Android：设备型号、系统版本、WebView 版本未取得，未执行。
-- 两端均需执行 PDF Text 长按、原生选区手柄、页边拖选不翻页、高亮 Popover、侧栏滚动、横竖屏、同原页翻两屏后关闭重开，并回归 EPUB 共享外壳。
+- iOS 模拟器：HAM-142 已在 Xcode 27.2 / iPhone 18 Pro / iOS 27.2、PR #39 `f8b14e3` 完成回归；HAM-144 核对已有证据后确认自绘手柄符合 PDF Text 策略。本轮未重新运行模拟器。
+- iOS 真机：设备型号、系统版本及 WebView 信息未取得，未执行。
+- Android 真机：设备型号、系统版本及 WebView 版本未取得，未执行。
+- 两端真机均需执行 PDF Text 长按、自绘圆形手柄显示与拖动调整、页边拖选不翻页、系统编辑菜单抑制与高亮 Popover、侧栏滚动、横竖屏、同原页翻两屏后关闭重开，并回归 EPUB 共享外壳。具体可观察判据见 [HAM-144](ham144-pdf-text-selection.md)。
 - WebKit 的桌面/触摸模拟矩阵需在具备系统库的环境补跑；这不能替代上述实机验收。
 
 按实际验证情况保留任务勾选；OpenSpec strict 校验只证明规划文档有效，不代表上述设备项目已通过。

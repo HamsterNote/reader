@@ -27,5 +27,5 @@
 ## 5. 跨格式与宿主验收
 
 - [x] 5.1 在 `scripts/check-reader-browser.mjs` 或同级脚本串联新增 PDF Text 真实布局场景，回归 `scripts/check-epub-pagination.mjs` 对应的 EPUB 重排/固定版式/封面/进度场景，以及 PDF Layout 翻页/缩放/链接/选择/矩形/绘图和 TXT 原滚动；交付两个 delta spec 每个 Scenario 对应的执行结果与证据，设备缺失项单独标明。
-- [ ] 5.2 在 iOS 和 Android WebView 验证 PDF Text 长按选择、原生手柄、页边拖选、高亮 Popover、侧栏滚动、横竖屏及同原页翻两屏后关闭重开；同时回归 EPUB 共用外壳，记录设备/系统版本与结果，不能用桌面触摸模拟替代实机结论。（2026-11-03 归档时挂起：本机无 iOS/Android 设备，未取得实机结论；浏览器证据见 `docs/ham130-acceptance.md`，实机验收待设备可用后补做。）
+- [ ] 5.2 在 iOS 和 Android WebView 验证 PDF Text 长按选择、自绘圆形手柄显示与拖动调整、页边拖选不翻页、系统编辑菜单抑制与高亮 Popover、侧栏滚动、横竖屏及同原页翻两屏后关闭重开；同时回归 EPUB 共用外壳，记录设备/系统版本与结果，不能用桌面触摸模拟替代实机结论。（2026-11-03 HAM-144 更正原“原生手柄”判据：PDF Text 明确使用 PdfTextHandle/RangeHandle；HAM-142 的 Xcode 27.2 / iPhone 18 Pro / iOS 27.2 模拟器证据支持上述交互，见 `docs/ham144-pdf-text-selection.md`。iOS/Android 真机仍未验证，保持挂起；不将模拟器计为实机通过。）
 - [x] 5.3 验证 `webview/src/ReaderSurface.tsx`、`app/src/screens/ReaderScreen.tsx`、`src/host/readerDataStore.ts` 可沿原格式读写新进度，运行 `yarn test:run`、`yarn typecheck`、`yarn lint`、`yarn build:webview`、`yarn verify:webview`、`yarn check:browser` 及新增分页脚本；在实施验收记录中列出结果、失败/未验证项及跨格式回归证据，不以 OpenSpec 校验代替实现验证。
