@@ -48,6 +48,11 @@ export type WebBridgeClient = {
   readonly dispose: () => void
   readonly getRevision: () => number | null
   readonly getPendingCount: () => number
+  /**
+   * 等待未确认写入（pending + in-flight）全部收到 ack。
+   * 超时或会话已关闭返回 false——调用方不得据此声称已保存。
+   */
+  readonly flushPending: (timeoutMs?: number) => Promise<boolean>
 }
 
 type PendingWrite = {
@@ -56,6 +61,7 @@ type PendingWrite = {
 }
 
 const DEFAULT_RETRY_TIMEOUT_MS = 3000
+const DEFAULT_FLUSH_TIMEOUT_MS = 2000
 
 let fallbackCounter = 0
 
@@ -104,6 +110,18 @@ export function createWebBridgeClient(
   let retryHandle: unknown
   let pendingChange: PendingWrite | null = null
   let pendingProgress: PendingWrite | null = null
+  let idleWaiters: Array<(saved: boolean) => void> = []
+
+  /** 未确认写入全部 ack（或会话关闭）。 */
+  const isIdle = (): boolean =>
+    inFlight === null && pendingChange === null && pendingProgress === null
+
+  const settleIdle = (saved: boolean): void => {
+    if (!isIdle()) return
+    const waiters = idleWaiters
+    idleWaiters = []
+    for (const resolve of waiters) resolve(saved)
+  }
 
   const post = (message: BridgeMessage): void => {
     options.post(
@@ -180,6 +198,7 @@ export function createWebBridgeClient(
     revision = payload.revision
     inFlight = null
     flush()
+    settleIdle(true)
   }
 
   const start = (): void => {
@@ -234,6 +253,8 @@ export function createWebBridgeClient(
         clearRetry()
         pendingChange = null
         pendingProgress = null
+        inFlight = null
+        settleIdle(false)
         options.onDispose?.()
         break
       }
@@ -264,6 +285,25 @@ export function createWebBridgeClient(
       const pending =
         (pendingChange ? 1 : 0) + (pendingProgress ? 1 : 0) + (inFlight ? 1 : 0)
       return pending
+    },
+    flushPending: (timeoutMs) => {
+      if (closed) return Promise.resolve(false)
+      if (isIdle()) return Promise.resolve(true)
+      return new Promise<boolean>((resolve) => {
+        let settled = false
+        const timeout: { handle?: unknown } = {}
+        const finish = (saved: boolean): void => {
+          if (settled) return
+          settled = true
+          if (timeout.handle !== undefined) timers.clearTimeout(timeout.handle)
+          resolve(saved)
+        }
+        timeout.handle = timers.setTimeout(
+          () => finish(false),
+          timeoutMs ?? DEFAULT_FLUSH_TIMEOUT_MS
+        )
+        idleWaiters.push(finish)
+      })
     }
   }
 }

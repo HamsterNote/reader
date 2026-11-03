@@ -8,10 +8,12 @@ import {
   serializeReaderSnapshot
 } from '../src/host/readerSnapshot'
 
+const SNAPSHOT_ANNOTATIONS_VERSION = 5
+
 describe('engine host snapshot compatibility', () => {
   for (const format of ['epub-duplicate-text', 'pdf-two-column']) {
     it.each([2, 3, 4])(
-      `${format} v%i survives edit, old import and reopen`,
+      `${format} v%i migrates to annotations without losing content`,
       (version) => {
         const highlights = JSON.parse(
           readFileSync(
@@ -61,7 +63,15 @@ describe('engine host snapshot compatibility', () => {
         const before = parseHighlights(original)
         expect(restored.data.ranges).toEqual(before.ranges)
         expect(restored.data.rects).toEqual(before.rects)
-        expect(restored.data.pagePaintings).toEqual(before.paintings)
+        // 旧绘图由画库迁移成 schema 3 文档，页集合保持一致。
+        expect(Object.keys(restored.data.pagePaintings ?? {})).toEqual(
+          Object.keys(before.paintings)
+        )
+        for (const document of Object.values(
+          restored.data.pagePaintings ?? {}
+        )) {
+          expect(document.schemaVersion).toBe(3)
+        }
 
         const changed = {
           ...restored,
@@ -81,11 +91,11 @@ describe('engine host snapshot compatibility', () => {
           }
         }
         const saved = serializeReaderSnapshot(changed)
-        const oldReader = parseHighlights(JSON.stringify(saved['highlights']))
-        // Full equality includes IDs, timestamps, endpoints, units, every rectangle and style.
-        expect(oldReader.ranges).toEqual(changed.data.ranges)
-        expect(oldReader.rects).toEqual(before.rects)
-        expect(oldReader.paintings).toEqual(before.paintings)
+        // 单一写入格式：信封里只有 annotations，没有 v4 highlights。
+        expect(saved['highlights']).toBeUndefined()
+        expect(saved['annotations']).toMatchObject({
+          version: SNAPSHOT_ANNOTATIONS_VERSION
+        })
         expect(parseComments(JSON.stringify(saved['comments']))).toEqual(
           restored.comments
         )
@@ -111,20 +121,21 @@ describe('engine host snapshot compatibility', () => {
   })
 })
 
-describe('v2 snapshot envelope passthrough', () => {
-  it('keeps annotations and unknown extension fields when the envelope uses the new container', () => {
-    const annotations = {
-      version: 5,
-      ranges: [],
-      rects: [],
-      paintings: {
-        'page-1': {
-          schemaVersion: 3,
-          documentRevision: 1,
-          objects: []
-        }
+describe('snapshot envelope annotations', () => {
+  const annotations = {
+    version: SNAPSHOT_ANNOTATIONS_VERSION,
+    ranges: [],
+    rects: [],
+    paintings: {
+      'page-1': {
+        schemaVersion: 3,
+        documentRevision: 1,
+        objects: []
       }
     }
+  }
+
+  it('round-trips annotations and keeps unknown extension fields', () => {
     const envelope = {
       annotations,
       comments: { version: 2, comments: [] },
@@ -134,17 +145,50 @@ describe('v2 snapshot envelope passthrough', () => {
 
     const restored = restoreReaderSnapshot(envelope)
     expect(restored.data.renderMode).toBe('layout')
-    expect(restored.extra['annotations']).toEqual(annotations)
+    expect(restored.data.pagePaintings).toEqual(annotations.paintings)
     expect(restored.extra['customOwnerField']).toEqual({ keep: true })
 
     const saved = serializeReaderSnapshot(restored)
-    // 2.4/3.1 切换生产端之前：annotations 与扩展字段原样保留，不被裁剪或重建。
     expect(saved['annotations']).toEqual(annotations)
+    expect(saved['highlights']).toBeUndefined()
     expect(saved['customOwnerField']).toEqual({ keep: true })
     expect(saved['readerData']).toEqual({
       renderMode: 'layout',
       hiddenPages: [2]
     })
     expect(restoreReaderSnapshot(saved)).toEqual({ ...restored, extra: saved })
+  })
+
+  it('drops a legacy highlights key instead of writing both containers', () => {
+    const restored = restoreReaderSnapshot({
+      highlights: {
+        version: 4,
+        ranges: [],
+        rects: [],
+        paintings: {}
+      }
+    })
+
+    const saved = serializeReaderSnapshot(restored)
+    expect(saved['highlights']).toBeUndefined()
+    expect(saved['annotations']).toEqual({
+      version: SNAPSHOT_ANNOTATIONS_VERSION,
+      ranges: [],
+      rects: [],
+      paintings: {}
+    })
+  })
+
+  it('fails explicitly for a corrupt annotations envelope', () => {
+    expect(() =>
+      restoreReaderSnapshot({
+        annotations: {
+          version: 5,
+          ranges: [],
+          rects: [],
+          paintings: { 'page-1': { schemaVersion: 3, objects: 'broken' } }
+        }
+      })
+    ).toThrow('标注恢复失败')
   })
 })

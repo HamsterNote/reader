@@ -48,14 +48,15 @@ function summarizeSnapshot(payload: BridgeRestorePayload): string {
     return `revision ${payload.revision}，无历史数据`
   }
   const record = data as Record<string, unknown>
-  const highlights = record['highlights']
-  if (highlights !== null && typeof highlights === 'object') {
-    const h = highlights as Record<string, unknown>
-    const ranges = Array.isArray(h['ranges']) ? h['ranges'].length : 0
-    const rects = Array.isArray(h['rects']) ? h['rects'].length : 0
+  // 新快照只有 annotations；旧快照的 highlights 在读取时迁移。
+  const annotations = record['annotations'] ?? record['highlights']
+  if (annotations !== null && typeof annotations === 'object') {
+    const a = annotations as Record<string, unknown>
+    const ranges = Array.isArray(a['ranges']) ? a['ranges'].length : 0
+    const rects = Array.isArray(a['rects']) ? a['rects'].length : 0
     const paintings =
-      h['paintings'] !== null && typeof h['paintings'] === 'object'
-        ? Object.keys(h['paintings'] as Record<string, unknown>).length
+      a['paintings'] !== null && typeof a['paintings'] === 'object'
+        ? Object.keys(a['paintings'] as Record<string, unknown>).length
         : 0
     return `revision ${payload.revision}，高亮 ${ranges}、矩形 ${rects}、绘图页 ${paintings}`
   }

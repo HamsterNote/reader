@@ -43,8 +43,8 @@ export type ReaderHostSession = {
   readonly getSnapshot: () => BridgeHostSnapshot
   /** 文档切换/关闭：先通知 Web 释放资源，再使会话失效。 */
   readonly dispose: () => void
-  /** 立即下发 dispose（用于切换文档，旧 WebView 尚未卸载时）。 */
-  readonly sendDispose: () => void
+  /** 关闭前先等已接收写入落盘并 ack，再下发 dispose。 */
+  readonly sendDispose: () => Promise<void>
 }
 
 export function createReaderHostSession(
@@ -118,8 +118,11 @@ export function createReaderHostSession(
       return { accepted: true }
     },
     getSnapshot: () => session.getSnapshot(),
-    sendDispose: () => {
+    sendDispose: async () => {
       if (disposed) return
+      // 立即拒绝新消息，但先等在途写入完成（落盘后 ack 才可能发出）。
+      disposed = true
+      await session.drain()
       options.sendToWeb({
         version: READER_BRIDGE_PROTOCOL_VERSION,
         sessionId: options.sessionId,
@@ -128,7 +131,6 @@ export function createReaderHostSession(
         payload: {}
       })
       session.dispose()
-      disposed = true
     },
     dispose: () => {
       session.dispose()

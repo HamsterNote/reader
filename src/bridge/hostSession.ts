@@ -54,6 +54,11 @@ export type BridgeHostSession = {
    * 不改变 revision，也不触发持久化。
    */
   readonly resendRestore: () => BridgeMessage[]
+  /**
+   * 等待已接收消息的异步持久化全部结束（含在途 ack）。
+   * 关闭/切换文档前调用，避免把已接收但未落盘的写入丢掉。
+   */
+  readonly drain: () => Promise<void>
   /** 结束会话；之后所有该会话消息按 STALE_SESSION 拒绝。 */
   readonly dispose: () => void
 }
@@ -346,6 +351,10 @@ export function createBridgeHostSession(
     resendRestore: () => {
       restoreSent = true
       return [buildRestore()]
+    },
+    drain: async () => {
+      // 队列尾部的 catch 已吞掉单条失败；这里只等它结束。
+      await asyncQueue
     },
     dispose: () => {
       disposed = true

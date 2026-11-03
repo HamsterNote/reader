@@ -22,6 +22,8 @@ if (!rootElement) throw new Error('Missing reader root')
 const root = createRoot(rootElement)
 const host = window.__READER_HOST__
 const post = window.ReactNativeWebView?.postMessage
+// 关闭前等待未确认写入的时间上限；超时仍释放，但不声称已保存。
+const FLUSH_PENDING_TIMEOUT_MS = 2000
 let generation = 0
 let descriptor: BridgeOpenPayload | null = null
 let snapshot: BridgeRestorePayload | null = null
@@ -125,7 +127,14 @@ const bridge =
         },
         onDispose: () => {
           generation++
-          work = work.then(release).catch(() => undefined)
+          // 正常关闭：先等未确认写入落盘并 ack，再释放引擎。
+          // flushPending 返回 false 表示超时/会话已关闭——不伪造已保存。
+          work = work
+            .then(async () => {
+              await bridge?.flushPending(FLUSH_PENDING_TIMEOUT_MS)
+              await release()
+            })
+            .catch(() => undefined)
         },
         onError: (error) => {
           if (error.code !== 'REVISION_MISMATCH')

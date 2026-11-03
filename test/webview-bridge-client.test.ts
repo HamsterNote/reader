@@ -239,3 +239,58 @@ describe('createWebBridgeClient', () => {
     }
   })
 })
+
+describe('createWebBridgeClient flushPending', () => {
+  it('resolves only after the pending write is acknowledged', async () => {
+    const { bridge, sent, timers } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+    const flushed = bridge.flushPending(1000)
+    expect(bridge.getPendingCount()).toBe(1)
+
+    const change = sent.at(-1) ?? {}
+    bridge.handleMessage(
+      hostMessage('ack', {
+        requestId: change['requestId'],
+        revision: 1
+      })
+    )
+
+    await expect(flushed).resolves.toBe(true)
+    expect(bridge.getPendingCount()).toBe(0)
+    expect(timers.pending()).toBe(0)
+  })
+
+  it('reports an unconfirmed flush on timeout without clearing the write', async () => {
+    const { bridge, timers } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+
+    const flushed = bridge.flushPending(1000)
+    timers.fireAll()
+
+    await expect(flushed).resolves.toBe(false)
+    // 超时只说明“未确认”，写入仍会重发，不能被当成已保存。
+    expect(bridge.getPendingCount()).toBeGreaterThan(0)
+  })
+
+  it('reports an unconfirmed flush when the session is disposed', async () => {
+    const { bridge } = createHarness()
+    bridge.start()
+    bridge.handleMessage(
+      hostMessage('restore', { data: null, progress: null, revision: 0 })
+    )
+    bridge.sendChange({ annotations: { version: 5 } })
+
+    const flushed = bridge.flushPending(1000)
+    bridge.handleMessage(hostMessage('dispose', {}))
+
+    await expect(flushed).resolves.toBe(false)
+  })
+})

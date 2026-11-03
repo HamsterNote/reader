@@ -274,7 +274,7 @@ describe('ReaderHostSession', () => {
   it('stops accepting messages after dispose', async () => {
     const harness = createHarness()
     await ready(harness)
-    harness.session.sendDispose()
+    await harness.session.sendDispose()
     expect(harness.sent.at(-1)?.type).toBe('dispose')
 
     const result = await harness.session.handleRawMessage(
@@ -282,6 +282,29 @@ describe('ReaderHostSession', () => {
     )
     expect(result.accepted).toBe(false)
     expect(result.rejection?.code).toBe('STALE_SESSION')
+  })
+
+  it('waits for an in-flight persist before sending dispose', async () => {
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const harness = createHarness({ persist: () => gate })
+    await ready(harness)
+    harness.sent.length = 0
+
+    const write = harness.session.handleRawMessage(
+      raw('change', { data: { annotations: {} }, revision: 1 })
+    )
+    const disposing = harness.session.sendDispose()
+    release()
+    await write
+    await disposing
+
+    // 先落盘并 ack，最后才 dispose；关闭不会把已接收写入丢掉。
+    const types = harness.sent.map((message) => message.type)
+    expect(types).toEqual(['ack', 'dispose'])
+    expect(harness.persisted).toHaveLength(1)
   })
 
   it('serializes concurrent async writes', async () => {

@@ -22,14 +22,7 @@ export type PersistedHighlights = {
   readonly paintings: ReaderPagePaintingMap
 }
 
-// v4 在 v3 基础上增加 paintings 字段，用于持久化 Drawing 工具数据。
-type HighlightsStorageV4 = {
-  readonly version: 4
-  readonly ranges: readonly ReaderSelectionRange[]
-  readonly rects: readonly ReaderSelectionRectangle[]
-  readonly paintings: Readonly<Record<string, unknown>>
-}
-
+// v4 在 v3 基础上增加 paintings 字段；只保留读入形状，不再有写入类型。
 const PUBLIC_PAGE_SELECTION_ID_PATTERN = /^page-[1-9]\d*$/
 
 export function parseHighlights(raw: string | null): PersistedHighlights {
@@ -47,15 +40,7 @@ export function parseHighlights(raw: string | null): PersistedHighlights {
   }
 }
 
-/** 旧容器写入入口；只有 2.4/2.5 尚未迁移的调用点可用，V5 已存在的文件不得再写 v4。 */
-export function serializeHighlights(
-  ranges: ReaderSelectionRange[],
-  rects: ReaderSelectionRectangle[],
-  paintings: Readonly<Record<string, unknown>>
-): string {
-  const storage: HighlightsStorageV4 = { version: 4, ranges, rects, paintings }
-  return JSON.stringify(storage)
-}
+// 旧容器只读：v2/v3/v4 写入入口已删除，新数据只写 V5（见 annotationStore）。
 
 // ---------------------------------------------------------------------------
 // V5 标注容器（design.md §4）
