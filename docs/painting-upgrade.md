@@ -1,6 +1,6 @@
 # Painting integration
 
-The reader integration uses the published `@hamster-note/painting@0.8.2` package, pinned exactly in `package.json` and `yarn.lock`.
+The reader integration uses the published `@hamster-note/painting@0.8.3` package, pinned exactly in `package.json` and `yarn.lock`.
 
 ## Public drawing API
 
@@ -30,16 +30,16 @@ Drawing changes, highlights, rectangles, history, file restoration and clear now
 
 Older apps continue to display the preserved pre-upgrade state; they cannot display subsequent drawing changes. There is no reverse projection or dual write.
 
-Host persistence (2.5/2.6) is delivered independently in PR #34. Host `data.annotations` production and bridge migration/ack integration (2.7) are explicit follow-up work and are not included in this Web/consumer integration PR. The intended authoritative host key is `reader.host.v2.snapshot.<fileId>`. The host must advance confirmed state only after a successful durable write and acknowledgment. Its snapshot producer still uses the legacy serializer until that follow-up replaces the write path; this PR does not claim complete host migration or end-to-end persistence acceptance.
+Host persistence uses the authoritative `reader.host.v2.snapshot.<fileId>` key and is delivered by PR #34 (new key, atomic `.pending`/`.bak` replacement, per-file serialization) and PR #36 (snapshot envelope and closing handshake). The Web snapshot producer writes only `data.annotations`; the legacy `serializeHighlights` write path and its callers are removed, so there is no dual write or legacy-key fallback. A legacy `highlights` envelope is migrated once on restore and the complete migrated container is committed to the new key and acknowledged before the session starts; a failed commit keeps the original bytes and reports an error. The host advances its confirmed snapshot only after a durable write is acknowledged, and the closing handshake (`flush` → `quiesce` → `ready` → `dispose`) makes sure pending writes — including a gesture that was still in progress when closing began — are acknowledged before the session is disposed. A failed or timed-out close keeps the session usable and reports `unconfirmed` instead of claiming success. The v1 document record keeps its original bytes.
 
 ## Verification and remaining gate
 
-- `yarn typecheck`, `yarn lint`, `yarn build:lib`, and `yarn host:check` pass. The 0.8.2 full regression run passes all 90 test files / 1258 tests.
+- `yarn typecheck`, `yarn lint`, `yarn build:lib`, and `yarn host:check` pass. The 0.8.3 full regression run passes all 99 test files / 1366 tests.
 - `test/annotation-store.test.ts` checks v2/v3/v4 migration, all-page atomicity, mandatory validator wiring, quota retry, corrupt/new-key precedence, file isolation, and byte preservation. The demo tests additionally cover UI errors/retry, clear/reopen, drawing/history saves, and retired-file callbacks.
 - `yarn test:run` exercises the actual installed package, including mixed invalid pen styles, controlled echoes, complete objects, stroke colors, cancellation, and shared consumers.
 - `yarn check:painting` runs real pdf.js with Chromium at DPR 1/2/3, scale 50/100/200%, before/after scrolling, and navigation/remount. It writes a JSON report and exits unsuccessfully if any contract fails.
-- The published 0.8.2 package fixes the disabled-first-mount presentation defect. `test/painting-page-contract.test.tsx` verifies complete saved ink, shapes, text, and images on disabled first mount and remount. Chromium checks all saved object IDs after disabled remount, at every DPR, without changing the document. No reader implementation workaround is needed.
-- On 0.8.2, all 18 Chromium positioning cases pass with maximum error approximately 0.000013 CSS px; all three disabled-remount checks display all six saved objects. The browser report records the actual installed package version and any runtime errors.
-- The browser matrix covers mouse input and the checked viewport combinations. Rotation/crop fixtures, touch/pen on real devices, iOS/Android WebView, and durable host/bridge fault injection still require acceptance runs. The Web store and demo quota paths are covered by automated tests.
+- The published 0.8.3 package fixes the disabled-first-mount presentation defect. `test/painting-page-contract.test.tsx` verifies complete saved ink, shapes, text, and images on disabled first mount and remount. Chromium checks all saved object IDs after disabled remount, at every DPR, without changing the document. No reader implementation workaround is needed.
+- On 0.8.3, all 18 Chromium positioning cases pass with maximum error approximately 0.000012 CSS px; all three disabled-remount checks display all six saved objects. The browser report records the actual installed package version and any runtime errors.
+- The browser matrix covers mouse input, DPR 1/2/3, 50/100/200% zoom and before/after scrolling. Rotation/crop are covered by the page-geometry contract and integration tests, but there is no dedicated browser report for them. Touch/pen on real devices, iOS/Android WebView, and durable disk-failure injection are waived by the user (2026-11-03) and were not run. The Web store and demo quota paths are covered by automated tests.
 
-- Subsequent library review identified an existing text-editor limitation: an active draft can still submit after input is disabled (`painting` PR #41 review). The readonly history/display checks above do not validate cancellation of that editing session. This library P2 and full task 3.6 acceptance remain open; this integration adds no reader workaround.
+- The earlier text-editor limitation (an active draft could submit after input was disabled) is fixed in the published 0.8.3 package. `test/painting-page-contract.test.tsx` verifies that disabling the surface discards a reader text draft — via both Ctrl+Enter and the 完成 button — and that the draft never persists across remounts.
