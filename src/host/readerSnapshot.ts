@@ -17,7 +17,14 @@ const record = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {}
 
-/** Same legacy readers as the Web demo; engine positions never enter the envelope. */
+/**
+ * 读取宿主快照信封（旧格式解析沿用 Web demo 的读入器）。
+ *
+ * v2 快照键里的 `data` 由 WebView 生产。新格式把绘图放进 `data.annotations`
+ * （V5 容器）；reader 当前仍按 `highlights` 读取 v4 数据，`annotations` 与其余
+ * 未知扩展字段都经 `extra` 原样透传，不解析、不裁剪、不重建，避免在 2.4/3.1
+ * 切换生产端之前丢字段。
+ */
 export function restoreReaderSnapshot(
   value: unknown,
   progress?: unknown

@@ -110,3 +110,41 @@ describe('engine host snapshot compatibility', () => {
     ).toEqual(current)
   })
 })
+
+describe('v2 snapshot envelope passthrough', () => {
+  it('keeps annotations and unknown extension fields when the envelope uses the new container', () => {
+    const annotations = {
+      version: 5,
+      ranges: [],
+      rects: [],
+      paintings: {
+        'page-1': {
+          schemaVersion: 3,
+          documentRevision: 1,
+          objects: []
+        }
+      }
+    }
+    const envelope = {
+      annotations,
+      comments: { version: 2, comments: [] },
+      readerData: { renderMode: 'layout', hiddenPages: [2] },
+      customOwnerField: { keep: true }
+    }
+
+    const restored = restoreReaderSnapshot(envelope)
+    expect(restored.data.renderMode).toBe('layout')
+    expect(restored.extra['annotations']).toEqual(annotations)
+    expect(restored.extra['customOwnerField']).toEqual({ keep: true })
+
+    const saved = serializeReaderSnapshot(restored)
+    // 2.4/3.1 切换生产端之前：annotations 与扩展字段原样保留，不被裁剪或重建。
+    expect(saved['annotations']).toEqual(annotations)
+    expect(saved['customOwnerField']).toEqual({ keep: true })
+    expect(saved['readerData']).toEqual({
+      renderMode: 'layout',
+      hiddenPages: [2]
+    })
+    expect(restoreReaderSnapshot(saved)).toEqual({ ...restored, extra: saved })
+  })
+})
