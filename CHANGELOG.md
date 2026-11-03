@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复首次进入阅读页且未主动选色时高亮/选区与底栏选中色不同源：未显式设置或主动选择高亮色时，从当前生效的描边色派生半透明高亮；显式 `highlightColor` 优先。Demo 的初始高亮色与阅读偏好回退值同步取预设首项；新增公开辅助函数 `getDefaultBottomBarHighlightColor` 供宿主初始化使用。
+
+### Changed
+- Reader 未受控的描边默认色从 `#2563eb` 改为初始 `colors` 首项（未提供或为空时使用默认蓝色 `#7d9ec0`），让底栏首次加载即有选中项。显式描边色即使不在预设列表中，也会用于派生默认高亮色，此时底栏没有匹配选中项。Demo 已使用预设首项作为描边默认值。
+
 ## [1.12.0-beta.2] - 2026-08-14
 
 ### Added
