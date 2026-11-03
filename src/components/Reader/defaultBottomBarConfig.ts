@@ -61,8 +61,8 @@ export function getFontScaleLabel(fontScale: ReaderFontScale): string {
 }
 
 /**
- * 底栏颜色列表首项即默认选中项。高亮默认色从这里派生，保证
- * “首次进入未主动选色”的高亮颜色与底栏默认选中色同源。
+ * 从预设列表首项派生高亮色，供宿主初始化与底栏同源的颜色。
+ * Reader 未受控的描边默认取该首项；显式描边色的高亮回退由 Reader 单独解析。
  */
 export function getDefaultBottomBarHighlightColor(
   colors: readonly ReaderColorOption[] | undefined = DEFAULT_BOTTOM_BAR_COLORS
