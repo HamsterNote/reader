@@ -1651,6 +1651,7 @@ export function Reader({
             document={document}
             isEpub={isEpub}
             isPdf={isPdf}
+            darkMode={darkMode}
             onRequestLayout={() => handleRenderModeChange('layout')}
             fontScale={fontScale}
             containMarginX={containMarginX}

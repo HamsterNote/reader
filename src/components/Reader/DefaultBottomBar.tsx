@@ -33,6 +33,7 @@ import {
   type ReaderLayoutZoom
 } from './defaultBottomBarConfig'
 import {
+  resolveReaderTheme,
   useBottomBarMenus,
   usePrefersColorScheme,
   useWindowWidth
@@ -74,8 +75,7 @@ export type DefaultBottomBarProps = {
 export function DefaultBottomBar(props: DefaultBottomBarProps) {
   const width = useWindowWidth()
   const preferredTheme = usePrefersColorScheme()
-  const explicitTheme = props.darkMode ? 'dark' : 'light'
-  const theme = props.darkMode === undefined ? preferredTheme : explicitTheme
+  const theme = resolveReaderTheme(props.darkMode, preferredTheme)
   const menus = useBottomBarMenus()
   const layoutDisabled = props.renderMode === 'text'
   const visibleFontScale =

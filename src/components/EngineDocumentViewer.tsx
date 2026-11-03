@@ -12,7 +12,10 @@ import {
   useState
 } from 'react'
 import { buttonOnlyInput } from './reading/buttonOnlyInput'
-import { usePrefersColorScheme } from './Reader/useDefaultBottomBar'
+import {
+  resolveReaderTheme,
+  usePrefersColorScheme
+} from './Reader/useDefaultBottomBar'
 import type { ReaderEngineSource } from '../types/engineSource'
 import type { ReaderRenderMode } from '../types/readerOptions'
 import type {
@@ -187,11 +190,6 @@ function forwardPublicationPointer(
   )
 }
 
-function epubTheme(darkMode: boolean | undefined, preferred: 'dark' | 'light') {
-  if (darkMode === undefined) return preferred
-  return darkMode ? 'dark' : 'light'
-}
-
 function epubViewportStyle(
   source: ReaderEngineSource | undefined,
   inset: number,
@@ -207,7 +205,7 @@ function epubViewportStyle(
 export function EngineDocumentViewer(props: Props) {
   const { engineSource: source, engineRenderMode: mode = 'layout' } = props
   const preferredTheme = usePrefersColorScheme()
-  const theme = epubTheme(props.engineDarkMode, preferredTheme)
+  const theme = resolveReaderTheme(props.engineDarkMode, preferredTheme)
   const [navigation, setNavigation] = useState<EpubNavigationState>({
     canPrevious: false,
     canNext: false,

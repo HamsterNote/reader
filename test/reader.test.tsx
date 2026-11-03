@@ -15,7 +15,7 @@ import {
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef, type RefObject, useState } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sanitizeDrawingValue } from '../src/components/PageDrawingLayer'
 import {
   SUPPORTED_UPLOAD_ACCEPT,
@@ -49,6 +49,7 @@ import {
   simulateLinkedSelectRange,
   simulateSelectionConfirmRect
 } from './mocks/selection'
+import { installMatchMediaMock } from './mocks/matchMedia'
 import { intersectionObserverMock, mockElementSize } from './setup'
 
 let capturedViewerProps: Record<string, unknown> = {}
@@ -211,6 +212,25 @@ vi.mock('@system-ui-js/multi-drag', () => {
     }
   }
 })
+
+/** 以指定的系统深浅色偏好替换全局 matchMedia 实现。 */
+function mockSystemColorScheme(dark: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string): MediaQueryList =>
+      ({
+        matches: query === '(prefers-color-scheme: dark)' && dark,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => true
+      }) as MediaQueryList
+  })
+}
 
 function makePage(number: number) {
   return {
@@ -408,6 +428,10 @@ describe('Reader public API', () => {
   beforeEach(() => {
     capturedViewerProps = {}
     capturedTextViewerProps = {}
+  })
+
+  afterEach(() => {
+    installMatchMediaMock()
   })
 
   it('renders the provided document title on the public entry', () => {
@@ -3145,6 +3169,59 @@ describe('Reader prop forwarding', () => {
       'hamster-reader-popover--light'
     )
   })
+
+  it.each([
+    { darkMode: true, systemDark: false, expected: 'dark' },
+    { darkMode: false, systemDark: true, expected: 'light' }
+  ])(
+    'gives PDF text pagination the explicit theme rather than the system one (darkMode=$darkMode, systemDark=$systemDark)',
+    async ({ darkMode, systemDark, expected }) => {
+      // Given: the system preference contradicts the host-provided darkMode.
+      mockSystemColorScheme(systemDark)
+      const document = makeDocument({ pages: [makePage(1)] })
+
+      // When: the Reader renders PDF text mode.
+      render(
+        <Reader
+          document={document}
+          isPdf
+          renderMode='text'
+          darkMode={darkMode}
+        />
+      )
+
+      // Then: the pagination controls and the default bottom bar agree on theme.
+      const pagination = await screen.findByRole('group', { name: '翻页' })
+      const bottomBar = screen.getByTestId('tool-bottom-bar')
+      expect(pagination).toHaveAttribute('data-theme', expected)
+      expect(pagination.getAttribute('data-theme')).toBe(
+        bottomBar.getAttribute('data-theme')
+      )
+    }
+  )
+
+  it.each([true, false])(
+    'follows the system color scheme for PDF text pagination when darkMode is omitted (systemDark=%s)',
+    async (systemDark) => {
+      // Given: the host does not pass darkMode.
+      mockSystemColorScheme(systemDark)
+      const document = makeDocument({ pages: [makePage(1)] })
+
+      // When: the Reader renders PDF text mode.
+      render(<Reader document={document} isPdf renderMode='text' />)
+
+      // Then: both surfaces track the system preference.
+      const pagination = await screen.findByRole('group', { name: '翻页' })
+      const bottomBar = screen.getByTestId('tool-bottom-bar')
+      expect(pagination).toHaveAttribute(
+        'data-theme',
+        systemDark ? 'dark' : 'light'
+      )
+      expect(pagination.getAttribute('data-theme')).toBe(
+        bottomBar.getAttribute('data-theme')
+      )
+    }
+  )
 
   it('renders an existing highlight popover from the original range reference', async () => {
     // Given: the selected highlight has its own color, which differs from the

@@ -3,7 +3,10 @@ import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
-import { usePrefersColorScheme } from '../Reader/useDefaultBottomBar'
+import {
+  resolveReaderTheme,
+  usePrefersColorScheme
+} from '../Reader/useDefaultBottomBar'
 import type { CSSProperties } from 'react'
 import type {
   LinkedSelectionData,
@@ -850,6 +853,11 @@ export type IntermediateDocumentTextViewerProps = {
   onPageBrowserClose?: () => void
   /** 页面浏览侧栏主题色。 */
   themeColor?: string
+  /**
+   * 显式深色主题；未提供时翻页控件跟随系统偏好。与 layout 模式、默认底栏
+   * 共用 Reader 的主题 API。
+   */
+  darkMode?: boolean
   /** 每个文本高亮对应的评论数量。 */
   commentCountByRangeId?: Readonly<Record<string, number>>
   /** container 顶部文字对应的精确书签。 */
@@ -987,6 +995,7 @@ export function IntermediateDocumentTextViewer(
     showPageBrowser = false,
     onPageBrowserClose,
     themeColor,
+    darkMode,
     commentCountByRangeId,
     bookmarks,
     onToggleBookmark,
@@ -1046,6 +1055,7 @@ export function IntermediateDocumentTextViewer(
     typeof usePdfTextPagination
   > | null>(null)
   const preferredTheme = usePrefersColorScheme()
+  const paginationTheme = resolveReaderTheme(darkMode, preferredTheme)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -3248,7 +3258,7 @@ export function IntermediateDocumentTextViewer(
           navigation={pdfPagination.navigation}
           ready={pdfPagination.ready}
           unlocatable={pdfPagination.unlocatable}
-          theme={preferredTheme}
+          theme={paginationTheme}
           empty={!pageNumbers.length}
           failed={pdfLoadErrors.has(pdfPagination.pageNumber)}
           onPrevious={() => pdfPagination.turn(false)}
