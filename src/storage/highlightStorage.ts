@@ -210,9 +210,10 @@ export function readAnnotationStorageV5(
 /**
  * 单次 `setItem` 提交整容器：成功即完整替换，异常即失败且旧值不变。
  *
- * 写入前先校验本次内容（文档必须通过注入的校验器）；已存在的值损坏、未知版本
- * 或文档不合格时默认拒绝覆盖（`refused`），只有用户显式确认恢复才可传
- * `overwriteInvalid: true`。
+ * 写入前先把要落盘的 JSON 跑一遍与读取完全相同的校验：任何读不回来的输入
+ * （非法页键、坏文档、缺校验器等）都返回 `invalid-input`，不触碰已有数据。
+ * 已存在的值损坏、未知版本或文档不合格时默认拒绝覆盖（`refused`），只有用户
+ * 显式确认恢复才可传 `overwriteInvalid: true`。
  */
 export function writeAnnotationStorageV5(
   backend: AnnotationStorageV5Backend,
@@ -220,12 +221,25 @@ export function writeAnnotationStorageV5(
   storage: AnnotationStorageV5,
   options: AnnotationStorageV5WriteOptions = {}
 ): AnnotationStorageV5WriteResult {
-  const inputReason = checkAnnotationDocuments(
-    storage.paintings,
-    options.validateDocument
-  )
-  if (inputReason !== null)
-    return { status: 'invalid-input', reason: inputReason }
+  let serialized: string
+  try {
+    serialized = serializeAnnotationStorageV5(
+      storage.ranges,
+      storage.rects,
+      storage.paintings
+    )
+  } catch (error) {
+    return { status: 'failed', error }
+  }
+
+  // 用读取路径校验即将写入的字节，保证「写进去的必然读得出来」。
+  const written = parseAnnotationStorageV5(serialized, options)
+  if (written.status !== 'ok') {
+    return {
+      status: 'invalid-input',
+      reason: written.status === 'invalid' ? written.reason : 'invalid-shape'
+    }
+  }
 
   const current = readAnnotationStorageV5(backend, key, options)
   if (current.status === 'invalid' && options.overwriteInvalid !== true) {
@@ -233,14 +247,7 @@ export function writeAnnotationStorageV5(
   }
 
   try {
-    backend.setItem(
-      key,
-      serializeAnnotationStorageV5(
-        storage.ranges,
-        storage.rects,
-        storage.paintings
-      )
-    )
+    backend.setItem(key, serialized)
     return { status: 'saved' }
   } catch (error) {
     return { status: 'failed', error }

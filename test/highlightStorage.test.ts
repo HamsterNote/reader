@@ -765,6 +765,83 @@ describe('annotation storage v5', () => {
     expect(backend.store.has('annotations:v5')).toBe(false)
   })
 
+  it('rejects invalid page keys before touching an existing archive', () => {
+    // 复现：已有合法 page-1 存档时写入 page-0，旧实现返回 saved 并覆盖，
+    // 随后自己读回 invalid/invalid-shape。
+    const stored = serializeAnnotationStorageV5(
+      v5Storage.ranges,
+      v5Storage.rects,
+      v5Storage.paintings
+    )
+
+    for (const pageKey of ['page-0', 'page-abc', 'page-', 'page-01']) {
+      const backend = createBackend({ 'annotations:v5': stored })
+
+      const result = writeAnnotationStorageV5(
+        backend,
+        'annotations:v5',
+        {
+          version: 5,
+          ranges: [],
+          rects: [],
+          paintings: { [pageKey]: editorDocumentPage1 }
+        },
+        v5Options
+      )
+
+      expect(result).toEqual({
+        status: 'invalid-input',
+        reason: 'invalid-shape'
+      })
+      expect(backend.store.get('annotations:v5')).toBe(stored)
+      expect(
+        readAnnotationStorageV5(backend, 'annotations:v5', v5Options)
+      ).toEqual({ status: 'ok', storage: v5Storage })
+    }
+  })
+
+  it('validates ranges and rects of the container before writing', () => {
+    const stored = serializeAnnotationStorageV5([], [], {})
+    const backend = createBackend({ 'annotations:v5': stored })
+
+    const result = writeAnnotationStorageV5(
+      backend,
+      'annotations:v5',
+      {
+        version: 5,
+        ranges: [
+          { ...linkedRangeA, start: { selectionId: 'internal-1', offset: 0 } }
+        ],
+        rects: [],
+        paintings: {}
+      },
+      v5Options
+    )
+
+    expect(result).toEqual({ status: 'invalid-input', reason: 'invalid-shape' })
+    expect(backend.store.get('annotations:v5')).toBe(stored)
+  })
+
+  it('only reports saved when the written container reads back identically', () => {
+    const backend = createBackend()
+
+    expect(
+      writeAnnotationStorageV5(backend, 'annotations:v5', v5Storage, v5Options)
+    ).toEqual({ status: 'saved' })
+
+    // 落盘字节与序列化结果一致，且读取闭环 ok + 深比较相等。
+    expect(backend.store.get('annotations:v5')).toBe(
+      serializeAnnotationStorageV5(
+        v5Storage.ranges,
+        v5Storage.rects,
+        v5Storage.paintings
+      )
+    )
+    expect(
+      readAnnotationStorageV5(backend, 'annotations:v5', v5Options)
+    ).toEqual({ status: 'ok', storage: v5Storage })
+  })
+
   it('refuses to overwrite corrupt new data without an explicit recovery', () => {
     const corrupt = '{"version":5,"ranges":['
     const backend = createBackend({ 'annotations:v5': corrupt })
