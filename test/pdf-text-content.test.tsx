@@ -1,3 +1,4 @@
+import { deriveDomSelectionPageRects } from '../src/components/IntermediateDocumentViewer/textHighlightAdapter'
 import { IntermediateText, TextDir } from '@hamster-note/types'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -302,4 +303,43 @@ describe('PdfTextContent', () => {
     // Then: 可见正文不继承透明色，而由 Reader 的正文色统一控制。
     expect(screen.getByText('Visible text').style.color).toBe('')
   })
+})
+
+it('clips split source span highlight fragments to the PDF Text viewport', () => {
+  const root = document.createElement('div')
+  root.className = 'hamster-reader__pdf-text-viewport'
+  root.innerHTML =
+    '<div data-testid="intermediate-text-page-1"><div class="hsn-selection-container"><div class="hsn-selection-content"><span data-selection-start-offset="0">abcdef</span></div></div></div>'
+  const container = root.querySelector<HTMLElement>('.hsn-selection-container')!
+  vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(10, 20, 300, 200)
+  )
+  const previous = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [
+      new DOMRect(-314, 20, 40, 20),
+      new DOMRect(10, 20, 40, 20),
+      new DOMRect(334, 20, 40, 20)
+    ]
+  })
+  try {
+    expect(
+      deriveDomSelectionPageRects({
+        root,
+        pageSelector: '[data-testid="intermediate-text-page-1"]',
+        startOffset: 0,
+        endOffset: 6,
+        overlayRectType: 'px'
+      })
+    ).toEqual([{ x: 0, y: 0, width: 40, height: 20 }])
+  } finally {
+    if (previous)
+      Object.defineProperty(Range.prototype, 'getClientRects', previous)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    vi.restoreAllMocks()
+  }
 })

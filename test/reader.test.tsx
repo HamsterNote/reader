@@ -4317,6 +4317,32 @@ describe('Reader zoom props', () => {
     })
   })
 
+  it('remeasures the replacement PDF toolbar after switching Layout back to Text', async () => {
+    const { document } = makeLazyDocument(1)
+    const view = render(<Reader document={document} isPdf renderMode='text' />)
+    const root = screen.getByTestId('reader-root')
+    mockElementSize(root, { width: 800, height: 600 })
+    const first = screen.getByTestId('tool-bottom-bar')
+    mockElementSize(first, { width: 320, height: 54, top: 530 })
+    await waitFor(() =>
+      expect(capturedTextViewerProps.containMarginBottom).toBe(70)
+    )
+    view.rerender(<Reader document={document} isPdf renderMode='layout' />)
+    const layout = screen.getByTestId('tool-bottom-bar')
+    expect(layout).not.toBe(first)
+    mockElementSize(layout, { width: 320, height: 54, top: 520 })
+    view.rerender(<Reader document={document} isPdf renderMode='text' />)
+    const replacement = screen.getByTestId('tool-bottom-bar')
+    expect(replacement).not.toBe(layout)
+    mockElementSize(replacement, { width: 320, height: 54, top: 510 })
+    await waitFor(() =>
+      expect(capturedTextViewerProps.containMarginBottom).toBe(90)
+    )
+    // A detached toolbar must no longer influence the Text content rectangle.
+    mockElementSize(layout, { width: 0, height: 0, top: 0 })
+    expect(capturedTextViewerProps.containMarginBottom).toBe(90)
+  })
+
   it('preserves the legacy vertical margin while adding the default bottom bar inset', async () => {
     // Given: a legacy Layout Mode consumer provides one symmetric vertical margin.
     const { document } = makeLazyDocument(1)

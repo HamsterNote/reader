@@ -151,15 +151,25 @@ export function deriveDomSelectionPageRects({
   }
 
   const bounds = container.getBoundingClientRect()
+  const clip = root.classList.contains('hamster-reader__pdf-text-viewport')
+    ? bounds
+    : null
   const pixelRects: OverlayRect[] = textRanges.flatMap((textRange) =>
     Array.from(textRange.getClientRects())
       .filter((rect) => rect.width > 0 && rect.height > 0)
-      .map((rect) => ({
-        x: rect.left - bounds.left,
-        y: rect.top - bounds.top,
-        width: rect.width,
-        height: rect.height
-      }))
+      .map((rect) => {
+        const left = clip ? Math.max(rect.left, clip.left) : rect.left
+        const top = clip ? Math.max(rect.top, clip.top) : rect.top
+        const right = clip ? Math.min(rect.right, clip.right) : rect.right
+        const bottom = clip ? Math.min(rect.bottom, clip.bottom) : rect.bottom
+        return {
+          x: left - bounds.left,
+          y: top - bounds.top,
+          width: right - left,
+          height: bottom - top
+        }
+      })
+      .filter((rect) => rect.width > 0 && rect.height > 0)
   )
   return overlayRectType === 'percent'
     ? pixelRectsToPercentRects(pixelRects, container)

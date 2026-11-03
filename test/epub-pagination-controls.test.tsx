@@ -273,6 +273,7 @@ describe('EPUB pagination controls and progress', () => {
     enable()
     const next = screen.getByRole('button', { name: '下一页' })
     next.focus()
+    expect(next).toHaveFocus()
     await userEvent.keyboard('{Enter} ')
     expect(engine.nextPage).toHaveBeenCalledTimes(2)
     act(() =>

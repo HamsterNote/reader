@@ -12,13 +12,16 @@ import { getDocument } from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { IntermediateText } from '@hamster-note/types'
 import { PdfParser } from '@hamster-note/pdf-parser'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { TextItem } from '../../src/pdf/pdfjsRuntime'
 
 import { parseHighlights } from '../../demo/highlightStorage'
 import { buildCanonicalPageText } from '../../src/pdf/pdfTextMapping'
-import { createPdfTextModeDocument } from '../../src/pdf/pdfTextModeDocument'
+import {
+  createPdfTextModeDocument,
+  releasePdfTextPage
+} from '../../src/pdf/pdfTextModeDocument'
 
 const FIXTURE_ROOT = join(__dirname, '../compat/fixtures')
 
@@ -224,6 +227,31 @@ describe('Text 模式派生文档（createPdfTextModeDocument）', () => {
       )
       // Text 模式页内容与 canonical 缓存同源。
       expect(facade.getCanonicalPageText(1)?.text).toBe(texts)
+    } finally {
+      await document.destroy()
+    }
+  })
+
+  it('extracts lazily, releases canonical text, and retries a failed extraction', async () => {
+    const document = await openFixture('pdf/two-column.pdf')
+    try {
+      const pdfPage = await document.getPage(1)
+      const extract = vi.spyOn(pdfPage, 'getTextContent')
+      const facade = await createPdfTextModeDocument(document, 'bounded')
+      expect(extract).not.toHaveBeenCalled()
+      extract.mockRejectedValueOnce(new Error('temporary extraction failure'))
+      await expect(facade.document.getPageByPageNumber(1)).rejects.toThrow(
+        'temporary'
+      )
+      expect(facade.getCanonicalPageText(1)).toBeUndefined()
+      const page = await facade.document.getPageByPageNumber(1)
+      expect(page!.content.length).toBeGreaterThan(0)
+      expect(extract).toHaveBeenCalledTimes(2)
+      expect(facade.getCanonicalPageText(2)).toBeUndefined()
+      releasePdfTextPage(facade.document, 1)
+      expect(facade.getCanonicalPageText(1)).toBeUndefined()
+      await facade.document.getPageById('page-1')
+      expect(extract).toHaveBeenCalledTimes(3)
     } finally {
       await document.destroy()
     }

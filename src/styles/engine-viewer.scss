@@ -103,7 +103,7 @@
     height: auto;
   }
 }
-.hamster-reader__epub-pagination {
+.hamster-reader__viewport-pagination {
   position: absolute;
   bottom: 32px;
   right: 16px;
@@ -145,5 +145,43 @@
   @media (max-width: 767px) {
     right: 16px;
     bottom: 96px;
+  }
+}
+
+// Only the PDF Text branch uses CSS columns. The selection container remains a
+// stationary viewport, so its overlay geometry shares the visible text origin.
+.hamster-reader__pdf-text-viewport {
+  overflow: clip;
+  overscroll-behavior: none;
+  .hamster-reader__intermediate-text-page {
+    padding: 0;
+    height: var(--pdf-text-height);
+    overflow: clip;
+    .hsn-selection-container {
+      width: var(--pdf-text-width);
+      height: var(--pdf-text-height);
+      min-height: 0;
+      overflow: clip;
+    }
+    .hsn-selection-content {
+      width: var(--pdf-text-width);
+      height: var(--pdf-text-height);
+      min-height: 0;
+      column-width: var(--pdf-text-width);
+      column-gap: 24px;
+      column-fill: auto;
+      overflow-wrap: anywhere;
+    }
+  }
+  .hamster-reader__intermediate-text-page-marker {
+    display: none;
+  }
+}
+.hamster-reader__pdf-text-empty {
+  padding: 16px;
+  color: #6b7280;
+  button {
+    display: block;
+    margin-top: 12px;
   }
 }

@@ -8,6 +8,10 @@ import {
   parseLegacyHighlightsJson,
   ReaderDataStore
 } from '../src/host/readerDataStore'
+import {
+  restoreReaderSnapshot,
+  serializeReaderSnapshot
+} from '../src/host/readerSnapshot'
 
 class MemoryStorage implements HostStorage {
   readonly values = new Map<string, string>()
@@ -44,6 +48,45 @@ function record(
 }
 
 describe('ReaderDataStore', () => {
+  it('round trips consecutive PDF Text characters on the same source page through the WebView snapshot and host store', async () => {
+    const storage = new MemoryStorage()
+    const store = new ReaderDataStore(storage)
+    await store.upsert(record({ fileName: 'paper.pdf', format: 'pdf' }))
+    for (const offset of [1306, 2586]) {
+      const snapshot = restoreReaderSnapshot(null)
+      const progress = {
+        currentPageNumber: 1,
+        anchor: {
+          pageNumber: 1,
+          textId: 'page-1-item-0',
+          text: 'source character',
+          offset
+        }
+      }
+      const data = serializeReaderSnapshot({
+        ...snapshot,
+        data: {
+          ...snapshot.data,
+          renderMode: 'text',
+          textReadingProgress: progress
+        }
+      })
+      await store.saveSnapshot(fileId, {
+        data,
+        progress: null,
+        revision: offset
+      })
+      const reopened = await new ReaderDataStore(storage).get(fileId)
+      const restored = restoreReaderSnapshot(
+        reopened!.snapshot.data,
+        reopened!.snapshot.progress
+      )
+      expect(restored.data.textReadingProgress).toEqual(progress)
+      expect(restored.data.renderMode).toBe('text')
+      expect(JSON.stringify(reopened!.snapshot)).not.toContain('column')
+    }
+  })
+
   it('persists a document and restores it in a new store instance', async () => {
     const storage = new MemoryStorage()
     const store = new ReaderDataStore(storage)

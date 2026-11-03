@@ -212,6 +212,77 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it('cancels a pending Text character restore when an explicit page seek replaces it', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    renderViewer({}, ref)
+    await act(async () => {})
+    let pending!: Promise<void>
+    act(() => {
+      pending = ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        textId: 'page-1-item-0',
+        text: 'column',
+        offset: 5
+      })
+      ref.current!.scrollToPage(2)
+    })
+    await act(async () => {
+      await pending
+    })
+    expect(latestViewer().currentPageNumber).toBe(2)
+    expect(ref.current!.captureTextAnchor()).toBeNull()
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    expect(latestViewer().currentPageNumber).toBe(2)
+    expect(ref.current!.captureTextAnchor()).toBeNull()
+  })
+
+  it('keeps the restored Text character through an unchanged Layout viewport, then captures actual navigation', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const anchor = {
+      pageNumber: 1,
+      textId: 'page-1-item-0',
+      text: 'column line one',
+      offset: 5
+    }
+    let restored!: Promise<void>
+    act(() => {
+      restored = ref.current!.scrollToAnchor(anchor)
+    })
+    // An immediate mode switch must not discard the pending precise anchor.
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    const layer = emitTextLayer(1, [
+      'Left column line one',
+      'Left column line two'
+    ])
+    for (const span of layer.querySelectorAll('span'))
+      span.scrollIntoView = vi.fn()
+    await act(async () => {
+      await restored
+    })
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    expect(container).not.toBeNull()
+    container.scrollTop += 10
+    expect(ref.current!.captureTextAnchor()).toMatchObject({
+      pageNumber: 1,
+      offset: 0
+    })
+    // Returning to the old scroll coordinates must not revive an invalidated anchor.
+    container.scrollTop -= 10
+    expect(ref.current!.captureTextAnchor()).toMatchObject({ offset: 0 })
+    await act(async () => {
+      await ref.current!.scrollToAnchor(anchor)
+    })
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    act(() => ref.current!.scrollToPage(1))
+    expect(ref.current!.captureTextAnchor()).toMatchObject({ offset: 0 })
+  })
+
   it('uses non-hidden in-range pages for navigation, bookmarks, callbacks and crop-mode fallback', async () => {
     const source = { data: readFixture('pdf/two-column.pdf') }
     const ref = createRef<PdfDocumentViewerRef>()

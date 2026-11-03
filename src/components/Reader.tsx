@@ -584,6 +584,14 @@ function resolveBottomBarLayoutZoom(
   return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
 }
 
+function hasViewportPagination(
+  format: string | undefined,
+  isPdf: boolean | undefined,
+  mode: string
+) {
+  return format === 'epub' || Boolean(isPdf && mode === 'text')
+}
+
 function resolveVerticalMargins(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
@@ -897,7 +905,9 @@ export function Reader({
   const bottomBarInset = useBottomBarInset({
     rootRef: readerRootRef,
     bottomBarRef: defaultBottomBarRef,
-    layoutKey: resolvedSelectedTool,
+    // Changing mode can replace the toolbar host (the pagination wrapper).
+    // Reconnect the observer instead of measuring the detached Layout toolbar.
+    layoutKey: `${resolvedSelectedTool}:${resolvedRenderMode}`,
     enabled: hasDocumentPages && bottomBar === undefined
   })
   const resolvedVerticalMargins = resolveVerticalMargins(
@@ -1641,6 +1651,7 @@ export function Reader({
             document={document}
             isEpub={isEpub}
             isPdf={isPdf}
+            onRequestLayout={() => handleRenderModeChange('layout')}
             fontScale={fontScale}
             containMarginX={containMarginX}
             containMarginTop={resolvedVerticalMargins.top}
@@ -2022,7 +2033,11 @@ export function Reader({
             bottomBarRef={defaultBottomBarRef}
             renderMode={resolvedRenderMode}
             isEpub={isEpub || engineSource?.format === 'epub'}
-            epubPagination={engineSource?.format === 'epub'}
+            epubPagination={hasViewportPagination(
+              engineSource?.format,
+              isPdf,
+              resolvedRenderMode
+            )}
             ocrEnabled={resolvedOcrEnabled}
             fontScale={fontScale}
             layoutZoom={resolveBottomBarLayoutZoom(

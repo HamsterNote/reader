@@ -58,6 +58,11 @@ async function chapter(page, number) {
       number - 1,
     number
   )
+  await page.waitForFunction(() => {
+    const next = document.querySelector('[aria-label="下一页"]')
+    const previous = document.querySelector('[aria-label="上一页"]')
+    return next && previous && !(next.disabled && previous.disabled)
+  })
 }
 async function drag(page, from, to) {
   await page.mouse.move(from.x, from.y)
@@ -152,7 +157,9 @@ async function recyclePdf(page, fixtureName, edited, label, result) {
 }
 async function touchSkipHidden(page, mobile, result) {
   if (!mobile) return
-  await page.waitForTimeout(200)
+  const before = await page.evaluate(
+    () => document.querySelector('foliate-view').renderer.getContents()[0].index
+  )
   const point = await page.evaluate(() => {
     const doc = document
       .querySelector('foliate-view')
@@ -176,13 +183,23 @@ async function touchSkipHidden(page, mobile, result) {
     type: 'touchEnd',
     touchPoints: []
   })
-  await page.waitForFunction(
+  await page.evaluate(
     () =>
-      document.querySelector('foliate-view')?.renderer?.getContents()[0]
-        ?.index === 2
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      )
+  )
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.querySelector('foliate-view').renderer.getContents()[0].index
+    ),
+    before
   )
   await cdp.detach()
-  result.checks.push('Chromium touch emulation: swipe skips hidden chapter')
+  result.checks.push(
+    'Chromium touch emulation: swipe leaves the button-only reading position unchanged'
+  )
 }
 async function checkPrependedCover(page, label, result) {
   const name = 'spine-omits-cover.epub'
@@ -200,7 +217,7 @@ async function checkPrependedCover(page, label, result) {
     .getByTestId('render-mode-select')
     .selectOption('layout', { force: true })
   await page.getByLabel('文本阅读进度').press('Home')
-  const cover = page.getByRole('button', { name: '进入正文' })
+  const cover = page.locator('div.hamster-reader__epub-cover')
   await cover.waitFor()
   await page.locator('[data-engine-page="page-1"]').waitFor()
   const box = await cover.boundingBox()
@@ -244,20 +261,42 @@ async function editEndpoint(page, label, end, result) {
     name: end ? '调整高亮终点' : '调整高亮起点'
   })
   await handle.waitFor()
-  const target = await page.evaluate((end) => {
-    const doc = document
-      .querySelector('foliate-view')
-      .renderer.getContents()[0].doc
-    const selection = doc.getSelection().getRangeAt(0)
-    const range = doc.createRange()
-    const node = end ? selection.endContainer : selection.startContainer
-    const offset = end ? selection.endOffset - 1 : selection.startOffset + 1
-    range.setStart(node, offset)
-    range.collapse(true)
-    const box = range.getBoundingClientRect()
-    const frame = doc.defaultView.frameElement.getBoundingClientRect()
-    return { x: box.x + frame.x, y: box.y + frame.y + box.height / 2 }
-  }, end)
+  const original = (await saved(page, 'duplicate-text.epub')).ranges.find(
+    (range) => range.id === 'epub-range-cross-page'
+  )
+  const canonicalOffset = end
+    ? original.end.offset - 1
+    : original.start.offset + 1
+  const target = await page.evaluate(
+    ({ canonicalOffset }) => {
+      const doc = document
+        .querySelector('foliate-view')
+        .renderer.getContents()[0].doc
+      const range = doc.createRange()
+      // Native selection is transient across chapter navigation. Locate the
+      // fixture's canonical endpoint in its real text nodes instead.
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+      let remaining = canonicalOffset
+      let found = false
+      while (walker.nextNode()) {
+        const node = walker.currentNode
+        if (!node.textContent.trim()) continue
+        if (remaining <= node.length) {
+          range.setStart(node, remaining)
+          found = true
+          break
+        }
+        remaining -= node.length
+      }
+      if (!found)
+        throw new Error(`Missing fixture character ${canonicalOffset}`)
+      range.collapse(true)
+      const box = range.getBoundingClientRect()
+      const frame = doc.defaultView.frameElement.getBoundingClientRect()
+      return { x: box.x + frame.x, y: box.y + frame.y + box.height / 2 }
+    },
+    { canonicalOffset }
+  )
   const box = await handle.boundingBox()
   await page.mouse.move(box.x + 7, box.y + 7)
   await page.mouse.down()
@@ -333,7 +372,10 @@ async function run(mobile, format) {
       },
       { fixtureName, initial }
     )
-    await page.goto(`${base}/`)
+    await page.goto(`${base}/`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    })
     if (security) await monitorMagnifierSecurity(page, result)
     await uploadFixture(page, format, fixtureName)
     await page.locator(`[data-engine=${format}]`).waitFor()
@@ -551,28 +593,39 @@ async function run(mobile, format) {
             frame !== page.mainFrame() && frame.url().startsWith('blob:')
         )
       await frame.locator('body').hover()
-      await page.waitForTimeout(200)
       await page.mouse.wheel(0, -1200)
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+          )
+      )
+      assert.equal(
+        await page.evaluate(
+          () =>
+            document.querySelector('foliate-view').renderer.getContents()[0]
+              .index
+        ),
+        3
+      )
+      await page.getByRole('button', { name: '上一页', exact: true }).click()
       await page.waitForFunction(
         () =>
           document.querySelector('foliate-view')?.renderer?.getContents()[0]
             ?.index === 2
       )
-      await page.waitForTimeout(200)
-      const currentFrame = page
-        .frames()
-        .find(
-          (frame) =>
-            frame !== page.mainFrame() && frame.url().startsWith('blob:')
-        )
-      await currentFrame.locator('body').hover()
-      await page.mouse.wheel(0, -1200)
+      await page.waitForFunction(
+        () => !document.querySelector('[aria-label="上一页"]').disabled
+      )
+      await page.getByRole('button', { name: '上一页', exact: true }).click()
       await page.waitForFunction(
         () =>
           document.querySelector('foliate-view')?.renderer?.getContents()[0]
             ?.index === 0
       )
-      result.checks.push('wheel chapter navigation skips hidden chapter')
+      result.checks.push(
+        'wheel leaves reading position unchanged; previous buttons skip hidden chapter'
+      )
       await touchSkipHidden(page, mobile, result)
     } else {
       await page.waitForFunction(

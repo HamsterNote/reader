@@ -495,3 +495,40 @@ it.each(['layout', 'text'] as const)(
     }
   }
 )
+
+it('persists two PDF screens within one source page and flushes the final source anchor on close', () => {
+  vi.useFakeTimers()
+  const onDataChange = vi.fn()
+  const data = { textReadingProgress: { currentPageNumber: 3 } }
+  const { result, unmount } = renderHook(() =>
+    useTextReadingProgressSave('pdf', data, onDataChange)
+  )
+  try {
+    const at = (offset: number) => ({
+      currentPageNumber: 3,
+      anchor: {
+        pageNumber: 3,
+        textId: 'page-3-item-0',
+        text: 'source text',
+        offset
+      }
+    })
+    act(() => {
+      result.current(at(100))
+      vi.advanceTimersByTime(101)
+    })
+    expect(onDataChange).toHaveBeenLastCalledWith({
+      ...data,
+      textReadingProgress: at(100)
+    })
+    act(() => result.current(at(200)))
+    unmount()
+    expect(onDataChange).toHaveBeenLastCalledWith({
+      ...data,
+      textReadingProgress: at(200)
+    })
+    expect(JSON.stringify(onDataChange.mock.calls)).not.toContain('column')
+  } finally {
+    vi.useRealTimers()
+  }
+})
