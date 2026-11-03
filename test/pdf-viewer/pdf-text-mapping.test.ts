@@ -48,6 +48,30 @@ describe('buildCanonicalPageText', () => {
 })
 
 describe('enhanceTextLayer', () => {
+  it('maps nested tagged-PDF leaf spans and survives repeated enhancement', () => {
+    const page = buildCanonicalPageText(2, [
+      { str: 'Hello ' },
+      { str: 'world' }
+    ])
+    const div = document.createElement('div')
+    div.innerHTML =
+      '<span class="markedContent"><span>Hello </span><span class="markedContent"><span>world</span></span></span>'
+    div
+      .querySelector('.markedContent')!
+      .setAttribute('data-selection-start-offset', '999')
+    for (let pass = 0; pass < 2; pass++) {
+      expect(enhanceTextLayer(div, page)).toBe(true)
+      expect(
+        div.querySelector('.markedContent')?.hasAttribute('data-text-id')
+      ).toBe(false)
+      const leaf = div.querySelector('.markedContent .markedContent span')!
+      expect(domPositionToCanonicalOffset(leaf.firstChild!, 3, page)).toBe(9)
+      expect(canonicalRangeToDomRange(page, 0, 11, div)?.toString()).toBe(
+        'Hello world'
+      )
+    }
+  })
+
   it('按序匹配 span 并注入三件套属性', () => {
     const page = buildCanonicalPageText(2, [
       { str: 'Hello ' },

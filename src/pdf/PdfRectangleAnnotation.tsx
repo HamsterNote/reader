@@ -11,12 +11,14 @@ export function PdfRectangleAnnotation({
   selected,
   geometry,
   pageDiv,
+  highlightColor,
   onUpdate
 }: {
   readonly rectangle: ReaderSelectionRectangle
   readonly selected: boolean
   readonly geometry: PdfPageOverlayGeometry
   readonly pageDiv: HTMLElement
+  readonly highlightColor: string
   readonly onUpdate?: (rectangle: ReaderSelectionRectangle) => void
 }) {
   const [draft, setDraft] = useState<ReaderSelectionRectangle | null>(null)
@@ -33,7 +35,11 @@ export function PdfRectangleAnnotation({
     geometry.viewport,
     geometry.visual
   )
-  const color = rectangle.selectionStyle?.borderColor ?? '#1976d2'
+  const color =
+    (selected ? rectangle.selectionStyle?.borderColor : undefined) ??
+    rectangle.markerStyle?.borderColor ??
+    rectangle.markerStyle?.backgroundColor ??
+    highlightColor
   const finish = () => {
     drag.current = null
     setDraft(null)
@@ -48,6 +54,9 @@ export function PdfRectangleAnnotation({
         width: projected.width,
         height: projected.height,
         ...rectangle.markerStyle,
+        // Persisted marker colors still determine the stroke, never a fill.
+        background: 'none',
+        backgroundColor: 'transparent',
         borderColor: color
       }}
     >
