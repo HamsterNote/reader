@@ -298,10 +298,13 @@ consumers can see how to implement the `onDragHighlight` integration.
   following the operating-system preference and built-in popovers retain their
   pre-existing dark appearance. Explicit `false` selects light chrome and
   explicit `true` selects dark chrome and article content.
-- **Shared chrome:** the built-in bottom toolbar and built-in selection,
-  highlight, and rectangle popovers follow the same `darkMode` value. Custom
-  `bottomBar`, `selectionPopover`, `highlightPopover`, and `rectPopover`
-  surfaces remain the host's theming responsibility.
+- **Shared chrome:** the built-in bottom toolbar, its drawing-tool capsule, and
+  built-in selection, highlight, and rectangle popovers follow the same
+  `darkMode` value. Both bottom capsules reuse the shared `Popover`, `Button`,
+  `Icon`, and circular color controls; the selected drawing tool uses the
+  primary button variant. Custom `bottomBar`, `selectionPopover`,
+  `highlightPopover`, and `rectPopover` surfaces remain the host's theming
+  responsibility.
 - **Layout mode:** the complete article canvas uses direct color inversion.
   Embedded `img`, `canvas`, `video`, and SVG image content receives the same
   inversion a second time so media retains its source colors.

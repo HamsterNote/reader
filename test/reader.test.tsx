@@ -737,6 +737,36 @@ describe('Reader public API', () => {
     })
   })
 
+  it('keeps both color rows synchronized with custom drawing colors', async () => {
+    const onHighlightColorChange = vi.fn()
+    render(
+      <Reader
+        document={makeDocument({ pages: [makePage(1)] })}
+        selectedTool='drawing'
+        colors={[{ name: 'brand', color: '#123456' }]}
+        onHighlightColorChange={onHighlightColorChange}
+      />
+    )
+    const drawingToolbar = screen.getByRole('toolbar', { name: '绘图工具' })
+
+    expect(screen.getAllByTestId('tool-bottom-bar-color-brand')).toHaveLength(2)
+    expect(screen.queryByTestId('tool-bottom-bar-color-green')).toBeNull()
+    fireEvent.click(
+      within(drawingToolbar).getByRole('button', { name: '绘图brand颜色' })
+    )
+
+    await waitFor(() => {
+      expect(capturedViewerProps.drawingStrokeColor).toBe('#123456')
+      expect(capturedViewerProps.paintingSettings).toMatchObject({
+        settings: {
+          freehand: { color: '#123456' },
+          shape: { color: '#123456' }
+        }
+      })
+    })
+    expect(onHighlightColorChange).not.toHaveBeenCalled()
+  })
+
   it('changes only the highlight color from the Text mode bottom bar', async () => {
     // Given: Text Mode 使用默认底栏，绘图颜色由宿主监听。
     const onDrawingStrokeColorChange = vi.fn()
@@ -4371,6 +4401,38 @@ describe('Reader zoom props', () => {
         screen.getByTestId('intermediate-document-text-viewer')
       ).toHaveStyle({ paddingBottom: '80px' })
     })
+  })
+  it('measures a wrapped drawing toolbar without obscuring reader content', async () => {
+    const { document } = makeLazyDocument(1)
+    render(
+      <Reader
+        document={document}
+        renderMode='text'
+        selectedTool='drawing'
+        paintingTool='line'
+      />
+    )
+    const root = screen.getByTestId('reader-root')
+    const drawingToolbar = screen.getByRole('toolbar', { name: '绘图工具' })
+    mockElementSize(drawingToolbar, { width: 320, height: 75 })
+    mockElementSize(root, { width: 800, height: 600 })
+    const stack = drawingToolbar.parentElement as HTMLElement
+
+    mockElementSize(stack, { width: 800, height: 181, top: 419 })
+    await waitFor(() =>
+      expect(capturedTextViewerProps.containMarginBottom).toBe(181)
+    )
+
+    mockElementSize(drawingToolbar, { width: 320, height: 108 })
+    await waitFor(() =>
+      expect(stack.style.getPropertyValue('--drawing-toolbar-height')).toBe(
+        '108px'
+      )
+    )
+    mockElementSize(stack, { width: 800, height: 214, top: 386 })
+    await waitFor(() =>
+      expect(capturedTextViewerProps.containMarginBottom).toBe(214)
+    )
   })
 
   it('remeasures the replacement PDF toolbar after switching Layout back to Text', async () => {

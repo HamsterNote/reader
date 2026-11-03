@@ -35,7 +35,7 @@
     }
 
     &--drawing {
-      height: 128px;
+      height: calc(var(--drawing-toolbar-height, 42px) + 106px);
     }
   }
 
@@ -2392,29 +2392,58 @@
 }
 
 .hamster-reader__drawing-toolbar {
-  display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  justify-content: center;
+  box-sizing: border-box;
+  width: max-content;
+  position: absolute;
+  bottom: 96px;
+  left: 50%;
   max-width: calc(100% - 16px);
-  padding: 8px;
-  background: var(--popover-background, #fff);
-  color: var(--popover-foreground, #20262d);
-  border-radius: 8px;
+  transform: translateX(-50%);
 
   button,
   input {
     font: inherit;
   }
-  button[aria-pressed='true'] {
-    outline: 2px solid currentColor;
+  .hn-button,
+  .hn-popover__separator {
+    flex-shrink: 0;
   }
-  label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+  button:hover,
+  input[type='number']:hover {
+    box-shadow: var(--hn-focus-ring);
   }
+  .hamster-reader__bottom-bar-color {
+    margin: 5px 3px;
+
+    &:hover {
+      border-color: currentColor;
+    }
+  }
+}
+
+.hamster-reader__drawing-stroke-width {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  color: var(--hn-color-text-muted);
+  font-size: 12px;
+
   input[type='number'] {
-    width: 56px;
+    box-sizing: border-box;
+    width: 60px;
+    height: 30px;
+    padding: 0 4px;
+    border: 1px solid var(--hn-color-border);
+    border-radius: var(--hn-radius-md);
+    background: var(--hn-color-surface);
+    color: var(--hn-color-text);
+    font-variant-numeric: tabular-nums;
+  }
+  input[type='number']:focus-visible {
+    outline: none;
+    box-shadow: var(--hn-focus-ring);
   }
 }
