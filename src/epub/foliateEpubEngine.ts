@@ -772,6 +772,7 @@ export const createEpubEngine = (
     }
     const sectionIndex = sectionIndexByChapter[firstPart.parts[0].chapterIndex]
     if (sectionIndex === null || sectionIndex === undefined) return false
+    virtualCoverActive = false
     // 两阶段：先切节（此间 load/relocate 把活文档接入兼容索引），
     // 再用活文档重建 Range 做精确滚动——静态文档的 Range 不能跨文档锚定。
     await view.renderer.goTo({ index: sectionIndex })
