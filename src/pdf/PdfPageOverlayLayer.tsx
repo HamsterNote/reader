@@ -330,41 +330,62 @@ export function PdfPageOverlayLayer({
             overlayRectType
           )[pageId] ??
           []
-        return storedRects.map((stored, index) => {
-          const selectedClass =
-            selectedGroup.length > 1
-              ? ' hamster-reader__pdf-highlight-rect--group-selected'
-              : ' hamster-reader__pdf-highlight-rect--selected'
-          const projected = projectStoredRectToViewport(
+        const projectedRects = storedRects.map((stored) =>
+          projectStoredRectToViewport(
             stored,
             range.overlayRectType ?? overlayRectType,
             geometry.scaleOneViewport,
             geometry.viewport,
             geometry.visual
           )
-          return (
-            <div
-              key={`${range.id}-${index}`}
-              className={`hamster-reader__pdf-highlight-rect${
-                selectedGroupIds.has(range.id) ? selectedClass : ''
-              }`}
-              data-range-id={range.id}
-              data-selected={
-                selectedGroupIds.has(range.id) ? 'true' : undefined
-              }
-              style={{
-                left: projected.left,
-                top: projected.top,
-                width: projected.width,
-                height: projected.height,
-                backgroundColor:
-                  selectedGroup.length > 1 && selectedGroupIds.has(range.id)
-                    ? 'rgba(0, 120, 215, 0.3)'
-                    : (range.markerStyle?.backgroundColor ?? highlightColor)
-              }}
-            />
+        )
+        if (projectedRects.length === 0) return null
+        const left = Math.min(...projectedRects.map((rect) => rect.left))
+        const top = Math.min(...projectedRects.map((rect) => rect.top))
+        const right = Math.max(
+          ...projectedRects.map((rect) => rect.left + rect.width)
+        )
+        const bottom = Math.max(
+          ...projectedRects.map((rect) => rect.top + rect.height)
+        )
+        const width = right - left
+        const height = bottom - top
+        // Same-winding subpaths with nonzero fill paint overlaps once. Keep
+        // stored rectangles unchanged for hit testing and cross-mode anchors.
+        const path = projectedRects
+          .map(
+            (rect) =>
+              `M${rect.left - left} ${rect.top - top}h${rect.width}v${rect.height}h${-rect.width}Z`
           )
-        })
+          .join('')
+        const selectedClass =
+          selectedGroup.length > 1
+            ? ' hamster-reader__pdf-highlight-rect--group-selected'
+            : ' hamster-reader__pdf-highlight-rect--selected'
+        return (
+          <svg
+            key={range.id}
+            className={`hamster-reader__pdf-highlight-rect${
+              selectedGroupIds.has(range.id) ? selectedClass : ''
+            }`}
+            data-range-id={range.id}
+            data-selected={selectedGroupIds.has(range.id) ? 'true' : undefined}
+            style={{ left, top, width, height }}
+            width={width}
+            height={height}
+            viewBox={`0 0 ${width} ${height}`}
+          >
+            <path
+              d={path}
+              fillRule='nonzero'
+              fill={
+                selectedGroup.length > 1 && selectedGroupIds.has(range.id)
+                  ? 'rgba(0, 120, 215, 0.3)'
+                  : (range.markerStyle?.backgroundColor ?? highlightColor)
+              }
+            />
+          </svg>
+        )
       })}
 
       {[
