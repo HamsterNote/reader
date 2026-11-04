@@ -1104,20 +1104,41 @@ export const PdfDocumentViewer = forwardRef<
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    const doc = container.ownerDocument
+    const editingOrExternalSelection = () =>
+      Boolean(
+        doc.activeElement?.closest('input, textarea, [contenteditable]') ||
+        (touchSelection.managed.current && doc.getSelection()?.rangeCount)
+      )
     const copy = (event: ClipboardEvent) => {
-      const doc = container.ownerDocument
-      if (doc.activeElement?.closest('input, textarea, [contenteditable]'))
-        return
-      if (touchSelection.managed.current && doc.getSelection()?.rangeCount)
-        return
+      if (editingOrExternalSelection()) return
       const detail = serializeCurrentSelection()
       if (!detail || !event.clipboardData) return
       if (!touchSelection.managed.current && !detail.sourceRanges) return
       event.clipboardData.setData('text/plain', detail.text)
       event.preventDefault()
     }
-    container.ownerDocument.addEventListener('copy', copy)
-    return () => container.ownerDocument.removeEventListener('copy', copy)
+    const keydown = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== 'c' ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        !touchSelection.managed.current ||
+        editingOrExternalSelection()
+      )
+        return
+      // Some browsers skip their default copy event when native Selection is
+      // empty. Trigger the clipboard event in this user gesture; its handler
+      // supplies managed text without ever selecting the visible PDF DOM.
+      if (doc.execCommand?.('copy')) event.preventDefault()
+    }
+    doc.addEventListener('copy', copy)
+    doc.addEventListener('keydown', keydown)
+    return () => {
+      doc.removeEventListener('copy', copy)
+      doc.removeEventListener('keydown', keydown)
+    }
   }, [serializeCurrentSelection])
 
   // 选区变化 → onTextSelectionChange（text + 公开端点 detail）。

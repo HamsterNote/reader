@@ -292,6 +292,30 @@ describe('PdfDocumentViewer 接线', () => {
     expect(setData).toHaveBeenCalledWith('text/plain', 'Left column')
     expect(copy.defaultPrevented).toBe(true)
     expect(native.rangeCount).toBe(0)
+    const previousCommand = Object.getOwnPropertyDescriptor(
+      document,
+      'execCommand'
+    )
+    const command = vi.fn(() => {
+      const clipboard = new Event('copy', { bubbles: true, cancelable: true })
+      Object.defineProperty(clipboard, 'clipboardData', { value: { setData } })
+      fireEvent(document, clipboard)
+      return true
+    })
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: command
+    })
+    try {
+      fireEvent.keyDown(document, { key: 'c', ctrlKey: true })
+      expect(command).toHaveBeenCalledWith('copy')
+      expect(setData).toHaveBeenLastCalledWith('text/plain', 'Left column')
+      expect(native.rangeCount).toBe(0)
+    } finally {
+      if (previousCommand)
+        Object.defineProperty(document, 'execCommand', previousCommand)
+      else Reflect.deleteProperty(document, 'execCommand')
+    }
   })
 
   it.each([

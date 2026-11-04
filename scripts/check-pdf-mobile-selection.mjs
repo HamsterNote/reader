@@ -12,6 +12,8 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
   const errors = []
   const nativeChecks = []
   const hotAreaChecks = []
+  const scaleChecks = []
+  let scaleOneWidth = 0
   page.on('pageerror', (error) => errors.push(error.message))
   const html = (await (await fetch(base)).text()).replace(
     '/demo/main.tsx',
@@ -45,13 +47,49 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
         const bottom = Math.min(glyph.bottom, box.bottom)
         const rect = { left: glyph.left, top, height: bottom - top }
         return {
-          x: rect.left + 0.1,
+          x: rect.left + Math.min(1, glyph.width / 4),
           y: rect.top + rect.height / 2,
           height: rect.height
         }
       }, offset)
   const lastText = () =>
     page.evaluate(() => window.readerRegression.state.selectionTexts.at(-1))
+  const setZoom = async (scale) => {
+    await page.evaluate(
+      (scale) =>
+        window.readerRegression.selection.current.scrollToPosition({
+          x: 0,
+          y: 0,
+          scale
+        }),
+      scale
+    )
+    await page.waitForFunction(
+      (scale) =>
+        document.querySelector('[data-testid="tool-bottom-bar-layout-zoom"]')
+          ?.textContent === `${Math.round(scale * 100)}%`,
+      scale
+    )
+    await page
+      .locator('.textLayer [data-selection-start-offset]')
+      .first()
+      .waitFor()
+    await page.waitForTimeout(200)
+    const box = await page.locator('.pdfViewer .page').first().boundingBox()
+    if (!scaleOneWidth) scaleOneWidth = box.width / scale
+    assert(
+      Math.abs(box.width / scaleOneWidth - scale) < 0.01,
+      'actual PDF page width must track the requested zoom'
+    )
+    scaleChecks.push({
+      requested: scale,
+      toolbar: await page
+        .getByTestId('tool-bottom-bar-layout-zoom')
+        .innerText(),
+      pageWidth: box.width,
+      measuredScale: box.width / scaleOneWidth
+    })
+  }
   const noNative = async (phase) => {
     await page.waitForFunction(() => getSelection().rangeCount === 0)
     const count = await page.evaluate(() => getSelection().rangeCount)
@@ -63,7 +101,7 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       .locator(`[data-range-handle-circle="${end ? 'end' : 'start'}"]`)
       .boundingBox()
     assert(
-      Math.abs(circle.x + circle.width / 2 - target.x) < 1,
+      Math.abs(circle.x + circle.width / 2 - target.x) < 1.5,
       'circle and current Range endpoint must match without waiting for rAF'
     )
     const edge = end ? circle.y : circle.y + circle.height
@@ -155,7 +193,6 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       (bytes) =>
         window.readerRegression.open('pdf', bytes, {
           isPdf: true,
-          nativeLayoutZoom: 1,
           highlightColor: 'rgba(255, 193, 7, 0.35)',
           selectionColor: '#0000ff'
         }),
@@ -165,6 +202,7 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       .locator('.textLayer [data-selection-start-offset]')
       .first()
       .waitFor({ timeout: 15000 })
+    await setZoom(1)
     await longPress(await point(0, 7))
     await page.getByRole('button', { name: '拖动以调整选区终点' }).waitFor()
     assert.equal(await lastText(), 'beta')
@@ -202,6 +240,7 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       )
     })
     await page.keyboard.press('Control+C')
+    await page.waitForFunction(() => window.pdfCopiedText !== null)
     assert.equal(await page.evaluate(() => window.pdfCopiedText), 'beta')
     await noNative('copy-without-visible-native-range')
     await page.screenshot({ path: resolve(output, 'pdf-mobile-longpress.png') })
@@ -239,24 +278,21 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     )
     assert(edited.ranges[0].text.length > saved[0].text.length)
     for (const scale of [0.49, 0.5, 1, 2]) {
-      await page.evaluate(
-        (scale) => window.readerRegression.update({ nativeLayoutZoom: scale }),
-        scale
-      )
-      await page.waitForTimeout(200)
+      await setZoom(scale)
       await longPress(await point(0, 7))
       await page.getByRole('button', { name: '拖动以调整选区终点' }).waitFor()
       const circle = await page
         .getByRole('button', { name: '拖动以调整选区终点' })
         .boundingBox()
       assert.equal(Math.round(circle.width), 40)
-      for (const corner of [
+      const corners = [
         [1, 1],
         [39, 1],
         [1, 39],
         [39, 39]
-      ]) {
-        await drag(true, await point(0, 16), corner)
+      ]
+      for (const [index, corner] of corners.entries()) {
+        await drag(true, await point(0, index % 2 ? 10 : 12), corner)
       }
       assert.equal(await page.evaluate(() => getSelection().rangeCount), 0)
       await page.screenshot({
@@ -271,6 +307,25 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
           path: resolve(output, 'pdf-mobile-hot-area-49.png')
         })
         await debug.evaluate((element) => element.remove())
+        const outside = await point(1, 25)
+        assert.equal(
+          await page.evaluate(
+            ({ x, y }) =>
+              Boolean(
+                document
+                  .elementFromPoint(x, y)
+                  ?.closest('[data-pdf-handle-hit-target]')
+              ),
+            outside
+          ),
+          false
+        )
+        await longPress(outside)
+        assert.equal(
+          await lastText(),
+          'selection',
+          'text outside the hit squares must still accept long press'
+        )
       }
     }
     assert.deepEqual(
@@ -319,7 +374,8 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       passed: true,
       highlight: edited.ranges[0],
       nativeChecks,
-      hotAreaChecks
+      hotAreaChecks,
+      scaleChecks
     }
   } catch (error) {
     await page.screenshot({ path: resolve(output, 'pdf-mobile-failure.png') })

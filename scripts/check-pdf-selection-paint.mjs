@@ -43,13 +43,26 @@ export async function checkPdfSelectionPaint({
       (bytes) =>
         window.readerRegression.open('pdf', bytes, {
           isPdf: true,
-          nativeLayoutZoom: 1,
           highlightColor: '#ffc107'
         }),
       [...(await pdf.save())]
     )
     const spans = page.locator('.textLayer [data-selection-start-offset]')
     await spans.first().waitFor()
+    await page.evaluate(() =>
+      window.readerRegression.selection.current.scrollToPosition({
+        x: 0,
+        y: 0,
+        scale: 1
+      })
+    )
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[data-testid="tool-bottom-bar-layout-zoom"]')
+          ?.textContent === '100%'
+    )
+    await spans.first().waitFor()
+    await page.waitForTimeout(200)
     const geometry = await spans.evaluateAll((spans) => {
       const r = document.createRange()
       r.setStart(spans[0].firstChild, 0)
@@ -87,7 +100,7 @@ export async function checkPdfSelectionPaint({
     const box = await handle.boundingBox()
     await touch('touchStart', [{ x: box.x + 20, y: box.y + 20 }])
     await touch('touchMove', [
-      { x: last.right - 0.1, y: last.bottom + (baseline ? 0 : 10) }
+      { x: last.right - 2, y: last.bottom + (baseline ? 0 : 10) }
     ])
     await touch('touchEnd')
     await page.waitForTimeout(150)
