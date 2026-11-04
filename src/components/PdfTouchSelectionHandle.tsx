@@ -37,27 +37,36 @@ export function PdfTouchSelectionHandle({
     >
       <span
         aria-hidden='true'
-        data-range-handle-circle={end ? 'end' : 'start'}
-        style={rangeHandleCircleStyle({
+        data-pdf-handle-visual='true'
+        style={{
           position: 'absolute',
-          left: hitSize / 2,
-          top: hitSize / 2,
-          backgroundColor: color,
-          border: '2px solid white',
-          boxSizing: 'border-box',
+          inset: 0,
           pointerEvents: 'none',
           filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45))'
-        })}
+        }}
       >
         <span
           style={{
             position: 'absolute',
-            left: 7,
-            top: end ? -12 : 16,
+            left: hitSize / 2 - 1,
+            top: end ? -2 : 28,
             width: 2,
             height: 12,
-            backgroundColor: 'inherit'
+            backgroundColor: rangeHandleCircleStyle({ backgroundColor: color })
+              .backgroundColor
           }}
+        />
+        <span
+          data-range-handle-circle={end ? 'end' : 'start'}
+          style={rangeHandleCircleStyle({
+            position: 'absolute',
+            left: hitSize / 2,
+            top: hitSize / 2,
+            backgroundColor: color,
+            border: '2px solid white',
+            boxSizing: 'border-box',
+            pointerEvents: 'none'
+          })}
         />
       </span>
     </button>
