@@ -1,3 +1,5 @@
+import { usePdfPreviews } from '../pdf/usePdfPreviews'
+import type { PDFDocumentProxy } from '../pdf/pdfjsRuntime'
 import { ViewportPaginationControls } from './reading/ViewportPaginationControls'
 import { useReadingViewport } from './reading/useReadingViewport'
 import {
@@ -53,7 +55,10 @@ import {
 } from './Reader/useAnnotationHistory'
 import { PageBrowser } from './IntermediateDocumentViewer/PageBrowser'
 import { ReadingProgress } from './IntermediateDocumentViewer/ReadingProgress'
-import { isTextBookmark } from './IntermediateDocumentViewer/textAnchor'
+import {
+  isTextBookmark,
+  getBookmarkKey
+} from './IntermediateDocumentViewer/textAnchor'
 import { getCommentCountByHighlightId } from '../comments'
 import {
   DefaultSelectionPopover,
@@ -707,6 +712,13 @@ export function EngineDocumentViewer(props: Props) {
   }
   const finishNativeEditRef = useRef(finishNativeEdit)
   finishNativeEditRef.current = finishNativeEdit
+  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
+  const previews = usePdfPreviews(
+    pdfDocument,
+    Boolean(props.showPageBrowser),
+    () => pdf.current?.isRendering() ?? true
+  )
+  const emittedLayoutPositions = useRef(new Set<string>())
   const publishPosition = useCallback((pageNumber: number) => {
     setPage(pageNumber)
     if (!restored.current || !progressEnabled.current) return
@@ -714,16 +726,24 @@ export function EngineDocumentViewer(props: Props) {
       epub.current?.captureTextAnchor() ??
       pdf.current?.captureTextAnchor() ??
       undefined
+    const position = pdf.current?.captureReadingPosition()
+    if (pdf.current && !position) return
     latest.current.onTextAnchorChange?.(anchor)
     if (latest.current.engineRenderMode === 'text')
       latest.current.onTextReadingProgressChange?.({
         currentPageNumber: pageNumber,
         ...(anchor ? { anchor } : {})
       })
-    else
-      latest.current.onLayoutReadingProgressChange?.(
+    else {
+      const bookmark = position ??
         anchor ?? { pageNumber, verticalPercentage: 0 }
-      )
+      emittedLayoutPositions.current.add(getBookmarkKey(bookmark))
+      if (emittedLayoutPositions.current.size > 32)
+        emittedLayoutPositions.current.delete(
+          emittedLayoutPositions.current.values().next().value!
+        )
+      latest.current.onLayoutReadingProgressChange?.(bookmark)
+    }
   }, [])
   const cancelSelection = useCallback((clear = true) => {
     ++activationGeneration.current
@@ -738,6 +758,7 @@ export function EngineDocumentViewer(props: Props) {
   }, [])
   const navigate = useCallback(
     (pageNumber: number) => {
+      ++pdfNavigationGeneration.current
       progressEnabled.current = true
       cancelSelection()
       if (epub.current) epub.current.goToPage(pageNumber).catch(() => undefined)
@@ -745,13 +766,53 @@ export function EngineDocumentViewer(props: Props) {
     },
     [publishPosition]
   )
+  const pdfNavigationGeneration = useRef(0)
+  useEffect(() => {
+    if (source?.format === 'pdf') {
+      restored.current = false
+      progressEnabled.current = false
+      emittedLayoutPositions.current.clear()
+    }
+    return () => {
+      ++pdfNavigationGeneration.current
+    }
+  }, [source])
   const navigateBookmark = (bookmark: ReaderBookmark) => {
     if (epub.current) {
       if (isTextBookmark(bookmark)) return epub.current.goToAnchor(bookmark)
       return epub.current.goToPage(bookmark.pageNumber)
     }
-    return pdf.current?.scrollToAnchor(bookmark)
+    const generation = ++pdfNavigationGeneration.current
+    progressEnabled.current = false
+    return pdf.current
+      ?.scrollToAnchor(bookmark)
+      .then(() => {
+        if (generation !== pdfNavigationGeneration.current) return
+        progressEnabled.current = true
+        publishPosition(bookmark.pageNumber)
+      })
+      .catch((failure: Error) => {
+        if (generation !== pdfNavigationGeneration.current) return
+        setError(failure.message)
+        throw failure
+      })
   }
+  const lastLayoutRequest = useRef(props.layoutReadingProgress)
+  useEffect(() => {
+    const target = props.layoutReadingProgress
+    if (
+      source?.format !== 'pdf' ||
+      !target ||
+      !restored.current ||
+      lastLayoutRequest.current === target
+    )
+      return
+    lastLayoutRequest.current = target
+    if (emittedLayoutPositions.current.delete(getBookmarkKey(target))) return
+    const actual = pdf.current?.captureReadingPosition()
+    if (!actual || getBookmarkKey(actual) !== getBookmarkKey(target))
+      navigateBookmark(target)?.catch(() => undefined)
+  }, [props.layoutReadingProgress, pdfDocument])
   const restorePosition = () => {
     const current = latest.current
     let progress =
@@ -762,7 +823,8 @@ export function EngineDocumentViewer(props: Props) {
       if (!progress && current.textReadingProgress)
         progress = {
           pageNumber: current.textReadingProgress.currentPageNumber,
-          verticalPercentage: 0
+          verticalPercentage:
+            current.textReadingProgress.verticalPercentage ?? 0
         }
     }
     if (progress) {
@@ -778,11 +840,26 @@ export function EngineDocumentViewer(props: Props) {
   restorePositionRef.current = restorePosition
   const onPdfReady = useCallback(async (count: number) => {
     setPageCount(count)
-    await restorePositionRef.current()
-    restored.current = true
+    const restoration = restorePositionRef.current()
+    const generation = pdfNavigationGeneration.current
+    try {
+      await restoration
+      if (generation !== pdfNavigationGeneration.current) return
+      restored.current = true
+      progressEnabled.current = true
+    } catch (failure) {
+      if (
+        generation !== pdfNavigationGeneration.current ||
+        (failure instanceof Error && failure.name === 'AbortError')
+      )
+        return
+      setError(failure instanceof Error ? failure.message : String(failure))
+    }
   }, [])
   const onPdfTextReady = useCallback((loadedPages: readonly number[]) => {
     latest.current.onPageLoadStatusChange?.([...loadedPages])
+    const position = pdf.current?.captureReadingPosition()
+    if (position) publishPosition(position.pageNumber)
     const id = values.current.selected
     if (id && !editing.current) {
       activating.current = true
@@ -1093,7 +1170,9 @@ export function EngineDocumentViewer(props: Props) {
       captureTextAnchor: () =>
         epub.current?.captureTextAnchor() ??
         pdf.current?.captureTextAnchor() ??
-        undefined
+        undefined,
+      captureReadingPosition: () =>
+        pdf.current?.captureReadingPosition() ?? undefined
     }),
     []
   )
@@ -1114,6 +1193,8 @@ export function EngineDocumentViewer(props: Props) {
       pdf.current?.clearSelection()
     },
     scrollToRange: (id) => {
+      ++pdfNavigationGeneration.current
+      progressEnabled.current = true
       if (epub.current) epub.current.goToRange(id)
       else pdf.current?.scrollToRange(id)
     },
@@ -1164,6 +1245,7 @@ export function EngineDocumentViewer(props: Props) {
     [source, retry]
   )
   const pageNumbers = enginePageNumbers(pageCount, props)
+  const visiblePageNumbers = useMemo(() => new Set([page]), [page])
   const current = ranges.find(
     (range) =>
       range.id ===
@@ -1324,6 +1406,15 @@ export function EngineDocumentViewer(props: Props) {
     })
     if (!hit) selectRect(null)
   }
+  const bookmarkToggleHandler = () => {
+    if (!props.onToggleBookmark) return undefined
+    return (bookmark: ReaderBookmark) => {
+      const position = pdf.current?.captureReadingPosition()
+      if (props.bookmarks?.includes(bookmark) || !pdf.current)
+        props.onToggleBookmark?.(bookmark)
+      else if (position) props.onToggleBookmark?.(position)
+    }
+  }
   return (
     <RangeMagnifierProvider
       rootElement={rootElement}
@@ -1399,6 +1490,12 @@ export function EngineDocumentViewer(props: Props) {
           <PdfDocumentViewer
             key={retry}
             ref={pdf}
+            onDocumentReady={setPdfDocument}
+            readingInsets={{
+              top: props.containMarginTop ?? props.containMarginY ?? 0,
+              bottom: props.containMarginBottom ?? props.containMarginY ?? 0,
+              horizontal: props.containMarginX ?? 0
+            }}
             source={pdfSource}
             workerSrc={source?.workerSrc}
             documentOptions={source?.documentOptions}
@@ -1420,7 +1517,7 @@ export function EngineDocumentViewer(props: Props) {
             onTextLayerReady={onPdfTextReady}
             onPageChange={publishPosition}
             onTextAnchorChange={(anchor) => {
-              if (anchor) publishPosition(anchor.pageNumber)
+              publishPosition(anchor?.pageNumber ?? page)
             }}
             onScaleChange={props.onNativeLayoutScaleChange}
             onError={(failure) => setError(failure.message)}
@@ -1526,9 +1623,11 @@ export function EngineDocumentViewer(props: Props) {
           }
           isOpen={props.showPageBrowser ?? false}
           pageNumbers={pageNumbers}
-          pageSizesByPageNumber={new Map()}
-          baseImagesByPageNumber={new Map()}
-          onPageVisibilityChange={() => undefined}
+          pageSizesByPageNumber={previews.sizes}
+          baseImagesByPageNumber={previews.images}
+          previewErrors={previews.errors}
+          onRetryPreview={previews.retryPreview}
+          onPageVisibilityChange={previews.onVisibility}
           onNavigateToPage={navigate}
           onClose={props.onPageBrowserClose}
           showPagesTab={mode === 'layout'}
@@ -1538,6 +1637,8 @@ export function EngineDocumentViewer(props: Props) {
           selectedRectId={selectedRect}
           onSelectRange={activate}
           onNavigateToRange={(id) => {
+            ++pdfNavigationGeneration.current
+            progressEnabled.current = true
             if (epub.current) epub.current.goToRange(id)
             else pdf.current?.scrollToRange(id)
           }}
@@ -1557,17 +1658,17 @@ export function EngineDocumentViewer(props: Props) {
           }
           commentCountByRectId={props.commentCountByRectId}
           bookmarks={props.bookmarks}
-          onToggleBookmark={props.onToggleBookmark}
-          onNavigateToBookmark={navigateBookmark}
+          onToggleBookmark={bookmarkToggleHandler()}
+          onNavigateToBookmark={(bookmark) => {
+            navigateBookmark(bookmark)?.catch(() => undefined)
+          }}
           currentPageNumber={page}
           currentBookmark={
             epub.current?.captureTextAnchor() ??
-            pdf.current?.captureTextAnchor() ?? {
-              pageNumber: page,
-              verticalPercentage: 0
-            }
+            pdf.current?.captureReadingPosition() ??
+            undefined
           }
-          visiblePageNumbers={new Set([page])}
+          visiblePageNumbers={visiblePageNumbers}
           pagePaintings={props.pagePaintings}
           themeColor={props.themeColor}
         />
