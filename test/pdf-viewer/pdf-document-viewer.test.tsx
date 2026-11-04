@@ -299,6 +299,109 @@ it.each(['pagerendered', 'textlayerrendered'] as const)(
 )
 
 describe('PdfDocumentViewer 接线', () => {
+  it.each([
+    'immediate reopen',
+    'rotation after crop',
+    'close-time recapture'
+  ] as const)(
+    'preserves the pre-crop page ratio through %s after user scrolling',
+    async (operation) => {
+      const pdf = await PDFDocument.create()
+      pdf.addPage([400, 300])
+      pdf.addPage([400, 300])
+      const source = { data: await pdf.save() }
+      const crop = { pages: { 'page-2': { bottom: 0.05124378204345703 } } }
+      const percentage = 42.83582089552239
+      const ref = createRef<PdfDocumentViewerRef>()
+      const view = renderViewer({ source, edgeCropEditing: true }, ref)
+      await act(async () => {})
+      let height = 1340.339111328125
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(
+        10000
+      )
+      const measure = () => {
+        const container = view.container.querySelector(
+          '.hamster-reader__pdf-viewer-container'
+        ) as HTMLElement
+        container.getBoundingClientRect = () => new DOMRect(0, 114, 400, 200)
+        latestViewer().getPageView(1)!.div.getBoundingClientRect = () =>
+          new DOMRect(0, 1500 - container.scrollTop, 400, height)
+        return container
+      }
+      let container = measure()
+      // Real navigation releases restore protection before entering crop editing.
+      act(() =>
+        container.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+      )
+      container.scrollTop = 1500 + (height * percentage) / 100 - 114
+      act(() =>
+        latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 2 })
+      )
+      await act(async () => {})
+      expect(ref.current!.captureReadingPosition()).toMatchObject({
+        status: 'ready',
+        position: { pageNumber: 2, verticalPercentage: percentage }
+      })
+      // Applying the draft and leaving editing can be separate controlled commits.
+      view.rerender(
+        <PdfDocumentViewer
+          source={source}
+          edgeCrop={crop}
+          edgeCropEditing
+          ref={ref}
+        />
+      )
+      view.rerender(
+        <PdfDocumentViewer source={source} edgeCrop={crop} ref={ref} />
+      )
+      const captured = ref.current!.captureReadingPosition()
+      expect(captured.status).toBe('ready')
+      if (captured.status !== 'ready')
+        throw new Error('Expected stable crop capture')
+      if (operation === 'immediate reopen') {
+        view.rerender(
+          <PdfDocumentViewer
+            key='reopen'
+            source={source}
+            edgeCrop={crop}
+            ref={ref}
+          />
+        )
+        await act(async () => {})
+        container = measure()
+        await act(async () => {
+          await ref.current!.scrollToAnchor(captured.position)
+          latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 2 })
+        })
+      } else if (operation === 'rotation after crop') {
+        height = 2501.499
+        act(() => latestViewer().eventBus.dispatch('rotationchanging'))
+        act(() =>
+          latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 2 })
+        )
+        await act(async () => {})
+      }
+      // This is also the synchronous capture used by the close barrier.
+      const final = ref.current!.captureReadingPosition()
+      expect(final).toMatchObject({
+        status: 'ready',
+        position: {
+          pageNumber: 2,
+          verticalPercentage: expect.closeTo(percentage, 8)
+        }
+      })
+      const rect = latestViewer().getPageView(1)!.div.getBoundingClientRect()
+      expect(
+        Math.abs(
+          rect.top +
+            (rect.height * (1 - crop.pages['page-2'].bottom) * percentage) /
+              100 -
+            114
+        )
+      ).toBeLessThan(0.000001)
+    }
+  )
+
   it('captures and restores distinct visible source characters inside one wrapped span', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     const view = renderViewer({}, ref)
