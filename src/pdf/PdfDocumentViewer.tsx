@@ -492,22 +492,41 @@ export const PdfDocumentViewer = forwardRef<
       width: right - left
     }
   }
-  const alignTop = (top: number, pageNumber: number) => {
+  const alignTop = (top: number, pageNumber: number, targetLeft?: number) => {
     const container = containerRef.current
     const viewport = viewportRect()
     const viewer = viewerRef.current
     const pageView = viewer?.getPageView(pageNumber - 1)
     if (container && viewport && viewer && pageView) {
-      const offset = top - pageView.div.getBoundingClientRect().top
+      const box = pageView.div.getBoundingClientRect()
+      const offset = top - box.top
       const left = container.scrollLeft
-      const [x, y] = pageView.viewport.convertToPdfPoint(left, offset)
+      const horizontalOffset =
+        targetLeft === undefined ? left : targetLeft - box.left
+      const [x, y] = pageView.viewport.convertToPdfPoint(
+        horizontalOffset,
+        offset
+      )
       viewer.scrollPageIntoView({
         pageNumber,
         destArray: [null, { name: 'XYZ' }, x, y, null],
         ignoreDestinationZoom: true,
         allowNegativeOffset: true
       })
-      container.scrollLeft = left
+      // Text destinations use the character's position in the original page
+      // frame, including after zoom/rotation. Ratio restores retain horizontal
+      // scrolling; the cropped display frame still determines their vertical
+      // projection. The browser clamps horizontal scrolling at page boundaries.
+      container.scrollLeft =
+        targetLeft === undefined
+          ? left
+          : Math.max(
+              0,
+              container.scrollLeft +
+                pageView.div.getBoundingClientRect().left +
+                horizontalOffset -
+                viewport.left
+            )
       container.scrollTop = Math.max(
         0,
         Math.min(
@@ -554,7 +573,7 @@ export const PdfDocumentViewer = forwardRef<
         '无法精确恢复阅读位置，已显示原页；原进度已保留'
       )
     } else {
-      alignTop(rect.top, anchor.pageNumber)
+      alignTop(rect.top, anchor.pageNumber, rect.left)
       const container = containerRef.current
       if (container && viewerRef.current)
         restoredTextPosition.current = {
