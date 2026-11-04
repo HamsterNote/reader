@@ -17,6 +17,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -47,10 +48,12 @@ import {
 import type { PdfPageOverlayGeometry } from './PdfPageOverlayLayer'
 import { PdfPageOverlayLayer } from './PdfPageOverlayLayer'
 import { getSelectionGroup } from '../components/selection/selectionGroups'
-import { edgeCropToClipPath } from './pdfOverlayGeometry'
 import type { OverlayRectUnit } from './pdfOverlayGeometry'
 import type { ReaderPageEdgeCrop } from '../types/readerData'
-import { resolvePageEdgeCrop } from '../components/IntermediateDocumentViewer/pageDisplay'
+import {
+  getPageCropGeometry,
+  resolvePageEdgeCrop
+} from '../components/IntermediateDocumentViewer/pageDisplay'
 import { EdgeCropOverlay } from '../components/IntermediateDocumentViewer/EdgeCropOverlay'
 import type { ReaderPageRange } from '../components/IntermediateDocumentViewer'
 import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
@@ -370,6 +373,72 @@ export const PdfDocumentViewer = forwardRef<
   initialScaleRef.current = scale ?? defaultScale
   const fitWidthRef = useRef(fitWidth)
   fitWidthRef.current = fitWidth
+  const effectiveEdgeCrop = edgeCropEditing ? undefined : edgeCrop
+  const cropOptionsRef = useRef(effectiveEdgeCrop)
+  cropOptionsRef.current = effectiveEdgeCrop
+  const fitCroppedWidth = useCallback(() => {
+    const viewer = viewerRef.current
+    const container = containerRef.current
+    if (!viewer || !container || !fitWidthRef.current) return
+    const pageNumber = viewer.currentPageNumber
+    const pageView = viewer.getPageView(pageNumber - 1)
+    if (!pageView) return
+    const viewport = pageView.viewport
+    const crop = getPageCropGeometry(
+      viewport,
+      resolvePageEdgeCrop(cropOptionsRef.current, pageNumber)
+    )
+    // PDFViewer's page-width preset always measures the original full viewport.
+    const nextScale = (container.clientWidth / crop.width) * viewer.currentScale
+    if (nextScale > 0 && Math.abs(viewer.currentScale - nextScale) > 0.001)
+      viewer.currentScaleValue = String(nextScale)
+  }, [])
+
+  const applyPageCrop = useCallback(() => {
+    const viewer = viewerRef.current
+    const element = viewerElementRef.current
+    if (!viewer || !element) return
+    const visible = new Set(visiblePagesRef.current)
+    let widest = 0
+    for (let pageNumber = 1; pageNumber <= viewer.pagesCount; pageNumber++) {
+      const pageView = viewer.getPageView(pageNumber - 1)
+      if (!pageView) continue
+      const crop = getPageCropGeometry(
+        pageView.viewport,
+        resolvePageEdgeCrop(cropOptionsRef.current, pageNumber)
+      )
+      const { top, right, bottom, left } = crop
+      // Keep the full page's coordinate origin and PDF.js-owned layers intact.
+      // Flex margins remove exactly the clipped space without wrapping page.div
+      // (PDF.js visibility/navigation read its offsetTop/offsetLeft directly).
+      pageView.div.style.clipPath =
+        top || right || bottom || left
+          ? `inset(${top}px ${right}px ${bottom}px ${left}px)`
+          : ''
+      pageView.div.style.margin = `${-top}px ${-right}px ${10 - bottom}px ${-left}px`
+      if (visible.has(pageNumber)) widest = Math.max(widest, crop.width)
+    }
+    element.style.minWidth = `${widest}px`
+  }, [])
+  const scrollToCroppedPage = useCallback((pageNumber: number) => {
+    const viewer = viewerRef.current
+    const container = containerRef.current
+    if (!viewer || !container) return
+    viewer.scrollPageIntoView({ pageNumber })
+    const pageView = viewer.getPageView(pageNumber - 1)
+    if (!pageView) return
+    const crop = getPageCropGeometry(
+      pageView.viewport,
+      resolvePageEdgeCrop(cropOptionsRef.current, pageNumber)
+    )
+    const pageRect = pageView.div.getBoundingClientRect()
+    const containerRect = container.getBoundingClientRect()
+    // PDF.js destinations use the full page origin, which may now precede the
+    // visible page. A page jump must start at the cropped top/left instead.
+    container.scrollTop += pageRect.top + crop.top - containerRect.top
+    if (crop.width > container.clientWidth)
+      container.scrollLeft += pageRect.left + crop.left - containerRect.left
+  }, [])
   const pendingAnchor = useRef<{
     anchor: ReaderBookmark
     done: () => void
@@ -417,14 +486,15 @@ export const PdfDocumentViewer = forwardRef<
       x = targetRect.left - pageRect.left
       y = targetRect.top - pageRect.top
     } else {
-      const crop = resolvePageEdgeCrop(edgeCrop, anchor.pageNumber)
       const viewport = pageView.viewport as PageViewport
+      const crop = getPageCropGeometry(
+        viewport,
+        resolvePageEdgeCrop(effectiveEdgeCrop, anchor.pageNumber)
+      )
       y =
-        viewport.height *
-        ((crop?.top ?? 0) +
-          ((1 - (crop?.top ?? 0) - (crop?.bottom ?? 0)) *
-            Math.max(0, Math.min(100, anchor.verticalPercentage))) /
-            100)
+        crop.top +
+        (crop.height * Math.max(0, Math.min(100, anchor.verticalPercentage))) /
+          100
     }
     // PDF.js owns scale/rotation and destination navigation. Its XYZ API does
     // not express Reader safe insets, so correct once inside its own container.
@@ -660,6 +730,7 @@ export const PdfDocumentViewer = forwardRef<
           visible.find((page) => page >= event.pageNumber) ?? visible.at(-1)!
     }
     const handleScaleChanging = (event: { scale: number }) => {
+      applyPageCrop()
       callbacksRef.current.onScaleChange?.(event.scale)
       // viewport 变化后叠加层按持久化坐标重投影。
       bumpGeometry()
@@ -685,6 +756,8 @@ export const PdfDocumentViewer = forwardRef<
         navigation.edgeCropEditing
       )
       setOverlayPages(pages)
+      fitCroppedWidth()
+      applyPageCrop()
     }
     const handlePageRendered = (event: { pageNumber: number }) => {
       setRenderedPages((pages) =>
@@ -704,8 +777,8 @@ export const PdfDocumentViewer = forwardRef<
     }
     const handleRotation = () => bumpGeometry()
     const resize = new ResizeObserver(() => {
-      if (fitWidthRef.current && viewer.pagesCount)
-        viewer.currentScaleValue = 'page-width'
+      if (viewer.pagesCount) fitCroppedWidth()
+      applyPageCrop()
       viewer.update()
     })
     resize.observe(container)
@@ -737,10 +810,9 @@ export const PdfDocumentViewer = forwardRef<
     }
   }, [])
 
-  useEffect(() => {
-    if (fitWidth && viewerRef.current?.pagesCount)
-      viewerRef.current.currentScaleValue = 'page-width'
-  }, [fitWidth])
+  useLayoutEffect(() => {
+    if (viewerRef.current?.pagesCount) fitCroppedWidth()
+  }, [fitWidth, effectiveEdgeCrop, fitCroppedWidth])
 
   // 打开/切换文档：PdfSessionManager 保证旧加载结果不更新后续文档。
   useEffect(() => {
@@ -857,7 +929,7 @@ export const PdfDocumentViewer = forwardRef<
     )
       return
     if (viewer.currentPageNumber !== currentPageNumber) {
-      viewer.currentPageNumber = currentPageNumber
+      scrollToCroppedPage(currentPageNumber)
     }
   }, [
     currentPageNumber,
@@ -865,7 +937,8 @@ export const PdfDocumentViewer = forwardRef<
     pageRange,
     overlayPages,
     hiddenPages,
-    edgeCropEditing
+    edgeCropEditing,
+    scrollToCroppedPage
   ])
 
   // 隐藏页：display:none 占位（矩阵 §9：阅读时省略隐藏页）。
@@ -950,18 +1023,21 @@ export const PdfDocumentViewer = forwardRef<
     }
   }, [ocrTexts])
 
-  // 裁切：clip-path 只裁可视区域，叠加层坐标不受影响（3.3 裁切对齐）。
-  useEffect(() => {
+  // Clip and layout must change together, including unrendered page shells.
+  useLayoutEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
-    for (let pageNumber = 1; pageNumber <= viewer.pagesCount; pageNumber++) {
-      const pageView = viewer.getPageView(pageNumber - 1)
-      if (!pageView) continue
-      pageView.div.style.clipPath = edgeCropEditing
-        ? ''
-        : (edgeCropToClipPath(resolvePageEdgeCrop(edgeCrop, pageNumber)) ?? '')
-    }
-  }, [edgeCrop, edgeCropEditing, geometryVersion, status])
+    applyPageCrop()
+    viewer.update()
+  }, [
+    effectiveEdgeCrop,
+    geometryVersion,
+    status,
+    overlayPages,
+    pageRange,
+    hiddenPages,
+    applyPageCrop
+  ])
 
   useEffect(() => {
     restoreAnchorRef.current()
@@ -1071,12 +1147,15 @@ export const PdfDocumentViewer = forwardRef<
       const pageView = viewer.getPageView(pageNumber - 1)
       if (!pageView) continue
       const rect = pageView.div.getBoundingClientRect()
-      const crop = resolvePageEdgeCrop(edgeCrop, pageNumber)
+      const crop = getPageCropGeometry(
+        rect,
+        resolvePageEdgeCrop(effectiveEdgeCrop, pageNumber)
+      )
       const clip = {
-        top: rect.top + rect.height * (crop?.top ?? 0),
-        bottom: rect.bottom - rect.height * (crop?.bottom ?? 0),
-        left: rect.left + rect.width * (crop?.left ?? 0),
-        right: rect.right - rect.width * (crop?.right ?? 0)
+        top: rect.top + crop.top,
+        bottom: rect.bottom - crop.bottom,
+        left: rect.left + crop.left,
+        right: rect.right - crop.right
       }
       if (!intersects(clip, safe)) continue
       const context = selectionContextsRef.current.get(pageNumber)
@@ -1101,12 +1180,15 @@ export const PdfDocumentViewer = forwardRef<
     }
     const anchor = firstVisiblePdfCharacter(contexts, safe, (context) => {
       const rect = context.pageDiv.getBoundingClientRect()
-      const crop = resolvePageEdgeCrop(edgeCrop, context.pageNumber)
+      const crop = getPageCropGeometry(
+        rect,
+        resolvePageEdgeCrop(effectiveEdgeCrop, context.pageNumber)
+      )
       return {
-        top: rect.top + rect.height * (crop?.top ?? 0),
-        bottom: rect.bottom - rect.height * (crop?.bottom ?? 0),
-        left: rect.left + rect.width * (crop?.left ?? 0),
-        right: rect.right - rect.width * (crop?.right ?? 0)
+        top: rect.top + crop.top,
+        bottom: rect.bottom - crop.bottom,
+        left: rect.left + crop.left,
+        right: rect.right - crop.right
       }
     })
     if (anchor) return anchor
@@ -1207,7 +1289,7 @@ export const PdfDocumentViewer = forwardRef<
         if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return
         pendingAnchor.current?.done()
         pendingAnchor.current = null
-        viewer.scrollPageIntoView({ pageNumber })
+        scrollToCroppedPage(pageNumber)
       },
       setScale: (nextScale) => {
         const viewer = viewerRef.current
@@ -1304,7 +1386,8 @@ export const PdfDocumentViewer = forwardRef<
       onHighlight,
       serializeCurrentSelection,
       props.readingInsets,
-      edgeCrop
+      effectiveEdgeCrop,
+      scrollToCroppedPage
     ]
   )
 
