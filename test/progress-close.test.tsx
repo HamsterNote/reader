@@ -7,6 +7,82 @@ import { createWebBridgeClient } from '../webview/src/bridgeClient'
 import type { ReaderData } from '../src/types/readerData'
 
 describe('Reader progress through the complete persistence barrier', () => {
+  it.each(['layout', 'text'] as const)(
+    'close recaptures %s progress after external replacement',
+    async (mode) => {
+      const position = (offset: number): ReaderData => {
+        const anchor = {
+          pageNumber: 1,
+          textId: 'page-1',
+          text: 'Source',
+          offset
+        }
+        return mode === 'layout'
+          ? {
+              layoutReadingProgress: {
+                pageNumber: 1,
+                verticalPercentage: offset
+              }
+            }
+          : { textReadingProgress: { currentPageNumber: 1, anchor } }
+      }
+      let collectAndFlush = () => {}
+      const persist = vi.fn(async () => {})
+      const web = createWebBridgeClient({
+        sessionId: 'A',
+        sourceToken: 'token',
+        post: (raw) => {
+          host.handleRawMessage(raw).catch(() => undefined)
+        },
+        onQuiesce: async () => {
+          collectAndFlush()
+        }
+      })
+      const host = createReaderHostSession({
+        sessionId: 'A',
+        sourceToken: 'token',
+        descriptor: { fileId: 'A', format: 'pdf', fileUrl: 'file:///A.pdf' },
+        confirmedSnapshot: null,
+        persist,
+        sendToWeb: (message) => web.handleMessage(message)
+      })
+      const onDataChange = (data: ReaderData) =>
+        web.sendChange(
+          serializeReaderSnapshot({
+            data,
+            comments: [],
+            extra: {},
+            migrated: false
+          })
+        )
+      const { result, rerender, unmount } = renderHook(
+        ({ data }) => useReadingProgressSaves('A', data, onDataChange),
+        { initialProps: { data: position(0) } }
+      )
+      collectAndFlush = () => {
+        const data = position(40)
+        if (mode === 'layout')
+          result.current.layout(data.layoutReadingProgress!)
+        else result.current.text(data.textReadingProgress!)
+        result.current.flush()
+      }
+      act(() => web.start())
+      await waitFor(() => expect(web.getRevision()).toBe(0))
+      act(collectAndFlush)
+      rerender({ data: position(40) })
+      rerender({ data: position(70) })
+      act(() => onDataChange(position(70)))
+      expect(await host.close()).toEqual({ status: 'closed' })
+      expect(host.getSnapshot().data).toMatchObject({
+        readerData: position(40)
+      })
+      expect(persist).toHaveBeenCalled()
+      unmount()
+      web.dispose()
+      host.dispose()
+    }
+  )
+
   it.each(['close', 'flush', 'flush-close'] as const)(
     '%s collects the sub-100ms Reader queue before ack, and flush retains the session',
     async (operation) => {

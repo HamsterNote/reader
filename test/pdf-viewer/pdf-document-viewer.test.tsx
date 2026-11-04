@@ -258,6 +258,46 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
   return textLayerDiv
 }
 
+it.each(['pagerendered', 'textlayerrendered'] as const)(
+  'review: ignores a late %s extraction failure from the previous PDF',
+  async (event) => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const viewer = latestViewer()
+    const oldDocument = viewer.document as PDFDocumentProxy
+    const oldPages = Array.from(view.container.querySelectorAll('.page'))
+    let rejectOld!: (error: Error) => void
+    const extraction = new Promise<never>((_, reject) => {
+      rejectOld = reject
+    })
+    const spy = vi.spyOn(oldDocument, 'getPage').mockReturnValueOnce(extraction)
+    act(() => {
+      if (event === 'pagerendered')
+        viewer.eventBus.dispatch(event, { pageNumber: 1 })
+      else emitTextLayer(1, ['First page'])
+    })
+    spy.mockRestore()
+    view.rerender(
+      <PdfDocumentViewer
+        source={{ data: readFixture('pdf/two-column.pdf') }}
+        ref={ref}
+      />
+    )
+    await act(async () => {})
+    expect(latestViewer()).toBe(viewer)
+    expect(viewer.document).not.toBe(oldDocument)
+    oldPages.forEach((page) => page.remove())
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition().status).toBe('ready')
+    await act(async () => {
+      rejectOld(new Error('old worker destroyed'))
+    })
+    expect(ref.current!.captureReadingPosition().status).toBe('ready')
+  }
+)
+
 describe('PdfDocumentViewer 接线', () => {
   it('captures and restores distinct visible source characters inside one wrapped span', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
