@@ -79,7 +79,17 @@ export function measurePdfTextColumns(
               previous.left <= rect.left))
         )
           continue
-        const localOffset = firstCharacter(element, index, left, step)
+        let localOffset = firstCharacter(element, index, left, step)
+        while (
+          localOffset < (element.textContent?.length ?? 0) &&
+          !element.textContent![localOffset].trim()
+        )
+          localOffset++
+        const firstRect = characterRange(
+          element,
+          localOffset
+        )?.getClientRects()[0]
+        if (!firstRect || columnOf(firstRect, left, step) !== index) continue
         const sourceOffset = Number(element.dataset.selectionStartOffset)
         columns.set(index, {
           top: rect.top,
@@ -128,8 +138,7 @@ export function pdfTextAnchorColumn(
   const atOffset = matchingIds.length
     ? matchingIds.find(contains)
     : spans.find(contains)
-  const uniqueId = matchingIds.length === 1 ? matchingIds[0] : undefined
-  const element = atOffset ?? uniqueId
+  const element = atOffset
   if (!element) return null
   const offset = atOffset
     ? anchor.offset - Number(element.dataset.selectionStartOffset)

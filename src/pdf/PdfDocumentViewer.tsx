@@ -1,5 +1,11 @@
+import { normalizeBookmark, type ReadingPosition } from '../readingProgress'
+import {
+  firstVisibleCharacter,
+  intersects,
+  pagePercentage,
+  type ViewportRect
+} from '../viewportPosition'
 import { readingViewport } from '../components/reading/readingViewport'
-import { firstVisiblePdfCharacter, intersects } from './pdfReadingPosition'
 import { usePdfLayoutAnchor } from './usePdfLayoutAnchor'
 import { createPaintingSettings } from '../painting/paintingSettings'
 // HAM-89 / tasks.md 3.1–3.5：PDF 主展示切换到 pdfjs-dist 官方 viewer。
@@ -71,6 +77,49 @@ import {
   canonicalRangeToDomRange
 } from './pdfTextMapping'
 
+type VisiblePdfAnchor = { anchor: ReaderTextAnchor; top: number }
+
+function firstPdfCharacter(
+  context: PdfPageSelectionContext,
+  clip: ViewportRect
+): VisiblePdfAnchor | undefined {
+  let first: VisiblePdfAnchor | undefined
+  for (const span of context.textLayerDiv.querySelectorAll<HTMLElement>(
+    '[data-selection-start-offset]'
+  )) {
+    const character = firstVisibleCharacter(span, clip)
+    if (!character || (first && character.top >= first.top - 1)) continue
+    const offset = Number(span.dataset.selectionStartOffset) + character.offset
+    first = {
+      top: character.top,
+      anchor: {
+        pageNumber: context.pageNumber,
+        textId: span.dataset.textId ?? '',
+        text: context.canonical.text.slice(offset, offset + 80),
+        offset
+      }
+    }
+  }
+  return first
+}
+
+function capturePageText(
+  context: PdfPageSelectionContext | undefined,
+  canonical: CanonicalPageText | undefined,
+  failed: boolean,
+  clip: ViewportRect
+):
+  | { status: 'ready'; character?: VisiblePdfAnchor }
+  | { status: 'pending' | 'failed' } {
+  if (failed) return { status: 'failed' }
+  if (
+    !context?.textLayerDiv.isConnected ||
+    !context.textLayerDiv.querySelector('.textLayer')
+  )
+    return { status: canonical?.text === '' ? 'ready' : 'pending' }
+  return { status: 'ready', character: firstPdfCharacter(context, clip) }
+}
+
 export type PdfViewerTool = 'text-selection' | 'rect-selection' | 'drawing'
 
 export type PdfViewerStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -138,6 +187,10 @@ export type PdfDocumentViewerProps = PdfOcrOptions & {
   ) => void
   /** 阅读锚点变化（书签/进度用；textId 失效时宿主按 offset 兜底）。 */
   readonly onTextAnchorChange?: (anchor: ReaderTextAnchor | null) => void
+  readonly onReadingPositionChange?: (position: ReadingPosition) => void
+  readonly onRestoreError?: (message: string) => void
+  readonly viewportTopInset?: number
+  readonly viewportBottomInset?: number
   /** 隐藏页（数字或 'page-N'，与 ReaderData.hiddenPages 同契约）。 */
   readonly hiddenPages?: readonly (number | string)[]
   readonly pageRange?: ReaderPageRange
@@ -158,9 +211,12 @@ export type PdfDocumentViewerRef = {
   readonly scrollToPage: (pageNumber: number) => void
   readonly setScale: (scale: number) => void
   readonly captureTextAnchor: () => ReaderTextAnchor | null
-  readonly captureReadingPosition: () => ReaderBookmark | null
+  readonly captureReadingPosition: () => ReadingPosition
   readonly isRendering: () => boolean
-  readonly scrollToAnchor: (anchor: ReaderBookmark) => Promise<void>
+  readonly scrollToAnchor: (
+    anchor: ReaderBookmark,
+    options?: { preserveOnFailure?: boolean }
+  ) => Promise<void>
   readonly scrollToRange: (rangeId: string) => void
   readonly getCanonicalPageText: (pageNumber: number) => string | undefined
   /** 把当前原生选区转为公开 range 并触发 onHighlight。 */
@@ -308,6 +364,9 @@ export const PdfDocumentViewer = forwardRef<
   const linkServiceRef = useRef<PDFLinkService | null>(null)
   const sessionManagerRef = useRef(new PdfSessionManager())
   const documentRef = useRef<PDFDocumentProxy | null>(null)
+  const failedTextPages = useRef(new Set<number>())
+  const progressOptions = useRef(props)
+  progressOptions.current = props
   const canonicalCacheRef = useRef(new Map<number, CanonicalPageText>())
   const selectionContextsRef = useRef(
     new Map<number, PdfPageSelectionContext>()
@@ -421,10 +480,13 @@ export const PdfDocumentViewer = forwardRef<
     }
     element.style.minWidth = `${widest}px`
   }, [])
+  const restoredPosition = useRef<ReaderBookmark | null>(null)
+  const lastStablePosition = useRef<ReaderBookmark | null>(null)
   const pendingAnchor = useRef<{
     anchor: ReaderBookmark
     done: () => void
     fail: (error: Error) => void
+    preserveOnFailure?: boolean
   } | null>(null)
   const {
     restoreAfterLayout,
@@ -441,11 +503,17 @@ export const PdfDocumentViewer = forwardRef<
     navigation: pendingAnchor,
     crop: effectiveEdgeCrop,
     insets: props.readingInsets,
-    onRestored: (pageNumber) => callbacksRef.current.onPageChange?.(pageNumber)
+    onRestored: (pageNumber) => {
+      restoredPosition.current = null
+      restoredTextPosition.current = null
+      callbacksRef.current.onPageChange?.(pageNumber)
+    }
   })
   const scrollToCroppedPage = useCallback(
     (pageNumber: number) => {
       cancelLayoutRestore()
+      restoredPosition.current = null
+      restoredTextPosition.current = null
       const viewer = viewerRef.current
       const container = containerRef.current
       if (!viewer || !container) return
@@ -466,71 +534,169 @@ export const PdfDocumentViewer = forwardRef<
     },
     [cancelLayoutRestore]
   )
-  const safeViewport = () => {
+  // Layout captures at text-item granularity. Retain a restored Text character
+  // while the viewport stays at that exact position, including a quick round trip.
+  const restoredTextPosition = useRef<{
+    anchor: ReaderTextAnchor
+    top: number
+    left: number
+    scale: number
+  } | null>(null)
+  const viewportRect = () => {
     const container = containerRef.current
     if (!container) return null
-    const rect = container.getBoundingClientRect()
-    const insets = props.readingInsets ?? { top: 0, bottom: 0, horizontal: 0 }
-    return readingViewport(rect, {
-      topInset: insets.top,
-      bottomInset: insets.bottom,
-      horizontalInset: insets.horizontal
-    })
+    const box = container.getBoundingClientRect()
+    const insets = progressOptions.current.readingInsets
+    if (insets)
+      return readingViewport(box, {
+        topInset: container.clientTop + insets.top,
+        bottomInset: insets.bottom,
+        horizontalInset: container.clientLeft + insets.horizontal
+      })
+    const top =
+      box.top +
+      container.clientTop +
+      (progressOptions.current.viewportTopInset ?? 0)
+    const bottom =
+      box.bottom - (progressOptions.current.viewportBottomInset ?? 0)
+    return {
+      left: box.left + container.clientLeft,
+      right: box.right,
+      top,
+      bottom,
+      width: box.width,
+      height: bottom - top
+    }
   }
-  const restoreAnchor = () => {
-    const pending = pendingAnchor.current
-    const viewer = viewerRef.current
+  const pageRect = (pageNumber: number) => {
+    const div = viewerRef.current?.getPageView(pageNumber - 1)?.div
+    if (!div) return undefined
+    const box = div.getBoundingClientRect()
+    const crop = progressOptions.current.edgeCropEditing
+      ? undefined
+      : resolvePageEdgeCrop(progressOptions.current.edgeCrop, pageNumber)
+    const top = box.top + box.height * (crop?.top ?? 0)
+    const bottom = box.bottom - box.height * (crop?.bottom ?? 0)
+    const left = box.left + box.width * (crop?.left ?? 0)
+    const right = box.right - box.width * (crop?.right ?? 0)
+    return {
+      top,
+      bottom,
+      left,
+      right,
+      height: bottom - top,
+      width: right - left
+    }
+  }
+  const alignTop = (top: number, pageNumber: number, targetLeft?: number) => {
     const container = containerRef.current
-    const safe = safeViewport()
-    if (!pending || !viewer || !container || !safe) return
-    const anchor = pending.anchor
-    const pageView = viewer.getPageView(anchor.pageNumber - 1)
-    if (!pageView?.pdfPage) return
-    const context = selectionContextsRef.current.get(anchor.pageNumber)
-    let x = 0
-    let y = 0
-    let targetRect: DOMRect | undefined
-    if ('offset' in anchor) {
-      if (!context) return
-      const range = canonicalRangeToDomRange(
-        context.canonical,
-        anchor.offset,
-        anchor.offset + 1,
-        context.textLayerDiv
+    const viewport = viewportRect()
+    const viewer = viewerRef.current
+    const pageView = viewer?.getPageView(pageNumber - 1)
+    if (container && viewport && viewer && pageView) {
+      const box = pageView.div.getBoundingClientRect()
+      const offset = top - box.top
+      const left = container.scrollLeft
+      const horizontalOffset =
+        targetLeft === undefined ? left : targetLeft - box.left
+      const [x, y] = pageView.viewport.convertToPdfPoint(
+        horizontalOffset,
+        offset
       )
-      targetRect = range?.getClientRects?.()[0]
-      if (!targetRect) {
+      viewer.scrollPageIntoView({
+        pageNumber,
+        destArray: [null, { name: 'XYZ' }, x, y, null],
+        ignoreDestinationZoom: true,
+        allowNegativeOffset: true
+      })
+      // Text destinations use the character's position in the original page
+      // frame, including after zoom/rotation. Ratio restores retain horizontal
+      // scrolling; the cropped display frame still determines their vertical
+      // projection. The browser clamps horizontal scrolling at page boundaries.
+      container.scrollLeft =
+        targetLeft === undefined
+          ? left
+          : Math.max(
+              0,
+              container.scrollLeft +
+                pageView.div.getBoundingClientRect().left +
+                horizontalOffset -
+                viewport.left
+            )
+      container.scrollTop = Math.max(
+        0,
+        Math.min(
+          container.scrollHeight - container.clientHeight,
+          container.scrollTop +
+            pageView.div.getBoundingClientRect().top +
+            offset -
+            viewport.top
+        )
+      )
+    }
+  }
+  const restoreTextPosition = (
+    anchor: ReaderTextAnchor,
+    box: { top: number }
+  ): boolean => {
+    const context = selectionContextsRef.current.get(anchor.pageNumber)
+    if (!context && !failedTextPages.current.has(anchor.pageNumber))
+      return false
+    const range =
+      context && anchor.offset < context.canonical.text.length
+        ? canonicalRangeToDomRange(
+            context.canonical,
+            anchor.offset,
+            anchor.offset + 1,
+            context.textLayerDiv
+          )
+        : null
+    const rect =
+      range &&
+      Array.from(range.getClientRects()).find(
+        (rect) => rect.width > 0 && rect.height > 0
+      )
+    if (!rect) {
+      restoredPosition.current = null
+      const pending = pendingAnchor.current
+      if (pending?.preserveOnFailure) {
         pendingAnchor.current = null
         pending.fail(new Error('文字位置无法定位，原数据已保留'))
-        return
+        return false
       }
-      const pageRect = pageView.div.getBoundingClientRect()
-      x = targetRect.left - pageRect.left
-      y = targetRect.top - pageRect.top
-    } else {
-      const viewport = pageView.viewport as PageViewport
-      const crop = getPageCropGeometry(
-        viewport,
-        resolvePageEdgeCrop(effectiveEdgeCrop, anchor.pageNumber)
+      alignTop(box.top, anchor.pageNumber)
+      progressOptions.current.onRestoreError?.(
+        '无法精确恢复阅读位置，已显示原页；原进度已保留'
       )
-      y =
-        crop.top +
-        (crop.height * Math.max(0, Math.min(100, anchor.verticalPercentage))) /
-          100
+    } else {
+      alignTop(rect.top, anchor.pageNumber, rect.left)
+      const container = containerRef.current
+      if (container && viewerRef.current)
+        restoredTextPosition.current = {
+          anchor,
+          top: container.scrollTop,
+          left: container.scrollLeft,
+          scale: viewerRef.current.currentScale
+        }
     }
-    // PDF.js owns scale/rotation and destination navigation. Its XYZ API does
-    // not express Reader safe insets, so correct once inside its own container.
-    const viewport = pageView.viewport as PageViewport
-    const [pdfX, pdfY] = viewport.convertToPdfPoint(x, y)
-    viewer.scrollPageIntoView({
-      pageNumber: anchor.pageNumber,
-      destArray: [null, { name: 'XYZ' }, pdfX, pdfY, null],
-      ignoreDestinationZoom: true,
-      allowNegativeOffset: true
-    })
-    const point = viewport.convertToViewportPoint(pdfX!, pdfY!)
-    const after = pageView.div.getBoundingClientRect()
-    container.scrollTop += after.top + point[1]! - safe.top
+    return true
+  }
+
+  const restoreAnchor = () => {
+    if (isRestoringLayout()) return
+    const pending = pendingAnchor.current
+    if (!pending) return
+    const anchor = pending.anchor
+    if (!visiblePagesRef.current.includes(anchor.pageNumber)) return
+    const box = pageRect(anchor.pageNumber)
+    if (!box || box.height <= 0) return
+    if ('offset' in anchor) {
+      if (!restoreTextPosition(anchor, box)) return
+    } else
+      alignTop(
+        box.top + (box.height * anchor.verticalPercentage) / 100,
+        anchor.pageNumber
+      )
     pendingAnchor.current = null
     pending.done()
   }
@@ -551,34 +717,50 @@ export const PdfDocumentViewer = forwardRef<
     >(null)
   enhancePageTextLayerRef.current = (pageNumber, textLayerDiv, onResult) => {
     const viewer = viewerRef.current
+    const document = documentRef.current
     if (!viewer) return
     // eslint-disable-next-line sonarjs/void-use -- text layer 增强为后台任务，无需等待
-    void getCanonical(pageNumber).then((canonical) => {
-      if (!canonical || viewerRef.current !== viewer) return
-      const matched = enhanceTextLayer(textLayerDiv, canonical)
-      onResult?.(matched)
-      const pageView = viewer.getPageView(pageNumber - 1)
-      const geometry = getPageGeometry(pageNumber)
-      if (matched && pageView && geometry) {
-        selectionContextsRef.current.set(pageNumber, {
-          pageNumber,
-          textLayerDiv: pageView.div,
-          pageDiv: pageView.div,
-          canonical: withOcr(canonical),
-          viewport: geometry.viewport,
-          scaleOneViewport: geometry.scaleOneViewport,
-          visual: geometry.visual
-        })
-        restoreAnchorRef.current()
-        callbacksRef.current.onTextLayerReady?.([
-          ...selectionContextsRef.current.keys()
-        ])
-      } else if (!matched) {
-        // 瞬态重组中不匹配：摘除上下文，等下一次 DOM 变化重试。
-        selectionContextsRef.current.delete(pageNumber)
-      }
-      bumpGeometry()
-    })
+    void getCanonical(pageNumber)
+      .then((canonical) => {
+        if (
+          !canonical ||
+          viewerRef.current !== viewer ||
+          documentRef.current !== document ||
+          !textLayerDiv.isConnected
+        )
+          return
+        const matched = enhanceTextLayer(textLayerDiv, canonical)
+        failedTextPages.current.delete(pageNumber)
+        onResult?.(matched)
+        const pageView = viewer.getPageView(pageNumber - 1)
+        const geometry = getPageGeometry(pageNumber)
+        if (matched && pageView && geometry) {
+          selectionContextsRef.current.set(pageNumber, {
+            pageNumber,
+            textLayerDiv: pageView.div,
+            pageDiv: pageView.div,
+            canonical: withOcr(canonical),
+            viewport: geometry.viewport,
+            scaleOneViewport: geometry.scaleOneViewport,
+            visual: geometry.visual
+          })
+          restoreAnchorRef.current()
+          callbacksRef.current.onTextLayerReady?.([
+            ...selectionContextsRef.current.keys()
+          ])
+        } else if (!matched) {
+          // 瞬态重组中不匹配：摘除上下文，等下一次 DOM 变化重试。
+          selectionContextsRef.current.delete(pageNumber)
+        }
+        bumpGeometry()
+      })
+      .catch(() => {
+        if (viewerRef.current !== viewer || documentRef.current !== document)
+          return
+        failedTextPages.current.add(pageNumber)
+        restoreAnchor()
+        bumpGeometry()
+      })
   }
 
   // 与 IntermediateDocumentViewer 同一约定：未受控时使用静态默认控制面，
@@ -754,6 +936,8 @@ export const PdfDocumentViewer = forwardRef<
     }
     const handleScaleChanging = (event: { scale: number }) => {
       applyPageCrop()
+      if (!isRestoringLayout())
+        restoredPosition.current ??= lastStablePosition.current
       callbacksRef.current.onScaleChange?.(event.scale)
       // viewport 变化后叠加层按持久化坐标重投影。
       bumpGeometry()
@@ -783,6 +967,22 @@ export const PdfDocumentViewer = forwardRef<
       applyPageCrop()
     }
     const handlePageRendered = (event: { pageNumber: number }) => {
+      const document = documentRef.current
+      restoreAnchorRef.current()
+      getCanonical(event.pageNumber)
+        .then(() => {
+          if (viewerRef.current !== viewer || documentRef.current !== document)
+            return
+          restoreAnchorRef.current()
+          bumpGeometry()
+        })
+        .catch(() => {
+          if (viewerRef.current !== viewer || documentRef.current !== document)
+            return
+          failedTextPages.current.add(event.pageNumber)
+          restoreAnchorRef.current()
+          bumpGeometry()
+        })
       setRenderedPages((pages) =>
         pages.includes(event.pageNumber) ? pages : [...pages, event.pageNumber]
       )
@@ -798,7 +998,10 @@ export const PdfDocumentViewer = forwardRef<
       restoreAnchorRef.current()
       bumpGeometry()
     }
-    const handleRotation = () => bumpGeometry()
+    const handleRotation = () => {
+      restoredPosition.current ??= lastStablePosition.current
+      bumpGeometry()
+    }
     const resize = new ResizeObserver(() => {
       if (viewer.pagesCount) fitCroppedWidth()
       applyPageCrop()
@@ -846,6 +1049,9 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     if (!viewer) return
 
+    restoredPosition.current = null
+    lastStablePosition.current = null
+    restoredTextPosition.current = null
     pendingAnchor.current?.fail(
       new DOMException('PDF navigation cancelled', 'AbortError')
     )
@@ -855,6 +1061,7 @@ export const PdfDocumentViewer = forwardRef<
       setRenderedPages([])
       props.onDocumentReady?.(null)
       documentRef.current = null
+      failedTextPages.current.clear()
       canonicalCacheRef.current.clear()
       selectionContextsRef.current.clear()
       setViewerDocument(viewer, null)
@@ -873,6 +1080,7 @@ export const PdfDocumentViewer = forwardRef<
     setStatus('loading')
     setOcrDocument(null)
     setRenderedPages([])
+    failedTextPages.current.clear()
     canonicalCacheRef.current.clear()
     selectionContextsRef.current.clear()
 
@@ -928,6 +1136,7 @@ export const PdfDocumentViewer = forwardRef<
       pendingAnchor.current = null
       props.onDocumentReady?.(null)
       documentRef.current = null
+      failedTextPages.current.clear()
       canonicalCacheRef.current.clear()
       selectionContextsRef.current.clear()
       const viewer = viewerRef.current
@@ -974,18 +1183,27 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     if (!viewer) return
     const hidden = normalizeHiddenPageNumbers(hiddenPages)
-    for (let pageNumber = 1; pageNumber <= viewer.pagesCount; pageNumber++) {
-      const pageView = viewer.getPageView(pageNumber - 1)
-      if (!pageView) continue
-      const isHidden = hidden.has(pageNumber)
-      const inRange = allowedPages.includes(pageNumber)
-      pageView.div.style.display =
-        !inRange || (isHidden && !edgeCropEditing) ? 'none' : ''
-      pageView.div.dataset.readerHidden = String(
-        isHidden && Boolean(edgeCropEditing)
-      )
-    }
+    Array.from({ length: viewer.pagesCount }, (_, index) => index + 1).forEach(
+      (pageNumber) => {
+        const pageView = viewer.getPageView(pageNumber - 1)
+        if (!pageView) return
+        const isHidden = hidden.has(pageNumber)
+        const inRange = allowedPages.includes(pageNumber)
+        pageView.div.style.display =
+          !inRange || (isHidden && !edgeCropEditing) ? 'none' : ''
+        pageView.div.dataset.readerHidden = String(
+          isHidden && Boolean(edgeCropEditing)
+        )
+      }
+    )
     const visible = visiblePagesRef.current
+    if (
+      restoredPosition.current &&
+      !visible.includes(restoredPosition.current.pageNumber)
+    ) {
+      restoredPosition.current = null
+      restoredTextPosition.current = null
+    }
     if (
       pendingAnchor.current &&
       !visible.includes(pendingAnchor.current.anchor.pageNumber)
@@ -1001,12 +1219,28 @@ export const PdfDocumentViewer = forwardRef<
         .getPageView(viewer.currentPageNumber - 1)
         ?.div.scrollIntoView?.({ block: 'start' })
     }
-    for (const page of selectionContextsRef.current.keys()) {
+    selectionContextsRef.current.forEach((_, page) => {
       if (!visible.includes(page)) selectionContextsRef.current.delete(page)
-    }
+    })
+    // pagesinit and React's visibility commit can precede the first render.
+    // A page-ratio restore must retry once the displayed page box exists.
+    if (
+      !isRestoringLayout() &&
+      !pendingAnchor.current &&
+      restoredPosition.current
+    )
+      pendingAnchor.current = {
+        anchor: restoredPosition.current,
+        done: () => undefined,
+        fail: () => undefined
+      }
+    const pending = pendingAnchor.current
+    restoreAnchorRef.current()
+    if (pending && !pendingAnchor.current) viewer.update()
   }, [
     hiddenPages,
     pageRange,
+    edgeCrop,
     edgeCropEditing,
     geometryVersion,
     status,
@@ -1056,7 +1290,19 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     if (!viewer) return
     applyPageCrop()
-    restoreAfterLayout()
+    const stable = lastStablePosition.current
+    if (isRestoringLayout() && stable && !('offset' in stable)) {
+      // Blank/scanned pages use the persisted ratio in the displayed crop box.
+      // Keep main's close/rotation reprojection contract for those positions.
+      cancelLayoutRestore()
+      restoredPosition.current = stable
+      pendingAnchor.current = {
+        anchor: stable,
+        done: () => undefined,
+        fail: () => undefined
+      }
+      restoreAnchorRef.current()
+    } else restoreAfterLayout()
     viewer.update()
   }, [
     effectiveEdgeCrop,
@@ -1067,6 +1313,8 @@ export const PdfDocumentViewer = forwardRef<
     hiddenPages,
     applyPageCrop,
     restoreAfterLayout,
+    cancelLayoutRestore,
+    isRestoringLayout,
     props.readingInsets?.top,
     props.readingInsets?.bottom,
     props.readingInsets?.horizontal
@@ -1167,89 +1415,109 @@ export const PdfDocumentViewer = forwardRef<
       ownerDocument.removeEventListener('selectionchange', scheduleEmit)
   }, [onTextSelectionChange, overlayRectType])
 
-  // Inspect all intersecting source pages, not the viewer's majority-visible page.
-  const captureReadingPosition = (): ReaderBookmark | null => {
+  const captureReadingPosition = useCallback((): ReadingPosition => {
     const viewer = viewerRef.current
-    const safe = safeViewport()
-    if (!viewer || !safe || pendingAnchor.current || isRestoringLayout())
-      return null
-    const contexts: PdfPageSelectionContext[] = []
-    let fallback:
-      | { pageNumber: number; area: number; top: number; height: number }
-      | undefined
-    for (const pageNumber of visiblePagesRef.current) {
-      const pageView = viewer.getPageView(pageNumber - 1)
-      if (!pageView) continue
-      const rect = pageView.div.getBoundingClientRect()
-      const crop = getPageCropGeometry(
-        rect,
-        resolvePageEdgeCrop(effectiveEdgeCrop, pageNumber)
-      )
-      const clip = {
-        top: rect.top + crop.top,
-        bottom: rect.bottom - crop.bottom,
-        left: rect.left + crop.left,
-        right: rect.right - crop.right
-      }
-      if (!intersects(clip, safe)) continue
-      const context = selectionContextsRef.current.get(pageNumber)
-      // Loading text is not evidence of a blank page. Freeze stable progress.
-      if (
-        !context ||
-        (context.canonical.text.trim() &&
-          !context.textLayerDiv.querySelector('[data-selection-start-offset]'))
-      )
-        return null
-      contexts.push(context)
-      const area =
-        (Math.min(clip.right, safe.right) - Math.max(clip.left, safe.left)) *
-        (Math.min(clip.bottom, safe.bottom) - Math.max(clip.top, safe.top))
-      if (!fallback || area > fallback.area)
-        fallback = {
-          pageNumber,
-          area,
-          top: clip.top,
-          height: clip.bottom - clip.top
-        }
-    }
-    const anchor = firstVisiblePdfCharacter(contexts, safe, (context) => {
-      const rect = context.pageDiv.getBoundingClientRect()
-      const crop = getPageCropGeometry(
-        rect,
-        resolvePageEdgeCrop(effectiveEdgeCrop, context.pageNumber)
-      )
-      return {
-        top: rect.top + crop.top,
-        bottom: rect.bottom - crop.bottom,
-        left: rect.left + crop.left,
-        right: rect.right - crop.right
-      }
+    const viewport = viewportRect()
+    if (
+      !viewer ||
+      !viewport ||
+      viewport.height <= 0 ||
+      viewport.width <= 0 ||
+      pendingAnchor.current ||
+      isRestoringLayout()
+    )
+      return { status: 'pending' }
+    const pages = visiblePagesRef.current.flatMap((pageNumber) => {
+      const rect = pageRect(pageNumber)
+      return rect && intersects(rect, viewport) ? [{ pageNumber, rect }] : []
     })
-    if (anchor) return anchor
-    return fallback
-      ? {
-          pageNumber: fallback.pageNumber,
-          verticalPercentage: Math.max(
-            0,
-            Math.min(100, (100 * (safe.top - fallback.top)) / fallback.height)
-          )
+    if (!pages.length) return { status: 'pending' }
+    let first: { anchor: ReaderTextAnchor; top: number } | undefined
+    for (const { pageNumber, rect } of pages) {
+      // A lower page that has not rendered cannot precede this known first line.
+      if (first && rect.top >= first.top) break
+      const clip = {
+        left: Math.max(viewport.left, rect.left),
+        right: Math.min(viewport.right, rect.right),
+        top: Math.max(viewport.top, rect.top),
+        bottom: Math.min(viewport.bottom, rect.bottom),
+        width:
+          Math.min(viewport.right, rect.right) -
+          Math.max(viewport.left, rect.left),
+        height:
+          Math.min(viewport.bottom, rect.bottom) -
+          Math.max(viewport.top, rect.top)
+      }
+      const text = capturePageText(
+        selectionContextsRef.current.get(pageNumber),
+        canonicalCacheRef.current.get(pageNumber),
+        failedTextPages.current.has(pageNumber),
+        clip
+      )
+      if (text.status !== 'ready') return { status: text.status }
+      const character = text.character
+      if (character && (!first || character.top < first.top - 1))
+        first = character
+    }
+    if (first) {
+      lastStablePosition.current = first.anchor
+      return { status: 'ready', position: first.anchor }
+    }
+    const target =
+      pages.find(
+        ({ rect }) => rect.top <= viewport.top && rect.bottom > viewport.top
+      ) ?? pages[0]
+    const verticalPercentage = pagePercentage(viewport.top, target.rect)
+    if (verticalPercentage !== undefined)
+      lastStablePosition.current = {
+        pageNumber: target.pageNumber,
+        verticalPercentage
+      }
+    return verticalPercentage === undefined
+      ? { status: 'pending' }
+      : {
+          status: 'ready',
+          position: { pageNumber: target.pageNumber, verticalPercentage }
         }
-      : null
-  }
-  const positionRef = useRef(captureReadingPosition)
-  positionRef.current = captureReadingPosition
-  const captureTextAnchor = useCallback((): ReaderTextAnchor | null => {
-    const position = positionRef.current()
-    return position && 'offset' in position ? position : null
   }, [])
-  const scrollToAnchor = (anchor: ReaderBookmark): Promise<void> => {
+  const captureTextAnchor = useCallback((): ReaderTextAnchor | null => {
+    const pending = pendingAnchor.current?.anchor
+    if (pending && 'offset' in pending) return pending
+    const restored = restoredTextPosition.current
+    const container = containerRef.current
+    if (
+      restored &&
+      restored.top === container?.scrollTop &&
+      restored.left === container.scrollLeft &&
+      restored.scale === viewerRef.current?.currentScale
+    )
+      return restored.anchor
+    restoredTextPosition.current = null
+    const result = captureReadingPosition()
+    return result.status === 'ready' && 'offset' in result.position
+      ? result.position
+      : null
+  }, [captureReadingPosition])
+  const scrollToAnchor = (
+    stored: ReaderBookmark,
+    options?: { preserveOnFailure?: boolean }
+  ): Promise<void> => {
     cancelLayoutRestore()
+    const anchor = normalizeBookmark(stored)
+    if (!anchor) {
+      progressOptions.current.onRestoreError?.(
+        '无法精确恢复阅读位置，原进度已保留'
+      )
+      return Promise.resolve()
+    }
     const viewer = viewerRef.current
     if (!viewer || !visiblePagesRef.current.includes(anchor.pageNumber))
       return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     pendingAnchor.current?.fail(
       new DOMException('PDF navigation superseded', 'AbortError')
     )
+    restoredPosition.current = anchor
+    restoredTextPosition.current = null
     const original = {
       top: containerRef.current?.scrollTop ?? 0,
       left: containerRef.current?.scrollLeft ?? 0
@@ -1263,16 +1531,19 @@ export const PdfDocumentViewer = forwardRef<
           containerRef.current.scrollTop = original.top
           containerRef.current.scrollLeft = original.left
         }
+        restoredPosition.current = null
         reject(new Error('PDF 定位超时，请重试'))
       }, 10000)
       pendingAnchor.current = {
         anchor,
+        preserveOnFailure: options?.preserveOnFailure,
         done: () => {
           clearTimeout(timeout)
           resolve()
         },
         fail: (error) => {
           clearTimeout(timeout)
+          restoredPosition.current = null
           if (
             documentRef.current === originalDocument &&
             containerRef.current
@@ -1291,22 +1562,56 @@ export const PdfDocumentViewer = forwardRef<
 
   useEffect(() => {
     const eventBus = eventBusRef.current
-    if (!eventBus || !onTextAnchorChange) return
-    const emit = () => onTextAnchorChange(captureTextAnchor())
+    if (!eventBus) return
+    const emit = () => {
+      if (isRestoringLayout()) return
+      // PDF.js can finish its own scroll/scale adjustment after pagerendered.
+      // Keep the restored source position until the first reader interaction.
+      if (!pendingAnchor.current && restoredPosition.current)
+        pendingAnchor.current = {
+          anchor: restoredPosition.current,
+          done: () => undefined,
+          fail: () => undefined
+        }
+      restoreAnchorRef.current()
+      if (restoredPosition.current) return
+      onTextAnchorChange?.(captureTextAnchor())
+      progressOptions.current.onReadingPositionChange?.(
+        captureReadingPosition()
+      )
+    }
     const container = containerRef.current
+    const releaseRestore = () => {
+      restoredPosition.current = null
+    }
+    const inputEvents = ['pointerdown', 'wheel', 'keydown'] as const
+    for (const event of inputEvents)
+      container?.addEventListener(event, releaseRestore, {
+        capture: true,
+        passive: true
+      })
     let frame = 0
     const onScroll = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(emit)
     }
     container?.addEventListener('scroll', onScroll)
-    eventBus.on('pagechanging', emit)
+    eventBus.on('pagechanging', onScroll)
+    onScroll()
     return () => {
-      eventBus.off('pagechanging', emit)
+      eventBus.off('pagechanging', onScroll)
       container?.removeEventListener('scroll', onScroll)
+      for (const event of inputEvents)
+        container?.removeEventListener(event, releaseRestore, true)
       cancelAnimationFrame(frame)
     }
-  }, [onTextAnchorChange, captureTextAnchor, status])
+  }, [
+    onTextAnchorChange,
+    captureTextAnchor,
+    captureReadingPosition,
+    status,
+    geometryVersion
+  ])
 
   useImperativeHandle(
     ref,
@@ -1322,6 +1627,8 @@ export const PdfDocumentViewer = forwardRef<
       scrollToPage: (pageNumber) => {
         const viewer = viewerRef.current
         if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return
+        restoredPosition.current = null
+        restoredTextPosition.current = null
         pendingAnchor.current?.done()
         pendingAnchor.current = null
         scrollToCroppedPage(pageNumber)
@@ -1332,7 +1639,7 @@ export const PdfDocumentViewer = forwardRef<
         if (viewer) viewer.currentScale = nextScale
       },
       captureTextAnchor,
-      captureReadingPosition: () => positionRef.current(),
+      captureReadingPosition,
       isRendering: () => {
         const viewer = viewerRef.current
         return (
@@ -1343,15 +1650,20 @@ export const PdfDocumentViewer = forwardRef<
       },
       scrollToAnchor,
       scrollToRange: (rangeId) => {
+        restoredPosition.current = null
+        restoredTextPosition.current = null
         const range = ranges.find((candidate) => candidate.id === rangeId)
         if (!range) return
         const pageNumber = Number(range.start.selectionId.slice(5))
-        scrollToAnchor({
-          pageNumber,
-          offset: range.start.offset,
-          textId: '',
-          text: range.text
-        }).catch((error: Error) => {
+        scrollToAnchor(
+          {
+            pageNumber,
+            offset: range.start.offset,
+            textId: '',
+            text: range.text
+          },
+          { preserveOnFailure: true }
+        ).catch((error: Error) => {
           if (error.name !== 'AbortError')
             props.onError?.({ kind: 'unknown', message: error.message })
         })

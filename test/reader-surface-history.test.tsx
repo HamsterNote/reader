@@ -121,3 +121,45 @@ it('saves each drawing/replay once, fills all pages atomically, and reopens the 
   )
   expect(capture.props!.data?.pagePaintings).toEqual({})
 })
+
+it('keeps same-batch ink when a pending progress snapshot flushes before React echoes it', () => {
+  const changed = vi.fn()
+  const initial = {
+    data: {
+      ranges: [],
+      rects: [],
+      pagePaintings: {},
+      bookmarks: [{ pageNumber: 1, verticalPercentage: 20 }]
+    },
+    comments: [],
+    extra: { retained: true },
+    migrated: false
+  }
+  render(
+    <ReaderSurface
+      document={{ id: 'book' } as IntermediateDocument}
+      source={{ format: 'pdf', data: new Uint8Array() }}
+      initial={initial}
+      onChange={changed}
+    />
+  )
+  const ink = drawingFixture({
+    strokes: [{ id: 'latest', tool: 'pen', points: [{ x: 10, y: 20 }] }]
+  })
+  const props = capture.props!
+  act(() => {
+    props.onPagePaintingsChange!({ 'page-1': ink })
+    props.onDataChange!({
+      ...props.data,
+      layoutReadingProgress: { pageNumber: 2, verticalPercentage: 40 }
+    })
+  })
+  const restored = restoreReaderSnapshot(changed.mock.lastCall![0])
+  expect(restored.data.pagePaintings).toEqual({ 'page-1': ink })
+  expect(restored.data.layoutReadingProgress).toEqual({
+    pageNumber: 2,
+    verticalPercentage: 40
+  })
+  expect(restored.data.bookmarks).toEqual(initial.data.bookmarks)
+  expect(restored.extra).toMatchObject({ retained: true })
+})

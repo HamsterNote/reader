@@ -80,6 +80,7 @@ export {
   Reader,
   type ReaderLoadingProgress,
   type ReaderProps,
+  type ReaderProgressHandle,
   type ReaderRenderMode
 } from './components/Reader'
 export type {

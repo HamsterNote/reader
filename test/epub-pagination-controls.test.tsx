@@ -51,6 +51,12 @@ beforeEach(() => {
       text: '正文',
       offset
     }),
+    captureReadingPosition: () => ({
+      status: 'ready',
+      position: engine.captureTextAnchor()!
+    }),
+    goToPosition: vi.fn(async () => {}),
+    whenStable: () => Promise.resolve(),
     goToAnchor: vi.fn(async () => {}),
     destroy: vi.fn(async () => {}),
     nextPage: vi.fn(async () => {

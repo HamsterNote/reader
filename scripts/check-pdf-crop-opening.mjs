@@ -138,6 +138,11 @@ try {
   assert.deepEqual(report.errors, [])
 } catch (error) {
   report.failure = String(error)
+  if (browser) {
+    const page = browser.contexts()[0]?.pages()[0]
+    if (page)
+      report.body = (await page.locator('body').innerText()).slice(0, 2000)
+  }
   throw error
 } finally {
   await writeFile(

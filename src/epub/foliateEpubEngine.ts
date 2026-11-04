@@ -1,3 +1,5 @@
+import { normalizePercentage, type ReadingPosition } from '../readingProgress'
+import { firstVisibleCharacter } from '../viewportPosition'
 import type { ViewportNavigationState } from '../components/reading/navigation'
 // HAM-88 任务 2.2/2.4/2.5：EPUB 主展示引擎适配器（foliate-js）。
 // 职责：foliate-view 装配（打开、目录、封面、字体、flow）、高亮叠加、
@@ -22,7 +24,7 @@ import { openEpubPackage, type EpubPackage } from './epubPackage'
 import { buildLegacyEpubModel, type LegacyEpubModel } from './legacyEpubModel'
 import type { SerializedSelection } from './epubCompatIndex'
 import { restrictPublicationResources } from './publicationSecurity'
-import type { ReaderTextAnchor } from '../types/readerData'
+import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 
 export type EpubEngineTocEntry = {
   readonly label: string
@@ -98,6 +100,7 @@ export type EpubEngine = {
   readonly previousPage: () => Promise<boolean>
   readonly nextPage: () => Promise<boolean>
   readonly navigationState: () => EpubNavigationState
+  readonly whenStable: () => Promise<void>
   readonly goToPage: (pageNumber: number) => Promise<boolean>
   readonly goToTocHref: (href: string) => Promise<boolean>
   /** 跳转并滚动到已加入的高亮。 */
@@ -132,6 +135,8 @@ export type EpubEngine = {
     y: number
   ) => string | null
   readonly captureTextAnchor: () => ReaderTextAnchor | undefined
+  readonly captureReadingPosition: () => ReadingPosition
+  readonly goToPosition: (position: ReaderBookmark) => Promise<void>
   readonly goToAnchor: (anchor: ReaderTextAnchor) => Promise<void>
   /** 取消加载、释放 object URL / 视图 / 归档；之后不再产生任何事件。 */
   readonly destroy: () => Promise<void>
@@ -157,6 +162,8 @@ export const createEpubEngine = (
   let coverUrl: string | null = null
   let fontScale = options.fontScale ?? DEFAULT_FONT_SCALE
   let currentAnchor: ReaderTextAnchor | undefined
+  let stablePosition: ReadingPosition = { status: 'pending' }
+  let frozenPosition: ReaderBookmark | undefined
   let virtualCoverActive = false
   let displayedPage: number | undefined
   let activeRangeId: string | null = null
@@ -222,8 +229,14 @@ export const createEpubEngine = (
         !!restrictionNavigation
     }
   }
+  const stableWaiters = new Set<() => void>()
   const publishNavigation = () => {
-    if (!destroyed) options.onNavigationState?.(navigationState())
+    const state = navigationState()
+    if (!destroyed) options.onNavigationState?.(state)
+    if (destroyed || !state.busy) {
+      for (const resolve of stableWaiters) resolve()
+      stableWaiters.clear()
+    }
   }
 
   // Freeze the public character anchor while Foliate lays out its stable DOM Range.
@@ -234,11 +247,15 @@ export const createEpubEngine = (
       positioning ||
       restrictionNavigation ||
       !opened ||
-      !currentAnchor
+      stablePosition.status !== 'ready'
     )
       return
     if (view?.renderer?.getContents()[0]?.index !== lastDetail?.index) return
-    if (!reflowing) frozenAnchor = currentAnchor
+    if (!reflowing) {
+      frozenAnchor = currentAnchor
+      frozenPosition =
+        stablePosition.status === 'ready' ? stablePosition.position : undefined
+    }
     reflowing = true
     publishNavigation()
     cancelAnimationFrame(reflowFrame)
@@ -247,6 +264,8 @@ export const createEpubEngine = (
         if (destroyed) return
         try {
           if (frozenAnchor) await restoreLiveAnchor(frozenAnchor)
+          else if (frozenPosition && 'verticalPercentage' in frozenPosition)
+            await restorePageRatio(frozenPosition.verticalPercentage)
           redrawLiveOverlays()
         } catch (error) {
           if (!destroyed)
@@ -254,6 +273,9 @@ export const createEpubEngine = (
         } finally {
           if (!destroyed) {
             currentAnchor = frozenAnchor
+            if (frozenPosition)
+              stablePosition = { status: 'ready', position: frozenPosition }
+            frozenPosition = undefined
             frozenAnchor = undefined
             reflowing = false
             publishNavigation()
@@ -436,6 +458,99 @@ export const createEpubEngine = (
     )
   }
 
+  const captureLocation = (detail: FoliateRelocateDetail): ReadingPosition => {
+    const chapterIndex = chapterIndexBySection[detail.index]
+    const page = model?.pages.find(
+      (entry) => entry.chapterIndex === chapterIndex
+    )
+    const doc = chapterIndex == null ? undefined : liveDocs.get(chapterIndex)
+    const frame = doc?.defaultView?.frameElement as HTMLIFrameElement | null
+    if (!page || !doc || !frame || (!detail.range && !view?.isFixedLayout))
+      return { status: 'pending' }
+    const viewport = options.container.getBoundingClientRect()
+    const box = frame.getBoundingClientRect()
+    if (
+      viewport.width <= 0 ||
+      viewport.height <= 0 ||
+      !frame.clientWidth ||
+      !frame.clientHeight
+    )
+      return { status: 'pending' }
+    const sx = box.width / frame.clientWidth
+    const sy = box.height / frame.clientHeight
+    if (!sx || !sy) return { status: 'pending' }
+    const clip = {
+      left: (viewport.left - box.left) / sx,
+      right: (viewport.right - box.left) / sx,
+      top: (viewport.top - box.top) / sy,
+      bottom: (viewport.bottom - box.top) / sy,
+      width: viewport.width / sx,
+      height: viewport.height / sy
+    }
+    const character = firstVisibleCharacter(
+      doc.body,
+      clip,
+      detail.range ?? undefined
+    )
+    if (character) {
+      const serialized = compat?.serializeRange(chapterIndex!, character.range)
+      if (!serialized) return { status: 'failed' }
+      return {
+        status: 'ready',
+        position: {
+          pageNumber: page.pageNumber,
+          textId: `${page.pageId}-text`,
+          text: serialized.text,
+          offset: serialized.start.offset
+        }
+      }
+    }
+    return {
+      status: 'ready',
+      position: {
+        pageNumber: page.pageNumber,
+        verticalPercentage: view?.isFixedLayout
+          ? 0
+          : (normalizePercentage(detail.fraction * 100) ?? 0)
+      }
+    }
+  }
+
+  // Foliate numeric anchors use i/(N-1); our persisted unfolded coordinate is i/N.
+  const restorePageRatio = async (percentage: number) => {
+    if (!view?.renderer || view.isFixedLayout) return
+    const size = lastDetail?.size
+    if (!size || size <= 0) return
+    const count = Math.max(1, Math.round(1 / size))
+    const index = Math.min(
+      count - 1,
+      Math.floor(((normalizePercentage(percentage) ?? 0) / 100) * count + 1e-7)
+    )
+    await view.renderer.scrollToAnchor?.(count === 1 ? 0 : index / (count - 1))
+  }
+
+  const relocatedAnchor = (
+    detail: FoliateRelocateDetail,
+    chapterIndex: number,
+    page: LegacyEpubModel['pages'][number] | undefined
+  ): ReaderTextAnchor | undefined => {
+    if (stablePosition.status === 'ready')
+      return 'offset' in stablePosition.position
+        ? stablePosition.position
+        : undefined
+    // Preserve the legacy capture interface when an injected renderer has no live geometry.
+    const position =
+      detail.range && compat?.serializeRange(chapterIndex, detail.range)
+    return page?.text
+      ? {
+          pageNumber: page.pageNumber,
+          textId: `${page.pageId}-text`,
+          text: position?.text ?? page.text.slice(0, 80),
+          offset: position?.start.offset ?? 0
+        }
+      : undefined
+  }
+
   const onRelocate = (detail: FoliateRelocateDetail) => {
     if (destroyed || !model || virtualCoverActive) return
     if (turning) {
@@ -443,6 +558,7 @@ export const createEpubEngine = (
       return
     }
     lastDetail = detail
+    if (!reflowing) stablePosition = captureLocation(detail)
     if (
       pendingOverlayDraw.has(detail.index) &&
       drawSectionAnnotations(detail.index)
@@ -451,6 +567,7 @@ export const createEpubEngine = (
     }
     const chapterIndex = chapterIndexBySection[detail.index]
     if (chapterIndex === null || chapterIndex === undefined) {
+      stablePosition = { status: 'pending' }
       currentAnchor = undefined
       displayedPage = undefined
       return
@@ -459,20 +576,10 @@ export const createEpubEngine = (
       (entry) => entry.chapterIndex === chapterIndex
     )
     if (page && !isPageVisible(page.pageNumber)) return
-    const position =
-      detail.range && compat?.serializeRange(chapterIndex, detail.range)
-    if (!reflowing)
-      currentAnchor = page?.text
-        ? {
-            pageNumber: page.pageNumber,
-            textId: `${page.pageId}-text`,
-            text: position?.text ?? page.text.slice(0, 80),
-            offset: position?.start.offset ?? 0
-          }
-        : undefined
+    if (!reflowing) currentAnchor = relocatedAnchor(detail, chapterIndex, page)
     displayedPage = page?.pageNumber
     publishNavigation()
-    if (reflowing) return
+    if (reflowing || positioning) return
     options.onRelocate?.({
       chapterIndex,
       pageNumber: page?.pageNumber ?? null,
@@ -785,6 +892,7 @@ export const createEpubEngine = (
   const destroy = async () => {
     if (destroyed) return
     destroyed = true
+    publishNavigation()
     cancelAnimationFrame(reflowFrame)
     removeContainerInput()
     inputCleanups.forEach((remove) => remove())
@@ -836,10 +944,9 @@ export const createEpubEngine = (
   const restoreLiveAnchor = async (anchor: ReaderTextAnchor) => {
     if (!compat || !view?.renderer || destroyed) return
     const text = compat.pageText(anchor.pageNumber) ?? ''
-    const offset = Math.max(
-      0,
-      Math.min(anchor.offset, Math.max(0, text.length - 1))
-    )
+    const offset = anchor.offset
+    if (!Number.isInteger(offset) || offset < 0 || offset >= text.length)
+      throw new Error('无法精确恢复阅读位置：源字符已失效')
     const endpoint = { selectionId: `page-${anchor.pageNumber}`, offset }
     const located = compat.locateRange({
       start: endpoint,
@@ -852,7 +959,8 @@ export const createEpubEngine = (
       // that exact character for subsequent reflows, rather than its earlier page start.
       if (!destroyed && displayedPage === anchor.pageNumber)
         currentAnchor = { ...anchor, offset }
-    }
+      stablePosition = { status: 'ready', position: { ...anchor, offset } }
+    } else throw new Error('无法精确恢复阅读位置：源字符不可定位')
   }
 
   const restoreFailedTurn = async (
@@ -897,6 +1005,7 @@ export const createEpubEngine = (
     const savedAnchor = currentAnchor
     const savedPage = displayedPage
     const savedDetail = lastDetail
+    const savedPosition = stablePosition
     turning = true
     pendingDetail = undefined
     publishNavigation()
@@ -911,6 +1020,7 @@ export const createEpubEngine = (
       currentAnchor = savedAnchor
       displayedPage = savedPage
       lastDetail = savedDetail
+      stablePosition = savedPosition
       if (!destroyed)
         options.onError?.({ code: 'render-failed', message: String(error) })
       return false
@@ -929,11 +1039,23 @@ export const createEpubEngine = (
     reflowing = false
     frozenAnchor = undefined
     publishNavigation()
+    let success = false
     try {
-      return await action()
+      const result = await action()
+      success = result !== false
+      return result
+    } catch (error) {
+      stablePosition = { status: 'failed' }
+      throw error
     } finally {
       positioning--
       publishNavigation()
+      if (success && !destroyed && !positioning && displayedPage)
+        options.onRelocate?.({
+          chapterIndex: lastDetail?.index ?? -1,
+          pageNumber: displayedPage,
+          fraction: lastDetail?.fraction ?? 0
+        })
     }
   }
 
@@ -942,6 +1064,12 @@ export const createEpubEngine = (
     previousPage: () => turnPage(false),
     nextPage: () => turnPage(true),
     navigationState,
+    whenStable: () =>
+      destroyed || !navigationState().busy
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            stableWaiters.add(resolve)
+          }),
     goToPage: (page) => explicitNavigation(() => goToPage(page)),
     goToTocHref: (href) => explicitNavigation(() => goToTocHref(href)),
     goToRange: (id) => explicitNavigation(() => goToRange(id)),
@@ -1120,6 +1248,28 @@ export const createEpubEngine = (
       return range
     },
     captureTextAnchor: () => currentAnchor,
+    captureReadingPosition: () => {
+      if (
+        destroyed ||
+        turning ||
+        positioning ||
+        reflowing ||
+        restrictionNavigation
+      )
+        return { status: 'pending' }
+      if (virtualCoverActive && displayedPage)
+        return {
+          status: 'ready',
+          position: { pageNumber: displayedPage, verticalPercentage: 0 }
+        }
+      return stablePosition
+    },
+    goToPosition: (position) =>
+      explicitNavigation(async () => {
+        await goToPage(position.pageNumber)
+        if ('offset' in position) await restoreLiveAnchor(position)
+        else await restorePageRatio(position.verticalPercentage)
+      }),
     goToAnchor: (anchor) =>
       explicitNavigation(async () => {
         await goToPage(anchor.pageNumber)

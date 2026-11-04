@@ -221,11 +221,7 @@ const EMPTY_TEXT_PAGE_IMAGES = new Map<number, string>()
 
 const handleTextPageBrowserVisibilityChange = () => {}
 
-type TextReadingProgressSnapshot = {
-  readonly verticalPercentage?: number
-  readonly currentPageNumber: number
-  readonly anchor?: ReaderTextAnchor
-}
+type TextReadingProgressSnapshot = ReaderTextReadingProgress
 
 type TextAnchorRestoreRequest = {
   readonly token: number
@@ -306,7 +302,12 @@ function resolveRequestedTextReadingProgress(
     progress?.anchor?.pageNumber === pageNumber ? progress.anchor : undefined
   return anchor
     ? { currentPageNumber: pageNumber, anchor }
-    : { currentPageNumber: pageNumber }
+    : {
+        currentPageNumber: pageNumber,
+        ...(progress?.verticalPercentage === undefined
+          ? {}
+          : { verticalPercentage: progress.verticalPercentage })
+      }
 }
 
 function getRequestedProgressIdentity(
@@ -328,7 +329,12 @@ function getInitialTextReadingProgress(
   if (anchor?.pageNumber === currentPageNumber) {
     return { currentPageNumber, anchor }
   }
-  return { currentPageNumber }
+  return {
+    currentPageNumber,
+    ...(persistedProgress?.verticalPercentage === undefined
+      ? {}
+      : { verticalPercentage: persistedProgress.verticalPercentage })
+  }
 }
 
 const DISABLED_ANNOTATION_HISTORY_STATUS = {
@@ -1313,12 +1319,17 @@ export function IntermediateDocumentTextViewer(
     readingPositionRef,
     () => ({
       captureTextAnchor: () => captureCurrentTextAnchor(true),
+      captureAndPublish: () => {
+        captureReadingProgress()
+      },
       captureReadingPosition: () =>
         isPdf
           ? pdfNavigationRef.current?.capturePosition()
-          : captureCurrentTextAnchor(true)
+          : captureCurrentTextAnchor(true),
+      waitForStable: () =>
+        pdfNavigationRef.current?.whenStable() ?? Promise.resolve()
     }),
-    [captureCurrentTextAnchor]
+    [captureCurrentTextAnchor, captureReadingProgress]
   )
 
   const cancelRestoreAttempt = useCallback(() => {

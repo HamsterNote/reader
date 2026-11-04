@@ -110,6 +110,7 @@ try {
       )
       return {
         sheets,
+        hostTop: host.getBoundingClientRect().top,
         scrollWidth: host.scrollWidth,
         width: host.clientWidth,
         scrollHeight: host.scrollHeight,
@@ -214,10 +215,15 @@ try {
   await page.evaluate(() => window.pdfCropTest.setBrowserOpen(true))
   await page.getByTestId('page-browser-page-2').click()
   await page.evaluate(() => window.pdfCropTest.setBrowserOpen(false))
+  // Navigation and progress reprojection can finish after the browser closes.
+  await page.evaluate(async () => {
+    for (let frame = 0; frame < 12; frame++)
+      await new Promise((done) => requestAnimationFrame(done))
+  })
   const jumped = await measure()
   close(
     jumped.sheets[1].top + jumped.sheets[1].height * override.top,
-    0,
+    jumped.hostTop,
     'page jump starts at visible cropped top'
   )
   report.checks.push({ name: 'page browser jump aligns cropped page top' })
@@ -231,6 +237,15 @@ try {
     })
   await page.getByTestId('tool-bottom-bar-edge-crop').click()
   await page.getByTestId('edge-crop-line-top').first().waitFor()
+  // Entering editing preserves the reading anchor. Navigate back to page one
+  // before dragging so its top handle is inside the actual reading viewport.
+  await page.evaluate(async () => {
+    for (let frame = 0; frame < 12; frame++)
+      await new Promise((done) => requestAnimationFrame(done))
+    const host = document.querySelector('.hamster-reader__pdf-viewer-container')
+    host.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+    host.scrollTop = 0
+  })
   const editing = await measure()
   close(
     editing.sheets[1].top - editing.sheets[0].top,
@@ -525,7 +540,7 @@ try {
   const croppedJump = await measure()
   close(
     croppedJump.sheets[1].top + croppedJump.sheets[1].height * globalCrop.top,
-    0,
+    croppedJump.hostTop,
     'explicit page jump overrides retained layout anchor'
   )
   // PDF.js floors page width to --scale-round-x after canvas rendering.
