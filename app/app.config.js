@@ -7,10 +7,9 @@ module.exports = ({ config }) => {
     scheme: isDevelopment ? 'hamsterreader-dev' : config.scheme,
     ios: {
       ...config.ios,
-      // EAS can write the resolved dev ID back to app.json during setup.
-      bundleIdentifier: isDevelopment
-        ? 'com.hamsternote.reader.dev'
-        : 'com.hamsternote.reader'
+      // Both profiles reuse the existing ad-hoc signing identity.
+      bundleIdentifier: 'com.hamsternote.reader',
+      buildNumber: isDevelopment ? '2' : config.ios.buildNumber
     },
     plugins: [
       ...(config.plugins ?? []),

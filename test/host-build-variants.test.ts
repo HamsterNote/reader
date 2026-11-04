@@ -8,7 +8,7 @@ const { expo: baseConfig } = require('../app/app.json')
 afterEach(() => vi.unstubAllEnvs())
 
 describe('iOS host build variants', () => {
-  it('keeps preview separate after EAS writes the dev bundle ID into the static config', () => {
+  it('uses the provisioned identifier even if static config contains an old variant ID', () => {
     vi.stubEnv('APP_VARIANT', '')
     const config = {
       ...baseConfig,
@@ -20,14 +20,15 @@ describe('iOS host build variants', () => {
     expect(config.ios.bundleIdentifier).toBe('com.hamsternote.reader.dev')
   })
 
-  it('gives the dev launcher a separate identity while preserving host settings', () => {
+  it('gives the dev launcher its own name and scheme with the existing signing identity', () => {
     vi.stubEnv('APP_VARIANT', 'development')
     const development = configure({ config: baseConfig })
-    expect(development.ios.bundleIdentifier).toBe('com.hamsternote.reader.dev')
+    expect(development.ios.bundleIdentifier).toBe('com.hamsternote.reader')
     expect(development.scheme).toBe('hamsterreader-dev')
     expect(development.name).toBe('Hamster Reader Dev')
     expect(development.extra.eas).toEqual(baseConfig.extra.eas)
-    expect(development.ios.buildNumber).toBe(baseConfig.ios.buildNumber)
+    expect(development.ios.buildNumber).toBe('2')
+    expect(development.ios.supportsTablet).toBe(baseConfig.ios.supportsTablet)
     expect(development.plugins).toEqual([
       ...baseConfig.plugins,
       ['expo-dev-client', { addGeneratedScheme: false, launchMode: 'launcher' }]

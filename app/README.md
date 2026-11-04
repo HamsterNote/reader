@@ -31,7 +31,7 @@ bundle and Web reader assets embedded; it runs without Metro. The project is
 in the ad-hoc provisioning profile before building. Adding a device requires a
 new build or re-signing the IPA.
 
-For a development client that can coexist with the preview app:
+For a Metro development client:
 
 ```bash
 cd app # from the repository root
@@ -41,7 +41,9 @@ eas build -p ios --profile development
 `development` inherits the same Node/Yarn versions and build hooks, uses Debug
 with `developmentClient: true`, and sets `APP_VARIANT=development`. The dynamic
 app config gives this iOS app the name **Hamster Reader Dev**, Bundle ID
-`com.hamsternote.reader.dev`, and URL scheme `hamsterreader-dev`. It opens the
+`com.hamsternote.reader`, build number `2`, and URL scheme `hamsterreader-dev`.
+It reuses the existing ad-hoc credentials and replaces the preview app when
+installed on the same device. It opens the
 development launcher, where you can enter `http://192.168.0.145:8092` to connect
 to the current Metro server. Allow Local Network access and keep the phone on a
 network that can reach the server.
@@ -54,8 +56,8 @@ APP_VARIANT=development yarn host:start --port 8092
 
 This also makes Expo's generated launch URL use the dev app's scheme. The
 existing Metro server can still be entered manually in the dev launcher.
-Signing this separate Bundle ID requires its own ad-hoc provisioning profile;
-include the target UDID when setting up the EAS credentials.
+To distribute both apps side by side in the future, a separate Bundle ID would
+need its own ad-hoc provisioning profile and Apple account authentication.
 
 `app/yarn.lock` links to the repository's pinned lockfile for EAS's frozen host
 dependency install. Keep dependency updates and installs at the repository root
@@ -66,8 +68,9 @@ and applies the iOS WebView patch to the host's resolved native dependency.
 These hooks must run on the cloud builder; generating assets only on the machine
 submitting the build does not cover builds from a clean Git checkout.
 
-App version and iOS build number are local values in `app.json`; increment the
-build number before distributing a subsequent IPA of the same app version.
+App version and preview build number are local values in `app.json`; the dev
+build number is set in `app.config.js`. Increment the corresponding build number
+before distributing a subsequent IPA of the same app version.
 
 The iOS scripts apply the pinned react-native-webview patch automatically.
 After upgrading from SDK 54, regenerate the native project with
