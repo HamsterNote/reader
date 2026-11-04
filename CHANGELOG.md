@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- 修复 PDF 同一选区/高亮的重叠矩形重复着色：仅在显示层按 range、按页合成为单个 SVG 填充路径，保留原始矩形、持久化结构和命中语义，避免接缝与词边界颜色加深。
 - 修复首次进入阅读页且未主动选色时高亮/选区与底栏选中色不同源：未显式设置或主动选择高亮色时，从当前生效的描边色派生半透明高亮；显式 `highlightColor` 优先。Demo 的初始高亮色与阅读偏好回退值同步取预设首项；新增公开辅助函数 `getDefaultBottomBarHighlightColor` 供宿主初始化使用。
 
 ### Changed
