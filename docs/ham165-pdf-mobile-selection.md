@@ -84,3 +84,41 @@ OpenSpec 4.3 保持未勾选，当前为 11/12；浏览器触摸模拟不能替�
 现有 Web/Expo 服务实际运行于另一份干净 checkout；已将实现提交快进到该分支，未重启已有服务，并把重建的 `app/assets/webreader.zip` 与 manifest 同步到 Metro 使用的目录、校验 SHA-256 一致。上述 zip 被 gitignore，不能靠 push 自动更新，其他设备/checkout 仍需执行构建并重新加载宿主。
 
 OpenSpec 当前 14/15，仅 4.3 真机验收待办。请在 iOS WKWebView 和 Android WebView 复验原中文 PDF 的透明度、紧密行/混合字号/旋转裁切页几何、圆点是否碰到邻行、白边阴影缩放恒定、拖动放大镜和系统菜单抑制；浏览器结果不能替代这些设备结果。
+
+## 偶发原生双柄、末帧同步与 40px 热区
+
+本轮依据真机附件 `01a1a5f7-6253-709e-a7e0-2ea950781ff2`：蓝色原生选区还延伸到阅读工具栏。原代码仅在长按成立时清空一次原生 Selection；释放后的 rAF 也可能重新测量旧 prop Range。没有把这两处代码缺口当作已在 iPhone 上证明的唯一根因。
+
+改动文件与行为：
+
+- `src/pdf/pdfTouchSelection.ts`：在触摸入口、受管范围写入及 selectionchange/selectstart 中防止原生选择重新激活，覆盖该 reader 的工具栏。Range 独立 clone；保留编辑器及其他 reader 的原生选择。
+- `src/pdf/PdfDocumentViewer.tsx`、`src/components/EngineDocumentViewer.tsx`：显式传递 touch 模式，不能因 DOM 标记丢失退回 addRange；复制直接提供受管文本。Ctrl/Cmd+C 在用户手势内触发 copy 事件，解决无原生 Selection 时浏览器可能跳过默认复制事件的问题，不把 Range 放回正文。
+- `src/components/EngineSelectionControls.tsx`：移动时同步发布 Range 与几何；释放重算最终坐标，直到父级更新前保留最新预览，取消时同源回滚。抓取时重新测量端点，失效节点不启动拖动。
+- `src/components/PdfTouchSelectionHandle.tsx`：40×40 透明方形 button 负责命中，内部 20px 圆无 pointer 命中，白边和阴影保持。fixed portal 已在屏幕坐标系，比例为 1，不再逆向乘 PDF zoom。仅两块热区设置 touch-action:none，热区外正文仍可长按和滚动。
+- `src/components/IntermediateDocumentViewer/RangeHandle.tsx`：提取既有圆形样式函数和直径常量；Text 默认 button 与视觉不变。
+- `src/styles/pdf-viewer.scss`：PDF touch 的 reader chrome、portal 手柄和弹层抑制原生选字，输入框/contenteditable 保留原生文本编辑。
+- `test/engine-selection-controls.test.tsx`、`test/pdf-viewer/pdf-touch-selection.test.tsx`、`test/pdf-viewer/pdf-document-viewer.test.tsx`：增加原生选区复活、工具栏/编辑器隔离、复制、末帧坐标、rAF/父级延迟及热区断言。
+- `scripts/check-pdf-mobile-selection.mjs`、`scripts/check-pdf-selection-paint.mjs`：真实缩放、热区四角、复制和无原生 Range 检查；另更新 README、OpenSpec design/spec/tasks 和本记录。
+
+修正旧缩放测试：Reader 不接收 `nativeLayoutZoom` 属性，旧脚本的赋值实际无效，不能把旧矩阵当作缩放证据。本轮使用公开 `selection.current.scrollToPosition({x:0,y:0,scale})`，同时断言底栏显示和实际 PDF 页宽：
+
+| 请求缩放 | 底栏 | 实测页宽 | 相对 100% 页宽 |
+| --- | --- | --- | --- |
+| 49% | 49% | 261px | 0.48968 |
+| 50% | 50% | 266px | 0.49906 |
+| 100% | 100% | 533px | 1 |
+| 200% | 200% | 1065px | 1.99812 |
+
+最终验证：
+
+- `npm run typecheck`：通过。
+- `npm run test:run`：107 文件 / 1448 测试通过；最后复制快捷键分支亦包含在此次全量结果中。
+- 核心变更文件的 `npx eslint`：通过；此前记录的全仓既有 lint 限制仍保留。
+- `yarn build:webview`、`yarn verify:webview`：开发和现有服务 checkout 均通过，最终 build **`1233b0db58b9bc03`**，293 assets。
+- `READER_BROWSER_URL=http://192.168.0.145:5199 yarn check:web-selection`：8 组通过。59 个原生 Range 检查点均为 0，程序在触摸模式 addRange 的记录为空；包含故意重新加入原生 Range、复制快捷键和拖动前/中/后检查。19 次热区抓取均命中 40×40，视觉圆为 20px；四角向内 1px（视觉圆包围框外 9px）交替扩展/缩短端点，热区外正文长按亦成功。完整脚本继续覆盖滚轮/触摸滚动、桌面及 EPUB。
+- 旧版 `e95b7ca` 对照：重新加入原生 Range 后，等待 120ms 仍残留 1 个原生 Range；旧命中尺寸为 20px。此为防护缺口的浏览器复现，不是 iOS 原生系统 UI 的自动化复现。
+- OpenSpec strict 通过；进度 17/18，仅 4.3 真机验收待办。
+
+附件中的 49% 普通截图为真实 CDP 触摸浏览器结果；另一张用紫色虚线临时标出 40×40 命中层，仅用于验收说明，生产 UI 没有这些框。原始 iPhone 图仅为修前参考。当前运行环境无可操作的 iPhone/Android 截图通道，未取得修后真机截图，不能据此宣称 iOS 蓝色系统手柄已通过真机验收。
+
+现有 Vite/Metro checkout 已快进到新实现并实际重建资源包，服务未重启。真机需彻底退出 App 再打开新包，复验原 PDF 49% 下连续拖动、松手/复制后无蓝柄、圆外热区抓取及正文滚动/长按，以及系统菜单、放大镜和切书取消。
