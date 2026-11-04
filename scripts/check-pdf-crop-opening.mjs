@@ -52,6 +52,9 @@ try {
       const host = span.closest('.hamster-reader__pdf-viewer-container')
       const range = document.createRange()
       range.selectNodeContents(span)
+      const firstRow = host.querySelector('[data-selection-start-offset]')
+      const firstRange = document.createRange()
+      firstRange.selectNodeContents(firstRow)
       const sheets = [...host.querySelectorAll('.page')].map((sheet) => {
         const rect = sheet.getBoundingClientRect()
         const cropTop = parseFloat(
@@ -61,6 +64,7 @@ try {
       })
       return {
         rowTop: range.getBoundingClientRect().top,
+        firstRowTop: firstRange.getBoundingClientRect().top,
         scrollTop: host.scrollTop,
         hostTop: host.getBoundingClientRect().top,
         sheets
@@ -121,20 +125,58 @@ try {
   await page.getByTestId('contain-margin-bottom-input').fill('0')
   await toggle.uncheck()
   await settle()
-  await host.evaluate((host) => {
-    host.scrollTop = 0
-  })
-  await settle()
+  for (const scrollTop of [0, 30, 78]) {
+    await host.evaluate((host, scrollTop) => {
+      host.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+      host.scrollTop = scrollTop
+    }, scrollTop)
+    await settle()
+    const beforeTop = await measure()
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await toggle.check()
+      await settle()
+      const top = await measure()
+      if (scrollTop === 0) {
+        assert.equal(top.scrollTop, 0)
+        assert(
+          Math.abs(top.sheets[0].top + top.sheets[0].cropTop - top.hostTop) < 2
+        )
+        if (cycle === 0)
+          await page.screenshot({ path: resolve(output, 'document-top.png') })
+      }
+      await toggle.uncheck()
+      await settle()
+      const restoredTop = await measure()
+      report.checks.push({
+        name: 'document start round trip restores the position before clamping',
+        scrollTop,
+        cycle,
+        beforeTop,
+        top,
+        restoredTop
+      })
+      assert.equal(restoredTop.scrollTop, beforeTop.scrollTop)
+      assert(Math.abs(restoredTop.firstRowTop - beforeTop.firstRowTop) < 2)
+    }
+  }
   await toggle.check()
   await settle()
-  const top = await measure()
+  const hostBox = await host.boundingBox()
+  await page.mouse.move(hostBox.x + hostBox.width / 2, hostBox.y + 200)
+  await page.mouse.wheel(0, 700)
+  await settle()
+  const afterScroll = await measure()
+  assert(afterScroll.rowTop > afterScroll.hostTop)
+  assert(afterScroll.rowTop < afterScroll.hostTop + hostBox.height)
+  await toggle.uncheck()
+  await settle()
+  const afterScrolledClose = await measure()
   report.checks.push({
-    name: 'document start clamps to visible cropped edge',
-    top
+    name: 'reader scroll discards the pre-clamp position',
+    afterScroll,
+    afterScrolledClose
   })
-  assert.equal(top.scrollTop, 0)
-  assert(Math.abs(top.sheets[0].top + top.sheets[0].cropTop - top.hostTop) < 2)
-  await page.screenshot({ path: resolve(output, 'document-top.png') })
+  assert(Math.abs(afterScrolledClose.rowTop - afterScroll.rowTop) < 2)
   assert.deepEqual(report.errors, [])
 } catch (error) {
   report.failure = String(error)

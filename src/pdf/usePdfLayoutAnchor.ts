@@ -111,7 +111,7 @@ function restore(options: Options, anchor: LayoutAnchor) {
     !page ||
     !options.pages.current.includes(anchor.pageNumber)
   )
-    return
+    return false
   const point = page.viewport.convertToViewportPoint(
     anchor.pdfPoint[0]!,
     anchor.pdfPoint[1]!
@@ -124,14 +124,24 @@ function restore(options: Options, anchor: LayoutAnchor) {
   const x = Math.max(crop.left, Math.min(crop.left + crop.width, point[0]!))
   const y = Math.max(crop.top, Math.min(crop.top + crop.height, point[1]!))
   const rect = page.div.getBoundingClientRect()
-  container.scrollTop +=
+  const scrollTop =
+    container.scrollTop +
     rect.top +
     (y / page.viewport.height) * rect.height -
     (safe.top + anchor.screenOffsetY)
-  container.scrollLeft +=
+  const scrollLeft =
+    container.scrollLeft +
     rect.left +
     (x / page.viewport.width) * rect.width -
     (safe.left + safe.width * anchor.viewportX)
+  container.scrollTop = scrollTop
+  container.scrollLeft = scrollLeft
+  return (
+    x !== point[0] ||
+    y !== point[1] ||
+    Math.abs(container.scrollTop - scrollTop) > 1 ||
+    Math.abs(container.scrollLeft - scrollLeft) > 1
+  )
 }
 
 /** One transaction for crop/edit/inset changes. Capture from the old committed
@@ -144,6 +154,7 @@ export function usePdfLayoutAnchor(options: Options) {
     document: PDFDocumentProxy | null
     anchor: LayoutAnchor
     settled: boolean
+    clamped: boolean
   } | null>(null)
   const ownScroll = useRef({ top: 0, left: 0 })
   const frame = useRef(0)
@@ -169,14 +180,20 @@ export function usePdfLayoutAnchor(options: Options) {
         options.navigation.current
       )
         return
-      const anchor = capture(options)
+      // A crop or scroll boundary can prevent reaching the requested position.
+      // Recapturing that projected position loses the original on a round trip.
+      // User navigation already cancels pending, so retain it only until then.
+      const anchor = pending.current?.clamped
+        ? pending.current.anchor
+        : capture(options)
       pending.current = null
       if (anchor)
         pending.current = {
           source: options.source,
           document: options.document.current,
           anchor,
-          settled: false
+          settled: false,
+          clamped: false
         }
     }
     // Semantic keys avoid restarting on each controlled progress update.
@@ -197,7 +214,7 @@ export function usePdfLayoutAnchor(options: Options) {
     }
     saved.settled = false
     const restoreAndTrack = () => {
-      restore(latest.current, saved.anchor)
+      saved.clamped = restore(latest.current, saved.anchor)
       ownScroll.current = {
         top: latest.current.container.current?.scrollTop ?? 0,
         left: latest.current.container.current?.scrollLeft ?? 0

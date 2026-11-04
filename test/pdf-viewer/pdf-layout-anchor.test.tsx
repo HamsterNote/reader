@@ -46,7 +46,11 @@ const settle = () =>
     }
   })
 
-function harness(rotated = false, withText = false) {
+function harness(
+  rotated = false,
+  withText = false,
+  { textPage = 2, clampScroll = false } = {}
+) {
   let lateOffset = 0
   let layout: Layout = {
     zoom: 1,
@@ -56,6 +60,15 @@ function harness(rotated = false, withText = false) {
   const container = document.createElement('div')
   container.getBoundingClientRect = () => new DOMRect(0, 0, 400, 250)
   container.scrollTop = 460
+  if (clampScroll) {
+    let scrollTop = container.scrollTop
+    Object.defineProperty(container, 'scrollTop', {
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = Math.max(0, value)
+      }
+    })
+  }
   const navigation = { current: null as unknown }
   const containerRef = { current: container }
   const pagesRef = { current: [1, 2, 3] }
@@ -111,15 +124,15 @@ function harness(rotated = false, withText = false) {
   const onRestored = vi.fn()
   const text = { current: new Map<number, PdfReadingPage>() }
   const rowTop = () =>
-    pageViews[1]!.div.getBoundingClientRect().top + 190 * layout.zoom
+    pageViews[textPage - 1]!.div.getBoundingClientRect().top + 190 * layout.zoom
   if (withText) {
-    const pageDiv = pageViews[1]!.div
+    const pageDiv = pageViews[textPage - 1]!.div
     const span = document.createElement('span')
     span.textContent = 'X'
     pageDiv.append(span)
     const bounds = () => new DOMRect(200, rowTop(), 10, 10 * layout.zoom)
     span.getBoundingClientRect = bounds
-    const canonical = buildCanonicalPageText(2, [{ str: 'X' }])
+    const canonical = buildCanonicalPageText(textPage, [{ str: 'X' }])
     enhanceTextLayer(pageDiv, canonical)
     // Only this fixture creates text ranges; scanned fixtures have none.
     vi.spyOn(span.ownerDocument, 'createRange').mockImplementation(
@@ -130,8 +143,8 @@ function harness(rotated = false, withText = false) {
           getClientRects: () => [bounds()]
         }) as unknown as Range
     )
-    text.current.set(2, {
-      pageNumber: 2,
+    text.current.set(textPage, {
+      pageNumber: textPage,
       canonical,
       pageDiv,
       textLayerDiv: pageDiv
@@ -182,6 +195,38 @@ function harness(rotated = false, withText = false) {
 }
 
 describe('PDF coordinates survive layout changes', () => {
+  it.each([0.5, 0.7])(
+    'restores the original document start after a clamped round trip (top crop=%s)',
+    (top) => {
+      const view = harness(false, true, { textPage: 1, clampScroll: true })
+      view.container.scrollTop = 0
+      const before = view.rowTop()
+      for (let cycle = 0; cycle < 3; cycle++) {
+        view.rerender({ ...view.initial, crop: { all: { top } }, zoom: 2 })
+        settle()
+        expect(view.container.scrollTop).toBe(0)
+        view.rerender(view.initial)
+        settle()
+        expect(view.container.scrollTop).toBe(0)
+        expect(view.rowTop()).toBeCloseTo(before, 6)
+      }
+    }
+  )
+
+  it('discards the pre-clamp position after the reader scrolls', () => {
+    const view = harness(false, true, { textPage: 1, clampScroll: true })
+    view.container.scrollTop = 0
+    view.rerender({ ...view.initial, crop: { all: { top: 0.5 } }, zoom: 2 })
+    settle()
+    act(() => view.container.dispatchEvent(new WheelEvent('wheel')))
+    view.container.scrollTop = 10
+    const before = view.rowTop()
+    view.rerender(view.initial)
+    settle()
+    expect(view.rowTop()).toBeCloseTo(before, 6)
+    expect(view.container.scrollTop).toBeGreaterThan(0)
+  })
+
   it('keeps a visible text row when opening crop removes the viewport whitespace anchor', () => {
     const view = harness(false, true)
     const before = view.rowTop()
