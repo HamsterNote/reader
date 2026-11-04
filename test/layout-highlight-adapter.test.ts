@@ -58,6 +58,73 @@ const textRange: ReaderSelectionRange = {
 }
 
 describe('Layout highlight adapter', () => {
+  it.each([
+    {
+      name: '90 degrees',
+      polygon: [
+        [100, 20],
+        [100, 100],
+        [80, 100],
+        [80, 20]
+      ],
+      expected: { x: 80, y: 40, width: 20, height: 40 }
+    },
+    {
+      name: '180 degrees',
+      polygon: [
+        [100, 100],
+        [20, 100],
+        [20, 80],
+        [100, 80]
+      ],
+      expected: { x: 40, y: 80, width: 40, height: 20 }
+    },
+    {
+      name: '270 degrees',
+      polygon: [
+        [20, 100],
+        [20, 20],
+        [40, 20],
+        [40, 100]
+      ],
+      expected: { x: 20, y: 40, width: 20, height: 40 }
+    },
+    {
+      name: 'PDF reflected height axis',
+      polygon: [
+        [100, 20],
+        [100, 100],
+        [120, 100],
+        [120, 20]
+      ],
+      expected: { x: 100, y: 40, width: 20, height: 40 }
+    }
+  ])(
+    'projects a partial highlight into page axes: $name',
+    ({ polygon, expected }) => {
+      const text = makeText({
+        id: 'rotated',
+        content: 'abcd',
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 20
+      })
+      text.polygon = polygon as IntermediateText['polygon']
+      const range = deriveLayoutSelectionRange({
+        range: {
+          ...textRange,
+          start: { selectionId: 'page-1', offset: 1 },
+          end: { selectionId: 'page-1', offset: 3 }
+        },
+        textsByPageNumber: new Map([[1, [text]]]),
+        pageSizesByPageNumber: new Map([[1, { width: 400, height: 500 }]]),
+        overlayRectType: 'px'
+      })
+      expect(range.rectsBySelectionId['page-1']).toEqual([expected])
+    }
+  )
+
   it('maps a Text-created range to canonical Layout rectangles', () => {
     // Given: Text 模式创建的选区跨过同一页的两个绝对定位文本块。
     const textsByPageNumber = new Map([

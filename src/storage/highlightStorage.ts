@@ -385,6 +385,16 @@ function parseReaderSelectionRange(
 
   const id = value['id']
   const text = value['text']
+  const selectionGroup = value['selectionGroup']
+  if (
+    selectionGroup !== undefined &&
+    (!isPlainRecord(selectionGroup) ||
+      typeof selectionGroup['id'] !== 'string' ||
+      selectionGroup['id'].length === 0 ||
+      !Number.isSafeInteger(selectionGroup['index']) ||
+      (selectionGroup['index'] as number) < 0)
+  )
+    return null
   const start = parseReaderSelectionEndpoint(value['start'])
   const end = parseReaderSelectionEndpoint(value['end'])
   const createdAt = value['createdAt']
@@ -412,6 +422,12 @@ function parseReaderSelectionRange(
   return {
     id,
     text,
+    ...(selectionGroup === undefined
+      ? {}
+      : {
+          selectionGroup:
+            selectionGroup as ReaderSelectionRange['selectionGroup']
+        }),
     start,
     end,
     createdAt,

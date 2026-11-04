@@ -20,8 +20,14 @@ import { parseHighlights } from '../../demo/highlightStorage'
 import { buildCanonicalPageText } from '../../src/pdf/pdfTextMapping'
 import {
   createPdfTextModeDocument,
+  preparePdfTextPageGeometry,
   releasePdfTextPage
 } from '../../src/pdf/pdfTextModeDocument'
+import * as pdfGeometry from '../../src/pdf/pdfTextSelectionGeometry'
+import {
+  releaseSourceTextGeometry,
+  sourceTextGeometry
+} from '../../src/components/IntermediateDocumentViewer/sourceTextGeometry'
 
 const FIXTURE_ROOT = join(__dirname, '../compat/fixtures')
 
@@ -207,6 +213,45 @@ describe('pdfjs 官方链路：v2/v3/v4 高亮端点在 canonical 坐标系逐�
 })
 
 describe('Text 模式派生文档（createPdfTextModeDocument）', () => {
+  it('keeps generic cached pages free of measurement geometry and coalesces preparation of an owned page', async () => {
+    const document = await openFixture('pdf/two-column.pdf')
+    const ownedTexts: IntermediateText[] = []
+    const register = vi
+      .spyOn(pdfGeometry, 'registerPdfTextSelectionGeometry')
+      .mockImplementation(async (texts) => {
+        await Promise.resolve()
+        for (const text of texts) sourceTextGeometry.set(text, () => [])
+      })
+    try {
+      const facade = await createPdfTextModeDocument(
+        document,
+        'geometry-ownership'
+      )
+      const cached = await facade.document.pages
+      const owned = await facade.document.getPageByPageNumber(1)
+      ownedTexts.push(...(owned!.content as IntermediateText[]))
+      expect(register).not.toHaveBeenCalled()
+      await Promise.all([
+        preparePdfTextPageGeometry(owned),
+        preparePdfTextPageGeometry(owned)
+      ])
+      expect(register).toHaveBeenCalledTimes(1)
+      await preparePdfTextPageGeometry(owned)
+      expect(register).toHaveBeenCalledTimes(1)
+      for (const page of cached) {
+        for (const text of page.content as IntermediateText[])
+          expect(sourceTextGeometry.has(text)).toBe(false)
+      }
+      releaseSourceTextGeometry(ownedTexts)
+      await preparePdfTextPageGeometry(owned)
+      expect(register).toHaveBeenCalledTimes(2)
+    } finally {
+      register.mockRestore()
+      releaseSourceTextGeometry(ownedTexts)
+      await document.destroy()
+    }
+  })
+
   it('页文本与 canonical 坐标系逐字一致，页 ID 为 page-N', async () => {
     const document = await openFixture('pdf/two-column.pdf')
     try {

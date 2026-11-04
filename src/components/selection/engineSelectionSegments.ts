@@ -12,9 +12,28 @@ import type { ReaderSelectedTextSegment } from './selectionPayloadSerializer'
 
 export async function engineSelectionSegments(
   document: IntermediateDocument | IntermediateDocumentSerialized,
-  detail: SerializedSelection,
+  detail: SerializedSelection & {
+    readonly sourceRanges?: readonly Pick<
+      SerializedSelection,
+      'start' | 'end'
+    >[]
+  },
   ocrTexts?: Readonly<Record<number, readonly IntermediateText[]>>
-) {
+): Promise<{
+  texts: IntermediateText[]
+  segments: ReaderSelectedTextSegment[]
+}> {
+  if (detail.sourceRanges) {
+    const parts = await Promise.all(
+      detail.sourceRanges.map((source) =>
+        engineSelectionSegments(document, { ...source, text: '' }, ocrTexts)
+      )
+    )
+    return {
+      texts: parts.flatMap((part) => part.texts),
+      segments: parts.flatMap((part) => part.segments)
+    }
+  }
   const segments: ReaderSelectedTextSegment[] = []
   const texts: IntermediateText[] = []
   const startPage = Number(detail.start.selectionId.slice(5))

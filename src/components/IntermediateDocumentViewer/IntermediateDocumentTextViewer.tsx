@@ -1,5 +1,7 @@
 import { PdfTextHandle } from '../../pdf/PdfTextHandle'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
+import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeometry'
+import type { ReaderEngineSource } from '../../types/engineSource'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
@@ -78,7 +80,14 @@ import {
 } from './IntermediateDocumentViewer'
 import { resolveHiddenPageNumbers } from './pageDisplay'
 import { getPagePreloadWindow } from './pagePreloadWindow'
-import { canonicalizePdfSelectionRange } from './pdfSelectionOffsets'
+import {
+  canonicalizePdfSelectionRanges,
+  combinePdfTextSelectionGroups,
+  restorePdfTextSelection
+} from './pdfSelectionOffsets'
+import { getSelectionGroup } from '../selection/selectionGroups'
+import { deriveLayoutSelectionRange } from './layoutHighlightAdapter'
+import { releaseSourceTextGeometry } from './sourceTextGeometry'
 import { parsePublicPageId } from './rangeJumpHelpers'
 import type { IntermediateDocumentRenderTimingCallback } from './renderTiming'
 import {
@@ -834,6 +843,7 @@ export type IntermediateDocumentTextViewerProps = {
   isEpub?: boolean
   /** 当前文档是否为 PDF；文本模式据此启用基于 box 的段落重建。 */
   isPdf?: boolean
+  pdfSource?: ReaderEngineSource
   onRequestLayout?: () => void
   /** 已序列化的中间文档；与 `document` 二选一，文本模式同样支持。 */
   serializedDocument?: IntermediateDocumentSerialized | null
@@ -1123,6 +1133,14 @@ export function IntermediateDocumentTextViewer(
     () => new Map<number, IntermediateContent[]>()
   )
   textsByPageNumberRef.current = textsByPageNumber
+  useEffect(
+    () => () => {
+      for (const texts of textsByPageNumberRef.current.values()) {
+        releaseSourceTextGeometry(texts)
+      }
+    },
+    [document, serializedDocument]
+  )
   imagesByPageNumberRef.current = imagesByPageNumber
   orderedContentByPageNumberRef.current = orderedContentByPageNumber
 
@@ -1661,13 +1679,20 @@ export function IntermediateDocumentTextViewer(
     ','
   )}:${visiblePageNumbers.join(',')}`
   const storedRanges = isRangesControlled ? ranges : internalRanges
-  const effectiveRanges = useDerivedTextSelectionRanges({
+  const storedRangesRef = useRef<ReaderSelectionRange[]>(storedRanges)
+  storedRangesRef.current = storedRanges
+  const derivedRanges = useDerivedTextSelectionRanges({
     ranges: storedRanges,
     root: viewerRootElement,
     pageNumbers,
     overlayRectType,
     layoutKey: textLayoutKey
   })
+  const effectiveRanges = combinePdfTextSelectionGroups(
+    derivedRanges,
+    viewerRootElement,
+    isPdf
+  )
   const effectiveRangesRef = useRef<ReaderSelectionRange[]>(effectiveRanges)
   effectiveRangesRef.current = effectiveRanges
   const lastTextGeometryTraceRef = useRef('')
@@ -1717,9 +1742,7 @@ export function IntermediateDocumentTextViewer(
   const selectedHighlight = useMemo(
     () =>
       effectiveSelectedRangeId
-        ? (storedRanges.find(
-            (range) => range.id === effectiveSelectedRangeId
-          ) ?? null)
+        ? (getSelectionGroup(storedRanges, effectiveSelectedRangeId)[0] ?? null)
         : null,
     [effectiveSelectedRangeId, storedRanges]
   )
@@ -1741,7 +1764,10 @@ export function IntermediateDocumentTextViewer(
       buildRuntimeLinkedSelectionData({
         scopeId,
         ranges: effectiveRanges,
-        selectedRangeId: effectiveSelectedRangeId,
+        selectedRangeId: isPdf
+          ? (getSelectionGroup(storedRanges, effectiveSelectedRangeId)[0]?.id ??
+            effectiveSelectedRangeId)
+          : effectiveSelectedRangeId,
         pageNumbers,
         overlayRectType,
         transient: runtimeLinkedTransient
@@ -1752,7 +1778,9 @@ export function IntermediateDocumentTextViewer(
       overlayRectType,
       pageNumbers,
       runtimeLinkedTransient,
-      scopeId
+      scopeId,
+      isPdf,
+      storedRanges
     ]
   )
   const runtimeLinkedDataRef = useRef(runtimeLinkedData)
@@ -1873,6 +1901,7 @@ export function IntermediateDocumentTextViewer(
           break
         }
         if (!preloadPageNumberSet.has(pageNumber)) {
+          releaseSourceTextGeometry(nextTexts.get(pageNumber))
           nextTexts.delete(pageNumber)
           if (isPdf) releasePdfTextPage(runtimeDocument, pageNumber)
           clearUnloadTimer(pageNumber)
@@ -1889,12 +1918,16 @@ export function IntermediateDocumentTextViewer(
     ]
   )
 
+  const getContentWithPdfGeometry = usePdfTextSelectionGeometry(
+    isPdf ? props.pdfSource : undefined,
+    getTextContentEntries
+  )
   const lazyPageQueue = useLazyPageQueue(lazyQueueConfigRef, runtimeDocument, {
     mode: 'text',
     activeDocumentRef,
     isMountedRef,
     loadingPagesRef,
-    getPageContentEntries: getTextContentEntries,
+    getPageContentEntries: getContentWithPdfGeometry,
     isIntermediateText,
     isIntermediateImage,
     callbacks: {
@@ -2324,6 +2357,7 @@ export function IntermediateDocumentTextViewer(
 
   const removeLoadedTextPage = useCallback((pageNumber: number) => {
     releasePdfTextPage(activeDocumentRef.current, pageNumber)
+    releaseSourceTextGeometry(textsByPageNumberRef.current.get(pageNumber))
     setParagraphsByPageNumber((currentParagraphs) => {
       if (!currentParagraphs.has(pageNumber)) {
         return currentParagraphs
@@ -2516,36 +2550,46 @@ export function IntermediateDocumentTextViewer(
     [onSelect]
   )
 
-  const emitPendingLinkedHighlight = useCallback(
-    (range: ReaderSelectionRange) => {
+  const emitPendingLinkedHighlights = useCallback(
+    (ranges: ReaderSelectionRange[]) => {
       const pendingOperation = pendingLinkedHighlightOperationRef.current
-      if (!pendingOperation || pendingOperation.has(range.id)) {
-        return
-      }
-
+      if (!pendingOperation) return
+      const added = ranges.filter((range) => !pendingOperation.has(range.id))
+      if (added.length === 0) return
       pendingLinkedHighlightOperationRef.current = null
-      if (emittedLinkedHighlightRangeIdsRef.current.has(range.id)) {
-        return
+      for (const range of added) {
+        if (emittedLinkedHighlightRangeIdsRef.current.has(range.id)) continue
+        emittedLinkedHighlightRangeIdsRef.current.add(range.id)
+        onHighlight?.(range)
       }
-
-      emittedLinkedHighlightRangeIdsRef.current.add(range.id)
-      onHighlight?.(range)
     },
     [onHighlight]
   )
 
-  const toTextRange = useCallback(
-    (range: ReaderSelectionRange): ReaderSelectionRange | null => {
-      const canonicalRange = isPdf
-        ? canonicalizePdfSelectionRange(range, viewerRootRef.current)
-        : range
-      if (!canonicalRange) return null
-      return {
-        ...canonicalRange,
-        rectsBySelectionId: {}
-      }
+  const toTextRanges = useCallback(
+    (range: ReaderSelectionRange): ReaderSelectionRange[] => {
+      if (!isPdf) return [{ ...range, rectsBySelectionId: {} }]
+      const pageSizes = new Map(
+        Array.from(textsByPageNumberRef.current.keys()).flatMap(
+          (pageNumber) => {
+            const size = runtimeDocument?.getPageSizeByPageNumber(pageNumber)
+            return size
+              ? [[pageNumber, { width: size.x, height: size.y }] as const]
+              : []
+          }
+        )
+      )
+      return canonicalizePdfSelectionRanges(range, viewerRootRef.current).map(
+        (canonicalRange) =>
+          deriveLayoutSelectionRange({
+            range: canonicalRange,
+            textsByPageNumber: textsByPageNumberRef.current,
+            pageSizesByPageNumber: pageSizes,
+            overlayRectType
+          })
+      )
     },
-    [isPdf]
+    [isPdf, overlayRectType, runtimeDocument]
   )
 
   const handleLinkedDataChange = useCallback(
@@ -2555,17 +2599,22 @@ export function IntermediateDocumentTextViewer(
         scopeId
       )
       const existingRanges = new Map(
-        effectiveRangesRef.current.map((range) => [range.id, range])
+        // Text-flow rectangles are display-only. Keep the stored Layout
+        // geometry for unchanged annotations when forwarding linked state.
+        storedRangesRef.current.map((range) => [range.id, range])
       )
       const activeRangeId = runtimePublicLinkedData.activeRange?.id
-      const items = runtimePublicLinkedData.items.flatMap((range) => {
+      const convertedItems = runtimePublicLinkedData.items.flatMap((range) => {
         const existingRange = existingRanges.get(range.id)
-        if (existingRange && range.id !== activeRangeId) return [existingRange]
-        const textRange = toTextRange(range)
-        return textRange ? [textRange] : []
+        if (existingRange && range.id !== activeRangeId)
+          return getSelectionGroup(storedRangesRef.current, existingRange.id)
+        return toTextRanges(range)
       })
+      const items = Array.from(
+        new Map(convertedItems.map((range) => [range.id, range])).values()
+      )
       const activeRange = runtimePublicLinkedData.activeRange
-        ? toTextRange(runtimePublicLinkedData.activeRange)
+        ? (toTextRanges(runtimePublicLinkedData.activeRange)[0] ?? null)
         : runtimePublicLinkedData.activeRange
       const publicLinkedData: ReaderLinkedSelectionData = {
         ...runtimePublicLinkedData,
@@ -2599,22 +2648,17 @@ export function IntermediateDocumentTextViewer(
         setInternalSelectedRangeId(publicLinkedData.selectedRangeId)
       }
 
-      for (const range of publicLinkedData.items) {
-        emitPendingLinkedHighlight(range)
-        if (!pendingLinkedHighlightOperationRef.current) {
-          break
-        }
-      }
+      emitPendingLinkedHighlights(publicLinkedData.items)
     },
     [
-      emitPendingLinkedHighlight,
+      emitPendingLinkedHighlights,
       isRangesControlled,
       isSelectedRangeIdControlled,
       onLinkedDataChange,
       isEpub,
       scopeId,
       selectionScope,
-      toTextRange
+      toTextRanges
     ]
   )
 
@@ -2623,25 +2667,26 @@ export function IntermediateDocumentTextViewer(
       const publicRange = mapRuntimeRangeToPublic(range, scopeId)
 
       if (publicRange) {
-        const textRange = toTextRange(publicRange)
-        if (!textRange) return
-        traceHighlight('text.callback.select', {
-          mode: 'text',
-          isEpub,
-          ranges: summarizeHighlightRanges([textRange])
-        })
-        onLinkedSelect?.(textRange)
-        emitLinkedSelectOnce(textRange)
-        emitPendingLinkedHighlight(textRange)
+        const textRanges = toTextRanges(publicRange)
+        for (const textRange of textRanges) {
+          traceHighlight('text.callback.select', {
+            mode: 'text',
+            isEpub,
+            ranges: summarizeHighlightRanges([textRange])
+          })
+          onLinkedSelect?.(textRange)
+          emitLinkedSelectOnce(textRange)
+        }
+        emitPendingLinkedHighlights(textRanges)
       }
     },
     [
       emitLinkedSelectOnce,
-      emitPendingLinkedHighlight,
+      emitPendingLinkedHighlights,
       onLinkedSelect,
       isEpub,
       scopeId,
-      toTextRange
+      toTextRanges
     ]
   )
 
@@ -2650,22 +2695,23 @@ export function IntermediateDocumentTextViewer(
       const publicRange = mapRuntimeRangeToPublic(range, scopeId)
 
       if (publicRange) {
-        const textRange = toTextRange(publicRange)
-        if (!textRange) return
-        traceHighlight('text.callback.update', {
-          mode: 'text',
-          isEpub,
-          ranges: summarizeHighlightRanges([textRange])
-        })
-        if (!isRangesControlled) {
-          setInternalRanges((currentRanges) =>
-            currentRanges.map((currentRange) =>
-              currentRange.id === textRange.id ? textRange : currentRange
+        const textRanges = toTextRanges(publicRange)
+        for (const textRange of textRanges) {
+          traceHighlight('text.callback.update', {
+            mode: 'text',
+            isEpub,
+            ranges: summarizeHighlightRanges([textRange])
+          })
+          if (!isRangesControlled) {
+            setInternalRanges((currentRanges) =>
+              currentRanges.map((currentRange) =>
+                currentRange.id === textRange.id ? textRange : currentRange
+              )
             )
-          )
+          }
+          onLinkedUpdateRange?.(textRange)
+          onUpdateRange?.(textRange)
         }
-        onLinkedUpdateRange?.(textRange)
-        onUpdateRange?.(textRange)
       }
     },
     [
@@ -2674,19 +2720,49 @@ export function IntermediateDocumentTextViewer(
       onLinkedUpdateRange,
       onUpdateRange,
       scopeId,
-      toTextRange
+      toTextRanges
     ]
   )
 
   const handleLinkedSelectRange = useCallback(
     (id: string | null) => {
+      if (
+        isPdf &&
+        id &&
+        viewerRootRef.current &&
+        getSelectionGroup(storedRangesRef.current, id).length > 1
+      ) {
+        const restored = restorePdfTextSelection(
+          storedRangesRef.current,
+          id,
+          viewerRootRef.current
+        )
+        if (restored) {
+          // Existing Text highlights use the linked overlay for selection.
+          // Materialize the whole group only to build the source payload;
+          // retaining a native range makes upstream treat it as a new draft.
+          try {
+            emitSelectionEnd()
+          } finally {
+            viewerRootRef.current.ownerDocument
+              .getSelection()
+              ?.removeAllRanges()
+          }
+        }
+      }
       if (!isSelectedRangeIdControlled) {
         setInternalSelectedRangeId(id)
       }
       onLinkedSelectRange?.(id)
       onSelectRange?.(id)
     },
-    [isSelectedRangeIdControlled, onLinkedSelectRange, onSelectRange]
+    [
+      emitSelectionEnd,
+      isPdf,
+      isSelectedRangeIdControlled,
+      onLinkedSelectRange,
+      onSelectRange
+    ]
   )
 
   const handlePageLinkedDataChange = useCallback(

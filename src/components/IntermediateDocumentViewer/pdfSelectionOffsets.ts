@@ -2,6 +2,7 @@ import type {
   ReaderSelectionEndpoint,
   ReaderSelectionRange
 } from '../../types/selection'
+import { getSelectionGroup } from '../selection/selectionGroups'
 
 type EndpointSide = 'start' | 'end'
 
@@ -10,6 +11,149 @@ type DomAnchoredSegment = {
   readonly domEnd: number
   readonly canonicalStart: number
   readonly canonicalEnd: number
+  readonly text: string
+}
+
+/** Visual PDF reading order can differ from the source text stream. Represent
+ * a discontiguous selection as separate annotations, never a wider source range
+ * that would also mark unselected text (or silently reject the selection). */
+export function canonicalizePdfSelectionRanges(
+  range: ReaderSelectionRange,
+  root: HTMLElement | null
+): ReaderSelectionRange[] {
+  const continuous = canonicalizePdfSelectionRange(range, root)
+  if (continuous) return [continuous]
+  if (!root || range.start.selectionId !== range.end.selectionId) return []
+  const segments = getSelectionSegments(range.start.selectionId, root)
+  if (!segments) return []
+
+  const parts: Array<{ start: number; end: number; text: string }> = []
+  for (const segment of segments) {
+    const start = Math.max(range.start.offset, segment.domStart)
+    const end = Math.min(range.end.offset, segment.domEnd)
+    if (end <= start) continue
+    const sourceStart = segment.canonicalStart + start - segment.domStart
+    const sourceEnd = segment.canonicalStart + end - segment.domStart
+    const text = segment.text.slice(
+      start - segment.domStart,
+      end - segment.domStart
+    )
+    const previous = parts.at(-1)
+    if (previous?.end === sourceStart) {
+      previous.end = sourceEnd
+      previous.text += text
+    } else {
+      parts.push({ start: sourceStart, end: sourceEnd, text })
+    }
+  }
+  return parts.map((part, index) => ({
+    ...range,
+    selectionGroup: { id: range.selectionGroup?.id ?? range.id, index },
+    id: index === 0 ? range.id : `${range.id}:pdf-${part.start}-${part.end}`,
+    text: part.text,
+    start: { ...range.start, offset: part.start },
+    end: { ...range.end, offset: part.end }
+  }))
+}
+
+/** The Text runtime sees one logical selection. Persisted members keep their
+ * separate canonical endpoints and PDF geometry. DOM endpoints are rebuilt on
+ * every layout so pagination/font changes cannot leave stale offsets. */
+export function combinePdfTextSelectionGroups(
+  ranges: readonly ReaderSelectionRange[],
+  root: HTMLElement | null,
+  enabled = true
+): ReaderSelectionRange[] {
+  if (!root || !enabled) return Array.from(ranges)
+  const visited = new Set<string>()
+  return ranges.flatMap((range) => {
+    if (visited.has(range.id)) return []
+    const members = getSelectionGroup(ranges, range.id)
+    members.forEach((member) => visited.add(member.id))
+    if (members.length < 2) return [range]
+    const first = members[0]!
+    const last = members.at(-1)!
+    const start = pdfCanonicalEndpointToDom(first.start, 'start', root)
+    const end = pdfCanonicalEndpointToDom(last.end, 'end', root)
+    const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] = {}
+    for (const member of members) {
+      for (const [pageId, rects] of Object.entries(member.rectsBySelectionId)) {
+        const pageRects = rectsBySelectionId[pageId] ?? []
+        rectsBySelectionId[pageId] = [...pageRects, ...rects]
+      }
+    }
+    return [
+      {
+        ...first,
+        start,
+        end,
+        text: members.map((member) => member.text).join(''),
+        rectsBySelectionId
+      }
+    ]
+  })
+}
+
+export function pdfCanonicalEndpointToDom(
+  endpoint: ReaderSelectionEndpoint,
+  side: EndpointSide,
+  root: HTMLElement
+): ReaderSelectionEndpoint {
+  const segments = getSelectionSegments(endpoint.selectionId, root)
+  const candidates = segments?.filter((segment) =>
+    side === 'start'
+      ? segment.canonicalStart <= endpoint.offset &&
+        endpoint.offset < segment.canonicalEnd
+      : segment.canonicalStart < endpoint.offset &&
+        endpoint.offset <= segment.canonicalEnd
+  )
+  const segment = candidates?.[0]
+  return segment
+    ? {
+        ...endpoint,
+        offset: segment.domStart + endpoint.offset - segment.canonicalStart
+      }
+    : endpoint
+}
+
+export function restorePdfTextSelection(
+  ranges: readonly ReaderSelectionRange[],
+  id: string,
+  root: HTMLElement
+): Range | null {
+  const group = getSelectionGroup(ranges, id)
+  const first = group[0]
+  const last = group.at(-1)
+  if (!first || !last) return null
+  const start = pdfCanonicalEndpointToDom(first.start, 'start', root)
+  const end = pdfCanonicalEndpointToDom(last.end, 'end', root)
+  const resolvePoint = (endpoint: ReaderSelectionEndpoint) => {
+    const content = root.querySelector(
+      `[data-testid="intermediate-text-${endpoint.selectionId}"] .hsn-selection-content`
+    )
+    if (!content) return null
+    const walker = root.ownerDocument.createTreeWalker(
+      content,
+      NodeFilter.SHOW_TEXT
+    )
+    let offset = endpoint.offset
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text
+      if (offset <= node.length) return { node, offset }
+      offset -= node.length
+    }
+    return null
+  }
+  const a = resolvePoint(start)
+  const b = resolvePoint(end)
+  if (!a || !b) return null
+  const native = root.ownerDocument.createRange()
+  native.setStart(a.node, a.offset)
+  native.setEnd(b.node, b.offset)
+  const selection = root.ownerDocument.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(native)
+  return native
 }
 
 export function canonicalizePdfSelectionRange(
@@ -128,7 +272,8 @@ function getDomAnchoredSegments(root: HTMLElement): DomAnchoredSegment[] {
       {
         ...bounds,
         canonicalStart,
-        canonicalEnd: canonicalStart + textLength
+        canonicalEnd: canonicalStart + textLength,
+        text: anchor.textContent ?? ''
       }
     ]
   })

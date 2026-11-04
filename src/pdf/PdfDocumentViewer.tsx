@@ -43,6 +43,7 @@ import {
 } from './pdfjsRuntime'
 import type { PdfPageOverlayGeometry } from './PdfPageOverlayLayer'
 import { PdfPageOverlayLayer } from './PdfPageOverlayLayer'
+import { getSelectionGroup } from '../components/selection/selectionGroups'
 import { edgeCropToClipPath } from './pdfOverlayGeometry'
 import type { OverlayRectUnit } from './pdfOverlayGeometry'
 import type { ReaderPageEdgeCrop } from '../types/readerData'
@@ -910,17 +911,64 @@ export const PdfDocumentViewer = forwardRef<
     }
   }, [edgeCrop, edgeCropEditing, geometryVersion, status])
 
+  const restoredSelectionGroup = useRef<{
+    native: Range
+    members: ReaderSelectionRange[]
+  } | null>(null)
   const serializeCurrentSelection =
     useCallback((): SerializedPdfSelection | null => {
       const view = containerRef.current?.ownerDocument.defaultView
       const selection = view?.getSelection?.() ?? null
       if (!selection) return null
+      const restored = restoredSelectionGroup.current
+      const native = selection.rangeCount ? selection.getRangeAt(0) : null
+      if (
+        restored &&
+        native &&
+        native.startContainer === restored.native.startContainer &&
+        native.startOffset === restored.native.startOffset &&
+        native.endContainer === restored.native.endContainer &&
+        native.endOffset === restored.native.endOffset
+      ) {
+        const members = restored.members
+        const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] =
+          {}
+        for (const member of members) {
+          for (const [pageId, rects] of Object.entries(
+            member.rectsBySelectionId
+          )) {
+            const pageRects = rectsBySelectionId[pageId] ?? []
+            rectsBySelectionId[pageId] = [...pageRects, ...rects]
+          }
+        }
+        return {
+          start: members[0]!.start,
+          end: members.at(-1)!.end,
+          text: members.map((member) => member.text).join(''),
+          sourceRanges: members.map(({ start, end }) => ({ start, end })),
+          rectsBySelectionId
+        }
+      }
+      restoredSelectionGroup.current = null
       return serializePdfTextSelection(
         selection,
         selectionContextsRef.current,
         overlayRectType
       )
     }, [overlayRectType])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const copy = (event: ClipboardEvent) => {
+      const detail = serializeCurrentSelection()
+      if (!detail?.sourceRanges || !event.clipboardData) return
+      event.clipboardData.setData('text/plain', detail.text)
+      event.preventDefault()
+    }
+    container.ownerDocument.addEventListener('copy', copy)
+    return () => container.ownerDocument.removeEventListener('copy', copy)
+  }, [serializeCurrentSelection])
 
   // 选区变化 → onTextSelectionChange（text + 公开端点 detail）。
   useEffect(() => {
@@ -1068,13 +1116,16 @@ export const PdfDocumentViewer = forwardRef<
         })
       },
       clearSelection: () => {
+        restoredSelectionGroup.current = null
         containerRef.current?.ownerDocument.defaultView
           ?.getSelection()
           ?.removeAllRanges()
       },
       serializeSelection: serializeCurrentSelection,
       selectRange: (id) => {
-        const stored = ranges.find((range) => range.id === id)
+        restoredSelectionGroup.current = null
+        const members = getSelectionGroup(ranges, id)
+        const stored = members[0]
         if (!stored) return null
         const first = selectionContextsRef.current.get(
           Number(stored.start.selectionId.slice(5))
@@ -1100,6 +1151,11 @@ export const PdfDocumentViewer = forwardRef<
         const selection = first.textLayerDiv.ownerDocument.getSelection()
         selection?.removeAllRanges()
         selection?.addRange(start)
+        if (members.length > 1)
+          restoredSelectionGroup.current = {
+            native: start.cloneRange(),
+            members
+          }
         return start
       }
     }),

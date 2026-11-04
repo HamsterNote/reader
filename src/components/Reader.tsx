@@ -434,11 +434,10 @@ const documentHasPages = (
     return false
   }
 
-  if (Array.isArray((document as IntermediateDocumentSerialized).pages)) {
-    return (document as IntermediateDocumentSerialized).pages.length > 0
-  }
-
-  return (document as IntermediateDocument).pageCount > 0
+  // Runtime .pages is a loading getter, not metadata. Check pageCount first
+  // so mounting Reader does not extract and cache the entire document.
+  if ('pageCount' in document) return document.pageCount > 0
+  return document.pages.length > 0
 }
 
 interface UploadedFile {
@@ -1806,6 +1805,7 @@ export function Reader({
         return (
           <IntermediateDocumentTextViewer
             document={document}
+            pdfSource={engineSource}
             isEpub={isEpub}
             isPdf={isPdf}
             darkMode={darkMode}
