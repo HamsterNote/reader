@@ -1,5 +1,11 @@
-import { act, render } from '@testing-library/react'
-import { forwardRef, useImperativeHandle, type ComponentProps } from 'react'
+import { act, fireEvent, render } from '@testing-library/react'
+import {
+  createRef,
+  forwardRef,
+  useImperativeHandle,
+  type ComponentProps
+} from 'react'
+import type { ReaderReadingPositionHandle } from '../src/components/IntermediateDocumentViewer'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { EngineDocumentViewer } from '../src/components/EngineDocumentViewer'
 import type {
@@ -48,7 +54,8 @@ beforeEach(() => {
   pending = []
   state.api = {
     captureTextAnchor: () => null,
-    captureReadingPosition: () => (textReady ? position : null),
+    captureReadingPosition: () =>
+      textReady ? { status: 'ready', position } : { status: 'pending' },
     scrollToAnchor: vi.fn((target) => {
       position = target
       const navigation = deferred()
@@ -77,7 +84,7 @@ it.each(['complete', 'page', 'bookmark', 'failed'] as const)(
   'keeps progress publishable after initial restoration is %s',
   async (replacement) => {
     const onProgress = vi.fn()
-    render(
+    const view = render(
       <EngineDocumentViewer
         engineSource={source}
         layoutReadingProgress={saved}
@@ -106,6 +113,8 @@ it.each(['complete', 'page', 'bookmark', 'failed'] as const)(
     })
     if (replacement !== 'bookmark') expect(onProgress).not.toHaveBeenCalled()
 
+    fireEvent.wheel(view.container.querySelector('[data-engine="pdf"]')!)
+
     // The Page Browser replaces an unresolved text target before text geometry
     // exists. Once geometry arrives, scrolls AND later page seeks must persist.
     act(() => {
@@ -129,3 +138,117 @@ it.each(['complete', 'page', 'bookmark', 'failed'] as const)(
     })
   }
 )
+
+it.each(['page', 'bookmark'] as const)(
+  'captures the final ready position on close after a %s replaces initial restoration',
+  async (replacement) => {
+    const onProgress = vi.fn()
+    const ref = createRef<ReaderReadingPositionHandle>()
+    render(
+      <EngineDocumentViewer
+        engineSource={source}
+        layoutReadingProgress={saved}
+        readingPositionRef={ref}
+        onLayoutReadingProgressChange={onProgress}
+      />
+    )
+    let ready!: Promise<void>
+    act(() => {
+      ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+    })
+    await act(async () => {
+      if (replacement === 'page') state.browser!.onNavigateToPage(2)
+      else {
+        state.browser!.onNavigateToBookmark!({
+          pageNumber: 2,
+          verticalPercentage: 20
+        })
+        pending[1]!.resolve()
+        pending[0]!.resolve()
+      }
+      await ready
+    })
+    textReady = true
+    position = { pageNumber: 2, verticalPercentage: 42.83582089552239 }
+    act(() => ref.current!.captureAndPublish!()) // No scroll callback or debounce before close.
+    expect(onProgress).toHaveBeenLastCalledWith(position)
+    expect(ref.current!.captureReadingPosition!()).toEqual(position)
+  }
+)
+
+it('deduplicates a controlled echo but navigates an external replacement and captures the next position on close', async () => {
+  const onProgress = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  const props = {
+    engineSource: source,
+    readingPositionRef: ref,
+    onLayoutReadingProgressChange: onProgress
+  }
+  const view = render(
+    <EngineDocumentViewer {...props} layoutReadingProgress={saved} />
+  )
+  let ready!: Promise<void>
+  act(() => {
+    ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+  })
+  await act(async () => {
+    textReady = true
+    pending[0]!.resolve()
+    await ready
+  })
+  expect(onProgress).not.toHaveBeenCalled() // Initial restoration does not migrate storage.
+  const first = { pageNumber: 1, verticalPercentage: 40 }
+  fireEvent.wheel(view.container.querySelector('[data-engine="pdf"]')!)
+  position = first
+  act(() => state.pdf!.onReadingPositionChange!({ status: 'ready', position }))
+  view.rerender(
+    <EngineDocumentViewer {...props} layoutReadingProgress={{ ...first }} />
+  )
+  expect(pending).toHaveLength(1)
+  view.rerender(
+    <EngineDocumentViewer
+      {...props}
+      layoutReadingProgress={{ pageNumber: 1, verticalPercentage: 70 }}
+    />
+  )
+  expect(pending).toHaveLength(2)
+  await act(async () => pending[1]!.resolve())
+  expect(onProgress).toHaveBeenLastCalledWith({
+    pageNumber: 1,
+    verticalPercentage: 70
+  })
+  position = first
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).toHaveBeenLastCalledWith(first)
+})
+
+it('does not publish restored or fallback geometry before a real interaction, including close', async () => {
+  const onProgress = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  const view = render(
+    <EngineDocumentViewer
+      engineSource={source}
+      layoutReadingProgress={saved}
+      readingPositionRef={ref}
+      onLayoutReadingProgressChange={onProgress}
+    />
+  )
+  let ready!: Promise<void>
+  act(() => {
+    ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+  })
+  await act(async () => {
+    textReady = true
+    pending[0]!.resolve()
+    await ready
+  })
+  act(() => {
+    state.pdf!.onTextLayerReady!([1])
+    state.pdf!.onReadingPositionChange!({ status: 'ready', position })
+    ref.current!.captureAndPublish!()
+  })
+  expect(onProgress).not.toHaveBeenCalled()
+  fireEvent.wheel(view.container.querySelector('[data-engine="pdf"]')!)
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).toHaveBeenLastCalledWith(position)
+})

@@ -1,0 +1,874 @@
+{
+  "environment": "Linux headless Chromium automation plus Mac-operated iPhone 18 Pro / iOS 27.2 simulator running Release WKWebView; Android excluded by owner decision; no physical-device claim",
+  "pdfLayout": {
+    "environment": "Linux headless Chromium; actual PDF.js layout, no device claims",
+    "cases": [
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.046875
+      },
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.078125
+      },
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 39.98499624906226
+        },
+        "error": 0
+      },
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.97449362340586
+        },
+        "error": 2.2737367544323206e-13
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": -0.234375
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": 0.3125
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 40
+        },
+        "error": 0
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 98.23308270676692
+        },
+        "error": -0.10601503759380648
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.09375
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.234375
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 40.00375445841937
+        },
+        "error": 0
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.99136474563545
+        },
+        "error": -0.12051811526089296
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "rotation-new-display-box",
+        "percentage": 40
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "crop-new-display-box",
+        "percentage": 40
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.046875
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.078125
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 39.98499624906226
+        },
+        "error": 0
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.97449362340586
+        },
+        "error": 2.2737367544323206e-13
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.109375
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.140625
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 39.98499624906226
+        },
+        "error": 0
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 98.0120030007502
+        },
+        "error": 4.547473508864641e-13
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.09375
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.234375
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 40.00375445841937
+        },
+        "error": 0
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.99136474563545
+        },
+        "error": -0.12051811526089296
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "rotation-new-display-box",
+        "percentage": 40
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "crop-new-display-box",
+        "percentage": 40
+      }
+    ],
+    "sourceCommit": "418dc51"
+  },
+  "epubPagination": {
+    "cases": [
+      {
+        "width": 320,
+        "kind": "same-screen-reopen-and-reflow",
+        "before": {
+          "index": 1,
+          "page": 3,
+          "pages": 108,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "试",
+            "offset": 241
+          },
+          "range": true
+        },
+        "same": {
+          "index": 1,
+          "page": 3,
+          "pages": 108,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "试",
+            "offset": 241
+          },
+          "range": true
+        },
+        "wheelBlocked": true
+      },
+      {
+        "width": 1280,
+        "kind": "same-screen-reopen-and-reflow",
+        "before": {
+          "index": 1,
+          "page": 3,
+          "pages": 45,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "第",
+            "offset": 582
+          },
+          "range": true
+        },
+        "same": {
+          "index": 1,
+          "page": 3,
+          "pages": 45,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "第",
+            "offset": 582
+          },
+          "range": true
+        },
+        "wheelBlocked": true
+      },
+      {
+        "kind": "mixed-chapter-image-ratio-roundtrip",
+        "before": {
+          "index": 2,
+          "page": 2,
+          "pages": 10,
+          "progress": {
+            "pageNumber": 3,
+            "verticalPercentage": 12.5
+          },
+          "range": true
+        },
+        "after": {
+          "index": 2,
+          "page": 2,
+          "pages": 10,
+          "progress": {
+            "pageNumber": 3,
+            "verticalPercentage": 12.5
+          },
+          "range": true
+        }
+      },
+      {
+        "kind": "image-ratio-projected-after-reflow",
+        "percentage": 12.5,
+        "after": {
+          "index": 2,
+          "page": 2,
+          "pages": 16,
+          "progress": {
+            "pageNumber": 3,
+            "verticalPercentage": 12.5
+          },
+          "range": true
+        }
+      },
+      {
+        "kind": "fixed-layout-button-pages",
+        "passed": true
+      }
+    ],
+    "devices": "Linux headless Chromium; no physical iOS/Android WebView"
+  },
+  "pdfTextPagination": {
+    "cases": [
+      {
+        "width": 320,
+        "kind": "text-reopen-reflow-empty-buttons",
+        "offset": 858,
+        "transform": "translateX(-688px)",
+        "passed": true
+      },
+      {
+        "width": 960,
+        "kind": "text-reopen-reflow-empty-buttons",
+        "offset": 2746,
+        "transform": "translateX(-1968px)",
+        "passed": true
+      }
+    ],
+    "devices": "Linux headless Chromium; no physical iOS or Android WebView"
+  },
+  "pageRestrictions": {
+    "cases": [
+      {
+        "format": "pdf",
+        "hidden": [
+          2
+        ],
+        "range": {
+          "start": 2,
+          "end": 3
+        },
+        "displayedSourcePage": 3,
+        "turns": 0,
+        "passed": true
+      },
+      {
+        "format": "epub",
+        "hidden": [
+          2
+        ],
+        "range": {
+          "start": 2,
+          "end": 3
+        },
+        "displayedSourcePage": 3,
+        "turns": 0,
+        "passed": true
+      }
+    ]
+  },
+  "checks": {
+    "test:run": "105 files / 1429 tests passed at 4223f4b (initial 418dc51: 104 / 1419; c05b09a: 105 / 1426)",
+    "typecheck": "passed at 4223f4b",
+    "typecheck:host": "passed at c05b09a; not rerun for crop-only or documentation changes",
+    "lint": "full lint passed at 418dc51; changed-file ESLint passed at c05b09a and 4223f4b",
+    "build:all": "passed at 418dc51; not rerun for documentation closure",
+    "host:check": "passed at 418dc51; 4223f4b WebView build separately verified by Mac operator"
+  },
+  "pending": [],
+  "pdfLayoutCropRetest": {
+    "sourceCommit": "4223f4b",
+    "environment": "Linux headless Chromium; actual PDF.js layout, no device claims",
+    "totalPdfLayoutCasesPassed": 34,
+    "cases": [
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "crop-after-scroll-reopen",
+        "percentage": 42.83582089552239,
+        "saved": {
+          "layoutReadingProgress": {
+            "pageNumber": 2,
+            "verticalPercentage": 42.83714996592977
+          }
+        },
+        "error": 0.06717154232410394
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "crop-after-scroll-rotate",
+        "percentage": 42.83582089552239,
+        "saved": {
+          "layoutReadingProgress": {
+            "pageNumber": 2,
+            "verticalPercentage": 42.8604942253618
+          }
+        },
+        "error": 0.3736072426411283
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "crop-after-scroll-close-capture",
+        "percentage": 42.83582089552239,
+        "saved": {
+          "layoutReadingProgress": {
+            "pageNumber": 2,
+            "verticalPercentage": 42.83714996592977
+          }
+        },
+        "error": 0.06717154232410394
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "crop-after-scroll-reopen",
+        "percentage": 42.83582089552239,
+        "saved": {
+          "layoutReadingProgress": {
+            "pageNumber": 2,
+            "verticalPercentage": 42.83714996592977
+          }
+        },
+        "error": 0.06717154232410394
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "crop-after-scroll-rotate",
+        "percentage": 42.83582089552239,
+        "saved": {
+          "layoutReadingProgress": {
+            "pageNumber": 2,
+            "verticalPercentage": 42.8604942253618
+          }
+        },
+        "error": 0.3736072426411283
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "crop-after-scroll-close-capture",
+        "percentage": 42.83582089552239,
+        "saved": {
+          "layoutReadingProgress": {
+            "pageNumber": 2,
+            "verticalPercentage": 42.83714996592977
+          }
+        },
+        "error": 0.06717154232410394
+      }
+    ]
+  },
+  "iosSimulator": {
+    "date": "2026-11-04",
+    "device": "iPhone 18 Pro",
+    "os": "iOS 27.2",
+    "deviceType": "simulator",
+    "macOS": "27.2 arm64",
+    "xcode": "27.2",
+    "host": "reader/app Release WKWebView; existing native host, packaged ZIP replaced for retest",
+    "initial": {
+      "sourceCommit": "c05b09a",
+      "commentId": "01a1a533-431d-74d4-8d98-793eb9ae3797",
+      "reportAttachmentId": "01a1a533-2316-7bf3-bedd-beefd3b18bac",
+      "evidenceAttachmentId": "01a1a533-2cc1-7bf6-b32a-336e7fd361a1",
+      "cases": [
+        {
+          "case": "epub-first-chapter-reopen",
+          "offset": 294,
+          "sameLayoutBodyScreenshotsEqual": true,
+          "passed": true
+        },
+        {
+          "case": "epub-image-screen-reopen",
+          "verticalPercentage": 12.5,
+          "sameLayoutBodyScreenshotsEqual": true,
+          "passed": true
+        },
+        {
+          "case": "epub-font-size-and-orientation",
+          "offset": 294,
+          "anchorRemainsVisible": true,
+          "passed": true
+        },
+        {
+          "case": "epub-background-and-cross-book-reopen",
+          "offset": 294,
+          "sameProcessPid": 20697,
+          "passed": true
+        },
+        {
+          "case": "pdf-first-line-reopen-after-inertia-stops",
+          "offset": 1980,
+          "errorCssPx": 0,
+          "passed": true
+        },
+        {
+          "case": "pdf-blank40-and-near-end-reopen",
+          "verticalPercentages": [
+            40.029873,
+            90.067214
+          ],
+          "pageBoxDifferenceCssPx": 0,
+          "passed": true
+        },
+        {
+          "case": "pdf-device-orientation",
+          "errorCssPx": 0.7805,
+          "pdfInternalRotationTested": false,
+          "passed": true
+        },
+        {
+          "case": "pdf-text-font-background-reopen",
+          "offset": 2871,
+          "sameLayoutBodyScreenshotsEqual": true,
+          "passed": true
+        },
+        {
+          "case": "cross-book-and-pdf-layout-background",
+          "epubOffset": 294,
+          "pdfTextOffset": 2871,
+          "pdfLayoutOffset": 1980,
+          "fixedCropVerticalPercentage": 33.848018,
+          "crossWritesObserved": false,
+          "passed": true
+        },
+        {
+          "case": "new-pdf-crop-reopen-before-fix",
+          "beforePercentage": 42.83582089552239,
+          "afterPercentage": 45.14944944211628,
+          "errorCssPx": 28.849111547899042,
+          "passed": false,
+          "resolvedBy": "4223f4b retest below"
+        }
+      ]
+    },
+    "cropRetest": {
+      "head": "4223f4b",
+      "buildId": "248f8b40f34086a1",
+      "fileCount": 293,
+      "badHashes": [],
+      "zipSHA256": "9bf46f4cc91ab4bef1b62ce668da14ba933f91702287205ca8e9b9178115fae4",
+      "host": "Existing Release WKWebView host; replaced packaged ZIP only; no native rebuild",
+      "commentId": "01a1a552-18c1-7acf-b56a-f63c5957891e",
+      "evidenceAttachmentId": "01a1a552-168b-7d82-b275-9349e82d54b9",
+      "evidenceFile": "ham161-ios-4223f4b-evidence.zip",
+      "geometryFile": "evidence/final-geometry.json",
+      "originalPercentage": 42.83582089552239,
+      "bottomCropFrom": 0,
+      "bottomCropTo": 0.05124378204345703,
+      "errorBasis": "Original pre-crop percentage projected into current cropped display box, compared with viewport top; CSS pixels",
+      "toleranceCssPx": 2,
+      "cases": [
+        {
+          "case": "apply-exit-reopen",
+          "savedPercentage": 42.789722119357585,
+          "errorFromOriginalCssPx": 1.1808567138197077,
+          "passed": true
+        },
+        {
+          "case": "reopen-landscape-portrait",
+          "savedPercentage": 42.789722119357585,
+          "landscapeErrorFromOriginalCssPx": 1.6139619506046756,
+          "portraitErrorFromOriginalCssPx": 0.5866845479168887,
+          "passed": true
+        },
+        {
+          "case": "new-crop-exit-immediate-close-reopen",
+          "savedPercentage": 42.789722119357585,
+          "errorFromOriginalCssPx": 1.1808567138197077,
+          "passed": true
+        }
+      ],
+      "rawGeometry": [
+        {
+          "case": "final1-applied",
+          "referencePercentage": 42.83582089552239,
+          "savedPercentage": 42.83582089552239,
+          "bottomCrop": 0.05124378204345703,
+          "viewport": {
+            "x": 0,
+            "width": 402,
+            "y": 114,
+            "height": 725.7250366210938
+          },
+          "page": {
+            "height": 1341.340087890625,
+            "y": -430.54400634765625,
+            "width": 402,
+            "x": 0
+          },
+          "expectedPageTop": -431.13069089557314,
+          "errorCssPx": 0.5866845479168887,
+          "expectedFromOriginalPercentage": -431.13069089557314,
+          "errorFromOriginalCssPx": 0.5866845479168887
+        },
+        {
+          "case": "final1-reopen",
+          "referencePercentage": 42.83582089552239,
+          "savedPercentage": 42.789722119357585,
+          "bottomCrop": 0.05124378204345703,
+          "viewport": {
+            "y": 114,
+            "width": 402,
+            "x": 0,
+            "height": 725.7250366210938
+          },
+          "page": {
+            "height": 1340.339111328125,
+            "x": 0,
+            "y": -429.54302978515625,
+            "width": 402
+          },
+          "expectedPageTop": -430.72388649897596,
+          "errorCssPx": 1.1808567138197077,
+          "expectedFromOriginalPercentage": -430.72388649897596,
+          "errorFromOriginalCssPx": 1.1808567138197077
+        },
+        {
+          "case": "final2-landscape",
+          "referencePercentage": 42.789722119357585,
+          "savedPercentage": 42.789722119357585,
+          "bottomCrop": 0.05124378204345703,
+          "viewport": {
+            "y": 52,
+            "width": 750,
+            "x": 62,
+            "height": 329.3290100097656
+          },
+          "page": {
+            "width": 750,
+            "height": 2501.4990234375,
+            "y": -963.0140380859375,
+            "x": 62
+          },
+          "expectedPageTop": -963.5339319029852,
+          "errorCssPx": 0.5198938170476595,
+          "expectedFromOriginalPercentage": -964.6280000365422,
+          "errorFromOriginalCssPx": 1.6139619506046756
+        },
+        {
+          "case": "final2-portrait",
+          "referencePercentage": 42.789722119357585,
+          "savedPercentage": 42.789722119357585,
+          "bottomCrop": 0.05124378204345703,
+          "viewport": {
+            "width": 402,
+            "height": 725.7250366210938,
+            "x": 0,
+            "y": 114
+          },
+          "page": {
+            "height": 1341.340087890625,
+            "x": 0,
+            "width": 402,
+            "y": -430.54400634765625
+          },
+          "expectedPageTop": -430.5440356809702,
+          "errorCssPx": 2.9333313932511373e-05,
+          "expectedFromOriginalPercentage": -431.13069089557314,
+          "errorFromOriginalCssPx": 0.5866845479168887
+        },
+        {
+          "case": "final3-reopen",
+          "referencePercentage": 42.83582089552239,
+          "savedPercentage": 42.789722119357585,
+          "bottomCrop": 0.05124378204345703,
+          "viewport": {
+            "y": 114,
+            "width": 402,
+            "height": 725.7250366210938,
+            "x": 0
+          },
+          "page": {
+            "width": 402,
+            "height": 1340.339111328125,
+            "y": -429.54302978515625,
+            "x": 0
+          },
+          "expectedPageTop": -430.72388649897596,
+          "errorCssPx": 1.1808567138197077,
+          "expectedFromOriginalPercentage": -430.72388649897596,
+          "errorFromOriginalCssPx": 1.1808567138197077
+        }
+      ],
+      "timing": {
+        "exitCommandSeconds": 0.8438451670226641,
+        "returnCommandSeconds": 0.8322259580017999,
+        "noInterveningWaitOrCapture": true,
+        "provesSub100ms": false,
+        "interpretation": "Indirect exit-then-close evidence only; touch command took about 0.84 seconds, not a <100ms device proof"
+      },
+      "old4515PercentDriftObserved": false,
+      "otherInitialCasesRerun": false
+    }
+  },
+  "acceptanceScope": {
+    "tasks": {
+      "5.3": "completed within owner-approved scope",
+      "6.2": "completed within owner-approved scope"
+    },
+    "closureAuthorizationCommentId": "01a1a556-099d-7126-8db9-ee3bd12363c6",
+    "android": {
+      "status": "not tested by owner decision",
+      "ownerDecisionCommentId": "01a1a4f4-6ed3-7d3e-93c4-8f1801f319c1"
+    },
+    "sub100ms": {
+      "deterministicAutomation": "covered by existing progress/close tests",
+      "iosDeviceMeasurement": "not proven; exit-then-close indirect evidence, about 0.84s per touch command"
+    },
+    "archive": "Deferred to merge stage; openspec/specs and archive unchanged"
+  },
+  "reproduction": {
+    "workingDirectory": "reader repository root unless stated otherwise",
+    "implementation": [
+      "yarn test:run",
+      "yarn typecheck",
+      "yarn test:run test/pdf-viewer/pdf-document-viewer.test.tsx test/progress-close.test.tsx test/reading-progress.test.tsx test/review-progress-regression.test.tsx"
+    ],
+    "browser": [
+      "yarn build:webview",
+      "node scripts/check-reading-progress.mjs",
+      "READER_PROGRESS_WIDTH=320 READER_PROGRESS_SCALE=2 node scripts/check-reading-progress.mjs",
+      "node scripts/check-progress-epub.mjs",
+      "node scripts/check-progress-pdf-text.mjs",
+      "node scripts/check-progress-restrictions.mjs"
+    ],
+    "documentation": [
+      "openspec validate fix-reading-progress-persistence --strict",
+      "git diff --check"
+    ],
+    "ios": {
+      "setup": "Use 4223f4b or documentation-only successor, build WebView ZIP, load in reader/app Release WKWebView on iPhone 18 Pro / iOS 27.2 simulator; verify runtime build and hashes. Import progress-fixture.pdf and open page 2. Configure evidence scripts for local simulator UDID and tool paths; requires idb and MobileBuildMCP.",
+      "evidenceCommands": [
+        "multica attachment download 01a1a552-168b-7d82-b275-9349e82d54b9 -o ./ham161-ios-retest",
+        "unzip ./ham161-ios-retest/ham161-ios-4223f4b-evidence.zip -d ./ham161-ios-retest/run",
+        "cd ./ham161-ios-retest/run",
+        "python3 focused-qa.py final1",
+        "python3 focused-qa.py final2",
+        "python3 focused-qa.py final3"
+      ],
+      "manualCases": [
+        "Reset bottom crop to zero, scroll in editing to about 42.835821%, crop bottom 5.124378%, apply, exit editing, return and reopen",
+        "After crop and reopen, rotate landscape then portrait",
+        "Repeat new crop from zero, exit editing then immediately return without intervening wait/capture; reopen"
+      ],
+      "results": "Capture new AX page/viewport boxes, persisted snapshots, screenshots and command timing. Recompute geometry after deducting crop from page box; bundled final-geometry.json is historical, not regenerated by focused-qa.py."
+    },
+    "runScope": "Documentation closure ran only strict OpenSpec validation, JSON parsing and diff checks; implementation tests and device results retain their recorded execution commits."
+  },
+  "limitations": [
+    "Android not tested by owner decision; no physical iOS device claim.",
+    "iOS simulator <100ms exit not proven: exit command 0.843845167 seconds; only indirect exit-then-close evidence. Existing deterministic tests cover sub100ms close ordering.",
+    "Other nine initial iOS scenarios were not rerun at 4223f4b; their evidence remains c05b09a.",
+    "Device-side force kill, slow/failing storage injection, concurrent annotations and every zoom combination were not tested; retain existing automated evidence and last-confirmed-persistence guarantees.",
+    "Initial PDF first-line pass used stopped inertia; orientation tested device rotation, not the PDF internal rotation UI.",
+    "Original Linux WebKit unavailable due missing system libraries; simulator evidence came from independent Mac execution."
+  ]
+}

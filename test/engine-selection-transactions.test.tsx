@@ -88,6 +88,7 @@ beforeEach(() => {
     updateRangeEndpoint: vi.fn(() => serialized),
     serializeRange: vi.fn(() => serialized),
     captureTextAnchor: vi.fn(),
+    captureReadingPosition: vi.fn(() => ({ status: 'pending' })),
     nextPage: vi.fn(async () => true)
   } as unknown as EpubEngine
   mocks.factory.mockImplementation((value: EpubEngineOptions) => {

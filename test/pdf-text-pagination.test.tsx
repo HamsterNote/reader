@@ -391,7 +391,10 @@ describe('PDF Text actual fragments and navigation', () => {
       { initialProps: options }
     )
     await waitFor(() => expect(result.current.ready).toBe(true))
-    expect(onCommit.mock.lastCall?.[0]).toEqual({ currentPageNumber: 2 })
+    expect(onCommit.mock.lastCall?.[0]).toEqual({
+      currentPageNumber: 2,
+      verticalPercentage: 0
+    })
     expect(result.current.navigation).toEqual({
       busy: false,
       canPrevious: false,

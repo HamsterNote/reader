@@ -1,6 +1,7 @@
 import {
   useLayoutReadingProgressSave,
-  useTextReadingProgressSave
+  useTextReadingProgressSave,
+  useReadingProgressSaves
 } from '../src/components/Reader/useLayoutReadingProgressSave'
 import {
   act,
@@ -26,6 +27,49 @@ const highlightedPage: ReaderSelectionRange = {
   rectsBySelectionId: {},
   markerStyle: { backgroundColor: 'rgb(220, 38, 38)' }
 }
+
+it('bounds continuous movement, deduplicates complete positions and merges both pending modes with the latest edit', () => {
+  vi.useFakeTimers()
+  try {
+    const saved = vi.fn()
+    const initial = { bookmarks: [{ pageNumber: 1, verticalPercentage: 20 }] }
+    const { result, rerender, unmount } = renderHook(
+      ({ data }) => useReadingProgressSaves('A', data, saved),
+      { initialProps: { data: initial } }
+    )
+    act(() => {
+      for (let i = 0; i < 20; i++) {
+        result.current.layout({ pageNumber: 1, verticalPercentage: i })
+        vi.advanceTimersByTime(50)
+      }
+    })
+    expect(saved).toHaveBeenCalledTimes(1)
+    expect(
+      saved.mock.lastCall?.[0].layoutReadingProgress.verticalPercentage
+    ).toBe(19)
+    act(() => {
+      result.current.layout({ pageNumber: 1, verticalPercentage: 19 })
+      vi.advanceTimersByTime(200)
+    })
+    expect(saved).toHaveBeenCalledTimes(1)
+    act(() => {
+      result.current.layout({ pageNumber: 1, verticalPercentage: 40 })
+      result.current.text({ currentPageNumber: 2, verticalPercentage: 30 })
+    })
+    rerender({
+      data: { bookmarks: [{ pageNumber: 3, verticalPercentage: 70 }] }
+    })
+    act(() => result.current.flush()) // less than 100ms
+    expect(saved.mock.lastCall?.[0]).toEqual({
+      bookmarks: [{ pageNumber: 3, verticalPercentage: 70 }],
+      layoutReadingProgress: { pageNumber: 1, verticalPercentage: 40 },
+      textReadingProgress: { currentPageNumber: 2, verticalPercentage: 30 }
+    })
+    unmount()
+  } finally {
+    vi.useRealTimers()
+  }
+})
 
 describe('ReadingProgress', () => {
   it('commits a pointer seek only once on release', () => {
@@ -528,6 +572,33 @@ it('persists two PDF screens within one source page and flushes the final source
       textReadingProgress: at(200)
     })
     expect(JSON.stringify(onDataChange.mock.calls)).not.toContain('column')
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('ignores a late position callback from A after switching to B', () => {
+  vi.useFakeTimers()
+  try {
+    const a = vi.fn(),
+      b = vi.fn()
+    const { result, rerender, unmount } = renderHook(
+      ({ key, save }) => useReadingProgressSaves(key, {}, save),
+      { initialProps: { key: 'A', save: a } }
+    )
+    const old = result.current.layout
+    act(() => old({ pageNumber: 1, verticalPercentage: 40 }))
+    rerender({ key: 'B', save: b })
+    expect(a).toHaveBeenCalledWith({
+      layoutReadingProgress: { pageNumber: 1, verticalPercentage: 40 }
+    })
+    act(() => {
+      old({ pageNumber: 2, verticalPercentage: 60 })
+      vi.advanceTimersByTime(1000)
+    })
+    expect(b).not.toHaveBeenCalled()
+    expect(a).toHaveBeenCalledOnce()
+    unmount()
   } finally {
     vi.useRealTimers()
   }

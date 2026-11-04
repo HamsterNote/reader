@@ -47,7 +47,12 @@ export type BridgeCloseResult =
   | { readonly status: 'closed' }
   | { readonly status: 'unconfirmed'; readonly reason: string }
 
+export type BridgeFlushResult =
+  | { readonly status: 'flushed' }
+  | Extract<BridgeCloseResult, { status: 'unconfirmed' }>
+
 export type BridgeHostSession = {
+  readonly flush: (timeoutMs?: number) => Promise<BridgeFlushResult>
   /**
    * 处理一条来自 Web 层的原始消息，返回需要发回 Web 层的消息
    * （restore / ack / error），无任何输出时返回空数组。
@@ -101,7 +106,9 @@ export function createBridgeHostSession(
   let restoreSent = false
   let disposed = false
   // 关闭握手：closing 期间仍接收 Web 写入；webDrained 表示 Web 已冲干净。
+  let drainGeneration = 0
   let closing = false
+  let disposeAfterDrain = true
   let webDrained = false
   let closePromise: Promise<BridgeCloseResult> | null = null
   let settleClose: ((result: BridgeCloseResult) => void) | null = null
@@ -158,6 +165,7 @@ export function createBridgeHostSession(
   const abortClose = (reason: string): void => {
     if (!closing) return
     closing = false
+    drainGeneration++
     webDrained = false
     clearCloseTimer()
     options.send?.(
@@ -177,6 +185,7 @@ export function createBridgeHostSession(
    */
   const completeClose = async (): Promise<void> => {
     if (!closing || !webDrained) return
+    const generation = drainGeneration
     // ready 之后仍可能有排在后面的 change（同批投递）：队列直到稳定才 dispose。
     let observed: Promise<unknown> = asyncQueue
     let stable = false
@@ -185,11 +194,17 @@ export function createBridgeHostSession(
       stable = observed === asyncQueue
       observed = asyncQueue
     }
-    if (!closing) return
+    if (!closing || generation !== drainGeneration) return
     closing = false
-    disposed = true
+    disposed = disposeAfterDrain
     clearCloseTimer()
-    options.send?.(buildOutbound('dispose', {}))
+    options.send?.(
+      disposeAfterDrain
+        ? buildOutbound('dispose', {})
+        : buildOutbound<BridgeCommandPayload>('command', {
+            name: BRIDGE_COMMAND_RESUME
+          })
+    )
     const resolve = settleClose
     settleClose = null
     closePromise = null
@@ -424,29 +439,40 @@ export function createBridgeHostSession(
     return result
   }
 
-  const close = (timeoutMs = 5000): Promise<BridgeCloseResult> => {
+  const close = (
+    timeoutMs = 5000,
+    destroy = true
+  ): Promise<BridgeCloseResult> => {
     if (disposed) return Promise.resolve({ status: 'closed' })
-    if (closePromise !== null) return closePromise
+    if (closePromise !== null) {
+      if (destroy && !disposeAfterDrain)
+        return closePromise.then((result) =>
+          result.status === 'closed' ? close(timeoutMs) : result
+        )
+      return closePromise
+    }
     if (options.send === undefined) {
       return Promise.resolve({
         status: 'unconfirmed',
         reason: '宿主未提供关闭握手通道'
       })
     }
+    drainGeneration++
     closing = true
+    disposeAfterDrain = destroy
     webDrained = false
     const promise = new Promise<BridgeCloseResult>((resolve) => {
       settleClose = resolve
     })
     closePromise = promise
+    closeTimer = setTimeout(() => {
+      abortClose('关闭超时：仍有未确认写入未落盘')
+    }, timeoutMs)
     options.send(
       buildOutbound<BridgeCommandPayload>('command', {
         name: BRIDGE_COMMAND_FLUSH
       })
     )
-    closeTimer = setTimeout(() => {
-      abortClose('关闭超时：仍有未确认写入未落盘')
-    }, timeoutMs)
     return promise
   }
 
@@ -459,6 +485,10 @@ export function createBridgeHostSession(
       return [buildRestore()]
     },
     close,
+    flush: async (timeoutMs) => {
+      const result = await close(timeoutMs, false)
+      return result.status === 'closed' ? { status: 'flushed' } : result
+    },
     dispose: () => {
       if (settleClose !== null) abortClose('会话已关闭')
       disposed = true

@@ -465,3 +465,30 @@ describe('createWebBridgeClient input quiesce', () => {
     })
   })
 })
+
+it('cancels a late quiesce completion when the host resumes before starting another drain', async () => {
+  const sent: Record<string, unknown>[] = []
+  const pending: (() => void)[] = []
+  const bridge = createWebBridgeClient({
+    sessionId,
+    sourceToken,
+    post: (raw) => sent.push(JSON.parse(raw)),
+    onQuiesce: () => new Promise<void>((resolve) => pending.push(resolve))
+  })
+  bridge.start()
+  bridge.handleMessage(
+    hostMessage('restore', { data: null, progress: null, revision: 0 })
+  )
+  sent.length = 0
+  bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+  bridge.handleMessage(hostMessage('command', { name: 'resume' }))
+  bridge.handleMessage(hostMessage('command', { name: 'flush' }))
+  pending[0]()
+  await settle()
+  expect(sent).toEqual([])
+  pending[1]()
+  await settle()
+  expect(sent).toHaveLength(1)
+  expect(sent[0]).toMatchObject({ type: 'ready' })
+  bridge.dispose()
+})
