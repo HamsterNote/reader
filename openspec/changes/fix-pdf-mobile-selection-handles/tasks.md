@@ -23,3 +23,9 @@
 - [x] 4.1 扩展 `scripts/check-web-selection.mjs` 覆盖 PDF Layout 触摸选择/拖柄及 Layout/Text 预览换色，执行 `yarn check:web-selection` 并保存断言和截图；测试运行依赖缺失时先核对脚本依赖，不将无法启动算作通过。
 - [x] 4.2 执行 `yarn typecheck`、`yarn test:run`、`yarn build:webview`、`yarn verify:webview`，确保修改及共享组件回归通过；复查 PDF Text 不滚动/自动翻页、桌面鼠标选择与 EPUB 既有选择无回退。
 - [ ] 4.3 在 iOS 和 Android 真实 WebView 按 spec 场景分别验收长按后双端拖动、系统菜单抑制、底栏 A/B 换色、50%/100%/200% 缩放、滚动后/旋转裁切页命中、取消与切模式/切书、多指导航及无文字页；记录设备/系统、步骤与实际结果，失败项修复后重验，不能以桌面触摸模拟替代。
+
+## 5. 真机反馈的绘制和手柄修复
+
+- [x] 5.1 统一 PDF 草稿、原生选区及保存高亮的透明填充，关闭混色仍可读；修复跨 span 元素框/字体框越界和同行间隙，预览/序列化共用几何，不改写历史数据。
+- [x] 5.2 仅 PDF Layout 圆柄增加 2px 白边和整体阴影，圆点移到文字行外沿并同步修正拖动命中；Text 手柄默认样式保持原样。
+- [x] 5.3 保存同 fixture 修前/修后截图，补充不透明宿主色/禁混色/紧密多 span 回归；通过全量单测、类型检查、check:web-selection 与 WebView 重建/资源校验，并同步到现有验收服务。

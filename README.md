@@ -699,3 +699,5 @@ yarn host:android        # 或 macOS 上 yarn host:ios
 ### PDF selection preview colors
 
 PDF Layout and Text use the bottom toolbar's resolved highlight color (including alpha) for draft selection, preview and new highlights. A separate `selectionColor` does not override it for PDF; other formats retain their existing behavior. Changing the toolbar color preserves the active draft's endpoints. Editing a saved highlight preserves its ID, comments and saved color unless it is explicitly recolored. This interaction change requires no stored-data migration.
+
+PDF fills cap alpha at 0.35 (preserving lighter fills), including opaque colors passed by the host. Preview and saved overlays remain readable without `mix-blend-mode`. PDF Layout touch handles have a fixed 20px diameter, 2px white outline and shadow; their circles sit outside the start/end lines. Text mode handle styling is unchanged.

@@ -37,6 +37,8 @@ Layout 的 fixed portal 坐标取屏幕矩形，scale=1；Text 保留逆缩放�
 
 拖动采用 pointer capture 和 document 收尾监听。固定另一端，使用圆心相对抓取点偏移修正命中坐标，仅接受当前文档允许页 textLayer 内可映射的文字节点；拒绝空白/其他控件、反向交叉和失效节点。每次移动只更新受管范围及预览；pointerup 通过既有 onUpdate/emitRange 提交一次：草稿仅更新待确认状态，已有高亮保留 ID、颜色、评论并提交范围更新。沿用 generation token 阻止旧会话异步回写。
 
+真机复验修正：仅 PDF Layout 圆柄增加 2px 白边和覆盖圆点/竖线的 drop-shadow，fixed portal 保持 20px 屏幕直径。起点圆柄放在行上缘外、终点放在行下缘外；抓取点至文字行内中心的偏移用于命中和放大镜，不能继续以行下缘圆心减半行高推算。弹层预留圆柄空间。Text 共享圆柄的默认视觉与拖动逻辑保持原样。
+
 取消、失焦、多指、工具或会话切换、页面节点回收时释放捕获、清理监听/放大镜；仍在原会话则回滚原始范围，已换会话则丢弃旧预览。通过 PDF text mapping 和 serializer 保留 page-N、字符偏移与现有跨页/不连续分组语义，不能用全局 DOM 文本长度替代源字符偏移。端点不可见时隐藏对应手柄，不夹到视口边缘；不把不连续范围误合并为包含间隙的大范围。
 
 ### 3. PDF 预览颜色单一来源
@@ -44,6 +46,8 @@ Layout 的 fixed portal 坐标取屏幕矩形，scale=1；Text 保留逆缩放�
 Reader 对 PDF Layout/Text 将 resolvedHighlightColor 同时传给选择预览和新高亮；底栏及受控调用方保持既有解析顺序。PDF 的 selectionColor 即使显式传入不同颜色也不覆盖底栏色，非 PDF 调用保留原行为，在属性文档/发布说明中说明该行为变化。
 
 Layout 为受管选区叠层和桌面原生 ::selection 使用同一作用域颜色变量，保留 RGBA alpha；不连续分组继续按精确矩形渲染且禁止原生重复涂色。Text 为 HamsterSelection 传入统一后的 selectionColor/highlightColor。换色仅更新活动草稿/母版视觉，不清空范围，不重染历史标注。已存高亮的编辑仍使用保存颜色，显式改色走既有操作。
+
+真机复验修正：共用 PDF 填充解析，将不透明颜色转为 alpha 0.35，保留更低 alpha；历史颜色不改写，只统一显示填充。移除文字高亮叠层对混色的依赖，WKWebView 即使隔离混色背景也能读字。浏览器测量确认跨 span Range 含元素框与过大的字体框；只测量被选文本片段并裁到对应 PDF.js span，同行仅合并微小间隙，保持浮点坐标，不扩大行高、不跨列或不连续成员合并。预览、序列化共用此几何；历史标注可从 canonical 锚点实时重算显示，无法重算时回退保存矩形，无存储迁移。
 
 替代方案：固定黄色或仅靠全局 ::selection 无法覆盖两种选择叠层和活动换色；全局 CSS 还会影响 EPUB 和表单，故颜色仅限定 PDF 阅读根节点。
 

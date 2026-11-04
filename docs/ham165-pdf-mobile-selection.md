@@ -53,3 +53,34 @@ OpenSpec 4.3 保持未勾选，当前为 11/12；浏览器触摸模拟不能替�
 6. 普通触摸滚动、双指导航/缩放、链接点击和无文字扫描页。
 
 未进行真实 iOS/Android WebView 操作；旋转/裁切的低层几何已有测试通过，但本轮没有逐设备验证旋转/裁切页上的触摸拖柄。未新增拖到视口边缘自动滚动或翻页。
+
+## 2026-11-04 真机反馈修复
+
+针对遮字、白缝/行高越界、圆柄与背景混在一起及圆点压字四项反馈：
+
+- `src/pdf/pdfSelectionPaint.ts`：新增 PDF 填充与文字矩形共用逻辑。不透明颜色转 alpha 0.35，更低 alpha 保留；读取文本片段而非跨 span 元素框，并裁到 PDF.js span，同行微小间隙合并且不扩张行高。浏览器实测是文本/元素框混合及字体框超界，投影代码没有整数取整。
+- `src/components/Reader.tsx`、`src/pdf/PdfDocumentViewer.tsx`、`src/styles/pdf-viewer.scss`：PDF 两模式及原生选区颜色同源；草稿、已保存 SVG 使用相同透明填充，不再依赖 WKWebView 混色。
+- `src/pdf/pdfSelectionSerializer.ts`、`src/pdf/PdfPageOverlayLayer.tsx`：序列化与预览共用测量；历史标注从 canonical 锚点重算显示，保留保存数据和源范围，无法重算时回退已存矩形。
+- `src/components/EngineSelectionControls.tsx`：仅 PDF Layout 增加恒定 2px 白边、圆点/竖线整体阴影；20px 圆点在起点行上方、终点行下方，命中纠偏直接定位行内，弹层预留圆柄空间。共享 `RangeHandle.tsx` 及 Text 圆柄默认视觉没有改动。
+- `scripts/check-pdf-selection-paint.mjs`、`scripts/check-pdf-mobile-selection.mjs`、`scripts/check-web-selection.mjs`：增加不透明宿主色、禁用混色、紧密多 span、像素可读性、每行单一填充矩形与外沿圆柄断言，保留双端跨行/缩放及历史更新验证。
+- `test/pdf-viewer/pdf-selection-paint.test.ts`、`test/engine-selection-controls.test.tsx`、`test/reader.test.tsx`：颜色解析、透明度、片段裁切/合并、白边阴影与坐标纠偏，以及 PDF 两模式不透明输入回归。
+- `README.md`、本文件及 change 的 `design.md`、`specs/pdfjs-web-reader/spec.md`、`tasks.md`：补充行为与本轮验收记录。
+
+| 本轮命令 | 结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm run test:run` | 106 文件 / 1445 测试通过 |
+| `npm run test:run -- test/reader.test.tsx test/engine-selection-controls.test.tsx test/pdf-viewer/pdf-selection-paint.test.ts` | 最终补充断言及弹层间距后再次通过，3 文件 / 176 测试 |
+| `yarn build:webview` | 通过，build `e2ca721738d91f7d`，293 assets |
+| `yarn verify:webview` | 通过 |
+| `READER_BROWSER_URL=http://192.168.0.145:5199 yarn check:web-selection` | 8 组全部通过，使用现有服务，无新增常驻服务 |
+| `npx eslint src/pdf/pdfSelectionPaint.ts src/components/EngineSelectionControls.tsx src/pdf/PdfPageOverlayLayer.tsx src/pdf/PdfDocumentViewer.tsx test/pdf-viewer/pdf-selection-paint.test.ts` | 通过 |
+| `openspec validate fix-pdf-mobile-selection-handles --strict` | 通过 |
+
+扩大 ESLint 范围时，Reader 的既有 `renderDocumentContent` 超出认知复杂度阈值（20 > 15）；对 `9c451d2` 用 stdin 重跑确认同一问题已存在。Serializer 和旧触摸测试也有既有复杂度/嵌套条件提示。本次新增逻辑和上述核心文件的 ESLint 均通过，不将扩大范围检查描述为全仓通过。
+
+对比截图使用同一份三行多 span PDF、430×900 移动视口、2× DPR、Chromium CDP touch，并强制关闭混色。修前 `9c451d2` 草稿和已保存填充均为不透明 `#ffc107`；修后均为 `rgba(255, 193, 7, 0.35)`，预览文字像素可读，每行保存一个连续矩形，圆点在行外且有白边/阴影。截图是浏览器对照样例，不是原中文 PDF 的真机修后截图。原始真机附件仅作修前参考。
+
+现有 Web/Expo 服务实际运行于另一份干净 checkout；已将实现提交快进到该分支，未重启已有服务，并把重建的 `app/assets/webreader.zip` 与 manifest 同步到 Metro 使用的目录、校验 SHA-256 一致。上述 zip 被 gitignore，不能靠 push 自动更新，其他设备/checkout 仍需执行构建并重新加载宿主。
+
+OpenSpec 当前 14/15，仅 4.3 真机验收待办。请在 iOS WKWebView 和 Android WebView 复验原中文 PDF 的透明度、紧密行/混合字号/旋转裁切页几何、圆点是否碰到邻行、白边阴影缩放恒定、拖动放大镜和系统菜单抑制；浏览器结果不能替代这些设备结果。
