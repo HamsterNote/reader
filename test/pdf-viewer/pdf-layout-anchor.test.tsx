@@ -6,7 +6,12 @@ import type { PDFDocumentProxy } from '../../src/pdf/pdfjsRuntime'
 import type { PdfDocumentSource } from '../../src/pdf/pdfDocumentSession'
 import type { ReaderPageEdgeCrop } from '../../src/types/readerData'
 import { usePdfLayoutAnchor } from '../../src/pdf/usePdfLayoutAnchor'
+import type { PdfReadingPage } from '../../src/pdf/pdfReadingPosition'
 import { resizeObserverMock } from '../setup'
+import {
+  buildCanonicalPageText,
+  enhanceTextLayer
+} from '../../src/pdf/pdfTextMapping'
 
 const source: PdfDocumentSource = { url: 'first.pdf' }
 const crop: ReaderPageEdgeCrop = {
@@ -28,7 +33,10 @@ beforeEach(() => {
   })
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 const settle = () =>
   act(() => {
     for (let frame = 0; frame < 2; frame++) {
@@ -38,7 +46,7 @@ const settle = () =>
     }
   })
 
-function harness(rotated = false) {
+function harness(rotated = false, withText = false) {
   let lateOffset = 0
   let layout: Layout = {
     zoom: 1,
@@ -101,6 +109,34 @@ function harness(rotated = false) {
     } as unknown as PDFViewer
   }
   const onRestored = vi.fn()
+  const text = { current: new Map<number, PdfReadingPage>() }
+  const rowTop = () =>
+    pageViews[1]!.div.getBoundingClientRect().top + 190 * layout.zoom
+  if (withText) {
+    const pageDiv = pageViews[1]!.div
+    const span = document.createElement('span')
+    span.textContent = 'X'
+    pageDiv.append(span)
+    const bounds = () => new DOMRect(200, rowTop(), 10, 10 * layout.zoom)
+    span.getBoundingClientRect = bounds
+    const canonical = buildCanonicalPageText(2, [{ str: 'X' }])
+    enhanceTextLayer(pageDiv, canonical)
+    // Only this fixture creates text ranges; scanned fixtures have none.
+    vi.spyOn(span.ownerDocument, 'createRange').mockImplementation(
+      () =>
+        ({
+          setStart: () => undefined,
+          setEnd: () => undefined,
+          getClientRects: () => [bounds()]
+        }) as unknown as Range
+    )
+    text.current.set(2, {
+      pageNumber: 2,
+      canonical,
+      pageDiv,
+      textLayerDiv: pageDiv
+    })
+  }
   const view = renderHook(
     (next: Layout) => {
       const api = usePdfLayoutAnchor({
@@ -112,6 +148,7 @@ function harness(rotated = false) {
         document: documentRef,
         navigation,
         pages: pagesRef,
+        text,
         onRestored
       })
       useLayoutEffect(() => {
@@ -136,6 +173,7 @@ function harness(rotated = false) {
     navigation,
     onRestored,
     point,
+    rowTop,
     initial: layout,
     shiftPriorPage: (offset: number) => {
       lateOffset = offset
@@ -144,6 +182,37 @@ function harness(rotated = false) {
 }
 
 describe('PDF coordinates survive layout changes', () => {
+  it('keeps a visible text row when opening crop removes the viewport whitespace anchor', () => {
+    const view = harness(false, true)
+    const before = view.rowTop()
+    view.rerender({
+      ...view.initial,
+      crop: { all: { top: 0.6, bottom: 0.1 } },
+      zoom: 2
+    })
+    settle()
+    expect(view.rowTop()).toBeCloseTo(before, 6)
+    view.rerender(view.initial)
+    settle()
+    expect(view.rowTop()).toBeCloseTo(before, 6)
+  })
+
+  it('prefers visible text on the next page over the preceding blank tail, and keeps its offset through insets', () => {
+    const view = harness(false, true)
+    view.container.scrollTop = 280
+    const before = view.rowTop()
+    view.rerender({ ...view.initial, crop, zoom: 2 })
+    settle()
+    expect(view.rowTop()).toBeCloseTo(before, 6)
+    view.rerender({
+      ...view.initial,
+      crop,
+      zoom: 2,
+      insets: { top: 10, bottom: 20, horizontal: 0 }
+    })
+    settle()
+    expect(view.rowTop()).toBeCloseTo(before + 10, 6)
+  })
   it.each([false, true])(
     'preserves a non-page-start point through crop and fit scale (rotated=%s), without a text layer',
     (rotated) => {

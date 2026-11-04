@@ -437,6 +437,7 @@ export const PdfDocumentViewer = forwardRef<
     element: viewerElementRef,
     document: documentRef,
     pages: visiblePagesRef,
+    text: selectionContextsRef,
     navigation: pendingAnchor,
     crop: effectiveEdgeCrop,
     insets: props.readingInsets,

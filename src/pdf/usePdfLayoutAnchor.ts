@@ -6,6 +6,11 @@ import type { PdfDocumentSource } from './pdfDocumentSession'
 import type { ReaderPageEdgeCrop } from '../types/readerData'
 import { readingViewport } from '../components/reading/readingViewport'
 import {
+  firstVisiblePdfCharacterGeometry,
+  type PdfReadingPage,
+  type ReadingRect
+} from './pdfReadingPosition'
+import {
   getPageCropGeometry,
   resolvePageEdgeCrop
 } from '../components/IntermediateDocumentViewer/pageDisplay'
@@ -16,7 +21,8 @@ type LayoutAnchor = {
   // Content position is PDF user space, independent of crop, zoom and rotation.
   pdfPoint: number[]
   viewportX: number
-  viewportY: number
+  // Screen placement only; the content coordinate itself is always PDF space.
+  screenOffsetY: number
 }
 type Options = {
   source: PdfDocumentSource | null
@@ -25,6 +31,7 @@ type Options = {
   element: RefObject<HTMLDivElement | null>
   document: RefObject<PDFDocumentProxy | null>
   pages: RefObject<readonly number[]>
+  text?: RefObject<ReadonlyMap<number, PdfReadingPage>>
   navigation: RefObject<unknown>
   crop: ReaderPageEdgeCrop | undefined
   insets: Insets | undefined
@@ -43,6 +50,22 @@ function capture(options: Options): LayoutAnchor | null {
   const container = options.container.current
   const safe = container && safeViewport(container, options.insets)
   if (!viewer || !safe) return null
+  const contexts: PdfReadingPage[] = []
+  const clips = new Map<number, ReadingRect>()
+  const atPoint = (pageNumber: number, x: number, y: number): LayoutAnchor => {
+    const page = viewer.getPageView(pageNumber - 1)
+    const rect = page.div.getBoundingClientRect()
+    return {
+      pageNumber,
+      pdfPoint: page.viewport.convertToPdfPoint(
+        ((x - rect.left) / rect.width) * page.viewport.width,
+        ((y - rect.top) / rect.height) * page.viewport.height
+      ),
+      viewportX: (x - safe.left) / safe.width,
+      screenOffsetY: y - safe.top
+    }
+  }
+  let fallback: LayoutAnchor | null = null
   for (const pageNumber of options.pages.current) {
     const page = viewer.getPageView(pageNumber - 1)
     if (!page || page.div.style.display === 'none') continue
@@ -56,18 +79,26 @@ function capture(options: Options): LayoutAnchor | null {
     const left = Math.max(safe.left, rect.left + crop.left)
     const right = Math.min(safe.right, rect.right - crop.right)
     if (top >= bottom || left >= right) continue
-    const x = (left + right) / 2
-    return {
-      pageNumber,
-      pdfPoint: page.viewport.convertToPdfPoint(
-        ((x - rect.left) / rect.width) * page.viewport.width,
-        ((top - rect.top) / rect.height) * page.viewport.height
-      ),
-      viewportX: (x - safe.left) / safe.width,
-      viewportY: (top - safe.top) / safe.height
-    }
+    fallback ??= atPoint(pageNumber, (left + right) / 2, top)
+    clips.set(pageNumber, { top, bottom, left, right })
+    const context = options.text?.current.get(pageNumber)
+    if (context) contexts.push(context)
   }
-  return null
+  // A top-of-viewport whitespace point can be removed by the next crop even
+  // when the visible text survives. Anchor the actual first visible character,
+  // matching bookmark reading order, with geometry fallback for scanned pages.
+  const first = firstVisiblePdfCharacterGeometry(
+    contexts,
+    safe,
+    (context) => clips.get(context.pageNumber)!
+  )
+  if (!first) return fallback
+  const clip = clips.get(first.anchor.pageNumber)!
+  return atPoint(
+    first.anchor.pageNumber,
+    Math.max(clip.left, Math.min(clip.right, first.rect.left)),
+    Math.max(clip.top, first.rect.top)
+  )
 }
 
 function restore(options: Options, anchor: LayoutAnchor) {
@@ -96,7 +127,7 @@ function restore(options: Options, anchor: LayoutAnchor) {
   container.scrollTop +=
     rect.top +
     (y / page.viewport.height) * rect.height -
-    (safe.top + safe.height * anchor.viewportY)
+    (safe.top + anchor.screenOffsetY)
   container.scrollLeft +=
     rect.left +
     (x / page.viewport.width) * rect.width -

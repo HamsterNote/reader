@@ -19,7 +19,7 @@ PDF 样本、截图及测量报告输出到 `test-results/pdf-edge-crop/`。该�
 
 扣除裁切占位后，开关裁边会改变前面各页的高度；仅保留原有 scrollTop 会让第 2 页中部的参考内容偏移约 373px。适宽还会改变缩放，因此保存 CSS 页内偏移无法保持同一内容。
 
-`src/pdf/usePdfLayoutAnchor.ts` 在旧布局的 layout effect cleanup 中捕获第一张可见页及安全阅读区顶端的 PDF 用户坐标，经 `convertToPdfPoint` / `convertToViewportPoint` 转换，在新布局应用裁切后恢复。全局/单页裁切、编辑模式、上下及水平留白共用该路径；被裁掉的锚点夹到最近可见边界。过程中暂停发布中间阅读位置，避免进度回显抢占滚动。
+`src/pdf/usePdfLayoutAnchor.ts` 在旧布局的 layout effect cleanup 中优先捕获首个可见文字点的 PDF 用户坐标；无文字时捕获第一张可见页与阅读区相交的几何点。经 `convertToPdfPoint` / `convertToViewportPoint` 转换，在新布局应用裁切后恢复。全局/单页裁切、编辑模式、上下及水平留白共用该路径；被裁掉的锚点夹到最近可见边界。过程中暂停发布中间阅读位置，避免进度回显抢占滚动。
 
 PDF.js 异步 canvas 渲染还会通过 `--scale-round-x/y` 再次缩小页面尺寸，影响后续页面位置。因此除连续两帧恢复外，还观察 viewer 的尺寸变化并重新校正；用户滚动、跳页、书签、主动缩放和切换文档会取消恢复。容器禁用浏览器原生 overflow anchoring，避免重复补偿。
 
@@ -32,3 +32,13 @@ PDF.js 异步 canvas 渲染还会通过 `--scale-round-x/y` 再次缩小页面�
 加压验证可运行 `PDF_CROP_CYCLES=60 PDF_CROP_FRAMES=4 node scripts/check-pdf-edge-crop.mjs`；默认等待 12 帧，包含阅读进度的 100ms 防抖回显。
 
 最终加压结果：100% 和适宽各 60 轮开关，共 263 项浏览器检查通过，参考 PDF 点最大偏移 0.3125px，无页面错误。导航浏览器回归、106 个文件的 1425 项测试、类型检查、相关 ESLint 与库构建通过。
+
+## 稀疏文字页打开裁边
+
+`two-column.pdf` 暴露了仅锚定阅读区顶部几何点的问题：第 2 页只有靠近页首的一行文字，视口顶端可能位于这行之前的空白处。开启上裁 10% 后，空白锚点被裁掉并夹到裁后页首，但可见文字本身仍在裁切范围内；适宽从约 197% 变为 303% 后，该行从 y=60.5px 跳到 12.640625px。先前密集文字样本把参考点置于视口顶端，未覆盖这段空白。
+
+现在复用书签的首个可见字符查找，取得实际字符矩形并转换为 PDF 坐标，保留其相对安全阅读区顶部的屏幕距离（不使用页内 CSS 偏移作为内容坐标）。这也避免底部留白改变时按视口高度比例挪动文字。没有文字层的页面仍使用几何锚点。
+
+运行 `PDF_CROP_CYCLES=10 node scripts/check-pdf-crop-opening.mjs`：启动本地 Vite，通过 Demo 的上传/加载入口打开原始 `two-column.pdf`，在距滚动底部 0/100/200px 的三个位置各反复开关 10 轮，并检查真实顶部/底部留白输入。脚本直接比较可见文字行的 y，不以理论 viewport 点替代实际文字测量。截图和报告输出至 `test-results/pdf-crop-opening/`。
+
+文档顶部受 scrollTop 非负边界约束：若保持旧文字位置需要负滚动量，按裁后可见页首对齐，保持 scrollTop=0，不添加白色占位。原锚点或文字被裁掉时，也无法承诺它仍显示在原位置；脚本单独检查裁后页首对齐。
