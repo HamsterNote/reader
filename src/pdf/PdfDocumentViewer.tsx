@@ -1406,12 +1406,17 @@ export const PdfDocumentViewer = forwardRef<
             ) !== 0
           const changedEnd =
             range.compareBoundaryPoints(Range.END_TO_END, restored.native) !== 0
-          const member = changedEnd
+          const oldEnd = restored.native.cloneRange()
+          oldEnd.collapse(false)
+          const movedEnd =
+            changedEnd &&
+            range.compareBoundaryPoints(Range.START_TO_START, oldEnd) < 0
+          const member = movedEnd
             ? restored.members.at(-1)!
             : restored.members[0]!
           const detail =
             changedStart || changedEnd
-              ? serializeEndpoint(member, range, changedEnd)
+              ? serializeEndpoint(member, range, movedEnd)
               : null
           groupPreview.current = detail
             ? restored.members.map((item) =>

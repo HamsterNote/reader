@@ -33,7 +33,7 @@ export type SerializedPdfSelection = {
   }[]
   readonly start: { readonly selectionId: string; readonly offset: number }
   readonly end: { readonly selectionId: string; readonly offset: number }
-  /** 跨页按契约拼接：起点页选中后缀 + 终点页选中前缀（无分隔符）。 */
+  /** 跨页拼接：起点页后缀 + 中间已加载页全文 + 终点页前缀（无分隔符）。 */
   readonly text: string
   readonly rectsBySelectionId: Readonly<Record<string, ReaderSelectionRect[]>>
 }
@@ -102,7 +102,7 @@ const capturePageRects = (
 
 /**
  * 序列化跨页原生选区。选区任一端点不在已增强 text layer 内时返回 null。
- * 只覆盖 start/end 两页（契约不含中间页文本）。
+ * 连续拖动包含中间已加载页的文字与矩形，沿用 page-N/offset 格式。
  */
 export function serializePdfTextSelection(
   selection: Selection | Range,
@@ -141,28 +141,36 @@ export function serializePdfTextSelection(
 
   const startPage = start.context
   const endPage = end.context
-  const samePage = startPage.pageNumber === endPage.pageNumber
 
-  const text = samePage
-    ? startPage.canonical.text.slice(start.canonicalOffset, end.canonicalOffset)
-    : startPage.canonical.text.slice(start.canonicalOffset) +
-      endPage.canonical.text.slice(0, end.canonicalOffset)
-
+  const selectedPages = [...contexts.values()]
+    .filter(
+      (context) =>
+        context.pageNumber >= startPage.pageNumber &&
+        context.pageNumber <= endPage.pageNumber
+    )
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+  const text = selectedPages
+    .map((context) =>
+      context.canonical.text.slice(
+        context.pageNumber === startPage.pageNumber ? start.canonicalOffset : 0,
+        context.pageNumber === endPage.pageNumber
+          ? end.canonicalOffset
+          : undefined
+      )
+    )
+    .join('')
   const rectsBySelectionId: Record<string, ReaderSelectionRect[]> = {}
-  const startRects = capturePageRects(
-    startPage,
-    start.canonicalOffset,
-    samePage ? end.canonicalOffset : startPage.canonical.text.length,
-    unit
-  )
-  if (startRects.length > 0) {
-    rectsBySelectionId[pageSelectionId(startPage.pageNumber)] = startRects
-  }
-  if (!samePage) {
-    const endRects = capturePageRects(endPage, 0, end.canonicalOffset, unit)
-    if (endRects.length > 0) {
-      rectsBySelectionId[pageSelectionId(endPage.pageNumber)] = endRects
-    }
+  for (const context of selectedPages) {
+    const rects = capturePageRects(
+      context,
+      context.pageNumber === startPage.pageNumber ? start.canonicalOffset : 0,
+      context.pageNumber === endPage.pageNumber
+        ? end.canonicalOffset
+        : context.canonical.text.length,
+      unit
+    )
+    if (rects.length)
+      rectsBySelectionId[pageSelectionId(context.pageNumber)] = rects
   }
 
   return {
@@ -203,19 +211,23 @@ export function deriveRectsForCanonicalRange(
   if (!startContext || !endContext) return {}
 
   const rectsBySelectionId: Record<string, ReaderSelectionRect[]> = {}
-  const samePage = startPageNumber === endPageNumber
-  const startRects = capturePageRects(
-    startContext,
-    start.offset,
-    samePage ? end.offset : startContext.canonical.text.length,
-    unit
-  )
-  if (startRects.length > 0) {
-    rectsBySelectionId[start.selectionId] = startRects
+  for (const context of contexts.values()) {
+    if (
+      context.pageNumber < startPageNumber ||
+      context.pageNumber > endPageNumber
+    )
+      continue
+    const rects = capturePageRects(
+      context,
+      context.pageNumber === startPageNumber ? start.offset : 0,
+      context.pageNumber === endPageNumber
+        ? end.offset
+        : context.canonical.text.length,
+      unit
+    )
+    if (rects.length)
+      rectsBySelectionId[pageSelectionId(context.pageNumber)] = rects
   }
-  if (!samePage) {
-    const endRects = capturePageRects(endContext, 0, end.offset, unit)
-    if (endRects.length > 0) rectsBySelectionId[end.selectionId] = endRects
-  }
+
   return rectsBySelectionId
 }

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { pdfHighlightFill, pdfRangeClientRects } from '../pdf/pdfSelectionPaint'
+import { snapshotPdfRange } from '../pdf/pdfRangeRetention'
 import { PdfTouchSelectionHandle } from './PdfTouchSelectionHandle'
 import { useRangeMagnifier } from './IntermediateDocumentViewer/RangeMagnifier'
 import {
@@ -71,6 +72,9 @@ export function EngineSelectionControls({
   const magnifier = useRangeMagnifier()
   const latestRange = useRef(range)
   latestRange.current = range
+  const recovery = useRef<{ owner: Range; restore: () => boolean } | null>(null)
+  if (range && recovery.current?.owner !== range)
+    recovery.current = { owner: range, restore: snapshotPdfRange(range) }
   const [rects, setRects] = useState<DOMRect[]>([])
   const [dragging, setDragging] = useState(false)
   const previewRange = useRef<{ owner: Range; value: Range } | null>(null)
@@ -99,6 +103,8 @@ export function EngineSelectionControls({
     movingEnd: boolean
     original: Range
     current: Range
+    restoreOriginal: () => boolean
+    restoreCurrent: () => boolean
     valid: boolean
     element: HTMLButtonElement
     offsetX: number
@@ -127,10 +133,12 @@ export function EngineSelectionControls({
     if (!owner) return
     let scrollFrame = 0
     let scrollTime = 0
+    let scrollRemainder = 0
     const stopScroll = () => {
       cancelAnimationFrame(scrollFrame)
       scrollFrame = 0
       scrollTime = 0
+      scrollRemainder = 0
     }
     const replayRelease = (event?: PointerEvent) => {
       if (pdfTouch && event?.type === 'pointerup') move(event)
@@ -189,7 +197,33 @@ export function EngineSelectionControls({
       }
     }
     cancelDrag.current = () => finish()
+    const publish = (
+      active: NonNullable<typeof drag.current>,
+      next: Range,
+      doc: Document
+    ) => {
+      if (pdfTouch) {
+        previewRange.current = { owner: range!, value: next }
+        setRects(rangeViewportRects(next, true))
+        callbacks.current.onPreview?.(next)
+        const point = magnifierPoint(next, active.movingEnd)
+        if (point)
+          callbacks.current.magnifier?.move(point, {
+            range: next,
+            end: active.movingEnd,
+            color
+          })
+      } else {
+        const selection = doc.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(next)
+      }
+    }
     const update = (active: NonNullable<typeof drag.current>) => {
+      if (pdfTouch) {
+        active.restoreOriginal()
+        active.restoreCurrent()
+      }
       const clientX = active.clientX + active.offsetX
       const clientY = active.clientY + active.offsetY
       if (!pdfTouch) callbacks.current.magnifier?.move({ clientX, clientY })
@@ -238,22 +272,8 @@ export function EngineSelectionControls({
       }
       active.valid = true
       active.current = next
-      if (pdfTouch) {
-        previewRange.current = { owner: range!, value: next }
-        setRects(rangeViewportRects(next, true))
-        callbacks.current.onPreview?.(next)
-        const point = magnifierPoint(next, active.movingEnd)
-        if (point)
-          callbacks.current.magnifier?.move(point, {
-            range: next,
-            end: active.movingEnd,
-            color
-          })
-      } else {
-        const selection = doc.getSelection()
-        selection?.removeAllRanges()
-        selection?.addRange(next)
-      }
+      active.restoreCurrent = snapshotPdfRange(next)
+      publish(active, next, doc)
     }
     const autoScroll = (time: number) => {
       scrollFrame = 0
@@ -275,7 +295,12 @@ export function EngineSelectionControls({
       )
       const dt = scrollTime ? Math.min(32, time - scrollTime) : 16
       scrollTime = time
-      if (velocity) scroller.scrollTop += (velocity * dt) / 1000
+      // Some WebViews round each scrollTop assignment to whole CSS pixels.
+      // Accumulate fractions so the slow end of the edge band still moves.
+      scrollRemainder = velocity ? scrollRemainder + (velocity * dt) / 1000 : 0
+      const pixels = Math.trunc(scrollRemainder)
+      scroller.scrollTop += pixels
+      scrollRemainder -= pixels
       // Hit-test after scrolling even when the finger hasn't moved, including
       // after PDF.js has asynchronously materialized the next text layer.
       update(active)
@@ -331,6 +356,11 @@ export function EngineSelectionControls({
     }
     let frame = 0
     const sync = () => {
+      if (pdfTouch) {
+        recovery.current?.restore()
+        drag.current?.restoreOriginal()
+        drag.current?.restoreCurrent()
+      }
       if (
         drag.current &&
         (range.startContainer.nodeType !== Node.TEXT_NODE ||
@@ -457,11 +487,12 @@ export function EngineSelectionControls({
               : showStart && visible(rects[0])
           })
           .map((physicalEnd) => {
-            const end = drag.current
-              ? drag.current.end === physicalEnd
-                ? drag.current.movingEnd
-                : !drag.current.movingEnd
-              : physicalEnd
+            let end = physicalEnd
+            if (drag.current)
+              end =
+                drag.current.end === physicalEnd
+                  ? drag.current.movingEnd
+                  : !drag.current.movingEnd
             const type = end ? 'end' : 'start'
             const endpoint = end ? rects.at(-1)! : rects[0]
             const pdfHandleY = end ? endpoint.bottom + 10 : endpoint.top - 10
@@ -497,12 +528,16 @@ export function EngineSelectionControls({
                   if (!currentEndpoint) return
                   event.currentTarget.setPointerCapture(event.pointerId)
                   const circle = event.currentTarget.getBoundingClientRect()
+                  const original = current.cloneRange()
+                  const initial = current.cloneRange()
                   drag.current = {
                     pointer: event.pointerId,
                     end,
                     movingEnd: end,
-                    original: current.cloneRange(),
-                    current: current.cloneRange(),
+                    original,
+                    current: initial,
+                    restoreOriginal: snapshotPdfRange(original),
+                    restoreCurrent: snapshotPdfRange(initial),
                     valid: true,
                     clientX: event.clientX,
                     clientY: event.clientY,

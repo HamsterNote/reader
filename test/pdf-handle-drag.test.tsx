@@ -135,7 +135,8 @@ it.each(['pointerup', 'pointercancel'] as const)(
       tick(32)
       expect(scroller.scrollTop).toBeGreaterThan(10)
       expect(hitTest.mock.calls.length).toBeGreaterThan(before)
-      const finish = release === 'pointerup' ? fireEvent.pointerUp : fireEvent.pointerCancel
+      const finish =
+        release === 'pointerup' ? fireEvent.pointerUp : fireEvent.pointerCancel
       finish(document, { pointerId: 1, clientX: 110, clientY: 399 })
       const stopped = scroller.scrollTop
       tick(48)

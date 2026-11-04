@@ -190,6 +190,32 @@ describe('serializePdfTextSelection', () => {
     expect(rect.height).toBeCloseTo(12, 6)
   })
 
+  it('连续跨三页选择保留中间页全文和矩形', () => {
+    const pages = [1, 2, 3].map((pageNumber) =>
+      makePageContext({
+        pageNumber,
+        itemTexts: [`Page ${pageNumber} content`],
+        width: 400,
+        height: 300,
+        spanRects: [{ x: 20, y: 40, width: 180, height: 12 }]
+      })
+    )
+    const range = document.createRange()
+    range.setStart(pages[0].textLayerDiv.firstChild!.firstChild!, 5)
+    range.setEnd(pages[2].textLayerDiv.firstChild!.firstChild!, 6)
+    const detail = serializePdfTextSelection(
+      range,
+      new Map(pages.map((p) => [p.pageNumber, p])),
+      'percent'
+    )!
+    expect(detail.text).toBe('1 contentPage 2 contentPage 3')
+    expect(Object.keys(detail.rectsBySelectionId)).toEqual([
+      'page-1',
+      'page-2',
+      'page-3'
+    ])
+  })
+
   it('跨页选区：文本为起点页后缀 + 终点页前缀的直接拼接', () => {
     const page1 = makePageContext({
       pageNumber: 1,

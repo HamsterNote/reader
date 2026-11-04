@@ -19,7 +19,7 @@
 - **THEN** 可见手柄对应真实源文字端点、圆形视觉直径保持一致，离屏端点不在视口边缘生成替代手柄；命中与保存沿用原页字符锚点，重开恢复相同文字范围
 
 #### Scenario: Cancel or invalidate a drag
-- **WHEN** 拖动中发生 pointercancel、失焦、第二根手指加入、切工具/模式/文档、页面回收，或释放点无有效文字命中、端点越过另一端
+- **WHEN** 拖动中发生 pointercancel、失焦、第二根手指加入、切工具/模式/文档、页面回收，或释放点无有效文字命中
 - **THEN** 不提交本次范围变更；会话仍有效时恢复拖动前选区，会话已替换时清理旧预览和手柄；已保存标注不受影响，无遗留捕获或监听阻挡后续交互
 
 #### Scenario: Empty content and normal navigation
@@ -61,3 +61,23 @@
 #### Scenario: PDF handle contrast and line placement
 - **WHEN** 用户在 PDF Layout 的 50%、100%、200% 缩放下选择文字并拖动起止圆柄
 - **THEN** 20px 圆柄有恒定 2px 白边，圆点与竖线有整体阴影；起点圆点在行上缘外、终点在下缘外，命中按行内位置纠偏，PDF Text 圆柄视觉不随之改变
+
+### Requirement: PDF magnifier and continuous touch selection
+
+PDF Layout 镜片 MUST 位于自定义手柄之上且只显示文字与高亮色插入竖线，跨页与滚动后仍对应当前源端点。手柄竖线 MUST 绘制在圆点后方，白圈完整。拖动 MUST 允许越过固定端并交换起止角色；活动选择 SHALL 在正常滚动后保留。手指接近阅读器顶部/底部 MUST 启动按距离加速的自动滚动，每帧用当前手指位置更新端点，释放/取消时立即停止；Text 与 EPUB 既有行为保持不变。
+
+#### Scenario: Cross a page with a text-only lens
+- **WHEN** 用户拖动 PDF 手柄跨页或在页间隙取景
+- **THEN** 镜片读取当前位置文字层，排除所有高亮与手柄，当前字符端点显示高亮色竖线；镜片与圆柄不发生层级反转
+
+#### Scenario: Reverse an endpoint across its anchor
+- **WHEN** PDF 起点拖过终点或终点拖过起点，随后再拖回来并释放
+- **THEN** 保留固定字符端点，起止角色随移动端交换，预览和最终保存范围一致，不丢失捕获
+
+#### Scenario: Accelerate scrolling at the viewport edge
+- **WHEN** 用户保持手指在阅读容器上下边缘，并逐渐接近边缘
+- **THEN** 滚动速度随距离缩短增大，手指静止时仍更新跨页范围；松手或取消立即停止，普通滚动不清除活动选区，原生 Selection 仍为空
+
+#### Scenario: Continue beyond the PDF.js page cache
+- **WHEN** 选择从第 1 页持续拖动到第 12 页，PDF.js 已回收起始页画布和文字层
+- **THEN** 适配层保留并恢复当前会话需要的文字层及真实字符端点，拖动不中断，确认结果包含中间页文字与矩形；清除会话后释放保留文字并恢复重建的 PDF.js 文字层，不阻止画布缓存回收

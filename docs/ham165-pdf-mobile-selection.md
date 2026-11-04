@@ -122,3 +122,31 @@ OpenSpec 当前 14/15，仅 4.3 真机验收待办。请在 iOS WKWebView 和 An
 附件中的 49% 普通截图为真实 CDP 触摸浏览器结果；另一张用紫色虚线临时标出 40×40 命中层，仅用于验收说明，生产 UI 没有这些框。原始 iPhone 图仅为修前参考。当前运行环境无可操作的 iPhone/Android 截图通道，未取得修后真机截图，不能据此宣称 iOS 蓝色系统手柄已通过真机验收。
 
 现有 Vite/Metro checkout 已快进到新实现并实际重建资源包，服务未重启。真机需彻底退出 App 再打开新包，复验原 PDF 49% 下连续拖动、松手/复制后无蓝柄、圆外热区抓取及正文滚动/长按，以及系统菜单、放大镜和切书取消。
+
+## 第二轮：镜片、反选与连续跨页
+
+- `RangeMagnifier.tsx`、新增 `pdfMagnifierText.ts`、`reader.scss`：PDF 镜片改为 body 下的 fixed portal，z-index 10002 高于手柄 10001；克隆当前位置文字层而非抓取起始页快照，仅显示文字及 2px 高亮色插入竖线，跨页和滚动时实时更新。Text/EPUB 保留原镜片路径。
+- `PdfTouchSelectionHandle.tsx`：竖线与圆点使用前后独立元素，整体阴影，圆点覆盖竖线接头，2px 白圈完整。40px 命中层和20px视觉不变。
+- `EngineSelectionControls.tsx`、新增 `selection/pdfHandleDrag.ts`：固定字符端点，拖过另一端交换角色，保留捕获按钮身份；指针静止也由 rAF 持续命中。边缘带按距离平方加速、最大600屏幕px/s，以时间增量累计小数滚动量，松手/取消停止。
+- `EngineDocumentViewer.tsx`、`PdfDocumentViewer.tsx`：触摸空白点击延迟到未移动的松手判断，普通滑动不清除选区；已保存范围反选仍保留原 ID/颜色。
+- `pdfTouchSelection.ts`、新增 `pdfRangeRetention.ts`：scroll 只取消候选长按，手柄拖动期间保护候选；从独立节点/offset 快照恢复被 PDF.js 回收的 Range。仅保留会话涉及的文字层，不保留画布或操作 PDF.js 私有缓存；重复重建层在会话内隐藏，清除时释放保留层并恢复原层。
+- `pdfSelectionSerializer.ts`：连续跨页包含中间已加载页文字和矩形，page-N/offset 格式不变。
+- 新增 `check-pdf-continuous-selection.mjs`（可独立运行并接入完整浏览器检查）、`pdf-handle-drag.test.tsx`、`pdf-magnifier-text.test.tsx`、`pdf-range-retention.test.ts`；扩展现有控件/序列化测试与颜色绘制脚本。
+
+中断时未提交的五个源文件全部保留并收尾：控件增加小数滚动累积、Range 恢复及 lint 拆分；镜片提取 portalHost；viewer 修正已存范围交叉的预览端点；serializer 补中间页；触摸命中拆分可维护的几何助手并接入文字保留。新增代码和回归集中在第三个提交，前两个镜片/选择语义提交保持。
+
+| 最终验证命令 | 实际结果 |
+| --- | --- |
+| `npm run typecheck` | 通过 |
+| `npm run test:run` | 110 文件 / 1457 测试通过 |
+| 本轮核心源文件及新增测试 `npx eslint` | 通过 |
+| `READER_BROWSER_URL=http://192.168.0.145:5199 yarn check:web-selection` | 9 组通过；59 个原生 Range 检查点为0，19次40px热区抓取通过，含49%/50%/100%/200%真实缩放、桌面、滚动、Text/EPUB回归 |
+| `READER_BROWSER_URL=http://192.168.0.145:5199 READER_CONTINUOUS_TARGET_PAGE=12 node scripts/check-pdf-continuous-selection.mjs` | 独立压力检查通过：第1页到第12页，实际恢复3个回收文字层；反选再拖回及已保存起点越过终点均通过，后者保留ID |
+| `yarn build:webview` / `yarn verify:webview` | 开发和服务checkout通过，build `58bbc073be62fe81`，293 assets |
+| `openspec validate fix-pdf-mobile-selection-handles --strict` | 通过；20/21，4.3仍为真机验收 |
+
+12页压力检查的名义250ms采样窗口：远离边缘缓速5px，贴边151px；上缘450ms滚动-288px。松手/取消后250ms滚动不再变化；原生Range及应用addRange为0。镜片DOM确认位于BODY、fixed、z-index10002、无高亮/手柄、标记宽2px，截图展示第2页文字。完整9组检查另有独立速度采样，受浏览器调度影响数值不完全相同。
+
+Metro `/assets/assets/webreader.zip?platform=ios` 实测从16,193,907字节更新为16,196,477字节；GET返回内容与服务目录zip逐字节一致。无需重启Vite/Metro，App需彻底退出后重新打开。
+
+这些截图均为Chromium CDP touch，不能证明iOS WKWebView的系统UI或真实设备层叠合成已验收。请真机复验原中文PDF49%的镜片层级/文字/竖线、白圈、反选、跨页上下边缘滚动和蓝柄抑制；旋转裁切、混合字体、长文档内存及后台切换也仍需设备覆盖。当前尺寸/页树改变会安全取消会话；保留文字DOM随会话页数增长，清除/换书后释放。既有构建大包体/PDF.js路径提示及React act/字体警告仍保留。

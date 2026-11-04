@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { createWordRangeFromCaret } from '../components/selection/wordRange'
+import { PdfRangeRetention, snapshotPdfRange } from './pdfRangeRetention'
 
 /** Clear only this reader's native text selection, never another reader/editor. */
 export function clearPdfNativeSelection(root: HTMLElement): void {
@@ -23,7 +24,74 @@ export function clearPdfNativeSelection(root: HTMLElement): void {
   }
 }
 
-/** Only accept real glyph hits in this viewer's enhanced, visible text layers. */
+const glyphDistance = (rect: DOMRect, x: number, y: number) => {
+  const dx = Math.max(rect.left - x, 0, x - rect.right)
+  const dy = Math.max(rect.top - y, 0, y - rect.bottom)
+  return dx * dx + dy * dy * 4
+}
+
+function nearestPdfSpan(root: HTMLElement, x: number, y: number) {
+  const bounds = root.getBoundingClientRect()
+  let distance = Infinity
+  let span: HTMLElement | null = null
+  for (const candidate of root.querySelectorAll<HTMLElement>(
+    '.page .textLayer [data-selection-start-offset]'
+  )) {
+    const box = candidate.getBoundingClientRect()
+    const visible =
+      box.width &&
+      box.height &&
+      box.bottom > Math.max(0, bounds.top) &&
+      box.top < Math.min(innerHeight, bounds.bottom) &&
+      box.right >= bounds.left &&
+      box.left <= bounds.right
+    if (!visible) continue
+    const next = glyphDistance(box, x, y)
+    if (next < distance) {
+      distance = next
+      span = candidate
+    }
+  }
+  return span
+}
+
+function* glyphRects(span: HTMLElement) {
+  const doc = span.ownerDocument
+  const walker = doc.createTreeWalker(span, NodeFilter.SHOW_TEXT)
+  let text: Node | null
+  while ((text = walker.nextNode())) {
+    for (let i = 0; i < (text.textContent?.length ?? 0); i++) {
+      const range = doc.createRange()
+      range.setStart(text, i)
+      range.setEnd(text, i + 1)
+      for (const rect of Array.from(range.getClientRects()))
+        yield { range, rect }
+    }
+  }
+}
+
+function geometryCaret(
+  span: HTMLElement,
+  x: number,
+  y: number,
+  nearest: boolean
+) {
+  let closest: Range | null = null
+  let distance = Infinity
+  for (const { range, rect } of glyphRects(span)) {
+    const next = glyphDistance(rect, x, y)
+    if (!nearest && next > 0) continue
+    if (next < distance) {
+      distance = next
+      closest = range.cloneRange()
+      closest.collapse(x < rect.left + rect.width / 2)
+    }
+    if (!next) return closest
+  }
+  return closest
+}
+
+/** Long presses require a real hit; active handles may seek nearby visible text. */
 export function pdfCaretAtPoint(
   root: HTMLElement,
   x: number,
@@ -38,34 +106,9 @@ export function pdfCaretAtPoint(
         root.contains(element) &&
         element.closest('.textLayer [data-selection-start-offset]')
     )
-  let span = hit?.closest<HTMLElement>(
-    '.textLayer [data-selection-start-offset]'
-  )
-  if (!span && nearest) {
-    const bounds = root.getBoundingClientRect()
-    let distance = Infinity
-    for (const candidate of root.querySelectorAll<HTMLElement>(
-      '.page .textLayer [data-selection-start-offset]'
-    )) {
-      const box = candidate.getBoundingClientRect()
-      if (
-        !box.width ||
-        !box.height ||
-        box.bottom <= Math.max(0, bounds.top) ||
-        box.top >= Math.min(innerHeight, bounds.bottom) ||
-        box.right < bounds.left ||
-        box.left > bounds.right
-      )
-        continue
-      const dx = Math.max(box.left - x, 0, x - box.right)
-      const dy = Math.max(box.top - y, 0, y - box.bottom)
-      const next = dx * dx + dy * dy * 4
-      if (next < distance) {
-        distance = next
-        span = candidate
-      }
-    }
-  }
+  const span =
+    hit?.closest<HTMLElement>('.textLayer [data-selection-start-offset]') ??
+    (nearest ? nearestPdfSpan(root, x, y) : null)
   if (!span || !root.contains(span)) return null
   const page = span.closest<HTMLElement>('.page')
   if (!page || page.style.display === 'none') return null
@@ -90,42 +133,9 @@ export function pdfCaretAtPoint(
     caret.collapse(true)
     return caret
   }
-  // WebKit may exclude user-select:none nodes from its caret API. Read glyph
-  // geometry instead; do not briefly enable native selection to obtain a hit.
-  const walker = doc.createTreeWalker(span, NodeFilter.SHOW_TEXT)
-  let closest: Range | null = null
-  let distance = Infinity
-  let text: Node | null
-  while ((text = walker.nextNode())) {
-    const value = text.textContent ?? ''
-    for (let i = 0; i < value.length; i++) {
-      const character = doc.createRange()
-      character.setStart(text, i)
-      character.setEnd(text, i + 1)
-      for (const rect of Array.from(character.getClientRects())) {
-        if (nearest) {
-          const dx = Math.max(rect.left - x, 0, x - rect.right)
-          const dy = Math.max(rect.top - y, 0, y - rect.bottom)
-          const next = dx * dx + dy * dy * 4
-          if (next < distance) {
-            distance = next
-            closest = character.cloneRange()
-            closest.collapse(x < rect.left + rect.width / 2)
-          }
-        }
-        if (
-          x >= rect.left &&
-          x <= rect.right &&
-          y >= rect.top &&
-          y <= rect.bottom
-        ) {
-          character.collapse(x < rect.left + rect.width / 2)
-          return character
-        }
-      }
-    }
-  }
-  return closest
+  // WebKit excludes user-select:none nodes from its caret API. Never briefly
+  // enable native selection to obtain a hit.
+  return geometryCaret(span, x, y, nearest)
 }
 
 export function usePdfTouchSelection({
@@ -142,6 +152,8 @@ export function usePdfTouchSelection({
   onChange: () => void
 }) {
   const managed = useRef<Range | null>(null)
+  const retention = useRef(new PdfRangeRetention())
+  const recoverRange = useRef<(() => boolean) | null>(null)
   const [touch, setTouch] = useState(false)
   const latest = useRef({ validate, onChange })
   latest.current = { validate, onChange }
@@ -153,9 +165,15 @@ export function usePdfTouchSelection({
     clearPdfNativeSelection(root)
   }
   const setRange = (range: Range | null, notify = false) => {
+    if (!range) retention.current.clear()
+    else if (notify) retention.current.restrictTo(range)
     // Independent of any visible Selection, which WebKit may collapse later.
     managed.current = range?.cloneRange() ?? null
+    recoverRange.current = managed.current
+      ? snapshotPdfRange(managed.current)
+      : null
     const root = rootRef.current
+    if (root && managed.current) retention.current.track(root, managed.current)
     if (root?.dataset.pdfTouchSelection) clearPdfNativeSelection(root)
     if (notify) latest.current.onChange()
   }
@@ -282,8 +300,8 @@ export function usePdfTouchSelection({
     const observer = new MutationObserver(() => {
       if (
         managed.current &&
-        (!managed.current.startContainer.isConnected ||
-          !managed.current.endContainer.isConnected ||
+        (!retention.current.restore(root) ||
+          !recoverRange.current?.() ||
           !latest.current.validate(managed.current))
       )
         setRange(null, true)

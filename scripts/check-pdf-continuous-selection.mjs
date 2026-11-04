@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { PDFDocument } from 'pdf-lib'
 
 export async function checkPdfContinuousSelection({ browser, base, output }) {
+  const targetPage = Number(process.env.READER_CONTINUOUS_TARGET_PAGE ?? 3)
   const page = await browser.newPage({
     viewport: { width: 430, height: 900 },
     isMobile: true,
@@ -51,6 +54,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     await touch('touchStart', point)
     await page.waitForTimeout(570)
     await touch('touchEnd')
+    await page.waitForTimeout(150)
   }
   const center = async (end) => {
     const b = await handle(end).boundingBox()
@@ -98,7 +102,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     await page.addStyleTag({ content: '.hamster-reader { height: 100%; }' })
     await page.waitForFunction(() => window.readerRegression)
     const fixture = await PDFDocument.create()
-    for (let n = 1; n <= 5; n++) {
+    for (let n = 1; n <= Math.max(5, targetPage + 2); n++) {
       const sheet = fixture.addPage([400, 420])
       for (let line = 0; line < 19; line++)
         sheet.drawText(
@@ -147,12 +151,35 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
       true
     )
     await touch('touchEnd')
-    const reversedText = await page.evaluate(() =>
-      window.readerRegression.state.selectionTexts.at(-1)
+    await page.waitForTimeout(100)
+    await page.evaluate(() =>
+      window.readerRegression.selection.current.confirm()
+    )
+    const reversedText = await page.evaluate(
+      () => window.readerRegression.state.ranges.at(-1)?.text
     )
     assert(
       reversedText.includes('line 05'),
       'crossing back must commit the moving endpoint'
+    )
+    const savedBeforeReverse = await page.evaluate(() =>
+      window.readerRegression.state.ranges.at(-1)
+    )
+    await touch('touchStart', await center(false))
+    await moveTo(await glyph(0, 7, 27), false)
+    await page.waitForTimeout(80)
+    await touch('touchEnd')
+    await page.waitForFunction(
+      () => window.readerRegression.state.updates === 1
+    )
+    const savedAfterReverse = await page.evaluate(() =>
+      window.readerRegression.state.ranges.at(-1)
+    )
+    assert.equal(savedAfterReverse.id, savedBeforeReverse.id)
+    assert.deepEqual(savedAfterReverse.start, savedBeforeReverse.end)
+    assert(
+      savedAfterReverse.text.includes('line 07'),
+      'saved start dragged beyond end must persist the reversed range'
     )
     // Start a fresh selection and reach page two with a live text-only lens.
     await press(await glyph(0, 17, 23))
@@ -237,18 +264,30 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     )
     // Hold the finger stationary until the next page is reached.
     await page.waitForFunction(
-      () => {
+      (targetPage) => {
         const spans = [
           ...document.querySelectorAll('[data-pdf-magnifier-text]')
         ]
-        return spans.some((span) => span.textContent.includes('Page 3'))
+        return spans.some((span) =>
+          span.textContent.includes(`Page ${targetPage} `)
+        )
       },
-      null,
-      { timeout: 6000 }
+      targetPage,
+      { timeout: Math.max(6000, targetPage * 1300) }
     )
     await page.screenshot({
       path: resolve(output, 'pdf-continuous-edge-scroll.png')
     })
+    const retainedTextLayers = await page
+      .locator('[data-pdf-retained-text]')
+      .count()
+    if (targetPage >= 12)
+      assert(
+        retainedTextLayers > 0,
+        'stress test must actually exercise PDF.js text-layer recycling'
+      )
+    await touch('touchMove', { x: 150, y: bottom - 45 })
+    await page.waitForTimeout(80)
     await touch('touchEnd')
     const stopped = await scrollTop()
     await page.waitForTimeout(250)
@@ -264,8 +303,16 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     )
     assert.equal(selected.start.selectionId, 'page-1')
     assert(
-      Number(selected.end.selectionId.slice(5)) >= 3,
+      Number(selected.end.selectionId.slice(5)) >= targetPage,
       'stationary finger must keep extending onto new pages'
+    )
+    assert(
+      selected.text.includes('Page 2'),
+      'persisted continuous selection must include the middle page'
+    )
+    assert(
+      selected.rectsBySelectionId['page-2']?.length,
+      'middle page rectangles must survive confirmation'
     )
     const downEndPage = selected.end.selectionId
     // The last endpoint is visible. Reverse direction to test the upper edge.
@@ -296,6 +343,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
         upPixels450ms: upDelta
       },
       downEndPage,
+      retainedTextLayers,
       nativeRangeCount: 0
     }
   } catch (error) {
@@ -305,5 +353,31 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     throw error
   } finally {
     await page.close()
+  }
+}
+
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const { chromium } = await import('playwright')
+  const output = resolve(
+    process.env.READER_BROWSER_OUTPUT ?? 'test-results/pdf-continuous'
+  )
+  await mkdir(output, { recursive: true })
+  const browser = await chromium.launch()
+  try {
+    const result = await checkPdfContinuousSelection({
+      browser,
+      base: process.env.READER_BROWSER_URL ?? 'http://127.0.0.1:5199',
+      output
+    })
+    await writeFile(
+      resolve(output, 'report.json'),
+      JSON.stringify(result, null, 2)
+    )
+    console.log(JSON.stringify(result, null, 2))
+  } finally {
+    await browser.close()
   }
 }

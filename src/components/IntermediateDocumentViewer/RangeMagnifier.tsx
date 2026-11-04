@@ -251,10 +251,12 @@ export const RangeMagnifierProvider = ({
     [end, move, registerDragCleanup, start]
   )
 
+  const portalHost = pdfMode ? rootElement?.ownerDocument.body : rootElement
+
   return enabled ? (
     <RangeMagnifierContext.Provider value={controller}>
       {children}
-      {rootElement
+      {portalHost
         ? createPortal(
             <div
               ref={lensRef}
@@ -275,7 +277,7 @@ export const RangeMagnifierProvider = ({
                 className='hamster-reader__range-magnifier-marker'
               />
             </div>,
-            pdfMode ? rootElement.ownerDocument.body : rootElement
+            portalHost
           )
         : null}
     </RangeMagnifierContext.Provider>
