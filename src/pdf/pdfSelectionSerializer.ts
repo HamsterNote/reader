@@ -2,6 +2,7 @@
 // reader 公开 range 契约（page-N 端点 + 页内拼接 offset + px/percent 矩形）。
 // 只读 DOM 与几何，不持有状态；viewer 组件在选区变化时调用。
 
+import { pdfRangeClientRects } from './pdfSelectionPaint'
 import type { ReaderSelectionRect } from '../types/selection'
 import type { PageViewport } from './pdfjsRuntime'
 import type { OverlayRectUnit, PageVisualSize } from './pdfOverlayGeometry'
@@ -79,7 +80,7 @@ const capturePageRects = (
 
   const pageBox = context.pageDiv.getBoundingClientRect()
   const rects: ReaderSelectionRect[] = []
-  for (const clientRect of Array.from(range.getClientRects())) {
+  for (const clientRect of pdfRangeClientRects(range)) {
     if (clientRect.width <= 0 || clientRect.height <= 0) continue
     rects.push(
       captureViewportRectAsStored(

@@ -27,8 +27,7 @@
 .hamster-reader__pdf-highlight-rect {
   position: absolute;
   pointer-events: none;
-  // Preserve glyphs even when WebKit isolates the overlay's blend backdrop.
-  mix-blend-mode: multiply;
+  // Alpha is in the fill: WKWebView may isolate the blend backdrop.
 }
 
 .hamster-reader__pdf-highlight-rect--selected {

@@ -1,3 +1,4 @@
+import { pdfHighlightFill } from '../pdf/pdfSelectionPaint'
 import {
   AnnotationHistoryContext,
   paintingContentKey,
@@ -1049,10 +1050,14 @@ export function Reader({
     [internalPaintingSettings, resolvedDrawingStrokeColor, resolvedPaintingTool]
   )
   // 未主动选高亮色时跟随当前描边色；Text 底栏也使用该解析结果判定选中态。
-  const resolvedHighlightColor =
+  const rawHighlightColor =
     highlightColor ??
     internalHighlightColor ??
     getTranslucentColor(resolvedDrawingStrokeColor)
+  const resolvedHighlightColor = pdfHighlightFill(
+    rawHighlightColor,
+    isPdf || engineSource?.format === 'pdf'
+  )
   const hasDocumentPages =
     engineSource !== undefined || documentHasPages(document)
   const bottomBarInset = useBottomBarInset({

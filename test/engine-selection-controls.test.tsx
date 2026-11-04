@@ -169,6 +169,11 @@ it.each([
             : '拖动以调整选区终点'
       })
       expect(handle.style.width).toBe('20px')
+      expect(handle.style.borderWidth).toBe('2px')
+      expect(handle.style.filter).toContain('drop-shadow')
+      expect(handle.style.top).toBe(
+        action === 'commit-start' ? '90px' : '130px'
+      )
       expect(handle.style.backgroundColor).toBe('rgb(12, 34, 56)')
       handle.getBoundingClientRect = () => new DOMRect(110, 110, 20, 20)
       handle.setPointerCapture = vi.fn()

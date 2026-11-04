@@ -1,3 +1,4 @@
+import { pdfHighlightFill } from './pdfSelectionPaint'
 import { usePdfTouchSelection, pdfCaretAtPoint } from './pdfTouchSelection'
 import { readingViewport } from '../components/reading/readingViewport'
 import { firstVisiblePdfCharacter, intersects } from './pdfReadingPosition'
@@ -1607,9 +1608,10 @@ export const PdfDocumentViewer = forwardRef<
       className={rootClassName}
       style={
         {
-          '--pdf-selection-color':
+          '--pdf-selection-color': pdfHighlightFill(
             ranges.find((range) => range.id === selectedRangeId)?.markerStyle
               ?.backgroundColor ?? highlightColor
+          )
         } as React.CSSProperties
       }
       data-status={status}

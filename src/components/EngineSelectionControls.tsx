@@ -1,14 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import { pdfHighlightFill, pdfRangeClientRects } from '../pdf/pdfSelectionPaint'
 import { RangeHandleCircle } from './IntermediateDocumentViewer/RangeHandle'
 import { useRangeMagnifier } from './IntermediateDocumentViewer/RangeMagnifier'
 
 /** Convert iframe-local Range geometry into the outer reader's viewport. */
-export function rangeViewportRects(range: Range): DOMRect[] {
+export function rangeViewportRects(range: Range, pdfTouch = false): DOMRect[] {
   const frame = range.startContainer.ownerDocument?.defaultView?.frameElement
   const offset = frame?.getBoundingClientRect()
-  return Array.from(range.getClientRects())
+  return Array.from(
+    pdfTouch ? pdfRangeClientRects(range) : range.getClientRects()
+  )
     .filter((rect) => rect.width && rect.height)
     .map(
       (rect) =>
@@ -83,7 +86,6 @@ export function EngineSelectionControls({
     element: HTMLButtonElement
     offsetX: number
     offsetY: number
-    lineHeight: number
   } | null>(null)
   const cancelDrag = useRef<() => void>(() => {})
   const callbacks = useRef({
@@ -167,7 +169,7 @@ export function EngineSelectionControls({
       }
       const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
       const localX = clientX - (frame?.left ?? 0)
-      const localY = clientY - (frame?.top ?? 0) - active.lineHeight / 2
+      const localY = clientY - (frame?.top ?? 0)
       const caretDoc = doc as Document & {
         caretPositionFromPoint?: (
           x: number,
@@ -238,7 +240,7 @@ export function EngineSelectionControls({
       )
         cancelDrag.current()
       const next = range.startContainer.isConnected
-        ? rangeViewportRects(drag.current?.current ?? range)
+        ? rangeViewportRects(drag.current?.current ?? range, pdfTouch)
         : []
       setRects((previous) =>
         JSON.stringify(previous) === JSON.stringify(next) ? previous : next
@@ -247,7 +249,7 @@ export function EngineSelectionControls({
     }
     sync()
     return () => cancelAnimationFrame(frame)
-  }, [range])
+  }, [range, pdfTouch])
   const box = containerRef.current?.getBoundingClientRect()
   const left = Math.max(8, box?.left ?? 8)
   const right = Math.min(innerWidth - 8, box?.right ?? innerWidth - 8)
@@ -265,10 +267,14 @@ export function EngineSelectionControls({
   const width = Math.max(0, right - left)
   const height = Math.max(0, bottom - top)
   const x = Math.max(left, Math.min(first.left, right - popupSize.width))
-  const above = first.top - popupSize.height - 12
+  const popupGap = pdfTouch ? 32 : 12
+  const above = first.top - popupSize.height - popupGap
   const y = Math.max(
     top,
-    Math.min(above >= top ? above : last.bottom + 12, bottom - popupSize.height)
+    Math.min(
+      above >= top ? above : last.bottom + popupGap,
+      bottom - popupSize.height
+    )
   )
   const Handle = pdfTouch ? RangeHandleCircle : 'button'
   const handleLabels = pdfTouch
@@ -287,12 +293,11 @@ export function EngineSelectionControls({
             width,
             height,
             pointerEvents: 'none',
-            zIndex: 9998,
-            mixBlendMode: 'multiply'
+            zIndex: 9998
           }}
         >
           <path
-            fill={color}
+            fill={pdfHighlightFill(color)}
             fillRule='nonzero'
             d={visibleRects
               .map(
@@ -348,22 +353,25 @@ export function EngineSelectionControls({
           .map((end) => {
             const type = end ? 'end' : 'start'
             const endpoint = end ? rects.at(-1)! : rects[0]
+            const pdfHandleY = end ? endpoint.bottom + 10 : endpoint.top - 10
             return (
               <Handle
                 key={String(end)}
                 type='button'
                 aria-label={handleLabels[type]}
                 data-range-handle-circle={pdfTouch ? type : undefined}
-                className='hamster-reader__engine-handle'
+                className={`hamster-reader__engine-handle${pdfTouch ? ' hamster-reader__pdf-touch-handle' : ''}`}
                 style={{
                   position: 'fixed',
                   left:
                     (end ? endpoint.right : endpoint.left) - (pdfTouch ? 0 : 7),
-                  top: endpoint.bottom - (pdfTouch ? 0 : 7),
+                  top: pdfTouch ? pdfHandleY : endpoint.bottom - 7,
                   ...(pdfTouch
                     ? {
                         backgroundColor: color,
-                        border: 0,
+                        border: '2px solid white',
+                        boxSizing: 'border-box',
+                        filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45))',
                         padding: 0,
                         touchAction: 'none',
                         boxShadow: 'none'
@@ -393,9 +401,8 @@ export function EngineSelectionControls({
                       ? circle.left + circle.width / 2 - event.clientX
                       : 0,
                     offsetY: pdfTouch
-                      ? circle.top + circle.height / 2 - event.clientY
-                      : 0,
-                    lineHeight: pdfTouch ? endpoint.height : 0
+                      ? endpoint.top + endpoint.height / 2 - event.clientY
+                      : 0
                   }
                   setDragging(true)
                   onEditingChange(true)
@@ -409,7 +416,22 @@ export function EngineSelectionControls({
                       clientY: event.clientY
                     })
                 }}
-              />
+              >
+                {pdfTouch && (
+                  <span
+                    aria-hidden='true'
+                    style={{
+                      position: 'absolute',
+                      left: 7,
+                      top: end ? -12 : 16,
+                      width: 2,
+                      height: 12,
+                      backgroundColor: 'inherit',
+                      pointerEvents: 'none'
+                    }}
+                  />
+                )}
+              </Handle>
             )
           })}
     </>,

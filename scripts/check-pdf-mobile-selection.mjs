@@ -37,8 +37,16 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
         const r = document.createRange()
         r.setStart(span.firstChild, offset)
         r.setEnd(span.firstChild, offset + 1)
-        const rect = r.getBoundingClientRect()
-        return { x: rect.left + 0.1, y: rect.top + rect.height / 2 }
+        const glyph = r.getBoundingClientRect()
+        const box = span.getBoundingClientRect()
+        const top = Math.max(glyph.top, box.top)
+        const bottom = Math.min(glyph.bottom, box.bottom)
+        const rect = { left: glyph.left, top, height: bottom - top }
+        return {
+          x: rect.left + 0.1,
+          y: rect.top + rect.height / 2,
+          height: rect.height
+        }
       }, offset)
   const lastText = () =>
     page.evaluate(() => window.readerRegression.state.selectionTexts.at(-1))
@@ -49,10 +57,15 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     const box = await handle.boundingBox()
     assert(box)
     assert.equal(Math.round(box.width), 20)
-    // Grab off-center to exercise correction. The circle is at the line bottom.
+    // Grab off-center and move outside the target line, keeping its glyphs clear.
     const start = { x: box.x + 7, y: box.y + 7 }
     await touch('touchStart', [start])
-    await touch('touchMove', [{ x: target.x - 3, y: target.y + 7 }])
+    await touch('touchMove', [
+      {
+        x: target.x - 3,
+        y: target.y + (end ? 1 : -1) * (target.height / 2 + 10) - 3
+      }
+    ])
     await touch('touchEnd', [])
     await page.waitForTimeout(100)
   }

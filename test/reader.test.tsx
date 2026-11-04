@@ -5091,6 +5091,11 @@ describe('PDF preview color policy', () => {
         expect(captured().selectionColor).toBe('rgba(20, 180, 90, 0.35)')
       )
       expect(captured().highlightColor).toBe('rgba(20, 180, 90, 0.35)')
+      view.rerender(<Reader {...props} highlightColor='#ffc107' />)
+      await waitFor(() =>
+        expect(captured().selectionColor).toBe('rgba(255, 193, 7, 0.35)')
+      )
+      expect(captured().highlightColor).toBe('rgba(255, 193, 7, 0.35)')
       view.rerender(<Reader {...props} isPdf={false} />)
       await waitFor(() => expect(captured().selectionColor).toBe('#0000ff'))
     }

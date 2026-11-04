@@ -1,4 +1,5 @@
 import { createServer } from 'vite'
+import { checkPdfSelectionPaint } from './check-pdf-selection-paint.mjs'
 import { checkPdfMobileSelection } from './check-pdf-mobile-selection.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -815,6 +816,7 @@ async function epubNavigation(buffer) {
 }
 
 try {
+  results.push(await checkPdfSelectionPaint({ browser, base, output }))
   results.push(await checkPdfMobileSelection({ browser, base, output }))
   if (!process.argv.includes('--pdf-mobile-only')) {
     await pdfSelection(false)
