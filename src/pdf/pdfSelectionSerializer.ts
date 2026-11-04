@@ -104,21 +104,29 @@ const capturePageRects = (
  * 只覆盖 start/end 两页（契约不含中间页文本）。
  */
 export function serializePdfTextSelection(
-  selection: Selection,
+  selection: Selection | Range,
   contexts: ReadonlyMap<number, PdfPageSelectionContext>,
   unit: OverlayRectUnit
 ): SerializedPdfSelection | null {
-  if (selection.isCollapsed || selection.rangeCount === 0) return null
-  if (!selection.anchorNode || !selection.focusNode) return null
+  const managed = 'startContainer' in selection
+  if (
+    managed
+      ? selection.collapsed
+      : selection.isCollapsed || selection.rangeCount === 0
+  )
+    return null
+  const anchorNode = managed ? selection.startContainer : selection.anchorNode
+  const focusNode = managed ? selection.endContainer : selection.focusNode
+  if (!anchorNode || !focusNode) return null
 
   const anchor = locatePosition(
-    selection.anchorNode,
-    selection.anchorOffset,
+    anchorNode,
+    managed ? selection.startOffset : selection.anchorOffset,
     contexts
   )
   const focus = locatePosition(
-    selection.focusNode,
-    selection.focusOffset,
+    focusNode,
+    managed ? selection.endOffset : selection.focusOffset,
     contexts
   )
   if (!anchor || !focus) return null

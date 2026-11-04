@@ -4,6 +4,7 @@ import type {
 } from '@hamster-note/selection'
 import {
   type CSSProperties,
+  type ComponentPropsWithRef,
   type PointerEvent as ReactPointerEvent,
   useRef
 } from 'react'
@@ -72,6 +73,28 @@ const withOpaqueBackground = (style: CSSProperties): CSSProperties => {
     next.backgroundColor = toOpaqueColor(next.backgroundColor)
   }
   return next
+}
+
+/** Shared visual only; each renderer owns its hit testing and gesture lifecycle. */
+export function RangeHandleCircle({
+  style,
+  scale = 1,
+  ...props
+}: ComponentPropsWithRef<'button'> & { scale?: number }) {
+  return (
+    <button
+      type='button'
+      tabIndex={-1}
+      {...props}
+      style={{
+        ...withOpaqueBackground(style ?? {}),
+        width: HANDLE_CIRCLE_DIAMETER_PX,
+        height: HANDLE_CIRCLE_DIAMETER_PX,
+        borderRadius: '50%',
+        transform: `translate(-50%, -50%) scale(${1 / scale})`
+      }}
+    />
+  )
 }
 
 interface RangeHandleProps {
@@ -159,7 +182,8 @@ export const RangeHandle = ({
   }
 
   return (
-    <button
+    <RangeHandleCircle
+      scale={scale}
       ref={circleRef}
       type='button'
       className={handle.className}

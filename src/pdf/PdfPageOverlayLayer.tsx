@@ -380,7 +380,7 @@ export function PdfPageOverlayLayer({
               fillRule='nonzero'
               fill={
                 selectedGroup.length > 1 && selectedGroupIds.has(range.id)
-                  ? 'rgba(0, 120, 215, 0.3)'
+                  ? (range.markerStyle?.backgroundColor ?? highlightColor)
                   : (range.markerStyle?.backgroundColor ?? highlightColor)
               }
             />

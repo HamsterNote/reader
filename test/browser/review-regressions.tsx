@@ -20,6 +20,8 @@ let props: Props
 let dispose = async () => {}
 const state = {
   ranges: [] as ReaderSelectionRange[],
+  selectionTexts: [] as string[],
+  updates: 0,
   ocrPages: [] as number[],
   images: [] as string[],
   segments: [] as string[],
@@ -49,6 +51,8 @@ const api = {
     flushSync(() => root.render(null))
     await dispose()
     state.ranges = []
+    state.selectionTexts = []
+    state.updates = 0
     state.ocrPages = []
     state.images = []
     state.segments = []
@@ -65,6 +69,14 @@ const api = {
       useVirtualPaper: false,
       selectionRef: selection,
       onHighlight: (range) => state.ranges.push(range),
+      onTextSelectionChange: (_text, detail) =>
+        state.selectionTexts.push(detail.selectedText),
+      onUpdateRange: (range) => {
+        state.updates++
+        state.ranges = state.ranges.map((item) =>
+          item.id === range.id ? range : item
+        )
+      },
       onDataChange: (data) => {
         if (data.layoutReadingProgress)
           state.positions.push(data.layoutReadingProgress.pageNumber)

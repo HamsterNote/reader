@@ -296,6 +296,7 @@ export type ReaderProps = {
   /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
   onHighlightColorChange?: (color: string) => void
   highlightColor?: string
+  /** PDF preview uses the current toolbar highlightColor; other formats may override it here. */
   selectionColor?: string
   /** 是否启用 Selection 内置的选区端点放大镜，默认 true。 */
   showSelectionMagnifier?: boolean
@@ -1903,7 +1904,11 @@ export function Reader({
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
-            selectionColor={selectionColor}
+            selectionColor={
+              isPdf || engineSource?.format === 'pdf'
+                ? resolvedHighlightColor
+                : selectionColor
+            }
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               selectionPopover ?? (
@@ -2044,7 +2049,11 @@ export function Reader({
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
-            selectionColor={selectionColor}
+            selectionColor={
+              isPdf || engineSource?.format === 'pdf'
+                ? resolvedHighlightColor
+                : selectionColor
+            }
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               engineSource

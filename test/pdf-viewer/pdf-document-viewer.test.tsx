@@ -10,7 +10,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { act, render } from '@testing-library/react'
+import { mockPaintingCanvas } from '../fixtures/painting'
+import { act, fireEvent, render } from '@testing-library/react'
 import { createRef, StrictMode } from 'react'
 import type { RefObject } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -260,6 +261,155 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it.each([
+    'select',
+    'pan',
+    'multitouch',
+    'blank',
+    'drawing',
+    'cancel'
+  ] as const)(
+    'owns touch long press without native Selection (%s)',
+    async (action) => {
+      mockPaintingCanvas()
+      const ref = createRef<PdfDocumentViewerRef>()
+      const onChange = vi.fn(),
+        onHighlight = vi.fn()
+      const view = renderViewer(
+        {
+          tool: action === 'drawing' ? 'drawing' : 'text-selection',
+          onTextSelectionChange: onChange,
+          onHighlight
+        },
+        ref
+      )
+      await act(async () => {})
+      const layer = emitTextLayer(1, [
+        'Left column line one',
+        'Left column line two'
+      ])
+      await act(async () => {})
+      const span = layer.querySelector('span')!
+      const caret = document.createRange()
+      caret.setStart(span.firstChild!, 7)
+      caret.collapse(true)
+      const previousElements = Object.getOwnPropertyDescriptor(
+        document,
+        'elementsFromPoint'
+      )
+      Object.defineProperty(document, 'elementsFromPoint', {
+        configurable: true,
+        value: () => (action === 'blank' ? [] : [span])
+      })
+      Object.defineProperty(document, 'caretRangeFromPoint', {
+        configurable: true,
+        value: () => caret
+      })
+      vi.useFakeTimers()
+      try {
+        const down = {
+          pointerType: 'touch',
+          pointerId: 1,
+          isPrimary: true,
+          button: 0,
+          clientX: 45,
+          clientY: 40
+        }
+        fireEvent.pointerDown(span, down)
+        if (action === 'pan')
+          fireEvent.pointerMove(span, { ...down, clientX: 100 })
+        if (action === 'multitouch')
+          fireEvent.pointerDown(span, { ...down, pointerId: 2 })
+        if (action === 'cancel') fireEvent.pointerCancel(span, down)
+        act(() => vi.advanceTimersByTime(510))
+        if (action === 'select') {
+          expect(ref.current!.serializeSelection()).toMatchObject({
+            text: 'column',
+            start: { selectionId: 'page-1', offset: 5 },
+            end: { selectionId: 'page-1', offset: 11 }
+          })
+          expect(ref.current!.getSelectionRange()?.toString()).toBe('column')
+          expect(document.getSelection()!.rangeCount).toBe(0)
+          act(() => ref.current!.confirmSelection())
+          expect(onHighlight).toHaveBeenCalledOnce()
+          expect(onHighlight.mock.calls[0][0].text).toBe('column')
+          act(() => ref.current!.clearSelection())
+          expect(ref.current!.serializeSelection()).toBeNull()
+        } else expect(ref.current!.serializeSelection()).toBeNull()
+      } finally {
+        view.unmount()
+        vi.useRealTimers()
+        if (previousElements)
+          Object.defineProperty(document, 'elementsFromPoint', previousElements)
+        else Reflect.deleteProperty(document, 'elementsFromPoint')
+        Reflect.deleteProperty(document, 'caretRangeFromPoint')
+      }
+    }
+  )
+
+  it('keeps disjoint touch groups exact and updates only the dragged source member', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    const ranges: ReaderSelectionRange[] = [
+      {
+        id: 'first',
+        text: 'Left',
+        createdAt: 123,
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 4 },
+        rectsBySelectionId: {},
+        selectionGroup: { id: 'G', index: 0 },
+        markerStyle: { backgroundColor: '#c03080' }
+      },
+      {
+        id: 'second',
+        text: 'column',
+        createdAt: 123,
+        start: { selectionId: 'page-1', offset: 25 },
+        end: { selectionId: 'page-1', offset: 31 },
+        rectsBySelectionId: {},
+        selectionGroup: { id: 'G', index: 1 },
+        markerStyle: { backgroundColor: '#c03080' }
+      }
+    ]
+    const view = renderViewer({ source, ranges }, ref)
+    await act(async () => {})
+    const layer = emitTextLayer(1, [
+      'Left column line one',
+      'Left column line two',
+      'Right column line one',
+      'Right column line two'
+    ])
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    container.dataset.pdfTouchSelection = 'true'
+    let range!: Range
+    act(() => {
+      range = ref.current!.selectRange('first')!
+    })
+    const before = ref.current!.serializeSelection()!
+    expect(range, ref.current!.getCanonicalPageText(1)).not.toBeNull()
+    expect(before.text).toBe('Leftcolumn')
+    expect(before.sourceRanges).toHaveLength(2)
+    const edited = range.cloneRange()
+    edited.setEnd(layer.children[1].firstChild!, 16)
+    act(() => ref.current!.setSelectionRange(edited))
+    expect(ref.current!.serializeSelection()!.text).toBe('Leftcolumn line')
+    expect(
+      ref.current!.serializeRangeEndpoint('second', edited, true)
+    ).toMatchObject({
+      start: ranges[1].start,
+      end: { selectionId: 'page-1', offset: 36 },
+      text: 'column line'
+    })
+    act(() => ref.current!.setSelectionRange(range))
+    expect(ref.current!.serializeSelection()!.text).toBe('Leftcolumn')
+    expect(ranges[0].markerStyle?.backgroundColor).toBe('#c03080')
+    expect(document.getSelection()!.rangeCount).toBe(0)
+  })
+
   it('cancels a pending Text character restore when an explicit page seek replaces it', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)

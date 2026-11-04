@@ -5065,3 +5065,34 @@ describe('Reader zoom props', () => {
     expect(onCommentsChange).not.toHaveBeenCalled()
   })
 })
+
+describe('PDF preview color policy', () => {
+  it.each(['layout', 'text'] as const)(
+    'follows controlled toolbar colors in %s while other formats retain selectionColor',
+    async (renderMode) => {
+      const document = makeDocument({ pages: [makePage(1)] })
+      const props = {
+        document,
+        renderMode,
+        isPdf: true,
+        highlightColor: 'rgba(255, 193, 7, 0.35)',
+        selectionColor: '#0000ff'
+      }
+      const view = render(<Reader {...props} />)
+      const captured = () =>
+        renderMode === 'text' ? capturedTextViewerProps : capturedViewerProps
+      await waitFor(() =>
+        expect(captured().selectionColor).toBe(props.highlightColor)
+      )
+      view.rerender(
+        <Reader {...props} highlightColor='rgba(20, 180, 90, 0.35)' />
+      )
+      await waitFor(() =>
+        expect(captured().selectionColor).toBe('rgba(20, 180, 90, 0.35)')
+      )
+      expect(captured().highlightColor).toBe('rgba(20, 180, 90, 0.35)')
+      view.rerender(<Reader {...props} isPdf={false} />)
+      await waitFor(() => expect(captured().selectionColor).toBe('#0000ff'))
+    }
+  )
+})

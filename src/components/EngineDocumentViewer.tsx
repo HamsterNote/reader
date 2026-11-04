@@ -1,3 +1,4 @@
+import { getSelectionGroup } from './selection/selectionGroups'
 import { usePdfPreviews } from '../pdf/usePdfPreviews'
 import type { PDFDocumentProxy } from '../pdf/pdfjsRuntime'
 import { ViewportPaginationControls } from './reading/ViewportPaginationControls'
@@ -292,6 +293,10 @@ function sharedHistoryPresent(history: AnnotationHistoryController | null) {
   return history?.getStatus().enabled ? history.getPresent() : undefined
 }
 
+function usesPdfTouchSelection(format: string | undefined, touch: boolean) {
+  return format === 'pdf' && touch
+}
+
 export function EngineDocumentViewer(props: Props) {
   const { engineSource: source, engineRenderMode: mode = 'layout' } = props
   const preferredTheme = usePrefersColorScheme()
@@ -361,6 +366,8 @@ export function EngineDocumentViewer(props: Props) {
   const [draftRectangle, setDraftRectangle] =
     useState<ReaderSelectionRectangle | null>(null)
   const [mouse, setMouse] = useState(false)
+  const [touch, setTouch] = useState(false)
+  const pdfTouch = usesPdfTouchSelection(source?.format, touch)
   const nativeEdit = useRef<{
     id: string
     original: Range
@@ -377,6 +384,7 @@ export function EngineDocumentViewer(props: Props) {
     const down = (event: PointerEvent) => {
       progressEnabled.current = true
       setMouse(event.pointerType === 'mouse')
+      setTouch(event.pointerType === 'touch')
     }
     rootElement.addEventListener('pointerdown', down, true)
     return () => rootElement.removeEventListener('pointerdown', down, true)
@@ -611,7 +619,7 @@ export function EngineDocumentViewer(props: Props) {
     const range =
       latest.current.engineSource?.format === 'epub'
         ? epub.current?.getSelectionRange()
-        : firstSelectionRange(native)
+        : (pdf.current?.getSelectionRange() ?? firstSelectionRange(native))
     const selection = range?.startContainer.ownerDocument?.getSelection()
     if (!detail || !selection || !latest.current.document) return
     const startPage = pageNumberOf(detail.start.selectionId)
@@ -638,7 +646,7 @@ export function EngineDocumentViewer(props: Props) {
     const range =
       latest.current.engineSource?.format === 'epub'
         ? epub.current?.getSelectionRange()
-        : firstSelectionRange(selection)
+        : (pdf.current?.getSelectionRange() ?? firstSelectionRange(selection))
     const detail = serialize()
     if (detail && range) {
       const current = values.current.ranges.find(
@@ -754,7 +762,10 @@ export function EngineDocumentViewer(props: Props) {
     editing.current = false
     nativeEdit.current = null
     setNativeRange(null)
-    if (clear) epub.current?.clearSelection()
+    if (clear) {
+      epub.current?.clearSelection()
+      pdf.current?.clearSelection()
+    }
     epub.current?.setActiveRange(null)
   }, [])
   const navigate = useCallback(
@@ -1127,6 +1138,8 @@ export function EngineDocumentViewer(props: Props) {
     const activeId = activeText.current?.rangeId
     if (activeId && !ranges.some((item) => item.id === activeId))
       cancelSelection()
+    if (pdf.current && activeId && ranges.some((item) => item.id === activeId))
+      setNativeRange(pdf.current.selectRange(activeId), activeId)
     const report = epub.current?.showRanges(ranges)
     if (report) setUnlocatable(report.unlocatable.map((item) => item.id))
   }, [ranges, book])
@@ -1447,7 +1460,10 @@ export function EngineDocumentViewer(props: Props) {
         onPointerUp={(event) => {
           if (source?.format === 'pdf') {
             const selection = root.current?.ownerDocument.getSelection()
-            if (selection && !selection.isCollapsed) {
+            if (
+              selection &&
+              (!selection.isCollapsed || pdf.current?.getSelectionRange())
+            ) {
               props.onSelectionEnd?.(
                 { x: event.clientX, y: event.clientY },
                 selection
@@ -1688,7 +1704,12 @@ export function EngineDocumentViewer(props: Props) {
         <EngineSelectionControls
           range={props.showPageBrowser ? null : nativeRange}
           containerRef={root}
-          showHandles={mouse}
+          showHandles={mouse || pdfTouch}
+          pdfTouch={pdfTouch}
+          color={current?.markerStyle?.backgroundColor ?? props.highlightColor}
+          paintPreview={getSelectionGroup(ranges, selected).length <= 1}
+          onPreview={(range) => pdf.current?.setSelectionRange(range)}
+          hitTest={(x, y) => pdf.current?.hitTestSelection(x, y) ?? null}
           showStart={endpointVisible(current, source?.format, epubPage, false)}
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
           onEditingChange={(value) => {
@@ -1705,14 +1726,26 @@ export function EngineDocumentViewer(props: Props) {
                 range.startContainer.ownerDocument
             )
               return
-            const target = values.current.ranges.find(
-              (item) => item.id === active.rangeId
+            const group = getSelectionGroup(
+              values.current.ranges,
+              active.rangeId
             )
-            const detail =
-              epub.current && target
-                ? epub.current.updateRangeEndpoint(target.id, range, end)
-                : (epub.current?.serializeRange(range) ?? serialize())
+            const pdfTarget = end ? group.at(-1) : group[0]
+            const target = pdf.current
+              ? pdfTarget
+              : values.current.ranges.find((item) => item.id === active.rangeId)
+            if (pdf.current) pdf.current.setSelectionRange(range)
+            let detail: ReturnType<typeof serialize>
+            if (epub.current && target)
+              detail = epub.current.updateRangeEndpoint(target.id, range, end)
+            else if (pdf.current && target)
+              detail = pdf.current.serializeRangeEndpoint(target.id, range, end)
+            else detail = epub.current?.serializeRange(range) ?? serialize()
             if (!detail) {
+              if (pdf.current) {
+                pdf.current.setSelectionRange(active.range)
+                return
+              }
               const selection =
                 active.range.startContainer.ownerDocument?.getSelection()
               selection?.removeAllRanges()

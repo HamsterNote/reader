@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import { RangeHandleCircle } from './IntermediateDocumentViewer/RangeHandle'
 import { useRangeMagnifier } from './IntermediateDocumentViewer/RangeMagnifier'
 
 /** Convert iframe-local Range geometry into the outer reader's viewport. */
@@ -28,8 +29,18 @@ export function EngineSelectionControls({
   showHandles,
   showStart = true,
   showEnd = true,
-  onEditingChange
+  onEditingChange,
+  pdfTouch = false,
+  color = '#ffc107',
+  paintPreview = true,
+  onPreview,
+  hitTest
 }: {
+  readonly pdfTouch?: boolean
+  readonly color?: string
+  readonly paintPreview?: boolean
+  readonly onPreview?: (range: Range) => void
+  readonly hitTest?: (x: number, y: number) => Range | null
   readonly range: Range | null
   readonly containerRef: RefObject<HTMLDivElement | null>
   readonly children: ReactNode
@@ -69,9 +80,26 @@ export function EngineSelectionControls({
     original: Range
     current: Range
     valid: boolean
+    element: HTMLButtonElement
+    offsetX: number
+    offsetY: number
+    lineHeight: number
   } | null>(null)
-  const callbacks = useRef({ onUpdate, onEditingChange, magnifier })
-  callbacks.current = { onUpdate, onEditingChange, magnifier }
+  const cancelDrag = useRef<() => void>(() => {})
+  const callbacks = useRef({
+    onUpdate,
+    onEditingChange,
+    magnifier,
+    onPreview,
+    hitTest
+  })
+  callbacks.current = {
+    onUpdate,
+    onEditingChange,
+    magnifier,
+    onPreview,
+    hitTest
+  }
   useEffect(() => {
     const owner = containerRef.current?.ownerDocument
     if (!owner) return
@@ -79,13 +107,19 @@ export function EngineSelectionControls({
       const active = drag.current
       if (!active || (event && event.pointerId !== active.pointer)) return
       drag.current = null
+      if (active.element.hasPointerCapture?.(active.pointer))
+        active.element.releasePointerCapture(active.pointer)
       setDragging(false)
       callbacks.current.onEditingChange(false)
       callbacks.current.magnifier?.end()
       if (
         event?.type === 'pointerup' &&
         active.valid &&
-        active.current.startContainer.isConnected
+        active.current.startContainer.isConnected &&
+        active.current.endContainer.isConnected &&
+        active.current.startContainer.nodeType === Node.TEXT_NODE &&
+        active.current.endContainer.nodeType === Node.TEXT_NODE &&
+        latestRange.current === range
       ) {
         if (
           active.current.compareBoundaryPoints(
@@ -100,26 +134,94 @@ export function EngineSelectionControls({
           callbacks.current.onUpdate(active.current, active.end)
       } else if (
         latestRange.current === range &&
-        active.original.startContainer.isConnected
+        active.original.startContainer.isConnected &&
+        active.original.endContainer.isConnected &&
+        active.original.startContainer.nodeType === Node.TEXT_NODE &&
+        active.original.endContainer.nodeType === Node.TEXT_NODE
       ) {
-        const selection =
-          active.original.startContainer.ownerDocument?.getSelection()
-        selection?.removeAllRanges()
-        selection?.addRange(active.original)
+        if (pdfTouch) callbacks.current.onPreview?.(active.original)
+        else {
+          const selection =
+            active.original.startContainer.ownerDocument?.getSelection()
+          selection?.removeAllRanges()
+          selection?.addRange(active.original)
+        }
       }
     }
+    cancelDrag.current = () => finish()
+    const move = (event: PointerEvent) => {
+      const active = drag.current
+      if (!active || active.pointer !== event.pointerId) return
+      event.preventDefault()
+      const clientX = event.clientX + active.offsetX
+      const clientY = event.clientY + active.offsetY
+      callbacks.current.magnifier?.move({ clientX, clientY })
+      const doc = active.original.startContainer.ownerDocument
+      if (
+        !doc ||
+        !active.original.startContainer.isConnected ||
+        !active.original.endContainer.isConnected
+      ) {
+        finish()
+        return
+      }
+      const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
+      const localX = clientX - (frame?.left ?? 0)
+      const localY = clientY - (frame?.top ?? 0) - active.lineHeight / 2
+      const caretDoc = doc as Document & {
+        caretPositionFromPoint?: (
+          x: number,
+          y: number
+        ) => { offsetNode: Node; offset: number } | null
+        caretRangeFromPoint?: (x: number, y: number) => Range | null
+      }
+      const position = pdfTouch
+        ? null
+        : caretDoc.caretPositionFromPoint?.(localX, localY)
+      const caret = pdfTouch
+        ? callbacks.current.hitTest?.(localX, localY)
+        : caretDoc.caretRangeFromPoint?.(localX, localY)
+      const node = position?.offsetNode ?? caret?.startContainer
+      const offset = position?.offset ?? caret?.startOffset
+      if (!node || offset === undefined || node.nodeType !== Node.TEXT_NODE) {
+        active.valid = false
+        return
+      }
+      const next = active.original.cloneRange()
+      if (active.end) next.setEnd(node, offset)
+      else next.setStart(node, offset)
+      active.valid = !next.collapsed
+      if (!active.valid) return
+      active.current = next
+      if (pdfTouch) callbacks.current.onPreview?.(next)
+      else {
+        const selection = doc.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(next)
+      }
+    }
+    const down = (event: PointerEvent) => {
+      if (drag.current && event.pointerId !== drag.current.pointer) finish()
+    }
+    owner.addEventListener('pointermove', move, {
+      capture: true,
+      passive: false
+    })
+    owner.addEventListener('pointerdown', down, true)
     // Range materialization may replace the handle before pointerup.
     owner.addEventListener('pointerup', finish, true)
     owner.addEventListener('pointercancel', finish, true)
     const blur = () => finish()
     owner.defaultView?.addEventListener('blur', blur)
     return () => {
+      owner.removeEventListener('pointermove', move, true)
+      owner.removeEventListener('pointerdown', down, true)
       owner.removeEventListener('pointerup', finish, true)
       owner.removeEventListener('pointercancel', finish, true)
       owner.defaultView?.removeEventListener('blur', blur)
       finish()
     }
-  }, [containerRef, range])
+  }, [containerRef, range, pdfTouch])
   useEffect(() => {
     if (!range) {
       setRects([])
@@ -127,6 +229,14 @@ export function EngineSelectionControls({
     }
     let frame = 0
     const sync = () => {
+      if (
+        drag.current &&
+        (range.startContainer.nodeType !== Node.TEXT_NODE ||
+          range.endContainer.nodeType !== Node.TEXT_NODE ||
+          !range.startContainer.isConnected ||
+          !range.endContainer.isConnected)
+      )
+        cancelDrag.current()
       const next = range.startContainer.isConnected
         ? rangeViewportRects(drag.current?.current ?? range)
         : []
@@ -160,8 +270,39 @@ export function EngineSelectionControls({
     top,
     Math.min(above >= top ? above : last.bottom + 12, bottom - popupSize.height)
   )
+  const Handle = pdfTouch ? RangeHandleCircle : 'button'
+  const handleLabels = pdfTouch
+    ? { start: '拖动以调整选区起点', end: '拖动以调整选区终点' }
+    : { start: '调整高亮起点', end: '调整高亮终点' }
   return createPortal(
     <>
+      {pdfTouch && paintPreview && (
+        <svg
+          className='hamster-reader__pdf-selection-preview'
+          aria-hidden='true'
+          style={{
+            position: 'fixed',
+            left,
+            top,
+            width,
+            height,
+            pointerEvents: 'none',
+            zIndex: 9998,
+            mixBlendMode: 'multiply'
+          }}
+        >
+          <path
+            fill={color}
+            fillRule='nonzero'
+            d={visibleRects
+              .map(
+                (rect) =>
+                  `M${rect.left - left} ${rect.top - top}h${rect.width}v${rect.height}h${-rect.width}Z`
+              )
+              .join('')}
+          />
+        </svg>
+      )}
       {!dragging && children && (
         <div
           ref={popup}
@@ -204,89 +345,73 @@ export function EngineSelectionControls({
               ? showEnd && visible(rects.at(-1)!)
               : showStart && visible(rects[0])
           )
-          .map((end) => (
-            <button
-              key={String(end)}
-              type='button'
-              aria-label={end ? '调整高亮终点' : '调整高亮起点'}
-              className='hamster-reader__engine-handle'
-              style={{
-                position: 'fixed',
-                left: (end ? last.right : first.left) - 7,
-                top: (end ? last.bottom : first.bottom) - 7,
-                zIndex: 10001
-              }}
-              onPointerDown={(event) => {
-                if (event.pointerType === 'touch') return
-                event.preventDefault()
-                event.stopPropagation()
-                event.currentTarget.setPointerCapture(event.pointerId)
-                drag.current = {
-                  pointer: event.pointerId,
-                  end,
-                  original: range.cloneRange(),
-                  current: range.cloneRange(),
-                  valid: true
-                }
-                setDragging(true)
-                onEditingChange(true)
-                const body =
-                  range.startContainer.parentElement?.closest<HTMLElement>(
-                    '.pdfViewer .page'
-                  ) ?? range.startContainer.ownerDocument?.body
-                if (body)
-                  magnifier?.start(body, {
-                    clientX: event.clientX,
-                    clientY: event.clientY
-                  })
-              }}
-              onPointerMove={(event) => {
-                const active = drag.current
-                if (!active || active.pointer !== event.pointerId) return
-                magnifier?.move({
-                  clientX: event.clientX,
-                  clientY: event.clientY
-                })
-                const doc = active.original.startContainer.ownerDocument
-                if (!doc) return
-                const frame =
-                  doc.defaultView?.frameElement?.getBoundingClientRect()
-                const localX = event.clientX - (frame?.left ?? 0)
-                const localY = event.clientY - (frame?.top ?? 0)
-                const caretDoc = doc as Document & {
-                  caretPositionFromPoint?: (
-                    x: number,
-                    y: number
-                  ) => { offsetNode: Node; offset: number } | null
-                  caretRangeFromPoint?: (x: number, y: number) => Range | null
-                }
-                const position = caretDoc.caretPositionFromPoint?.(
-                  localX,
-                  localY
-                )
-                const caret = caretDoc.caretRangeFromPoint?.(localX, localY)
-                const node = position?.offsetNode ?? caret?.startContainer
-                const offset = position?.offset ?? caret?.startOffset
-                if (
-                  !node ||
-                  offset === undefined ||
-                  node.nodeType !== Node.TEXT_NODE
-                ) {
-                  active.valid = false
-                  return
-                }
-                const next = active.original.cloneRange()
-                if (active.end) next.setEnd(node, offset)
-                else next.setStart(node, offset)
-                active.valid = !next.collapsed
-                if (!active.valid) return
-                active.current = next
-                const selection = doc.getSelection()
-                selection?.removeAllRanges()
-                selection?.addRange(next)
-              }}
-            />
-          ))}
+          .map((end) => {
+            const type = end ? 'end' : 'start'
+            const endpoint = end ? rects.at(-1)! : rects[0]
+            return (
+              <Handle
+                key={String(end)}
+                type='button'
+                aria-label={handleLabels[type]}
+                data-range-handle-circle={pdfTouch ? type : undefined}
+                className='hamster-reader__engine-handle'
+                style={{
+                  position: 'fixed',
+                  left:
+                    (end ? endpoint.right : endpoint.left) - (pdfTouch ? 0 : 7),
+                  top: endpoint.bottom - (pdfTouch ? 0 : 7),
+                  ...(pdfTouch
+                    ? {
+                        backgroundColor: color,
+                        border: 0,
+                        padding: 0,
+                        touchAction: 'none',
+                        boxShadow: 'none'
+                      }
+                    : {}),
+                  zIndex: 10001
+                }}
+                onLostPointerCapture={() => cancelDrag.current()}
+                onContextMenu={(event) => {
+                  if (pdfTouch) event.preventDefault()
+                }}
+                onPointerDown={(event) => {
+                  if (event.pointerType === 'touch' && !pdfTouch) return
+                  if (drag.current || event.button > 0) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  const circle = event.currentTarget.getBoundingClientRect()
+                  drag.current = {
+                    pointer: event.pointerId,
+                    end,
+                    original: range.cloneRange(),
+                    current: range.cloneRange(),
+                    valid: true,
+                    element: event.currentTarget,
+                    offsetX: pdfTouch
+                      ? circle.left + circle.width / 2 - event.clientX
+                      : 0,
+                    offsetY: pdfTouch
+                      ? circle.top + circle.height / 2 - event.clientY
+                      : 0,
+                    lineHeight: pdfTouch ? endpoint.height : 0
+                  }
+                  setDragging(true)
+                  onEditingChange(true)
+                  const body =
+                    range.startContainer.parentElement?.closest<HTMLElement>(
+                      '.pdfViewer .page'
+                    ) ?? range.startContainer.ownerDocument?.body
+                  if (body)
+                    magnifier?.start(body, {
+                      clientX: event.clientX,
+                      clientY: event.clientY
+                    })
+                }}
+              />
+            )
+          })}
     </>,
     document.body
   )

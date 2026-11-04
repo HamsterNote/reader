@@ -1,3 +1,4 @@
+import { usePdfTouchSelection, pdfCaretAtPoint } from './pdfTouchSelection'
 import { readingViewport } from '../components/reading/readingViewport'
 import { firstVisiblePdfCharacter, intersects } from './pdfReadingPosition'
 import { createPaintingSettings } from '../painting/paintingSettings'
@@ -163,6 +164,14 @@ export type PdfDocumentViewerRef = {
   readonly confirmSelection: () => void
   readonly clearSelection: () => void
   readonly selectRange: (id: string) => Range | null
+  readonly getSelectionRange: () => Range | null
+  readonly setSelectionRange: (range: Range | null) => void
+  readonly serializeRangeEndpoint: (
+    id: string,
+    range: Range,
+    end: boolean
+  ) => SerializedPdfSelection | null
+  readonly hitTestSelection: (x: number, y: number) => Range | null
   readonly serializeSelection: () => SerializedPdfSelection | null
 }
 
@@ -967,6 +976,83 @@ export const PdfDocumentViewer = forwardRef<
     restoreAnchorRef.current()
   }, [geometryVersion, props.readingInsets])
 
+  const groupPreview = useRef<ReaderSelectionRange[] | null>(null)
+  const [previewVersion, setPreviewVersion] = useState(0)
+  const rangeFromEndpoints = (
+    stored: Pick<ReaderSelectionRange, 'start' | 'end'>
+  ): Range | null => {
+    const first = selectionContextsRef.current.get(
+      Number(stored.start.selectionId.slice(5))
+    )
+    const last = selectionContextsRef.current.get(
+      Number(stored.end.selectionId.slice(5))
+    )
+    if (!first || !last) return null
+    const start = canonicalRangeToDomRange(
+      first.canonical,
+      stored.start.offset,
+      first.canonical.text.length,
+      first.textLayerDiv
+    )
+    const end = canonicalRangeToDomRange(
+      last.canonical,
+      0,
+      stored.end.offset,
+      last.textLayerDiv
+    )
+    if (!start || !end) return null
+    start.setEnd(end.endContainer, end.endOffset)
+    return start
+  }
+  const serializeEndpoint = (
+    stored: ReaderSelectionRange,
+    candidate: Range,
+    end: boolean
+  ) => {
+    const range = rangeFromEndpoints(stored)
+    if (!range) return null
+    if (end) range.setEnd(candidate.endContainer, candidate.endOffset)
+    else range.setStart(candidate.startContainer, candidate.startOffset)
+    return serializePdfTextSelection(
+      range,
+      selectionContextsRef.current,
+      stored.overlayRectType ?? overlayRectType
+    )
+  }
+  const touchSelection = usePdfTouchSelection({
+    rootRef: containerRef,
+    source,
+    enabled: tool === 'text-selection' && !edgeCropEditing,
+    validate: (range) =>
+      Boolean(
+        serializePdfTextSelection(
+          range,
+          selectionContextsRef.current,
+          overlayRectType
+        )?.text
+      ),
+    onChange: () => {
+      restoredSelectionGroup.current = null
+      groupPreview.current = null
+      const range = touchSelection.managed.current
+      const detail = range
+        ? serializePdfTextSelection(
+            range,
+            selectionContextsRef.current,
+            overlayRectType
+          )
+        : null
+      onTextSelectionChange?.(detail?.text ?? '', detail)
+    }
+  })
+  const currentRange = () => {
+    const selection = containerRef.current?.ownerDocument.getSelection()
+    return (
+      touchSelection.managed.current ??
+      (selection?.rangeCount ? selection.getRangeAt(0) : null)
+    )
+  }
+
   const restoredSelectionGroup = useRef<{
     native: Range
     members: ReaderSelectionRange[]
@@ -975,18 +1061,19 @@ export const PdfDocumentViewer = forwardRef<
     useCallback((): SerializedPdfSelection | null => {
       const view = containerRef.current?.ownerDocument.defaultView
       const selection = view?.getSelection?.() ?? null
-      if (!selection) return null
+      if (!selection && !touchSelection.managed.current) return null
       const restored = restoredSelectionGroup.current
-      const native = selection.rangeCount ? selection.getRangeAt(0) : null
+      const native = currentRange()
       if (
         restored &&
         native &&
-        native.startContainer === restored.native.startContainer &&
-        native.startOffset === restored.native.startOffset &&
-        native.endContainer === restored.native.endContainer &&
-        native.endOffset === restored.native.endOffset
+        (Boolean(touchSelection.managed.current) ||
+          (native.startContainer === restored.native.startContainer &&
+            native.startOffset === restored.native.startOffset &&
+            native.endContainer === restored.native.endContainer &&
+            native.endOffset === restored.native.endOffset))
       ) {
-        const members = restored.members
+        const members = groupPreview.current ?? restored.members
         const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] =
           {}
         for (const member of members) {
@@ -1007,7 +1094,7 @@ export const PdfDocumentViewer = forwardRef<
       }
       restoredSelectionGroup.current = null
       return serializePdfTextSelection(
-        selection,
+        touchSelection.managed.current ?? selection!,
         selectionContextsRef.current,
         overlayRectType
       )
@@ -1035,6 +1122,7 @@ export const PdfDocumentViewer = forwardRef<
     let scheduled = false
     const emitSelection = () => {
       scheduled = false
+      if (touchSelection.managed.current) return
       const selection = ownerDocument.getSelection()
       if (!selection || selection.isCollapsed) {
         onTextSelectionChange('', null)
@@ -1254,14 +1342,90 @@ export const PdfDocumentViewer = forwardRef<
         })
       },
       clearSelection: () => {
+        touchSelection.setRange(null)
+        groupPreview.current = null
+        setPreviewVersion((value) => value + 1)
         restoredSelectionGroup.current = null
         containerRef.current?.ownerDocument.defaultView
           ?.getSelection()
           ?.removeAllRanges()
       },
+      getSelectionRange: currentRange,
+      serializeRangeEndpoint: (id, range, end) => {
+        const stored = ranges.find((item) => item.id === id)
+        return stored ? serializeEndpoint(stored, range, end) : null
+      },
+      setSelectionRange: (range) => {
+        const restored = restoredSelectionGroup.current
+        if (
+          restored &&
+          range &&
+          containerRef.current?.dataset.pdfTouchSelection
+        ) {
+          const changedStart =
+            range.compareBoundaryPoints(
+              Range.START_TO_START,
+              restored.native
+            ) !== 0
+          const changedEnd =
+            range.compareBoundaryPoints(Range.END_TO_END, restored.native) !== 0
+          const member = changedEnd
+            ? restored.members.at(-1)!
+            : restored.members[0]!
+          const detail =
+            changedStart || changedEnd
+              ? serializeEndpoint(member, range, changedEnd)
+              : null
+          groupPreview.current = detail
+            ? restored.members.map((item) =>
+                item.id === member.id
+                  ? {
+                      ...item,
+                      ...detail,
+                      rectsBySelectionId: { ...detail.rectsBySelectionId }
+                    }
+                  : item
+              )
+            : null
+          setPreviewVersion((value) => value + 1)
+        }
+        if (containerRef.current?.dataset.pdfTouchSelection)
+          touchSelection.setRange(range)
+        else {
+          const selection = containerRef.current?.ownerDocument.getSelection()
+          selection?.removeAllRanges()
+          if (range) selection?.addRange(range)
+        }
+      },
+      hitTestSelection: (x, y) => {
+        const root = containerRef.current
+        if (!root) return null
+        const caret = pdfCaretAtPoint(root, x, y)
+        if (!caret) return null
+        // Validate the caret through the same canonical mapping as persistence.
+        const probe = caret.cloneRange()
+        const length = probe.startContainer.textContent?.length ?? 0
+        if (!length) return null
+        probe.setStart(
+          caret.startContainer,
+          Math.min(caret.startOffset, length - 1)
+        )
+        probe.setEnd(
+          caret.startContainer,
+          Math.min(caret.startOffset + 1, length)
+        )
+        return serializePdfTextSelection(
+          probe,
+          selectionContextsRef.current,
+          overlayRectType
+        )
+          ? caret
+          : null
+      },
       serializeSelection: serializeCurrentSelection,
       selectRange: (id) => {
         restoredSelectionGroup.current = null
+        groupPreview.current = null
         const members = getSelectionGroup(ranges, id)
         const stored = members[0]
         if (!stored) return null
@@ -1286,9 +1450,18 @@ export const PdfDocumentViewer = forwardRef<
         )
         if (!start || !end) return null
         start.setEnd(end.endContainer, end.endOffset)
+        if (
+          containerRef.current?.dataset.pdfTouchSelection &&
+          members.length > 1
+        ) {
+          const final = rangeFromEndpoints(members.at(-1)!)
+          if (final) start.setEnd(final.endContainer, final.endOffset)
+        }
         const selection = first.textLayerDiv.ownerDocument.getSelection()
         selection?.removeAllRanges()
-        selection?.addRange(start)
+        if (containerRef.current?.dataset.pdfTouchSelection)
+          touchSelection.setRange(start)
+        else selection?.addRange(start)
         if (members.length > 1)
           restoredSelectionGroup.current = {
             native: start.cloneRange(),
@@ -1304,7 +1477,8 @@ export const PdfDocumentViewer = forwardRef<
       onHighlight,
       serializeCurrentSelection,
       props.readingInsets,
-      edgeCrop
+      edgeCrop,
+      touchSelection.touch
     ]
   )
 
@@ -1314,6 +1488,10 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     if (!viewer) return null
 
+    const previews = new Map(
+      groupPreview.current?.map((range) => [range.id, range])
+    )
+    const overlayRanges = ranges.map((range) => previews.get(range.id) ?? range)
     return overlayPages.flatMap((pageNumber) => {
       if (!allowedPages.includes(pageNumber)) return []
       const pageView = viewer.getPageView(pageNumber - 1)
@@ -1355,7 +1533,7 @@ export const PdfDocumentViewer = forwardRef<
             geometry={geometry}
             tool={tool}
             overlayRectType={overlayRectType}
-            ranges={ranges}
+            ranges={overlayRanges}
             rects={rects}
             painting={pagePaintings[pageId]}
             selectedRangeId={selectedRangeId}
@@ -1390,6 +1568,7 @@ export const PdfDocumentViewer = forwardRef<
   }, [
     status,
     overlayPages,
+    previewVersion,
     geometryVersion,
     tool,
     overlayRectType,
@@ -1426,12 +1605,23 @@ export const PdfDocumentViewer = forwardRef<
   return (
     <div
       className={rootClassName}
+      style={
+        {
+          '--pdf-selection-color':
+            ranges.find((range) => range.id === selectedRangeId)?.markerStyle
+              ?.backgroundColor ?? highlightColor
+        } as React.CSSProperties
+      }
       data-status={status}
       data-testid='pdf-document-viewer'
     >
       <div
         ref={containerRef}
         className='hamster-reader__pdf-viewer-container'
+        data-pdf-touch-selection={touchSelection.touch ? 'true' : undefined}
+        data-pdf-selection-enabled={
+          tool === 'text-selection' && !edgeCropEditing ? 'true' : undefined
+        }
         style={{ position: 'absolute', inset: 0, overflow: 'auto' }}
       >
         <div ref={viewerElementRef} className='pdfViewer' />
