@@ -1,6 +1,6 @@
 # HAM-160 PDF 导航与预览验证
 
-实现对应 `openspec/changes/fix-pdf-reader-navigation-and-previews/`。
+实现对应 `openspec/changes/archive/2026-11-04-fix-pdf-reader-navigation-and-previews/`。
 proposal、design、增量 spec 与评审附件逐字一致；只更新 tasks 完成状态。
 
 ## 实现约定
@@ -64,3 +64,32 @@ node scripts/check-pdf-navigation.mjs
 当前环境没有 iOS/Android 真机或可用模拟器，未验证原生 WebView SafeArea、长按选择、
 触摸和正文/侧栏手势，因此任务 4.3 保留未完成。桌面 Chromium 的响应式几何与
 host:check 不能代替设备测试。由小助手启动 dev server 后交人类验收，并补齐设备记录。
+
+## 代码审核后的两项修复
+
+PDF pagesloaded 即确认文档可用；初始恢复及其替代导航各自通过导航门禁控制进度提交。
+旧恢复的 generation 失效不会再使文档永久不可发布。新增集成回归覆盖初始恢复正常完成、
+文字层就绪前 Page Browser 跳页、书签替代及初始恢复失败后跳页，均验证后续滚动和跳页回调。
+
+预览任务完成、失败或取消并收敛后，通过当前文档 viewer 的 `thumbnailrendered`
+事件请求回收。pdfjs 官方 handler 检查正文页面 buffer，保留正文使用的页面；
+PNG 缓存不再持有底层渲染资源。切换文档的旧任务不会通知新 viewer 清理。
+预览单测现在同时断言 PDFPageProxy.cleanup、渲染资源保留集合、正文保护和失败/取消时序。
+
+复现实验：`node scripts/check-pdf-preview-resources.mjs`。
+脚本生成同一份 36 页 PDF，以真实 Chromium / pdfjs / PDFViewer 和预览 hook 测量：
+
+| 路径 | 保留操作列表的页数 | 操作条目数 |
+| --- | ---: | ---: |
+| 审核员流程：仅渲染并清空 canvas 的对照 | 36 | 396 |
+| 修复路径：顺序浏览 36 页预览并淘汰旧 PNG | 2 | 44 |
+| 修复路径：关闭预览后 | 2 | 44 |
+
+34 个仅预览页面的操作列表实际释放；图片缓存限制为 24 项、关闭后为零。
+正在显示的第 1 页在预览释放前后均为 22 条操作，PNG 淘汰后和关闭后仍为 22，
+正文继续可见。保留的两页属于正文缓存，不应由预览强制清理。无页面异常。
+这是操作列表缓存实验，不将计数解释为实际峰值内存。
+观察 `_intentStates` 仅存在于测试宿主；产品代码使用官方事件，不访问私有缓存。
+
+相关回归共 7 个文件、60 项通过（审核时的 55 项加 5 项新增）。
+报告、36 页 PDF 与正文截图输出至仓库同级 `ham160-review-browser/`。

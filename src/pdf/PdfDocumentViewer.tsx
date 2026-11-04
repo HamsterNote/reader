@@ -41,6 +41,7 @@ import {
   configurePdfJsWorker,
   type PageViewport,
   type PDFDocumentProxy,
+  type PDFPageProxy,
   type TextItem
 } from './pdfjsRuntime'
 import type { PdfPageOverlayGeometry } from './PdfPageOverlayLayer'
@@ -146,6 +147,10 @@ export type PdfDocumentViewerProps = PdfOcrOptions & {
 }
 
 export type PdfDocumentViewerRef = {
+  readonly releasePreviewPage: (
+    document: PDFDocumentProxy,
+    page: PDFPageProxy
+  ) => void
   readonly scrollToPage: (pageNumber: number) => void
   readonly setScale: (scale: number) => void
   readonly captureTextAnchor: () => ReaderTextAnchor | null
@@ -1189,6 +1194,14 @@ export const PdfDocumentViewer = forwardRef<
   useImperativeHandle(
     ref,
     () => ({
+      releasePreviewPage: (document, page) => {
+        if (document !== documentRef.current) return
+        eventBusRef.current?.dispatch('thumbnailrendered', {
+          source: viewerRef.current,
+          pageNumber: page.pageNumber,
+          pdfPage: page
+        })
+      },
       scrollToPage: (pageNumber) => {
         const viewer = viewerRef.current
         if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return

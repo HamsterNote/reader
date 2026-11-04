@@ -716,7 +716,8 @@ export function EngineDocumentViewer(props: Props) {
   const previews = usePdfPreviews(
     pdfDocument,
     Boolean(props.showPageBrowser),
-    () => pdf.current?.isRendering() ?? true
+    () => pdf.current?.isRendering() ?? true,
+    (document, page) => pdf.current?.releasePreviewPage(document, page)
   )
   const emittedLayoutPositions = useRef(new Set<string>())
   const publishPosition = useCallback((pageNumber: number) => {
@@ -840,12 +841,14 @@ export function EngineDocumentViewer(props: Props) {
   restorePositionRef.current = restorePosition
   const onPdfReady = useCallback(async (count: number) => {
     setPageCount(count)
+    // PDF pages are available independently of which navigation wins. Pending
+    // restores still block publication via progressEnabled/captureReadingPosition.
+    restored.current = true
     const restoration = restorePositionRef.current()
     const generation = pdfNavigationGeneration.current
     try {
       await restoration
       if (generation !== pdfNavigationGeneration.current) return
-      restored.current = true
       progressEnabled.current = true
     } catch (failure) {
       if (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
+import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 
 function resumeWhenIdle(
   resume: () => void,
@@ -14,11 +14,23 @@ function resumeWhenIdle(
 
 type Preview = { image: string; width: number; height: number }
 
+function trimPreviews(
+  cache: Map<number, Preview>,
+  visible: ReadonlySet<number>
+) {
+  while (cache.size > Math.max(24, visible.size)) {
+    const oldest = [...cache.keys()].find((key) => !visible.has(key))
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+}
+
 /** One small render at a time, sharing the viewer's document and worker. */
 export function usePdfPreviews(
   document: PDFDocumentProxy | null,
   open: boolean,
-  bodyBusy: () => boolean
+  bodyBusy: () => boolean,
+  releasePage: (document: PDFDocumentProxy, page: PDFPageProxy) => void
 ) {
   const active = useRef<{
     page: number
@@ -33,6 +45,8 @@ export function usePdfPreviews(
   const pump = useRef(() => {})
   const busy = useRef(bodyBusy)
   busy.current = bodyBusy
+  const release = useRef(releasePage)
+  release.current = releasePage
   useEffect(() => {
     setOwner(document)
     setPreviews(new Map())
@@ -65,8 +79,9 @@ export function usePdfPreviews(
         return
       }
       running = true
+      let page: PDFPageProxy | undefined
       try {
-        const page = await document.getPage(pageNumber)
+        page = await document.getPage(pageNumber)
         if (cancelled || !visible.current.has(pageNumber)) return
         const original = page.getViewport({ scale: 1 })
         const viewport = page.getViewport({
@@ -91,13 +106,7 @@ export function usePdfPreviews(
           width: original.width,
           height: original.height
         })
-        while (cache.size > Math.max(24, visible.current.size)) {
-          const oldest = [...cache.keys()].find(
-            (key) => !visible.current.has(key)
-          )
-          if (oldest === undefined) break
-          cache.delete(oldest)
-        }
+        trimPreviews(cache, visible.current)
         setPreviews(new Map(cache))
       } catch {
         if (!cancelled && visible.current.has(pageNumber)) {
@@ -108,6 +117,11 @@ export function usePdfPreviews(
         if (canvas) canvas.width = canvas.height = 0
         canvas = undefined
         task = undefined
+        // The PNG does not need PDF render resources. The viewer's official
+        // thumbnailrendered handler protects its buffered body pages; do not
+        // call cleanup directly on this shared proxy. Also release cancelled
+        // and failed renders, once their task has settled.
+        if (page) release.current(document, page)
         if (active.current?.owner === owner) active.current = null
         running = false
         if (!cancelled) timer = setTimeout(() => void run(), 0)
