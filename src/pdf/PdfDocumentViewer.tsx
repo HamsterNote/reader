@@ -33,6 +33,7 @@ import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 import { EventBus, PDFLinkService, PDFViewer } from './pdfViewerLib'
+import { CroppedPdfViewer } from './CroppedPdfViewer'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
@@ -515,22 +516,8 @@ export const PdfDocumentViewer = forwardRef<
       restoredPosition.current = null
       restoredTextPosition.current = null
       const viewer = viewerRef.current
-      const container = containerRef.current
-      if (!viewer || !container) return
+      if (!viewer) return
       viewer.scrollPageIntoView({ pageNumber })
-      const pageView = viewer.getPageView(pageNumber - 1)
-      if (!pageView) return
-      const crop = getPageCropGeometry(
-        pageView.viewport,
-        resolvePageEdgeCrop(cropOptionsRef.current, pageNumber)
-      )
-      const pageRect = pageView.div.getBoundingClientRect()
-      const containerRect = container.getBoundingClientRect()
-      // PDF.js destinations use the full page origin, which may now precede the
-      // visible page. A page jump must start at the cropped top/left instead.
-      container.scrollTop += pageRect.top + crop.top - containerRect.top
-      if (crop.width > container.clientWidth)
-        container.scrollLeft += pageRect.left + crop.left - containerRect.left
     },
     [cancelLayoutRestore]
   )
@@ -861,17 +848,23 @@ export const PdfDocumentViewer = forwardRef<
     if (workerSrc) configurePdfJsWorker(workerSrc)
     const eventBus = new EventBus()
     const linkService = new PDFLinkService({ eventBus })
-    const viewer = new PDFViewer({
-      container,
-      viewer: viewerElement,
-      eventBus,
-      linkService,
-      // TextLayerMode.ENABLE
-      textLayerMode: 1,
-      annotationMode: AnnotationMode.ENABLE,
-      annotationEditorMode: 0,
-      removePageBorders: true
-    })
+    const viewer = new CroppedPdfViewer(
+      {
+        container,
+        viewer: viewerElement,
+        eventBus,
+        linkService,
+        // TextLayerMode.ENABLE
+        textLayerMode: 1,
+        annotationMode: AnnotationMode.ENABLE,
+        annotationEditorMode: 0,
+        removePageBorders: true
+      },
+      {
+        crop: () => cropOptionsRef.current,
+        pages: () => visiblePagesRef.current
+      }
+    )
     linkService.setViewer(viewer)
     viewerRef.current = viewer
     eventBusRef.current = eventBus

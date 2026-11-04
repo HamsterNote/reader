@@ -6,6 +6,19 @@ import { createPdfTextModeDocument } from '../src/pdf/pdfTextModeDocument'
 import { configurePdfJsWorker } from '../src/pdf/pdfjsRuntime'
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import '../src/styles/index.scss'
+import { PDFViewer } from '../src/pdf/pdfViewerLib'
+
+// Browser-only observation of the real viewer, without a production debug API.
+const updateViewer = PDFViewer.prototype.update
+PDFViewer.prototype.update = function () {
+  window.pdfCropViewer = this
+  return updateViewer.call(this)
+}
+const scrollPage = PDFViewer.prototype.scrollPageIntoView
+PDFViewer.prototype.scrollPageIntoView = function (options) {
+  window.pdfCropPageScrolls = (window.pdfCropPageScrolls ?? 0) + 1
+  return scrollPage.call(this, options)
+}
 
 configurePdfJsWorker(workerSrc)
 const bytes = new Uint8Array(await (await fetch('/crop.pdf')).arrayBuffer())

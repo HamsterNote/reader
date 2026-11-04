@@ -554,6 +554,135 @@ try {
     name: 'cropped fit-width and page jump survive anchor restoration',
     croppedJump
   })
+  await update({ all: globalCrop })
+  await zoom('200%')
+  await page.setViewportSize({ width: 1200, height: 300 })
+  await settle()
+  const pageScrollsBefore = await host.evaluate((host) => {
+    host.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+    const sheet = host.querySelectorAll('.page')[1].getBoundingClientRect()
+    host.scrollTop +=
+      sheet.top + sheet.height * 0.1 - host.getBoundingClientRect().top
+    return window.pdfCropPageScrolls
+  })
+  await settle()
+  const visibility = await page.evaluate(() => {
+    const viewer = window.pdfCropViewer
+    viewer.update()
+    const visible = viewer._getVisiblePages()
+    return {
+      currentPageNumber: viewer.currentPageNumber,
+      visible: visible.views.map(({ id, percent }) => ({ id, percent })),
+      pageScrolls: window.pdfCropPageScrolls,
+      scrollTop: viewer.container.scrollTop
+    }
+  })
+  report.checks.push({
+    name: 'small viewport uses cropped page visibility',
+    visibility,
+    geometry: await measure()
+  })
+  assert(
+    !visibility.visible.some(({ id }) => id === 1),
+    'fully clipped page 1 must not be visible'
+  )
+  assert.equal(visibility.currentPageNumber, 2)
+  assert.equal(
+    visibility.pageScrolls,
+    pageScrollsBefore,
+    'visibility updates do not issue page navigation'
+  )
+  await settle()
+  const afterUpdate = await page.evaluate(() => ({
+    page: window.pdfCropViewer.currentPageNumber,
+    scrollTop: window.pdfCropViewer.container.scrollTop,
+    pageScrolls: window.pdfCropPageScrolls
+  }))
+  assert.equal(afterUpdate.page, 2)
+  assert.equal(afterUpdate.pageScrolls, visibility.pageScrolls)
+  close(
+    afterUpdate.scrollTop,
+    visibility.scrollTop,
+    'React updates do not overwrite visibility scroll position'
+  )
+  report.checks.push({
+    name: 'update does not trigger secondary scrollToCroppedPage',
+    visibility,
+    afterUpdate
+  })
+
+  // Exercise PDF.js page advance as well as the Reader's keyboard page control.
+  for (const [method, expected] of [
+    ['nextPage', 3],
+    ['previousPage', 2]
+  ]) {
+    assert(
+      await page.evaluate((method) => window.pdfCropViewer[method](), method)
+    )
+    await settle()
+    const current = await page.evaluate(
+      () => window.pdfCropViewer.currentPageNumber
+    )
+    assert.equal(current, expected)
+    report.checks.push({
+      name: `PDF.js ${method} uses the visible current page`,
+      current
+    })
+  }
+  const progress = page.getByRole('slider')
+  for (const [key, expected] of [
+    ['ArrowDown', 3],
+    ['ArrowUp', 2]
+  ]) {
+    await progress.press(key)
+    await settle()
+    const current = await page.evaluate(
+      () => window.pdfCropViewer.currentPageNumber
+    )
+    assert.equal(current, expected)
+    assert.equal(await progress.getAttribute('aria-valuenow'), String(expected))
+    const geometry = await measure()
+    close(
+      geometry.sheets[expected - 1].top +
+        geometry.sheets[expected - 1].height * globalCrop.top,
+      geometry.hostTop,
+      'Reader page advance aligns cropped top'
+    )
+    report.checks.push({
+      name: `Reader ${key} advances and aligns cropped page`,
+      current,
+      geometry
+    })
+  }
+  await page.evaluate(() => {
+    window.pdfCropViewer.scrollPageIntoView({
+      pageNumber: 2,
+      destArray: [null, { name: 'XYZ' }, 100, 500, null],
+      allowNegativeOffset: true
+    })
+  })
+  await settle()
+  const destination = await page.evaluate(() => {
+    const viewer = window.pdfCropViewer
+    const view = viewer.getPageView(1)
+    const point = view.viewport.convertToViewportPoint(100, 500)
+    const rect = view.div.getBoundingClientRect()
+    return {
+      page: viewer.currentPageNumber,
+      pointTop: rect.top + point[1],
+      hostTop: viewer.container.getBoundingClientRect().top
+    }
+  })
+  close(
+    destination.pointTop,
+    destination.hostTop,
+    'explicit PDF destination keeps full-page coordinates'
+  )
+  assert.equal(destination.page, 2)
+  report.checks.push({
+    name: 'PDF XYZ destination preserves content coordinates',
+    destination
+  })
   assert.deepEqual(report.errors, [])
 } finally {
   await writeFile(
