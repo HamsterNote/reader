@@ -51,6 +51,8 @@ type PageBrowserProps = {
   readonly pageNumbers: readonly number[]
   readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
   readonly baseImagesByPageNumber: ReadonlyMap<number, string>
+  readonly previewErrors?: ReadonlySet<number>
+  readonly onRetryPreview?: () => void
   readonly pagePaintings?: Readonly<Record<string, EditorDocument>>
   readonly onPageVisibilityChange: (
     pageNumber: number,
@@ -222,6 +224,8 @@ type PageBrowserPagesPanelProps = {
   readonly pageNumbers: readonly number[]
   readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
   readonly baseImagesByPageNumber: ReadonlyMap<number, string>
+  readonly previewErrors?: ReadonlySet<number>
+  readonly onRetryPreview?: () => void
   readonly visiblePageNumbers?: ReadonlySet<number>
   readonly bookmarkedPages: ReadonlySet<number>
   readonly isOpen: boolean
@@ -236,6 +240,8 @@ function PageBrowserPagesPanel({
   pageNumbers,
   pageSizesByPageNumber,
   baseImagesByPageNumber,
+  previewErrors,
+  onRetryPreview,
   visiblePageNumbers,
   bookmarkedPages,
   isOpen,
@@ -256,11 +262,13 @@ function PageBrowserPagesPanel({
         style={listStyle}
       >
         {pageNumbers.map((pageNumber) => {
-          const pageSize = pageSizesByPageNumber.get(pageNumber)
+          const pageSize =
+            pageSizesByPageNumber.get(pageNumber) ??
+            pageSizesByPageNumber.values().next().value
           const baseImage = baseImagesByPageNumber.get(pageNumber)
           const aspectRatio = pageSize
             ? `${pageSize.width} / ${pageSize.height}`
-            : undefined
+            : '3 / 4'
           const isSelected = visiblePageNumbers?.has(pageNumber) ?? false
           const itemClassName = [
             'hamster-reader__page-browser-item',
@@ -303,6 +311,11 @@ function PageBrowserPagesPanel({
                   {pageNumber}
                 </span>
               </button>
+              {previewErrors?.has(pageNumber) && (
+                <button type='button' onClick={onRetryPreview}>
+                  第 {pageNumber} 页预览失败，重试
+                </button>
+              )}
               <PageBookmarkButton
                 pageNumber={pageNumber}
                 isBookmarked={bookmarkedPages.has(pageNumber)}
@@ -381,6 +394,8 @@ export function PageBrowser({
   pageNumbers,
   pageSizesByPageNumber,
   baseImagesByPageNumber,
+  previewErrors,
+  onRetryPreview,
   pagePaintings,
   onPageVisibilityChange,
   onNavigateToPage,
@@ -685,6 +700,8 @@ export function PageBrowser({
           pageNumbers={pageNumbers}
           pageSizesByPageNumber={pageSizesByPageNumber}
           baseImagesByPageNumber={baseImagesByPageNumber}
+          previewErrors={previewErrors}
+          onRetryPreview={onRetryPreview}
           visiblePageNumbers={visiblePageNumbers}
           bookmarkedPages={bookmarkSet}
           isOpen={effectiveOpen}

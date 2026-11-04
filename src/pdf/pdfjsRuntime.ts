@@ -6,6 +6,7 @@
 import {
   AnnotationMode,
   getDocument,
+  normalizeUnicode,
   GlobalWorkerOptions,
   InvalidPDFException,
   PasswordResponses,
@@ -29,6 +30,7 @@ if (typeof globalThis.pdfjsLib === 'undefined') {
 export {
   AnnotationMode,
   getDocument,
+  normalizeUnicode,
   GlobalWorkerOptions,
   InvalidPDFException,
   PasswordResponses,

@@ -50,6 +50,7 @@ export type ReaderVirtualPaperState = {
 /** Text Mode 可持久化的当前阅读页与文字锚点。 */
 export type ReaderTextReadingProgress = {
   readonly currentPageNumber: number
+  /** Used only when no visible text anchor is available. */
   readonly anchor?: ReaderTextAnchor
   /** 无文字时的页内纵向百分比；旧记录缺省为页首。 */
   readonly verticalPercentage?: number

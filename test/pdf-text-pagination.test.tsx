@@ -48,6 +48,72 @@ const anchor = (offset: number) => ({
 })
 
 describe('PDF Text actual fragments and navigation', () => {
+  it('maps a proportion to a column, then hands off its actual first source character', async () => {
+    const onCommit = vi.fn()
+    const options = {
+      enabled: true,
+      generation: 0,
+      root,
+      pages: [1],
+      progress: { currentPageNumber: 1, verticalPercentage: 60 },
+      loaded: new Map([[1, []]]),
+      errors: new Set<number>(),
+      width: 300,
+      height: 200,
+      layoutKey: 1,
+      enqueue: vi.fn(),
+      onCommit,
+      onTurn: vi.fn()
+    }
+    const { result } = renderHook(() => usePdfTextPagination(options))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.column).toBe(1)
+    expect(result.current.capturePosition()).toMatchObject({
+      pageNumber: 1,
+      offset: 100
+    })
+    expect(onCommit.mock.lastCall?.[0].verticalPercentage).toBeUndefined()
+  })
+
+  it('retains a scanned page proportion, and resets it when turning to another empty source page', async () => {
+    root.innerHTML = '<div role="status">No text</div>'
+    const onCommit = vi.fn()
+    const options = {
+      enabled: true,
+      generation: 0,
+      root,
+      pages: [2, 3],
+      progress: { currentPageNumber: 2, verticalPercentage: 60 },
+      loaded: new Map([
+        [2, []],
+        [3, []]
+      ]),
+      errors: new Set<number>(),
+      width: 300,
+      height: 200,
+      layoutKey: 1,
+      enqueue: vi.fn(),
+      onCommit,
+      onTurn: vi.fn()
+    }
+    const { result } = renderHook(() => usePdfTextPagination(options))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.capturePosition()).toEqual({
+      pageNumber: 2,
+      verticalPercentage: 60
+    })
+    expect(onCommit.mock.lastCall?.[0]).toEqual({
+      currentPageNumber: 2,
+      verticalPercentage: 60
+    })
+    act(() => result.current.turn(true))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.capturePosition()).toEqual({
+      pageNumber: 3,
+      verticalPercentage: 0
+    })
+  })
+
   it.each([false, true])(
     'completes initial layout and sequential navigation in StrictMode (deferred content: %s)',
     async (deferred) => {

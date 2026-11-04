@@ -14,6 +14,7 @@ import {
 type Target = {
   pageNumber: number
   anchor?: ReaderTextAnchor
+  verticalPercentage?: number
   column?: number
   last?: boolean
   publish: boolean
@@ -84,6 +85,9 @@ export function usePdfTextPagination(options: {
         progress.anchor?.pageNumber === progress.currentPageNumber
           ? progress.anchor
           : undefined,
+      verticalPercentage: progress?.anchor
+        ? undefined
+        : progress?.verticalPercentage,
       publish: false,
       token: serial.current
     },
@@ -126,7 +130,8 @@ export function usePdfTextPagination(options: {
       pageNumber: number,
       anchor?: ReaderTextAnchor,
       publish = true,
-      preserveSelected = false
+      preserveSelected = false,
+      verticalPercentage?: number
     ) => {
       if (!values.current.enabled || !values.current.pages.includes(pageNumber))
         return
@@ -134,7 +139,13 @@ export function usePdfTextPagination(options: {
       values.current.onTurn(preserveSelected)
       // React may replay state initializers/updaters in StrictMode. Allocate
       // navigation tokens once per request, outside those pure functions.
-      const target = { pageNumber, anchor, publish, token: ++serial.current }
+      const target = {
+        pageNumber,
+        anchor,
+        verticalPercentage,
+        publish,
+        token: ++serial.current
+      }
       setState((previous) => ({
         ...previous,
         generation: values.current.generation,
@@ -154,7 +165,13 @@ export function usePdfTextPagination(options: {
       JSON.stringify(progress) === JSON.stringify(committed.current)
     )
       return
-    navigate(progress.currentPageNumber, progress.anchor, false)
+    navigate(
+      progress.currentPageNumber,
+      progress.anchor,
+      false,
+      false,
+      progress.verticalPercentage
+    )
   }, [enabled, progress, navigate])
 
   const target = current.target
@@ -202,10 +219,19 @@ export function usePdfTextPagination(options: {
         : [{ index: 0 }]
       const restoredColumn =
         restore && content ? pdfTextAnchorColumn(content, restore, width) : null
+      const ratioColumn =
+        target.verticalPercentage === undefined
+          ? undefined
+          : columns[
+              Math.round(
+                (Math.max(0, Math.min(100, target.verticalPercentage)) / 100) *
+                  (columns.length - 1)
+              )
+            ]?.index
       const column =
         target.last && committedToken.current !== token
           ? columns.at(-1)!.index
-          : (restoredColumn ?? target.column ?? 0)
+          : (restoredColumn ?? target.column ?? ratioColumn ?? 0)
       const visible =
         columns.find((item) => item.index === column) ?? columns[0]
       if (content)
@@ -217,9 +243,12 @@ export function usePdfTextPagination(options: {
         visible,
         unlocatable
       )
+      const fallbackPosition = {
+        verticalPercentage: target.verticalPercentage ?? 0
+      }
       const next: ReaderTextReadingProgress = {
         currentPageNumber: target.pageNumber,
-        ...(anchor ? { anchor } : { verticalPercentage: 0 })
+        ...(anchor ? { anchor } : fallbackPosition)
       }
       committed.current = next
       committedToken.current = token
@@ -353,6 +382,21 @@ export function usePdfTextPagination(options: {
         stableWaiters.current.add({ resolve, reject })
       })
     },
-    capture: () => committed.current?.anchor
+    capture: () => committed.current?.anchor,
+    capturePosition: () => {
+      if (!current.ready || gate.current) return undefined
+      const anchor = current.columns.find(
+        (item) => item.index === current.column
+      )?.anchor
+      return (
+        anchor ??
+        (committed.current
+          ? {
+              pageNumber: committed.current.currentPageNumber,
+              verticalPercentage: committed.current.verticalPercentage ?? 0
+            }
+          : undefined)
+      )
+    }
   }
 }

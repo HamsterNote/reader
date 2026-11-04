@@ -1827,6 +1827,60 @@ describe('Reader renderMode', () => {
     })
   })
 
+  it('hands off a live no-text proportion in both directions without reviving an old text anchor', async () => {
+    const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+    const onDataChange = vi.fn()
+    render(
+      <Reader
+        document={doc}
+        useVirtualPaper={false}
+        onDataChange={onDataChange}
+      />
+    )
+    const layoutRef = capturedViewerProps.readingPositionRef
+    if (typeof layoutRef !== 'function')
+      throw new TypeError('Expected Layout ref')
+    act(() => {
+      layoutRef({
+        captureTextAnchor: () => undefined,
+        captureReadingPosition: () => ({
+          pageNumber: 2,
+          verticalPercentage: 60
+        })
+      })
+      fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    })
+    await waitFor(() =>
+      expect(capturedTextViewerProps.textReadingProgress).toEqual({
+        currentPageNumber: 2,
+        verticalPercentage: 60
+      })
+    )
+    const textRef = capturedTextViewerProps.readingPositionRef
+    if (typeof textRef !== 'function') throw new TypeError('Expected Text ref')
+    act(() => {
+      textRef({
+        captureTextAnchor: () => undefined,
+        captureReadingPosition: () => ({
+          pageNumber: 2,
+          verticalPercentage: 72
+        })
+      })
+      fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+    })
+    await waitFor(() =>
+      expect(capturedViewerProps.layoutReadingProgress).toEqual({
+        pageNumber: 2,
+        verticalPercentage: 72
+      })
+    )
+    expect(onDataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        layoutReadingProgress: { pageNumber: 2, verticalPercentage: 72 }
+      })
+    )
+  })
+
   it('captures the latest Layout anchor synchronously when switching before scroll reporting', async () => {
     // Given: 滚动后的异步上报尚未执行，Reader 仍保存着旧锚点。
     const staleAnchor = {

@@ -431,7 +431,19 @@ function parseStoredTextReadingProgress(
       'anchor' in parsed ? parseStoredTextAnchor(parsed.anchor) : undefined
     return anchor?.pageNumber === currentPageNumber
       ? { currentPageNumber, anchor }
-      : { currentPageNumber }
+      : {
+          currentPageNumber,
+          ...('verticalPercentage' in parsed &&
+          typeof parsed.verticalPercentage === 'number' &&
+          Number.isFinite(parsed.verticalPercentage)
+            ? {
+                verticalPercentage: Math.max(
+                  0,
+                  Math.min(100, parsed.verticalPercentage)
+                )
+              }
+            : {})
+        }
   } catch {
     return undefined
   }

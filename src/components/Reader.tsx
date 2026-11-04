@@ -164,6 +164,15 @@ const getReaderVirtualPaperKey = (
 const getReaderBookmarkKey = (bookmark: ReaderBookmark | undefined): string =>
   bookmark ? getBookmarkKey(bookmark) : ''
 
+const toTextReadingProgress = (
+  position: ReaderBookmark
+): ReaderTextReadingProgress => ({
+  currentPageNumber: position.pageNumber,
+  ...(isTextBookmark(position)
+    ? { anchor: position }
+    : { verticalPercentage: position.verticalPercentage })
+})
+
 type BottomBarHistoryContext = {
   readonly status: ReaderAnnotationHistoryStatus
   readonly renderMode: ReaderRenderMode
@@ -617,7 +626,8 @@ function resolveVerticalMargins(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
   containMarginY: number | undefined,
-  bottomBarInset: number
+  bottomBarInset: number,
+  mergeInsets = false
 ): ResolvedVerticalMargins {
   if (bottomBarInset === 0) {
     return {
@@ -629,7 +639,9 @@ function resolveVerticalMargins(
 
   return {
     top: containMarginTop ?? containMarginY,
-    bottom: (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset,
+    bottom: mergeInsets
+      ? Math.max(containMarginBottom ?? containMarginY ?? 0, bottomBarInset)
+      : (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset,
     legacy: undefined
   }
 }
@@ -794,6 +806,7 @@ export function Reader({
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const [internalRenderMode, setInternalRenderMode] =
     useState<ReaderRenderMode>('layout')
+  const [readingPositionNotice, setReadingPositionNotice] = useState(false)
   const [layoutPositionHandoff, setLayoutPositionHandoff] =
     useState<ReaderPositionHandoff<ReaderVirtualPaperState> | null>(null)
   const [nativeLayoutPositionHandoff, setNativeLayoutPositionHandoff] =
@@ -827,6 +840,11 @@ export function Reader({
     readonly document: ReaderDocumentInput
     readonly persistedValueKey: string
     readonly anchor: ReaderTextAnchor | undefined
+  } | null>(null)
+  const currentReadingPositionRef = useRef<{
+    mode: ReaderRenderMode
+    document: ReaderDocumentInput
+    position: ReaderBookmark
   } | null>(null)
   const readingPositionHandleRef = useRef<ReaderReadingPositionHandle>(null)
   const currentVirtualPaperStateRef = useRef<{
@@ -1091,7 +1109,8 @@ export function Reader({
     containMarginTop,
     containMarginBottom,
     containMarginY,
-    bottomBarInset
+    bottomBarInset,
+    isPdf || engineSource?.format === 'pdf'
   )
   const bottomBarHistoryStatus = resolveBottomBarHistoryStatus({
     status: historyStatus,
@@ -1155,10 +1174,7 @@ export function Reader({
       data: ReaderData | undefined
     ): ReaderData => {
       if (nextMode === 'text') {
-        const textReadingProgress = {
-          currentPageNumber: position.pageNumber,
-          verticalPercentage: position.verticalPercentage
-        }
+        const textReadingProgress = toTextReadingProgress(position)
         setTextPositionHandoff({
           document,
           replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
@@ -1174,6 +1190,21 @@ export function Reader({
       return { ...data, layoutReadingProgress: position }
     },
     [document]
+  )
+
+  const captureReadingPosition = useCallback(
+    (sourceMode: ReaderRenderMode) => {
+      const captured = currentReadingPositionRef.current
+      return (
+        (sourceMode === resolvedRenderMode
+          ? readingPositionHandleRef.current?.captureReadingPosition?.()
+          : undefined) ??
+        (captured?.mode === sourceMode && captured.document === document
+          ? captured.position
+          : undefined)
+      )
+    },
+    [document, resolvedRenderMode]
   )
 
   const handoffReadingPosition = useCallback(
@@ -1202,15 +1233,14 @@ export function Reader({
           ? resolvedVirtualPaperState?.anchor
           : resolvedTextReadingProgress?.anchor)
 
+      const sourcePosition = captureReadingPosition(sourceMode) ?? sourceAnchor
+
       if (nextMode === 'text') {
-        if (!sourceAnchor) {
+        if (!sourcePosition) {
           setTextPositionHandoff(null)
           return { ...data }
         }
-        const textReadingProgress = {
-          currentPageNumber: sourceAnchor.pageNumber,
-          anchor: sourceAnchor
-        }
+        const textReadingProgress = toTextReadingProgress(sourcePosition)
         setTextPositionHandoff({
           document,
           replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
@@ -1219,7 +1249,7 @@ export function Reader({
         return { ...data, textReadingProgress }
       }
 
-      if (!sourceAnchor) {
+      if (!sourcePosition) {
         setLayoutPositionHandoff(null)
         setNativeLayoutPositionHandoff(null)
         return { ...data }
@@ -1228,7 +1258,7 @@ export function Reader({
       setNativeLayoutPositionHandoff({
         document,
         replacedValueKey: getReaderBookmarkKey(data?.layoutReadingProgress),
-        value: sourceAnchor
+        value: sourcePosition
       })
       const persistedVirtualPaperKey = getReaderVirtualPaperKey(
         data?.virtualPaper
@@ -1246,7 +1276,10 @@ export function Reader({
           y: 0,
           scale: scale ?? defaultScale ?? 1
         }
-      const virtualPaper = { ...currentVirtualPaper, anchor: sourceAnchor }
+      const virtualPaper = {
+        ...currentVirtualPaper,
+        anchor: isTextBookmark(sourcePosition) ? sourcePosition : undefined
+      }
       setLayoutPositionHandoff({
         document,
         replacedValueKey: persistedVirtualPaperKey,
@@ -1255,10 +1288,11 @@ export function Reader({
 
       return useVirtualPaper
         ? { ...data, virtualPaper }
-        : { ...data, layoutReadingProgress: sourceAnchor }
+        : { ...data, layoutReadingProgress: sourcePosition }
     },
     [
       data,
+      captureReadingPosition,
       defaultScale,
       document,
       handoffPagePosition,
@@ -1271,6 +1305,15 @@ export function Reader({
 
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
+      if (
+        engineSource?.format === 'pdf' &&
+        readingPositionHandleRef.current?.captureReadingPosition &&
+        !readingPositionHandleRef.current.captureReadingPosition()
+      ) {
+        setReadingPositionNotice(true)
+        return
+      }
+      setReadingPositionNotice(false)
       try {
         readingPositionHandleRef.current?.captureAndPublish?.()
       } catch {
@@ -1307,6 +1350,7 @@ export function Reader({
     },
     [
       edgeCropEditing,
+      engineSource,
       data,
       document,
       handoffReadingPosition,
@@ -1321,6 +1365,14 @@ export function Reader({
   const handleReadingPositionRef = useCallback(
     (handle: ReaderReadingPositionHandle | null) => {
       if (handle === null) {
+        const position =
+          readingPositionHandleRef.current?.captureReadingPosition?.()
+        if (position)
+          currentReadingPositionRef.current = {
+            mode: resolvedRenderMode,
+            document,
+            position
+          }
         const capturedAnchor =
           readingPositionHandleRef.current?.captureTextAnchor()
         if (capturedAnchor) {
@@ -2195,6 +2247,11 @@ export function Reader({
             {invalidStoredProgress(data, resolvedRenderMode) && (
               <div role='status'>
                 无法精确恢复阅读位置，已使用有效页码显示；原进度已保留
+              </div>
+            )}
+            {readingPositionNotice && (
+              <div role='status' className='hamster-reader__engine-notice'>
+                正在准备阅读位置，请稍后重试切换。
               </div>
             )}
             {resolvedLoadingProgress && (

@@ -465,6 +465,7 @@ export type ReaderReadingPositionHandle = {
   readonly captureTextAnchor: () => ReaderTextAnchor | undefined
   readonly captureAndPublish?: () => void
   readonly waitForStable?: () => Promise<void>
+  readonly captureReadingPosition?: () => ReaderBookmark | undefined
 }
 
 export type IntermediateDocumentViewerProps = {
