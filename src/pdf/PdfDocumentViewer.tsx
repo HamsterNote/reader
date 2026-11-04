@@ -587,7 +587,8 @@ export const PdfDocumentViewer = forwardRef<
         bumpGeometry()
       })
       .catch(() => {
-        if (viewerRef.current !== viewer) return
+        if (viewerRef.current !== viewer || documentRef.current !== document)
+          return
         failedTextPages.current.add(pageNumber)
         restoreAnchor()
         bumpGeometry()
@@ -796,15 +797,18 @@ export const PdfDocumentViewer = forwardRef<
       setOverlayPages(pages)
     }
     const handlePageRendered = (event: { pageNumber: number }) => {
+      const document = documentRef.current
       restoreAnchorRef.current()
       getCanonical(event.pageNumber)
         .then(() => {
-          if (viewerRef.current !== viewer) return
+          if (viewerRef.current !== viewer || documentRef.current !== document)
+            return
           restoreAnchorRef.current()
           bumpGeometry()
         })
         .catch(() => {
-          if (viewerRef.current !== viewer) return
+          if (viewerRef.current !== viewer || documentRef.current !== document)
+            return
           failedTextPages.current.add(event.pageNumber)
           restoreAnchorRef.current()
           bumpGeometry()

@@ -50,6 +50,17 @@ const useReadingProgressSave = <Field extends ReadingProgressField>(
   })
   const pendingSaveRef = useRef<PendingSave<Field> | null>(null)
   const currentTargetRef = useRef<SaveTarget>(target)
+  // Keep local saves deduplicated before their echo arrives, but accept a new
+  // supplied position as the baseline (including mode handoffs and removal).
+  if (
+    currentTargetRef.current.resetKey !== target.resetKey ||
+    currentTargetRef.current.data?.[field] !== target.data?.[field]
+  ) {
+    committed.current = {
+      resetKey: target.resetKey,
+      key: positionKey(target.data?.[field])
+    }
+  }
   currentTargetRef.current = target
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const maxWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -76,9 +87,11 @@ const useReadingProgressSave = <Field extends ReadingProgressField>(
             data: pendingSave.baselineData,
             onDataChange: pendingSave.baselineOnDataChange
           }
-    committed.current = {
-      resetKey: pendingSave.resetKey,
-      key: positionKey(pendingSave.progress)
+    if (currentTarget.resetKey === pendingSave.resetKey) {
+      committed.current = {
+        resetKey: pendingSave.resetKey,
+        key: positionKey(pendingSave.progress)
+      }
     }
     saveTarget.onDataChange?.({
       ...saveTarget.data,
