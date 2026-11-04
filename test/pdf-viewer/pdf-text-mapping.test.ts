@@ -52,6 +52,20 @@ describe('buildCanonicalPageText', () => {
 })
 
 describe('enhanceTextLayer', () => {
+  it('maps official unnormalized ligature glyphs to existing canonical endpoints', () => {
+    const page = buildCanonicalPageText(1, [{ str: 'fi x' }])
+    const div = makeTextLayerDiv(['ﬁ x'])
+    expect(enhanceTextLayer(div, page)).toBe(true)
+    const text = div.children[0].firstChild!
+    expect(div.textContent).toBe('ﬁ x')
+    expect(domPositionToCanonicalOffset(text, 0, page)).toBe(0)
+    expect(domPositionToCanonicalOffset(text, 1, page)).toBe(2)
+    expect(canonicalOffsetToDomPosition(page, 3, div)?.offset).toBe(2)
+    expect(canonicalRangeToDomRange(page, 0, 1, div)?.toString()).toBe('ﬁ')
+    expect(canonicalRangeToDomRange(page, 3, 4, div)?.toString()).toBe('x')
+    expect(page.text).toBe('fi x')
+  })
+
   it('maps nested tagged-PDF leaf spans and survives repeated enhancement', () => {
     const page = buildCanonicalPageText(2, [
       { str: 'Hello ' },

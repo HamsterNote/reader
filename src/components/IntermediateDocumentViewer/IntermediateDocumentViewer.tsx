@@ -462,6 +462,7 @@ export type ReaderExtraOcr = (
 
 export type ReaderReadingPositionHandle = {
   readonly captureTextAnchor: () => ReaderTextAnchor | undefined
+  readonly captureReadingPosition?: () => ReaderBookmark | undefined
 }
 
 export type IntermediateDocumentViewerProps = {

@@ -1,3 +1,4 @@
+import { readingViewport } from './readingViewport'
 import { useLayoutEffect, useState, type RefObject } from 'react'
 
 /** The Reader margin already contains its measured toolbar inset. Merge by max,
@@ -34,23 +35,22 @@ export function useReadingViewport({
         )
         return
       }
-      const controls = controlsRef.current?.getBoundingClientRect()
-      const inset =
-        Math.max(
-          bottomInset,
-          controls?.height ? box.bottom - controls.top : 0
-        ) + 8
-      const next = {
-        width: Math.max(0, box.width - horizontalInset * 2),
-        height: Math.max(0, box.height - topInset - inset),
-        bottomInset: inset,
-        available: true
-      }
-      if (next.width <= 0 || next.height <= 0) {
+      const measured = readingViewport(
+        box,
+        { bottomInset, topInset, horizontalInset },
+        controlsRef.current?.getBoundingClientRect()
+      )
+      if (!measured) {
         setSize((current) =>
           current.available ? { ...current, available: false } : current
         )
         return
+      }
+      const next = {
+        width: measured.width,
+        height: measured.height,
+        bottomInset: measured.bottomInset,
+        available: true
       }
       setSize((current) =>
         current.available &&

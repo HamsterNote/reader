@@ -1,11 +1,40 @@
 // HAM-89 / tasks.md 3.2：旧 PDF 文本 offset ↔ pdfjs text layer 映射。
 // 坐标系契约见 openspec/.../contracts/sample-manifest.md：
 // 公开页 ID 为 `page-N`（N 为原 PDF 页号），端点 offset 为页内全部文本项
-// 无分隔符拼接后的字符偏移。pdfjs-dist 5.4.530 的 getTextContent 已在核心层
-// 完成连字等 Unicode 规范化（如 U+FB01 → "fi"），与旧 @hamster-note/pdf-parser
-// 输出逐字一致；公开坐标严格沿用 TextItem.str，不额外进行 Unicode 归一化。
+// 无分隔符拼接后的字符偏移。公开端点沿用 getTextContent 的规范化文本；
+// 官方 viewer 保留原始连字字形，通过 pdfjs normalizeUnicode 映射 DOM 边界。
 
 import type { TextItem } from './pdfjsRuntime'
+import { normalizeUnicode } from './pdfjsRuntime'
+
+// Official viewer streams disableNormalization:true, whereas public source
+// offsets use getTextContent's normalized strings. Keep DOM glyphs untouched.
+const enhancedMappings = new WeakMap<HTMLElement, CanonicalTextSpan>()
+
+function mapDomBoundaries(
+  span: CanonicalTextSpan,
+  domText: string
+): CanonicalTextSpan {
+  if (span.canonicalText === domText) return span
+  const prefixes = Array.from(
+    { length: domText.length + 1 },
+    (_, offset) => normalizeUnicode(domText.slice(0, offset)).length
+  )
+  return {
+    ...span,
+    domText,
+    canonicalToDom: Array.from(
+      { length: span.canonicalText.length + 1 },
+      (_, offset) => {
+        let boundary = 0
+        for (let index = 0; index < prefixes.length; index++) {
+          if (prefixes[index]! <= offset) boundary = index
+        }
+        return boundary
+      }
+    )
+  }
+}
 
 /** 文本层 span 上注入的数据属性（与既有选区链路的三件套一致）。 */
 export const TEXT_LAYER_TEXT_ID_ATTR = 'data-text-id'
@@ -23,7 +52,7 @@ export type CanonicalTextSpan = {
   readonly canonicalEnd: number
   /**
    * canonical 偏移 → dom 偏移的端点映射表，长度 canonicalText.length + 1。
-   * TextItem.str 与 text layer 同源，使用 UTF-16 恒等映射 [0,1,2,...]。
+   * 默认使用 UTF-16 恒等映射；增强后多个 canonical 边界可对应同一连字字形。
    */
   readonly canonicalToDom: readonly number[]
 }
@@ -83,6 +112,7 @@ export function enhanceTextLayer(
   // DOM regrouping can turn an enhanced leaf into a wrapper. Remove stale
   // mappings before matching so endpoints always resolve to current leaves.
   for (const element of [textLayerDiv, ...spans]) {
+    enhancedMappings.delete(element)
     for (const attr of [
       TEXT_LAYER_TEXT_ID_ATTR,
       TEXT_LAYER_PAGE_NUMBER_ATTR,
@@ -109,7 +139,10 @@ export function enhanceTextLayer(
     for (let i = spanPointer; i < page.spans.length; i++) {
       const candidate = page.spans[i]
       if (!candidate || candidate.canonicalText === '') continue
-      if (candidate.canonicalText === elementText) {
+      if (
+        candidate.canonicalText === elementText ||
+        candidate.canonicalText === normalizeUnicode(elementText)
+      ) {
         found = candidate
         spanPointer = i + 1
         break
@@ -119,6 +152,7 @@ export function enhanceTextLayer(
       matched = false
       continue
     }
+    enhancedMappings.set(element, mapDomBoundaries(found, elementText))
     element.setAttribute(
       TEXT_LAYER_TEXT_ID_ATTR,
       found.textId ?? canonicalTextId(page.pageNumber, found.itemIndex)
@@ -152,7 +186,9 @@ const findEnhancedSpan = (
         (candidate.textId ??
           canonicalTextId(page.pageNumber, candidate.itemIndex)) === itemId
     ) ?? null
-  return span ? { element: host, span } : null
+  return span
+    ? { element: host, span: enhancedMappings.get(host) ?? span }
+    : null
 }
 
 /** 元素内 text node 的字符偏移（与 selectionPayloadSerializer 同规则）。 */
@@ -196,16 +232,14 @@ export function domPositionToCanonicalOffset(
   const domOffset = getTextOffsetWithin(context.element, node, offset)
   const { span } = context
 
-  // Both public and DOM offsets count UTF-16 code units from the same str.
-  let result = span.canonicalStart
-  for (const [o, position] of span.canonicalToDom.entries()) {
-    if (position <= domOffset) {
-      result = span.canonicalStart + o
-    } else {
-      break
-    }
-  }
-  return result
+  // Several canonical characters may share one DOM glyph. At an exact DOM
+  // boundary choose its first canonical boundary, preserving selection starts.
+  const boundary = span.canonicalToDom.findIndex(
+    (position) => position >= domOffset
+  )
+  return (
+    span.canonicalStart + (boundary < 0 ? span.canonicalText.length : boundary)
+  )
 }
 
 /**
@@ -239,7 +273,9 @@ export function canonicalOffsetToDomPosition(
   ).find((entry) => entry.getAttribute(TEXT_LAYER_TEXT_ID_ATTR) === textId)
   if (!element) return null
 
-  const domOffset = span.canonicalToDom[canonicalOffset - span.canonicalStart]
+  const mapping = enhancedMappings.get(element) ?? span
+  const domOffset =
+    mapping.canonicalToDom[canonicalOffset - span.canonicalStart]
   if (domOffset === undefined) return null
 
   const walker = element.ownerDocument.createTreeWalker(
@@ -269,6 +305,15 @@ export function canonicalRangeToDomRange(
   const start = canonicalOffsetToDomPosition(page, startOffset, textLayerDiv)
   const end = canonicalOffsetToDomPosition(page, endOffset, textLayerDiv)
   if (!start || !end) return null
+
+  // A canonical substring of an indivisible ligature still occupies its glyph.
+  // Preserve the stored endpoints; only expand the transient geometry range.
+  if (
+    endOffset > startOffset &&
+    start.node === end.node &&
+    start.offset === end.offset
+  )
+    end.offset = Math.min(end.node.length, end.offset + 1)
 
   const range = textLayerDiv.ownerDocument.createRange()
   range.setStart(start.node, start.offset)

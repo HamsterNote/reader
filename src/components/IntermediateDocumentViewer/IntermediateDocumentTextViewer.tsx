@@ -222,6 +222,7 @@ const EMPTY_TEXT_PAGE_IMAGES = new Map<number, string>()
 const handleTextPageBrowserVisibilityChange = () => {}
 
 type TextReadingProgressSnapshot = {
+  readonly verticalPercentage?: number
   readonly currentPageNumber: number
   readonly anchor?: ReaderTextAnchor
 }
@@ -243,7 +244,7 @@ function getTextReadingProgressKey(
 ): string {
   return progress.anchor
     ? getTextAnchorKey(progress.anchor)
-    : `${progress.currentPageNumber}:page`
+    : `${progress.currentPageNumber}:page:${progress.verticalPercentage ?? 0}`
 }
 
 function useDocumentGeneration(
@@ -1261,7 +1262,10 @@ export function IntermediateDocumentTextViewer(
   } = useReadingProgressActivity()
   const captureCurrentTextAnchor = useCallback(
     (scanBelow: boolean = false) => {
-      if (isPdf) return pdfNavigationRef.current?.capture()
+      if (isPdf) {
+        const position = pdfNavigationRef.current?.capturePosition()
+        return position && isTextBookmark(position) ? position : undefined
+      }
       const viewport = scrollContainerRef.current
       if (!viewport) return undefined
 
@@ -1307,7 +1311,13 @@ export function IntermediateDocumentTextViewer(
   ])
   useImperativeHandle(
     readingPositionRef,
-    () => ({ captureTextAnchor: () => captureCurrentTextAnchor(true) }),
+    () => ({
+      captureTextAnchor: () => captureCurrentTextAnchor(true),
+      captureReadingPosition: () =>
+        isPdf
+          ? pdfNavigationRef.current?.capturePosition()
+          : captureCurrentTextAnchor(true)
+    }),
     [captureCurrentTextAnchor]
   )
 
@@ -2174,6 +2184,16 @@ export function IntermediateDocumentTextViewer(
 
       const pageIndex = pageNumbers.indexOf(bookmark.pageNumber)
       if (pageIndex < 0) return
+      if (isPdf) {
+        pdfNavigationRef.current?.navigate(
+          bookmark.pageNumber,
+          undefined,
+          true,
+          false,
+          bookmark.verticalPercentage
+        )
+        return
+      }
       handleReadingProgressSeekPage(bookmark.pageNumber)
       setFallbackBookmarkKey(getBookmarkKey(bookmark))
       const verticalRatio =
@@ -3325,6 +3345,20 @@ export function IntermediateDocumentTextViewer(
   const title = runtimeDocument?.title
   const textClasses = getTextReadingClasses(isPdf)
 
+  const captureBookmark = () =>
+    isPdf ? pdfPagination.capturePosition() : readingProgress.anchor
+  const canNavigateBookmark = (bookmark: ReaderBookmark) =>
+    isPdf ? pageNumbers.includes(bookmark.pageNumber) : isTextBookmark(bookmark)
+  const bookmarkToggleHandler = () => {
+    if (!onToggleBookmark) return undefined
+    return (bookmark: ReaderBookmark) => {
+      if (bookmarks?.includes(bookmark)) onToggleBookmark(bookmark)
+      else {
+        const current = isPdf ? captureBookmark() : bookmark
+        if (current) onToggleBookmark(current)
+      }
+    }
+  }
   return (
     <div className={textClasses.shell}>
       {
@@ -3369,7 +3403,7 @@ export function IntermediateDocumentTextViewer(
         onDeleteRect={onRemoveRect}
         showPagesTab={false}
         bookmarks={bookmarks}
-        currentBookmark={readingProgress.anchor}
+        currentBookmark={captureBookmark()}
         activeBookmarkKey={getActiveBookmarkKey(
           readingProgress.anchor,
           fallbackBookmarkKey,
@@ -3380,8 +3414,8 @@ export function IntermediateDocumentTextViewer(
           onToggleBookmark,
           scrollToBookmark
         )}
-        isBookmarkNavigationEnabled={isTextBookmark}
-        onToggleBookmark={onToggleBookmark}
+        isBookmarkNavigationEnabled={canNavigateBookmark}
+        onToggleBookmark={bookmarkToggleHandler()}
         bookmarkedPageNumbers={bookmarkedPageNumbers}
         onTogglePageBookmark={onTogglePageBookmark}
         onClose={onPageBrowserClose}
