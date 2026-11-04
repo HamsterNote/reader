@@ -281,7 +281,10 @@ it.each([
       )!
       expect(circle.style.width).toBe('20px')
       expect(circle.style.borderWidth).toBe('2px')
-      expect(circle.style.filter).toContain('drop-shadow')
+      expect(
+        handle.querySelector<HTMLElement>('[data-pdf-handle-visual]')!.style
+          .filter
+      ).toContain('drop-shadow')
       expect(handle.style.top).toBe(
         action === 'commit-start' ? '90px' : '130px'
       )
@@ -315,10 +318,14 @@ it.each([
         clientX: 155,
         clientY: 115
       })
-      if (action.startsWith('commit')) {
+      if (action.startsWith('commit') || action === 'crossed') {
         expect(onUpdate).toHaveBeenCalledOnce()
         expect(onUpdate.mock.calls[0][0].toString()).toBe(
-          action === 'commit-start' ? 'Alpha beta' : 'beta gamma'
+          action === 'crossed'
+            ? 'Alpha '
+            : action === 'commit-start'
+              ? 'Alpha beta'
+              : 'beta gamma'
         )
       } else {
         expect(onUpdate).not.toHaveBeenCalled()

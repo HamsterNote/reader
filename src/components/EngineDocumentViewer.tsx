@@ -1422,6 +1422,13 @@ export function EngineDocumentViewer(props: Props) {
     })
     if (!hit) selectRect(null)
   }
+  const pdfNavigationTouch = useRef<{
+    pointer: number
+    x: number
+    y: number
+    range: Range | null
+    moved: boolean
+  } | null>(null)
   const bookmarkToggleHandler = () => {
     if (!props.onToggleBookmark) return undefined
     return (bookmark: ReaderBookmark) => {
@@ -1445,7 +1452,15 @@ export function EngineDocumentViewer(props: Props) {
           if (source?.format === 'pdf') {
             // Clear before the browser starts its next native text gesture;
             // never preventDefault, so a fresh drag selection remains intact.
-            dismissPdfSelectionOutside(event)
+            if (event.pointerType === 'touch') {
+              pdfNavigationTouch.current = {
+                pointer: event.pointerId,
+                x: event.clientX,
+                y: event.clientY,
+                range: activeText.current?.range ?? null,
+                moved: false
+              }
+            } else dismissPdfSelectionOutside(event)
             const selection = root.current?.ownerDocument.getSelection()
             if (selection)
               props.onSelectionStart?.(
@@ -1457,8 +1472,27 @@ export function EngineDocumentViewer(props: Props) {
         onWheel={() => {
           progressEnabled.current = true
         }}
+        onPointerMove={(event) => {
+          const gesture = pdfNavigationTouch.current
+          if (
+            gesture?.pointer === event.pointerId &&
+            Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 8
+          )
+            gesture.moved = true
+        }}
+        onPointerCancel={() => {
+          pdfNavigationTouch.current = null
+        }}
         onPointerUp={(event) => {
           if (source?.format === 'pdf') {
+            const gesture = pdfNavigationTouch.current
+            pdfNavigationTouch.current = null
+            if (
+              gesture?.pointer === event.pointerId &&
+              !gesture.moved &&
+              gesture.range === (activeText.current?.range ?? null)
+            )
+              dismissPdfSelectionOutside(event)
             const selection = root.current?.ownerDocument.getSelection()
             if (
               selection &&

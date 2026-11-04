@@ -27,7 +27,8 @@ export function clearPdfNativeSelection(root: HTMLElement): void {
 export function pdfCaretAtPoint(
   root: HTMLElement,
   x: number,
-  y: number
+  y: number,
+  nearest = false
 ): Range | null {
   const doc = root.ownerDocument
   const hit = doc
@@ -37,9 +38,34 @@ export function pdfCaretAtPoint(
         root.contains(element) &&
         element.closest('.textLayer [data-selection-start-offset]')
     )
-  const span = hit?.closest<HTMLElement>(
+  let span = hit?.closest<HTMLElement>(
     '.textLayer [data-selection-start-offset]'
   )
+  if (!span && nearest) {
+    const bounds = root.getBoundingClientRect()
+    let distance = Infinity
+    for (const candidate of root.querySelectorAll<HTMLElement>(
+      '.page .textLayer [data-selection-start-offset]'
+    )) {
+      const box = candidate.getBoundingClientRect()
+      if (
+        !box.width ||
+        !box.height ||
+        box.bottom <= Math.max(0, bounds.top) ||
+        box.top >= Math.min(innerHeight, bounds.bottom) ||
+        box.right < bounds.left ||
+        box.left > bounds.right
+      )
+        continue
+      const dx = Math.max(box.left - x, 0, x - box.right)
+      const dy = Math.max(box.top - y, 0, y - box.bottom)
+      const next = dx * dx + dy * dy * 4
+      if (next < distance) {
+        distance = next
+        span = candidate
+      }
+    }
+  }
   if (!span || !root.contains(span)) return null
   const page = span.closest<HTMLElement>('.page')
   if (!page || page.style.display === 'none') return null
@@ -67,6 +93,8 @@ export function pdfCaretAtPoint(
   // WebKit may exclude user-select:none nodes from its caret API. Read glyph
   // geometry instead; do not briefly enable native selection to obtain a hit.
   const walker = doc.createTreeWalker(span, NodeFilter.SHOW_TEXT)
+  let closest: Range | null = null
+  let distance = Infinity
   let text: Node | null
   while ((text = walker.nextNode())) {
     const value = text.textContent ?? ''
@@ -75,6 +103,16 @@ export function pdfCaretAtPoint(
       character.setStart(text, i)
       character.setEnd(text, i + 1)
       for (const rect of Array.from(character.getClientRects())) {
+        if (nearest) {
+          const dx = Math.max(rect.left - x, 0, x - rect.right)
+          const dy = Math.max(rect.top - y, 0, y - rect.bottom)
+          const next = dx * dx + dy * dy * 4
+          if (next < distance) {
+            distance = next
+            closest = character.cloneRange()
+            closest.collapse(x < rect.left + rect.width / 2)
+          }
+        }
         if (
           x >= rect.left &&
           x <= rect.right &&
@@ -87,7 +125,7 @@ export function pdfCaretAtPoint(
       }
     }
   }
-  return null
+  return closest
 }
 
 export function usePdfTouchSelection({
@@ -227,6 +265,10 @@ export function usePdfTouchSelection({
       cancel()
       pointers.clear()
     }
+    const scroll = () => {
+      // Scrolling only cancels a pending long press, never a managed Range.
+      if (!root.closest('[data-pdf-handle-dragging]')) cancel()
+    }
     // Observe the second finger even when it lands outside this viewer.
     doc.addEventListener('selectionchange', suppressNative)
     doc.addEventListener('selectstart', selectStart, true)
@@ -234,7 +276,7 @@ export function usePdfTouchSelection({
     doc.addEventListener('pointermove', move, true)
     doc.addEventListener('pointerup', up, true)
     doc.addEventListener('pointercancel', up, true)
-    root.addEventListener('scroll', cancel, true)
+    root.addEventListener('scroll', scroll, true)
     root.addEventListener('contextmenu', context)
     doc.defaultView?.addEventListener('blur', blur)
     const observer = new MutationObserver(() => {
@@ -256,7 +298,7 @@ export function usePdfTouchSelection({
       doc.removeEventListener('pointermove', move, true)
       doc.removeEventListener('pointerup', up, true)
       doc.removeEventListener('pointercancel', up, true)
-      root.removeEventListener('scroll', cancel, true)
+      root.removeEventListener('scroll', scroll, true)
       root.removeEventListener('contextmenu', context)
       doc.defaultView?.removeEventListener('blur', blur)
       if (managed.current) setRange(null, true)

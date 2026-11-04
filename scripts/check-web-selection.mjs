@@ -1,6 +1,7 @@
 import { createServer } from 'vite'
 import { checkPdfSelectionPaint } from './check-pdf-selection-paint.mjs'
 import { checkPdfMobileSelection } from './check-pdf-mobile-selection.mjs'
+import { checkPdfContinuousSelection } from './check-pdf-continuous-selection.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -818,6 +819,7 @@ async function epubNavigation(buffer) {
 try {
   results.push(await checkPdfSelectionPaint({ browser, base, output }))
   results.push(await checkPdfMobileSelection({ browser, base, output }))
+  results.push(await checkPdfContinuousSelection({ browser, base, output }))
   if (!process.argv.includes('--pdf-mobile-only')) {
     await pdfSelection(false)
     await pdfSelection(true)

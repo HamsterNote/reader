@@ -1012,7 +1012,15 @@ export const PdfDocumentViewer = forwardRef<
   ) => {
     const range = rangeFromEndpoints(stored)
     if (!range) return null
-    if (end) range.setEnd(candidate.endContainer, candidate.endOffset)
+    const anchor = range.cloneRange()
+    anchor.collapse(end)
+    const crossed = end
+      ? candidate.compareBoundaryPoints(Range.END_TO_END, anchor) <= 0
+      : candidate.compareBoundaryPoints(Range.START_TO_START, anchor) >= 0
+    if (crossed) {
+      range.setStart(candidate.startContainer, candidate.startOffset)
+      range.setEnd(candidate.endContainer, candidate.endOffset)
+    } else if (end) range.setEnd(candidate.endContainer, candidate.endOffset)
     else range.setStart(candidate.startContainer, candidate.startOffset)
     return serializePdfTextSelection(
       range,
@@ -1429,7 +1437,7 @@ export const PdfDocumentViewer = forwardRef<
       hitTestSelection: (x, y) => {
         const root = containerRef.current
         if (!root) return null
-        const caret = pdfCaretAtPoint(root, x, y)
+        const caret = pdfCaretAtPoint(root, x, y, true)
         if (!caret) return null
         // Validate the caret through the same canonical mapping as persistence.
         const probe = caret.cloneRange()
