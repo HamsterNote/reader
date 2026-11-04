@@ -9,6 +9,8 @@
 }
 
 .hamster-reader__pdf-viewer-container {
+  // Crop reflow restores a PDF-space anchor; native scroll anchoring competes.
+  overflow-anchor: none;
   scrollbar-width: none;
   -ms-overflow-style: none;
 

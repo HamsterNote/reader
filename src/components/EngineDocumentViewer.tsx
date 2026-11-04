@@ -720,6 +720,10 @@ export function EngineDocumentViewer(props: Props) {
     (document, page) => pdf.current?.releasePreviewPage(document, page)
   )
   const emittedLayoutPositions = useRef(new Set<string>())
+  // A controlled host can return the same emitted object more than once (e.g.
+  // a debounced save crossing crop reflow). A consumed key alone loses that
+  // provenance and turns the second echo into an explicit bookmark navigation.
+  const emittedLayoutBookmarks = useRef(new WeakSet<ReaderBookmark>())
   const publishPosition = useCallback((pageNumber: number) => {
     setPage(pageNumber)
     if (!restored.current || !progressEnabled.current) return
@@ -739,6 +743,7 @@ export function EngineDocumentViewer(props: Props) {
       const bookmark = position ??
         anchor ?? { pageNumber, verticalPercentage: 0 }
       emittedLayoutPositions.current.add(getBookmarkKey(bookmark))
+      emittedLayoutBookmarks.current.add(bookmark)
       if (emittedLayoutPositions.current.size > 32)
         emittedLayoutPositions.current.delete(
           emittedLayoutPositions.current.values().next().value!
@@ -773,6 +778,7 @@ export function EngineDocumentViewer(props: Props) {
       restored.current = false
       progressEnabled.current = false
       emittedLayoutPositions.current.clear()
+      emittedLayoutBookmarks.current = new WeakSet()
     }
     return () => {
       ++pdfNavigationGeneration.current
@@ -809,7 +815,13 @@ export function EngineDocumentViewer(props: Props) {
     )
       return
     lastLayoutRequest.current = target
-    if (emittedLayoutPositions.current.delete(getBookmarkKey(target))) return
+    const emitted = emittedLayoutPositions.current.delete(
+      getBookmarkKey(target)
+    )
+    if (emitted || emittedLayoutBookmarks.current.has(target)) {
+      emittedLayoutBookmarks.current.add(target)
+      return
+    }
     const actual = pdf.current?.captureReadingPosition()
     if (!actual || getBookmarkKey(actual) !== getBookmarkKey(target))
       navigateBookmark(target)?.catch(() => undefined)

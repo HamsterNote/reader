@@ -101,6 +101,9 @@ try {
             left: rect.left,
             width: rect.width,
             height: rect.height,
+            roundingX: parseFloat(
+              getComputedStyle(sheet).getPropertyValue('--scale-round-x')
+            ),
             display: sheet.style.display
           }
         }
@@ -377,6 +380,165 @@ try {
     )
   })
   report.checks.push({ name: 'disabling crop recalculates fit-width' })
+
+  await page.setViewportSize({ width: 1200, height: 700 })
+  await zoom('100%')
+  const host = page.locator('.hamster-reader__pdf-viewer-container')
+  await host.evaluate((host) => {
+    const sheet = host.querySelectorAll('.page')[1]
+    host.scrollTop +=
+      sheet.getBoundingClientRect().top -
+      host.getBoundingClientRect().top +
+      sheet.clientHeight * 0.45
+  })
+  const marker = page
+    .locator('.pdfViewer [data-selection-start-offset]')
+    .filter({ hasText: 'PAGE 2 LINE 15' })
+    .first()
+  await marker.waitFor()
+  await marker.evaluate((span) => {
+    const host = span.closest('.hamster-reader__pdf-viewer-container')
+    const sheet = span.closest('.page').getBoundingClientRect()
+    // LINE 15 baseline is y=470 in PDF user space; native CropBox top is 860.
+    host.scrollTop +=
+      sheet.top + sheet.height * (390 / 800) - host.getBoundingClientRect().top
+  })
+  const markerPosition = () =>
+    marker.evaluate((span) => {
+      const host = span.closest('.hamster-reader__pdf-viewer-container')
+      const range = document.createRange()
+      range.selectNodeContents(span)
+      const rect = range.getBoundingClientRect()
+      const sheet = span.closest('.page').getBoundingClientRect()
+      return {
+        top:
+          sheet.top +
+          sheet.height * (390 / 800) -
+          host.getBoundingClientRect().top -
+          window.pdfCropTest.insets.top,
+        glyphTop: rect.top,
+        scrollTop: host.scrollTop,
+        width: rect.width
+      }
+    })
+  const settle = () =>
+    page.evaluate(
+      async (frames) => {
+        // Include the Reader's 100ms progress-save echo and asynchronous canvas render.
+        for (let frame = 0; frame < frames; frame++)
+          await new Promise((done) => requestAnimationFrame(done))
+      },
+      Number(process.env.PDF_CROP_FRAMES ?? 12)
+    )
+  await settle()
+  for (const label of ['100%', '适配宽度']) {
+    await zoom(label)
+    // Align a known source character at the safe top before each zoom scenario.
+    await marker.evaluate((span) => {
+      const host = span.closest('.hamster-reader__pdf-viewer-container')
+      const sheet = span.closest('.page').getBoundingClientRect()
+      host.scrollTop +=
+        sheet.top +
+        sheet.height * (390 / 800) -
+        host.getBoundingClientRect().top
+    })
+    await settle()
+    for (
+      let cycle = 0;
+      cycle < Number(process.env.PDF_CROP_CYCLES ?? 3);
+      cycle++
+    ) {
+      const before = await markerPosition()
+      if (label === '100%' && cycle === 0)
+        await page.screenshot({ path: resolve(output, 'anchor-before.png') })
+      await page.getByTestId('global-edge-crop-toggle').check()
+      await settle()
+      const enabled = await markerPosition()
+      if (label === '100%' && cycle === 0)
+        await page.screenshot({ path: resolve(output, 'anchor-enabled.png') })
+      report.checks.push({
+        name: `page 2 middle crop enabled at ${label}, cycle ${cycle}`,
+        before,
+        enabled
+      })
+      close(
+        enabled.top,
+        before.top,
+        'visible source character stays fixed when enabling crop'
+      )
+      await page.getByTestId('global-edge-crop-toggle').uncheck()
+      await settle()
+      const disabled = await markerPosition()
+      if (label === '100%' && cycle === 0)
+        await page.screenshot({ path: resolve(output, 'anchor-disabled.png') })
+      report.checks.push({
+        name: `page 2 middle crop disabled at ${label}, cycle ${cycle}`,
+        disabled
+      })
+      close(
+        disabled.top,
+        before.top,
+        'visible source character stays fixed when disabling crop'
+      )
+    }
+  }
+  const preservesPoint = async (name, action) => {
+    const before = await markerPosition()
+    await action()
+    await settle()
+    const after = await markerPosition()
+    report.checks.push({ name, before, after })
+    close(after.top, before.top, name)
+  }
+  await preservesPoint(
+    'global top/bottom crop update preserves page 2 PDF point',
+    () => update({ all: { ...globalCrop, top: 0.18, bottom: 0.08 } })
+  )
+  await preservesPoint(
+    'per-page crop on current and preceding pages preserves PDF point',
+    () =>
+      update({
+        all: globalCrop,
+        pages: { 'page-1': { top: 0.2, bottom: 0.3 }, 'page-2': override }
+      })
+  )
+  await preservesPoint('entering crop editor preserves PDF point', () =>
+    update({ all: globalCrop }, true)
+  )
+  await preservesPoint('leaving crop editor preserves PDF point', () =>
+    update({ all: globalCrop })
+  )
+  await preservesPoint(
+    'top inset update preserves PDF point at the safe top',
+    () => page.getByTestId('crop-margin-top').fill('48')
+  )
+  await preservesPoint('bottom inset update preserves PDF point', () =>
+    page.getByTestId('crop-margin-bottom').fill('64')
+  )
+  await preservesPoint('clearing insets preserves PDF point', () =>
+    page.evaluate(() => window.pdfCropTest.setInsets({ top: 0, bottom: 0 }))
+  )
+  await page.evaluate(() => window.pdfCropTest.setBrowserOpen(true))
+  await page.getByTestId('page-browser-page-2').click()
+  await page.evaluate(() => window.pdfCropTest.setBrowserOpen(false))
+  await settle()
+  const croppedJump = await measure()
+  close(
+    croppedJump.sheets[1].top + croppedJump.sheets[1].height * globalCrop.top,
+    0,
+    'explicit page jump overrides retained layout anchor'
+  )
+  // PDF.js floors page width to --scale-round-x after canvas rendering.
+  // Allow only that measured rounding loss; anchor assertions retain <2px.
+  assert(
+    Math.abs(croppedJump.sheets[1].width * 0.75 - croppedJump.width) <
+      croppedJump.sheets[1].roundingX * 0.75 + 1,
+    'cropped fit-width still active after anchor restoration'
+  )
+  report.checks.push({
+    name: 'cropped fit-width and page jump survive anchor restoration',
+    croppedJump
+  })
   assert.deepEqual(report.errors, [])
 } finally {
   await writeFile(

@@ -129,3 +129,54 @@ it.each(['complete', 'page', 'bookmark', 'failed'] as const)(
     })
   }
 )
+
+it('does not replay a previously acknowledged progress object during crop reflow', async () => {
+  const onProgress = vi.fn()
+  const props = {
+    engineSource: source,
+    onLayoutReadingProgressChange: onProgress
+  }
+  const view = render(
+    <EngineDocumentViewer {...props} layoutReadingProgress={saved} />
+  )
+  let ready!: Promise<void>
+  act(() => {
+    ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+  })
+  await act(async () => {
+    textReady = true
+    pending[0]!.resolve()
+    await ready
+  })
+  vi.mocked(state.api!.scrollToAnchor).mockClear()
+  const first: ReaderBookmark = {
+    pageNumber: 2,
+    textId: 'line-15',
+    offset: 435,
+    text: 'line 15'
+  }
+  const second: ReaderBookmark = { ...first, offset: 436 }
+  for (const bookmark of [first, second]) {
+    act(() => {
+      position = bookmark
+      state.pdf!.onPageChange!(2)
+    })
+    expect(onProgress).toHaveBeenLastCalledWith(bookmark)
+    view.rerender(
+      <EngineDocumentViewer {...props} layoutReadingProgress={bookmark} />
+    )
+  }
+  // A debounced save can return an older emitted object while geometry is
+  // rebuilding. No readable position is available until the anchor settles.
+  textReady = false
+  view.rerender(
+    <EngineDocumentViewer {...props} layoutReadingProgress={first} />
+  )
+  expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+
+  // A fresh external bookmark request, including the same coordinates, works.
+  view.rerender(
+    <EngineDocumentViewer {...props} layoutReadingProgress={{ ...first }} />
+  )
+  expect(state.api!.scrollToAnchor).toHaveBeenCalledWith(first)
+})

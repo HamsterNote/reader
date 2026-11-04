@@ -17,16 +17,66 @@ function Harness() {
   const [data, setData] = useState({})
   const [editing, setEditing] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
+  const [insets, setInsets] = useState({ top: 0, bottom: 0 })
   const selection = useRef(null)
-  window.pdfCropTest = { data, setData, setEditing, setBrowserOpen, selection }
+  window.pdfCropTest = {
+    data,
+    setData,
+    setEditing,
+    setBrowserOpen,
+    selection,
+    insets,
+    setInsets
+  }
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
+      <label style={{ position: 'fixed', top: 4, right: 4, zIndex: 100 }}>
+        <input
+          type='checkbox'
+          data-testid='global-edge-crop-toggle'
+          checked={!!data.edgeCrop?.all}
+          onChange={(event) => {
+            const all = event.currentTarget.checked
+              ? { top: 0.1, right: 0.2, bottom: 0.15, left: 0.05 }
+              : undefined
+            setData((current) => ({
+              ...current,
+              edgeCrop: { ...current.edgeCrop, all }
+            }))
+          }}
+        />
+        全局裁边
+      </label>
+      {['top', 'bottom'].map((edge, index) => (
+        <input
+          key={edge}
+          type='number'
+          aria-label={`${edge} inset`}
+          data-testid={`crop-margin-${edge}`}
+          value={insets[edge]}
+          onChange={(event) =>
+            setInsets((current) => ({
+              ...current,
+              [edge]: Number(event.target.value)
+            }))
+          }
+          style={{
+            position: 'fixed',
+            top: 28 + index * 24,
+            right: 4,
+            width: 64,
+            zIndex: 100
+          }}
+        />
+      ))}
       <Reader
         document={text.document}
         engineSource={source}
         isPdf
         data={data}
         onDataChange={setData}
+        containMarginTop={insets.top}
+        containMarginBottom={insets.bottom}
         showPageBrowser={browserOpen}
         onPageBrowserClose={() => setBrowserOpen(false)}
         onSelect={(range) =>

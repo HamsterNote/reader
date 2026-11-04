@@ -14,3 +14,21 @@ node scripts/check-pdf-edge-crop.mjs
 脚本启动本地 Vite Dev Server，在 Chromium 中通过真实 Reader 打开生成的三页 PDF（包含非零原生 CropBox、旋转页），测量实际页面边界并执行鼠标拖拽。覆盖裁边开关、四边独立生效、全局/单页覆盖、页面浏览器跳页、编辑开关及应用到当前页/全部、文字选择/高亮对齐、50%/200% 缩放、桌面及 480px 视口的裁后宽度适配。修复后可见页间距恢复为约 10px。
 
 PDF 样本、截图及测量报告输出到 `test-results/pdf-edge-crop/`。该目录为运行产物，不提交。
+
+## 切换裁边时保持阅读锚点
+
+扣除裁切占位后，开关裁边会改变前面各页的高度；仅保留原有 scrollTop 会让第 2 页中部的参考内容偏移约 373px。适宽还会改变缩放，因此保存 CSS 页内偏移无法保持同一内容。
+
+`src/pdf/usePdfLayoutAnchor.ts` 在旧布局的 layout effect cleanup 中捕获第一张可见页及安全阅读区顶端的 PDF 用户坐标，经 `convertToPdfPoint` / `convertToViewportPoint` 转换，在新布局应用裁切后恢复。全局/单页裁切、编辑模式、上下及水平留白共用该路径；被裁掉的锚点夹到最近可见边界。过程中暂停发布中间阅读位置，避免进度回显抢占滚动。
+
+PDF.js 异步 canvas 渲染还会通过 `--scale-round-x/y` 再次缩小页面尺寸，影响后续页面位置。因此除连续两帧恢复外，还观察 viewer 的尺寸变化并重新校正；用户滚动、跳页、书签、主动缩放和切换文档会取消恢复。容器禁用浏览器原生 overflow anchoring，避免重复补偿。
+
+浏览器脚本现覆盖 35 项检查。在第 2 页中部，100% 和适宽各反复开关三轮，参考 PDF 点偏移均小于 1px；另覆盖全局上下裁切、当前页及前页单独裁切、进出编辑模式、实际上下留白输入和清空留白，并确认恢复后裁后适宽、跳页对齐仍有效。内容位置断言保持小于 2px；适宽尺寸断言仅允许 PDF.js 实际 `--scale-round-x` 对应的取整损失。`anchor-before.png`、`anchor-enabled.png`、`anchor-disabled.png` 为同一参考位置的截图。
+
+`test/pdf-viewer/pdf-layout-anchor.test.tsx` 补充 PDF 坐标、非零原生 CropBox、90° 旋转、无文字层页面、快速连续裁切、异步前页尺寸变化及导航取消的回归验证。
+
+快速切换还暴露了另一条滚动路径：`EngineDocumentViewer` 只用一次性消费的书签 key 识别自身进度回显，较早发出的同一进度对象再次返回时，会误触发文字书签导航，让参考行从 baseline 对齐变成文字框顶部对齐（约偏移 25px）。现在另用 WeakSet 记录进度对象来源，跨重复回显保留识别能力；外部新书签请求仍正常执行。`test/engine-pdf-progress.test.tsx` 先复现该失败，再验证重复回显及显式书签导航。
+
+加压验证可运行 `PDF_CROP_CYCLES=60 PDF_CROP_FRAMES=4 node scripts/check-pdf-edge-crop.mjs`；默认等待 12 帧，包含阅读进度的 100ms 防抖回显。
+
+最终加压结果：100% 和适宽各 60 轮开关，共 263 项浏览器检查通过，参考 PDF 点最大偏移 0.3125px，无页面错误。导航浏览器回归、106 个文件的 1425 项测试、类型检查、相关 ESLint 与库构建通过。
