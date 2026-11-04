@@ -31,6 +31,32 @@ bundle and Web reader assets embedded; it runs without Metro. The project is
 in the ad-hoc provisioning profile before building. Adding a device requires a
 new build or re-signing the IPA.
 
+For a development client that can coexist with the preview app:
+
+```bash
+cd app # from the repository root
+eas build -p ios --profile development
+```
+
+`development` inherits the same Node/Yarn versions and build hooks, uses Debug
+with `developmentClient: true`, and sets `APP_VARIANT=development`. The dynamic
+app config gives this iOS app the name **Hamster Reader Dev**, Bundle ID
+`com.hamsternote.reader.dev`, and URL scheme `hamsterreader-dev`. It opens the
+development launcher, where you can enter `http://192.168.0.145:8092` to connect
+to the current Metro server. Allow Local Network access and keep the phone on a
+network that can reach the server.
+
+For a new Metro session using this variant, run from the repository root:
+
+```bash
+APP_VARIANT=development yarn host:start --port 8092
+```
+
+This also makes Expo's generated launch URL use the dev app's scheme. The
+existing Metro server can still be entered manually in the dev launcher.
+Signing this separate Bundle ID requires its own ad-hoc provisioning profile;
+include the target UDID when setting up the EAS credentials.
+
 `app/yarn.lock` links to the repository's pinned lockfile for EAS's frozen host
 dependency install. Keep dependency updates and installs at the repository root
 so the shared lockfile continues to cover the library and build tools.

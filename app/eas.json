@@ -4,6 +4,17 @@
     "appVersionSource": "local"
   },
   "build": {
+    "development": {
+      "extends": "preview",
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "development"
+      },
+      "ios": {
+        "buildConfiguration": "Debug"
+      }
+    },
     "preview": {
       "distribution": "internal",
       "developmentClient": false,
