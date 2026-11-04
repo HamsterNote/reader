@@ -31,9 +31,11 @@ bundle and Web reader assets embedded; it runs without Metro. The project is
 in the ad-hoc provisioning profile before building. Adding a device requires a
 new build or re-signing the IPA.
 
-The pre-install hook copies the repository's pinned `yarn.lock` into the build's
-`app/` directory for EAS's host dependency install and installs the root build
-tools. The post-install hook builds and verifies the gitignored Web reader ZIP
+`app/yarn.lock` links to the repository's pinned lockfile for EAS's frozen host
+dependency install. Keep dependency updates and installs at the repository root
+so the shared lockfile continues to cover the library and build tools.
+The pre-install hook installs those root build tools. The post-install hook
+builds and verifies the gitignored Web reader ZIP
 and applies the iOS WebView patch to the host's resolved native dependency.
 These hooks must run on the cloud builder; generating assets only on the machine
 submitting the build does not cover builds from a clean Git checkout.
