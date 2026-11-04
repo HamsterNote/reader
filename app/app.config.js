@@ -1,17 +1,27 @@
 module.exports = ({ config }) => {
-  if (process.env.APP_VARIANT !== 'development') return config
+  const isDevelopment = process.env.APP_VARIANT === 'development'
 
   return {
     ...config,
-    name: 'Hamster Reader Dev',
-    scheme: 'hamsterreader-dev',
+    name: isDevelopment ? 'Hamster Reader Dev' : config.name,
+    scheme: isDevelopment ? 'hamsterreader-dev' : config.scheme,
     ios: {
       ...config.ios,
-      bundleIdentifier: 'com.hamsternote.reader.dev'
+      // EAS can write the resolved dev ID back to app.json during setup.
+      bundleIdentifier: isDevelopment
+        ? 'com.hamsternote.reader.dev'
+        : 'com.hamsternote.reader'
     },
     plugins: [
       ...(config.plugins ?? []),
-      ['expo-dev-client', { addGeneratedScheme: false, launchMode: 'launcher' }]
+      ...(isDevelopment
+        ? [
+            [
+              'expo-dev-client',
+              { addGeneratedScheme: false, launchMode: 'launcher' }
+            ]
+          ]
+        : [])
     ]
   }
 }
