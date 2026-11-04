@@ -26,6 +26,14 @@
 - **WHEN** 用户在无可选择文字的扫描页或正文空白处长按，或未拖动手柄时滚动、双指导航及点击链接
 - **THEN** 不生成伪造文字选区，阅读导航继续正常工作，非文字工具不启动文字选择
 
+#### Scenario: Native selection reactivates during a touch session
+- **WHEN** PDF Layout 触摸选择、拖动、保持选区或复制期间，浏览器尝试重新激活正文/工具栏的原生 Selection
+- **THEN** 原生可见选择被抑制，受管文字/端点保留，复制不向可见正文 addRange；评论编辑器和其他 reader 的原生选择不被清空，真机不存在蓝色系统手柄仍需设备验收
+
+#### Scenario: Grab the larger hit square and release before another frame
+- **WHEN** 在 49%、50%、100%、200% PDF 缩放下，从 20px 视觉圆外 9px 的热区角落抓取起点或终点并拖动，在下一 rAF 或父级更新前释放
+- **THEN** 40×40 屏幕像素热区触发拖动且不跳变，视觉圆仍为 20px，最终手柄与保存的源端点一致；热区之外不拦截正文指针事件，Text 圆柄不改变
+
 ### Requirement: PDF selection preview follows toolbar highlight color
 
 系统 MUST 在 PDF Layout 和 PDF Text 使用底部栏当前选中的有效高亮色渲染未高亮选区、高亮母版预览及由其确认的新高亮，包括相同的透明度语义；不得退回系统蓝色或固定默认色。活动选区保持期间换色 SHALL 立即更新预览，保留文字与端点。受控颜色 SHALL 以调用方最新传入且底栏显示选中的值为准；PDF 场景独立 selectionColor 不得覆盖该规则。系统 MUST 保留未操作的历史高亮颜色；调整已有高亮范围 SHALL 保留其保存颜色，只有显式改色才改变保存颜色。

@@ -83,3 +83,23 @@
     -webkit-touch-callout: none;
   }
 }
+
+// Include PDF reader chrome: a native range can otherwise extend into its toolbar.
+.hamster-reader:has([data-pdf-touch-selection][data-pdf-selection-enabled]) {
+  -webkit-user-select: none;
+  user-select: none;
+
+  input,
+  textarea,
+  [contenteditable='true'] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+.hamster-reader__pdf-touch-handle,
+.hamster-reader__engine-popover[data-pdf-touch] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

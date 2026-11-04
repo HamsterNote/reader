@@ -166,7 +166,7 @@ export type PdfDocumentViewerRef = {
   readonly clearSelection: () => void
   readonly selectRange: (id: string) => Range | null
   readonly getSelectionRange: () => Range | null
-  readonly setSelectionRange: (range: Range | null) => void
+  readonly setSelectionRange: (range: Range | null, touch?: boolean) => void
   readonly serializeRangeEndpoint: (
     id: string,
     range: Range,
@@ -1105,8 +1105,14 @@ export const PdfDocumentViewer = forwardRef<
     const container = containerRef.current
     if (!container) return
     const copy = (event: ClipboardEvent) => {
+      const doc = container.ownerDocument
+      if (doc.activeElement?.closest('input, textarea, [contenteditable]'))
+        return
+      if (touchSelection.managed.current && doc.getSelection()?.rangeCount)
+        return
       const detail = serializeCurrentSelection()
-      if (!detail?.sourceRanges || !event.clipboardData) return
+      if (!detail || !event.clipboardData) return
+      if (!touchSelection.managed.current && !detail.sourceRanges) return
       event.clipboardData.setData('text/plain', detail.text)
       event.preventDefault()
     }
@@ -1356,7 +1362,8 @@ export const PdfDocumentViewer = forwardRef<
         const stored = ranges.find((item) => item.id === id)
         return stored ? serializeEndpoint(stored, range, end) : null
       },
-      setSelectionRange: (range) => {
+      setSelectionRange: (range, touch) => {
+        if (touch) touchSelection.activate()
         const restored = restoredSelectionGroup.current
         if (
           restored &&

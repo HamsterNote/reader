@@ -39,6 +39,10 @@ Layout 的 fixed portal 坐标取屏幕矩形，scale=1；Text 保留逆缩放�
 
 真机复验修正：仅 PDF Layout 圆柄增加 2px 白边和覆盖圆点/竖线的 drop-shadow，fixed portal 保持 20px 屏幕直径。起点圆柄放在行上缘外、终点放在行下缘外；抓取点至文字行内中心的偏移用于命中和放大镜，不能继续以行下缘圆心减半行高推算。弹层预留圆柄空间。Text 共享圆柄的默认视觉与拖动逻辑保持原样。
 
+偶发双柄复验：每端改为 40×40 透明方形 button 负责 pointer capture 与 touch-action:none，内部无 pointer 命中的 20px 圆保留白边/阴影，中心一致。fixed portal 已使用屏幕坐标，缩放因子为 1，不能再按 PDF viewport 比例反向缩放使屏幕尺寸翻倍。热区外的长按和滚动仍传到正文；热区内用于拖动，以实际抓取点至文字命中点的偏移纠正坐标。移动即发布同源几何，pointerup 重算最后坐标，保留最终预览直到父级接受新 Range；rAF 只跟随滚动/布局，不能在释放后回读旧 prop 把柄拉回。
+
+原生 Selection 在触摸入口、显式 PDF touch 预览写入和选择事件中清空；selectstart 与 reader 工具栏的 user-select:none 提前阻止激活，避免原生范围从正文延伸到工具栏。受管 Range 独立 clone，复制事件直接写入文本，无需 addRange 到可见 textLayer。保护评论输入、contenteditable 和其他 reader 的原生选择，桌面及 EPUB 原生路径保留。真实 iOS 系统手柄是否消失由设备复验确认，DOM/CDP 断言不能替代系统 UI 截图。
+
 取消、失焦、多指、工具或会话切换、页面节点回收时释放捕获、清理监听/放大镜；仍在原会话则回滚原始范围，已换会话则丢弃旧预览。通过 PDF text mapping 和 serializer 保留 page-N、字符偏移与现有跨页/不连续分组语义，不能用全局 DOM 文本长度替代源字符偏移。端点不可见时隐藏对应手柄，不夹到视口边缘；不把不连续范围误合并为包含间隙的大范围。
 
 ### 3. PDF 预览颜色单一来源

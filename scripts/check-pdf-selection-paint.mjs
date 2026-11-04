@@ -85,7 +85,7 @@ export async function checkPdfSelectionPaint({
     const handle = page.getByRole('button', { name: '拖动以调整选区终点' })
     await handle.waitFor()
     const box = await handle.boundingBox()
-    await touch('touchStart', [{ x: box.x + 10, y: box.y + 10 }])
+    await touch('touchStart', [{ x: box.x + 20, y: box.y + 20 }])
     await touch('touchMove', [
       { x: last.right - 0.1, y: last.bottom + (baseline ? 0 : 10) }
     ])

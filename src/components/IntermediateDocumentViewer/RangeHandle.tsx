@@ -14,7 +14,7 @@ import { useRangeHandleDrag } from './useRangeHandleDrag'
 // 圆圈手柄的目标视觉直径（屏幕像素）。
 // CSS 尺寸固定为此值，再通过 transform: scale(1/scale) 抵消
 // VirtualPaper 容器的 transform: scale(s)，使视觉直径恒为 20px，方便用户拖动。
-const HANDLE_CIRCLE_DIAMETER_PX = 20
+export const HANDLE_CIRCLE_DIAMETER_PX = 20
 
 /**
  * 去除 CSS 颜色字符串中的透明度（alpha 通道），返回无 alpha 的等价颜色。
@@ -76,6 +76,19 @@ const withOpaqueBackground = (style: CSSProperties): CSSProperties => {
 }
 
 /** Shared visual only; each renderer owns its hit testing and gesture lifecycle. */
+export function rangeHandleCircleStyle(
+  style: CSSProperties = {},
+  scale = 1
+): CSSProperties {
+  return {
+    ...withOpaqueBackground(style),
+    width: HANDLE_CIRCLE_DIAMETER_PX,
+    height: HANDLE_CIRCLE_DIAMETER_PX,
+    borderRadius: '50%',
+    transform: `translate(-50%, -50%) scale(${1 / scale})`
+  }
+}
+
 export function RangeHandleCircle({
   style,
   scale = 1,
@@ -86,13 +99,7 @@ export function RangeHandleCircle({
       type='button'
       tabIndex={-1}
       {...props}
-      style={{
-        ...withOpaqueBackground(style ?? {}),
-        width: HANDLE_CIRCLE_DIAMETER_PX,
-        height: HANDLE_CIRCLE_DIAMETER_PX,
-        borderRadius: '50%',
-        transform: `translate(-50%, -50%) scale(${1 / scale})`
-      }}
+      style={rangeHandleCircleStyle(style, scale)}
     />
   )
 }

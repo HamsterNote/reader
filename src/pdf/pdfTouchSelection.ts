@@ -2,6 +2,27 @@ import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { createWordRangeFromCaret } from '../components/selection/wordRange'
 
+/** Clear only this reader's native text selection, never another reader/editor. */
+export function clearPdfNativeSelection(root: HTMLElement): void {
+  const selection = root.ownerDocument.getSelection()
+  if (!selection?.rangeCount) return
+  const reader = root.closest('.hamster-reader') ?? root
+  const editable = (node: Node | null) =>
+    (node?.nodeType === Node.ELEMENT_NODE
+      ? (node as Element)
+      : node?.parentElement
+    )?.closest(
+      'input, textarea, [contenteditable]:not([contenteditable="false"])'
+    )
+  if (editable(selection.anchorNode) || editable(selection.focusNode)) return
+  for (let index = 0; index < selection.rangeCount; index++) {
+    if (selection.getRangeAt(index).intersectsNode(reader)) {
+      selection.removeAllRanges()
+      return
+    }
+  }
+}
+
 /** Only accept real glyph hits in this viewer's enhanced, visible text layers. */
 export function pdfCaretAtPoint(
   root: HTMLElement,
@@ -86,8 +107,18 @@ export function usePdfTouchSelection({
   const [touch, setTouch] = useState(false)
   const latest = useRef({ validate, onChange })
   latest.current = { validate, onChange }
+  const activate = () => {
+    const root = rootRef.current
+    if (!root) return
+    root.dataset.pdfTouchSelection = 'true'
+    setTouch(true)
+    clearPdfNativeSelection(root)
+  }
   const setRange = (range: Range | null, notify = false) => {
-    managed.current = range
+    // Independent of any visible Selection, which WebKit may collapse later.
+    managed.current = range?.cloneRange() ?? null
+    const root = rootRef.current
+    if (root?.dataset.pdfTouchSelection) clearPdfNativeSelection(root)
     if (notify) latest.current.onChange()
   }
   useEffect(() => {
@@ -113,6 +144,7 @@ export function usePdfTouchSelection({
       // Apply before the browser's default action, including the first touch.
       root.dataset.pdfTouchSelection = 'true'
       setTouch(true)
+      clearPdfNativeSelection(root)
       pointers.add(event.pointerId)
       if (pointers.size > 1 || event.isPrimary === false) {
         cancel()
@@ -147,7 +179,7 @@ export function usePdfTouchSelection({
           !latest.current.validate(word)
         )
           return
-        doc.getSelection()?.removeAllRanges()
+        clearPdfNativeSelection(root)
         setRange(word, true)
       }, 500)
     }
@@ -170,11 +202,34 @@ export function usePdfTouchSelection({
       )
         event.preventDefault()
     }
+    const suppressNative = () => {
+      if (enabled && root.dataset.pdfTouchSelection)
+        clearPdfNativeSelection(root)
+    }
+    const selectStart = (event: Event) => {
+      const target =
+        event.target instanceof Element
+          ? event.target
+          : (event.target as Node).parentElement
+      if (!target) return
+      const reader = root.closest('.hamster-reader') ?? root
+      if (
+        enabled &&
+        root.dataset.pdfTouchSelection &&
+        reader.contains(target) &&
+        !target.closest(
+          'input, textarea, [contenteditable]:not([contenteditable="false"])'
+        )
+      )
+        event.preventDefault()
+    }
     const blur = () => {
       cancel()
       pointers.clear()
     }
     // Observe the second finger even when it lands outside this viewer.
+    doc.addEventListener('selectionchange', suppressNative)
+    doc.addEventListener('selectstart', selectStart, true)
     doc.addEventListener('pointerdown', down, true)
     doc.addEventListener('pointermove', move, true)
     doc.addEventListener('pointerup', up, true)
@@ -195,6 +250,8 @@ export function usePdfTouchSelection({
     return () => {
       cancel()
       observer.disconnect()
+      doc.removeEventListener('selectionchange', suppressNative)
+      doc.removeEventListener('selectstart', selectStart, true)
       doc.removeEventListener('pointerdown', down, true)
       doc.removeEventListener('pointermove', move, true)
       doc.removeEventListener('pointerup', up, true)
@@ -205,5 +262,5 @@ export function usePdfTouchSelection({
       if (managed.current) setRange(null, true)
     }
   }, [rootRef, source, enabled])
-  return { managed, touch, setRange }
+  return { managed, touch, setRange, activate }
 }

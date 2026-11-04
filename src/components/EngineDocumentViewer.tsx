@@ -1708,7 +1708,7 @@ export function EngineDocumentViewer(props: Props) {
           pdfTouch={pdfTouch}
           color={current?.markerStyle?.backgroundColor ?? props.highlightColor}
           paintPreview={getSelectionGroup(ranges, selected).length <= 1}
-          onPreview={(range) => pdf.current?.setSelectionRange(range)}
+          onPreview={(range) => pdf.current?.setSelectionRange(range, pdfTouch)}
           hitTest={(x, y) => pdf.current?.hitTestSelection(x, y) ?? null}
           showStart={endpointVisible(current, source?.format, epubPage, false)}
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
@@ -1734,7 +1734,7 @@ export function EngineDocumentViewer(props: Props) {
             const target = pdf.current
               ? pdfTarget
               : values.current.ranges.find((item) => item.id === active.rangeId)
-            if (pdf.current) pdf.current.setSelectionRange(range)
+            if (pdf.current) pdf.current.setSelectionRange(range, pdfTouch)
             let detail: ReturnType<typeof serialize>
             if (epub.current && target)
               detail = epub.current.updateRangeEndpoint(target.id, range, end)
@@ -1743,7 +1743,7 @@ export function EngineDocumentViewer(props: Props) {
             else detail = epub.current?.serializeRange(range) ?? serialize()
             if (!detail) {
               if (pdf.current) {
-                pdf.current.setSelectionRange(active.range)
+                pdf.current.setSelectionRange(active.range, pdfTouch)
                 return
               }
               const selection =

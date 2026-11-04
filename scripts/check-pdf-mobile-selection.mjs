@@ -10,6 +10,8 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     hasTouch: true
   })
   const errors = []
+  const nativeChecks = []
+  const hotAreaChecks = []
   page.on('pageerror', (error) => errors.push(error.message))
   const html = (await (await fetch(base)).text()).replace(
     '/demo/main.tsx',
@@ -50,26 +52,92 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       }, offset)
   const lastText = () =>
     page.evaluate(() => window.readerRegression.state.selectionTexts.at(-1))
-  const drag = async (end, target) => {
+  const noNative = async (phase) => {
+    await page.waitForFunction(() => getSelection().rangeCount === 0)
+    const count = await page.evaluate(() => getSelection().rangeCount)
+    nativeChecks.push({ phase, rangeCount: count })
+    assert.equal(count, 0)
+  }
+  const assertEndpoint = async (end, target) => {
+    const circle = await page
+      .locator(`[data-range-handle-circle="${end ? 'end' : 'start'}"]`)
+      .boundingBox()
+    assert(
+      Math.abs(circle.x + circle.width / 2 - target.x) < 1,
+      'circle and current Range endpoint must match without waiting for rAF'
+    )
+    const edge = end ? circle.y : circle.y + circle.height
+    assert(
+      Math.abs(edge - (target.y + ((end ? 1 : -1) * target.height) / 2)) < 1,
+      'circle must stay outside its current line'
+    )
+  }
+  const drag = async (end, target, corner = [1, 1]) => {
     const handle = page.getByRole('button', {
       name: end ? '拖动以调整选区终点' : '拖动以调整选区起点'
     })
     const box = await handle.boundingBox()
     assert(box)
-    assert.equal(Math.round(box.width), 20)
+    assert.equal(Math.round(box.width), 40)
+    assert.equal(Math.round(box.height), 40)
+    const visual = await handle
+      .locator('[data-range-handle-circle]')
+      .boundingBox()
+    assert.equal(Math.round(visual.width), 20)
+    assert.equal(Math.round(visual.height), 20)
     // Grab off-center and move outside the target line, keeping its glyphs clear.
-    const start = { x: box.x + 7, y: box.y + 7 }
+    const grabX = corner[0],
+      grabY = corner[1]
+    const start = { x: box.x + grabX, y: box.y + grabY }
+    assert.equal(
+      await page.evaluate(
+        ({ x, y, end }) =>
+          document
+            .elementFromPoint(x, y)
+            ?.closest('[data-pdf-handle-hit-target]')
+            ?.getAttribute('data-pdf-handle-hit-target'),
+        { ...start, end }
+      ),
+      end ? 'end' : 'start'
+    )
+    hotAreaChecks.push({
+      end,
+      width: box.width,
+      height: box.height,
+      grab: [grabX, grabY],
+      outsideCircleBy: 9
+    })
     await touch('touchStart', [start])
+    await noNative('drag-start')
     await touch('touchMove', [
       {
-        x: target.x - 3,
-        y: target.y + (end ? 1 : -1) * (target.height / 2 + 10) - 3
+        x: target.x + grabX - 20,
+        y: target.y + (end ? 1 : -1) * (target.height / 2 + 10) + grabY - 20
       }
     ])
+    await noNative('drag-moving')
+    await assertEndpoint(end, target)
+    await page.screenshot({
+      path: resolve(output, 'pdf-mobile-active-edge-drag.png')
+    })
     await touch('touchEnd', [])
+    await noNative('drag-finished')
     await page.waitForTimeout(100)
+    await assertEndpoint(end, target)
   }
   try {
+    await page.addInitScript(() => {
+      window.pdfSelectionNativeAdds = []
+      const add = Selection.prototype.addRange
+      Selection.prototype.addRange = function (range) {
+        if (
+          document.querySelector('[data-pdf-touch-selection]') &&
+          !window.pdfInjectNative
+        )
+          window.pdfSelectionNativeAdds.push(new Error().stack)
+        return add.call(this, range)
+      }
+    })
     await page.goto(`${base}/pdf-mobile.html`)
     await page.addStyleTag({ content: '.hamster-reader { height: 100%; }' })
     await page.waitForFunction(() => window.readerRegression)
@@ -108,6 +176,34 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
         .evaluate((span) => getComputedStyle(span).userSelect),
       'none'
     )
+    // Adversarially reactivate a native range extending into the bottom toolbar.
+    await page.evaluate(() => {
+      window.pdfInjectNative = true
+      const span = document.querySelector(
+        '.textLayer [data-selection-start-offset]'
+      )
+      const toolbar = document.querySelector('.hamster-reader button')
+      const range = document.createRange()
+      range.selectNodeContents(span)
+      if (toolbar?.firstChild?.nodeType === Node.TEXT_NODE)
+        range.setEnd(toolbar.firstChild, 1)
+      getSelection().addRange(range)
+      window.pdfInjectNative = false
+    })
+    await noNative('injected-native-selection-cleared')
+    await page.evaluate(() => {
+      window.pdfCopiedText = null
+      document.addEventListener(
+        'copy',
+        (event) => {
+          window.pdfCopiedText = event.clipboardData.getData('text/plain')
+        },
+        { once: true }
+      )
+    })
+    await page.keyboard.press('Control+C')
+    assert.equal(await page.evaluate(() => window.pdfCopiedText), 'beta')
+    await noNative('copy-without-visible-native-range')
     await page.screenshot({ path: resolve(output, 'pdf-mobile-longpress.png') })
     await drag(true, await point(1, 8))
     await drag(false, await point(0, 0))
@@ -142,7 +238,7 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       saved[0].markerStyle.backgroundColor
     )
     assert(edited.ranges[0].text.length > saved[0].text.length)
-    for (const scale of [0.5, 1, 2]) {
+    for (const scale of [0.49, 0.5, 1, 2]) {
       await page.evaluate(
         (scale) => window.readerRegression.update({ nativeLayoutZoom: scale }),
         scale
@@ -153,13 +249,35 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       const circle = await page
         .getByRole('button', { name: '拖动以调整选区终点' })
         .boundingBox()
-      assert.equal(Math.round(circle.width), 20)
-      await drag(true, await point(0, 16))
+      assert.equal(Math.round(circle.width), 40)
+      for (const corner of [
+        [1, 1],
+        [39, 1],
+        [1, 39],
+        [39, 39]
+      ]) {
+        await drag(true, await point(0, 16), corner)
+      }
       assert.equal(await page.evaluate(() => getSelection().rangeCount), 0)
       await page.screenshot({
         path: resolve(output, `pdf-mobile-scale-${scale}.png`)
       })
+      if (scale === 0.49) {
+        const debug = await page.addStyleTag({
+          content:
+            '[data-pdf-handle-hit-target]{outline:1px dashed purple!important} [data-pdf-handle-hit-target]::after{content:"40 x 40";position:absolute;left:42px;top:0;color:purple;font:10px sans-serif;white-space:nowrap;pointer-events:none}'
+        })
+        await page.screenshot({
+          path: resolve(output, 'pdf-mobile-hot-area-49.png')
+        })
+        await debug.evaluate((element) => element.remove())
+      }
     }
+    assert.deepEqual(
+      await page.evaluate(() => window.pdfSelectionNativeAdds),
+      [],
+      'app must never add a visible native Range during PDF touch selection'
+    )
     await page.evaluate(() =>
       window.readerRegression.update({ renderMode: 'text' })
     )
@@ -199,7 +317,9 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       label:
         'pdf-mobile-cdp-longpress-both-handles-cross-line-color-confirm-edit',
       passed: true,
-      highlight: edited.ranges[0]
+      highlight: edited.ranges[0],
+      nativeChecks,
+      hotAreaChecks
     }
   } catch (error) {
     await page.screenshot({ path: resolve(output, 'pdf-mobile-failure.png') })

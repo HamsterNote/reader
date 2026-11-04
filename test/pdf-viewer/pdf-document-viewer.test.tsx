@@ -261,6 +261,39 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it('explicit touch updates and copy keep native Selection empty after reactivation', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const layer = emitTextLayer(1, [
+      'Left column line one',
+      'Left column line two'
+    ])
+    await act(async () => {})
+    const range = document.createRange()
+    range.setStart(layer.children[0].firstChild!, 0)
+    range.setEnd(layer.children[0].firstChild!, 4)
+    act(() => ref.current!.setSelectionRange(range, true))
+    const native = document.getSelection()!
+    native.addRange(range.cloneRange())
+    fireEvent(document, new Event('selectionchange'))
+    expect(native.rangeCount).toBe(0)
+    expect(ref.current!.serializeSelection()?.text).toBe('Left')
+    // Even a lost DOM flag cannot send an explicit touch preview through addRange.
+    delete view.container.querySelector<HTMLElement>(
+      '[data-pdf-touch-selection]'
+    )!.dataset.pdfTouchSelection
+    range.setEnd(layer.children[0].firstChild!, 11)
+    act(() => ref.current!.setSelectionRange(range, true))
+    const copy = new Event('copy', { bubbles: true, cancelable: true })
+    const setData = vi.fn()
+    Object.defineProperty(copy, 'clipboardData', { value: { setData } })
+    fireEvent(document, copy)
+    expect(setData).toHaveBeenCalledWith('text/plain', 'Left column')
+    expect(copy.defaultPrevented).toBe(true)
+    expect(native.rangeCount).toBe(0)
+  })
+
   it.each([
     'select',
     'pan',
