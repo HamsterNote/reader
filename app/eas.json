@@ -1,0 +1,18 @@
+{
+  "cli": {
+    "version": ">= 21.4.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "developmentClient": false,
+      "node": "24.15.0",
+      "yarn": "1.22.22",
+      "ios": {
+        "simulator": false,
+        "buildConfiguration": "Release"
+      }
+    }
+  }
+}

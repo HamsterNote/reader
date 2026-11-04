@@ -8,7 +8,8 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hamsternote.reader"
+      "bundleIdentifier": "com.hamsternote.reader",
+      "buildNumber": "1"
     },
     "android": {
       "package": "com.hamsternote.reader",
@@ -17,6 +18,12 @@
     "plugins": ["expo-document-picker", "./plugins/with-ios-scene.cjs"],
     "experiments": {
       "autolinkingModuleResolution": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e90ee40c-54b7-42b8-895f-97f026713062"
+      }
+    },
+    "owner": "wszxdhr"
   }
 }

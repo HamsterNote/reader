@@ -16,6 +16,31 @@ yarn host:android           # or: yarn host:ios on macOS
 reader until the zip exists. See `../docs/expo-host.md` for architecture, security
 rules and the verification matrix.
 
+## Internal iOS IPA (EAS)
+
+From the repository root, install with `yarn install --frozen-lockfile`, then:
+
+```bash
+cd app
+eas build -p ios --profile preview
+```
+
+The `preview` profile produces an ad-hoc signed Release IPA with the JavaScript
+bundle and Web reader assets embedded; it runs without Metro. The project is
+`wszxdhr/hamster-reader`. Register the target device with EAS and include its UDID
+in the ad-hoc provisioning profile before building. Adding a device requires a
+new build or re-signing the IPA.
+
+The pre-install hook copies the repository's pinned `yarn.lock` into the build's
+`app/` directory for EAS's host dependency install and installs the root build
+tools. The post-install hook builds and verifies the gitignored Web reader ZIP
+and applies the iOS WebView patch to the host's resolved native dependency.
+These hooks must run on the cloud builder; generating assets only on the machine
+submitting the build does not cover builds from a clean Git checkout.
+
+App version and iOS build number are local values in `app.json`; increment the
+build number before distributing a subsequent IPA of the same app version.
+
 The iOS scripts apply the pinned react-native-webview patch automatically.
 After upgrading from SDK 54, regenerate the native project with
 `yarn host:prebuild --platform ios --clean` before building on macOS. This runs
