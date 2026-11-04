@@ -41,6 +41,7 @@ function* visibleCharacters(
       if (rect && intersects(rect, clip))
         yield {
           top: rect.top,
+          rect,
           anchor: {
             pageNumber: context.pageNumber,
             textId: element.dataset.textId!,
@@ -57,13 +58,15 @@ function* visibleCharacters(
 
 /** PDF.js has no API for a reader's safe first source character. Inspect its
  * actual character geometry, retaining canonical offsets through rotation. */
-export function firstVisiblePdfCharacter(
+export function firstVisiblePdfCharacterGeometry(
   contexts: readonly PdfReadingPage[],
   viewport: ReadingRect,
   pageClip: (context: PdfReadingPage) => ReadingRect = (context) =>
     context.pageDiv.getBoundingClientRect()
-): ReaderTextAnchor | null {
-  let first: { anchor: ReaderTextAnchor; top: number } | undefined
+) {
+  let first:
+    | { anchor: ReaderTextAnchor; top: number; rect: DOMRect }
+    | undefined
   for (const context of contexts) {
     const page = pageClip(context)
     const clip = {
@@ -81,5 +84,11 @@ export function firstVisiblePdfCharacter(
       if (!first || candidate.top < first.top - 0.5) first = candidate
     }
   }
-  return first?.anchor ?? null
+  return first ?? null
+}
+
+export function firstVisiblePdfCharacter(
+  ...args: Parameters<typeof firstVisiblePdfCharacterGeometry>
+): ReaderTextAnchor | null {
+  return firstVisiblePdfCharacterGeometry(...args)?.anchor ?? null
 }

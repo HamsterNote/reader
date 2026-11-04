@@ -736,6 +736,10 @@ export function EngineDocumentViewer(props: Props) {
     return result?.status === 'ready' ? result.position : undefined
   }
   const emittedLayoutPositions = useRef(new Set<string>())
+  // A controlled host can return the same emitted object more than once (e.g.
+  // a debounced save crossing crop reflow). A consumed key alone loses that
+  // provenance and turns the second echo into an explicit bookmark navigation.
+  const emittedLayoutBookmarks = useRef(new WeakSet<ReaderBookmark>())
   const publishPosition = useCallback(
     (pageNumber: number, captured?: ReadingPosition) => {
       setPage(pageNumber)
@@ -762,6 +766,7 @@ export function EngineDocumentViewer(props: Props) {
         })
       else {
         emittedLayoutPositions.current.add(getBookmarkKey(position))
+        emittedLayoutBookmarks.current.add(position)
         if (emittedLayoutPositions.current.size > 32)
           emittedLayoutPositions.current.delete(
             emittedLayoutPositions.current.values().next().value!
@@ -798,6 +803,7 @@ export function EngineDocumentViewer(props: Props) {
       restored.current = false
       progressEnabled.current = false
       emittedLayoutPositions.current.clear()
+      emittedLayoutBookmarks.current = new WeakSet()
     }
     return () => {
       ++pdfNavigationGeneration.current
@@ -835,7 +841,13 @@ export function EngineDocumentViewer(props: Props) {
     )
       return
     lastLayoutRequest.current = target
-    if (emittedLayoutPositions.current.delete(getBookmarkKey(target))) return
+    const emitted = emittedLayoutPositions.current.delete(
+      getBookmarkKey(target)
+    )
+    if (emitted || emittedLayoutBookmarks.current.has(target)) {
+      emittedLayoutBookmarks.current.add(target)
+      return
+    }
     const actual = capturePdfPosition()
     if (!actual || getBookmarkKey(actual) !== getBookmarkKey(target))
       navigateBookmark(target)?.catch(() => undefined)

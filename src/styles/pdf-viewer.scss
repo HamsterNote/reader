@@ -9,11 +9,27 @@
 }
 
 .hamster-reader__pdf-viewer-container {
+  // Crop reflow restores a PDF-space anchor; native scroll anchoring competes.
+  overflow-anchor: none;
   scrollbar-width: none;
   -ms-overflow-style: none;
 
   &::-webkit-scrollbar {
     display: none;
+  }
+}
+
+.hamster-reader__pdf-viewer-container > .pdfViewer {
+  // Each full-size PDF.js page keeps its original coordinate system. Negative
+  // margins reduce its flex footprint to the crop; prevent margin collapsing
+  // and clip discarded page edges out of the scrollable overflow area.
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: clip;
+
+  > .page {
+    flex: none;
   }
 }
 
