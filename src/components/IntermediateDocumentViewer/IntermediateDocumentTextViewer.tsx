@@ -221,10 +221,7 @@ const EMPTY_TEXT_PAGE_IMAGES = new Map<number, string>()
 
 const handleTextPageBrowserVisibilityChange = () => {}
 
-type TextReadingProgressSnapshot = {
-  readonly currentPageNumber: number
-  readonly anchor?: ReaderTextAnchor
-}
+type TextReadingProgressSnapshot = ReaderTextReadingProgress
 
 type TextAnchorRestoreRequest = {
   readonly token: number
@@ -243,7 +240,7 @@ function getTextReadingProgressKey(
 ): string {
   return progress.anchor
     ? getTextAnchorKey(progress.anchor)
-    : `${progress.currentPageNumber}:page`
+    : `${progress.currentPageNumber}:page:${progress.verticalPercentage ?? 0}`
 }
 
 function useDocumentGeneration(
@@ -305,7 +302,12 @@ function resolveRequestedTextReadingProgress(
     progress?.anchor?.pageNumber === pageNumber ? progress.anchor : undefined
   return anchor
     ? { currentPageNumber: pageNumber, anchor }
-    : { currentPageNumber: pageNumber }
+    : {
+        currentPageNumber: pageNumber,
+        ...(progress?.verticalPercentage === undefined
+          ? {}
+          : { verticalPercentage: progress.verticalPercentage })
+      }
 }
 
 function getRequestedProgressIdentity(
@@ -327,7 +329,12 @@ function getInitialTextReadingProgress(
   if (anchor?.pageNumber === currentPageNumber) {
     return { currentPageNumber, anchor }
   }
-  return { currentPageNumber }
+  return {
+    currentPageNumber,
+    ...(persistedProgress?.verticalPercentage === undefined
+      ? {}
+      : { verticalPercentage: persistedProgress.verticalPercentage })
+  }
 }
 
 const DISABLED_ANNOTATION_HISTORY_STATUS = {
@@ -1307,8 +1314,15 @@ export function IntermediateDocumentTextViewer(
   ])
   useImperativeHandle(
     readingPositionRef,
-    () => ({ captureTextAnchor: () => captureCurrentTextAnchor(true) }),
-    [captureCurrentTextAnchor]
+    () => ({
+      captureTextAnchor: () => captureCurrentTextAnchor(true),
+      captureAndPublish: () => {
+        captureReadingProgress()
+      },
+      waitForStable: () =>
+        pdfNavigationRef.current?.whenStable() ?? Promise.resolve()
+    }),
+    [captureCurrentTextAnchor, captureReadingProgress]
   )
 
   const cancelRestoreAttempt = useCallback(() => {

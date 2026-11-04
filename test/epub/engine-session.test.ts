@@ -832,3 +832,75 @@ it('keeps the requested restored character through reflow when it is inside a vi
   expect(onRelocate).not.toHaveBeenCalled()
   await engine.destroy()
 })
+
+it('persists a nonzero unfolded ratio for an image screen inside a chapter with text', async () => {
+  const bytes = readFixture('epub/duplicate-text.epub')
+  const zip = await JSZip.loadAsync(bytes)
+  const xml = await zip.file('OPS/chapter1.xhtml')!.async('string')
+  const frame = document.createElement('iframe')
+  const container = document.createElement('div')
+  document.body.append(container)
+  container.append(frame)
+  const doc = frame.contentDocument!
+  doc.open()
+  doc.write(xml)
+  doc.close()
+  const image = doc.createElement('img')
+  doc.body.append(image)
+  const range = doc.createRange()
+  range.selectNode(image)
+  vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(0, 0, 320, 600)
+  )
+  vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(0, 0, 320, 600)
+  )
+  Object.defineProperties(frame, {
+    clientWidth: { value: 320 },
+    clientHeight: { value: 600 }
+  })
+  const fake = makeFakeView()
+  const engine = createEpubEngine({ container, source: bytes }, fake.factory)
+  await engine.ready
+  fake.handle.emit('load', { index: 1, doc })
+  vi.spyOn(fake.handle.renderer, 'getContents').mockReturnValue([
+    { index: 1, doc }
+  ])
+  let count = 3
+  const relocate = (index: number) =>
+    fake.handle.emit('relocate', {
+      index: 1,
+      fraction: index / count,
+      size: 1 / count,
+      range
+    })
+  vi.spyOn(fake.handle.renderer, 'goTo').mockImplementation(async () => {
+    relocate(0)
+  })
+  const scroll = vi
+    .spyOn(fake.handle.renderer, 'scrollToAnchor')
+    .mockImplementation(async (...args: unknown[]) => {
+      relocate(Math.round(Number(args[0]) * (count - 1)))
+    })
+  relocate(1)
+  const position = engine.captureReadingPosition()
+  expect(position).toEqual({
+    status: 'ready',
+    position: { pageNumber: 2, verticalPercentage: (1 / 3) * 100 }
+  })
+  expect(engine.captureTextAnchor()).toBeUndefined()
+  await engine.goToPosition({
+    pageNumber: 2,
+    verticalPercentage: (1 / 3) * 100
+  })
+  expect(scroll).toHaveBeenLastCalledWith(0.5)
+  expect(engine.captureReadingPosition()).toEqual(position)
+  fake.handle.emit('before-reflow', {})
+  count = 4
+  relocate(0)
+  await vi.waitFor(() => expect(engine.navigationState().busy).toBe(false))
+  expect(scroll).toHaveBeenLastCalledWith(1 / 3)
+  expect(engine.captureReadingPosition()).toEqual(position)
+  await engine.destroy()
+  container.remove()
+})

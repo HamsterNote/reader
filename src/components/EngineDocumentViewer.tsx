@@ -1,3 +1,7 @@
+import {
+  resolveReadingProgress,
+  type ReadingPosition
+} from '../readingProgress'
 import { ViewportPaginationControls } from './reading/ViewportPaginationControls'
 import { useReadingViewport } from './reading/useReadingViewport'
 import {
@@ -318,6 +322,7 @@ export function EngineDocumentViewer(props: Props) {
     latest.current.onOcrTextsChange?.(page, texts)
   }, [])
   const [retry, setRetry] = useState(0)
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [book, setBook] = useState<EpubEngineBookInfo | null>(null)
   const [unlocatable, setUnlocatable] = useState<readonly string[]>([])
@@ -373,8 +378,15 @@ export function EngineDocumentViewer(props: Props) {
       progressEnabled.current = true
       setMouse(event.pointerType === 'mouse')
     }
+    const keydown = () => {
+      progressEnabled.current = true
+    }
+    rootElement.addEventListener('keydown', keydown, true)
     rootElement.addEventListener('pointerdown', down, true)
-    return () => rootElement.removeEventListener('pointerdown', down, true)
+    return () => {
+      rootElement.removeEventListener('pointerdown', down, true)
+      rootElement.removeEventListener('keydown', keydown, true)
+    }
   }, [rootElement])
   // The file owner also supplies uncontrolled content after a source reset.
   const sharedPresent = sharedHistoryPresent(sharedHistory)
@@ -707,24 +719,34 @@ export function EngineDocumentViewer(props: Props) {
   }
   const finishNativeEditRef = useRef(finishNativeEdit)
   finishNativeEditRef.current = finishNativeEdit
-  const publishPosition = useCallback((pageNumber: number) => {
-    setPage(pageNumber)
-    if (!restored.current || !progressEnabled.current) return
-    const anchor =
-      epub.current?.captureTextAnchor() ??
-      pdf.current?.captureTextAnchor() ??
-      undefined
-    latest.current.onTextAnchorChange?.(anchor)
-    if (latest.current.engineRenderMode === 'text')
-      latest.current.onTextReadingProgressChange?.({
-        currentPageNumber: pageNumber,
-        ...(anchor ? { anchor } : {})
-      })
-    else
-      latest.current.onLayoutReadingProgressChange?.(
-        anchor ?? { pageNumber, verticalPercentage: 0 }
-      )
-  }, [])
+  const publishPosition = useCallback(
+    (pageNumber: number, captured?: ReadingPosition) => {
+      setPage(pageNumber)
+      if (!restored.current || !progressEnabled.current) return
+      const result =
+        captured ??
+        epub.current?.captureReadingPosition() ??
+        pdf.current?.captureReadingPosition()
+      const position = result?.status === 'ready' ? result.position : undefined
+      if (!position) return
+      const textAnchor = isTextBookmark(position) ? position : undefined
+      latest.current.onTextAnchorChange?.(textAnchor)
+      if (latest.current.engineRenderMode === 'text')
+        latest.current.onTextReadingProgressChange?.({
+          currentPageNumber: position.pageNumber,
+          ...(textAnchor
+            ? { anchor: textAnchor }
+            : {
+                verticalPercentage:
+                  'verticalPercentage' in position
+                    ? position.verticalPercentage
+                    : 0
+              })
+        })
+      else latest.current.onLayoutReadingProgressChange?.(position)
+    },
+    []
+  )
   const cancelSelection = useCallback((clear = true) => {
     ++activationGeneration.current
     ++selectionCallbackGeneration.current.change
@@ -747,39 +769,44 @@ export function EngineDocumentViewer(props: Props) {
   )
   const navigateBookmark = (bookmark: ReaderBookmark) => {
     if (epub.current) {
-      if (isTextBookmark(bookmark)) return epub.current.goToAnchor(bookmark)
-      return epub.current.goToPage(bookmark.pageNumber)
+      return epub.current.goToPosition(bookmark)
     }
     return pdf.current?.scrollToAnchor(bookmark)
   }
   const restorePosition = () => {
     const current = latest.current
-    let progress =
-      current.layoutReadingProgress ??
-      current.defaultVirtualPaperTransform?.anchor
-    if (current.engineRenderMode === 'text') {
-      progress = current.textReadingProgress?.anchor
-      if (!progress && current.textReadingProgress)
-        progress = {
-          pageNumber: current.textReadingProgress.currentPageNumber,
-          verticalPercentage: 0
-        }
-    }
-    if (progress) {
-      if (epub.current) {
-        if (isTextBookmark(progress)) return epub.current.goToAnchor(progress)
-        return epub.current.goToPage(progress.pageNumber)
-      }
-      return navigateBookmark(progress)
-    }
-    return Promise.resolve()
+    const progress = resolveReadingProgress(
+      {
+        layoutReadingProgress: current.layoutReadingProgress,
+        virtualPaper: current.defaultVirtualPaperTransform,
+        textReadingProgress: current.textReadingProgress
+      },
+      current.engineRenderMode ?? 'layout'
+    )
+    if (!progress) return Promise.resolve()
+    const allowed = enginePageNumbers(pageCountRef.current, current)
+    const targetPage =
+      allowed.length && !allowed.includes(progress.pageNumber)
+        ? (allowed.find((page) => page >= progress.pageNumber) ??
+          allowed.at(-1)!)
+        : progress.pageNumber
+    const fallback = { pageNumber: targetPage, verticalPercentage: 0 }
+    const target = targetPage === progress.pageNumber ? progress : fallback
+    if (target !== progress)
+      setRestoreNotice('原阅读页当前不可见，已显示相邻页；原进度已保留')
+    return Promise.resolve(navigateBookmark(target)).catch(async () => {
+      setRestoreNotice('无法精确恢复阅读位置，已显示原页；原进度已保留')
+      await navigateBookmark(fallback)
+    })
   }
   const restorePositionRef = useRef(restorePosition)
   restorePositionRef.current = restorePosition
   const onPdfReady = useCallback(async (count: number) => {
+    const activeSource = latest.current.engineSource
+    pageCountRef.current = count
     setPageCount(count)
     await restorePositionRef.current()
-    restored.current = true
+    if (activeSource === latest.current.engineSource) restored.current = true
   }, [])
   const onPdfTextReady = useCallback((loadedPages: readonly number[]) => {
     latest.current.onPageLoadStatusChange?.([...loadedPages])
@@ -971,6 +998,7 @@ export function EngineDocumentViewer(props: Props) {
     engine.ready
       .then(async (info) => {
         if (cancelled) return
+        pageCountRef.current = info.pageCount
         setPageCount(info.pageCount)
         await engine.setHiddenPages(
           latest.current.hiddenPages ?? [],
@@ -1093,7 +1121,17 @@ export function EngineDocumentViewer(props: Props) {
       captureTextAnchor: () =>
         epub.current?.captureTextAnchor() ??
         pdf.current?.captureTextAnchor() ??
-        undefined
+        undefined,
+      captureAndPublish: () => {
+        if (!progressEnabled.current) return
+        const position =
+          epub.current?.captureReadingPosition() ??
+          pdf.current?.captureReadingPosition()
+        if (!restored.current || position?.status !== 'ready')
+          throw new Error('当前阅读位置尚未就绪，保存未确认，请稍后重试')
+        publishPosition(pageRef.current, position)
+      },
+      waitForStable: () => epub.current?.whenStable() ?? Promise.resolve()
     }),
     []
   )
@@ -1163,6 +1201,17 @@ export function EngineDocumentViewer(props: Props) {
     () => (source ? { data: source.data.slice() } : null),
     [source, retry]
   )
+  useEffect(() => {
+    if (source?.format === 'pdf') {
+      restored.current = false
+      progressEnabled.current = false
+      setRestoreNotice(null)
+    }
+  }, [source, retry])
+  const pageRef = useRef(page)
+  pageRef.current = page
+  const pageCountRef = useRef(pageCount)
+  pageCountRef.current = pageCount
   const pageNumbers = enginePageNumbers(pageCount, props)
   const current = ranges.find(
     (range) =>
@@ -1419,9 +1468,15 @@ export function EngineDocumentViewer(props: Props) {
             onPagesLoaded={onPdfReady}
             onTextLayerReady={onPdfTextReady}
             onPageChange={publishPosition}
-            onTextAnchorChange={(anchor) => {
-              if (anchor) publishPosition(anchor.pageNumber)
+            onReadingPositionChange={(position) => {
+              if (position.status === 'ready')
+                publishPosition(position.position.pageNumber, position)
             }}
+            onRestoreError={setRestoreNotice}
+            viewportTopInset={props.containMarginTop ?? props.containMarginY}
+            viewportBottomInset={
+              props.containMarginBottom ?? props.containMarginY
+            }
             onScaleChange={props.onNativeLayoutScaleChange}
             onError={(failure) => setError(failure.message)}
             tool={props.selectedTool}
@@ -1496,6 +1551,7 @@ export function EngineDocumentViewer(props: Props) {
             {unlocatable.length} 条高亮无法定位，原数据已保留
           </div>
         )}
+        {restoreNotice && <div role='status'>{restoreNotice}</div>}
         {error && (
           <div role='alert' className='hamster-reader__engine-error'>
             <p>{error}</p>

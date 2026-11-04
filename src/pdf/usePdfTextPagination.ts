@@ -98,6 +98,16 @@ export function usePdfTextPagination(options: {
   const committed = useRef<ReaderTextReadingProgress | undefined>(progress)
   const gate = useRef(false)
   const committedToken = useRef(-1)
+  const stableWaiters = useRef(
+    new Set<{ resolve: () => void; reject: (error: Error) => void }>()
+  )
+  useLayoutEffect(
+    () => () => {
+      for (const waiter of stableWaiters.current) waiter.resolve()
+      stableWaiters.current.clear()
+    },
+    [generation]
+  )
   // Invalidate during render so old effects cannot commit into a new document.
   const scope = useRef(generation)
   if (scope.current !== generation) {
@@ -209,7 +219,7 @@ export function usePdfTextPagination(options: {
       )
       const next: ReaderTextReadingProgress = {
         currentPageNumber: target.pageNumber,
-        ...(anchor ? { anchor } : {})
+        ...(anchor ? { anchor } : { verticalPercentage: 0 })
       }
       committed.current = next
       committedToken.current = token
@@ -300,6 +310,15 @@ export function usePdfTextPagination(options: {
     },
     [state]
   )
+  useLayoutEffect(() => {
+    const failed = errors.has(target.pageNumber)
+    if (!failed && (current.busy || !current.ready || gate.current)) return
+    for (const waiter of stableWaiters.current) {
+      if (failed) waiter.reject(new Error('阅读页加载失败，保存未确认，请重试'))
+      else waiter.resolve()
+    }
+    stableWaiters.current.clear()
+  }, [current.busy, current.ready, errors, target.pageNumber])
   return {
     pageNumber: target.pageNumber,
     column: current.column,
@@ -325,6 +344,15 @@ export function usePdfTextPagination(options: {
     },
     navigate,
     turn,
+    whenStable: () => {
+      if (errors.has(target.pageNumber))
+        return Promise.reject(new Error('阅读页加载失败，保存未确认，请重试'))
+      if (!gate.current && current.ready && !current.busy)
+        return Promise.resolve()
+      return new Promise<void>((resolve, reject) => {
+        stableWaiters.current.add({ resolve, reject })
+      })
+    },
     capture: () => committed.current?.anchor
   }
 }

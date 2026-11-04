@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { act, render } from '@testing-library/react'
 import { createRef, StrictMode } from 'react'
 import type { RefObject } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IntermediatePage, TextDir } from '@hamster-note/types'
 import { PDFDocument } from 'pdf-lib'
 import { ImageParser } from '@hamster-note/image-parser'
@@ -113,7 +113,15 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
     readonly eventBus: FakeEventBus
     document: unknown = null
     currentScale = 1
-    currentPageNumber = 1
+    private pageNumber = 1
+    get currentPageNumber() {
+      return this.pageNumber
+    }
+    set currentPageNumber(value: number) {
+      this.pageNumber = value
+      const container = this.options.container as HTMLElement
+      container.scrollTop = (value - 1) * 320
+    }
     pagesCount = 0
     private pageViews: FakePageView[] = []
 
@@ -168,6 +176,43 @@ const FIXTURE_ROOT = join(__dirname, '../compat/fixtures')
 const readFixture = (name: string): Uint8Array =>
   new Uint8Array(readFileSync(join(FIXTURE_ROOT, name)))
 
+// Measured page/character geometry; jsdom itself has no layout.
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+    function (this: HTMLElement) {
+      const container = this.closest(
+        '.hamster-reader__pdf-viewer-container'
+      ) as HTMLElement | null
+      const scroll = container?.scrollTop ?? 0
+      if (this.classList.contains('hamster-reader__pdf-viewer-container'))
+        return new DOMRect(0, 0, 400, 200)
+      const page = this.closest('.page')
+      const pageIndex = page
+        ? Array.from(page.parentElement!.children).indexOf(page)
+        : 0
+      if (page) return new DOMRect(0, pageIndex * 320 - scroll, 400, 300)
+      return new DOMRect()
+    }
+  )
+  if (!Range.prototype.getClientRects)
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      writable: true,
+      value: () => []
+    })
+  vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+    this: Range
+  ) {
+    const element = this.startContainer.parentElement
+    const box = element?.getBoundingClientRect() ?? new DOMRect()
+    return [
+      new DOMRect(box.left + this.startOffset * 5, box.top + 20, 5, 12)
+    ] as unknown as DOMRectList
+  })
+  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000)
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200)
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   hoisted.viewerInstances.splice(0)
@@ -214,6 +259,130 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
 }
 
 describe('PdfDocumentViewer 接线', () => {
+  it('captures and restores distinct visible source characters inside one wrapped span', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.getBoundingClientRect = () => new DOMRect(0, 0, 100, 25)
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+      this: Range
+    ) {
+      const start = Number(
+        this.startContainer.parentElement?.dataset.selectionStartOffset ?? 0
+      )
+      const offset = start + this.startOffset
+      return [
+        new DOMRect(
+          (offset % 5) * 10,
+          Math.floor(offset / 5) * 20 - container.scrollTop,
+          8,
+          15
+        )
+      ] as unknown as DOMRectList
+    })
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { offset: 0 }
+    })
+    container.scrollTop = 43 // first row is partly visible
+    const b = ref.current!.captureReadingPosition()
+    expect(b).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 1, offset: 10 }
+    })
+    if (b.status !== 'ready') throw new Error('Expected stable position')
+    container.scrollTop = 0
+    await act(async () => {
+      await ref.current!.scrollToAnchor(b.position)
+    })
+    expect(container.scrollTop).toBe(40) // full source line, not original clipping
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      position: { offset: 10 }
+    })
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      new DOMRect(500, 0, 10, 15)
+    ] as unknown as DOMRectList)
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { verticalPercentage: 40 / 3 }
+    })
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      new DOMRect(0, 1000, 10, 15)
+    ] as unknown as DOMRectList)
+    expect(ref.current!.captureTextAnchor()).toEqual(b.position) // legacy interface retains the precise restore
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { verticalPercentage: 40 / 3 }
+    })
+  })
+
+  it('selects the first visible line across pages and waits only for layers that can precede it', async () => {
+    const pdf = await PDFDocument.create()
+    pdf.addPage([400, 300]).drawText('Upper')
+    pdf.addPage([400, 300]).drawText('Lower')
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source: { data: await pdf.save() } }, ref)
+    await act(async () => {})
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.getBoundingClientRect = () => new DOMRect(0, 0, 400, 600)
+    emitTextLayer(1, ['Upper'])
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 1, offset: 0 }
+    })
+    container.getBoundingClientRect = () => new DOMRect(0, 0, 400, 200)
+    container.scrollTop = 250
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    emitTextLayer(2, ['Lower'])
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 2, offset: 0, text: 'Lower' }
+    })
+  })
+
+  it('keeps pending layers distinct from blank geometry and reports stale anchors without publishing fallback', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const notice = vi.fn()
+    const view = renderViewer({ onRestoreError: notice }, ref)
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    await act(async () => {
+      await ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        verticalPercentage: 40
+      })
+    })
+    expect(container.scrollTop).toBe(120)
+    let restored!: Promise<void>
+    act(() => {
+      restored = ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        offset: 99999,
+        text: 'duplicate',
+        textId: 'missing'
+      })
+    })
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {
+      await restored
+    })
+    expect(notice).toHaveBeenCalledOnce()
+    expect(container.scrollTop).toBe(0)
+  })
+
   it('cancels a pending Text character restore when an explicit page seek replaces it', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)
@@ -376,7 +545,9 @@ describe('PdfDocumentViewer 接线', () => {
           settled = true
         })
     })
-    expect(settled).toBe(false)
+    // Page geometry restores independently of the text layer.
+    await Promise.resolve()
+    expect(settled).toBe(true)
     view.rerender(
       <PdfDocumentViewer source={source} hiddenPages={[2]} ref={ref} />
     )

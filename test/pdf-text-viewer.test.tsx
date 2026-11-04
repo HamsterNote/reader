@@ -1,3 +1,5 @@
+import { createRef } from 'react'
+import type { ReaderReadingPositionHandle } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentViewer'
 import type {
   IntermediateDocument,
   IntermediateText
@@ -81,7 +83,10 @@ describe('PDF Text viewer integration', () => {
     )
     expect(fixture.loaders[50]).not.toHaveBeenCalled()
     await waitFor(() =>
-      expect(onProgress).toHaveBeenLastCalledWith({ currentPageNumber: 52 })
+      expect(onProgress).toHaveBeenLastCalledWith({
+        currentPageNumber: 52,
+        verticalPercentage: 0
+      })
     )
     const page49Calls = fixture.loaders[48].mock.calls.length
     fixture.loaders[69].mockRejectedValueOnce(
@@ -137,14 +142,20 @@ describe('PDF Text viewer integration', () => {
     fireEvent.click(screen.getByRole('button', { name: '返回 Layout' }))
     expect(onRequestLayout).toHaveBeenCalledOnce()
     await waitFor(() =>
-      expect(onProgress).toHaveBeenLastCalledWith({ currentPageNumber: 2 })
+      expect(onProgress).toHaveBeenLastCalledWith({
+        currentPageNumber: 2,
+        verticalPercentage: 0
+      })
     )
     fireEvent.click(screen.getByRole('button', { name: '下一页' }))
     await screen.findByText('第 3 页没有可提取的文字')
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
     )
-    expect(onProgress).toHaveBeenLastCalledWith({ currentPageNumber: 3 })
+    expect(onProgress).toHaveBeenLastCalledWith({
+      currentPageNumber: 3,
+      verticalPercentage: 0
+    })
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -182,5 +193,49 @@ describe('PDF Text viewer integration', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByText('A page 1')).toBeNull()
     expect(progress).not.toHaveBeenCalled()
+  })
+})
+
+it('waits for the requested PDF Text page before a close capture can flush progress', async () => {
+  const fixture = documentFixture('close-pending', 2)
+  const texts = await fixture.loaders[1]()
+  let release!: () => void
+  fixture.loaders[1].mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(texts)
+      })
+  )
+  const ref = createRef<ReaderReadingPositionHandle>()
+  const onProgress = vi.fn()
+  render(
+    <IntermediateDocumentTextViewer
+      document={fixture.document}
+      isPdf
+      readingPositionRef={ref}
+      onTextReadingProgressChange={onProgress}
+    />
+  )
+  sizeRoot()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+  )
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+  let complete = false
+  const stable = ref.current!.waitForStable!().then(() => {
+    complete = true
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+  expect(complete).toBe(false)
+  await act(async () => {
+    release()
+  })
+  await stable
+  expect(complete).toBe(true)
+  expect(onProgress).toHaveBeenLastCalledWith({
+    currentPageNumber: 2,
+    verticalPercentage: 0
   })
 })

@@ -1,0 +1,485 @@
+{
+  "environment": "Linux headless Chromium; physical iOS/Android and WebKit unavailable",
+  "pdfLayout": {
+    "environment": "Linux headless Chromium; actual PDF.js layout, no device claims",
+    "cases": [
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.046875
+      },
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.078125
+      },
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 39.98499624906226
+        },
+        "error": 0
+      },
+      {
+        "width": 320,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.97449362340586
+        },
+        "error": 2.2737367544323206e-13
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": -0.234375
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": 0.3125
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 40
+        },
+        "error": 0
+      },
+      {
+        "width": 320,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 98.23308270676692
+        },
+        "error": -0.10601503759380648
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.09375
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.234375
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 40.00375445841937
+        },
+        "error": 0
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.99136474563545
+        },
+        "error": -0.12051811526089296
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "rotation-new-display-box",
+        "percentage": 40
+      },
+      {
+        "width": 320,
+        "scale": 2,
+        "kind": "crop-new-display-box",
+        "percentage": 40
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.046875
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.078125
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 39.98499624906226
+        },
+        "error": 0
+      },
+      {
+        "width": 1280,
+        "scale": 0.5,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.97449362340586
+        },
+        "error": 2.2737367544323206e-13
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.109375
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.140625
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 39.98499624906226
+        },
+        "error": 0
+      },
+      {
+        "width": 1280,
+        "scale": 1,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 98.0120030007502
+        },
+        "error": 4.547473508864641e-13
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "text",
+        "line": 20,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-40",
+          "text": "Repeated reading line 2. Same words; unique source position.Repeated reading lin",
+          "offset": 1200
+        },
+        "error": 0.09375
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "text",
+        "line": 55,
+        "saved": {
+          "pageNumber": 1,
+          "textId": "page-1-item-110",
+          "text": "Repeated reading line 1. Same words; unique source position.Repeated reading lin",
+          "offset": 3300
+        },
+        "error": -0.234375
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 40,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 40.00375445841937
+        },
+        "error": 0
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "page-roundtrip",
+        "percentage": 98,
+        "saved": {
+          "pageNumber": 2,
+          "verticalPercentage": 97.99136474563545
+        },
+        "error": -0.12051811526089296
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "rotation-new-display-box",
+        "percentage": 40
+      },
+      {
+        "width": 1280,
+        "scale": 2,
+        "kind": "crop-new-display-box",
+        "percentage": 40
+      }
+    ]
+  },
+  "epubPagination": {
+    "cases": [
+      {
+        "width": 320,
+        "kind": "same-screen-reopen-and-reflow",
+        "before": {
+          "index": 1,
+          "page": 3,
+          "pages": 108,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "试",
+            "offset": 241
+          },
+          "range": true
+        },
+        "same": {
+          "index": 1,
+          "page": 3,
+          "pages": 108,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "试",
+            "offset": 241
+          },
+          "range": true
+        },
+        "wheelBlocked": true
+      },
+      {
+        "width": 1280,
+        "kind": "same-screen-reopen-and-reflow",
+        "before": {
+          "index": 1,
+          "page": 3,
+          "pages": 45,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "第",
+            "offset": 582
+          },
+          "range": true
+        },
+        "same": {
+          "index": 1,
+          "page": 3,
+          "pages": 45,
+          "progress": {
+            "pageNumber": 2,
+            "textId": "page-2-text",
+            "text": "第",
+            "offset": 582
+          },
+          "range": true
+        },
+        "wheelBlocked": true
+      },
+      {
+        "kind": "mixed-chapter-image-ratio-roundtrip",
+        "before": {
+          "index": 2,
+          "page": 2,
+          "pages": 10,
+          "progress": {
+            "pageNumber": 3,
+            "verticalPercentage": 12.5
+          },
+          "range": true
+        },
+        "after": {
+          "index": 2,
+          "page": 2,
+          "pages": 10,
+          "progress": {
+            "pageNumber": 3,
+            "verticalPercentage": 12.5
+          },
+          "range": true
+        }
+      },
+      {
+        "kind": "image-ratio-projected-after-reflow",
+        "percentage": 12.5,
+        "after": {
+          "index": 2,
+          "page": 2,
+          "pages": 16,
+          "progress": {
+            "pageNumber": 3,
+            "verticalPercentage": 12.5
+          },
+          "range": true
+        }
+      },
+      {
+        "kind": "fixed-layout-button-pages",
+        "passed": true
+      }
+    ],
+    "devices": "Linux headless Chromium; no physical iOS/Android WebView"
+  },
+  "pdfTextPagination": {
+    "cases": [
+      {
+        "width": 320,
+        "kind": "text-reopen-reflow-empty-buttons",
+        "offset": 858,
+        "transform": "translateX(-688px)",
+        "passed": true
+      },
+      {
+        "width": 960,
+        "kind": "text-reopen-reflow-empty-buttons",
+        "offset": 2746,
+        "transform": "translateX(-1968px)",
+        "passed": true
+      }
+    ],
+    "devices": "Linux headless Chromium; no physical iOS or Android WebView"
+  },
+  "pageRestrictions": {
+    "cases": [
+      {
+        "format": "pdf",
+        "hidden": [
+          2
+        ],
+        "range": {
+          "start": 2,
+          "end": 3
+        },
+        "displayedSourcePage": 3,
+        "turns": 0,
+        "passed": true
+      },
+      {
+        "format": "epub",
+        "hidden": [
+          2
+        ],
+        "range": {
+          "start": 2,
+          "end": 3
+        },
+        "displayedSourcePage": 3,
+        "turns": 0,
+        "passed": true
+      }
+    ]
+  },
+  "checks": {
+    "test:run": "104 files / 1419 tests passed",
+    "typecheck": "passed",
+    "typecheck:host": "passed",
+    "lint": "passed",
+    "build:all": "passed",
+    "host:check": "passed"
+  },
+  "pending": [
+    "5.3: physical iOS/Android background/foreground acceptance",
+    "6.2: physical-device evidence; no claim of 16/16 completion"
+  ]
+}

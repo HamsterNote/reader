@@ -5011,3 +5011,35 @@ describe('Reader zoom props', () => {
     expect(onCommentsChange).not.toHaveBeenCalled()
   })
 })
+
+it('hands a native page ratio to Text mode instead of reviving its older page', async () => {
+  const doc = makeDocument({ pages: [makePage(1), makePage(2)] })
+  const save = vi.fn()
+  render(
+    <Reader
+      document={doc}
+      useVirtualPaper={false}
+      data={{
+        layoutReadingProgress: { pageNumber: 2, verticalPercentage: 40 },
+        textReadingProgress: { currentPageNumber: 1 }
+      }}
+      onDataChange={save}
+    />
+  )
+  await waitFor(() =>
+    expect(capturedViewerProps.readingPositionRef).toBeDefined()
+  )
+  const position = capturedViewerProps.readingPositionRef
+  if (typeof position !== 'function')
+    throw new Error('Expected reading position ref')
+  act(() => {
+    position({ captureTextAnchor: () => undefined })
+    fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+  })
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({
+      renderMode: 'text',
+      textReadingProgress: { currentPageNumber: 2, verticalPercentage: 40 }
+    })
+  )
+})

@@ -1,3 +1,4 @@
+import { pagePercentage, intersects } from '../../viewportPosition'
 import { createPaintingSettings } from '../../painting/paintingSettings'
 import { Loading } from '@hamster-note/components'
 import type {
@@ -462,6 +463,8 @@ export type ReaderExtraOcr = (
 
 export type ReaderReadingPositionHandle = {
   readonly captureTextAnchor: () => ReaderTextAnchor | undefined
+  readonly captureAndPublish?: () => void
+  readonly waitForStable?: () => Promise<void>
 }
 
 export type IntermediateDocumentViewerProps = {
@@ -770,19 +773,18 @@ function getInitialLayoutTextAnchor(
   defaultVirtualPaperTransform: ReaderVirtualPaperState | undefined,
   layoutReadingProgress: ReaderBookmark | undefined
 ): ReaderTextAnchor | undefined {
-  if (defaultVirtualPaperTransform?.anchor) {
-    return defaultVirtualPaperTransform.anchor
-  }
-  return layoutReadingProgress && isTextBookmark(layoutReadingProgress)
-    ? layoutReadingProgress
-    : undefined
+  if (layoutReadingProgress)
+    return isTextBookmark(layoutReadingProgress)
+      ? layoutReadingProgress
+      : undefined
+  return defaultVirtualPaperTransform?.anchor
 }
 
 function getInitialLayoutBookmark(
   defaultVirtualPaperTransform: ReaderVirtualPaperState | undefined,
   layoutReadingProgress: ReaderBookmark | undefined
 ): ReaderBookmark | undefined {
-  return defaultVirtualPaperTransform?.anchor ?? layoutReadingProgress
+  return layoutReadingProgress ?? defaultVirtualPaperTransform?.anchor
 }
 
 function getOptionalBookmarkKey(
@@ -833,20 +835,11 @@ function resolveNativeLayoutBookmark(
   topPage: { readonly pageNumber: number; readonly rect: DOMRect } | undefined
 ): ReaderBookmark | undefined {
   if (anchor) return anchor
-  if (!topPage) return undefined
+  if (!topPage || topPage.rect.height <= 0) return undefined
 
   return {
     pageNumber: topPage.pageNumber,
-    verticalPercentage:
-      Math.round(
-        Math.min(
-          100,
-          Math.max(
-            0,
-            ((contentTop - topPage.rect.top) / topPage.rect.height) * 100
-          )
-        ) * 100
-      ) / 100
+    verticalPercentage: pagePercentage(contentTop, topPage.rect) ?? 0
   }
 }
 
@@ -5405,7 +5398,9 @@ export function IntermediateDocumentViewer({
             const rect = pageRefs.current
               .get(pageNumber)
               ?.getBoundingClientRect()
-            return rect && rect.height > 0 ? [{ pageNumber, rect }] : []
+            return rect && intersects(rect, viewportRect)
+              ? [{ pageNumber, rect }]
+              : []
           })
         : []
       const topPage = viewportRect
@@ -5427,7 +5422,7 @@ export function IntermediateDocumentViewer({
       const findAnchor = scanBelow ? findTextAnchorAtOrBelow : findTopTextAnchor
       const anchor = viewport
         ? (findAnchor(viewport, textElementsRef.current, textsByPageNumber, {
-            pageNumber: resolvedPageNumber,
+            pageNumber: useVirtualPaper ? resolvedPageNumber : undefined,
             topInset: containMarginTop ?? containMarginY
           }) ?? undefined)
         : undefined
@@ -5443,7 +5438,10 @@ export function IntermediateDocumentViewer({
           ? value
           : nextBookmark
       )
-      if (reportNativeProgress) {
+      if (
+        reportNativeProgress &&
+        (anchor || (topPage && textsByPageNumber.has(topPage.pageNumber)))
+      ) {
         reportUnreportedNativeProgress({
           lastReportedProgressKeyRef: lastReportedLayoutProgressKeyRef,
           nextBookmark,
@@ -5481,7 +5479,10 @@ export function IntermediateDocumentViewer({
   useImperativeHandle(
     readingPositionRef,
     () => ({
-      captureTextAnchor: () => captureCurrentTextAnchor(false, false, true)
+      captureTextAnchor: () => captureCurrentTextAnchor(false, false, true),
+      captureAndPublish: () => {
+        captureCurrentTextAnchor(false, true)
+      }
     }),
     [captureCurrentTextAnchor]
   )

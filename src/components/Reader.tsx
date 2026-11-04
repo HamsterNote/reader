@@ -1,4 +1,10 @@
 import {
+  normalizeBookmark,
+  normalizeTextProgress,
+  invalidStoredProgress,
+  resolveReadingProgress
+} from '../readingProgress'
+import {
   AnnotationHistoryContext,
   paintingContentKey,
   useAnnotationHistory
@@ -27,6 +33,7 @@ import {
   lazy,
   Suspense,
   useCallback,
+  useImperativeHandle,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -108,10 +115,7 @@ import {
   getTranslucentColor
 } from './Reader/defaultBottomBarConfig'
 import { useBottomBarInset } from './Reader/useBottomBarInset'
-import {
-  useLayoutReadingProgressSave,
-  useTextReadingProgressSave
-} from './Reader/useLayoutReadingProgressSave'
+import { useReadingProgressSaves } from './Reader/useLayoutReadingProgressSave'
 
 export type { ReaderRenderMode } from '../types/readerOptions'
 
@@ -145,7 +149,7 @@ const getReaderTextProgressKey = (
 ): string =>
   progress?.anchor
     ? getTextAnchorKey(progress.anchor)
-    : `${progress?.currentPageNumber ?? ''}:page`
+    : `${progress?.currentPageNumber ?? ''}:page:${progress?.verticalPercentage ?? 0}`
 
 const getReaderVirtualPaperKey = (
   virtualPaper: ReaderVirtualPaperState | undefined
@@ -184,7 +188,11 @@ const resolveBottomBarHistoryStatus = ({
   }
 }
 
+export type ReaderProgressHandle = { readonly flush: () => Promise<void> }
+
 export type ReaderProps = {
+  /** 重新采集稳定进度并冲刷 Reader 保存队列；宿主仍须等待实际持久化确认。 */
+  progressRef?: Ref<ReaderProgressHandle>
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   /** Native EPUB/PDF bytes can render without document; provide the compatibility index for derived PDF text mode. */
   engineSource?: ReaderEngineSource
@@ -771,7 +779,8 @@ export function Reader({
   onPageRectSelectionsChange,
   onPageLoadStatusChange,
   popoverRelative,
-  bottomBar
+  bottomBar,
+  progressRef
 }: ReaderProps) {
   const useVirtualPaper = !engineSource && useVirtualPaperProp
   const LayoutViewer = viewerForSource(engineSource)
@@ -825,16 +834,41 @@ export function Reader({
     readonly replacedValueKey: string
     readonly value: ReaderVirtualPaperState
   } | null>(null)
-  const scheduleLayoutReadingProgressSave = useLayoutReadingProgressSave(
-    document,
+  const progressSaves = useReadingProgressSaves(
+    engineSource ?? document,
     data,
     onDataChange
   )
-  const scheduleTextReadingProgressSave = useTextReadingProgressSave(
-    document,
-    data,
-    onDataChange
-  )
+  const scheduleLayoutReadingProgressSave = progressSaves.layout
+  const scheduleTextReadingProgressSave = progressSaves.text
+  const progressControl = useRef(progressSaves)
+  progressControl.current = progressSaves
+  const flushProgress = useCallback(async () => {
+    const handle = readingPositionHandleRef.current
+    const saves = progressControl.current
+    await handle?.waitForStable?.()
+    if (saves.resetKey !== progressControl.current.resetKey) return
+    handle?.captureAndPublish?.()
+    saves.flush()
+  }, [])
+  useImperativeHandle(progressRef, () => ({ flush: flushProgress }), [
+    flushProgress
+  ])
+  useEffect(() => {
+    const hide = () => {
+      if (window.document.visibilityState === 'hidden')
+        flushProgress().catch(() => undefined)
+    }
+    const pagehide = () => {
+      flushProgress().catch(() => undefined)
+    }
+    window.document.addEventListener('visibilitychange', hide)
+    window.addEventListener('pagehide', pagehide)
+    return () => {
+      window.document.removeEventListener('visibilitychange', hide)
+      window.removeEventListener('pagehide', pagehide)
+    }
+  }, [flushProgress])
   const resolvedPagePaintings =
     data?.pagePaintings ?? pagePaintings ?? internalPagePaintings
   const pagePaintingsRef = useRef(resolvedPagePaintings)
@@ -1003,7 +1037,7 @@ export function Reader({
     textPositionHandoff,
     document,
     getReaderTextProgressKey(data?.textReadingProgress),
-    data?.textReadingProgress
+    normalizeTextProgress(data?.textReadingProgress)
   )
   const resolvedVirtualPaperState = resolvePositionHandoff(
     layoutPositionHandoff,
@@ -1015,7 +1049,7 @@ export function Reader({
     nativeLayoutPositionHandoff,
     document,
     getReaderBookmarkKey(data?.layoutReadingProgress),
-    data?.layoutReadingProgress
+    normalizeBookmark(data?.layoutReadingProgress)
   )
   const resolvedOcr = ocr ?? internalOcrEnabled
   const resolvedOcrEnabled =
@@ -1114,9 +1148,42 @@ export function Reader({
       ? handleSelectionRef
       : (selectionRef ?? defaultSelectionRef)
 
+  const handoffPagePosition = useCallback(
+    (
+      position: Extract<ReaderBookmark, { verticalPercentage: number }>,
+      nextMode: ReaderRenderMode,
+      data: ReaderData | undefined
+    ): ReaderData => {
+      if (nextMode === 'text') {
+        const textReadingProgress = {
+          currentPageNumber: position.pageNumber,
+          verticalPercentage: position.verticalPercentage
+        }
+        setTextPositionHandoff({
+          document,
+          replacedValueKey: getReaderTextProgressKey(data?.textReadingProgress),
+          value: textReadingProgress
+        })
+        return { ...data, textReadingProgress }
+      }
+      setNativeLayoutPositionHandoff({
+        document,
+        replacedValueKey: getReaderBookmarkKey(data?.layoutReadingProgress),
+        value: position
+      })
+      return { ...data, layoutReadingProgress: position }
+    },
+    [document]
+  )
+
   const handoffReadingPosition = useCallback(
     (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode): ReaderData => {
+      progressControl.current.flush()
+      const data = progressControl.current.getData()
       if (nextMode === sourceMode) return { ...data }
+      const pagePosition = resolveReadingProgress(data ?? {}, sourceMode)
+      if (!useVirtualPaper && pagePosition && !('offset' in pagePosition))
+        return handoffPagePosition(pagePosition, nextMode, data)
       const currentTextAnchor = currentTextAnchorRef.current
       const sourcePersistedValueKey =
         sourceMode === 'layout'
@@ -1194,6 +1261,7 @@ export function Reader({
       data,
       defaultScale,
       document,
+      handoffPagePosition,
       resolvedTextReadingProgress?.anchor,
       resolvedVirtualPaperState?.anchor,
       scale,
@@ -1203,6 +1271,11 @@ export function Reader({
 
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
+      try {
+        readingPositionHandleRef.current?.captureAndPublish?.()
+      } catch {
+        /* Keep the last stable position while navigation is pending. */
+      }
       const capturedAnchor =
         readingPositionHandleRef.current?.captureTextAnchor()
       if (capturedAnchor) {
@@ -2119,6 +2192,11 @@ export function Reader({
             style={readerThemeStyle}
             aria-busy={resolvedLoadingProgress ? true : undefined}
           >
+            {invalidStoredProgress(data, resolvedRenderMode) && (
+              <div role='status'>
+                无法精确恢复阅读位置，已使用有效页码显示；原进度已保留
+              </div>
+            )}
             {resolvedLoadingProgress && (
               <section
                 className='hamster-reader__loading-progress'

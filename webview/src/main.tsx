@@ -1,3 +1,5 @@
+import { createRef } from 'react'
+import type { ReaderProgressHandle } from '../../src/components/Reader'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { ReaderSurface } from './ReaderSurface'
@@ -24,6 +26,7 @@ import './reader.css'
 const rootElement = document.getElementById('reader')
 if (!rootElement) throw new Error('Missing reader root')
 const root = createRoot(rootElement)
+const readerProgress = createRef<ReaderProgressHandle>()
 const host = window.__READER_HOST__
 const post = window.ReactNativeWebView?.postMessage
 // 关闭前等待未确认写入的时间上限；超时仍释放，但不声称已保存。
@@ -161,6 +164,7 @@ async function display(
     root.render(
       <ReaderSurface
         key={`${document.fileId}:${token}`}
+        progressRef={readerProgress}
         source={source}
         document={documentHandle.document}
         initial={initial}
@@ -216,10 +220,21 @@ const bridge =
           // 关闭冲刷期间冻结输入；恢复（resume）时解除。
           setClosingShield(draining)
         },
-        onQuiesce: waitForInputQuiesce,
+        onQuiesce: async () => {
+          await waitForInputQuiesce()
+          await work
+          await readerProgress.current?.flush()
+        },
         onError: (error) => {
-          if (error.code !== 'REVISION_MISMATCH')
-            root.render(<div role='alert'>{error.message}</div>)
+          if (error.code === 'REVISION_MISMATCH') return
+          let notice = document.getElementById('reader-save-error')
+          if (!notice) {
+            notice = document.createElement('div')
+            notice.id = 'reader-save-error'
+            notice.setAttribute('role', 'alert')
+            document.body.appendChild(notice)
+          }
+          notice.textContent = error.message
         }
       })
     : null
@@ -227,3 +242,21 @@ if (bridge) {
   listenHostMessages((message) => bridge.handleMessage(message))
   bridge.start()
 } else root.render(<div role='alert'>未连接阅读宿主</div>)
+
+// Hidden-page work is best effort; only bridge acknowledgements confirm persistence.
+let backgroundWork: Promise<unknown> = Promise.resolve()
+const flushBackground = () => {
+  const token = generation
+  backgroundWork = backgroundWork
+    .catch(() => undefined)
+    .then(async () => {
+      if (token !== generation || !bridge) return
+      await readerProgress.current?.flush()
+      if (token === generation)
+        await bridge.flushPending(FLUSH_PENDING_TIMEOUT_MS)
+    })
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushBackground()
+})
+window.addEventListener('pagehide', flushBackground)
