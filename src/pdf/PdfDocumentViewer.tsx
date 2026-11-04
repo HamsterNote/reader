@@ -22,6 +22,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -983,6 +984,18 @@ export const PdfDocumentViewer = forwardRef<
     hiddenPages,
     edgeCropEditing
   ])
+
+  // Like rotation, crop changes preserve the position measured in the previous
+  // display box and project it into the new one before a close can recapture it.
+  useLayoutEffect(() => {
+    restoredPosition.current ??= lastStablePosition.current
+    if (!pendingAnchor.current && restoredPosition.current)
+      pendingAnchor.current = {
+        anchor: restoredPosition.current,
+        done: () => undefined
+      }
+    restoreAnchorRef.current()
+  }, [edgeCrop, edgeCropEditing])
 
   // 隐藏页：display:none 占位（矩阵 §9：阅读时省略隐藏页）。
   useEffect(() => {

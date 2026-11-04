@@ -23,7 +23,7 @@ for (let p = 0; p < 4; p++) {
 const bytes = await pdf.save()
 await writeFile(resolve(output, 'progress-fixture.pdf'), bytes)
 const entry = `
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { EngineDocumentViewer } from '/src/components/EngineDocumentViewer.tsx'
@@ -46,14 +46,18 @@ function App() {
   const [version, setVersion] = useState(0)
   const [scale, setScale] = useState(1)
   const [crop, setCrop] = useState(undefined)
+  const [cropEditing, setCropEditing] = useState(false)
+  const positionRef = useRef(null)
   window.setCrop = setCrop
+  window.setCropEditing = setCropEditing
   window.reopen = (nextScale, value = window.saved) => {
     window.fixtureGeneration++; window.saved = value; flushSync(() => { setData(value); setScale(nextScale); setVersion(v => v + 1) })
   }
   const save = useReadingProgressSaves(version, data, next => { if (window.fixtureGeneration !== version) return; window.saved = next; window.writes.push(next); setData(next) })
+  window.flushProgress = () => { positionRef.current.captureAndPublish(); save.flush() }
   return <EngineDocumentViewer key={version} document={opened.document} engineSource={source}
     engineRenderMode='layout' layoutReadingProgress={data.layoutReadingProgress} onLayoutReadingProgressChange={save.layout}
-    edgeCrop={crop} useVirtualPaper={false} nativeLayoutZoom={scale} defaultScale={scale}
+    edgeCrop={crop} edgeCropEditing={cropEditing} readingPositionRef={positionRef} useVirtualPaper={false} nativeLayoutZoom={scale} defaultScale={scale}
     containMarginX={0} containMarginY={0} />
 }
 createRoot(document.getElementById('root')).render(<App />)
@@ -415,6 +419,146 @@ try {
           kind: 'crop-new-display-box',
           percentage: 40
         })
+        for (const operation of ['reopen', 'rotate', 'close-capture']) {
+          const percentage = 42.83582089552239
+          const bottom = 0.05124378204345703
+          await page.evaluate(
+            ({ scale, percentage }) => {
+              window.setCrop(undefined)
+              window.setCropEditing(true)
+              window.reopen(scale, {
+                layoutReadingProgress: {
+                  pageNumber: 2,
+                  verticalPercentage: percentage
+                }
+              })
+            },
+            { scale, percentage }
+          )
+          await page.waitForFunction(
+            () =>
+              window.pdfViewer?.getPageView(1)?.div.getBoundingClientRect()
+                .height > 5000 &&
+              document.querySelector('[data-selection-start-offset]')
+          )
+          await page.evaluate((percentage) => {
+            const container = document.querySelector(
+              '.hamster-reader__pdf-viewer-container'
+            )
+            const rect = window.pdfViewer
+              .getPageView(1)
+              .div.getBoundingClientRect()
+            container.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+            container.scrollTop +=
+              rect.top +
+              (rect.height * percentage) / 100 -
+              container.getBoundingClientRect().top
+            container.dispatchEvent(new Event('scroll'))
+          }, percentage)
+          await page.waitForFunction((percentage) => {
+            try {
+              window.flushProgress()
+              return (
+                Math.abs(
+                  window.saved.layoutReadingProgress?.verticalPercentage -
+                    percentage
+                ) < 0.05
+              )
+            } catch {
+              return false
+            } // Wait for the blank page's canonical extraction.
+          }, percentage)
+          await page.evaluate(
+            (bottom) => window.setCrop({ pages: { 'page-2': { bottom } } }),
+            bottom
+          )
+          await page.waitForFunction(() =>
+            document.querySelector('.hamster-reader__edge-crop-overlay')
+          )
+          await page.evaluate(() => {
+            document
+              .querySelector('.hamster-reader__pdf-viewer-container')
+              .dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+            window.setCropEditing(false)
+          })
+          await page.waitForFunction(
+            () => !document.querySelector('.hamster-reader__edge-crop-overlay')
+          )
+          if (operation === 'rotate') {
+            await page.evaluate(() => {
+              window.pdfViewer.pagesRotation = 90
+            })
+            await page.waitForFunction(
+              () =>
+                window.pdfViewer.getPageView(1).div.getBoundingClientRect()
+                  .height < 2000
+            )
+          }
+          // Engine captureAndPublish + the Reader queue are the close-time path.
+          const saved = await page.evaluate(() => {
+            window.flushProgress()
+            return window.saved
+          })
+          assert.ok(
+            Math.abs(
+              saved.layoutReadingProgress.verticalPercentage - percentage
+            ) < 0.05,
+            JSON.stringify({ operation, percentage, saved })
+          )
+          if (operation === 'reopen') {
+            await page.evaluate(
+              ({ scale, saved }) => window.reopen(scale, saved),
+              { scale, saved }
+            )
+            await page.waitForFunction(
+              () =>
+                window.pdfViewer.getPageView(1)?.div.getBoundingClientRect()
+                  .height > 5000
+            )
+          }
+          await page.waitForFunction(
+            ({ percentage, bottom }) => {
+              const rect = window.pdfViewer
+                .getPageView(1)
+                ?.div.getBoundingClientRect()
+              const top = document
+                .querySelector('.hamster-reader__pdf-viewer-container')
+                .getBoundingClientRect().top
+              return (
+                rect &&
+                Math.abs(
+                  rect.top +
+                    (rect.height * (1 - bottom) * percentage) / 100 -
+                    top
+                ) <= 2
+              )
+            },
+            { percentage, bottom }
+          )
+          const error = await page.evaluate(
+            ({ percentage, bottom }) => {
+              const rect = window.pdfViewer
+                .getPageView(1)
+                .div.getBoundingClientRect()
+              return Math.abs(
+                rect.top +
+                  (rect.height * (1 - bottom) * percentage) / 100 -
+                  document
+                    .querySelector('.hamster-reader__pdf-viewer-container')
+                    .getBoundingClientRect().top
+              )
+            },
+            { percentage, bottom }
+          )
+          report.cases.push({
+            width,
+            scale,
+            kind: `crop-after-scroll-${operation}`,
+            percentage,
+            saved,
+            error
+          })
+        }
       }
       assert.deepEqual(errors, [])
       await page.close()
