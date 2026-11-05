@@ -14,7 +14,7 @@ import { mockPaintingCanvas } from '../fixtures/painting'
 import { act, fireEvent, render } from '@testing-library/react'
 import { createRef, StrictMode } from 'react'
 import type { RefObject } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IntermediatePage, TextDir } from '@hamster-note/types'
 import { PDFDocument } from 'pdf-lib'
 import { ImageParser } from '@hamster-note/image-parser'
@@ -118,7 +118,15 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
     readonly eventBus: FakeEventBus
     document: unknown = null
     currentScale = 1
-    currentPageNumber = 1
+    private pageNumber = 1
+    get currentPageNumber() {
+      return this.pageNumber
+    }
+    set currentPageNumber(value: number) {
+      this.pageNumber = value
+      const container = this.options.container as HTMLElement
+      container.scrollTop = (value - 1) * 320
+    }
     pagesCount = 0
     private pageViews: FakePageView[] = []
 
@@ -140,15 +148,6 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
       for (let index = 0; index < document.numPages; index++) {
         const pageDiv = globalThis.document.createElement('div')
         pageDiv.className = 'page'
-        pageDiv.getBoundingClientRect = () => {
-          const container = this.options.container as HTMLElement
-          return new DOMRect(
-            -(container.scrollLeft ?? 0),
-            index * 300 - (container.scrollTop ?? 0),
-            400,
-            300
-          )
-        }
         viewerElement?.appendChild(pageDiv)
         this.pageViews.push({
           div: pageDiv,
@@ -181,7 +180,7 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
             Number(destArray[3])
           )
         : [0, 0]
-      container.scrollTop = (pageNumber - 1) * 300 + point[1]!
+      container.scrollTop = (pageNumber - 1) * 320 + point[1]!
       container.scrollLeft = point[0]!
     }
     update() {}
@@ -199,6 +198,43 @@ import { PdfDocumentViewer } from '../../src/pdf/PdfDocumentViewer'
 const FIXTURE_ROOT = join(__dirname, '../compat/fixtures')
 const readFixture = (name: string): Uint8Array =>
   new Uint8Array(readFileSync(join(FIXTURE_ROOT, name)))
+
+// Measured page/character geometry; jsdom itself has no layout.
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+    function (this: HTMLElement) {
+      const container = this.closest(
+        '.hamster-reader__pdf-viewer-container'
+      ) as HTMLElement | null
+      const scroll = container?.scrollTop ?? 0
+      if (this.classList.contains('hamster-reader__pdf-viewer-container'))
+        return new DOMRect(0, 0, 400, 200)
+      const page = this.closest('.page')
+      const pageIndex = page
+        ? Array.from(page.parentElement!.children).indexOf(page)
+        : 0
+      if (page) return new DOMRect(0, pageIndex * 320 - scroll, 400, 300)
+      return new DOMRect()
+    }
+  )
+  if (!Range.prototype.getClientRects)
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      writable: true,
+      value: () => []
+    })
+  vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+    this: Range
+  ) {
+    const element = this.startContainer.parentElement
+    const box = element?.getBoundingClientRect() ?? new DOMRect()
+    return [
+      new DOMRect(box.left + this.startOffset * 5, box.top + 20, 5, 12)
+    ] as unknown as DOMRectList
+  })
+  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000)
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -236,18 +272,9 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
   const pageView = viewer.getPageView(pageNumber - 1)!
   const textLayerDiv = document.createElement('div')
   textLayerDiv.className = 'textLayer'
-  for (const [index, text] of texts.entries()) {
+  for (const text of texts) {
     const span = document.createElement('span')
     span.textContent = text
-    span.getBoundingClientRect = () => {
-      const page = pageView.div.getBoundingClientRect()
-      return new DOMRect(
-        page.left + 10,
-        page.top + 30 + index * 30,
-        text.length * 5,
-        20
-      )
-    }
     textLayerDiv.appendChild(span)
   }
   pageView.div.appendChild(textLayerDiv)
@@ -259,6 +286,174 @@ const emitTextLayer = (pageNumber: number, texts: readonly string[]) => {
   })
   return textLayerDiv
 }
+
+it.each(['pagerendered', 'textlayerrendered'] as const)(
+  'review: ignores a late %s extraction failure from the previous PDF',
+  async (event) => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const viewer = latestViewer()
+    const oldDocument = viewer.document as PDFDocumentProxy
+    const oldPages = Array.from(view.container.querySelectorAll('.page'))
+    let rejectOld!: (error: Error) => void
+    const extraction = new Promise<never>((_, reject) => {
+      rejectOld = reject
+    })
+    const spy = vi.spyOn(oldDocument, 'getPage').mockReturnValueOnce(extraction)
+    act(() => {
+      if (event === 'pagerendered')
+        viewer.eventBus.dispatch(event, { pageNumber: 1 })
+      else emitTextLayer(1, ['First page'])
+    })
+    spy.mockRestore()
+    view.rerender(
+      <PdfDocumentViewer
+        source={{ data: readFixture('pdf/two-column.pdf') }}
+        ref={ref}
+      />
+    )
+    await act(async () => {})
+    expect(latestViewer()).toBe(viewer)
+    expect(viewer.document).not.toBe(oldDocument)
+    oldPages.forEach((page) => page.remove())
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition().status).toBe('ready')
+    await act(async () => {
+      rejectOld(new Error('old worker destroyed'))
+    })
+    expect(ref.current!.captureReadingPosition().status).toBe('ready')
+  }
+)
+
+it('review merge: a text bookmark offscreen to the right becomes visible', async () => {
+  const ref = createRef<PdfDocumentViewerRef>()
+  const view = renderViewer({}, ref)
+  await act(async () => {})
+  emitTextLayer(1, ['Left column line one', 'Left column line two'])
+  await act(async () => {})
+  const container = view.container.querySelector(
+    '.hamster-reader__pdf-viewer-container'
+  ) as HTMLElement
+  container.scrollLeft = 300
+  const page = latestViewer().getPageView(0)!
+  page.div.getBoundingClientRect = () =>
+    new DOMRect(-container.scrollLeft, -container.scrollTop, 800, 300)
+  vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+    this: Range
+  ) {
+    return [
+      new DOMRect(600 - container.scrollLeft, 120 - container.scrollTop, 5, 12)
+    ] as unknown as DOMRectList
+  })
+  await act(async () => {
+    await ref.current!.scrollToAnchor(
+      { pageNumber: 1, textId: 'page-1-item-0', text: 'Left', offset: 0 },
+      { preserveOnFailure: true }
+    )
+  })
+  expect(600 - container.scrollLeft).toBeGreaterThanOrEqual(0)
+  expect(600 - container.scrollLeft).toBeLessThan(400)
+})
+
+it.each(['bookmark', 'highlight', 'zoomed bookmark'] as const)(
+  'horizontal text navigation: %s remains in the safe viewport after reopening',
+  async (navigation) => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const props = {
+      readingInsets: { top: 40, bottom: 20, horizontal: 24 },
+      ranges: [
+        {
+          id: 'right-column',
+          text: 'column',
+          start: { selectionId: 'page-1', offset: 5 },
+          end: { selectionId: 'page-1', offset: 11 },
+          createdAt: 1735689701000,
+          rectsBySelectionId: {}
+        }
+      ]
+    }
+    const scale = navigation === 'zoomed bookmark' ? 2 : 1
+    // Measured geometry follows scrolling on both mounts; x=600 on an
+    // 800px page is outside the 400px viewport before seeking.
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+      this: Range
+    ) {
+      const box = this.startContainer
+        .parentElement!.closest('.page')!
+        .getBoundingClientRect()
+      return [
+        new DOMRect(
+          box.left + (600 + (this.startOffset - 5) * 10) * scale,
+          box.top + 120 * scale,
+          5,
+          12
+        )
+      ] as unknown as DOMRectList
+    })
+    const prepare = async () => {
+      const view = renderViewer(props, ref)
+      await act(async () => {})
+      const container = view.container.querySelector(
+        '.hamster-reader__pdf-viewer-container'
+      ) as HTMLElement
+      const page = latestViewer().getPageView(0)!
+      act(() => ref.current!.setScale(scale))
+      page.viewport = {
+        ...page.viewport,
+        scale,
+        width: 800 * scale,
+        height: 300 * scale,
+        convertToPdfPoint: (x, y) => [x / scale, 300 - y / scale],
+        convertToViewportPoint: (x, y) => [x * scale, (300 - y) * scale]
+      }
+      page.div.getBoundingClientRect = () =>
+        new DOMRect(
+          -container.scrollLeft,
+          -container.scrollTop,
+          800 * scale,
+          300 * scale
+        )
+      emitTextLayer(1, ['Left column line one', 'Left column line two'])
+      await act(async () => {})
+      return { view, container }
+    }
+    const expectVisible = (container: HTMLElement) => {
+      const left = 600 * scale - container.scrollLeft
+      expect(left).toBeGreaterThanOrEqual(24)
+      expect(left + 5).toBeLessThanOrEqual(400 - 24)
+      expect(120 * scale - container.scrollTop).toBeCloseTo(40, 8)
+    }
+    const anchor = {
+      pageNumber: 1,
+      textId: navigation === 'highlight' ? '' : 'page-1-item-0',
+      text: 'column',
+      offset: 5
+    }
+    const initial = await prepare()
+    await act(async () => {
+      if (navigation === 'highlight') ref.current!.scrollToRange('right-column')
+      else
+        await ref.current!.scrollToAnchor(anchor, { preserveOnFailure: true })
+    })
+    expectVisible(initial.container)
+    const saved = ref.current!.captureReadingPosition()
+    expect(saved).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 1, offset: anchor.offset }
+    })
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    if (saved.status !== 'ready') throw new Error('Expected stable position')
+    initial.view.unmount()
+    const reopened = await prepare()
+    await act(async () => {
+      await ref.current!.scrollToAnchor(saved.position)
+    })
+    expectVisible(reopened.container)
+    expect(ref.current!.captureReadingPosition()).toEqual(saved)
+  }
+)
 
 describe('PdfDocumentViewer 接线', () => {
   it('explicit touch updates and copy keep native Selection empty after reactivation', async () => {
@@ -467,6 +662,351 @@ describe('PdfDocumentViewer 接线', () => {
     expect(document.getSelection()!.rangeCount).toBe(0)
   })
 
+  it('uses the official XYZ destination with safe insets while retaining the precise restored character', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer(
+      {
+        readingInsets: { top: 40, bottom: 20, horizontal: 10 },
+        viewportTopInset: 40
+      },
+      ref
+    )
+    await act(async () => {})
+    const viewer = latestViewer()
+    const destination = vi.spyOn(viewer, 'scrollPageIntoView')
+    // Put the line below the page top so legal scroll clamping permits alignment.
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+      this: Range
+    ) {
+      const box = this.startContainer.parentElement!.getBoundingClientRect()
+      return [
+        new DOMRect(box.left + 20 + this.startOffset * 5, box.top + 120, 5, 12)
+      ] as unknown as DOMRectList
+    })
+    const anchor = {
+      pageNumber: 1,
+      textId: 'page-1-item-0',
+      text: 'column',
+      offset: 5
+    }
+    let restored!: Promise<void>
+    act(() => {
+      restored = ref.current!.scrollToAnchor(anchor)
+    })
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {
+      await restored
+    })
+    expect(destination).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pageNumber: 1,
+        destArray: expect.arrayContaining([{ name: 'XYZ' }]),
+        ignoreDestinationZoom: true,
+        allowNegativeOffset: true
+      })
+    )
+    const layer = viewer
+      .getPageView(0)!
+      .div.querySelector('[data-selection-start-offset]')!
+    const character = document.createRange()
+    character.setStart(layer.firstChild!, anchor.offset)
+    character.setEnd(layer.firstChild!, anchor.offset + 1)
+    expect(character.getClientRects()[0]!.top).toBeCloseTo(40, 8) // Insets applied once.
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+    container.scrollTop += 10
+    expect(ref.current!.captureTextAnchor()).toMatchObject({ offset: 0 })
+  })
+
+  it('preserves the previous position when an explicit bookmark fails, while stored restore can still fall back', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.scrollTop = 80
+    await act(async () => {
+      await expect(
+        ref.current!.scrollToAnchor(
+          { pageNumber: 1, textId: 'missing', text: 'missing', offset: 99999 },
+          { preserveOnFailure: true }
+        )
+      ).rejects.toThrow('文字位置无法定位')
+    })
+    expect(container.scrollTop).toBe(80)
+    const capture = ref.current!.captureReadingPosition()
+    act(() =>
+      latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 1 })
+    )
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toEqual(capture)
+  })
+
+  it('releases only the current document preview through PDF.js without changing stable progress', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    renderViewer({}, ref)
+    await act(async () => {})
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    const viewer = latestViewer()
+    const document = viewer.document as PDFDocumentProxy
+    const page = await document.getPage(1)
+    const dispatch = vi.spyOn(viewer.eventBus, 'dispatch')
+    await act(async () => {
+      await ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        verticalPercentage: 20
+      })
+    })
+    const before = ref.current!.captureReadingPosition()
+    expect(before.status).toBe('ready')
+    act(() => ref.current!.releasePreviewPage(document, page))
+    expect(dispatch).toHaveBeenLastCalledWith('thumbnailrendered', {
+      source: viewer,
+      pageNumber: 1,
+      pdfPage: page
+    })
+    expect(ref.current!.captureReadingPosition()).toEqual(before)
+    dispatch.mockClear()
+    act(() => ref.current!.releasePreviewPage({} as PDFDocumentProxy, page))
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(ref.current!.captureReadingPosition()).toEqual(before)
+  })
+
+  it.each([
+    'immediate reopen',
+    'rotation after crop',
+    'close-time recapture'
+  ] as const)(
+    'preserves the pre-crop page ratio through %s after user scrolling',
+    async (operation) => {
+      const pdf = await PDFDocument.create()
+      pdf.addPage([400, 300])
+      pdf.addPage([400, 300])
+      const source = { data: await pdf.save() }
+      const crop = { pages: { 'page-2': { bottom: 0.05124378204345703 } } }
+      const percentage = 42.83582089552239
+      const ref = createRef<PdfDocumentViewerRef>()
+      const view = renderViewer({ source, edgeCropEditing: true }, ref)
+      await act(async () => {})
+      let height = 1340.339111328125
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(
+        10000
+      )
+      const measure = () => {
+        const container = view.container.querySelector(
+          '.hamster-reader__pdf-viewer-container'
+        ) as HTMLElement
+        container.getBoundingClientRect = () => new DOMRect(0, 114, 400, 200)
+        latestViewer().getPageView(1)!.div.getBoundingClientRect = () =>
+          new DOMRect(0, 1500 - container.scrollTop, 400, height)
+        return container
+      }
+      let container = measure()
+      // Real navigation releases restore protection before entering crop editing.
+      act(() =>
+        container.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+      )
+      container.scrollTop = 1500 + (height * percentage) / 100 - 114
+      act(() =>
+        latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 2 })
+      )
+      await act(async () => {})
+      expect(ref.current!.captureReadingPosition()).toMatchObject({
+        status: 'ready',
+        position: { pageNumber: 2, verticalPercentage: percentage }
+      })
+      // Applying the draft and leaving editing can be separate controlled commits.
+      view.rerender(
+        <PdfDocumentViewer
+          source={source}
+          edgeCrop={crop}
+          edgeCropEditing
+          ref={ref}
+        />
+      )
+      view.rerender(
+        <PdfDocumentViewer source={source} edgeCrop={crop} ref={ref} />
+      )
+      const captured = ref.current!.captureReadingPosition()
+      expect(captured.status).toBe('ready')
+      if (captured.status !== 'ready')
+        throw new Error('Expected stable crop capture')
+      if (operation === 'immediate reopen') {
+        view.rerender(
+          <PdfDocumentViewer
+            key='reopen'
+            source={source}
+            edgeCrop={crop}
+            ref={ref}
+          />
+        )
+        await act(async () => {})
+        container = measure()
+        await act(async () => {
+          await ref.current!.scrollToAnchor(captured.position)
+          latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 2 })
+        })
+      } else if (operation === 'rotation after crop') {
+        height = 2501.499
+        act(() => latestViewer().eventBus.dispatch('rotationchanging'))
+        act(() =>
+          latestViewer().eventBus.dispatch('pagerendered', { pageNumber: 2 })
+        )
+        await act(async () => {})
+      }
+      // This is also the synchronous capture used by the close barrier.
+      const final = ref.current!.captureReadingPosition()
+      expect(final).toMatchObject({
+        status: 'ready',
+        position: {
+          pageNumber: 2,
+          verticalPercentage: expect.closeTo(percentage, 8)
+        }
+      })
+      const rect = latestViewer().getPageView(1)!.div.getBoundingClientRect()
+      expect(
+        Math.abs(
+          rect.top +
+            (rect.height * (1 - crop.pages['page-2'].bottom) * percentage) /
+              100 -
+            114
+        )
+      ).toBeLessThan(0.000001)
+    }
+  )
+
+  it('captures and restores distinct visible source characters inside one wrapped span', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.getBoundingClientRect = () => new DOMRect(0, 0, 100, 25)
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(function (
+      this: Range
+    ) {
+      const start = Number(
+        this.startContainer.parentElement?.dataset.selectionStartOffset ?? 0
+      )
+      const offset = start + this.startOffset
+      return [
+        new DOMRect(
+          (offset % 5) * 10,
+          Math.floor(offset / 5) * 20 - container.scrollTop,
+          8,
+          15
+        )
+      ] as unknown as DOMRectList
+    })
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { offset: 0 }
+    })
+    container.scrollTop = 43 // first row is partly visible
+    const b = ref.current!.captureReadingPosition()
+    expect(b).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 1, offset: 10 }
+    })
+    if (b.status !== 'ready') throw new Error('Expected stable position')
+    container.scrollTop = 0
+    await act(async () => {
+      await ref.current!.scrollToAnchor(b.position)
+    })
+    expect(container.scrollTop).toBe(40) // full source line, not original clipping
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      position: { offset: 10 }
+    })
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      new DOMRect(500, 0, 10, 15)
+    ] as unknown as DOMRectList)
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { verticalPercentage: 40 / 3 }
+    })
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      new DOMRect(0, 1000, 10, 15)
+    ] as unknown as DOMRectList)
+    expect(ref.current!.captureTextAnchor()).toEqual(b.position) // legacy interface retains the precise restore
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { verticalPercentage: 40 / 3 }
+    })
+  })
+
+  it('selects the first visible line across pages and waits only for layers that can precede it', async () => {
+    const pdf = await PDFDocument.create()
+    pdf.addPage([400, 300]).drawText('Upper')
+    pdf.addPage([400, 300]).drawText('Lower')
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({ source: { data: await pdf.save() } }, ref)
+    await act(async () => {})
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.getBoundingClientRect = () => new DOMRect(0, 0, 400, 600)
+    emitTextLayer(1, ['Upper'])
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 1, offset: 0 }
+    })
+    container.getBoundingClientRect = () => new DOMRect(0, 0, 400, 200)
+    container.scrollTop = 250
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    emitTextLayer(2, ['Lower'])
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toMatchObject({
+      status: 'ready',
+      position: { pageNumber: 2, offset: 0, text: 'Lower' }
+    })
+  })
+
+  it('keeps pending layers distinct from blank geometry and reports stale anchors without publishing fallback', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const notice = vi.fn()
+    const view = renderViewer({ onRestoreError: notice }, ref)
+    await act(async () => {})
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    await act(async () => {
+      await ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        verticalPercentage: 40
+      })
+    })
+    expect(container.scrollTop).toBe(120)
+    let restored!: Promise<void>
+    act(() => {
+      restored = ref.current!.scrollToAnchor({
+        pageNumber: 1,
+        offset: 99999,
+        text: 'duplicate',
+        textId: 'missing'
+      })
+    })
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {
+      await restored
+    })
+    expect(notice).toHaveBeenCalledOnce()
+    expect(container.scrollTop).toBe(0)
+  })
+
   it('cancels a pending Text character restore when an explicit page seek replaces it', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)
@@ -492,39 +1032,48 @@ describe('PdfDocumentViewer 接线', () => {
     expect(ref.current!.captureTextAnchor()).toBeNull()
   })
 
-  it('waits for character geometry, then navigates with official XYZ and captures the safe first character', async () => {
+  it('keeps the restored Text character through an unchanged Layout viewport, then captures actual navigation', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
-    renderViewer({}, ref)
+    const view = renderViewer({}, ref)
     await act(async () => {})
     const anchor = {
       pageNumber: 1,
       textId: 'page-1-item-0',
-      text: 'column',
+      text: 'column line one',
       offset: 5
     }
-    Object.defineProperty(Range.prototype, 'getClientRects', {
-      configurable: true,
-      value: function (this: Range) {
-        const element = this.startContainer.parentElement!
-        const rect = element.getBoundingClientRect()
-        return [
-          new DOMRect(rect.left + this.startOffset * 5, rect.top, 5, 20)
-        ] as unknown as DOMRectList
-      }
-    })
     let restored!: Promise<void>
     act(() => {
       restored = ref.current!.scrollToAnchor(anchor)
     })
-    expect(ref.current!.captureReadingPosition()).toBeNull()
-    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    // An immediate mode switch must not discard the pending precise anchor.
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    const layer = emitTextLayer(1, [
+      'Left column line one',
+      'Left column line two'
+    ])
+    for (const span of layer.querySelectorAll('span'))
+      span.scrollIntoView = vi.fn()
     await act(async () => {
       await restored
     })
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    expect(container).not.toBeNull()
+    container.scrollTop += 10
     expect(ref.current!.captureTextAnchor()).toMatchObject({
       pageNumber: 1,
-      offset: 5
+      offset: 0
     })
+    // Returning to the old scroll coordinates must not revive an invalidated anchor.
+    container.scrollTop -= 10
+    expect(ref.current!.captureTextAnchor()).toMatchObject({ offset: 0 })
+    await act(async () => {
+      await ref.current!.scrollToAnchor(anchor)
+    })
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
     act(() => ref.current!.scrollToPage(1))
     expect(ref.current!.captureTextAnchor()).toMatchObject({ offset: 0 })
   })
@@ -622,7 +1171,8 @@ describe('PdfDocumentViewer 接线', () => {
           settled = true
         })
     })
-    await act(async () => {})
+    // Page geometry restores independently of the text layer.
+    await Promise.resolve()
     expect(settled).toBe(true)
     view.rerender(
       <PdfDocumentViewer source={source} hiddenPages={[2]} ref={ref} />

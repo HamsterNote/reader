@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type Ref } from 'react'
 import { Icon } from '@hamster-note/components'
 import type { IntermediateDocument } from '@hamster-note/types'
-import { Reader } from '../../src/components/Reader'
+import { Reader, type ReaderProgressHandle } from '../../src/components/Reader'
 import type { ReaderEngineSource } from '../../src/types/engineSource'
 import type { ReaderSelectionRef } from '../../src/types/selection'
 import type { ReaderFontScale } from '../../src/types/fontScale'
@@ -14,8 +14,10 @@ export function ReaderSurface({
   source,
   document,
   initial,
-  onChange
+  onChange,
+  progressRef
 }: {
+  readonly progressRef?: Ref<ReaderProgressHandle>
   readonly source: ReaderEngineSource
   readonly document: IntermediateDocument
   readonly initial: ReaderSnapshot
@@ -36,8 +38,18 @@ export function ReaderSurface({
     setSnapshot(next)
     onChange(serializeReaderSnapshot(next))
   }
-  const dataChange = (data: ReaderSnapshot['data']) =>
-    update({ ...current.current, data })
+  const dataChange = (data: ReaderSnapshot['data']) => {
+    // Progress can flush in the same React batch as an annotation callback.
+    // Apply only fields changed from this render's baseline to the latest snapshot.
+    const keys = new Set([...Object.keys(snapshot.data), ...Object.keys(data)])
+    const patch = Object.fromEntries(
+      [...keys].flatMap((name) => {
+        const key = name as keyof ReaderSnapshot['data']
+        return data[key] === snapshot.data[key] ? [] : [[key, data[key]]]
+      })
+    )
+    update({ ...current.current, data: { ...current.current.data, ...patch } })
+  }
   const remove = (id: string, rectangle: boolean) => {
     const next = current.current
     update({
@@ -59,6 +71,7 @@ export function ReaderSurface({
   return (
     <>
       <Reader
+        progressRef={progressRef}
         document={document}
         engineSource={source}
         isEpub={source.format === 'epub'}

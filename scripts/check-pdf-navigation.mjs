@@ -189,6 +189,7 @@ try {
   const mode = () => page.getByTestId('tool-bottom-bar-render-mode').click()
   const goLine = async (line) => {
     await viewer.evaluate((element, line) => {
+      element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
       const span = [
         ...element.querySelectorAll('[data-selection-start-offset]')
       ].find((span) =>
@@ -253,6 +254,7 @@ try {
     () => window.pdfNavigationTest.data.ranges[0]
   )
   await viewer.evaluate((element) => {
+    element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
     element.scrollTop = 0
   })
   await page.getByRole('button', { name: '页面浏览', exact: true }).click()
@@ -288,6 +290,7 @@ try {
       .isDisabled()
   )
   await viewer.evaluate((element) => {
+    element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
     element.scrollTop = 0
   })
   await page.locator('.hamster-reader__bookmark-link').first().click()
@@ -302,6 +305,7 @@ try {
 
   // A scanned page has no text context to wait for; retain the 60% handoff.
   await viewer.evaluate((element) => {
+    element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
     const sheet = element.querySelector('.page[data-page-number="3"]')
     element.scrollTop +=
       sheet.getBoundingClientRect().top -

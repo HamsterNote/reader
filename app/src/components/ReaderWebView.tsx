@@ -10,6 +10,7 @@ import {
 } from 'react'
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   Linking,
   StyleSheet,
@@ -115,6 +116,25 @@ export const ReaderWebView = forwardRef<
     }),
     []
   )
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'inactive' || next === 'background') {
+        const session = sessionRef.current
+        session
+          ?.flush()
+          .then((result) => {
+            if (session !== sessionRef.current) return
+            if (result.status === 'unconfirmed')
+              setStatusText('后台保存未确认，可继续阅读或重试')
+          })
+          .catch(() => {
+            /* The confirmed snapshot remains authoritative. */
+          })
+      }
+    })
+    return () => subscription.remove()
+  }, [])
 
   // 宿主会话随文档创建一次，不随 WebView 重载（generation）重建：
   // 会话内的已确认快照、幂等表与在途持久化队列在重载后仍然有效，

@@ -5,6 +5,7 @@
 import {
   createBridgeHostSession,
   type BridgeCloseResult,
+  type BridgeFlushResult,
   type BridgeHostSession,
   type BridgeHostSnapshot
 } from '../bridge/hostSession'
@@ -36,6 +37,7 @@ export type ReaderHostSessionOptions = {
 }
 
 export type ReaderHostSession = {
+  readonly flush: (timeoutMs?: number) => Promise<BridgeFlushResult>
   /** 处理 WebView postMessage 原始字符串；返回是否通过来源/结构校验。 */
   readonly handleRawMessage: (raw: unknown) => Promise<{
     readonly accepted: boolean
@@ -124,6 +126,7 @@ export function createReaderHostSession(
       return { accepted: true }
     },
     getSnapshot: () => session.getSnapshot(),
+    flush: (timeoutMs) => session.flush(timeoutMs),
     close: async (timeoutMs) => {
       if (disposed) return { status: 'closed' }
       closing = true

@@ -116,6 +116,7 @@ export function createWebBridgeClient(
   let started = false
   let closed = false
   let draining = false
+  let drainGeneration = 0
 
   const setDraining = (value: boolean): void => {
     if (draining === value) return
@@ -326,9 +327,10 @@ export function createWebBridgeClient(
         if (command?.name === BRIDGE_COMMAND_FLUSH) {
           // 宿主准备关闭：先冻结输入并等当前手势提交（onQuiesce），再冲刷
           // 全部未确认写入；全部 ack 后回 ready，才允许宿主 dispose。
+          const token = ++drainGeneration
           setDraining(true)
           waitForQuiesce().then((quiesced) => {
-            if (closed) return
+            if (closed || token !== drainGeneration) return
             if (!quiesced) {
               post(
                 buildMessage('error', {
@@ -339,7 +341,7 @@ export function createWebBridgeClient(
               return
             }
             return flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
-              if (closed) return
+              if (closed || token !== drainGeneration) return
               if (saved) {
                 post(buildMessage('ready', {}))
               } else {
@@ -353,6 +355,7 @@ export function createWebBridgeClient(
             })
           })
         } else if (command?.name === BRIDGE_COMMAND_RESUME) {
+          drainGeneration++
           setDraining(false)
         }
         break
