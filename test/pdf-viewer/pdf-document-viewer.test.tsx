@@ -542,6 +542,8 @@ describe('PdfDocumentViewer 接线', () => {
       ])
       await act(async () => {})
       const span = layer.querySelector('span')!
+      // Give the hit span its own box, rather than the default full-page mock.
+      span.getBoundingClientRect = () => new DOMRect(20, 30, 200, 20)
       const caret = document.createRange()
       caret.setStart(span.firstChild!, 7)
       caret.collapse(true)

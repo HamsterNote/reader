@@ -13,6 +13,7 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
   const nativeChecks = []
   const hotAreaChecks = []
   const scaleChecks = []
+  const cropChecks = []
   let scaleOneWidth = 0
   page.on('pageerror', (error) => errors.push(error.message))
   const html = (await (await fetch(base)).text()).replace(
@@ -367,6 +368,71 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     )
     assert.equal(await color(), 'rgba(190, 80, 150, 0.35)')
     await page.screenshot({ path: resolve(output, 'pdf-mobile-text-mode.png') })
+    const croppedFixture = await PDFDocument.create()
+    const croppedSheet = croppedFixture.addPage([400, 600])
+    croppedSheet.drawText('HIDDEN HEADER', { x: 30, y: 560, size: 16 })
+    croppedSheet.drawText('VISIBLE BODY', { x: 30, y: 300, size: 16 })
+    croppedSheet.drawText('HIDDEN FOOTER', { x: 30, y: 20, size: 16 })
+    const croppedBytes = [...(await croppedFixture.save())]
+    await page.evaluate(
+      (bytes) =>
+        window.readerRegression.open('pdf', bytes, {
+          isPdf: true,
+          useVirtualPaper: false,
+          data: { edgeCrop: { all: { top: 0.15, bottom: 0.15 } } }
+        }),
+      croppedBytes
+    )
+    await page
+      .locator('.textLayer [data-selection-start-offset]')
+      .first()
+      .waitFor()
+    await page.waitForFunction(() =>
+      document
+        .querySelector('.pdfViewer .page')
+        ?.style.clipPath.includes('inset')
+    )
+    const hiddenCropHits = await page.evaluate(() => {
+      const sheet = document.querySelector('.pdfViewer .page')
+      const box = sheet.getBoundingClientRect()
+      const x = box.left + 25
+      return [
+        {
+          name: 'cropped-page-gap-never-hits-hidden-header-footer',
+          region: 'top',
+          nativeTextHit: document
+            .elementsFromPoint(x, box.top + box.height * 0.15 - 5)
+            .some((element) =>
+              element.closest('.textLayer [data-selection-start-offset]')
+            ),
+          text: window.readerRegression.pdfCaretTextAtPoint(
+            x,
+            box.top + box.height * 0.15 - 5,
+            true
+          )
+        },
+        {
+          name: 'cropped-page-gap-never-hits-hidden-header-footer',
+          region: 'bottom',
+          nativeTextHit: document
+            .elementsFromPoint(x, box.bottom - box.height * 0.15 + 5)
+            .some((element) =>
+              element.closest('.textLayer [data-selection-start-offset]')
+            ),
+          text: window.readerRegression.pdfCaretTextAtPoint(
+            x,
+            box.bottom - box.height * 0.15 + 5,
+            true
+          )
+        }
+      ]
+    })
+    for (const check of hiddenCropHits) {
+      assert.equal(check.nativeTextHit, false)
+      assert.equal(check.text, 'VISIBLE BODY', check.name)
+    }
+    cropChecks.push(...hiddenCropHits)
+    await page.screenshot({ path: resolve(output, 'pdf-mobile-crop-gap.png') })
     assert.deepEqual(errors, [])
     return {
       label:
@@ -375,7 +441,8 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       highlight: edited.ranges[0],
       nativeChecks,
       hotAreaChecks,
-      scaleChecks
+      scaleChecks,
+      cropChecks
     }
   } catch (error) {
     await page.screenshot({ path: resolve(output, 'pdf-mobile-failure.png') })

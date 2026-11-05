@@ -30,6 +30,47 @@ const glyphDistance = (rect: DOMRect, x: number, y: number) => {
   return dx * dx + dy * dy * 4
 }
 
+function intersectRect(a: DOMRect, b: DOMRect): DOMRect {
+  const left = Math.max(a.left, b.left)
+  const top = Math.max(a.top, b.top)
+  const right = Math.min(a.right, b.right)
+  const bottom = Math.min(a.bottom, b.bottom)
+  return new DOMRect(
+    left,
+    top,
+    Math.max(0, right - left),
+    Math.max(0, bottom - top)
+  )
+}
+
+function visiblePageRect(page: HTMLElement): DOMRect {
+  const rect = page.getBoundingClientRect()
+  // applyPageCrop writes viewport-pixel insets, including PDF.js rounding.
+  // The full page/span boxes still include the content hidden by clip-path.
+  const match = /^inset\(([^)]+)\)/.exec(page.style.clipPath)
+  if (!match) return rect
+  const values = match[1].trim().split(/\s+/)
+  if (
+    values.length > 4 ||
+    values.some(
+      (value) =>
+        !value.endsWith('px') || !Number.isFinite(Number(value.slice(0, -2)))
+    )
+  )
+    return rect
+  const pixels = values.map(parseFloat)
+  const top = pixels[0]!
+  const right = pixels[1] ?? top
+  const bottom = pixels[2] ?? top
+  const left = pixels[3] ?? right
+  return new DOMRect(
+    rect.left + left,
+    rect.top + top,
+    Math.max(0, rect.width - left - right),
+    Math.max(0, rect.height - top - bottom)
+  )
+}
+
 function nearestPdfSpan(root: HTMLElement, x: number, y: number) {
   const bounds = root.getBoundingClientRect()
   let distance = Infinity
@@ -37,7 +78,12 @@ function nearestPdfSpan(root: HTMLElement, x: number, y: number) {
   for (const candidate of root.querySelectorAll<HTMLElement>(
     '.page .textLayer [data-selection-start-offset]'
   )) {
-    const box = candidate.getBoundingClientRect()
+    const page = candidate.closest<HTMLElement>('.page')
+    if (!page || page.style.display === 'none') continue
+    const box = intersectRect(
+      intersectRect(candidate.getBoundingClientRect(), visiblePageRect(page)),
+      bounds
+    )
     const visible =
       box.width &&
       box.height &&
@@ -74,12 +120,15 @@ function geometryCaret(
   span: HTMLElement,
   x: number,
   y: number,
-  nearest: boolean
+  nearest: boolean,
+  clip: DOMRect
 ) {
   let closest: Range | null = null
   let distance = Infinity
   for (const { range, rect } of glyphRects(span)) {
-    const next = glyphDistance(rect, x, y)
+    const visibleRect = intersectRect(rect, clip)
+    if (!visibleRect.width || !visibleRect.height) continue
+    const next = glyphDistance(visibleRect, x, y)
     if (!nearest && next > 0) continue
     if (next < distance) {
       distance = next
@@ -112,6 +161,13 @@ export function pdfCaretAtPoint(
   if (!span || !root.contains(span)) return null
   const page = span.closest<HTMLElement>('.page')
   if (!page || page.style.display === 'none') return null
+  const clip = intersectRect(
+    visiblePageRect(page),
+    root.getBoundingClientRect()
+  )
+  const spanBox = span.getBoundingClientRect()
+  const visibleSpan = intersectRect(spanBox, clip)
+  if (!visibleSpan.width || !visibleSpan.height) return null
   const caretDoc = doc as Document & {
     caretPositionFromPoint?: (
       x: number,
@@ -126,7 +182,14 @@ export function pdfCaretAtPoint(
   if (
     node?.nodeType === Node.TEXT_NODE &&
     span.contains(node) &&
-    offset !== undefined
+    offset !== undefined &&
+    glyphDistance(visibleSpan, x, y) === 0 &&
+    // A native caret in a partially clipped span may point at a hidden glyph.
+    // Resolve those spans with visible glyph geometry instead.
+    spanBox.left >= clip.left &&
+    spanBox.right <= clip.right &&
+    spanBox.top >= clip.top &&
+    spanBox.bottom <= clip.bottom
   ) {
     const caret = doc.createRange()
     caret.setStart(node, offset)
@@ -135,7 +198,7 @@ export function pdfCaretAtPoint(
   }
   // WebKit excludes user-select:none nodes from its caret API. Never briefly
   // enable native selection to obtain a hit.
-  return geometryCaret(span, x, y, nearest)
+  return geometryCaret(span, x, y, nearest, visibleSpan)
 }
 
 export function usePdfTouchSelection({

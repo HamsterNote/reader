@@ -53,6 +53,11 @@ function copyText(source: HTMLElement): HTMLElement {
   return copy
 }
 
+export function clearPdfMagnifierText(output: HTMLElement): void {
+  caches.delete(output)
+  output.replaceChildren()
+}
+
 /** Render the current viewport, not a snapshot of the drag's starting page. */
 export function renderPdfMagnifierText(
   output: HTMLElement,

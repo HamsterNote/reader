@@ -1516,6 +1516,7 @@ export function EngineDocumentViewer(props: Props) {
   return (
     <RangeMagnifierProvider
       rootElement={rootElement}
+      source={source}
       enabled={props.showSelectionMagnifier ?? true}
     >
       <div

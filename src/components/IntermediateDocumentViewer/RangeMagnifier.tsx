@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom'
 import { pdfRangeClientRects } from '../../pdf/pdfSelectionPaint'
 import { magnifierCaptureSource } from './magnifierCaptureSource'
 import {
+  clearPdfMagnifierText,
   renderPdfMagnifierText,
   type PdfMagnifierFocus
 } from './pdfMagnifierText'
@@ -47,6 +48,7 @@ interface RangeMagnifierProviderProps {
   readonly children: ReactNode
   readonly enabled?: boolean
   readonly rootElement: HTMLElement | null
+  readonly source?: unknown
 }
 
 const RangeMagnifierContext = createContext<RangeMagnifierController | null>(
@@ -59,11 +61,16 @@ export const useRangeMagnifier = (): RangeMagnifierController | null =>
 export const RangeMagnifierProvider = ({
   children,
   enabled = true,
-  rootElement
+  rootElement,
+  source
 }: RangeMagnifierProviderProps) => {
   const lensRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textRef = useRef<HTMLDivElement>(null)
+  const setTextElement = useCallback((element: HTMLDivElement | null) => {
+    if (textRef.current) clearPdfMagnifierText(textRef.current)
+    textRef.current = element
+  }, [])
   const markerRef = useRef<HTMLSpanElement>(null)
   const pdfRef = useRef<{
     source: HTMLElement
@@ -98,9 +105,13 @@ export const RangeMagnifierProvider = ({
     snapshotRef.current = null
     pointRef.current = null
     pdfRef.current = null
-    textRef.current?.replaceChildren()
+    if (textRef.current) clearPdfMagnifierText(textRef.current)
     if (lensRef.current) lensRef.current.hidden = true
   }, [])
+
+  useEffect(() => {
+    end()
+  }, [end, rootElement, source])
 
   const capture = useCallback(
     (page: HTMLElement) => {
@@ -268,7 +279,7 @@ export const RangeMagnifierProvider = ({
             >
               <canvas ref={canvasRef} hidden={pdfMode} />
               <div
-                ref={textRef}
+                ref={setTextElement}
                 className='hamster-reader__range-magnifier-text'
                 hidden={!pdfMode}
               />

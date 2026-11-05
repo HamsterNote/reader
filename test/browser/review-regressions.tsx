@@ -5,6 +5,7 @@ import { IntermediatePage, TextDir } from '@hamster-note/types'
 import { Reader } from '../../src/components/Reader'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
 import { configurePdfJsWorker } from '../../src/pdf/pdfjsRuntime'
+import { pdfCaretAtPoint } from '../../src/pdf/pdfTouchSelection'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRef
@@ -122,6 +123,15 @@ const api = {
       ...initial
     }
     render()
+  },
+  pdfCaretTextAtPoint(x: number, y: number, nearest = false) {
+    const viewer = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )
+    if (!viewer) return null
+    return (
+      pdfCaretAtPoint(viewer, x, y, nearest)?.startContainer.textContent ?? null
+    )
   },
   update(next: Props) {
     props = { ...props, ...next }
