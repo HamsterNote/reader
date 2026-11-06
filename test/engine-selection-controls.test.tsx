@@ -207,17 +207,17 @@ it.each(['pointercancel', 'blur', 'replace', 'crossed', 'unmappable'] as const)(
 )
 
 it.each([
-  'commit-start',
-  'commit-end',
-  'pointercancel',
-  'blur',
-  'second-finger',
-  'replace',
-  'crossed',
-  'unmappable'
+  ['commit-start', 0, 'Alpha beta'],
+  ['commit-end', 16, 'beta gamma'],
+  ['pointercancel', 16, null],
+  ['blur', 16, null],
+  ['second-finger', 16, null],
+  ['replace', 16, null],
+  ['crossed', 0, 'Alpha '],
+  ['unmappable', 16, null]
 ] as const)(
   'PDF touch circle corrects the grab offset and %s exactly once',
-  (action) => {
+  (action, caretOffset, committedText) => {
     const root = createRef<HTMLDivElement>()
     const node = document.createTextNode('Alpha beta gamma delta')
     const paragraph = document.createElement('p')
@@ -240,10 +240,7 @@ it.each([
     const hitTest = vi.fn(() => {
       if (action === 'unmappable') return null
       const caret = document.createRange()
-      caret.setStart(
-        node,
-        action === 'crossed' ? 0 : action === 'commit-start' ? 0 : 16
-      )
+      caret.setStart(node, caretOffset)
       caret.collapse(true)
       return caret
     })
@@ -318,15 +315,9 @@ it.each([
         clientX: 155,
         clientY: 115
       })
-      if (action.startsWith('commit') || action === 'crossed') {
+      if (committedText !== null) {
         expect(onUpdate).toHaveBeenCalledOnce()
-        expect(onUpdate.mock.calls[0][0].toString()).toBe(
-          action === 'crossed'
-            ? 'Alpha '
-            : action === 'commit-start'
-              ? 'Alpha beta'
-              : 'beta gamma'
-        )
+        expect(onUpdate.mock.calls[0][0].toString()).toBe(committedText)
       } else {
         expect(onUpdate).not.toHaveBeenCalled()
         if (action !== 'replace')

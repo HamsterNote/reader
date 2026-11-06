@@ -1097,10 +1097,13 @@ export function Reader({
     highlightColor ??
     internalHighlightColor ??
     getTranslucentColor(resolvedDrawingStrokeColor)
+  const isPdfDocument = isPdf || engineSource?.format === 'pdf'
   const resolvedHighlightColor = pdfHighlightFill(
     rawHighlightColor,
-    isPdf || engineSource?.format === 'pdf'
+    isPdfDocument
   )
+  const resolvedSelectionColor =
+    whenEnabled(isPdfDocument, resolvedHighlightColor) ?? selectionColor
   const hasDocumentPages =
     engineSource !== undefined || documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
@@ -1983,11 +1986,7 @@ export function Reader({
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
-            selectionColor={
-              isPdf || engineSource?.format === 'pdf'
-                ? resolvedHighlightColor
-                : selectionColor
-            }
+            selectionColor={resolvedSelectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               selectionPopover ?? (
@@ -2128,11 +2127,7 @@ export function Reader({
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
-            selectionColor={
-              isPdf || engineSource?.format === 'pdf'
-                ? resolvedHighlightColor
-                : selectionColor
-            }
+            selectionColor={resolvedSelectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               engineSource

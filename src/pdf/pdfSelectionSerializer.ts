@@ -100,6 +100,25 @@ const capturePageRects = (
   return rects
 }
 
+function selectionEndpoints(selection: Selection | Range) {
+  if ('startContainer' in selection) {
+    if (selection.collapsed) return null
+    return {
+      anchorNode: selection.startContainer,
+      anchorOffset: selection.startOffset,
+      focusNode: selection.endContainer,
+      focusOffset: selection.endOffset
+    }
+  }
+  if (selection.isCollapsed || selection.rangeCount === 0) return null
+  return {
+    anchorNode: selection.anchorNode,
+    anchorOffset: selection.anchorOffset,
+    focusNode: selection.focusNode,
+    focusOffset: selection.focusOffset
+  }
+}
+
 /**
  * 序列化跨页原生选区。选区任一端点不在已增强 text layer 内时返回 null。
  * 连续拖动包含中间已加载页的文字与矩形，沿用 page-N/offset 格式。
@@ -109,25 +128,16 @@ export function serializePdfTextSelection(
   contexts: ReadonlyMap<number, PdfPageSelectionContext>,
   unit: OverlayRectUnit
 ): SerializedPdfSelection | null {
-  const managed = 'startContainer' in selection
-  if (
-    managed
-      ? selection.collapsed
-      : selection.isCollapsed || selection.rangeCount === 0
-  )
-    return null
-  const anchorNode = managed ? selection.startContainer : selection.anchorNode
-  const focusNode = managed ? selection.endContainer : selection.focusNode
-  if (!anchorNode || !focusNode) return null
-
+  const endpoints = selectionEndpoints(selection)
+  if (!endpoints?.anchorNode || !endpoints.focusNode) return null
   const anchor = locatePosition(
-    anchorNode,
-    managed ? selection.startOffset : selection.anchorOffset,
+    endpoints.anchorNode,
+    endpoints.anchorOffset,
     contexts
   )
   const focus = locatePosition(
-    focusNode,
-    managed ? selection.endOffset : selection.focusOffset,
+    endpoints.focusNode,
+    endpoints.focusOffset,
     contexts
   )
   if (!anchor || !focus) return null

@@ -166,7 +166,8 @@ export async function checkPdfSelectionPaint({
           handles.map((h) => ({
             box: h.getBoundingClientRect().toJSON(),
             border: getComputedStyle(h).borderWidth,
-            filter: getComputedStyle(h.closest('[data-pdf-handle-visual]')).filter
+            filter: getComputedStyle(h.closest('[data-pdf-handle-visual]'))
+              .filter
           }))
         )
       assert.equal(handles[0].box.bottom <= first.top + 0.1, true)

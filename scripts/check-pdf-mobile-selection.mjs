@@ -130,12 +130,12 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     const start = { x: box.x + grabX, y: box.y + grabY }
     assert.equal(
       await page.evaluate(
-        ({ x, y, end }) =>
+        ({ x, y }) =>
           document
             .elementFromPoint(x, y)
             ?.closest('[data-pdf-handle-hit-target]')
             ?.getAttribute('data-pdf-handle-hit-target'),
-        { ...start, end }
+        start
       ),
       end ? 'end' : 'start'
     )
