@@ -751,6 +751,98 @@ describe('PdfDocumentViewer 接线', () => {
     expect(ref.current!.captureReadingPosition()).toEqual(capture)
   })
 
+  it('waits for textlayerrendered when an existing context has a temporary zero character rectangle', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    let measurable = false
+    vi.spyOn(Range.prototype, 'getClientRects').mockImplementation(
+      () =>
+        [
+          new DOMRect(
+            20 - container.scrollLeft,
+            120 - container.scrollTop,
+            measurable ? 5 : 0,
+            measurable ? 12 : 0
+          )
+        ] as unknown as DOMRectList
+    )
+    const anchor = {
+      pageNumber: 1,
+      textId: 'page-1-item-0',
+      text: 'column',
+      offset: 5
+    }
+    let navigation!: Promise<unknown>
+    act(() => {
+      navigation = ref
+        .current!.scrollToAnchor(anchor, {
+          preserveOnFailure: true
+        })
+        .then(
+          () => null,
+          (error: unknown) => error
+        )
+    })
+    expect(ref.current!.captureReadingPosition()).toEqual({ status: 'pending' })
+    measurable = true
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {
+      expect(await navigation).toBeNull()
+    })
+    expect(container.scrollTop).toBe(120)
+    expect(ref.current!.captureTextAnchor()).toEqual(anchor)
+  })
+
+  it('times out when a character rectangle never becomes measurable', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    emitTextLayer(1, ['Left column line one', 'Left column line two'])
+    await act(async () => {})
+    vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      new DOMRect(20, 120, 0, 0)
+    ] as unknown as DOMRectList)
+    const container = view.container.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    ) as HTMLElement
+    container.scrollTop = 80
+    vi.useFakeTimers()
+    try {
+      let navigation!: Promise<unknown>
+      act(() => {
+        navigation = ref
+          .current!.scrollToAnchor(
+            {
+              pageNumber: 1,
+              textId: 'page-1-item-0',
+              text: 'column',
+              offset: 5
+            },
+            { preserveOnFailure: true }
+          )
+          .then(
+            () => null,
+            (error: unknown) => error
+          )
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
+      expect(await navigation).toMatchObject({
+        message: 'PDF 定位超时，请重试'
+      })
+      expect(container.scrollTop).toBe(80)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('releases only the current document preview through PDF.js without changing stable progress', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)
