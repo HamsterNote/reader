@@ -114,11 +114,10 @@ export function measurePdfTextColumns(
     : [{ index: 0 }]
 }
 
-export function pdfTextAnchorColumn(
+export function pdfTextAnchorRect(
   content: HTMLElement,
-  anchor: ReaderTextAnchor,
-  width: number
-): number | null {
+  anchor: ReaderTextAnchor
+): DOMRect | null {
   const spans = Array.from(
     content.querySelectorAll<HTMLElement>(
       '[data-selection-start-offset][data-text-id]'
@@ -135,15 +134,20 @@ export function pdfTextAnchorColumn(
   const matchingIds = spans.filter(
     (element) => element.dataset.textId === anchor.textId
   )
-  const atOffset = matchingIds.length
+  const element = matchingIds.length
     ? matchingIds.find(contains)
     : spans.find(contains)
-  const element = atOffset
   if (!element) return null
-  const offset = atOffset
-    ? anchor.offset - Number(element.dataset.selectionStartOffset)
-    : 0
-  const rect = characterRange(element, offset)?.getClientRects?.()[0]
+  const offset = anchor.offset - Number(element.dataset.selectionStartOffset)
+  return characterRange(element, offset)?.getClientRects?.()[0] ?? null
+}
+
+export function pdfTextAnchorColumn(
+  content: HTMLElement,
+  anchor: ReaderTextAnchor,
+  width: number
+): number | null {
+  const rect = pdfTextAnchorRect(content, anchor)
   return rect
     ? columnOf(
         rect,
