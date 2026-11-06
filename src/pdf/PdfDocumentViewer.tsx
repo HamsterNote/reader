@@ -654,8 +654,14 @@ export const PdfDocumentViewer = forwardRef<
         (rect) => rect.width > 0 && rect.height > 0
       )
     if (!rect) {
-      restoredPosition.current = null
       const pending = pendingAnchor.current
+      if (
+        context &&
+        anchor.offset < context.canonical.text.length &&
+        pending?.preserveOnFailure
+      )
+        return false
+      restoredPosition.current = null
       if (pending?.preserveOnFailure) {
         pendingAnchor.current = null
         pending.fail(new Error('文字位置无法定位，原数据已保留'))
