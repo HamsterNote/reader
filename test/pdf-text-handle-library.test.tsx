@@ -100,7 +100,11 @@ const Harness = ({
     }
   })
   return (
-    <div ref={setRoot} className='hamster-reader__intermediate-document-viewer'>
+    <div
+      ref={setRoot}
+      className='hamster-reader__intermediate-document-viewer'
+      data-selection-id={selectionId}
+    >
       <LibrarySelection
         ref={selectionRef}
         selectionId={selectionId}

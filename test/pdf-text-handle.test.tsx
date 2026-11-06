@@ -45,6 +45,19 @@ const characterRect = (offset: number) =>
     characterHeight
   )
 
+const domCharacterOffset = (node: Node, offset: number) => {
+  const walker = content.ownerDocument.createTreeWalker(
+    content,
+    NodeFilter.SHOW_TEXT
+  )
+  let traversed = 0
+  while (walker.nextNode()) {
+    if (walker.currentNode === node) return traversed + offset
+    traversed += walker.currentNode.textContent?.length ?? 0
+  }
+  return offset
+}
+
 const makeRange = (): LinkedSelectionRange => ({
   id: 'saved-range',
   text: 'bcd',
@@ -91,14 +104,22 @@ const renderHandle = ({
   type = 'start',
   owner = 'active-selection',
   positionUnit = 'px',
-  column = 0
+  column = 0,
+  startOffset = 1,
+  endOffset = 4
 }: {
   type?: 'start' | 'end'
   owner?: HandleRenderProps['owner']
   positionUnit?: 'px' | 'percent'
   column?: number
+  startOffset?: number
+  endOffset?: number
 } = {}) => {
-  const range = makeRange()
+  const range = {
+    ...makeRange(),
+    start: { selectionId, offset: startOffset },
+    end: { selectionId, offset: endOffset }
+  }
   const linkedData: LinkedSelectionData = {
     items: owner === 'persisted-range' ? [range] : [],
     selectedRangeId: owner === 'persisted-range' ? range.id : null,
@@ -127,7 +148,7 @@ beforeEach(() => {
   root = document.createElement('div')
   root.className = 'hamster-reader__intermediate-document-viewer'
   root.innerHTML =
-    '<div class="hsn-selection-container"><div class="hsn-selection-content"><span data-selection-start-offset="0" data-text-id="glyph">abcdefgh</span></div></div>'
+    '<div class="hsn-selection-container" data-selection-id="page-1"><div class="hsn-selection-content"><span data-selection-start-offset="0" data-text-id="glyph">abcdefgh</span></div></div>'
   document.body.append(root)
   container = root.querySelector<HTMLDivElement>('.hsn-selection-container')!
   content = root.querySelector<HTMLDivElement>('.hsn-selection-content')!
@@ -141,7 +162,9 @@ beforeEach(() => {
   Object.defineProperty(Range.prototype, 'getClientRects', {
     configurable: true,
     value: function (this: Range) {
-      return [characterRect(this.startOffset)]
+      return [
+        characterRect(domCharacterOffset(this.startContainer, this.startOffset))
+      ]
     }
   })
   Object.defineProperty(document, 'elementFromPoint', {
@@ -255,6 +278,31 @@ describe('PdfTextHandle appearance and geometry', () => {
     expect(
       button.querySelector<HTMLElement>('[data-pdf-handle-visual] span')
     ).toHaveStyle({ width: '2px', height: '12px' })
+  })
+
+  it.each([
+    { type: 'start' as const, left: '50px', top: '40px' },
+    { type: 'end' as const, left: '60px', top: '80px' }
+  ])(
+    'uses the DOM $type endpoint across reflow whitespace',
+    ({ type, left, top }) => {
+      content.innerHTML =
+        '<span data-selection-start-offset="0" data-text-id="first">abcd</span> <span data-selection-start-offset="4" data-text-id="second">efgh</span>'
+      const { handle } = renderHandle({
+        type,
+        startOffset: 5,
+        endOffset: 6
+      })
+      expect(
+        screen.getByRole('button', { name: handle.ariaLabel })
+      ).toHaveStyle({ left, top })
+    }
+  )
+
+  it('measures only the content that owns the selectionId', () => {
+    container.dataset.selectionId = 'page-other'
+    renderHandle()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('does not substitute an endpoint from another paginated column', () => {

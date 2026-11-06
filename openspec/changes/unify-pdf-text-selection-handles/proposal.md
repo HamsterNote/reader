@@ -7,6 +7,7 @@ PDF Text 当前已有自绘手柄，但仍使用旧圆柄，和 PDF Layout 的�
 ## What Changes
 
 - 以当前 PDF Layout 自绘手柄为基准，统一 PDF Text 起止手柄的 20 CSS px 不透明圆点、2px 白边、整体阴影、连接竖线及上下端点位置，并提供相同的 40×40 CSS px 透明热区。
+- 桌面 PDF Layout 的鼠标手柄也复用同一视觉、外置端点与热区，但保留原生 Selection 的更新和确认流程。
 - 保留 PDF Text 的 selection 库、源字符锚点、当前可视列端点过滤与放大镜；适配视觉位移到文字命中的坐标纠偏，避免从热区边缘抓取时跳选。
 - 更新既有规格中“PDF Text 圆柄视觉不随之改变”的旧约束，明确本次统一视觉及热区，但不迁移 Layout 的自动滚动、跨页拖选或镜片实现。
 - 范围仅 reader 项目的 PDF 文字选择；保留 Layout 基准行为、Text 按钮分页及禁止滚动/自动翻页契约，不改 EPUB、矩形选择、其他格式或外部 selection 包。
@@ -23,6 +24,6 @@ PDF Text 当前已有自绘手柄，但仍使用旧圆柄，和 PDF Layout 的�
 
 ## Impact
 
-- 主要入口：`src/pdf/PdfTextHandle.tsx`；视觉复用基准：`src/components/PdfTouchSelectionHandle.tsx`；Text 手势适配参考 `RangeHandle.tsx` / `useRangeHandleDrag.ts`。共享逻辑如需扩展必须 PDF 显式启用，默认行为不变。
-- 回归覆盖 PDF Text 草稿和已存高亮端点、分页列边界、文字映射与保存、Layout 基准，以及共享组件的非 PDF 使用方。
-- 不新增依赖，不改变公开 API、数据格式或宿主代码。本次仅生成规划文档，不实施代码或声称设备验证通过。
+- 主要入口：`src/pdf/PdfTextHandle.tsx`；视觉复用基准：`src/components/PdfTouchSelectionHandle.tsx`；Text 手势适配参考 `RangeHandle.tsx` / `useRangeHandleDrag.ts`；桌面 Layout 接入 `EngineDocumentViewer.tsx` / `EngineSelectionControls.tsx`。共享逻辑如需扩展必须 PDF 显式启用，非 PDF 默认行为不变。
+- 回归覆盖 PDF Text 草稿和已存高亮端点、分页列边界、重排空白、文字映射与保存、桌面和移动 Layout，以及共享组件的非 PDF 使用方。
+- 不新增依赖，不改变公开 API、数据格式或宿主代码；设备未覆盖项在 tasks 中明确记录。

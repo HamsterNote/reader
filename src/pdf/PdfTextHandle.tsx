@@ -106,7 +106,13 @@ export function PdfTextHandle({
       ? linkedData.activeRange
       : linkedData.items.find((item) => item.id === handle.rangeId)
   const endpoint = end ? range?.end : range?.start
-  const content = root?.querySelector<HTMLElement>('.hsn-selection-content')
+  const content = Array.from(
+    root?.querySelectorAll<HTMLElement>('.hsn-selection-content') ?? []
+  ).find(
+    (candidate) =>
+      candidate.closest<HTMLElement>('[data-selection-id]')?.dataset
+        .selectionId === selectionId
+  )
   if (!endpoint || endpoint.selectionId !== selectionId || !content) return null
   const offset = end ? Math.max(0, endpoint.offset - 1) : endpoint.offset
   const anchor = { pageNumber, textId: '', text: '', offset }

@@ -394,3 +394,111 @@ it('hides an offscreen PDF endpoint instead of moving it onto another visible li
     p.remove()
   }
 })
+
+it('shares PDF handle visuals and grab correction with desktop mouse selection', () => {
+  const root = createRef<HTMLDivElement>()
+  const paragraph = document.createElement('p')
+  paragraph.textContent = 'Alpha beta gamma delta'
+  document.body.append(paragraph)
+  const text = paragraph.firstChild!
+  const range = document.createRange()
+  range.setStart(text, 6)
+  range.setEnd(text, 10)
+  const previousRects = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(40, 100, 80, 20)]
+  })
+  const previousCaret = Object.getOwnPropertyDescriptor(
+    document,
+    'caretRangeFromPoint'
+  )
+  const caretPoint = vi.fn((x: number, y: number) => {
+    const caret = document.createRange()
+    caret.setStart(text, 16)
+    caret.collapse(true)
+    return { x, y, caret }
+  })
+  Object.defineProperty(document, 'caretRangeFromPoint', {
+    configurable: true,
+    value: (x: number, y: number) => caretPoint(x, y).caret
+  })
+  const selection = document.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(range)
+  const onUpdate = vi.fn()
+  const controls = () => (
+    <div ref={root}>
+      <EngineSelectionControls
+        range={range}
+        containerRef={root}
+        showHandles
+        pdfCustomHandles
+        color='rgba(12, 34, 56, 0.3)'
+        onUpdate={onUpdate}
+        onEditingChange={() => {}}
+      >
+        Menu
+      </EngineSelectionControls>
+    </div>
+  )
+  const view = render(controls())
+  mockElementSize(root.current!, { width: 400, height: 400 })
+  view.rerender(controls())
+  try {
+    const handle = screen.getByRole('button', { name: '调整高亮终点' })
+    const circle = handle.querySelector<HTMLElement>(
+      '[data-range-handle-circle]'
+    )!
+    expect(handle).toHaveStyle({ width: '40px', height: '40px' })
+    expect(handle.style.left).toBe('120px')
+    expect(handle.style.top).toBe('130px')
+    expect(circle.style.width).toBe('20px')
+    expect(circle.style.borderWidth).toBe('2px')
+    expect(circle.style.backgroundColor).toBe('rgb(12, 34, 56)')
+    expect(
+      handle.querySelector<HTMLElement>('[data-pdf-handle-visual]')!.style
+        .filter
+    ).toContain('drop-shadow')
+    handle.getBoundingClientRect = () => new DOMRect(100, 100, 40, 40)
+    handle.setPointerCapture = vi.fn()
+    handle.hasPointerCapture = vi.fn(() => true)
+    handle.releasePointerCapture = vi.fn()
+
+    fireEvent.pointerDown(handle, {
+      pointerId: 8,
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 115,
+      clientY: 115
+    })
+    fireEvent.pointerMove(document, {
+      pointerId: 8,
+      pointerType: 'mouse',
+      clientX: 155,
+      clientY: 115
+    })
+    expect(caretPoint).toHaveBeenCalledWith(160, 110)
+    fireEvent.pointerUp(document, {
+      pointerId: 8,
+      pointerType: 'mouse',
+      clientX: 155,
+      clientY: 115
+    })
+    expect(onUpdate).toHaveBeenCalledOnce()
+    expect(onUpdate.mock.calls[0][0].toString()).toBe('beta gamma')
+  } finally {
+    view.unmount()
+    selection.removeAllRanges()
+    if (previousRects)
+      Object.defineProperty(Range.prototype, 'getClientRects', previousRects)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    if (previousCaret)
+      Object.defineProperty(document, 'caretRangeFromPoint', previousCaret)
+    else Reflect.deleteProperty(document, 'caretRangeFromPoint')
+    paragraph.remove()
+  }
+})

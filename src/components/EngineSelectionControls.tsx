@@ -50,12 +50,14 @@ export function EngineSelectionControls({
   showEnd = true,
   onEditingChange,
   pdfTouch = false,
+  pdfCustomHandles = false,
   color = '#ffc107',
   paintPreview = true,
   onPreview,
   hitTest
 }: {
   readonly pdfTouch?: boolean
+  readonly pdfCustomHandles?: boolean
   readonly color?: string
   readonly paintPreview?: boolean
   readonly onPreview?: (range: Range) => void
@@ -69,6 +71,7 @@ export function EngineSelectionControls({
   readonly onUpdate: (range: Range, end: boolean) => void
   readonly onEditingChange: (editing: boolean) => void
 }) {
+  const pdfHandles = pdfTouch || pdfCustomHandles
   const magnifier = useRangeMagnifier()
   const latestRange = useRef(range)
   latestRange.current = range
@@ -347,7 +350,7 @@ export function EngineSelectionControls({
       finish()
       stopScroll()
     }
-  }, [containerRef, range, pdfTouch, color])
+  }, [containerRef, range, pdfTouch, pdfHandles, color])
   useLayoutEffect(() => {
     if (previewRange.current?.owner !== range) previewRange.current = null
     if (!range) {
@@ -409,7 +412,7 @@ export function EngineSelectionControls({
       bottom - popupSize.height
     )
   )
-  const Handle = pdfTouch ? PdfTouchSelectionHandle : 'button'
+  const Handle = pdfHandles ? PdfTouchSelectionHandle : 'button'
   const handleLabels = pdfTouch
     ? { start: '拖动以调整选区起点', end: '拖动以调整选区终点' }
     : { start: '调整高亮起点', end: '调整高亮终点' }
@@ -501,13 +504,14 @@ export function EngineSelectionControls({
                 key={String(physicalEnd)}
                 type='button'
                 aria-label={handleLabels[type]}
-                {...(pdfTouch ? { end, color } : {})}
-                className={`hamster-reader__engine-handle${pdfTouch ? ' hamster-reader__pdf-touch-handle' : ''}`}
+                {...(pdfHandles ? { end, color } : {})}
+                className={`hamster-reader__engine-handle${pdfHandles ? ' hamster-reader__pdf-touch-handle' : ''}`}
                 style={{
                   position: 'fixed',
                   left:
-                    (end ? endpoint.right : endpoint.left) - (pdfTouch ? 0 : 7),
-                  top: pdfTouch ? pdfHandleY : endpoint.bottom - 7,
+                    (end ? endpoint.right : endpoint.left) -
+                    (pdfHandles ? 0 : 7),
+                  top: pdfHandles ? pdfHandleY : endpoint.bottom - 7,
                   zIndex: 10001
                 }}
                 onLostPointerCapture={() => cancelDrag.current()}
@@ -542,10 +546,10 @@ export function EngineSelectionControls({
                     clientX: event.clientX,
                     clientY: event.clientY,
                     element: event.currentTarget,
-                    offsetX: pdfTouch
+                    offsetX: pdfHandles
                       ? circle.left + circle.width / 2 - event.clientX
                       : 0,
-                    offsetY: pdfTouch
+                    offsetY: pdfHandles
                       ? currentEndpoint.top +
                         currentEndpoint.height / 2 -
                         event.clientY
@@ -562,7 +566,9 @@ export function EngineSelectionControls({
                       '.pdfViewer .page'
                     ) ?? range.startContainer.ownerDocument?.body
                   if (body) {
-                    const point = pdfTouch ? magnifierPoint(current, end) : null
+                    const point = pdfHandles
+                      ? magnifierPoint(current, end)
+                      : null
                     magnifier?.start(
                       body,
                       point ?? {

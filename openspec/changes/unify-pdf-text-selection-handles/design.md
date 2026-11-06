@@ -4,11 +4,11 @@
 
 动机见 proposal.md。项目安装 OpenSpec 1.13.1，`openspec/config.yaml` 仅配置 spec-driven；未发现项目随附的 propose 命令或技能，按运行时提供的 openspec-propose 技能和 CLI 产物指令执行。本次为代码只读核对，未运行 UI 或真机复现。
 
-| 路径 | 当前实现及约束 |
-| --- | --- |
-| Layout | `EngineSelectionControls.tsx` 的 pdfTouch 路径在 body fixed portal 渲染 `PdfTouchSelectionHandle`。起点圆心在首矩形上缘外 10px，终点在末矩形下缘外 10px。按钮热区 40×40，视觉圆外径 20px、白边 2px，2×12px 连接线，整体 `drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45))`，线先画、圆后画。 |
-| Text | `IntermediateDocumentTextViewer.tsx` 只对 isPdf 指定 `PdfTextHandle`。其按源端点和当前分页列过滤，随后调用 scale=1 的 `RangeHandle`，未使用 Layout 的白边、竖线及大热区。 |
-| Text 手势 | `RangeHandle` 将同一 button 的 pointerdown 交给 `useRangeHandleDrag` 和 selection 库；前者根据抓取点到按钮中心的偏差纠正 pointermove，并驱动放大镜。依赖按钮元数据和 document 捕获匹配，替换为多层 DOM 时必须保持兼容。 |
+| 路径      | 当前实现及约束                                                                                                                                                                                                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Layout    | `EngineSelectionControls.tsx` 的 pdfTouch 路径在 body fixed portal 渲染 `PdfTouchSelectionHandle`。起点圆心在首矩形上缘外 10px，终点在末矩形下缘外 10px。按钮热区 40×40，视觉圆外径 20px、白边 2px，2×12px 连接线，整体 `drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45))`，线先画、圆后画。 |
+| Text      | `IntermediateDocumentTextViewer.tsx` 只对 isPdf 指定 `PdfTextHandle`。其按源端点和当前分页列过滤，随后调用 scale=1 的 `RangeHandle`，未使用 Layout 的白边、竖线及大热区。                                                                                                              |
+| Text 手势 | `RangeHandle` 将同一 button 的 pointerdown 交给 `useRangeHandleDrag` 和 selection 库；前者根据抓取点到按钮中心的偏差纠正 pointermove，并驱动放大镜。依赖按钮元数据和 document 捕获匹配，替换为多层 DOM 时必须保持兼容。                                                                |
 
 主规格中两个旧场景明确要求 Text 圆柄不变，本次 delta 完整保留所在 requirement 并只替换这两处限制及 Text 场景描述，新增统一手柄契约。Layout 的跨页镜片、自动滚动及 Text 分页约束继续有效。
 
@@ -43,6 +43,14 @@ Text 适配器在原叠层坐标系定位热区圆心：起点对应行左端、
 Text 仍使用 HamsterSelection linkedMode 的 onPointerDown、activeRange/item 和既有更新/确认回调；草稿和历史高亮继续使用原颜色来源，视觉通过已有不透明颜色转换去除 alpha。不得因统一手柄而以当前底栏色覆盖历史高亮颜色。维持 Text 自有放大镜开关、正文锁滚动、系统选择抑制及分页策略，边缘拖动不启动 Layout 的自动滚动。
 
 替代方案：把整个 Text 选区切换为 Layout DOM Range 会扩大范围并增加字符映射风险，且本需求只需要手柄一致，因此不采用。
+
+### 4. Text 在当前 selection 容器中解析 runtime DOM 几何
+
+验收发现重排后的可视文本会插入源流中不存在的空白。`linkedData` 的 runtime 端点是当前 `selectionId` 内容中的 DOM offset，不能直接拿 `data-selection-start-offset` 当 canonical offset 查 span。Text 手柄必须在所属 selection 容器中用 DOM offset 定位字符矩形；持久化时仍由既有 canonicalize 流程转换，存储格式不变。
+
+### 5. 桌面 PDF Layout 只共享视觉和抓取纠偏
+
+`EngineDocumentViewer` 对 PDF source 显式启用 `pdfCustomHandles`，使桌面鼠标也渲染 `PdfTouchSelectionHandle`、起上终下位置与 40×40 热区。`pdfTouch` 仍为 false：桌面继续使用 caret 命中和原生 Selection 更新/确认，仅复用抓取偏移，不启用触摸专用预览事务、自动滚动或镜片实现。EPUB、矩形和非 PDF 默认手柄不变。
 
 ## Risks / Trade-offs
 

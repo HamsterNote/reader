@@ -118,28 +118,7 @@ export function pdfTextAnchorRect(
   content: HTMLElement,
   anchor: ReaderTextAnchor
 ): DOMRect | null {
-  const spans = Array.from(
-    content.querySelectorAll<HTMLElement>(
-      '[data-selection-start-offset][data-text-id]'
-    )
-  )
-  // Offset identifies a position within a source span, including a span crossing columns.
-  const contains = (element: HTMLElement) => {
-    const start = Number(element.dataset.selectionStartOffset)
-    return (
-      start <= anchor.offset &&
-      anchor.offset < start + (element.textContent?.length ?? 0)
-    )
-  }
-  const matchingIds = spans.filter(
-    (element) => element.dataset.textId === anchor.textId
-  )
-  const element = matchingIds.length
-    ? matchingIds.find(contains)
-    : spans.find(contains)
-  if (!element) return null
-  const offset = anchor.offset - Number(element.dataset.selectionStartOffset)
-  return characterRange(element, offset)?.getClientRects?.()[0] ?? null
+  return characterRange(content, anchor.offset)?.getClientRects?.()[0] ?? null
 }
 
 export function pdfTextAnchorColumn(
