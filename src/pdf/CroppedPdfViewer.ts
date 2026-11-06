@@ -124,6 +124,8 @@ export class CroppedPdfViewer extends PDFViewer {
       page.viewport,
       resolvePageEdgeCrop(crop, pageNumber)
     )
+    if (!geometry.top && !geometry.right && !geometry.bottom && !geometry.left)
+      return
     this.container.scrollTop +=
       rect.top + geometry.top - host.top - this.container.clientTop
     if (

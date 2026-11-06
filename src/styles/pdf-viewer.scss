@@ -43,8 +43,7 @@
 .hamster-reader__pdf-highlight-rect {
   position: absolute;
   pointer-events: none;
-  // Preserve glyphs even when WebKit isolates the overlay's blend backdrop.
-  mix-blend-mode: multiply;
+  // Alpha is in the fill: WKWebView may isolate the blend backdrop.
 }
 
 .hamster-reader__pdf-highlight-rect--selected {
@@ -84,4 +83,39 @@
 .hamster-reader__pdf-overlay .hamster-reader__drawing-layer {
   position: absolute;
   inset: 0;
+}
+
+// PDF alone owns selection colors; other document engines keep their policy.
+.hamster-reader__pdf-viewer .textLayer ::selection {
+  background: var(--pdf-selection-color);
+}
+
+.hamster-reader__pdf-viewer-container[data-pdf-touch-selection][data-pdf-selection-enabled]
+  .textLayer {
+  &,
+  * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+// Include PDF reader chrome: a native range can otherwise extend into its toolbar.
+.hamster-reader:has([data-pdf-touch-selection][data-pdf-selection-enabled]) {
+  -webkit-user-select: none;
+  user-select: none;
+
+  input,
+  textarea,
+  [contenteditable='true'] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+.hamster-reader__pdf-touch-handle,
+.hamster-reader__engine-popover[data-pdf-touch] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }

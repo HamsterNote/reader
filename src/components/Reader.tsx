@@ -1,3 +1,4 @@
+import { pdfHighlightFill } from '../pdf/pdfSelectionPaint'
 import {
   normalizeBookmark,
   normalizeTextProgress,
@@ -313,6 +314,7 @@ export type ReaderProps = {
   /** 全局高亮颜色变更回调（供默认 popover 的颜色选择器使用） */
   onHighlightColorChange?: (color: string) => void
   highlightColor?: string
+  /** PDF preview uses the current toolbar highlightColor; other formats may override it here. */
   selectionColor?: string
   /** 是否启用 Selection 内置的选区端点放大镜，默认 true。 */
   showSelectionMagnifier?: boolean
@@ -1091,10 +1093,17 @@ export function Reader({
     [internalPaintingSettings, resolvedDrawingStrokeColor, resolvedPaintingTool]
   )
   // 未主动选高亮色时跟随当前描边色；Text 底栏也使用该解析结果判定选中态。
-  const resolvedHighlightColor =
+  const rawHighlightColor =
     highlightColor ??
     internalHighlightColor ??
     getTranslucentColor(resolvedDrawingStrokeColor)
+  const isPdfDocument = isPdf || engineSource?.format === 'pdf'
+  const resolvedHighlightColor = pdfHighlightFill(
+    rawHighlightColor,
+    isPdfDocument
+  )
+  const resolvedSelectionColor =
+    whenEnabled(isPdfDocument, resolvedHighlightColor) ?? selectionColor
   const hasDocumentPages =
     engineSource !== undefined || documentHasPages(document)
   const bottomBarInset = useBottomBarInset({
@@ -1977,7 +1986,7 @@ export function Reader({
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
-            selectionColor={selectionColor}
+            selectionColor={resolvedSelectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               selectionPopover ?? (
@@ -2118,7 +2127,7 @@ export function Reader({
             onHighlight={onHighlight}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
-            selectionColor={selectionColor}
+            selectionColor={resolvedSelectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
             selectionPopover={
               engineSource

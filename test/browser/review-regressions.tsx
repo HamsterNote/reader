@@ -5,6 +5,7 @@ import { IntermediatePage, TextDir } from '@hamster-note/types'
 import { Reader } from '../../src/components/Reader'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
 import { configurePdfJsWorker } from '../../src/pdf/pdfjsRuntime'
+import { pdfCaretAtPoint } from '../../src/pdf/pdfTouchSelection'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRef
@@ -20,6 +21,8 @@ let props: Props
 let dispose = async () => {}
 const state = {
   ranges: [] as ReaderSelectionRange[],
+  selectionTexts: [] as string[],
+  updates: 0,
   ocrPages: [] as number[],
   images: [] as string[],
   segments: [] as string[],
@@ -49,6 +52,8 @@ const api = {
     flushSync(() => root.render(null))
     await dispose()
     state.ranges = []
+    state.selectionTexts = []
+    state.updates = 0
     state.ocrPages = []
     state.images = []
     state.segments = []
@@ -65,6 +70,14 @@ const api = {
       useVirtualPaper: false,
       selectionRef: selection,
       onHighlight: (range) => state.ranges.push(range),
+      onTextSelectionChange: (_text, detail) =>
+        state.selectionTexts.push(detail.selectedText),
+      onUpdateRange: (range) => {
+        state.updates++
+        state.ranges = state.ranges.map((item) =>
+          item.id === range.id ? range : item
+        )
+      },
       onDataChange: (data) => {
         if (data.layoutReadingProgress)
           state.positions.push(data.layoutReadingProgress.pageNumber)
@@ -110,6 +123,15 @@ const api = {
       ...initial
     }
     render()
+  },
+  pdfCaretTextAtPoint(x: number, y: number, nearest = false) {
+    const viewer = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )
+    if (!viewer) return null
+    return (
+      pdfCaretAtPoint(viewer, x, y, nearest)?.startContainer.textContent ?? null
+    )
   },
   update(next: Props) {
     props = { ...props, ...next }

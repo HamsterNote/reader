@@ -74,6 +74,10 @@ beforeEach(() => {
     confirmSelection: vi.fn(),
     clearSelection: vi.fn(),
     selectRange: () => null,
+    getSelectionRange: () => null,
+    setSelectionRange: () => {},
+    hitTestSelection: () => null,
+    serializeRangeEndpoint: () => null,
     serializeSelection: () => null
   }
 })

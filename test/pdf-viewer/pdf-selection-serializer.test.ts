@@ -15,6 +15,21 @@ import {
   enhanceTextLayer
 } from '../../src/pdf/pdfTextMapping'
 
+// Every existing anchor fixture also exercises the managed Range path with no
+// visible Selection dependency, including backwards and cross-page selections.
+function serializeBoth(
+  selection: Selection,
+  contexts: ReadonlyMap<number, PdfPageSelectionContext>,
+  unit: 'px' | 'percent'
+) {
+  const result = serializePdfTextSelection(selection, contexts, unit)
+  if (selection.rangeCount)
+    expect(
+      serializePdfTextSelection(selection.getRangeAt(0), contexts, unit)
+    ).toEqual(result)
+  return result
+}
+
 // 几何 stub：scale=1、无旋转。identity 投影足够验证矩形归一逻辑；
 // 旋转/缩放投影由 pdf-overlay-geometry.test.ts 覆盖。
 const makeStubViewport = (pageWidth: number, pageHeight: number) =>
@@ -162,7 +177,7 @@ describe('serializePdfTextSelection', () => {
       20
     )
 
-    const detail = serializePdfTextSelection(selection, contexts, 'px')
+    const detail = serializeBoth(selection, contexts, 'px')
     expect(detail).not.toBeNull()
     expect(detail!.start).toEqual({ selectionId: 'page-1', offset: 0 })
     expect(detail!.end).toEqual({ selectionId: 'page-1', offset: 20 })
@@ -173,6 +188,32 @@ describe('serializePdfTextSelection', () => {
     expect(rect.y).toBeCloseTo(32.9, 6)
     expect(rect.width).toBeCloseTo(97.8, 6)
     expect(rect.height).toBeCloseTo(12, 6)
+  })
+
+  it('连续跨三页选择保留中间页全文和矩形', () => {
+    const pages = [1, 2, 3].map((pageNumber) =>
+      makePageContext({
+        pageNumber,
+        itemTexts: [`Page ${pageNumber} content`],
+        width: 400,
+        height: 300,
+        spanRects: [{ x: 20, y: 40, width: 180, height: 12 }]
+      })
+    )
+    const range = document.createRange()
+    range.setStart(pages[0].textLayerDiv.firstChild!.firstChild!, 5)
+    range.setEnd(pages[2].textLayerDiv.firstChild!.firstChild!, 6)
+    const detail = serializePdfTextSelection(
+      range,
+      new Map(pages.map((p) => [p.pageNumber, p])),
+      'percent'
+    )!
+    expect(detail.text).toBe('1 contentPage 2 contentPage 3')
+    expect(Object.keys(detail.rectsBySelectionId)).toEqual([
+      'page-1',
+      'page-2',
+      'page-3'
+    ])
   })
 
   it('跨页选区：文本为起点页后缀 + 终点页前缀的直接拼接', () => {
@@ -212,7 +253,7 @@ describe('serializePdfTextSelection', () => {
       11
     )
 
-    const detail = serializePdfTextSelection(selection, contexts, 'percent')
+    const detail = serializeBoth(selection, contexts, 'percent')
     expect(detail).not.toBeNull()
     expect(detail!.start).toEqual({ selectionId: 'page-1', offset: 61 })
     expect(detail!.end).toEqual({ selectionId: 'page-2', offset: 11 })
@@ -247,7 +288,7 @@ describe('serializePdfTextSelection', () => {
     const selection = document.getSelection()!
     selection.setBaseAndExtent(second.firstChild!, 5, first.firstChild!, 0)
 
-    const detail = serializePdfTextSelection(selection, contexts, 'px')
+    const detail = serializeBoth(selection, contexts, 'px')
     expect(detail!.start).toEqual({ selectionId: 'page-1', offset: 0 })
     expect(detail!.end).toEqual({ selectionId: 'page-1', offset: 25 })
   })
@@ -263,13 +304,13 @@ describe('serializePdfTextSelection', () => {
     const contexts = new Map([[1, context]])
 
     const selection = document.getSelection()!
-    expect(serializePdfTextSelection(selection, contexts, 'px')).toBeNull()
+    expect(serializeBoth(selection, contexts, 'px')).toBeNull()
 
     const outside = document.createElement('span')
     outside.textContent = '页外文本'
     document.body.appendChild(outside)
     selection.setBaseAndExtent(outside.firstChild!, 0, outside.firstChild!, 4)
-    expect(serializePdfTextSelection(selection, contexts, 'px')).toBeNull()
+    expect(serializeBoth(selection, contexts, 'px')).toBeNull()
     outside.remove()
   })
 })

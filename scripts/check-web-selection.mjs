@@ -1,3 +1,7 @@
+import { createServer } from 'vite'
+import { checkPdfSelectionPaint } from './check-pdf-selection-paint.mjs'
+import { checkPdfMobileSelection } from './check-pdf-mobile-selection.mjs'
+import { checkPdfContinuousSelection } from './check-pdf-continuous-selection.mjs'
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -6,7 +10,13 @@ import JSZip from 'jszip'
 import { PDFDocument, PDFName, PDFString, PDFOperator } from 'pdf-lib'
 
 // Run against `yarn dev`; READER_BROWSER_URL can point at a LAN HTTP preview.
-const base = process.env.READER_BROWSER_URL ?? 'http://127.0.0.1:5577'
+const server = process.env.READER_BROWSER_URL
+  ? null
+  : await createServer({ server: { host: '127.0.0.1', port: 0 } })
+await server?.listen()
+const base =
+  process.env.READER_BROWSER_URL ??
+  `http://127.0.0.1:${server.httpServer.address().port}`
 const output = resolve(
   process.env.READER_BROWSER_OUTPUT ?? 'test-results/web-selection'
 )
@@ -18,7 +28,7 @@ async function saved(page, name = 'two-column.pdf') {
   return page.evaluate(
     (name) =>
       JSON.parse(
-        localStorage.getItem(`hamster-reader-demo:highlights:${name}`) ??
+        localStorage.getItem(`hamster-reader-demo:annotations:v5:${name}`) ??
           '{"ranges":[],"rects":[]}'
       ),
     name
@@ -338,6 +348,14 @@ async function pdfSelection(withoutUUID) {
       rects: highlights.rects.length,
       secureContext: await page.evaluate(() => isSecureContext)
     })
+  } catch (error) {
+    console.error({
+      errors,
+      selection: await page.evaluate(() => getSelection()?.toString()),
+      data: await saved(page)
+    })
+    await page.screenshot({ path: resolve(output, `${label}-error.png`) })
+    throw error
   } finally {
     await page.close()
   }
@@ -387,7 +405,9 @@ async function pdfAnnotationEditing(file, original = false) {
     const textStyle = await text.evaluate((element) => {
       const style = getComputedStyle(element)
       return {
-        background: style.backgroundColor,
+        background: element.querySelector('path')
+          ? getComputedStyle(element.querySelector('path')).fill
+          : style.backgroundColor,
         opacity: style.opacity,
         visibility: style.visibility
       }
@@ -595,8 +615,9 @@ async function pdfToolRestoration(page, file, original, name) {
   await page.mouse.up()
   await page.waitForFunction(
     ({ name, width }) =>
-      JSON.parse(localStorage.getItem(`hamster-reader-demo:highlights:${name}`))
-        .rects[0].rect.width > width,
+      JSON.parse(
+        localStorage.getItem(`hamster-reader-demo:annotations:v5:${name}`)
+      ).rects[0].rect.width > width,
     { name, width: beforeResize.width }
   )
   assert.equal((await saved(page, name)).rects.length, 1)
@@ -796,15 +817,20 @@ async function epubNavigation(buffer) {
 }
 
 try {
-  await pdfSelection(false)
-  await pdfSelection(true)
-  await printedPdf(await printedPdfFixture())
-  await pdfAnnotationEditing(await printedPdfFixture())
-  if (process.env.READER_ORIGINAL_PDF) {
-    await printedPdf(resolve(process.env.READER_ORIGINAL_PDF), true)
-    await pdfAnnotationEditing(resolve(process.env.READER_ORIGINAL_PDF), true)
+  results.push(await checkPdfSelectionPaint({ browser, base, output }))
+  results.push(await checkPdfMobileSelection({ browser, base, output }))
+  results.push(await checkPdfContinuousSelection({ browser, base, output }))
+  if (!process.argv.includes('--pdf-mobile-only')) {
+    await pdfSelection(false)
+    await pdfSelection(true)
+    await printedPdf(await printedPdfFixture())
+    await pdfAnnotationEditing(await printedPdfFixture())
+    if (process.env.READER_ORIGINAL_PDF) {
+      await printedPdf(resolve(process.env.READER_ORIGINAL_PDF), true)
+      await pdfAnnotationEditing(resolve(process.env.READER_ORIGINAL_PDF), true)
+    }
+    await epubNavigation(await tocFixture())
   }
-  await epubNavigation(await tocFixture())
   await writeFile(
     resolve(output, 'report.json'),
     JSON.stringify({ base, results }, null, 2)
@@ -812,4 +838,5 @@ try {
   console.log(JSON.stringify(results, null, 2))
 } finally {
   await browser.close()
+  await server?.close()
 }

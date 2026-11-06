@@ -3,6 +3,8 @@
 // 程序化命中检测，原生选区不被拦截；页面回收后 textlayerrendered 触发
 // 重挂载，按持久化数据重建（回页恢复）。
 
+import { mergePdfLineRects, pdfHighlightFill } from './pdfSelectionPaint'
+
 import type {
   EditorDocument,
   LayeredToolsSnapshot,
@@ -321,22 +323,28 @@ export function PdfPageOverlayLayer({
       }}
     >
       {pageRanges.flatMap((range) => {
-        const storedRects =
-          range.rectsBySelectionId?.[pageId] ??
-          deriveRectsForCanonicalRange(
-            range.start,
-            range.end,
-            selectionContexts,
-            overlayRectType
-          )[pageId] ??
-          []
-        const projectedRects = storedRects.map((stored) =>
-          projectStoredRectToViewport(
-            stored,
-            range.overlayRectType ?? overlayRectType,
-            geometry.scaleOneViewport,
-            geometry.viewport,
-            geometry.visual
+        // Old saved boxes can include font/element boxes taller than the PDF line.
+        // Recompute from canonical anchors when the text layer is available.
+        const derived = deriveRectsForCanonicalRange(
+          range.start,
+          range.end,
+          selectionContexts,
+          overlayRectType
+        )[pageId]
+        const storedRects = derived?.length
+          ? derived
+          : (range.rectsBySelectionId?.[pageId] ?? [])
+        const projectedRects = mergePdfLineRects(
+          storedRects.map((stored) =>
+            projectStoredRectToViewport(
+              stored,
+              derived?.length
+                ? overlayRectType
+                : (range.overlayRectType ?? overlayRectType),
+              geometry.scaleOneViewport,
+              geometry.viewport,
+              geometry.visual
+            )
           )
         )
         if (projectedRects.length === 0) return null
@@ -378,11 +386,9 @@ export function PdfPageOverlayLayer({
             <path
               d={path}
               fillRule='nonzero'
-              fill={
-                selectedGroup.length > 1 && selectedGroupIds.has(range.id)
-                  ? 'rgba(0, 120, 215, 0.3)'
-                  : (range.markerStyle?.backgroundColor ?? highlightColor)
-              }
+              fill={pdfHighlightFill(
+                range.markerStyle?.backgroundColor ?? highlightColor
+              )}
             />
           </svg>
         )
