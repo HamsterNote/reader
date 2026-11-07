@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
+declare const __DEV__: boolean
+
 type PdfDrawingErrorBoundaryProps = {
   readonly children: ReactNode
 }
@@ -30,7 +32,12 @@ export class PdfDrawingErrorBoundary extends Component<
   render() {
     const { error, componentStack } = this.state
     if (error === null) return this.props.children
+    const showComponentStack =
+      typeof __DEV__ !== 'undefined'
+        ? __DEV__
+        : (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true
 
+    // 仅用于诊断：错误后持续显示兜底，只有绘图层卸载并重挂才会重置。
     return (
       <div
         className='hamster-reader__pdf-drawing-error'
@@ -39,7 +46,7 @@ export class PdfDrawingErrorBoundary extends Component<
       >
         <strong>PDF 绘图层发生错误，请截图此信息</strong>
         <pre data-testid='pdf-drawing-error-message'>{error.message}</pre>
-        {componentStack ? (
+        {componentStack && showComponentStack ? (
           <pre data-testid='pdf-drawing-error-stack'>{componentStack}</pre>
         ) : null}
       </div>

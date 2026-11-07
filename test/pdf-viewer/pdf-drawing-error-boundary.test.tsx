@@ -45,6 +45,7 @@ function renderOverlay() {
 
 afterEach(() => {
   drawing.failure = null
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -57,6 +58,7 @@ describe('PdfPageOverlayLayer drawing error boundary', () => {
   })
 
   it('shows and logs the error message and component stack', () => {
+    vi.stubGlobal('__DEV__', true)
     const failure = new Error('native canvas unavailable')
     drawing.failure = failure
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -78,5 +80,26 @@ describe('PdfPageOverlayLayer drawing error boundary', () => {
       expect.stringContaining('PageDrawingLayer')
     )
     expect(screen.queryByTestId('drawing-surface')).not.toBeInTheDocument()
+  })
+
+  it('hides the component stack in production but keeps the message and log', () => {
+    vi.stubGlobal('__DEV__', false)
+    const failure = new Error('native canvas unavailable')
+    drawing.failure = failure
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    renderOverlay()
+
+    expect(screen.getByTestId('pdf-drawing-error-message')).toHaveTextContent(
+      failure.message
+    )
+    expect(
+      screen.queryByTestId('pdf-drawing-error-stack')
+    ).not.toBeInTheDocument()
+    expect(consoleError).toHaveBeenCalledWith(
+      'PDF drawing layer render error',
+      failure,
+      expect.stringContaining('PageDrawingLayer')
+    )
   })
 })
