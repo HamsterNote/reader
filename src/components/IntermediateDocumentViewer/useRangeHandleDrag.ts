@@ -21,6 +21,10 @@ interface RangeHandleDragOptions {
   readonly correctPointerCoordinates: boolean
   readonly magnifierEnabled: boolean
   readonly viewerRoot?: HTMLElement | null
+  readonly pointerTarget?: {
+    readonly clientX: number
+    readonly clientY: number
+  }
 }
 
 const activeDragSessions = new WeakMap<Document, ActiveRangeHandleDragSession>()
@@ -29,9 +33,10 @@ const handledPointerDownEvents = new WeakSet<PointerEvent>()
 const copyPointerEvent = (
   event: PointerEvent,
   clientX: number,
-  clientY: number
+  clientY: number,
+  type = event.type
 ): PointerEvent =>
-  new PointerEvent(event.type, {
+  new PointerEvent(type, {
     bubbles: true,
     cancelable: true,
     composed: true,
@@ -64,7 +69,8 @@ export const useRangeHandleDrag = ({
   circleRef,
   correctPointerCoordinates,
   magnifierEnabled,
-  viewerRoot
+  viewerRoot,
+  pointerTarget
 }: RangeHandleDragOptions): ((event: PointerEvent) => void) => {
   const magnifier = useRangeMagnifier()
   const activeMagnifier = magnifierEnabled ? magnifier : null
@@ -86,11 +92,13 @@ export const useRangeHandleDrag = ({
       const ownerDocument = circle.ownerDocument
       activeDragSessions.get(ownerDocument)?.finishDrag()
 
-      // 放大镜始终跟随手柄中心；自定义文本圆柄还会把依赖收到的
-      // pointermove 坐标修正到圆心，避免从圆柄边缘抓取时端点偏移。
       const circleRect = circle.getBoundingClientRect()
-      const offsetX = circleRect.left + circleRect.width / 2 - event.clientX
-      const offsetY = circleRect.top + circleRect.height / 2 - event.clientY
+      const target = pointerTarget ?? {
+        clientX: circleRect.left + circleRect.width / 2,
+        clientY: circleRect.top + circleRect.height / 2
+      }
+      const offsetX = target.clientX - event.clientX
+      const offsetY = target.clientY - event.clientY
       const forwardedEvents = new WeakSet<PointerEvent>()
       let pointerCorrectionActive = correctPointerCoordinates
       let dragFinished = false
@@ -146,7 +154,22 @@ export const useRangeHandleDrag = ({
         }
       }
       const finishPointerDrag = (terminalEvent: PointerEvent) => {
-        if (terminalEvent.pointerId === event.pointerId) finishDrag()
+        if (terminalEvent.pointerId !== event.pointerId) return
+        if (
+          terminalEvent.type === 'pointerup' &&
+          pointerTarget &&
+          correctPointerCoordinates
+        ) {
+          correctPointerMove(
+            copyPointerEvent(
+              terminalEvent,
+              terminalEvent.clientX,
+              terminalEvent.clientY,
+              'pointermove'
+            )
+          )
+        }
+        finishDrag()
       }
       const correctPointerMove = (moveEvent: PointerEvent) => {
         if (
@@ -156,6 +179,8 @@ export const useRangeHandleDrag = ({
           return
         }
 
+        const correctedClientX = moveEvent.clientX + offsetX
+        const correctedClientY = moveEvent.clientY + offsetY
         const selectionRoot =
           circle.closest<HTMLElement>(
             '.hamster-reader__intermediate-document-viewer'
@@ -163,8 +188,8 @@ export const useRangeHandleDrag = ({
         if (
           !selectionRoot ||
           !isPointOnSelectionText(
-            moveEvent.clientX,
-            moveEvent.clientY,
+            pointerTarget ? correctedClientX : moveEvent.clientX,
+            pointerTarget ? correctedClientY : moveEvent.clientY,
             selectionRoot,
             ownerDocument
           )
@@ -178,8 +203,8 @@ export const useRangeHandleDrag = ({
         moveEvent.stopImmediatePropagation()
         const correctedEvent = copyPointerEvent(
           moveEvent,
-          moveEvent.clientX + offsetX,
-          moveEvent.clientY + offsetY
+          correctedClientX,
+          correctedClientY
         )
         markSelectionPointerMoveAsTextHit(correctedEvent)
         forwardedEvents.add(correctedEvent)
@@ -204,7 +229,13 @@ export const useRangeHandleDrag = ({
       ownerDocument.defaultView?.addEventListener('blur', finishDrag)
       activeDragSessions.set(ownerDocument, session)
     },
-    [activeMagnifier, circleRef, correctPointerCoordinates, viewerRoot]
+    [
+      activeMagnifier,
+      circleRef,
+      correctPointerCoordinates,
+      pointerTarget,
+      viewerRoot
+    ]
   )
 
   useLayoutEffect(() => {

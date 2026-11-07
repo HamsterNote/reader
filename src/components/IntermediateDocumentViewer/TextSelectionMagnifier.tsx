@@ -48,8 +48,14 @@ export const TextSelectionMagnifier = ({
 
       finishDrag()
       const rect = handle.getBoundingClientRect()
-      const offsetX = rect.left + rect.width / 2 - event.clientX
-      const offsetY = rect.top + rect.height / 2 - event.clientY
+      const targetX = Number(handle.dataset.pdfTextTargetX)
+      const targetY = Number(handle.dataset.pdfTextTargetY)
+      const offsetX =
+        (Number.isFinite(targetX) ? targetX : rect.left + rect.width / 2) -
+        event.clientX
+      const offsetY =
+        (Number.isFinite(targetY) ? targetY : rect.top + rect.height / 2) -
+        event.clientY
       activeDragRef.current = { pointerId: event.pointerId, offsetX, offsetY }
       magnifier.start(handle, {
         clientX: event.clientX + offsetX,

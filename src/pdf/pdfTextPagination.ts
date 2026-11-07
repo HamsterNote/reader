@@ -114,17 +114,36 @@ export function measurePdfTextColumns(
     : [{ index: 0 }]
 }
 
-export function pdfTextAnchorColumn(
+/** Runtime selection offsets count display whitespace and use DOM order. */
+export function pdfTextDomOffsetRect(
   content: HTMLElement,
-  anchor: ReaderTextAnchor,
+  offset: number
+): DOMRect | null {
+  return characterRange(content, offset)?.getClientRects?.()[0] ?? null
+}
+
+export function pdfTextRectColumn(
+  content: HTMLElement,
+  rect: DOMRect,
   width: number
-): number | null {
+): number {
+  return columnOf(
+    rect,
+    content.getBoundingClientRect().left,
+    width + PDF_TEXT_COLUMN_GAP
+  )
+}
+
+/** Reading/bookmark anchors remain in the PDF source stream. */
+export function pdfTextAnchorRect(
+  content: HTMLElement,
+  anchor: ReaderTextAnchor
+): DOMRect | null {
   const spans = Array.from(
     content.querySelectorAll<HTMLElement>(
       '[data-selection-start-offset][data-text-id]'
     )
   )
-  // Offset identifies a position within a source span, including a span crossing columns.
   const contains = (element: HTMLElement) => {
     const start = Number(element.dataset.selectionStartOffset)
     return (
@@ -135,22 +154,23 @@ export function pdfTextAnchorColumn(
   const matchingIds = spans.filter(
     (element) => element.dataset.textId === anchor.textId
   )
-  const atOffset = matchingIds.length
+  const element = matchingIds.length
     ? matchingIds.find(contains)
     : spans.find(contains)
-  const element = atOffset
   if (!element) return null
-  const offset = atOffset
-    ? anchor.offset - Number(element.dataset.selectionStartOffset)
-    : 0
-  const rect = characterRange(element, offset)?.getClientRects?.()[0]
-  return rect
-    ? columnOf(
-        rect,
-        content.getBoundingClientRect().left,
-        width + PDF_TEXT_COLUMN_GAP
-      )
-    : null
+  return pdfTextDomOffsetRect(
+    element,
+    anchor.offset - Number(element.dataset.selectionStartOffset)
+  )
+}
+
+export function pdfTextAnchorColumn(
+  content: HTMLElement,
+  anchor: ReaderTextAnchor,
+  width: number
+): number | null {
+  const rect = pdfTextAnchorRect(content, anchor)
+  return rect ? pdfTextRectColumn(content, rect, width) : null
 }
 
 /** Move one measured screen, then one allowed source page. No wrapping. */

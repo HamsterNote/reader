@@ -1824,6 +1824,7 @@ export function EngineDocumentViewer(props: Props) {
           containerRef={root}
           showHandles={mouse || pdfTouch}
           pdfTouch={pdfTouch}
+          pdfCustomHandles={source?.format === 'pdf'}
           color={current?.markerStyle?.backgroundColor ?? props.highlightColor}
           paintPreview={getSelectionGroup(ranges, selected).length <= 1}
           onPreview={(range) => pdf.current?.setSelectionRange(range, pdfTouch)}

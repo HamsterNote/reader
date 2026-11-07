@@ -8,9 +8,14 @@ import {
 export function PdfTouchSelectionHandle({
   end = false,
   color = '#ffc107',
+  lineHeight = 12,
   style,
   ...props
-}: ComponentPropsWithRef<'button'> & { end?: boolean; color?: string }) {
+}: ComponentPropsWithRef<'button'> & {
+  end?: boolean
+  color?: string
+  lineHeight?: number
+}) {
   const diameter = HANDLE_CIRCLE_DIAMETER_PX
   const hitSize = diameter * 2
   return (
@@ -49,9 +54,9 @@ export function PdfTouchSelectionHandle({
           style={{
             position: 'absolute',
             left: hitSize / 2 - 1,
-            top: end ? -2 : 28,
+            top: end ? 10 - lineHeight : 28,
             width: 2,
-            height: 12,
+            height: lineHeight,
             backgroundColor: rangeHandleCircleStyle({ backgroundColor: color })
               .backgroundColor
           }}
