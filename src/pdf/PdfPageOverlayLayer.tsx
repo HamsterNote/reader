@@ -18,6 +18,7 @@ import type {
   ReaderSelectionRectangle
 } from '../types/selection'
 import { PageDrawingLayer } from '../components/PageDrawingLayer'
+import { PdfDrawingErrorBoundary } from './PdfDrawingErrorBoundary'
 import { PdfRectangleAnnotation } from './PdfRectangleAnnotation'
 import type {
   OverlayRectUnit,
@@ -425,14 +426,16 @@ export function PdfPageOverlayLayer({
       )}
 
       {(painting !== undefined || tool === 'drawing') && (
-        <PageDrawingLayer
-          enabled={tool === 'drawing'}
-          pageId={pageId}
-          settings={paintingSettings}
-          value={painting}
-          onChange={handlePaintingChange}
-          geometry={geometry.drawing}
-        />
+        <PdfDrawingErrorBoundary>
+          <PageDrawingLayer
+            enabled={tool === 'drawing'}
+            pageId={pageId}
+            settings={paintingSettings}
+            value={painting}
+            onChange={handlePaintingChange}
+            geometry={geometry.drawing}
+          />
+        </PdfDrawingErrorBoundary>
       )}
     </div>
   )
