@@ -103,7 +103,7 @@
 
 ### Requirement: PDF modes share selection handle appearance
 
-系统 MUST 在 PDF Text 与 PDF Layout 的自定义文字选择中显示一致的起止手柄，包括未确认选区与已选中的历史高亮。圆点屏幕外径 SHALL 为 20 CSS px，具有不透明的对应选区/高亮色、2 CSS px 白边，以及覆盖圆点和连接竖线的同一阴影；起点圆点 SHALL 位于文字行上缘外，终点圆点 SHALL 位于文字行下缘外，竖线在圆点后方且白圈完整。每端 MUST 提供以圆心居中的 40×40 CSS px 透明热区，视觉与热区均不随内容缩放改变。Text MUST 保留现有源字符端点、可见列判定、可访问名称与放大镜开关，不出现系统手柄或系统菜单；手柄统一 MUST 不改变 EPUB、矩形选择及其他格式的交互。
+系统 MUST 在 PDF Text 与 PDF Layout 的自定义文字选择中显示一致的起止手柄，包括未确认选区与已选中的历史高亮。圆点屏幕外径 SHALL 为 20 CSS px，具有不透明的对应选区/高亮色、2 CSS px 白边，以及覆盖圆点和连接竖线的同一阴影；起点圆点 SHALL 位于文字行上缘外，终点圆点 SHALL 位于文字行下缘外，竖线在圆点后方且白圈完整，连接竖线长度 MUST 分别等于当前端点字符矩形的实际高度，跨行两端不得共用固定值。每端 MUST 提供以圆心居中的 40×40 CSS px 透明热区，视觉与热区均不随内容缩放改变。Text MUST 保留现有源字符端点、可见列判定、可访问名称与放大镜开关，不出现系统手柄或系统菜单；手柄统一 MUST 不改变 EPUB、矩形选择及其他格式的交互。
 
 #### Scenario: Compare draft and saved highlight handles
 
@@ -134,3 +134,21 @@
 
 - **WHEN** 使用桌面 PDF Text 或 PDF Layout 鼠标调整范围、PDF Layout 现有移动选择，或 EPUB、其他格式及矩形选择
 - **THEN** 桌面 PDF 两模式均可操作并共享统一手柄外观与热区，鼠标沿用各自原有选择引擎；Layout 触摸选择保持原行为，EPUB、其他格式及矩形选择的手柄外观与逻辑不受本次变更影响
+
+### Requirement: PDF Text magnifier insertion caret
+
+PDF Text 拖动手柄时，放大镜 MUST 在镜像文字的当前插入位置显示 2 CSS px 竖线，指示将插入到哪两个字符之间。插入点 SHALL 使用纠偏后的文字命中坐标，并经过与快照内容相同的缩放、偏移和边缘裁剪换算；不得直接复用主视图的 fixed/absolute 坐标。竖线高度 SHALL 跟随放大后的文字行高，放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
+
+#### Scenario: Follow the scaled and clamped insertion point
+
+- **WHEN** 用户从 PDF Text 手柄中心或热区角落拖动，命中文字中心、另一行或快照边缘
+- **THEN** 插入线与镜像中的实际字符间隙一致，坐标随缩放和裁剪变化，释放或取消后不遗留标记
+
+### Requirement: PDF selection overlays track scrolling in the same frame
+
+PDF Layout 滚动正文时，页内高亮和自绘手柄 SHALL 与对应文字保持同步，不出现固定手柄比高亮晚一帧的可见错位。实现可以保留 body fixed portal，但滚动捕获和每帧重测 MUST 在绘制前提交最新坐标；不得因此改变正常阅读滚动、拖选事务或其他格式布局。
+
+#### Scenario: Measure a continuous scroll
+
+- **WHEN** 已选中高亮所在的 PDF 页面以每帧固定位移连续滚动，并逐帧比较文字、高亮和手柄位置
+- **THEN** 高亮相对文字无新增偏差，手柄相对静止基线的新增错位帧数为 0；端点离屏后的隐藏规则保持有效

@@ -56,6 +56,22 @@ Text 仍使用 HamsterSelection linkedMode 的 onPointerDown、activeRange/item 
 
 `EngineDocumentViewer` 对 PDF source 显式启用 `pdfCustomHandles`，使桌面鼠标也渲染 `PdfTouchSelectionHandle`、起上终下位置与 40×40 热区。`pdfTouch` 仍为 false：桌面继续使用 caret 命中和原生 Selection 更新/确认，仅复用抓取偏移，不启用触摸专用预览事务、自动滚动或镜片实现。EPUB、矩形和非 PDF 默认手柄不变。
 
+### 6. 每个端点独立使用字符高度
+
+`PdfTouchSelectionHandle` 接受当前端点的 `lineHeight`，Text 从该端字符矩形读取，Layout 分别使用首/末可见矩形。起点保持线顶相对圆心的位置；终点使用 `top = 10 - lineHeight`，确保线末端仍贴合文字下缘。不得把首末行高度合并为一个固定值。
+
+### 7. Text 放大镜由 viewer 持有并复用快照坐标
+
+Reader 的 PDF Text 分支此前直接使用 selection 库镜片，不在 `EngineDocumentViewer` 的 Provider 内。现在在 `IntermediateDocumentTextViewer` 显式挂载 `RangeMagnifierProvider` 与 `TextSelectionMagnifier`，PDF Text 关闭库自带镜片，避免双镜片。手柄被拖动状态替换时，viewer 级会话仍持续，取消/卸载统一清理。
+
+`resolveMagnifierSnapshotPoint` 使用与 canvas 绘制相同的 `sourceRect`、缩放及 clamp，把纠偏后的文字点换算到镜片坐标。插入线宽 2px，高度按 caret 行高放大；其他格式仍使用原圆点标记。
+
+### 8. 滚动保留 fixed portal，但消除一帧 React 等待
+
+实测机制为：页内高亮位于 `.hamster-reader__pdf-overlay` 的 absolute 层；手柄在 body fixed portal，并由 rAF 重测 Range。6px/帧连续滚动时，高亮相对文字新增偏差为 0，手柄则稳定落后一帧、约 6px。
+
+不迁移到滚动容器内图层，避免裁剪、stacking context 和 iframe 坐标改造。滚动捕获时先按 delta 临时 transform，并提交当前 Range 矩形；既有 rAF 还通过手柄 ref 直接写入最新 fixed `left/top`，在绘制前完成位置更新，React 状态提交后恢复 transform 基准。实测 30 个有效滚动样本的新增错位帧由 29 降为 0，高亮保持 0。
+
 ## Risks / Trade-offs
 
 - [热区或竖线被分页容器裁剪] → 在真实浏览器检查每列首末行、窄屏和可视边缘；如需调整叠层裁剪，仅限定 PDF 手柄，不能开放正文滚动或伪造离屏端点。
@@ -65,7 +81,7 @@ Text 仍使用 HamsterSelection linkedMode 的 onPointerDown、activeRange/item 
 
 ## Migration Plan
 
-无数据、依赖或公共 API 迁移。后续由实现角色执行 tasks，局部验证通过后构建 WebView 资源并按验收矩阵复验。回退本次 PDF Text 视觉适配及显式启用配置即可，已有标注继续可读。此阶段不执行 apply、构建、部署或编码。
+无数据、依赖或公共 API 迁移。实现按 tasks 执行并在局部验证后构建 WebView 资源；设备未覆盖项明确记录为未验收。回退本次 PDF Text 视觉适配及显式启用配置即可，已有标注继续可读。
 
 ## Open Questions
 

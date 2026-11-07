@@ -33,3 +33,16 @@
 - `yarn build:webview` 与 `yarn verify:webview` 通过，293 个 WebView 资源校验一致。
 - 验收修复后完整回归 118 个测试文件 1546 项通过；5981 服务的 Chromium 实测确认 Text 跨行两端与 Range 首末矩形对齐，桌面 PDF Layout 鼠标手柄复用统一视觉且终点位置一致。
 - 当前环境未连接 iOS/Android 设备或模拟器；两平台同文档截图、320px 窄屏、横竖屏、首末行遮挡/裁剪、原生手柄/菜单及真机保存重开均标记为未验收。JSDOM 结果不替代这些设备项。
+
+## 5. 竖线、插入点与滚动跟随优化
+
+- [x] 5.1 `PdfTouchSelectionHandle` 接收每端实际字符高度，Text 与 Layout 分别测量首末行；覆盖跨行不同高度、字号变化和重排。
+- [x] 5.2 PDF Text 接入 `RangeMagnifierProvider` 与 viewer 级 `TextSelectionMagnifier`，关闭重复的库镜片；插入线按快照缩放/裁剪换算并跟随 caret 行高，覆盖中心、边缘、释放和取消清理。
+- [x] 5.3 先测量 absolute 高亮与 fixed 手柄的滚动偏差，再选择最小修正；保留 portal，scroll 时提交当前矩形并在 rAF 直接写最新坐标，记录修复前后错位帧数，回归正常滚动和其他选择面。
+
+## 第四轮验证记录
+
+- Chromium 实际排版中，Text 首末端字符/连接线为 27/27px；放大镜插入线宽 2px、高 54px，缩放后的中心坐标为 `(60,60)`，释放后清理。跨行不同高度的单元回归同时覆盖 Layout。
+- 6px/帧连续滚动时，修复前 30 个有效样本中手柄有 29 个新增错位帧，高亮为 0；修复后手柄与高亮均为 0。保留 fixed portal 和 absolute 高亮，未迁移图层。
+- 完整回归 118 文件 / 1553 项通过；typecheck、改动文件 ESLint、diff 检查、WebView 构建及 293 个资源校验通过。OpenSpec tasks 12/12，strict 校验通过。
+- 本轮 WebKit 脚本因运行环境缺少 `libicudata.so.74` 未能启动；新增结果来自 Chromium，不记为 WebKit 或 iOS/Android 原生验收。既有设备未覆盖项仍未验收。

@@ -66,7 +66,14 @@ try {
         )
         if (!button) return null
         const rect = button.getBoundingClientRect()
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+        const line = button.querySelector(
+          '[data-pdf-handle-visual]'
+        )?.firstElementChild
+        return {
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+          lineHeight: line?.getBoundingClientRect().height
+        }
       })
       return {
         endpoints,
@@ -87,7 +94,8 @@ try {
                   point.y -
                   (index
                     ? endpoints[index].bottom + 10
-                    : endpoints[index].top - 10)
+                    : endpoints[index].top - 10),
+                line: point.lineHeight - endpoints[index].height
               }
             : null
         )
@@ -121,7 +129,9 @@ try {
         for (const error of result.errors) {
           assert.ok(error, 'Both selected source endpoints should be visible')
           assert.ok(
-            Math.abs(error.x) < 1 && Math.abs(error.y) < 1,
+            Math.abs(error.x) < 1 &&
+              Math.abs(error.y) < 1 &&
+              Math.abs(error.line) < 1,
             JSON.stringify(result)
           )
         }
@@ -137,7 +147,12 @@ try {
   const restored = { reopened: true, ...(await measure()) }
   report.cases.push(restored)
   for (const error of restored.errors)
-    assert.ok(error && Math.abs(error.x) < 1 && Math.abs(error.y) < 1)
+    assert.ok(
+      error &&
+        Math.abs(error.x) < 1 &&
+        Math.abs(error.y) < 1 &&
+        Math.abs(error.line) < 1
+    )
   // Send touch pointer events through the real viewer/library. WebKit supplies
   // the actual reflow/caret geometry; this does not emulate UIKit gestures.
   await page.setViewportSize({ width: 402, height: 874 })
@@ -189,7 +204,10 @@ try {
   assert.deepEqual(dragged.range.markerStyle, beforeDrag.range.markerStyle)
   for (const error of dragged.errors)
     assert.ok(
-      error && Math.abs(error.x) < 1 && Math.abs(error.y) < 1,
+      error &&
+        Math.abs(error.x) < 1 &&
+        Math.abs(error.y) < 1 &&
+        Math.abs(error.line) < 1,
       JSON.stringify(dragged)
     )
   report.gestures.push({
@@ -213,7 +231,12 @@ try {
   await settle()
   const draft = await measure()
   for (const error of draft.errors)
-    assert.ok(error && Math.abs(error.x) < 1 && Math.abs(error.y) < 1)
+    assert.ok(
+      error &&
+        Math.abs(error.x) < 1 &&
+        Math.abs(error.y) < 1 &&
+        Math.abs(error.line) < 1
+    )
   report.cases.push({ draft: true, ...draft })
   await page.evaluate(() => window.pdfTextHandles.selection.highlight())
   await page.waitForFunction(() => window.pdfTextHandles.ranges.length === 1)
@@ -230,7 +253,11 @@ try {
       cases: report.cases.length,
       maxError: Math.max(
         ...report.cases.flatMap((item) =>
-          item.errors.flatMap((error) => [Math.abs(error.x), Math.abs(error.y)])
+          item.errors.flatMap((error) => [
+            Math.abs(error.x),
+            Math.abs(error.y),
+            Math.abs(error.line)
+          ])
         )
       )
     })

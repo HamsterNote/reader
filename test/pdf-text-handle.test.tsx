@@ -228,7 +228,7 @@ describe('PdfTextHandle appearance and geometry', () => {
       expect(circle.style.backgroundColor).toBe('rgb(10, 20, 30)')
       expect(line).toHaveStyle({
         width: '2px',
-        height: '12px',
+        height: '20px',
         backgroundColor: 'rgb(10, 20, 30)'
       })
       expect(circle.style.pointerEvents).toBe('none')
@@ -237,7 +237,7 @@ describe('PdfTextHandle appearance and geometry', () => {
 
   it.each([
     { type: 'start' as const, left: '10px', top: '10px', lineTop: '28px' },
-    { type: 'end' as const, left: '40px', top: '50px', lineTop: '-2px' }
+    { type: 'end' as const, left: '40px', top: '50px', lineTop: '-10px' }
   ])(
     'places the $type circle outside its real source row',
     ({ type, left, top, lineTop }) => {
@@ -276,7 +276,7 @@ describe('PdfTextHandle appearance and geometry', () => {
     expect(button).toHaveStyle({ left: '14px', top: '25px' })
     expect(
       button.querySelector<HTMLElement>('[data-pdf-handle-visual] span')
-    ).toHaveStyle({ width: '2px', height: '12px' })
+    ).toHaveStyle({ width: '2px', height: '32px' })
   })
 
   it.each([

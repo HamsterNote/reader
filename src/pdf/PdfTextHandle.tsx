@@ -24,6 +24,7 @@ type PdfTextHandleProps = {
 type PdfTextGeometry = {
   left: number | string
   top: number | string
+  lineHeight: number
   libraryPoint: { clientX: number; clientY: number }
 }
 
@@ -73,11 +74,14 @@ function PdfTextHandleControl({
       ref={circleRef}
       end={handle.type === 'end'}
       color={handleColor(handle.style)}
+      lineHeight={geometry.lineHeight}
       className={handle.className}
       aria-label={handle.ariaLabel}
       data-range-handle-circle={handle.type}
       data-rect-id={handle.rectId ?? ''}
       data-range-id={handle.rangeId ?? ''}
+      data-pdf-text-target-x={geometry.libraryPoint.clientX}
+      data-pdf-text-target-y={geometry.libraryPoint.clientY}
       style={{
         ...handle.style,
         position: 'absolute',
@@ -140,6 +144,7 @@ export function PdfTextHandle({
       handle.positionUnit,
       end ? 10 : -10
     ),
+    lineHeight: endpointRect.height,
     libraryPoint: {
       clientX: percent
         ? containerRect.left + (handle.position.x / 100) * containerRect.width

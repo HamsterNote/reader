@@ -21,6 +21,30 @@ function magnifierPoint(range: Range, end: boolean) {
     : null
 }
 
+function pdfHandleLogicalEnd(
+  drag: { readonly end: boolean; readonly movingEnd: boolean } | null,
+  physicalEnd: boolean
+) {
+  if (!drag) return physicalEnd
+  return drag.end === physicalEnd ? drag.movingEnd : !drag.movingEnd
+}
+
+function writePdfHandlePositions(
+  rects: readonly DOMRect[],
+  drag: { readonly end: boolean; readonly movingEnd: boolean } | null,
+  elements: Record<'start' | 'end', HTMLButtonElement | null>
+) {
+  for (const physicalEnd of [false, true]) {
+    const end = pdfHandleLogicalEnd(drag, physicalEnd)
+    const endpoint = end ? rects.at(-1) : rects[0]
+    const element = elements[physicalEnd ? 'end' : 'start']
+    if (!endpoint || !element) continue
+    element.style.left = `${end ? endpoint.right : endpoint.left}px`
+    element.style.top = `${end ? endpoint.bottom + 10 : endpoint.top - 10}px`
+    element.style.transform = 'translate(-50%, -50%)'
+  }
+}
+
 /** Convert iframe-local Range geometry into the outer reader's viewport. */
 export function rangeViewportRects(range: Range, pdfTouch = false): DOMRect[] {
   const frame = range.startContainer.ownerDocument?.defaultView?.frameElement
@@ -81,6 +105,10 @@ export function EngineSelectionControls({
   const [rects, setRects] = useState<DOMRect[]>([])
   const [dragging, setDragging] = useState(false)
   const previewRange = useRef<{ owner: Range; value: Range } | null>(null)
+  const handleElements = useRef<
+    Record<'start' | 'end', HTMLButtonElement | null>
+  >({ start: null, end: null })
+  const syncedScroll = useRef<{ left: number; top: number } | null>(null)
   const popup = useRef<HTMLDivElement>(null)
   const [popupSize, setPopupSize] = useState({ width: 0, height: 0 })
   useLayoutEffect(() => {
@@ -99,6 +127,18 @@ export function EngineSelectionControls({
     observer.observe(element)
     return () => observer.disconnect()
   }, [children, dragging, rects.length])
+  useLayoutEffect(() => {
+    if (!pdfHandles) return
+    for (const element of Object.values(handleElements.current)) {
+      if (element) element.style.transform = 'translate(-50%, -50%)'
+    }
+    const scroller = containerRef.current?.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )
+    syncedScroll.current = scroller
+      ? { left: scroller.scrollLeft, top: scroller.scrollTop }
+      : null
+  }, [containerRef, rects, pdfHandles])
   const popupPointerTarget = useRef<Node | null>(null)
   const drag = useRef<{
     pointer: number
@@ -331,11 +371,32 @@ export function EngineSelectionControls({
     const down = (event: PointerEvent) => {
       if (drag.current && event.pointerId !== drag.current.pointer) finish()
     }
+    const scroller = containerRef.current?.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )
+    syncedScroll.current = scroller
+      ? { left: scroller.scrollLeft, top: scroller.scrollTop }
+      : null
+    const followScroll = (event: Event) => {
+      if (!pdfHandles || !scroller || event.target !== scroller) return
+      const previous = syncedScroll.current
+      if (!previous) return
+      const offsetX = previous.left - scroller.scrollLeft
+      const offsetY = previous.top - scroller.scrollTop
+      for (const element of Object.values(handleElements.current)) {
+        if (element)
+          element.style.transform = `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px)`
+      }
+      const current =
+        previewRange.current?.value ?? drag.current?.current ?? range
+      if (current) setRects(rangeViewportRects(current, pdfTouch))
+    }
     owner.addEventListener('pointermove', move, {
       capture: true,
       passive: false
     })
     owner.addEventListener('pointerdown', down, true)
+    owner.addEventListener('scroll', followScroll, true)
     // Range materialization may replace the handle before pointerup.
     owner.addEventListener('pointerup', finish, true)
     owner.addEventListener('pointercancel', finish, true)
@@ -344,6 +405,7 @@ export function EngineSelectionControls({
     return () => {
       owner.removeEventListener('pointermove', move, true)
       owner.removeEventListener('pointerdown', down, true)
+      owner.removeEventListener('scroll', followScroll, true)
       owner.removeEventListener('pointerup', finish, true)
       owner.removeEventListener('pointercancel', finish, true)
       owner.defaultView?.removeEventListener('blur', blur)
@@ -381,11 +443,13 @@ export function EngineSelectionControls({
       setRects((previous) =>
         JSON.stringify(previous) === JSON.stringify(next) ? previous : next
       )
+      if (pdfHandles)
+        writePdfHandlePositions(next, drag.current, handleElements.current)
       frame = requestAnimationFrame(sync)
     }
     sync()
     return () => cancelAnimationFrame(frame)
-  }, [range, pdfTouch])
+  }, [range, pdfTouch, pdfHandles])
   const box = containerRef.current?.getBoundingClientRect()
   const left = Math.max(8, box?.left ?? 8)
   const right = Math.min(innerWidth - 8, box?.right ?? innerWidth - 8)
@@ -502,9 +566,15 @@ export function EngineSelectionControls({
             return (
               <Handle
                 key={String(physicalEnd)}
+                ref={(element) => {
+                  handleElements.current[physicalEnd ? 'end' : 'start'] =
+                    element
+                }}
                 type='button'
                 aria-label={handleLabels[type]}
-                {...(pdfHandles ? { end, color } : {})}
+                {...(pdfHandles
+                  ? { end, color, lineHeight: endpoint.height }
+                  : {})}
                 className={`hamster-reader__engine-handle${pdfHandles ? ' hamster-reader__pdf-touch-handle' : ''}`}
                 style={{
                   position: 'fixed',

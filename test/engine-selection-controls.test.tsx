@@ -502,3 +502,127 @@ it('shares PDF handle visuals and grab correction with desktop mouse selection',
     paragraph.remove()
   }
 })
+
+it('measures PDF connector heights independently at the start and end rows', () => {
+  const root = createRef<HTMLDivElement>()
+  const paragraph = document.createElement('p')
+  paragraph.textContent = 'Alpha beta gamma'
+  document.body.append(paragraph)
+  const range = document.createRange()
+  range.selectNodeContents(paragraph)
+  const previous = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(40, 80, 80, 18), new DOMRect(40, 140, 120, 34)]
+  })
+  const controls = () => (
+    <div ref={root}>
+      <EngineSelectionControls
+        range={range}
+        containerRef={root}
+        showHandles
+        pdfCustomHandles
+        onUpdate={vi.fn()}
+        onEditingChange={vi.fn()}
+      >
+        Menu
+      </EngineSelectionControls>
+    </div>
+  )
+  const view = render(controls())
+  mockElementSize(root.current!, { width: 400, height: 400 })
+  view.rerender(controls())
+  try {
+    const start = screen.getByRole('button', { name: '调整高亮起点' })
+    const end = screen.getByRole('button', { name: '调整高亮终点' })
+    const startLine = start.querySelector<HTMLElement>(
+      '[data-pdf-handle-visual]'
+    )!.firstElementChild as HTMLElement
+    const endLine = end.querySelector<HTMLElement>('[data-pdf-handle-visual]')!
+      .firstElementChild as HTMLElement
+    expect(startLine).toHaveStyle({ height: '18px', top: '28px' })
+    expect(endLine).toHaveStyle({ height: '34px', top: '-24px' })
+  } finally {
+    view.unmount()
+    if (previous)
+      Object.defineProperty(Range.prototype, 'getClientRects', previous)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    paragraph.remove()
+  }
+})
+
+it('moves fixed PDF handles with scroll before the next Range frame', () => {
+  const root = createRef<HTMLDivElement>()
+  const paragraph = document.createElement('p')
+  paragraph.textContent = 'Alpha beta gamma'
+  document.body.append(paragraph)
+  const range = document.createRange()
+  range.selectNodeContents(paragraph)
+  const previousRects = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  let scroller: HTMLDivElement | null = null
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(40, 100 - (scroller?.scrollTop ?? 0), 80, 20)]
+  })
+  let frame!: FrameRequestCallback
+  const raf = vi
+    .spyOn(window, 'requestAnimationFrame')
+    .mockImplementation((callback) => {
+      frame = callback
+      return 1
+    })
+  const cancel = vi
+    .spyOn(window, 'cancelAnimationFrame')
+    .mockImplementation(() => {})
+  const controls = () => (
+    <div ref={root}>
+      <div
+        ref={(element) => {
+          scroller = element
+        }}
+        className='hamster-reader__pdf-viewer-container'
+      />
+      <EngineSelectionControls
+        range={range}
+        containerRef={root}
+        showHandles
+        pdfCustomHandles
+        onUpdate={vi.fn()}
+        onEditingChange={vi.fn()}
+      >
+        Menu
+      </EngineSelectionControls>
+    </div>
+  )
+  const view = render(controls())
+  mockElementSize(root.current!, { width: 400, height: 400 })
+  view.rerender(controls())
+  try {
+    const handle = screen.getByRole('button', { name: '调整高亮终点' })
+    expect(handle.style.transform).toBe('translate(-50%, -50%)')
+    scroller!.scrollTop = 24
+    fireEvent.scroll(scroller!)
+    expect(handle.style.top).toBe('106px')
+    expect(handle.style.transform).toBe('translate(-50%, -50%)')
+    act(() => frame(0))
+    expect(handle.style.top).toBe('106px')
+    expect(handle.style.transform).toBe('translate(-50%, -50%)')
+    scroller!.scrollTop = 48
+    act(() => frame(0))
+    expect(handle.style.top).toBe('82px')
+  } finally {
+    view.unmount()
+    raf.mockRestore()
+    cancel.mockRestore()
+    if (previousRects)
+      Object.defineProperty(Range.prototype, 'getClientRects', previousRects)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    paragraph.remove()
+  }
+})
