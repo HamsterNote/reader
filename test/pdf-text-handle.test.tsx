@@ -132,7 +132,6 @@ const renderHandle = ({
     linkedData,
     root,
     selectionId,
-    pageNumber: 1,
     width: 300,
     column,
     magnifierEnabled: true

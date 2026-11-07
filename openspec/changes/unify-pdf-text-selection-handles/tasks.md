@@ -16,7 +16,18 @@
 - [x] 3.2 运行 `yarn build:webview` 与 `yarn verify:webview` 后，在 iOS/Android WebView 对同一 PDF 的 Layout/Text 草稿和历史高亮截图对比；交付覆盖窄屏 320px、横竖屏、字号、首末行及热区边缘的验收记录，验证白圈完整、竖线及阴影一致、无遮挡/裁剪、无原生手柄/菜单、Text 不滚动或自动翻页、放大镜开关正常、保存重开字符范围一致；设备未覆盖项明确标记未验收。
 - [x] 3.3 回归桌面 PDF Text 与 Layout 鼠标调整、Layout 触摸手势及 EPUB/其他格式选择；桌面 Layout 同样使用统一手柄外观和热区，但原生 Selection 更新/确认流程不变。将结果与统一手柄规格的各场景逐项对照，遗留失败项修复并复验后交付实现结果。
 
-## Apply 验证记录
+## 4. 文字模式已保存高亮错位修复
+
+- [x] 4.1 普通高亮和分组高亮进入 selection runtime 前统一转换为当前 DOM offset；分页/书签继续使用 canonical source anchor，回归展示空白、源顺序重排、保存重开及非 PDF 隔离。
+- [x] 4.2 使用真实 selection 库和 PDF Text viewer，在 WebKit 触摸上下文、大字号及重排后测量字符 Range 与手柄圆心；记录修复前后数据，并明确与 iOS WKWebView 设备验收的区别。
+
+## 第三轮验证记录
+
+- 证据和复现命令见 `docs/ham182-pdf-text-handles.md`。旧单条高亮分支使首末柄均偏移 36px（一行），去掉该分支后同一 fixture 的端点与圆心对齐。
+- WebKit 实际重排的 20 个几何检查通过，合成触摸事件拖动与草稿确认的源字符范围检查通过。使用受控已存高亮和 DOM Range 草稿初始化；不代表 iOS WKWebView 原生手势已验收。
+- 全量 118 文件 / 1549 项通过；typecheck、改动源码/测试及检查脚本 ESLint 通过；WebView 构建及 293 个资源校验通过。原 PDF 的 iOS 大字号设备复验仍未完成，不归档 change。
+
+## 前两轮验证记录
 
 - 相关回归 9 个测试文件 52 项通过；随后完整回归 118 个测试文件 1541 项通过，另新增的真实库桌面鼠标用例单独通过。`yarn typecheck`、改动文件 ESLint 与 `git diff --check` 通过，源码 diff 不含 EPUB 逻辑。
 - `yarn build:webview` 与 `yarn verify:webview` 通过，293 个 WebView 资源校验一致。

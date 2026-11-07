@@ -190,6 +190,20 @@ describe('PDF Text actual fragments and navigation', () => {
     expect(pdfTextTurnTarget([1, 3], 3, 0, [{ index: 0 }], true)).toBeNull()
   })
 
+  it('restores source anchors after inserted whitespace and reordered spans', () => {
+    const content = root.firstElementChild as HTMLElement
+    content.innerHTML =
+      '<span data-selection-start-offset="200" data-text-id="last">tail</span> <span data-selection-start-offset="0" data-text-id="same">' +
+      'a'.repeat(200) +
+      '</span>'
+    // The source anchor is in the second column of "same", independently of
+    // the text that precedes that span in the reflowed DOM.
+    expect(pdfTextAnchorColumn(content, anchor(100), 300)).toBe(1)
+    expect(
+      pdfTextAnchorColumn(content, { ...anchor(201), textId: 'last' }, 300)
+    ).toBe(0)
+  })
+
   it('serializes rapid turns, commits source anchors, and preserves them across reflow', async () => {
     const onCommit = vi.fn()
     const options = {

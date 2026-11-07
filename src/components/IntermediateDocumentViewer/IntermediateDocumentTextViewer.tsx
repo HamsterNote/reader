@@ -2873,9 +2873,11 @@ export function IntermediateDocumentTextViewer(
 
   const scrollToRange = useCallback(
     (rangeId: string) => {
-      const range = effectiveRangesRef.current.find(
-        (candidate) => candidate.id === rangeId
-      )
+      const range = isPdf
+        ? getSelectionGroup(storedRangesRef.current, rangeId)[0]
+        : effectiveRangesRef.current.find(
+            (candidate) => candidate.id === rangeId
+          )
       if (!range) return
       if (isPdf) {
         const pageNumber = parsePublicPageId(range.start.selectionId)
@@ -3596,7 +3598,6 @@ export function IntermediateDocumentTextViewer(
                               linkedData={runtimeLinkedData}
                               root={viewerRootElement}
                               selectionId={pageSelectionId}
-                              pageNumber={pageNumber}
                               width={readingViewport.width}
                               column={pdfPagination.column}
                               magnifierEnabled={showSelectionMagnifier}

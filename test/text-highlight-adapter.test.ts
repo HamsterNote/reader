@@ -260,6 +260,43 @@ describe('Text highlight adapter', () => {
     })
   })
 
+  it.each([
+    {
+      html: '<span data-selection-start-offset="0">Hello</span> <span data-selection-start-offset="5">world</span>',
+      start: 6,
+      end: 11
+    },
+    {
+      html: '<span data-selection-start-offset="5">world</span> <span data-selection-start-offset="0">Hello</span>',
+      start: 0,
+      end: 5
+    }
+  ])(
+    'restores a single saved highlight into DOM offsets ($start, $end)',
+    ({ html, start, end }) => {
+      const { root } = makeAnchoredViewerRoot(html)
+      const saved = {
+        ...storedRange,
+        text: 'world',
+        start: { selectionId: 'page-1', offset: 5 },
+        end: { selectionId: 'page-1', offset: 10 }
+      }
+      const [runtime] = combinePdfTextSelectionGroups([saved], root)
+      expect(runtime).toMatchObject({
+        id: saved.id,
+        start: { offset: start },
+        end: { offset: end },
+        rectsBySelectionId: saved.rectsBySelectionId
+      })
+      expect(canonicalizePdfSelectionRange(runtime!, root)).toEqual(saved)
+      expect(saved.start.offset).toBe(5)
+      expect(saved.end.offset).toBe(10)
+      expect(combinePdfTextSelectionGroups([saved], root, false)).toEqual([
+        saved
+      ])
+    }
+  )
+
   it('maps inferred PDF space endpoints to adjacent canonical boundaries', () => {
     // Given: 两个 canonical 相邻的 span 在 DOM 中由一个推断空格分开。
     const { root } = makeAnchoredViewerRoot(

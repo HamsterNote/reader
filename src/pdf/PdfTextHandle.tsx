@@ -9,14 +9,13 @@ import {
 } from 'react'
 import { useRangeHandleDrag } from '../components/IntermediateDocumentViewer/useRangeHandleDrag'
 import { PdfTouchSelectionHandle } from '../components/PdfTouchSelectionHandle'
-import { pdfTextAnchorColumn, pdfTextAnchorRect } from './pdfTextPagination'
+import { pdfTextDomOffsetRect, pdfTextRectColumn } from './pdfTextPagination'
 
 type PdfTextHandleProps = {
   handle: HandleRenderProps
   linkedData: LinkedSelectionData
   root: HTMLElement | null
   selectionId: string
-  pageNumber: number
   width: number
   column: number
   magnifierEnabled: boolean
@@ -95,7 +94,6 @@ export function PdfTextHandle({
   linkedData,
   root,
   selectionId,
-  pageNumber,
   width,
   column,
   magnifierEnabled
@@ -115,11 +113,14 @@ export function PdfTextHandle({
   )
   if (!endpoint || endpoint.selectionId !== selectionId || !content) return null
   const offset = end ? Math.max(0, endpoint.offset - 1) : endpoint.offset
-  const anchor = { pageNumber, textId: '', text: '', offset }
-  if (pdfTextAnchorColumn(content, anchor, width) !== column) return null
-  const endpointRect = pdfTextAnchorRect(content, anchor)
+  const endpointRect = pdfTextDomOffsetRect(content, offset)
+  if (
+    !endpointRect ||
+    pdfTextRectColumn(content, endpointRect, width) !== column
+  )
+    return null
   const container = content.closest<HTMLElement>('.hsn-selection-container')
-  if (!endpointRect || !container) return null
+  if (!container) return null
   const containerRect = container.getBoundingClientRect()
   const percent = handle.positionUnit === 'percent'
   if (percent && (containerRect.width === 0 || containerRect.height === 0))

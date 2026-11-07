@@ -114,11 +114,54 @@ export function measurePdfTextColumns(
     : [{ index: 0 }]
 }
 
+/** Runtime selection offsets count display whitespace and use DOM order. */
+export function pdfTextDomOffsetRect(
+  content: HTMLElement,
+  offset: number
+): DOMRect | null {
+  return characterRange(content, offset)?.getClientRects?.()[0] ?? null
+}
+
+export function pdfTextRectColumn(
+  content: HTMLElement,
+  rect: DOMRect,
+  width: number
+): number {
+  return columnOf(
+    rect,
+    content.getBoundingClientRect().left,
+    width + PDF_TEXT_COLUMN_GAP
+  )
+}
+
+/** Reading/bookmark anchors remain in the PDF source stream. */
 export function pdfTextAnchorRect(
   content: HTMLElement,
   anchor: ReaderTextAnchor
 ): DOMRect | null {
-  return characterRange(content, anchor.offset)?.getClientRects?.()[0] ?? null
+  const spans = Array.from(
+    content.querySelectorAll<HTMLElement>(
+      '[data-selection-start-offset][data-text-id]'
+    )
+  )
+  const contains = (element: HTMLElement) => {
+    const start = Number(element.dataset.selectionStartOffset)
+    return (
+      start <= anchor.offset &&
+      anchor.offset < start + (element.textContent?.length ?? 0)
+    )
+  }
+  const matchingIds = spans.filter(
+    (element) => element.dataset.textId === anchor.textId
+  )
+  const element = matchingIds.length
+    ? matchingIds.find(contains)
+    : spans.find(contains)
+  if (!element) return null
+  return pdfTextDomOffsetRect(
+    element,
+    anchor.offset - Number(element.dataset.selectionStartOffset)
+  )
 }
 
 export function pdfTextAnchorColumn(
@@ -127,13 +170,7 @@ export function pdfTextAnchorColumn(
   width: number
 ): number | null {
   const rect = pdfTextAnchorRect(content, anchor)
-  return rect
-    ? columnOf(
-        rect,
-        content.getBoundingClientRect().left,
-        width + PDF_TEXT_COLUMN_GAP
-      )
-    : null
+  return rect ? pdfTextRectColumn(content, rect, width) : null
 }
 
 /** Move one measured screen, then one allowed source page. No wrapping. */

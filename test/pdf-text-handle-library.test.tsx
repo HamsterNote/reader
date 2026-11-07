@@ -122,7 +122,6 @@ const Harness = ({
             linkedData={linkedData}
             root={root}
             selectionId={selectionId}
-            pageNumber={1}
             width={300}
             column={0}
             magnifierEnabled

@@ -48,6 +48,10 @@ Text 仍使用 HamsterSelection linkedMode 的 onPointerDown、activeRange/item 
 
 验收发现重排后的可视文本会插入源流中不存在的空白。`linkedData` 的 runtime 端点是当前 `selectionId` 内容中的 DOM offset，不能直接拿 `data-selection-start-offset` 当 canonical offset 查 span。Text 手柄必须在所属 selection 容器中用 DOM offset 定位字符矩形；持久化时仍由既有 canonicalize 流程转换，存储格式不变。
 
+第三轮复查发现上述 runtime 契约此前没有完整实现：`combinePdfTextSelectionGroups` 对普通单条高亮提前返回，只有分组高亮才转换端点。背景按 canonical offset 生成，手柄却把未转换的 offset 当 DOM offset，所以重排后两者落在不同字符。删除单条高亮的例外，让所有持久化高亮在进入 selection runtime 前转换一次；草稿本来就是 DOM offset，保持原路径。转换每次使用当前所属页面 DOM，不缓存 PDF 版面坐标。
+
+`pdfTextDomOffsetRect` 专门用于 runtime 端点，`pdfTextAnchorRect` 继续按源 span 解析分页/书签的 canonical anchor；高亮导航也从存储范围取源锚点。不得为了修手柄改变分页锚点语义。可见列判定与手柄位置使用同一个实测字符矩形。
+
 ### 5. 桌面 PDF Layout 只共享视觉和抓取纠偏
 
 `EngineDocumentViewer` 对 PDF source 显式启用 `pdfCustomHandles`，使桌面鼠标也渲染 `PdfTouchSelectionHandle`、起上终下位置与 40×40 热区。`pdfTouch` 仍为 false：桌面继续使用 caret 命中和原生 Selection 更新/确认，仅复用抓取偏移，不启用触摸专用预览事务、自动滚动或镜片实现。EPUB、矩形和非 PDF 默认手柄不变。
