@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react'
 import type { HiddenPageGroup } from './hiddenPages'
 
 type PageView = { readonly div: HTMLElement }
@@ -21,6 +22,35 @@ export function PdfHiddenPageGroupControls({
   getPageView,
   onOpen
 }: Props) {
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const hasAnchors = groups.length > 0 && readablePages.length > 0
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current
+    if (!container || !viewer || !overlay || !hasAnchors) return
+    // Both coordinates live in document space. X tracks the viewport centre;
+    // the clipping layer follows the viewer's width, never scrollLeft, so it
+    // cannot keep an obsolete horizontal overflow alive after zooming out.
+    const alignViewport = () => {
+      overlay.style.setProperty(
+        '--pdf-hidden-anchor-x',
+        `${container.scrollLeft + container.clientWidth / 2}px`
+      )
+    }
+    const resize = () => {
+      overlay.style.width = `${Math.max(container.clientWidth, viewer.scrollWidth)}px`
+      alignViewport()
+    }
+    resize()
+    const observer = new ResizeObserver(resize)
+    observer.observe(container)
+    observer.observe(viewer)
+    container.addEventListener('scroll', alignViewport, { passive: true })
+    return () => {
+      observer.disconnect()
+      container.removeEventListener('scroll', alignViewport)
+    }
+  }, [container, viewer, hasAnchors])
+
   if (groups.length === 0) return null
   if (readablePages.length === 0) {
     const count = groups.reduce((total, group) => total + group.pages.length, 0)
@@ -55,6 +85,7 @@ export function PdfHiddenPageGroupControls({
 
   return (
     <div
+      ref={overlayRef}
       className='hamster-reader__pdf-hidden-groups'
       style={{ height: contentHeight }}
       aria-label='隐藏页恢复入口'

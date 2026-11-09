@@ -970,14 +970,7 @@ export const PdfDocumentViewer = forwardRef<
       applyPageCrop()
     }
     const handlePageRendered = (event: { pageNumber: number }) => {
-      if (
-        normalizeHiddenPageNumbers(progressOptions.current.hiddenPages).has(
-          event.pageNumber
-        )
-      ) {
-        viewer.getPageView(event.pageNumber - 1)?.reset()
-        return
-      }
+      if (!visiblePagesRef.current.includes(event.pageNumber)) return
       const document = documentRef.current
       restoreAnchorRef.current()
       getCanonical(event.pageNumber)

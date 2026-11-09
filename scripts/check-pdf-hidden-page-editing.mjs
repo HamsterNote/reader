@@ -50,6 +50,17 @@ try {
   const bytes = [...(await fixture.save())]
   await page.evaluate(async (bytes) => {
     window.pdfHiddenRenderLog = []
+    // PDF.js submits render before mounting its canvas. Tag the actual viewer
+    // rendering source (including detail canvases), independent of DOM timing.
+    const bodyCanvases = new WeakMap()
+    const base = Object.getPrototypeOf(
+      window.readerRegression.PDFPageView.prototype
+    )
+    const drawCanvas = base._drawCanvas
+    base._drawCanvas = function (options, ...args) {
+      bodyCanvases.set(options.canvas, this.renderingQueue.pdfViewer.viewer)
+      return drawCanvas.call(this, options, ...args)
+    }
     const probe = await window.pdfjsLib.getDocument({
       data: new Uint8Array(bytes)
     }).promise
@@ -59,12 +70,16 @@ try {
     prototype.render = function (options) {
       window.pdfHiddenRenderLog.push({
         pageNumber: this.pageNumber,
-        modal: Boolean(document.querySelector('[role="dialog"]')),
-        body: Boolean(options.canvas?.closest?.('.pdfViewer .page')),
+        modal:
+          !bodyCanvases.has(options.canvas) &&
+          Boolean(document.querySelector('[role="dialog"]')),
+        body: bodyCanvases.has(options.canvas),
+        viewer: bodyCanvases.get(options.canvas),
         connected: options.canvas?.isConnected ?? false
       })
       if (
         window.pdfHiddenFailPage === this.pageNumber &&
+        !bodyCanvases.has(options.canvas) &&
         document.querySelector('[role="dialog"]')
       ) {
         window.pdfHiddenFailPage = null
@@ -77,7 +92,196 @@ try {
     }
     await probe.destroy()
   }, bytes)
+
+  const failures = []
+  const checkRegression = (name, check) => {
+    try {
+      check()
+      report.checks.push(name)
+    } catch (error) {
+      failures.push(`${name}: ${error.message}`)
+    }
+  }
+  const hiddenBodyCount = () =>
+    page.evaluate(
+      () =>
+        window.pdfHiddenRenderLog.filter(
+          (entry) =>
+            entry.body && entry.pageNumber >= 2 && entry.pageNumber <= 4
+        ).length
+    )
+  const wide = await PDFDocument.create()
+  for (let i = 0; i < 5; i++) wide.addPage([800, 600])
+  await page.evaluate(
+    async (bytes) => {
+      await window.readerRegression.open('pdf', bytes, {
+        data: { hiddenPages: [2, 3, 4] },
+        edgeCropEditing: true,
+        onDataChange: (data) => window.readerRegression.update({ data })
+      })
+    },
+    [...(await wide.save())]
+  )
+  await page.locator('[data-hidden-page-group="2-4"]').waitFor()
+  await page.waitForFunction(() =>
+    window.pdfHiddenRenderLog.some(
+      (entry) => entry.body && entry.pageNumber === 1
+    )
+  )
+  report.idle = { milliseconds: 2000, before: await hiddenBodyCount() }
+  await page.waitForTimeout(report.idle.milliseconds)
+  report.idle.after = await hiddenBodyCount()
+  report.idle.detachedBodyRenders = await page.evaluate(
+    () =>
+      window.pdfHiddenRenderLog.filter(
+        (entry) => entry.body && !entry.connected
+      ).length
+  )
+  checkRegression(
+    'hidden pages make zero body requests at startup and during 2s idle',
+    () => {
+      assert.equal(
+        report.idle.after,
+        report.idle.before,
+        'hidden render count grew while idle'
+      )
+      assert.equal(report.idle.after, 0, 'hidden pages rendered before idle')
+    }
+  )
+  assert(
+    report.idle.detachedBodyRenders > 0,
+    'render probe must detect detached viewer canvases'
+  )
+
+  // Put both readable pages in the viewport: PDF.js must not fill hidden holes.
+  await page.getByRole('button', { name: '缩放', exact: true }).click()
+  await page.getByRole('menuitem', { name: '25%', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.pdfViewer .page')?.getBoundingClientRect()
+        .height < 300
+  )
+  const holeBefore = await hiddenBodyCount()
+  await page.waitForTimeout(1000)
+  report.holes = { before: holeBefore, after: await hiddenBodyCount() }
+  checkRegression(
+    'hidden holes stay idle while both readable pages render',
+    () => assert.equal(report.holes.after, holeBefore)
+  )
+  await page.waitForFunction(() =>
+    [0, 4].every(
+      (index) =>
+        document
+          .querySelectorAll('.pdfViewer .page')
+          [index]?.querySelector('canvas')?.width > 0
+    )
+  )
+
+  await page.getByRole('button', { name: '缩放', exact: true }).click()
+  await page.getByRole('menuitem', { name: '300%', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.pdfViewer .page')?.getBoundingClientRect()
+        .width >= 3190
+  )
+  report.horizontal = []
+  for (const fraction of [0, 0.5, 1, 0.25, 0, 1]) {
+    await page.evaluate((fraction) => {
+      const container = document.querySelector(
+        '.hamster-reader__pdf-viewer-container'
+      )
+      const button = document.querySelector('[data-hidden-page-group="2-4"]')
+      // Release the reader's pending scale-anchor restoration as user input does.
+      container.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+      container.scrollTop +=
+        button.getBoundingClientRect().top -
+        container.getBoundingClientRect().top -
+        container.clientHeight / 2
+      container.scrollLeft =
+        (container.scrollWidth - container.clientWidth) * fraction
+    }, fraction)
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        )
+    )
+    const geometry = await page.evaluate(() => {
+      const container = document.querySelector(
+        '.hamster-reader__pdf-viewer-container'
+      )
+      const button = document.querySelector('[data-hidden-page-group="2-4"]')
+      const host = container.getBoundingClientRect()
+      const rect = button.getBoundingClientRect()
+      const x = rect.left + rect.width / 2
+      const y = rect.top + rect.height / 2
+      return {
+        scrollLeft: container.scrollLeft,
+        width: container.clientWidth,
+        scrollWidth: container.scrollWidth,
+        left: rect.left,
+        right: rect.right,
+        x,
+        y,
+        visible:
+          rect.left >= host.left &&
+          rect.right <= host.right &&
+          rect.top >= host.top &&
+          rect.bottom <= host.bottom,
+        hittable: button.contains(document.elementFromPoint(x, y))
+      }
+    })
+    report.horizontal.push(geometry)
+    checkRegression(
+      `300% wide-page entry visible and clickable at scrollLeft=${geometry.scrollLeft}`,
+      () => {
+        assert(geometry.visible, JSON.stringify(geometry))
+        assert(geometry.hittable, 'entry is not the pointer hit target')
+      }
+    )
+    // Raw pointer coordinates: locator.click() could scroll a broken entry back
+    // into view and hide this regression.
+    if (geometry.hittable) {
+      await page.mouse.click(geometry.x, geometry.y)
+      await page.getByRole('dialog').waitFor()
+      await page.keyboard.press('Escape')
+      await page.getByRole('dialog').waitFor({ state: 'detached' })
+    }
+  }
+  await page.getByRole('button', { name: '缩放', exact: true }).click()
+  await page.getByRole('menuitem', { name: '25%', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.pdfViewer .page')?.getBoundingClientRect()
+        .width < 300
+  )
+  report.zoomOut = await page.evaluate(() => {
+    const container = document.querySelector(
+      '.hamster-reader__pdf-viewer-container'
+    )
+    return {
+      width: container.clientWidth,
+      scrollWidth: container.scrollWidth,
+      scrollLeft: container.scrollLeft
+    }
+  })
+  checkRegression(
+    'zooming out after a right pan leaves no overlay-induced horizontal overflow',
+    () => {
+      assert.equal(report.zoomOut.scrollWidth, report.zoomOut.width)
+      assert.equal(report.zoomOut.scrollLeft, 0)
+    }
+  )
+  assert.deepEqual(
+    failures,
+    [],
+    'render scheduling / horizontal entry regressions'
+  )
+
   const hiddenPages = Array.from({ length: 198 }, (_, index) => index + 2)
+  await page.evaluate(() => {
+    window.pdfHiddenRenderLog.length = 0
+  })
   await page.evaluate(
     async ({ bytes, hiddenPages }) => {
       await window.readerRegression.open('pdf', bytes, {
@@ -94,7 +298,6 @@ try {
   await page.locator('.pdfViewer .page').first().waitFor()
   await page.evaluate(() => {
     window.pdfHiddenViewer = document.querySelector('.pdfViewer')
-    window.pdfHiddenRenderLog.length = 0
   })
   assert.equal(await page.locator('[data-hidden-page-group]').count(), 0)
 
@@ -159,7 +362,10 @@ try {
           window.pdfHiddenViewer === document.querySelector('.pdfViewer'),
         bodyRenders: window.pdfHiddenRenderLog.filter(
           (entry) =>
-            entry.pageNumber >= 2 && entry.pageNumber <= 199 && entry.body
+            entry.pageNumber >= 2 &&
+            entry.pageNumber <= 199 &&
+            entry.body &&
+            entry.viewer === window.pdfHiddenViewer
         ).length
       }
     })
@@ -193,6 +399,25 @@ try {
     await assertLayoutUnchanged()
   }
   await assertHiddenLayout()
+  const countLargeHiddenBody = () =>
+    page.evaluate(
+      () =>
+        window.pdfHiddenRenderLog.filter(
+          (entry) =>
+            entry.body &&
+            entry.viewer === window.pdfHiddenViewer &&
+            entry.pageNumber >= 2 &&
+            entry.pageNumber <= 199
+        ).length
+    )
+  report.largeIdle = {
+    milliseconds: 2000,
+    before: await countLargeHiddenBody()
+  }
+  await page.waitForTimeout(report.largeIdle.milliseconds)
+  report.largeIdle.after = await countLargeHiddenBody()
+  assert.equal(report.largeIdle.after, report.largeIdle.before)
+  assert.equal(report.largeIdle.after, 0)
   report.checks.push(
     '200-page PDF: pages 2-199 keep zero layout boxes/content, zero body render requests, one group, identical visible offsetTop values, unchanged scrollHeight, and the same viewer across edit toggles'
   )
@@ -261,7 +486,11 @@ try {
         .map((entry) => entry.pageNumber)
     ).size,
     bodyRenders: window.pdfHiddenRenderLog.filter(
-      (entry) => entry.pageNumber >= 2 && entry.pageNumber <= 199 && entry.body
+      (entry) =>
+        entry.pageNumber >= 2 &&
+        entry.pageNumber <= 199 &&
+        entry.body &&
+        entry.viewer === window.pdfHiddenViewer
     ).length
   }))
   report.preview = preview

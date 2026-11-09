@@ -176,7 +176,8 @@
 
 .hamster-reader__pdf-hidden-group {
   position: absolute;
-  left: 50%;
+  // Document-space X = scrollLeft + half the viewport width.
+  left: var(--pdf-hidden-anchor-x, 50%);
   transform: translate(-50%, -50%);
 }
 
