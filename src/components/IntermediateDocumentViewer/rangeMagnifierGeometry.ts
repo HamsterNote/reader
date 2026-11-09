@@ -1,19 +1,20 @@
 export const MAGNIFIER_SIZE_PX = 120
-// Touch lenses leave room for the finger; pointer-centered PDF Text skips this.
-const TOUCH_MAGNIFIER_GAP_PX = 18
+// Preserve the existing lens clearance; it must not shift the sampled content.
+const MAGNIFIER_GAP_PX = 18
 const MAGNIFIER_EDGE_GAP_PX = 8
 const MAGNIFICATION = 2
 
 export interface MagnifierPoint {
   readonly clientX: number
   readonly clientY: number
-  readonly pointerType?: string
+  /** Optional layout anchor; clientX/clientY always identify sampled content. */
+  readonly lensPoint?: { readonly clientX: number; readonly clientY: number }
 }
 
 interface MagnifierPosition {
   readonly left: number
   readonly top: number
-  readonly placement: 'above' | 'below' | 'center'
+  readonly placement: 'above' | 'below'
 }
 
 export interface MagnifierSnapshot {
@@ -76,19 +77,10 @@ export const resolveMagnifierSnapshotPoint = (
 
 export const resolveMagnifierPosition = (
   point: MagnifierPoint,
-  rootRect: DOMRect,
-  centerOnPointer = false
+  rootRect: DOMRect
 ): MagnifierPosition => {
   const relativeX = point.clientX - rootRect.left
   const relativeY = point.clientY - rootRect.top
-  if (centerOnPointer) {
-    // Keep the pointer at the lens center even near a viewport edge.
-    return {
-      left: relativeX - MAGNIFIER_SIZE_PX / 2,
-      top: relativeY - MAGNIFIER_SIZE_PX / 2,
-      placement: 'center'
-    }
-  }
   const maximumLeft = Math.max(
     MAGNIFIER_EDGE_GAP_PX,
     rootRect.width - MAGNIFIER_SIZE_PX - MAGNIFIER_EDGE_GAP_PX
@@ -97,10 +89,10 @@ export const resolveMagnifierPosition = (
     MAGNIFIER_EDGE_GAP_PX,
     rootRect.height - MAGNIFIER_SIZE_PX - MAGNIFIER_EDGE_GAP_PX
   )
-  const aboveTop = relativeY - MAGNIFIER_SIZE_PX - TOUCH_MAGNIFIER_GAP_PX
+  const aboveTop = relativeY - MAGNIFIER_SIZE_PX - MAGNIFIER_GAP_PX
   const placement = aboveTop >= MAGNIFIER_EDGE_GAP_PX ? 'above' : 'below'
   const desiredTop =
-    placement === 'above' ? aboveTop : relativeY + TOUCH_MAGNIFIER_GAP_PX
+    placement === 'above' ? aboveTop : relativeY + MAGNIFIER_GAP_PX
 
   return {
     left: clamp(

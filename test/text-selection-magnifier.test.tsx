@@ -172,91 +172,99 @@ describe('text selection handle magnifier', () => {
   })
 })
 
-it('shows a PDF Text caret at the scaled and clamped snapshot point', async () => {
-  const canvas = document.createElement('canvas')
-  canvas.width = 400
-  canvas.height = 400
-  vi.spyOn(canvas, 'getContext').mockReturnValue(null)
-  html2canvasMock.mockResolvedValue(canvas)
-  const caret = document.createRange()
-  Object.defineProperty(caret, 'getBoundingClientRect', {
-    configurable: true,
-    value: () => new DOMRect(0, 0, 0, 18)
-  })
-  const caretRangeFromPoint = vi.fn(() => caret)
-  const previous = Object.getOwnPropertyDescriptor(
-    document,
-    'caretRangeFromPoint'
-  )
-  Object.defineProperty(document, 'caretRangeFromPoint', {
-    configurable: true,
-    value: caretRangeFromPoint
-  })
-  const view = render(
-    <Harness pageClassName='hamster-reader__intermediate-text-page' pdfText>
-      <TextHandle className='hsn-selection-handle hsn-selection-handle--start' />
-    </Harness>
-  )
-  try {
-    const viewerRoot = screen.getByTestId('viewer-root')
-    const page = viewerRoot.querySelector<HTMLElement>(
-      '.hamster-reader__intermediate-text-page'
-    )!
-    const handle = screen.getByRole('button', { name: 'Text range handle' })
-    handle.style.setProperty('--hsn-handle-color', 'rgb(10, 20, 30)')
-    mockElementSize(viewerRoot, { left: 10, top: 20, width: 320, height: 480 })
-    mockElementSize(page, { left: 30, top: 40, width: 200, height: 300 })
-    mockElementSize(handle, { left: 90, top: 120, width: 20, height: 20 })
+it.each(['mouse', 'pen', 'touch'])(
+  'samples the physical %s point independently of lens layout',
+  async (pointerType) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 400
+    canvas.height = 400
+    vi.spyOn(canvas, 'getContext').mockReturnValue(null)
+    html2canvasMock.mockResolvedValue(canvas)
+    const caret = document.createRange()
+    Object.defineProperty(caret, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => new DOMRect(0, 0, 0, 18)
+    })
+    const caretRangeFromPoint = vi.fn(() => caret)
+    const previous = Object.getOwnPropertyDescriptor(
+      document,
+      'caretRangeFromPoint'
+    )
+    Object.defineProperty(document, 'caretRangeFromPoint', {
+      configurable: true,
+      value: caretRangeFromPoint
+    })
+    const view = render(
+      <Harness pageClassName='hamster-reader__intermediate-text-page' pdfText>
+        <TextHandle className='hsn-selection-handle hsn-selection-handle--start' />
+      </Harness>
+    )
+    try {
+      const viewerRoot = screen.getByTestId('viewer-root')
+      const page = viewerRoot.querySelector<HTMLElement>(
+        '.hamster-reader__intermediate-text-page'
+      )!
+      const handle = screen.getByRole('button', { name: 'Text range handle' })
+      handle.style.setProperty('--hsn-handle-color', 'rgb(10, 20, 30)')
+      mockElementSize(viewerRoot, {
+        left: 10,
+        top: 20,
+        width: 320,
+        height: 480
+      })
+      mockElementSize(page, { left: 30, top: 40, width: 200, height: 300 })
+      mockElementSize(handle, { left: 90, top: 120, width: 20, height: 20 })
 
-    fireEvent.pointerDown(handle, {
-      pointerId: 31,
-      pointerType: 'mouse',
-      clientX: 105,
-      clientY: 135,
-      buttons: 1
-    })
-    const marker = screen
-      .getByTestId('range-magnifier')
-      .querySelector<HTMLElement>('.hamster-reader__range-magnifier-marker')!
-    await waitFor(() => expect(marker).toHaveAttribute('data-caret', 'true'))
-    expect(marker).toHaveStyle({
-      left: '50%',
-      top: '50%',
-      height: '36px',
-      backgroundColor: 'rgb(10, 20, 30)'
-    })
-    expect(caretRangeFromPoint).toHaveBeenCalledWith(105, 135)
-    expect(screen.getByTestId('range-magnifier')).toHaveStyle({
-      left: '35px',
-      top: '55px'
-    })
+      fireEvent.pointerDown(handle, {
+        pointerId: 31,
+        pointerType,
+        clientX: 105,
+        clientY: 135,
+        buttons: 1
+      })
+      const marker = screen
+        .getByTestId('range-magnifier')
+        .querySelector<HTMLElement>('.hamster-reader__range-magnifier-marker')!
+      await waitFor(() => expect(marker).toHaveAttribute('data-caret', 'true'))
+      expect(marker).toHaveStyle({
+        left: '50%',
+        top: '50%',
+        height: '36px',
+        backgroundColor: 'rgb(10, 20, 30)'
+      })
+      expect(caretRangeFromPoint).toHaveBeenCalledWith(105, 135)
+      expect(screen.getByTestId('range-magnifier')).toHaveStyle({
+        left: '30px',
+        top: '128px'
+      })
 
-    fireEvent.pointerMove(document, {
-      pointerId: 31,
-      clientX: 37,
-      clientY: 50,
-      buttons: 1
-    })
-    expect(parseFloat(marker.style.left)).toBeCloseTo((14 / 120) * 100)
-    expect(parseFloat(marker.style.top)).toBeCloseTo((20 / 120) * 100)
-    expect(caretRangeFromPoint).toHaveBeenLastCalledWith(37, 50)
-    expect(screen.getByTestId('range-magnifier')).toHaveStyle({
-      left: '-33px',
-      top: '-30px'
-    })
-    fireEvent.pointerUp(document, { pointerId: 31 })
-    expect(marker).not.toHaveAttribute('data-caret')
-    expect(screen.getByTestId('range-magnifier')).toHaveAttribute('hidden')
-  } finally {
-    view.unmount()
-    if (previous)
-      Object.defineProperty(document, 'caretRangeFromPoint', previous)
-    else Reflect.deleteProperty(document, 'caretRangeFromPoint')
+      fireEvent.pointerMove(document, {
+        pointerId: 31,
+        clientX: 37,
+        clientY: 50,
+        buttons: 1
+      })
+      expect(parseFloat(marker.style.left)).toBeCloseTo((14 / 120) * 100)
+      expect(parseFloat(marker.style.top)).toBeCloseTo((20 / 120) * 100)
+      expect(caretRangeFromPoint).toHaveBeenLastCalledWith(37, 50)
+      expect(screen.getByTestId('range-magnifier')).toHaveStyle({
+        left: '8px',
+        top: '43px'
+      })
+      fireEvent.pointerUp(document, { pointerId: 31 })
+      expect(marker).not.toHaveAttribute('data-caret')
+      expect(screen.getByTestId('range-magnifier')).toHaveAttribute('hidden')
+    } finally {
+      view.unmount()
+      if (previous)
+        Object.defineProperty(document, 'caretRangeFromPoint', previous)
+      else Reflect.deleteProperty(document, 'caretRangeFromPoint')
+    }
   }
-})
+)
 
-it.each(['mouse', 'pen'])(
-  'keeps the PDF Text %s lens on the physical pointer despite endpoint correction',
+it.each(['mouse', 'pen', 'touch'])(
+  'preserves the PDF Text %s lens layout despite endpoint correction',
   (pointerType) => {
     html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))
     const { rerender } = render(
@@ -276,8 +284,8 @@ it.each(['mouse', 'pen'])(
       buttons: 1
     })
     const lens = screen.getByTestId('range-magnifier')
-    expect(lens).toHaveStyle({ left: '89px', top: '199px' })
-    expect(lens).toHaveAttribute('data-placement', 'center')
+    expect(lens).toHaveStyle({ left: '80px', top: '82px' })
+    expect(lens).toHaveAttribute('data-placement', 'above')
     rerender(<Harness pdfText>{null}</Harness>)
     fireEvent.pointerMove(document, {
       pointerId: 41,
@@ -295,13 +303,13 @@ it.each(['mouse', 'pen'])(
     })
     markSelectionPointerMoveAsTextHit(corrected)
     fireEvent(document, corrected)
-    expect(lens).toHaveStyle({ left: '105px', top: '215px' })
+    expect(lens).toHaveStyle({ left: '96px', top: '98px' })
     fireEvent.pointerCancel(document, { pointerId: 41 })
     expect(lens).toHaveAttribute('hidden')
   }
 )
 
-it('preserves finger clearance and corrected sampling for PDF Text touch', () => {
+it('preserves finger clearance for PDF Text touch', () => {
   html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))
   render(
     <Harness pdfText>

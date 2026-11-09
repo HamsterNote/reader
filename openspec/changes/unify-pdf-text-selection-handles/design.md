@@ -66,7 +66,7 @@ Reader 的 PDF Text 分支此前直接使用 selection 库镜片，不在 `Engin
 
 `resolveMagnifierSnapshotPoint` 使用与 canvas 绘制相同的 `sourceRect`、缩放及 clamp，把采样点换算到镜片坐标。标记用百分比定位以匹配白边内实际 114px 画布，避免直接套 120px 逻辑坐标产生约 3px 偏差。插入线宽 2px，高度按 caret 行高放大；其他格式仍使用原圆点标记。
 
-PDF Text 鼠标/笔输入使用原始 `clientX/clientY` 作为镜心、快照采样及标记点，边缘也不移动镜心；镜片可被视口裁剪，快照仍按既有规则限制源裁剪区域。选择层为防止热区抓取跳选而派发的纠偏 pointermove 不得覆盖镜片的原始指针点，选区命中和保存继续走原纠偏协议。触摸沿用纠偏采样与上/下方镜片布局，显式 `TOUCH_MAGNIFIER_GAP_PX = 18` 用于避让手指；其他格式和 Layout 的镜片行为保持原样。
+PDF Text 将镜片布局与采样分开：`MagnifierPoint.clientX/clientY` 是鼠标、笔或触摸的物理指针，供快照与标记使用；可选 `lensPoint` 沿用抓取点到库端点的纠偏坐标，仅用于原有镜片位置、18px 间距、上下避让和边缘约束。镜片不放到指针上。快照仍按既有规则限制源裁剪区域。选择层派发的纠偏 pointermove 不得再次覆盖物理采样点，选区命中和保存继续走原纠偏协议。其他格式和 Layout 的镜片行为保持原样。此定义按用户澄清取代上一轮镜心贴指针的方案。
 
 ### 8. 滚动保留 fixed portal，但消除一帧 React 等待
 

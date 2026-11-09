@@ -227,9 +227,8 @@ export const RangeMagnifierProvider = ({
       if (pdfRef.current && pdf) pdfRef.current.focus = pdf
       const rootBox = rootElement.getBoundingClientRect()
       const relative = resolveMagnifierPosition(
-        point,
-        rootBox,
-        pdfText && point.pointerType !== 'touch'
+        point.lensPoint ?? point,
+        rootBox
       )
       const position = { ...relative }
       if (pdfRef.current) {
@@ -253,7 +252,7 @@ export const RangeMagnifierProvider = ({
 
       if (pageRef.current) scheduleCapture()
     },
-    [rootElement, scheduleCapture, updateSnapshot, pdfText]
+    [rootElement, scheduleCapture, updateSnapshot]
   )
 
   const start = useCallback(

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 import { chromium } from 'playwright'
+import { PDFDocument } from 'pdf-lib'
 import { createServer } from 'vite'
 
 // Real PDF Text viewer, selection dependency, layout, capture and mouse input.
@@ -50,6 +51,13 @@ try {
       x: box.x + box.width / 2 + 9,
       y: box.y + box.height / 2 + 9
     }
+    const offset = await handle.evaluate(
+      (handle, origin) => ({
+        x: Number(handle.dataset.pdfTextTargetX) - origin.x,
+        y: Number(handle.dataset.pdfTextTargetY) - origin.y
+      }),
+      origin
+    )
     await page.mouse.move(origin.x, origin.y)
     await page.mouse.down()
     await lens.waitFor({ state: 'visible' })
@@ -76,18 +84,31 @@ try {
             x: marker.x + marker.width / 2,
             y: marker.y + marker.height / 2
           },
-          placement: lens.dataset.placement
+          placement: lens.dataset.placement,
+          root: lens.parentElement.getBoundingClientRect().toJSON()
         }
       })
-      assert.ok(
-        Math.abs(geometry.center.x - point.x) < 0.1,
-        JSON.stringify(geometry)
+      // Compare against the 17c3542 layout contract, independently of sampling.
+      const { root } = geometry
+      const anchor = {
+        x: point.x + offset.x - root.x,
+        y: point.y + offset.y - root.y
+      }
+      const above = anchor.y - 138
+      const desiredTop = above >= 8 ? above : anchor.y + 18
+      const expectedLeft = Math.min(
+        Math.max(anchor.x - 60, 8),
+        Math.max(8, root.width - 128)
+      )
+      const expectedTop = Math.min(
+        Math.max(desiredTop, 8),
+        Math.max(8, root.height - 128)
       )
       assert.ok(
-        Math.abs(geometry.center.y - point.y) < 0.1,
-        JSON.stringify(geometry)
+        Math.abs(geometry.center.x - (root.x + expectedLeft + 60)) < 0.1
       )
-      assert.equal(geometry.placement, 'center')
+      assert.ok(Math.abs(geometry.center.y - (root.y + expectedTop + 60)) < 0.1)
+      assert.equal(geometry.placement, above >= 8 ? 'above' : 'below')
       // Sample centers follow the pointer, subject only to snapshot crop bounds.
       const { source, sample } = geometry
       const expectedX = Math.min(
@@ -118,7 +139,16 @@ try {
         Math.abs(geometry.marker.y - markerY) < 0.1,
         JSON.stringify(geometry)
       )
-      results.push({ side, point, center: geometry.center })
+      results.push({
+        mode: 'Text',
+        side,
+        point,
+        lensCenter: geometry.center,
+        sampleOffset: {
+          x: (sample.x / sample.width) * source.width - (point.x - source.x),
+          y: (sample.y / sample.height) * source.height - (point.y - source.y)
+        }
+      })
     }
     await page.mouse.up()
     await lens.waitFor({ state: 'hidden' })
@@ -126,6 +156,108 @@ try {
       window.magnifierSample = null
     })
   }
+  // Reference: the actual desktop PDF preview renderer and its mouse handles.
+  const previewHtml = await server.transformIndexHtml(
+    '/preview.html',
+    '<html><body style="margin:0"><div id="root"></div><script type="module" src="/test/browser/review-regressions.tsx"></script></body></html>'
+  )
+  await page.route('**/preview.html', (route) =>
+    route.fulfill({ contentType: 'text/html', body: previewHtml })
+  )
+  await page.goto(
+    `http://127.0.0.1:${server.httpServer.address().port}/preview.html`
+  )
+  await page.addStyleTag({ content: '.hamster-reader { height: 100%; }' })
+  await page.waitForFunction(() => window.readerRegression)
+  const pdf = await PDFDocument.create()
+  const sheet = pdf.addPage([400, 600])
+  sheet.drawText('Alpha beta gamma delta', { x: 50, y: 400, size: 16 })
+  await page.evaluate(
+    (bytes) => window.readerRegression.open('pdf', bytes, { isPdf: true }),
+    [...(await pdf.save())]
+  )
+  await page
+    .locator('.textLayer [data-selection-start-offset]')
+    .first()
+    .waitFor()
+  await page.evaluate(() =>
+    window.readerRegression.selection.current.scrollToPosition({
+      x: 0,
+      y: 0,
+      scale: 0.5
+    })
+  )
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[data-testid="tool-bottom-bar-layout-zoom"]')
+        ?.textContent === '50%'
+  )
+  const selectionBox = await page.evaluate(() => {
+    const text = document.querySelector(
+      '.textLayer [data-selection-start-offset]'
+    )
+    const range = document.createRange()
+    range.setStart(text.firstChild, 0)
+    range.setEnd(text.firstChild, 10)
+    const rect = range.getBoundingClientRect()
+    window.magnifierSample = null
+    return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 }
+  })
+  if (
+    (await page
+      .getByTestId('tool-bottom-bar-text-selection')
+      .getAttribute('aria-pressed')) !== 'true'
+  )
+    await page.getByTestId('tool-bottom-bar-text-selection').click()
+  await page.mouse.move(selectionBox.left + 1, selectionBox.y)
+  await page.mouse.down()
+  await page.mouse.move(selectionBox.right - 1, selectionBox.y, { steps: 8 })
+  await page.mouse.up()
+  await page.locator('button[data-pdf-handle-hit-target="end"]').waitFor()
+  const grab = await page.evaluate(() => {
+    const rect = getSelection().getRangeAt(0).getBoundingClientRect()
+    return { x: rect.right, y: rect.top + rect.height / 2 }
+  })
+  // Grab at the line center inside the hit square: no intentional grab offset.
+  assert.ok(
+    await page.evaluate(
+      (point) =>
+        !!document
+          .elementFromPoint(point.x, point.y)
+          ?.closest('button[data-pdf-handle-hit-target="end"]'),
+      grab
+    ),
+    'reference grab must hit the PDF handle'
+  )
+  await page.mouse.move(grab.x, grab.y)
+  await page.mouse.down()
+  await lens.waitFor({ state: 'visible' })
+  for (const delta of [1, 11, 21]) {
+    const point = { x: grab.x + delta, y: grab.y }
+    await page.mouse.move(point.x, point.y)
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done))
+        )
+    )
+    await page.waitForFunction(() => !!window.magnifierSample)
+    const sampleOffset = await page.evaluate((point) => {
+      const rect = document
+        .querySelector('.pdfViewer .page')
+        .getBoundingClientRect()
+      const sample = window.magnifierSample
+      return {
+        x: (sample.x / sample.width) * rect.width + rect.x - point.x,
+        y: (sample.y / sample.height) * rect.height + rect.y - point.y
+      }
+    }, point)
+    assert.ok(Math.abs(sampleOffset.x) < 0.1, JSON.stringify(sampleOffset))
+    assert.ok(Math.abs(sampleOffset.y) < 0.1, JSON.stringify(sampleOffset))
+    results.push({ mode: 'PDF preview', point, sampleOffset })
+  }
+  await page.mouse.up()
+  await lens.waitFor({ state: 'hidden' })
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ platform: 'Chromium mouse', results }, null, 2))
 } finally {
