@@ -3639,7 +3639,10 @@ export function IntermediateDocumentTextViewer(
       pdfText={isPdf}
       enabled={isPdf && showSelectionMagnifier}
     >
-      <TextSelectionMagnifier viewerRootElement={viewerRootElement} />
+      <TextSelectionMagnifier
+        viewerRootElement={viewerRootElement}
+        pdfText={isPdf}
+      />
       {viewer}
     </RangeMagnifierProvider>
   )

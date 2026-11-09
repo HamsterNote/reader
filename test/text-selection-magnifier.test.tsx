@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RangeMagnifierProvider } from '../src/components/IntermediateDocumentViewer/RangeMagnifier'
 import { TextSelectionMagnifier } from '../src/components/IntermediateDocumentViewer/TextSelectionMagnifier'
+import { markSelectionPointerMoveAsTextHit } from '../src/components/selection/selectionPointerGuard'
 import { mockElementSize } from './setup'
 
 const html2canvasMock = vi.hoisted(() => vi.fn())
@@ -26,7 +27,10 @@ const Harness = ({
   return (
     <div ref={setViewerRoot} data-testid='viewer-root'>
       <RangeMagnifierProvider rootElement={viewerRoot} pdfText={pdfText}>
-        <TextSelectionMagnifier viewerRootElement={viewerRoot} />
+        <TextSelectionMagnifier
+          viewerRootElement={viewerRoot}
+          pdfText={pdfText}
+        />
         <div className={pageClassName}>{children}</div>
       </RangeMagnifierProvider>
     </div>
@@ -206,6 +210,7 @@ it('shows a PDF Text caret at the scaled and clamped snapshot point', async () =
 
     fireEvent.pointerDown(handle, {
       pointerId: 31,
+      pointerType: 'mouse',
       clientX: 105,
       clientY: 135,
       buttons: 1
@@ -215,12 +220,16 @@ it('shows a PDF Text caret at the scaled and clamped snapshot point', async () =
       .querySelector<HTMLElement>('.hamster-reader__range-magnifier-marker')!
     await waitFor(() => expect(marker).toHaveAttribute('data-caret', 'true'))
     expect(marker).toHaveStyle({
-      left: '60px',
-      top: '60px',
+      left: '50%',
+      top: '50%',
       height: '36px',
       backgroundColor: 'rgb(10, 20, 30)'
     })
-    expect(caretRangeFromPoint).toHaveBeenCalledWith(100, 130)
+    expect(caretRangeFromPoint).toHaveBeenCalledWith(105, 135)
+    expect(screen.getByTestId('range-magnifier')).toHaveStyle({
+      left: '35px',
+      top: '55px'
+    })
 
     fireEvent.pointerMove(document, {
       pointerId: 31,
@@ -228,8 +237,13 @@ it('shows a PDF Text caret at the scaled and clamped snapshot point', async () =
       clientY: 50,
       buttons: 1
     })
-    expect(marker).toHaveStyle({ left: '4px', top: '10px' })
-    expect(caretRangeFromPoint).toHaveBeenLastCalledWith(32, 45)
+    expect(parseFloat(marker.style.left)).toBeCloseTo((14 / 120) * 100)
+    expect(parseFloat(marker.style.top)).toBeCloseTo((20 / 120) * 100)
+    expect(caretRangeFromPoint).toHaveBeenLastCalledWith(37, 50)
+    expect(screen.getByTestId('range-magnifier')).toHaveStyle({
+      left: '-33px',
+      top: '-30px'
+    })
     fireEvent.pointerUp(document, { pointerId: 31 })
     expect(marker).not.toHaveAttribute('data-caret')
     expect(screen.getByTestId('range-magnifier')).toHaveAttribute('hidden')
@@ -239,4 +253,74 @@ it('shows a PDF Text caret at the scaled and clamped snapshot point', async () =
       Object.defineProperty(document, 'caretRangeFromPoint', previous)
     else Reflect.deleteProperty(document, 'caretRangeFromPoint')
   }
+})
+
+it.each(['mouse', 'pen'])(
+  'keeps the PDF Text %s lens on the physical pointer despite endpoint correction',
+  (pointerType) => {
+    html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))
+    const { rerender } = render(
+      <Harness pdfText>
+        <TextHandle className='hsn-selection-handle hsn-selection-handle--end' />
+      </Harness>
+    )
+    const { handle } = prepareGeometry()
+    // The endpoint is well above the handle's enlarged grab area.
+    handle.dataset.pdfTextTargetX = '150'
+    handle.dataset.pdfTextTargetY = '240'
+    fireEvent.pointerDown(handle, {
+      pointerId: 41,
+      pointerType,
+      clientX: 159,
+      clientY: 279,
+      buttons: 1
+    })
+    const lens = screen.getByTestId('range-magnifier')
+    expect(lens).toHaveStyle({ left: '89px', top: '199px' })
+    expect(lens).toHaveAttribute('data-placement', 'center')
+    rerender(<Harness pdfText>{null}</Harness>)
+    fireEvent.pointerMove(document, {
+      pointerId: 41,
+      pointerType,
+      clientX: 175,
+      clientY: 295,
+      buttons: 1
+    })
+    const corrected = new PointerEvent('pointermove', {
+      pointerId: 41,
+      pointerType,
+      clientX: 166,
+      clientY: 256,
+      bubbles: true
+    })
+    markSelectionPointerMoveAsTextHit(corrected)
+    fireEvent(document, corrected)
+    expect(lens).toHaveStyle({ left: '105px', top: '215px' })
+    fireEvent.pointerCancel(document, { pointerId: 41 })
+    expect(lens).toHaveAttribute('hidden')
+  }
+)
+
+it('preserves finger clearance and corrected sampling for PDF Text touch', () => {
+  html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))
+  render(
+    <Harness pdfText>
+      <TextHandle className='hsn-selection-handle hsn-selection-handle--end' />
+    </Harness>
+  )
+  const { handle } = prepareGeometry()
+  handle.dataset.pdfTextTargetX = '150'
+  handle.dataset.pdfTextTargetY = '240'
+  fireEvent.pointerDown(handle, {
+    pointerId: 43,
+    pointerType: 'touch',
+    clientX: 159,
+    clientY: 279,
+    buttons: 1
+  })
+  const lens = screen.getByTestId('range-magnifier')
+  expect(lens).toHaveStyle({ left: '80px', top: '82px' })
+  expect(lens).toHaveAttribute('data-placement', 'above')
+  fireEvent.pointerUp(document, { pointerId: 43 })
+  expect(lens).toHaveAttribute('hidden')
 })

@@ -41,3 +41,11 @@ openspec validate unify-pdf-text-selection-handles --strict --json
 ## 验证边界
 
 这是 Linux Playwright WebKit 的实际排版和合成触摸事件验证，不是 iOS WKWebView 或 UIKit 原生长按/点击验收。已保存高亮由受控状态初始化，草稿由 DOM Range 初始化；不以此宣称真机长按、系统菜单抑制、首末行裁剪或 Android 通过。用户原 PDF 未在本环境获得，原文件 + iOS WKWebView + 大字号仍需设备复验。
+
+## 鼠标放大镜镜心与采样
+
+`node scripts/check-pdf-text-magnifier.mjs` 使用同一 PDF Text harness、真实 selection 库、html2canvas 和 Chromium 鼠标输入。从首末手柄热区角落（圆心外各 9px）抓取，各测 3 个拖动点，直接对比镜片 DOMRect 中心、原始鼠标坐标、canvas 实际裁剪源中心，以及标记在画布内的投影位置。
+
+原实现同时存在上方避让布局和选区端点纠偏，不能只将 18px gap 设为零。修复后鼠标/笔镜心和采样使用原始指针点，并忽略 selection 层为选区命中转发的纠偏事件；选区本身仍保留原纠偏协议。触摸保留 18px 避让常量及原端点采样。另修正标记按 120px 逻辑坐标定位到白边内 114px 画布所产生的约 3px 误差，改用比例定位。
+
+Chromium 的 6 个测量点镜心均等于鼠标坐标，采样及标记投影误差 < 0.1px。快照边缘仍限制采样源区域，镜片中心保持指针位置，镜片本身可能被视口裁剪。鼠标/笔、触摸、取消及纠偏转发另有单元回归；这轮不代表真机触摸验收。

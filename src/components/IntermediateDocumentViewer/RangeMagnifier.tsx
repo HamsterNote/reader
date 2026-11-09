@@ -20,6 +20,7 @@ import {
 } from './pdfMagnifierText'
 import {
   drawMagnifierSnapshot,
+  MAGNIFIER_SIZE_PX,
   type MagnifierPoint,
   type MagnifierSnapshot,
   resolveMagnifierPosition,
@@ -139,8 +140,10 @@ export const RangeMagnifierProvider = ({
     )
     const lineHeight = caret?.getBoundingClientRect().height ?? 12
     marker.dataset.caret = 'true'
-    marker.style.left = `${markerPoint.x}px`
-    marker.style.top = `${markerPoint.y}px`
+    // The canvas fills the lens inside its border, which is smaller than the
+    // logical snapshot size. Percentages keep the caret on the sampled pixel.
+    marker.style.left = `${(markerPoint.x / MAGNIFIER_SIZE_PX) * 100}%`
+    marker.style.top = `${(markerPoint.y / MAGNIFIER_SIZE_PX) * 100}%`
     marker.style.height = `${Math.max(12, lineHeight * 2)}px`
     const color = source.style.getPropertyValue('--hsn-handle-color')
     if (color) marker.style.backgroundColor = color
@@ -223,7 +226,11 @@ export const RangeMagnifierProvider = ({
       pointRef.current = point
       if (pdfRef.current && pdf) pdfRef.current.focus = pdf
       const rootBox = rootElement.getBoundingClientRect()
-      const relative = resolveMagnifierPosition(point, rootBox)
+      const relative = resolveMagnifierPosition(
+        point,
+        rootBox,
+        pdfText && point.pointerType !== 'touch'
+      )
       const position = { ...relative }
       if (pdfRef.current) {
         // PDF handles and the lens share a body-level fixed stacking context.
@@ -246,7 +253,7 @@ export const RangeMagnifierProvider = ({
 
       if (pageRef.current) scheduleCapture()
     },
-    [rootElement, scheduleCapture, updateSnapshot]
+    [rootElement, scheduleCapture, updateSnapshot, pdfText]
   )
 
   const start = useCallback(

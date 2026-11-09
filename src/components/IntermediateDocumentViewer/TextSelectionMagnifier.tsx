@@ -7,10 +7,13 @@ interface ActiveTextHandleDrag {
   readonly pointerId: number
   readonly offsetX: number
   readonly offsetY: number
+  readonly pointerType: string
+  readonly centerOnPointer: boolean
 }
 
 interface TextSelectionMagnifierProps {
   readonly viewerRootElement: HTMLElement | null
+  readonly pdfText?: boolean
 }
 
 /**
@@ -18,7 +21,8 @@ interface TextSelectionMagnifierProps {
  * 因此放大镜会话由稳定的 viewer/document 持有，而不是由 handle 组件持有。
  */
 export const TextSelectionMagnifier = ({
-  viewerRootElement
+  viewerRootElement,
+  pdfText = false
 }: TextSelectionMagnifierProps) => {
   const magnifier = useRangeMagnifier()
   const activeDragRef = useRef<ActiveTextHandleDrag | null>(null)
@@ -56,23 +60,42 @@ export const TextSelectionMagnifier = ({
       const offsetY =
         (Number.isFinite(targetY) ? targetY : rect.top + rect.height / 2) -
         event.clientY
-      activeDragRef.current = { pointerId: event.pointerId, offsetX, offsetY }
+      const centerOnPointer = pdfText && event.pointerType !== 'touch'
+      activeDragRef.current = {
+        pointerId: event.pointerId,
+        offsetX,
+        offsetY,
+        pointerType: event.pointerType,
+        centerOnPointer
+      }
       magnifier.start(handle, {
-        clientX: event.clientX + offsetX,
-        clientY: event.clientY + offsetY
+        clientX: event.clientX + (centerOnPointer ? 0 : offsetX),
+        clientY: event.clientY + (centerOnPointer ? 0 : offsetY),
+        pointerType: event.pointerType
       })
     }
     const handlePointerMove = (event: PointerEvent) => {
       const activeDrag = activeDragRef.current
       if (!activeDrag || activeDrag.pointerId !== event.pointerId) return
 
+      if (activeDrag.centerOnPointer) {
+        // The selection layer also dispatches a corrected move for the text
+        // endpoint. It must not replace the physical pointer's lens position.
+        if (isSelectionPointerMoveTextHit(event)) return
+        magnifier.move({
+          clientX: event.clientX,
+          clientY: event.clientY,
+          pointerType: activeDrag.pointerType
+        })
+        return
+      }
       const point: MagnifierPoint = isSelectionPointerMoveTextHit(event)
         ? { clientX: event.clientX, clientY: event.clientY }
         : {
             clientX: event.clientX + activeDrag.offsetX,
             clientY: event.clientY + activeDrag.offsetY
           }
-      magnifier.move(point)
+      magnifier.move({ ...point, pointerType: activeDrag.pointerType })
     }
     const handlePointerEnd = (event: PointerEvent) => {
       if (activeDragRef.current?.pointerId === event.pointerId) finishDrag()
@@ -92,7 +115,7 @@ export const TextSelectionMagnifier = ({
       ownerDocument.defaultView?.removeEventListener('blur', finishDrag)
       finishDrag()
     }
-  }, [magnifier, viewerRootElement])
+  }, [magnifier, viewerRootElement, pdfText])
 
   return null
 }

@@ -113,7 +113,7 @@
 #### Scenario: Grab the enlarged Text handle target
 
 - **WHEN** 从 PDF Text 的圆点中心、白边以及圆外 9px 的热区角落分别抓取任一端点，跨行扩展或缩短选区并释放，包括快速拖动在下一动画帧前释放
-- **THEN** 热区均能启动拖动，首次抓取不跳选，手指移动对应正确文字端点，放大镜跟随纠偏后的文字位置，最终预览与确认范围一致；草稿只确认一次，已有高亮只更新一次且保留 ID、颜色和评论关联，热区外不截获正文操作
+- **THEN** 热区均能启动拖动，首次抓取不跳选，手指移动对应正确文字端点；触摸放大镜跟随纠偏后的文字位置，鼠标/笔的放大镜遵循原始指针镜心契约；最终预览与确认范围一致，草稿只确认一次，已有高亮只更新一次且保留 ID、颜色和评论关联，热区外不截获正文操作
 
 #### Scenario: Text pagination and geometry remain stable
 
@@ -137,7 +137,12 @@
 
 ### Requirement: PDF Text magnifier insertion caret
 
-PDF Text 拖动手柄时，放大镜 MUST 在镜像文字的当前插入位置显示 2 CSS px 竖线，指示将插入到哪两个字符之间。插入点 SHALL 使用纠偏后的文字命中坐标，并经过与快照内容相同的缩放、偏移和边缘裁剪换算；不得直接复用主视图的 fixed/absolute 坐标。竖线高度 SHALL 跟随放大后的文字行高，放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
+PDF Text 拖动手柄时，放大镜 MUST 在镜像文字的当前插入位置显示 2 CSS px 竖线，指示将插入到哪两个字符之间。鼠标/笔输入的镜心 MUST 严格对齐原始 clientX/clientY（包括视口边缘），采样和标记 SHALL 使用同一原始指针点，选择层转发的纠偏事件不得覆盖该点。触摸 SHALL 保留手指避让与纠偏文字采样，偏移量使用有注释的显式常量。标记 MUST 经过与快照内容相同的缩放、偏移和边缘裁剪换算；不得直接复用主视图的 fixed/absolute 坐标。选区命中及保存继续使用既有纠偏协议。竖线高度 SHALL 跟随放大后的文字行高，放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
+
+#### Scenario: Center the mouse lens on the original pointer
+
+- **WHEN** 使用鼠标或笔从 PDF Text 起/止手柄的中心或热区边缘拖动，选择层同时转发纠偏后的 pointermove，或指针移至视口边缘
+- **THEN** 镜心在 clientX/clientY，快照采样与标记使用原始指针点；边缘保持镜心不变并沿用源快照裁剪规则，触摸避让和其他选择面不变
 
 #### Scenario: Follow the scaled and clamped insertion point
 

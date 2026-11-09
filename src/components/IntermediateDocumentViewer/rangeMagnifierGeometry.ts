@@ -1,17 +1,19 @@
-const MAGNIFIER_SIZE_PX = 120
-const MAGNIFIER_GAP_PX = 18
+export const MAGNIFIER_SIZE_PX = 120
+// Touch lenses leave room for the finger; pointer-centered PDF Text skips this.
+const TOUCH_MAGNIFIER_GAP_PX = 18
 const MAGNIFIER_EDGE_GAP_PX = 8
 const MAGNIFICATION = 2
 
 export interface MagnifierPoint {
   readonly clientX: number
   readonly clientY: number
+  readonly pointerType?: string
 }
 
 interface MagnifierPosition {
   readonly left: number
   readonly top: number
-  readonly placement: 'above' | 'below'
+  readonly placement: 'above' | 'below' | 'center'
 }
 
 export interface MagnifierSnapshot {
@@ -74,10 +76,19 @@ export const resolveMagnifierSnapshotPoint = (
 
 export const resolveMagnifierPosition = (
   point: MagnifierPoint,
-  rootRect: DOMRect
+  rootRect: DOMRect,
+  centerOnPointer = false
 ): MagnifierPosition => {
   const relativeX = point.clientX - rootRect.left
   const relativeY = point.clientY - rootRect.top
+  if (centerOnPointer) {
+    // Keep the pointer at the lens center even near a viewport edge.
+    return {
+      left: relativeX - MAGNIFIER_SIZE_PX / 2,
+      top: relativeY - MAGNIFIER_SIZE_PX / 2,
+      placement: 'center'
+    }
+  }
   const maximumLeft = Math.max(
     MAGNIFIER_EDGE_GAP_PX,
     rootRect.width - MAGNIFIER_SIZE_PX - MAGNIFIER_EDGE_GAP_PX
@@ -86,10 +97,10 @@ export const resolveMagnifierPosition = (
     MAGNIFIER_EDGE_GAP_PX,
     rootRect.height - MAGNIFIER_SIZE_PX - MAGNIFIER_EDGE_GAP_PX
   )
-  const aboveTop = relativeY - MAGNIFIER_SIZE_PX - MAGNIFIER_GAP_PX
+  const aboveTop = relativeY - MAGNIFIER_SIZE_PX - TOUCH_MAGNIFIER_GAP_PX
   const placement = aboveTop >= MAGNIFIER_EDGE_GAP_PX ? 'above' : 'below'
   const desiredTop =
-    placement === 'above' ? aboveTop : relativeY + MAGNIFIER_GAP_PX
+    placement === 'above' ? aboveTop : relativeY + TOUCH_MAGNIFIER_GAP_PX
 
   return {
     left: clamp(
