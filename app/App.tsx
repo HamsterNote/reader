@@ -24,8 +24,17 @@ import {
 } from './src/native/webAssets'
 import { LibraryScreen } from './src/screens/LibraryScreen'
 import { ReaderScreen } from './src/screens/ReaderScreen'
+import { AppErrorBoundary } from './src/components/AppErrorBoundary'
 
 export function App() {
+  return (
+    <AppErrorBoundary>
+      <AppContent />
+    </AppErrorBoundary>
+  )
+}
+
+function AppContent() {
   const storeRef = useRef<ReaderDataStore | null>(null)
   if (storeRef.current === null) {
     storeRef.current = new Store(createFileSystemStorage())

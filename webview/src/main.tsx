@@ -3,6 +3,7 @@ import type { ReaderProgressHandle } from '../../src/components/Reader'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { ReaderSurface } from './ReaderSurface'
+import { ReaderRootErrorBoundary } from './ReaderRootErrorBoundary'
 import { createWebBridgeClient } from './bridgeClient'
 import { listenHostMessages } from './hostMessageChannel'
 import { readPackagedAsset } from './packagedAsset'
@@ -162,16 +163,17 @@ async function display(
     await commitMigratedAnnotations(initial)
     if (token !== generation) return
     root.render(
-      <ReaderSurface
-        key={`${document.fileId}:${token}`}
-        progressRef={readerProgress}
-        source={source}
-        document={documentHandle.document}
-        initial={initial}
-        onChange={(data) => {
-          if (token === generation) bridge?.sendChange(data)
-        }}
-      />
+      <ReaderRootErrorBoundary key={`${document.fileId}:${token}`}>
+        <ReaderSurface
+          progressRef={readerProgress}
+          source={source}
+          document={documentHandle.document}
+          initial={initial}
+          onChange={(data) => {
+            if (token === generation) bridge?.sendChange(data)
+          }}
+        />
+      </ReaderRootErrorBoundary>
     )
   } catch (error) {
     await release().catch(() => undefined)
