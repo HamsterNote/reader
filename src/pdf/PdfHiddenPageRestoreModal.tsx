@@ -126,6 +126,7 @@ export function PdfHiddenPageRestoreModal({
           <button
             ref={closeRef}
             type='button'
+            className='hamster-reader__pdf-hidden-modal-close'
             aria-label='关闭隐藏页恢复'
             onClick={onClose}
           >
@@ -136,7 +137,9 @@ export function PdfHiddenPageRestoreModal({
           {groups.map((group) => (
             <section key={group.start} data-hidden-group-start={group.start}>
               <h3>
-                第 {group.start}–{group.end} 页（{group.pages.length} 页）
+                {group.start === group.end
+                  ? `第 ${group.start} 页`
+                  : `第 ${group.start}–${group.end} 页（${group.pages.length} 页）`}
               </h3>
               <div className='hamster-reader__pdf-hidden-page-grid'>
                 {group.pages.map((pageNumber) => {
@@ -180,6 +183,7 @@ export function PdfHiddenPageRestoreModal({
                       {previews.errors.has(pageNumber) && (
                         <button
                           type='button'
+                          className='hamster-reader__pdf-hidden-preview-retry'
                           onClick={() => previews.retryPage(pageNumber)}
                         >
                           第 {pageNumber} 页预览失败，重试
@@ -195,6 +199,7 @@ export function PdfHiddenPageRestoreModal({
         <div className='hamster-reader__pdf-hidden-modal-footer'>
           <button
             type='button'
+            className='hamster-reader__pdf-hidden-modal-select-all'
             onClick={() =>
               setSelected(allSelected ? new Set() : new Set(pages))
             }
@@ -206,6 +211,7 @@ export function PdfHiddenPageRestoreModal({
           </button>
           <button
             type='button'
+            className='hamster-reader__pdf-hidden-modal-confirm'
             disabled={selected.size === 0}
             onClick={() =>
               onConfirm([...selected].sort((left, right) => left - right))

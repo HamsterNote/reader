@@ -28,11 +28,13 @@ export function PdfHiddenPageGroupControls({
       <div className='hamster-reader__pdf-hidden-empty'>
         <button
           type='button'
+          aria-label={`查看 ${count} 个隐藏页`}
           data-hidden-page-group={`${groups[0]!.start}-${groups.at(-1)!.end}`}
           data-testid='pdf-hidden-page-group'
           onClick={(event) => onOpen(groups[0]!.start, event.currentTarget)}
         >
-          查看 {count} 个隐藏页
+          查看隐藏页
+          <span className='hamster-reader__pdf-hidden-count'>{count}</span>
         </button>
       </div>
     )
@@ -88,7 +90,8 @@ export function PdfHiddenPageGroupControls({
             aria-label={`查看第 ${group.start} 至 ${group.end} 页，共 ${count} 个隐藏页`}
             onClick={(event) => onOpen(group.start, event.currentTarget)}
           >
-            隐藏 {count} 页
+            隐藏
+            <span className='hamster-reader__pdf-hidden-count'>{count}</span>页
           </button>
         )
       })}

@@ -130,19 +130,68 @@
   pointer-events: none;
 }
 
+.hamster-reader__pdf-hidden-group,
+.hamster-reader__pdf-hidden-empty button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 4px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #fff;
+  color: #1f2937;
+  box-shadow: 0 2px 8px rgb(17 24 39 / 12%);
+  font:
+    500 12px / 1.5 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out,
+    box-shadow 160ms ease-out;
+
+  &:hover {
+    border-color: var(--hamster-reader-theme-color, #2563eb);
+    background: #f3f4f6;
+  }
+
+  &:active {
+    background: #e5e7eb;
+    box-shadow: none;
+  }
+
+  &:focus-visible {
+    // Keep the ring inside the clipped overlay without changing its geometry.
+    outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+    outline-offset: -3px;
+  }
+}
+
 .hamster-reader__pdf-hidden-group {
   position: absolute;
   left: 50%;
-  min-height: 32px;
   transform: translate(-50%, -50%);
-  pointer-events: auto;
-  padding: 4px 12px;
-  border: 1px solid #1677cf;
-  border-radius: 16px;
-  background: #fff;
-  color: #125da2;
-  box-shadow: 0 1px 4px #0002;
-  white-space: nowrap;
+}
+
+.hamster-reader__pdf-hidden-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--hamster-reader-theme-color, #2563eb);
+  color: #fff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .hamster-reader__pdf-hidden-empty {
@@ -154,13 +203,8 @@
   pointer-events: none;
 
   button {
-    min-height: 40px;
-    padding: 8px 16px;
-    border: 1px solid #1677cf;
-    border-radius: 20px;
-    background: #fff;
-    color: #125da2;
-    pointer-events: auto;
+    height: 40px;
+    padding-inline: 16px;
   }
 }
 
@@ -171,6 +215,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
+  box-sizing: border-box;
   background: #11182780;
 }
 
@@ -178,47 +223,163 @@
   display: flex;
   flex-direction: column;
   width: min(720px, 100%);
+  min-height: 0;
   max-height: 100%;
   overflow: hidden;
-  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
   background: #fff;
   color: #1f2937;
-  box-shadow: 0 16px 48px #0004;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 24%);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+
+  button {
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    transition:
+      background-color 160ms ease-out,
+      border-color 160ms ease-out;
+
+    &:focus-visible {
+      outline: 2px solid var(--hamster-reader-theme-color, #2563eb);
+      outline-offset: 2px;
+    }
+  }
 }
 
 .hamster-reader__pdf-hidden-modal-header,
 .hamster-reader__pdf-hidden-modal-footer {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 16px 24px;
 
   h2 {
     flex: 1;
     margin: 0;
     font-size: 18px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+}
+
+.hamster-reader__pdf-hidden-modal-header {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.hamster-reader__pdf-hidden-modal-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--hn-radius-md, 8px);
+  background: transparent;
+  color: #6b7280;
+
+  // Match the page browser close control rather than native button typography.
+  .hamster-reader__pdf-hidden-modal & {
+    font-size: 24px;
+    line-height: 1;
+  }
+
+  &:hover {
+    background: #f3f4f6;
+  }
+
+  &:active {
+    background: #e5e7eb;
   }
 }
 
 .hamster-reader__pdf-hidden-modal-footer {
+  flex-wrap: wrap;
   justify-content: flex-end;
   border-top: 1px solid #e5e7eb;
-  border-bottom: 0;
+
+  button {
+    min-height: 36px;
+    padding: 7px 14px;
+    border: 1px solid #d1d5db;
+    border-radius: var(--hn-radius-md, 8px);
+    background: #fff;
+    color: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+
+    &:hover:not(:disabled) {
+      background: #f3f4f6;
+      border-color: #6b7280;
+    }
+
+    &:active:not(:disabled) {
+      background: #e5e7eb;
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+  }
+
+  .hamster-reader__pdf-hidden-modal-select-all {
+    margin-right: auto;
+  }
+
+  .hamster-reader__pdf-hidden-modal-confirm {
+    border-color: transparent;
+    background: var(--hamster-reader-theme-color, #2563eb);
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      border-color: transparent;
+      background: color-mix(
+        in srgb,
+        var(--hamster-reader-theme-color, #2563eb) 88%,
+        #111827
+      );
+    }
+
+    &:active:not(:disabled) {
+      background: color-mix(
+        in srgb,
+        var(--hamster-reader-theme-color, #2563eb) 76%,
+        #111827
+      );
+    }
+  }
 }
 
 .hamster-reader__pdf-hidden-modal-list {
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 16px;
+  padding: 24px;
+  background: #f9fafb;
 
   section {
-    margin-bottom: 16px;
+    scroll-margin-top: 24px;
+
+    + section {
+      margin-top: 24px;
+    }
   }
 
   h3 {
-    margin: 0 0 8px;
-    font-size: 14px;
+    margin: 0 0 12px;
+    color: #6b7280;
+    font-size: 13px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -230,16 +391,28 @@
 
 .hamster-reader__pdf-hidden-page {
   position: relative;
+  display: grid;
+  gap: 8px;
+  width: 100%;
   min-width: 0;
   padding: 8px;
   border: 2px solid transparent;
-  border-radius: 8px;
-  background: #f3f4f6;
+  border-radius: var(--hn-radius-md, 8px);
+  background: #fff;
   color: inherit;
+  font-variant-numeric: tabular-nums;
+
+  &:hover {
+    border-color: #d1d5db;
+  }
 
   &[aria-checked='true'] {
-    border-color: #1677cf;
-    background: #eff6ff;
+    border-color: var(--hamster-reader-theme-color, #2563eb);
+    background: color-mix(
+      in srgb,
+      var(--hamster-reader-theme-color, #2563eb) 8%,
+      #fff
+    );
   }
 }
 
@@ -249,12 +422,29 @@
   width: 100%;
   min-height: 96px;
   overflow: hidden;
-  background: #e5e7eb;
+  border-radius: 4px;
+  background: #f3f4f6;
 
   img {
     width: 100%;
     height: 100%;
     object-fit: contain;
+  }
+}
+
+.hamster-reader__pdf-hidden-preview-retry {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hamster-reader-theme-color, #2563eb);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+
+  &:hover {
+    background: #f3f4f6;
   }
 }
 
@@ -267,9 +457,17 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: #1677cf;
+  background: var(--hamster-reader-theme-color, #2563eb);
   color: #fff;
   font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hamster-reader__pdf-hidden-group,
+  .hamster-reader__pdf-hidden-empty button,
+  .hamster-reader__pdf-hidden-modal button {
+    transition: none;
+  }
 }
 
 .hamster-reader__pdf-hidden-undo {
@@ -297,6 +495,16 @@
 @media (max-width: 480px) {
   .hamster-reader__pdf-hidden-modal-backdrop {
     padding: 8px;
+  }
+
+  .hamster-reader__pdf-hidden-modal-header,
+  .hamster-reader__pdf-hidden-modal-footer,
+  .hamster-reader__pdf-hidden-modal-list {
+    padding: 12px;
+  }
+
+  .hamster-reader__pdf-hidden-modal-footer button {
+    padding-inline: 10px;
   }
 
   .hamster-reader__pdf-hidden-page-grid {

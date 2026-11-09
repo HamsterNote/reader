@@ -268,7 +268,53 @@ try {
   assert.equal(preview.cards, 198)
   assert(preview.rendered > 0 && preview.rendered < 198)
   assert.equal(preview.bodyRenders, 0)
+  const assertDialogFits = async () => {
+    const layout = await page.getByRole('dialog').evaluate((dialog) => {
+      const rect = dialog.getBoundingClientRect()
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        width: dialog.clientWidth,
+        scrollWidth: dialog.scrollWidth
+      }
+    })
+    assert(layout.left >= 0 && layout.right <= layout.viewportWidth)
+    assert(layout.top >= 0 && layout.bottom <= layout.viewportHeight)
+    assert.equal(layout.scrollWidth, layout.width)
+  }
+  await assertDialogFits()
+  await page.getByTestId('pdf-hidden-restore-page-2').click()
   await page.screenshot({ path: resolve(output, 'mobile-restore-modal.png') })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await assertDialogFits()
+  await page.screenshot({ path: resolve(output, 'desktop-restore-modal.png') })
+  await page.getByRole('button', { name: '关闭隐藏页恢复' }).focus()
+  await page.keyboard.press('Shift+Tab')
+  assert.equal(
+    await page
+      .getByRole('button', { name: '恢复 1 页' })
+      .evaluate((button) => button === document.activeElement),
+    true
+  )
+  await page.keyboard.press('Tab')
+  assert.equal(
+    await page
+      .getByRole('button', { name: '关闭隐藏页恢复' })
+      .evaluate((button) => button === document.activeElement),
+    true
+  )
+  await page.keyboard.press('Escape')
+  await page.getByRole('dialog').waitFor({ state: 'detached' })
+  assert(await group.evaluate((button) => button === document.activeElement))
+  await page.setViewportSize({ width: 320, height: 740 })
+  await group.click()
+  report.checks.push(
+    '320px and desktop dialogs fit the viewport without horizontal overflow; Tab traps focus, Escape closes, and focus returns to the group entry'
+  )
   report.checks.push(
     `modal renders real previews on demand (${preview.rendered}/198), with zero hidden-page body renders`
   )
@@ -380,6 +426,10 @@ try {
     })
   }, bytes)
   await page.locator('[data-hidden-page-group="2-2"]').waitFor()
+  await page.locator('[data-hidden-page-group="2-2"]').click()
+  await page.getByRole('heading', { name: '第 2 页', exact: true }).waitFor()
+  await page.keyboard.press('Escape')
+  report.checks.push('a single hidden page uses a single-page group heading')
   assert.equal(
     await page.locator('.hamster-reader__pdf-hidden-undo').count(),
     0
