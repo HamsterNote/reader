@@ -52,29 +52,57 @@ try {
     window.pdfHiddenRenderLog = []
     // PDF.js submits render before mounting its canvas. Tag the actual viewer
     // rendering source (including detail canvases), independent of DOM timing.
-    const bodyCanvases = new WeakMap()
+    const bodyCanvases = new WeakSet()
+    const viewers = new WeakMap()
+    const documentSessions = new WeakMap()
+    const pageSessions = new WeakMap()
+    let nextSession = 0
+    const sessionFor = (document) => {
+      if (!documentSessions.has(document))
+        documentSessions.set(document, ++nextSession)
+      return documentSessions.get(document)
+    }
+    window.pdfHiddenGetViewer = () =>
+      viewers.get(document.querySelector('.pdfViewer'))
+    window.pdfHiddenGetSession = () =>
+      sessionFor(window.pdfHiddenGetViewer().pdfDocument)
     const base = Object.getPrototypeOf(
       window.readerRegression.PDFPageView.prototype
     )
     const drawCanvas = base._drawCanvas
     base._drawCanvas = function (options, ...args) {
-      bodyCanvases.set(options.canvas, this.renderingQueue.pdfViewer.viewer)
+      const viewer = this.renderingQueue.pdfViewer
+      viewers.set(viewer.viewer, viewer)
+      bodyCanvases.add(options.canvas)
       return drawCanvas.call(this, options, ...args)
     }
     const probe = await window.pdfjsLib.getDocument({
       data: new Uint8Array(bytes)
     }).promise
+    // Associate pages with the actual document instance, before any caller can
+    // render them. A reused viewer DOM node or identical PDF bytes is not a
+    // session identity. Keep all requests, including startup and retired docs.
+    const documentPrototype = Object.getPrototypeOf(probe)
+    const getPage = documentPrototype.getPage
+    documentPrototype.getPage = async function (...args) {
+      const session = sessionFor(this)
+      const page = await getPage.apply(this, args)
+      pageSessions.set(page, session)
+      return page
+    }
     const first = await probe.getPage(1)
     const prototype = Object.getPrototypeOf(first)
     const render = prototype.render
     prototype.render = function (options) {
+      const session = pageSessions.get(this)
+      if (session === undefined) throw new Error('untracked PDF render session')
       window.pdfHiddenRenderLog.push({
+        session,
         pageNumber: this.pageNumber,
         modal:
           !bodyCanvases.has(options.canvas) &&
           Boolean(document.querySelector('[role="dialog"]')),
         body: bodyCanvases.has(options.canvas),
-        viewer: bodyCanvases.get(options.canvas),
         connected: options.canvas?.isConnected ?? false
       })
       if (
@@ -107,7 +135,10 @@ try {
       () =>
         window.pdfHiddenRenderLog.filter(
           (entry) =>
-            entry.body && entry.pageNumber >= 2 && entry.pageNumber <= 4
+            entry.session === window.pdfHiddenDocumentSession &&
+            entry.body &&
+            entry.pageNumber >= 2 &&
+            entry.pageNumber <= 4
         ).length
     )
   const wide = await PDFDocument.create()
@@ -128,13 +159,19 @@ try {
       (entry) => entry.body && entry.pageNumber === 1
     )
   )
+  await page.evaluate(() => {
+    window.pdfHiddenDocumentSession = window.pdfHiddenGetSession()
+  })
   report.idle = { milliseconds: 2000, before: await hiddenBodyCount() }
   await page.waitForTimeout(report.idle.milliseconds)
   report.idle.after = await hiddenBodyCount()
   report.idle.detachedBodyRenders = await page.evaluate(
     () =>
       window.pdfHiddenRenderLog.filter(
-        (entry) => entry.body && !entry.connected
+        (entry) =>
+          entry.session === window.pdfHiddenDocumentSession &&
+          entry.body &&
+          !entry.connected
       ).length
   )
   checkRegression(
@@ -279,16 +316,36 @@ try {
   )
 
   const hiddenPages = Array.from({ length: 198 }, (_, index) => index + 2)
-  await page.evaluate(() => {
-    window.pdfHiddenRenderLog.length = 0
-  })
-  await page.evaluate(
+  const switchWindow = await page.evaluate(
     async ({ bytes, hiddenPages }) => {
-      await window.readerRegression.open('pdf', bytes, {
+      const oldSession = window.pdfHiddenGetSession()
+      const oldViewer = window.pdfHiddenGetViewer()
+      const oldPage = oldViewer.getPageView(4)
+      if (!oldPage.pdfPage) throw new Error('old page 5 must be loaded')
+      const logStart = window.pdfHiddenRenderLog.length
+      const opening = window.readerRegression.open('pdf', bytes, {
         data: { hiddenPages },
         edgeCropEditing: false,
         onDataChange: (data) => window.readerRegression.update({ data })
       })
+      // open() waits two frames before retiring the old document. Force a real
+      // old-page draw inside that window, while page 5 will be hidden in the new
+      // book. Its canvas still goes through the actual PDFPageView source probe.
+      const lateDraw = new Promise((resolve, reject) =>
+        requestAnimationFrame(() => {
+          try {
+            oldPage.reset()
+            oldPage.draw().then(resolve, (error) => {
+              if (error.name === 'RenderingCancelledException') resolve()
+              else reject(error)
+            })
+          } catch (error) {
+            reject(error)
+          }
+        })
+      )
+      await Promise.all([opening, lateDraw])
+      return { oldSession, logStart }
     },
     { bytes, hiddenPages }
   )
@@ -296,9 +353,47 @@ try {
     () => document.querySelectorAll('.pdfViewer .page').length === 200
   )
   await page.locator('.pdfViewer .page').first().waitFor()
+  await page.waitForFunction(
+    () => window.pdfHiddenGetViewer()?.pdfDocument?.numPages === 200
+  )
   await page.evaluate(() => {
     window.pdfHiddenViewer = document.querySelector('.pdfViewer')
+    window.pdfHiddenDocumentSession = window.pdfHiddenGetSession()
   })
+  report.sessionIsolation = await page.evaluate(({ oldSession, logStart }) => {
+    const session = window.pdfHiddenDocumentSession
+    const requests = window.pdfHiddenRenderLog.slice(logStart)
+    return {
+      oldSession,
+      newSession: session,
+      lateOldPageFiveRequests: requests.filter(
+        (entry) =>
+          entry.session === oldSession && entry.body && entry.pageNumber === 5
+      ).length,
+      newSessionStartupRequests: requests.filter(
+        (entry) => entry.session === session && entry.body
+      ).length,
+      newSessionPageFiveRequests: requests.filter(
+        (entry) =>
+          entry.session === session && entry.body && entry.pageNumber === 5
+      ).length,
+      unscopedHiddenBodyRequests: requests.filter(
+        (entry) =>
+          entry.body && entry.pageNumber >= 2 && entry.pageNumber <= 199
+      ).length
+    }
+  }, switchWindow)
+  assert.notEqual(
+    report.sessionIsolation.oldSession,
+    report.sessionIsolation.newSession
+  )
+  assert(report.sessionIsolation.lateOldPageFiveRequests > 0)
+  assert(report.sessionIsolation.newSessionStartupRequests > 0)
+  assert.equal(report.sessionIsolation.newSessionPageFiveRequests, 0)
+  assert(report.sessionIsolation.unscopedHiddenBodyRequests > 0)
+  report.checks.push(
+    'a real late page-5 body draw during book switching stays in the old document session; new-document startup renders remain recorded'
+  )
   assert.equal(await page.locator('[data-hidden-page-group]').count(), 0)
 
   const measureLayout = () =>
@@ -365,7 +460,7 @@ try {
             entry.pageNumber >= 2 &&
             entry.pageNumber <= 199 &&
             entry.body &&
-            entry.viewer === window.pdfHiddenViewer
+            entry.session === window.pdfHiddenDocumentSession
         ).length
       }
     })
@@ -405,7 +500,7 @@ try {
         window.pdfHiddenRenderLog.filter(
           (entry) =>
             entry.body &&
-            entry.viewer === window.pdfHiddenViewer &&
+            entry.session === window.pdfHiddenDocumentSession &&
             entry.pageNumber >= 2 &&
             entry.pageNumber <= 199
         ).length
@@ -482,7 +577,10 @@ try {
     cards: document.querySelectorAll('[data-hidden-preview-page]').length,
     rendered: new Set(
       window.pdfHiddenRenderLog
-        .filter((entry) => entry.modal)
+        .filter(
+          (entry) =>
+            entry.session === window.pdfHiddenDocumentSession && entry.modal
+        )
         .map((entry) => entry.pageNumber)
     ).size,
     bodyRenders: window.pdfHiddenRenderLog.filter(
@@ -490,7 +588,7 @@ try {
         entry.pageNumber >= 2 &&
         entry.pageNumber <= 199 &&
         entry.body &&
-        entry.viewer === window.pdfHiddenViewer
+        entry.session === window.pdfHiddenDocumentSession
     ).length
   }))
   report.preview = preview
