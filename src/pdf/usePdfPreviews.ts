@@ -42,6 +42,7 @@ export function usePdfPreviews(
   const [errors, setErrors] = useState(new Set<number>())
   const [retry, setRetry] = useState(0)
   const visible = useRef(new Set<number>())
+  const failedPages = useRef(new Set<number>())
   const pump = useRef(() => {})
   const busy = useRef(bodyBusy)
   busy.current = bodyBusy
@@ -60,6 +61,7 @@ export function usePdfPreviews(
     const owner = {}
     const cache = new Map<number, Preview>()
     const failed = new Set<number>()
+    failedPages.current = failed
     const isCancelled = () => cancelled
     const bodyRendering = () => busy.current()
     const scheduleContinuation = (callback: () => void) => {
@@ -135,6 +137,7 @@ export function usePdfPreviews(
       task?.cancel()
       if (canvas) canvas.width = canvas.height = 0
       cache.clear()
+      failed.clear()
       pump.current = () => {}
     }
   }, [document, open, retry])
@@ -147,6 +150,15 @@ export function usePdfPreviews(
     pump.current()
   }, [])
   const retryPreview = useCallback(() => setRetry((value) => value + 1), [])
+  const retryPage = useCallback((pageNumber: number) => {
+    if (!failedPages.current.delete(pageNumber)) return
+    setErrors((current) => {
+      const next = new Set(current)
+      next.delete(pageNumber)
+      return next
+    })
+    pump.current()
+  }, [])
   const current =
     owner === document && open ? previews : new Map<number, Preview>()
   return {
@@ -154,6 +166,7 @@ export function usePdfPreviews(
     images: new Map([...current].map(([page, item]) => [page, item.image])),
     errors: owner === document && open ? errors : new Set<number>(),
     onVisibility,
-    retryPreview
+    retryPreview,
+    retryPage
   }
 }

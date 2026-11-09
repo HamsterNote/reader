@@ -1180,7 +1180,8 @@ describe('PdfDocumentViewer 接线', () => {
       source,
       hiddenPages: [1],
       pageRange: { start: 1, end: 2 },
-      onPageChange
+      onPageChange,
+      onHiddenPagesRestore: vi.fn()
     }
     const view = renderViewer(props, ref)
     await act(async () => {})
@@ -1211,11 +1212,16 @@ describe('PdfDocumentViewer 接线', () => {
     expect(onPageChange).toHaveBeenLastCalledWith(2)
     view.rerender(<PdfDocumentViewer {...props} edgeCropEditing ref={ref} />)
     act(() => ref.current!.scrollToPage(1))
-    expect(latestViewer().currentPageNumber).toBe(1)
+    expect(latestViewer().currentPageNumber).toBe(2)
+    expect(latestViewer().getPageView(0)!.div.style.display).toBe('none')
+    expect(
+      view.container.querySelector('.hamster-reader__engine-hidden-page')
+    ).toBeNull()
+    expect(view.getByTestId('pdf-hidden-page-group-1-1')).toBeTruthy()
     act(() =>
       latestViewer().eventBus.dispatch('pagechanging', { pageNumber: 1 })
     )
-    expect(onPageChange).toHaveBeenLastCalledWith(1)
+    expect(onPageChange).not.toHaveBeenCalledWith(1)
     onPageChange.mockClear()
     view.rerender(
       <PdfDocumentViewer {...props} currentPageNumber={1} ref={ref} />
@@ -1311,11 +1317,13 @@ describe('PdfDocumentViewer 接线', () => {
         pageRange={{ start: 2, end: 2 }}
         hiddenPages={[2]}
         edgeCropEditing
+        onHiddenPagesRestore={vi.fn()}
         ref={ref}
       />
     )
     expect(latestViewer().getPageView(0)!.div.style.display).toBe('none')
-    expect(latestViewer().getPageView(1)!.div.style.display).toBe('')
+    expect(latestViewer().getPageView(1)!.div.style.display).toBe('none')
+    expect(view.getByTestId('pdf-hidden-page-group')).toBeTruthy()
     view.rerender(
       <PdfDocumentViewer
         source={source}
@@ -1326,6 +1334,72 @@ describe('PdfDocumentViewer 接线', () => {
     expect(latestViewer().getPageView(1)!.div.style.display).toBe('none')
     view.rerender(<PdfDocumentViewer source={source} ref={ref} />)
     expect(latestViewer().getPageView(0)!.div.style.display).toBe('')
+  })
+
+  it('renders one independent control per hidden group without revealing hidden pages', async () => {
+    const pdf = await PDFDocument.create()
+    for (let page = 0; page < 11; page++) pdf.addPage([400, 300])
+    const source = { data: await pdf.save() }
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onHiddenPagesRestore = vi.fn()
+    const view = renderViewer(
+      {
+        source,
+        edgeCropEditing: true,
+        hiddenPages: [2, 4, 5, 9, 'page-10'],
+        onHiddenPagesRestore
+      },
+      ref
+    )
+    await act(async () => {})
+    expect(
+      view
+        .getAllByRole('button', { name: /个隐藏页/ })
+        .map((button) => button.getAttribute('data-hidden-page-group'))
+    ).toEqual(['2-2', '4-5', '9-10'])
+    for (const pageNumber of [2, 4, 5, 9, 10]) {
+      expect(
+        latestViewer().getPageView(pageNumber - 1)!.div.style.display
+      ).toBe('none')
+      expect(
+        latestViewer()
+          .getPageView(pageNumber - 1)!
+          .div.querySelector('.hamster-reader__engine-hidden-page')
+      ).toBeNull()
+    }
+    const trigger = view.getByTestId('pdf-hidden-page-group-2-2')
+    fireEvent.click(trigger)
+    fireEvent.click(view.getByTestId('pdf-hidden-restore-page-2'))
+    fireEvent.click(view.getByTestId('pdf-hidden-restore-page-4'))
+    fireEvent.click(view.getByRole('button', { name: '恢复 2 页' }))
+    expect(onHiddenPagesRestore).toHaveBeenCalledTimes(1)
+    expect(onHiddenPagesRestore).toHaveBeenCalledWith([2, 4])
+    fireEvent.click(trigger)
+    fireEvent.keyDown(view.getByRole('dialog'), { key: 'Escape' })
+    expect(view.queryByRole('dialog')).toBeNull()
+    expect(trigger).toHaveFocus()
+    view.rerender(
+      <PdfDocumentViewer
+        source={source}
+        edgeCropEditing
+        hiddenPages={Array.from({ length: 11 }, (_, index) => index + 1)}
+        onHiddenPagesRestore={onHiddenPagesRestore}
+        ref={ref}
+      />
+    )
+    expect(view.getByTestId('pdf-hidden-page-group').textContent).toContain(
+      '11'
+    )
+    view.rerender(
+      <PdfDocumentViewer
+        source={source}
+        edgeCropEditing
+        hiddenPages={[]}
+        onHiddenPagesRestore={onHiddenPagesRestore}
+        ref={ref}
+      />
+    )
+    expect(view.queryAllByTestId(/pdf-hidden-page-group/)).toHaveLength(0)
   })
 
   async function scannedSource() {

@@ -1,4 +1,6 @@
 import { pdfHighlightFill } from '../pdf/pdfSelectionPaint'
+import { removeHiddenPageNumbers } from '../pdf/hiddenPages'
+import type { HiddenPageEntry } from '../pdf/hiddenPages'
 import {
   normalizeBookmark,
   normalizeTextProgress,
@@ -675,6 +677,21 @@ function resolveHistoryDefaultRanges(
   return enabled && controlled === undefined ? present : defaults
 }
 
+type HiddenPagesRestoreUndo = {
+  readonly previous: readonly HiddenPageEntry[]
+  readonly next: readonly HiddenPageEntry[]
+}
+
+function sameHiddenPages(
+  left: readonly HiddenPageEntry[],
+  right: readonly HiddenPageEntry[]
+) {
+  return (
+    left.length === right.length &&
+    left.every((entry, index) => entry === right[index])
+  )
+}
+
 export function Reader({
   engineSource,
   document,
@@ -833,6 +850,18 @@ export function Reader({
   const [internalPaintingSettings, setInternalPaintingSettings] =
     useState<LayeredToolsSnapshot>(() => createPaintingSettings())
   const [internalHighlightColor, setInternalHighlightColor] = useState<string>()
+  const [hiddenPagesRestoreUndo, setHiddenPagesRestoreUndo] =
+    useState<HiddenPagesRestoreUndo | null>(null)
+  const hiddenPagesUndoTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const latestReaderData = useRef(data)
+  latestReaderData.current = data
+  const clearHiddenPagesRestoreUndo = useCallback(() => {
+    if (hiddenPagesUndoTimer.current) clearTimeout(hiddenPagesUndoTimer.current)
+    hiddenPagesUndoTimer.current = null
+    setHiddenPagesRestoreUndo(null)
+  }, [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const readerRootRef = useRef<HTMLDivElement>(null)
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
@@ -1077,6 +1106,28 @@ export function Reader({
     (typeof resolvedOcr === 'object' && resolvedOcr.enabled === true)
   const resolvedTouchPanMode = touchPanMode ?? internalTouchPanMode
   const resolvedEdgeCropEditing = edgeCropEditing ?? internalEdgeCropEditing
+  useEffect(() => {
+    clearHiddenPagesRestoreUndo()
+  }, [engineSource, document, clearHiddenPagesRestoreUndo])
+  useEffect(() => {
+    if (!resolvedEdgeCropEditing) clearHiddenPagesRestoreUndo()
+  }, [resolvedEdgeCropEditing, clearHiddenPagesRestoreUndo])
+  useEffect(() => {
+    if (!hiddenPagesRestoreUndo) return
+    const actual = data?.hiddenPages ?? []
+    if (
+      !sameHiddenPages(actual, hiddenPagesRestoreUndo.previous) &&
+      !sameHiddenPages(actual, hiddenPagesRestoreUndo.next)
+    )
+      clearHiddenPagesRestoreUndo()
+  }, [data?.hiddenPages, hiddenPagesRestoreUndo, clearHiddenPagesRestoreUndo])
+  useEffect(
+    () => () => {
+      if (hiddenPagesUndoTimer.current)
+        clearTimeout(hiddenPagesUndoTimer.current)
+    },
+    []
+  )
   const resolvedSelectedTool =
     data?.selectedTool ?? selectedTool ?? internalSelectedTool
   const resolvedDrawingStrokeColor =
@@ -1488,17 +1539,19 @@ export function Reader({
 
   const handleEdgeCropEditingChange = useCallback(
     (editing: boolean) => {
+      if (!editing) clearHiddenPagesRestoreUndo()
       if (edgeCropEditing === undefined) setInternalEdgeCropEditing(editing)
       onEdgeCropEditingChange?.(editing)
     },
-    [edgeCropEditing, onEdgeCropEditingChange]
+    [edgeCropEditing, onEdgeCropEditingChange, clearHiddenPagesRestoreUndo]
   )
 
   const handleEdgeCropHidePage = useCallback(
     (pageNumber: number) => {
       if (!onDataChange) return
 
-      const hiddenPages = data?.hiddenPages ?? []
+      const current = latestReaderData.current
+      const hiddenPages = current?.hiddenPages ?? []
       const pageId = `page-${pageNumber}`
       if (
         hiddenPages.some(
@@ -1507,10 +1560,36 @@ export function Reader({
       ) {
         return
       }
-      onDataChange({ ...data, hiddenPages: [...hiddenPages, pageNumber] })
+      clearHiddenPagesRestoreUndo()
+      onDataChange({ ...current, hiddenPages: [...hiddenPages, pageNumber] })
     },
-    [data, onDataChange]
+    [onDataChange, clearHiddenPagesRestoreUndo]
   )
+
+  const handleHiddenPagesRestore = useCallback(
+    (pageNumbers: readonly number[]) => {
+      if (!onDataChange) return
+      const current = latestReaderData.current
+      const previous = current?.hiddenPages ?? []
+      const next = removeHiddenPageNumbers(previous, pageNumbers)
+      if (next.length === previous.length) return
+      clearHiddenPagesRestoreUndo()
+      setHiddenPagesRestoreUndo({ previous, next })
+      onDataChange({ ...current, hiddenPages: next })
+      hiddenPagesUndoTimer.current = setTimeout(() => {
+        hiddenPagesUndoTimer.current = null
+        setHiddenPagesRestoreUndo(null)
+      }, 5000)
+    },
+    [onDataChange, clearHiddenPagesRestoreUndo]
+  )
+
+  const handleHiddenPagesRestoreUndo = useCallback(() => {
+    if (!hiddenPagesRestoreUndo || !onDataChange) return
+    const current = latestReaderData.current
+    clearHiddenPagesRestoreUndo()
+    onDataChange({ ...current, hiddenPages: hiddenPagesRestoreUndo.previous })
+  }, [hiddenPagesRestoreUndo, onDataChange, clearHiddenPagesRestoreUndo])
 
   const handleSelectedToolChange = useCallback(
     (nextTool: ReaderPageTool) => {
@@ -2069,6 +2148,9 @@ export function Reader({
             edgeCropEditing={resolvedEdgeCropEditing}
             onEdgeCropApply={onEdgeCropApply}
             onEdgeCropHidePage={handleEdgeCropHidePage}
+            onHiddenPagesRestore={handleHiddenPagesRestore}
+            canUndoHiddenPagesRestore={hiddenPagesRestoreUndo !== null}
+            onHiddenPagesRestoreUndo={handleHiddenPagesRestoreUndo}
             ocr={resolvedOcr}
             extraOCR={extraOCR}
             onOcrError={onOcrError}

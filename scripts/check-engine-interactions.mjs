@@ -639,11 +639,16 @@ async function run(mobile, format) {
       .getByRole('button', { name: '隐藏当前页', exact: true })
       .first()
       .click()
-    await page
-      .getByText(/当前 第 .* 页 已隐藏/)
-      .first()
-      .waitFor()
-    await screenshot(page, label, 'hidden-placeholder')
+    if (format === 'epub') {
+      await page
+        .getByText(/当前 第 .* 页 已隐藏/)
+        .first()
+        .waitFor()
+      await screenshot(page, label, 'hidden-placeholder')
+    } else {
+      await page.locator('[data-hidden-page-group]').first().waitFor()
+      await screenshot(page, label, 'hidden-group')
+    }
     await page
       .getByTestId('edge-crop-edit-toggle')
       .evaluate((button) => button.click())
@@ -703,7 +708,9 @@ async function run(mobile, format) {
       )
     }
     result.checks.push(
-      'crop drag/apply; hidden page placeholder during editing; omitted during reading'
+      format === 'epub'
+        ? 'crop drag/apply; hidden page placeholder during editing; omitted during reading'
+        : 'crop drag/apply; hidden PDF pages stay out of layout with one grouped restore entry'
     )
     await screenshot(page, label, 'hidden-reading')
     if (format === 'epub') await checkPrependedCover(page, label, result)
