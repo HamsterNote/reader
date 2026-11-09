@@ -36,6 +36,9 @@ import { createPortal } from 'react-dom'
 
 import { EventBus, PDFLinkService, PDFViewer } from './pdfViewerLib'
 import { CroppedPdfViewer } from './CroppedPdfViewer'
+import { groupHiddenPages, normalizeHiddenPageNumbers } from './hiddenPages'
+import { PdfHiddenPageGroupControls } from './PdfHiddenPageGroupControls'
+import { PdfHiddenPageRestoreModal } from './PdfHiddenPageRestoreModal'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
@@ -204,6 +207,9 @@ export type PdfDocumentViewerProps = PdfOcrOptions & {
     typeof EdgeCropOverlay
   >['onApply']
   readonly onEdgeCropHidePage?: (pageNumber: number) => void
+  readonly onHiddenPagesRestore?: (pageNumbers: readonly number[]) => void
+  readonly canUndoHiddenPagesRestore?: boolean
+  readonly onHiddenPagesRestoreUndo?: () => void
 }
 
 export type PdfDocumentViewerRef = {
@@ -260,21 +266,6 @@ const setViewerDocument = (
   target.setDocument(doc as PDFDocumentProxy)
 }
 
-const normalizeHiddenPageNumbers = (
-  hiddenPages: readonly (number | string)[] | undefined
-): ReadonlySet<number> => {
-  const result = new Set<number>()
-  for (const entry of hiddenPages ?? []) {
-    if (typeof entry === 'number') {
-      result.add(entry)
-      continue
-    }
-    const match = /^page-([1-9]\d*)$/.exec(entry)
-    if (match) result.add(Number(match[1]))
-  }
-  return result
-}
-
 type OverlayPortalProps = {
   readonly pageDiv: HTMLElement
   readonly children: ReactNode
@@ -282,10 +273,8 @@ type OverlayPortalProps = {
 
 const filterHiddenPages = (
   pages: readonly number[],
-  hiddenPages: readonly (number | string)[] | undefined,
-  editing = false
+  hiddenPages: readonly (number | string)[] | undefined
 ): readonly number[] => {
-  if (editing) return pages
   const hidden = normalizeHiddenPageNumbers(hiddenPages)
   return pages.filter((page) => !hidden.has(page))
 }
@@ -387,17 +376,23 @@ export const PdfDocumentViewer = forwardRef<
   const [overlayPages, setOverlayPages] = useState<readonly number[]>([])
   const [ocrDocument, setOcrDocument] = useState<PDFDocumentProxy | null>(null)
   const [renderedPages, setRenderedPages] = useState<readonly number[]>([])
+  const [restoreGroupStart, setRestoreGroupStart] = useState<number | null>(
+    null
+  )
+  const restoreTriggerRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => setRestoreGroupStart(null), [source, edgeCropEditing])
+  useEffect(() => {
+    if (restoreGroupStart !== null || !restoreTriggerRef.current) return
+    restoreTriggerRef.current.focus()
+    restoreTriggerRef.current = null
+  }, [restoreGroupStart])
   const allowedPages = getVisiblePageNumbers([...overlayPages], pageRange)
   const readablePages = filterHiddenPages(allowedPages, hiddenPages)
-  const navigablePages = edgeCropEditing ? allowedPages : readablePages
-  const visiblePagesRef = useRef(navigablePages)
-  visiblePagesRef.current = navigablePages
-  const navigationOptionsRef = useRef({
-    pageRange,
-    hiddenPages,
-    edgeCropEditing
-  })
-  navigationOptionsRef.current = { pageRange, hiddenPages, edgeCropEditing }
+  const hiddenGroups = groupHiddenPages(hiddenPages, allowedPages)
+  const visiblePagesRef = useRef(readablePages)
+  visiblePagesRef.current = readablePages
+  const navigationOptionsRef = useRef({ pageRange, hiddenPages })
+  navigationOptionsRef.current = { pageRange, hiddenPages }
   const ocrTexts = usePdfOcr(ocrDocument, renderedPages, readablePages, props)
   const ocrTextsRef = useRef(ocrTexts)
   ocrTextsRef.current = ocrTexts
@@ -968,14 +963,14 @@ export const PdfDocumentViewer = forwardRef<
       const navigation = navigationOptionsRef.current
       visiblePagesRef.current = filterHiddenPages(
         getVisiblePageNumbers(pages, navigation.pageRange),
-        navigation.hiddenPages,
-        navigation.edgeCropEditing
+        navigation.hiddenPages
       )
       setOverlayPages(pages)
       fitCroppedWidth()
       applyPageCrop()
     }
     const handlePageRendered = (event: { pageNumber: number }) => {
+      if (!visiblePagesRef.current.includes(event.pageNumber)) return
       const document = documentRef.current
       restoreAnchorRef.current()
       getCanonical(event.pageNumber)
@@ -1187,7 +1182,7 @@ export const PdfDocumentViewer = forwardRef<
     scrollToCroppedPage
   ])
 
-  // 隐藏页：display:none 占位（矩阵 §9：阅读时省略隐藏页）。
+  // 隐藏页及范围外页始终退出布局；编辑态只增加独立段入口。
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
@@ -1198,11 +1193,10 @@ export const PdfDocumentViewer = forwardRef<
         if (!pageView) return
         const isHidden = hidden.has(pageNumber)
         const inRange = allowedPages.includes(pageNumber)
-        pageView.div.style.display =
-          !inRange || (isHidden && !edgeCropEditing) ? 'none' : ''
-        pageView.div.dataset.readerHidden = String(
-          isHidden && Boolean(edgeCropEditing)
-        )
+        if ((!inRange || isHidden) && pageView.div.childElementCount > 0)
+          pageView.reset()
+        pageView.div.style.display = !inRange || isHidden ? 'none' : ''
+        delete pageView.div.dataset.readerHidden
       }
     )
     const visible = visiblePagesRef.current
@@ -1243,9 +1237,8 @@ export const PdfDocumentViewer = forwardRef<
         done: () => undefined,
         fail: () => undefined
       }
-    const pending = pendingAnchor.current
     restoreAnchorRef.current()
-    if (pending && !pendingAnchor.current) viewer.update()
+    viewer.update()
   }, [
     hiddenPages,
     pageRange,
@@ -1975,14 +1968,15 @@ export const PdfDocumentViewer = forwardRef<
       groupPreview.current?.map((range) => [range.id, range])
     )
     const overlayRanges = ranges.map((range) => previews.get(range.id) ?? range)
+    const hidden = normalizeHiddenPageNumbers(hiddenPages)
     return overlayPages.flatMap((pageNumber) => {
-      if (!allowedPages.includes(pageNumber)) return []
+      if (!allowedPages.includes(pageNumber) || hidden.has(pageNumber))
+        return []
       const pageView = viewer.getPageView(pageNumber - 1)
       if (!pageView) return []
       const geometry = getPageGeometry(pageNumber)
       if (!geometry) return []
       const pageId = `page-${pageNumber}`
-      const hidden = normalizeHiddenPageNumbers(hiddenPages).has(pageNumber)
       return [
         <PdfOverlayPortal key={pageId} pageDiv={pageView.div}>
           {ocrTexts.has(pageNumber) && (
@@ -1997,12 +1991,7 @@ export const PdfDocumentViewer = forwardRef<
               debug={props.ocrDebug}
             />
           )}
-          {hidden && edgeCropEditing && (
-            <div className='hamster-reader__engine-hidden-page'>
-              当前 第 {pageNumber} 页 已隐藏
-            </div>
-          )}
-          {!hidden && edgeCropEditing && (
+          {edgeCropEditing && (
             <EdgeCropOverlay
               pageNumber={pageNumber}
               edgeCrop={edgeCrop}
@@ -2109,8 +2098,61 @@ export const PdfDocumentViewer = forwardRef<
         style={{ position: 'absolute', inset: 0, overflow: 'auto' }}
       >
         <div ref={viewerElementRef} className='pdfViewer' />
+        {edgeCropEditing && props.onHiddenPagesRestore && (
+          <PdfHiddenPageGroupControls
+            groups={hiddenGroups}
+            readablePages={readablePages}
+            container={containerRef.current}
+            viewer={viewerElementRef.current}
+            getPageView={(pageNumber) =>
+              viewerRef.current?.getPageView(pageNumber - 1)
+            }
+            onOpen={(groupStart, trigger) => {
+              restoreTriggerRef.current = trigger
+              setRestoreGroupStart(groupStart)
+            }}
+          />
+        )}
       </div>
       {overlayElements}
+      {restoreGroupStart !== null && hiddenGroups.length > 0 && (
+        <PdfHiddenPageRestoreModal
+          groups={hiddenGroups}
+          initialGroupStart={restoreGroupStart}
+          document={ocrDocument}
+          bodyBusy={() => {
+            const viewer = viewerRef.current
+            return Boolean(
+              isRestoringLayout() ||
+              viewer?.getPageView(viewer.currentPageNumber - 1)
+                ?.renderingState === 1
+            )
+          }}
+          releasePage={(document, page) => {
+            if (document !== documentRef.current) return
+            eventBusRef.current?.dispatch('thumbnailrendered', {
+              source: viewerRef.current,
+              pageNumber: page.pageNumber,
+              pdfPage: page
+            })
+          }}
+          onClose={() => setRestoreGroupStart(null)}
+          onConfirm={(pageNumbers) => {
+            setRestoreGroupStart(null)
+            props.onHiddenPagesRestore?.(pageNumbers)
+          }}
+        />
+      )}
+      {props.canUndoHiddenPagesRestore &&
+        createPortal(
+          <div className='hamster-reader__pdf-hidden-undo' role='status'>
+            <span>已恢复所选页面</span>
+            <button type='button' onClick={props.onHiddenPagesRestoreUndo}>
+              撤销
+            </button>
+          </div>,
+          window.document.body
+        )}
     </div>
   )
 })

@@ -1,4 +1,5 @@
 import { PDFViewer } from './pdfViewerLib'
+import { restrictPdfRenderingQueue } from './pdfRenderingQueue'
 import type { ReaderPageEdgeCrop } from '../types/readerData'
 import {
   getPageCropGeometry,
@@ -100,6 +101,8 @@ export class CroppedPdfViewer extends PDFViewer {
     private readonly cropLayout?: CropLayout
   ) {
     super(options)
+    if (cropLayout && this.renderingQueue)
+      restrictPdfRenderingQueue(this.renderingQueue, cropLayout.pages)
   }
 
   override _getVisiblePages() {

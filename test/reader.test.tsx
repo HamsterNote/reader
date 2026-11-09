@@ -901,6 +901,152 @@ describe('Reader public API', () => {
     expect(onDataChange).toHaveBeenCalledWith({ hiddenPages: [1] })
   })
 
+  it('restores hidden page aliases once and undoes the exact previous ReaderData value', () => {
+    const onDataChange = vi.fn()
+    const document = makeDocument({ pages: [makePage(1)] })
+    const data = {
+      hiddenPages: [2, 'page-4', 4, 'invalid', 7],
+      selectedTool: 'text-selection' as const
+    }
+    const view = render(
+      <Reader
+        document={document}
+        data={data}
+        onDataChange={onDataChange}
+        edgeCropEditing
+      />
+    )
+    const restore = capturedViewerProps.onHiddenPagesRestore as (
+      pages: readonly number[]
+    ) => void
+    act(() => restore([2, 4]))
+    expect(onDataChange).toHaveBeenCalledTimes(1)
+    expect(onDataChange).toHaveBeenCalledWith({
+      ...data,
+      hiddenPages: ['invalid', 7]
+    })
+    const nextData = { ...data, hiddenPages: ['invalid', 7] }
+    view.rerender(
+      <Reader
+        document={document}
+        data={nextData}
+        onDataChange={onDataChange}
+        edgeCropEditing
+      />
+    )
+    expect(onDataChange).toHaveBeenCalledTimes(1)
+    expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(true)
+    act(() => (capturedViewerProps.onHiddenPagesRestoreUndo as () => void)())
+    expect(onDataChange).toHaveBeenCalledTimes(2)
+    expect(onDataChange).toHaveBeenLastCalledWith(data)
+    expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(false)
+  })
+
+  it('expires hidden page restoration undo and invalidates it on edit exit or document change', () => {
+    vi.useFakeTimers()
+    try {
+      const onDataChange = vi.fn()
+      const document = makeDocument({ pages: [makePage(1)] })
+      const nextDocument = makeDocument({ pages: [makePage(2)] })
+      const view = render(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [2] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      act(() =>
+        (
+          capturedViewerProps.onHiddenPagesRestore as (
+            pages: readonly number[]
+          ) => void
+        )([2])
+      )
+      view.rerender(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(true)
+      act(() => vi.advanceTimersByTime(5000))
+      expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(false)
+
+      view.rerender(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [2] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      act(() =>
+        (
+          capturedViewerProps.onHiddenPagesRestore as (
+            pages: readonly number[]
+          ) => void
+        )([2])
+      )
+      view.rerender(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(true)
+      view.rerender(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [] }}
+          onDataChange={onDataChange}
+          edgeCropEditing={false}
+        />
+      )
+      expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(false)
+
+      view.rerender(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [2] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      act(() =>
+        (
+          capturedViewerProps.onHiddenPagesRestore as (
+            pages: readonly number[]
+          ) => void
+        )([2])
+      )
+      view.rerender(
+        <Reader
+          document={document}
+          data={{ hiddenPages: [] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(true)
+      view.rerender(
+        <Reader
+          document={nextDocument}
+          data={{ hiddenPages: [] }}
+          onDataChange={onDataChange}
+          edgeCropEditing
+        />
+      )
+      expect(capturedViewerProps.canUndoHiddenPagesRestore).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('uses the colors prop as the default bottom bar color list', () => {
     // Given: 宿主提供与默认颜色完全不同的公共颜色列表。
     const onDrawingStrokeColorChange = vi.fn()

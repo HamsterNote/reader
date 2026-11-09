@@ -37,9 +37,6 @@
   color: #4b5563;
   visibility: visible;
 }
-.pdfViewer .page[data-reader-hidden='true'] > * {
-  visibility: hidden;
-}
 .hamster-reader__engine-handle {
   width: 14px;
   height: 14px;

@@ -495,6 +495,9 @@ export type IntermediateDocumentViewerProps = {
    */
   onEdgeCropApply?: (pageNumber: number | null, crop: ReaderEdgeCrop) => void
   onEdgeCropHidePage?: (pageNumber: number) => void
+  onHiddenPagesRestore?: (pageNumbers: readonly number[]) => void
+  canUndoHiddenPagesRestore?: boolean
+  onHiddenPagesRestoreUndo?: () => void
   /**
    * OCR 配置。
    * - `true` / `{ enabled: true }`：自动模式，识别当前与后续加载完成的页面；
