@@ -27,6 +27,7 @@ PDF 的「页面隐藏 / 编辑」目前会在编辑态把隐藏页重新插回�
 ### Modified Capabilities
 
 - `pdfjs-web-reader`: 增加隐藏页编辑态的折叠分组、无正文占位、模态框多选恢复、一次撤销及预览资源边界；保持既有页码和 `hiddenPages` 数据兼容。
+- `reader-data-compatibility`: 明确历史数字 / `page-N` 隐藏数据、原子批量恢复及一次撤销对其他最新阅读数据和标注历史的隔离契约。
 
 ## Impact
 

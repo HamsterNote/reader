@@ -95,17 +95,3 @@
 
 - **WHEN** 文档 A 的隐藏页预览仍在加载，用户关闭模态框或打开文档 B，随后 A 的预览结果返回
 - **THEN** A 的任务被取消并释放，结果被丢弃，B 不显示 A 的图片、页码或错误
-
-### Requirement: Existing page and data semantics remain compatible
-
-系统 MUST 继续使用一基原 PDF 页号及既有 `hiddenPages` 数字 / `page-N` 公共格式，不要求宿主迁移。隐藏页在恢复确认前 MUST 保持不可导航，恢复后 SHALL 按既有页范围、裁切、标注和进度规则参与阅读；折叠入口、模态框选择及撤销本身 MUST NOT 创建标注历史或改写书签、进度、裁切和标注。
-
-#### Scenario: Reopen historic hidden-page data
-
-- **WHEN** 用户打开同时含数字页码和 `page-N` 的历史数据，批量恢复其中一页后保存并重开
-- **THEN** 新旧标识均正确归一化，只有确认恢复的页面退出隐藏集合，其他字段与原页号语义保持不变
-
-#### Scenario: Navigate while editing
-
-- **WHEN** 用户在编辑态使用上一页、下一页、页码或书签定位，目标中包含仍隐藏的页面
-- **THEN** 导航继续跳过仍隐藏页，不跳到折叠入口；只有已确认恢复的页面重新成为有效目标，当前可见阅读位置不因打开模态框而改变
