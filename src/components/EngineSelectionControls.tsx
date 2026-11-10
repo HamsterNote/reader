@@ -648,9 +648,13 @@ export function EngineSelectionControls({
                   if (pdfTouch)
                     callbacks.current.onPreview?.(current.cloneRange())
                   const doc = range.startContainer.ownerDocument
-                  const body = doc?.defaultView?.frameElement
-                    ? doc.body
-                    : containerRef.current
+                  const body = pdfTouch
+                    ? (containerRef.current?.querySelector<HTMLElement>(
+                        '.pdfViewer'
+                      ) ?? doc?.body)
+                    : doc?.defaultView?.frameElement
+                      ? doc.body
+                      : containerRef.current
                   if (body && usesTouchMagnifier(event.pointerType)) {
                     magnifier?.start(
                       body,

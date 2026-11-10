@@ -39,20 +39,28 @@ export async function checkSharedSelectionInteraction({
     '/test/browser/review-regressions.tsx'
   )
   const rows = []
-  const page = await browser.newPage({
-    viewport: { width: 900, height: 900 },
-    hasTouch: true
-  })
-  page.setDefaultTimeout(12000)
+  let page, cdp
   const errors = []
-  page.on('pageerror', (error) => {
-    errors.push(error.message)
-    console.log('Page error', error.message)
-  })
-  await page.route('**/shared-selection.html', (route) =>
-    route.fulfill({ contentType: 'text/html', body: html })
-  )
-  const cdp = await page.context().newCDPSession(page)
+  const resetInputPage = async () => {
+    await cdp?.detach()
+    await page?.close()
+    page = await browser.newPage({
+      viewport: { width: 900, height: 900 },
+      hasTouch: true
+    })
+    page.setDefaultTimeout(20000)
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.route('**/shared-selection.html', (route) =>
+      route.fulfill({ contentType: 'text/html', body: html })
+    )
+    cdp = await page.context().newCDPSession(page)
+    await page.goto(`${base}/shared-selection.html`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000
+    })
+    await page.addStyleTag({ content: '.hamster-reader { height: 100%; }' })
+    await page.waitForFunction(() => window.readerRegression)
+  }
   const pointer = async (type, phase, p) => {
     if (type === 'touch') {
       await cdp.send('Input.dispatchTouchEvent', {
@@ -88,12 +96,6 @@ export async function checkSharedSelectionInteraction({
     }
   }
   try {
-    await page.goto(`${base}/shared-selection.html`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 45000
-    })
-    await page.addStyleTag({ content: '.hamster-reader { height: 100%; }' })
-    await page.waitForFunction(() => window.readerRegression)
     for (const surface of process.env.READER_SHARED_SURFACES?.split(',') ?? [
       'pdf-layout',
       'epub',
@@ -104,6 +106,9 @@ export async function checkSharedSelectionInteraction({
         'mouse',
         'pen'
       ]) {
+        // CDP can reuse inconsistent pen IDs after touch on an EPUB iframe.
+        // Give each input a new target; each case still starts via mouse selection.
+        await resetInputPage()
         for (const end of [false, true]) {
           for (const saved of [false, true]) {
             const label = `${surface}/${input}/${end ? 'end' : 'start'}/${saved ? 'saved' : 'draft'}`
@@ -407,8 +412,8 @@ export async function checkSharedSelectionInteraction({
     )
     throw error
   } finally {
-    await cdp.detach()
-    await page.close()
+    await cdp?.detach()
+    await page?.close()
   }
 }
 

@@ -33,7 +33,7 @@ it.each([false, true])(
         ]
       }
     })
-    const range: LinkedSelectionRange = {
+    const range: LinkedSelectionRange & { commentIds: string[] } = {
       id: 'saved',
       text: end ? 'previousabcd' : 'cdefghfollowing',
       createdAt: 1,
@@ -86,7 +86,9 @@ it.each([false, true])(
       })
       fireEvent.pointerUp(document, { pointerId: 1, clientX: 50, clientY: 110 })
       expect(update).toHaveBeenCalledOnce()
-      const result = update.mock.calls[0][0] as LinkedSelectionRange
+      const result = update.mock.calls[0][0] as LinkedSelectionRange & {
+        commentIds: string[]
+      }
       expect(result[end ? 'start' : 'end']).toEqual(
         range[end ? 'start' : 'end']
       )

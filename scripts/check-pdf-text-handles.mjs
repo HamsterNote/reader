@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { webkit } from 'playwright'
+import { chromium, webkit } from 'playwright'
 import { createServer } from 'vite'
 
 const repo = resolve(import.meta.dirname, '..')
@@ -10,9 +10,10 @@ const server = await createServer({
   root: repo,
   server: { host: '127.0.0.1', port: 0 }
 })
+const engine =
+  process.env.READER_BROWSER_ENGINE === 'chromium' ? chromium : webkit
 const report = {
-  platform:
-    'Linux Playwright WebKit; synthetic touch PointerEvents, not iOS WKWebView',
+  platform: `Linux Playwright ${engine.name()}; synthetic touch PointerEvents, physical WebViews pending`,
   cases: [],
   gestures: []
 }
@@ -25,7 +26,7 @@ try {
     '/handles.html',
     '<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0"><div id="root"></div><script type="module" src="/scripts/pdf-text-handles-harness.jsx"></script></body></html>'
   )
-  browser = await webkit.launch({
+  browser = await engine.launch({
     headless: true,
     executablePath: process.env.WEBKIT_EXECUTABLE_PATH
   })
@@ -41,6 +42,12 @@ try {
     route.fulfill({ contentType: 'text/html', body: html })
   )
   await page.goto(`${base}/handles.html`)
+  // This geometry harness dispatches synthetic events without an OS pointer.
+  // Real capture is exercised by the shared CDP input matrix.
+  await page.evaluate(() => {
+    HTMLElement.prototype.setPointerCapture = () => {}
+    HTMLElement.prototype.hasPointerCapture = () => false
+  })
   await page.locator('[data-text-id="end"]').waitFor()
   const settle = () =>
     page.evaluate(async () => {
@@ -127,7 +134,7 @@ try {
         if (report.cases.length === 1)
           await page.screenshot({ path: resolve(output, 'handles.png') })
         for (const error of result.errors) {
-          assert.ok(error, 'Both selected source endpoints should be visible')
+          assert.ok(error, JSON.stringify(result))
           assert.ok(
             Math.abs(error.x) < 1 &&
               Math.abs(error.y) < 1 &&
@@ -166,18 +173,13 @@ try {
       range.setEnd(node, offset + 1)
       return range.getBoundingClientRect()
     }
-    const current = rectAt(node.length - 1)
     const target = rectAt(node.length - 3)
     const button = document.querySelector('[data-pdf-handle-hit-target="end"]')
     const hit = button.getBoundingClientRect()
     const grab = { x: hit.x + hit.width / 2 + 9, y: hit.y + hit.height / 2 + 9 }
     const release = {
-      x: target.right - 0.5 + grab.x - current.right,
-      y:
-        target.top +
-        target.height / 2 +
-        grab.y -
-        (current.top + current.height / 2)
+      x: target.right - 0.5,
+      y: target.top + target.height / 2
     }
     const send = (element, type, point) =>
       element.dispatchEvent(

@@ -85,17 +85,26 @@ export function PdfTextSelectionControls({
     range: Range | null
   } | null>(null)
   const key = JSON.stringify([active?.start, active?.end])
+  const resolvedStart = root && active ? resolve(root, active.start) : null
+  const resolvedEnd = root && active ? resolve(root, active.end) : null
+  const cached = rangeCache.current?.range
+  const movedSource =
+    (resolvedStart &&
+      (cached?.startContainer !== resolvedStart.node ||
+        cached.startOffset !== resolvedStart.offset)) ||
+    (resolvedEnd &&
+      (cached?.endContainer !== resolvedEnd.node ||
+        cached.endOffset !== resolvedEnd.offset))
   if (
     root &&
     active &&
-    (rangeCache.current?.key !== key ||
+    (movedSource ||
+      rangeCache.current?.key !== key ||
       rangeCache.current.root !== root ||
       !rangeCache.current.range?.startContainer.isConnected ||
       !rangeCache.current.range?.endContainer.isConnected ||
       rangeCache.current.range.startContainer.nodeType !== Node.TEXT_NODE)
   ) {
-    const resolvedStart = resolve(root, active.start),
-      resolvedEnd = resolve(root, active.end)
     const content = root.querySelector<HTMLElement>('.hsn-selection-content')
     const walker =
       content &&

@@ -17,19 +17,22 @@ afterEach(() => vi.restoreAllMocks())
 const matrix = ['pdf-layout', 'epub', 'pdf-text'].flatMap((surface) =>
   ['touch', 'mouse', 'pen', ''].flatMap((pointerType) =>
     [false, true].flatMap((end) =>
-      ['draft', 'saved'].map((target) => ({
-        surface,
-        pointerType,
-        end,
-        target
-      }))
+      ['draft', 'saved'].flatMap((target) =>
+        ['center', 'edge', 'corner'].map((grab) => ({
+          surface,
+          pointerType,
+          end,
+          target,
+          grab
+        }))
+      )
     )
   )
 )
 
 it.each(matrix)(
-  '$surface / $pointerType / end=$end / $target uses raw hits, stable handles and a touch-only text lens',
-  ({ surface, pointerType, end, target }) => {
+  '$surface / $pointerType / end=$end / $target / $grab uses raw hits, stable handles and a touch-only text lens',
+  ({ surface, pointerType, end, target, grab }) => {
     const frame = surface === 'epub' ? document.createElement('iframe') : null
     if (frame) document.body.append(frame)
     const doc = frame?.contentDocument ?? document
@@ -127,8 +130,8 @@ it.each(matrix)(
         pointerId: 7,
         pointerType,
         button: 0,
-        clientX: 7,
-        clientY: 8
+        clientX: grab === 'center' ? 60 : grab === 'edge' ? 69 : 79,
+        clientY: grab === 'center' ? 140 : grab === 'edge' ? 140 : 159
       })
       fireEvent.pointerMove(document, { pointerId: 7, pointerType, ...point })
       expect(hit).toHaveBeenLastCalledWith(x, y)
@@ -173,6 +176,23 @@ it.each(matrix)(
       )
       expect(lens.hidden).toBe(true)
       expect(screenshot).not.toHaveBeenCalled()
+      if (pointerType === 'touch') {
+        for (const [i, nextType] of ['mouse', 'pen', ''].entries()) {
+          fireEvent.pointerDown(handle, {
+            pointerId: 20 + i,
+            pointerType: nextType,
+            button: 0,
+            ...point
+          })
+          fireEvent.pointerMove(document, {
+            pointerId: 20 + i,
+            pointerType: nextType,
+            ...point
+          })
+          expect(lens.hidden).toBe(true)
+          fireEvent.pointerCancel(document, { pointerId: 20 + i })
+        }
+      }
       // Disabling the feature cannot disable endpoint editing.
       view.rerender(controls(false))
       fireEvent.pointerDown(handle, {
