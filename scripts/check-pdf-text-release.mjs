@@ -26,7 +26,7 @@ let browser, page
 const errors = []
 const report = {
   coverage:
-    'Real Reader/PDF.js/selection dependency; synthetic initial Selection and pointer drags; trusted confirmation taps; OS long press/capture pending device validation',
+    'Real Reader/PDF.js/selection dependency; controlled linked-snapshot host and uncontrolled host; synthetic initial Selection and pointer drags; trusted confirmation/deselection/reselection taps; saved paint and both handle boundaries measured within 1 CSS px; OS long press/capture pending device validation',
   browser: engine.name(),
   version: '',
   cases: []
@@ -60,7 +60,12 @@ try {
     HTMLElement.prototype.setPointerCapture = () => {}
     HTMLElement.prototype.hasPointerCapture = () => false
   })
-  for (const line of [0, 1])
+  for (const [controlled, line] of [
+    [true, 0],
+    [true, 1],
+    [false, 0],
+    [false, 1]
+  ])
     for (const end of [false, true])
       for (const saved of [false, true])
         for (const cancel of [false, true])
@@ -69,23 +74,31 @@ try {
             : [false]) {
             let action = cancel ? 'cancel' : 'release'
             if (confirmDuringDrag) action = 'confirm-during-drag'
-            const label = `line${line + 1}/${end ? 'end' : 'start'}/${saved ? 'saved' : 'draft'}/${action}`
+            const label = `${controlled ? 'controlled' : 'uncontrolled'}/line${line + 1}/${end ? 'end' : 'start'}/${saved ? 'saved' : 'draft'}/${action}`
             console.log(`Checking ${label}`)
             await page.evaluate(
-              ({ bytes, relative }) => {
+              ({ bytes, relative, controlled }) => {
                 window.pdfTextFlow = []
-                return window.readerRegression.open('pdf', bytes, {
-                  renderMode: 'text',
-                  isPdf: true,
-                  selectedTool: 'text-selection',
-                  popoverRelative: relative,
-                  onLinkedDataChange: (data) => {
-                    window.pdfTextData = data
-                    window.pdfTextFlow.push(data.activeRange?.text ?? null)
-                  }
-                })
+                return window.readerRegression.open(
+                  'pdf',
+                  bytes,
+                  {
+                    renderMode: 'text',
+                    isPdf: true,
+                    selectedTool: 'text-selection',
+                    popoverRelative: relative,
+                    onLinkedDataChange: (data) => {
+                      window.pdfTextData = data
+                      window.pdfTextFlow.push({
+                        text: data.activeRange?.text,
+                        selected: data.selectedRangeId
+                      })
+                    }
+                  },
+                  controlled
+                )
               },
-              { bytes, relative: line === 1 }
+              { bytes, relative: line === 1, controlled }
             )
             await page.waitForFunction(
               (line) =>
@@ -136,7 +149,6 @@ try {
                 () => window.readerRegression.state.ranges[0]
               )
             }
-            const before = await handle.boundingBox()
             const pointAt = (offset) =>
               page.evaluate(
                 ({ line, offset }) => {
@@ -155,6 +167,26 @@ try {
                 },
                 { line, offset }
               )
+            const deselect = async () => {
+              const viewport = await page
+                .locator('.hamster-reader__pdf-text-viewport')
+                .boundingBox()
+              await page.touchscreen.tap(
+                viewport.x + viewport.width / 2,
+                viewport.y + viewport.height - 30
+              )
+              await handles.first().waitFor({ state: 'detached' })
+            }
+            const reselect = async () => {
+              const point = await pointAt(12)
+              await page.touchscreen.tap(point.x, point.y)
+              await handles.first().waitFor({ state: 'visible' })
+            }
+            if (saved) {
+              await deselect()
+              await reselect()
+            }
+            const before = await handle.boundingBox()
             const moving = await pointAt(end ? 21 : 5)
             const final = await pointAt(end ? 25 : 3)
             await handle.evaluate(
@@ -258,6 +290,14 @@ try {
               `${label}: committed end`
             )
             assert.equal(range.id, original.id, `${label}: identity`)
+            if (saved) {
+              for (const key of ['createdAt', 'markerStyle', 'selectionStyle'])
+                assert.deepEqual(
+                  range[key],
+                  original[key],
+                  `${label}: preserves ${key}`
+                )
+            }
             assert.equal(
               await page.evaluate(() => window.readerRegression.state.updates),
               saved && !cancel ? 1 : 0,
@@ -298,11 +338,91 @@ try {
             )
             assert.equal(confirmed[0].start.offset, range.start.offset)
             assert.equal(confirmed[0].end.offset, range.end.offset)
+            if (saved) {
+              const expectedBox = await page.evaluate(
+                ({ line, expectedStart, expectedEnd }) => {
+                  const node = Array.from(
+                    document.querySelectorAll(
+                      '.hsn-selection-content [data-text-id]'
+                    )
+                  ).find((el) =>
+                    el.textContent.startsWith(`Line ${line + 1}`)
+                  ).firstChild
+                  const range = document.createRange()
+                  range.setStart(node, expectedStart)
+                  range.setEnd(node, expectedEnd)
+                  return range.getBoundingClientRect().toJSON()
+                },
+                { line, expectedStart, expectedEnd }
+              )
+              await deselect()
+              assert.equal(
+                await page
+                  .locator('.hamster-reader__pdf-selection-preview')
+                  .count(),
+                0,
+                `${label}: clears managed preview`
+              )
+              const persisted = await page.evaluate(
+                () => window.pdfTextData.items[0]
+              )
+              assert.equal(
+                persisted.text,
+                expectedText,
+                `${label}: linked snapshot keeps edited text`
+              )
+              assert.deepEqual(
+                persisted.start,
+                range.start,
+                `${label}: linked snapshot start`
+              )
+              assert.deepEqual(
+                persisted.end,
+                range.end,
+                `${label}: linked snapshot end`
+              )
+              const painted = await page
+                .locator('.hsn-selection-percent-rect-highlight')
+                .boundingBox()
+              for (const key of ['x', 'y', 'width', 'height'])
+                assert(
+                  Math.abs(painted[key] - expectedBox[key]) < 1,
+                  `${label}: saved paint ${key} matches text`
+                )
+              await reselect()
+              for (const end of [false, true]) {
+                const box = await handles.nth(end ? 1 : 0).boundingBox()
+                assert(
+                  Math.abs(
+                    box.x +
+                      box.width / 2 -
+                      (end ? expectedBox.right : expectedBox.left)
+                  ) < 1,
+                  `${label}: exact ${end ? 'end' : 'start'} character boundary`
+                )
+                assert(
+                  Math.abs(
+                    box.y +
+                      box.height / 2 -
+                      (end ? expectedBox.bottom + 10 : expectedBox.top - 10)
+                  ) < 1,
+                  `${label}: exact handle line`
+                )
+              }
+              const reopened = await handle.boundingBox()
+              assert(
+                Math.abs(reopened.x - after.x) < 1 &&
+                  Math.abs(reopened.y - after.y) < 1,
+                `${label}: reselected handle matches released endpoint`
+              )
+            }
             report.cases.push({
               label,
               confirmVisibleDuringDrag: !saved,
               confirmDuringDrag,
               confirmation: 'trusted browser tap',
+              reselection: saved ? 'trusted browser tap' : undefined,
+              savedGeometryVerified: saved,
               popoverRelative: line === 1,
               passed: true,
               before,
@@ -318,17 +438,25 @@ try {
     resolve(output, 'report.json'),
     JSON.stringify(report, null, 2)
   )
+  await writeFile(
+    resolve(output, `${report.browser}.json`),
+    JSON.stringify(report, null, 2)
+  )
   console.log(
     `Passed ${report.cases.length} PDF Text release/cancel cases in ${report.browser} ${report.version}`
   )
 } catch (error) {
   await page?.screenshot({ path: resolve(output, 'failure.png') })
   console.log(
-    await page?.evaluate(() => ({
-      flow: window.pdfTextFlow,
-      data: window.pdfTextData,
-      state: window.readerRegression.state
-    }))
+    JSON.stringify(
+      await page?.evaluate(() => ({
+        flow: window.pdfTextFlow,
+        data: window.pdfTextData,
+        state: window.readerRegression.state
+      })),
+      null,
+      2
+    )
   )
   throw error
 } finally {
