@@ -1769,6 +1769,7 @@ export function IntermediateDocumentTextViewer(
     [effectiveSelectedRangeId, storedRanges]
   )
   const [managedTextEditing, setManagedTextEditing] = useState(false)
+  const resettingPdfTextSelectionRef = useRef(false)
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
   )
@@ -2800,6 +2801,7 @@ export function IntermediateDocumentTextViewer(
 
   const handlePageLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
+      if (resettingPdfTextSelectionRef.current) return
       runtimeLinkedDataRef.current = next
       if (next.activeRange) {
         lastActiveRangeRef.current = next.activeRange
@@ -3634,7 +3636,23 @@ export function IntermediateDocumentTextViewer(
           root={viewerRootElement}
           data={runtimeLinkedData}
           color={highlightColor ?? '#ffc107'}
-          onEditingChange={setManagedTextEditing}
+          onEditingChange={(editing) => {
+            if (editing) {
+              // The dependency keeps its own native draft even after the DOM
+              // Selection is cleared. Retire that draft before managed edits;
+              // otherwise its linked-data effect writes the old endpoints back
+              // over our release commit. Keep the outer managed range intact.
+              resettingPdfTextSelectionRef.current = true
+              try {
+                selectionRefsByRuntimeIdRef.current.forEach((ref) =>
+                  ref.clear()
+                )
+              } finally {
+                resettingPdfTextSelectionRef.current = false
+              }
+            }
+            setManagedTextEditing(editing)
+          }}
           onDraft={handlePageLinkedDataChange}
           onUpdate={handleLinkedUpdateRange}
         />

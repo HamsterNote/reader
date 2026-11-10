@@ -339,9 +339,18 @@ export async function checkSharedSelectionInteraction({
                 `${label}: colour recopied text`
               )
             }
+            const previewHandle = await handles.nth(end ? 1 : 0).boundingBox()
             await pointer(input, 'up', { x: target.x + 0.3, y: target.y })
             await page.evaluate(() => new Promise(requestAnimationFrame))
             assert.equal(await lens.isVisible(), false, label)
+            const releasedHandle = await handles.nth(end ? 1 : 0).boundingBox()
+            assert(
+              releasedHandle &&
+                previewHandle &&
+                Math.abs(releasedHandle.x - previewHandle.x) < 1 &&
+                Math.abs(releasedHandle.y - previewHandle.y) < 1,
+              `${label}: release retains the preview endpoint`
+            )
             if (saved) {
               await page.waitForFunction(
                 () => window.readerRegression.state.updates === 1

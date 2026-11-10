@@ -101,6 +101,22 @@ Mac 操作员对旧 `9c024c4` 的进一步对照：iPhone 18 Pro / iOS 27.2 runt
 
 本修正使用独立验收端口 `http://192.168.0.145:6203/`，从提交固定的独立 worktree 启动，保留 6201/6202 对照服务。启动命令为 `yarn dev --host 0.0.0.0 --port 6203 --strictPort`，tmux 会话 `ham201-pr59-6203`；日志 `ham201-dev-6203.log` 位于任务工作目录，停止命令 `tmux kill-session -t ham201-pr59-6203`。tmux 尽力保活，不保证机器重启后自动恢复。
 
-任务 4.3 保持未勾选。本轮未操作 iOS/Android WebView 真机，不宣称真机通过。前轮缺失 `libicudata.so.74` 的 Linux WebKit 启动问题已通过独立兼容运行库解决；本轮新增的 WebKit 自动化范围与限制见上一节，不能以它代替设备验收。
+### PDF 纯文字释放回弹修正
+
+后续 Mac 操作员在 6203 / `92083c3`、iPhone 18 Pro 模拟器 / iOS 27.2 (`24B8117`) / Safari 复验：EPUB 首拖起终点、重拖、确认、取消、翻页恢复及 PDF Layout 通过；PDF Text 首行和第二行均拖动时移动、释放回原位。6202 / `9c024c4` 同样复现。事件为完整 trusted pointer/touch 序列，无 cancel 或丢失，不能归因于模拟器吞事件。这些是 Mac 操作员的证据，本机没有执行该 iOS 验收。
+
+本机使用实际 Reader、PDF.js 和 `@hamster-note/selection` 的 Linux WebKit 复现：终点预览 x 从 121 变为 193，释放后回到 121，确认仍保存 offset 18。回调明确记录 `activeRange.end.offset: 18 → 25 → 18`。共享控件已经按释放坐标提交了 25，随后依赖库的内部草稿 effect 将旧范围 18 写回；仅清除 DOM Selection，没有清理其内部选区状态。
+
+修正在 `IntermediateDocumentTextViewer` 的受管拖动入口调用页面 SelectionRef.clear，清掉依赖库内部草稿；仅在这段同步清理期间忽略它发出的 linked-data 清空回调，保留外层受管范围。之后恢复正常回调路径，草稿提交和已有高亮更新仍由共享控件按最终释放坐标执行一次，取消保留原端点。没有引入位置补偿、延时回写或更改手柄尺寸。
+
+新增 `scripts/check-pdf-text-release.mjs`，两行 × 起/终点 × 草稿/已有高亮 × 释放/取消，共 16 组，在 Linux WebKit 26.4 和 Chromium 均通过。初始 Selection 与持续拖动均为明确标注的合成事件，调用真实选择依赖，捕获其内部 effect 的反向同步。每组要求：拖动预览移动；释放坐标与最后 move 不同、无下一帧时仍保存正确字符间隙；取消恢复原位；宿主重渲染、双次确认后仍保存正确文本/端点；已有对象 ID 不变且更新一次。原共享 36 组合另新增释放后端点与拖动预览一致的断言。
+
+复验命令：`node scripts/check-pdf-text-release.mjs`（默认 WebKit，本机加 `WEBKIT_EXECUTABLE_PATH=../webkit-runtime/run-webkit.sh`）；Chromium 用 `READER_BROWSER_ENGINE=chromium node scripts/check-pdf-text-release.mjs`。逐项输出位于 `test-results/pdf-text-release/report.json`。
+
+本轮再次执行 `yarn typecheck`、`yarn build:lib`、`yarn test:run --maxWorkers=2 --testTimeout=15000`（126 文件 / 1,735 项）、增强后的 Chromium 共享矩阵 36 组合、OpenSpec strict 和改动代码 Prettier 检查，全部通过。
+
+新修正使用独立端口 `http://192.168.0.145:6204/`，从固定提交 worktree 启动，6201/6202/6203 保留对照。tmux：`ham201-pr59-6204`，日志：任务目录中的 `ham201-dev-6204.log`，停止：`tmux kill-session -t ham201-pr59-6204`；尽力保活，不保证机器重启后恢复。新版 PDF Text 仍需 Mac 在该端口复验原生长按后首拖、重拖、释放、取消和确认保存。
+
+任务 4.3 保持未勾选。本机未操作 iOS/Android WebView 真机，不宣称真机通过。前轮缺失 `libicudata.so.74` 的 Linux WebKit 启动问题已通过独立兼容运行库解决；新增的 WebKit 自动化范围与限制见上文，不能以它代替设备验收。
 
 iOS WKWebView 和 Android WebView 均需执行三个渲染面的 touch × 起终点 × 草稿/已有高亮，记录设备型号、系统/WebView 版本及可用鼠标/笔组合。重点录像约 1cm 观感、60px 镜片、顶部翻转/恢复、热区边角命中、全程双手柄、无系统选择手柄/编辑菜单竞争、跨字符竖线跳变、换色、松手/取消/切书/切模式关闭。PDF Layout 补验连续跨页与边缘自动滚动，EPUB/Text 补验页边不滚动且不自动翻页。
