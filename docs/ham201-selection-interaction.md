@@ -53,8 +53,37 @@ touch 组合另检查 60px/38px、镜心随触点移动、源字符间隙锚点�
 
 保留 HAM-182 的 40px 热区、20px 圆柄、2px 白圈、整体阴影、按真实行高绘制的竖线、源端点几何、滚动跟随、离屏端点、重排及源坐标修正。旧抓取补偿、mouse/pen 镜片和镜心固定竖线由本次共享规格替代。PDF Text 手柄移到稳定受管层，避免上游拖动重建时消失。
 
+## WebKit 触摸中断回归（PR #59 后续修正）
+
+Mac 操作员报告 iOS 27.2 模拟器 Safari 在 `1069a15` 上首次拖柄只有 pointerdown，松手镜片残留、重拖空白。当前证据可以确认应用的收尾缺口，尚不能确定模拟器为何没有派发后续 pointer 事件，也不能断言是模拟器注入问题。
+
+旧共享会话只消费 pointermove/up/cancel；若它们丢失，后续 TouchEvent 不能更新或结束会话，同一 pointerId 的新按下也被旧会话挡住。用新的 WebKit 脚本对旧 `1069a15` 保留 touchstart/move/end、停止后续 pointer 流，失败于 `draft/start: release/cancel closes`（镜片仍可见）。这是明确标注的故障注入，不能冒充原生 iOS 长按复现。
+
+修正仍只在共享 `EngineSelectionControls`：pointerdown 后，仅将起始手柄上的 touch identifier 绑定到当前 touch 会话；touchmove 使用原始坐标且显式非 passive，touchend 重放释放坐标并提交一次，touchcancel 取消。正常两种事件都到达时跳过重复移动；迟到 pointerup、无关触点均不能再次提交。新的 pointerdown 会取消未结束的旧会话，包括复用同一 pointerId 的情况。EPUB 圆柄补齐 WebKit 禁选字/禁触摸菜单设置，自定义手柄阻止 contextmenu。38px/60px 常量不变。
+
+实际运行环境为 Linux x64、Playwright WebKit 26.4、402×874 移动视口。所需 Ubuntu 24.04 兼容运行库解包到任务目录后启动，未修改系统库。四组为 EPUB × 草稿/已有高亮 × 起点/终点，每组检查：
+
+- 两次浏览器原生 tap，真实 pointer capture/up/lostcapture 及释放关闭，共 8 次；原生鼠标操作共 4 次，均不打开镜片。
+- 一次成对 pointer/touch 拖动、两次 pointer 流中断的 touch 拖动（其中一次先恢复同 ID 的遗留会话）、一次 touchcancel，共 16 次合成拖动。
+- 每次开始及移动都有镜内文字、双手柄常显；无关触点不结束、释放关闭并清空镜内内容、迟到 pointerup 不重复提交；取消恢复前次端点，已保存对象 ID/颜色/固定端不变。
+
+初始 Selection 由脚本设置为长按后的状态，持续拖动为合成事件；只有 tap 和鼠标由浏览器原生输入接口驱动。保存后的原生 tap 在下一帧激活恢复完成后执行，并严格检查每次真实 capture 和 release。不能据此宣称原生长按、iOS Safari/WKWebView 或 Android 真机通过。
+
+本轮验证：
+
+| 命令                                                  | 结果                                                                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `node scripts/check-webkit-selection-touch.mjs`       | WebKit 4 组通过，报告含浏览器版本、isTrusted、pointerId、touch identifier、坐标、捕获及 preventDefault 事件记录 |
+| `node scripts/check-shared-selection-interaction.mjs` | Chromium 36 组通过                                                                                              |
+| `yarn test:run --maxWorkers=2 --testTimeout=15000`    | 126 文件、1,729 项通过                                                                                          |
+| `yarn typecheck`、`yarn build:lib`                    | 通过                                                                                                            |
+
+WebKit 脚本自行启动并关闭 Vite 和浏览器，不依赖 Mac 的旧 `6201` 服务。在支持 Playwright 的开发机执行 `npx playwright install webkit` 后运行上述命令；已有自定义启动器可用 `WEBKIT_EXECUTABLE_PATH` 指定。本机使用该变量指向任务目录的兼容运行库启动器。逐组证据输出到 `test-results/webkit-selection-touch/report.json`。
+
+Mac 复验应使用 PR 最新提交，并启动独立端口：`yarn dev --host 0.0.0.0 --port 6202 --strictPort`。Safari 打开该新端口，依次长按选字、首次拖起/终柄、释放、重拖、保存后再次编辑、取消；同时记录 outer document 和 EPUB iframe 的 pointerdown/move/up/cancel、got/lostpointercapture、touchstart/move/end/cancel，至少包含 isTrusted、pointerType、pointerId、touch identifier、target、defaultPrevented。重点区分 Mouse 注入与真实触摸事件；若两种流都没有 move/end，应用无法还原未收到的轨迹或释放，需继续定位注入/浏览器事件派发，不能仅凭“只有 down”判定责任。
+
 ## 待设备验收
 
-任务 4.3 保持未勾选。本机没有可操作的 iOS/Android WebView 真机；本轮不宣称真机通过。Playwright WebKit 也未启动成功，缺失 `libicudata.so.74`，不能以 Chromium 代替 WebKit 结果。
+任务 4.3 保持未勾选。本轮未操作 iOS/Android WebView 真机，不宣称真机通过。前轮缺失 `libicudata.so.74` 的 Linux WebKit 启动问题已通过独立兼容运行库解决；本轮新增的 WebKit 自动化范围与限制见上一节，不能以它代替设备验收。
 
 iOS WKWebView 和 Android WebView 均需执行三个渲染面的 touch × 起终点 × 草稿/已有高亮，记录设备型号、系统/WebView 版本及可用鼠标/笔组合。重点录像约 1cm 观感、60px 镜片、顶部翻转/恢复、热区边角命中、全程双手柄、无系统选择手柄/编辑菜单竞争、跨字符竖线跳变、换色、松手/取消/切书/切模式关闭。PDF Layout 补验连续跨页与边缘自动滚动，EPUB/Text 补验页边不滚动且不自动翻页。

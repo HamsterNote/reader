@@ -133,8 +133,22 @@ it.each(matrix)(
         clientX: grab === 'center' ? 60 : grab === 'edge' ? 69 : 79,
         clientY: grab === 'center' ? 140 : grab === 'edge' ? 140 : 159
       })
+      if (pointerType === 'touch')
+        fireEvent.touchStart(handle, {
+          touches: [{ identifier: 42 }],
+          changedTouches: [{ identifier: 42 }]
+        })
       fireEvent.pointerMove(document, { pointerId: 7, pointerType, ...point })
       expect(hit).toHaveBeenLastCalledWith(x, y)
+      if (pointerType === 'touch') {
+        const calls = hit.mock.calls.length
+        const touch = { identifier: 42, ...point }
+        fireEvent.touchMove(handle, {
+          touches: [touch],
+          changedTouches: [touch]
+        })
+        expect(hit).toHaveBeenCalledTimes(calls)
+      }
       expect(screen.getAllByRole('button', { name: /调整/ })).toEqual(handles)
       const lens = screen.getByTestId('range-magnifier')
       expect(lens.hidden).toBe(pointerType !== 'touch')
@@ -177,6 +191,63 @@ it.each(matrix)(
       expect(lens.hidden).toBe(true)
       expect(screenshot).not.toHaveBeenCalled()
       if (pointerType === 'touch') {
+        fireEvent.touchEnd(handle, {
+          changedTouches: [{ identifier: 42, ...point }],
+          touches: []
+        })
+        expect(onUpdate).toHaveBeenCalledOnce()
+        // A WebKit pointer stream can stop after down while touch continues.
+        // Keep the raw touch hit, replay its release, and commit exactly once.
+        fireEvent.pointerDown(handle, {
+          pointerId: 8,
+          pointerType: 'touch',
+          button: 0,
+          ...point
+        })
+        fireEvent.touchStart(handle, {
+          touches: [{ identifier: 43 }],
+          changedTouches: [{ identifier: 43 }]
+        })
+        const touch = { identifier: 43, ...point }
+        fireEvent.touchMove(handle, {
+          touches: [touch],
+          changedTouches: [touch]
+        })
+        fireEvent.touchEnd(document, {
+          touches: [touch],
+          changedTouches: [{ ...touch, identifier: 99 }]
+        })
+        expect(lens.hidden).toBe(false)
+        fireEvent.touchEnd(handle, {
+          touches: [],
+          changedTouches: [
+            { ...touch, clientX: point.clientX + (end ? 20 : -20) }
+          ]
+        })
+        expect(onUpdate).toHaveBeenCalledTimes(2)
+        expect(
+          onUpdate.mock.calls[1][0][end ? 'endOffset' : 'startOffset']
+        ).toBe(end ? 20 : 9)
+        expect(lens.hidden).toBe(true)
+        // A delayed pointerup after touchend cannot commit a second time.
+        fireEvent.pointerUp(document, { pointerId: 8, ...point })
+        expect(onUpdate).toHaveBeenCalledTimes(2)
+        fireEvent.pointerDown(handle, {
+          pointerId: 9,
+          pointerType: 'touch',
+          button: 0,
+          ...point
+        })
+        fireEvent.touchStart(handle, {
+          touches: [{ identifier: 44 }],
+          changedTouches: [{ identifier: 44 }]
+        })
+        fireEvent.touchCancel(handle, {
+          touches: [],
+          changedTouches: [{ identifier: 44 }]
+        })
+        expect(lens.hidden).toBe(true)
+        expect(onUpdate).toHaveBeenCalledTimes(2)
         for (const [i, nextType] of ['mouse', 'pen', ''].entries()) {
           fireEvent.pointerDown(handle, {
             pointerId: 20 + i,

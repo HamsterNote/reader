@@ -14,6 +14,11 @@ import {
   pdfHandleScrollVelocity
 } from './selection/pdfHandleDrag'
 
+type DragPoint = Pick<
+  PointerEvent,
+  'type' | 'pointerId' | 'clientX' | 'clientY' | 'preventDefault'
+>
+
 function pdfHandleLogicalEnd(
   drag: { readonly end: boolean; readonly movingEnd: boolean } | null,
   physicalEnd: boolean
@@ -146,6 +151,7 @@ export function EngineSelectionControls({
     valid: boolean
     element: HTMLButtonElement
     pointerType: string
+    touch?: number
     clientX: number
     clientY: number
   } | null>(null)
@@ -179,10 +185,10 @@ export function EngineSelectionControls({
       scrollTime = 0
       scrollRemainder = 0
     }
-    const replayRelease = (event?: PointerEvent) => {
+    const replayRelease = (event?: DragPoint) => {
       if (event?.type === 'pointerup') move(event)
     }
-    const finish = (event?: PointerEvent) => {
+    const finish = (event?: DragPoint) => {
       const active = drag.current
       if (!active || (event && event.pointerId !== active.pointer)) return
       // The release can contain a newer point than the last pointermove.
@@ -347,10 +353,9 @@ export function EngineSelectionControls({
       if (pdfTouch && !scrollFrame)
         scrollFrame = requestAnimationFrame(autoScroll)
     }
-    const move = (event: PointerEvent) => {
+    const move = (event: DragPoint) => {
       const active = drag.current
       if (!active || active.pointer !== event.pointerId) return
-      if (pdfHandles && isSelectionPointerMoveTextHit(event)) return
       if (latestRange.current !== range) {
         finish()
         return
@@ -362,8 +367,60 @@ export function EngineSelectionControls({
       if (pdfTouch && drag.current === active && !scrollFrame)
         scrollFrame = requestAnimationFrame(autoScroll)
     }
-    const down = (event: PointerEvent) => {
-      if (drag.current && event.pointerId !== drag.current.pointer) finish()
+    const pointerMove = (event: PointerEvent) => {
+      if (pdfHandles && isSelectionPointerMoveTextHit(event)) return
+      move(event)
+    }
+    const down = () => {
+      // A fresh down is a new gesture, including WebKit's reused mouse ID.
+      // Recover a session whose terminal pointer event never reached us.
+      if (drag.current) finish()
+    }
+    const touchStart = (event: TouchEvent) => {
+      const active = drag.current
+      if (!active || !usesTouchMagnifier(active.pointerType)) return
+      if (event.touches.length !== 1) {
+        finish()
+        return
+      }
+      // Pointerdown precedes touchstart. Bind only the touch on our handle;
+      // an unrelated finger must never move or commit this endpoint.
+      if (event.target === active.element)
+        active.touch = event.changedTouches[0]?.identifier
+    }
+    const touchPoint = (event: TouchEvent, type: string): DragPoint | null => {
+      const active = drag.current
+      if (!active || active.touch === undefined) return null
+      const touch = Array.from(event.changedTouches).find(
+        (touch) => touch.identifier === active.touch
+      )
+      return touch
+        ? {
+            type,
+            pointerId: active.pointer,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            preventDefault: () => event.preventDefault()
+          }
+        : null
+    }
+    const touchMove = (event: TouchEvent) => {
+      const point = touchPoint(event, 'pointermove')
+      if (!point) return
+      event.preventDefault()
+      // Normal WebKit delivers both streams. Avoid publishing the same hit twice.
+      if (
+        drag.current?.clientX !== point.clientX ||
+        drag.current?.clientY !== point.clientY
+      )
+        move(point)
+    }
+    const touchEnd = (event: TouchEvent) => {
+      const point = touchPoint(event, 'pointerup')
+      if (point) finish(point)
+    }
+    const touchCancel = (event: TouchEvent) => {
+      if (touchPoint(event, 'pointercancel')) finish()
     }
     const scroller = containerRef.current?.querySelector<HTMLElement>(
       '.hamster-reader__pdf-viewer-container'
@@ -385,7 +442,7 @@ export function EngineSelectionControls({
         previewRange.current?.value ?? drag.current?.current ?? range
       if (current) setRects(rangeViewportRects(current, pdfTouch))
     }
-    owner.addEventListener('pointermove', move, {
+    owner.addEventListener('pointermove', pointerMove, {
       capture: true,
       passive: false
     })
@@ -394,14 +451,27 @@ export function EngineSelectionControls({
     // Range materialization may replace the handle before pointerup.
     owner.addEventListener('pointerup', finish, true)
     owner.addEventListener('pointercancel', finish, true)
+    // Pair the TouchEvent stream with this captured pointer session as a
+    // fallback for interrupted pointer delivery. Keep the same raw hits.
+    owner.addEventListener('touchstart', touchStart, true)
+    owner.addEventListener('touchmove', touchMove, {
+      capture: true,
+      passive: false
+    })
+    owner.addEventListener('touchend', touchEnd, true)
+    owner.addEventListener('touchcancel', touchCancel, true)
     const blur = () => finish()
     owner.defaultView?.addEventListener('blur', blur)
     return () => {
-      owner.removeEventListener('pointermove', move, true)
+      owner.removeEventListener('pointermove', pointerMove, true)
       owner.removeEventListener('pointerdown', down, true)
       owner.removeEventListener('scroll', followScroll, true)
       owner.removeEventListener('pointerup', finish, true)
       owner.removeEventListener('pointercancel', finish, true)
+      owner.removeEventListener('touchstart', touchStart, true)
+      owner.removeEventListener('touchmove', touchMove, true)
+      owner.removeEventListener('touchend', touchEnd, true)
+      owner.removeEventListener('touchcancel', touchCancel, true)
       owner.defaultView?.removeEventListener('blur', blur)
       finish()
       stopScroll()
@@ -601,7 +671,9 @@ export function EngineSelectionControls({
                     ? {
                         backgroundColor: color,
                         touchAction: 'none',
-                        userSelect: 'none'
+                        userSelect: 'none',
+                        WebkitUserSelect: 'none',
+                        WebkitTouchCallout: 'none'
                       }
                     : {}),
                   zIndex: 10001
@@ -611,7 +683,7 @@ export function EngineSelectionControls({
                     cancelDrag.current()
                 }}
                 onContextMenu={(event) => {
-                  if (pdfTouch) event.preventDefault()
+                  event.preventDefault()
                 }}
                 onPointerDown={(event) => {
                   if (drag.current || event.button > 0) return
