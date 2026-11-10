@@ -54,7 +54,7 @@ Text 仍使用 HamsterSelection linkedMode 的 onPointerDown、activeRange/item 
 
 ### 5. 桌面 PDF Layout 只共享视觉和抓取纠偏
 
-`EngineDocumentViewer` 对 PDF source 显式启用 `pdfCustomHandles`，使桌面鼠标也渲染 `PdfTouchSelectionHandle`、起上终下位置与 40×40 热区。`pdfTouch` 仍为 false：桌面继续使用 caret 命中和原生 Selection 更新/确认，仅复用抓取偏移，不启用触摸专用预览事务、自动滚动或镜片实现。EPUB、矩形和非 PDF 默认手柄不变。
+`EngineDocumentViewer` 对 PDF source 显式启用 `pdfCustomHandles`，使桌面鼠标也渲染 `PdfTouchSelectionHandle`、起上终下位置与 40×40 热区。`pdfTouch` 仍为 false：桌面继续使用原生 Selection 更新/确认，不启用触摸专用预览事务、自动滚动或镜片实现。后续长拖动修复将 PDF 可见字符命中与跨端点算法供桌面复用，具体见第 9 节。EPUB、矩形和非 PDF 默认手柄不变。
 
 ### 6. 每个端点独立使用字符高度
 
@@ -74,11 +74,17 @@ PDF Text 将镜片布局与采样分开：`MagnifierPoint.clientX/clientY` 是�
 
 不迁移到滚动容器内图层，避免裁剪、stacking context 和 iframe 坐标改造。滚动捕获时先按 delta 临时 transform，并提交当前 Range 矩形；既有 rAF 还通过手柄 ref 直接写入最新 fixed `left/top`，在绘制前完成位置更新，React 状态提交后恢复 transform 基准。实测 30 个有效滚动样本的新增错位帧由 29 降为 0，高亮保持 0。
 
-### 9. PDF 预览单独增加垂直避让
+### 9. PDF 预览采样、镜片视觉位移与命中分离
 
 Chromium 鼠标从终点热区圆心外各 9px 抓取，再向下拖动 200/220px：Text 镜片底边到物理指针均为 50.515625px，50% 缩放的 PDF 预览为 43px。差值来自两种模式不同的端点布局/纠偏路径，不能直接比较共享的 18px 间距。
 
-仅在 `EngineSelectionControls` 的 PDF 路径设置 `lensPoint.y = clientY - PDF_MAGNIFIER_LIFT_PX`，显式常量为 8 CSS px。start、桌面 move 和触摸 publish 均使用同一布局转换，原采样点、命中、保存及预览自身左右钳制/上下翻转算法不变。Text 生产文件与共享几何不改。相同样本中预览距离变为 51px，与 Text 相差约 0.48px；该常量为屏幕像素避让，不声明任意字号、抓取偏移、缩放下两模式距离严格相等。采样三点仍约为指针偏移 `(-0.0102,0)` px，Text 原六点完整结果前后相同。
+上一轮将 8px 放入 `lensPoint`，且仅对无有意抓取偏移的三点检查采样，遗漏了 PDF 原有抓取纠偏仍混入采样的问题。该实现被本节取代。
+
+`EngineSelectionControls` 的 start/move 采样始终使用物理 clientX/clientY。冻结的抓取偏移只用于选区 hitTest 与原有镜片布局锚点，触摸 publish 也不得将采样替换为选区端点。8px 仅在 `engine-viewer.scss` 通过预览专属选择器 `transform: translateY(-8px)` 作用于 lens 元素，完全移出采样点与共享定位算法；原左右钳制、上下翻转继续使用无 8px 修正的布局锚点。Text 和共享放大镜生产文件均不修改，六点完整结果前后比较。避让为屏幕像素值，不声明任意字号与缩放下两模式严格等距。
+
+真实 Chromium 鼠标基线：48 次约 270px 长拖动覆盖首末柄、中心/±9px/18px 热区抓取、单步/24 步、文字/行间/跨锚点，40 次未到目标或松手回退，48 次采样偏离物理指针。捕获未提前丢失、pointerId 一致、镜片 pointer-events 为 none。原桌面 caret API 会被移动热区遮挡或在行间返回非文字节点，从而标记本次预览无效；直接 setStart/setEnd 在越过另一端时折叠 Range，也导致回退。
+
+桌面 PDF 改用已有 `hitTestSelection`（`pdfCaretAtPoint` 的可见字符几何兜底和 canonical 校验），命中仍使用冻结纠偏。PDF 两种输入均用 `pdfHandleRange` 固定另一端并允许逻辑端翻转；暂时无命中时保留最后有效范围，pointerup 重放最终位置。桌面继续写原生 Selection 并只在释放时提交一次。忽略选择层标记的纠偏转发，其他 pointerId 不影响当前会话；lostpointercapture 仅取消匹配的指针。非 PDF 继续原 caret 与取消规则。
 
 ## Risks / Trade-offs
 

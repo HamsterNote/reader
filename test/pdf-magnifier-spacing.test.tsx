@@ -3,6 +3,7 @@ import { createRef } from 'react'
 import { expect, it, vi } from 'vitest'
 import { EngineSelectionControls } from '../src/components/EngineSelectionControls'
 import { mockElementSize } from './setup'
+import { markSelectionPointerMoveAsTextHit } from '../src/components/selection/selectionPointerGuard'
 
 const magnifier = vi.hoisted(() => ({
   start: vi.fn(),
@@ -14,7 +15,7 @@ vi.mock('../src/components/IntermediateDocumentViewer/RangeMagnifier', () => ({
 }))
 
 it.each(['mouse', 'touch'])(
-  'lifts only PDF %s lens layout and retains its sampled point',
+  'samples the physical PDF %s pointer independently of grab correction',
   (pointerType) => {
     Object.values(magnifier).forEach((mock) => mock.mockClear())
     const root = createRef<HTMLDivElement>()
@@ -32,6 +33,11 @@ it.each(['mouse', 'touch'])(
       configurable: true,
       value: () => [new DOMRect(20, 220, 80, 20)]
     })
+    const hitTest = vi.fn<() => Range | null>(() => {
+      const caret = range.cloneRange()
+      caret.collapse(false)
+      return caret
+    })
     const controls = () => (
       <div ref={root}>
         <EngineSelectionControls
@@ -42,11 +48,7 @@ it.each(['mouse', 'touch'])(
           pdfTouch={pointerType === 'touch'}
           onUpdate={() => {}}
           onEditingChange={() => {}}
-          hitTest={() => {
-            const caret = range.cloneRange()
-            caret.collapse(false)
-            return caret
-          }}
+          hitTest={hitTest}
         >
           Menu
         </EngineSelectionControls>
@@ -72,8 +74,8 @@ it.each(['mouse', 'touch'])(
         expect.any(HTMLElement),
         {
           clientX: 100,
-          clientY: 230,
-          lensPoint: { clientX: 100, clientY: 222 }
+          clientY: 250,
+          lensPoint: { clientX: 100, clientY: 230 }
         },
         pointerType === 'touch'
           ? expect.objectContaining({ end: true })
@@ -86,17 +88,39 @@ it.each(['mouse', 'touch'])(
         clientY: 280
       })
       expect(magnifier.move).toHaveBeenLastCalledWith(
-        pointerType === 'touch'
-          ? {
-              clientX: 100,
-              clientY: 230,
-              lensPoint: { clientX: 100, clientY: 222 }
-            }
-          : {
-              clientX: 120,
-              clientY: 260,
-              lensPoint: { clientX: 120, clientY: 252 }
-            },
+        {
+          clientX: 120,
+          clientY: 280,
+          lensPoint: { clientX: 120, clientY: 260 }
+        },
+        ...(pointerType === 'touch'
+          ? [expect.objectContaining({ end: true })]
+          : [])
+      )
+      const moves = magnifier.move.mock.calls.length
+      const forwarded = new PointerEvent('pointermove', {
+        pointerId: 9,
+        clientX: 120,
+        clientY: 260
+      })
+      markSelectionPointerMoveAsTextHit(forwarded)
+      fireEvent(document, forwarded)
+      fireEvent.pointerMove(document, { pointerId: 10, clientX: 9, clientY: 9 })
+      fireEvent.lostPointerCapture(handle, { pointerId: 10 })
+      expect(magnifier.move).toHaveBeenCalledTimes(moves)
+      expect(magnifier.end).not.toHaveBeenCalled()
+      hitTest.mockReturnValue(null)
+      fireEvent.pointerMove(document, {
+        pointerId: 9,
+        clientX: 140,
+        clientY: 300
+      })
+      expect(magnifier.move).toHaveBeenLastCalledWith(
+        {
+          clientX: 140,
+          clientY: 300,
+          lensPoint: { clientX: 140, clientY: 280 }
+        },
         ...(pointerType === 'touch'
           ? [expect.objectContaining({ end: true })]
           : [])

@@ -5,25 +5,26 @@ import { pdfHighlightFill, pdfRangeClientRects } from '../pdf/pdfSelectionPaint'
 import { snapshotPdfRange } from '../pdf/pdfRangeRetention'
 import { PdfTouchSelectionHandle } from './PdfTouchSelectionHandle'
 import { useRangeMagnifier } from './IntermediateDocumentViewer/RangeMagnifier'
+import { isSelectionPointerMoveTextHit } from './selection/selectionPointerGuard'
 import {
   pdfHandleRange,
   pdfHandleScrollVelocity
 } from './selection/pdfHandleDrag'
 
-// The preview lens measured ~7.5px closer to the pointer than PDF Text.
-// Lift only its layout anchor; sampling and selection retain their coordinates.
-const PDF_MAGNIFIER_LIFT_PX = 8
-
-function magnifierLayoutPoint(
-  point: { clientX: number; clientY: number },
-  pdfHandles: boolean
-) {
-  if (!pdfHandles) return point
+// Selection hit-testing uses the frozen grab offset. Lens content always reads
+// the physical pointer; visual clearance belongs to the preview lens's CSS.
+function magnifierDragPoint(active: {
+  clientX: number
+  clientY: number
+  offsetX: number
+  offsetY: number
+}) {
   return {
-    ...point,
+    clientX: active.clientX,
+    clientY: active.clientY,
     lensPoint: {
-      clientX: point.clientX,
-      clientY: point.clientY - PDF_MAGNIFIER_LIFT_PX
+      clientX: active.clientX + active.offsetX,
+      clientY: active.clientY + active.offsetY
     }
   }
 }
@@ -37,6 +38,32 @@ function magnifierPoint(range: Range, end: boolean) {
         clientY: rect.top + rect.height / 2
       }
     : null
+}
+
+function handleCaretAtPoint(
+  doc: Document,
+  x: number,
+  y: number,
+  pdfTouch: boolean,
+  hitTest?: (x: number, y: number) => Range | null
+) {
+  // PDF's geometry fallback can see text beneath the moving handle and seek
+  // the nearest visible glyph in line gaps. A native caret alone cannot.
+  if (hitTest) return hitTest(x, y)
+  if (pdfTouch) return null
+  const caretDoc = doc as Document & {
+    caretPositionFromPoint?: (
+      x: number,
+      y: number
+    ) => { offsetNode: Node; offset: number } | null
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  const position = caretDoc.caretPositionFromPoint?.(x, y)
+  if (!position) return caretDoc.caretRangeFromPoint?.(x, y) ?? null
+  const caret = doc.createRange()
+  caret.setStart(position.offsetNode, position.offset)
+  caret.collapse(true)
+  return caret
 }
 
 function pdfHandleLogicalEnd(
@@ -202,7 +229,7 @@ export function EngineSelectionControls({
       scrollRemainder = 0
     }
     const replayRelease = (event?: PointerEvent) => {
-      if (pdfTouch && event?.type === 'pointerup') move(event)
+      if (pdfHandles && event?.type === 'pointerup') move(event)
     }
     const finish = (event?: PointerEvent) => {
       const active = drag.current
@@ -258,6 +285,16 @@ export function EngineSelectionControls({
       }
     }
     cancelDrag.current = () => finish()
+    const moveMagnifier = (active: NonNullable<typeof drag.current>) => {
+      const point = magnifierDragPoint(active)
+      if (pdfTouch)
+        callbacks.current.magnifier?.move(point, {
+          range: active.current,
+          end: active.movingEnd,
+          color
+        })
+      else callbacks.current.magnifier?.move(point)
+    }
     const publish = (
       active: NonNullable<typeof drag.current>,
       next: Range,
@@ -267,13 +304,7 @@ export function EngineSelectionControls({
         previewRange.current = { owner: range!, value: next }
         setRects(rangeViewportRects(next, true))
         callbacks.current.onPreview?.(next)
-        const point = magnifierPoint(next, active.movingEnd)
-        if (point)
-          callbacks.current.magnifier?.move(magnifierLayoutPoint(point, true), {
-            range: next,
-            end: active.movingEnd,
-            color
-          })
+        moveMagnifier(active)
       } else {
         const selection = doc.getSelection()
         selection?.removeAllRanges()
@@ -287,10 +318,8 @@ export function EngineSelectionControls({
       }
       const clientX = active.clientX + active.offsetX
       const clientY = active.clientY + active.offsetY
-      if (!pdfTouch)
-        callbacks.current.magnifier?.move(
-          magnifierLayoutPoint({ clientX, clientY }, pdfHandles)
-        )
+      // Even pending/gap hits retain a live physical sampling point.
+      moveMagnifier(active)
       const doc = active.original.startContainer.ownerDocument
       if (
         !doc ||
@@ -303,35 +332,29 @@ export function EngineSelectionControls({
       const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
       const localX = clientX - (frame?.left ?? 0)
       const localY = clientY - (frame?.top ?? 0)
-      const caretDoc = doc as Document & {
-        caretPositionFromPoint?: (
-          x: number,
-          y: number
-        ) => { offsetNode: Node; offset: number } | null
-        caretRangeFromPoint?: (x: number, y: number) => Range | null
-      }
-      const position = pdfTouch
-        ? null
-        : caretDoc.caretPositionFromPoint?.(localX, localY)
-      const caret = pdfTouch
-        ? callbacks.current.hitTest?.(localX, localY)
-        : caretDoc.caretRangeFromPoint?.(localX, localY)
-      const node = position?.offsetNode ?? caret?.startContainer
-      const offset = position?.offset ?? caret?.startOffset
+      const caret = handleCaretAtPoint(
+        doc,
+        localX,
+        localY,
+        pdfTouch,
+        pdfHandles ? callbacks.current.hitTest : undefined
+      )
+      const node = caret?.startContainer
+      const offset = caret?.startOffset
       if (!node || offset === undefined || node.nodeType !== Node.TEXT_NODE) {
         // Page gaps and pending text layers retain the last valid PDF range.
-        if (!pdfTouch) active.valid = false
+        if (!pdfHandles) active.valid = false
         return
       }
       let next = active.original.cloneRange()
-      if (pdfTouch && caret) {
+      if (pdfHandles && caret) {
         const result = pdfHandleRange(active.original, active.end, caret)
         next = result.range
         active.movingEnd = result.end
       } else if (active.end) next.setEnd(node, offset)
       else next.setStart(node, offset)
       if (next.collapsed) {
-        if (!pdfTouch) active.valid = false
+        if (!pdfHandles) active.valid = false
         return
       }
       active.valid = true
@@ -378,6 +401,7 @@ export function EngineSelectionControls({
     const move = (event: PointerEvent) => {
       const active = drag.current
       if (!active || active.pointer !== event.pointerId) return
+      if (pdfHandles && isSelectionPointerMoveTextHit(event)) return
       if (latestRange.current !== range) {
         finish()
         return
@@ -605,7 +629,10 @@ export function EngineSelectionControls({
                   top: pdfHandles ? pdfHandleY : endpoint.bottom - 7,
                   zIndex: 10001
                 }}
-                onLostPointerCapture={() => cancelDrag.current()}
+                onLostPointerCapture={(event) => {
+                  if (drag.current?.pointer === event.pointerId)
+                    cancelDrag.current()
+                }}
                 onContextMenu={(event) => {
                   if (pdfTouch) event.preventDefault()
                 }}
@@ -662,13 +689,11 @@ export function EngineSelectionControls({
                       : null
                     magnifier?.start(
                       body,
-                      magnifierLayoutPoint(
-                        point ?? {
-                          clientX: event.clientX,
-                          clientY: event.clientY
-                        },
-                        pdfHandles
-                      ),
+                      {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                        lensPoint: point ?? undefined
+                      },
                       pdfTouch ? { range: current, end, color } : undefined
                     )
                   }

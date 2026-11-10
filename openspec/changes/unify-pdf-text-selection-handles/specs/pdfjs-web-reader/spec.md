@@ -151,7 +151,7 @@ PDF Text 拖动手柄时，放大镜 MUST 在镜像文字的当前插入位置�
 
 ### Requirement: PDF preview magnifier vertical clearance
 
-PDF Layout 的放大镜 SHALL 在自己的布局锚点增加向上 8 CSS px 的垂直避让，以接近 Text 已验收的镜片到指针距离。该偏移 MUST 仅影响镜片布局，保留 Layout 既有的采样、标记、选区命中、左右钳制和上下翻转规则；Text 生产代码及其六点布局与采样基线 MUST 不变。
+PDF Layout 的放大镜采样与标记 MUST 使用物理指针 clientX/clientY，不混入抓取纠偏或选区端点。8 CSS px 的垂直避让 SHALL 仅作为预览镜片元素自身的 CSS transform，不进入采样或共享定位几何计算。抓取纠偏仅用于选区命中和原有布局锚点，保留左右钳制和上下翻转规则；Text 生产代码及其六点布局与采样基线 MUST 不变。源快照边缘沿用既有裁剪规则。
 
 #### Scenario: Compare preview and Text pointer clearance
 
@@ -161,7 +161,21 @@ PDF Layout 的放大镜 SHALL 在自己的布局锚点增加向上 8 CSS px 的�
 #### Scenario: Retain preview edge placement
 
 - **WHEN** PDF Layout 的布局锚点靠近左右或上方边缘，鼠标或触摸仍在拖动手柄
-- **THEN** 仅预览的布局锚点上移，镜片继续由原有定位算法左右钳制、上方空间不足时翻到下方；偏移不混入采样和选区坐标
+- **THEN** 原有布局锚点不加 8px，定位算法仍左右钳制、上方空间不足时翻到下方，之后仅镜片元素作视觉上移；采样和选区坐标不含此视觉位移
+
+#### Scenario: Sample from different preview grab positions
+
+- **WHEN** 鼠标或触摸从预览起止手柄的中心、±9px 角落或 18px 热区边缘抓取并拖动
+- **THEN** start/move 和触摸 publish 的采样坐标均等于物理指针，常规快照区域的采样中心相对指针为 `(0,0)`；选择层纠偏转发不得覆盖原始采样点，镜片和内容不接受 pointer 命中
+
+### Requirement: PDF preview handles remain responsive across long drags
+
+PDF 桌面手柄 MUST 通过本 reader 的可见 PDF 字符命中并允许越过另一端点，固定的源锚点保持不变。行间空白、移动手柄覆盖文字或暂时未命中 MUST 不使最后有效范围在释放时回退；pointerup MUST 处理最终坐标，正常完成只提交一次。其他 pointerId 与选择层转发不得打断当前会话，匹配的取消、失焦、替换或丢失捕获仍清理且不提交；不得改变 Text、EPUB 或其他格式契约。
+
+#### Scenario: Repeat real mouse drags through gaps and across the anchor
+
+- **WHEN** 在真实 Chromium 鼠标回归中从首末热区抓取，单步或逐步拖动超过 200px，目标包括文字、行间空白及越过另一端点，重复至少 20 次
+- **THEN** 范围跟随并在释放后保持，固定锚点未改变；记录失败次数、pointer capture、pointerId、镜片命中及采样偏移，修复后失败次数为 0，镜片 pointer-events 为 none
 
 ### Requirement: PDF selection overlays track scrolling in the same frame
 
