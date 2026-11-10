@@ -35,7 +35,9 @@ it('portals the PDF lens alongside handles and reads the current page without hi
     </RangeMagnifierProvider>
   )
   const focus = { range, end: true, color: '#ffc107' }
-  act(() => controller.start(source, { clientX: 120, clientY: 230 }, focus))
+  act(() =>
+    controller.start(source, { clientX: 120, clientY: 230 }, focus, 'touch')
+  )
   const lens = screen.getByTestId('range-magnifier')
   expect(lens.parentElement).toBe(document.body)
   expect(lens.hidden).toBe(false)
@@ -78,7 +80,9 @@ it('releases PDF text caches on end and document replacement', () => {
     </RangeMagnifierProvider>
   )
   const focus = { range, end: true, color: '#ffc107' }
-  act(() => controller.start(source, { clientX: 120, clientY: 230 }, focus))
+  act(() =>
+    controller.start(source, { clientX: 120, clientY: 230 }, focus, 'touch')
+  )
   const lens = screen.getByTestId('range-magnifier')
   const output = lens.querySelector<HTMLElement>(
     '.hamster-reader__range-magnifier-text'
@@ -92,7 +96,9 @@ it('releases PDF text caches on end and document replacement', () => {
   expect(lens.hidden).toBe(true)
   expect(output.childNodes).toHaveLength(0)
 
-  act(() => controller.start(source, { clientX: 120, clientY: 230 }, focus))
+  act(() =>
+    controller.start(source, { clientX: 120, clientY: 230 }, focus, 'touch')
+  )
   const secondCopy = output.firstChild
   expect(secondCopy).not.toBeNull()
   expect(secondCopy).not.toBe(firstCopy)
@@ -103,7 +109,9 @@ it('releases PDF text caches on end and document replacement', () => {
   )
   expect(lens.hidden).toBe(true)
   expect(output.childNodes).toHaveLength(0)
-  act(() => controller.start(source, { clientX: 120, clientY: 230 }, focus))
+  act(() =>
+    controller.start(source, { clientX: 120, clientY: 230 }, focus, 'touch')
+  )
   expect(output.firstChild).not.toBeNull()
   expect(output.firstChild).not.toBe(secondCopy)
   view.unmount()

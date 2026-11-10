@@ -101,7 +101,7 @@ it.each(['cross-anchor', 'pending-hit', 'collapsed-hit', 'release-only'])(
         clientY: 149
       })
       expect(nativeCaret).not.toHaveBeenCalled()
-      expect(hitTest).toHaveBeenLastCalledWith(310, 120)
+      expect(hitTest).toHaveBeenLastCalledWith(319, 149)
       expect(onUpdate).toHaveBeenCalledOnce()
       const result = onUpdate.mock.calls[0][0] as Range
       expect(result.startOffset).toBe(scenario === 'cross-anchor' ? 2 : 6)

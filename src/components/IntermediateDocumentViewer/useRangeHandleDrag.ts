@@ -9,6 +9,7 @@ import {
 import { isPointOnSelectionText } from '../selection/caretResolver'
 import { markSelectionPointerMoveAsTextHit } from '../selection/selectionPointerGuard'
 import { useRangeMagnifier } from './RangeMagnifier'
+import { usesTouchMagnifier } from './selectionInteraction'
 
 interface ActiveRangeHandleDragSession {
   readonly sourceElement: HTMLElement
@@ -92,18 +93,26 @@ export const useRangeHandleDrag = ({
       const ownerDocument = circle.ownerDocument
       activeDragSessions.get(ownerDocument)?.finishDrag()
 
+      // Text hit tests use the actual pointer; rectangle grabs keep their offset.
       const circleRect = circle.getBoundingClientRect()
-      const target = pointerTarget ?? {
-        clientX: circleRect.left + circleRect.width / 2,
-        clientY: circleRect.top + circleRect.height / 2
-      }
-      const offsetX = target.clientX - event.clientX
-      const offsetY = target.clientY - event.clientY
+      const isText =
+        !circle.dataset.rectId &&
+        !circle.classList.contains('hsn-selection-handle-rect')
+      const offsetX = isText
+        ? 0
+        : circleRect.left + circleRect.width / 2 - event.clientX
+      const offsetY = isText
+        ? 0
+        : circleRect.top + circleRect.height / 2 - event.clientY
+      const sessionMagnifier =
+        !isText || usesTouchMagnifier(event.pointerType)
+          ? activeMagnifier
+          : null
       const forwardedEvents = new WeakSet<PointerEvent>()
       let pointerCorrectionActive = correctPointerCoordinates
       let dragFinished = false
       let unregisterMagnifierCleanup: (() => void) | null = null
-      activeMagnifier?.start(circle, {
+      sessionMagnifier?.start(circle, {
         clientX: event.clientX + offsetX,
         clientY: event.clientY + offsetY
       })
@@ -116,7 +125,7 @@ export const useRangeHandleDrag = ({
           return
         }
 
-        activeMagnifier?.move({
+        sessionMagnifier?.move({
           clientX: moveEvent.clientX + offsetX,
           clientY: moveEvent.clientY + offsetY
         })
@@ -148,7 +157,7 @@ export const useRangeHandleDrag = ({
         ownerDocument.defaultView?.removeEventListener('blur', finishDrag)
         unregisterMagnifierCleanup?.()
         unregisterMagnifierCleanup = null
-        activeMagnifier?.end()
+        sessionMagnifier?.end()
         if (activeDragSessions.get(ownerDocument)?.finishDrag === finishDrag) {
           activeDragSessions.delete(ownerDocument)
         }

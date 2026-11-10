@@ -114,6 +114,7 @@ export type EpubEngine = {
   /** 当前选区 → 旧端点结构；无选区或节降级时 null。 */
   readonly serializeCurrentSelection: () => SerializedSelection | null
   readonly getSelectionRange: () => Range | null
+  readonly setSelectionRange: (range: Range | null) => void
   readonly selectRange: (id: string) => Promise<Range | null>
   readonly serializeRange: (range: Range) => SerializedSelection | null
   readonly updateRangeEndpoint: (
@@ -167,6 +168,7 @@ export const createEpubEngine = (
   let virtualCoverActive = false
   let displayedPage: number | undefined
   let activeRangeId: string | null = null
+  let managedSelection: Range | null = null
   let hiddenPages = new Set<number>()
   let rangePages: ReadonlySet<number> | undefined
   let restrictionGeneration = 0
@@ -387,6 +389,8 @@ export const createEpubEngine = (
         continue
       inputCleanups.get(oldDoc)?.()
       inputCleanups.delete(oldDoc)
+      if (managedSelection?.startContainer.ownerDocument === oldDoc)
+        managedSelection = null
       options.onDocumentUnload?.(oldDoc)
       for (let i = docListeners.length - 1; i >= 0; i--) {
         const [owner, type, listener] = docListeners[i]
@@ -425,6 +429,13 @@ export const createEpubEngine = (
 
     const onSelectionChange = () => {
       if (destroyed) return
+      if (managedSelection) {
+        // Our handoff clear (or Foliate's collapsed focus caret) must not
+        // erase the managed range. A new native selection can also come from
+        // the keyboard, without pointerdown, and takes ownership immediately.
+        if (!getNativeSelectionRange()) return
+        managedSelection = null
+      }
       options.onSelection?.(serializeCurrentSelection())
     }
     const onClick = (event: Event) => {
@@ -450,6 +461,11 @@ export const createEpubEngine = (
       }
     }
     inputCleanups.set(doc, buttonOnlyInput(doc))
+    const resetManagedSelection = () => {
+      managedSelection = null
+    }
+    doc.addEventListener('pointerdown', resetManagedSelection, true)
+    docListeners.push([doc, 'pointerdown', resetManagedSelection])
     doc.addEventListener('selectionchange', onSelectionChange)
     doc.addEventListener('click', onClick)
     docListeners.push(
@@ -587,18 +603,36 @@ export const createEpubEngine = (
     })
   }
 
+  const getNativeSelectionRange = (): Range | null => {
+    for (const doc of liveDocs.values()) {
+      const selection = doc.getSelection()
+      if (selection && !selection.isCollapsed && selection.rangeCount) {
+        return selection.getRangeAt(0)
+      }
+    }
+    return null
+  }
+
+  const getSelectionRange = (): Range | null => {
+    const native = getNativeSelectionRange()
+    if (native) {
+      // Reads can precede the queued selectionchange event. Never serialize
+      // the previous managed text after a user has already selected new text.
+      managedSelection = null
+      return native
+    }
+    return managedSelection?.startContainer.isConnected
+      ? managedSelection
+      : null
+  }
+
   const serializeCurrentSelection = (): SerializedSelection | null => {
     if (destroyed || !compat) return null
+    const range = getSelectionRange()
+    if (!range) return null
     for (const [chapterIndex, doc] of liveDocs) {
-      const selection = doc.getSelection()
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-        continue
-      }
-      const payload = compat.serializeRange(
-        chapterIndex,
-        selection.getRangeAt(0)
-      )
-      if (payload) return payload
+      if (range.startContainer.ownerDocument === doc)
+        return compat.serializeRange(chapterIndex, range)
     }
     return null
   }
@@ -1209,21 +1243,21 @@ export const createEpubEngine = (
       return null
     },
     clearSelection: () => {
+      managedSelection = null
       for (const doc of liveDocs.values()) doc.getSelection()?.removeAllRanges()
     },
     setActiveRange: (id) => {
       activeRangeId = id
       drawAllLiveSections()
     },
-    getSelectionRange: () => {
-      for (const doc of liveDocs.values()) {
-        const selection = doc.getSelection()
-        if (selection && !selection.isCollapsed && selection.rangeCount) {
-          return selection.getRangeAt(0)
-        }
-      }
-      return null
+    setSelectionRange: (range) => {
+      managedSelection = range?.cloneRange() ?? null
+      if (managedSelection)
+        managedSelection.startContainer.ownerDocument
+          ?.getSelection()
+          ?.removeAllRanges()
     },
+    getSelectionRange,
     serializeRange: (range) => {
       for (const [chapter, doc] of liveDocs) {
         if (range.startContainer.ownerDocument === doc)
@@ -1242,9 +1276,8 @@ export const createEpubEngine = (
       if (!entry) return null
       const range = getRangePart(id)
       if (!range) return null
-      const selection = range.startContainer.ownerDocument?.getSelection()
-      selection?.removeAllRanges()
-      selection?.addRange(range)
+      managedSelection = range.cloneRange()
+      range.startContainer.ownerDocument?.getSelection()?.removeAllRanges()
       return range
     },
     captureTextAnchor: () => currentAnchor,

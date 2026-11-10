@@ -315,43 +315,46 @@ describe('PdfTextHandle drag coordinates', () => {
     { name: 'center', x: 20, y: 30 },
     { name: 'white border', x: 20, y: 22 },
     { name: 'corner 9px outside the circle', x: 39, y: 49 }
-  ])('does not jump when grabbed at the $name', ({ x, y }) => {
-    const { handle } = renderHandle()
-    const button = screen.getByRole('button', { name: handle.ariaLabel })
-    const move = vi.fn()
-    document.addEventListener('pointermove', move)
+  ])(
+    'hits the same physical destination when grabbed at the $name',
+    ({ x, y }) => {
+      const { handle } = renderHandle()
+      const button = screen.getByRole('button', { name: handle.ariaLabel })
+      const move = vi.fn()
+      document.addEventListener('pointermove', move)
 
-    fireEvent.pointerDown(button, {
-      pointerId: 7,
-      pointerType: 'touch',
-      isPrimary: true,
-      clientX: x,
-      clientY: y
-    })
-    fireEvent.pointerMove(document, {
-      pointerId: 7,
-      pointerType: 'touch',
-      clientX: x + 30,
-      clientY: y + 20
-    })
+      fireEvent.pointerDown(button, {
+        pointerId: 7,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y
+      })
+      fireEvent.pointerMove(document, {
+        pointerId: 7,
+        pointerType: 'touch',
+        clientX: 50,
+        clientY: 50
+      })
 
-    expect(handle.onPointerDown).toHaveBeenCalledTimes(1)
-    expect(magnifier.start).toHaveBeenCalledWith(button, {
-      clientX: 20,
-      clientY: 50
-    })
-    expect(move).toHaveBeenCalledTimes(1)
-    expect(move.mock.calls[0][0]).toMatchObject({ clientX: 50, clientY: 70 })
-    expect(magnifier.move).toHaveBeenLastCalledWith({
-      clientX: 50,
-      clientY: 70
-    })
+      expect(handle.onPointerDown).toHaveBeenCalledTimes(1)
+      expect(magnifier.start).toHaveBeenCalledWith(button, {
+        clientX: x,
+        clientY: y
+      })
+      expect(move).toHaveBeenCalledTimes(1)
+      expect(move.mock.calls[0][0]).toMatchObject({ clientX: 50, clientY: 50 })
+      expect(magnifier.move).toHaveBeenLastCalledWith({
+        clientX: 50,
+        clientY: 50
+      })
 
-    fireEvent.pointerUp(document, { pointerId: 7, clientX: 50, clientY: 70 })
-    document.removeEventListener('pointermove', move)
-  })
+      fireEvent.pointerUp(document, { pointerId: 7, clientX: 50, clientY: 50 })
+      document.removeEventListener('pointermove', move)
+    }
+  )
 
-  it('uses the corrected final release point before pointerup', () => {
+  it('uses the actual final release point before pointerup', () => {
     const { handle } = renderHandle({ type: 'end' })
     const button = screen.getByRole('button', { name: handle.ariaLabel })
     const events: string[] = []
@@ -366,17 +369,17 @@ describe('PdfTextHandle drag coordinates', () => {
       pointerId: 9,
       pointerType: 'touch',
       clientX: 50,
-      clientY: 70
+      clientY: 50
     })
     fireEvent.pointerUp(document, {
       pointerId: 9,
       pointerType: 'touch',
       clientX: 70,
-      clientY: 90
+      clientY: 80
     })
 
     expect(move).toHaveBeenCalledTimes(1)
-    expect(events).toEqual(['move:70,70', 'up'])
+    expect(events).toEqual(['move:70,80', 'up'])
     expect(magnifier.end).toHaveBeenCalledTimes(1)
     document.removeEventListener('pointermove', move)
     document.removeEventListener('pointerup', up)

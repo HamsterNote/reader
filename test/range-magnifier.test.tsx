@@ -61,7 +61,7 @@ describe('range magnifier', () => {
       new DOMRect(10, 20, 300, 400)
     )
 
-    expect(position).toEqual({ left: 90, top: 68, placement: 'below' })
+    expect(position).toEqual({ left: 120, top: 58, placement: 'below' })
   })
 
   it('keeps the sampled source rectangle inside a short page snapshot', () => {
@@ -114,6 +114,7 @@ describe('range magnifier', () => {
 
     // When: the user starts, moves, and finishes a handle drag.
     fireEvent.pointerDown(circle, {
+      pointerType: 'touch',
       pointerId: 7,
       clientX: 145,
       clientY: 265,
@@ -126,7 +127,7 @@ describe('range magnifier', () => {
     expect(magnifier.parentElement).toBe(portalHost)
     expect(magnifier).not.toHaveAttribute('hidden')
     expect(magnifier).toHaveAttribute('data-placement', 'above')
-    expect(magnifier).toHaveStyle({ left: '80px', top: '112px' })
+    expect(magnifier).toHaveStyle({ left: '75px', top: '107px' })
     expect(
       magnifier.closest('.virtual-paper-container')
     ).not.toBeInTheDocument()
@@ -136,14 +137,15 @@ describe('range magnifier', () => {
     )
 
     fireEvent.pointerMove(document, {
+      pointerType: 'touch',
       pointerId: 7,
       clientX: 155,
       clientY: 275,
       buttons: 1
     })
-    expect(magnifier).toHaveStyle({ left: '90px', top: '122px' })
+    expect(magnifier).toHaveStyle({ left: '85px', top: '117px' })
 
-    fireEvent.pointerUp(document, { pointerId: 7 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 7 })
     expect(magnifier).toHaveAttribute('hidden')
 
     unmount()
@@ -174,6 +176,7 @@ describe('range magnifier', () => {
     mockElementSize(portalHost, { left: 10, top: 20, width: 320, height: 480 })
     mockElementSize(circle, { left: 140, top: 260, width: 20, height: 20 })
     fireEvent.pointerDown(circle, {
+      pointerType: 'touch',
       pointerId: 9,
       clientX: 145,
       clientY: 265,
@@ -185,6 +188,7 @@ describe('range magnifier', () => {
     rerender(renderSelection(false))
     await new Promise((resolve) => setTimeout(resolve, 0))
     fireEvent.pointerMove(document, {
+      pointerType: 'touch',
       pointerId: 9,
       clientX: 155,
       clientY: 275,
@@ -193,8 +197,8 @@ describe('range magnifier', () => {
 
     // Then: unmounting the drag owner releases the lens and document listeners.
     expect(magnifier).toHaveAttribute('hidden')
-    expect(magnifier).toHaveStyle({ left: '80px', top: '112px' })
-    fireEvent.pointerUp(document, { pointerId: 9 })
+    expect(magnifier).toHaveStyle({ left: '75px', top: '107px' })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 9 })
     expect(magnifier).toHaveAttribute('hidden')
 
     unmount()
@@ -222,6 +226,7 @@ describe('range magnifier', () => {
     mockElementSize(portalHost, { left: 10, top: 20, width: 320, height: 480 })
     mockElementSize(circle, { left: 140, top: 260, width: 20, height: 20 })
     fireEvent.pointerDown(circle, {
+      pointerType: 'touch',
       pointerId: 11,
       clientX: 145,
       clientY: 265,
@@ -230,11 +235,11 @@ describe('range magnifier', () => {
     const magnifier = screen.getByTestId('range-magnifier')
 
     // When: another active pointer ends before the drag-owning pointer.
-    fireEvent.pointerUp(document, { pointerId: 12 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 12 })
 
     // Then: only pointer 11 can end this drag session.
     expect(magnifier).not.toHaveAttribute('hidden')
-    fireEvent.pointerUp(document, { pointerId: 11 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 11 })
     expect(magnifier).toHaveAttribute('hidden')
 
     unmount()
@@ -263,6 +268,7 @@ describe('range magnifier', () => {
     const addListenerSpy = vi.spyOn(document, 'addEventListener')
     const removeListenerSpy = vi.spyOn(document, 'removeEventListener')
     fireEvent.pointerDown(circle, {
+      pointerType: 'touch',
       pointerId: 13,
       clientX: 145,
       clientY: 265,

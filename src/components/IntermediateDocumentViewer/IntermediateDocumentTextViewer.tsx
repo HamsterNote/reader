@@ -1,12 +1,11 @@
-import { PdfTextHandle } from '../../pdf/PdfTextHandle'
+import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
+import { RangeMagnifierProvider } from './RangeMagnifier'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
 import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeometry'
 import type { ReaderEngineSource } from '../../types/engineSource'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
-import { RangeMagnifierProvider } from './RangeMagnifier'
-import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import {
   resolveReaderTheme,
   usePrefersColorScheme
@@ -172,6 +171,25 @@ function getTextReadingClasses(isPdf: boolean) {
     shell: `hamster-reader__intermediate-text-shell${isPdf ? ' hamster-reader__pdf-text-shell' : ''}`,
     viewport: isPdf ? 'hamster-reader__pdf-text-viewport' : ''
   }
+}
+
+function getTextPageSelectionOptions(isPdf: boolean, showMagnifier: boolean) {
+  return {
+    renderHandle: isPdf ? () => null : undefined,
+    showSelectionMagnifier: isPdf ? false : showMagnifier
+  }
+}
+
+function emptyPdfText(isPdf: boolean, texts: IntermediateText[] | undefined) {
+  return isPdf && texts && !texts.some((text) => text.content.trim())
+}
+
+function managedTextPopover(
+  active: boolean,
+  draft: ReactNode,
+  saved: ReactNode
+) {
+  return active ? draft : saved
 }
 
 function getTextSpacerStyle(
@@ -497,9 +515,12 @@ function completeHighlightPointerUp(
 
 function getHighlightDragClassNames(
   suppressNativeSelection: boolean,
-  activePointerType: string | null
+  activePointerType: string | null,
+  managedTextEditing: boolean
 ): string[] {
   const classNames: string[] = []
+  if (managedTextEditing)
+    classNames.push('hamster-reader__managed-text-editing')
   if (suppressNativeSelection) {
     classNames.push(
       'hamster-reader__intermediate-document-viewer--suppress-native-selection'
@@ -1769,6 +1790,8 @@ export function IntermediateDocumentTextViewer(
         : null,
     [effectiveSelectedRangeId, storedRanges]
   )
+  const [managedTextEditing, setManagedTextEditing] = useState(false)
+  const resettingPdfTextSelectionRef = useRef(false)
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
   )
@@ -2800,6 +2823,7 @@ export function IntermediateDocumentTextViewer(
 
   const handlePageLinkedDataChange = useCallback(
     (next: LinkedSelectionData) => {
+      if (resettingPdfTextSelectionRef.current) return
       runtimeLinkedDataRef.current = next
       if (next.activeRange) {
         lastActiveRangeRef.current = next.activeRange
@@ -3359,6 +3383,10 @@ export function IntermediateDocumentTextViewer(
   // 文档标题用于无障碍标签；缺失时回退到静态文案。
   const title = runtimeDocument?.title
   const textClasses = getTextReadingClasses(isPdf)
+  const pageSelectionOptions = getTextPageSelectionOptions(
+    isPdf,
+    showSelectionMagnifier
+  )
 
   const captureBookmark = () =>
     isPdf ? pdfPagination.capturePosition() : readingProgress.anchor
@@ -3374,276 +3402,290 @@ export function IntermediateDocumentTextViewer(
       }
     }
   }
-  const viewer = (
-    <div className={textClasses.shell}>
-      {
-        <PdfTextReadingControls
-          enabled={isPdf}
-          controlsRef={paginationControlsRef}
-          navigation={pdfPagination.navigation}
-          ready={pdfPagination.ready}
-          unlocatable={pdfPagination.unlocatable}
-          theme={paginationTheme}
-          empty={!pageNumbers.length}
-          failed={pdfLoadErrors.has(pdfPagination.pageNumber)}
-          onPrevious={() => pdfPagination.turn(false)}
-          onNext={() => pdfPagination.turn(true)}
-          onRetry={() => {
-            setPdfLoadErrors((current) => {
-              const next = new Set(current)
-              next.delete(pdfPagination.pageNumber)
-              return next
-            })
-            lazyPageQueueRef.current.enqueuePage(pdfPagination.pageNumber)
-          }}
-        />
-      }
-      <PageBrowser
-        isOpen={showPageBrowser}
-        pageNumbers={pageNumbers}
-        pageSizesByPageNumber={pageSizesByPageNumber}
-        baseImagesByPageNumber={EMPTY_TEXT_PAGE_IMAGES}
-        onPageVisibilityChange={handleTextPageBrowserVisibilityChange}
-        onNavigateToPage={handleReadingProgressSeekPage}
-        themeColor={themeColor}
-        visiblePageNumbers={visiblePageNumberSet}
-        containMarginTop={containMarginTop ?? containMarginY}
-        containMarginBottom={containMarginBottom ?? containMarginY}
-        ranges={effectiveRanges}
-        selectedRangeId={effectiveSelectedRangeId}
-        onSelectRange={handlePageLinkedSelectRange}
-        onNavigateToRange={scrollToRange}
-        onDeleteRange={onRemoveRange}
-        commentCountByRangeId={commentCountByRangeId}
-        onDeleteRect={onRemoveRect}
-        showPagesTab={false}
-        bookmarks={bookmarks}
-        currentBookmark={captureBookmark()}
-        activeBookmarkKey={getActiveBookmarkKey(
-          readingProgress.anchor,
-          fallbackBookmarkKey,
-          bookmarks
-        )}
-        onNavigateToBookmark={resolveBookmarkNavigationHandler(
-          bookmarks,
-          onToggleBookmark,
-          scrollToBookmark
-        )}
-        isBookmarkNavigationEnabled={canNavigateBookmark}
-        onToggleBookmark={bookmarkToggleHandler()}
-        bookmarkedPageNumbers={bookmarkedPageNumbers}
-        onTogglePageBookmark={onTogglePageBookmark}
-        onClose={onPageBrowserClose}
-      />
-      {pageNumbers.length > 0 ? (
-        <ReadingProgress
-          mode='text'
-          pageNumbers={pageNumbers}
-          currentPageNumber={
-            readingProgress.anchor?.pageNumber ??
-            readingProgress.currentPageNumber
-          }
-          isMoving={isReadingProgressMoving}
-          ranges={effectiveRanges}
-          highlightColor={highlightColor}
-          insetTop={containMarginTop ?? containMarginY}
-          insetBottom={containMarginBottom ?? containMarginY}
-          onSeekPage={handleReadingProgressSeekPage}
-        />
-      ) : null}
-      <div
-        ref={setScrollRootRef}
-        role='document'
-        className={[
-          // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
-          // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）
-          'hamster-reader__intermediate-text-viewer',
-          'hamster-reader__intermediate-text-scroll',
-          textClasses.viewport,
-          // 添加 layout 模式的 viewer class，使 buildSelectionPayload 的
-          // getSelectionViewerRoot 能在文本模式下找到 viewer root — 不影响布局
-          // 因为 SCSS .hamster-reader__intermediate-text-viewer / -text-scroll
-          // 的 display:block / overflow:auto 在源码顺序上后于该 class，覆盖其
-          // display:flex / overflow:hidden
-          'hamster-reader__intermediate-document-viewer',
-          ...getHighlightDragClassNames(
-            suppressNativeSelection,
-            highlightDragPointerType
-          ),
-          className
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        data-testid='intermediate-document-text-viewer'
-        data-title={title}
-        style={getTextViewportStyle(props, readingViewport)}
-        onPointerDownCapture={handleViewerPointerDown}
-        onPointerMoveCapture={handleViewerPointerMove}
-        onPointerUpCapture={handleViewerPointerUp}
-        onPointerCancelCapture={handleViewerPointerCancel}
-      >
-        {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
-        <div
-          className='hamster-reader__intermediate-text-spacer'
-          style={getTextSpacerStyle(
-            isPdf,
-            readingViewport.height,
-            virtualizer.getTotalSize()
-          )}
-        >
-          {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
-          {virtualItems.map((virtualItem) => {
-            const pageNumber = pageNumbers[virtualItem.index]
-            if (typeof pageNumber !== 'number') {
-              return null
-            }
-
-            const texts = textsByPageNumber.get(pageNumber)
-            const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
-            const images = imagesByPageNumber.get(pageNumber) ?? []
-            const orderedContent = orderedContentByPageNumber.get(pageNumber)
-            const pageSelectionId = getRuntimePageSelectionId(pageNumber)
-            const isPopoverOwner =
-              popoverOwnerRuntimeId === null ||
-              popoverOwnerRuntimeId === pageSelectionId
-            const pagePopover = isPopoverOwner ? (
-              <PopoverPortal
-                containerRef={popoverContainerRef}
-                selectionKind='selected'
-                visible={!isPdf || !showPageBrowser}
-                relative={popoverRelative}
-              >
-                {existingHighlightPopover}
-              </PopoverPortal>
-            ) : undefined
-            const pageSelectionPopover = isPopoverOwner ? (
-              <PopoverPortal
-                containerRef={popoverContainerRef}
-                selectionKind='active'
-                visible={!isPdf || !showPageBrowser}
-                relative={popoverRelative}
-              >
-                {selectionPopover}
-              </PopoverPortal>
-            ) : undefined
-            return (
-              <div
-                key={virtualItem.key}
-                ref={isPdf ? undefined : virtualizer.measureElement}
-                data-index={virtualItem.index}
-                data-page-measurable={
-                  texts !== undefined && (texts.length > 0 || images.length > 0)
-                }
-                data-page-number={pageNumber}
-                data-selection-id={pageSelectionId}
-                data-testid={`intermediate-text-page-${pageNumber}`}
-                // SCSS .hamster-reader__intermediate-text-page 提供
-                // position:absolute / top:0 / left:0 / width:100% / padding:5px，
-                // 仅保留动态 transform（由 TanStack Virtual 计算）
-                className={`hamster-reader__intermediate-text-page${
-                  !isPdf && virtualItem.index > 0
-                    ? ' hamster-reader__intermediate-text-page--following'
-                    : ''
-                }`}
-                style={{ transform: `translateY(${virtualItem.start}px)` }}
-              >
-                {isPdf ? (
-                  <div
-                    aria-hidden='true'
-                    className='hamster-reader__intermediate-text-page-marker'
-                    data-testid={`pdf-text-page-marker-${pageNumber}`}
-                  >
-                    第 {pageNumber} 页
-                  </div>
-                ) : null}
-                {isPdf &&
-                texts &&
-                !texts.some((text) => text.content.trim()) ? (
-                  <div role='status' className='hamster-reader__pdf-text-empty'>
-                    第 {pageNumber} 页没有可提取的文字
-                    {props.onRequestLayout && (
-                      <button type='button' onClick={props.onRequestLayout}>
-                        返回 Layout
-                      </button>
-                    )}
-                  </div>
-                ) : null}
-                {texts &&
-                !(isPdf && !texts.some((text) => text.content.trim())) ? (
-                  <HamsterSelection
-                    selectionId={pageSelectionId}
-                    linkedMode
-                    linkedData={runtimeLinkedData}
-                    onLinkedDataChange={handlePageLinkedDataChange}
-                    onLinkedSelect={handleLinkedSelect}
-                    onLinkedUpdateRange={handleLinkedUpdateRange}
-                    onLinkedSelectRange={handlePageLinkedSelectRange}
-                    ranges={EMPTY_SELECTION_RANGES}
-                    selectedRangeId={effectiveSelectedRangeId}
-                    onSelect={undefined}
-                    onSelectRange={undefined}
-                    onUpdateRange={undefined}
-                    onSelectionStart={selectionStartHandler}
-                    onSelectionEnd={selectionEndHandler}
-                    onHighlight={undefined}
-                    highlightColor={highlightColor}
-                    selectionColor={selectionColor}
-                    popover={pagePopover}
-                    selectionPopover={pageSelectionPopover}
-                    overlayRectType={overlayRectType}
-                    tool='text'
-                    renderHandle={
-                      isPdf
-                        ? (handle) => (
-                            <PdfTextHandle
-                              handle={handle}
-                              linkedData={runtimeLinkedData}
-                              root={viewerRootElement}
-                              selectionId={pageSelectionId}
-                              width={readingViewport.width}
-                              column={pdfPagination.column}
-                              magnifierEnabled={false}
-                            />
-                          )
-                        : undefined
-                    }
-                    showSelectionMagnifier={!isPdf && showSelectionMagnifier}
-                    ref={selectionRefForRuntimeId(pageSelectionId)}
-                  >
-                    <IntermediateDocumentTextPageContent
-                      key={virtualItem.key}
-                      pageNumber={pageNumber}
-                      texts={texts}
-                      paragraphs={paragraphs}
-                      images={images}
-                      orderedContent={orderedContent}
-                      isPdf={isPdf}
-                      setTextRef={setTextRef}
-                      fontScale={fontScale}
-                    />
-                  </HamsterSelection>
-                ) : (
-                  <>Page {pageNumber}</>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
   return (
     <RangeMagnifierProvider
       rootElement={viewerRootElement}
-      source={props.pdfSource}
-      pdfText={isPdf}
-      enabled={isPdf && showSelectionMagnifier}
+      source={selectionScope}
+      enabled={showSelectionMagnifier}
     >
-      <TextSelectionMagnifier
-        viewerRootElement={viewerRootElement}
-        pdfText={isPdf}
-      />
-      {viewer}
+      <div className={textClasses.shell}>
+        {
+          <PdfTextReadingControls
+            enabled={isPdf}
+            controlsRef={paginationControlsRef}
+            navigation={pdfPagination.navigation}
+            ready={pdfPagination.ready}
+            unlocatable={pdfPagination.unlocatable}
+            theme={paginationTheme}
+            empty={!pageNumbers.length}
+            failed={pdfLoadErrors.has(pdfPagination.pageNumber)}
+            onPrevious={() => pdfPagination.turn(false)}
+            onNext={() => pdfPagination.turn(true)}
+            onRetry={() => {
+              setPdfLoadErrors((current) => {
+                const next = new Set(current)
+                next.delete(pdfPagination.pageNumber)
+                return next
+              })
+              lazyPageQueueRef.current.enqueuePage(pdfPagination.pageNumber)
+            }}
+          />
+        }
+        <PageBrowser
+          isOpen={showPageBrowser}
+          pageNumbers={pageNumbers}
+          pageSizesByPageNumber={pageSizesByPageNumber}
+          baseImagesByPageNumber={EMPTY_TEXT_PAGE_IMAGES}
+          onPageVisibilityChange={handleTextPageBrowserVisibilityChange}
+          onNavigateToPage={handleReadingProgressSeekPage}
+          themeColor={themeColor}
+          visiblePageNumbers={visiblePageNumberSet}
+          containMarginTop={containMarginTop ?? containMarginY}
+          containMarginBottom={containMarginBottom ?? containMarginY}
+          ranges={effectiveRanges}
+          selectedRangeId={effectiveSelectedRangeId}
+          onSelectRange={handlePageLinkedSelectRange}
+          onNavigateToRange={scrollToRange}
+          onDeleteRange={onRemoveRange}
+          commentCountByRangeId={commentCountByRangeId}
+          onDeleteRect={onRemoveRect}
+          showPagesTab={false}
+          bookmarks={bookmarks}
+          currentBookmark={captureBookmark()}
+          activeBookmarkKey={getActiveBookmarkKey(
+            readingProgress.anchor,
+            fallbackBookmarkKey,
+            bookmarks
+          )}
+          onNavigateToBookmark={resolveBookmarkNavigationHandler(
+            bookmarks,
+            onToggleBookmark,
+            scrollToBookmark
+          )}
+          isBookmarkNavigationEnabled={canNavigateBookmark}
+          onToggleBookmark={bookmarkToggleHandler()}
+          bookmarkedPageNumbers={bookmarkedPageNumbers}
+          onTogglePageBookmark={onTogglePageBookmark}
+          onClose={onPageBrowserClose}
+        />
+        {pageNumbers.length > 0 ? (
+          <ReadingProgress
+            mode='text'
+            pageNumbers={pageNumbers}
+            currentPageNumber={
+              readingProgress.anchor?.pageNumber ??
+              readingProgress.currentPageNumber
+            }
+            isMoving={isReadingProgressMoving}
+            ranges={effectiveRanges}
+            highlightColor={highlightColor}
+            insetTop={containMarginTop ?? containMarginY}
+            insetBottom={containMarginBottom ?? containMarginY}
+            onSeekPage={handleReadingProgressSeekPage}
+          />
+        ) : null}
+        <div
+          ref={setScrollRootRef}
+          role='document'
+          className={[
+            // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
+            // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）
+            'hamster-reader__intermediate-text-viewer',
+            'hamster-reader__intermediate-text-scroll',
+            textClasses.viewport,
+            // 添加 layout 模式的 viewer class，使 buildSelectionPayload 的
+            // getSelectionViewerRoot 能在文本模式下找到 viewer root — 不影响布局
+            // 因为 SCSS .hamster-reader__intermediate-text-viewer / -text-scroll
+            // 的 display:block / overflow:auto 在源码顺序上后于该 class，覆盖其
+            // display:flex / overflow:hidden
+            'hamster-reader__intermediate-document-viewer',
+            ...getHighlightDragClassNames(
+              suppressNativeSelection,
+              highlightDragPointerType,
+              managedTextEditing
+            ),
+            className
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          data-testid='intermediate-document-text-viewer'
+          data-title={title}
+          style={getTextViewportStyle(props, readingViewport)}
+          onPointerDownCapture={handleViewerPointerDown}
+          onPointerMoveCapture={handleViewerPointerMove}
+          onPointerUpCapture={handleViewerPointerUp}
+          onPointerCancelCapture={handleViewerPointerCancel}
+        >
+          {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
+          <div
+            className='hamster-reader__intermediate-text-spacer'
+            style={getTextSpacerStyle(
+              isPdf,
+              readingViewport.height,
+              virtualizer.getTotalSize()
+            )}
+          >
+            {/* 仅渲染虚拟范围内的页面，不渲染任何非可见页占位 DOM */}
+            {virtualItems.map((virtualItem) => {
+              const pageNumber = pageNumbers[virtualItem.index]
+              if (typeof pageNumber !== 'number') {
+                return null
+              }
+
+              const texts = textsByPageNumber.get(pageNumber)
+              const paragraphs = paragraphsByPageNumber.get(pageNumber) ?? []
+              const images = imagesByPageNumber.get(pageNumber) ?? []
+              const orderedContent = orderedContentByPageNumber.get(pageNumber)
+              const pageSelectionId = getRuntimePageSelectionId(pageNumber)
+              const isPopoverOwner =
+                popoverOwnerRuntimeId === null ||
+                popoverOwnerRuntimeId === pageSelectionId
+              const showPagePopover = !isPdf && isPopoverOwner
+              const emptyPdfPage = emptyPdfText(isPdf, texts)
+              const pagePopover = showPagePopover ? (
+                <PopoverPortal
+                  containerRef={popoverContainerRef}
+                  selectionKind='selected'
+                  visible={!managedTextEditing}
+                  relative={popoverRelative}
+                >
+                  {existingHighlightPopover}
+                </PopoverPortal>
+              ) : undefined
+              const pageSelectionPopover = showPagePopover ? (
+                <PopoverPortal
+                  containerRef={popoverContainerRef}
+                  selectionKind='active'
+                  visible={!managedTextEditing}
+                  relative={popoverRelative}
+                >
+                  {selectionPopover}
+                </PopoverPortal>
+              ) : undefined
+              return (
+                <div
+                  key={virtualItem.key}
+                  ref={isPdf ? undefined : virtualizer.measureElement}
+                  data-index={virtualItem.index}
+                  data-page-measurable={
+                    texts !== undefined &&
+                    (texts.length > 0 || images.length > 0)
+                  }
+                  data-page-number={pageNumber}
+                  data-selection-id={pageSelectionId}
+                  data-testid={`intermediate-text-page-${pageNumber}`}
+                  // SCSS .hamster-reader__intermediate-text-page 提供
+                  // position:absolute / top:0 / left:0 / width:100% / padding:5px，
+                  // 仅保留动态 transform（由 TanStack Virtual 计算）
+                  className={`hamster-reader__intermediate-text-page${
+                    !isPdf && virtualItem.index > 0
+                      ? ' hamster-reader__intermediate-text-page--following'
+                      : ''
+                  }`}
+                  style={{ transform: `translateY(${virtualItem.start}px)` }}
+                >
+                  {isPdf ? (
+                    <div
+                      aria-hidden='true'
+                      className='hamster-reader__intermediate-text-page-marker'
+                      data-testid={`pdf-text-page-marker-${pageNumber}`}
+                    >
+                      第 {pageNumber} 页
+                    </div>
+                  ) : null}
+                  {emptyPdfPage ? (
+                    <div
+                      role='status'
+                      className='hamster-reader__pdf-text-empty'
+                    >
+                      第 {pageNumber} 页没有可提取的文字
+                      {props.onRequestLayout && (
+                        <button type='button' onClick={props.onRequestLayout}>
+                          返回 Layout
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
+                  {texts && !emptyPdfPage ? (
+                    <HamsterSelection
+                      selectionId={pageSelectionId}
+                      linkedMode
+                      linkedData={runtimeLinkedData}
+                      onLinkedDataChange={handlePageLinkedDataChange}
+                      onLinkedSelect={handleLinkedSelect}
+                      onLinkedUpdateRange={handleLinkedUpdateRange}
+                      onLinkedSelectRange={handlePageLinkedSelectRange}
+                      ranges={EMPTY_SELECTION_RANGES}
+                      selectedRangeId={effectiveSelectedRangeId}
+                      onSelect={undefined}
+                      onSelectRange={undefined}
+                      onUpdateRange={undefined}
+                      onSelectionStart={selectionStartHandler}
+                      onSelectionEnd={selectionEndHandler}
+                      onHighlight={undefined}
+                      highlightColor={highlightColor}
+                      selectionColor={selectionColor}
+                      popover={pagePopover}
+                      selectionPopover={pageSelectionPopover}
+                      overlayRectType={overlayRectType}
+                      tool='text'
+                      {...pageSelectionOptions}
+                      ref={selectionRefForRuntimeId(pageSelectionId)}
+                    >
+                      <IntermediateDocumentTextPageContent
+                        key={virtualItem.key}
+                        pageNumber={pageNumber}
+                        texts={texts}
+                        paragraphs={paragraphs}
+                        images={images}
+                        orderedContent={orderedContent}
+                        isPdf={isPdf}
+                        setTextRef={setTextRef}
+                        fontScale={fontScale}
+                      />
+                    </HamsterSelection>
+                  ) : (
+                    <>Page {pageNumber}</>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+      {isPdf && !showPageBrowser && (
+        <PdfTextSelectionControls
+          root={viewerRootElement}
+          data={runtimeLinkedData}
+          color={highlightColor ?? '#ffc107'}
+          popoverRelative={popoverRelative}
+          onEditingChange={(editing) => {
+            if (editing) {
+              // The dependency keeps its own native draft even after the DOM
+              // Selection is cleared. Retire that draft before managed edits;
+              // otherwise its linked-data effect writes the old endpoints back
+              // over our release commit. Keep the outer managed range intact.
+              resettingPdfTextSelectionRef.current = true
+              try {
+                selectionRefsByRuntimeIdRef.current.forEach((ref) =>
+                  ref.clear()
+                )
+              } finally {
+                resettingPdfTextSelectionRef.current = false
+              }
+            }
+            setManagedTextEditing(editing)
+          }}
+          onDraft={handlePageLinkedDataChange}
+          onUpdate={handleLinkedUpdateRange}
+        >
+          {managedTextPopover(
+            Boolean(runtimeLinkedData.activeRange),
+            selectionPopover,
+            existingHighlightPopover
+          )}
+        </PdfTextSelectionControls>
+      )}
     </RangeMagnifierProvider>
   )
 }

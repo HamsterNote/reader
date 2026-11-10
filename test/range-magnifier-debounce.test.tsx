@@ -18,14 +18,14 @@ const handle: HandleRenderProps = {
   type: 'start',
   owner: 'persisted-range',
   rangeId: 'range-1',
-  target: 'text',
-  rectId: null,
+  target: 'rect',
+  rectId: 'rect-1',
   position: { x: 20, y: 30 },
   positionUnit: 'px',
   isDragging: false,
   onPointerDown: vi.fn(),
   ariaLabel: 'Drag range start',
-  className: 'hsn-selection-handle',
+  className: 'hsn-selection-handle hsn-selection-handle-rect',
   style: { backgroundColor: 'rgba(37, 99, 235, 0.4)' }
 }
 const linkedData: LinkedSelectionData = {
@@ -51,7 +51,7 @@ afterEach(() => {
 })
 
 describe('range magnifier screenshot debounce', () => {
-  it('recaptures the latest selection after 100ms and cancels pending work on drag end', () => {
+  it('recaptures the latest rectangle view after 100ms and cancels pending work on drag end', () => {
     // Given: an active magnifier whose initial page screenshot is still pending.
     vi.useFakeTimers()
     html2canvasMock.mockReturnValue(new Promise<HTMLCanvasElement>(() => {}))

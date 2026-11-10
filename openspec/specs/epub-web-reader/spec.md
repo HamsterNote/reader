@@ -126,7 +126,7 @@
 - **THEN** 激活完整高亮的原 ID，Popover 不把可见片段另存为新高亮，不丢弃不可见端点
 
 ### Requirement: EPUB range editing commits consistent endpoints and text
-系统 SHALL 使用既有鼠标端点手柄及触摸原生选择交互对活动范围扩展或缩小，支持当前章节可选正文内跨段落、跨节点编辑。草稿调整 MUST 仅更新草稿；已有高亮有效编辑完成后 MUST 按原 ID 提交端点和对应规范化文本的一次完整更新，保留 createdAt、样式、评论关联及未编辑端点。空范围、端点交叉导致的无效范围或无法映射的编辑 MUST 不提交且恢复最后有效范围。中途取消 MUST 不保留部分更新。
+系统 SHALL 对活动范围使用遵循 `reader-text-selection-interaction` 的受管文字端点手柄扩展或缩小，支持当前章节可选正文内跨段落、跨节点编辑。PDF 预览、EPUB、PDF 纯文字三者 MUST 共用该规格的同一份交互描述与全部验收场景；触摸原生选择仍可用于初始选区形成，随后端点调整由受管手柄承担，不得同时出现另一套原生端点拖动或放大镜反馈。草稿调整 MUST 仅更新草稿；已有高亮有效编辑完成后 MUST 按原 ID 提交端点和对应规范化文本的一次完整更新，保留 createdAt、样式、评论关联及未编辑端点。空范围、端点交叉导致的无效范围或无法映射的编辑 MUST 不提交且恢复最后有效范围。中途取消 MUST 不保留部分更新。
 
 #### Scenario: Expand and shrink a saved range
 - **WHEN** 用户将高亮终点扩展至下一段并结束，再将起点缩回同段
@@ -143,6 +143,10 @@
 #### Scenario: Respect explicit pagination
 - **WHEN** 用户将选区或端点拖至可视页边缘，或编辑中通过按钮翻页、目录跳转导致原选区文档失效
 - **THEN** 越界不自动翻页或滚动；显式导航先取消未完成编辑，再按新视口恢复已有高亮片段或关闭草稿，不把旧文档回调提交为新范围
+
+#### Scenario: Use the shared interaction after initial touch selection
+- **WHEN** 通过鼠标或触摸形成 EPUB 初始选区，再执行 `reader-text-selection-interaction` 的共享手柄验收矩阵
+- **THEN** 端点调整完整遵循共享标准，正文与 iframe 坐标换算不增加命中位移；保持本规格的有效范围提交、取消和显式分页规则
 
 ### Requirement: EPUB deletion clears only the targeted highlight
 用户通过高亮 Popover 删除时，系统 MUST 按当前活动 ID 删除对应高亮，清除其所有可见片段、选区、手柄及 Popover，并按既有删除契约通知宿主。删除 MUST 不影响其他高亮；受控模式遵循宿主回传的数据，未受控模式更新内部数据，均不得在没有新激活目标时继续向被删 ID 写入。

@@ -787,6 +787,71 @@ it('discards transient relocations from a failed turn instead of publishing fals
   await engine.destroy()
 })
 
+it.each([false, true])(
+  'accepts a new native selection after handoff without pointerdown (readBeforeEvent=%s)',
+  async (readBeforeEvent) => {
+    const bytes = readFixture('epub/duplicate-text.epub')
+    const zip = await JSZip.loadAsync(bytes)
+    const xml = await zip.file('OPS/chapter1.xhtml')!.async('string')
+    const frame = document.createElement('iframe')
+    document.body.append(frame)
+    const doc = frame.contentDocument!
+    doc.open()
+    doc.write(xml)
+    doc.close()
+    const fake = makeFakeView()
+    const onSelection = vi.fn()
+    const engine = createEpubEngine(
+      { container: document.createElement('div'), source: bytes, onSelection },
+      fake.factory
+    )
+    try {
+      await engine.ready
+      fake.handle.emit('load', { index: 1, doc })
+      const old = doc.createRange()
+      old.setStart(doc.querySelector('h1')!.firstChild!, 0)
+      old.setEnd(old.startContainer, 1)
+      engine.setSelectionRange(old)
+      doc.dispatchEvent(new Event('selectionchange'))
+      expect(onSelection).not.toHaveBeenCalled()
+      expect(engine.getSelectionRange()?.toString()).toBe(old.toString())
+
+      // Foliate can leave a collapsed focus caret after our own clear.
+      const caret = old.cloneRange()
+      caret.collapse(true)
+      doc.getSelection()!.addRange(caret)
+      doc.dispatchEvent(new Event('selectionchange'))
+      expect(onSelection).not.toHaveBeenCalled()
+      expect(engine.getSelectionRange()?.toString()).toBe(old.toString())
+
+      const next = doc.createRange()
+      next.selectNodeContents(doc.querySelector('p')!)
+      const expected = next.toString()
+      const selection = doc.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(next)
+      if (readBeforeEvent) {
+        expect(engine.getSelectionRange()?.toString()).toBe(expected)
+        expect(engine.serializeCurrentSelection()?.text).toBe(expected)
+      }
+      doc.dispatchEvent(new Event('selectionchange'))
+      expect(onSelection).toHaveBeenCalledOnce()
+      expect(onSelection.mock.calls[0][0]?.text).toBe(expected)
+      expect(engine.getSelectionRange()?.toString()).toBe(expected)
+      expect(engine.serializeCurrentSelection()?.text).toBe(expected)
+
+      engine.setSelectionRange(next)
+      expect(selection.rangeCount).toBe(0)
+      doc.dispatchEvent(new Event('selectionchange'))
+      expect(onSelection).toHaveBeenCalledOnce()
+      expect(engine.serializeCurrentSelection()?.text).toBe(expected)
+    } finally {
+      await engine.destroy()
+      frame.remove()
+    }
+  }
+)
+
 it('keeps the requested restored character through reflow when it is inside a visual page', async () => {
   const bytes = readFixture('epub/duplicate-text.epub')
   const zip = await JSZip.loadAsync(bytes)

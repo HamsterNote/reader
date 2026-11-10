@@ -217,7 +217,8 @@ describe('EPUB pagination controls and progress', () => {
         expect(screen.getByRole('button', { name: '上一页' })).toBeEnabled()
         expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
         if (entry === 'selectRange')
-          expect(doc.getSelection()?.toString()).toBe('chapter')
+          expect(engine.getSelectionRange()?.toString()).toBe('chapter')
+        expect(doc.getSelection()?.rangeCount).toBe(0)
       } finally {
         unmount()
         vi.unstubAllGlobals()

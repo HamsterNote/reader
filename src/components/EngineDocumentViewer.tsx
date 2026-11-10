@@ -199,33 +199,6 @@ function sameEndpoints(
   )
 }
 
-function touchedEndpoint(
-  range: Range,
-  target: ReaderSelectionRange,
-  pageNumber: number,
-  touch: Touch
-): boolean | null {
-  const rects = Array.from(range.getClientRects()).filter(
-    (rect) => rect.width && rect.height
-  )
-  const first = rects[0],
-    last = rects.at(-1)
-  if (!first || !last) return null
-  const near = (x: number, y: number) =>
-    Math.hypot(touch.clientX - x, touch.clientY - y) < 24
-  if (
-    target.start.selectionId === `page-${pageNumber}` &&
-    near(first.left, first.bottom)
-  )
-    return false
-  if (
-    target.end.selectionId === `page-${pageNumber}` &&
-    near(last.right, last.bottom)
-  )
-    return true
-  return null
-}
-
 function enginePageNumbers(pageCount: number, props: Props) {
   return getVisiblePageNumbers(
     Array.from({ length: pageCount }, (_, index) => index + 1),
@@ -297,8 +270,11 @@ function sharedHistoryPresent(history: AnnotationHistoryController | null) {
   return history?.getStatus().enabled ? history.getPresent() : undefined
 }
 
-function usesPdfTouchSelection(format: string | undefined, touch: boolean) {
-  return format === 'pdf' && touch
+function commentCounts(props: Props) {
+  return (
+    props.commentCountByRangeId ??
+    (props.comments ? getCommentCountByHighlightId(props.comments) : undefined)
+  )
 }
 
 export function EngineDocumentViewer(props: Props) {
@@ -347,6 +323,9 @@ export function EngineDocumentViewer(props: Props) {
   const rangeActionToken = rangeActionGeneration.current
   const nativeRange =
     activeSelection?.kind === 'text' ? activeSelection.range : null
+  const [epubInteractiveRange, setEpubInteractiveRange] =
+    useState<Range | null>(null)
+  const cancelEpubHandoff = useRef(() => {})
   const setNativeRange = useCallback(
     (range: Range | null, rangeId: string | null = null) => {
       activeText.current = range ? { range, rangeId } : null
@@ -357,6 +336,18 @@ export function EngineDocumentViewer(props: Props) {
     },
     []
   )
+  useLayoutEffect(() => {
+    setEpubInteractiveRange(null)
+    if (source?.format !== 'epub' || !nativeRange) return
+    const selection = nativeRange.startContainer.ownerDocument?.getSelection()
+    if (selection && !selection.isCollapsed) return
+    // Give WebKit a painting opportunity after native Selection is removed.
+    // This is a UI gate, not an acknowledgement from UIKit.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setEpubInteractiveRange(nativeRange))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [source, nativeRange])
   const sharedHistory = useContext(AnnotationHistoryContext)
   const [internalRanges, setInternalRanges] = useState(
     sharedHistory?.getPresent().ranges ?? props.defaultRanges ?? []
@@ -370,15 +361,8 @@ export function EngineDocumentViewer(props: Props) {
   const [internalRectId, setInternalRectId] = useState<string | null>(null)
   const [draftRectangle, setDraftRectangle] =
     useState<ReaderSelectionRectangle | null>(null)
-  const [mouse, setMouse] = useState(false)
-  const [touch, setTouch] = useState(false)
-  const pdfTouch = usesPdfTouchSelection(source?.format, touch)
-  const nativeEdit = useRef<{
-    id: string
-    original: Range
-    end: boolean
-    doc: Document
-  } | null>(null)
+  const pdfTouch = source?.format === 'pdf'
+
   const editing = useRef(false)
   const activating = useRef(false)
   const restored = useRef(false)
@@ -386,10 +370,8 @@ export function EngineDocumentViewer(props: Props) {
   useEffect(() => {
     if (!rootElement) return
     // Native capture runs before PDF portal/drag listeners can stop the event.
-    const down = (event: PointerEvent) => {
+    const down = () => {
       progressEnabled.current = true
-      setMouse(event.pointerType === 'mouse')
-      setTouch(event.pointerType === 'touch')
     }
     const keydown = () => {
       progressEnabled.current = true
@@ -480,9 +462,21 @@ export function EngineDocumentViewer(props: Props) {
         pendingRemoval.current.delete(id)
       }
     }
-    nativeEdit.current = null
     editing.current = false
-    const token = ++activationGeneration.current
+    const selection =
+      activeText.current?.range.startContainer.ownerDocument?.getSelection()
+    // A host can confirm inside an end callback. Keep that callback's native
+    // Selection alive until the pending handoff finishes all consumers.
+    const nativeConfirmation = Boolean(
+      epub.current &&
+      id &&
+      activeText.current?.rangeId === id &&
+      selection &&
+      !selection.isCollapsed
+    )
+    const token = nativeConfirmation
+      ? activationGeneration.current
+      : ++activationGeneration.current
     setInternalSelected(id)
     latest.current.onSelectRange?.(id)
     latest.current.onLinkedSelectRange?.(id)
@@ -499,6 +493,11 @@ export function EngineDocumentViewer(props: Props) {
     setDraftRectangle(null)
     activating.current = true
     if (epub.current) {
+      if (nativeConfirmation) {
+        epub.current.setActiveRange(id)
+        activating.current = false
+        return
+      }
       const engine = epub.current
       engine
         .selectRange(id)
@@ -684,7 +683,7 @@ export function EngineDocumentViewer(props: Props) {
       setDraftRectangle(null)
       ++activationGeneration.current
       setNativeRange(range.cloneRange(), sameRange ? current.id : null)
-      void emitSelectionCallbacks()
+      return emitSelectionCallbacks()
     } else {
       ++selectionCallbackGeneration.current.change
       ++selectionCallbackGeneration.current.end
@@ -692,46 +691,7 @@ export function EngineDocumentViewer(props: Props) {
       setNativeRange(null)
     }
   }, [emitSelectionCallbacks])
-  const finishNativeEdit = (cancel = false) => {
-    const transaction = nativeEdit.current
-    if (!transaction) return
-    nativeEdit.current = null
-    editing.current = false
-    const target = values.current.ranges.find(
-      (item) => item.id === transaction.id
-    )
-    const candidate = transaction.doc.getSelection()
-    const range = candidate?.rangeCount ? candidate.getRangeAt(0) : null
-    const unchangedOtherEnd =
-      range &&
-      range.compareBoundaryPoints(
-        transaction.end ? Range.START_TO_START : Range.END_TO_END,
-        transaction.original
-      ) === 0
-    const detail =
-      !cancel &&
-      unchangedOtherEnd &&
-      range &&
-      target &&
-      !pendingRemoval.current.has(target.id)
-        ? epub.current?.updateRangeEndpoint(target.id, range, transaction.end)
-        : null
-    const changed =
-      detail &&
-      target &&
-      (JSON.stringify(detail.start) !== JSON.stringify(target.start) ||
-        JSON.stringify(detail.end) !== JSON.stringify(target.end))
-    if (changed && range) {
-      setNativeRange(range.cloneRange(), target.id)
-      emitRange({ ...target, ...detail }, true)
-    } else if (transaction.original.startContainer.isConnected && target) {
-      candidate?.removeAllRanges()
-      candidate?.addRange(transaction.original)
-      setNativeRange(transaction.original, target.id)
-    }
-  }
-  const finishNativeEditRef = useRef(finishNativeEdit)
-  finishNativeEditRef.current = finishNativeEdit
+
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const previews = usePdfPreviews(
     pdfDocument,
@@ -785,12 +745,12 @@ export function EngineDocumentViewer(props: Props) {
     []
   )
   const cancelSelection = useCallback((clear = true) => {
+    cancelEpubHandoff.current()
     ++activationGeneration.current
     ++selectionCallbackGeneration.current.change
     ++selectionCallbackGeneration.current.end
     activating.current = false
     editing.current = false
-    nativeEdit.current = null
     setNativeRange(null)
     if (clear) {
       epub.current?.clearSelection()
@@ -935,6 +895,68 @@ export function EngineDocumentViewer(props: Props) {
     if (source?.format !== 'epub' || !epubContainer.current) return
     let cancelled = false
     let restoreFrame = 0
+    let handoffFrame = 0
+    let handoffGeneration = 0
+    let pointerActive = false
+    let touchActive = false
+    let ended = false
+    let endPoint: { x: number; y: number } | null = null
+    let changeCallbacks: Promise<void> | undefined
+    const invalidateHandoff = () => {
+      ++handoffGeneration
+      ++selectionCallbackGeneration.current.end
+      cancelAnimationFrame(handoffFrame)
+    }
+    const cancelHandoff = () => {
+      invalidateHandoff()
+      pointerActive = false
+      touchActive = false
+      ended = false
+      endPoint = null
+      changeCallbacks = undefined
+      ++selectionCallbackGeneration.current.change
+      ++selectionCallbackGeneration.current.end
+    }
+    cancelEpubHandoff.current = cancelHandoff
+    const finishHandoff = async (token: number) => {
+      const active = activeText.current
+      const range = engine.getSelectionRange()?.cloneRange()
+      if (cancelled || token !== handoffGeneration || !active || !range) return
+      const activation = activationGeneration.current
+      const selection = range.startContainer.ownerDocument?.getSelection()
+      if (endPoint && !ended && selection && !selection.isCollapsed) {
+        ended = true
+        latest.current.onSelectionEnd?.(endPoint, selection)
+      }
+      // Consumers read the live Selection during these callbacks. Do not
+      // empty it while asynchronous text extraction is still in flight.
+      await Promise.all([
+        changeCallbacks,
+        endPoint ? emitSelectionCallbacks(true) : undefined
+      ])
+      if (
+        cancelled ||
+        token !== handoffGeneration ||
+        activation !== activationGeneration.current ||
+        !activeText.current ||
+        !sameNativeRange(activeText.current.range, active.range) ||
+        !range.startContainer.isConnected ||
+        !range.endContainer.isConnected
+      )
+        return
+      const rangeId = activeText.current.rangeId
+      engine.setSelectionRange(range)
+      setNativeRange(range, rangeId)
+      const confirmDraft = endPoint && latest.current.autoHighlight && !rangeId
+      endPoint = null
+      if (confirmDraft) confirmRef.current()
+    }
+    const queueHandoff = () => {
+      invalidateHandoff()
+      if (cancelled || pointerActive || touchActive) return
+      const token = handoffGeneration
+      handoffFrame = requestAnimationFrame(() => void finishHandoff(token))
+    }
     const listeners = new Map<Document, () => void>()
     restored.current = false
     progressEnabled.current = false
@@ -947,6 +969,7 @@ export function EngineDocumentViewer(props: Props) {
     const restoreActiveRange = (engine: EpubEngine) => {
       const id = values.current.selected
       if (id && !editing.current && !pendingRemoval.current.has(id)) {
+        cancelHandoff()
         // Foliate may still move/collapse the native selection after relocate.
         // Restore against the live iframe once that navigation has settled.
         const token = ++activationGeneration.current
@@ -960,18 +983,12 @@ export function EngineDocumentViewer(props: Props) {
           )
             return
           const part = engine.getRangePart(id)
+          engine.setSelectionRange(part ?? null)
           setNativeRange(part?.cloneRange() ?? null, id)
-          const selection = part?.startContainer.ownerDocument?.getSelection()
-          selection?.removeAllRanges()
-          if (part) selection?.addRange(part)
           engine.setActiveRange(part ? id : null)
           activating.current = false
         })
       }
-    }
-    const finishTouchEdit = (generation: number) => {
-      if (generation === activationGeneration.current && !cancelled)
-        finishNativeEditRef.current()
     }
     const engine = createEpubEngine({
       container: epubContainer.current,
@@ -982,7 +999,10 @@ export function EngineDocumentViewer(props: Props) {
         if (!cancelled) setNavigation(state)
       },
       selectionColor: latest.current.selectionColor,
-      onSelection: selectionChanged,
+      onSelection: () => {
+        changeCallbacks = selectionChanged()
+        queueHandoff()
+      },
       onHighlightActivate: activate,
       onDocumentLoad: (doc, pageNumber) => {
         setEpubDocument(doc)
@@ -1001,10 +1021,15 @@ export function EngineDocumentViewer(props: Props) {
           doc.addEventListener(type, forward, true)
         )
         const down = (event: PointerEvent) => {
+          invalidateHandoff()
+          ++selectionCallbackGeneration.current.change
+          pointerActive = true
+          ended = false
+          endPoint = null
+          setEpubInteractiveRange(null)
           ++activationGeneration.current
           activating.current = false
           progressEnabled.current = true
-          setMouse(event.pointerType === 'mouse')
           const selection = doc.getSelection()
           if (selection)
             latest.current.onSelectionStart?.(
@@ -1013,86 +1038,83 @@ export function EngineDocumentViewer(props: Props) {
             )
         }
         const up = (event: PointerEvent) => {
+          pointerActive = false
+          const activation = activationGeneration.current
           const selection = doc.getSelection()
-          if (selection && !selection.isCollapsed)
+          if (!ended && selection && !selection.isCollapsed) {
+            ended = true
             latest.current.onSelectionEnd?.(
               { x: event.clientX, y: event.clientY },
               selection
             )
-          if (editing.current) return
-          selectionChanged()
-          void emitSelectionCallbacks(true)
-          if (latest.current.autoHighlight && !activeText.current?.rangeId)
-            confirmRef.current()
-        }
-        let touchFrame = 0
-        const touchStart = (event: TouchEvent) => {
-          setMouse(false)
-          const active = activeText.current
-          if (
-            !active?.rangeId ||
-            active.range.startContainer.ownerDocument !== doc ||
-            event.touches.length !== 1
-          )
-            return
-          const target = values.current.ranges.find(
-            // The native endpoint gesture belongs to the active saved ID.
-            // eslint-disable-next-line sonarjs/no-nested-functions
-            (item) => item.id === active.rangeId
-          )
-          if (!target || pendingRemoval.current.has(target.id)) return
-          const end = touchedEndpoint(
-            active.range,
-            target,
-            pageNumber,
-            event.touches[0]
-          )
-          if (end === null) return
-          nativeEdit.current = {
-            id: target.id,
-            original: active.range.cloneRange(),
-            end,
-            doc
           }
-          editing.current = true
+          if (editing.current || activation !== activationGeneration.current)
+            return
+          endPoint = { x: event.clientX, y: event.clientY }
+          changeCallbacks = selectionChanged()
+          queueHandoff()
         }
-        const touchEnd = () => {
-          if (!nativeEdit.current) return
-          const generation = activationGeneration.current
-          cancelAnimationFrame(touchFrame)
-          touchFrame = requestAnimationFrame(
-            finishTouchEdit.bind(null, generation)
-          )
+        const touchStart = (event: TouchEvent) => {
+          if (!pointerActive && !touchActive) {
+            ended = false
+            endPoint = null
+          }
+          touchActive = event.touches.length > 0
+          invalidateHandoff()
+          setEpubInteractiveRange(null)
         }
-        const touchCancel = () => finishNativeEditRef.current(true)
-        const blur = () => finishNativeEditRef.current(true)
+        const touchEnd = (event: TouchEvent) => {
+          touchActive = event.touches.length > 0
+          if (touchActive || editing.current) return
+          pointerActive = false
+          const touch = event.changedTouches[0]
+          if (!endPoint && touch)
+            endPoint = { x: touch.clientX, y: touch.clientY }
+          changeCallbacks = selectionChanged()
+          queueHandoff()
+        }
+        const pointerCancel = () => {
+          pointerActive = false
+          if (!touchActive) {
+            endPoint = null
+            ++selectionCallbackGeneration.current.end
+            queueHandoff()
+          }
+        }
+        const touchCancel = () => {
+          pointerActive = false
+          touchActive = false
+          endPoint = null
+          ++selectionCallbackGeneration.current.end
+          queueHandoff()
+        }
+        doc.addEventListener('pointerdown', down, true)
+        doc.addEventListener('pointerup', up)
+        doc.addEventListener('pointercancel', pointerCancel)
         doc.addEventListener('touchstart', touchStart, { passive: true })
         doc.addEventListener('touchend', touchEnd)
         doc.addEventListener('touchcancel', touchCancel)
-        doc.defaultView?.addEventListener('blur', blur)
-        doc.addEventListener('pointerdown', down, true)
-        doc.addEventListener('pointerup', up)
         const interacted = () => {
           progressEnabled.current = true
         }
         doc.addEventListener('wheel', interacted, { passive: true })
         doc.addEventListener('keydown', interacted)
         listeners.set(doc, () => {
-          cancelAnimationFrame(touchFrame)
-          doc.removeEventListener('touchstart', touchStart)
-          doc.removeEventListener('touchend', touchEnd)
-          doc.removeEventListener('touchcancel', touchCancel)
-          doc.defaultView?.removeEventListener('blur', blur)
           for (const type of pointerEvents)
             doc.removeEventListener(type, forward, true)
           doc.removeEventListener('pointerdown', down, true)
           doc.removeEventListener('pointerup', up)
+          doc.removeEventListener('pointercancel', pointerCancel)
+          doc.removeEventListener('touchstart', touchStart)
+          doc.removeEventListener('touchend', touchEnd)
+          doc.removeEventListener('touchcancel', touchCancel)
           doc.removeEventListener('wheel', interacted)
           doc.removeEventListener('keydown', interacted)
         })
         restoreActiveRange(engine)
       },
       onDocumentUnload: (doc) => {
+        cancelHandoff()
         if (activeText.current?.range.startContainer.ownerDocument === doc)
           cancelSelection(false)
         listeners.get(doc)?.()
@@ -1135,6 +1157,7 @@ export function EngineDocumentViewer(props: Props) {
       .catch(() => undefined)
     return () => {
       cancelled = true
+      invalidateHandoff()
       cancelAnimationFrame(restoreFrame)
       restored.current = false
       cancelSelection(false)
@@ -1142,6 +1165,8 @@ export function EngineDocumentViewer(props: Props) {
       listeners.clear()
       epub.current = null
       engine.destroy().catch(() => undefined)
+      if (cancelEpubHandoff.current === cancelHandoff)
+        cancelEpubHandoff.current = () => {}
     }
   }, [
     source,
@@ -1265,12 +1290,9 @@ export function EngineDocumentViewer(props: Props) {
         { ranges: [], rects: [], selectedRangeId: null, selectedRectId: null },
         'clear'
       )
-      setNativeRange(null)
+      cancelSelection()
       setActiveSelection(null)
       setDraftRectangle(null)
-      epub.current?.clearSelection()
-      epub.current?.setActiveRange(null)
-      pdf.current?.clearSelection()
     },
     scrollToRange: (id) => {
       ++pdfNavigationGeneration.current
@@ -1792,12 +1814,7 @@ export function EngineDocumentViewer(props: Props) {
             if (rectangle?.selectionId)
               navigate(pageNumberOf(rectangle.selectionId))
           }}
-          commentCountByRangeId={
-            props.commentCountByRangeId ??
-            (props.comments
-              ? getCommentCountByHighlightId(props.comments)
-              : undefined)
-          }
+          commentCountByRangeId={commentCounts(props)}
           commentCountByRectId={props.commentCountByRectId}
           bookmarks={props.bookmarks}
           onToggleBookmark={bookmarkToggleHandler()}
@@ -1825,18 +1842,30 @@ export function EngineDocumentViewer(props: Props) {
         <EngineSelectionControls
           range={props.showPageBrowser ? null : nativeRange}
           containerRef={root}
-          showHandles={mouse || pdfTouch}
+          showHandles={
+            source?.format !== 'epub' || epubInteractiveRange === nativeRange
+          }
+          managedText={!pdfTouch}
           pdfTouch={pdfTouch}
           pdfCustomHandles={source?.format === 'pdf'}
           color={current?.markerStyle?.backgroundColor ?? props.highlightColor}
           paintPreview={getSelectionGroup(ranges, selected).length <= 1}
-          onPreview={(range) => pdf.current?.setSelectionRange(range, pdfTouch)}
-          hitTest={(x, y) => pdf.current?.hitTestSelection(x, y) ?? null}
+          onPreview={(range) => {
+            if (epub.current) epub.current.setSelectionRange(range)
+            else pdf.current?.setSelectionRange(range, pdfTouch)
+          }}
+          hitTest={
+            source?.format === 'pdf'
+              ? (x, y) => pdf.current?.hitTestSelection(x, y) ?? null
+              : undefined
+          }
           showStart={endpointVisible(current, source?.format, epubPage, false)}
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
           onEditingChange={(value) => {
             if (rangeActionToken !== rangeActionGeneration.current) return
             editing.current = value
+            if (value && epub.current && nativeRange)
+              epub.current.setSelectionRange(nativeRange)
           }}
           onUpdate={(range, end) => {
             const active = activeText.current
@@ -1857,6 +1886,7 @@ export function EngineDocumentViewer(props: Props) {
               ? pdfTarget
               : values.current.ranges.find((item) => item.id === active.rangeId)
             if (pdf.current) pdf.current.setSelectionRange(range, pdfTouch)
+            else epub.current?.setSelectionRange(range)
             let detail: ReturnType<typeof serialize>
             if (epub.current && target)
               detail = epub.current.updateRangeEndpoint(target.id, range, end)
@@ -1868,10 +1898,7 @@ export function EngineDocumentViewer(props: Props) {
                 pdf.current.setSelectionRange(active.range, pdfTouch)
                 return
               }
-              const selection =
-                active.range.startContainer.ownerDocument?.getSelection()
-              selection?.removeAllRanges()
-              selection?.addRange(active.range)
+              epub.current?.setSelectionRange(active.range)
               return
             }
             setNativeRange(range.cloneRange(), target?.id ?? null)

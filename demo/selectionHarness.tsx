@@ -17,6 +17,13 @@ const documentModel = {
   ]
 }
 function Harness() {
+  const [mode, setMode] = useState<'layout' | 'text'>(
+    new URLSearchParams(location.search).get('mode') === 'text'
+      ? 'text'
+      : 'layout'
+  )
+  const [color, setColor] = useState('#ffc107')
+  const [magnifier, setMagnifier] = useState(true)
   const [source, setSource] = useState<ReaderEngineSource>()
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
   const [initialRanges, setInitialRanges] = useState<ReaderSelectionRange[]>([])
@@ -50,6 +57,29 @@ function Harness() {
           setEvents([])
         }}
       />
+      <select
+        aria-label='Mode'
+        value={mode}
+        onChange={(event) => setMode(event.target.value as 'layout' | 'text')}
+      >
+        <option value='layout'>Layout</option>
+        <option value='text'>Text</option>
+      </select>
+      <input
+        aria-label='Highlight color'
+        value={color}
+        onChange={(event) => setColor(event.target.value)}
+      />
+      <label>
+        <input
+          aria-label='Magnifier'
+          type='checkbox'
+          checked={magnifier}
+          onChange={(event) => setMagnifier(event.target.checked)}
+        />
+        Magnifier
+      </label>
+      <button onClick={() => selection.current?.confirm()}>Confirm</button>
       <button onClick={() => setFontScale((value) => (value === 1 ? 1.5 : 1))}>
         Font
       </button>
@@ -70,6 +100,9 @@ function Harness() {
         <Reader
           document={documentModel}
           engineSource={source}
+          renderMode={mode}
+          highlightColor={color}
+          showSelectionMagnifier={magnifier}
           selectedTool='text-selection'
           selectionRef={selection}
           bottomBar={null}

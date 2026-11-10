@@ -15,7 +15,7 @@ vi.mock('../src/components/IntermediateDocumentViewer/RangeMagnifier', () => ({
 }))
 
 it.each(['mouse', 'touch'])(
-  'samples the physical PDF %s pointer independently of grab correction',
+  'samples the physical PDF %s pointer without grab correction',
   (pointerType) => {
     Object.values(magnifier).forEach((mock) => mock.mockClear())
     const root = createRef<HTMLDivElement>()
@@ -70,33 +70,26 @@ it.each(['mouse', 'touch'])(
         clientX: 100,
         clientY: 250
       })
-      expect(magnifier.start).toHaveBeenCalledWith(
-        expect.any(HTMLElement),
-        {
-          clientX: 100,
-          clientY: 250,
-          lensPoint: { clientX: 100, clientY: 230 }
-        },
-        pointerType === 'touch'
-          ? expect.objectContaining({ end: true })
-          : undefined
-      )
+      if (pointerType === 'touch')
+        expect(magnifier.start).toHaveBeenCalledWith(
+          expect.any(HTMLElement),
+          { clientX: 100, clientY: 250 },
+          expect.objectContaining({ end: true }),
+          'touch'
+        )
+      else expect(magnifier.start).not.toHaveBeenCalled()
       fireEvent.pointerMove(document, {
         pointerId: 9,
         pointerType,
         clientX: 120,
         clientY: 280
       })
-      expect(magnifier.move).toHaveBeenLastCalledWith(
-        {
-          clientX: 120,
-          clientY: 280,
-          lensPoint: { clientX: 120, clientY: 260 }
-        },
-        ...(pointerType === 'touch'
-          ? [expect.objectContaining({ end: true })]
-          : [])
-      )
+      if (pointerType === 'touch')
+        expect(magnifier.move).toHaveBeenLastCalledWith(
+          { clientX: 120, clientY: 280 },
+          expect.objectContaining({ end: true })
+        )
+      else expect(magnifier.move).not.toHaveBeenCalled()
       const moves = magnifier.move.mock.calls.length
       const forwarded = new PointerEvent('pointermove', {
         pointerId: 9,
@@ -115,16 +108,12 @@ it.each(['mouse', 'touch'])(
         clientX: 140,
         clientY: 300
       })
-      expect(magnifier.move).toHaveBeenLastCalledWith(
-        {
-          clientX: 140,
-          clientY: 300,
-          lensPoint: { clientX: 140, clientY: 280 }
-        },
-        ...(pointerType === 'touch'
-          ? [expect.objectContaining({ end: true })]
-          : [])
-      )
+      if (pointerType === 'touch')
+        expect(magnifier.move).toHaveBeenLastCalledWith(
+          { clientX: 140, clientY: 300 },
+          expect.objectContaining({ end: true, valid: false })
+        )
+      else expect(magnifier.move).not.toHaveBeenCalled()
       fireEvent.pointerCancel(document, { pointerId: 9 })
       expect(magnifier.end).toHaveBeenCalledOnce()
     } finally {
