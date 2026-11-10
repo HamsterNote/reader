@@ -6,11 +6,10 @@
   min-height: 0;
   background: #f1f3f4;
 }
-// Preview-only finger clearance: keep it out of sampling and placement geometry.
-// PDF Text has its own accepted layout and does not match either selector.
+// Preserve rectangle snapshots; text lenses use only shared placement geometry.
 .hamster-reader__engine-viewer[data-engine='pdf']
-  > .hamster-reader__range-magnifier,
-.hamster-reader__range-magnifier[data-pdf='true'] {
+  > .hamster-reader__range-magnifier:not([data-text]),
+.hamster-reader__range-magnifier[data-pdf='true']:not([data-text]) {
   transform: translateY(-8px);
   pointer-events: none;
 }

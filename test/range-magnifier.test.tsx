@@ -61,7 +61,7 @@ describe('range magnifier', () => {
       new DOMRect(10, 20, 300, 400)
     )
 
-    expect(position).toEqual({ left: 120, top: 58, placement: 'below' })
+    expect(position).toEqual({ left: 112, top: 88, placement: 'below' })
   })
 
   it('keeps the sampled source rectangle inside a short page snapshot', () => {

@@ -18,21 +18,20 @@ import {
 import {
   projectInsertionMarker,
   TEXT_LENS_BORDER_PX,
-  TEXT_LENS_DISTANCE_PX,
   TEXT_LENS_SIZE_PX,
   TEXT_LENS_MAGNIFICATION,
   TEXT_LENS_MARKER_WIDTH_PX,
   usesTouchMagnifier
 } from './selectionInteraction'
 import { magnifierCaptureSource } from './magnifierCaptureSource'
+import { observeMagnifierViewport } from './magnifierViewport'
 import {
   clearPdfMagnifierText,
   renderPdfMagnifierText,
   type PdfMagnifierFocus
 } from './pdfMagnifierText'
 import {
-  SNAPSHOT_LENS_SIZE_PX,
-  SNAPSHOT_LENS_DISTANCE_PX,
+  resolveSnapshotMagnifierPosition,
   drawMagnifierSnapshot,
   type MagnifierPoint,
   type MagnifierSnapshot,
@@ -136,11 +135,16 @@ export const RangeMagnifierProvider = ({
   const captureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const captureGenerationRef = useRef(0)
   const dragCleanupsRef = useRef(new Set<() => void>())
+  const viewportRef = useRef<ReturnType<
+    typeof observeMagnifierViewport
+  > | null>(null)
 
   useEffect(
     () => () => {
       for (const cleanup of dragCleanupsRef.current) cleanup()
       dragCleanupsRef.current.clear()
+      viewportRef.current?.dispose()
+      viewportRef.current = null
       if (captureTimerRef.current !== null)
         clearTimeout(captureTimerRef.current)
       captureGenerationRef.current += 1
@@ -149,6 +153,8 @@ export const RangeMagnifierProvider = ({
   )
 
   const end = useCallback(() => {
+    viewportRef.current?.dispose()
+    viewportRef.current = null
     if (captureTimerRef.current !== null) {
       clearTimeout(captureTimerRef.current)
       captureTimerRef.current = null
@@ -168,6 +174,12 @@ export const RangeMagnifierProvider = ({
   useEffect(() => {
     end()
   }, [end, rootElement, source, enabled])
+
+  useEffect(() => {
+    const view = rootElement?.ownerDocument.defaultView
+    view?.addEventListener('blur', end)
+    return () => view?.removeEventListener('blur', end)
+  }, [rootElement, end])
 
   const capture = useCallback(
     (page: HTMLElement) => {
@@ -232,15 +244,16 @@ export const RangeMagnifierProvider = ({
 
       pointRef.current = point
       if (textSessionRef.current && pdf) textSessionRef.current.focus = pdf
-      const rootBox = visibleRootBox(rootElement)
-      const relative = resolveMagnifierPosition(
-        point,
-        rootBox,
-        textSessionRef.current ? TEXT_LENS_SIZE_PX : SNAPSHOT_LENS_SIZE_PX,
-        textSessionRef.current
-          ? TEXT_LENS_DISTANCE_PX
-          : SNAPSHOT_LENS_DISTANCE_PX
-      )
+      const rootBox = textSessionRef.current
+        ? viewportRef.current!.read()
+        : visibleRootBox(rootElement)
+      if (textSessionRef.current) {
+        lens.hidden = rootBox.width <= 0 || rootBox.height <= 0
+        if (lens.hidden) return
+      }
+      const relative = textSessionRef.current
+        ? resolveMagnifierPosition(point, rootBox)
+        : resolveSnapshotMagnifierPosition(point, rootBox)
       const position = { ...relative }
       if (textSessionRef.current) {
         // Managed handles and the text lens share a fixed stacking context.
@@ -276,18 +289,24 @@ export const RangeMagnifierProvider = ({
       pointerType?: string
     ) => {
       const lens = lensRef.current
-      if (pdf && (!enabled || !usesTouchMagnifier(pointerType ?? ''))) {
+      if (
+        pdf &&
+        (!enabled || !rootElement || !usesTouchMagnifier(pointerType ?? ''))
+      ) {
         end()
         return
       }
+      end()
       pointRef.current = point
       if (pdf && lens) {
-        end()
         textSessionRef.current = {
           source: source.closest<HTMLElement>('.pdfViewer') ?? source,
           focus: pdf
         }
         pointRef.current = point
+        viewportRef.current = observeMagnifierViewport(rootElement!, () => {
+          if (pointRef.current) move(pointRef.current)
+        })
         setTextMode(true)
         lens.hidden = false
         move(point, pdf)
@@ -315,7 +334,7 @@ export const RangeMagnifierProvider = ({
       pageRef.current = captureSource
       capture(captureSource)
     },
-    [capture, move, end, enabled]
+    [capture, move, end, enabled, rootElement]
   )
 
   const registerDragCleanup = useCallback((cleanup: () => void) => {
@@ -325,7 +344,6 @@ export const RangeMagnifierProvider = ({
 
   useLayoutEffect(() => {
     if (textMode && textSessionRef.current && pointRef.current) {
-      if (lensRef.current) lensRef.current.hidden = false
       move(pointRef.current, textSessionRef.current.focus)
     }
   }, [textMode, move])

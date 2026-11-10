@@ -4,20 +4,32 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PDFDocument } from 'pdf-lib'
 import JSZip from 'jszip'
+import { checkMagnifierGeometry } from './shared-magnifier-geometry.mjs'
 
 // eslint-disable-next-line sonarjs/cognitive-complexity -- Keep the end-to-end matrix assertions together as an independent browser oracle.
 export async function checkSharedSelectionInteraction({
   browser,
   base,
-  output
+  output,
+  surfaces = process.env.READER_SHARED_SURFACES?.split(',') ?? [
+    'pdf-layout',
+    'epub',
+    'pdf-text'
+  ],
+  inputs = process.env.READER_SHARED_INPUTS?.split(',') ?? [
+    'touch',
+    'mouse',
+    'pen'
+  ],
+  geometry = true
 }) {
   const pdf = await PDFDocument.create()
   const sheet = pdf.addPage([600, 800])
   for (let i = 0; i < 3; i++)
     sheet.drawText(`Line ${i + 1} alpha beta gamma delta epsilon zeta.`, {
-      x: 40,
+      x: 20,
       y: 700 - i * 40,
-      size: 16
+      size: 12
     })
   const pdfBytes = Array.from(await pdf.save())
   const zip = await JSZip.loadAsync(
@@ -100,16 +112,8 @@ export async function checkSharedSelectionInteraction({
     }
   }
   try {
-    for (const surface of process.env.READER_SHARED_SURFACES?.split(',') ?? [
-      'pdf-layout',
-      'epub',
-      'pdf-text'
-    ]) {
-      for (const input of process.env.READER_SHARED_INPUTS?.split(',') ?? [
-        'touch',
-        'mouse',
-        'pen'
-      ]) {
+    for (const surface of surfaces) {
+      for (const input of inputs) {
         // CDP can reuse inconsistent pen IDs after touch on an EPUB iframe.
         // Give each input a new target; each case still starts via mouse selection.
         await resetInputPage()
@@ -253,7 +257,13 @@ export async function checkSharedSelectionInteraction({
                 const rect = lens.getBoundingClientRect()
                 return {
                   left: rect.left,
-                  anchor: point.x + (parseFloat(marker.style.left) - 30) / 2,
+                  minimumLeft: Math.max(
+                    0,
+                    document
+                      .querySelector('.hamster-reader')
+                      .getBoundingClientRect().left
+                  ),
+                  anchor: point.x + (parseFloat(marker.style.left) - 38) / 2,
                   markerHidden: marker.hidden,
                   color: marker.style.backgroundColor,
                   text: text.textContent,
@@ -261,11 +271,13 @@ export async function checkSharedSelectionInteraction({
                     'svg, canvas, button, [style*="background-color"], .hsn-selection-overlay'
                   ).length,
                   size: rect.width,
+                  transform: getComputedStyle(lens).transform,
                   distance: point.y - (rect.y + rect.height / 2)
                 }
               }, target)
-              assert.equal(tracking.size, 60, label)
-              assert(Math.abs(Math.abs(tracking.distance) - 38) < 1, label)
+              assert.equal(tracking.size, 76, label)
+              assert.equal(tracking.transform, 'none', label)
+              assert(Math.abs(Math.abs(tracking.distance) - 76) < 1, label)
               assert.equal(tracking.markerHidden, false, label)
               assert.equal(
                 tracking.color,
@@ -297,7 +309,7 @@ export async function checkSharedSelectionInteraction({
                           '.hamster-reader__range-magnifier-marker'
                         ).style.left
                       ) -
-                        30) /
+                        38) /
                         2,
                     mutations: window.lensMutations
                   }),
@@ -308,8 +320,13 @@ export async function checkSharedSelectionInteraction({
                   `${label}: character anchor drift`
                 )
                 assert(
-                  Math.abs(current.left - tracking.left - dx) < 0.1,
-                  `${label}: finger tracking`
+                  Math.abs(
+                    current.left -
+                      tracking.left -
+                      (Math.max(target.x + dx - 38, tracking.minimumLeft) -
+                        Math.max(target.x - 38, tracking.minimumLeft))
+                  ) < 0.1,
+                  `${label}: finger tracking ${JSON.stringify({ current, tracking, target, dx })}`
                 )
                 assert.equal(
                   current.mutations,
@@ -407,7 +424,19 @@ export async function checkSharedSelectionInteraction({
         2
       )
     )
+    const geometryCases = geometry
+      ? await checkMagnifierGeometry({
+          browser,
+          base,
+          html,
+          output,
+          pdfBytes,
+          epubBytes,
+          surfaces
+        })
+      : 0
     return {
+      geometryCases,
       label: 'shared-selection-interaction',
       passed: true,
       combinations: rows.length

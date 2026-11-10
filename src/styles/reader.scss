@@ -219,6 +219,7 @@
     &[data-text='true'] {
       position: fixed;
       z-index: 10002;
+      transform: none;
       border: 0;
 
       canvas {
@@ -226,7 +227,6 @@
       }
 
       .hamster-reader__range-magnifier-marker {
-        width: 2px;
         border: 0;
         border-radius: 0;
         box-shadow: none;
@@ -250,7 +250,6 @@
   &__range-magnifier-text {
     position: absolute;
     inset: 0;
-    transform: scale(2);
     transform-origin: top left;
     pointer-events: none;
     user-select: none;

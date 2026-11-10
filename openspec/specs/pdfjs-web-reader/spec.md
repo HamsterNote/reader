@@ -328,7 +328,7 @@ PDF Layout 与 PDF Text 的文字手柄及放大镜 MUST 遵循 `reader-text-sel
 #### Scenario: Grab the enlarged Text handle target
 
 - **WHEN** 从 PDF Text 的圆点中心、白边以及圆外 9px 的热区角落分别抓取任一端点，跨行扩展或缩短选区并释放，包括快速拖动在下一动画帧前释放
-- **THEN** 热区均能启动拖动，首次抓取不跳选，手指移动对应正确文字端点；放大镜保留原镜片位置与避让，镜内采样和标记使用物理指针；最终预览与确认范围一致，草稿只确认一次，已有高亮只更新一次且保留 ID、颜色和评论关联，热区外不截获正文操作
+- **THEN** 热区均能启动拖动，首次抓取不跳选，手指移动对应正确文字端点；文字放大镜按 `reader-text-selection-interaction` 的共享尺寸、倍率及安全区放置规则显示，镜内采样和标记使用物理指针；最终预览与确认范围一致，草稿只确认一次，已有高亮只更新一次且保留 ID、颜色和评论关联，热区外不截获正文操作
 
 #### Scenario: Text pagination and geometry remain stable
 
@@ -352,36 +352,31 @@ PDF Layout 与 PDF Text 的文字手柄及放大镜 MUST 遵循 `reader-text-sel
 
 ### Requirement: PDF Text magnifier insertion caret
 
-PDF Text 拖动手柄时，放大镜 MUST 在镜像文字的当前插入位置显示 2 CSS px 竖线，指示将插入到哪两个字符之间。镜片位置 MUST 保留原有布局锚点、18px 间距、上下避让及边缘约束，不将镜心移到指针。鼠标、笔和触摸的镜内采样与标记 SHALL 使用同一物理指针 clientX/clientY，选择层转发的纠偏事件不得覆盖该采样点。标记 MUST 经过与快照内容相同的缩放、偏移和边缘裁剪换算，并按白边内实际画布比例定位；不得直接复用主视图的 fixed/absolute 坐标。选区命中及保存继续使用既有纠偏协议。竖线高度 SHALL 跟随放大后的文字行高，放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
+PDF Text 文字手柄拖动的镜片及插入竖线 MUST 遵循 `reader-text-selection-interaction`，与 PDF 预览 / EPUB 共用同一份尺寸、倍率、中心距、safe area 放置和仅触摸显示规则，MUST NOT 继续使用独立布局锚点、旧间距或纠偏命中协议覆盖共享规范。镜内 MUST 在当前有效字符间隙显示 2 CSS px 竖线，高度随放大后的文字行高变化，颜色及离散跳变遵循共享规范。镜内取景 SHALL 使用当前物理触点 clientX/clientY，经必要坐标换算后采样；镜片显示避让不得混入取景或真实文字命中。标记 MUST 经过与文字取景相同的缩放、偏移和裁剪换算，不得直接复用主视图的 fixed/absolute 坐标。放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
 
 #### Scenario: Sample the physical pointer without moving the lens
-
-- **WHEN** 使用鼠标、笔或触摸从 PDF Text 起/止手柄的中心或热区边缘拖动，选择层同时转发纠偏后的 pointermove，或指针移至视口边缘
-- **THEN** 镜片仍在原有避让位置，快照采样与标记对应物理指针；仅源快照边缘裁剪可影响实际采样中心，布局间距不得混入采样偏移；与 PDF 预览镜片对照时，同一有效采样点无额外向上偏移
+- **WHEN** 使用触摸从 PDF Text 起/止手柄的中心或热区边缘拖动，选择层同时转发其他坐标事件，或触点移至视口边缘
+- **THEN** 镜片依共享安全区规则显示，文字取景与标记对应真实物理触点，不被转发的纠偏坐标覆盖，显示间距不混入采样；mouse/pen 仍可调整端点，但不显示镜片
 
 #### Scenario: Follow the scaled and clamped insertion point
-
-- **WHEN** 用户从 PDF Text 手柄中心或热区角落拖动，命中文字中心、另一行或快照边缘
-- **THEN** 插入线与镜像中的实际字符间隙一致，坐标随缩放和裁剪变化，释放或取消后不遗留标记
+- **WHEN** 用户触摸从 PDF Text 手柄中心或热区角落拖动，命中文字中心、另一行或取景边缘
+- **THEN** 插入线与镜像中的实际字符间隙一致，坐标随共享倍率和裁剪变化，释放或取消后不遗留标记
 
 ### Requirement: PDF preview magnifier vertical clearance
 
-PDF Layout 的放大镜采样与标记 MUST 使用物理指针 clientX/clientY，不混入抓取纠偏或选区端点。8 CSS px 的垂直避让 SHALL 仅作为预览镜片元素自身的 CSS transform，不进入采样或共享定位几何计算。抓取纠偏仅用于选区命中和原有布局锚点，保留左右钳制和上下翻转规则；Text 生产代码及其六点布局与采样基线 MUST 不变。源快照边缘沿用既有裁剪规则。
+PDF Layout 文字放大镜的最终显示位置、尺寸与倍率 MUST 完整遵循 `reader-text-selection-interaction`，与 EPUB / PDF Text 共用同一交互描述，MUST NOT 叠加预览专属垂直平移或要求 PDF Text 保持旧镜片布局基线。取景及标记 MUST 使用当前物理触点 clientX/clientY，经必要坐标换算后采样，不混入抓取纠偏、选区端点或显示避让。镜片及内容 MUST 不接受 pointer 命中。矩形快照工具继续沿用其既有契约，不因文字镜片统一而改变。
 
 #### Scenario: Compare preview and Text pointer clearance
-
-- **WHEN** 在 Chromium 鼠标回归中，从终点热区圆心外各 9px 抓取，再向下拖动 200/220px，使镜片位于指针上方，预览使用 50% 缩放
-- **THEN** Text 镜片底边到指针约 50.52px，预览由 43px 增至 51px，差值小于 1px；Text 原六点的镜片、采样及标记结果不变，预览对照采样没有新增纵向偏移
+- **WHEN** 在共享矩阵的标准视口下，分别触摸拖动 PDF Layout 与 PDF Text 的起止手柄，包含不同抓取位置和 PDF 内容缩放，镜片未受边缘夹取
+- **THEN** 最终外框半径、中心距、靠触点间隙和实际文字倍率均满足共享规范，无 PDF 预览专属平移，放置变化不改变源文字采样
 
 #### Scenario: Retain preview edge placement
-
-- **WHEN** PDF Layout 的布局锚点靠近左右或上方边缘，鼠标或触摸仍在拖动手柄
-- **THEN** 原有布局锚点不加 8px，定位算法仍左右钳制、上方空间不足时翻到下方，之后仅镜片元素作视觉上移；采样和选区坐标不含此视觉位移
+- **WHEN** PDF Layout 的触点靠近左右边缘或安全区上边界，并继续触摸拖动手柄
+- **THEN** 镜片按共享安全区规则横向夹取或上下翻转，实际外框不因额外 transform 越过安全边界；mouse/pen 调整端点时不显示镜片
 
 #### Scenario: Sample from different preview grab positions
-
-- **WHEN** 鼠标或触摸从预览起止手柄的中心、±9px 角落或 18px 热区边缘抓取并拖动
-- **THEN** start/move 和触摸 publish 的采样坐标均等于物理指针，常规快照区域的采样中心相对指针为 `(0,0)`；选择层纠偏转发不得覆盖原始采样点，镜片和内容不接受 pointer 命中
+- **WHEN** 触摸从预览起止手柄的中心、±9px 角落或 18px 热区边缘抓取并拖动
+- **THEN** start/move 和触摸 publish 的采样坐标均等于物理触点，正常文字取景以该触点为中心；选择层纠偏转发不得覆盖原始采样点，镜片和内容不接受 pointer 命中
 
 ### Requirement: PDF preview handles remain responsive across long drags
 

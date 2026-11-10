@@ -1,13 +1,13 @@
 import {
   TEXT_LENS_SIZE_PX as MAGNIFIER_SIZE_PX,
   TEXT_LENS_DISTANCE_PX,
-  TEXT_LENS_EDGE_PX as MAGNIFIER_EDGE_GAP_PX,
   TEXT_LENS_MAGNIFICATION as MAGNIFICATION
 } from './selectionInteraction'
 
 // Preserve the existing rectangle-tool snapshot geometry.
 export const SNAPSHOT_LENS_SIZE_PX = 120
 export const SNAPSHOT_LENS_DISTANCE_PX = 78
+const SNAPSHOT_EDGE_GAP_PX = 8
 
 export interface MagnifierPoint {
   readonly clientX: number
@@ -82,18 +82,43 @@ export const resolveMagnifierSnapshotPoint = (
 
 export const resolveMagnifierPosition = (
   point: MagnifierPoint,
+  rootRect: DOMRect
+): MagnifierPosition => {
+  const radius = MAGNIFIER_SIZE_PX / 2
+  const x = point.clientX - rootRect.left
+  const y = point.clientY - rootRect.top
+  const above = y - TEXT_LENS_DISTANCE_PX - radius
+  const placement =
+    above >= 0 && above + MAGNIFIER_SIZE_PX <= rootRect.height
+      ? 'above'
+      : 'below'
+  const desiredTop =
+    placement === 'above' ? above : y + TEXT_LENS_DISTANCE_PX - radius
+  const constrain = (value: number, extent: number) =>
+    extent < MAGNIFIER_SIZE_PX
+      ? (extent - MAGNIFIER_SIZE_PX) / 2
+      : clamp(value, 0, extent - MAGNIFIER_SIZE_PX)
+  return {
+    left: constrain(x - radius, rootRect.width),
+    top: constrain(desiredTop, rootRect.height),
+    placement
+  }
+}
+
+export const resolveSnapshotMagnifierPosition = (
+  point: MagnifierPoint,
   rootRect: DOMRect,
-  size = MAGNIFIER_SIZE_PX,
-  distance = TEXT_LENS_DISTANCE_PX
+  size = SNAPSHOT_LENS_SIZE_PX,
+  distance = SNAPSHOT_LENS_DISTANCE_PX
 ): MagnifierPosition => {
   const relativeX = point.clientX - rootRect.left
   const relativeY = point.clientY - rootRect.top
   const edgeX = Math.min(
-    MAGNIFIER_EDGE_GAP_PX,
+    SNAPSHOT_EDGE_GAP_PX,
     Math.max(0, (rootRect.width - size) / 2)
   )
   const edgeY = Math.min(
-    MAGNIFIER_EDGE_GAP_PX,
+    SNAPSHOT_EDGE_GAP_PX,
     Math.max(0, (rootRect.height - size) / 2)
   )
   const maximumLeft = Math.max(edgeX, rootRect.width - size - edgeX)
