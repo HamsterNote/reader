@@ -115,6 +115,36 @@ try {
       )
     })
   await settle()
+  // Managed selections intentionally clear window.Selection before the first
+  // handle drag. Read the rendered endpoints through the real PDF hit tester.
+  await page.evaluate(async () => {
+    const { pdfCaretAtPoint } = await import('/src/pdf/pdfTouchSelection.ts')
+    window.previewRange = () => {
+      const root = document.querySelector(
+        '.hamster-reader__pdf-viewer-container'
+      )
+      const points = ['start', 'end'].map((side) => {
+        const handle = document.querySelector(
+          `[data-pdf-handle-hit-target="${side}"]`
+        )
+        const b = handle.getBoundingClientRect()
+        const height = parseFloat(
+          handle.querySelector('[data-pdf-handle-visual] > span').style.height
+        )
+        const x = b.x + b.width / 2
+        const y =
+          b.y +
+          b.height / 2 +
+          (side === 'end' ? -10 - height / 2 : 10 + height / 2)
+        return pdfCaretAtPoint(root, x, y, true)
+      })
+      if (!points[0] || !points[1]) return null
+      const range = document.createRange()
+      range.setStart(points[0].startContainer, points[0].startOffset)
+      range.setEnd(points[1].startContainer, points[1].startOffset)
+      return range
+    }
+  })
   if (
     (await page
       .getByTestId('tool-bottom-bar-text-selection')
@@ -128,6 +158,7 @@ try {
     const side = iteration % 2 ? 'start' : 'end'
     const grabOffset = [0, 9, -9, 18][Math.floor(iteration / 2) % 4]
     const steps = Math.floor(iteration / 8) % 2 ? 24 : 1
+    await page.evaluate(() => window.readerRegression.selection.current.clear())
     if (savedMode)
       await page.evaluate(() =>
         window.readerRegression.update({ ranges: [], selectedRangeId: null })
@@ -192,7 +223,7 @@ try {
     }
     const before = await page.evaluate(
       ({ origin, side }) => {
-        const r = getSelection().getRangeAt(0)
+        const r = window.previewRange()
         const rects = r.getClientRects()
         const rect = side === 'end' ? rects[rects.length - 1] : rects[0]
         window.dragEvents = []
@@ -213,29 +244,27 @@ try {
       { origin, side }
     )
     const point = {
-      x: geometry.target.x - before.offsetX,
-      y: geometry.target.y - before.offsetY + (scenario === 'line-gap' ? 11 : 0)
+      x: geometry.target.x,
+      y: geometry.target.y + (scenario === 'line-gap' ? 11 : 0)
     }
-    assert.ok(Math.hypot(point.x - origin.x, point.y - origin.y) > 200)
+    assert.ok(
+      Math.hypot(point.x - origin.x, point.y - origin.y) > 200,
+      JSON.stringify({ iteration, point, origin, before, geometry })
+    )
     await page.mouse.move(origin.x, origin.y)
     await page.mouse.down()
     await settle()
     await page.mouse.move(point.x, point.y, { steps })
     await settle()
     const during = await page.evaluate(
-      ({ point, before }) => {
-        const r = getSelection().rangeCount
-          ? getSelection().getRangeAt(0)
-          : null
+      ({ point }) => {
+        const r = window.previewRange()
         const lens = document.querySelector('[data-testid="range-magnifier"]')
         const source = document
           .querySelector('.pdfViewer .page')
           .getBoundingClientRect()
         const sample = window.magnifierSample
-        const caret = document.caretRangeFromPoint(
-          point.x + before.offsetX,
-          point.y + before.offsetY
-        )
+        const caret = document.caretRangeFromPoint(point.x, point.y)
         return {
           start: r?.startContainer.textContent,
           startOffset: r?.startOffset,
@@ -265,7 +294,7 @@ try {
     await page.mouse.up()
     await settle()
     const after = await page.evaluate(() => {
-      const r = getSelection().rangeCount ? getSelection().getRangeAt(0) : null
+      const r = window.previewRange()
       return {
         start: r?.startContainer.textContent,
         startOffset: r?.startOffset,
@@ -320,11 +349,10 @@ try {
     })
   }
   report.failures = report.trials.filter((trial) => trial.failed).length
+  // Mouse edits must not open a lens or capture a snapshot. Touch glyph and
+  // physical-pointer projection are covered by check-shared-selection-interaction.
   report.sampleFailures = report.trials.filter(
-    (trial) =>
-      !trial.during.sampleOffset ||
-      Math.abs(trial.during.sampleOffset.x) > 0.1 ||
-      Math.abs(trial.during.sampleOffset.y) > 0.1
+    (trial) => trial.during.lensVisible || trial.during.sampleOffset !== null
   ).length
   report.captureFailures = report.trials.filter((trial) => {
     const events = trial.during.events
@@ -355,7 +383,7 @@ try {
   assert.equal(
     report.sampleFailures,
     0,
-    `${report.sampleFailures}/${report.trials.length} samples displaced`
+    `${report.sampleFailures}/${report.trials.length} mouse drags unexpectedly opened a lens`
   )
   assert.deepEqual(errors, [])
   assert.equal(report.captureFailures, 0)

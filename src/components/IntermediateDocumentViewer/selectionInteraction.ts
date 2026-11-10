@@ -1,7 +1,7 @@
 // CSS reference pixels; deliberately independent of devicePixelRatio.
-export const TEXT_LENS_SIZE_PX = 60
-export const TEXT_LENS_DISTANCE_PX = 38
-export const TEXT_LENS_EDGE_PX = 8
+export const TEXT_LENS_RADIUS_PX = 38
+export const TEXT_LENS_SIZE_PX = TEXT_LENS_RADIUS_PX * 2
+export const TEXT_LENS_DISTANCE_PX = 76
 export const TEXT_LENS_MAGNIFICATION = 2
 export const TEXT_LENS_MARKER_WIDTH_PX = 2
 export const TEXT_LENS_BORDER_PX = 3

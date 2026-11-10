@@ -281,13 +281,13 @@ it.each(matrix)(
   }
 )
 
-it('positions a continuous 60px lens 38px from the finger and flips only at the top', () => {
+it('positions a continuous 76px lens 76px from the finger and flips only at the top', () => {
   const root = new DOMRect(13, 19, 400, 600)
   for (const y of [200, 201, 202, 500]) {
     const p = resolveMagnifierPosition({ clientX: 140, clientY: y }, root)
     expect(p.placement).toBe('above')
-    expect(p.top + root.top + 30).toBe(y - 38)
-    expect(p.left + root.left + 30).toBe(140)
+    expect(p.top + root.top + 38).toBe(y - 76)
+    expect(p.left + root.left + 38).toBe(140)
   }
   expect(
     resolveMagnifierPosition({ clientX: 140, clientY: 40 }, root).placement
@@ -296,7 +296,7 @@ it('positions a continuous 60px lens 38px from the finger and flips only at the 
     resolveMagnifierPosition({ clientX: 140, clientY: 200 }, root).placement
   ).toBe('above')
   expect(resolveMagnifierPosition({ clientX: 0, clientY: 40 }, root).left).toBe(
-    8
+    0
   )
 })
 
