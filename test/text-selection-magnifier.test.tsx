@@ -70,6 +70,7 @@ describe('text selection handle magnifier', () => {
 
     // When: dragging starts and the active-selection renderer removes its handle.
     fireEvent.pointerDown(handle, {
+      pointerType: 'touch',
       pointerId: 17,
       clientX: 145,
       clientY: 265,
@@ -83,6 +84,7 @@ describe('text selection handle magnifier', () => {
     )
     rerender(<Harness>{null}</Harness>)
     fireEvent.pointerMove(document, {
+      pointerType: 'touch',
       pointerId: 17,
       clientX: 155,
       clientY: 275,
@@ -91,8 +93,9 @@ describe('text selection handle magnifier', () => {
 
     // Then: the viewer-owned session follows the pointer until that drag ends.
     expect(magnifier).not.toHaveAttribute('hidden')
-    expect(magnifier).toHaveStyle({ left: '90px', top: '122px' })
-    fireEvent.pointerUp(document, { pointerId: 17 })
+    expect(magnifier).toHaveStyle({ left: '85px', top: '117px' })
+    fireEvent.pointerUp(document, { pointerType: 'touch',
+      pointerId: 17 })
     expect(magnifier).toHaveAttribute('hidden')
   })
 
@@ -106,6 +109,7 @@ describe('text selection handle magnifier', () => {
 
     // When: the dependency marks the same handle as dragging and moves it.
     fireEvent.pointerDown(handle, {
+      pointerType: 'touch',
       pointerId: 23,
       clientX: 145,
       clientY: 265,
@@ -118,6 +122,7 @@ describe('text selection handle magnifier', () => {
       </Harness>
     )
     fireEvent.pointerMove(document, {
+      pointerType: 'touch',
       pointerId: 23,
       clientX: 160,
       clientY: 280,
@@ -126,8 +131,9 @@ describe('text selection handle magnifier', () => {
 
     // Then: the class transition does not interrupt the shared magnifier session.
     expect(magnifier).not.toHaveAttribute('hidden')
-    expect(magnifier).toHaveStyle({ left: '95px', top: '127px' })
-    fireEvent.pointerUp(document, { pointerId: 23 })
+    expect(magnifier).toHaveStyle({ left: '90px', top: '122px' })
+    fireEvent.pointerUp(document, { pointerType: 'touch',
+      pointerId: 23 })
     expect(magnifier).toHaveAttribute('hidden')
   })
 
@@ -151,6 +157,7 @@ describe('text selection handle magnifier', () => {
 
     // When: mouse dragging starts from that text handle.
     fireEvent.pointerDown(handle, {
+      pointerType: 'touch',
       pointerId: 29,
       clientX: 145,
       clientY: 265,

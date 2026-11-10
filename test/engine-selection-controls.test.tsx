@@ -86,13 +86,13 @@ it('uses the release point and holds its geometry across a delayed animation fra
       clientX: 141,
       clientY: 111
     })
-    expect(handle.style.left).toBe('160px')
+    expect(handle.style.left).toBe('140px')
     fireEvent.pointerUp(document, { pointerId: 1, clientX: 181, clientY: 111 })
     expect(onUpdate).toHaveBeenCalledOnce()
-    expect(onUpdate.mock.calls[0][0].endOffset).toBe(16)
-    expect(handle.style.left).toBe('200px')
+    expect(onUpdate.mock.calls[0][0].endOffset).toBe(14)
+    expect(handle.style.left).toBe('180px')
     act(() => frame(0))
-    expect(handle.style.left).toBe('200px')
+    expect(handle.style.left).toBe('180px')
     const replacement = range.cloneRange()
     replacement.setStart(text, 0)
     replacement.setEnd(text, 4)
@@ -216,7 +216,7 @@ it.each([
   ['crossed', 0, 'Alpha '],
   ['unmappable', 16, null]
 ] as const)(
-  'PDF touch circle corrects the grab offset and %s exactly once',
+  'PDF touch circle uses the actual pointer and %s exactly once',
   (action, caretOffset, committedText) => {
     const root = createRef<HTMLDivElement>()
     const node = document.createTextNode('Alpha beta gamma delta')
@@ -303,7 +303,7 @@ it.each([
         clientX: 155,
         clientY: 115
       })
-      expect(hitTest).toHaveBeenCalledWith(160, 110)
+      expect(hitTest).toHaveBeenCalledWith(155, 115)
       if (action === 'pointercancel')
         fireEvent.pointerCancel(document, { pointerId: 3 })
       else if (action === 'blur') fireEvent(window, new Event('blur'))

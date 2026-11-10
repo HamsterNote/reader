@@ -83,6 +83,7 @@ beforeEach(() => {
     clearSelection: vi.fn(),
     destroy: vi.fn(async () => {}),
     serializeCurrentSelection: vi.fn(() => serialized),
+    setSelectionRange: vi.fn(),
     getSelectionRange: vi.fn(() => native),
     selectRange: vi.fn(async () => native.cloneRange()),
     updateRangeEndpoint: vi.fn(() => serialized),
@@ -559,7 +560,7 @@ it('commits only a valid endpoint edit, preserves identity/style, and discards u
   expect(onHistory).toHaveBeenCalledTimes(historyCount)
 })
 
-it('recognizes a native endpoint touch lifecycle but cancels a gesture that also changes the other endpoint', async () => {
+it('does not commit obsolete native endpoint touch gestures', async () => {
   const iframe = document.createElement('iframe')
   document.body.append(iframe)
   doc = iframe.contentDocument!
@@ -597,7 +598,7 @@ it('recognizes a native endpoint touch lifecycle but cancels a gesture that also
     act(() => options.onSelection?.(serialized))
     expect(onUpdate).not.toHaveBeenCalled()
     fireEvent.touchEnd(doc)
-    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    expect(onUpdate).not.toHaveBeenCalled()
     fireEvent.touchStart(doc, { touches: [{ clientX: 120, clientY: 40 }] })
     const fresh = expanded.cloneRange()
     fresh.setStart(fresh.startContainer, 2)
@@ -608,8 +609,7 @@ it('recognizes a native endpoint touch lifecycle but cancels a gesture that also
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 40))
     })
-    expect(onUpdate).toHaveBeenCalledTimes(1)
-    expect(selection.getRangeAt(0).toString()).toBe('Alpha beta')
+    expect(onUpdate).not.toHaveBeenCalled()
   } finally {
     view.unmount()
     await new Promise((resolve) => setTimeout(resolve, 10))

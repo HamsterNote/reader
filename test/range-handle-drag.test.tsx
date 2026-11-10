@@ -78,7 +78,7 @@ describe('useRangeHandleDrag', () => {
           bubbles: true,
           isPrimary: true,
           pointerId: 1,
-          pointerType: 'mouse'
+          pointerType: 'touch'
         })
       )
     })

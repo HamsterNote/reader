@@ -1,7 +1,13 @@
-const MAGNIFIER_SIZE_PX = 120
-const MAGNIFIER_GAP_PX = 18
-const MAGNIFIER_EDGE_GAP_PX = 8
-const MAGNIFICATION = 2
+import {
+  TEXT_LENS_SIZE_PX as MAGNIFIER_SIZE_PX,
+  TEXT_LENS_DISTANCE_PX,
+  TEXT_LENS_EDGE_PX as MAGNIFIER_EDGE_GAP_PX,
+  TEXT_LENS_MAGNIFICATION as MAGNIFICATION
+} from './selectionInteraction'
+
+// Preserve the existing rectangle-tool snapshot geometry.
+export const SNAPSHOT_LENS_SIZE_PX = 120
+export const SNAPSHOT_LENS_DISTANCE_PX = 78
 
 export interface MagnifierPoint {
   readonly clientX: number
@@ -36,11 +42,11 @@ export const resolveMagnifierSourceRect = (
   const scaleX = snapshot.canvas.width / snapshot.sourceRect.width
   const scaleY = snapshot.canvas.height / snapshot.sourceRect.height
   const width = Math.min(
-    (MAGNIFIER_SIZE_PX / MAGNIFICATION) * scaleX,
+    (SNAPSHOT_LENS_SIZE_PX / MAGNIFICATION) * scaleX,
     snapshot.canvas.width
   )
   const height = Math.min(
-    (MAGNIFIER_SIZE_PX / MAGNIFICATION) * scaleY,
+    (SNAPSHOT_LENS_SIZE_PX / MAGNIFICATION) * scaleY,
     snapshot.canvas.height
   )
   const centerX = (point.clientX - snapshot.sourceRect.left) * scaleX
@@ -56,30 +62,34 @@ export const resolveMagnifierSourceRect = (
 
 export const resolveMagnifierPosition = (
   point: MagnifierPoint,
-  rootRect: DOMRect
+  rootRect: DOMRect,
+  size = MAGNIFIER_SIZE_PX,
+  distance = TEXT_LENS_DISTANCE_PX
 ): MagnifierPosition => {
   const relativeX = point.clientX - rootRect.left
   const relativeY = point.clientY - rootRect.top
+  const edgeX = Math.min(MAGNIFIER_EDGE_GAP_PX, Math.max(0, (rootRect.width - size) / 2))
+  const edgeY = Math.min(MAGNIFIER_EDGE_GAP_PX, Math.max(0, (rootRect.height - size) / 2))
   const maximumLeft = Math.max(
-    MAGNIFIER_EDGE_GAP_PX,
-    rootRect.width - MAGNIFIER_SIZE_PX - MAGNIFIER_EDGE_GAP_PX
+    edgeX,
+    rootRect.width - size - edgeX
   )
   const maximumTop = Math.max(
-    MAGNIFIER_EDGE_GAP_PX,
-    rootRect.height - MAGNIFIER_SIZE_PX - MAGNIFIER_EDGE_GAP_PX
+    edgeY,
+    rootRect.height - size - edgeY
   )
-  const aboveTop = relativeY - MAGNIFIER_SIZE_PX - MAGNIFIER_GAP_PX
-  const placement = aboveTop >= MAGNIFIER_EDGE_GAP_PX ? 'above' : 'below'
+  const aboveTop = relativeY - distance - size / 2
+  const placement = aboveTop >= edgeY ? 'above' : 'below'
   const desiredTop =
-    placement === 'above' ? aboveTop : relativeY + MAGNIFIER_GAP_PX
+    placement === 'above' ? aboveTop : relativeY + distance - size / 2
 
   return {
     left: clamp(
-      relativeX - MAGNIFIER_SIZE_PX / 2,
-      MAGNIFIER_EDGE_GAP_PX,
+      relativeX - size / 2,
+      edgeX,
       maximumLeft
     ),
-    top: clamp(desiredTop, MAGNIFIER_EDGE_GAP_PX, maximumTop),
+    top: clamp(desiredTop, edgeY, maximumTop),
     placement
   }
 }
@@ -98,7 +108,7 @@ export const drawMagnifierSnapshot = (
     return
 
   const deviceScale = output.ownerDocument.defaultView?.devicePixelRatio ?? 1
-  const outputSize = Math.round(MAGNIFIER_SIZE_PX * deviceScale)
+  const outputSize = Math.round(SNAPSHOT_LENS_SIZE_PX * deviceScale)
   if (output.width !== outputSize || output.height !== outputSize) {
     output.width = outputSize
     output.height = outputSize

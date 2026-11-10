@@ -1,12 +1,10 @@
 import { useEffect, useRef } from 'react'
 
-import { isSelectionPointerMoveTextHit } from '../selection/selectionPointerGuard'
+import { usesTouchMagnifier } from './selectionInteraction'
 import { type MagnifierPoint, useRangeMagnifier } from './RangeMagnifier'
 
 interface ActiveTextHandleDrag {
   readonly pointerId: number
-  readonly offsetX: number
-  readonly offsetY: number
 }
 
 interface TextSelectionMagnifierProps {
@@ -33,12 +31,14 @@ export const TextSelectionMagnifier = ({
       magnifier.end()
     }
     const handlePointerDown = (event: PointerEvent) => {
+      finishDrag()
       const target = event.target
       const handle =
         target instanceof Element
           ? target.closest<HTMLElement>('.hsn-selection-handle')
           : null
       if (
+        !usesTouchMagnifier(event.pointerType) ||
         !handle ||
         handle.classList.contains('hsn-selection-handle-rect') ||
         !viewerRootElement.contains(handle)
@@ -46,26 +46,14 @@ export const TextSelectionMagnifier = ({
         return
       }
 
-      finishDrag()
-      const rect = handle.getBoundingClientRect()
-      const offsetX = rect.left + rect.width / 2 - event.clientX
-      const offsetY = rect.top + rect.height / 2 - event.clientY
-      activeDragRef.current = { pointerId: event.pointerId, offsetX, offsetY }
-      magnifier.start(handle, {
-        clientX: event.clientX + offsetX,
-        clientY: event.clientY + offsetY
-      })
+      activeDragRef.current = { pointerId: event.pointerId }
+      magnifier.start(handle, { clientX: event.clientX, clientY: event.clientY })
     }
     const handlePointerMove = (event: PointerEvent) => {
       const activeDrag = activeDragRef.current
       if (!activeDrag || activeDrag.pointerId !== event.pointerId) return
 
-      const point: MagnifierPoint = isSelectionPointerMoveTextHit(event)
-        ? { clientX: event.clientX, clientY: event.clientY }
-        : {
-            clientX: event.clientX + activeDrag.offsetX,
-            clientY: event.clientY + activeDrag.offsetY
-          }
+      const point: MagnifierPoint = { clientX: event.clientX, clientY: event.clientY }
       magnifier.move(point)
     }
     const handlePointerEnd = (event: PointerEvent) => {

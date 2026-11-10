@@ -553,8 +553,8 @@ async function pdfToolRestoration(page, file, original, name) {
     )
     return sheet
   }
-  const start = page.getByRole('button', { name: '调整高亮起点', exact: true })
-  const end = page.getByRole('button', { name: '调整高亮终点', exact: true })
+  const start = page.getByRole('button', { name: /(?:拖动以调整选区|调整高亮)起点/ })
+  const end = page.getByRole('button', { name: /(?:拖动以调整选区|调整高亮)终点/ })
   const clickText = async (sheet) => {
     const annotation = sheet.locator('[data-range-id]').first()
     await annotation.scrollIntoViewIfNeeded()

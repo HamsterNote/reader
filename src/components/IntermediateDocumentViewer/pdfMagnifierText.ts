@@ -1,10 +1,7 @@
 import type { MagnifierPoint } from './rangeMagnifierGeometry'
+import { TEXT_LENS_SIZE_PX, TEXT_LENS_MAGNIFICATION, type TextMagnifierFocus } from './selectionInteraction'
 
-export interface PdfMagnifierFocus {
-  readonly range: Range
-  readonly end: boolean
-  readonly color: string
-}
+export type PdfMagnifierFocus = TextMagnifierFocus
 
 // Only PDF.js-generated text presentation is copied, never PDF annotations,
 // images, SVG highlights, event handlers or publication attributes.
@@ -64,8 +61,7 @@ export function renderPdfMagnifierText(
   source: HTMLElement,
   point: MagnifierPoint
 ): void {
-  const radius = 30 // 120px lens at 2x magnification.
-  const fragment = output.ownerDocument.createDocumentFragment()
+  const radius = TEXT_LENS_SIZE_PX / (2 * TEXT_LENS_MAGNIFICATION)
   const previous = caches.get(output)
   const next = new Map<HTMLElement, { key: string; copy: HTMLElement }>()
   const layers = source.querySelectorAll<HTMLElement>('.page .textLayer')
@@ -81,7 +77,7 @@ export function renderPdfMagnifierText(
       layer.closest<HTMLElement>('.page')?.style.display === 'none'
     )
       continue
-    const key = `${rect.width}:${rect.height}:${layer.textContent}`
+    const key = `${rect.width}:${rect.height}:${layer.textContent}:${Array.from(layer.querySelectorAll<HTMLElement>('span')).map(span => span.getAttribute('style')).join(';')}:${layer.getAttribute('style')}`
     const cached = previous?.get(layer)
     const copy = cached?.key === key ? cached.copy : copyText(layer)
     next.set(layer, { key, copy })
@@ -119,8 +115,9 @@ export function renderPdfMagnifierText(
       top: `${radius + rect.top - point.clientY - shiftY}px`,
       margin: '0'
     })
-    fragment.append(copy)
+    if (copy.parentElement !== output) output.append(copy)
   }
-  output.replaceChildren(fragment)
+  for (const [layer, cached] of previous ?? [])
+    if (!next.has(layer)) cached.copy.remove()
   caches.set(output, next)
 }

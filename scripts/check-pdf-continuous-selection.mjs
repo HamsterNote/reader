@@ -61,10 +61,10 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     assert(b)
     return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
   }
-  const moveTo = (point, end) =>
+  const moveTo = (point) =>
     touch('touchMove', {
       x: point.x,
-      y: point.y + (end ? 1 : -1) * (point.height / 2 + 10)
+      y: point.y
     })
   const scrollTop = () =>
     page

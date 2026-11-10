@@ -9,12 +9,13 @@ import {
   useRef
 } from 'react'
 
+import { TEXT_HANDLE_SIZE_PX } from './selectionInteraction'
 import { useRangeHandleDrag } from './useRangeHandleDrag'
 
 // 圆圈手柄的目标视觉直径（屏幕像素）。
 // CSS 尺寸固定为此值，再通过 transform: scale(1/scale) 抵消
 // VirtualPaper 容器的 transform: scale(s)，使视觉直径恒为 20px，方便用户拖动。
-export const HANDLE_CIRCLE_DIAMETER_PX = 20
+export const HANDLE_CIRCLE_DIAMETER_PX = TEXT_HANDLE_SIZE_PX
 
 /**
  * 去除 CSS 颜色字符串中的透明度（alpha 通道），返回无 alpha 的等价颜色。

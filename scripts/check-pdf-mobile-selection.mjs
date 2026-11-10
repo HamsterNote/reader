@@ -124,7 +124,7 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
       .boundingBox()
     assert.equal(Math.round(visual.width), 20)
     assert.equal(Math.round(visual.height), 20)
-    // Grab off-center and move outside the target line, keeping its glyphs clear.
+    // Grab off-center, then hit the actual target glyph with no compensation.
     const grabX = corner[0],
       grabY = corner[1]
     const start = { x: box.x + grabX, y: box.y + grabY }
@@ -150,8 +150,8 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     await noNative('drag-start')
     await touch('touchMove', [
       {
-        x: target.x + grabX - 20,
-        y: target.y + (end ? 1 : -1) * (target.height / 2 + 10) + grabY - 20
+        x: target.x,
+        y: target.y
       }
     ])
     await noNative('drag-moving')

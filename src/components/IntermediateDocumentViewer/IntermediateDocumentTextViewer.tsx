@@ -1,4 +1,5 @@
-import { PdfTextHandle } from '../../pdf/PdfTextHandle'
+import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
+import { RangeMagnifierProvider } from './RangeMagnifier'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
 import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeometry'
 import type { ReaderEngineSource } from '../../types/engineSource'
@@ -1767,6 +1768,7 @@ export function IntermediateDocumentTextViewer(
         : null,
     [effectiveSelectedRangeId, storedRanges]
   )
+  const [managedTextEditing, setManagedTextEditing] = useState(false)
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
   )
@@ -3371,6 +3373,7 @@ export function IntermediateDocumentTextViewer(
     }
   }
   return (
+    <RangeMagnifierProvider rootElement={viewerRootElement} source={selectionScope} enabled={showSelectionMagnifier}>
     <div className={textClasses.shell}>
       {
         <PdfTextReadingControls
@@ -3506,7 +3509,7 @@ export function IntermediateDocumentTextViewer(
               <PopoverPortal
                 containerRef={popoverContainerRef}
                 selectionKind='selected'
-                visible={!isPdf || !showPageBrowser}
+                visible={(!isPdf || !showPageBrowser) && !managedTextEditing}
                 relative={popoverRelative}
               >
                 {existingHighlightPopover}
@@ -3516,7 +3519,7 @@ export function IntermediateDocumentTextViewer(
               <PopoverPortal
                 containerRef={popoverContainerRef}
                 selectionKind='active'
-                visible={!isPdf || !showPageBrowser}
+                visible={(!isPdf || !showPageBrowser) && !managedTextEditing}
                 relative={popoverRelative}
               >
                 {selectionPopover}
@@ -3588,23 +3591,8 @@ export function IntermediateDocumentTextViewer(
                     selectionPopover={pageSelectionPopover}
                     overlayRectType={overlayRectType}
                     tool='text'
-                    renderHandle={
-                      isPdf
-                        ? (handle) => (
-                            <PdfTextHandle
-                              handle={handle}
-                              linkedData={runtimeLinkedData}
-                              root={viewerRootElement}
-                              selectionId={pageSelectionId}
-                              pageNumber={pageNumber}
-                              width={readingViewport.width}
-                              column={pdfPagination.column}
-                              magnifierEnabled={showSelectionMagnifier}
-                            />
-                          )
-                        : undefined
-                    }
-                    showSelectionMagnifier={showSelectionMagnifier}
+                    renderHandle={isPdf ? () => null : undefined}
+                    showSelectionMagnifier={isPdf ? false : showSelectionMagnifier}
                     ref={selectionRefForRuntimeId(pageSelectionId)}
                   >
                     <IntermediateDocumentTextPageContent
@@ -3628,5 +3616,14 @@ export function IntermediateDocumentTextViewer(
         </div>
       </div>
     </div>
+    {isPdf && !showPageBrowser && <PdfTextSelectionControls
+      root={viewerRootElement}
+      data={runtimeLinkedData}
+      color={highlightColor ?? '#ffc107'}
+      onEditingChange={setManagedTextEditing}
+      onDraft={handlePageLinkedDataChange}
+      onUpdate={handleLinkedUpdateRange}
+    />}
+    </RangeMagnifierProvider>
   )
 }
