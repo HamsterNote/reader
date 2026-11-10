@@ -145,6 +145,14 @@ Linux WPE / Playwright WebKit 26.4 中，trusted Ctrl+A 已进入 EPUB iframe，
 
 新验收服务使用固定提交 worktree：`http://192.168.0.145:6206/`，保留 6201–6205 对照。tmux：`ham201-pr59-6206`；日志：任务目录内 `ham201-dev-6206.log`；停止：`tmux kill-session -t ham201-pr59-6206`。尽力保活，不保证机器重启后恢复。设备复验请在 EPUB 完成交接后用硬件键盘全选，再点击可见“高亮”，检查保存全文及仅新增一次，并补一次触摸首拖。
 
+### 审核与归档
+
+Mac 操作员在 6206 / `6f48cdd`、iPhone 18 Pro 模拟器 / iOS 27.2 (`24B8117`) / Safari 补验通过：交接完成后系统 HID Cmd+A 将旧 `beta` 更新为当前章 12 段、363 字符；点击可见“高亮”只保存一条全文，端点 `[0,363]`。中途无 iframe pointerdown，该 runtime 不派发 DOM keydown/up，实际观测到 trusted 全文 selectionchange 及重新交接。触摸首拖从 `beta [13,17]` 到 `beta gam [13,21]`，释放后保持，镜片有文字且释放关闭。此证据来自 Mac 操作员，本机未操作 iOS。
+
+增量复审结论为“可合入”，审核员复跑 216 项相关单测、Chromium 键盘两组与 PDF Text 20 组通过。按收尾指令归档至 `openspec/changes/archive/2026-11-10-unify-selection-handle-magnifier/`，主规格为 `openspec/specs/reader-text-selection-interaction/spec.md`，EPUB/PDF 的 delta 已同步到各自主规格；5 份主规格 strict 校验通过。
+
+合入前再次 fetch 并普通 merge 最新 main（包含 v2.0.0 版本提交），无冲突。发现旧 PR CI 在 lint 阶段失败：整理重复分支、抽出纯文字测量/范围换算/镜内投影函数、降低交接闭包嵌套、移除测试多余实参。只为完整浏览器/单测场景保留有原因的局部复杂度例外，不关闭生产 lint 规则；原有交互参数与时序契约不变。
+
 任务 4.3 保持未勾选。本机未操作 iOS/Android WebView 真机，不宣称真机通过。前轮缺失 `libicudata.so.74` 的 Linux WebKit 启动问题已通过独立兼容运行库解决；新增的 WebKit 自动化范围与限制见上文，不能以它代替设备验收。
 
 iOS WKWebView 和 Android WebView 均需执行三个渲染面的 touch × 起终点 × 草稿/已有高亮，记录设备型号、系统/WebView 版本及可用鼠标/笔组合。重点录像约 1cm 观感、60px 镜片、顶部翻转/恢复、热区边角命中、全程双手柄、无系统选择手柄/编辑菜单竞争、跨字符竖线跳变、换色、松手/取消/切书/切模式关闭。PDF Layout 补验连续跨页与边缘自动滚动，EPUB/Text 补验页边不滚动且不自动翻页。
