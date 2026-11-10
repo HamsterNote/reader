@@ -14,6 +14,20 @@ body {
 #reader {
   position: relative;
 }
+.reader-root-error {
+  box-sizing: border-box;
+  height: 100%;
+  overflow: auto;
+  padding: 24px;
+  color: #4d473f;
+  background: #fffdf8;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.reader-root-error pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 #reader > .hamster-reader {
   width: 100%;
   height: 100%;

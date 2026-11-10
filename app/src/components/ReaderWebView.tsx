@@ -13,6 +13,7 @@ import {
   AppState,
   Alert,
   Linking,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -101,6 +102,9 @@ export const ReaderWebView = forwardRef<
   const [generation, setGeneration] = useState(0)
   const [state, setState] = useState<HostState>('loading')
   const [statusText, setStatusText] = useState('正在加载阅读资源…')
+  // Native failures remain visible despite late bridge/load/timeout events.
+  // Only an explicit reload clears the diagnostic; never auto-reload edits.
+  const [hostError, setHostError] = useState<string | null>(null)
   const sessionId = useMemo(() => randomUUID(), [])
   const sourceToken = useMemo(() => randomUUID(), [])
 
@@ -208,9 +212,17 @@ export const ReaderWebView = forwardRef<
   )
 
   const retry = (): void => {
+    setHostError(null)
     setGeneration((current) => current + 1)
     setState('loading')
     setStatusText('正在重新加载…')
+  }
+
+  const reportHostError = (eventType: string, description: string): void => {
+    const diagnostic = `${eventType}: ${description}`
+    console.error('Reader WebView host error', diagnostic)
+    setHostError(diagnostic)
+    setState('error')
   }
 
   return (
@@ -250,26 +262,51 @@ export const ReaderWebView = forwardRef<
             onShouldStartLoadWithRequest={handleNavigation}
             onMessage={handleMessage}
             onError={({ nativeEvent }) => {
-              setState('error')
-              setStatusText(`WebView 错误：${nativeEvent.description}`)
+              reportHostError(
+                'onError',
+                `${nativeEvent.description} (code=${nativeEvent.code}, domain=${nativeEvent.domain ?? 'unknown'})`
+              )
             }}
             onHttpError={({ nativeEvent }) => {
-              setState('error')
-              setStatusText(`资源加载失败：HTTP ${nativeEvent.statusCode}`)
+              reportHostError(
+                'onHttpError',
+                `HTTP ${nativeEvent.statusCode}: ${nativeEvent.description ?? '资源加载失败'}`
+              )
+            }}
+            onContentProcessDidTerminate={() => {
+              reportHostError(
+                'onContentProcessDidTerminate',
+                'iOS WebView 内容进程已终止（系统未提供原因）'
+              )
+            }}
+            onRenderProcessGone={({ nativeEvent }) => {
+              reportHostError(
+                'onRenderProcessGone',
+                `Android WebView 渲染进程已退出 (didCrash=${nativeEvent.didCrash})`
+              )
             }}
             onLoadEnd={() => {
               if (!openedRef.current) setStatusText('页面已加载，等待桥接握手…')
             }}
             style={styles.webview}
           />
-          {state !== 'connected' ? (
+          {hostError !== null || state !== 'connected' ? (
             <View style={styles.overlay} pointerEvents='box-none'>
               <View style={styles.panel}>
-                {state === 'loading' ? (
+                {hostError === null && state === 'loading' ? (
                   <ActivityIndicator size='small' color='#8b5e3c' />
                 ) : null}
-                <Text style={styles.status}>{statusText}</Text>
-                {state === 'error' ? (
+                {hostError !== null ? (
+                  <ScrollView style={styles.diagnostic}>
+                    <Text role='alert' selectable style={styles.status}>
+                      阅读宿主发生错误，请截图此信息{'\n'}
+                      {hostError}
+                    </Text>
+                  </ScrollView>
+                ) : (
+                  <Text style={styles.status}>{statusText}</Text>
+                )}
+                {hostError !== null || state === 'error' ? (
                   <>
                     <TouchableOpacity style={styles.button} onPress={retry}>
                       <Text style={styles.buttonText}>重载 WebView</Text>
@@ -317,6 +354,7 @@ const styles = StyleSheet.create({
     borderColor: '#ddd6ca'
   },
   status: { color: '#4d473f', textAlign: 'center' },
+  diagnostic: { maxHeight: 240, alignSelf: 'stretch' },
   button: {
     paddingHorizontal: 16,
     paddingVertical: 8,
