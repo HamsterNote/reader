@@ -20,9 +20,11 @@ import {
 } from './pdfMagnifierText'
 import {
   drawMagnifierSnapshot,
+  MAGNIFIER_SIZE_PX,
   type MagnifierPoint,
   type MagnifierSnapshot,
-  resolveMagnifierPosition
+  resolveMagnifierPosition,
+  resolveMagnifierSnapshotPoint
 } from './rangeMagnifierGeometry'
 
 const SNAPSHOT_DEBOUNCE_MS = 100
@@ -30,7 +32,8 @@ const SNAPSHOT_DEBOUNCE_MS = 100
 export type { MagnifierPoint } from './rangeMagnifierGeometry'
 export {
   resolveMagnifierPosition,
-  resolveMagnifierSourceRect
+  resolveMagnifierSourceRect,
+  resolveMagnifierSnapshotPoint
 } from './rangeMagnifierGeometry'
 
 interface RangeMagnifierController {
@@ -49,6 +52,7 @@ interface RangeMagnifierProviderProps {
   readonly enabled?: boolean
   readonly rootElement: HTMLElement | null
   readonly source?: unknown
+  readonly pdfText?: boolean
 }
 
 const RangeMagnifierContext = createContext<RangeMagnifierController | null>(
@@ -62,7 +66,8 @@ export const RangeMagnifierProvider = ({
   children,
   enabled = true,
   rootElement,
-  source
+  source,
+  pdfText = false
 }: RangeMagnifierProviderProps) => {
   const lensRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -80,6 +85,7 @@ export const RangeMagnifierProvider = ({
   const snapshotRef = useRef<MagnifierSnapshot | null>(null)
   const pointRef = useRef<MagnifierPoint | null>(null)
   const pageRef = useRef<HTMLElement | null>(null)
+  const caretSourceRef = useRef<HTMLElement | null>(null)
   const captureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const captureGenerationRef = useRef(0)
   const dragCleanupsRef = useRef(new Set<() => void>())
@@ -105,13 +111,43 @@ export const RangeMagnifierProvider = ({
     snapshotRef.current = null
     pointRef.current = null
     pdfRef.current = null
+    caretSourceRef.current = null
     if (textRef.current) clearPdfMagnifierText(textRef.current)
+    if (markerRef.current) {
+      markerRef.current.removeAttribute('data-caret')
+      for (const property of ['left', 'top', 'height', 'background-color'])
+        markerRef.current.style.removeProperty(property)
+    }
     if (lensRef.current) lensRef.current.hidden = true
   }, [])
 
   useEffect(() => {
     end()
-  }, [end, rootElement, source])
+  }, [end, rootElement, source, pdfText])
+
+  const updateCaret = useCallback((point: MagnifierPoint) => {
+    const marker = markerRef.current
+    const snapshot = snapshotRef.current
+    const source = caretSourceRef.current
+    if (!marker || !snapshot || !source) return
+    const markerPoint = resolveMagnifierSnapshotPoint(snapshot, point)
+    if (!markerPoint) return
+    const frame =
+      source.ownerDocument.defaultView?.frameElement?.getBoundingClientRect()
+    const caret = source.ownerDocument.caretRangeFromPoint?.(
+      point.clientX - (frame?.left ?? 0),
+      point.clientY - (frame?.top ?? 0)
+    )
+    const lineHeight = caret?.getBoundingClientRect().height ?? 12
+    marker.dataset.caret = 'true'
+    // The canvas fills the lens inside its border, which is smaller than the
+    // logical snapshot size. Percentages keep the caret on the sampled pixel.
+    marker.style.left = `${(markerPoint.x / MAGNIFIER_SIZE_PX) * 100}%`
+    marker.style.top = `${(markerPoint.y / MAGNIFIER_SIZE_PX) * 100}%`
+    marker.style.height = `${Math.max(12, lineHeight * 2)}px`
+    const color = source.style.getPropertyValue('--hsn-handle-color')
+    if (color) marker.style.backgroundColor = color
+  }, [])
 
   const capture = useCallback(
     (page: HTMLElement) => {
@@ -148,15 +184,18 @@ export const RangeMagnifierProvider = ({
             snapshotRef.current = { canvas, sourceRect }
             const currentPoint = pointRef.current
             const output = canvasRef.current
-            if (currentPoint && output)
-              drawMagnifierSnapshot(output, snapshotRef.current, currentPoint)
+            if (currentPoint) {
+              if (output)
+                drawMagnifierSnapshot(output, snapshotRef.current, currentPoint)
+              updateCaret(currentPoint)
+            }
           },
           () => {
             if (captureGenerationRef.current === captureGeneration) end()
           }
         )
     },
-    [end, rootElement]
+    [end, rootElement, updateCaret]
   )
 
   const scheduleCapture = useCallback(() => {
@@ -169,6 +208,16 @@ export const RangeMagnifierProvider = ({
     }, SNAPSHOT_DEBOUNCE_MS)
   }, [capture])
 
+  const updateSnapshot = useCallback(
+    (point: MagnifierPoint) => {
+      const snapshot = snapshotRef.current
+      const canvas = canvasRef.current
+      if (snapshot && canvas) drawMagnifierSnapshot(canvas, snapshot, point)
+      updateCaret(point)
+    },
+    [updateCaret]
+  )
+
   const move = useCallback(
     (point: MagnifierPoint, pdf?: PdfMagnifierFocus) => {
       const lens = lensRef.current
@@ -177,7 +226,10 @@ export const RangeMagnifierProvider = ({
       pointRef.current = point
       if (pdfRef.current && pdf) pdfRef.current.focus = pdf
       const rootBox = rootElement.getBoundingClientRect()
-      const relative = resolveMagnifierPosition(point, rootBox)
+      const relative = resolveMagnifierPosition(
+        point.lensPoint ?? point,
+        rootBox
+      )
       const position = { ...relative }
       if (pdfRef.current) {
         // PDF handles and the lens share a body-level fixed stacking context.
@@ -196,14 +248,11 @@ export const RangeMagnifierProvider = ({
       lens.style.top = `${position.top}px`
       lens.dataset.placement = position.placement
 
-      const snapshot = snapshotRef.current
-      const canvas = canvasRef.current
-      if (!pdfRef.current && snapshot && canvas)
-        drawMagnifierSnapshot(canvas, snapshot, point)
+      if (!pdfRef.current) updateSnapshot(point)
 
       if (pageRef.current) scheduleCapture()
     },
-    [rootElement, scheduleCapture]
+    [rootElement, scheduleCapture, updateSnapshot]
   )
 
   const start = useCallback(
@@ -221,6 +270,7 @@ export const RangeMagnifierProvider = ({
         return
       }
       setPdfMode(false)
+      caretSourceRef.current = pdfText ? source : null
       const page = source.closest<HTMLElement>(
         '.hamster-reader__intermediate-page, .hamster-reader__intermediate-text-page, .pdfViewer .page, [data-engine-page]'
       )
@@ -242,7 +292,7 @@ export const RangeMagnifierProvider = ({
       pageRef.current = captureSource
       capture(captureSource)
     },
-    [capture, move, end]
+    [capture, move, end, pdfText]
   )
 
   const registerDragCleanup = useCallback((cleanup: () => void) => {

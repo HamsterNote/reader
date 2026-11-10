@@ -1,4 +1,5 @@
-const MAGNIFIER_SIZE_PX = 120
+export const MAGNIFIER_SIZE_PX = 120
+// Preserve the existing lens clearance; it must not shift the sampled content.
 const MAGNIFIER_GAP_PX = 18
 const MAGNIFIER_EDGE_GAP_PX = 8
 const MAGNIFICATION = 2
@@ -6,6 +7,8 @@ const MAGNIFICATION = 2
 export interface MagnifierPoint {
   readonly clientX: number
   readonly clientY: number
+  /** Optional layout anchor; clientX/clientY always identify sampled content. */
+  readonly lensPoint?: { readonly clientX: number; readonly clientY: number }
 }
 
 interface MagnifierPosition {
@@ -51,6 +54,24 @@ export const resolveMagnifierSourceRect = (
     y: clamp(centerY - height / 2, 0, snapshot.canvas.height - height),
     width,
     height
+  }
+}
+
+export const resolveMagnifierSnapshotPoint = (
+  snapshot: MagnifierSnapshot,
+  point: MagnifierPoint
+): { x: number; y: number } | null => {
+  const source = resolveMagnifierSourceRect(snapshot, point)
+  if (source.width <= 0 || source.height <= 0) return null
+  const scaleX = snapshot.canvas.width / snapshot.sourceRect.width
+  const scaleY = snapshot.canvas.height / snapshot.sourceRect.height
+  return {
+    x:
+      ((point.clientX - snapshot.sourceRect.left) * scaleX - source.x) *
+      (MAGNIFIER_SIZE_PX / source.width),
+    y:
+      ((point.clientY - snapshot.sourceRect.top) * scaleY - source.y) *
+      (MAGNIFIER_SIZE_PX / source.height)
   }
 }
 

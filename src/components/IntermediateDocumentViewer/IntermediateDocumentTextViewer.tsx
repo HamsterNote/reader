@@ -5,6 +5,8 @@ import type { ReaderEngineSource } from '../../types/engineSource'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
+import { RangeMagnifierProvider } from './RangeMagnifier'
+import { TextSelectionMagnifier } from './TextSelectionMagnifier'
 import {
   resolveReaderTheme,
   usePrefersColorScheme
@@ -2873,9 +2875,11 @@ export function IntermediateDocumentTextViewer(
 
   const scrollToRange = useCallback(
     (rangeId: string) => {
-      const range = effectiveRangesRef.current.find(
-        (candidate) => candidate.id === rangeId
-      )
+      const range = isPdf
+        ? getSelectionGroup(storedRangesRef.current, rangeId)[0]
+        : effectiveRangesRef.current.find(
+            (candidate) => candidate.id === rangeId
+          )
       if (!range) return
       if (isPdf) {
         const pageNumber = parsePublicPageId(range.start.selectionId)
@@ -3370,7 +3374,7 @@ export function IntermediateDocumentTextViewer(
       }
     }
   }
-  return (
+  const viewer = (
     <div className={textClasses.shell}>
       {
         <PdfTextReadingControls
@@ -3596,15 +3600,14 @@ export function IntermediateDocumentTextViewer(
                               linkedData={runtimeLinkedData}
                               root={viewerRootElement}
                               selectionId={pageSelectionId}
-                              pageNumber={pageNumber}
                               width={readingViewport.width}
                               column={pdfPagination.column}
-                              magnifierEnabled={showSelectionMagnifier}
+                              magnifierEnabled={false}
                             />
                           )
                         : undefined
                     }
-                    showSelectionMagnifier={showSelectionMagnifier}
+                    showSelectionMagnifier={!isPdf && showSelectionMagnifier}
                     ref={selectionRefForRuntimeId(pageSelectionId)}
                   >
                     <IntermediateDocumentTextPageContent
@@ -3628,5 +3631,19 @@ export function IntermediateDocumentTextViewer(
         </div>
       </div>
     </div>
+  )
+  return (
+    <RangeMagnifierProvider
+      rootElement={viewerRootElement}
+      source={props.pdfSource}
+      pdfText={isPdf}
+      enabled={isPdf && showSelectionMagnifier}
+    >
+      <TextSelectionMagnifier
+        viewerRootElement={viewerRootElement}
+        pdfText={isPdf}
+      />
+      {viewer}
+    </RangeMagnifierProvider>
   )
 }
