@@ -15,9 +15,10 @@ const normalize = (text) => text.replace(/\s+/g, '')
 const zip = await JSZip.loadAsync(
   await readFile('test/compat/fixtures/epub/duplicate-text.epub')
 )
+const paragraphMarkup = paragraphs.map((text) => `<p>${text}</p>`).join('')
 zip.file(
   'OPS/chapter1.xhtml',
-  `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Keyboard</title></head><body>${paragraphs.map((text) => `<p>${text}</p>`).join('')}</body></html>`
+  `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Keyboard</title></head><body>${paragraphMarkup}</body></html>`
 )
 zip.file(
   'OPS/package.opf',

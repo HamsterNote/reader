@@ -67,7 +67,9 @@ try {
           for (const confirmDuringDrag of !saved && !cancel
             ? [false, true]
             : [false]) {
-            const label = `line${line + 1}/${end ? 'end' : 'start'}/${saved ? 'saved' : 'draft'}/${confirmDuringDrag ? 'confirm-during-drag' : cancel ? 'cancel' : 'release'}`
+            let action = cancel ? 'cancel' : 'release'
+            if (confirmDuringDrag) action = 'confirm-during-drag'
+            const label = `line${line + 1}/${end ? 'end' : 'start'}/${saved ? 'saved' : 'draft'}/${action}`
             console.log(`Checking ${label}`)
             await page.evaluate(
               ({ bytes, relative }) => {
@@ -232,10 +234,10 @@ try {
               false,
               `${label}: closes lens`
             )
-            const expectedStart =
-              !end && !cancel ? (confirmDuringDrag ? 5 : 3) : 8
-            const expectedEnd =
-              end && !cancel ? (confirmDuringDrag ? 21 : 25) : 18
+            const movedStart = confirmDuringDrag ? 5 : 3
+            const movedEnd = confirmDuringDrag ? 21 : 25
+            const expectedStart = !end && !cancel ? movedStart : 8
+            const expectedEnd = end && !cancel ? movedEnd : 18
             const expectedText = lines[line].slice(expectedStart, expectedEnd)
             const range = await page.evaluate(
               (saved) =>

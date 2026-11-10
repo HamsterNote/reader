@@ -173,6 +173,25 @@ function getTextReadingClasses(isPdf: boolean) {
   }
 }
 
+function getTextPageSelectionOptions(isPdf: boolean, showMagnifier: boolean) {
+  return {
+    renderHandle: isPdf ? () => null : undefined,
+    showSelectionMagnifier: isPdf ? false : showMagnifier
+  }
+}
+
+function emptyPdfText(isPdf: boolean, texts: IntermediateText[] | undefined) {
+  return isPdf && texts && !texts.some((text) => text.content.trim())
+}
+
+function managedTextPopover(
+  active: boolean,
+  draft: ReactNode,
+  saved: ReactNode
+) {
+  return active ? draft : saved
+}
+
 function getTextSpacerStyle(
   isPdf: boolean,
   viewportHeight: number,
@@ -496,9 +515,12 @@ function completeHighlightPointerUp(
 
 function getHighlightDragClassNames(
   suppressNativeSelection: boolean,
-  activePointerType: string | null
+  activePointerType: string | null,
+  managedTextEditing: boolean
 ): string[] {
   const classNames: string[] = []
+  if (managedTextEditing)
+    classNames.push('hamster-reader__managed-text-editing')
   if (suppressNativeSelection) {
     classNames.push(
       'hamster-reader__intermediate-document-viewer--suppress-native-selection'
@@ -3361,6 +3383,10 @@ export function IntermediateDocumentTextViewer(
   // 文档标题用于无障碍标签；缺失时回退到静态文案。
   const title = runtimeDocument?.title
   const textClasses = getTextReadingClasses(isPdf)
+  const pageSelectionOptions = getTextPageSelectionOptions(
+    isPdf,
+    showSelectionMagnifier
+  )
 
   const captureBookmark = () =>
     isPdf ? pdfPagination.capturePosition() : readingProgress.anchor
@@ -3467,7 +3493,6 @@ export function IntermediateDocumentTextViewer(
             'hamster-reader__intermediate-text-viewer',
             'hamster-reader__intermediate-text-scroll',
             textClasses.viewport,
-            managedTextEditing ? 'hamster-reader__managed-text-editing' : '',
             // 添加 layout 模式的 viewer class，使 buildSelectionPayload 的
             // getSelectionViewerRoot 能在文本模式下找到 viewer root — 不影响布局
             // 因为 SCSS .hamster-reader__intermediate-text-viewer / -text-scroll
@@ -3476,7 +3501,8 @@ export function IntermediateDocumentTextViewer(
             'hamster-reader__intermediate-document-viewer',
             ...getHighlightDragClassNames(
               suppressNativeSelection,
-              highlightDragPointerType
+              highlightDragPointerType,
+              managedTextEditing
             ),
             className
           ]
@@ -3514,32 +3540,28 @@ export function IntermediateDocumentTextViewer(
               const isPopoverOwner =
                 popoverOwnerRuntimeId === null ||
                 popoverOwnerRuntimeId === pageSelectionId
-              const pagePopover =
-                !isPdf && isPopoverOwner ? (
-                  <PopoverPortal
-                    containerRef={popoverContainerRef}
-                    selectionKind='selected'
-                    visible={
-                      (!isPdf || !showPageBrowser) && !managedTextEditing
-                    }
-                    relative={popoverRelative}
-                  >
-                    {existingHighlightPopover}
-                  </PopoverPortal>
-                ) : undefined
-              const pageSelectionPopover =
-                !isPdf && isPopoverOwner ? (
-                  <PopoverPortal
-                    containerRef={popoverContainerRef}
-                    selectionKind='active'
-                    visible={
-                      (!isPdf || !showPageBrowser) && !managedTextEditing
-                    }
-                    relative={popoverRelative}
-                  >
-                    {selectionPopover}
-                  </PopoverPortal>
-                ) : undefined
+              const showPagePopover = !isPdf && isPopoverOwner
+              const emptyPdfPage = emptyPdfText(isPdf, texts)
+              const pagePopover = showPagePopover ? (
+                <PopoverPortal
+                  containerRef={popoverContainerRef}
+                  selectionKind='selected'
+                  visible={!managedTextEditing}
+                  relative={popoverRelative}
+                >
+                  {existingHighlightPopover}
+                </PopoverPortal>
+              ) : undefined
+              const pageSelectionPopover = showPagePopover ? (
+                <PopoverPortal
+                  containerRef={popoverContainerRef}
+                  selectionKind='active'
+                  visible={!managedTextEditing}
+                  relative={popoverRelative}
+                >
+                  {selectionPopover}
+                </PopoverPortal>
+              ) : undefined
               return (
                 <div
                   key={virtualItem.key}
@@ -3571,9 +3593,7 @@ export function IntermediateDocumentTextViewer(
                       第 {pageNumber} 页
                     </div>
                   ) : null}
-                  {isPdf &&
-                  texts &&
-                  !texts.some((text) => text.content.trim()) ? (
+                  {emptyPdfPage ? (
                     <div
                       role='status'
                       className='hamster-reader__pdf-text-empty'
@@ -3586,8 +3606,7 @@ export function IntermediateDocumentTextViewer(
                       )}
                     </div>
                   ) : null}
-                  {texts &&
-                  !(isPdf && !texts.some((text) => text.content.trim())) ? (
+                  {texts && !emptyPdfPage ? (
                     <HamsterSelection
                       selectionId={pageSelectionId}
                       linkedMode
@@ -3610,10 +3629,7 @@ export function IntermediateDocumentTextViewer(
                       selectionPopover={pageSelectionPopover}
                       overlayRectType={overlayRectType}
                       tool='text'
-                      renderHandle={isPdf ? () => null : undefined}
-                      showSelectionMagnifier={
-                        isPdf ? false : showSelectionMagnifier
-                      }
+                      {...pageSelectionOptions}
                       ref={selectionRefForRuntimeId(pageSelectionId)}
                     >
                       <IntermediateDocumentTextPageContent
@@ -3663,9 +3679,11 @@ export function IntermediateDocumentTextViewer(
           onDraft={handlePageLinkedDataChange}
           onUpdate={handleLinkedUpdateRange}
         >
-          {runtimeLinkedData.activeRange
-            ? selectionPopover
-            : existingHighlightPopover}
+          {managedTextPopover(
+            Boolean(runtimeLinkedData.activeRange),
+            selectionPopover,
+            existingHighlightPopover
+          )}
         </PdfTextSelectionControls>
       )}
     </RangeMagnifierProvider>

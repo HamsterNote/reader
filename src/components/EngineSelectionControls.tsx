@@ -62,6 +62,23 @@ export function rangeViewportRects(range: Range, pdfTouch = false): DOMRect[] {
     )
 }
 
+function selectionHandleComponent(pdfHandles: boolean, managedText: boolean) {
+  if (pdfHandles) return PdfTouchSelectionHandle
+  if (managedText) return RangeHandleCircle
+  return 'button' as const
+}
+
+function selectionHandleTop(
+  endpoint: DOMRect,
+  end: boolean,
+  pdfHandles: boolean,
+  managedText: boolean
+) {
+  if (pdfHandles) return end ? endpoint.bottom + 10 : endpoint.top - 10
+  if (managedText) return endpoint.top + endpoint.height / 2
+  return endpoint.bottom - 7
+}
+
 export function EngineSelectionControls({
   range,
   containerRef,
@@ -290,11 +307,10 @@ export function EngineSelectionControls({
       const frame = doc.defaultView?.frameElement?.getBoundingClientRect()
       const localX = clientX - (frame?.left ?? 0)
       const localY = clientY - (frame?.top ?? 0)
-      const caret = callbacks.current.hitTest
-        ? callbacks.current.hitTest(localX, localY)
-        : pdfTouch
-          ? null
-          : textCaretAtPoint(doc, localX, localY)
+      let caret: Range | null = null
+      if (callbacks.current.hitTest)
+        caret = callbacks.current.hitTest(localX, localY)
+      else if (!pdfTouch) caret = textCaretAtPoint(doc, localX, localY)
       const node = caret?.startContainer
       const offset = caret?.startOffset
       if (!node || offset === undefined || node.nodeType !== Node.TEXT_NODE) {
@@ -581,11 +597,7 @@ export function EngineSelectionControls({
       bottom - popupSize.height
     )
   )
-  const Handle = pdfHandles
-    ? PdfTouchSelectionHandle
-    : managedText
-      ? RangeHandleCircle
-      : 'button'
+  const Handle = selectionHandleComponent(pdfHandles, managedText)
   const handleLabels = pdfTouch
     ? { start: '拖动以调整选区起点', end: '拖动以调整选区终点' }
     : { start: '调整高亮起点', end: '调整高亮终点' }
@@ -667,15 +679,9 @@ export function EngineSelectionControls({
               : showStart && visible(rects[0])
           })
           .map((physicalEnd) => {
-            let end = physicalEnd
-            if (drag.current)
-              end =
-                drag.current.end === physicalEnd
-                  ? drag.current.movingEnd
-                  : !drag.current.movingEnd
+            const end = pdfHandleLogicalEnd(drag.current, physicalEnd)
             const type = end ? 'end' : 'start'
             const endpoint = end ? rects.at(-1)! : rects[0]
-            const pdfHandleY = end ? endpoint.bottom + 10 : endpoint.top - 10
             return (
               <Handle
                 key={String(physicalEnd)}
@@ -695,11 +701,12 @@ export function EngineSelectionControls({
                   left:
                     (end ? endpoint.right : endpoint.left) -
                     (pdfHandles || managedText ? 0 : 7),
-                  top: pdfHandles
-                    ? pdfHandleY
-                    : managedText
-                      ? endpoint.top + endpoint.height / 2
-                      : endpoint.bottom - 7,
+                  top: selectionHandleTop(
+                    endpoint,
+                    end,
+                    pdfHandles,
+                    managedText
+                  ),
                   ...(managedText && !pdfHandles
                     ? {
                         backgroundColor: color,
@@ -753,13 +760,14 @@ export function EngineSelectionControls({
                   if (pdfTouch)
                     callbacks.current.onPreview?.(current.cloneRange())
                   const doc = range.startContainer.ownerDocument
-                  const body = pdfTouch
-                    ? (containerRef.current?.querySelector<HTMLElement>(
+                  let body: HTMLElement | null | undefined =
+                    containerRef.current
+                  if (pdfTouch)
+                    body =
+                      containerRef.current?.querySelector<HTMLElement>(
                         '.pdfViewer'
-                      ) ?? doc?.body)
-                    : doc?.defaultView?.frameElement
-                      ? doc.body
-                      : containerRef.current
+                      ) ?? doc?.body
+                  else if (doc?.defaultView?.frameElement) body = doc.body
                   if (body && usesTouchMagnifier(event.pointerType)) {
                     magnifier?.start(
                       body,

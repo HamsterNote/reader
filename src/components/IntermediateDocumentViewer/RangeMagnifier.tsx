@@ -41,6 +41,39 @@ import {
 
 const SNAPSHOT_DEBOUNCE_MS = 100
 
+function visibleRootBox(root: HTMLElement): DOMRect {
+  const box = root.getBoundingClientRect()
+  return new DOMRect(
+    Math.max(0, box.left),
+    Math.max(0, box.top),
+    Math.max(0, Math.min(innerWidth, box.right) - Math.max(0, box.left)),
+    Math.max(0, Math.min(innerHeight, box.bottom) - Math.max(0, box.top))
+  )
+}
+
+function renderTextSession(
+  text: HTMLElement | null,
+  marker: HTMLElement | null,
+  source: HTMLElement,
+  focus: PdfMagnifierFocus,
+  point: MagnifierPoint
+) {
+  if (text) {
+    const render = source.matches('.pdfViewer')
+      ? renderPdfMagnifierText
+      : renderFlowMagnifierText
+    render(text, source, point)
+  }
+  if (!marker) return
+  const projection = projectInsertionMarker(focus, point)
+  marker.hidden = !projection
+  marker.style.backgroundColor = focus.color
+  if (!projection) return
+  marker.style.left = `${projection.left}px`
+  marker.style.top = `${projection.top}px`
+  marker.style.height = `${projection.height}px`
+}
+
 export type { MagnifierPoint } from './rangeMagnifierGeometry'
 export {
   resolveMagnifierPosition,
@@ -199,13 +232,7 @@ export const RangeMagnifierProvider = ({
 
       pointRef.current = point
       if (textSessionRef.current && pdf) textSessionRef.current.focus = pdf
-      const box = rootElement.getBoundingClientRect()
-      const rootBox = new DOMRect(
-        Math.max(0, box.left),
-        Math.max(0, box.top),
-        Math.max(0, Math.min(innerWidth, box.right) - Math.max(0, box.left)),
-        Math.max(0, Math.min(innerHeight, box.bottom) - Math.max(0, box.top))
-      )
+      const rootBox = visibleRootBox(rootElement)
       const relative = resolveMagnifierPosition(
         point,
         rootBox,
@@ -219,26 +246,13 @@ export const RangeMagnifierProvider = ({
         // Managed handles and the text lens share a fixed stacking context.
         position.left += rootBox.left
         position.top += rootBox.top
-        if (textRef.current) {
-          const renderer = textSessionRef.current.source.matches('.pdfViewer')
-            ? renderPdfMagnifierText
-            : renderFlowMagnifierText
-          renderer(textRef.current, textSessionRef.current.source, point)
-        }
-        if (markerRef.current) {
-          const marker = markerRef.current
-          const projection = projectInsertionMarker(
-            textSessionRef.current.focus,
-            point
-          )
-          marker.hidden = !projection
-          marker.style.backgroundColor = textSessionRef.current.focus.color
-          if (projection) {
-            marker.style.left = `${projection.left}px`
-            marker.style.top = `${projection.top}px`
-            marker.style.height = `${projection.height}px`
-          }
-        }
+        renderTextSession(
+          textRef.current,
+          markerRef.current,
+          textSessionRef.current.source,
+          textSessionRef.current.focus,
+          point
+        )
       }
       lens.style.left = `${position.left}px`
       lens.style.top = `${position.top}px`

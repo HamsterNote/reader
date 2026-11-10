@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { PDFDocument } from 'pdf-lib'
 import JSZip from 'jszip'
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- Keep the end-to-end matrix assertions together as an independent browser oracle.
 export async function checkSharedSelectionInteraction({
   browser,
   base,
@@ -22,9 +23,12 @@ export async function checkSharedSelectionInteraction({
   const zip = await JSZip.loadAsync(
     await readFile('test/compat/fixtures/epub/duplicate-text.epub')
   )
+  const paragraphMarkup = [1, 2, 3]
+    .map((i) => `<p>Line ${i} alpha beta gamma delta epsilon zeta.</p>`)
+    .join('')
   zip.file(
     'OPS/chapter1.xhtml',
-    `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Test</title></head><body>${[1, 2, 3].map((i) => `<p>Line ${i} alpha beta gamma delta epsilon zeta.</p>`).join('')}</body></html>`
+    `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Test</title></head><body>${paragraphMarkup}</body></html>`
   )
   zip.file(
     'OPS/package.opf',
@@ -135,12 +139,11 @@ export async function checkSharedSelectionInteraction({
                       .querySelector('foliate-view')
                       ?.renderer?.getContents()[0]?.doc
                   : document
-              const selector =
-                surface === 'epub'
-                  ? 'p'
-                  : surface === 'pdf-text'
-                    ? '.hsn-selection-content [data-text-id]'
-                    : '.textLayer [data-selection-start-offset]'
+              const selector = {
+                epub: 'p',
+                'pdf-text': '.hsn-selection-content [data-text-id]',
+                'pdf-layout': '.textLayer [data-selection-start-offset]'
+              }[surface]
               return doc
                 ?.querySelector(selector)
                 ?.textContent?.includes('Line 1')
@@ -155,11 +158,11 @@ export async function checkSharedSelectionInteraction({
                       .renderer.getContents()[0].doc
                   : document
               const element = doc.querySelector(
-                surface === 'epub'
-                  ? 'p'
-                  : surface === 'pdf-text'
-                    ? '.hsn-selection-content [data-text-id]'
-                    : '.textLayer [data-selection-start-offset]'
+                {
+                  epub: 'p',
+                  'pdf-text': '.hsn-selection-content [data-text-id]',
+                  'pdf-layout': '.textLayer [data-selection-start-offset]'
+                }[surface]
               )
               const node = element.firstChild
               const pointAt = (offset) => {

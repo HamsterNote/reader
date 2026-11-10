@@ -46,6 +46,74 @@ function endpointFor(
   return { selectionId: id!, offset: prefix.toString().length }
 }
 
+function sourceMoved(
+  cached: Range | null | undefined,
+  start: ReturnType<typeof resolve>,
+  end: ReturnType<typeof resolve>
+) {
+  return (
+    (start &&
+      (cached?.startContainer !== start.node ||
+        cached.startOffset !== start.offset)) ||
+    (end &&
+      (cached?.endContainer !== end.node || cached.endOffset !== end.offset))
+  )
+}
+
+function clippedPreview(
+  root: HTMLElement,
+  resolvedStart: ReturnType<typeof resolve>,
+  resolvedEnd: ReturnType<typeof resolve>
+): Range | null {
+  const content = root.querySelector<HTMLElement>('.hsn-selection-content')
+  const walker =
+    content &&
+    root.ownerDocument.createTreeWalker(content, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  while (walker?.nextNode()) nodes.push(walker.currentNode as Text)
+  // Only the current original PDF page is mounted. Clip the preview to its
+  // text, but keep a missing fixed endpoint in linked source coordinates.
+  const start =
+    resolvedStart ?? (nodes[0] ? { node: nodes[0], offset: 0 } : null)
+  const tail = nodes.at(-1)
+  const end = resolvedEnd ?? (tail ? { node: tail, offset: tail.length } : null)
+  if (!start || !end || !(resolvedStart || resolvedEnd)) return null
+  const next = root.ownerDocument.createRange()
+  next.setStart(start.node, start.offset)
+  next.setEnd(end.node, end.offset)
+  return next.collapsed ? null : next
+}
+
+function textWithMovedStart(text: string, range: Range, next: Range): string {
+  const earlier = next.compareBoundaryPoints(Range.START_TO_START, range) < 0
+  const difference = range.cloneRange()
+  difference.setStart(
+    earlier ? next.startContainer : range.startContainer,
+    earlier ? next.startOffset : range.startOffset
+  )
+  difference.setEnd(
+    earlier ? range.startContainer : next.startContainer,
+    earlier ? range.startOffset : next.startOffset
+  )
+  const delta = difference.toString()
+  return earlier ? delta + text : text.slice(delta.length)
+}
+
+function textWithMovedEnd(text: string, range: Range, next: Range): string {
+  const later = next.compareBoundaryPoints(Range.END_TO_END, range) > 0
+  const difference = range.cloneRange()
+  difference.setStart(
+    later ? range.endContainer : next.endContainer,
+    later ? range.endOffset : next.endOffset
+  )
+  difference.setEnd(
+    later ? next.endContainer : range.endContainer,
+    later ? next.endOffset : range.endOffset
+  )
+  const delta = difference.toString()
+  return later ? text + delta : text.slice(0, text.length - delta.length)
+}
+
 /** Keep handles outside the dependency's transient drag/unmount lifecycle.
  * Only draft previews are published; a saved edit commits once on release. */
 export function PdfTextSelectionControls({
@@ -92,43 +160,17 @@ export function PdfTextSelectionControls({
   const resolvedStart = root && active ? resolve(root, active.start) : null
   const resolvedEnd = root && active ? resolve(root, active.end) : null
   const cached = rangeCache.current?.range
-  const movedSource =
-    (resolvedStart &&
-      (cached?.startContainer !== resolvedStart.node ||
-        cached.startOffset !== resolvedStart.offset)) ||
-    (resolvedEnd &&
-      (cached?.endContainer !== resolvedEnd.node ||
-        cached.endOffset !== resolvedEnd.offset))
   if (
     root &&
     active &&
-    (movedSource ||
+    (sourceMoved(cached, resolvedStart, resolvedEnd) ||
       rangeCache.current?.key !== key ||
       rangeCache.current.root !== root ||
       !rangeCache.current.range?.startContainer.isConnected ||
       !rangeCache.current.range?.endContainer.isConnected ||
       rangeCache.current.range.startContainer.nodeType !== Node.TEXT_NODE)
   ) {
-    const content = root.querySelector<HTMLElement>('.hsn-selection-content')
-    const walker =
-      content &&
-      root.ownerDocument.createTreeWalker(content, NodeFilter.SHOW_TEXT)
-    const nodes: Text[] = []
-    while (walker?.nextNode()) nodes.push(walker.currentNode as Text)
-    // Only the current original PDF page is mounted. Clip the preview to its
-    // text, but keep a missing fixed endpoint in linked source coordinates.
-    const start =
-      resolvedStart ?? (nodes[0] ? { node: nodes[0], offset: 0 } : null)
-    const tail = nodes.at(-1)
-    const end =
-      resolvedEnd ?? (tail ? { node: tail, offset: tail.length } : null)
-    let next: Range | null = null
-    if (start && end && (resolvedStart || resolvedEnd)) {
-      next = root.ownerDocument.createRange()
-      next.setStart(start.node, start.offset)
-      next.setEnd(end.node, end.offset)
-      if (next.collapsed) next = null
-    }
+    const next = clippedPreview(root, resolvedStart, resolvedEnd)
     rangeCache.current = { key, root, range: next }
   }
   const range = root && active ? (rangeCache.current?.range ?? null) : null
@@ -146,34 +188,8 @@ export function PdfTextSelectionControls({
     let text = next.toString()
     if (!hasStart || !hasEnd) {
       text = active.text
-      const difference = range.cloneRange()
-      if (hasStart) {
-        const earlier =
-          next.compareBoundaryPoints(Range.START_TO_START, range) < 0
-        difference.setStart(
-          earlier ? next.startContainer : range.startContainer,
-          earlier ? next.startOffset : range.startOffset
-        )
-        difference.setEnd(
-          earlier ? range.startContainer : next.startContainer,
-          earlier ? range.startOffset : next.startOffset
-        )
-        const delta = difference.toString()
-        text = earlier ? delta + text : text.slice(delta.length)
-      }
-      if (hasEnd) {
-        const later = next.compareBoundaryPoints(Range.END_TO_END, range) > 0
-        difference.setStart(
-          later ? range.endContainer : next.endContainer,
-          later ? range.endOffset : next.endOffset
-        )
-        difference.setEnd(
-          later ? next.endContainer : range.endContainer,
-          later ? next.endOffset : range.endOffset
-        )
-        const delta = difference.toString()
-        text = later ? text + delta : text.slice(0, text.length - delta.length)
-      }
+      if (hasStart) text = textWithMovedStart(text, range, next)
+      if (hasEnd) text = textWithMovedEnd(text, range, next)
     }
     return { ...active, start, end, text, rectsBySelectionId: {} }
   }

@@ -130,7 +130,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
       window.capturedHandle = element
     })
     await touch('touchStart', await center(true))
-    await moveTo(await glyph(0, 3, 15), true)
+    await moveTo(await glyph(0, 3, 15))
     await page.waitForTimeout(80)
     assert.equal(
       await handle(false).evaluate(
@@ -142,7 +142,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     await page.screenshot({
       path: resolve(output, 'pdf-continuous-reversed.png')
     })
-    await moveTo(await glyph(0, 5, 27), true)
+    await moveTo(await glyph(0, 5, 27))
     await page.waitForTimeout(80)
     assert.equal(
       await handle(true).evaluate(
@@ -166,7 +166,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
       window.readerRegression.state.ranges.at(-1)
     )
     await touch('touchStart', await center(false))
-    await moveTo(await glyph(0, 7, 27), false)
+    await moveTo(await glyph(0, 7, 27))
     await page.waitForTimeout(80)
     await touch('touchEnd')
     await page.waitForFunction(
@@ -184,7 +184,7 @@ export async function checkPdfContinuousSelection({ browser, base, output }) {
     // Start a fresh selection and reach page two with a live text-only lens.
     await press(await glyph(0, 17, 23))
     await touch('touchStart', await center(true))
-    await moveTo(await glyph(1, 2, 27), true)
+    await moveTo(await glyph(1, 2, 27))
     await page.waitForTimeout(100)
     const lens = page.getByTestId('range-magnifier')
     const lensState = await lens.evaluate((element) => ({

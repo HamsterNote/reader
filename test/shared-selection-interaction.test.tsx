@@ -14,24 +14,17 @@ const screenshot = vi.hoisted(() => vi.fn())
 vi.mock('html2canvas', () => ({ default: screenshot }))
 afterEach(() => vi.restoreAllMocks())
 
-const matrix = ['pdf-layout', 'epub', 'pdf-text'].flatMap((surface) =>
-  ['touch', 'mouse', 'pen', ''].flatMap((pointerType) =>
-    [false, true].flatMap((end) =>
-      ['draft', 'saved'].flatMap((target) =>
-        ['center', 'edge', 'corner'].map((grab) => ({
-          surface,
-          pointerType,
-          end,
-          target,
-          grab
-        }))
-      )
-    )
-  )
-)
+const matrix = []
+for (const surface of ['pdf-layout', 'epub', 'pdf-text'])
+  for (const pointerType of ['touch', 'mouse', 'pen', ''])
+    for (const end of [false, true])
+      for (const target of ['draft', 'saved'])
+        for (const grab of ['center', 'edge', 'corner'])
+          matrix.push({ surface, pointerType, end, target, grab })
 
 it.each(matrix)(
   '$surface / $pointerType / end=$end / $target / $grab uses raw hits, stable handles and a touch-only text lens',
+  // eslint-disable-next-line sonarjs/cognitive-complexity -- Each matrix row checks one complete input/drag/commit/cancel lifecycle.
   ({ surface, pointerType, end, target, grab }) => {
     const frame = surface === 'epub' ? document.createElement('iframe') : null
     if (frame) document.body.append(frame)
@@ -126,12 +119,13 @@ it.each(matrix)(
       clientY: y + (frame ? 19 : 0)
     }
     try {
+      const grabX = { center: 60, edge: 69, corner: 79 }[grab]
       fireEvent.pointerDown(handle, {
         pointerId: 7,
         pointerType,
         button: 0,
-        clientX: grab === 'center' ? 60 : grab === 'edge' ? 69 : 79,
-        clientY: grab === 'center' ? 140 : grab === 'edge' ? 140 : 159
+        clientX: grabX,
+        clientY: grab === 'corner' ? 159 : 140
       })
       if (pointerType === 'touch')
         fireEvent.touchStart(handle, {

@@ -270,6 +270,13 @@ function sharedHistoryPresent(history: AnnotationHistoryController | null) {
   return history?.getStatus().enabled ? history.getPresent() : undefined
 }
 
+function commentCounts(props: Props) {
+  return (
+    props.commentCountByRangeId ??
+    (props.comments ? getCommentCountByHighlightId(props.comments) : undefined)
+  )
+}
+
 export function EngineDocumentViewer(props: Props) {
   const { engineSource: source, engineRenderMode: mode = 'layout' } = props
   const preferredTheme = usePrefersColorScheme()
@@ -911,47 +918,44 @@ export function EngineDocumentViewer(props: Props) {
       ++selectionCallbackGeneration.current.end
     }
     cancelEpubHandoff.current = cancelHandoff
+    const finishHandoff = async (token: number) => {
+      const active = activeText.current
+      const range = engine.getSelectionRange()?.cloneRange()
+      if (cancelled || token !== handoffGeneration || !active || !range) return
+      const activation = activationGeneration.current
+      const selection = range.startContainer.ownerDocument?.getSelection()
+      if (endPoint && !ended && selection && !selection.isCollapsed) {
+        ended = true
+        latest.current.onSelectionEnd?.(endPoint, selection)
+      }
+      // Consumers read the live Selection during these callbacks. Do not
+      // empty it while asynchronous text extraction is still in flight.
+      await Promise.all([
+        changeCallbacks,
+        endPoint ? emitSelectionCallbacks(true) : undefined
+      ])
+      if (
+        cancelled ||
+        token !== handoffGeneration ||
+        activation !== activationGeneration.current ||
+        !activeText.current ||
+        !sameNativeRange(activeText.current.range, active.range) ||
+        !range.startContainer.isConnected ||
+        !range.endContainer.isConnected
+      )
+        return
+      const rangeId = activeText.current.rangeId
+      engine.setSelectionRange(range)
+      setNativeRange(range, rangeId)
+      const confirmDraft = endPoint && latest.current.autoHighlight && !rangeId
+      endPoint = null
+      if (confirmDraft) confirmRef.current()
+    }
     const queueHandoff = () => {
       invalidateHandoff()
       if (cancelled || pointerActive || touchActive) return
       const token = handoffGeneration
-      handoffFrame = requestAnimationFrame(() => {
-        void (async () => {
-          const active = activeText.current
-          const range = engine.getSelectionRange()?.cloneRange()
-          if (cancelled || token !== handoffGeneration || !active || !range)
-            return
-          const activation = activationGeneration.current
-          const selection = range.startContainer.ownerDocument?.getSelection()
-          if (endPoint && !ended && selection && !selection.isCollapsed) {
-            ended = true
-            latest.current.onSelectionEnd?.(endPoint, selection)
-          }
-          // Consumers read the live Selection during these callbacks. Do not
-          // empty it while asynchronous text extraction is still in flight.
-          await Promise.all([
-            changeCallbacks,
-            endPoint ? emitSelectionCallbacks(true) : undefined
-          ])
-          if (
-            cancelled ||
-            token !== handoffGeneration ||
-            activation !== activationGeneration.current ||
-            !activeText.current ||
-            !sameNativeRange(activeText.current.range, active.range) ||
-            !range.startContainer.isConnected ||
-            !range.endContainer.isConnected
-          )
-            return
-          const rangeId = activeText.current.rangeId
-          engine.setSelectionRange(range)
-          setNativeRange(range, rangeId)
-          const confirmDraft =
-            endPoint && latest.current.autoHighlight && !rangeId
-          endPoint = null
-          if (confirmDraft) confirmRef.current()
-        })()
-      })
+      handoffFrame = requestAnimationFrame(() => void finishHandoff(token))
     }
     const listeners = new Map<Document, () => void>()
     restored.current = false
@@ -1810,12 +1814,7 @@ export function EngineDocumentViewer(props: Props) {
             if (rectangle?.selectionId)
               navigate(pageNumberOf(rectangle.selectionId))
           }}
-          commentCountByRangeId={
-            props.commentCountByRangeId ??
-            (props.comments
-              ? getCommentCountByHighlightId(props.comments)
-              : undefined)
-          }
+          commentCountByRangeId={commentCounts(props)}
           commentCountByRectId={props.commentCountByRectId}
           bookmarks={props.bookmarks}
           onToggleBookmark={bookmarkToggleHandler()}
