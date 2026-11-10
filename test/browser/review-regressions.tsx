@@ -5,6 +5,7 @@ import { IntermediatePage, TextDir } from '@hamster-note/types'
 import { Reader } from '../../src/components/Reader'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
 import { configurePdfJsWorker } from '../../src/pdf/pdfjsRuntime'
+import { PDFPageView } from 'pdfjs-dist/web/pdf_viewer.mjs'
 import { pdfCaretAtPoint } from '../../src/pdf/pdfTouchSelection'
 import type {
   ReaderSelectionRange,
@@ -40,6 +41,7 @@ function render() {
   )
 }
 const api = {
+  PDFPageView,
   state,
   selection,
   get document() {

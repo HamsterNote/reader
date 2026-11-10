@@ -1674,6 +1674,9 @@ export function EngineDocumentViewer(props: Props) {
             edgeCropEditing={props.edgeCropEditing}
             onEdgeCropApply={props.onEdgeCropApply}
             onEdgeCropHidePage={props.onEdgeCropHidePage}
+            onHiddenPagesRestore={props.onHiddenPagesRestore}
+            canUndoHiddenPagesRestore={props.canUndoHiddenPagesRestore}
+            onHiddenPagesRestoreUndo={props.onHiddenPagesRestoreUndo}
             pagePaintings={props.pagePaintings}
             paintingSettings={props.paintingSettings}
             onPaintingSettingsChange={props.onPaintingSettingsChange}
