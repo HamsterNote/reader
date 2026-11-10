@@ -639,7 +639,8 @@ it('auto-highlights a fresh draft once and keeps custom Popovers on their curren
   await act(async () => {
     doc.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'mouse' }))
   })
-  expect(onSelect).toHaveBeenCalledTimes(1)
+  // EPUB finishes its managed handoff on the next animation frame.
+  await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1))
   expect(
     screen.getByText(`Custom ${onSelect.mock.calls[0][0].id}`)
   ).toBeInTheDocument()

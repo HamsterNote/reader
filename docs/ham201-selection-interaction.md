@@ -129,6 +129,22 @@ Mac 操作员在 6204 / `581c5f5`、iPhone 18 Pro 模拟器 / iOS 27.2 (`24B8117
 
 确认入口修正后重新运行类型检查、库构建、126 文件 / 1,735 项全量单测、OpenSpec strict 及改动代码格式检查，全部通过。
 
+### EPUB 键盘新选区接管修正
+
+Mac 操作员已在 6205 / `0e59e27`、iPhone 18 Pro 模拟器 / iOS 27.2 (`24B8117`) / Safari 补验 PDF Text：首拖释放保持、可见“高亮”确认、保存文本/offset/手柄正确，标注数量 `0 → 1 → 1`。这补齐了前轮确认入口的模拟器验收；本轮键盘修正仍需设备复验。
+
+审核发现 EPUB 交接后只在 pointerdown 清除旧 `managedSelection`，并忽略其存在期间的所有 selectionchange。键盘 Ctrl+A 没有 pointerdown，原生新选区因此不能接管，确认仍序列化旧文本。本次仅忽略清空/折叠 Selection；出现新的非折叠原生 Range 就使旧受管范围失效，通过现有回调重新交接。读取 Range 和序列化也优先新原生范围，覆盖读取先于排队 selectionchange 的情况。自身清空、Foliate 折叠焦点 caret、原有取消与确认路径保留；尺寸不变。
+
+新增真实入口回归 `node scripts/check-epub-keyboard-selection.mjs`，使用实际 Reader、Foliate、compat：原生鼠标选择 `Alpha beta`，等待交接且原生 Selection 清空；不再点击 iframe，直接发送 trusted Ctrl+A，再点击唯一可见“高亮”按钮。从草稿、已有高亮两种状态都检查全文保存、offset `[0, 63]`、恰好新增一条、已有高亮不变。没有用 Selection API 种初选或用 API 确认。旧代码在原生已为全文而回调未接管处失败；修正后 Chromium 148.0.7778.96 两组通过，记录见 `test-results/epub-keyboard-selection/chromium.json`。
+
+Linux WPE / Playwright WebKit 26.4 中，trusted Ctrl+A 已进入 EPUB iframe，但未建立原生选区；独立空白页面的普通 iframe（无 Reader）在保持焦点时 Ctrl+A、Meta+A 同样不选字。因此该运行库不能完成这条键盘验收，不把它报为通过，也不外推到 iOS Safari。脚本失败时自动运行普通 iframe 对照，输出 `webkit-failure.json`；复验命令为 `READER_BROWSER_ENGINE=webkit WEBKIT_EXECUTABLE_PATH=../webkit-runtime/run-webkit.sh node scripts/check-epub-keyboard-selection.mjs`。WebKit 原有 EPUB 触摸四组已另行通过，两者不是同一验证结果。
+
+新增两项引擎回归覆盖自身清空/折叠不丢范围、新原生范围在事件之前或之后读取的行为。全量检查首次出现旧 auto-highlight 用例未等下一动画帧交接就断言的时序失败，单独复跑通过；将断言改为等待实际提交，不添加固定延迟。
+
+本轮最终检查：`yarn typecheck`、`yarn build:lib` 通过；`yarn test:run --maxWorkers=2 --testTimeout=15000` 为 126 文件 / 1,737 项通过；Chromium 键盘两组、共享交互 36 组、WebKit EPUB 触摸四组通过。OpenSpec strict、改动代码 Prettier 与 `git diff --check` 通过。
+
+新验收服务使用固定提交 worktree：`http://192.168.0.145:6206/`，保留 6201–6205 对照。tmux：`ham201-pr59-6206`；日志：任务目录内 `ham201-dev-6206.log`；停止：`tmux kill-session -t ham201-pr59-6206`。尽力保活，不保证机器重启后恢复。设备复验请在 EPUB 完成交接后用硬件键盘全选，再点击可见“高亮”，检查保存全文及仅新增一次，并补一次触摸首拖。
+
 任务 4.3 保持未勾选。本机未操作 iOS/Android WebView 真机，不宣称真机通过。前轮缺失 `libicudata.so.74` 的 Linux WebKit 启动问题已通过独立兼容运行库解决；新增的 WebKit 自动化范围与限制见上文，不能以它代替设备验收。
 
 iOS WKWebView 和 Android WebView 均需执行三个渲染面的 touch × 起终点 × 草稿/已有高亮，记录设备型号、系统/WebView 版本及可用鼠标/笔组合。重点录像约 1cm 观感、60px 镜片、顶部翻转/恢复、热区边角命中、全程双手柄、无系统选择手柄/编辑菜单竞争、跨字符竖线跳变、换色、松手/取消/切书/切模式关闭。PDF Layout 补验连续跨页与边缘自动滚动，EPUB/Text 补验页边不滚动且不自动翻页。
