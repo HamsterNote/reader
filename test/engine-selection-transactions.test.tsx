@@ -19,6 +19,8 @@ import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../src/types/selection'
+import * as selectionSegments from '../src/components/selection/engineSelectionSegments'
+import { IntermediateText, TextDir } from '@hamster-note/types'
 
 type ControlsProps = ComponentProps<typeof EngineSelectionControls>
 
@@ -647,3 +649,196 @@ it('auto-highlights a fresh draft once and keeps custom Popovers on their curren
   expect(onSelect).toHaveBeenCalledTimes(1)
   view.unmount()
 })
+
+it.each([
+  'finish',
+  'late-selection',
+  'late-during-extraction',
+  'callback-confirm',
+  'cancel',
+  'unload'
+] as const)(
+  'hands a finished native EPUB gesture to managed controls safely (%s)',
+  async (scenario) => {
+    const iframe = document.createElement('iframe')
+    document.body.append(iframe)
+    doc = iframe.contentDocument!
+    doc.body.innerHTML = '<p>Alpha beta gamma</p>'
+    const selection = doc.getSelection()!
+    let managed: Range | null = null
+    const currentRange = () =>
+      selection.rangeCount && !selection.isCollapsed
+        ? selection.getRangeAt(0)
+        : managed
+    vi.mocked(engine.getSelectionRange).mockImplementation(currentRange)
+    vi.mocked(engine.serializeCurrentSelection).mockImplementation(() => {
+      const range = currentRange()
+      return range
+        ? {
+            start: { selectionId: 'page-1', offset: range.startOffset },
+            end: { selectionId: 'page-1', offset: range.endOffset },
+            text: range.toString()
+          }
+        : null
+    })
+    vi.mocked(engine.setSelectionRange).mockImplementation((range) => {
+      managed = range?.cloneRange() ?? null
+      selection.removeAllRanges()
+    })
+    vi.mocked(engine.clearSelection).mockImplementation(() => {
+      managed = null
+      selection.removeAllRanges()
+    })
+    let resolveExtraction!: (
+      value: Awaited<
+        ReturnType<typeof selectionSegments.engineSelectionSegments>
+      >
+    ) => void
+    const extraction = new Promise<
+      Awaited<ReturnType<typeof selectionSegments.engineSelectionSegments>>
+    >((resolve) => {
+      resolveExtraction = resolve
+    })
+    const extract = vi
+      .spyOn(selectionSegments, 'engineSelectionSegments')
+      .mockReturnValue(extraction)
+    const callbacks: string[] = []
+    const ref = createRef<ReaderSelectionRef>()
+    const onSelect = vi.fn()
+    const onEnd = vi.fn((_position, value: Selection) =>
+      callbacks.push(`native:${value.toString()}`)
+    )
+    const onTextEnd = vi.fn((_text, detail) => {
+      callbacks.push(`text:${detail.selection.toString()}`)
+      if (scenario === 'callback-confirm') ref.current?.confirm()
+    })
+    const onSelectText = vi.fn((value: Selection) =>
+      callbacks.push(`segments:${value.toString()}`)
+    )
+    const view = render(
+      <EngineDocumentViewer
+        engineSource={source}
+        document={compatibilityIndex}
+        selectedTool='text-selection'
+        selectionRef={ref}
+        onSelect={onSelect}
+        onSelectionEnd={onEnd}
+        onTextSelectionEnd={onTextEnd}
+        onSelectText={onSelectText}
+      />
+    )
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 70))
+      })
+    const select = (end: number) => {
+      native = doc.createRange()
+      native.setStart(doc.querySelector('p')!.firstChild!, 0)
+      native.setEnd(native.endContainer, end)
+      selection.removeAllRanges()
+      selection.addRange(native)
+      act(() => options.onSelection?.(engine.serializeCurrentSelection()))
+    }
+    try {
+      await act(async () => options.onDocumentLoad?.(doc, 1))
+      fireEvent.pointerDown(doc, {
+        pointerId: 71,
+        pointerType: 'touch',
+        clientX: 20,
+        clientY: 30
+      })
+      fireEvent.touchStart(doc, {
+        touches: [{ identifier: 71 }],
+        changedTouches: [{ identifier: 71 }]
+      })
+      if (scenario !== 'late-selection') select(5)
+      await settle()
+      expect(engine.setSelectionRange).not.toHaveBeenCalled()
+      expect(Boolean(mocks.controls?.range && mocks.controls.showHandles)).toBe(
+        false
+      )
+      if (scenario !== 'late-selection')
+        expect(selection.toString()).toBe('Alpha')
+      fireEvent.pointerUp(doc, {
+        pointerId: 71,
+        pointerType: 'touch',
+        clientX: 60,
+        clientY: 30
+      })
+      // Pointerup alone must not clear a still active native touch.
+      await settle()
+      expect(engine.setSelectionRange).not.toHaveBeenCalled()
+      fireEvent.touchEnd(doc, {
+        touches: [],
+        changedTouches: [{ identifier: 71, clientX: 60, clientY: 30 }]
+      })
+      if (scenario === 'late-selection') select(10)
+      await settle()
+      expect(mocks.controls?.showHandles).toBe(false)
+      expect(engine.setSelectionRange).not.toHaveBeenCalled()
+      if (scenario === 'late-during-extraction') {
+        select(10)
+        await settle()
+      }
+      if (scenario === 'cancel') act(() => ref.current?.clear())
+      if (scenario === 'unload') act(() => options.onDocumentUnload?.(doc))
+      resolveExtraction({
+        texts: [
+          IntermediateText.parse({
+            id: 'native-text',
+            content: 'Alpha beta gamma',
+            fontSize: 16,
+            fontFamily: 'sans-serif',
+            fontWeight: 400,
+            italic: false,
+            color: '#000000',
+            polygon: [
+              [0, 0],
+              [100, 0],
+              [100, 20],
+              [0, 20]
+            ],
+            lineHeight: 20,
+            ascent: 16,
+            descent: 4,
+            dir: TextDir.LTR,
+            skew: 0,
+            isEOL: false
+          })
+        ],
+        segments: []
+      })
+      await settle()
+      if (scenario === 'cancel' || scenario === 'unload') {
+        expect(engine.setSelectionRange).not.toHaveBeenCalled()
+        expect(mocks.controls?.range).toBeNull()
+        expect(onTextEnd).not.toHaveBeenCalled()
+      } else {
+        const expected =
+          scenario === 'late-selection' || scenario === 'late-during-extraction'
+            ? 'Alpha beta'
+            : 'Alpha'
+        expect(callbacks).toEqual([
+          `native:${scenario === 'late-during-extraction' ? 'Alpha' : expected}`,
+          `text:${expected}`,
+          `segments:${expected}`
+        ])
+        expect(engine.setSelectionRange).toHaveBeenCalledOnce()
+        expect(managed!.toString()).toBe(expected)
+        expect(selection.rangeCount).toBe(0)
+        await waitFor(() => expect(mocks.controls?.showHandles).toBe(true))
+        expect(mocks.controls?.range?.toString()).toBe(expected)
+        act(() => {
+          ref.current?.confirm()
+          ref.current?.confirm()
+        })
+        expect(onSelect).toHaveBeenCalledOnce()
+        expect(onSelect.mock.calls[0][0].text).toBe(expected)
+      }
+    } finally {
+      view.unmount()
+      extract.mockRestore()
+      iframe.remove()
+    }
+  }
+)

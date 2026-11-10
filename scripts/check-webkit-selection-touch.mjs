@@ -85,6 +85,21 @@ try {
           .renderer.getContents()[0].doc
         const node = doc.querySelector('p').firstChild
         const range = doc.createRange()
+        doc.querySelector('p').dispatchEvent(
+          new PointerEvent('pointerdown', {
+            bubbles: true,
+            pointerId: 4001,
+            pointerType: 'touch',
+            clientX: 80,
+            clientY: 83
+          })
+        )
+        const start = new Event('touchstart', { bubbles: true })
+        Object.defineProperties(start, {
+          touches: { value: [{ identifier: 4001 }] },
+          changedTouches: { value: [{ identifier: 4001 }] }
+        })
+        doc.querySelector('p').dispatchEvent(start)
         range.setStart(node, 8)
         range.setEnd(node, 18)
         doc.getSelection().removeAllRanges()
@@ -137,7 +152,66 @@ try {
       })
       const handles = page.locator('.hamster-reader__engine-handle')
       const handle = handles.nth(end ? 1 : 0)
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+          )
+      )
+      assert.equal(
+        await handles.count(),
+        0,
+        'native gesture still owns selection; managed handles cannot be pressed'
+      )
+      assert.equal(
+        await page.evaluate(() =>
+          document
+            .querySelector('foliate-view')
+            .renderer.getContents()[0]
+            .doc.getSelection()
+            .toString()
+        ),
+        text.slice(8, 18)
+      )
+      await page.evaluate(() => {
+        const doc = document
+          .querySelector('foliate-view')
+          .renderer.getContents()[0].doc
+        const element = doc.querySelector('p')
+        element.dispatchEvent(
+          new PointerEvent('pointerup', {
+            bubbles: true,
+            pointerId: 4001,
+            pointerType: 'touch',
+            clientX: 168,
+            clientY: 83
+          })
+        )
+        const end = new Event('touchend', { bubbles: true })
+        Object.defineProperties(end, {
+          touches: { value: [] },
+          changedTouches: {
+            value: [{ identifier: 4001, clientX: 168, clientY: 83 }]
+          }
+        })
+        element.dispatchEvent(end)
+      })
       await handle.waitFor()
+      assert.equal(
+        await page.evaluate(
+          () =>
+            document
+              .querySelector('foliate-view')
+              .renderer.getContents()[0]
+              .doc.getSelection().rangeCount
+        ),
+        0,
+        'native Selection is empty before the first managed handle can receive input'
+      )
+      // Keep the native capture assertions below separate from setup events.
+      await page.evaluate(() => {
+        window.touchTrace = []
+      })
       if (saved) {
         await page.evaluate(() =>
           window.readerRegression.selection.current.confirm()
@@ -342,6 +416,31 @@ try {
           before[0][end ? 'start' : 'end']
         )
       }
+      await page.evaluate(
+        (id) => window.readerRegression.selection.current.scrollToRange(id),
+        state.ranges[0].id
+      )
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+          )
+      )
+      await handle.waitFor()
+      const reopened = await page.evaluate(() => {
+        const selection = document
+          .querySelector('foliate-view')
+          .renderer.getContents()[0]
+          .doc.getSelection()
+        return { collapsed: selection.isCollapsed, text: selection.toString() }
+      })
+      // Foliate may create a collapsed focus caret while navigating. It must
+      // never reinstall a native text selection with endpoint handles.
+      assert.deepEqual(
+        reopened,
+        { collapsed: true, text: '' },
+        'reopening a saved highlight must stay managed'
+      )
       const trace = await page.evaluate(() => window.touchTrace)
       assert(
         trace.some((event) => event.type === 'touchmove' && event.prevented),
@@ -358,6 +457,8 @@ try {
       )
       report.cases.push({
         label,
+        nativeHandoffBeforeHandles: true,
+        reopenedNativeTextSelection: false,
         nativeTaps: 2,
         nativeMouse: 1,
         pairedDrag: 1,

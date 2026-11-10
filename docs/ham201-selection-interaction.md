@@ -80,9 +80,26 @@ Mac 操作员报告 iOS 27.2 模拟器 Safari 在 `1069a15` 上首次拖柄只�
 
 WebKit 脚本自行启动并关闭 Vite 和浏览器，不依赖 Mac 的旧 `6201` 服务。在支持 Playwright 的开发机执行 `npx playwright install webkit` 后运行上述命令；已有自定义启动器可用 `WEBKIT_EXECUTABLE_PATH` 指定。本机使用该变量指向任务目录的兼容运行库启动器。逐组证据输出到 `test-results/webkit-selection-touch/report.json`。
 
-Mac 复验应使用 PR 最新提交，并启动独立端口：`yarn dev --host 0.0.0.0 --port 6202 --strictPort`。Safari 打开该新端口，依次长按选字、首次拖起/终柄、释放、重拖、保存后再次编辑、取消；同时记录 outer document 和 EPUB iframe 的 pointerdown/move/up/cancel、got/lostpointercapture、touchstart/move/end/cancel，至少包含 isTrusted、pointerType、pointerId、touch identifier、target、defaultPrevented。重点区分 Mouse 注入与真实触摸事件；若两种流都没有 move/end，应用无法还原未收到的轨迹或释放，需继续定位注入/浏览器事件派发，不能仅凭“只有 down”判定责任。
+旧修正版 `9c024c4` 的独立验收端口为 6202，保留用于对照。Safari 复验依次长按选字、首次拖起/终柄、释放、重拖、保存后再次编辑、取消；同时记录 outer document 和 EPUB iframe 的 pointerdown/move/up/cancel、got/lostpointercapture、touchstart/move/end/cancel，至少包含 isTrusted、pointerType、pointerId、touch identifier、target、defaultPrevented。重点区分 Mouse 注入与真实触摸事件；若两种流都没有 move/end，应用无法还原未收到的轨迹或释放，需继续定位注入/浏览器事件派发，不能仅凭“只有 down”判定责任。
 
 ## 待设备验收
+
+### 原生 Selection 提前交接修正
+
+Mac 操作员对旧 `9c024c4` 的进一步对照：iPhone 18 Pro / iOS 27.2 runtime `24B8117`，6202 上每组刷新、原生长按后首拖，各一轮。baseline 仅 down/start、松手后镜片残留；探针将自绘手柄向下移 96px、按新坐标拖回正文后，收到 11 次 pointermove、11 次 touchmove 和 up/end，释放关闭。这支持 Linus 提出的原生端点命中区重叠方向，未核实该 runtime 是否包含具体 WebKit 上游修正。移位仅作诊断，本次产品坐标及尺寸不变。
+
+交接现在发生在原生手势结束后：
+
+- EPUB 文档跟踪 pointer/touch 生命周期，手势进行中保留 Selection 并关闭自绘手柄。pointerup 后若原生 touch 仍活动，继续等待 touchend；touchend 后迟到的 selectionchange 会重排待交接工作。
+- 先保留 Range 副本，完成 onSelectionEnd，以及异步文本提取后的 onTextSelectionChange/onTextSelectionEnd/onSelectText；回调调用时仍能读取有效原生 Selection。随后调用已有 setSelectionRange 保存受管 Range、清除原生 Selection。
+- 原生 Selection 清理后再经过两帧开放自绘命中，让 WebKit 有绘制机会。两帧不代表 UIKit 的完成确认，也不代替 iOS 原生触摸复验。
+- 取消、clear、导航/文档卸载、切源使待交接及过期回调失效。导航恢复和端点更新失败回退均使用受管 Range，不再 addRange 恢复原生文本选区。确认一次及拖动取消路径继续复用原实现。
+
+本轮 `yarn typecheck`、`yarn build:lib` 通过；全量 126 文件、1,735 项通过，Chromium 共享矩阵 36 组通过，WebKit 四组通过。事务回归新增六项：正常交接、迟到 selectionchange、异步提取期间再次变更选区、宿主在结束回调内确认一次、等待期间取消及卸载。WebKit 增加不变量：模拟原生手势进行中无自绘手柄、首次自绘手柄可按时原生 Selection 已清理、重开已有高亮保持受管；原有真实 tap/鼠标与合成拖动检查继续覆盖。Foliate 导航可能建立折叠的焦点 caret，测试要求不重建带端点的原生文本选区。OpenSpec strict 校验和改动代码格式检查通过。
+
+复验仍运行 `node scripts/check-webkit-selection-touch.mjs`；本机加 `WEBKIT_EXECUTABLE_PATH=../webkit-runtime/run-webkit.sh`。上述长按后的初始状态及拖动为合成事件，仅证明应用交接不变量和 JS 路径；本轮尚未执行新补丁的 iOS 原生长按首拖。请在独立新验收端口、无移位探针下重新验证首次拖柄、释放关闭、重拖、确认一次、取消、已有高亮与翻页恢复。暂不采用系统手柄降级方案。
+
+本修正使用独立验收端口 `http://192.168.0.145:6203/`，从提交固定的独立 worktree 启动，保留 6201/6202 对照服务。启动命令为 `yarn dev --host 0.0.0.0 --port 6203 --strictPort`，tmux 会话 `ham201-pr59-6203`；日志 `ham201-dev-6203.log` 位于任务工作目录，停止命令 `tmux kill-session -t ham201-pr59-6203`。tmux 尽力保活，不保证机器重启后自动恢复。
 
 任务 4.3 保持未勾选。本轮未操作 iOS/Android WebView 真机，不宣称真机通过。前轮缺失 `libicudata.so.74` 的 Linux WebKit 启动问题已通过独立兼容运行库解决；本轮新增的 WebKit 自动化范围与限制见上一节，不能以它代替设备验收。
 
