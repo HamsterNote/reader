@@ -74,6 +74,8 @@ export function EngineSelectionControls({
   pdfTouch = false,
   pdfCustomHandles = false,
   managedText = false,
+  showPopoverWhileDragging = false,
+  popoverRelative = false,
   color = '#ffc107',
   paintPreview = true,
   onPreview,
@@ -82,6 +84,8 @@ export function EngineSelectionControls({
   readonly pdfTouch?: boolean
   readonly pdfCustomHandles?: boolean
   readonly managedText?: boolean
+  readonly showPopoverWhileDragging?: boolean
+  readonly popoverRelative?: boolean
   readonly color?: string
   readonly paintPreview?: boolean
   readonly onPreview?: (range: Range) => void
@@ -126,7 +130,7 @@ export function EngineSelectionControls({
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     return () => observer.disconnect()
-  }, [children, dragging, rects.length])
+  }, [children, dragging, rects.length, popoverRelative])
   useLayoutEffect(() => {
     if (!pdfHandles) return
     for (const element of Object.values(handleElements.current)) {
@@ -371,10 +375,27 @@ export function EngineSelectionControls({
       if (pdfHandles && isSelectionPointerMoveTextHit(event)) return
       move(event)
     }
-    const down = () => {
+    const down = (event: PointerEvent) => {
       // A fresh down is a new gesture, including WebKit's reused mouse ID.
       // Recover a session whose terminal pointer event never reached us.
-      if (drag.current) finish()
+      const active = drag.current
+      if (!active) return
+      if (
+        showPopoverWhileDragging &&
+        event.target instanceof Node &&
+        popup.current?.contains(event.target)
+      ) {
+        // Publish the current preview before a second pointer uses the menu.
+        // Its confirmation callback must see these endpoints, not the draft
+        // from the start of the still-active drag.
+        finish({
+          type: 'pointerup',
+          pointerId: active.pointer,
+          clientX: active.clientX,
+          clientY: active.clientY,
+          preventDefault: () => {}
+        })
+      } else finish()
     }
     const touchStart = (event: TouchEvent) => {
       const active = drag.current
@@ -476,7 +497,14 @@ export function EngineSelectionControls({
       finish()
       stopScroll()
     }
-  }, [containerRef, range, pdfTouch, managedText, pdfHandles])
+  }, [
+    containerRef,
+    range,
+    pdfTouch,
+    managedText,
+    pdfHandles,
+    showPopoverWhileDragging
+  ])
   useLayoutEffect(() => {
     if (previewRange.current?.owner !== range) previewRange.current = null
     if (!range) {
@@ -561,6 +589,7 @@ export function EngineSelectionControls({
   const handleLabels = pdfTouch
     ? { start: '拖动以调整选区起点', end: '拖动以调整选区终点' }
     : { start: '调整高亮起点', end: '调整高亮终点' }
+  const popupContainer = popoverRelative ? containerRef.current : document.body
   return createPortal(
     <>
       {(pdfTouch || managedText) && paintPreview && (
@@ -589,42 +618,46 @@ export function EngineSelectionControls({
           />
         </svg>
       )}
-      {!dragging && children && (
-        <div
-          ref={popup}
-          className='hsn-selection-popover hamster-reader__engine-popover'
-          data-pdf-touch={pdfTouch ? 'true' : undefined}
-          style={{
-            position: 'fixed',
-            left: x,
-            top: y,
-            maxWidth: width,
-            maxHeight: height,
-            overflow: 'auto',
-            boxSizing: 'border-box',
-            transform: 'none',
-            margin: 0,
-            zIndex: 10000
-          }}
-          onPointerDownCapture={(event) => {
-            popupPointerTarget.current = event.target as Node
-          }}
-          onClickCapture={(event) => {
-            // Touch confirmation can replace its button before the synthesized click.
-            if (
-              popupPointerTarget.current &&
-              !popupPointerTarget.current.isConnected
-            ) {
-              event.preventDefault()
-              event.stopPropagation()
-            }
-            popupPointerTarget.current = null
-          }}
-          onPointerDown={(event) => event.preventDefault()}
-        >
-          {children}
-        </div>
-      )}
+      {(!dragging || showPopoverWhileDragging) &&
+        children &&
+        popupContainer &&
+        createPortal(
+          <div
+            ref={popup}
+            className='hsn-selection-popover hamster-reader__engine-popover'
+            data-pdf-touch={pdfTouch ? 'true' : undefined}
+            style={{
+              position: popoverRelative ? 'absolute' : 'fixed',
+              left: popoverRelative ? x - (box?.left ?? 0) : x,
+              top: popoverRelative ? y - (box?.top ?? 0) : y,
+              maxWidth: width,
+              maxHeight: height,
+              overflow: 'auto',
+              boxSizing: 'border-box',
+              transform: 'none',
+              margin: 0,
+              zIndex: 10000
+            }}
+            onPointerDownCapture={(event) => {
+              popupPointerTarget.current = event.target as Node
+            }}
+            onClickCapture={(event) => {
+              // Touch confirmation can replace its button before the synthesized click.
+              if (
+                popupPointerTarget.current &&
+                !popupPointerTarget.current.isConnected
+              ) {
+                event.preventDefault()
+                event.stopPropagation()
+              }
+              popupPointerTarget.current = null
+            }}
+            onPointerDown={(event) => event.preventDefault()}
+          >
+            {children}
+          </div>,
+          popupContainer
+        )}
       {showHandles &&
         [false, true]
           .filter((physicalEnd) => {

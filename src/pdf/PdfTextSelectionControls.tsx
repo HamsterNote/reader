@@ -3,7 +3,7 @@ import type {
   LinkedSelectionRange,
   SelectionEndpoint
 } from '@hamster-note/selection'
-import { useEffect, useRef } from 'react'
+import { type ReactNode, useEffect, useRef } from 'react'
 import { EngineSelectionControls } from '../components/EngineSelectionControls'
 import { textCaretAtPoint } from '../components/selection/textCaretAtPoint'
 
@@ -52,6 +52,8 @@ export function PdfTextSelectionControls({
   root,
   data,
   color,
+  children,
+  popoverRelative,
   onDraft,
   onUpdate,
   onEditingChange
@@ -59,6 +61,8 @@ export function PdfTextSelectionControls({
   root: HTMLDivElement | null
   data: LinkedSelectionData
   color: string
+  children?: ReactNode
+  popoverRelative?: boolean
   onEditingChange: (editing: boolean) => void
   onDraft: (data: LinkedSelectionData) => void
   onUpdate: (range: LinkedSelectionRange) => void
@@ -182,6 +186,8 @@ export function PdfTextSelectionControls({
       showEnd={!!(root && active && resolve(root, active.end))}
       pdfCustomHandles
       managedText
+      showPopoverWhileDragging
+      popoverRelative={popoverRelative}
       hitTest={(x, y) => {
         if (!root) return null
         const caret = textCaretAtPoint(root.ownerDocument, x, y)
@@ -214,7 +220,7 @@ export function PdfTextSelectionControls({
         else onUpdate(converted)
       }}
     >
-      {null}
+      {children}
     </EngineSelectionControls>
   )
 }

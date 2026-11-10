@@ -3514,26 +3514,32 @@ export function IntermediateDocumentTextViewer(
               const isPopoverOwner =
                 popoverOwnerRuntimeId === null ||
                 popoverOwnerRuntimeId === pageSelectionId
-              const pagePopover = isPopoverOwner ? (
-                <PopoverPortal
-                  containerRef={popoverContainerRef}
-                  selectionKind='selected'
-                  visible={(!isPdf || !showPageBrowser) && !managedTextEditing}
-                  relative={popoverRelative}
-                >
-                  {existingHighlightPopover}
-                </PopoverPortal>
-              ) : undefined
-              const pageSelectionPopover = isPopoverOwner ? (
-                <PopoverPortal
-                  containerRef={popoverContainerRef}
-                  selectionKind='active'
-                  visible={(!isPdf || !showPageBrowser) && !managedTextEditing}
-                  relative={popoverRelative}
-                >
-                  {selectionPopover}
-                </PopoverPortal>
-              ) : undefined
+              const pagePopover =
+                !isPdf && isPopoverOwner ? (
+                  <PopoverPortal
+                    containerRef={popoverContainerRef}
+                    selectionKind='selected'
+                    visible={
+                      (!isPdf || !showPageBrowser) && !managedTextEditing
+                    }
+                    relative={popoverRelative}
+                  >
+                    {existingHighlightPopover}
+                  </PopoverPortal>
+                ) : undefined
+              const pageSelectionPopover =
+                !isPdf && isPopoverOwner ? (
+                  <PopoverPortal
+                    containerRef={popoverContainerRef}
+                    selectionKind='active'
+                    visible={
+                      (!isPdf || !showPageBrowser) && !managedTextEditing
+                    }
+                    relative={popoverRelative}
+                  >
+                    {selectionPopover}
+                  </PopoverPortal>
+                ) : undefined
               return (
                 <div
                   key={virtualItem.key}
@@ -3636,6 +3642,7 @@ export function IntermediateDocumentTextViewer(
           root={viewerRootElement}
           data={runtimeLinkedData}
           color={highlightColor ?? '#ffc107'}
+          popoverRelative={popoverRelative}
           onEditingChange={(editing) => {
             if (editing) {
               // The dependency keeps its own native draft even after the DOM
@@ -3655,7 +3662,11 @@ export function IntermediateDocumentTextViewer(
           }}
           onDraft={handlePageLinkedDataChange}
           onUpdate={handleLinkedUpdateRange}
-        />
+        >
+          {runtimeLinkedData.activeRange
+            ? selectionPopover
+            : existingHighlightPopover}
+        </PdfTextSelectionControls>
       )}
     </RangeMagnifierProvider>
   )
