@@ -10,6 +10,24 @@ import {
   pdfHandleScrollVelocity
 } from './selection/pdfHandleDrag'
 
+// The preview lens measured ~7.5px closer to the pointer than PDF Text.
+// Lift only its layout anchor; sampling and selection retain their coordinates.
+const PDF_MAGNIFIER_LIFT_PX = 8
+
+function magnifierLayoutPoint(
+  point: { clientX: number; clientY: number },
+  pdfHandles: boolean
+) {
+  if (!pdfHandles) return point
+  return {
+    ...point,
+    lensPoint: {
+      clientX: point.clientX,
+      clientY: point.clientY - PDF_MAGNIFIER_LIFT_PX
+    }
+  }
+}
+
 function magnifierPoint(range: Range, end: boolean) {
   const rects = rangeViewportRects(range, true)
   const rect = end ? rects.at(-1) : rects[0]
@@ -251,7 +269,7 @@ export function EngineSelectionControls({
         callbacks.current.onPreview?.(next)
         const point = magnifierPoint(next, active.movingEnd)
         if (point)
-          callbacks.current.magnifier?.move(point, {
+          callbacks.current.magnifier?.move(magnifierLayoutPoint(point, true), {
             range: next,
             end: active.movingEnd,
             color
@@ -269,7 +287,10 @@ export function EngineSelectionControls({
       }
       const clientX = active.clientX + active.offsetX
       const clientY = active.clientY + active.offsetY
-      if (!pdfTouch) callbacks.current.magnifier?.move({ clientX, clientY })
+      if (!pdfTouch)
+        callbacks.current.magnifier?.move(
+          magnifierLayoutPoint({ clientX, clientY }, pdfHandles)
+        )
       const doc = active.original.startContainer.ownerDocument
       if (
         !doc ||
@@ -641,10 +662,13 @@ export function EngineSelectionControls({
                       : null
                     magnifier?.start(
                       body,
-                      point ?? {
-                        clientX: event.clientX,
-                        clientY: event.clientY
-                      },
+                      magnifierLayoutPoint(
+                        point ?? {
+                          clientX: event.clientX,
+                          clientY: event.clientY
+                        },
+                        pdfHandles
+                      ),
                       pdfTouch ? { range: current, end, color } : undefined
                     )
                   }

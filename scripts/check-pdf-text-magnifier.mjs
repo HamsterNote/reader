@@ -150,6 +150,19 @@ try {
         }
       })
     }
+    if (side === 'end') {
+      for (const delta of [200, 220]) {
+        const point = { x: origin.x, y: origin.y + delta }
+        await page.mouse.move(point.x, point.y)
+        const box = await lens.boundingBox()
+        results.push({
+          mode: 'Text clearance',
+          point,
+          bottomGap: point.y - box.y - box.height,
+          offset
+        })
+      }
+    }
     await page.mouse.up()
     await lens.waitFor({ state: 'hidden' })
     await page.evaluate(() => {
@@ -192,6 +205,12 @@ try {
       document.querySelector('[data-testid="tool-bottom-bar-layout-zoom"]')
         ?.textContent === '50%'
   )
+  await page.evaluate(async () => {
+    await document.fonts.ready
+    await new Promise((done) =>
+      requestAnimationFrame(() => requestAnimationFrame(done))
+    )
+  })
   const selectionBox = await page.evaluate(() => {
     const text = document.querySelector(
       '.textLayer [data-selection-start-offset]'
@@ -258,6 +277,70 @@ try {
   }
   await page.mouse.up()
   await lens.waitFor({ state: 'hidden' })
+  const handleBox = await page
+    .locator('button[data-pdf-handle-hit-target="end"]')
+    .boundingBox()
+  const corner = {
+    x: handleBox.x + handleBox.width / 2 + 9,
+    y: handleBox.y + handleBox.height / 2 + 9
+  }
+  await page.mouse.move(corner.x, corner.y)
+  await page.mouse.down()
+  for (const delta of [200, 220]) {
+    const point = { x: corner.x, y: corner.y + delta }
+    await page.mouse.move(point.x, point.y)
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done))
+        )
+    )
+    const box = await lens.boundingBox()
+    results.push({
+      mode: 'PDF clearance',
+      point,
+      bottomGap: point.y - box.y - box.height
+    })
+  }
+  // Exercise the preview's own edge rules with the lifted anchor.
+  const rootBox = await page
+    .locator('.hamster-reader__engine-viewer')
+    .boundingBox()
+  for (const side of ['left', 'right']) {
+    const point = {
+      x: side === 'left' ? rootBox.x + 1 : rootBox.x + rootBox.width - 1,
+      y: rootBox.y + 40
+    }
+    await page.mouse.move(point.x, point.y)
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done))
+        )
+    )
+    const box = await lens.boundingBox()
+    const edge =
+      side === 'left'
+        ? box.x - rootBox.x
+        : rootBox.x + rootBox.width - box.x - box.width
+    assert.ok(Math.abs(edge - 8) < 0.1, JSON.stringify({ side, box, rootBox }))
+    assert.equal(await lens.getAttribute('data-placement'), 'below')
+    results.push({ mode: 'PDF edge', side, point, box, placement: 'below' })
+  }
+  await page.mouse.up()
+  await lens.waitFor({ state: 'hidden' })
+  const textClearance = results.filter(
+    (result) => result.mode === 'Text clearance'
+  )
+  const pdfClearance = results.filter(
+    (result) => result.mode === 'PDF clearance'
+  )
+  for (let index = 0; index < textClearance.length; index++)
+    assert.ok(
+      Math.abs(textClearance[index].bottomGap - pdfClearance[index].bottomGap) <
+        1,
+      JSON.stringify({ text: textClearance[index], pdf: pdfClearance[index] })
+    )
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ platform: 'Chromium mouse', results }, null, 2))
 } finally {

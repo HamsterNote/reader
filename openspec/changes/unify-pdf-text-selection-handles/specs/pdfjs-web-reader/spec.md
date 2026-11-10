@@ -149,6 +149,20 @@ PDF Text 拖动手柄时，放大镜 MUST 在镜像文字的当前插入位置�
 - **WHEN** 用户从 PDF Text 手柄中心或热区角落拖动，命中文字中心、另一行或快照边缘
 - **THEN** 插入线与镜像中的实际字符间隙一致，坐标随缩放和裁剪变化，释放或取消后不遗留标记
 
+### Requirement: PDF preview magnifier vertical clearance
+
+PDF Layout 的放大镜 SHALL 在自己的布局锚点增加向上 8 CSS px 的垂直避让，以接近 Text 已验收的镜片到指针距离。该偏移 MUST 仅影响镜片布局，保留 Layout 既有的采样、标记、选区命中、左右钳制和上下翻转规则；Text 生产代码及其六点布局与采样基线 MUST 不变。
+
+#### Scenario: Compare preview and Text pointer clearance
+
+- **WHEN** 在 Chromium 鼠标回归中，从终点热区圆心外各 9px 抓取，再向下拖动 200/220px，使镜片位于指针上方，预览使用 50% 缩放
+- **THEN** Text 镜片底边到指针约 50.52px，预览由 43px 增至 51px，差值小于 1px；Text 原六点的镜片、采样及标记结果不变，预览对照采样没有新增纵向偏移
+
+#### Scenario: Retain preview edge placement
+
+- **WHEN** PDF Layout 的布局锚点靠近左右或上方边缘，鼠标或触摸仍在拖动手柄
+- **THEN** 仅预览的布局锚点上移，镜片继续由原有定位算法左右钳制、上方空间不足时翻到下方；偏移不混入采样和选区坐标
+
 ### Requirement: PDF selection overlays track scrolling in the same frame
 
 PDF Layout 滚动正文时，页内高亮和自绘手柄 SHALL 与对应文字保持同步，不出现固定手柄比高亮晚一帧的可见错位。实现可以保留 body fixed portal，但滚动捕获和每帧重测 MUST 在绘制前提交最新坐标；不得因此改变正常阅读滚动、拖选事务或其他格式布局。

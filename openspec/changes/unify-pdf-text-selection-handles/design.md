@@ -66,13 +66,19 @@ Reader 的 PDF Text 分支此前直接使用 selection 库镜片，不在 `Engin
 
 `resolveMagnifierSnapshotPoint` 使用与 canvas 绘制相同的 `sourceRect`、缩放及 clamp，把采样点换算到镜片坐标。标记用百分比定位以匹配白边内实际 114px 画布，避免直接套 120px 逻辑坐标产生约 3px 偏差。插入线宽 2px，高度按 caret 行高放大；其他格式仍使用原圆点标记。
 
-PDF Text 将镜片布局与采样分开：`MagnifierPoint.clientX/clientY` 是鼠标、笔或触摸的物理指针，供快照与标记使用；可选 `lensPoint` 沿用抓取点到库端点的纠偏坐标，仅用于原有镜片位置、18px 间距、上下避让和边缘约束。镜片不放到指针上。快照仍按既有规则限制源裁剪区域。选择层派发的纠偏 pointermove 不得再次覆盖物理采样点，选区命中和保存继续走原纠偏协议。其他格式和 Layout 的镜片行为保持原样。此定义按用户澄清取代上一轮镜心贴指针的方案。
+PDF Text 将镜片布局与采样分开：`MagnifierPoint.clientX/clientY` 是鼠标、笔或触摸的物理指针，供快照与标记使用；可选 `lensPoint` 沿用抓取点到库端点的纠偏坐标，仅用于原有镜片位置、18px 间距、上下避让和边缘约束。镜片不放到指针上。快照仍按既有规则限制源裁剪区域。选择层派发的纠偏 pointermove 不得再次覆盖物理采样点，选区命中和保存继续走原纠偏协议。其他格式的镜片行为保持原样；Layout 后续仅调整第 9 节的垂直布局距离。此定义按用户澄清取代上一轮镜心贴指针的方案。
 
 ### 8. 滚动保留 fixed portal，但消除一帧 React 等待
 
 实测机制为：页内高亮位于 `.hamster-reader__pdf-overlay` 的 absolute 层；手柄在 body fixed portal，并由 rAF 重测 Range。6px/帧连续滚动时，高亮相对文字新增偏差为 0，手柄则稳定落后一帧、约 6px。
 
 不迁移到滚动容器内图层，避免裁剪、stacking context 和 iframe 坐标改造。滚动捕获时先按 delta 临时 transform，并提交当前 Range 矩形；既有 rAF 还通过手柄 ref 直接写入最新 fixed `left/top`，在绘制前完成位置更新，React 状态提交后恢复 transform 基准。实测 30 个有效滚动样本的新增错位帧由 29 降为 0，高亮保持 0。
+
+### 9. PDF 预览单独增加垂直避让
+
+Chromium 鼠标从终点热区圆心外各 9px 抓取，再向下拖动 200/220px：Text 镜片底边到物理指针均为 50.515625px，50% 缩放的 PDF 预览为 43px。差值来自两种模式不同的端点布局/纠偏路径，不能直接比较共享的 18px 间距。
+
+仅在 `EngineSelectionControls` 的 PDF 路径设置 `lensPoint.y = clientY - PDF_MAGNIFIER_LIFT_PX`，显式常量为 8 CSS px。start、桌面 move 和触摸 publish 均使用同一布局转换，原采样点、命中、保存及预览自身左右钳制/上下翻转算法不变。Text 生产文件与共享几何不改。相同样本中预览距离变为 51px，与 Text 相差约 0.48px；该常量为屏幕像素避让，不声明任意字号、抓取偏移、缩放下两模式距离严格相等。采样三点仍约为指针偏移 `(-0.0102,0)` px，Text 原六点完整结果前后相同。
 
 ## Risks / Trade-offs
 
