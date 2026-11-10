@@ -29,6 +29,7 @@ import type {
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
   Ref,
@@ -601,12 +602,15 @@ function resolveTextRangeTargetPageNumber(
 
 function useTouchTapSelection(
   runtimeLinkedDataRef: React.MutableRefObject<LinkedSelectionData>,
-  handlePageLinkedSelectRange: (id: string | null) => void
+  handlePageLinkedSelectRange: (id: string | null) => void,
+  managedTouchClicks: boolean
 ) {
   const touchTapStartRef = useRef<TouchTapStart | null>(null)
+  const touchClickRef = useRef<{ x: number; y: number } | null>(null)
 
   const handleTouchPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      touchClickRef.current = null
       if (shouldIgnoreTouchPointerDown(event)) {
         touchTapStartRef.current = null
         return
@@ -661,6 +665,7 @@ function useTouchTapSelection(
         return
       }
 
+      touchClickRef.current = { x: event.clientX, y: event.clientY }
       const linkedData = runtimeLinkedDataRef.current
       const selectionContainers = Array.from(
         event.currentTarget.querySelectorAll<HTMLElement>(
@@ -694,13 +699,33 @@ function useTouchTapSelection(
 
   const handleTouchPointerCancel = useCallback(() => {
     touchTapStartRef.current = null
+    touchClickRef.current = null
   }, [])
+
+  const handleTouchClickCapture = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      const point = touchClickRef.current
+      touchClickRef.current = null
+      // The touch tap was already handled on pointerup. The dependency's
+      // following click would toggle that same highlight a second time.
+      if (
+        point &&
+        Math.abs(event.clientX - point.x) <= 4 &&
+        Math.abs(event.clientY - point.y) <= 4
+      )
+        event.preventDefault()
+    },
+    []
+  )
 
   return {
     handleTouchPointerDown,
     handleTouchPointerMove,
     handleTouchPointerUp,
-    handleTouchPointerCancel
+    handleTouchPointerCancel,
+    handleTouchClickCapture: managedTouchClicks
+      ? handleTouchClickCapture
+      : undefined
   }
 }
 
@@ -2649,7 +2674,7 @@ export function IntermediateDocumentTextViewer(
   )
 
   const handleLinkedDataChange = useCallback(
-    (next: LinkedSelectionData) => {
+    (next: LinkedSelectionData, updatedRangeId?: string) => {
       const runtimePublicLinkedData = mapRuntimeLinkedDataToPublic(
         next,
         scopeId
@@ -2662,7 +2687,11 @@ export function IntermediateDocumentTextViewer(
       const activeRangeId = runtimePublicLinkedData.activeRange?.id
       const convertedItems = runtimePublicLinkedData.items.flatMap((range) => {
         const existingRange = existingRanges.get(range.id)
-        if (existingRange && range.id !== activeRangeId)
+        if (
+          existingRange &&
+          range.id !== activeRangeId &&
+          range.id !== updatedRangeId
+        )
           return getSelectionGroup(storedRangesRef.current, existingRange.id)
         return toTextRanges(range)
       })
@@ -2852,12 +2881,36 @@ export function IntermediateDocumentTextViewer(
     [handleLinkedSelectRange, handlePageLinkedDataChange]
   )
 
+  const handleManagedPdfTextUpdateRange = useCallback(
+    (range: LinkedSelectionRange) => {
+      const current = runtimeLinkedDataRef.current
+      const next = {
+        ...current,
+        items: current.items.map((item) =>
+          item.id === range.id ? range : item
+        )
+      }
+      // Match linked selection's saved-edit contract: publish the full
+      // snapshot as well as the update notification. Otherwise controlled
+      // hosts keep the old endpoints behind the temporary handle preview.
+      runtimeLinkedDataRef.current = next
+      handleLinkedDataChange(next, range.id)
+      handleLinkedUpdateRange(range)
+    },
+    [handleLinkedDataChange, handleLinkedUpdateRange]
+  )
+
   const {
     handleTouchPointerDown,
     handleTouchPointerMove,
     handleTouchPointerUp,
-    handleTouchPointerCancel
-  } = useTouchTapSelection(runtimeLinkedDataRef, handlePageLinkedSelectRange)
+    handleTouchPointerCancel,
+    handleTouchClickCapture
+  } = useTouchTapSelection(
+    runtimeLinkedDataRef,
+    handlePageLinkedSelectRange,
+    isPdf
+  )
 
   const { highlightSelection } = useSelectionHighlight(
     pageNumbers,
@@ -3515,6 +3568,7 @@ export function IntermediateDocumentTextViewer(
           onPointerMoveCapture={handleViewerPointerMove}
           onPointerUpCapture={handleViewerPointerUp}
           onPointerCancelCapture={handleViewerPointerCancel}
+          onClickCapture={handleTouchClickCapture}
         >
           {/* 内部 spacer：高度 = 虚拟化器累计总高度（inline），CSS 提供 position:relative */}
           <div
@@ -3677,7 +3731,7 @@ export function IntermediateDocumentTextViewer(
             setManagedTextEditing(editing)
           }}
           onDraft={handlePageLinkedDataChange}
-          onUpdate={handleLinkedUpdateRange}
+          onUpdate={handleManagedPdfTextUpdateRange}
         >
           {managedTextPopover(
             Boolean(runtimeLinkedData.activeRange),

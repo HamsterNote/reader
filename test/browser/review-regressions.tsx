@@ -1,4 +1,4 @@
-import { createRef, type ComponentProps } from 'react'
+import { createRef, useCallback, useState, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { IntermediatePage, TextDir } from '@hamster-note/types'
@@ -19,6 +19,38 @@ const root = createRoot(document.getElementById('root')!)
 const selection = createRef<ReaderSelectionRef>()
 type Props = ComponentProps<typeof Reader>
 let props: Props
+let controlledAnnotations = false
+function RegressionReader({ readerProps }: { readerProps: Props }) {
+  const [annotations, setAnnotations] = useState<{
+    ranges: ReaderSelectionRange[]
+    selectedRangeId: string | null
+  }>({ ranges: [], selectedRangeId: null })
+  const onLinkedDataChange = useCallback<
+    NonNullable<Props['onLinkedDataChange']>
+  >(
+    (next) => {
+      readerProps.onLinkedDataChange?.(next)
+      setAnnotations({
+        ranges: next.items,
+        selectedRangeId: next.selectedRangeId
+      })
+    },
+    [readerProps.onLinkedDataChange]
+  )
+  const onSelectRange = useCallback((selectedRangeId: string | null) => {
+    setAnnotations((current) => ({ ...current, selectedRangeId }))
+  }, [])
+  if (!controlledAnnotations) return <Reader {...readerProps} />
+  return (
+    <Reader
+      {...readerProps}
+      ranges={annotations.ranges}
+      selectedRangeId={annotations.selectedRangeId}
+      onLinkedDataChange={onLinkedDataChange}
+      onSelectRange={onSelectRange}
+    />
+  )
+}
 let dispose = async () => {}
 const state = {
   ranges: [] as ReaderSelectionRange[],
@@ -35,7 +67,7 @@ function render() {
   flushSync(() =>
     root.render(
       <div style={{ height: '100vh' }}>
-        <Reader {...props} />
+        <RegressionReader readerProps={props} />
       </div>
     )
   )
@@ -47,7 +79,12 @@ const api = {
   get document() {
     return props.document
   },
-  async open(format: 'pdf' | 'epub', bytes: number[], initial: Props = {}) {
+  async open(
+    format: 'pdf' | 'epub',
+    bytes: number[],
+    initial: Props = {},
+    controlled = false
+  ) {
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     )
@@ -124,6 +161,7 @@ const api = {
       },
       ...initial
     }
+    controlledAnnotations = controlled
     render()
   },
   pdfCaretTextAtPoint(x: number, y: number, nearest = false) {
