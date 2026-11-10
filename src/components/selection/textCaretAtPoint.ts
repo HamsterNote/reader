@@ -1,18 +1,22 @@
-/** Resolve the actual point through our visible handles. Making them inert
- * only for hit testing preserves their DOM, appearance and pointer capture. */
+/** Resolve the text beneath reader controls, including menus over lower lines.
+ * Only the synchronous caret query ignores them; menus remain interactive. */
 export function textCaretAtPoint(
   doc: Document,
   x: number,
   y: number
 ): Range | null {
-  const handles = Array.from(
+  const controls = Array.from(
     doc.querySelectorAll<HTMLElement>(
-      '.hamster-reader__engine-handle, .hsn-selection-handle, .hsn-selection-overlay, .hsn-selection-overlay *, .hsn-selection-percent-overlay, .hsn-selection-percent-overlay *'
+      '.hamster-reader__engine-handle, .hsn-selection-handle, .hsn-selection-overlay, .hsn-selection-overlay *, .hsn-selection-percent-overlay, .hsn-selection-percent-overlay *, .hsn-selection-popover, .hsn-selection-popover *, .hamster-reader__engine-popover, .hamster-reader__engine-popover *'
     )
   )
-  const previous = handles.map((handle) => handle.style.pointerEvents)
-  handles.forEach((handle) => {
-    handle.style.pointerEvents = 'none'
+  const previous = controls.map(({ style }) => ({
+    value: style.getPropertyValue('pointer-events'),
+    priority: style.getPropertyPriority('pointer-events')
+  }))
+  controls.forEach(({ style }) => {
+    // Descendants can explicitly opt back in, including with !important.
+    style.setProperty('pointer-events', 'none', 'important')
   })
   try {
     const caretDoc = doc as Document & {
@@ -31,8 +35,10 @@ export function textCaretAtPoint(
     }
     return caretDoc.caretRangeFromPoint?.(x, y) ?? null
   } finally {
-    handles.forEach((handle, index) => {
-      handle.style.pointerEvents = previous[index]
+    controls.forEach(({ style }, index) => {
+      const { value, priority } = previous[index]
+      if (value) style.setProperty('pointer-events', value, priority)
+      else style.removeProperty('pointer-events')
     })
   }
 }

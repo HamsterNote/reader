@@ -30,3 +30,18 @@ node scripts/check-pdf-text-release.mjs
 Linux WebKit 如缺少运行库，可通过 `WEBKIT_EXECUTABLE_PATH` 指定兼容的 Playwright MiniBrowser 包装脚本。本机 iOS 工具调用报 `spawn xcrun ENOENT`，因此 iOS 模拟器、WKWebView 和真机长按/原生拖动仍需设备复验，不能用浏览器合成拖动结果代替。
 
 设备复验步骤：PDF 文字模式高亮 → 点空白 → 点该高亮 → 分别拖起点/终点并松手 → 点空白 → 再点同一高亮；检查只保留调整后的高亮、无残留手柄、再次点选端点准确。补验缩短范围、跨行和再次拖动，以及草稿确认/取消。放大镜尺寸和放置策略属于 HAM-217，本次未调整。
+
+## 向下跨行被菜单遮挡（设备复验补修）
+
+设备发现第二行已有高亮 `51..68` 向第三、四行拖动后仍回退。根因与设备推断一致：`textCaretAtPoint` 原先只临时排除手柄和高亮覆盖层，原生 caret 查询会命中浮动菜单的“背景颜色设置”等文字；`PdfTextSelectionControls` 的内容归属校验因此返回 null，拖动被标为无效并在松手时回滚。修复前浏览器实际复现了菜单文字命中，以及向第三行拖动预览未下移的失败断言。
+
+现在查询同时临时排除两类 popover 及其后代，使用 `pointer-events: none !important` 覆盖子节点显式启用命中的情况。`finally` 恢复每个节点原来的属性值和优先级；原来无内联属性则移除。改动仅覆盖同步字符查询，保留拖动中菜单确认能力，不改变范围校验或放大镜参数。
+
+新增 `scripts/check-pdf-text-cross-line.mjs`：真实 PDF.js 四行文本、完整快照驱动的受控宿主，第二行 `51..68` 分别拖向第三、四行，fixed/relative 菜单、已有高亮/草稿、释放/取消/拖动中确认，共 20 组。测试把真实菜单文字定位到目标字符上，并先断言原生 caret 确实命中菜单。Chromium 和 Linux WebKit 各 20 组通过；释放后终点分别为 111/154，每次已有高亮只更新一次；取消保留 68，属性不变，取消选中后 0 手柄/0 预览，重选端点误差小于 1 CSS px。菜单查询后恢复 `auto !important`，草稿拖动中通过 trusted tap 确认。WebKit 测试点放在文字框下部，避开旧终点手柄的 40px 触摸区域；测试菜单关闭入场动画以固定遮挡条件。
+
+```sh
+READER_BROWSER_ENGINE=chromium node scripts/check-pdf-text-cross-line.mjs
+node scripts/check-pdf-text-cross-line.mjs
+```
+
+报告：`test-results/pdf-text-cross-line/chromium.json`、`webkit.json`。新增单测覆盖两种 caret API、无命中及查询异常后的样式恢复；与 PDF Text、共享手柄相关单测合计 170 项通过。原有 PDF Text 释放/取消/确认回归两引擎各 40 组、共享 Chromium touch/mouse/pen 矩阵 36 组、WebKit EPUB 4 组复跑通过；`yarn typecheck`、`yarn lint`、`yarn build:lib` 通过。浏览器持续拖动仍为合成事件，不能替代设备长按和原生拖动；本轮修复需 Mac 操作员重点复验向第三、四行拖动松手，以及菜单仍可确认。
