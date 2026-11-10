@@ -13,18 +13,23 @@ vi.mock('html2canvas', () => ({ default: html2canvasMock }))
 interface HarnessProps {
   readonly children: ReactNode
   readonly pageClassName?: string
+  readonly pdfText?: boolean
 }
 
 const Harness = ({
   children,
-  pageClassName = 'hamster-reader__intermediate-page'
+  pageClassName = 'hamster-reader__intermediate-page',
+  pdfText = false
 }: HarnessProps) => {
   const [viewerRoot, setViewerRoot] = useState<HTMLDivElement | null>(null)
 
   return (
     <div ref={setViewerRoot} data-testid='viewer-root'>
-      <RangeMagnifierProvider rootElement={viewerRoot}>
-        <TextSelectionMagnifier viewerRootElement={viewerRoot} />
+      <RangeMagnifierProvider rootElement={viewerRoot} pdfText={pdfText}>
+        <TextSelectionMagnifier
+          viewerRootElement={viewerRoot}
+          pdfText={pdfText}
+        />
         <div className={pageClassName}>{children}</div>
       </RangeMagnifierProvider>
     </div>
@@ -94,8 +99,7 @@ describe('text selection handle magnifier', () => {
     // Then: the viewer-owned session follows the pointer until that drag ends.
     expect(magnifier).not.toHaveAttribute('hidden')
     expect(magnifier).toHaveStyle({ left: '85px', top: '117px' })
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 17 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 17 })
     expect(magnifier).toHaveAttribute('hidden')
   })
 
@@ -132,8 +136,7 @@ describe('text selection handle magnifier', () => {
     // Then: the class transition does not interrupt the shared magnifier session.
     expect(magnifier).not.toHaveAttribute('hidden')
     expect(magnifier).toHaveStyle({ left: '90px', top: '122px' })
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 23 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 23 })
     expect(magnifier).toHaveAttribute('hidden')
   })
 
@@ -172,3 +175,27 @@ describe('text selection handle magnifier', () => {
     )
   })
 })
+
+it.each(['mouse', 'pen', ''])(
+  'does not open the legacy text entry for %s',
+  (pointerType) => {
+    renderHarness(
+      <TextHandle className='hsn-selection-handle hsn-selection-handle--start' />
+    )
+    const { handle } = prepareGeometry()
+    fireEvent.pointerDown(handle, {
+      pointerId: 31,
+      pointerType,
+      clientX: 105,
+      clientY: 135
+    })
+    fireEvent.pointerMove(document, {
+      pointerId: 31,
+      pointerType,
+      clientX: 120,
+      clientY: 150
+    })
+    expect(screen.getByTestId('range-magnifier')).toHaveAttribute('hidden')
+    expect(html2canvasMock).not.toHaveBeenCalled()
+  }
+)

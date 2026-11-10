@@ -206,7 +206,9 @@
     contain: strict;
     pointer-events: none;
 
-    &[hidden] { display: none; }
+    &[hidden] {
+      display: none;
+    }
 
     canvas {
       display: block;
@@ -231,9 +233,18 @@
         transform: translateX(-50%);
         transition: none;
 
-        &[hidden] { display: none; }
+        &[hidden] {
+          display: none;
+        }
       }
     }
+  }
+
+  &__range-magnifier-marker[data-caret='true'] {
+    width: 2px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   &__range-magnifier-text {
@@ -2480,3 +2491,12 @@
   }
 }
 
+// The stable preview owns the target while editing; historical highlights stay.
+.hamster-reader__managed-text-editing {
+  .hsn-selection-rect--active,
+  .hsn-selection-rect--selected,
+  .hsn-selection-percent-rect-active,
+  .hsn-selection-percent-rect-selected {
+    visibility: hidden;
+  }
+}

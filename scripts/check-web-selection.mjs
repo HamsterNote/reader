@@ -1,4 +1,5 @@
 import { createServer } from 'vite'
+import { checkSharedSelectionInteraction } from './check-shared-selection-interaction.mjs'
 import { checkPdfSelectionPaint } from './check-pdf-selection-paint.mjs'
 import { checkPdfMobileSelection } from './check-pdf-mobile-selection.mjs'
 import { checkPdfContinuousSelection } from './check-pdf-continuous-selection.mjs'
@@ -553,8 +554,12 @@ async function pdfToolRestoration(page, file, original, name) {
     )
     return sheet
   }
-  const start = page.getByRole('button', { name: /(?:拖动以调整选区|调整高亮)起点/ })
-  const end = page.getByRole('button', { name: /(?:拖动以调整选区|调整高亮)终点/ })
+  const start = page.getByRole('button', {
+    name: /(?:拖动以调整选区|调整高亮)起点/
+  })
+  const end = page.getByRole('button', {
+    name: /(?:拖动以调整选区|调整高亮)终点/
+  })
   const clickText = async (sheet) => {
     const annotation = sheet.locator('[data-range-id]').first()
     await annotation.scrollIntoViewIfNeeded()
@@ -830,6 +835,9 @@ try {
       await pdfAnnotationEditing(resolve(process.env.READER_ORIGINAL_PDF), true)
     }
     await epubNavigation(await tocFixture())
+    results.push(
+      await checkSharedSelectionInteraction({ browser, base, output })
+    )
   }
   await writeFile(
     resolve(output, 'report.json'),

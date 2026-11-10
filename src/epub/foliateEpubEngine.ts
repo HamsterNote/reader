@@ -389,7 +389,8 @@ export const createEpubEngine = (
         continue
       inputCleanups.get(oldDoc)?.()
       inputCleanups.delete(oldDoc)
-      if (managedSelection?.startContainer.ownerDocument === oldDoc) managedSelection = null
+      if (managedSelection?.startContainer.ownerDocument === oldDoc)
+        managedSelection = null
       options.onDocumentUnload?.(oldDoc)
       for (let i = docListeners.length - 1; i >= 0; i--) {
         const [owner, type, listener] = docListeners[i]
@@ -453,7 +454,9 @@ export const createEpubEngine = (
       }
     }
     inputCleanups.set(doc, buttonOnlyInput(doc))
-    const resetManagedSelection = () => { managedSelection = null }
+    const resetManagedSelection = () => {
+      managedSelection = null
+    }
     doc.addEventListener('pointerdown', resetManagedSelection, true)
     docListeners.push([doc, 'pointerdown', resetManagedSelection])
     doc.addEventListener('selectionchange', onSelectionChange)
@@ -596,7 +599,8 @@ export const createEpubEngine = (
   const serializeCurrentSelection = (): SerializedSelection | null => {
     if (destroyed || !compat) return null
     for (const [chapterIndex, doc] of liveDocs) {
-      if (managedSelection?.startContainer.ownerDocument === doc) return compat.serializeRange(chapterIndex, managedSelection)
+      if (managedSelection?.startContainer.ownerDocument === doc)
+        return compat.serializeRange(chapterIndex, managedSelection)
       const selection = doc.getSelection()
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
         continue
@@ -1225,7 +1229,10 @@ export const createEpubEngine = (
     },
     setSelectionRange: (range) => {
       managedSelection = range?.cloneRange() ?? null
-      if (managedSelection) managedSelection.startContainer.ownerDocument?.getSelection()?.removeAllRanges()
+      if (managedSelection)
+        managedSelection.startContainer.ownerDocument
+          ?.getSelection()
+          ?.removeAllRanges()
     },
     getSelectionRange: () => {
       if (managedSelection?.startContainer.isConnected) return managedSelection

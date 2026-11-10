@@ -11,8 +11,19 @@ import {
   useState
 } from 'react'
 import { createPortal } from 'react-dom'
-import { renderFlowMagnifierText, clearFlowMagnifierText } from './flowMagnifierText'
-import { projectInsertionMarker, TEXT_LENS_BORDER_PX, TEXT_LENS_DISTANCE_PX, TEXT_LENS_SIZE_PX, TEXT_LENS_MAGNIFICATION, TEXT_LENS_MARKER_WIDTH_PX, usesTouchMagnifier } from './selectionInteraction'
+import {
+  renderFlowMagnifierText,
+  clearFlowMagnifierText
+} from './flowMagnifierText'
+import {
+  projectInsertionMarker,
+  TEXT_LENS_BORDER_PX,
+  TEXT_LENS_DISTANCE_PX,
+  TEXT_LENS_SIZE_PX,
+  TEXT_LENS_MAGNIFICATION,
+  TEXT_LENS_MARKER_WIDTH_PX,
+  usesTouchMagnifier
+} from './selectionInteraction'
 import { magnifierCaptureSource } from './magnifierCaptureSource'
 import {
   clearPdfMagnifierText,
@@ -33,7 +44,8 @@ const SNAPSHOT_DEBOUNCE_MS = 100
 export type { MagnifierPoint } from './rangeMagnifierGeometry'
 export {
   resolveMagnifierPosition,
-  resolveMagnifierSourceRect
+  resolveMagnifierSourceRect,
+  resolveMagnifierSnapshotPoint
 } from './rangeMagnifierGeometry'
 
 interface RangeMagnifierController {
@@ -53,6 +65,7 @@ interface RangeMagnifierProviderProps {
   readonly enabled?: boolean
   readonly rootElement: HTMLElement | null
   readonly source?: unknown
+  readonly pdfText?: boolean
 }
 
 const RangeMagnifierContext = createContext<RangeMagnifierController | null>(
@@ -72,7 +85,10 @@ export const RangeMagnifierProvider = ({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textRef = useRef<HTMLDivElement>(null)
   const setTextElement = useCallback((element: HTMLDivElement | null) => {
-    if (textRef.current) { clearPdfMagnifierText(textRef.current); clearFlowMagnifierText(textRef.current) }
+    if (textRef.current) {
+      clearPdfMagnifierText(textRef.current)
+      clearFlowMagnifierText(textRef.current)
+    }
     textRef.current = element
   }, [])
   const markerRef = useRef<HTMLSpanElement>(null)
@@ -109,7 +125,10 @@ export const RangeMagnifierProvider = ({
     snapshotRef.current = null
     pointRef.current = null
     textSessionRef.current = null
-    if (textRef.current) { clearPdfMagnifierText(textRef.current); clearFlowMagnifierText(textRef.current) }
+    if (textRef.current) {
+      clearPdfMagnifierText(textRef.current)
+      clearFlowMagnifierText(textRef.current)
+    }
     if (lensRef.current) lensRef.current.hidden = true
   }, [])
 
@@ -181,10 +200,20 @@ export const RangeMagnifierProvider = ({
       pointRef.current = point
       if (textSessionRef.current && pdf) textSessionRef.current.focus = pdf
       const box = rootElement.getBoundingClientRect()
-      const rootBox = new DOMRect(Math.max(0, box.left), Math.max(0, box.top),
+      const rootBox = new DOMRect(
+        Math.max(0, box.left),
+        Math.max(0, box.top),
         Math.max(0, Math.min(innerWidth, box.right) - Math.max(0, box.left)),
-        Math.max(0, Math.min(innerHeight, box.bottom) - Math.max(0, box.top)))
-      const relative = resolveMagnifierPosition(point, rootBox, textSessionRef.current ? TEXT_LENS_SIZE_PX : SNAPSHOT_LENS_SIZE_PX, textSessionRef.current ? TEXT_LENS_DISTANCE_PX : SNAPSHOT_LENS_DISTANCE_PX)
+        Math.max(0, Math.min(innerHeight, box.bottom) - Math.max(0, box.top))
+      )
+      const relative = resolveMagnifierPosition(
+        point,
+        rootBox,
+        textSessionRef.current ? TEXT_LENS_SIZE_PX : SNAPSHOT_LENS_SIZE_PX,
+        textSessionRef.current
+          ? TEXT_LENS_DISTANCE_PX
+          : SNAPSHOT_LENS_DISTANCE_PX
+      )
       const position = { ...relative }
       if (textSessionRef.current) {
         // Managed handles and the text lens share a fixed stacking context.
@@ -192,12 +221,16 @@ export const RangeMagnifierProvider = ({
         position.top += rootBox.top
         if (textRef.current) {
           const renderer = textSessionRef.current.source.matches('.pdfViewer')
-            ? renderPdfMagnifierText : renderFlowMagnifierText
+            ? renderPdfMagnifierText
+            : renderFlowMagnifierText
           renderer(textRef.current, textSessionRef.current.source, point)
         }
         if (markerRef.current) {
           const marker = markerRef.current
-          const projection = projectInsertionMarker(textSessionRef.current.focus, point)
+          const projection = projectInsertionMarker(
+            textSessionRef.current.focus,
+            point
+          )
           marker.hidden = !projection
           marker.style.backgroundColor = textSessionRef.current.focus.color
           if (projection) {
@@ -222,9 +255,17 @@ export const RangeMagnifierProvider = ({
   )
 
   const start = useCallback(
-    (source: HTMLElement, point: MagnifierPoint, pdf?: PdfMagnifierFocus, pointerType?: string) => {
+    (
+      source: HTMLElement,
+      point: MagnifierPoint,
+      pdf?: PdfMagnifierFocus,
+      pointerType?: string
+    ) => {
       const lens = lensRef.current
-      if (pdf && (!enabled || !usesTouchMagnifier(pointerType ?? ""))) { end(); return }
+      if (pdf && (!enabled || !usesTouchMagnifier(pointerType ?? ''))) {
+        end()
+        return
+      }
       pointRef.current = point
       if (pdf && lens) {
         end()
@@ -293,7 +334,16 @@ export const RangeMagnifierProvider = ({
               data-text={textMode ? 'true' : undefined}
               data-testid='range-magnifier'
               aria-hidden='true'
-              style={textMode ? { width: TEXT_LENS_SIZE_PX, height: TEXT_LENS_SIZE_PX, outline: `${TEXT_LENS_BORDER_PX}px solid white`, outlineOffset: -TEXT_LENS_BORDER_PX } : undefined}
+              style={
+                textMode
+                  ? {
+                      width: TEXT_LENS_SIZE_PX,
+                      height: TEXT_LENS_SIZE_PX,
+                      outline: `${TEXT_LENS_BORDER_PX}px solid white`,
+                      outlineOffset: -TEXT_LENS_BORDER_PX
+                    }
+                  : undefined
+              }
               hidden
             >
               <canvas ref={canvasRef} hidden={textMode} />
@@ -305,7 +355,9 @@ export const RangeMagnifierProvider = ({
               />
               <span
                 ref={markerRef}
-                style={textMode ? { width: TEXT_LENS_MARKER_WIDTH_PX } : undefined}
+                style={
+                  textMode ? { width: TEXT_LENS_MARKER_WIDTH_PX } : undefined
+                }
                 className='hamster-reader__range-magnifier-marker'
               />
             </div>,

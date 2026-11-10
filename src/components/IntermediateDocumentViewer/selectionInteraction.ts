@@ -36,13 +36,21 @@ export function insertionRect(focus: TextMagnifierFocus): DOMRect | null {
     caret.setStart(node, before ? offset - 1 : offset)
     caret.setEnd(node, before ? offset : offset + 1)
     rect = Array.from(caret.getClientRects()).find((box) => box.height > 0)
-    const rtl = node.parentElement?.ownerDocument.defaultView
-      ?.getComputedStyle(node.parentElement).direction === 'rtl'
+    const rtl =
+      node.parentElement?.ownerDocument.defaultView?.getComputedStyle(
+        node.parentElement
+      ).direction === 'rtl'
     x = before !== rtl ? rect?.right : rect?.left
   }
   if (!rect || x === undefined) return null
-  const frame = node.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect()
-  return new DOMRect(x + (frame?.left ?? 0), rect.top + (frame?.top ?? 0), 0, rect.height)
+  const frame =
+    node.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect()
+  return new DOMRect(
+    x + (frame?.left ?? 0),
+    rect.top + (frame?.top ?? 0),
+    0,
+    rect.height
+  )
 }
 
 export function projectInsertionMarker(
@@ -51,10 +59,18 @@ export function projectInsertionMarker(
 ): { left: number; top: number; height: number } | null {
   const rect = insertionRect(focus)
   if (!rect) return null
-  const left = TEXT_LENS_SIZE_PX / 2 + (rect.left - point.clientX) * TEXT_LENS_MAGNIFICATION
-  const top = TEXT_LENS_SIZE_PX / 2 + (rect.top - point.clientY) * TEXT_LENS_MAGNIFICATION
+  const left =
+    TEXT_LENS_SIZE_PX / 2 +
+    (rect.left - point.clientX) * TEXT_LENS_MAGNIFICATION
+  const top =
+    TEXT_LENS_SIZE_PX / 2 + (rect.top - point.clientY) * TEXT_LENS_MAGNIFICATION
   const height = rect.height * TEXT_LENS_MAGNIFICATION
-  if (left < 0 || left > TEXT_LENS_SIZE_PX || top >= TEXT_LENS_SIZE_PX || top + height <= 0)
+  if (
+    left < 0 ||
+    left > TEXT_LENS_SIZE_PX ||
+    top >= TEXT_LENS_SIZE_PX ||
+    top + height <= 0
+  )
     return null
   return { left, top, height }
 }

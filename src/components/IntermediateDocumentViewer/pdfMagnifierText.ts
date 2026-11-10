@@ -1,5 +1,9 @@
 import type { MagnifierPoint } from './rangeMagnifierGeometry'
-import { TEXT_LENS_SIZE_PX, TEXT_LENS_MAGNIFICATION, type TextMagnifierFocus } from './selectionInteraction'
+import {
+  TEXT_LENS_SIZE_PX,
+  TEXT_LENS_MAGNIFICATION,
+  type TextMagnifierFocus
+} from './selectionInteraction'
 
 export type PdfMagnifierFocus = TextMagnifierFocus
 
@@ -77,7 +81,11 @@ export function renderPdfMagnifierText(
       layer.closest<HTMLElement>('.page')?.style.display === 'none'
     )
       continue
-    const key = `${rect.width}:${rect.height}:${layer.textContent}:${Array.from(layer.querySelectorAll<HTMLElement>('span')).map(span => span.getAttribute('style')).join(';')}:${layer.getAttribute('style')}`
+    const key = `${rect.width}:${rect.height}:${layer.textContent}:${Array.from(
+      layer.querySelectorAll<HTMLElement>('span')
+    )
+      .map((span) => span.getAttribute('style'))
+      .join(';')}:${layer.getAttribute('style')}`
     const cached = previous?.get(layer)
     const copy = cached?.key === key ? cached.copy : copyText(layer)
     next.set(layer, { key, copy })

@@ -1,9 +1,21 @@
 import type { MagnifierPoint } from './rangeMagnifierGeometry'
-import { TEXT_LENS_MAGNIFICATION, TEXT_LENS_SIZE_PX } from './selectionInteraction'
+import {
+  TEXT_LENS_MAGNIFICATION,
+  TEXT_LENS_SIZE_PX
+} from './selectionInteraction'
 
 const FONT_PROPERTIES = [
-  'font-family', 'font-size', 'font-weight', 'font-style', 'font-stretch',
-  'font-variant', 'font-feature-settings', 'font-kerning', 'letter-spacing', 'word-spacing', 'direction'
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'font-stretch',
+  'font-variant',
+  'font-feature-settings',
+  'font-kerning',
+  'letter-spacing',
+  'word-spacing',
+  'direction'
 ]
 interface GlyphCopy {
   copy: HTMLElement
@@ -50,19 +62,35 @@ export function renderFlowMagnifierText(
   while ((node = walker.nextNode())) {
     const text = node as Text
     const parent = text.parentElement
-    if (!parent || !text.data.trim() || parent.closest(
-      'script, style, noscript, svg, button, [aria-hidden="true"], .hsn-selection-overlay, .hsn-selection-handle, .hsn-selection-popover, .hamster-reader__range-magnifier'
-    )) continue
+    if (
+      !parent ||
+      !text.data.trim() ||
+      parent.closest(
+        'script, style, noscript, svg, button, [aria-hidden="true"], .hsn-selection-overlay, .hsn-selection-handle, .hsn-selection-popover, .hamster-reader__range-magnifier'
+      )
+    )
+      continue
     const rect = parent.getBoundingClientRect()
-    if (!rect.width || !rect.height || rect.right < x - radius || rect.left > x + radius || rect.bottom < y - radius || rect.top > y + radius) continue
+    if (
+      !rect.width ||
+      !rect.height ||
+      rect.right < x - radius ||
+      rect.left > x + radius ||
+      rect.bottom < y - radius ||
+      rect.top > y + radius
+    )
+      continue
     const computed = doc.defaultView!.getComputedStyle(parent)
-    if (computed.visibility === 'hidden' || computed.display === 'none') continue
-    const font = FONT_PROPERTIES.map(property => computed.getPropertyValue(property))
+    if (computed.visibility === 'hidden' || computed.display === 'none')
+      continue
+    const font = FONT_PROPERTIES.map((property) =>
+      computed.getPropertyValue(property)
+    )
     // Translation is applied below; dimensions/font/content invalidate glyph geometry.
     const key = `${fontGeneration(doc)}:${rect.width}:${rect.height}:${font.join(':')}:${text.data}`
     let entry = previous.get(text)
     if (entry?.key !== key) {
-      entry?.glyphs.forEach(glyph => glyph.copy.remove())
+      entry?.glyphs.forEach((glyph) => glyph.copy.remove())
       entry = { key, glyphs: [] }
       const range = doc.createRange()
       let offset = 0
@@ -74,9 +102,16 @@ export function renderFlowMagnifierText(
         const box = range.getBoundingClientRect()
         if (!box.height) continue
         const previousLine = entry.glyphs.at(-1)
-        if (previousLine && previousBox && Math.abs(box.top - previousBox.top) < 0.5 &&
+        if (
+          previousLine &&
+          previousBox &&
+          Math.abs(box.top - previousBox.top) < 0.5 &&
           Math.abs(box.height - previousBox.height) < 0.5 &&
-          Math.min(Math.abs(box.left - previousBox.right), Math.abs(box.right - previousBox.left)) < parseFloat(computed.fontSize)) {
+          Math.min(
+            Math.abs(box.left - previousBox.right),
+            Math.abs(box.right - previousBox.left)
+          ) < parseFloat(computed.fontSize)
+        ) {
           previousLine.copy.textContent += character
           previousLine.left = Math.min(previousLine.left, box.left - rect.left)
           previousBox = box
@@ -85,10 +120,17 @@ export function renderFlowMagnifierText(
         previousBox = box
         const copy = output.ownerDocument.createElement('span')
         copy.textContent = character
-        copy.style.cssText = 'all:initial;position:absolute;color:#111;background:transparent;white-space:pre;pointer-events:none;user-select:none;'
-        FONT_PROPERTIES.forEach((property, i) => copy.style.setProperty(property, font[i]))
+        copy.style.cssText =
+          'all:initial;position:absolute;color:#111;background:transparent;white-space:pre;pointer-events:none;user-select:none;'
+        FONT_PROPERTIES.forEach((property, i) =>
+          copy.style.setProperty(property, font[i])
+        )
         copy.style.lineHeight = `${box.height}px`
-        entry.glyphs.push({ copy, left: box.left - rect.left, top: box.top - rect.top })
+        entry.glyphs.push({
+          copy,
+          left: box.left - rect.left,
+          top: box.top - rect.top
+        })
       }
     }
     next.set(text, entry)
@@ -99,6 +141,6 @@ export function renderFlowMagnifierText(
     }
   }
   for (const [text, entry] of previous)
-    if (!next.has(text)) entry.glyphs.forEach(glyph => glyph.copy.remove())
+    if (!next.has(text)) entry.glyphs.forEach((glyph) => glyph.copy.remove())
   caches.set(output, next)
 }

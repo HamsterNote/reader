@@ -70,7 +70,8 @@ export function combinePdfTextSelectionGroups(
     if (visited.has(range.id)) return []
     const members = getSelectionGroup(ranges, range.id)
     members.forEach((member) => visited.add(member.id))
-    if (members.length < 2) return [range]
+    // Every persisted range carries canonical offsets, including a single
+    // highlight. Selection and its handles always consume current DOM offsets.
     const first = members[0]!
     const last = members.at(-1)!
     const start = pdfCanonicalEndpointToDom(first.start, 'start', root)

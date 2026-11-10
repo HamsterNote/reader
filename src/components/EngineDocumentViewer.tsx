@@ -199,8 +199,6 @@ function sameEndpoints(
   )
 }
 
-
-
 function enginePageNumbers(pageCount: number, props: Props) {
   return getVisiblePageNumbers(
     Array.from({ length: pageCount }, (_, index) => index + 1),
@@ -1694,19 +1692,25 @@ export function EngineDocumentViewer(props: Props) {
           showHandles
           managedText={!pdfTouch}
           pdfTouch={pdfTouch}
+          pdfCustomHandles={source?.format === 'pdf'}
           color={current?.markerStyle?.backgroundColor ?? props.highlightColor}
           paintPreview={getSelectionGroup(ranges, selected).length <= 1}
           onPreview={(range) => {
             if (epub.current) epub.current.setSelectionRange(range)
             else pdf.current?.setSelectionRange(range, pdfTouch)
           }}
-          hitTest={(x, y) => pdf.current?.hitTestSelection(x, y) ?? null}
+          hitTest={
+            source?.format === 'pdf'
+              ? (x, y) => pdf.current?.hitTestSelection(x, y) ?? null
+              : undefined
+          }
           showStart={endpointVisible(current, source?.format, epubPage, false)}
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
           onEditingChange={(value) => {
             if (rangeActionToken !== rangeActionGeneration.current) return
             editing.current = value
-            if (value && epub.current && nativeRange) epub.current.setSelectionRange(nativeRange)
+            if (value && epub.current && nativeRange)
+              epub.current.setSelectionRange(nativeRange)
           }}
           onUpdate={(range, end) => {
             const active = activeText.current

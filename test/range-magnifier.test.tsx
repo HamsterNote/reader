@@ -9,6 +9,7 @@ import { RangeHandle } from '../src/components/IntermediateDocumentViewer/RangeH
 import {
   RangeMagnifierProvider,
   resolveMagnifierPosition,
+  resolveMagnifierSnapshotPoint,
   resolveMagnifierSourceRect
 } from '../src/components/IntermediateDocumentViewer/RangeMagnifier'
 import { mockElementSize } from './setup'
@@ -144,8 +145,7 @@ describe('range magnifier', () => {
     })
     expect(magnifier).toHaveStyle({ left: '85px', top: '117px' })
 
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 7 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 7 })
     expect(magnifier).toHaveAttribute('hidden')
 
     unmount()
@@ -198,8 +198,7 @@ describe('range magnifier', () => {
     // Then: unmounting the drag owner releases the lens and document listeners.
     expect(magnifier).toHaveAttribute('hidden')
     expect(magnifier).toHaveStyle({ left: '75px', top: '107px' })
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 9 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 9 })
     expect(magnifier).toHaveAttribute('hidden')
 
     unmount()
@@ -236,13 +235,11 @@ describe('range magnifier', () => {
     const magnifier = screen.getByTestId('range-magnifier')
 
     // When: another active pointer ends before the drag-owning pointer.
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 12 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 12 })
 
     // Then: only pointer 11 can end this drag session.
     expect(magnifier).not.toHaveAttribute('hidden')
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 11 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 11 })
     expect(magnifier).toHaveAttribute('hidden')
 
     unmount()
@@ -296,4 +293,26 @@ describe('range magnifier', () => {
     removeListenerSpy.mockRestore()
     portalHost.remove()
   })
+})
+
+it('maps insertion points through snapshot scale and edge clamping', () => {
+  const canvas = document.createElement('canvas')
+  canvas.width = 400
+  canvas.height = 400
+  const snapshot = { canvas, sourceRect: new DOMRect(30, 40, 200, 300) }
+  const center = resolveMagnifierSnapshotPoint(snapshot, {
+    clientX: 100,
+    clientY: 130
+  })
+  expect(center).not.toBeNull()
+  expect(center!.x).toBeCloseTo(60)
+  expect(center!.y).toBeCloseTo(60)
+
+  const clamped = resolveMagnifierSnapshotPoint(snapshot, {
+    clientX: 32,
+    clientY: 45
+  })
+  expect(clamped).not.toBeNull()
+  expect(clamped!.x).toBeCloseTo(4)
+  expect(clamped!.y).toBeCloseTo(10)
 })

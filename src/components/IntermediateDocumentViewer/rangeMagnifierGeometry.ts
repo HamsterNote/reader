@@ -12,6 +12,8 @@ export const SNAPSHOT_LENS_DISTANCE_PX = 78
 export interface MagnifierPoint {
   readonly clientX: number
   readonly clientY: number
+  /** Optional layout anchor; clientX/clientY always identify sampled content. */
+  readonly lensPoint?: { readonly clientX: number; readonly clientY: number }
 }
 
 interface MagnifierPosition {
@@ -60,6 +62,24 @@ export const resolveMagnifierSourceRect = (
   }
 }
 
+export const resolveMagnifierSnapshotPoint = (
+  snapshot: MagnifierSnapshot,
+  point: MagnifierPoint
+): { x: number; y: number } | null => {
+  const source = resolveMagnifierSourceRect(snapshot, point)
+  if (source.width <= 0 || source.height <= 0) return null
+  const scaleX = snapshot.canvas.width / snapshot.sourceRect.width
+  const scaleY = snapshot.canvas.height / snapshot.sourceRect.height
+  return {
+    x:
+      ((point.clientX - snapshot.sourceRect.left) * scaleX - source.x) *
+      (SNAPSHOT_LENS_SIZE_PX / source.width),
+    y:
+      ((point.clientY - snapshot.sourceRect.top) * scaleY - source.y) *
+      (SNAPSHOT_LENS_SIZE_PX / source.height)
+  }
+}
+
 export const resolveMagnifierPosition = (
   point: MagnifierPoint,
   rootRect: DOMRect,
@@ -68,27 +88,23 @@ export const resolveMagnifierPosition = (
 ): MagnifierPosition => {
   const relativeX = point.clientX - rootRect.left
   const relativeY = point.clientY - rootRect.top
-  const edgeX = Math.min(MAGNIFIER_EDGE_GAP_PX, Math.max(0, (rootRect.width - size) / 2))
-  const edgeY = Math.min(MAGNIFIER_EDGE_GAP_PX, Math.max(0, (rootRect.height - size) / 2))
-  const maximumLeft = Math.max(
-    edgeX,
-    rootRect.width - size - edgeX
+  const edgeX = Math.min(
+    MAGNIFIER_EDGE_GAP_PX,
+    Math.max(0, (rootRect.width - size) / 2)
   )
-  const maximumTop = Math.max(
-    edgeY,
-    rootRect.height - size - edgeY
+  const edgeY = Math.min(
+    MAGNIFIER_EDGE_GAP_PX,
+    Math.max(0, (rootRect.height - size) / 2)
   )
+  const maximumLeft = Math.max(edgeX, rootRect.width - size - edgeX)
+  const maximumTop = Math.max(edgeY, rootRect.height - size - edgeY)
   const aboveTop = relativeY - distance - size / 2
   const placement = aboveTop >= edgeY ? 'above' : 'below'
   const desiredTop =
     placement === 'above' ? aboveTop : relativeY + distance - size / 2
 
   return {
-    left: clamp(
-      relativeX - size / 2,
-      edgeX,
-      maximumLeft
-    ),
+    left: clamp(relativeX - size / 2, edgeX, maximumLeft),
     top: clamp(desiredTop, edgeY, maximumTop),
     placement
   }

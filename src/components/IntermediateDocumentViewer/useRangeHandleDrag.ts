@@ -22,6 +22,10 @@ interface RangeHandleDragOptions {
   readonly correctPointerCoordinates: boolean
   readonly magnifierEnabled: boolean
   readonly viewerRoot?: HTMLElement | null
+  readonly pointerTarget?: {
+    readonly clientX: number
+    readonly clientY: number
+  }
 }
 
 const activeDragSessions = new WeakMap<Document, ActiveRangeHandleDragSession>()
@@ -30,9 +34,10 @@ const handledPointerDownEvents = new WeakSet<PointerEvent>()
 const copyPointerEvent = (
   event: PointerEvent,
   clientX: number,
-  clientY: number
+  clientY: number,
+  type = event.type
 ): PointerEvent =>
-  new PointerEvent(event.type, {
+  new PointerEvent(type, {
     bubbles: true,
     cancelable: true,
     composed: true,
@@ -65,7 +70,8 @@ export const useRangeHandleDrag = ({
   circleRef,
   correctPointerCoordinates,
   magnifierEnabled,
-  viewerRoot
+  viewerRoot,
+  pointerTarget
 }: RangeHandleDragOptions): ((event: PointerEvent) => void) => {
   const magnifier = useRangeMagnifier()
   const activeMagnifier = magnifierEnabled ? magnifier : null
@@ -89,10 +95,19 @@ export const useRangeHandleDrag = ({
 
       // Text hit tests use the actual pointer; rectangle grabs keep their offset.
       const circleRect = circle.getBoundingClientRect()
-      const isText = !circle.dataset.rectId && !circle.classList.contains('hsn-selection-handle-rect')
-      const offsetX = isText ? 0 : circleRect.left + circleRect.width / 2 - event.clientX
-      const offsetY = isText ? 0 : circleRect.top + circleRect.height / 2 - event.clientY
-      const sessionMagnifier = !isText || usesTouchMagnifier(event.pointerType) ? activeMagnifier : null
+      const isText =
+        !circle.dataset.rectId &&
+        !circle.classList.contains('hsn-selection-handle-rect')
+      const offsetX = isText
+        ? 0
+        : circleRect.left + circleRect.width / 2 - event.clientX
+      const offsetY = isText
+        ? 0
+        : circleRect.top + circleRect.height / 2 - event.clientY
+      const sessionMagnifier =
+        !isText || usesTouchMagnifier(event.pointerType)
+          ? activeMagnifier
+          : null
       const forwardedEvents = new WeakSet<PointerEvent>()
       let pointerCorrectionActive = correctPointerCoordinates
       let dragFinished = false
@@ -148,7 +163,22 @@ export const useRangeHandleDrag = ({
         }
       }
       const finishPointerDrag = (terminalEvent: PointerEvent) => {
-        if (terminalEvent.pointerId === event.pointerId) finishDrag()
+        if (terminalEvent.pointerId !== event.pointerId) return
+        if (
+          terminalEvent.type === 'pointerup' &&
+          pointerTarget &&
+          correctPointerCoordinates
+        ) {
+          correctPointerMove(
+            copyPointerEvent(
+              terminalEvent,
+              terminalEvent.clientX,
+              terminalEvent.clientY,
+              'pointermove'
+            )
+          )
+        }
+        finishDrag()
       }
       const correctPointerMove = (moveEvent: PointerEvent) => {
         if (
@@ -158,6 +188,8 @@ export const useRangeHandleDrag = ({
           return
         }
 
+        const correctedClientX = moveEvent.clientX + offsetX
+        const correctedClientY = moveEvent.clientY + offsetY
         const selectionRoot =
           circle.closest<HTMLElement>(
             '.hamster-reader__intermediate-document-viewer'
@@ -165,8 +197,8 @@ export const useRangeHandleDrag = ({
         if (
           !selectionRoot ||
           !isPointOnSelectionText(
-            moveEvent.clientX,
-            moveEvent.clientY,
+            pointerTarget ? correctedClientX : moveEvent.clientX,
+            pointerTarget ? correctedClientY : moveEvent.clientY,
             selectionRoot,
             ownerDocument
           )
@@ -180,8 +212,8 @@ export const useRangeHandleDrag = ({
         moveEvent.stopImmediatePropagation()
         const correctedEvent = copyPointerEvent(
           moveEvent,
-          moveEvent.clientX + offsetX,
-          moveEvent.clientY + offsetY
+          correctedClientX,
+          correctedClientY
         )
         markSelectionPointerMoveAsTextHit(correctedEvent)
         forwardedEvents.add(correctedEvent)
@@ -206,7 +238,13 @@ export const useRangeHandleDrag = ({
       ownerDocument.defaultView?.addEventListener('blur', finishDrag)
       activeDragSessions.set(ownerDocument, session)
     },
-    [activeMagnifier, circleRef, correctPointerCoordinates, viewerRoot]
+    [
+      activeMagnifier,
+      circleRef,
+      correctPointerCoordinates,
+      pointerTarget,
+      viewerRoot
+    ]
   )
 
   useLayoutEffect(() => {

@@ -94,8 +94,7 @@ describe('range magnifier event ordering', () => {
     expect(screen.getByTestId('range-magnifier')).not.toHaveAttribute('hidden')
 
     page.replaceChild(originalHandle, currentHandle)
-    fireEvent.pointerUp(document, { pointerType: 'touch',
-      pointerId: 17 })
+    fireEvent.pointerUp(document, { pointerType: 'touch', pointerId: 17 })
     unmount()
     portalHost.remove()
   })

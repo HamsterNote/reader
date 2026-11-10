@@ -9,6 +9,7 @@ interface ActiveTextHandleDrag {
 
 interface TextSelectionMagnifierProps {
   readonly viewerRootElement: HTMLElement | null
+  readonly pdfText?: boolean
 }
 
 /**
@@ -16,7 +17,8 @@ interface TextSelectionMagnifierProps {
  * 因此放大镜会话由稳定的 viewer/document 持有，而不是由 handle 组件持有。
  */
 export const TextSelectionMagnifier = ({
-  viewerRootElement
+  viewerRootElement,
+  pdfText = false
 }: TextSelectionMagnifierProps) => {
   const magnifier = useRangeMagnifier()
   const activeDragRef = useRef<ActiveTextHandleDrag | null>(null)
@@ -47,13 +49,19 @@ export const TextSelectionMagnifier = ({
       }
 
       activeDragRef.current = { pointerId: event.pointerId }
-      magnifier.start(handle, { clientX: event.clientX, clientY: event.clientY })
+      magnifier.start(handle, {
+        clientX: event.clientX,
+        clientY: event.clientY
+      })
     }
     const handlePointerMove = (event: PointerEvent) => {
       const activeDrag = activeDragRef.current
       if (!activeDrag || activeDrag.pointerId !== event.pointerId) return
 
-      const point: MagnifierPoint = { clientX: event.clientX, clientY: event.clientY }
+      const point: MagnifierPoint = {
+        clientX: event.clientX,
+        clientY: event.clientY
+      }
       magnifier.move(point)
     }
     const handlePointerEnd = (event: PointerEvent) => {
@@ -74,7 +82,7 @@ export const TextSelectionMagnifier = ({
       ownerDocument.defaultView?.removeEventListener('blur', finishDrag)
       finishDrag()
     }
-  }, [magnifier, viewerRootElement])
+  }, [magnifier, viewerRootElement, pdfText])
 
   return null
 }
