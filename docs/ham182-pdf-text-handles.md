@@ -12,7 +12,7 @@ yarn typecheck
 node scripts/check-pdf-text-handles.mjs
 yarn build:webview
 yarn verify:webview
-openspec validate unify-pdf-text-selection-handles --strict --json
+openspec validate pdfjs-web-reader --type spec --strict --json
 ```
 
 浏览器脚本需要 Playwright WebKit 及其系统依赖；可通过 `WEBKIT_EXECUTABLE_PATH` 指定本机浏览器启动器。脚本自动启动并关闭 Vite/浏览器，输出到仓库同级 `ham182-webkit/`。
@@ -97,3 +97,7 @@ Text 原六点的完整位置与采样 JSON 对照保持不变，常规采样相
 最终相关回归 8 文件 / 51 项通过，typecheck、改动文件 ESLint 和 diff 检查通过。草稿与已存高亮共 96 次的采样纵向偏移为 0、横向最大误差约 0.0000061px，捕获与命中检查均通过。本轮未重跑全量。
 
 WebView 构建与 293 个资源校验通过，构建 `9a7555ffcb064ef9`；OpenSpec strict 通过，任务 17/17，等待验收。
+
+## 验收与归档
+
+2026-11-10 用户按验收通过处理 HAM-182。已将变更的 3 条修改与 5 条新增 requirement 同步到 `openspec/specs/pdfjs-web-reader/spec.md`，原变更完整归档至 `openspec/changes/archive/2026-11-10-unify-pdf-text-selection-handles/`。后续三种渲染面的统一交互由 HAM-201 承接，保持独立任务。
