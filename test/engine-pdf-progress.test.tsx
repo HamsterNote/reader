@@ -344,3 +344,28 @@ it('publishes independent safe text notifications while persisting same-page geo
   })
   expect(onText).toHaveBeenLastCalledWith(saved)
 })
+
+it('captures a wheel interaction even when a PDF child stops propagation', async () => {
+  const onProgress = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  const view = render(
+    <EngineDocumentViewer
+      engineSource={source}
+      readingPositionRef={ref}
+      onLayoutReadingProgressChange={onProgress}
+    />
+  )
+  await act(async () => {
+    await state.pdf!.onPagesLoaded!(3)
+  })
+  textReady = true
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).not.toHaveBeenCalled()
+  const child = document.createElement('div')
+  view.container.querySelector('[data-engine="pdf"]')!.append(child)
+  child.addEventListener('wheel', (event) => event.stopPropagation())
+  fireEvent.wheel(child)
+  position = { pageNumber: 1, verticalPercentage: 65 }
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).toHaveBeenLastCalledWith(position)
+})

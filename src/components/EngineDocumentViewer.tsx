@@ -378,7 +378,12 @@ export function EngineDocumentViewer(props: Props) {
     }
     rootElement.addEventListener('keydown', keydown, true)
     rootElement.addEventListener('pointerdown', down, true)
+    rootElement.addEventListener('wheel', down, {
+      capture: true,
+      passive: true
+    })
     return () => {
+      rootElement.removeEventListener('wheel', down, true)
       rootElement.removeEventListener('pointerdown', down, true)
       rootElement.removeEventListener('keydown', keydown, true)
     }
@@ -1284,6 +1289,8 @@ export function EngineDocumentViewer(props: Props) {
           pdf.current?.captureReadingPosition()
         return fallback?.status === 'ready' ? fallback.position : undefined
       },
+      captureModeSwitchResult: () =>
+        pdf.current?.captureModeSwitchPosition?.() ?? { status: 'pending' },
       captureReadingPosition: () => {
         const result =
           epub.current?.captureReadingPosition() ??

@@ -468,6 +468,9 @@ export type ReaderReadingPositionHandle = {
   readonly captureReadingPosition?: () => ReaderBookmark | undefined
   /** Current safe text anchor, or geometry only after text is confirmed absent. */
   readonly captureModeSwitchPosition?: () => ReaderBookmark | undefined
+  readonly captureModeSwitchResult?: () =>
+    | { readonly status: 'ready'; readonly position: ReaderBookmark }
+    | { readonly status: 'pending' | 'failed' }
 }
 
 export type IntermediateDocumentViewerProps = {
