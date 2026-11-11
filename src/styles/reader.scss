@@ -21,22 +21,18 @@
     }
   }
 
-  &__bottom-bar-stack {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 20;
-    height: 64px;
-    pointer-events: none;
+  &__file-surface > .hamster-reader {
+    width: 100%;
+    height: 100%;
+  }
 
-    > * {
-      pointer-events: auto;
-    }
+  &__shared-toolbar button[aria-pressed='true'] {
+    background: var(--hn-color-accent, #7163d9);
+    color: white;
+  }
 
-    &--drawing {
-      height: calc(var(--drawing-toolbar-height, 42px) + 106px);
-    }
+  &__shared-toolbar--pagination[data-toolbar-edge='bottom'] {
+    bottom: var(--reader-toolbar-pagination-bottom, 80px) !important;
   }
 
   // Upload zone

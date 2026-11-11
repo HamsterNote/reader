@@ -1,7 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { DrawingBottomBarStack } from '../src/components/Reader/DefaultBottomBarControls'
+import { DrawingBottomBarControls } from '../src/components/Reader/DefaultBottomBarControls'
 import { createPaintingSettings } from '../src/painting/paintingSettings'
 
 const renderToolbar = (
@@ -10,9 +9,7 @@ const renderToolbar = (
 ) => {
   const paintingSettings = createPaintingSettings()
   render(
-    <DrawingBottomBarStack
-      bottomBarRef={createRef<HTMLDivElement>()}
-      readerToolbar={<div>Reader tools</div>}
+    <DrawingBottomBarControls
       paintingSettings={paintingSettings}
       colors={colors}
       theme='light'
@@ -22,7 +19,7 @@ const renderToolbar = (
   return { onPaintingSettingsChange, paintingSettings }
 }
 
-describe('DrawingBottomBarStack', () => {
+describe('DrawingBottomBarControls', () => {
   it('preserves all brush settings when changing the active tool', () => {
     const onPaintingSettingsChange = vi.fn()
     const { paintingSettings } = renderToolbar(onPaintingSettingsChange)

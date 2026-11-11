@@ -1,6 +1,7 @@
 import { IntermediateDocument, TextDir } from '@hamster-note/types'
 import { openEpubPackage } from '../epub/epubPackage'
 import { buildLegacyEpubModel } from '../epub/legacyEpubModel'
+import { configurePdfJsWorker } from '../pdf/pdfjsRuntime'
 import { PdfDocumentSession } from '../pdf/pdfDocumentSession'
 import { createPdfTextModeDocument } from '../pdf/pdfTextModeDocument'
 import type { ReaderEngineSource } from '../types/engineSource'
@@ -56,6 +57,7 @@ export async function openReaderDocument(
       await pkg.destroy()
     }
   }
+  if (source.workerSrc) configurePdfJsWorker(source.workerSrc)
   const session = await PdfDocumentSession.open(
     { data: source.data.slice() },
     { documentOptions: source.documentOptions }

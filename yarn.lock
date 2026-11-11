@@ -1428,10 +1428,9 @@
     mdast-util-to-markdown "^2.1.2"
     micromark-extension-gfm "^3.0.0"
 
-"@hamster-note/painting@0.8.3":
-  version "0.8.3"
-  resolved "https://registry.npmjs.org/@hamster-note/painting/-/painting-0.8.3.tgz#9384f2de4894fe95cbb29145d86e84484deb54b6"
-  integrity sha512-qzMPiPp1RFo7UYVvnusSM29JOSOWWUSnsUQQDXdqliRwURIP0PW1iMcELQnZBeStlS0NkQr5b0hqeR6hyRLImw==
+"@hamster-note/painting@file:vendor/hamster-note-painting-0.8.4-63abd68.tgz":
+  version "0.8.4"
+  resolved "file:vendor/hamster-note-painting-0.8.4-63abd68.tgz#fb6fde152ec85683222df52d789f2bf400107898"
   dependencies:
     "@hamster-note/components" "0.3.0"
     perfect-freehand "1.2.3"

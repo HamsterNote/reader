@@ -407,7 +407,7 @@ async function run(browserType, mobile, format, version, attack = false) {
       await page.mouse.down()
       await page.mouse.up()
       // Reactivating through the public Page Browser also exercises stored-range navigation.
-      await page.getByRole('button', { name: '页面与标注' }).click()
+      await page.getByRole('button', { name: '目录', exact: true }).click()
       await page.getByRole('tab', { name: '高亮', exact: true }).click()
       await page.getByTestId(`page-browser-highlight-${added.id}`).click()
       await page.getByRole('button', { name: '关闭页面浏览' }).click()

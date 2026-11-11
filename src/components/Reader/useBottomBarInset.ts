@@ -4,6 +4,7 @@ type BottomBarInsetElements = {
   readonly rootRef: RefObject<HTMLDivElement | null>
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
   readonly layoutKey?: string
+  readonly edge?: 'top' | 'bottom'
   readonly enabled: boolean
 }
 
@@ -17,7 +18,8 @@ export function useBottomBarInset({
   rootRef,
   bottomBarRef,
   enabled,
-  layoutKey
+  layoutKey,
+  edge = 'bottom'
 }: BottomBarInsetElements): number {
   const [inset, setInset] = useState(0)
 
@@ -35,11 +37,16 @@ export function useBottomBarInset({
     }
 
     const measure = () => {
-      const nextInset = Math.max(
-        0,
-        root.getBoundingClientRect().bottom -
-          bottomBar.getBoundingClientRect().top
-      )
+      const rootBox = root.getBoundingClientRect()
+      const barBox = bottomBar.getBoundingClientRect()
+      const obstruction =
+        edge === 'top'
+          ? barBox.bottom - rootBox.top
+          : rootBox.bottom - barBox.top
+      const nextInset =
+        barBox.height > 0 && rootBox.height > 0
+          ? Math.max(0, Math.min(rootBox.height, obstruction))
+          : 0
       setInset((currentInset) =>
         currentInset === nextInset ? currentInset : nextInset
       )
@@ -53,7 +60,7 @@ export function useBottomBarInset({
     measure()
 
     return () => observer.disconnect()
-  }, [bottomBarRef, enabled, rootRef, layoutKey])
+  }, [bottomBarRef, enabled, rootRef, layoutKey, edge])
 
   return inset
 }

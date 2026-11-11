@@ -54,6 +54,8 @@ export type WebBridgeOptions = {
 export type WebBridgeClient = {
   readonly start: () => void
   readonly handleMessage: (raw: unknown) => void
+  readonly reportDocumentReady: () => void
+  readonly reportEngineFailure: (error: Error) => void
   readonly sendChange: (data: unknown) => void
   readonly sendProgress: (progress: unknown) => void
   /** 主动重新握手：用于协议错误或 WebView 恢复后的重同步。 */
@@ -378,6 +380,19 @@ export function createWebBridgeClient(
 
   return {
     start,
+    reportDocumentReady: () => {
+      if (!closed) post(buildMessage('document-ready', {}))
+    },
+    reportEngineFailure: (error) => {
+      if (!closed)
+        post(
+          buildMessage('error', {
+            code: 'ENGINE_FAILURE',
+            stage: 'document',
+            message: error.message
+          })
+        )
+    },
     handleMessage,
     sendChange: (data) => {
       enqueue({ type: 'change', payload: data })

@@ -1114,12 +1114,19 @@ export class Paginator extends HTMLElement {
             $style.textContent = style
         } else $style.textContent = styles
 
+        // Keep callbacks scoped to the section that scheduled them (HAM-229).
+        // A document switch can destroy this view before the frame/fonts settle.
+        const view = this.#view
         // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() =>
-            this.#background.style.background = getBackground(this.#view.document))
+        requestAnimationFrame(() => {
+            if (this.#view === view)
+                this.#background.style.background = getBackground(view.document)
+        })
 
         // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
+        view?.document?.fonts?.ready?.then(() => {
+            if (this.#view === view) view.expand()
+        })
     }
     focusView() {
         this.#view.document.defaultView.focus()

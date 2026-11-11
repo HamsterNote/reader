@@ -16,3 +16,12 @@ focus-triggered navigation; `before-reflow` notifies the adapter before viewport
 font or image layout changes; ignore zero-size viewport renders; always release
 the navigation lock after a failed turn. Other consumers retain default gestures.
 The patched hash is recorded in MANIFEST.md and checked by the asset test.
+
+## reader lifecycle patch (HAM-229)
+
+`paginator.js`: `setStyles` captures its section view and checks that identity
+before its animation-frame and fonts-ready callbacks access it. Same-container
+file replacement destroys the old renderer immediately after restore-ready;
+late callbacks must not dereference the destroyed view or mutate a new section.
+The packaged WebView roundtrip browser test covers this teardown path. The
+patched hash is recorded in MANIFEST.md and the asset integrity test.

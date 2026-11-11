@@ -7,7 +7,7 @@ React reader component package for Hamster Note.
 Install the package and its peer dependencies:
 
 ```bash
-yarn add @hamster-note/reader react react-dom
+yarn add @hamster-note/reader @hamster-note/painting@0.8.4 @hamster-note/selection@0.3.0 react react-dom
 ```
 
 ## 使用
@@ -705,3 +705,7 @@ PDF fills cap alpha at 0.35 (preserving lighter fills), including opaque colors 
 Each PDF Layout circle has a concentric 40×40 screen-pixel hit square. Touch previews and copying use an independent managed Range; native selection in the PDF reader and toolbar is suppressed throughout the touch session. Drag release uses the latest pointer position and keeps matching preview geometry until the parent accepts the update.
 
 PDF Layout handles can cross and exchange endpoint roles. Holding a handle near the viewport's top or bottom scrolls with increasing speed toward the edge, extending the selection across pages even when PDF.js recycles older canvases. Selected text layers remain available until the session clears. PDF Layout, EPUB and PDF Text share stable managed text handles and a touch-only 60 CSS px lens, centered 38 CSS px above the finger (below only when the top cannot fit). Hit testing uses the actual pointer without grab offsets. The lens shows cached plain text and a discrete character-boundary caret in the target highlight color; selection changes do not recapture it. PDF Text keeps the Layout handle visual and its offscreen endpoint rules. Text/EPUB keep explicit button pagination. See [HAM-201 validation](docs/ham201-selection-interaction.md). With an existing Vite server, run `READER_BROWSER_URL=http://127.0.0.1:5199 READER_CONTINUOUS_TARGET_PAGE=12 node scripts/check-pdf-continuous-selection.mjs` for the recycling stress check; the standard `check:web-selection` also covers the shorter scenario.
+
+### 文件工具栏与同容器切换（3.0.0）
+
+可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting 精确 peer 版本为 0.8.4；开发归档说明与合并/发布顺序见文档。

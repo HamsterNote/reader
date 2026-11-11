@@ -9,8 +9,7 @@ import type {
   LayeredEditorTool,
   LayeredToolsSnapshot
 } from '@hamster-note/painting/core'
-import type { CSSProperties, ReactNode, RefObject } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 
 import type {
   ReaderAnnotationHistoryStatus,
@@ -104,124 +103,106 @@ const DRAWING_TOOLS: readonly {
   { tool: 'eraser', icon: 'eraser', label: '橡皮擦' }
 ]
 
-type DrawingBottomBarStackProps = {
-  readonly bottomBarRef: RefObject<HTMLDivElement | null>
-  readonly readerToolbar: ReactNode
+type DrawingBottomBarControlsProps = {
   readonly paintingSettings: LayeredToolsSnapshot
   readonly colors: readonly ReaderColorOption[]
   readonly theme: 'light' | 'dark'
   readonly onPaintingSettingsChange: (data: LayeredToolsSnapshot) => void
 }
 
-export function DrawingBottomBarStack(props: DrawingBottomBarStackProps) {
-  const toolbarRef = useRef<HTMLDivElement>(null)
-  const [toolbarHeight, setToolbarHeight] = useState(42)
-  useEffect(() => {
-    const toolbar = toolbarRef.current
-    if (!toolbar) return
-    const observer = new ResizeObserver(([entry]) => {
-      setToolbarHeight(
-        entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height
-      )
-    })
-    observer.observe(toolbar)
-    return () => observer.disconnect()
-  }, [])
+export function DrawingBottomBarControls(props: DrawingBottomBarControlsProps) {
   const paintingColor =
     props.paintingSettings.activeTool === 'freehand'
       ? props.paintingSettings.settings.freehand.color
       : props.paintingSettings.settings.shape.color
 
   return (
-    <div
-      ref={props.bottomBarRef}
-      className='hamster-reader__bottom-bar-stack hamster-reader__bottom-bar-stack--drawing'
-      style={
-        { '--drawing-toolbar-height': `${toolbarHeight}px` } as CSSProperties
-      }
+    <Popover
+      relative
+      style={{
+        position: 'static',
+        transform: 'none',
+        maxWidth: 'calc(100% - 32px)',
+        overflowX: 'auto',
+        pointerEvents: 'auto'
+      }}
+      theme={props.theme}
+      role='toolbar'
+      aria-label='绘图工具'
+      className='hamster-reader__drawing-toolbar'
     >
-      {props.readerToolbar}
-      <Popover
-        ref={toolbarRef}
-        relative
-        theme={props.theme}
-        role='toolbar'
-        aria-label='绘图工具'
-        className='hamster-reader__drawing-toolbar'
-      >
-        {DRAWING_TOOLS.map(({ tool, icon, label }) => (
-          <Button
-            key={tool}
-            type='button'
-            size='small'
-            variant={
-              props.paintingSettings.activeTool === tool ? 'primary' : 'ghost'
+      {DRAWING_TOOLS.map(({ tool, icon, label }) => (
+        <Button
+          key={tool}
+          type='button'
+          size='small'
+          variant={
+            props.paintingSettings.activeTool === tool ? 'primary' : 'ghost'
+          }
+          aria-label={label}
+          aria-pressed={props.paintingSettings.activeTool === tool}
+          onClick={() =>
+            props.onPaintingSettingsChange({
+              ...props.paintingSettings,
+              activeTool: tool
+            })
+          }
+        >
+          <Icon name={icon} />
+        </Button>
+      ))}
+      <PopoverSeparator />
+      <BottomBarColorControls
+        colors={props.colors ?? DEFAULT_BOTTOM_BAR_COLORS}
+        renderMode='drawing'
+        drawingStrokeColor={paintingColor}
+        highlightColor={undefined}
+        onDrawingStrokeColorChange={(color) =>
+          props.onPaintingSettingsChange({
+            ...props.paintingSettings,
+            settings: {
+              freehand: {
+                ...props.paintingSettings.settings.freehand,
+                color
+              },
+              shape: { ...props.paintingSettings.settings.shape, color }
             }
-            aria-label={label}
-            aria-pressed={props.paintingSettings.activeTool === tool}
-            onClick={() =>
-              props.onPaintingSettingsChange({
-                ...props.paintingSettings,
-                activeTool: tool
-              })
-            }
-          >
-            <Icon name={icon} />
-          </Button>
-        ))}
-        <PopoverSeparator />
-        <BottomBarColorControls
-          colors={props.colors ?? DEFAULT_BOTTOM_BAR_COLORS}
-          renderMode='drawing'
-          drawingStrokeColor={paintingColor}
-          highlightColor={undefined}
-          onDrawingStrokeColorChange={(color) =>
+          })
+        }
+        colorAriaLabel={(name) => `绘图${name}颜色`}
+        onHighlightColorChange={undefined}
+      />
+      <PopoverSeparator />
+      <label className='hamster-reader__drawing-stroke-width'>
+        笔宽
+        <input
+          type='number'
+          aria-label='绘图笔宽'
+          min={0.5}
+          max={200}
+          step={0.5}
+          value={
+            props.paintingSettings.activeTool === 'freehand'
+              ? props.paintingSettings.settings.freehand.nominalSize
+              : props.paintingSettings.settings.shape.width
+          }
+          onChange={(event) => {
+            const width = event.target.valueAsNumber
+            if (!Number.isFinite(width) || width <= 0) return
             props.onPaintingSettingsChange({
               ...props.paintingSettings,
               settings: {
                 freehand: {
                   ...props.paintingSettings.settings.freehand,
-                  color
+                  nominalSize: width
                 },
-                shape: { ...props.paintingSettings.settings.shape, color }
+                shape: { ...props.paintingSettings.settings.shape, width }
               }
             })
-          }
-          colorAriaLabel={(name) => `绘图${name}颜色`}
-          onHighlightColorChange={undefined}
+          }}
         />
-        <PopoverSeparator />
-        <label className='hamster-reader__drawing-stroke-width'>
-          笔宽
-          <input
-            type='number'
-            aria-label='绘图笔宽'
-            min={0.5}
-            max={200}
-            step={0.5}
-            value={
-              props.paintingSettings.activeTool === 'freehand'
-                ? props.paintingSettings.settings.freehand.nominalSize
-                : props.paintingSettings.settings.shape.width
-            }
-            onChange={(event) => {
-              const width = event.target.valueAsNumber
-              if (!Number.isFinite(width) || width <= 0) return
-              props.onPaintingSettingsChange({
-                ...props.paintingSettings,
-                settings: {
-                  freehand: {
-                    ...props.paintingSettings.settings.freehand,
-                    nominalSize: width
-                  },
-                  shape: { ...props.paintingSettings.settings.shape, width }
-                }
-              })
-            }}
-          />
-        </label>
-      </Popover>
-    </div>
+      </label>
+    </Popover>
   )
 }
 
