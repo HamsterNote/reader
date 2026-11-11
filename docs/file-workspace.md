@@ -78,4 +78,6 @@ reload 回调为必选。webview 的 open/restore 引擎失败通过带 `stage: 
 
 文字模式回归：`yarn check:workspace` 包含首次打开文字模式、PDF→EPUB→PDF 文字模式往返两条场景；`yarn check:pdf-text-readiness` 对打包 WebView 运行相同位置恢复路径。均断言真实文字栏定位完成、宿主随后提交、没有 reload；另有单元测试覆盖字体等待、加载与布局失败。两份浏览器检查分别需要先完成 lib 与 webview 构建。
 
+PDF 进度及模式切换兼容检查可运行 `READER_PROGRESS_WIDTH=320 READER_PROGRESS_SCALE=1 node scripts/check-reading-progress.mjs`，在窄栏覆盖安全区、文字/无文字页面、Layout/Text 往返与位置恢复。该命令使用浏览器，完整默认矩阵可省略两个环境变量；不运行原生构建或实机验收。
+
 `yarn typecheck`、`yarn lint`、`yarn test:run`、`yarn build:lib`、`yarn pack:check`，以及在构建后运行 `yarn check:workspace`（直接加载 dist）验证 Web 契约；另在 `yarn build:webview`（纯 Web 资产构建）后运行 `yarn check:session-replacement` 验证打包入口的会话替换。浏览器输出在调用者的 artifacts/reader-workspace-browser。旧宿主继续使用 Reader 单文档 props，不需要采用 Workspace。回滚恢复 reader/painting 依赖和入口即可；源文件、批注、组合与持久位置不转换、不删除。
