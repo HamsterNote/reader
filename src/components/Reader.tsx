@@ -1504,7 +1504,6 @@ export function Reader({
   }, [readingPositionNotice, engineSource, document])
 
   useLayoutEffect(() => {
-    if (engineSource?.format !== 'pdf') return
     if (!samePdfModeScope) {
       pendingModeRequest.current = null
       completedModeHandoffRef.current = null
@@ -1512,6 +1511,7 @@ export function Reader({
       setPdfMode({ source: engineSource, document, mode: requestedRenderMode })
       return
     }
+    if (engineSource?.format !== 'pdf') return
     if (requestedRenderMode === resolvedRenderMode) {
       if (pendingModeRequest.current?.external) {
         pendingModeRequest.current = null

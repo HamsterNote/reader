@@ -68,9 +68,11 @@ WebBase 当前 `ReaderEditorPane.tsx` 没有传 `engineSource`，document-only �
 
 - `yarn typecheck`：通过。
 - `yarn test:run test/pdf-mode-handoff.test.tsx test/engine-pdf-progress.test.tsx`：25 项通过。
-- `yarn test:run`：133 个文件、1787 项通过（包含上述新增回归及下述选文回归）。
+- `yarn test:run`：133 个文件、1788 项通过（包含上述新增回归及下述选文回归）。
 - `yarn build:lib`：JS、类型声明、样式通过。
 
 下游真实鼠标 E2E 暴露 PDF Text 首行选中首字符即弹出浮层，挡住后续拖动的回归。`PdfTextSelectionControls` 在原生 `selectingText` 期间隐藏浮层和手柄，松开后展示，避免与原生选区竞争命中。`test/pdf-text-managed-controls.test.tsx` 覆盖拖选中/结束两个阶段；该文件 3 项通过。下游诊断复测中完整鼠标拖选、保存高亮文本包含 PDF、重开后高亮仍在均通过；最终 fresh-build 结果以下游记录为准。
+
+补充 PDF 待互切时同一 Reader 换为非 PDF 的取消回归：scope 清理在格式分支前执行，旧请求不能切换新文件的模式。最终全量与库构建均包含此修正。
 
 WebBase 接线和真实 sidecar 的产品验证证据单独保存在下游 `docs/testing/ham228-pdf-engine.md`；reader 单测通过不等于下游产品验证通过。

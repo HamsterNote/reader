@@ -285,3 +285,21 @@ it('keeps a controlled toolbar source mounted until its owner accepts the reques
   view.rerender(<Reader {...props} renderMode='text' />)
   expect(screen.queryByTestId('pdf-text-target')).not.toBeNull()
 })
+
+it('cancels a pending PDF request when the same Reader changes to a non-PDF document', async () => {
+  state.handoff = undefined
+  const changed = vi.fn()
+  const view = render(
+    <Reader document={document} engineSource={source} onDataChange={changed} />
+  )
+  await act(async () => {})
+  fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+  const replacement = { ...document, id: 'replacement-text' }
+  view.rerender(<Reader document={replacement} onDataChange={changed} />)
+  state.handoff = anchor(72)
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  })
+  expect(changed).not.toHaveBeenCalled()
+  expect(screen.queryByRole('status')).toBeNull()
+})
