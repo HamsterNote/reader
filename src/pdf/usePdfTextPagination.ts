@@ -446,6 +446,7 @@ export function usePdfTextPagination(options: {
       })
     },
     capture: () => committed.current?.anchor,
+    failed: errors.has(target.pageNumber),
     capturePosition: () => {
       if (!current.ready || gate.current) return undefined
       const anchor = current.columns.find(

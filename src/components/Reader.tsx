@@ -37,6 +37,7 @@ import {
   type CSSProperties,
   type ReactNode,
   type Ref,
+  type RefObject,
   lazy,
   Suspense,
   useCallback,
@@ -136,6 +137,64 @@ type ReaderPositionHandoff<T> = {
   readonly document: ReaderDocumentInput
   readonly replacedValueKey: string
   readonly value: T
+}
+
+type CurrentTextAnchor = {
+  readonly mode: ReaderRenderMode
+  readonly document: ReaderDocumentInput
+  readonly persistedValueKey: string
+  readonly anchor: ReaderTextAnchor | undefined
+}
+
+function resolveCurrentTextAnchor(
+  current: CurrentTextAnchor | null,
+  mode: ReaderRenderMode,
+  document: ReaderDocumentInput,
+  persistedValueKey: string
+) {
+  return current !== null &&
+    current.mode === mode &&
+    current.document === document &&
+    current.persistedValueKey === persistedValueKey
+    ? current.anchor
+    : undefined
+}
+
+function isReaderOcrEnabled(ocr: boolean | ReaderOcrOptions) {
+  return ocr === true || (typeof ocr === 'object' && ocr.enabled === true)
+}
+
+function resolveSelectionRefs(
+  selectionRef: ReaderProps['selectionRef'],
+  fallback: RefObject<ReaderSelectionRef | null>,
+  handleSelectionRef: (value: ReaderSelectionRef | null) => void
+) {
+  return {
+    popoverSelectionRef:
+      selectionRef && typeof selectionRef !== 'function'
+        ? selectionRef
+        : fallback,
+    resolvedSelectionRef:
+      typeof selectionRef === 'function'
+        ? handleSelectionRef
+        : (selectionRef ?? fallback)
+  }
+}
+
+function capturePdfHandoff(
+  handle: ReaderReadingPositionHandle | null,
+  source: ReaderEngineSource | undefined
+) {
+  if (source?.format !== 'pdf') return {}
+  const result = handle?.captureModeSwitchResult?.()
+  if (result) {
+    const handoff = result.status === 'ready' ? result.position : undefined
+    return { result, handoff }
+  }
+  const handoff = handle?.captureModeSwitchPosition
+    ? handle.captureModeSwitchPosition()
+    : handle?.captureReadingPosition?.()
+  return { result, handoff }
 }
 
 function resolvePositionHandoff<T>(
@@ -876,7 +935,9 @@ export function Reader({
     useState<ReaderPageRectSelectionMap>(defaultPageRectSelections ?? {})
   const [internalRenderMode, setInternalRenderMode] =
     useState<ReaderRenderMode>('layout')
-  const [readingPositionNotice, setReadingPositionNotice] = useState(false)
+  const [readingPositionNotice, setReadingPositionNotice] = useState<
+    'pending' | 'failed' | null
+  >(null)
   const [layoutPositionHandoff, setLayoutPositionHandoff] =
     useState<ReaderPositionHandoff<ReaderVirtualPaperState> | null>(null)
   const [nativeLayoutPositionHandoff, setNativeLayoutPositionHandoff] =
@@ -917,16 +978,11 @@ export function Reader({
   const readerRootRef = useRef<HTMLDivElement>(null)
   const defaultBottomBarRef = useRef<HTMLDivElement>(null)
   const defaultSelectionRef = useRef<ReaderSelectionRef>(null)
-  const currentTextAnchorRef = useRef<{
-    readonly mode: ReaderRenderMode
-    readonly document: ReaderDocumentInput
-    readonly persistedValueKey: string
-    readonly anchor: ReaderTextAnchor | undefined
-  } | null>(null)
+  const currentTextAnchorRef = useRef<CurrentTextAnchor | null>(null)
   const currentReadingPositionRef = useRef<{
     mode: ReaderRenderMode
     document: ReaderDocumentInput
-    position: ReaderBookmark
+    position: ReaderBookmark | undefined
   } | null>(null)
   const readingPositionHandleRef = useRef<ReaderReadingPositionHandle>(null)
   const currentVirtualPaperStateRef = useRef<{
@@ -1131,8 +1187,25 @@ export function Reader({
     history.getPresent().ranges,
     defaultRanges
   )
-  const resolvedRenderMode =
+  const requestedRenderMode =
     data?.renderMode ?? renderMode ?? internalRenderMode
+  // Keep the source mounted until it can hand off a ready position, including
+  // requests arriving through controlled props rather than the toolbar.
+  const [pdfMode, setPdfMode] = useState(() => ({
+    source: engineSource,
+    document,
+    mode: requestedRenderMode
+  }))
+  const samePdfModeScope =
+    pdfMode.source === engineSource && pdfMode.document === document
+  const resolvedRenderMode =
+    engineSource?.format === 'pdf' && samePdfModeScope
+      ? pdfMode.mode
+      : requestedRenderMode
+  const pendingModeRequest = useRef<{
+    mode: ReaderRenderMode
+    external: boolean
+  } | null>(null)
   const previousRenderModeRef = useRef(resolvedRenderMode)
   const completedModeHandoffRef = useRef<{
     readonly sourceMode: ReaderRenderMode
@@ -1157,9 +1230,7 @@ export function Reader({
     normalizeBookmark(data?.layoutReadingProgress)
   )
   const resolvedOcr = ocr ?? internalOcrEnabled
-  const resolvedOcrEnabled =
-    resolvedOcr === true ||
-    (typeof resolvedOcr === 'object' && resolvedOcr.enabled === true)
+  const resolvedOcrEnabled = isReaderOcrEnabled(resolvedOcr)
   const resolvedTouchPanMode = touchPanMode ?? internalTouchPanMode
   const resolvedEdgeCropEditing = edgeCropEditing ?? internalEdgeCropEditing
   useEffect(() => {
@@ -1228,7 +1299,7 @@ export function Reader({
     containMarginBottom,
     containMarginY,
     occupied.bottom,
-    isPdf || engineSource?.format === 'pdf',
+    isPdfDocument,
     occupied.top
   )
   const bottomBarHistoryStatus = resolveBottomBarHistoryStatus({
@@ -1277,14 +1348,11 @@ export function Reader({
     },
     [selectionRef]
   )
-  const popoverSelectionRef =
-    selectionRef && typeof selectionRef !== 'function'
-      ? selectionRef
-      : defaultSelectionRef
-  const resolvedSelectionRef =
-    typeof selectionRef === 'function'
-      ? handleSelectionRef
-      : (selectionRef ?? defaultSelectionRef)
+  const { popoverSelectionRef, resolvedSelectionRef } = resolveSelectionRefs(
+    selectionRef,
+    defaultSelectionRef,
+    handleSelectionRef
+  )
 
   const handoffPagePosition = useCallback(
     (
@@ -1311,48 +1379,61 @@ export function Reader({
     [document]
   )
 
-  const captureReadingPosition = useCallback(
+  const captureHandoffPosition = useCallback(
     (sourceMode: ReaderRenderMode) => {
+      const handle = readingPositionHandleRef.current
+      if (sourceMode === resolvedRenderMode) {
+        if (engineSource?.format === 'pdf' && handle?.captureModeSwitchPosition)
+          return handle.captureModeSwitchPosition()
+        return handle?.captureReadingPosition?.()
+      }
       const captured = currentReadingPositionRef.current
-      return (
-        (sourceMode === resolvedRenderMode
-          ? readingPositionHandleRef.current?.captureReadingPosition?.()
-          : undefined) ??
-        (captured?.mode === sourceMode && captured.document === document
-          ? captured.position
-          : undefined)
-      )
+      return captured?.mode === sourceMode && captured.document === document
+        ? captured.position
+        : undefined
     },
-    [document, resolvedRenderMode]
+    [document, resolvedRenderMode, engineSource?.format]
   )
 
   const handoffReadingPosition = useCallback(
-    (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode): ReaderData => {
+    (
+      sourceMode: ReaderRenderMode,
+      nextMode: ReaderRenderMode,
+      handoff?: ReaderBookmark
+    ): ReaderData => {
       progressControl.current.flush()
       const data = progressControl.current.getData()
       if (nextMode === sourceMode) return { ...data }
       const pagePosition = resolveReadingProgress(data ?? {}, sourceMode)
-      if (!useVirtualPaper && pagePosition && !('offset' in pagePosition))
+      if (
+        !handoff &&
+        engineSource?.format !== 'pdf' &&
+        !useVirtualPaper &&
+        pagePosition &&
+        !('offset' in pagePosition)
+      )
         return handoffPagePosition(pagePosition, nextMode, data)
       const currentTextAnchor = currentTextAnchorRef.current
       const sourcePersistedValueKey =
         sourceMode === 'layout'
           ? getReaderVirtualPaperKey(data?.virtualPaper)
           : getReaderTextProgressKey(data?.textReadingProgress)
-      const currentAnchor =
-        currentTextAnchor !== null &&
-        currentTextAnchor.mode === sourceMode &&
-        currentTextAnchor.document === document &&
-        currentTextAnchor.persistedValueKey === sourcePersistedValueKey
-          ? currentTextAnchor.anchor
-          : undefined
+      const currentAnchor = resolveCurrentTextAnchor(
+        currentTextAnchor,
+        sourceMode,
+        document,
+        sourcePersistedValueKey
+      )
       const sourceAnchor =
         currentAnchor ??
         (sourceMode === 'layout'
           ? resolvedVirtualPaperState?.anchor
           : resolvedTextReadingProgress?.anchor)
 
-      const sourcePosition = captureReadingPosition(sourceMode) ?? sourceAnchor
+      const sourcePosition =
+        handoff ??
+        captureHandoffPosition(sourceMode) ??
+        (engineSource?.format === 'pdf' ? undefined : sourceAnchor)
 
       if (nextMode === 'text') {
         if (!sourcePosition) {
@@ -1411,7 +1492,9 @@ export function Reader({
     },
     [
       data,
-      captureReadingPosition,
+      engineSource?.format,
+      resolvedRenderMode,
+      captureHandoffPosition,
       defaultScale,
       document,
       handoffPagePosition,
@@ -1422,17 +1505,57 @@ export function Reader({
     ]
   )
 
-  const handleRenderModeChange = useCallback(
-    (nextMode: ReaderRenderMode) => {
+  const commitRenderMode = useCallback(
+    (nextMode: ReaderRenderMode, nextData: ReaderData) => {
+      completedModeHandoffRef.current = {
+        sourceMode: resolvedRenderMode,
+        nextMode
+      }
+      if (data?.renderMode === undefined && renderMode === undefined) {
+        setInternalRenderMode(nextMode)
+      }
       if (
         engineSource?.format === 'pdf' &&
-        readingPositionHandleRef.current?.captureReadingPosition &&
-        !readingPositionHandleRef.current.captureReadingPosition()
-      ) {
-        setReadingPositionNotice(true)
+        (nextMode === requestedRenderMode ||
+          (data?.renderMode === undefined && renderMode === undefined))
+      )
+        setPdfMode({ source: engineSource, document, mode: nextMode })
+      onDataChange?.({ ...nextData, renderMode: nextMode })
+      onRenderModeChange?.(nextMode)
+
+      if (nextMode === 'text' && resolvedEdgeCropEditing) {
+        if (edgeCropEditing === undefined) setInternalEdgeCropEditing(false)
+        onEdgeCropEditingChange?.(false)
+      }
+    },
+    [
+      data?.renderMode,
+      document,
+      edgeCropEditing,
+      engineSource,
+      onDataChange,
+      onEdgeCropEditingChange,
+      onRenderModeChange,
+      renderMode,
+      requestedRenderMode,
+      resolvedEdgeCropEditing,
+      resolvedRenderMode
+    ]
+  )
+
+  const handleRenderModeChange = useCallback(
+    (nextMode: ReaderRenderMode, external = false) => {
+      const handle = readingPositionHandleRef.current
+      const { result, handoff } = capturePdfHandoff(handle, engineSource)
+      if (engineSource?.format === 'pdf' && !handoff) {
+        const status = result?.status === 'failed' ? 'failed' : 'pending'
+        pendingModeRequest.current =
+          status === 'pending' ? { mode: nextMode, external } : null
+        setReadingPositionNotice(status)
         return
       }
-      setReadingPositionNotice(false)
+      pendingModeRequest.current = null
+      setReadingPositionNotice(null)
       try {
         readingPositionHandleRef.current?.captureAndPublish?.()
       } catch {
@@ -1451,47 +1574,90 @@ export function Reader({
           anchor: capturedAnchor
         }
       }
-      const nextData = handoffReadingPosition(resolvedRenderMode, nextMode)
-      completedModeHandoffRef.current = {
-        sourceMode: resolvedRenderMode,
-        nextMode
-      }
-      if (data?.renderMode === undefined && renderMode === undefined) {
-        setInternalRenderMode(nextMode)
-      }
-      onDataChange?.({ ...nextData, renderMode: nextMode })
-      onRenderModeChange?.(nextMode)
-
-      if (nextMode === 'text' && resolvedEdgeCropEditing) {
-        if (edgeCropEditing === undefined) setInternalEdgeCropEditing(false)
-        onEdgeCropEditingChange?.(false)
-      }
+      const nextData = handoffReadingPosition(
+        resolvedRenderMode,
+        nextMode,
+        handoff
+      )
+      commitRenderMode(nextMode, nextData)
     },
     [
-      edgeCropEditing,
+      commitRenderMode,
       engineSource,
       data,
       document,
       handoffReadingPosition,
-      onDataChange,
-      onEdgeCropEditingChange,
-      onRenderModeChange,
-      renderMode,
-      resolvedEdgeCropEditing,
       resolvedRenderMode
     ]
   )
+  const attemptModeRequest = useRef(handleRenderModeChange)
+  attemptModeRequest.current = handleRenderModeChange
+  const currentModeRequest = useRef(requestedRenderMode)
+  currentModeRequest.current = requestedRenderMode
+  useEffect(() => {
+    if (readingPositionNotice !== 'pending') return
+    let frame = 0
+    const retry = () => {
+      const request = pendingModeRequest.current
+      if (
+        !request ||
+        (request.external && request.mode !== currentModeRequest.current)
+      )
+        return
+      attemptModeRequest.current(request.mode, request.external)
+      if (pendingModeRequest.current) frame = requestAnimationFrame(retry)
+    }
+    frame = requestAnimationFrame(retry)
+    return () => cancelAnimationFrame(frame)
+  }, [readingPositionNotice, engineSource, document])
+
+  useLayoutEffect(() => {
+    if (!samePdfModeScope) {
+      pendingModeRequest.current = null
+      completedModeHandoffRef.current = null
+      setReadingPositionNotice(null)
+      setPdfMode({ source: engineSource, document, mode: requestedRenderMode })
+      return
+    }
+    if (engineSource?.format !== 'pdf') return
+    if (requestedRenderMode === resolvedRenderMode) {
+      if (pendingModeRequest.current?.external) {
+        pendingModeRequest.current = null
+        setReadingPositionNotice(null)
+      }
+      return
+    }
+    const completed = completedModeHandoffRef.current
+    if (
+      completed?.sourceMode === resolvedRenderMode &&
+      completed.nextMode === requestedRenderMode
+    ) {
+      completedModeHandoffRef.current = null
+      setPdfMode({ source: engineSource, document, mode: requestedRenderMode })
+      return
+    }
+    handleRenderModeChange(requestedRenderMode, true)
+  }, [
+    engineSource,
+    document,
+    samePdfModeScope,
+    requestedRenderMode,
+    resolvedRenderMode,
+    handleRenderModeChange
+  ])
   const handleReadingPositionRef = useCallback(
     (handle: ReaderReadingPositionHandle | null) => {
       if (handle === null) {
         const position =
-          readingPositionHandleRef.current?.captureReadingPosition?.()
-        if (position)
-          currentReadingPositionRef.current = {
-            mode: resolvedRenderMode,
-            document,
-            position
-          }
+          engineSource?.format === 'pdf' &&
+          readingPositionHandleRef.current?.captureModeSwitchPosition
+            ? readingPositionHandleRef.current.captureModeSwitchPosition()
+            : readingPositionHandleRef.current?.captureReadingPosition?.()
+        currentReadingPositionRef.current = {
+          mode: resolvedRenderMode,
+          document,
+          position
+        }
         const capturedAnchor =
           readingPositionHandleRef.current?.captureTextAnchor()
         if (capturedAnchor) {
@@ -1512,6 +1678,7 @@ export function Reader({
       data?.textReadingProgress,
       data?.virtualPaper,
       document,
+      engineSource?.format,
       resolvedRenderMode
     ]
   )
@@ -1563,6 +1730,7 @@ export function Reader({
   useLayoutEffect(() => {
     const previousMode = previousRenderModeRef.current
     previousRenderModeRef.current = resolvedRenderMode
+    if (engineSource?.format === 'pdf') return
     if (previousMode === resolvedRenderMode) return
     const completedHandoff = completedModeHandoffRef.current
     completedModeHandoffRef.current = null
@@ -1573,7 +1741,7 @@ export function Reader({
       return
     }
     handoffReadingPosition(previousMode, resolvedRenderMode)
-  }, [handoffReadingPosition, resolvedRenderMode])
+  }, [handoffReadingPosition, resolvedRenderMode, engineSource?.format])
 
   const handleOcrChange = useCallback(
     (enabled: boolean) => {
@@ -2407,7 +2575,9 @@ export function Reader({
             )}
             {readingPositionNotice && (
               <div role='status' className='hamster-reader__engine-notice'>
-                正在准备阅读位置，请稍后重试切换。
+                {readingPositionNotice === 'failed'
+                  ? '阅读位置无法定位，请重试切换。'
+                  : '正在准备阅读位置，请稍候。'}
               </div>
             )}
             {resolvedLoadingProgress && (

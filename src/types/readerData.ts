@@ -29,7 +29,7 @@ export type ReaderTextAnchor = {
   readonly offset: number
 }
 
-/** 无文字页面中，以页码和页内纵向百分比定位的可持久化书签。 */
+/** 以原页码和显示页内纵向百分比定位；也用于 PDF Layout 几何续读。 */
 export type ReaderPagePositionBookmark = {
   readonly pageNumber: number
   /** 相对页面顶部的纵向位置，取值范围为 0..100。 */
@@ -71,7 +71,7 @@ export type ReaderData = {
   readonly rects?: ReaderSelectionRectangle[]
   readonly pagePaintings?: Record<string, EditorDocument>
   readonly virtualPaper?: ReaderVirtualPaperState
-  /** 原生 Layout 缩放模式的阅读进度：优先记录文字，无文字时记录页内百分比。 */
+  /** Layout 阅读进度：PDF 引擎始终记录安全线页内比例，其他布局仍文字优先；兼容旧文字记录。 */
   readonly layoutReadingProgress?: ReaderBookmark
   readonly textReadingProgress?: ReaderTextReadingProgress
   readonly bookmarks?: readonly ReaderBookmark[]

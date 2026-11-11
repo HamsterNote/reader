@@ -310,3 +310,62 @@ it('does not replay a previously acknowledged progress object during crop reflow
     preserveOnFailure: true
   })
 })
+
+it('publishes independent safe text notifications while persisting same-page geometry before and after extraction', async () => {
+  const onProgress = vi.fn()
+  const onText = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  const view = render(
+    <EngineDocumentViewer
+      engineSource={source}
+      readingPositionRef={ref}
+      onLayoutReadingProgressChange={onProgress}
+      onTextAnchorChange={onText}
+    />
+  )
+  await act(async () => {
+    await state.pdf!.onPagesLoaded!(3)
+  })
+  fireEvent.wheel(view.container.querySelector('[data-engine="pdf"]')!)
+  textReady = true // Page geometry is available independently of extraction.
+  let text = null as typeof saved | null
+  vi.spyOn(state.api!, 'captureTextAnchor').mockImplementation(() => text)
+  for (const percentage of [35, 65]) {
+    position = { pageNumber: 1, verticalPercentage: percentage }
+    act(() => ref.current!.captureAndPublish!())
+    expect(onProgress).toHaveBeenLastCalledWith(position)
+    expect(onText).toHaveBeenLastCalledWith(undefined)
+  }
+  text = saved
+  act(() => state.pdf!.onTextLayerReady!([1]))
+  expect(onProgress).toHaveBeenLastCalledWith({
+    pageNumber: 1,
+    verticalPercentage: 65
+  })
+  expect(onText).toHaveBeenLastCalledWith(saved)
+})
+
+it('captures a wheel interaction even when a PDF child stops propagation', async () => {
+  const onProgress = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  const view = render(
+    <EngineDocumentViewer
+      engineSource={source}
+      readingPositionRef={ref}
+      onLayoutReadingProgressChange={onProgress}
+    />
+  )
+  await act(async () => {
+    await state.pdf!.onPagesLoaded!(3)
+  })
+  textReady = true
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).not.toHaveBeenCalled()
+  const child = document.createElement('div')
+  view.container.querySelector('[data-engine="pdf"]')!.append(child)
+  child.addEventListener('wheel', (event) => event.stopPropagation())
+  fireEvent.wheel(child)
+  position = { pageNumber: 1, verticalPercentage: 65 }
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).toHaveBeenLastCalledWith(position)
+})
