@@ -2781,19 +2781,36 @@ export function IntermediateDocumentTextViewer(
 
       if (publicRange) {
         const textRanges = toTextRanges(publicRange)
+        if (textRanges.length === 0) return
+        // A PDF selection may split into canonical fragments whose IDs change
+        // as either endpoint moves. Hosts using the per-range callbacks upsert
+        // updates; they also need removals for fragments no longer selected.
+        const nextIds = new Set(textRanges.map((item) => item.id))
+        for (const previous of getSelectionGroup(
+          storedRangesRef.current,
+          publicRange.id
+        )) {
+          if (!nextIds.has(previous.id)) onRemoveRange?.(previous.id)
+        }
+        if (!isRangesControlled) {
+          setInternalRanges((currentRanges) => {
+            const previousIds = new Set(
+              getSelectionGroup(currentRanges, publicRange.id).map(
+                (item) => item.id
+              )
+            )
+            return currentRanges.flatMap((item) => {
+              if (item.id === publicRange.id) return textRanges
+              return previousIds.has(item.id) ? [] : [item]
+            })
+          })
+        }
         for (const textRange of textRanges) {
           traceHighlight('text.callback.update', {
             mode: 'text',
             isEpub,
             ranges: summarizeHighlightRanges([textRange])
           })
-          if (!isRangesControlled) {
-            setInternalRanges((currentRanges) =>
-              currentRanges.map((currentRange) =>
-                currentRange.id === textRange.id ? textRange : currentRange
-              )
-            )
-          }
           onLinkedUpdateRange?.(textRange)
           onUpdateRange?.(textRange)
         }
@@ -2803,6 +2820,7 @@ export function IntermediateDocumentTextViewer(
       isRangesControlled,
       isEpub,
       onLinkedUpdateRange,
+      onRemoveRange,
       onUpdateRange,
       scopeId,
       toTextRanges
