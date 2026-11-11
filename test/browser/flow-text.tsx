@@ -4,7 +4,11 @@ import {
   type ReaderProgressHandle
 } from '@hamster-note/reader'
 import '@hamster-note/reader/style.css'
-import { TextDir } from '@hamster-note/types'
+import {
+  IntermediateDocument,
+  IntermediatePageMap,
+  TextDir
+} from '@hamster-note/types'
 import { createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
@@ -100,10 +104,47 @@ function open(kind: 'txt' | 'epub', long = false, layout?: 'native' | 'paper') {
     )
   )
 }
+function openReject() {
+  flushSync(() => root.render(null))
+  state.data = undefined
+  const document = new IntermediateDocument({
+    id: 'reject-document',
+    title: 'reject-document',
+    outline: undefined,
+    pagesMap: IntermediatePageMap.makeByInfoList([
+      {
+        id: 'reject-page-1',
+        pageNumber: 1,
+        size: { x: 400, y: 600 },
+        getData: async () => {
+          throw new Error('compatibility page rejected')
+        }
+      }
+    ])
+  })
+  flushSync(() =>
+    root.render(
+      <div style={{ height: '100vh' }}>
+        <Reader
+          document={document}
+          renderMode='text'
+          data={{ textReadingProgress: { currentPageNumber: 1 } }}
+          progressRef={progress}
+          onEngineReady={() => state.ready.push('reject')}
+          onEngineError={(error) => state.errors.push(error.message)}
+          onDataChange={(data) => {
+            state.data = data
+          }}
+        />
+      </div>
+    )
+  )
+}
 Object.assign(window, {
   flowTextTest: {
     state,
     open,
+    openReject,
     flush: async () => {
       await progress.current!.flush()
       state.data = progress.current!.getData()

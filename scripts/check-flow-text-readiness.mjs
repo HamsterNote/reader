@@ -124,15 +124,63 @@ try {
       `PASS compatibility layout (${layout}): restored page 2, engine ready, public progress flush`
     )
   }
+  const readyBefore = await page.evaluate(
+    () => window.flowTextTest.state.ready.length
+  )
+  const errorsBefore = await page.evaluate(
+    () => window.flowTextTest.state.errors.length
+  )
+  await page.evaluate(() => window.flowTextTest.openReject())
+  // Wait for the first terminal signal so a regression that wrongly emits ready
+  // fails on the assertion below instead of timing out.
+  await page
+    .waitForFunction(
+      ({ ready, errors }) =>
+        window.flowTextTest.state.ready.length > ready ||
+        window.flowTextTest.state.errors.length > errors,
+      { ready: readyBefore, errors: errorsBefore },
+      { timeout: 5000 }
+    )
+    .catch(async (error) => {
+      console.error(
+        await page.evaluate(() => ({
+          state: window.flowTextTest.state,
+          html: document.body.innerText.slice(0, 1200)
+        }))
+      )
+      throw error
+    })
+  const rejectedFlush = await page.evaluate(async () => {
+    try {
+      await window.flowTextTest.flush()
+      return 'resolved'
+    } catch (error) {
+      return `rejected:${error.message}`
+    }
+  })
+  assert.equal(
+    await page.evaluate(() => window.flowTextTest.state.ready.length),
+    readyBefore,
+    'a rejected compatibility page must not emit engine ready'
+  )
+  assert.ok(
+    (await page.evaluate(() => window.flowTextTest.state.errors.length)) >
+      errorsBefore,
+    'a rejected compatibility page must emit engine error'
+  )
+  assert.match(
+    await page.evaluate(() => window.flowTextTest.state.errors.at(-1)),
+    /failed|rejected/i
+  )
+  assert.match(rejectedFlush, /^rejected:/)
+  console.log(
+    'PASS compatibility text page rejection: error emitted, no ready, public progress flush rejected'
+  )
   await page.screenshot({
     path: resolve(repo, '../artifacts/reader-flow-readiness-320.png')
   })
   assert.deepEqual(errors, [])
-  assert.deepEqual(
-    await page.evaluate(() => window.flowTextTest.state.errors),
-    []
-  )
-  console.log('8 passed / 0 failed; 320px; public built artifact')
+  console.log('9 passed / 0 failed; 320px; public built artifact')
 } finally {
   await browser?.close()
   await server.close()

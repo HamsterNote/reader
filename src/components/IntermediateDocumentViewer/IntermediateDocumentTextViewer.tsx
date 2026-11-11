@@ -1122,6 +1122,11 @@ export function IntermediateDocumentTextViewer(
   const [pdfLoadErrors, setPdfLoadErrors] = useState<ReadonlySet<number>>(
     new Set()
   )
+  // Compatibility viewers have no PDF pagination controller; page load
+  // rejections must still be observed by readiness and progress flush.
+  const [flowLoadErrors, setFlowLoadErrors] = useState<ReadonlySet<number>>(
+    new Set()
+  )
   const pdfNavigationRef = useRef<ReturnType<
     typeof usePdfTextPagination
   > | null>(null)
@@ -2031,6 +2036,13 @@ export function IntermediateDocumentTextViewer(
             next.delete(pageNumber)
             return next
           })
+        else
+          setFlowLoadErrors((current) => {
+            if (!current.has(pageNumber)) return current
+            const next = new Set(current)
+            next.delete(pageNumber)
+            return next
+          })
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
@@ -2058,6 +2070,7 @@ export function IntermediateDocumentTextViewer(
           setPdfLoadErrors((current) => new Set(current).add(pageNumber))
           return
         }
+        setFlowLoadErrors((current) => new Set(current).add(pageNumber))
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
@@ -2478,8 +2491,9 @@ export function IntermediateDocumentTextViewer(
       loaded: page !== undefined && textsByPageNumberRef.current.has(page),
       restoring: isInitialProgressRestorePendingRef.current,
       error:
-        page !== undefined && pdfLoadErrors.has(page)
-          ? new Error('Text page failed to load')
+        page !== undefined &&
+        (pdfLoadErrors.has(page) || flowLoadErrors.has(page))
+          ? new Error(`Text page ${page} failed to load`)
           : undefined
     }
   }
@@ -3373,6 +3387,7 @@ export function IntermediateDocumentTextViewer(
 
   useEffect(() => {
     setPdfLoadErrors(new Set())
+    setFlowLoadErrors(new Set())
     activeDocumentRef.current = runtimeDocument
     activePageNumbersKeyRef.current = pageNumbersKey
     previousPreloadPageNumbersRef.current = new Set()
