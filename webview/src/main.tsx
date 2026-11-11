@@ -1,3 +1,4 @@
+import { parseReaderSessionReplacement } from '../../src/bridge/sessionReplacement'
 import { createRef } from 'react'
 import type { ReaderProgressHandle } from '../../src/components/Reader'
 import { createRoot } from 'react-dom/client'
@@ -99,6 +100,7 @@ let snapshot: BridgeRestorePayload | null = null
 let opened: Awaited<ReturnType<typeof openReaderDocument>> | null = null
 let worker: Worker | null = null
 let work: Promise<void> = Promise.resolve()
+const engineDisposals: Promise<void>[] = []
 
 async function release() {
   flushSync(() => root.render(null))
@@ -107,7 +109,12 @@ async function release() {
   opened = null
   worker = null
   try {
-    await previous?.dispose()
+    const results = await Promise.allSettled([
+      ...engineDisposals.splice(0),
+      previous?.dispose()
+    ])
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
   } finally {
     previousWorker?.terminate()
     if (GlobalWorkerOptions.workerPort === previousWorker)
@@ -165,6 +172,14 @@ async function display(
     root.render(
       <ReaderRootErrorBoundary key={`${document.fileId}:${token}`}>
         <ReaderSurface
+          onEngineReady={() => {
+            if (token === generation && activeSessionId !== host?.sessionId)
+              bridge?.reportDocumentReady()
+          }}
+          onEngineError={(error) => {
+            if (token === generation) bridge?.reportEngineFailure(error)
+          }}
+          onEngineDisposal={(completion) => engineDisposals.push(completion)}
           progressRef={readerProgress}
           source={source}
           document={documentHandle.document}
@@ -178,6 +193,9 @@ async function display(
   } catch (error) {
     await release().catch(() => undefined)
     if (token !== generation) return
+    bridge?.reportEngineFailure(
+      error instanceof Error ? error : new Error(String(error))
+    )
     root.render(
       <div role='alert'>
         <p>{error instanceof Error ? error.message : String(error)}</p>
@@ -198,10 +216,10 @@ function scheduleDisplay() {
   work = work.then(() => display(token, document, restored))
 }
 
-const bridge =
-  host && post
+function makeBridge(sessionId: string) {
+  return host && post
     ? createWebBridgeClient({
-        sessionId: host.sessionId,
+        sessionId,
         sourceToken: host.sourceToken,
         post: (raw) => post(raw),
         onOpen: (payload) => {
@@ -240,8 +258,34 @@ const bridge =
         }
       })
     : null
+}
+let activeSessionId = host?.sessionId ?? ''
+let bridge = makeBridge(activeSessionId)
+const replacedSessions = new Set([activeSessionId])
 if (bridge) {
-  listenHostMessages((message) => bridge.handleMessage(message))
+  listenHostMessages((message) => {
+    const replacement =
+      host &&
+      parseReaderSessionReplacement(message, {
+        sessionId: activeSessionId,
+        sourceToken: host.sourceToken
+      })
+    if (replacement && !replacedSessions.has(replacement.sessionId)) {
+      // Host only sends this after the old close/ACK barrier. Old messages are
+      // rejected by the fresh client; document rendering remains serialized.
+      generation++
+      descriptor = null
+      snapshot = null
+      bridge?.dispose()
+      work = work.then(release)
+      activeSessionId = replacement.sessionId
+      replacedSessions.add(activeSessionId)
+      bridge = makeBridge(activeSessionId)
+      bridge?.start()
+      return
+    }
+    bridge?.handleMessage(message)
+  })
   bridge.start()
 } else root.render(<div role='alert'>未连接阅读宿主</div>)
 

@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   PdfDocumentOpenError,
@@ -143,6 +143,22 @@ describe('PdfSessionManager 切文件竞态', () => {
     })
     expect(reopened.session.document.numPages).toBe(1)
     await manager.dispose()
+  })
+
+  it('dispose waits for an in-flight open and its eventual resource destruction', async () => {
+    const destroyed = vi.spyOn(PdfDocumentSession.prototype, 'dispose')
+    try {
+      const manager = new PdfSessionManager()
+      const opening = manager
+        .open({ data: readFixture('pdf/two-column.pdf') })
+        .catch((error) => error)
+      await manager.dispose()
+      expect((await opening).kind).toBe('cancelled')
+      expect(destroyed).toHaveBeenCalledOnce()
+      expect(manager.currentSession).toBeNull()
+    } finally {
+      destroyed.mockRestore()
+    }
   })
 
   it('dispose 后拒绝新的 open', async () => {

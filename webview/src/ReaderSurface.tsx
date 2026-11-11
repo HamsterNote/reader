@@ -1,5 +1,4 @@
 import { useRef, useState, type Ref } from 'react'
-import { Icon } from '@hamster-note/components'
 import type { IntermediateDocument } from '@hamster-note/types'
 import { Reader, type ReaderProgressHandle } from '../../src/components/Reader'
 import type { ReaderEngineSource } from '../../src/types/engineSource'
@@ -15,8 +14,14 @@ export function ReaderSurface({
   document,
   initial,
   onChange,
-  progressRef
+  progressRef,
+  onEngineDisposal,
+  onEngineError,
+  onEngineReady
 }: {
+  readonly onEngineReady?: () => void
+  readonly onEngineError?: (error: Error) => void
+  readonly onEngineDisposal?: (completion: Promise<void>) => void
   readonly progressRef?: Ref<ReaderProgressHandle>
   readonly source: ReaderEngineSource
   readonly document: IntermediateDocument
@@ -29,7 +34,6 @@ export function ReaderSurface({
   const [rangeId, setRangeId] = useState<string | null>(null)
   const [rectId, setRectId] = useState<string | null>(null)
   const [commentId, setCommentId] = useState<string | null>(null)
-  const [browser, setBrowser] = useState(false)
   const [fontScale, setFontScale] = useState<ReaderFontScale>(1.5)
   const [color, setColor] = useState('#ffc107')
   const selection = useRef<ReaderSelectionRef>(null)
@@ -71,6 +75,9 @@ export function ReaderSurface({
   return (
     <>
       <Reader
+        onEngineReady={onEngineReady}
+        onEngineError={onEngineError}
+        onEngineDisposal={onEngineDisposal}
         progressRef={progressRef}
         document={document}
         engineSource={source}
@@ -142,8 +149,6 @@ export function ReaderSurface({
         onFontScaleChange={setFontScale}
         highlightColor={color}
         onHighlightColorChange={setColor}
-        showPageBrowser={browser}
-        onPageBrowserClose={() => setBrowser(false)}
         onEdgeCropApply={(pageNumber, crop) =>
           dataChange({
             ...current.current.data,
@@ -169,15 +174,6 @@ export function ReaderSurface({
           return rect
         }}
       />
-      <button
-        type='button'
-        className='reader-outline-toggle'
-        aria-label='页面与标注'
-        title='页面与标注'
-        onClick={() => setBrowser((value) => !value)}
-      >
-        <Icon name='menu' />
-      </button>
       {commentId && (
         <CommentPanel
           comments={snapshot.comments}

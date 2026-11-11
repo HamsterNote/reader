@@ -1,4 +1,9 @@
-import { Icon, Menu, MenuItem, Popover } from '@hamster-note/components'
+import {
+  ToolbarPopover,
+  type PaneToolbarLayout
+} from '@hamster-note/painting/toolbar'
+import { useCallback, useRef, type RefObject } from 'react'
+import { Icon, Menu, MenuItem } from '@hamster-note/components'
 
 import type { ReaderFontScale } from '../../types/fontScale'
 import type { ReaderPageTool } from '../Page'
@@ -14,6 +19,8 @@ import type {
 } from './useDefaultBottomBar'
 
 type DefaultBottomBarMenusProps = {
+  readonly layout?: PaneToolbarLayout
+  readonly boundary: RefObject<HTMLDivElement | null>
   readonly fontScale: ReaderFontScale | undefined
   readonly selectedTool: ReaderPageTool
   readonly layoutZoom: ReaderLayoutZoom | undefined
@@ -31,23 +38,37 @@ const selectedItemStyle = {
 }
 
 export function DefaultBottomBarMenus({
+  layout,
+  boundary,
   fontScale,
   selectedTool,
   layoutZoom,
-  theme,
   menus,
   onFontScaleChange,
   onSelectedToolChange,
   onLayoutZoomChange
 }: DefaultBottomBarMenusProps) {
+  const activeAnchor = useRef<HTMLButtonElement | null>(null)
+  activeAnchor.current = (menus.toolMenuAnchor ??
+    menus.fontMenuAnchor ??
+    menus.zoomMenuAnchor) as HTMLButtonElement | null
+  const closeRef = useRef(menus)
+  closeRef.current = menus
+  const close = useCallback((restoreFocus: boolean) => {
+    if (restoreFocus) closeRef.current.closeMenusAndRestoreFocus()
+    else closeRef.current.closeMenus()
+  }, [])
   return (
     <>
       {menus.toolMenuAnchor !== null && (
-        <Popover
-          anchor={menus.toolMenuAnchor}
-          placement='top-start'
-          theme={theme}
-          data-testid='tool-bottom-bar-tool-menu-popover'
+        <ToolbarPopover
+          id={menus.toolMenuId + '-panel'}
+          label={'选择工具'}
+          menu={false}
+          anchor={activeAnchor}
+          boundary={boundary}
+          layout={layout}
+          onClose={close}
         >
           <Menu
             id={menus.toolMenuId}
@@ -81,14 +102,17 @@ export function DefaultBottomBarMenus({
               )
             })}
           </Menu>
-        </Popover>
+        </ToolbarPopover>
       )}
       {fontScale !== undefined && menus.fontMenuAnchor !== null && (
-        <Popover
-          anchor={menus.fontMenuAnchor}
-          placement='top-start'
-          theme={theme}
-          data-testid='tool-bottom-bar-font-scale-popover'
+        <ToolbarPopover
+          id={menus.fontMenuId + '-panel'}
+          label={'字号菜单'}
+          menu={false}
+          anchor={activeAnchor}
+          boundary={boundary}
+          layout={layout}
+          onClose={close}
         >
           <Menu
             id={menus.fontMenuId}
@@ -120,14 +144,17 @@ export function DefaultBottomBarMenus({
               )
             })}
           </Menu>
-        </Popover>
+        </ToolbarPopover>
       )}
       {layoutZoom !== undefined && menus.zoomMenuAnchor !== null && (
-        <Popover
-          anchor={menus.zoomMenuAnchor}
-          placement='top-start'
-          theme={theme}
-          data-testid='tool-bottom-bar-layout-zoom-popover'
+        <ToolbarPopover
+          id={menus.zoomMenuId + '-panel'}
+          label={'缩放菜单'}
+          menu={false}
+          anchor={activeAnchor}
+          boundary={boundary}
+          layout={layout}
+          onClose={close}
         >
           <Menu
             id={menus.zoomMenuId}
@@ -159,7 +186,7 @@ export function DefaultBottomBarMenus({
               )
             })}
           </Menu>
-        </Popover>
+        </ToolbarPopover>
       )}
     </>
   )

@@ -1,2 +1,4 @@
 # Unified diff context lines contain a required leading space.
 patches/*.patch whitespace=-blank-at-eol
+# PDF cross-reference records contain required trailing spaces.
+test/browser/eight-pages.pdf binary

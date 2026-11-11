@@ -1,9 +1,10 @@
 import {
-  Button,
-  Icon,
-  Popover,
-  PopoverSeparator
-} from '@hamster-note/components'
+  ToolbarShell,
+  ToolbarFileMenu,
+  type ToolbarFileNavigationProps,
+  type PaneToolbarLayout
+} from '@hamster-note/painting/toolbar'
+import { Button, Icon, PopoverSeparator } from '@hamster-note/components'
 import type { LayeredToolsSnapshot } from '@hamster-note/painting/core'
 import { type RefObject, useEffect } from 'react'
 
@@ -22,7 +23,7 @@ import {
   BottomBarColorControls,
   BottomBarHistoryControls,
   BottomBarToolButtons,
-  DrawingBottomBarStack
+  DrawingBottomBarControls
 } from './DefaultBottomBarControls'
 import { DefaultBottomBarFontScaleControl } from './DefaultBottomBarFontScaleControl'
 import { DefaultBottomBarMenus } from './DefaultBottomBarMenus'
@@ -39,7 +40,10 @@ import {
   useWindowWidth
 } from './useDefaultBottomBar'
 
-export type DefaultBottomBarProps = {
+export type DefaultBottomBarProps = ToolbarFileNavigationProps & {
+  readonly layout?: PaneToolbarLayout
+  readonly onOutlineToggle?: () => void
+  readonly outlineOpen?: boolean
   readonly bottomBarRef: RefObject<HTMLDivElement | null>
   readonly darkMode?: boolean
   readonly renderMode: ReaderRenderMode
@@ -92,26 +96,61 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
     : DEFAULT_BOTTOM_BAR_TOOLS
 
   const readerToolbar = (
-    <Popover
-      ref={props.selectedTool === 'drawing' ? undefined : props.bottomBarRef}
-      edge='bottom'
-      edgeOffset={32}
-      relative
-      theme={theme}
-      role='toolbar'
-      aria-label='工具栏'
-      data-testid='tool-bottom-bar'
-      style={{
-        boxSizing: 'border-box',
-        maxWidth: 'calc(100% - 16px)',
-        overflowX: 'auto',
-        whiteSpace: 'nowrap'
-      }}
+    <ToolbarShell
+      ref={props.bottomBarRef}
+      placement='floating'
+      layout={props.layout}
+      label='工具栏'
+      className={
+        props.epubPagination && props.layout?.edge !== 'top'
+          ? 'hamster-reader__shared-toolbar hamster-reader__shared-toolbar--pagination'
+          : 'hamster-reader__shared-toolbar'
+      }
+      toolbarProps={
+        {
+          'data-testid': 'tool-bottom-bar',
+          'data-theme': theme,
+          style: {
+            background: theme === 'dark' ? '#20252d' : '#f5f6f8',
+            color: theme === 'dark' ? '#e2e5ea' : '#526174',
+            borderColor: theme === 'dark' ? '#3b4350' : '#e2e5ea'
+          }
+        } as import('react').HTMLAttributes<HTMLDivElement>
+      }
+      auxiliary={
+        props.selectedTool === 'drawing' ? (
+          <DrawingBottomBarControls
+            paintingSettings={props.paintingSettings}
+            colors={props.colors}
+            theme={theme}
+            onPaintingSettingsChange={props.onPaintingSettingsChange}
+          />
+        ) : undefined
+      }
     >
       <BottomBarHistoryControls
         historyStatus={props.historyStatus}
         selectionRef={props.selectionRef}
       />
+      <ToolbarFileMenu
+        onOpen={menus.closeMenus}
+        files={props.files}
+        currentFileKey={props.currentFileKey}
+        paneId={props.paneId}
+        busy={props.busy}
+        onSelectFile={props.onSelectFile}
+        onRequestRemove={props.onRequestRemove}
+        layout={props.layout}
+      />
+      <button
+        type='button'
+        aria-label='目录'
+        aria-expanded={props.outlineOpen}
+        onClick={props.onOutlineToggle}
+        disabled={!props.onOutlineToggle}
+      >
+        <Icon name='menu' />
+      </button>
       <PopoverSeparator />
       {props.layoutZoom !== undefined && (
         <>
@@ -220,31 +259,15 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
         fontScale={visibleFontScale}
         menus={menus}
       />
-    </Popover>
+    </ToolbarShell>
   )
-
-  const toolbarStack =
-    props.selectedTool === 'drawing' ? (
-      <DrawingBottomBarStack
-        bottomBarRef={props.bottomBarRef}
-        readerToolbar={readerToolbar}
-        paintingSettings={props.paintingSettings}
-        colors={props.colors}
-        theme={theme}
-        onPaintingSettingsChange={props.onPaintingSettingsChange}
-      />
-    ) : (
-      readerToolbar
-    )
 
   return (
     <>
-      {props.epubPagination ? (
-        <div className='hamster-reader__epub-bottom-bar'>{toolbarStack}</div>
-      ) : (
-        toolbarStack
-      )}
+      {readerToolbar}
       <DefaultBottomBarMenus
+        layout={props.layout}
+        boundary={props.bottomBarRef}
         fontScale={visibleFontScale}
         layoutZoom={props.layoutZoom}
         selectedTool={props.selectedTool}

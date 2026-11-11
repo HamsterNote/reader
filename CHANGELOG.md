@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Reader 3.0.0 将 painting 改为精确必选 peer `0.8.4`，宿主需显式安装；公开 Reader props 与原底栏插槽仍兼容。
+
+### Added
+
+- Reader 3.0.0：复用 painting 0.8.4 的公开工具栏、文件菜单和分栏布局，加入内置目录；保留自定义/禁用底栏。
+- ReaderFileSession / ReaderFileWorkspace：等待保存 ACK、按文件与栏恢复位置、按引用释放源资源，加载/恢复失败走宿主重载回退。
+- 可选的同 WebView 会话替换入口：保留容器，隔离新旧 v1 会话和迟到回执。
+- painting 精确 peer 依赖 0.8.4；仅开发依赖锁定官方未发布构建包。
+
 ### Fixed
+- Web 文件会话与 byte adapter 移入独立 workspace 模块，避免 Expo 宿主目录扫描把 Reader DOM 组件纳入原生类型检查；根入口公开导出不变。
+- PDF 文字模式在字体、分页布局和初始位置恢复完成后统一发送 ready；目标页或布局失败统一发送 error，供 Workspace 与 WebView 会话替换执行宿主重载回退，避免正文已显示但切换一直停在 restoring。
 - 修复 PDF 同一选区/高亮的重叠矩形重复着色：仅在显示层按 range、按页合成为单个 SVG 填充路径，保留原始矩形、持久化结构和命中语义，避免接缝与词边界颜色加深。
+- 修复 EPUB 切文件销毁后排队的样式帧/字体就绪回调访问旧节视图的问题；更新 reader 自有 Foliate 资产的生命周期守卫与哈希记录。
 - 修复首次进入阅读页且未主动选色时高亮/选区与底栏选中色不同源：未显式设置或主动选择高亮色时，从当前生效的描边色派生半透明高亮；显式 `highlightColor` 优先。Demo 的初始高亮色与阅读偏好回退值同步取预设首项；新增公开辅助函数 `getDefaultBottomBarHighlightColor` 供宿主初始化使用。
 
 ### Changed

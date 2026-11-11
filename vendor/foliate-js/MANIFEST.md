@@ -13,9 +13,9 @@ checkout，也不依赖任何 npm 外的运行时下载。
   故不采用 npm 包，按上游建议 vendor 固定提交。）
 - 获取方式：
   `curl -sL https://codeload.github.com/johnfactotum/foliate-js/tar.gz/78914aef4466eb960965702401634c2cb348e9b1`
-- 除 `paginator.js` 的 HAM-129 最小补丁外，其余上游文件保持原样。
+- 除 `paginator.js` 的 HAM-129 / HAM-229 最小补丁外，其余上游文件保持原样。
   `manual-navigation` 禁用手势/选区越界/focus 自动定位；`before-reflow`
-  通知适配层冻结锚点；忽略零尺寸重排；翻页失败也释放锁。详见 PIN.md。
+  通知适配层冻结锚点；忽略零尺寸重排；翻页失败也释放锁。HAM-229 为样式帧与字体就绪回调增加节身份守卫，防止切文件销毁后访问空视图。详见 PIN.md。
   表内 paginator 哈希为补丁后的值，不带入 native-reader 宿主专用补丁。
 
 ## 许可证
@@ -37,7 +37,7 @@ viewer 主线，不经过 foliate；打开 PDF 时显式报错。
 | `view.js` | `<foliate-view>` 自定义元素：打开图书、导航、CFI、overlayer 装配 | `e0093af921feb03bb58fb51aeedc321fa108a4158d215f6913ecf7925415c945` |
 | `epub.js` | EPUB 解包：OPF/spine/TOC/封面/资源加载 | `dfe347495039e9b5991478986ec6b7713cf9efbcd8f475a77ef7b967c5176298` |
 | `epubcfi.js` | EPUB CFI 生成与解析 | `e1a688ad5c84bf31f33cef467f92c7a6d060a0f17ec37c1d3c048e9c7b1cf645` |
-| `paginator.js` | `<foliate-paginator>` reflow 渲染器（分页/滚动、样式注入） | `47b432ecae5c46c4590bd403a7795cc6bbd435d9a5d9d3765186d87264d89b1c` |
+| `paginator.js` | `<foliate-paginator>` reflow 渲染器（分页/滚动、样式注入） | `16b192f96c5f5b9ef3f5c9159743785a1f498abac7dd3727766a7b34531be4b9` |
 | `fixed-layout.js` | 固定版式渲染器（view.js 动态 import） | `7aee1d15d8e0479b8a6c59a20304b250dafc4c7dc158147a2b2c6bed9e180b4c` |
 | `progress.js` | 目录/页列表进度换算 | `544f5e90babc0cb31c5caf971a5f06dd6249ec06600cb62f672fa7179811fde1` |
 | `overlayer.js` | 标注叠加层（highlight/underline/hitTest） | `d3d3396e3083277ccbd4f17c407621159b22a407107e43ce75ca3014578094fb` |

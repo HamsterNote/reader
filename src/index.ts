@@ -195,6 +195,14 @@ export type ReaderInteractiveProps = Pick<
   | 'edgeCropEditing'
   | 'onEdgeCropEditingChange'
   | 'bottomBar'
+  | 'files'
+  | 'currentFileKey'
+  | 'paneId'
+  | 'busy'
+  | 'onSelectFile'
+  | 'onRequestRemove'
+  | 'layout'
+  | 'onPageBrowserOpenChange'
 >
 
 export type { EditorDocument, PageGeometry } from '@hamster-note/painting/core'
@@ -202,3 +210,32 @@ export type {
   LayeredEditorTool,
   LayeredToolsSnapshot
 } from '@hamster-note/painting/core'
+
+export {
+  ReaderFileWorkspace,
+  type ReaderFileWorkspaceProps
+} from './components/ReaderFileWorkspace'
+export {
+  ReaderFileSession,
+  ReaderFileResourcePool,
+  type ReaderFileAdapter,
+  type ReaderFileDocument,
+  type ReaderFileHost,
+  type ReaderFilePosition,
+  type ReaderFileState,
+  type ReaderFileTransaction,
+  type ReaderFileView
+} from './workspace/readerFileSession'
+export type {
+  PaneToolbarLayout,
+  ToolbarFile,
+  ToolbarFileRequest,
+  ToolbarRequestResult,
+  ToolbarFileNavigationProps
+} from '@hamster-note/painting/toolbar'
+export { createReaderByteFileAdapter } from './workspace/readerByteFileAdapter'
+export { createReaderHostWorkspace } from './host/readerHostWorkspace'
+export {
+  parseReaderSessionReplacement,
+  type ReaderSessionReplacement
+} from './bridge/sessionReplacement'

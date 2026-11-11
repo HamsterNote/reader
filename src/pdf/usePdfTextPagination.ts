@@ -1,4 +1,10 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react'
 import type {
   ReaderTextAnchor,
   ReaderTextReadingProgress
@@ -29,6 +35,7 @@ type Snapshot = {
   ready: boolean
   revision: number
   unlocatable: boolean
+  error?: Error
 }
 
 function restoredPdfAnchor(
@@ -56,6 +63,8 @@ export function usePdfTextPagination(options: {
   enqueue: (page: number) => void
   onCommit: (progress: ReaderTextReadingProgress, publish: boolean) => void
   onTurn: (preserveSelected?: boolean) => void
+  onReady?: () => void
+  onError?: (error: Error) => void
 }) {
   const {
     enabled,
@@ -120,6 +129,36 @@ export function usePdfTextPagination(options: {
     gate.current = false
   }
   const current = state.generation === generation ? state : initial()
+  const reported = useRef<{ generation: number; settled: boolean }>({
+    generation,
+    settled: false
+  })
+  useEffect(() => {
+    if (!enabled) return
+    if (reported.current.generation !== generation)
+      reported.current = { generation, settled: false }
+    if (reported.current.settled) return
+    const error =
+      current.error ??
+      (errors.has(current.target.pageNumber)
+        ? new Error('阅读页加载失败，位置恢复未完成')
+        : undefined)
+    if (error) {
+      reported.current.settled = true
+      values.current.onError?.(error)
+    } else if (current.ready && !current.busy) {
+      reported.current.settled = true
+      values.current.onReady?.()
+    }
+  }, [
+    enabled,
+    generation,
+    current.error,
+    current.ready,
+    current.busy,
+    errors,
+    current.target.pageNumber
+  ])
   useLayoutEffect(() => {
     if (state.generation !== generation) setState(initial())
     // The generation owns the initial target, not subsequent prop echoes.
@@ -151,7 +190,8 @@ export function usePdfTextPagination(options: {
         generation: values.current.generation,
         target,
         busy: true,
-        ready: false
+        ready: false,
+        error: undefined
       }))
     },
     []
@@ -200,7 +240,7 @@ export function usePdfTextPagination(options: {
     setState((previous) =>
       previous.busy ? previous : { ...previous, busy: true }
     )
-    const layout = () => {
+    const measureLayout = () => {
       if (
         !valid() ||
         root.getBoundingClientRect().width <= 0 ||
@@ -264,6 +304,23 @@ export function usePdfTextPagination(options: {
       }))
       values.current.onCommit(next, target.publish && !unlocatable)
     }
+    const fail = (reason: unknown) => {
+      if (!valid()) return
+      const error = reason instanceof Error ? reason : new Error(String(reason))
+      setState((previous) => ({
+        ...previous,
+        busy: false,
+        ready: false,
+        error
+      }))
+    }
+    const layout = () => {
+      try {
+        measureLayout()
+      } catch (error) {
+        fail(error)
+      }
+    }
     const schedule = () => {
       if (valid()) {
         gate.current = true
@@ -274,9 +331,10 @@ export function usePdfTextPagination(options: {
         frame = requestAnimationFrame(layout)
       }
     }
-    schedule()
     const fonts = root.ownerDocument.fonts
-    fonts?.ready.then(schedule).catch(() => undefined)
+    // Initial readiness must include font layout, source-anchor restoration and
+    // the frame that applies the resulting column transform.
+    Promise.resolve(fonts?.ready).then(schedule).catch(fail)
     fonts?.addEventListener('loadingdone', schedule)
     return () => {
       cancelled = true
@@ -340,14 +398,18 @@ export function usePdfTextPagination(options: {
     [state]
   )
   useLayoutEffect(() => {
-    const failed = errors.has(target.pageNumber)
+    const failed =
+      current.error ??
+      (errors.has(target.pageNumber)
+        ? new Error('阅读页加载失败，保存未确认，请重试')
+        : undefined)
     if (!failed && (current.busy || !current.ready || gate.current)) return
     for (const waiter of stableWaiters.current) {
-      if (failed) waiter.reject(new Error('阅读页加载失败，保存未确认，请重试'))
+      if (failed) waiter.reject(failed)
       else waiter.resolve()
     }
     stableWaiters.current.clear()
-  }, [current.busy, current.ready, errors, target.pageNumber])
+  }, [current.busy, current.ready, current.error, errors, target.pageNumber])
   return {
     pageNumber: target.pageNumber,
     column: current.column,
@@ -374,6 +436,7 @@ export function usePdfTextPagination(options: {
     navigate,
     turn,
     whenStable: () => {
+      if (current.error) return Promise.reject(current.error)
       if (errors.has(target.pageNumber))
         return Promise.reject(new Error('阅读页加载失败，保存未确认，请重试'))
       if (!gate.current && current.ready && !current.busy)

@@ -94,3 +94,15 @@
 #### Scenario: Late callback after file or mode switch
 - **WHEN** 文件 A 或旧模式的延迟文字层/进度回调在切换到 B 或新模式后返回
 - **THEN** 不覆盖当前文件/模式的稳定位置，旧任务只能在其有效所属会话内结束，完整快照仍保留其他最新数据
+
+### Requirement: 可选的持久 WebView 会话替换
+
+宿主 MAY 使用 createReaderHostWorkspace 在同一 WebView 内更换文档。替换 MUST 先通过原会话 close/ACK 保存屏障，再发送校验 sourceToken、previousSessionId 和全新 sessionId 的 reader:replace-session。Web 入口 SHALL 保持 React root、串行释放旧引擎和 worker，新会话继续 v1 ready/open/restore，并在位置恢复完成的 document-ready 后才提交当前项；旧会话消息 SHALL 被拒绝。新文档失败 SHALL 报告 stage=document 的 ENGINE_FAILURE，并仅对当前会话执行一次宿主重载；关闭保存失败不属于文档重载条件。
+
+#### Scenario: 旧消息与失败回退
+- **WHEN** 新会话已建立时旧会话进度或错误迟到，或新会话重复上报加载错误
+- **THEN** 旧消息不影响新文档，新会话仅发起一次宿主存储重载，v1 旧宿主继续兼容
+
+#### Scenario: 替换后恢复 PDF 文字模式
+- **WHEN** 同一 WebView 从 PDF 文字模式切到 EPUB 并返回 PDF
+- **THEN** PDF 文字视图完成字体、分页布局和原位置恢复后才发 document-ready；宿主随后提交且容器不变，目标页或布局失败发送统一文档错误并触发宿主重载

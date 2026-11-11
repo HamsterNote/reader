@@ -152,10 +152,14 @@ describe('PDF Text viewer integration', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
     )
-    expect(onProgress).toHaveBeenLastCalledWith({
-      currentPageNumber: 3,
-      verticalPercentage: 0
-    })
+    // The button is disabled both while restoring and at the last page.
+    // Wait for the actual position commit rather than that transient UI state.
+    await waitFor(() =>
+      expect(onProgress).toHaveBeenLastCalledWith({
+        currentPageNumber: 3,
+        verticalPercentage: 0
+      })
+    )
     expect(screen.queryByRole('alert')).toBeNull()
   })
 

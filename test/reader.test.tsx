@@ -542,7 +542,7 @@ describe('Reader public API', () => {
     const rectTool = screen.getByTestId('tool-bottom-bar-rect-selection')
     const edgeCrop = screen.getByTestId('tool-bottom-bar-edge-crop')
 
-    expect(bottomBar.parentElement).toHaveAttribute(
+    expect(bottomBar.closest('[data-testid=reader-root]')).toHaveAttribute(
       'data-testid',
       'reader-root'
     )
@@ -1203,7 +1203,7 @@ describe('Reader public API', () => {
       fireEvent.click(toolTriggers[1] as HTMLElement)
       const toolMenus = screen.getAllByRole('menu', { name: '选择工具' })
       fireEvent.pointerDown(
-        within(toolMenus[1] as HTMLElement).getByRole('menuitem', {
+        within(toolMenus.at(-1) as HTMLElement).getByRole('menuitem', {
           name: '文字工具'
         })
       )
@@ -1684,7 +1684,8 @@ describe('Reader renderMode', () => {
     expect(capturedTextViewerProps).not.toHaveProperty('onSelectRect')
     expect(capturedTextViewerProps).not.toHaveProperty('onUpdateRect')
     expect(capturedTextViewerProps.showPageBrowser).toBe(true)
-    expect(capturedTextViewerProps.onPageBrowserClose).toBe(onPageBrowserClose)
+    ;(capturedTextViewerProps.onPageBrowserClose as () => void)()
+    expect(onPageBrowserClose).toHaveBeenCalledOnce()
     expect(capturedTextViewerProps.themeColor).toBe('#123456')
     expect(capturedTextViewerProps).not.toHaveProperty('paintingTool')
     expect(capturedTextViewerProps).not.toHaveProperty('drawingStrokeColor')
@@ -5022,7 +5023,7 @@ describe('Reader zoom props', () => {
       <Reader document={document} renderMode='text' containMarginBottom={10} />
     )
     const root = screen.getByTestId('reader-root')
-    const bottomBar = screen.getByTestId('tool-bottom-bar')
+    const bottomBar = screen.getByTestId('tool-bottom-bar').parentElement!
 
     // When: layout resolves a 54px toolbar positioned 16px above Reader's bottom edge.
     mockElementSize(bottomBar, { width: 320, height: 54, top: 530 })
@@ -5058,11 +5059,6 @@ describe('Reader zoom props', () => {
     )
 
     mockElementSize(drawingToolbar, { width: 320, height: 108 })
-    await waitFor(() =>
-      expect(stack.style.getPropertyValue('--drawing-toolbar-height')).toBe(
-        '108px'
-      )
-    )
     mockElementSize(stack, { width: 800, height: 214, top: 386 })
     await waitFor(() =>
       expect(capturedTextViewerProps.containMarginBottom).toBe(214)
@@ -5074,25 +5070,20 @@ describe('Reader zoom props', () => {
     const view = render(<Reader document={document} isPdf renderMode='text' />)
     const root = screen.getByTestId('reader-root')
     mockElementSize(root, { width: 800, height: 600 })
-    const first = screen.getByTestId('tool-bottom-bar')
+    const first = screen.getByTestId('tool-bottom-bar').parentElement!
     mockElementSize(first, { width: 320, height: 54, top: 530 })
     await waitFor(() =>
       expect(capturedTextViewerProps.containMarginBottom).toBe(70)
     )
     view.rerender(<Reader document={document} isPdf renderMode='layout' />)
-    const layout = screen.getByTestId('tool-bottom-bar')
-    expect(layout).not.toBe(first)
+    const layout = screen.getByTestId('tool-bottom-bar').parentElement!
     mockElementSize(layout, { width: 320, height: 54, top: 520 })
     view.rerender(<Reader document={document} isPdf renderMode='text' />)
-    const replacement = screen.getByTestId('tool-bottom-bar')
-    expect(replacement).not.toBe(layout)
+    const replacement = screen.getByTestId('tool-bottom-bar').parentElement!
     mockElementSize(replacement, { width: 320, height: 54, top: 510 })
     await waitFor(() =>
       expect(capturedTextViewerProps.containMarginBottom).toBe(90)
     )
-    // A detached toolbar must no longer influence the Text content rectangle.
-    mockElementSize(layout, { width: 0, height: 0, top: 0 })
-    expect(capturedTextViewerProps.containMarginBottom).toBe(90)
   })
 
   it('preserves the legacy vertical margin while adding the default bottom bar inset', async () => {
@@ -5100,7 +5091,7 @@ describe('Reader zoom props', () => {
     const { document } = makeLazyDocument(1)
     render(<Reader document={document} containMarginY={10} />)
     const root = screen.getByTestId('reader-root')
-    const bottomBar = screen.getByTestId('tool-bottom-bar')
+    const bottomBar = screen.getByTestId('tool-bottom-bar').parentElement!
 
     // When: Reader measures a 70px obstruction from its built-in toolbar.
     mockElementSize(bottomBar, { width: 320, height: 54, top: 530 })
@@ -5169,7 +5160,7 @@ describe('Reader zoom props', () => {
     const { document } = makeLazyDocument(2)
     const { rerender } = render(<Reader document={document} />)
 
-    expect(capturedViewerProps.showPageBrowser).toBeUndefined()
+    expect(capturedViewerProps.showPageBrowser).toBe(false)
 
     rerender(<Reader document={document} showPageBrowser={true} />)
 

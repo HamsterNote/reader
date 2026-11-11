@@ -15,7 +15,7 @@
 }
 .hamster-reader__epub-container {
   position: absolute;
-  inset: 0 0 var(--epub-bottom-inset, 0px);
+  inset: var(--epub-top-inset, 0px) 0 var(--epub-bottom-inset, 0px);
   overflow: hidden;
   overscroll-behavior: none;
   background: #fff;
@@ -27,7 +27,7 @@
 }
 .hamster-reader__epub-tools-viewport {
   position: absolute;
-  inset: 0 0 var(--epub-bottom-inset, 0px);
+  inset: var(--epub-top-inset, 0px) 0 var(--epub-bottom-inset, 0px);
   overflow: hidden;
   pointer-events: none;
 }
@@ -109,7 +109,7 @@
 }
 .hamster-reader__viewport-pagination {
   position: absolute;
-  bottom: 32px;
+  bottom: var(--reader-pagination-bottom, 32px);
   right: 16px;
   z-index: 20;
   button {
@@ -121,37 +121,6 @@
     }
   }
 }
-// Keep the shared toolbar to the left of the pagination group. On narrow
-// screens use two rows, measuring both for the publication's usable height.
-.hamster-reader__epub-bottom-bar {
-  position: absolute;
-  left: 16px;
-  right: 136px;
-  bottom: 32px;
-  z-index: 20;
-  width: auto;
-  pointer-events: none;
-  > *,
-  .hamster-reader__bottom-bar-stack > * {
-    position: static !important;
-    transform: none !important;
-    max-width: 100% !important;
-    pointer-events: auto;
-  }
-  .hamster-reader__bottom-bar-stack {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-    height: auto;
-    pointer-events: none;
-  }
-  @media (max-width: 767px) {
-    right: 16px;
-    bottom: 96px;
-  }
-}
-
 // Only the PDF Text branch uses CSS columns. The selection container remains a
 // stationary viewport, so its overlay geometry shares the visible text origin.
 .hamster-reader__pdf-text-viewport {

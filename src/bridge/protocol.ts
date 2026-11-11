@@ -14,6 +14,7 @@ export const READER_BRIDGE_PROTOCOL_VERSION = 1
  */
 export type BridgeMessageType =
   | 'ready'
+  | 'document-ready'
   | 'open'
   | 'restore'
   | 'command'
@@ -97,6 +98,7 @@ export type BridgeOpenPayload = {
 
 const MESSAGE_TYPES: readonly BridgeMessageType[] = [
   'ready',
+  'document-ready',
   'open',
   'restore',
   'command',

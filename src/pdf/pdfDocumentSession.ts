@@ -183,6 +183,10 @@ export class PdfSessionManager {
   private generation = 0
   private current: PdfDocumentSession | null = null
   private disposed = false
+  private pending = new Set<Promise<PdfSessionManagerOpenResult>>()
+  private disposal: Promise<void> | undefined
+  private cleanups = new Set<Promise<void>>()
+  private cleanupFailure: unknown
 
   get currentGeneration(): number {
     return this.generation
@@ -192,9 +196,22 @@ export class PdfSessionManager {
     return this.current
   }
 
-  async open(
+  open(
     source: PdfDocumentSource,
     options: OpenPdfDocumentOptions = {}
+  ): Promise<PdfSessionManagerOpenResult> {
+    const operation = this.openDocument(source, options)
+    this.pending.add(operation)
+    const settled = () => {
+      this.pending.delete(operation)
+    }
+    operation.then(settled, settled)
+    return operation
+  }
+
+  private async openDocument(
+    source: PdfDocumentSource,
+    options: OpenPdfDocumentOptions
   ): Promise<PdfSessionManagerOpenResult> {
     if (this.disposed) {
       throw new PdfDocumentOpenError('cancelled', 'Manager disposed', undefined)
@@ -207,8 +224,7 @@ export class PdfSessionManager {
 
     if (this.disposed || generation !== this.generation) {
       // 旧加载结果不进入后续文档（契约：STALE_SESSION / 竞态隔离）。
-      // eslint-disable-next-line sonarjs/void-use -- 竞态丢弃的会话后台释放
-      void session.dispose()
+      await session.dispose()
       throw new PdfDocumentOpenError(
         'cancelled',
         'Superseded by a newer open',
@@ -218,8 +234,17 @@ export class PdfSessionManager {
 
     const previous = this.current
     this.current = session
-    // eslint-disable-next-line sonarjs/void-use -- 旧会话后台释放，不阻塞新会话交付
-    if (previous) void previous.dispose()
+    if (previous) {
+      const cleanup = previous.dispose()
+      this.cleanups.add(cleanup)
+      cleanup.then(
+        () => this.cleanups.delete(cleanup),
+        (error) => {
+          this.cleanups.delete(cleanup)
+          this.cleanupFailure = error
+        }
+      )
+    }
     return { generation, session }
   }
 
@@ -233,10 +258,18 @@ export class PdfSessionManager {
 
   /** 关闭当前会话；之后不再产生该会话的任何事件。幂等。 */
   async dispose(): Promise<void> {
-    if (this.disposed) return
+    if (this.disposal) return this.disposal
     this.disposed = true
     const session = this.current
     this.current = null
-    if (session) await session.dispose()
+    this.disposal = (async () => {
+      try {
+        await session?.dispose()
+      } finally {
+        await Promise.allSettled([...this.pending, ...this.cleanups])
+      }
+      if (this.cleanupFailure) throw this.cleanupFailure
+    })()
+    return this.disposal
   }
 }

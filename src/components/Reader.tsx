@@ -1,3 +1,7 @@
+import type {
+  PaneToolbarLayout,
+  ToolbarFileNavigationProps
+} from '@hamster-note/painting/toolbar'
 import { pdfHighlightFill } from '../pdf/pdfSelectionPaint'
 import { removeHiddenPageNumbers } from '../pdf/hiddenPages'
 import type { HiddenPageEntry } from '../pdf/hiddenPages'
@@ -200,9 +204,20 @@ const resolveBottomBarHistoryStatus = ({
   }
 }
 
-export type ReaderProgressHandle = { readonly flush: () => Promise<void> }
+export type ReaderProgressHandle = {
+  readonly flush: () => Promise<void>
+  readonly getData: () => ReaderData | undefined
+}
 
-export type ReaderProps = {
+export type ReaderProps = ToolbarFileNavigationProps & {
+  /** Pane-local toolbar placement; explicit insets replace screen env insets. */
+  layout?: PaneToolbarLayout
+  /** Fired after engine layout and initial position restoration, including PDF text font/column layout. */
+  onEngineReady?: () => void
+  onEngineError?: (error: Error) => void
+  /** Registers asynchronous engine cleanup with a container's release barrier. */
+  onEngineDisposal?: (completion: Promise<void>) => void
+  onPageBrowserOpenChange?: (open: boolean) => void
   /** 重新采集稳定进度并冲刷 Reader 保存队列；宿主仍须等待实际持久化确认。 */
   progressRef?: Ref<ReaderProgressHandle>
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -626,14 +641,31 @@ function hasViewportPagination(
   return format === 'epub' || Boolean(isPdf && mode === 'text')
 }
 
+function toolbarSpace(layout: PaneToolbarLayout | undefined, inset: number) {
+  return layout?.edge === 'top'
+    ? { top: inset, bottom: 0 }
+    : { top: 0, bottom: inset }
+}
+function toolbarLayoutStyle(
+  layout: PaneToolbarLayout | undefined
+): CSSProperties {
+  return {
+    '--reader-pagination-bottom': `${32 + (layout?.insets.bottom ?? 0)}px`,
+    '--reader-toolbar-pagination-bottom': layout
+      ? `${80 + layout.insets.bottom}px`
+      : 'calc(80px + env(safe-area-inset-bottom, 0px))'
+  } as CSSProperties
+}
+
 function resolveVerticalMargins(
   containMarginTop: number | undefined,
   containMarginBottom: number | undefined,
   containMarginY: number | undefined,
   bottomBarInset: number,
-  mergeInsets = false
+  mergeInsets = false,
+  topBarInset = 0
 ): ResolvedVerticalMargins {
-  if (bottomBarInset === 0) {
+  if (bottomBarInset === 0 && topBarInset === 0) {
     return {
       top: containMarginTop,
       bottom: containMarginBottom,
@@ -642,7 +674,7 @@ function resolveVerticalMargins(
   }
 
   return {
-    top: containMarginTop ?? containMarginY,
+    top: Math.max(containMarginTop ?? containMarginY ?? 0, topBarInset),
     bottom: mergeInsets
       ? Math.max(containMarginBottom ?? containMarginY ?? 0, bottomBarInset)
       : (containMarginBottom ?? containMarginY ?? 0) + bottomBarInset,
@@ -848,8 +880,27 @@ export function Reader({
   onPageLoadStatusChange,
   popoverRelative,
   bottomBar,
-  progressRef
+  progressRef,
+  layout,
+  files,
+  currentFileKey,
+  paneId,
+  busy,
+  onSelectFile,
+  onRequestRemove,
+  onEngineReady,
+  onEngineError,
+  onEngineDisposal,
+  onPageBrowserOpenChange
 }: ReaderProps) {
+  const [internalPageBrowser, setInternalPageBrowser] = useState(false)
+  const pageBrowserOpen = showPageBrowser ?? internalPageBrowser
+  const changePageBrowser = (open: boolean) => {
+    setInternalPageBrowser(open)
+    onPageBrowserOpenChange?.(open)
+    if (!open) onPageBrowserClose?.()
+  }
+  useEffect(() => setInternalPageBrowser(false), [engineSource, document])
   const useVirtualPaper = !engineSource && useVirtualPaperProp
   const LayoutViewer = viewerForSource(engineSource)
   const [isDragging, setIsDragging] = useState(false)
@@ -939,9 +990,14 @@ export function Reader({
     handle?.captureAndPublish?.()
     saves.flush()
   }, [])
-  useImperativeHandle(progressRef, () => ({ flush: flushProgress }), [
-    flushProgress
-  ])
+  useImperativeHandle(
+    progressRef,
+    () => ({
+      flush: flushProgress,
+      getData: () => progressControl.current.getData()
+    }),
+    [flushProgress]
+  )
   useEffect(() => {
     const hide = () => {
       if (window.document.visibilityState === 'hidden')
@@ -1218,15 +1274,18 @@ export function Reader({
     bottomBarRef: defaultBottomBarRef,
     // Changing mode can replace the toolbar host (the pagination wrapper).
     // Reconnect the observer instead of measuring the detached Layout toolbar.
-    layoutKey: `${resolvedSelectedTool}:${resolvedRenderMode}`,
+    layoutKey: `${resolvedSelectedTool}:${resolvedRenderMode}:${JSON.stringify(layout)}`,
+    edge: layout?.edge,
     enabled: hasDocumentPages && bottomBar === undefined
   })
+  const occupied = toolbarSpace(layout, bottomBarInset)
   const resolvedVerticalMargins = resolveVerticalMargins(
     containMarginTop,
     containMarginBottom,
     containMarginY,
-    bottomBarInset,
-    isPdfDocument
+    occupied.bottom,
+    isPdfDocument,
+    occupied.top
   )
   const bottomBarHistoryStatus = resolveBottomBarHistoryStatus({
     status: historyStatus,
@@ -2170,6 +2229,8 @@ export function Reader({
       if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
         return (
           <IntermediateDocumentTextViewer
+            onEngineReady={onEngineReady}
+            onEngineError={onEngineError}
             document={document}
             pdfSource={engineSource}
             isEpub={isEpub}
@@ -2181,8 +2242,8 @@ export function Reader({
             containMarginTop={resolvedVerticalMargins.top}
             containMarginBottom={resolvedVerticalMargins.bottom}
             containMarginY={resolvedVerticalMargins.legacy}
-            showPageBrowser={showPageBrowser}
-            onPageBrowserClose={onPageBrowserClose}
+            showPageBrowser={pageBrowserOpen}
+            onPageBrowserClose={() => changePageBrowser(false)}
             themeColor={themeColor}
             commentCountByRangeId={commentCountByRangeId}
             bookmarks={whenEnabled(usesPreciseBookmarks, resolvedBookmarks)}
@@ -2280,6 +2341,9 @@ export function Reader({
         <Suspense fallback={<div role='status'>正在加载文档…</div>}>
           <LayoutViewer
             engineSource={engineSource}
+            onEngineReady={onEngineReady}
+            onEngineError={onEngineError}
+            onEngineDisposal={onEngineDisposal}
             engineRenderMode={resolvedRenderMode}
             engineDarkMode={darkMode}
             enginePopoverContext={{
@@ -2453,8 +2517,8 @@ export function Reader({
             onPaintingSettingsChange={handlePaintingSettingsChange}
             pagePaintings={resolvedPagePaintings}
             onPagePaintingChange={handlePagePaintingChange}
-            showPageBrowser={showPageBrowser}
-            onPageBrowserClose={onPageBrowserClose}
+            showPageBrowser={pageBrowserOpen}
+            onPageBrowserClose={() => changePageBrowser(false)}
             themeColor={themeColor}
             commentCountByRangeId={commentCountByRangeId}
             commentCountByRectId={commentCountByRectId}
@@ -2485,7 +2549,8 @@ export function Reader({
             ref={readerRootRef}
             className={rootClassName}
             data-testid='reader-root'
-            style={readerThemeStyle}
+            data-pane-toolbar-boundary='true'
+            style={{ ...readerThemeStyle, ...toolbarLayoutStyle(layout) }}
             aria-busy={resolvedLoadingProgress ? true : undefined}
           >
             {invalidStoredProgress(data, resolvedRenderMode) && (
@@ -2584,6 +2649,15 @@ export function Reader({
               hasDocumentPages &&
               (bottomBar === undefined ? (
                 <DefaultBottomBar
+                  files={files}
+                  currentFileKey={currentFileKey}
+                  paneId={paneId}
+                  busy={busy}
+                  onSelectFile={onSelectFile}
+                  onRequestRemove={onRequestRemove}
+                  layout={layout}
+                  outlineOpen={pageBrowserOpen}
+                  onOutlineToggle={() => changePageBrowser(!pageBrowserOpen)}
                   darkMode={darkMode}
                   bottomBarRef={defaultBottomBarRef}
                   renderMode={resolvedRenderMode}

@@ -79,6 +79,9 @@ import { EngineEpubLayoutLayer } from './EngineEpubLayoutLayer'
 import { RangeMagnifierProvider } from './IntermediateDocumentViewer/RangeMagnifier'
 
 type Props = IntermediateDocumentViewerProps & {
+  readonly onEngineReady?: () => void
+  readonly onEngineError?: (error: Error) => void
+  readonly onEngineDisposal?: (completion: Promise<void>) => void
   readonly enginePopoverContext?: Pick<
     DefaultPopoverContext,
     'onHighlightColorChange' | 'onCommentHighlight'
@@ -90,6 +93,21 @@ type Props = IntermediateDocumentViewerProps & {
   readonly onTextReadingProgressChange?: (
     progress: ReaderTextReadingProgress
   ) => void
+}
+
+function renderEngineOutline(
+  book: EpubEngineBookInfo | null,
+  pageNumbers: readonly number[],
+  onNavigate: (href: string) => void
+) {
+  if (!book) return <p role='status'>此文档没有章节目录，可使用页面导航。</p>
+  return (
+    <EpubOutline
+      items={book.toc}
+      pageNumbers={pageNumbers}
+      onNavigate={onNavigate}
+    />
+  )
 }
 
 type ActiveSelection =
@@ -261,6 +279,7 @@ function epubViewportStyle(
 ): CSSProperties | undefined {
   if (source?.format !== 'epub') return undefined
   return {
+    '--epub-top-inset': `${props.containMarginTop ?? props.containMarginY ?? 0}px`,
     '--epub-bottom-inset': `${Math.max(inset, (props.containMarginBottom ?? props.containMarginY ?? 0) + 8)}px`
   } as CSSProperties
 }
@@ -310,6 +329,11 @@ export function EngineDocumentViewer(props: Props) {
   const [retry, setRetry] = useState(0)
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const errorCallback = useRef(props.onEngineError)
+  errorCallback.current = props.onEngineError
+  useEffect(() => {
+    if (error) errorCallback.current?.(new Error(error))
+  }, [error])
   const [book, setBook] = useState<EpubEngineBookInfo | null>(null)
   const [unlocatable, setUnlocatable] = useState<readonly string[]>([])
   const [pageCount, setPageCount] = useState(0)
@@ -416,6 +440,7 @@ export function EngineDocumentViewer(props: Props) {
     root: rootElement,
     controlsRef: pagination,
     enabled: source?.format === 'epub',
+    topInset: props.containMarginTop ?? props.containMarginY ?? 0,
     bottomInset: props.containMarginBottom ?? props.containMarginY ?? 0
   })
   useEffect(() => {
@@ -877,6 +902,7 @@ export function EngineDocumentViewer(props: Props) {
         activeSource !== latest.current.engineSource
       )
         return
+      latest.current.onEngineReady?.()
       // Readiness must not itself publish/migrate stored progress. User input
       // or an explicit navigation enables saves, including replacement seeks.
     } catch (failure) {
@@ -1162,8 +1188,12 @@ export function EngineDocumentViewer(props: Props) {
         restored.current = true
         setBook(info)
         setEpubReady(true)
+        latest.current.onEngineReady?.()
       })
-      .catch(() => undefined)
+      .catch((failure) => {
+        if (!cancelled)
+          setError(failure instanceof Error ? failure.message : String(failure))
+      })
     return () => {
       cancelled = true
       invalidateHandoff()
@@ -1173,7 +1203,9 @@ export function EngineDocumentViewer(props: Props) {
       listeners.forEach((remove) => remove())
       listeners.clear()
       epub.current = null
-      engine.destroy().catch(() => undefined)
+      const disposal = engine.destroy()
+      latest.current.onEngineDisposal?.(disposal)
+      disposal.catch(() => undefined)
       if (cancelEpubHandoff.current === cancelHandoff)
         cancelEpubHandoff.current = () => {}
     }
@@ -1684,6 +1716,7 @@ export function EngineDocumentViewer(props: Props) {
             onSelectRange={activate}
             onSelectRect={selectRect}
             onTextSelectionChange={selectionChanged}
+            onDisposal={props.onEngineDisposal}
             onPagesLoaded={onPdfReady}
             onTextLayerReady={onPdfTextReady}
             onPageChange={publishPosition}
@@ -1792,19 +1825,11 @@ export function EngineDocumentViewer(props: Props) {
           </div>
         )}
         <PageBrowser
-          outline={
-            book && (
-              <EpubOutline
-                items={book.toc}
-                pageNumbers={pageNumbers}
-                onNavigate={(href) => {
-                  progressEnabled.current = true
-                  cancelSelection()
-                  epub.current?.goToTocHref(href).catch(() => undefined)
-                }}
-              />
-            )
-          }
+          outline={renderEngineOutline(book, pageNumbers, (href) => {
+            progressEnabled.current = true
+            cancelSelection()
+            epub.current?.goToTocHref(href).catch(() => undefined)
+          })}
           isOpen={props.showPageBrowser ?? false}
           pageNumbers={pageNumbers}
           pageSizesByPageNumber={previews.sizes}

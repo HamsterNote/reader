@@ -46,7 +46,8 @@ export function EpubOutline({
   readonly pageNumbers?: readonly number[]
   readonly onNavigate: (href: string) => void
 }) {
-  if (!items.length) return null
+  if (!items.length)
+    return <p role='status'>此文档没有章节目录，可使用页面导航。</p>
   return (
     <details className='hamster-reader__epub-outline'>
       <summary>目录</summary>

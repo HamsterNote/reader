@@ -187,6 +187,7 @@ export type PdfDocumentViewerProps = PdfOcrOptions & {
     typeof EdgeCropOverlay
   >['onApply']
   readonly onEdgeCropHidePage?: (pageNumber: number) => void
+  readonly onDisposal?: (completion: Promise<void>) => void
   readonly onHiddenPagesRestore?: (pageNumbers: readonly number[]) => void
   readonly canUndoHiddenPagesRestore?: boolean
   readonly onHiddenPagesRestoreUndo?: () => void
@@ -1126,8 +1127,9 @@ export const PdfDocumentViewer = forwardRef<
       selectionContextsRef.current.clear()
       const viewer = viewerRef.current
       if (viewer) setViewerDocument(viewer, null)
-      // eslint-disable-next-line sonarjs/void-use -- unmount 清理无需等待销毁完成
-      void manager.dispose()
+      const disposal = manager.dispose()
+      props.onDisposal?.(disposal)
+      disposal.catch(() => undefined)
     }
   }, [])
 
