@@ -206,47 +206,47 @@ const firstSource = ({ selector, inset }) => {
   const root = document.querySelector(selector)
   if (!root) return null
   const v = root.getBoundingClientRect()
+  const isVisibleCharacter = (rect) =>
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.top < v.bottom - 80 &&
+    rect.bottom > v.top + inset &&
+    rect.left < v.right &&
+    rect.right > v.left
   let first
-  const scanSpan = (span) => {
-    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT)
-    let node,
-      base = 0
-    while ((node = walker.nextNode())) {
-      for (let i = 0; i < node.length; i++) {
-        if (!node.textContent[i].trim()) continue
-        const range = document.createRange()
-        range.setStart(node, i)
-        range.setEnd(node, i + 1)
-        const r = range.getBoundingClientRect()
-        if (
-          r.width > 0 &&
-          r.height > 0 &&
-          r.top < v.bottom - 80 &&
-          r.bottom > v.top + inset &&
-          r.left < v.right &&
-          r.right > v.left &&
-          (!first || r.top < first.top - 0.5)
-        ) {
-          first = {
-            textId: span.dataset.textId,
-            pageNumber: Number(
-              span.dataset.pageNumber ||
-                span.closest('[data-page-number]')?.dataset.pageNumber ||
-                1
-            ),
-            offset: Number(span.dataset.selectionStartOffset) + base + i,
-            top: r.top,
-            safeTop: v.top + inset
-          }
+  const scanTextNode = (span, node, base) => {
+    for (let i = 0; i < node.length; i++) {
+      if (!node.textContent[i].trim()) continue
+      const range = document.createRange()
+      range.setStart(node, i)
+      range.setEnd(node, i + 1)
+      const r = range.getBoundingClientRect()
+      if (isVisibleCharacter(r) && (!first || r.top < first.top - 0.5)) {
+        first = {
+          textId: span.dataset.textId,
+          pageNumber: Number(
+            span.dataset.pageNumber ||
+              span.closest('[data-page-number]')?.dataset.pageNumber ||
+              1
+          ),
+          offset: Number(span.dataset.selectionStartOffset) + base + i,
+          top: r.top,
+          safeTop: v.top + inset
         }
       }
-      base += node.length
     }
   }
   for (const span of root.querySelectorAll(
     '[data-text-id][data-selection-start-offset]'
-  ))
-    scanSpan(span)
+  )) {
+    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT)
+    let node,
+      base = 0
+    while ((node = walker.nextNode())) {
+      scanTextNode(span, node, base)
+      base += node.length
+    }
+  }
   return first
 }
 async function measure(page, args) {
@@ -373,8 +373,8 @@ try {
           })
           assert.ok(Math.abs(result.error) <= 2, JSON.stringify(result))
           let kind = 'text-geometry-roundtrip'
-          if (pageNumber === 2) kind = 'blank-roundtrip'
           if (percentage === 100) kind = 'clamped-tail'
+          else if (pageNumber === 2) kind = 'blank-roundtrip'
           report.cases.push({
             width,
             scale,
