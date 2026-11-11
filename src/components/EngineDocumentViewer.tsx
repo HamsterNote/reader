@@ -719,7 +719,11 @@ export function EngineDocumentViewer(props: Props) {
       const position = result?.status === 'ready' ? result.position : undefined
       if (!position) return
       const textAnchor = isTextBookmark(position) ? position : undefined
-      latest.current.onTextAnchorChange?.(textAnchor)
+      latest.current.onTextAnchorChange?.(
+        latest.current.engineSource?.format === 'pdf'
+          ? (pdf.current?.captureTextAnchor() ?? undefined)
+          : textAnchor
+      )
       if (latest.current.engineRenderMode === 'text')
         latest.current.onTextReadingProgressChange?.({
           currentPageNumber: position.pageNumber,
@@ -1270,6 +1274,15 @@ export function EngineDocumentViewer(props: Props) {
         if (!restored.current || position?.status !== 'ready')
           throw new Error('当前阅读位置尚未就绪，保存未确认，请稍后重试')
         publishPosition(pageRef.current, position)
+      },
+      captureModeSwitchPosition: () => {
+        const result = pdf.current?.captureModeSwitchPosition?.()
+        if (result)
+          return result.status === 'ready' ? result.position : undefined
+        const fallback =
+          epub.current?.captureReadingPosition() ??
+          pdf.current?.captureReadingPosition()
+        return fallback?.status === 'ready' ? fallback.position : undefined
       },
       captureReadingPosition: () => {
         const result =

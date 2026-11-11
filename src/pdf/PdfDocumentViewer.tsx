@@ -2,7 +2,6 @@ import { pdfHighlightFill } from './pdfSelectionPaint'
 import { usePdfTouchSelection, pdfCaretAtPoint } from './pdfTouchSelection'
 import { normalizeBookmark, type ReadingPosition } from '../readingProgress'
 import {
-  firstVisibleCharacter,
   intersects,
   pagePercentage,
   type ViewportRect
@@ -83,31 +82,9 @@ import {
   canonicalRangeToDomRange
 } from './pdfTextMapping'
 
-type VisiblePdfAnchor = { anchor: ReaderTextAnchor; top: number }
+import { firstVisiblePdfCharacterGeometry } from './pdfReadingPosition'
 
-function firstPdfCharacter(
-  context: PdfPageSelectionContext,
-  clip: ViewportRect
-): VisiblePdfAnchor | undefined {
-  let first: VisiblePdfAnchor | undefined
-  for (const span of context.textLayerDiv.querySelectorAll<HTMLElement>(
-    '[data-selection-start-offset]'
-  )) {
-    const character = firstVisibleCharacter(span, clip)
-    if (!character || (first && character.top >= first.top - 1)) continue
-    const offset = Number(span.dataset.selectionStartOffset) + character.offset
-    first = {
-      top: character.top,
-      anchor: {
-        pageNumber: context.pageNumber,
-        textId: span.dataset.textId ?? '',
-        text: context.canonical.text.slice(offset, offset + 80),
-        offset
-      }
-    }
-  }
-  return first
-}
+type VisiblePdfAnchor = { anchor: ReaderTextAnchor; top: number }
 
 function capturePageText(
   context: PdfPageSelectionContext | undefined,
@@ -123,7 +100,10 @@ function capturePageText(
     !context.textLayerDiv.querySelector('.textLayer')
   )
     return { status: canonical?.text === '' ? 'ready' : 'pending' }
-  return { status: 'ready', character: firstPdfCharacter(context, clip) }
+  return {
+    status: 'ready',
+    character: firstVisiblePdfCharacterGeometry([context], clip) ?? undefined
+  }
 }
 
 export type PdfViewerTool = 'text-selection' | 'rect-selection' | 'drawing'
@@ -221,6 +201,7 @@ export type PdfDocumentViewerRef = {
   readonly setScale: (scale: number) => void
   readonly captureTextAnchor: () => ReaderTextAnchor | null
   readonly captureReadingPosition: () => ReadingPosition
+  readonly captureModeSwitchPosition?: () => ReadingPosition
   readonly isRendering: () => boolean
   readonly scrollToAnchor: (
     anchor: ReaderBookmark,
@@ -1548,6 +1529,45 @@ export const PdfDocumentViewer = forwardRef<
       return rect && intersects(rect, viewport) ? [{ pageNumber, rect }] : []
     })
     if (!pages.length) return { status: 'pending' }
+    const target =
+      pages.find(
+        ({ rect }) => rect.top <= viewport.top && rect.bottom > viewport.top
+      ) ?? pages[0]
+    const verticalPercentage = pagePercentage(viewport.top, target.rect)
+    if (verticalPercentage === undefined) return { status: 'pending' }
+    const position = { pageNumber: target.pageNumber, verticalPercentage }
+    lastStablePosition.current = position
+    return { status: 'ready', position }
+  }, [])
+
+  // Mode handoff needs text readiness independently of geometric persistence.
+  const captureModeSwitchPosition = useCallback((): ReadingPosition => {
+    const viewer = viewerRef.current
+    const viewport = viewportRect()
+    if (
+      !viewer ||
+      !viewport ||
+      viewport.height <= 0 ||
+      viewport.width <= 0 ||
+      pendingAnchor.current ||
+      isRestoringLayout()
+    )
+      return { status: 'pending' }
+    const restored = restoredTextPosition.current
+    const container = containerRef.current
+    if (
+      restored &&
+      restored.top === container?.scrollTop &&
+      restored.left === container.scrollLeft &&
+      restored.scale === viewerRef.current?.currentScale
+    )
+      return { status: 'ready', position: restored.anchor }
+    restoredTextPosition.current = null
+    const pages = visiblePagesRef.current.flatMap((pageNumber) => {
+      const rect = pageRect(pageNumber)
+      return rect && intersects(rect, viewport) ? [{ pageNumber, rect }] : []
+    })
+    if (!pages.length) return { status: 'pending' }
     let first: { anchor: ReaderTextAnchor; top: number } | undefined
     for (const { pageNumber, rect } of pages) {
       // A lower page that has not rendered cannot precede this known first line.
@@ -1575,45 +1595,17 @@ export const PdfDocumentViewer = forwardRef<
       if (character && (!first || character.top < first.top - 1))
         first = character
     }
-    if (first) {
-      lastStablePosition.current = first.anchor
-      return { status: 'ready', position: first.anchor }
-    }
-    const target =
-      pages.find(
-        ({ rect }) => rect.top <= viewport.top && rect.bottom > viewport.top
-      ) ?? pages[0]
-    const verticalPercentage = pagePercentage(viewport.top, target.rect)
-    if (verticalPercentage !== undefined)
-      lastStablePosition.current = {
-        pageNumber: target.pageNumber,
-        verticalPercentage
-      }
-    return verticalPercentage === undefined
-      ? { status: 'pending' }
-      : {
-          status: 'ready',
-          position: { pageNumber: target.pageNumber, verticalPercentage }
-        }
-  }, [])
+    if (first) return { status: 'ready', position: first.anchor }
+    return captureReadingPosition()
+  }, [captureReadingPosition])
   const captureTextAnchor = useCallback((): ReaderTextAnchor | null => {
     const pending = pendingAnchor.current?.anchor
     if (pending && 'offset' in pending) return pending
-    const restored = restoredTextPosition.current
-    const container = containerRef.current
-    if (
-      restored &&
-      restored.top === container?.scrollTop &&
-      restored.left === container.scrollLeft &&
-      restored.scale === viewerRef.current?.currentScale
-    )
-      return restored.anchor
-    restoredTextPosition.current = null
-    const result = captureReadingPosition()
+    const result = captureModeSwitchPosition()
     return result.status === 'ready' && 'offset' in result.position
       ? result.position
       : null
-  }, [captureReadingPosition])
+  }, [captureModeSwitchPosition])
   const scrollToAnchor = (
     stored: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
@@ -1764,6 +1756,7 @@ export const PdfDocumentViewer = forwardRef<
       },
       captureTextAnchor,
       captureReadingPosition,
+      captureModeSwitchPosition,
       isRendering: () => {
         const viewer = viewerRef.current
         return (

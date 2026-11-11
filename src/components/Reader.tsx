@@ -875,7 +875,7 @@ export function Reader({
   const currentReadingPositionRef = useRef<{
     mode: ReaderRenderMode
     document: ReaderDocumentInput
-    position: ReaderBookmark
+    position: ReaderBookmark | undefined
   } | null>(null)
   const readingPositionHandleRef = useRef<ReaderReadingPositionHandle>(null)
   const currentVirtualPaperStateRef = useRef<{
@@ -1252,28 +1252,39 @@ export function Reader({
     [document]
   )
 
-  const captureReadingPosition = useCallback(
+  const captureHandoffPosition = useCallback(
     (sourceMode: ReaderRenderMode) => {
+      const handle = readingPositionHandleRef.current
+      if (sourceMode === resolvedRenderMode) {
+        if (engineSource?.format === 'pdf' && handle?.captureModeSwitchPosition)
+          return handle.captureModeSwitchPosition()
+        return handle?.captureReadingPosition?.()
+      }
       const captured = currentReadingPositionRef.current
-      return (
-        (sourceMode === resolvedRenderMode
-          ? readingPositionHandleRef.current?.captureReadingPosition?.()
-          : undefined) ??
-        (captured?.mode === sourceMode && captured.document === document
-          ? captured.position
-          : undefined)
-      )
+      return captured?.mode === sourceMode && captured.document === document
+        ? captured.position
+        : undefined
     },
-    [document, resolvedRenderMode]
+    [document, resolvedRenderMode, engineSource?.format]
   )
 
   const handoffReadingPosition = useCallback(
-    (sourceMode: ReaderRenderMode, nextMode: ReaderRenderMode): ReaderData => {
+    (
+      sourceMode: ReaderRenderMode,
+      nextMode: ReaderRenderMode,
+      handoff?: ReaderBookmark
+    ): ReaderData => {
       progressControl.current.flush()
       const data = progressControl.current.getData()
       if (nextMode === sourceMode) return { ...data }
       const pagePosition = resolveReadingProgress(data ?? {}, sourceMode)
-      if (!useVirtualPaper && pagePosition && !('offset' in pagePosition))
+      if (
+        !handoff &&
+        engineSource?.format !== 'pdf' &&
+        !useVirtualPaper &&
+        pagePosition &&
+        !('offset' in pagePosition)
+      )
         return handoffPagePosition(pagePosition, nextMode, data)
       const currentTextAnchor = currentTextAnchorRef.current
       const sourcePersistedValueKey =
@@ -1293,7 +1304,10 @@ export function Reader({
           ? resolvedVirtualPaperState?.anchor
           : resolvedTextReadingProgress?.anchor)
 
-      const sourcePosition = captureReadingPosition(sourceMode) ?? sourceAnchor
+      const sourcePosition =
+        handoff ??
+        captureHandoffPosition(sourceMode) ??
+        (engineSource?.format === 'pdf' ? undefined : sourceAnchor)
 
       if (nextMode === 'text') {
         if (!sourcePosition) {
@@ -1352,7 +1366,9 @@ export function Reader({
     },
     [
       data,
-      captureReadingPosition,
+      engineSource?.format,
+      resolvedRenderMode,
+      captureHandoffPosition,
       defaultScale,
       document,
       handoffPagePosition,
@@ -1365,11 +1381,14 @@ export function Reader({
 
   const handleRenderModeChange = useCallback(
     (nextMode: ReaderRenderMode) => {
-      if (
-        engineSource?.format === 'pdf' &&
-        readingPositionHandleRef.current?.captureReadingPosition &&
-        !readingPositionHandleRef.current.captureReadingPosition()
-      ) {
+      const handle = readingPositionHandleRef.current
+      const handoff =
+        engineSource?.format === 'pdf'
+          ? handle?.captureModeSwitchPosition
+            ? handle.captureModeSwitchPosition()
+            : handle?.captureReadingPosition?.()
+          : undefined
+      if (engineSource?.format === 'pdf' && !handoff) {
         setReadingPositionNotice(true)
         return
       }
@@ -1392,7 +1411,11 @@ export function Reader({
           anchor: capturedAnchor
         }
       }
-      const nextData = handoffReadingPosition(resolvedRenderMode, nextMode)
+      const nextData = handoffReadingPosition(
+        resolvedRenderMode,
+        nextMode,
+        handoff
+      )
       completedModeHandoffRef.current = {
         sourceMode: resolvedRenderMode,
         nextMode
@@ -1426,13 +1449,15 @@ export function Reader({
     (handle: ReaderReadingPositionHandle | null) => {
       if (handle === null) {
         const position =
-          readingPositionHandleRef.current?.captureReadingPosition?.()
-        if (position)
-          currentReadingPositionRef.current = {
-            mode: resolvedRenderMode,
-            document,
-            position
-          }
+          engineSource?.format === 'pdf' &&
+          readingPositionHandleRef.current?.captureModeSwitchPosition
+            ? readingPositionHandleRef.current.captureModeSwitchPosition()
+            : readingPositionHandleRef.current?.captureReadingPosition?.()
+        currentReadingPositionRef.current = {
+          mode: resolvedRenderMode,
+          document,
+          position
+        }
         const capturedAnchor =
           readingPositionHandleRef.current?.captureTextAnchor()
         if (capturedAnchor) {
@@ -1453,6 +1478,7 @@ export function Reader({
       data?.textReadingProgress,
       data?.virtualPaper,
       document,
+      engineSource?.format,
       resolvedRenderMode
     ]
   )
