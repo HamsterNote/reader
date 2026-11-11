@@ -421,3 +421,94 @@ describe('PDF Text actual fragments and navigation', () => {
     expect(result.current.pageNumber).toBe(0)
   })
 })
+
+function readinessOptions() {
+  return {
+    enabled: true,
+    generation: 0,
+    root,
+    pages: [1],
+    progress: { currentPageNumber: 1, anchor: anchor(120) },
+    loaded: new Map([[1, []]]),
+    errors: new Set<number>(),
+    width: 300,
+    height: 200,
+    layoutKey: 1,
+    enqueue: vi.fn(),
+    onCommit: vi.fn(),
+    onTurn: vi.fn(),
+    onReady: vi.fn(),
+    onError: vi.fn()
+  }
+}
+
+describe('PDF text restoration lifecycle notifications', () => {
+  it('does not announce ready on mount, before font layout, or before restoring the source column', async () => {
+    let finishFonts!: () => void
+    const original = Object.getOwnPropertyDescriptor(document, 'fonts')
+    const fonts = Object.assign(new EventTarget(), {
+      ready: new Promise<void>((resolve) => {
+        finishFonts = resolve
+      })
+    })
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: fonts
+    })
+    const options = readinessOptions()
+    const { result, unmount } = renderHook(() => usePdfTextPagination(options))
+    try {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      })
+      expect(result.current.ready).toBe(false)
+      expect(options.onReady).not.toHaveBeenCalled()
+      expect(options.onCommit).not.toHaveBeenCalled()
+      await act(async () => {
+        finishFonts()
+      })
+      await waitFor(() => expect(options.onReady).toHaveBeenCalledTimes(1))
+      expect(result.current.column).toBe(1)
+      expect((root.firstElementChild as HTMLElement).style.transform).toBe(
+        'translateX(-324px)'
+      )
+      expect(options.onCommit.mock.invocationCallOrder[0]).toBeLessThan(
+        options.onReady.mock.invocationCallOrder[0]
+      )
+      act(() => fonts.dispatchEvent(new Event('loadingdone')))
+      await waitFor(() => expect(result.current.navigation.busy).toBe(false))
+      expect(options.onReady).toHaveBeenCalledTimes(1)
+    } finally {
+      unmount()
+      if (original) Object.defineProperty(document, 'fonts', original)
+      else Reflect.deleteProperty(document, 'fonts')
+    }
+  })
+
+  it('reports target-page load failure without a ready receipt', async () => {
+    const options = readinessOptions()
+    options.loaded.clear()
+    options.errors.add(1)
+    const { result } = renderHook(() => usePdfTextPagination(options))
+    await waitFor(() => expect(options.onError).toHaveBeenCalledTimes(1))
+    expect(options.onReady).not.toHaveBeenCalled()
+    await expect(result.current.whenStable()).rejects.toThrow('阅读页加载失败')
+  })
+
+  it('reports layout failure to the same lifecycle and stability barrier', async () => {
+    const options = readinessOptions()
+    vi.spyOn(root, 'getBoundingClientRect').mockImplementation(() => {
+      throw new Error('Injected layout failure')
+    })
+    const { result } = renderHook(() => usePdfTextPagination(options))
+    await waitFor(() =>
+      expect(options.onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Injected layout failure' })
+      )
+    )
+    expect(options.onReady).not.toHaveBeenCalled()
+    await expect(result.current.whenStable()).rejects.toThrow(
+      'Injected layout failure'
+    )
+  })
+})

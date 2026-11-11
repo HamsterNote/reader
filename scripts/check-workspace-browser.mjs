@@ -8,6 +8,18 @@ const output = resolve(repo, '../artifacts/reader-workspace-browser')
 await mkdir(output, { recursive: true })
 const server = await createServer({
   root: repo,
+  resolve: {
+    alias: [
+      {
+        find: /^@hamster-note\/reader$/,
+        replacement: resolve(repo, 'dist/index.js')
+      },
+      {
+        find: /^@hamster-note\/reader\/style\.css$/,
+        replacement: resolve(repo, 'dist/style.css')
+      }
+    ]
+  },
   server: { host: '127.0.0.1', port: 0 }
 })
 const report = { cases: [], errors: [] }
@@ -29,6 +41,10 @@ try {
       { timeout: 45000 }
     )
   await idle('a')
+  assert(
+    server.moduleGraph.getModuleById(resolve(repo, 'dist/index.js')),
+    'Fixture must consume the built public artifact'
+  )
   await page.locator('.pdfViewer .page[data-page-number="8"]').waitFor()
   const initial = await page.evaluate(() => {
     window.__container = document.querySelector('[data-reader-workspace]')
@@ -316,6 +332,74 @@ try {
   report.cases.push({
     name: 'EPUB chapter/character anchor survives pane reflow and roundtrip; other pane remains mounted',
     epubPosition
+  })
+  // This is the reviewer's actual persisted-text-mode reproduction, against dist.
+  await page.goto(
+    `http://127.0.0.1:${server.httpServer.address().port}/test/browser/workspace.html?text`
+  )
+  await idle('a')
+  await page.getByTestId('intermediate-text-page-8').waitFor()
+  const initialText = await page.evaluate(() => {
+    window.__textContainer = document.querySelector('[data-reader-workspace]')
+    return {
+      phase: window.workspaceTest.snapshot().phase,
+      transform: document.querySelector('.hsn-selection-content')?.style
+        .transform,
+      log: window.workspaceTest.log.slice(),
+      navigation: performance.getEntriesByType('navigation').length
+    }
+  })
+  assert.equal(initialText.phase, 'idle')
+  assert.match(initialText.transform, /^translateX\(/)
+  assert.equal(
+    initialText.log.filter((entry) => entry[0] === 'reload').length,
+    0
+  )
+  assert(
+    initialText.log.findIndex((entry) => entry[0] === 'ready') <
+      initialText.log.findIndex((entry) => entry[0] === 'commit')
+  )
+  await page.screenshot({ path: resolve(output, 'pdf-text-first-open.png') })
+  report.cases.push({
+    name: 'PDF text first open waits for real layout/restoration, then commits without reload',
+    ...initialText
+  })
+  await page.evaluate(() => window.workspaceTest.select('b'))
+  await idle('b')
+  await page.evaluate(() => window.workspaceTest.select('a'))
+  await idle('a')
+  await page.getByTestId('intermediate-text-page-8').waitFor()
+  const returnedText = await page.evaluate(() => ({
+    phase: window.workspaceTest.snapshot().phase,
+    currentFileKey: window.workspaceTest.snapshot().currentFileKey,
+    position: window.workspaceTest.snapshot().data.textReadingProgress,
+    transform: document.querySelector('.hsn-selection-content')?.style
+      .transform,
+    sameContainer:
+      window.__textContainer ===
+      document.querySelector('[data-reader-workspace]'),
+    navigation: performance.getEntriesByType('navigation').length,
+    log: window.workspaceTest.log.slice()
+  }))
+  assert.equal(returnedText.phase, 'idle')
+  assert.equal(returnedText.currentFileKey, 'a')
+  assert.equal(returnedText.position.currentPageNumber, 8)
+  assert.equal(returnedText.transform, initialText.transform)
+  assert.equal(returnedText.sameContainer, true)
+  assert.equal(returnedText.navigation, initialText.navigation)
+  assert.equal(
+    returnedText.log.filter((entry) => entry[0] === 'reload').length,
+    0
+  )
+  assert.equal(
+    returnedText.log.filter((entry) => entry[0] === 'ready' && entry[1] === 'a')
+      .length,
+    2
+  )
+  await page.screenshot({ path: resolve(output, 'pdf-text-roundtrip.png') })
+  report.cases.push({
+    name: 'PDF text roundtrip restores source position and commits after ready without reload',
+    ...returnedText
   })
   assert.deepEqual(report.errors, [])
 } catch (error) {

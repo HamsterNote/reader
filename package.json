@@ -55,7 +55,8 @@
     "host:check": "yarn build:webview && yarn verify:webview && yarn typecheck:host",
     "check:painting": "node scripts/check-painting-browser.mjs",
     "check:workspace": "node scripts/check-workspace-browser.mjs",
-    "check:session-replacement": "node scripts/check-session-replacement-browser.mjs"
+    "check:session-replacement": "node scripts/check-session-replacement-browser.mjs",
+    "check:pdf-text-readiness": "node scripts/check-session-replacement-browser.mjs --text"
   },
   "dependencies": {
     "@hamster-note/components": "0.2.1-beta.3",
@@ -125,7 +126,7 @@
     "typescript-eslint": "^8.50.0",
     "vite": "^7.0.0",
     "vitest": "^3.0.0",
-    "@hamster-note/painting": "file:vendor/hamster-note-painting-0.8.4-63abd68.tgz"
+    "@hamster-note/painting": "file:vendor/hamster-note-painting-0.8.4-57a82fb.tgz"
   },
   "publishConfig": {
     "access": "public",

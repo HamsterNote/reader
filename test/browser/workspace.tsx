@@ -7,8 +7,8 @@ import {
   type ReaderData,
   type ToolbarFile,
   type PaneToolbarLayout
-} from '../../dist/index.js'
-import '../../dist/style.css'
+} from '@hamster-note/reader'
+import '@hamster-note/reader/style.css'
 import { createRoot } from 'react-dom/client'
 import { useState } from 'react'
 
@@ -63,6 +63,12 @@ const persisted = new Map<string, ReaderData>([
     }
   ]
 ])
+if (new URLSearchParams(location.search).has('text')) {
+  persisted.set('a', {
+    renderMode: 'text',
+    textReadingProgress: { currentPageNumber: 8, verticalPercentage: 60 }
+  })
+}
 const log: unknown[] = []
 const config = { failSave: false, failLoad: false }
 let engineMounts = 0,

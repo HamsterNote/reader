@@ -1,6 +1,6 @@
 # 文件工具栏与 reader 会话（3.0.0）
 
-Reader 直接消费 `@hamster-note/painting/toolbar` 的 `ToolbarShell`、`ToolbarPopover`、`ToolbarFileMenu`。没有复制工具栏或文件列表实现。要求 painting **0.8.4**（精确 peer 依赖）；源码开发使用 `vendor/hamster-note-painting-0.8.4-63abd68.tgz` 的同版本官方构建包，来自 painting PR #48 / commit 63abd68。该包尚未发布到 npm。合并顺序为 painting #48 → reader 本 PR；发布顺序为 painting 0.8.4 → reader 3.0.0 → 宿主依赖接线。此 PR 不发布 npm，也不修改 WebBase。
+Reader 直接消费 `@hamster-note/painting/toolbar` 的 `ToolbarShell`、`ToolbarPopover`、`ToolbarFileMenu`。没有复制工具栏或文件列表实现。要求 painting **0.8.4**（精确 peer 依赖）；源码开发使用 `vendor/hamster-note-painting-0.8.4-57a82fb.tgz` 的同版本官方构建包，来自 painting PR #48 / commit 57a82fb。该包尚未发布到 npm。合并顺序为 painting #48 → reader 本 PR；发布顺序为 painting 0.8.4 → reader 3.0.0 → 宿主依赖接线。此 PR 不发布 npm，也不修改 WebBase。
 
 painting 从传递依赖改为必选 peer，属于安装契约变化，因此 reader 使用 **3.0.0**。宿主需显式安装 `@hamster-note/painting@0.8.4`；Reader 的旧 props 和底栏插槽保持兼容。
 
@@ -64,6 +64,8 @@ const session = new ReaderFileSession({
 
 位置缓存仅含 layoutReadingProgress / textReadingProgress，键为 storageId、规范 path、paneId；优先使用本栏位置，否则使用适配器从持久层加载的数据，再否则默认起点。沿用原 PDF 页码+文字锚点/页内百分比、EPUB 兼容字符锚点恢复；无法精确定位时原引擎提示并回退有效页，不修改批注和原存储定位。
 
+PDF 文字视图与原布局引擎共用 `onEngineReady/onEngineError`：等待目标页、字体、实际分页测量与位置变换完成后才通知 ready，每个文档 generation 一次；挂载或正文初现均不代表恢复成功。目标页加载、字体或布局失败通知 error。Workspace 用该通知解除恢复屏障，打包 WebView 用同一通知发送 document-ready 或 ENGINE_FAILURE；失败继续走既有宿主重载路径。
+
 双栏可共享 `new ReaderFileResourcePool(2)`（单栏可用 limit=1）。源数据/索引按规范身份引用计数，最后一个引用释放后才销毁；每栏仍有独立引擎和历史。池内 adapter.load 返回的 props 仅放共享且不含栏状态的文档/source；每栏数据和回调使用 adapter.viewProps，byte adapter 的 props 回调自动走此路径。不要将每栏选区、历史、回调放进共享 load 结果。资源销毁中的条目仍计入上限并拒绝重新获取。宿主用 `isActivePane` 指明持久最近位置的写入权。池不缓存非活动文档。
 
 ## WebView 的可选会话替换
@@ -73,5 +75,7 @@ const session = new ReaderFileSession({
 reload 回调为必选。webview 的 open/restore 引擎失败通过带 `stage: document` 的 ENGINE_FAILURE 报告，宿主对当前 session 只触发一次 reload；过期错误、重复错误和关闭冲刷错误不会触发文档重载。宿主回调须从持久存储重开，不使用失败中的空视图覆盖数据。新 sessionId 必须全程唯一，不循环复用。该能力是可选公开接线，不自动接入 WebBase；开发验收为 Web-only，不宣称原生实机验证。
 
 ## 验证与回滚
+
+文字模式回归：`yarn check:workspace` 包含首次打开文字模式、PDF→EPUB→PDF 文字模式往返两条场景；`yarn check:pdf-text-readiness` 对打包 WebView 运行相同位置恢复路径。均断言真实文字栏定位完成、宿主随后提交、没有 reload；另有单元测试覆盖字体等待、加载与布局失败。两份浏览器检查分别需要先完成 lib 与 webview 构建。
 
 `yarn typecheck`、`yarn lint`、`yarn test:run`、`yarn build:lib`、`yarn pack:check`，以及在构建后运行 `yarn check:workspace`（直接加载 dist）验证 Web 契约；另在 `yarn build:webview`（纯 Web 资产构建）后运行 `yarn check:session-replacement` 验证打包入口的会话替换。浏览器输出在调用者的 artifacts/reader-workspace-browser。旧宿主继续使用 Reader 单文档 props，不需要采用 Workspace。回滚恢复 reader/painting 依赖和入口即可；源文件、批注、组合与持久位置不转换、不删除。

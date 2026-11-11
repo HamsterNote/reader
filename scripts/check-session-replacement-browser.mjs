@@ -4,7 +4,13 @@ import { createServer } from 'node:http'
 import { resolve, extname } from 'node:path'
 import { chromium } from 'playwright'
 const repo = resolve(import.meta.dirname, '..')
-const output = resolve(repo, '../artifacts/reader-session-browser')
+const textMode = process.argv.includes('--text')
+const output = resolve(
+  repo,
+  textMode
+    ? '../artifacts/reader-session-browser-text'
+    : '../artifacts/reader-session-browser'
+)
 await mkdir(output, { recursive: true })
 const server = createServer(async (request, response) => {
   try {
@@ -44,142 +50,161 @@ try {
     report.errors.push(error.message)
     console.error(error.stack)
   })
-  await page.addInitScript(() => {
-    const token = 'replacement-contract'
-    let id = 'session-a',
-      format = 'pdf',
-      replacing = null,
-      counter = 0
-    const writes = [],
-      ready = [],
-      saved = new Map()
-    const initial = {
-      data: {
-        readerData: {
-          layoutReadingProgress: { pageNumber: 8, verticalPercentage: 45 }
-        }
-      },
-      progress: null,
-      revision: 0
-    }
-    saved.set('pdf', initial)
-    saved.set('epub', {
-      data: {
-        readerData: {
-          layoutReadingProgress: { pageNumber: 2, verticalPercentage: 0 }
-        }
-      },
-      progress: null,
-      revision: 0
-    })
-    const deliver = (type, payload, sessionId = id) =>
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          data: JSON.stringify({
-            version: 1,
-            type,
-            payload,
-            sessionId,
-            requestId: `host-${++counter}`
-          })
-        })
-      )
-    window.__READER_HOST__ = { sessionId: id, sourceToken: token }
-    window.ReactNativeWebView = {
-      postMessage(raw) {
-        const message = JSON.parse(raw)
-        if (message.sourceToken !== token || message.sessionId !== id) return
-        if (message.type === 'document-ready') ready.push(message.sessionId)
-        if (message.type === 'ready') {
-          if (replacing) {
-            const previousSessionId = id
-            deliver('dispose', {})
-            id = `session-${++counter}`
-            format = replacing
-            replacing = null
-            window.dispatchEvent(
-              new MessageEvent('message', {
-                data: JSON.stringify({
-                  type: 'reader:replace-session',
-                  version: 1,
-                  sourceToken: token,
-                  previousSessionId,
-                  sessionId: id,
-                  requestId: `replace-${counter}`
+  await page.addInitScript(
+    ({ textMode }) => {
+      const token = 'replacement-contract'
+      let id = 'session-a',
+        format = 'pdf',
+        replacing = null,
+        counter = 0
+      const writes = [],
+        ready = [],
+        saved = new Map()
+      const initial = {
+        data: {
+          readerData: {
+            ...(textMode
+              ? {
+                  renderMode: 'text',
+                  textReadingProgress: {
+                    currentPageNumber: 8,
+                    verticalPercentage: 60
+                  }
+                }
+              : {
+                  layoutReadingProgress: {
+                    pageNumber: 8,
+                    verticalPercentage: 45
+                  }
                 })
-              })
-            )
-            return
           }
-          setTimeout(() => {
-            deliver('open', {
-              document: {
-                fileId: `file-${format}`,
-                format,
-                fileUrl:
-                  location.origin +
-                  (format === 'pdf'
-                    ? '/webview-dist/publication.pdf'
-                    : '/webview-dist/publication.epub')
-              }
+        },
+        progress: null,
+        revision: 0
+      }
+      saved.set('pdf', initial)
+      saved.set('epub', {
+        data: {
+          readerData: {
+            layoutReadingProgress: { pageNumber: 2, verticalPercentage: 0 }
+          }
+        },
+        progress: null,
+        revision: 0
+      })
+      const deliver = (type, payload, sessionId = id) =>
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: JSON.stringify({
+              version: 1,
+              type,
+              payload,
+              sessionId,
+              requestId: `host-${++counter}`
             })
-            deliver(
-              'restore',
-              saved.get(format) ?? { data: null, progress: null, revision: 0 }
-            )
-          }, 0)
-        }
-        if (['change', 'progress'].includes(message.type)) {
-          writes.push(message)
-          saved.set(format, {
-            ...(saved.get(format) ?? {}),
-            ...message.payload
           })
-          setTimeout(
-            () =>
-              deliver('ack', {
-                requestId: message.requestId,
-                revision: message.payload.revision
-              }),
-            0
-          )
+        )
+      window.__READER_HOST__ = { sessionId: id, sourceToken: token }
+      window.ReactNativeWebView = {
+        postMessage(raw) {
+          const message = JSON.parse(raw)
+          if (message.sourceToken !== token || message.sessionId !== id) return
+          if (message.type === 'document-ready') ready.push(message.sessionId)
+          if (message.type === 'ready') {
+            if (replacing) {
+              const previousSessionId = id
+              deliver('dispose', {})
+              id = `session-${++counter}`
+              format = replacing
+              replacing = null
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: JSON.stringify({
+                    type: 'reader:replace-session',
+                    version: 1,
+                    sourceToken: token,
+                    previousSessionId,
+                    sessionId: id,
+                    requestId: `replace-${counter}`
+                  })
+                })
+              )
+              return
+            }
+            setTimeout(() => {
+              deliver('open', {
+                document: {
+                  fileId: `file-${format}`,
+                  format,
+                  fileUrl:
+                    location.origin +
+                    (format === 'pdf'
+                      ? '/webview-dist/publication.pdf'
+                      : '/webview-dist/publication.epub')
+                }
+              })
+              deliver(
+                'restore',
+                saved.get(format) ?? { data: null, progress: null, revision: 0 }
+              )
+            }, 0)
+          }
+          if (['change', 'progress'].includes(message.type)) {
+            writes.push(message)
+            saved.set(format, {
+              ...(saved.get(format) ?? {}),
+              ...message.payload
+            })
+            setTimeout(
+              () =>
+                deliver('ack', {
+                  requestId: message.requestId,
+                  revision: message.payload.revision
+                }),
+              0
+            )
+          }
         }
       }
-    }
-    window.replacementTest = {
-      writes,
-      ready,
-      saved,
-      select: (next) => {
-        replacing = next
-        deliver('command', { name: 'flush' })
-      },
-      stale: () =>
-        deliver(
-          'restore',
-          {
-            data: {
-              layoutReadingProgress: { pageNumber: 1, verticalPercentage: 0 }
+      window.replacementTest = {
+        writes,
+        ready,
+        saved,
+        select: (next) => {
+          replacing = next
+          deliver('command', { name: 'flush' })
+        },
+        stale: () =>
+          deliver(
+            'restore',
+            {
+              data: {
+                layoutReadingProgress: { pageNumber: 1, verticalPercentage: 0 }
+              },
+              progress: null,
+              revision: 0
             },
-            progress: null,
-            revision: 0
-          },
-          'session-a'
-        ),
-      id: () => id
-    }
-  })
+            'session-a'
+          ),
+        id: () => id
+      }
+    },
+    { textMode }
+  )
   await page.goto(
     `http://127.0.0.1:${server.address().port}/webview-dist/index.html`
   )
-  await page
-    .locator('[data-engine="pdf"] .page[data-page-number="8"]')
-    .waitFor()
-  await page.waitForFunction(() =>
-    document.querySelector(
-      '[data-engine="pdf"] .page[data-page-number="8"] canvas'
+  const pdfPage = textMode
+    ? '[data-testid="intermediate-text-page-8"]'
+    : '[data-engine="pdf"] .page[data-page-number="8"]'
+  await page.locator(pdfPage).waitFor()
+  if (textMode)
+    await page.waitForFunction(() =>
+      document
+        .querySelector('.hsn-selection-content')
+        ?.style.transform.startsWith('translateX(')
     )
-  )
+  else await page.locator(pdfPage + ' canvas').waitFor()
   await page.evaluate(() => {
     window.__sameRoot = document.getElementById('reader')
     window.__mountId = crypto.randomUUID()
@@ -196,9 +221,7 @@ try {
     ).some((item) => item.doc.body.textContent.includes('第一章'))
   )
   await page.evaluate(() => window.replacementTest.select('pdf'))
-  await page
-    .locator('[data-engine="pdf"] .page[data-page-number="8"]')
-    .waitFor({ timeout: 45000 })
+  await page.locator(pdfPage).waitFor({ timeout: 45000 })
   await page.waitForFunction(() => window.replacementTest.ready.length === 2)
   await page.evaluate(() => window.replacementTest.stale())
   const result = await page.evaluate(() => ({
@@ -217,7 +240,12 @@ try {
   assert.equal(result.sameRoot, true)
   assert.equal(result.mountId, original.mountId)
   assert.equal(result.navigation, original.navigation)
-  assert.equal(result.saved.data.readerData.layoutReadingProgress.pageNumber, 8)
+  assert.equal(
+    textMode
+      ? result.saved.data.readerData.textReadingProgress.currentPageNumber
+      : result.saved.data.readerData.layoutReadingProgress.pageNumber,
+    8
+  )
   assert.notEqual(result.sessionId, 'session-a')
   assert.deepEqual(result.staleWrites, [])
   assert.deepEqual(report.errors, [])
@@ -225,7 +253,9 @@ try {
     path: resolve(output, 'webview-pdf-epub-roundtrip.png')
   })
   report.cases.push({
-    name: 'packaged WebView keeps root and navigation count across new isolated PDF/EPUB sessions',
+    name: textMode
+      ? 'packaged WebView PDF text first-open and roundtrip acknowledge only after restored layout'
+      : 'packaged WebView keeps root and navigation count across new isolated PDF/EPUB sessions',
     ...result
   })
 } catch (error) {

@@ -212,7 +212,7 @@ export type ReaderProgressHandle = {
 export type ReaderProps = ToolbarFileNavigationProps & {
   /** Pane-local toolbar placement; explicit insets replace screen env insets. */
   layout?: PaneToolbarLayout
-  /** Fired after the native-byte engine has completed initial position restoration. */
+  /** Fired after engine layout and initial position restoration, including PDF text font/column layout. */
   onEngineReady?: () => void
   onEngineError?: (error: Error) => void
   /** Registers asynchronous engine cleanup with a container's release barrier. */
@@ -2076,6 +2076,8 @@ export function Reader({
       if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
         return (
           <IntermediateDocumentTextViewer
+            onEngineReady={onEngineReady}
+            onEngineError={onEngineError}
             document={document}
             pdfSource={engineSource}
             isEpub={isEpub}

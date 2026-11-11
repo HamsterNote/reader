@@ -894,6 +894,8 @@ function useSelectionHighlight(
  * 绘制相关 props；页面浏览侧栏则与布局模式共用书签和文本高亮数据。
  */
 export type IntermediateDocumentTextViewerProps = {
+  readonly onEngineReady?: () => void
+  readonly onEngineError?: (error: Error) => void
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   isEpub?: boolean
   /** 当前文档是否为 PDF；文本模式据此启用基于 box 的段落重建。 */
@@ -1638,6 +1640,8 @@ export function IntermediateDocumentTextViewer(
     paginationControlsRef
   )
   const pdfPagination = usePdfTextPagination({
+    onReady: props.onEngineReady,
+    onError: props.onEngineError,
     enabled: isPdf,
     generation: documentGeneration,
     root: viewerRootElement,
