@@ -27,15 +27,18 @@ WEBBASE_DIR=../WebBase WEBBASE_PORT=6229 node scripts/serve-webbase-reader.mjs
 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' node scripts/check-webbase-pdf-reselection.mjs
 ```
 
-脚本通过真实文件导入、原生 Selection、菜单、鼠标或 CDP 触摸事件操作宿主。监听真实 bridge 的文件写入，等待侧车异步队列结束后检查保存内容。普通与逆序 PDF、鼠标与触摸、三次重选，共 12 组，每组连续往返移动 25 次。检查单个预览、取消选中时清空预览和手柄、释放后原 ID、唯一片段 ID、准确文本和绘制数量。
+脚本通过真实文件导入、原生 Selection、菜单、鼠标或 CDP 触摸事件操作宿主。监听真实 bridge 的文件写入，等到新的提交写入出现并经过 300ms 无写入窗口后检查保存内容；此静默窗口不是持久化队列已完全清空的严格证明。普通与逆序 PDF、鼠标与触摸、起点与终点手柄、三次重选，共 24 组，每组连续往返移动 25 次。
+
+每次先创建第二个独立高亮，并在目标高亮创建和每轮调整后比较其完整保存对象（包括文本、页号、canonical 起止偏移）。目标范围的每个片段都按固定 PDF 绘制/源字符顺序独立计算预期页号和 canonical 起止偏移，不调用生产映射函数或从实际结果推导预期。终点调整为 16 → 6 → 1 个片段，起点调整为 14 → 6 → 1 个片段，覆盖多片段收缩为单片段；普通样本始终是单范围。另检查单个预览、取消选中时清空预览和手柄、原逻辑 ID、唯一片段 ID 和绘制数量。
+
+样本每个字符唯一，比较前按字母显示顺序排列片段，避免宿主 upsert 的插入顺序影响逐片段端点比较。本回归不验证 selectionGroup.index 的正确性：WebBase 的 mergeRangeById 比较未包含该元数据，扩大起点时观察到旧 index 被保留。该宿主行为未在本次只补强测试的改动中修改。终点落在前一字符右边缘以排除重排文本插入的显示空格；包含这些空格的选区端点也不在本轮断言范围内。
 
 生成的 normal.pdf、reordered.pdf、逐次写入、截图和报告在 test-results/webbase-reselection。人工导入 reordered.pdf，切换文字模式，在第三行标记 i 到 r；取消并重选后，把终点扩大到 x，再缩回 n，预期仅 i 到 n 保持高亮。
 
 修复前主线与原 npm 构建均在缩小范围时失败；修复后 Chromium 148.0.7778.96：
 
 ```text
-{"reordered":true,"input":"mouse","cycle":1,"expected":6,"actual":6,"text":"ijklmn","maxPreviews":1,"uniqueIds":6}
-PASS: 12 WebBase PDF reselection/drag cases
+PASS: 24 WebBase PDF reselection/drag cases
 ```
 
 ## 其余回归与验证边界

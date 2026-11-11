@@ -13,12 +13,49 @@ await mkdir(output, { recursive: true })
 const browser = await chromium.launch()
 const report = { url: base, browser: browser.version(), cases: [] }
 const alphabet = 'abcdefghijklmnopqrstuvwxyz'
+const headings = ['Heading one', 'Heading two']
+const canonicalBase = headings.join('').length
+const gestures = ['mouse', 'touch'].flatMap((input) =>
+  ['end', 'start'].map((side) => ({ input, side }))
+)
+const endpoints = (range) => ({
+  text: range.text,
+  startPage: range.start.selectionId,
+  startOffset: range.start.offset,
+  endPage: range.end.selectionId,
+  endOffset: range.end.offset
+})
+// Upsert-only hosts append newly exposed fragments after existing ones. This
+// fixture has unique letters: compare each source fragment in visual alphabet
+// order, independently of insertion order and selectionGroup.index metadata.
+const targetFragments = (ranges, independentId) =>
+  ranges
+    .filter((item) => item.id !== independentId)
+    .sort((a, b) => alphabet.indexOf(a.text[0]) - alphabet.indexOf(b.text[0]))
+// Independent oracle: offsets follow the PDF drawing/source order below, not
+// the reader's DOM-to-canonical conversion or the returned annotation values.
+const expectedFragments = (start, end, reordered) => {
+  const fragment = (text, offset, length) => ({
+    text,
+    startPage: 'page-1',
+    startOffset: offset,
+    endPage: 'page-1',
+    endOffset: offset + length
+  })
+  if (!reordered)
+    return [
+      fragment(alphabet.slice(start, end), canonicalBase + start, end - start)
+    ]
+  return Array.from({ length: end - start }, (_, index) =>
+    fragment(alphabet[start + index], canonicalBase + 25 - start - index, 1)
+  )
+}
 try {
   for (const reordered of [false, true]) {
     const pdf = await PDFDocument.create()
     const sheet = pdf.addPage([600, 800])
-    sheet.drawText('Heading one', { x: 40, y: 760, size: 12 })
-    sheet.drawText('Heading two', { x: 40, y: 730, size: 12 })
+    sheet.drawText(headings[0], { x: 40, y: 760, size: 12 })
+    sheet.drawText(headings[1], { x: 40, y: 730, size: 12 })
     if (reordered) {
       for (let i = alphabet.length - 1; i >= 0; i--)
         sheet.drawText(alphabet[i], { x: 40 + i * 12, y: 700, size: 12 })
@@ -28,7 +65,7 @@ try {
       `${output}/${reordered ? 'reordered' : 'normal'}.pdf`,
       bytes
     )
-    for (const input of ['mouse', 'touch']) {
+    for (const { input, side } of gestures) {
       const page = await browser.newPage({
         viewport: { width: 1400, height: 950 },
         hasTouch: true
@@ -37,7 +74,7 @@ try {
       page.on('pageerror', (error) => errors.push(error.message))
       page.setDefaultTimeout(20000)
       const cdp = await page.context().newCDPSession(page)
-      const name = `${reordered ? 'reordered' : 'normal'}-${input}`
+      const name = `${reordered ? 'reordered' : 'normal'}-${input}-${side}`
       try {
         await page.goto(base)
         await page.getByRole('heading', { name: 'WebView Demo' }).waitFor()
@@ -95,28 +132,34 @@ try {
             range.setStart(glyph.firstChild, reordered ? 0 : offset)
             range.setEnd(glyph.firstChild, reordered ? 1 : offset + 1)
             const rect = range.getBoundingClientRect()
+            return {
+              x: rect.x + 0.2,
+              hitX: rect.x + rect.width / 2,
+              rightX: rect.right - 0.2,
+              y: rect.y + rect.height / 2
+            }
+          }
+          const heading = element
+            .closest('.hsn-selection-content')
+            .querySelectorAll('[data-text-id]')[1]
+          const headingAt = (offset) => {
+            const range = document.createRange()
+            range.setStart(heading.firstChild, offset)
+            range.setEnd(heading.firstChild, offset + 1)
+            const rect = range.getBoundingClientRect()
             return { x: rect.x + 0.2, y: rect.y + rect.height / 2 }
           }
           return {
-            start: at(8),
-            middle: at(11),
-            end: at(18),
-            targets: [at(24), at(14), at(22)]
+            letters: Array.from({ length: 26 }, (_, offset) => at(offset)),
+            independentStart: headingAt(2),
+            independentEnd: headingAt(7)
           }
         }, reordered)
-        await page.mouse.move(points.start.x, points.start.y)
-        await page.mouse.down()
-        await page.mouse.move(points.end.x, points.end.y, { steps: 6 })
-        await page.mouse.up()
-        await page.getByRole('button', { name: '高亮', exact: true }).click()
-        await page.waitForFunction(() => window.highlightWrites.at(-1)?.length)
-        await page.waitForFunction(
-          () => performance.now() - window.lastHighlightWriteAt > 300
-        )
-        const originalId = await page.evaluate(
-          () => window.highlightWrites.at(-1)[0].id
-        )
-        for (let cycle = 0; cycle < 3; cycle++) {
+        const settleWrites = () =>
+          page.waitForFunction(
+            () => performance.now() - window.lastHighlightWriteAt > 300
+          )
+        const deselect = async () => {
           const viewer = await page
             .getByTestId('intermediate-document-text-viewer')
             .boundingBox()
@@ -124,7 +167,6 @@ try {
             viewer.x + viewer.width / 2,
             viewer.y + viewer.height - 80
           )
-          const handles = page.locator('[data-pdf-handle-hit-target]')
           await page.waitForFunction(
             () => !document.querySelector('[data-pdf-handle-hit-target]')
           )
@@ -134,9 +176,70 @@ try {
               .count(),
             0
           )
-          await page.mouse.click(points.middle.x, points.middle.y)
+        }
+        const createHighlight = async (start, end) => {
+          const count = await page.evaluate(() => window.highlightWrites.length)
+          await page.mouse.move(start.x, start.y)
+          await page.mouse.down()
+          await page.mouse.move(end.x, end.y, { steps: 6 })
+          await page.mouse.up()
+          await page.getByRole('button', { name: '高亮', exact: true }).click()
+          await page.waitForFunction(
+            (count) => window.highlightWrites.length > count,
+            count
+          )
+          await settleWrites()
+        }
+        await createHighlight(points.independentStart, points.independentEnd)
+        const independent = await page.evaluate(
+          () => window.highlightWrites.at(-1)[0]
+        )
+        assert.deepEqual(endpoints(independent), {
+          text: 'ading',
+          startPage: 'page-1',
+          startOffset: 13,
+          endPage: 'page-1',
+          endOffset: 18
+        })
+        await deselect()
+        const endpointPoint = (offset, side) => {
+          // Reordered glyphs have synthetic DOM spaces between them. An end
+          // offset means the right edge of the preceding source character,
+          // not the left edge of the next glyph beyond that synthetic space.
+          const glyph = points.letters[side === 'end' ? offset - 1 : offset]
+          return { x: side === 'end' ? glyph.rightX : glyph.x, y: glyph.y }
+        }
+        await createHighlight(points.letters[8], endpointPoint(18, 'end'))
+        const originalId = await page.evaluate(
+          (id) =>
+            window.highlightWrites.at(-1).find((item) => item.id !== id).id,
+          independent.id
+        )
+        let currentStart = 8,
+          currentEnd = 18
+        const initial = await page.evaluate(() => window.highlightWrites.at(-1))
+        assert.deepEqual(
+          initial.find((item) => item.id === independent.id),
+          independent
+        )
+        assert.deepEqual(
+          targetFragments(initial, independent.id).map(endpoints),
+          expectedFragments(8, 18, reordered)
+        )
+        for (let cycle = 0; cycle < 3; cycle++) {
+          await deselect()
+          const handles = page.locator('[data-pdf-handle-hit-target]')
+          const middle =
+            points.letters[Math.floor((currentStart + currentEnd) / 2)]
+          await page.mouse.click(middle.hitX, middle.y)
           await handles.first().waitFor()
-          const box = await handles.last().boundingBox()
+          const box = await page
+            .locator(`[data-pdf-handle-hit-target="${side}"]`)
+            .boundingBox()
+          const targetOffset = (side === 'end' ? [24, 14, 9] : [4, 12, 17])[
+            cycle
+          ]
+          const oldOffset = side === 'end' ? currentEnd : currentStart
           const grab = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
           assert.ok(
             await page.evaluate(
@@ -151,7 +254,7 @@ try {
           const touch = (type, point) =>
             cdp.send('Input.dispatchTouchEvent', {
               type,
-              touchPoints: point ? [{ id: 1, ...point }] : []
+              touchPoints: point ? [{ id: 1, x: point.x, y: point.y }] : []
             })
           if (input === 'touch') await touch('touchStart', grab)
           else {
@@ -160,7 +263,10 @@ try {
           }
           let maxPreviews = 0
           for (let step = 0; step < 25; step++) {
-            const point = step % 2 === 0 ? points.targets[cycle] : points.end
+            const point = endpointPoint(
+              step % 2 === 0 ? targetOffset : oldOffset,
+              side
+            )
             if (input === 'touch') await touch('touchMove', point)
             else await page.mouse.move(point.x, point.y)
             const previews = await page
@@ -184,42 +290,57 @@ try {
               writesBeforeRelease
             )
           // The real host serializes sidecar writes through its async bridge.
-          // Read only after that queue has settled, not after the first write.
+          // Require a quiet window after a new commit write; this is not a
+          // strict host-side queue drain acknowledgement.
           await page.waitForFunction(
             () => performance.now() - window.lastHighlightWriteAt > 300
           )
           const saved = await page.evaluate(() => window.highlightWrites.at(-1))
-          const end = [24, 14, 22][cycle]
+          if (side === 'end') currentEnd = targetOffset
+          else currentStart = targetOffset
+          const fragments = targetFragments(saved, independent.id)
+          const expected = expectedFragments(
+            currentStart,
+            currentEnd,
+            reordered
+          )
+          assert.deepEqual(
+            saved.find((item) => item.id === independent.id),
+            independent,
+            'the independent highlight must remain completely unchanged'
+          )
           const result = {
             reordered,
             input,
+            side,
             cycle,
-            expected: reordered ? end - 8 : 1,
-            actual: saved.length,
-            text: saved.map((range) => range.text).join(''),
+            expected: expected.length,
+            actual: fragments.length,
+            fragments: fragments.map(endpoints),
+            independent: endpoints(independent),
             maxPreviews,
             uniqueIds: new Set(saved.map((range) => range.id)).size
           }
           report.cases.push(result)
           console.log(JSON.stringify(result))
           assert.equal(
-            saved[0].id,
+            fragments[0].id,
             originalId,
             'retain logical highlight identity'
           )
-          assert.equal(
-            result.text,
-            alphabet.slice(8, end),
-            'remove retired fragments after shrink'
+          assert.deepEqual(
+            result.fragments,
+            expected,
+            'every fragment must retain its exact source page and canonical endpoints'
           )
           assert.equal(result.actual, result.expected)
-          assert.equal(result.uniqueIds, result.actual)
+          assert.equal(result.uniqueIds, saved.length)
           assert.equal(await handles.count(), 2)
           assert.equal(
             await page
               .locator('.hsn-selection-percent-rect, .hsn-selection-rect')
               .count(),
-            result.actual
+            saved.length
           )
         }
         assert.deepEqual(errors, [])
