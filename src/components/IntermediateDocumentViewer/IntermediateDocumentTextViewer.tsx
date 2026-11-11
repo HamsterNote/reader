@@ -7,6 +7,10 @@ import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
 import {
+  createFlowTextReadiness,
+  isClampedFlowTargetVisible
+} from '../reading/flowTextReadiness'
+import {
   resolveReaderTheme,
   usePrefersColorScheme
 } from '../Reader/useDefaultBottomBar'
@@ -1121,6 +1125,9 @@ export function IntermediateDocumentTextViewer(
   const pdfNavigationRef = useRef<ReturnType<
     typeof usePdfTextPagination
   > | null>(null)
+  const flowReadinessRef = useRef<ReturnType<
+    typeof createFlowTextReadiness
+  > | null>(null)
   const preferredTheme = usePrefersColorScheme()
   const paginationTheme = resolveReaderTheme(darkMode, preferredTheme)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -1382,9 +1389,11 @@ export function IntermediateDocumentTextViewer(
         return position ? { status: 'ready', position } : { status: 'pending' }
       },
       waitForStable: () =>
-        pdfNavigationRef.current?.whenStable() ?? Promise.resolve()
+        isPdf
+          ? (pdfNavigationRef.current?.whenStable() ?? Promise.resolve())
+          : (flowReadinessRef.current?.waitForStable() ?? Promise.resolve())
     }),
-    [captureCurrentTextAnchor, captureReadingProgress]
+    [captureCurrentTextAnchor, captureReadingProgress, isPdf]
   )
 
   const cancelRestoreAttempt = useCallback(() => {
@@ -1536,7 +1545,10 @@ export function IntermediateDocumentTextViewer(
       setReadingProgress(requestedProgress)
       restoredProgressPageRef.current = requestedPageNumber
       suppressProgrammaticProgressRef.current = true
-      if (currentPageNumber === requestedPageNumber) {
+      if (
+        currentPageNumber === requestedPageNumber ||
+        isClampedFlowTargetVisible(scrollElement, requestedPageNumber)
+      ) {
         isInitialProgressRestorePendingRef.current = false
         return
       }
@@ -2433,6 +2445,67 @@ export function IntermediateDocumentTextViewer(
   useEffect(() => {
     if (!isPdf) restoreScrollReadingProgress()
   }, [isPdf, restoreScrollReadingProgress])
+
+  // A browser may clamp scrollToIndex without emitting another scroll event
+  // when the final page already fits in the viewport. Recheck after measured
+  // text commits, so restoration completes from geometry rather than a timer.
+  useEffect(() => {
+    if (isPdf || !viewerRootElement) return
+    const frame =
+      viewerRootElement.ownerDocument.defaultView!.requestAnimationFrame(() => {
+        if (isInitialProgressRestorePendingRef.current)
+          restoreInitialReadingProgress(virtualizer)
+      })
+    return () =>
+      viewerRootElement.ownerDocument.defaultView!.cancelAnimationFrame(frame)
+  }, [
+    isPdf,
+    viewerRootElement,
+    textsByPageNumber,
+    restoreInitialReadingProgress,
+    virtualizer
+  ])
+
+  const flowState = useRef(() => ({
+    loaded: false,
+    restoring: true,
+    error: undefined as Error | undefined
+  }))
+  flowState.current = () => {
+    const page = readingProgressPageRef.current ?? pageNumbers[0]
+    return {
+      loaded: page !== undefined && textsByPageNumberRef.current.has(page),
+      restoring: isInitialProgressRestorePendingRef.current,
+      error:
+        page !== undefined && pdfLoadErrors.has(page)
+          ? new Error('Text page failed to load')
+          : undefined
+    }
+  }
+  const flowCallbacks = useRef(props)
+  flowCallbacks.current = props
+  useEffect(() => {
+    if (isPdf || !viewerRootElement) return
+    let cancelled = false
+    const readiness = createFlowTextReadiness(viewerRootElement, () =>
+      flowState.current()
+    )
+    flowReadinessRef.current = readiness
+    readiness.waitForStable().then(
+      () => {
+        if (!cancelled) flowCallbacks.current.onEngineReady?.()
+      },
+      (error) => {
+        if (!cancelled) flowCallbacks.current.onEngineError?.(error)
+      }
+    )
+    return () => {
+      cancelled = true
+      readiness.dispose()
+      if (flowReadinessRef.current === readiness)
+        flowReadinessRef.current = null
+    }
+  }, [isPdf, viewerRootElement, documentGeneration])
 
   useEffect(() => {
     if (isPdf || textsByPageNumber.size === 0) return
