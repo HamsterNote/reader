@@ -21,7 +21,7 @@ export function createReaderByteFileAdapter(options: {
         workerSrc: options.workerSrc,
         documentOptions: options.documentOptions
       }
-      const { openReaderDocument } = await import('./openReaderDocument')
+      const { openReaderDocument } = await import('../host/openReaderDocument')
       const opened = await openReaderDocument(source, file.key)
       return {
         props: {

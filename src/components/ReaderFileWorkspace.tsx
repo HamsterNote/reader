@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { Reader, type ReaderProps, type ReaderProgressHandle } from './Reader'
-import { ReaderFileSession } from '../host/readerFileSession'
+import { ReaderFileSession } from '../workspace/readerFileSession'
 
 export type ReaderFileWorkspaceProps = Pick<
   ReaderProps,

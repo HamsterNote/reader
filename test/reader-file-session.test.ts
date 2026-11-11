@@ -4,7 +4,7 @@ import {
   ReaderFileSession,
   type ReaderFileAdapter,
   type ReaderFileHost
-} from '../src/host/readerFileSession'
+} from '../src/workspace/readerFileSession'
 import type { ToolbarFile } from '@hamster-note/painting/toolbar'
 import type { ReaderData } from '../src/types/readerData'
 

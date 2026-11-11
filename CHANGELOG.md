@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - painting 精确 peer 依赖 0.8.4；仅开发依赖锁定官方未发布构建包。
 
 ### Fixed
+- Web 文件会话与 byte adapter 移入独立 workspace 模块，避免 Expo 宿主目录扫描把 Reader DOM 组件纳入原生类型检查；根入口公开导出不变。
 - PDF 文字模式在字体、分页布局和初始位置恢复完成后统一发送 ready；目标页或布局失败统一发送 error，供 Workspace 与 WebView 会话替换执行宿主重载回退，避免正文已显示但切换一直停在 restoring。
 - 修复 PDF 同一选区/高亮的重叠矩形重复着色：仅在显示层按 range、按页合成为单个 SVG 填充路径，保留原始矩形、持久化结构和命中语义，避免接缝与词边界颜色加深。
 - 修复 EPUB 切文件销毁后排队的样式帧/字体就绪回调访问旧节视图的问题；更新 reader 自有 Foliate 资产的生命周期守卫与哈希记录。

@@ -225,7 +225,7 @@ export {
   type ReaderFileState,
   type ReaderFileTransaction,
   type ReaderFileView
-} from './host/readerFileSession'
+} from './workspace/readerFileSession'
 export type {
   PaneToolbarLayout,
   ToolbarFile,
@@ -233,7 +233,7 @@ export type {
   ToolbarRequestResult,
   ToolbarFileNavigationProps
 } from '@hamster-note/painting/toolbar'
-export { createReaderByteFileAdapter } from './host/readerByteFileAdapter'
+export { createReaderByteFileAdapter } from './workspace/readerByteFileAdapter'
 export { createReaderHostWorkspace } from './host/readerHostWorkspace'
 export {
   parseReaderSessionReplacement,
