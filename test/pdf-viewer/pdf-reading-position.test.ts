@@ -103,3 +103,15 @@ describe('safe PDF source characters', () => {
     ).toBe(3)
   })
 })
+
+it('excludes an occluded row X and both horizontal edges, retaining the partially exposed row A', () => {
+  const page = context(1, 'XALR', [
+    new DOMRect(20, 50, 10, 20),
+    new DOMRect(20, 75, 10, 20),
+    new DOMRect(-20, 80, 10, 20),
+    new DOMRect(210, 80, 10, 20)
+  ])
+  expect(
+    firstVisiblePdfCharacter([page], new DOMRect(0, 80, 200, 200))
+  ).toMatchObject({ pageNumber: 1, offset: 1, text: 'ALR' })
+})

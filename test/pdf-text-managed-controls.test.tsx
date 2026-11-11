@@ -7,6 +7,62 @@ import { expect, it, vi } from 'vitest'
 import { PdfTextSelectionControls } from '../src/pdf/PdfTextSelectionControls'
 import { mockElementSize } from './setup'
 
+it('shows the PDF draft popup and handles only after native selection releases', () => {
+  const root = document.createElement('div')
+  root.innerHTML =
+    '<div data-selection-id="page"><div class="hsn-selection-content">PDF progress</div></div>'
+  document.body.append(root)
+  mockElementSize(root, { width: 500, height: 500 })
+  const original = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(10, 10, 40, 20)]
+  })
+  const data: LinkedSelectionData = {
+    items: [],
+    selectedRangeId: null,
+    selectionOrder: [],
+    selectingText: true,
+    activeRange: {
+      id: 'draft',
+      text: 'PDF',
+      createdAt: 1,
+      start: { selectionId: 'page', offset: 0 },
+      end: { selectionId: 'page', offset: 3 },
+      rectsBySelectionId: {}
+    }
+  }
+  const controls = (selectingText: boolean) => (
+    <PdfTextSelectionControls
+      root={root}
+      data={{ ...data, selectingText }}
+      color='#ff0000'
+      onDraft={vi.fn()}
+      onUpdate={vi.fn()}
+      onEditingChange={vi.fn()}
+    >
+      <button>确认高亮</button>
+    </PdfTextSelectionControls>
+  )
+  const view = render(controls(true))
+  try {
+    expect(screen.queryByRole('button', { name: '确认高亮' })).toBeNull()
+    expect(screen.queryAllByRole('button', { name: /调整/ })).toHaveLength(0)
+    view.rerender(controls(false))
+    expect(screen.getByRole('button', { name: '确认高亮' })).toBeVisible()
+    expect(screen.getAllByRole('button', { name: /调整/ })).toHaveLength(2)
+  } finally {
+    view.unmount()
+    root.remove()
+    if (original)
+      Object.defineProperty(Range.prototype, 'getClientRects', original)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+  }
+})
+
 it.each([false, true])(
   'retains an unmounted fixed PDF endpoint (end=%s), identity and comments',
   (end) => {

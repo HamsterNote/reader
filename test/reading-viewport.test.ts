@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { pagePercentage } from '../src/viewportPosition'
 import { readingViewport } from '../src/components/reading/readingViewport'
 
 describe('PDF shared safe viewport', () => {
@@ -22,4 +23,16 @@ describe('PDF shared safe viewport', () => {
       readingViewport(new DOMRect(0, 0, 400, 50), { bottomInset: 70 })
     ).toBeNull()
   })
+})
+
+it('uses the same 80px safe line for overlapping and externally reserved chrome', () => {
+  const page = new DOMRect(0, -120, 400, 1000)
+  const overlap = readingViewport(new DOMRect(0, 0, 400, 700), {
+    topInset: 80
+  })!
+  const reserved = readingViewport(new DOMRect(0, 80, 400, 620), {})!
+  expect(overlap.top).toBe(80)
+  expect(reserved.top).toBe(80)
+  expect(pagePercentage(overlap.top, page)).toBe(20)
+  expect(pagePercentage(reserved.top, page)).toBe(20)
 })

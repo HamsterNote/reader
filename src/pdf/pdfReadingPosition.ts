@@ -37,8 +37,12 @@ function* visibleCharacters(
         start + local + 1,
         context.textLayerDiv
       )
-      const rect = range?.getClientRects?.()[0]
-      if (rect && intersects(rect, clip))
+      const rect =
+        range &&
+        Array.from(range.getClientRects?.() ?? []).find((rect) =>
+          intersects(rect, clip)
+        )
+      if (rect)
         yield {
           top: rect.top,
           rect,

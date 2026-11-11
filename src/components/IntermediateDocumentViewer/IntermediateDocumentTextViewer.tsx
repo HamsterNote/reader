@@ -1374,6 +1374,11 @@ export function IntermediateDocumentTextViewer(
         isPdf
           ? pdfNavigationRef.current?.capturePosition()
           : captureCurrentTextAnchor(true),
+      captureModeSwitchResult: () => {
+        if (pdfNavigationRef.current?.failed) return { status: 'failed' }
+        const position = pdfNavigationRef.current?.capturePosition()
+        return position ? { status: 'ready', position } : { status: 'pending' }
+      },
       waitForStable: () =>
         pdfNavigationRef.current?.whenStable() ?? Promise.resolve()
     }),

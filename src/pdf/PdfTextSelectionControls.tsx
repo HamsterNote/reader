@@ -197,7 +197,7 @@ export function PdfTextSelectionControls({
     <EngineSelectionControls
       range={range}
       containerRef={containerRef}
-      showHandles
+      showHandles={!data.selectingText}
       showStart={!!(root && active && resolve(root, active.start))}
       showEnd={!!(root && active && resolve(root, active.end))}
       pdfCustomHandles
@@ -236,7 +236,9 @@ export function PdfTextSelectionControls({
         else onUpdate(converted)
       }}
     >
-      {children}
+      {/* A clamped popup can overlap the first line. Wait for native selection
+          release so it cannot intercept the remaining mouse drag. */}
+      {data.selectingText ? null : children}
     </EngineSelectionControls>
   )
 }
