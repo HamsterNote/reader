@@ -692,6 +692,43 @@ function sameHiddenPages(
   )
 }
 
+type PdfRenderModeState = {
+  readonly source: ReaderEngineSource | undefined
+  readonly document: ReaderDocumentInput
+  readonly mode: ReaderRenderMode
+}
+
+function resolvePdfRenderMode(
+  actual: PdfRenderModeState,
+  source: ReaderEngineSource | undefined,
+  document: ReaderDocumentInput,
+  requestedMode: ReaderRenderMode
+) {
+  const samePdfModeScope =
+    actual.source === source && actual.document === document
+  return {
+    samePdfModeScope,
+    resolvedRenderMode:
+      source?.format === 'pdf' && samePdfModeScope ? actual.mode : requestedMode
+  }
+}
+
+function capturePdfModeSwitch(handle: ReaderReadingPositionHandle | null) {
+  const result = handle?.captureModeSwitchResult?.()
+  if (result) return result
+  const position = handle?.captureModeSwitchPosition
+    ? handle.captureModeSwitchPosition()
+    : handle?.captureReadingPosition?.()
+  if (position) return { status: 'ready' as const, position }
+  return { status: 'pending' as const }
+}
+
+function readingPositionMessage(notice: 'pending' | 'failed') {
+  return notice === 'failed'
+    ? '阅读位置无法定位，请重试切换。'
+    : '正在准备阅读位置，请稍候。'
+}
+
 export function Reader({
   engineSource,
   document,
@@ -1086,12 +1123,12 @@ export function Reader({
     document,
     mode: requestedRenderMode
   }))
-  const samePdfModeScope =
-    pdfMode.source === engineSource && pdfMode.document === document
-  const resolvedRenderMode =
-    engineSource?.format === 'pdf' && samePdfModeScope
-      ? pdfMode.mode
-      : requestedRenderMode
+  const { samePdfModeScope, resolvedRenderMode } = resolvePdfRenderMode(
+    pdfMode,
+    engineSource,
+    document,
+    requestedRenderMode
+  )
   const pendingModeRequest = useRef<{
     mode: ReaderRenderMode
     external: boolean
@@ -1189,7 +1226,7 @@ export function Reader({
     containMarginBottom,
     containMarginY,
     bottomBarInset,
-    isPdf || engineSource?.format === 'pdf'
+    isPdfDocument
   )
   const bottomBarHistoryStatus = resolveBottomBarHistoryStatus({
     status: historyStatus,
@@ -1356,13 +1393,12 @@ export function Reader({
       const persistedVirtualPaperKey = getReaderVirtualPaperKey(
         data?.virtualPaper
       )
-      const currentVirtualPaperState = currentVirtualPaperStateRef.current
-      const localVirtualPaper =
-        currentVirtualPaperState !== null &&
-        currentVirtualPaperState.document === document &&
-        currentVirtualPaperState.replacedValueKey === persistedVirtualPaperKey
-          ? currentVirtualPaperState.value
-          : undefined
+      const localVirtualPaper = resolvePositionHandoff(
+        currentVirtualPaperStateRef.current,
+        document,
+        persistedVirtualPaperKey,
+        undefined
+      )
       const currentVirtualPaper = localVirtualPaper ??
         data?.virtualPaper ?? {
           x: 0,
@@ -1398,29 +1434,8 @@ export function Reader({
     ]
   )
 
-  const handleRenderModeChange = useCallback(
-    (nextMode: ReaderRenderMode, external = false) => {
-      const handle = readingPositionHandleRef.current
-      const result =
-        engineSource?.format === 'pdf'
-          ? handle?.captureModeSwitchResult?.()
-          : undefined
-      const handoff = result
-        ? result.status === 'ready'
-          ? result.position
-          : undefined
-        : engineSource?.format === 'pdf'
-          ? handle?.captureModeSwitchPosition
-            ? handle.captureModeSwitchPosition()
-            : handle?.captureReadingPosition?.()
-          : undefined
-      if (engineSource?.format === 'pdf' && !handoff) {
-        const status = result?.status === 'failed' ? 'failed' : 'pending'
-        pendingModeRequest.current =
-          status === 'pending' ? { mode: nextMode, external } : null
-        setReadingPositionNotice(status)
-        return
-      }
+  const commitRenderModeChange = useCallback(
+    (nextMode: ReaderRenderMode, handoff: ReaderBookmark | undefined) => {
       pendingModeRequest.current = null
       setReadingPositionNotice(null)
       try {
@@ -1450,13 +1465,14 @@ export function Reader({
         sourceMode: resolvedRenderMode,
         nextMode
       }
-      if (data?.renderMode === undefined && renderMode === undefined) {
+      const uncontrolled =
+        data?.renderMode === undefined && renderMode === undefined
+      if (uncontrolled) {
         setInternalRenderMode(nextMode)
       }
       if (
         engineSource?.format === 'pdf' &&
-        (nextMode === requestedRenderMode ||
-          (data?.renderMode === undefined && renderMode === undefined))
+        (nextMode === requestedRenderMode || uncontrolled)
       )
         setPdfMode({ source: engineSource, document, mode: nextMode })
       onDataChange?.({ ...nextData, renderMode: nextMode })
@@ -1481,6 +1497,24 @@ export function Reader({
       requestedRenderMode,
       resolvedRenderMode
     ]
+  )
+  const handleRenderModeChange = useCallback(
+    (nextMode: ReaderRenderMode, external = false) => {
+      const result =
+        engineSource?.format === 'pdf'
+          ? capturePdfModeSwitch(readingPositionHandleRef.current)
+          : undefined
+      const handoff = result?.status === 'ready' ? result.position : undefined
+      if (engineSource?.format === 'pdf' && !handoff) {
+        const status = result?.status === 'failed' ? 'failed' : 'pending'
+        pendingModeRequest.current =
+          status === 'pending' ? { mode: nextMode, external } : null
+        setReadingPositionNotice(status)
+        return
+      }
+      commitRenderModeChange(nextMode, handoff)
+    },
+    [engineSource, commitRenderModeChange]
   )
   const attemptModeRequest = useRef(handleRenderModeChange)
   attemptModeRequest.current = handleRenderModeChange
@@ -2461,9 +2495,7 @@ export function Reader({
             )}
             {readingPositionNotice && (
               <div role='status' className='hamster-reader__engine-notice'>
-                {readingPositionNotice === 'failed'
-                  ? '阅读位置无法定位，请重试切换。'
-                  : '正在准备阅读位置，请稍候。'}
+                {readingPositionMessage(readingPositionNotice)}
               </div>
             )}
             {resolvedLoadingProgress && (

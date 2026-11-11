@@ -4,7 +4,7 @@ import type { IntermediateDocumentSerialized } from '@hamster-note/types'
 import type { IntermediateDocumentViewerProps } from '../src/components/IntermediateDocumentViewer'
 import type { ReaderBookmark } from '../src/types/readerData'
 import { Reader } from '../src'
-import { useImperativeHandle } from 'react'
+import { useEffect, useImperativeHandle } from 'react'
 import { mockPaintingCanvas } from './fixtures/painting'
 import { beforeEach } from 'vitest'
 beforeEach(() => {
@@ -18,39 +18,45 @@ const state = vi.hoisted(() => ({
   failure: false,
   handoff: undefined as ReaderBookmark | undefined
 }))
+
+function captureModeSwitchResult() {
+  if (state.failure) return { status: 'failed' as const }
+  if (state.handoff)
+    return { status: 'ready' as const, position: state.handoff }
+  return { status: 'pending' as const }
+}
+
+function MockLayoutViewer(props: IntermediateDocumentViewerProps) {
+  state.props = props
+  useEffect(() => {
+    const ref = props.readingPositionRef
+    if (typeof ref === 'function')
+      ref({
+        captureTextAnchor: () => undefined,
+        captureReadingPosition: () => ({
+          pageNumber: 1,
+          verticalPercentage: 35
+        }),
+        captureModeSwitchPosition: () => state.handoff,
+        captureModeSwitchResult
+      })
+    return () => {
+      if (typeof ref === 'function') ref(null)
+    }
+  }, [props.readingPositionRef])
+  return <div data-testid='pdf-layout-source' />
+}
+
 // Exercise Reader orchestration synchronously; lazy-module loading is not under test.
 vi.mock('react', async (importOriginal) => {
   const react = await importOriginal<typeof import('react')>()
   return {
     ...react,
-    lazy: (load: () => Promise<unknown>) =>
-      load.toString().includes('EngineDocumentViewer')
-        ? (props: IntermediateDocumentViewerProps) => {
-            state.props = props
-            react.useEffect(() => {
-              const ref = props.readingPositionRef
-              if (typeof ref === 'function')
-                ref({
-                  captureTextAnchor: () => undefined,
-                  captureReadingPosition: () => ({
-                    pageNumber: 1,
-                    verticalPercentage: 35
-                  }),
-                  captureModeSwitchPosition: () => state.handoff,
-                  captureModeSwitchResult: () =>
-                    state.failure
-                      ? { status: 'failed' }
-                      : state.handoff
-                        ? { status: 'ready', position: state.handoff }
-                        : { status: 'pending' }
-                })
-              return () => {
-                if (typeof ref === 'function') ref(null)
-              }
-            }, [props.readingPositionRef])
-            return <div data-testid='pdf-layout-source' />
-          }
-        : react.lazy(load as Parameters<typeof react.lazy>[0])
+    lazy: (load: () => Promise<unknown>) => {
+      if (load.toString().includes('EngineDocumentViewer'))
+        return MockLayoutViewer
+      return react.lazy(load as Parameters<typeof react.lazy>[0])
+    }
   }
 })
 vi.mock(
@@ -63,12 +69,7 @@ vi.mock(
       useImperativeHandle(props.readingPositionRef, () => ({
         captureTextAnchor: () => undefined,
         captureReadingPosition: () => state.handoff,
-        captureModeSwitchResult: () =>
-          state.failure
-            ? { status: 'failed' }
-            : state.handoff
-              ? { status: 'ready', position: state.handoff }
-              : { status: 'pending' }
+        captureModeSwitchResult
       }))
       return <div data-testid='pdf-text-target' />
     }
