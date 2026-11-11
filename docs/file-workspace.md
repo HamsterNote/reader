@@ -86,4 +86,4 @@ PDF 进度及模式切换兼容检查可运行 `READER_PROGRESS_WIDTH=320 READER
 
 非 PDF 的 TXT/兼容 EPUB 文字视图使用自己的排版就绪信号，不等待禁用的 PDF 分页器。目标页载入、字体就绪、位置恢复及可见布局均完成后才发 `onEngineReady`，公开 `progressRef.flush()` 等待相同条件；加载失败或清理会拒绝未完成请求。短文档不能把最后一页滚到顶部时，依据真实滚动上限和完整可见的已加载目标页结束恢复，不依赖超时。
 
-`yarn build:lib && yarn check:flow-text-readiness` 在 320px Chromium 中通过公开构建产物执行 TXT→EPUB→TXT，分别覆盖整篇可见和可滚动两种布局，共六条 ready/flush 回归。`test/flow-text-readiness.test.ts` 覆盖字体/恢复屏障、销毁、错误和滚动夹限。该修复不更改 WebBase `useReaderDocument` 的分页进度通知时序。
+`yarn build:lib && yarn check:flow-text-readiness` 在 320px Chromium 中通过公开构建产物执行 TXT→EPUB→TXT，分别覆盖整篇可见和可滚动两种布局，共六条文字 ready/flush 回归，另有兼容布局的浏览器滚动/VirtualPaper 两条页码恢复回归，共八条。`test/flow-text-readiness.test.ts` 覆盖字体/恢复屏障、销毁、错误和滚动夹限。兼容布局视图也在可见页载入、恢复屏障解除和实际页几何稳定后通知 ready/error，公开 flush 等待同一屏障。该修复不更改 WebBase `useReaderDocument` 的分页进度通知时序。

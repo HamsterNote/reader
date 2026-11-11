@@ -79,6 +79,51 @@ try {
       )
     }
   }
+  for (const layout of ['native', 'paper']) {
+    const previous = await page.evaluate(
+      () => window.flowTextTest.state.ready.length
+    )
+    await page.evaluate(
+      (layout) => window.flowTextTest.open('txt', false, layout),
+      layout
+    )
+    await page.waitForFunction(
+      (previous) => window.flowTextTest.state.ready.length === previous + 1,
+      previous
+    )
+    await page.evaluate(() =>
+      Promise.race([
+        window.flowTextTest.flush(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Layout flush did not settle')),
+            3000
+          )
+        )
+      ])
+    )
+    assert.equal(
+      await page.evaluate(() => {
+        const data = window.flowTextTest.state.data
+        return (
+          data?.layoutReadingProgress?.pageNumber ??
+          data?.virtualPaper?.anchor?.pageNumber
+        )
+      }),
+      2
+    )
+    const restored = await page
+      .locator('.virtual-paper-wrapper [data-page-number="2"]')
+      .first()
+      .boundingBox()
+    assert.ok(
+      restored && restored.y < 740 && restored.y + restored.height > 0,
+      'Restored page must intersect the actual viewport'
+    )
+    console.log(
+      `PASS compatibility layout (${layout}): restored page 2, engine ready, public progress flush`
+    )
+  }
   await page.screenshot({
     path: resolve(repo, '../artifacts/reader-flow-readiness-320.png')
   })
@@ -87,7 +132,7 @@ try {
     await page.evaluate(() => window.flowTextTest.state.errors),
     []
   )
-  console.log('6 passed / 0 failed; 320px; public built artifact')
+  console.log('8 passed / 0 failed; 320px; public built artifact')
 } finally {
   await browser?.close()
   await server.close()

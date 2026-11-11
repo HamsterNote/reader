@@ -41,7 +41,12 @@ function fixture() {
     frames.clear()
     current.forEach((callback) => callback(0))
   }
-  const state: { loaded: boolean; restoring: boolean; error?: Error } = {
+  const state: {
+    loaded: boolean
+    restoring: boolean
+    error?: Error
+    layoutKey?: string
+  } = {
     loaded: false,
     restoring: true
   }
@@ -70,6 +75,26 @@ describe('flow text readiness', () => {
     expect(saved).not.toHaveBeenCalled()
     f.state.restoring = false
     f.step()
+    expect(saved).not.toHaveBeenCalled()
+    f.step()
+    await task
+    expect(saved).toHaveBeenCalledOnce()
+    f.readiness.dispose()
+  })
+
+  it('requires unchanged page geometry on consecutive rendered frames', async () => {
+    const f = fixture()
+    f.state.loaded = true
+    f.state.restoring = false
+    f.state.layoutKey = 'page-2:before-restoration'
+    const saved = vi.fn()
+    const task = f.readiness.waitForStable().then(saved)
+    f.fontsReady()
+    await Promise.resolve()
+    f.step()
+    f.state.layoutKey = 'page-2:restored'
+    f.step()
+    await Promise.resolve()
     expect(saved).not.toHaveBeenCalled()
     f.step()
     await task

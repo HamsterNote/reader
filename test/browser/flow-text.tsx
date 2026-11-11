@@ -16,8 +16,9 @@ const state = {
   errors: [] as string[],
   data: undefined as ReaderData | undefined
 }
-function open(kind: 'txt' | 'epub', long = false) {
+function open(kind: 'txt' | 'epub', long = false, layout?: 'native' | 'paper') {
   flushSync(() => root.render(null))
+  state.data = undefined
   const document = {
     id: kind,
     title: kind,
@@ -25,7 +26,7 @@ function open(kind: 'txt' | 'epub', long = false) {
       id: `page-${number}`,
       number,
       width: 400,
-      height: 600,
+      height: layout ? 1200 : 600,
       texts: [
         {
           id: `text-${number}`,
@@ -60,14 +61,34 @@ function open(kind: 'txt' | 'epub', long = false) {
       ]
     }))
   }
+  let data: ReaderData = { textReadingProgress: { currentPageNumber: 2 } }
+  if (layout === 'paper') {
+    data = {
+      virtualPaper: {
+        x: 0,
+        y: -980,
+        scale: 0.8,
+        anchor: {
+          pageNumber: 2,
+          textId: 'text-2',
+          text: 'txt restored page 2',
+          offset: 0
+        }
+      }
+    }
+  } else if (layout) {
+    data = { layoutReadingProgress: { pageNumber: 2, verticalPercentage: 0 } }
+  }
   flushSync(() =>
     root.render(
       <div style={{ height: '100vh' }}>
         <Reader
           document={document}
-          renderMode='text'
+          renderMode={layout ? 'layout' : 'text'}
+          useVirtualPaper={layout === 'paper'}
           isEpub={kind === 'epub'}
-          data={{ textReadingProgress: { currentPageNumber: 2 } }}
+          isPdf={!!layout}
+          data={data}
           progressRef={progress}
           onEngineReady={() => state.ready.push(kind)}
           onEngineError={(error) => state.errors.push(error.message)}
@@ -80,5 +101,12 @@ function open(kind: 'txt' | 'epub', long = false) {
   )
 }
 Object.assign(window, {
-  flowTextTest: { state, open, flush: () => progress.current!.flush() }
+  flowTextTest: {
+    state,
+    open,
+    flush: async () => {
+      await progress.current!.flush()
+      state.data = progress.current!.getData()
+    }
+  }
 })

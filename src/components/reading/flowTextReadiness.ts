@@ -1,8 +1,13 @@
-/** Flow text has no PDF pagination controller. Wait for its own loaded target,
- * restored locator, fonts and visible layout before acknowledging readiness. */
+/** Compatibility viewers have no PDF pagination controller. Wait for loaded
+ * visible pages, restored locators, fonts and stable geometry before ready. */
 export function createFlowTextReadiness(
   root: HTMLElement,
-  state: () => { loaded: boolean; restoring: boolean; error?: Error }
+  state: () => {
+    loaded: boolean
+    restoring: boolean
+    error?: Error
+    layoutKey?: string
+  }
 ) {
   const view = root.ownerDocument.defaultView!
   const pending = new Set<(error: Error) => void>()
@@ -13,7 +18,7 @@ export function createFlowTextReadiness(
         return Promise.reject(new Error('Text document was disposed'))
       return new Promise((resolve, reject) => {
         let frame = 0
-        let measured = false
+        let measured: string | null = null
         const finish = (error?: Error) => {
           view.cancelAnimationFrame(frame)
           pending.delete(cancel)
@@ -33,12 +38,13 @@ export function createFlowTextReadiness(
             root.isConnected && root.clientWidth > 0 && root.clientHeight > 0
           if (current.loaded && !current.restoring && visible) {
             // Validate the settled DOM again after the browser has laid it out.
-            if (measured) {
+            const geometry = `${root.clientWidth}:${root.clientHeight}:${root.scrollTop}:${current.layoutKey ?? ''}`
+            if (measured === geometry) {
               finish()
               return
             }
-            measured = true
-          } else measured = false
+            measured = geometry
+          } else measured = null
           frame = view.requestAnimationFrame(measure)
         }
         Promise.resolve(root.ownerDocument.fonts?.ready).then(

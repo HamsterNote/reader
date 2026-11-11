@@ -1,3 +1,4 @@
+import { createFlowTextReadiness } from '../reading/flowTextReadiness'
 import { pagePercentage, intersects } from '../../viewportPosition'
 import { createPaintingSettings } from '../../painting/paintingSettings'
 import { Loading } from '@hamster-note/components'
@@ -474,6 +475,8 @@ export type ReaderReadingPositionHandle = {
 }
 
 export type IntermediateDocumentViewerProps = {
+  readonly onEngineReady?: () => void
+  readonly onEngineError?: (error: Error) => void
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
   serializedDocument?: IntermediateDocumentSerialized | null
   /** EPUB 高亮仅从字符锚点实时派生，不持久化页面矩形。 */
@@ -4441,6 +4444,8 @@ export function IntermediateDocumentViewer({
   onLayoutReadingProgressChange,
   onTextAnchorChange,
   readingPositionRef,
+  onEngineReady,
+  onEngineError,
   onScaleChange,
   minScale,
   maxScale,
@@ -4690,6 +4695,9 @@ export function IntermediateDocumentViewer({
   const activeDocumentRef = useRef<IntermediateDocument | null>(null)
   const isMountedRef = useRef(false)
   const viewerRootRef = useRef<HTMLDivElement>(null)
+  const layoutReadinessRef = useRef<ReturnType<
+    typeof createFlowTextReadiness
+  > | null>(null)
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
 
@@ -5488,6 +5496,9 @@ export function IntermediateDocumentViewer({
   useImperativeHandle(
     readingPositionRef,
     () => ({
+      waitForStable: () =>
+        layoutReadinessRef.current?.waitForStable() ??
+        Promise.reject(new Error('Layout document is not ready')),
       captureTextAnchor: () => captureCurrentTextAnchor(false, false, true),
       captureAndPublish: () => {
         captureCurrentTextAnchor(false, true)
@@ -7314,6 +7325,71 @@ export function IntermediateDocumentViewer({
     useVirtualPaper,
     viewerRootRef
   })
+
+  const layoutStateRef = useRef(() => ({
+    loaded: false,
+    restoring: true,
+    error: undefined as Error | undefined,
+    layoutKey: ''
+  }))
+  layoutStateRef.current = () => {
+    const viewport = viewerRootRef.current
+      ?.querySelector<HTMLElement>('.virtual-paper-wrapper')
+      ?.getBoundingClientRect()
+    const visible = viewport
+      ? [...pageRefs.current.entries()].filter(([, page]) =>
+          intersects(page.getBoundingClientRect(), viewport)
+        )
+      : []
+    const errorPage = visible.find(
+      ([number]) => pageStatuses.get(number) === 'error'
+    )
+    return {
+      loaded:
+        pageResourcesDocument === runtimeDocument &&
+        visible.length > 0 &&
+        visible.every(([number]) => pageStatuses.get(number) === 'loaded'),
+      restoring:
+        !!pendingTextAnchorRef.current ||
+        !!pendingNativeZoomAnchorRef.current ||
+        (!useVirtualPaper &&
+          restoringNativeProgressKeyRef.current !== undefined),
+      error: errorPage
+        ? new Error(`Layout page ${errorPage[0]} failed to load`)
+        : undefined,
+      layoutKey: visible
+        .map(([number, page]) => {
+          const r = page.getBoundingClientRect()
+          return `${number}:${r.top}:${r.left}:${r.width}:${r.height}`
+        })
+        .join('|')
+    }
+  }
+  const layoutCallbacks = useRef({ onEngineReady, onEngineError })
+  layoutCallbacks.current = { onEngineReady, onEngineError }
+  useEffect(() => {
+    if (!viewerRootElement || !runtimeDocument) return
+    let cancelled = false
+    const readiness = createFlowTextReadiness(viewerRootElement, () =>
+      layoutStateRef.current()
+    )
+    layoutReadinessRef.current = readiness
+    if (onEngineReady || onEngineError)
+      readiness.waitForStable().then(
+        () => {
+          if (!cancelled) layoutCallbacks.current.onEngineReady?.()
+        },
+        (error) => {
+          if (!cancelled) layoutCallbacks.current.onEngineError?.(error)
+        }
+      )
+    return () => {
+      cancelled = true
+      readiness.dispose()
+      if (layoutReadinessRef.current === readiness)
+        layoutReadinessRef.current = null
+    }
+  }, [viewerRootElement, runtimeDocument, !!onEngineReady, !!onEngineError])
 
   useEffect(() => {
     if (!pendingTextAnchor) return

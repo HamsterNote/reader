@@ -1391,7 +1391,8 @@ export function IntermediateDocumentTextViewer(
       waitForStable: () =>
         isPdf
           ? (pdfNavigationRef.current?.whenStable() ?? Promise.resolve())
-          : (flowReadinessRef.current?.waitForStable() ?? Promise.resolve())
+          : (flowReadinessRef.current?.waitForStable() ??
+            Promise.reject(new Error('Text document is not ready')))
     }),
     [captureCurrentTextAnchor, captureReadingProgress, isPdf]
   )
