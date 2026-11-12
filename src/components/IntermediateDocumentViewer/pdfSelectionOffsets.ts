@@ -19,9 +19,10 @@ type DomAnchoredSegment = {
  * that would also mark unselected text (or silently reject the selection). */
 export function canonicalizePdfSelectionRanges(
   range: ReaderSelectionRange,
-  root: HTMLElement | null
+  root: HTMLElement | null,
+  canonicalText?: string
 ): ReaderSelectionRange[] {
-  const continuous = canonicalizePdfSelectionRange(range, root)
+  const continuous = canonicalizePdfSelectionRange(range, root, canonicalText)
   if (continuous) return [continuous]
   if (!root || range.start.selectionId !== range.end.selectionId) return []
   const segments = getSelectionSegments(range.start.selectionId, root)
@@ -39,7 +40,11 @@ export function canonicalizePdfSelectionRanges(
       end - segment.domStart
     )
     const previous = parts.at(-1)
-    if (previous?.end === sourceStart) {
+    if (
+      previous &&
+      areCanonicalNeighbors(previous.end, sourceStart, canonicalText)
+    ) {
+      previous.text += canonicalText?.slice(previous.end, sourceStart) ?? ''
       previous.end = sourceEnd
       previous.text += text
     } else {
@@ -71,11 +76,20 @@ export function combinePdfTextSelectionGroups(
     const members = getSelectionGroup(ranges, range.id)
     members.forEach((member) => visited.add(member.id))
     // Every persisted range carries canonical offsets, including a single
-    // highlight. Selection and its handles always consume current DOM offsets.
+    // highlight. Visible selection handles consume current DOM offsets.
     const first = members[0]!
     const last = members.at(-1)!
-    const start = pdfCanonicalEndpointToDom(first.start, 'start', root)
-    const end = pdfCanonicalEndpointToDom(last.end, 'end', root)
+    // Controls keep an unmounted fixed endpoint in canonical coordinates.
+    // Convert each mounted endpoint independently so its handle stays usable.
+    const start =
+      getSelectionSegments(first.start.selectionId, root) === null
+        ? first.start
+        : pdfCanonicalEndpointToDom(first.start, 'start', root)
+    const end =
+      getSelectionSegments(last.end.selectionId, root) === null
+        ? last.end
+        : pdfCanonicalEndpointToDom(last.end, 'end', root)
+    if (!start || !end) return []
     const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] = {}
     for (const member of members) {
       for (const [pageId, rects] of Object.entries(member.rectsBySelectionId)) {
@@ -99,7 +113,7 @@ export function pdfCanonicalEndpointToDom(
   endpoint: ReaderSelectionEndpoint,
   side: EndpointSide,
   root: HTMLElement
-): ReaderSelectionEndpoint {
+): ReaderSelectionEndpoint | null {
   const segments = getSelectionSegments(endpoint.selectionId, root)
   const candidates = segments?.filter((segment) =>
     side === 'start'
@@ -114,7 +128,7 @@ export function pdfCanonicalEndpointToDom(
         ...endpoint,
         offset: segment.domStart + endpoint.offset - segment.canonicalStart
       }
-    : endpoint
+    : null
 }
 
 export function restorePdfTextSelection(
@@ -128,6 +142,7 @@ export function restorePdfTextSelection(
   if (!first || !last) return null
   const start = pdfCanonicalEndpointToDom(first.start, 'start', root)
   const end = pdfCanonicalEndpointToDom(last.end, 'end', root)
+  if (!start || !end) return null
   const resolvePoint = (endpoint: ReaderSelectionEndpoint) => {
     const content = root.querySelector(
       `[data-testid="intermediate-text-${endpoint.selectionId}"] .hsn-selection-content`
@@ -159,7 +174,8 @@ export function restorePdfTextSelection(
 
 export function canonicalizePdfSelectionRange(
   range: ReaderSelectionRange,
-  root: HTMLElement | null
+  root: HTMLElement | null,
+  canonicalText?: string
 ): ReaderSelectionRange | null {
   if (!root) return range
 
@@ -170,17 +186,43 @@ export function canonicalizePdfSelectionRange(
       !isContinuousCanonicalRange(
         segments,
         range.start.offset,
-        range.end.offset
+        range.end.offset,
+        canonicalText
       )
     ) {
       return null
     }
   }
 
+  const start = canonicalizeEndpoint(range.start, 'start', root)
+  const end = canonicalizeEndpoint(range.end, 'end', root)
+  if (!start || !end) return null
+  let text = range.text
+  if (
+    start.selectionId === end.selectionId &&
+    getSelectionSegments(start.selectionId, root) !== null
+  ) {
+    const domStart = pdfCanonicalEndpointToDom(start, 'start', root)
+    const domEnd = pdfCanonicalEndpointToDom(end, 'end', root)
+    if (!domStart || !domEnd || start.offset > end.offset) return null
+    // Display gaps can represent several omitted source whitespace items.
+    // Normalize both boundaries inward and trim the corresponding display
+    // whitespace, so saving and restoring describe the same visible text.
+    if (
+      domStart.offset !== range.start.offset ||
+      domEnd.offset !== range.end.offset
+    ) {
+      const content = root.querySelector(
+        `[data-testid="intermediate-text-${start.selectionId}"] .hsn-selection-content`
+      )
+      text = content?.textContent?.slice(domStart.offset, domEnd.offset) ?? text
+    }
+  }
   return {
     ...range,
-    start: canonicalizeEndpoint(range.start, 'start', root),
-    end: canonicalizeEndpoint(range.end, 'end', root)
+    text,
+    start,
+    end
   }
 }
 
@@ -199,7 +241,8 @@ function getSelectionSegments(
 function isContinuousCanonicalRange(
   segments: readonly DomAnchoredSegment[],
   domStart: number,
-  domEnd: number
+  domEnd: number,
+  canonicalText?: string
 ): boolean {
   if (domStart > domEnd) return false
   const intersectingSegments = segments.filter(
@@ -208,7 +251,29 @@ function isContinuousCanonicalRange(
   return intersectingSegments.every(
     (segment, index) =>
       index === 0 ||
-      intersectingSegments[index - 1]?.canonicalEnd === segment.canonicalStart
+      areCanonicalNeighbors(
+        intersectingSegments[index - 1]!.canonicalEnd,
+        segment.canonicalStart,
+        canonicalText
+      )
+  )
+}
+
+function areCanonicalNeighbors(
+  end: number,
+  start: number,
+  canonicalText: string | undefined
+): boolean {
+  if (end === start) return true
+  // PDF.js can emit whitespace-only items between independently positioned
+  // runs. Text layout omits those items and inserts display spacing instead.
+  // Bridge only verified source whitespace; reordered or omitted text must
+  // remain separate canonical fragments of the same logical highlight.
+  return (
+    canonicalText !== undefined &&
+    end < start &&
+    start <= canonicalText.length &&
+    /^\s+$/u.test(canonicalText.slice(end, start))
   )
 }
 
@@ -216,11 +281,15 @@ function canonicalizeEndpoint(
   endpoint: ReaderSelectionEndpoint,
   side: EndpointSide,
   root: HTMLElement
-): ReaderSelectionEndpoint {
+): ReaderSelectionEndpoint | null {
   if (!/^page-[1-9]\d*$/.test(endpoint.selectionId)) return endpoint
 
   const segments = getSelectionSegments(endpoint.selectionId, root)
-  if (!segments) return endpoint
+  // A fixed endpoint on an unmounted page was never converted to DOM by
+  // combinePdfTextSelectionGroups or moved by PdfTextSelectionControls.
+  // Preserve its canonical value; a mounted page with no usable anchors
+  // still fails conversion below.
+  if (segments === null) return endpoint
 
   const canonicalOffset = mapDomOffsetToCanonical(
     segments,
@@ -228,7 +297,7 @@ function canonicalizeEndpoint(
     side
   )
   return canonicalOffset === null
-    ? endpoint
+    ? null
     : { ...endpoint, offset: canonicalOffset }
 }
 
@@ -293,20 +362,10 @@ function mapDomOffsetToCanonical(
     return null
   }
 
-  const startBoundary = segments.find(
-    (segment) => segment.domStart === domOffset
-  )
-  const endBoundary = segments.find((segment) => segment.domEnd === domOffset)
-  if (startBoundary && endBoundary) {
-    return side === 'start'
-      ? startBoundary.canonicalStart
-      : endBoundary.canonicalEnd
-  }
-  if (startBoundary) return startBoundary.canonicalStart
-  if (endBoundary) return endBoundary.canonicalEnd
-
-  const containingSegment = segments.find(
-    (segment) => segment.domStart < domOffset && domOffset < segment.domEnd
+  const containingSegment = segments.find((segment) =>
+    side === 'start'
+      ? segment.domStart <= domOffset && domOffset < segment.domEnd
+      : segment.domStart < domOffset && domOffset <= segment.domEnd
   )
   if (containingSegment) {
     return (
@@ -314,13 +373,14 @@ function mapDomOffsetToCanonical(
     )
   }
 
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    const previousSegment = segments[index]
-    if (previousSegment && previousSegment.domEnd < domOffset) {
-      return previousSegment.canonicalEnd
-    }
+  if (side === 'start')
+    return (
+      segments.find((segment) => segment.domStart >= domOffset)
+        ?.canonicalStart ?? null
+    )
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index]!
+    if (segment.domEnd <= domOffset) return segment.canonicalEnd
   }
-
-  const nextSegment = segments.find((segment) => segment.domStart > domOffset)
-  return nextSegment?.canonicalStart ?? null
+  return null
 }

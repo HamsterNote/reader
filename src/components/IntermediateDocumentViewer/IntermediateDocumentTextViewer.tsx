@@ -2757,14 +2757,25 @@ export function IntermediateDocumentTextViewer(
           }
         )
       )
-      return canonicalizePdfSelectionRanges(range, viewerRootRef.current).map(
-        (canonicalRange) =>
-          deriveLayoutSelectionRange({
-            range: canonicalRange,
-            textsByPageNumber: textsByPageNumberRef.current,
-            pageSizesByPageNumber: pageSizes,
-            overlayRectType
-          })
+      const pageNumber = parsePublicPageId(range.start.selectionId)
+      const canonicalText =
+        pageNumber === null
+          ? undefined
+          : textsByPageNumberRef.current
+              .get(pageNumber)
+              ?.map((text) => text.content)
+              .join('')
+      return canonicalizePdfSelectionRanges(
+        range,
+        viewerRootRef.current,
+        canonicalText
+      ).map((canonicalRange) =>
+        deriveLayoutSelectionRange({
+          range: canonicalRange,
+          textsByPageNumber: textsByPageNumberRef.current,
+          pageSizesByPageNumber: pageSizes,
+          overlayRectType
+        })
       )
     },
     [isPdf, overlayRectType, runtimeDocument]
@@ -2790,7 +2801,12 @@ export function IntermediateDocumentTextViewer(
           range.id !== updatedRangeId
         )
           return getSelectionGroup(storedRangesRef.current, existingRange.id)
-        return toTextRanges(range)
+        const converted = toTextRanges(range)
+        // A failed edit conversion is not a removal. Full-snapshot hosts
+        // must retain the saved group just like the update callback does.
+        return converted.length || !existingRange
+          ? converted
+          : getSelectionGroup(storedRangesRef.current, existingRange.id)
       })
       const items = Array.from(
         new Map(convertedItems.map((range) => [range.id, range])).values()
@@ -2878,19 +2894,36 @@ export function IntermediateDocumentTextViewer(
 
       if (publicRange) {
         const textRanges = toTextRanges(publicRange)
+        if (textRanges.length === 0) return
+        // A PDF selection may split into canonical fragments whose IDs change
+        // as either endpoint moves. Hosts using the per-range callbacks upsert
+        // updates; they also need removals for fragments no longer selected.
+        const nextIds = new Set(textRanges.map((item) => item.id))
+        for (const previous of getSelectionGroup(
+          storedRangesRef.current,
+          publicRange.id
+        )) {
+          if (!nextIds.has(previous.id)) onRemoveRange?.(previous.id)
+        }
+        if (!isRangesControlled) {
+          setInternalRanges((currentRanges) => {
+            const previousIds = new Set(
+              getSelectionGroup(currentRanges, publicRange.id).map(
+                (item) => item.id
+              )
+            )
+            return currentRanges.flatMap((item) => {
+              if (item.id === publicRange.id) return textRanges
+              return previousIds.has(item.id) ? [] : [item]
+            })
+          })
+        }
         for (const textRange of textRanges) {
           traceHighlight('text.callback.update', {
             mode: 'text',
             isEpub,
             ranges: summarizeHighlightRanges([textRange])
           })
-          if (!isRangesControlled) {
-            setInternalRanges((currentRanges) =>
-              currentRanges.map((currentRange) =>
-                currentRange.id === textRange.id ? textRange : currentRange
-              )
-            )
-          }
           onLinkedUpdateRange?.(textRange)
           onUpdateRange?.(textRange)
         }
@@ -2900,6 +2933,7 @@ export function IntermediateDocumentTextViewer(
       isRangesControlled,
       isEpub,
       onLinkedUpdateRange,
+      onRemoveRange,
       onUpdateRange,
       scopeId,
       toTextRanges
