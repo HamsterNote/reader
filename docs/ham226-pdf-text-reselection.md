@@ -36,6 +36,41 @@ REORDERED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUT
 跨模式往返的附加点击用鼠标。等待新持久化写入后 300ms 静默并非队列严格清空的证明。
 尚未取得报障人的原始 PDF，修复的是可重复的多定位组/源空白误拆分路径，仍需人工复核。
 
+## 复审：显示空格端点的往返（2026-11-12）
+
+审核在 47d0a9a 上发现：源组间有多个空白而 DOM 只有一个显示空格时，
+从显示空格起选会保存前一组源末尾，反向映射找不到锚点却把源 offset 当作 DOM offset。
+3 个源空白会还原成 hi jkl，11 个源空白会还原失败。
+
+现在共享端点转换按 side 向选区内部归一：起点取后方的可见锚点，终点取前方的锚点，
+同时裁掉对应的显示空白。反向映射失败返回 null，禁止把无法映射的源 offset 当作 DOM offset；
+尚未挂载页面的已有条目保留在快照中，待页面挂载后再做 DOM 转换。
+没有改动 WebBase、onRemoveRange 清理或已确认源空白的内部合并条件。
+
+`test/pdf-selection-offset-boundaries.test.ts` 覆盖 3 / 11 个源空白，输入 DOM [7,15)，
+保存分别为 page-1 [12,21) / [28,45)，均还原为 DOM [8,15) 的 ghi jkl；
+再缩小到 ghi 后保存 [12,15) / [28,31)，逻辑 ID 和页号保持。
+另覆盖结束端位于显示空格、无法映射的源端点以及未挂载页面。
+
+反例的具体排除条件为：
+
+- 多栏：视觉选中左栏 LeftA、LeftB，源顺序在两者之间包含右栏可见 RIGHT，
+  及其两边的空白。必须保留 [0,5) 和 [18,23) 两个片段，排除 RIGHT 的 [8,13)。
+- 跨行：选中正文 Top、Bottom，源顺序夹着独立旁注 NOTE 和空白。
+  必须保留 [0,3) 与 [14,20)，排除 NOTE 的 [6,10)。
+- 跨页：只选 page-1 的 Tail 到 page-2 的 Head，明确排除 page-1 的 NO1 前缀
+  [0,3) 和 page-2 的 NO2 后缀 [7,10)。保存端点必须是 page-1:6 到 page-2:4。
+
+每条反例均检查未选中可见字符不被 canonical 区间覆盖、独立高亮 ID 不合并、
+各端点和页号往返准确。前两条还逐片段检查同一 selectionGroup 的边界。
+跨行或跨页本身不是禁止合并的理由；一条选区覆盖的可见内容与源顺序是否连续才是条件。
+
+```sh
+yarn test:run test/pdf-selection-offset-boundaries.test.ts test/text-highlight-adapter.test.ts test/pdf-text-content.test.tsx test/pdf-text-viewer.test.tsx test/pdf-text-selection-geometry.test.ts test/pdf-text-managed-controls.test.tsx test/pdf-text-handle-library.test.tsx test/intermediate-document-viewer.test.tsx
+yarn typecheck
+yarn build:lib
+```
+
 ## 构建身份与根因
 
 WebBase 基线为 `aec5e60b22314129edb27314dbcf4b0a2b9a4519`。`webview/pnpm-lock.yaml` 与 frozen install 确认实际安装 reader 2.0.0、selection 0.3.0。npm 元数据中的 reader gitHead 为 `fce3193e132f6e288ae0df1e5856f420845afe22`，安装后的 `dist/index-2LyCXV-x.js` SHA256 为 `3416b009319e5ebe591fb91dec963f894c3f5be3caa3a2907c782d406ca2618d`。
