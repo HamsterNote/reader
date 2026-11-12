@@ -440,6 +440,14 @@ selectionRef.current?.clear()
 selectionRef.current?.scrollToRange('highlight-1')
 ```
 
+#### PDF anchor navigation (`scrollToAnchor`)
+
+PDF 的公开 `scrollToAnchor(anchor, options?)` 返回 `Promise<void>`，语义固定：
+
+- **目标不可见或未挂载**（页不在当前可见集合、页面节点已 detached、或祖先 `display:none`）：**立即 reject**，错误为 `目标页面不可用，原位置已保留`。不会排队等待页面重新可见；调用方应视为「当前不可用」，在用户再次操作时重试。
+- **正常路径**：目标页渲染完成并应用锚点后 resolve；10 秒内未完成定位、或被更新的导航取代时 reject。
+- 被拒绝的请求不会触碰 PDF.js 的 `currentPageNumber` / `scrollPageIntoView`，因此不会产生 `offsetParent is not set` 诊断。
+
 ### PDF text pagination diagnostics
 
 PDF 文字模式分页根节点（`.hamster-reader__viewport-pagination`）暴露只读 `data-pdf-text-*` 属性，供宿主在失败注入或 Playwright 失败现场抓取；它们不参与 ready 判定，只反映当前快照：

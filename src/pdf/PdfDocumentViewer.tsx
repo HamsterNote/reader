@@ -210,6 +210,18 @@ export type PdfDocumentViewerRef = {
   readonly captureReadingPosition: () => ReadingPosition
   readonly captureModeSwitchPosition?: () => ReadingPosition
   readonly isRendering: () => boolean
+  /**
+   * Scrolls to a saved anchor.
+   *
+   * Rejects immediately when the target page is not in the current visible
+   * set, its page view is detached, or it has a `display:none` ancestor. The
+   * request is NOT queued until the page becomes visible; callers must treat
+   * this as "unavailable now" and retry from a user action.
+   *
+   * Resolves once the page has rendered and the anchor has been applied.
+   * Rejects on the 10s positioning timeout or when a newer navigation
+   * supersedes this request.
+   */
   readonly scrollToAnchor: (
     anchor: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
@@ -543,7 +555,7 @@ export const PdfDocumentViewer = forwardRef<
         pendingPageRef.current = { pageNumber }
         return
       }
-      viewer.scrollPageIntoView({ pageNumber })
+      viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
     },
     [cancelLayoutRestore]
   )
@@ -623,12 +635,13 @@ export const PdfDocumentViewer = forwardRef<
         horizontalOffset,
         offset
       )
-      viewer.scrollPageIntoView({
+      const destination: Parameters<typeof viewer.scrollPageIntoView>[0] = {
         pageNumber,
         destArray: [null, { name: 'XYZ' }, x, y, null],
         ignoreDestinationZoom: true,
         allowNegativeOffset: true
-      })
+      }
+      viewer.scrollPageIntoView(destination) // pdf-scroll-guard: guarded above
       // Text destinations use the character's position in the original page
       // frame, including after zoom/rotation. Ratio restores retain horizontal
       // scrolling; the cropped display frame still determines their vertical
@@ -1658,6 +1671,11 @@ export const PdfDocumentViewer = forwardRef<
       ? result.position
       : null
   }, [captureModeSwitchPosition])
+  /**
+   * Public anchor navigation. Hidden/detached targets reject immediately; this
+   * function never waits for visibility. Normal requests resolve after render
+   * and reject on timeout/supersession.
+   */
   const scrollToAnchor = (
     stored: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
@@ -1725,7 +1743,7 @@ export const PdfDocumentViewer = forwardRef<
       pendingAnchor.current = null
       return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     }
-    viewer.scrollPageIntoView({ pageNumber: anchor.pageNumber })
+    viewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: canTargetPdfPage + recheck above
     restoreAnchor()
     return promise
   }
