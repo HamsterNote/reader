@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState
-} from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type {
   ReaderTextAnchor,
   ReaderTextReadingProgress
@@ -133,7 +127,10 @@ export function usePdfTextPagination(options: {
     generation,
     settled: false
   })
-  useEffect(() => {
+  // Announce readiness before the browser paints the now-enabled controls.
+  // A passive effect would let a click (and its progress write) land between
+  // paint and the host's ready gate for one frame.
+  useLayoutEffect(() => {
     if (!enabled) return
     if (reported.current.generation !== generation)
       reported.current = { generation, settled: false }

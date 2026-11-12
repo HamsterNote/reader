@@ -1,5 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
-import { StrictMode } from 'react'
+import { act, render, renderHook, waitFor } from '@testing-library/react'
+import { StrictMode, useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   measurePdfTextColumns,
@@ -48,6 +48,39 @@ const anchor = (offset: number) => ({
 })
 
 describe('PDF Text actual fragments and navigation', () => {
+  it('announces engine ready before the ready render can expose enabled controls', async () => {
+    const onReady = vi.fn()
+    const observedAtLayout: boolean[] = []
+    const options = {
+      enabled: true,
+      generation: 0,
+      root,
+      pages: [1],
+      progress: { currentPageNumber: 1 },
+      loaded: new Map([[1, []]]),
+      errors: new Set<number>(),
+      width: 300,
+      height: 200,
+      layoutKey: 1,
+      enqueue: vi.fn(),
+      onCommit: vi.fn(),
+      onTurn: vi.fn()
+    }
+    function Harness() {
+      const pagination = usePdfTextPagination({ ...options, onReady })
+      useLayoutEffect(() => {
+        if (pagination.ready)
+          observedAtLayout.push(onReady.mock.calls.length > 0)
+      }, [pagination.ready])
+      return null
+    }
+    render(<Harness />)
+    await waitFor(() => expect(observedAtLayout.length).toBeGreaterThan(0))
+    // Passive ready notification would make this false: the ready render would
+    // be visible to the host before onEngineReady ran.
+    expect(observedAtLayout[0]).toBe(true)
+  })
+
   it('maps a proportion to a column, then hands off its actual first source character', async () => {
     const onCommit = vi.fn()
     const options = {
