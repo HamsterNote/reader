@@ -2,6 +2,7 @@ import { Button, Popover } from '@hamster-note/components'
 import {
   useEffect,
   useRef,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type Ref
 } from 'react'
@@ -81,7 +82,10 @@ export function ViewportPaginationControls({
         return
       gesture.current = null
       if (!isInside(active.element, event)) {
+        // Pointer capture still delivers the click to this button; mark the
+        // gesture as cancelled and suppress only that pointer-derived click.
         pending.current = null
+        suppressClick.current = active.direction
         return
       }
       const state = latest.current
@@ -137,8 +141,14 @@ export function ViewportPaginationControls({
     gesture.current = null
     pending.current = null
   }
-  const onClick = (direction: Direction) => {
-    if (suppressClick.current === direction) {
+  const onClick = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    direction: Direction
+  ) => {
+    // Only a pointer-derived click (detail > 0) belongs to the gesture being
+    // suppressed. Keyboard Enter/Space and programmatic click() use detail 0
+    // and must always activate.
+    if (suppressClick.current === direction && event.detail > 0) {
       suppressClick.current = null
       return
     }
@@ -176,8 +186,7 @@ export function ViewportPaginationControls({
           disabled={disabled.previous}
           onPointerDown={(event) => onPointerDown(event, 'previous')}
           onPointerCancel={dropGesture}
-          onPointerLeave={dropGesture}
-          onClick={() => onClick('previous')}
+          onClick={(event) => onClick(event, 'previous')}
         >
           ←
         </Button>
@@ -189,8 +198,7 @@ export function ViewportPaginationControls({
           disabled={disabled.next}
           onPointerDown={(event) => onPointerDown(event, 'next')}
           onPointerCancel={dropGesture}
-          onPointerLeave={dropGesture}
-          onClick={() => onClick('next')}
+          onClick={(event) => onClick(event, 'next')}
         >
           →
         </Button>

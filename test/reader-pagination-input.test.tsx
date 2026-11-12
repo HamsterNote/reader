@@ -36,9 +36,12 @@ describe('pagination press intent', () => {
     expect(h.onNext).not.toHaveBeenCalled()
     fireEvent.pointerUp(next)
     expect(h.onNext).toHaveBeenCalledOnce()
-    // The native click that would follow the same gesture must not fire again.
-    fireEvent.click(next)
+    // The pointer-derived click that would follow the same gesture is swallowed.
+    fireEvent.click(next, { detail: 1 })
     expect(h.onNext).toHaveBeenCalledOnce()
+    // Keyboard Enter/Space and programmatic click use detail 0 and still work.
+    fireEvent.click(next, { detail: 0 })
+    expect(h.onNext).toHaveBeenCalledTimes(2)
   })
 
   it('drops a cancelled press so a later reflow cannot page for the user', () => {
@@ -76,7 +79,7 @@ describe('pagination press intent', () => {
     const next = screen.getByLabelText('下一页')
     fireEvent.pointerDown(next)
     fireEvent.pointerUp(next)
-    fireEvent.click(next)
+    fireEvent.click(next, { detail: 1 })
     expect(h.onNext).toHaveBeenCalledOnce()
   })
 
@@ -85,7 +88,7 @@ describe('pagination press intent', () => {
     const next = screen.getByLabelText('下一页')
     fireEvent.pointerDown(next)
     fireEvent.pointerUp(next)
-    fireEvent.click(next)
+    fireEvent.click(next, { detail: 1 })
     expect(h.onNext).toHaveBeenCalledOnce()
     h.rerenderState(false, true)
     fireEvent.pointerDown(screen.getByLabelText('下一页'))
