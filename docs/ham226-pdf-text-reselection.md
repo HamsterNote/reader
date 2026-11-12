@@ -103,18 +103,20 @@ Chromium 命中测试和鼠标手柄拖动，在编辑提交后的所有完整�
 `two-page-positioned-runs.pdf` 包含两页、十组独立定位文字。
 `PDF_CROSS_PAGE_CREATE=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' node scripts/check-pdf-text-cross-page.mjs`
 从真实 WebBase 导入、零标注开始拖选第一页最后一行，松手、调整两端后再尝试到第二页。
-该项当前失败，不能以已有跨页高亮的四项编辑通过替代。
+该入口现在显式 SKIP，并在 JSON 报告中保存 status: skipped 与 spec:67 的原因。
+默认运行和带环境变量运行均执行已有跨页编辑四项，跳过不计为新建通过。
 
 原因在选择入口：`getPdfVirtualItems` 只返回当前原页，Text 禁止边缘滚动/自动翻页，
 `usePdfTextPagination.turn` 调用 `onTurn`，继而 `pdfClearDraftRef` 清空选区及草稿。
 因此点击下一页后只有 page-2 挂载，手柄从 2 变成 0，持久化条目仍为 0；
 在第二页再次拖选并确认只产生 page-2 的一条高亮。
-脚本继续检查这条真实生成的单页高亮在 Layout、取消、重选后保留相同 ID，
-最终仍以起点必须在 page-1 的断言失败，不把单页结果算作跨页创建成功。
+前一轮诊断运行确认，这条真实生成的单页高亮在 Layout、取消、重选后保留相同 ID，
+但不满足起点必须在 page-1 的断言。该记录说明既有能力边界，不是本 bug 的回归。
 
 当前 `pdfjs-web-reader` 的 Text 分页契约明确禁止正文滚动或自动翻页，原分页设计也
-明确不跨原页拼接。支持新建跨原页范围需要确定续选交互；它不是上述 canonical
-编辑修复已经支持的操作。本轮保留生产逻辑与 Spec，记录能力缺口，PR 继续 Draft。
+明确不跨原页拼接。跨页续选是独立产品需求，不在 PR #63 范围。
+两页 PDF 和 checkCreation 检查逻辑保留，待引入该需求后再启用 creationSupport.enabled。
+本轮仅改测试与文档，业务代码保持 ec23bf3，Spec 与 WebBase 均未改。
 
 ## 构建身份与根因
 

@@ -25,18 +25,22 @@ generated with pdf-lib. Page 1 has `First page` at (30,450) and four independent
 at (30,450) and `mno`, `pqr`, `stu`, `vwx` at (30 + 45i,400). Each heading and
 word uses its own BT/Tm/Tj/ET sequence, ten positioning groups in total.
 
-Run the explicit creation acceptance with:
+Request the explicit creation check with:
 
 ```sh
 PDF_CROSS_PAGE_CREATE=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' node scripts/check-pdf-text-cross-page.mjs
 ```
 
-This imports the PDF into WebBase with no annotations and uses real mouse
-input. It currently **fails**: PDF Text mounts one original page at a time,
-edge dragging does not turn pages, and clicking Next discards the draft.
-Selecting on page 2 consequently creates a new page-2-only annotation, not
-a continuation from page 1. The script records that failure, screenshots,
-actual persisted ranges and a Layout / deselect / reselect round trip of the
-annotation actually created. That single-page round trip is not counted as
-successful cross-page creation. Default execution still runs the four saved
-cross-page edit cases; creation is opt-in and must not be reported as passing.
+This prints an explicit **SKIP** with a reference to
+`openspec/specs/pdfjs-web-reader/spec.md:67` and records `status: "skipped"` in
+the JSON report. The spec forbids selection overflow from turning pages;
+PDF Text mounts one original page at a time and Next discards the draft.
+Cross-page continuation is a separate product requirement, outside this fix.
+Both this command and default execution run the four saved cross-page edit
+cases and exit successfully when those cases pass. A skip is not a creation pass.
+
+The PDF and `checkCreation` implementation remain available for that future
+requirement: import through WebBase from zero annotations, drag and release,
+adjust handles, continue to page 2, confirm, switch Layout, deselect/reselect,
+and assert one spanning annotation. Enable `creationSupport.enabled` only
+after the product introduces that continuation interaction.
