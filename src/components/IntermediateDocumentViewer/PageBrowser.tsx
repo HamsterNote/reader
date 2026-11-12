@@ -1,6 +1,5 @@
 import { confirm } from '@hamster-note/components'
 import type { EditorDocument } from '@hamster-note/painting/core'
-import { scrollIntoViewIfAttached } from '../scrollIntoViewIfAttached'
 import type { CSSProperties, KeyboardEvent, RefObject, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -600,10 +599,9 @@ export function PageBrowser({
     const targetButton = pagesScrollRootRef.current.querySelector<HTMLElement>(
       `[data-page-number="${firstVisiblePage}"]`
     )
-    scrollIntoViewIfAttached(targetButton, {
-      block: 'nearest',
-      behavior: 'auto'
-    })
+    if (targetButton) {
+      targetButton.scrollIntoView({ block: 'nearest', behavior: 'auto' })
+    }
   }, [activeTab, effectiveOpen, visiblePageNumbers])
 
   const className = [

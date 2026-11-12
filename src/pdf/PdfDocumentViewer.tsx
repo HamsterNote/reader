@@ -38,7 +38,6 @@ import { CroppedPdfViewer } from './CroppedPdfViewer'
 import { groupHiddenPages, normalizeHiddenPageNumbers } from './hiddenPages'
 import { PdfHiddenPageGroupControls } from './PdfHiddenPageGroupControls'
 import { PdfHiddenPageRestoreModal } from './PdfHiddenPageRestoreModal'
-import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
@@ -1202,10 +1201,9 @@ export const PdfDocumentViewer = forwardRef<
       viewer.currentPageNumber =
         visible.find((page) => page >= viewer.currentPageNumber) ??
         visible.at(-1)!
-      scrollIntoViewIfAttached(
-        viewer.getPageView(viewer.currentPageNumber - 1)?.div,
-        { block: 'start' }
-      )
+      viewer
+        .getPageView(viewer.currentPageNumber - 1)
+        ?.div.scrollIntoView?.({ block: 'start' })
     }
     selectionContextsRef.current.forEach((_, page) => {
       if (!visible.includes(page)) selectionContextsRef.current.delete(page)

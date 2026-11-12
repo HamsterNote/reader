@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import type { HiddenPageGroup } from './hiddenPages'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjsRuntime'
 import { usePdfPreviews } from './usePdfPreviews'
-import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached'
 
 type Props = {
   readonly groups: readonly HiddenPageGroup[]
@@ -34,12 +33,9 @@ export function PdfHiddenPageRestoreModal({
 
   useEffect(() => {
     closeRef.current?.focus()
-    scrollIntoViewIfAttached(
-      listRef.current?.querySelector(
-        `[data-hidden-group-start="${initialGroupStart}"]`
-      ),
-      { block: 'start' }
-    )
+    listRef.current
+      ?.querySelector(`[data-hidden-group-start="${initialGroupStart}"]`)
+      ?.scrollIntoView?.({ block: 'start' })
   }, [initialGroupStart])
 
   useEffect(() => {
