@@ -61,6 +61,7 @@ export function waitForPageActivation(
     readonly timeoutMs: number
     readonly now?: () => number
     readonly schedule?: (callback: () => void) => void
+    readonly signal?: AbortSignal
   }
 ): Promise<void> {
   const now = options.now ?? (() => Date.now())
@@ -71,14 +72,31 @@ export function waitForPageActivation(
         requestAnimationFrame(callback)
       else setTimeout(callback, 16)
     })
+  const signal = options.signal
   const deadline = now() + options.timeoutMs
   return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      signal?.removeEventListener('abort', abort)
+      reject(
+        signal?.reason instanceof Error
+          ? signal.reason
+          : new DOMException('PDF navigation superseded', 'AbortError')
+      )
+    }
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
     const poll = () => {
+      if (signal?.aborted) return
       if (isReady()) {
+        signal?.removeEventListener('abort', abort)
         resolve()
         return
       }
       if (now() >= deadline) {
+        signal?.removeEventListener('abort', abort)
         reject(new Error('目标页面不可用，原位置已保留'))
         return
       }

@@ -118,4 +118,22 @@ describe('PDF page activation guard', () => {
     ticks.shift()!()
     await assertion
   })
+
+  it('aborts a pending wait immediately when its navigation is superseded', async () => {
+    const controller = new AbortController()
+    const ticks: Array<() => void> = []
+    const waiting = waitForPageActivation(() => false, {
+      timeoutMs: 10000,
+      now: () => 0,
+      schedule: (callback) => ticks.push(callback),
+      signal: controller.signal
+    })
+    controller.abort(
+      new DOMException('PDF navigation superseded', 'AbortError')
+    )
+    await expect(waiting).rejects.toMatchObject({ name: 'AbortError' })
+    // Draining any queued tick must not schedule another poll or replay.
+    for (const tick of ticks.splice(0)) tick()
+    expect(ticks).toHaveLength(0)
+  })
 })

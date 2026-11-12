@@ -538,6 +538,22 @@ export const PdfDocumentViewer = forwardRef<
     fail: (error: Error) => void
     preserveOnFailure?: boolean
   } | null>(null)
+  // Restore may wait for the target page (initial load/crop). That wait owns
+  // navigation like any other request: a newer navigation, a source change or
+  // unmount aborts it immediately instead of letting it replay later.
+  const navigationGeneration = useRef(0)
+  const restoreWait = useRef<{
+    generation: number
+    controller: AbortController
+  } | null>(null)
+  const cancelRestoreWait = useCallback(() => {
+    navigationGeneration.current += 1
+    const wait = restoreWait.current
+    restoreWait.current = null
+    wait?.controller.abort(
+      new DOMException('PDF navigation superseded', 'AbortError')
+    )
+  }, [])
   const {
     restoreAfterLayout,
     cancelRestore: cancelLayoutRestore,
@@ -561,6 +577,7 @@ export const PdfDocumentViewer = forwardRef<
   })
   const scrollToCroppedPage = useCallback(
     (pageNumber: number) => {
+      cancelRestoreWait()
       cancelLayoutRestore()
       restoredPosition.current = null
       restoredTextPosition.current = null
@@ -572,7 +589,7 @@ export const PdfDocumentViewer = forwardRef<
       }
       viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
     },
-    [cancelLayoutRestore]
+    [cancelLayoutRestore, cancelRestoreWait]
   )
   // Layout captures at text-item granularity. Retain a restored Text character
   // while the viewport stays at that exact position, including a quick round trip.
@@ -1183,14 +1200,16 @@ export const PdfDocumentViewer = forwardRef<
 
     return () => {
       cancelled = true
+      cancelRestoreWait()
       removeSourceLinks?.()
     }
-  }, [source])
+  }, [source, cancelRestoreWait])
 
   // 卸载/切文件：取消加载、销毁 worker、清空页面（tasks.md 3.5）。
   useEffect(() => {
     const manager = sessionManagerRef.current
     return () => {
+      cancelRestoreWait()
       pendingAnchor.current?.fail(
         new DOMException('PDF navigation cancelled', 'AbortError')
       )
@@ -1768,6 +1787,8 @@ export const PdfDocumentViewer = forwardRef<
     waitForPage: boolean
   ): Promise<void> => {
     cancelLayoutRestore()
+    cancelRestoreWait()
+    const generation = navigationGeneration.current
     const anchor = normalizeBookmark(stored)
     if (!anchor) {
       progressOptions.current.onRestoreError?.(
@@ -1795,9 +1816,31 @@ export const PdfDocumentViewer = forwardRef<
     if (initialViewer && anchor.pageNumber > initialViewer.pagesCount)
       return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     // Restore runs before pagesinit/crop settles; wait for the real page
-    // view instead of treating "not visible yet" as unavailable.
-    return waitForPageActivation(targetReady, { timeoutMs: 10000 }).then(() =>
-      beginNavigation(anchor, options, originalDocument)
+    // view instead of treating "not visible yet" as unavailable. The wait is
+    // owned by this navigation generation, so a newer request aborts it.
+    const controller = new AbortController()
+    restoreWait.current = { generation, controller }
+    const finishWait = () => {
+      if (restoreWait.current?.controller === controller)
+        restoreWait.current = null
+    }
+    return waitForPageActivation(targetReady, {
+      timeoutMs: 10000,
+      signal: controller.signal
+    }).then(
+      () => {
+        finishWait()
+        if (
+          generation !== navigationGeneration.current ||
+          controller.signal.aborted
+        )
+          throw new DOMException('PDF navigation superseded', 'AbortError')
+        return beginNavigation(anchor, options, originalDocument)
+      },
+      (error) => {
+        finishWait()
+        throw error
+      }
     )
   }
 
