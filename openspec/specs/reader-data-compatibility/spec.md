@@ -213,7 +213,7 @@ reader MUST 仅调用正式发布绘图库的迁移能力和页面锚定能力�
 
 ### Requirement: 按栏文件切换与位置隔离
 
-Reader SHALL 通过 painting 0.8.4 的公开 toolbar 接收可选文件列表与 pane layout，默认目录入口打开本库既有视图；旧 bottomBar 插槽保持兼容。文件格式能力 SHALL 以宿主 resolvedFormat 与已注册适配器匹配，支持格式在同内容容器内切换，不支持但宿主支持时异步接管。两者均不支持 SHALL 保留当前文档并报错。
+Reader SHALL 通过 painting 0.9.0 的公开 toolbar 接收可选文件列表与 pane layout，默认目录入口打开本库既有视图；旧 bottomBar 插槽保持兼容。文件格式能力 SHALL 以宿主 resolvedFormat 与已注册适配器匹配，支持格式在同内容容器内切换，不支持但宿主支持时异步接管。两者均不支持 SHALL 保留当前文档并报错。
 
 切换 MUST 等待稳定位置采集、原进度队列冲刷及宿主持久化 ACK。保存失败 MUST NOT 卸载；释放后加载或恢复失败 SHALL 自动调用宿主重载回退，并在回退失败时允许重试或从存储重开原文件。位置仅按 storageId/path/paneId 缓存轻量切片，恢复布局就绪前不得发布初始化零进度。共享源引用最后释放才销毁，单/双栏最多一/两个不同活动文档；旧 session/request 不得污染新文档。
 
