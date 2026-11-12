@@ -456,7 +456,11 @@ PDF 文字模式分页根节点（`.hamster-reader__viewport-pagination`）暴�
 | `data-pdf-text-last-turn-page` | 最近一次被接受的翻页目标页（首次前缺失） |
 | `data-pdf-text-error` | 当前页加载/恢复错误（存在时） |
 
-宿主无需新增回调；失败时读取这些属性即可区分「点击未被分页接受」（`turn-sequence` 不变）与「分页已推进但位置桥接/落盘仍旧」（`turn-sequence`/`target-page` 前进）。
+宿主无需新增回调。归因必须按**同一 generation 内的差值**分段，顺序固定，不要用绝对值或在 generation 变化时比较：
+
+1. **未接受**：点击前后 `turn-sequence` 无增量 → reader 没接住这次翻页，属 reader 侧。
+2. **已接受未完成/失败**：`turn-sequence` 有增量，但 `ready=false` 或 `busy=true` 或 `gate=true` 或 `error` 非空 → 翻页尚未完成或已失败，仍属 reader 侧；此时 `target-page` 可能已变但页面未就绪，不能归因宿主。
+3. **已完成并发布**：`turn-sequence` 有增量，且 `ready=true`、`gate=false`、`error` 为空、`target-page` 已到目标页；只有此时 sidecar 仍未变化，才归因桥接/落盘（宿主侧）。
 
 ## Comments
 
