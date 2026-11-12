@@ -2,6 +2,19 @@
 
 在 WebBase 的实际 ReaderEditorPane、受控 ranges 和侧车持久化路径上复现：源字符顺序与显示顺序相反的 PDF，创建高亮、取消选中、重新选中，再扩大与缩小范围后，旧片段仍留在宿主中。主线受管手柄修复了拖动时的预览生命周期，但没有解决只使用逐范围回调的宿主里的片段清理。
 
+## 新选区入口仍待复现（2026-11-12）
+
+报障人确认“已有高亮重选后拖动”已正常，但报告“新选中文字 → 拖动手柄 → 点击高亮”仍会出现多余高亮，PR 暂不合并。本轮新增检查脚本，没有修改生产逻辑，也没有把检查通过视为新入口已修复。
+
+```sh
+WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-draft-touch-confirm node scripts/check-webbase-pdf-draft.mjs
+REORDERED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-draft-reordered-touch-confirm node scripts/check-webbase-pdf-draft.mjs
+```
+
+在修复构建上，普通 PDF 和逆序字符 PDF 各 4 组均通过（Chromium 148.0.7778.96）。每组分别以起点或终点开始调整，两端各拖动 3 次，每次往返移动 25 次，包含扩大与缩小。逐帧、逐次释放检查草稿未持久化中间范围、只有一个预览和一对手柄；点击“高亮”后检查只保存最终一条、准确文本及页号/canonical 端点；取消并重选后检查没有新增条目和额外绘制节点。逆序 PDF 最终缩为一个字符，因此预期一条物理片段，而非错误地要求任意不连续源范围都只存一条。
+
+普通样本最终文本为 mnopqrstuv，page-1 的 canonical [34,44)；逆序样本最终为 m，canonical [35,36)。原生初始选择通过鼠标建立，触摸拖动使用 Chromium CDP，确认/取消/重选使用触摸 tap；不覆盖 OS 长按建立选区。源字符顺序、PDF 文件和浏览器实现仍是未覆盖的变量，需要原始复现 PDF、设备/浏览器以及准确点击目标来继续定位。当前证据没有证明“草稿逐帧累积”或 WebBase 提交逻辑有缺陷。
+
 ## 构建身份与根因
 
 WebBase 基线为 `aec5e60b22314129edb27314dbcf4b0a2b9a4519`。`webview/pnpm-lock.yaml` 与 frozen install 确认实际安装 reader 2.0.0、selection 0.3.0。npm 元数据中的 reader gitHead 为 `fce3193e132f6e288ae0df1e5856f420845afe22`，安装后的 `dist/index-2LyCXV-x.js` SHA256 为 `3416b009319e5ebe591fb91dec963f894c3f5be3caa3a2907c782d406ca2618d`。
