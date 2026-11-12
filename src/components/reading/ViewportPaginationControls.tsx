@@ -33,6 +33,10 @@ export function ViewportPaginationControls({
       data-pdf-text-busy={diagnostics ? String(diagnostics.busy) : undefined}
       data-pdf-text-gate={diagnostics ? String(diagnostics.gate) : undefined}
       data-pdf-text-target-page={diagnostics?.targetPageNumber}
+      data-pdf-text-turn-sequence={diagnostics?.turnSequence}
+      data-pdf-text-last-turn-page={
+        diagnostics?.lastTurnPageNumber ?? undefined
+      }
       data-pdf-text-error={diagnostics?.error}
     >
       <Popover

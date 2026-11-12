@@ -9,14 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-- Reader 3.0.0 将 painting 改为精确必选 peer `0.9.0`，宿主需显式安装；公开 Reader props 与原底栏插槽仍兼容。
+- Reader 3.0.0 将 painting 改为必选 peer，范围 `^0.8.4 || ^0.9.0`；宿主需显式安装其一。0.9.0 相对 0.8.4 仅版本字段不同，公开 API 一致。
 
 ### Added
 
 - Reader 3.0.0：复用 painting 0.9.0 的公开工具栏、文件菜单和分栏布局，加入内置目录；保留自定义/禁用底栏。
 - ReaderFileSession / ReaderFileWorkspace：等待保存 ACK、按文件与栏恢复位置、按引用释放源资源，加载/恢复失败走宿主重载回退。
 - 可选的同 WebView 会话替换入口：保留容器，隔离新旧 v1 会话和迟到回执。
-- painting 精确 peer 依赖 0.9.0；开发依赖同样使用 npm 正式包，锁文件记录 registry 完整性。
+- painting peer 范围 `^0.8.4 || ^0.9.0`；开发依赖使用 npm 正式包 0.9.0，锁文件记录 registry 完整性。
+- PDF 文字分页暴露只读 `data-pdf-text-*` 观测属性（generation/revision/ready/busy/gate/target-page/turn-sequence/last-turn-page/error），供宿主在失败现场区分「点击未被分页接受」与「分页推进但位置桥接仍旧」。
 
 ### Fixed
 - Web 文件会话与 byte adapter 移入独立 workspace 模块，避免 Expo 宿主目录扫描把 Reader DOM 组件纳入原生类型检查；根入口公开导出不变。

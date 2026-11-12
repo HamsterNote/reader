@@ -104,6 +104,8 @@ export function usePdfTextPagination(options: {
   const [state, setState] = useState(initial)
   const committed = useRef<ReaderTextReadingProgress | undefined>(progress)
   const gate = useRef(false)
+  const turnSequence = useRef(0)
+  const lastTurnPage = useRef<number | null>(null)
   const committedToken = useRef(-1)
   const stableWaiters = useRef(
     new Set<{ resolve: () => void; reject: (error: Error) => void }>()
@@ -383,6 +385,8 @@ export function usePdfTextPagination(options: {
       )
       if (!next) return
       gate.current = true
+      turnSequence.current += 1
+      lastTurnPage.current = next.pageNumber
       values.current.onTurn()
       const target = { ...next, publish: true, token: ++serial.current }
       setState((previous) => ({
@@ -423,6 +427,8 @@ export function usePdfTextPagination(options: {
       busy: current.busy,
       gate: gate.current,
       targetPageNumber: target.pageNumber,
+      turnSequence: turnSequence.current,
+      lastTurnPageNumber: lastTurnPage.current,
       error: pageError
     },
     ready: current.ready,

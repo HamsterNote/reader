@@ -7,7 +7,7 @@ React reader component package for Hamster Note.
 Install the package and its peer dependencies:
 
 ```bash
-yarn add @hamster-note/reader @hamster-note/painting@0.9.0 @hamster-note/selection@0.3.0 react react-dom
+yarn add @hamster-note/reader "@hamster-note/painting@>=0.8.4 <0.10" @hamster-note/selection@0.3.0 react react-dom
 ```
 
 ## 使用
@@ -452,9 +452,11 @@ PDF 文字模式分页根节点（`.hamster-reader__viewport-pagination`）暴�
 | `data-pdf-text-busy` | 翻页事务是否进行中 |
 | `data-pdf-text-gate` | 是否已接管一次翻页、等待稳定 |
 | `data-pdf-text-target-page` | 目标源页 |
+| `data-pdf-text-turn-sequence` | 已被接受的分页翻页次数；点击被忽略（未 ready/busy/gate）时不增长 |
+| `data-pdf-text-last-turn-page` | 最近一次被接受的翻页目标页（首次前缺失） |
 | `data-pdf-text-error` | 当前页加载/恢复错误（存在时） |
 
-宿主无需新增回调；失败时读取这些属性即可判断是否处于「按钮已可点但 ready 通知尚未到达」的同帧。
+宿主无需新增回调；失败时读取这些属性即可区分「点击未被分页接受」（`turn-sequence` 不变）与「分页已推进但位置桥接/落盘仍旧」（`turn-sequence`/`target-page` 前进）。
 
 ## Comments
 
@@ -724,4 +726,4 @@ PDF Layout handles can cross and exchange endpoint roles. Holding a handle near 
 
 ### 文件工具栏与同容器切换（3.0.0）
 
-可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting 精确 peer 版本为 0.9.0；正式包接入与发布顺序见文档。
+可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting peer 范围为 `^0.8.4 || ^0.9.0`（0.8.4 与 0.9.0 的公开 API 相同，宿主可按自身接线选择）；正式包接入与发布顺序见文档。
