@@ -104,6 +104,8 @@ export function usePdfTextPagination(options: {
   const [state, setState] = useState(initial)
   const committed = useRef<ReaderTextReadingProgress | undefined>(progress)
   const gate = useRef(false)
+  const turnSequence = useRef(0)
+  const lastTurnPage = useRef<number | null>(null)
   const committedToken = useRef(-1)
   const stableWaiters = useRef(
     new Set<{ resolve: () => void; reject: (error: Error) => void }>()
@@ -383,6 +385,8 @@ export function usePdfTextPagination(options: {
       )
       if (!next) return
       gate.current = true
+      turnSequence.current += 1
+      lastTurnPage.current = next.pageNumber
       values.current.onTurn()
       const target = { ...next, publish: true, token: ++serial.current }
       setState((previous) => ({
@@ -407,10 +411,26 @@ export function usePdfTextPagination(options: {
     }
     stableWaiters.current.clear()
   }, [current.busy, current.ready, current.error, errors, target.pageNumber])
+  let pageError: string | undefined
+  if (current.error) pageError = current.error.message
+  else if (errors.has(target.pageNumber))
+    pageError = '阅读页加载失败，位置恢复未完成'
   return {
     pageNumber: target.pageNumber,
     column: current.column,
     revision: current.revision,
+    /** Read-only observation for host failure capture; never drives readiness. */
+    diagnostics: {
+      generation,
+      revision: current.revision,
+      ready: current.ready,
+      busy: current.busy,
+      gate: gate.current,
+      targetPageNumber: target.pageNumber,
+      turnSequence: turnSequence.current,
+      lastTurnPageNumber: lastTurnPage.current,
+      error: pageError
+    },
     ready: current.ready,
     unlocatable: current.unlocatable,
     navigation: {

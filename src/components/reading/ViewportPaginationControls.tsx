@@ -1,6 +1,7 @@
 import { Button, Popover } from '@hamster-note/components'
 import type { Ref } from 'react'
 import type { ViewportNavigationState } from './navigation'
+import type { PaginationDiagnostics } from '../../types/paginationDiagnostics'
 
 export function ViewportPaginationControls({
   navigation,
@@ -8,6 +9,7 @@ export function ViewportPaginationControls({
   theme,
   controlsRef,
   className = '',
+  diagnostics,
   onPrevious,
   onNext
 }: {
@@ -16,6 +18,8 @@ export function ViewportPaginationControls({
   theme: 'light' | 'dark'
   controlsRef?: Ref<HTMLDivElement>
   className?: string
+  /** Read-only snapshot for host failure capture; does not affect behavior. */
+  diagnostics?: PaginationDiagnostics
   onPrevious: () => void
   onNext: () => void
 }) {
@@ -23,6 +27,17 @@ export function ViewportPaginationControls({
     <div
       ref={controlsRef}
       className={`hamster-reader__viewport-pagination ${className}`}
+      data-pdf-text-generation={diagnostics?.generation}
+      data-pdf-text-revision={diagnostics?.revision}
+      data-pdf-text-ready={diagnostics ? String(diagnostics.ready) : undefined}
+      data-pdf-text-busy={diagnostics ? String(diagnostics.busy) : undefined}
+      data-pdf-text-gate={diagnostics ? String(diagnostics.gate) : undefined}
+      data-pdf-text-target-page={diagnostics?.targetPageNumber}
+      data-pdf-text-turn-sequence={diagnostics?.turnSequence}
+      data-pdf-text-last-turn-page={
+        diagnostics?.lastTurnPageNumber ?? undefined
+      }
+      data-pdf-text-error={diagnostics?.error}
     >
       <Popover
         relative

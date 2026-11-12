@@ -7,7 +7,7 @@ React reader component package for Hamster Note.
 Install the package and its peer dependencies:
 
 ```bash
-yarn add @hamster-note/reader @hamster-note/painting@0.9.0 @hamster-note/selection@0.3.0 react react-dom
+yarn add @hamster-note/reader "@hamster-note/painting@>=0.8.4 <0.10" @hamster-note/selection@0.3.0 react react-dom
 ```
 
 ## 使用
@@ -440,6 +440,28 @@ selectionRef.current?.clear()
 selectionRef.current?.scrollToRange('highlight-1')
 ```
 
+### PDF text pagination diagnostics
+
+PDF 文字模式分页根节点（`.hamster-reader__viewport-pagination`）暴露只读 `data-pdf-text-*` 属性，供宿主在失败注入或 Playwright 失败现场抓取；它们不参与 ready 判定，只反映当前快照：
+
+| 属性 | 含义 |
+| --- | --- |
+| `data-pdf-text-generation` | 当前文档 generation |
+| `data-pdf-text-revision` | 分页状态 revision |
+| `data-pdf-text-ready` | 分页是否 ready（与控件禁用同一来源） |
+| `data-pdf-text-busy` | 翻页事务是否进行中 |
+| `data-pdf-text-gate` | 是否已接管一次翻页、等待稳定 |
+| `data-pdf-text-target-page` | 目标源页 |
+| `data-pdf-text-turn-sequence` | 已被接受的分页翻页次数；点击被忽略（未 ready/busy/gate）时不增长 |
+| `data-pdf-text-last-turn-page` | 最近一次被接受的翻页目标页（首次前缺失） |
+| `data-pdf-text-error` | 当前页加载/恢复错误（存在时） |
+
+宿主无需新增回调。归因必须按**同一 generation 内的差值**分段，顺序固定，不要用绝对值或在 generation 变化时比较：
+
+1. **未接受**：点击前后 `turn-sequence` 无增量 → reader 没接住这次翻页，属 reader 侧。
+2. **已接受未完成/失败**：`turn-sequence` 有增量，但 `ready=false` 或 `busy=true` 或 `gate=true` 或 `error` 非空 → 翻页尚未完成或已失败，仍属 reader 侧；此时 `target-page` 可能已变但页面未就绪，不能归因宿主。
+3. **已完成并发布**：`turn-sequence` 有增量，且 `ready=true`、`gate=false`、`error` 为空、`target-page` 已到目标页；只有此时 sidecar 仍未变化，才归因桥接/落盘（宿主侧）。
+
 ## Comments
 
 `Reader` exposes a purely controlled comments API. There is no `defaultComments` prop and no uncontrolled mode: the host owns the comment list and `Reader` never mutates it. The library ships no comment UI; the host owns presentation (panel, editor, badges). The existing `onCommentHighlight` prop is unchanged and remains the popover 评论 entry point for creating a comment from a highlight.
@@ -708,4 +730,4 @@ PDF Layout handles can cross and exchange endpoint roles. Holding a handle near 
 
 ### 文件工具栏与同容器切换（3.0.0）
 
-可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting 精确 peer 版本为 0.9.0；正式包接入与发布顺序见文档。
+可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting peer 范围为 `^0.8.4 || ^0.9.0`（0.8.4 与 0.9.0 的公开 API 相同，宿主可按自身接线选择）；正式包接入与发布顺序见文档。
