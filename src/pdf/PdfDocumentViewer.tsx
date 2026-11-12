@@ -38,6 +38,12 @@ import { CroppedPdfViewer } from './CroppedPdfViewer'
 import { groupHiddenPages, normalizeHiddenPageNumbers } from './hiddenPages'
 import { PdfHiddenPageGroupControls } from './PdfHiddenPageGroupControls'
 import { PdfHiddenPageRestoreModal } from './PdfHiddenPageRestoreModal'
+import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached'
+import {
+  activatePageIfReady,
+  canTargetPdfPage,
+  isPageViewActivatable
+} from './pageActivation'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
@@ -204,6 +210,23 @@ export type PdfDocumentViewerRef = {
   readonly captureReadingPosition: () => ReadingPosition
   readonly captureModeSwitchPosition?: () => ReadingPosition
   readonly isRendering: () => boolean
+  /**
+   * Scrolls to a saved anchor.
+   *
+   * Rejects immediately when the target page is not in the current visible
+   * set, its page view is detached, or it has a `display:none` ancestor. The
+   * request is NOT queued until the page becomes visible; callers must treat
+   * this as "unavailable now" and retry from a user action.
+   *
+   * Resolves once the positioning rectangle for the anchor has been applied
+   * and PDF.js reports the destination; this does NOT mean the canvas/page
+   * render has completed.
+   *
+   * Rejects on the 10s positioning timeout or when a newer navigation
+   * supersedes this request. A timeout/superseded request may already have
+   * invoked PDF.js positioning before rejecting; only the entry-level
+   * unavailable check below guarantees PDF.js was not touched.
+   */
   readonly scrollToAnchor: (
     anchor: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
@@ -364,6 +387,9 @@ export const PdfDocumentViewer = forwardRef<
   const restoreTriggerRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => setRestoreGroupStart(null), [source, edgeCropEditing])
   useEffect(() => {
+    pendingPageRef.current = null
+  }, [source])
+  useEffect(() => {
     if (restoreGroupStart !== null || !restoreTriggerRef.current) return
     restoreTriggerRef.current.focus()
     restoreTriggerRef.current = null
@@ -373,6 +399,32 @@ export const PdfDocumentViewer = forwardRef<
   const hiddenGroups = groupHiddenPages(hiddenPages, allowedPages)
   const visiblePagesRef = useRef(readablePages)
   visiblePagesRef.current = readablePages
+  const pendingPageRef = useRef<{
+    pageNumber: number
+    run?: () => void
+  } | null>(null)
+  const activatePage = (pageNumber: number): boolean => {
+    const viewer = viewerRef.current
+    if (!viewer || !activatePageIfReady(viewer, pageNumber)) {
+      pendingPageRef.current = { pageNumber }
+      return false
+    }
+    pendingPageRef.current = null
+    return true
+  }
+  const retryPendingPage = () => {
+    const pending = pendingPageRef.current
+    if (!pending) return
+    const viewer = viewerRef.current
+    if (
+      !viewer ||
+      !isPageViewActivatable(viewer.getPageView(pending.pageNumber - 1))
+    )
+      return
+    pendingPageRef.current = null
+    if (pending.run) pending.run()
+    else activatePage(pending.pageNumber)
+  }
   const navigationOptionsRef = useRef({ pageRange, hiddenPages })
   navigationOptionsRef.current = { pageRange, hiddenPages }
   const ocrTexts = usePdfOcr(ocrDocument, renderedPages, readablePages, props)
@@ -504,7 +556,11 @@ export const PdfDocumentViewer = forwardRef<
       restoredTextPosition.current = null
       const viewer = viewerRef.current
       if (!viewer) return
-      viewer.scrollPageIntoView({ pageNumber })
+      if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1))) {
+        pendingPageRef.current = { pageNumber }
+        return
+      }
+      viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
     },
     [cancelLayoutRestore]
   )
@@ -568,6 +624,13 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     const pageView = viewer?.getPageView(pageNumber - 1)
     if (container && viewport && viewer && pageView) {
+      if (!isPageViewActivatable(pageView)) {
+        pendingPageRef.current = {
+          pageNumber,
+          run: () => alignTop(top, pageNumber, targetLeft)
+        }
+        return
+      }
       const box = pageView.div.getBoundingClientRect()
       const offset = top - box.top
       const left = container.scrollLeft
@@ -577,12 +640,13 @@ export const PdfDocumentViewer = forwardRef<
         horizontalOffset,
         offset
       )
-      viewer.scrollPageIntoView({
+      const destination: Parameters<typeof viewer.scrollPageIntoView>[0] = {
         pageNumber,
         destArray: [null, { name: 'XYZ' }, x, y, null],
         ignoreDestinationZoom: true,
         allowNegativeOffset: true
-      })
+      }
+      viewer.scrollPageIntoView(destination) // pdf-scroll-guard: guarded above
       // Text destinations use the character's position in the original page
       // frame, including after zoom/rotation. Ratio restores retain horizontal
       // scrolling; the cropped display frame still determines their vertical
@@ -917,8 +981,9 @@ export const PdfDocumentViewer = forwardRef<
       if (visible.includes(event.pageNumber))
         callbacksRef.current.onPageChange?.(event.pageNumber)
       else if (visible.length)
-        viewer.currentPageNumber =
+        activatePage(
           visible.find((page) => page >= event.pageNumber) ?? visible.at(-1)!
+        )
     }
     const handleScaleChanging = (event: { scale: number }) => {
       applyPageCrop()
@@ -1198,13 +1263,16 @@ export const PdfDocumentViewer = forwardRef<
       pendingAnchor.current = null
     }
     if (visible.length && !visible.includes(viewer.currentPageNumber)) {
-      viewer.currentPageNumber =
+      const next =
         visible.find((page) => page >= viewer.currentPageNumber) ??
         visible.at(-1)!
-      viewer
-        .getPageView(viewer.currentPageNumber - 1)
-        ?.div.scrollIntoView?.({ block: 'start' })
+      if (activatePage(next)) {
+        scrollIntoViewIfAttached(viewer.getPageView(next - 1)?.div, {
+          block: 'start'
+        })
+      }
     }
+    retryPendingPage()
     selectionContextsRef.current.forEach((_, page) => {
       if (!visible.includes(page)) selectionContextsRef.current.delete(page)
     })
@@ -1608,6 +1676,12 @@ export const PdfDocumentViewer = forwardRef<
       ? result.position
       : null
   }, [captureModeSwitchPosition])
+  /**
+   * Public anchor navigation. Hidden/detached targets reject immediately at
+   * the entry check, before PDF.js is touched; this function never waits for
+   * visibility. Normal requests resolve after the destination rectangle is
+   * applied (not after canvas rendering) and reject on timeout/supersession.
+   */
   const scrollToAnchor = (
     stored: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
@@ -1621,7 +1695,10 @@ export const PdfDocumentViewer = forwardRef<
       return Promise.resolve()
     }
     const viewer = viewerRef.current
-    if (!viewer || !visiblePagesRef.current.includes(anchor.pageNumber))
+    if (
+      !viewer ||
+      !canTargetPdfPage(viewer, visiblePagesRef.current, anchor.pageNumber)
+    )
       return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     pendingAnchor.current?.fail(
       new DOMException('PDF navigation superseded', 'AbortError')
@@ -1665,7 +1742,14 @@ export const PdfDocumentViewer = forwardRef<
         }
       }
     })
-    viewer.scrollPageIntoView({ pageNumber: anchor.pageNumber })
+    if (!isPageViewActivatable(viewer.getPageView(anchor.pageNumber - 1))) {
+      pendingAnchor.current?.fail(
+        new DOMException('PDF navigation superseded', 'AbortError')
+      )
+      pendingAnchor.current = null
+      return Promise.reject(new Error('目标页面不可用，原位置已保留'))
+    }
+    viewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: canTargetPdfPage + recheck above
     restoreAnchor()
     return promise
   }
@@ -2090,7 +2174,17 @@ export const PdfDocumentViewer = forwardRef<
         data-pdf-selection-enabled={
           tool === 'text-selection' && !edgeCropEditing ? 'true' : undefined
         }
-        style={{ position: 'absolute', inset: 0, overflow: 'auto' }}
+        style={
+          {
+            position: 'absolute',
+            inset: 0,
+            overflow: 'auto',
+            // The PDF.js page box must consume the host's effective top/bottom
+            // inset; viewport math alone does not move the real page element.
+            '--pdf-top-inset': `${props.readingInsets?.top ?? 0}px`,
+            '--pdf-bottom-inset': `${props.readingInsets?.bottom ?? 0}px`
+          } as React.CSSProperties
+        }
       >
         <div ref={viewerElementRef} className='pdfViewer' />
         {edgeCropEditing && props.onHiddenPagesRestore && (

@@ -58,7 +58,8 @@
     "check:session-replacement": "node scripts/check-session-replacement-browser.mjs",
     "check:pdf-text-readiness": "node scripts/check-session-replacement-browser.mjs --text",
     "check:flow-text-readiness": "node scripts/check-flow-text-readiness.mjs",
-    "check:pagination-input": "node scripts/check-pagination-input-browser.mjs"
+    "check:pagination-input": "node scripts/check-pagination-input-browser.mjs",
+    "check:pdf-inset": "node scripts/check-pdf-page-inset.mjs"
   },
   "dependencies": {
     "@hamster-note/components": "0.2.1-beta.3",
