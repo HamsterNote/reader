@@ -18,3 +18,25 @@ independent positioning operations and must remain one saved range.
 Run `POSITIONED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' node
 scripts/check-webbase-pdf-draft.mjs` from the reader checkout. The script imports
 this exact PDF through WebBase's real document and persistence path.
+
+`two-page-positioned-runs.pdf` is a real two-page PDF (400 × 500 points),
+generated with pdf-lib. Page 1 has `First page` at (30,450) and four independent
+14pt groups `abc`, `def`, `ghi`, `jkl` at (30 + 45i,60). Page 2 has `Second page`
+at (30,450) and `mno`, `pqr`, `stu`, `vwx` at (30 + 45i,400). Each heading and
+word uses its own BT/Tm/Tj/ET sequence, ten positioning groups in total.
+
+Run the explicit creation acceptance with:
+
+```sh
+PDF_CROSS_PAGE_CREATE=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' node scripts/check-pdf-text-cross-page.mjs
+```
+
+This imports the PDF into WebBase with no annotations and uses real mouse
+input. It currently **fails**: PDF Text mounts one original page at a time,
+edge dragging does not turn pages, and clicking Next discards the draft.
+Selecting on page 2 consequently creates a new page-2-only annotation, not
+a continuation from page 1. The script records that failure, screenshots,
+actual persisted ranges and a Layout / deselect / reselect round trip of the
+annotation actually created. That single-page round trip is not counted as
+successful cross-page creation. Default execution still runs the four saved
+cross-page edit cases; creation is opt-in and must not be reported as passing.

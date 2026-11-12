@@ -98,6 +98,24 @@ Chromium 命中测试和鼠标手柄拖动，在编辑提交后的所有完整�
 这验证的是分页 PDF Text 的生产组件路径，不依赖“两页同时挂载”的替代场景。
 该定向浏览器用例不走 PDF 解析器；既有 WebBase 浏览器矩阵继续覆盖真实 PDF 导入。
 
+## 验收边界：真实两页 PDF 从空选区新建（2026-11-12）
+
+`two-page-positioned-runs.pdf` 包含两页、十组独立定位文字。
+`PDF_CROSS_PAGE_CREATE=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' node scripts/check-pdf-text-cross-page.mjs`
+从真实 WebBase 导入、零标注开始拖选第一页最后一行，松手、调整两端后再尝试到第二页。
+该项当前失败，不能以已有跨页高亮的四项编辑通过替代。
+
+原因在选择入口：`getPdfVirtualItems` 只返回当前原页，Text 禁止边缘滚动/自动翻页，
+`usePdfTextPagination.turn` 调用 `onTurn`，继而 `pdfClearDraftRef` 清空选区及草稿。
+因此点击下一页后只有 page-2 挂载，手柄从 2 变成 0，持久化条目仍为 0；
+在第二页再次拖选并确认只产生 page-2 的一条高亮。
+脚本继续检查这条真实生成的单页高亮在 Layout、取消、重选后保留相同 ID，
+最终仍以起点必须在 page-1 的断言失败，不把单页结果算作跨页创建成功。
+
+当前 `pdfjs-web-reader` 的 Text 分页契约明确禁止正文滚动或自动翻页，原分页设计也
+明确不跨原页拼接。支持新建跨原页范围需要确定续选交互；它不是上述 canonical
+编辑修复已经支持的操作。本轮保留生产逻辑与 Spec，记录能力缺口，PR 继续 Draft。
+
 ## 构建身份与根因
 
 WebBase 基线为 `aec5e60b22314129edb27314dbcf4b0a2b9a4519`。`webview/pnpm-lock.yaml` 与 frozen install 确认实际安装 reader 2.0.0、selection 0.3.0。npm 元数据中的 reader gitHead 为 `fce3193e132f6e288ae0df1e5856f420845afe22`，安装后的 `dist/index-2LyCXV-x.js` SHA256 为 `3416b009319e5ebe591fb91dec963f894c3f5be3caa3a2907c782d406ca2618d`。
