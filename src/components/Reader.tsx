@@ -2389,7 +2389,7 @@ export function Reader({
               defaultScale
             )}
             defaultVirtualPaperTransform={whenEnabled(
-              useVirtualPaper,
+              useVirtualPaper || engineSource?.format === 'pdf',
               resolvedVirtualPaperState
             )}
             onVirtualPaperTransformChangeEnd={

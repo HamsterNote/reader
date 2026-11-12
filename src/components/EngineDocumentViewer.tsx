@@ -1,3 +1,4 @@
+import { legacyVirtualPaperProgress } from '../pdf/legacyVirtualPaperProgress'
 import { getSelectionGroup } from './selection/selectionGroups'
 import {
   resolveReadingProgress,
@@ -722,6 +723,7 @@ export function EngineDocumentViewer(props: Props) {
     }
   }, [emitSelectionCallbacks])
 
+  const pdfDocumentRef = useRef<PDFDocumentProxy | null>(null)
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const previews = usePdfPreviews(
     pdfDocument,
@@ -864,16 +866,52 @@ export function EngineDocumentViewer(props: Props) {
     if (!actual || getBookmarkKey(actual) !== getBookmarkKey(target))
       navigateBookmark(target)?.catch(() => undefined)
   }, [props.layoutReadingProgress, pdfDocument])
+  const legacyProgress = async (current: Props) => {
+    const doc = pdfDocumentRef.current
+    if (
+      current.engineRenderMode === 'text' ||
+      !doc ||
+      !current.defaultVirtualPaperTransform
+    )
+      return undefined
+    const numbers = getVisiblePageNumbers(
+      Array.from({ length: doc.numPages }, (_, i) => i + 1),
+      current.pageRange
+    )
+    // Hidden legacy pages retained their fixed-size shells, so include them
+    // when interpreting y; the existing restore fallback handles visibility.
+    const pages = await Promise.all(
+      numbers.map(async (pageNumber) => {
+        const page = await doc.getPage(pageNumber)
+        const size = page.getViewport({ scale: 1 })
+        return { pageNumber, width: size.width, height: size.height }
+      })
+    )
+    return legacyVirtualPaperProgress(
+      current.defaultVirtualPaperTransform,
+      pages,
+      current.containMarginTop ?? current.containMarginY ?? 0,
+      current.edgeCrop
+    )
+  }
+  const legacyRestore = useRef<{
+    source: Props['engineSource']
+    position: ReaderBookmark | undefined
+  } | null>(null)
   const restorePosition = () => {
     const current = latest.current
-    const progress = resolveReadingProgress(
-      {
-        layoutReadingProgress: current.layoutReadingProgress,
-        virtualPaper: current.defaultVirtualPaperTransform,
-        textReadingProgress: current.textReadingProgress
-      },
-      current.engineRenderMode ?? 'layout'
-    )
+    const progress =
+      resolveReadingProgress(
+        {
+          layoutReadingProgress: current.layoutReadingProgress,
+          virtualPaper: current.defaultVirtualPaperTransform,
+          textReadingProgress: current.textReadingProgress
+        },
+        current.engineRenderMode ?? 'layout'
+      ) ??
+      (legacyRestore.current?.source === current.engineSource
+        ? legacyRestore.current?.position
+        : undefined)
     if (!progress) return Promise.resolve()
     const allowed = enginePageNumbers(pageCountRef.current, current)
     const targetPage =
@@ -893,8 +931,38 @@ export function EngineDocumentViewer(props: Props) {
   }
   const restorePositionRef = useRef(restorePosition)
   restorePositionRef.current = restorePosition
+  const prepareLegacyRestore = async (current: Props) => {
+    const generation = pdfNavigationGeneration.current
+    try {
+      const position = await legacyProgress(current)
+      if (
+        current.engineSource !== latest.current.engineSource ||
+        generation !== pdfNavigationGeneration.current
+      )
+        return false
+      legacyRestore.current = { source: current.engineSource, position }
+    } catch {
+      if (current.engineSource !== latest.current.engineSource) return false
+      setRestoreNotice('无法恢复旧坐标，原进度已保留')
+    }
+    return true
+  }
   const onPdfReady = useCallback(async (count: number) => {
-    const activeSource = latest.current.engineSource
+    const current = latest.current
+    const activeSource = current.engineSource
+    if (
+      current.defaultVirtualPaperTransform &&
+      !resolveReadingProgress(
+        {
+          layoutReadingProgress: current.layoutReadingProgress,
+          virtualPaper: current.defaultVirtualPaperTransform,
+          textReadingProgress: current.textReadingProgress
+        },
+        current.engineRenderMode ?? 'layout'
+      )
+    ) {
+      if (!(await prepareLegacyRestore(current))) return
+    }
     pageCountRef.current = count
     setPageCount(count)
     // PDF pages are available independently of which navigation wins. Pending
@@ -1700,7 +1768,10 @@ export function EngineDocumentViewer(props: Props) {
           <PdfDocumentViewer
             key={retry}
             ref={pdf}
-            onDocumentReady={setPdfDocument}
+            onDocumentReady={(document) => {
+              pdfDocumentRef.current = document
+              setPdfDocument(document)
+            }}
             readingInsets={{
               top: props.containMarginTop ?? props.containMarginY ?? 0,
               bottom: props.containMarginBottom ?? props.containMarginY ?? 0,
