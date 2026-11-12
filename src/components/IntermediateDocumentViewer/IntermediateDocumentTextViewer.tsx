@@ -5,6 +5,7 @@ import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeomet
 import type { ReaderEngineSource } from '../../types/engineSource'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
+import { scrollIntoViewIfAttached } from '../scrollIntoViewIfAttached'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
 import {
   createFlowTextReadiness,
@@ -3065,7 +3066,10 @@ export function IntermediateDocumentTextViewer(
         scrollContainerRef.current?.querySelector<HTMLElement>(
           `[data-testid="intermediate-text-page-${pageNumber}"]`
         )
-      pageElement?.scrollIntoView?.({ block: 'center', inline: 'nearest' })
+      scrollIntoViewIfAttached(pageElement, {
+        block: 'center',
+        inline: 'nearest'
+      })
     }
 
     const viewerWindow = scrollContainerRef.current?.ownerDocument.defaultView
