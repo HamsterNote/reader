@@ -84,6 +84,47 @@ beforeEach(() => {
 const source = { format: 'pdf' as const, data: new Uint8Array([1]) }
 const saved = { pageNumber: 1, offset: 20, textId: 'x', text: 'text' }
 
+it('keeps the PDF indicator on the safe reading page when engine and text pages disagree', async () => {
+  const view = render(<EngineDocumentViewer engineSource={source} />)
+  await act(async () => state.pdf!.onPagesLoaded!(3))
+  const slider = view.getByRole('slider', { name: '文本阅读进度' })
+  const expectPage = (page: number) => {
+    expect(slider).toHaveAttribute('aria-valuenow', String(page))
+    expect(
+      slider.querySelector('.hamster-reader__reading-progress-position')
+    ).toHaveAttribute('data-page-number', String(page))
+  }
+
+  // PDF.js switches to the most visible page before the safe top crosses
+  // the page boundary. Each callback must agree with geometric progress.
+  textReady = true
+  position = { pageNumber: 1, verticalPercentage: 80 }
+  act(() => state.pdf!.onPageChange!(2))
+  expectPage(1)
+  act(() => state.pdf!.onReadingPositionChange!({ status: 'ready', position }))
+  expectPage(1)
+
+  // In the bottom whitespace, the first visible text can be on the next page.
+  act(() => state.pdf!.onTextAnchorChange!({ ...saved, pageNumber: 2 }))
+  expectPage(1)
+
+  position = { pageNumber: 2, verticalPercentage: 0 }
+  act(() => state.pdf!.onReadingPositionChange!({ status: 'ready', position }))
+  expectPage(2)
+  act(() => state.pdf!.onTextAnchorChange!(saved))
+  expectPage(2)
+
+  // Pending layout must retain the last readable page, and actual upward
+  // scrolling must still move back without a direction lock or debounce.
+  textReady = false
+  act(() => state.pdf!.onPageChange!(3))
+  expectPage(2)
+  textReady = true
+  position = { pageNumber: 1, verticalPercentage: 90 }
+  act(() => state.pdf!.onReadingPositionChange!({ status: 'ready', position }))
+  expectPage(1)
+})
+
 it.each(['complete', 'page', 'bookmark', 'failed'] as const)(
   'keeps progress publishable after initial restoration is %s',
   async (replacement) => {
