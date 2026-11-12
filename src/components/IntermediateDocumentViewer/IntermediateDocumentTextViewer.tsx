@@ -2704,7 +2704,12 @@ export function IntermediateDocumentTextViewer(
           range.id !== updatedRangeId
         )
           return getSelectionGroup(storedRangesRef.current, existingRange.id)
-        return toTextRanges(range)
+        const converted = toTextRanges(range)
+        // A failed edit conversion is not a removal. Full-snapshot hosts
+        // must retain the saved group just like the update callback does.
+        return converted.length || !existingRange
+          ? converted
+          : getSelectionGroup(storedRangesRef.current, existingRange.id)
       })
       const items = Array.from(
         new Map(convertedItems.map((range) => [range.id, range])).values()

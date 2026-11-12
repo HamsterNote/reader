@@ -52,6 +52,37 @@ afterEach(() => {
 })
 
 describe('PDF selection boundary round trips', () => {
+  it('converts a mounted start independently of its unmounted canonical end', () => {
+    const root = rootFor(`${span(0, 'abc')} ${span(14, 'def')}`)
+    const saved = {
+      ...range('spanning', 'deffollowing', 14, 28),
+      end: endpoint(28, 'page-2')
+    }
+    const [runtime] = combinePdfTextSelectionGroups([saved], root)
+    expect(runtime).toMatchObject({
+      start: endpoint(4),
+      end: saved.end
+    })
+    expect(canonicalizePdfSelectionRanges(runtime!, root)).toEqual([saved])
+    expect(
+      canonicalizePdfSelectionRanges(
+        { ...runtime!, text: 'effollowing', start: endpoint(5) },
+        root
+      )
+    ).toEqual([{ ...saved, text: 'effollowing', start: endpoint(15) }])
+    // Both endpoints offscreen must keep canonical coordinates on the way
+    // into, and back out of, the linked snapshot; native restoration can't run.
+    const offscreen = {
+      ...saved,
+      start: endpoint(14, 'page-2'),
+      end: endpoint(28, 'page-2')
+    }
+    const [unmounted] = combinePdfTextSelectionGroups([offscreen], root)
+    expect(canonicalizePdfSelectionRanges(unmounted!, root)).toEqual([
+      offscreen
+    ])
+  })
+
   it.each([3, 11])(
     'normalizes a display-space start with %i source spaces before restoring and shrinking',
     (gap) => {

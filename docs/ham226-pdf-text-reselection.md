@@ -44,7 +44,9 @@ REORDERED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUT
 
 现在共享端点转换按 side 向选区内部归一：起点取后方的可见锚点，终点取前方的锚点，
 同时裁掉对应的显示空白。反向映射失败返回 null，禁止把无法映射的源 offset 当作 DOM offset；
-尚未挂载页面的已有条目保留在快照中，待页面挂载后再做 DOM 转换。
+端点按页挂载情况逐端转换：未挂载的固定端保留 canonical 坐标，
+已挂载端正常转为 DOM 坐标；保存时可见端转回 canonical，固定端原样保留。
+已挂载页面上的非法偏移仍拒绝转换，失败的已有条目保留原分组，不能写成删除快照。
 没有改动 WebBase、onRemoveRange 清理或已确认源空白的内部合并条件。
 
 `test/pdf-selection-offset-boundaries.test.ts` 覆盖 3 / 11 个源空白，输入 DOM [7,15)，
@@ -70,6 +72,31 @@ yarn test:run test/pdf-selection-offset-boundaries.test.ts test/text-highlight-a
 yarn typecheck
 yarn build:lib
 ```
+
+## 复审：只挂载跨页高亮的一端（2026-11-12）
+
+3c45ee3 把缺少页面和当前页无法映射混为一谈：只挂载终点页时，
+跨页编辑被转换为 [] 并从完整快照删除；另一条快路径则在起点离屏时
+连终点也不转换，导致 source offset 不等于 DOM offset 的终点手柄消失。
+现按 PdfTextSelectionControls 的既有固定端契约逐端转换，并为快照增加转换失败保护。
+原 onRemoveRange 清理与多定位组的合并/排除条件保持。
+
+`test/pdf-text-cross-page-edit.test.tsx` 用真实 Viewer 和受管手柄的 pointerdown/up，
+分别验证非受控内部状态与吃快照的受控宿主：仅 page-2 挂载，page-1:0 固定不变；
+普通 abcdefg 的终点 canonical 7 → DOM 7 → 拖至 DOM 6 → 保存 canonical 6；
+abc def 的 anchors 0/14，终点 canonical 17 → DOM 7 → 拖至 DOM 6 → 保存 16。
+断言完整快照、更新通知、页号、端点、文本、逻辑 ID、唯一终点手柄及没有删除通知。
+另测失败转换保留原保存条目，及仅起点挂载时的对称转换。
+
+```sh
+yarn test:run test/pdf-text-cross-page-edit.test.tsx test/pdf-selection-offset-boundaries.test.ts
+node scripts/check-pdf-text-cross-page.mjs
+```
+
+浏览器脚本与组件测试共享两页 IntermediateDocument 样本，使用真实 selection 依赖、
+Chromium 命中测试和鼠标手柄拖动，在编辑提交后的所有完整快照中检查条目没有被删。
+这验证的是分页 PDF Text 的生产组件路径，不依赖“两页同时挂载”的替代场景。
+该定向浏览器用例不走 PDF 解析器；既有 WebBase 浏览器矩阵继续覆盖真实 PDF 导入。
 
 ## 构建身份与根因
 

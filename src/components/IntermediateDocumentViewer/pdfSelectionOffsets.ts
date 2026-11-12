@@ -76,18 +76,19 @@ export function combinePdfTextSelectionGroups(
     const members = getSelectionGroup(ranges, range.id)
     members.forEach((member) => visited.add(member.id))
     // Every persisted range carries canonical offsets, including a single
-    // highlight. Selection and its handles always consume current DOM offsets.
+    // highlight. Visible selection handles consume current DOM offsets.
     const first = members[0]!
     const last = members.at(-1)!
-    // Keep offscreen annotations in the linked snapshot until their pages
-    // mount. They cannot be interpreted as DOM ranges without anchors.
-    if (
-      !getSelectionSegments(first.start.selectionId, root)?.length ||
-      !getSelectionSegments(last.end.selectionId, root)?.length
-    )
-      return members
-    const start = pdfCanonicalEndpointToDom(first.start, 'start', root)
-    const end = pdfCanonicalEndpointToDom(last.end, 'end', root)
+    // Controls keep an unmounted fixed endpoint in canonical coordinates.
+    // Convert each mounted endpoint independently so its handle stays usable.
+    const start =
+      getSelectionSegments(first.start.selectionId, root) === null
+        ? first.start
+        : pdfCanonicalEndpointToDom(first.start, 'start', root)
+    const end =
+      getSelectionSegments(last.end.selectionId, root) === null
+        ? last.end
+        : pdfCanonicalEndpointToDom(last.end, 'end', root)
     if (!start || !end) return []
     const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] = {}
     for (const member of members) {
@@ -197,7 +198,10 @@ export function canonicalizePdfSelectionRange(
   const end = canonicalizeEndpoint(range.end, 'end', root)
   if (!start || !end) return null
   let text = range.text
-  if (start.selectionId === end.selectionId) {
+  if (
+    start.selectionId === end.selectionId &&
+    getSelectionSegments(start.selectionId, root) !== null
+  ) {
     const domStart = pdfCanonicalEndpointToDom(start, 'start', root)
     const domEnd = pdfCanonicalEndpointToDom(end, 'end', root)
     if (!domStart || !domEnd || start.offset > end.offset) return null
@@ -281,7 +285,11 @@ function canonicalizeEndpoint(
   if (!/^page-[1-9]\d*$/.test(endpoint.selectionId)) return endpoint
 
   const segments = getSelectionSegments(endpoint.selectionId, root)
-  if (!segments) return null
+  // A fixed endpoint on an unmounted page was never converted to DOM by
+  // combinePdfTextSelectionGroups or moved by PdfTextSelectionControls.
+  // Preserve its canonical value; a mounted page with no usable anchors
+  // still fails conversion below.
+  if (segments === null) return endpoint
 
   const canonicalOffset = mapDomOffsetToCanonical(
     segments,
