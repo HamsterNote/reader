@@ -97,7 +97,15 @@ try {
         { width: 480, height: 600 }
       ]) {
         await page.setViewportSize(viewport)
-        await page.waitForTimeout(250)
+        await page.evaluate(
+          () =>
+            new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve))
+            )
+        )
+        await page.waitForFunction(
+          () => window.engine.captureReadingPosition().status === 'ready'
+        )
         const position = await page.evaluate(() =>
           window.engine.captureReadingPosition()
         )
