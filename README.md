@@ -444,9 +444,9 @@ selectionRef.current?.scrollToRange('highlight-1')
 
 PDF 的公开 `scrollToAnchor(anchor, options?)` 返回 `Promise<void>`，语义固定：
 
-- **目标不可见或未挂载**（页不在当前可见集合、页面节点已 detached、或祖先 `display:none`）：**立即 reject**，错误为 `目标页面不可用，原位置已保留`。不会排队等待页面重新可见；调用方应视为「当前不可用」，在用户再次操作时重试。
-- **正常路径**：目标页渲染完成并应用锚点后 resolve；10 秒内未完成定位、或被更新的导航取代时 reject。
-- 被拒绝的请求不会触碰 PDF.js 的 `currentPageNumber` / `scrollPageIntoView`，因此不会产生 `offsetParent is not set` 诊断。
+- **目标不可见或未挂载**（页不在当前可见集合、页面节点已 detached、或祖先 `display:none`）：在入口检查处**立即 reject**，错误为 `目标页面不可用，原位置已保留`。不会排队等待页面重新可见；调用方应视为「当前不可用」，在用户再次操作时重试。此类拒绝发生在触碰 PDF.js 之前，不会产生 `offsetParent is not set` 诊断。
+- **正常路径**：定位矩形应用、PDF.js 报告目的位置后 resolve；**不代表 canvas/页面渲染完成**。
+- 10 秒超时或被更新导航取代时 reject。超时/被取代的请求**可能已经调用过** PDF.js 定位，只是不再保证后续完成；“未触碰 PDF.js”仅适用于上面的入口不可用拒绝。
 
 ### PDF text pagination diagnostics
 

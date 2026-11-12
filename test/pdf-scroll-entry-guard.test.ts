@@ -9,7 +9,7 @@ import {
 
 const pdfRoot = resolve(import.meta.dirname, '../src/pdf')
 
-function readTree(directory: string, prefix = ''): ScannedFile[] {
+function readTree(directory: string, prefix = 'pdf'): ScannedFile[] {
   const files: ScannedFile[] = []
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name
@@ -44,7 +44,7 @@ describe('PDF scroll guard scan', () => {
     expect(findUnguardedScrollCalls(files)).toHaveLength(2)
   })
 
-  it('does not accept a marker on another line or inside a string', () => {
+  it('does not accept a marker on another line or inside quotes or a template string', () => {
     const files: ScannedFile[] = [
       {
         path: 'Sneaky.tsx',
@@ -53,15 +53,27 @@ describe('PDF scroll guard scan', () => {
           'viewer.currentPageNumber = 3',
           'viewer.scrollPageIntoView({ pageNumber: 3 }) // pdf-scroll-guard: real',
           'viewer.currentPageNumber = 4; const note = "// pdf-scroll-guard: fake"',
-          '/* pdf-scroll-guard: block */ viewer.scrollPageIntoView({ pageNumber: 4 })'
+          '/* pdf-scroll-guard: block */ viewer.scrollPageIntoView({ pageNumber: 4 })',
+          'viewer.scrollPageIntoView({ pageNumber: 5, note: `// pdf-scroll-guard: template` })'
         ].join('\n')
       }
     ]
     const unguarded = findUnguardedScrollCalls(files)
-    expect(unguarded).toHaveLength(3)
+    expect(unguarded).toHaveLength(4)
     expect(unguarded[0]).toContain(':2:')
     expect(unguarded[1]).toContain(':4:')
     expect(unguarded[2]).toContain(':5:')
+    expect(unguarded[3]).toContain(':6:')
+  })
+
+  it('does not exempt a same-named file in a subdirectory', () => {
+    const files: ScannedFile[] = [
+      {
+        path: 'pdf/sub/CroppedPdfViewer.ts',
+        text: 'viewer.currentPageNumber = 3'
+      }
+    ]
+    expect(findUnguardedScrollCalls(files)).toHaveLength(1)
   })
 
   it('accepts a same-line annotation with a reason', () => {

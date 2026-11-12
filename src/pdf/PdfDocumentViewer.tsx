@@ -218,9 +218,14 @@ export type PdfDocumentViewerRef = {
    * request is NOT queued until the page becomes visible; callers must treat
    * this as "unavailable now" and retry from a user action.
    *
-   * Resolves once the page has rendered and the anchor has been applied.
+   * Resolves once the positioning rectangle for the anchor has been applied
+   * and PDF.js reports the destination; this does NOT mean the canvas/page
+   * render has completed.
+   *
    * Rejects on the 10s positioning timeout or when a newer navigation
-   * supersedes this request.
+   * supersedes this request. A timeout/superseded request may already have
+   * invoked PDF.js positioning before rejecting; only the entry-level
+   * unavailable check below guarantees PDF.js was not touched.
    */
   readonly scrollToAnchor: (
     anchor: ReaderBookmark,
@@ -1672,9 +1677,10 @@ export const PdfDocumentViewer = forwardRef<
       : null
   }, [captureModeSwitchPosition])
   /**
-   * Public anchor navigation. Hidden/detached targets reject immediately; this
-   * function never waits for visibility. Normal requests resolve after render
-   * and reject on timeout/supersession.
+   * Public anchor navigation. Hidden/detached targets reject immediately at
+   * the entry check, before PDF.js is touched; this function never waits for
+   * visibility. Normal requests resolve after the destination rectangle is
+   * applied (not after canvas rendering) and reject on timeout/supersession.
    */
   const scrollToAnchor = (
     stored: ReaderBookmark,

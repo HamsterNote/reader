@@ -10,10 +10,12 @@
 export const SCROLL_CALL =
   /\.scrollPageIntoView\s*\(|\.currentPageNumber\s*=(?!=)/
 
+// Keys are complete paths relative to `src/`; a same-named file in a
+// subdirectory is not exempt.
 export const ALLOWLIST: Readonly<Record<string, string>> = {
-  'CroppedPdfViewer.ts':
+  'pdf/CroppedPdfViewer.ts':
     'PDF.js subclass owns the low-level currentPageNumber/scrollPageIntoView wrapper; every external caller is guarded.',
-  'pageActivation.ts':
+  'pdf/pageActivation.ts':
     'Guard implementation itself performs the checked setter write.'
 }
 
@@ -26,6 +28,7 @@ export interface ScannedFile {
 function insideString(prefix: string): boolean {
   let single = 0
   let double = 0
+  let template = 0
   for (let index = 0; index < prefix.length; index++) {
     const character = prefix[index]
     if (character === '\\') {
@@ -34,8 +37,9 @@ function insideString(prefix: string): boolean {
     }
     if (character === "'") single++
     else if (character === '"') double++
+    else if (character === '`') template++
   }
-  return single % 2 === 1 || double % 2 === 1
+  return single % 2 === 1 || double % 2 === 1 || template % 2 === 1
 }
 
 function hasSameLineGuard(line: string, matchIndex: number): boolean {
@@ -53,8 +57,7 @@ export function findUnguardedScrollCalls(
 ): string[] {
   const unguarded: string[] = []
   for (const file of files) {
-    const name = file.path.split('/').at(-1) ?? file.path
-    if (ALLOWLIST[name]) continue
+    if (ALLOWLIST[file.path]) continue
     file.text.split('\n').forEach((line, index) => {
       const match = SCROLL_CALL.exec(line)
       if (!match || match.index === undefined) return
