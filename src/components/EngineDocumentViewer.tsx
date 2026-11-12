@@ -871,8 +871,14 @@ export function EngineDocumentViewer(props: Props) {
     }
     const token = beginPositionChange()
     progressEnabled.current = false
-    return pdf.current
-      ?.scrollToAnchor(bookmark, { preserveOnFailure: publish })
+    const target = pdf.current
+    if (!target) return undefined
+    // Restore may run before pagesinit/crop settles, so it waits for the real
+    // page view; user navigation keeps the immediate "unavailable" rejection.
+    const navigation = publish
+      ? target.scrollToAnchor(bookmark, { preserveOnFailure: true })
+      : target.scrollToAnchorForRestore(bookmark, { preserveOnFailure: false })
+    return navigation
       .then(() => {
         if (!isPositionCurrent(token)) return
         if (publish) {
@@ -882,7 +888,9 @@ export function EngineDocumentViewer(props: Props) {
       })
       .catch((failure: Error) => {
         if (!isPositionCurrent(token)) return
-        setError(failure.message)
+        // A restore failure falls back to the saved page with a notice; it is
+        // not a document-open failure and must not surface the host overlay.
+        if (publish) setError(failure.message)
         throw failure
       })
   }

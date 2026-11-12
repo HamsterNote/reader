@@ -3,7 +3,8 @@ import {
   activatePageIfReady,
   canTargetPdfPage,
   hasHiddenAncestor,
-  isPageViewActivatable
+  isPageViewActivatable,
+  waitForPageActivation
 } from '../src/pdf/pageActivation'
 
 afterEach(() => {
@@ -84,5 +85,37 @@ describe('PDF page activation guard', () => {
     expect(activatePageIfReady(viewer, 2)).toBe(true)
     expect(set).toHaveBeenCalledWith(2)
     expect(error).not.toHaveBeenCalled()
+  })
+
+  it('waits for a page that only becomes activatable after layout settles', async () => {
+    let ready = false
+    const ticks: Array<() => void> = []
+    const waiting = waitForPageActivation(() => ready, {
+      timeoutMs: 1000,
+      now: () => 0,
+      schedule: (callback) => ticks.push(callback)
+    })
+    expect(ticks).toHaveLength(1)
+    ticks.shift()!()
+    ready = true
+    expect(ticks).toHaveLength(1)
+    ticks.shift()!()
+    await expect(waiting).resolves.toBeUndefined()
+  })
+
+  it('rejects with the unavailable message when the page never activates', async () => {
+    let clock = 0
+    const ticks: Array<() => void> = []
+    const waiting = waitForPageActivation(() => false, {
+      timeoutMs: 100,
+      now: () => clock,
+      schedule: (callback) => ticks.push(callback)
+    })
+    const assertion = expect(waiting).rejects.toThrow('目标页面不可用')
+    clock = 50
+    ticks.shift()!()
+    clock = 100
+    ticks.shift()!()
+    await assertion
   })
 })

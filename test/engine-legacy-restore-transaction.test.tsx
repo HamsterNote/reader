@@ -74,6 +74,9 @@ beforeEach(() => {
     scrollToAnchor: vi.fn(async (target) => {
       position = target
     }),
+    scrollToAnchorForRestore: vi.fn(async (target) => {
+      position = target
+    }),
     scrollToPage: vi.fn((pageNumber) => {
       position = { ...fresh, pageNumber }
     }),
@@ -202,7 +205,7 @@ it.each(['wheel', 'touch', 'pinch', 'pointer-touch', 'pdf-link'] as const)(
       view.metadata.resolve()
       await view.ready
     })
-    expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+    expect(state.api!.scrollToAnchorForRestore).not.toHaveBeenCalled()
     expect(state.api!.scrollToPage).not.toHaveBeenCalled()
     expect(position).toEqual(fresh)
     view.onProgress.mockClear()
@@ -284,14 +287,16 @@ it.each([
           break
       }
     })
-    const callsBeforeMetadata = vi.mocked(state.api!.scrollToAnchor).mock.calls
-      .length
+    const callsBeforeMetadata = vi.mocked(state.api!.scrollToAnchorForRestore)
+      .mock.calls.length
     await act(async () => {
       view.metadata.resolve()
       await view.ready
     })
-    expect(state.api!.scrollToAnchor).toHaveBeenCalledTimes(callsBeforeMetadata)
-    expect(state.api!.scrollToAnchor).not.toHaveBeenCalledWith(
+    expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledTimes(
+      callsBeforeMetadata
+    )
+    expect(state.api!.scrollToAnchorForRestore).not.toHaveBeenCalledWith(
       { pageNumber: 2, verticalPercentage: 48.8 },
       { preserveOnFailure: false }
     )
@@ -335,7 +340,7 @@ it.each(['source', 'document', 'pdf-document', 'retry', 'unmount'] as const)(
       view.metadata.resolve()
       await view.ready
     })
-    expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+    expect(state.api!.scrollToAnchorForRestore).not.toHaveBeenCalled()
     expect(view.onProgress).not.toHaveBeenCalled()
     expect(view.onReady).not.toHaveBeenCalled()
     expect(view.queryByRole('status')).toBeNull()
@@ -380,7 +385,7 @@ it.each([
     view.metadata.resolve()
     await view.ready
   })
-  expect(state.api!.scrollToAnchor).toHaveBeenCalledExactlyOnceWith(
+  expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledExactlyOnceWith(
     { pageNumber: 2, verticalPercentage: 48.8 },
     { preserveOnFailure: false }
   )
@@ -402,7 +407,7 @@ it.each(['zoom', 'inset', 'page-range'] as const)(
       view.metadata.resolve()
       await view.ready
     })
-    expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+    expect(state.api!.scrollToAnchorForRestore).not.toHaveBeenCalled()
     expect(view.onProgress).not.toHaveBeenCalled()
   }
 )
@@ -415,7 +420,7 @@ it('allows the same restore after StrictMode effect replay', async () => {
     view.metadata.resolve()
     await view.ready
   })
-  expect(state.api!.scrollToAnchor).toHaveBeenCalledExactlyOnceWith(
+  expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledExactlyOnceWith(
     { pageNumber: 2, verticalPercentage: 48.8 },
     { preserveOnFailure: false }
   )
@@ -430,7 +435,7 @@ it('discards a stale metadata failure after reading instead of showing a restore
     await view.ready
   })
   expect(view.queryByRole('status')).toBeNull()
-  expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+  expect(state.api!.scrollToAnchorForRestore).not.toHaveBeenCalled()
   act(() => view.ref.current!.captureAndPublish!())
   expect(view.onProgress).toHaveBeenLastCalledWith(fresh)
 })
@@ -457,7 +462,7 @@ it('ignores disposed document callbacks without cancelling the replacement resto
   await act(async () => {
     await state.pdf!.onPagesLoaded!(3)
   })
-  expect(state.api!.scrollToAnchor).toHaveBeenCalledExactlyOnceWith(
+  expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledExactlyOnceWith(
     { pageNumber: 2, verticalPercentage: 48.8 },
     { preserveOnFailure: false }
   )
@@ -465,14 +470,14 @@ it('ignores disposed document callbacks without cancelling the replacement resto
     view.metadata.resolve()
     await view.ready
   })
-  expect(state.api!.scrollToAnchor).toHaveBeenCalledOnce()
+  expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledOnce()
   expect(view.onReady).toHaveBeenCalledOnce()
 })
 
-it('does not run a failed programmatic restore fallback after a newer reading interaction', async () => {
+it('falls back to the saved page without a host error when restore cannot reach it', async () => {
   const view = mountWaiting()
   const restoration = deferred()
-  vi.mocked(state.api!.scrollToAnchor).mockImplementation(
+  vi.mocked(state.api!.scrollToAnchorForRestore).mockImplementation(
     () => restoration.promise
   )
   await act(async () => {
@@ -480,7 +485,28 @@ it('does not run a failed programmatic restore fallback after a newer reading in
     await Promise.resolve()
     await Promise.resolve()
   })
-  expect(state.api!.scrollToAnchor).toHaveBeenCalledOnce()
+  expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledOnce()
+  await act(async () => {
+    restoration.reject(new Error('目标页面不可用，原位置已保留'))
+    await view.ready
+  })
+  expect(view.queryByRole('alert')).toBeNull()
+  expect(view.getByRole('status').textContent).toContain('无法精确恢复')
+  expect(state.api!.scrollToPage).toHaveBeenCalledWith(2)
+})
+
+it('does not run a failed programmatic restore fallback after a newer reading interaction', async () => {
+  const view = mountWaiting()
+  const restoration = deferred()
+  vi.mocked(state.api!.scrollToAnchorForRestore).mockImplementation(
+    () => restoration.promise
+  )
+  await act(async () => {
+    view.metadata.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledOnce()
   fireEvent.wheel(view.getByTestId('paper'), { deltaY: 250 })
   position = fresh
   await act(async () => {

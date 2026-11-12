@@ -49,3 +49,41 @@ export function activatePageIfReady(
     viewer.currentPageNumber = pageNumber
   return true
 }
+
+/**
+ * Waits until a page view is attached and visible. Used by internal document
+ * restore, which may legitimately run before pagesinit/crop settles. Public
+ * navigation keeps the immediate-reject contract instead.
+ */
+export function waitForPageActivation(
+  isReady: () => boolean,
+  options: {
+    readonly timeoutMs: number
+    readonly now?: () => number
+    readonly schedule?: (callback: () => void) => void
+  }
+): Promise<void> {
+  const now = options.now ?? (() => Date.now())
+  const schedule =
+    options.schedule ??
+    ((callback) => {
+      if (typeof requestAnimationFrame === 'function')
+        requestAnimationFrame(callback)
+      else setTimeout(callback, 16)
+    })
+  const deadline = now() + options.timeoutMs
+  return new Promise<void>((resolve, reject) => {
+    const poll = () => {
+      if (isReady()) {
+        resolve()
+        return
+      }
+      if (now() >= deadline) {
+        reject(new Error('目标页面不可用，原位置已保留'))
+        return
+      }
+      schedule(poll)
+    }
+    poll()
+  })
+}
