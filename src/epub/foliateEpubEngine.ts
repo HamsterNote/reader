@@ -26,6 +26,7 @@ import type { SerializedSelection } from './epubCompatIndex'
 import { restrictPublicationResources } from './publicationSecurity'
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import { resolveEpubTextAnchor } from './epubTextAnchor'
+import type { LegacyRangeLike } from './epubCompatIndex'
 
 export type EpubEngineTocEntry = {
   readonly label: string
@@ -57,7 +58,7 @@ export type EpubEngineError = {
 }
 
 /** 持久化高亮的最小形状（ReaderSelectionRange 的端点+样式子集）。 */
-export type EpubEngineRange = {
+export type EpubEngineRange = LegacyRangeLike & {
   readonly id: string
   readonly text: string
   readonly start: { readonly selectionId: string; readonly offset: number }

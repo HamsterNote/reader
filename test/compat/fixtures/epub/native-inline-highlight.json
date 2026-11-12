@@ -1,0 +1,25 @@
+{
+  "id": "native-history",
+  "text": "After",
+  "start": {
+    "selectionId": "page-2",
+    "offset": 7362
+  },
+  "end": {
+    "selectionId": "page-2",
+    "offset": 7367
+  },
+  "createdAt": 1,
+  "nativeTextSegments": [
+    {
+      "sectionIndex": 1,
+      "startOffset": 7372,
+      "endOffset": 7377
+    }
+  ],
+  "color": "green",
+  "rectsBySelectionId": {
+    "page-2": []
+  },
+  "overlayRectType": "percent"
+}
