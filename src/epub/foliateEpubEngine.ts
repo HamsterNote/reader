@@ -242,8 +242,25 @@ export const createEpubEngine = (
     }
   }
 
+  // The host may leave less space than Foliate's default two 48px margins.
+  // Shrink decoration before column layout; never let it consume the text area.
+  const fitPageMargins = () => {
+    const renderer = view?.renderer
+    if (!renderer || view?.isFixedLayout) return
+    const extent = Math.min(
+      options.container.clientWidth,
+      options.container.clientHeight
+    )
+    if (extent <= 0) return
+    renderer.setAttribute(
+      'margin',
+      `${Math.min(48, Math.max(0, (extent - 96) / 2))}px`
+    )
+  }
+
   // Freeze the public character anchor while Foliate lays out its stable DOM Range.
   const onReflow = () => {
+    fitPageMargins()
     if (
       destroyed ||
       turning ||
@@ -739,6 +756,7 @@ export const createEpubEngine = (
     renderer.addEventListener('before-reflow', onReflow)
     applyStyles()
     options.container.append(view)
+    fitPageMargins()
     return true
   }
 

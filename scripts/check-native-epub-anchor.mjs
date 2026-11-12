@@ -90,6 +90,41 @@ try {
         rect
       })
     )
+    if (name === 'reader 3.0.0') {
+      for (const viewport of [
+        { width: 320, height: 600 },
+        { width: 640, height: 28 },
+        { width: 480, height: 600 }
+      ]) {
+        await page.setViewportSize(viewport)
+        await page.waitForTimeout(250)
+        const position = await page.evaluate(() =>
+          window.engine.captureReadingPosition()
+        )
+        assert.equal(position.position.offset, 16459)
+        const visible = await target.evaluate(
+          (element) =>
+            new Promise((resolve) => {
+              const observer = new IntersectionObserver(([entry]) => {
+                observer.disconnect()
+                resolve(entry.intersectionRatio)
+              })
+              observer.observe(element)
+            })
+        )
+        assert.ok(
+          visible > 0,
+          `reflow target must remain visible: ${JSON.stringify({ viewport, visible })}`
+        )
+        console.log(
+          JSON.stringify({
+            viewport,
+            offset: position.position.offset,
+            ratio: visible
+          })
+        )
+      }
+    }
     await page.evaluate(() => window.engine.destroy())
   }
   assert.deepEqual(errors, [])
