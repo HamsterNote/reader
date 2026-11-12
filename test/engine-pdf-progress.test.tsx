@@ -62,6 +62,12 @@ beforeEach(() => {
       pending.push(navigation)
       return navigation.promise
     }),
+    scrollToAnchorForRestore: vi.fn((target) => {
+      position = target
+      const navigation = deferred()
+      pending.push(navigation)
+      return navigation.promise
+    }),
     scrollToPage: vi.fn((pageNumber) => {
       position = { pageNumber, verticalPercentage: 20 }
       pending[0]?.resolve()
@@ -429,7 +435,7 @@ it.each([false, true])(
     act(() => {
       ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
     })
-    expect(state.api!.scrollToAnchor).toHaveBeenCalledWith(
+    expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledWith(
       newer ? ratio : saved,
       { preserveOnFailure: false }
     )
@@ -475,7 +481,7 @@ it.each([false, true])(
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(state.api!.scrollToAnchor).toHaveBeenCalledWith(
+    expect(state.api!.scrollToAnchorForRestore).toHaveBeenCalledWith(
       newer ? ratio : { pageNumber: 2, verticalPercentage: 65 },
       { preserveOnFailure: false }
     )
@@ -517,7 +523,7 @@ it('keeps an explicit page seek publishable when it supersedes pending legacy me
     metadata.resolve()
     await ready
   })
-  expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+  expect(state.api!.scrollToAnchorForRestore).not.toHaveBeenCalled()
   act(() => ref.current!.captureAndPublish!())
   expect(onProgress).toHaveBeenLastCalledWith({
     pageNumber: 2,

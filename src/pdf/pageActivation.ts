@@ -49,3 +49,59 @@ export function activatePageIfReady(
     viewer.currentPageNumber = pageNumber
   return true
 }
+
+/**
+ * Waits until a page view is attached and visible. Used by internal document
+ * restore, which may legitimately run before pagesinit/crop settles. Public
+ * navigation keeps the immediate-reject contract instead.
+ */
+export function waitForPageActivation(
+  isReady: () => boolean,
+  options: {
+    readonly timeoutMs: number
+    readonly now?: () => number
+    readonly schedule?: (callback: () => void) => void
+    readonly signal?: AbortSignal
+  }
+): Promise<void> {
+  const now = options.now ?? (() => Date.now())
+  const schedule =
+    options.schedule ??
+    ((callback) => {
+      if (typeof requestAnimationFrame === 'function')
+        requestAnimationFrame(callback)
+      else setTimeout(callback, 16)
+    })
+  const signal = options.signal
+  const deadline = now() + options.timeoutMs
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      signal?.removeEventListener('abort', abort)
+      reject(
+        signal?.reason instanceof Error
+          ? signal.reason
+          : new DOMException('PDF navigation superseded', 'AbortError')
+      )
+    }
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    const poll = () => {
+      if (signal?.aborted) return
+      if (isReady()) {
+        signal?.removeEventListener('abort', abort)
+        resolve()
+        return
+      }
+      if (now() >= deadline) {
+        signal?.removeEventListener('abort', abort)
+        reject(new Error('目标页面不可用，原位置已保留'))
+        return
+      }
+      schedule(poll)
+    }
+    poll()
+  })
+}

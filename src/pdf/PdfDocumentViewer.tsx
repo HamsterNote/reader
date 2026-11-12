@@ -42,7 +42,8 @@ import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached
 import {
   activatePageIfReady,
   canTargetPdfPage,
-  isPageViewActivatable
+  isPageViewActivatable,
+  waitForPageActivation
 } from './pageActivation'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
@@ -228,6 +229,15 @@ export type PdfDocumentViewerRef = {
    * unavailable check below guarantees PDF.js was not touched.
    */
   readonly scrollToAnchor: (
+    anchor: ReaderBookmark,
+    options?: { preserveOnFailure?: boolean }
+  ) => Promise<void>
+  /**
+   * Internal restore path. Same contract as `scrollToAnchor`, except that a
+   * page view which is not attached/visible yet (initial load, crop restore)
+   * is awaited up to the positioning timeout instead of rejecting.
+   */
+  readonly scrollToAnchorForRestore: (
     anchor: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
   ) => Promise<void>
@@ -528,6 +538,22 @@ export const PdfDocumentViewer = forwardRef<
     fail: (error: Error) => void
     preserveOnFailure?: boolean
   } | null>(null)
+  // Restore may wait for the target page (initial load/crop). That wait owns
+  // navigation like any other request: a newer navigation, a source change or
+  // unmount aborts it immediately instead of letting it replay later.
+  const navigationGeneration = useRef(0)
+  const restoreWait = useRef<{
+    generation: number
+    controller: AbortController
+  } | null>(null)
+  const cancelRestoreWait = useCallback(() => {
+    navigationGeneration.current += 1
+    const wait = restoreWait.current
+    restoreWait.current = null
+    wait?.controller.abort(
+      new DOMException('PDF navigation superseded', 'AbortError')
+    )
+  }, [])
   const {
     restoreAfterLayout,
     cancelRestore: cancelLayoutRestore,
@@ -551,6 +577,7 @@ export const PdfDocumentViewer = forwardRef<
   })
   const scrollToCroppedPage = useCallback(
     (pageNumber: number) => {
+      cancelRestoreWait()
       cancelLayoutRestore()
       restoredPosition.current = null
       restoredTextPosition.current = null
@@ -562,7 +589,7 @@ export const PdfDocumentViewer = forwardRef<
       }
       viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
     },
-    [cancelLayoutRestore]
+    [cancelLayoutRestore, cancelRestoreWait]
   )
   // Layout captures at text-item granularity. Retain a restored Text character
   // while the viewport stays at that exact position, including a quick round trip.
@@ -1173,14 +1200,16 @@ export const PdfDocumentViewer = forwardRef<
 
     return () => {
       cancelled = true
+      cancelRestoreWait()
       removeSourceLinks?.()
     }
-  }, [source])
+  }, [source, cancelRestoreWait])
 
   // 卸载/切文件：取消加载、销毁 worker、清空页面（tasks.md 3.5）。
   useEffect(() => {
     const manager = sessionManagerRef.current
     return () => {
+      cancelRestoreWait()
       pendingAnchor.current?.fail(
         new DOMException('PDF navigation cancelled', 'AbortError')
       )
@@ -1682,24 +1711,11 @@ export const PdfDocumentViewer = forwardRef<
    * visibility. Normal requests resolve after the destination rectangle is
    * applied (not after canvas rendering) and reject on timeout/supersession.
    */
-  const scrollToAnchor = (
-    stored: ReaderBookmark,
-    options?: { preserveOnFailure?: boolean }
+  const beginNavigation = (
+    anchor: ReaderBookmark,
+    options: { preserveOnFailure?: boolean } | undefined,
+    originalDocument: typeof documentRef.current
   ): Promise<void> => {
-    cancelLayoutRestore()
-    const anchor = normalizeBookmark(stored)
-    if (!anchor) {
-      progressOptions.current.onRestoreError?.(
-        '无法精确恢复阅读位置，原进度已保留'
-      )
-      return Promise.resolve()
-    }
-    const viewer = viewerRef.current
-    if (
-      !viewer ||
-      !canTargetPdfPage(viewer, visiblePagesRef.current, anchor.pageNumber)
-    )
-      return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     pendingAnchor.current?.fail(
       new DOMException('PDF navigation superseded', 'AbortError')
     )
@@ -1709,7 +1725,6 @@ export const PdfDocumentViewer = forwardRef<
       top: containerRef.current?.scrollTop ?? 0,
       left: containerRef.current?.scrollLeft ?? 0
     }
-    const originalDocument = documentRef.current
     const promise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (pendingAnchor.current?.anchor === anchor)
@@ -1742,17 +1757,102 @@ export const PdfDocumentViewer = forwardRef<
         }
       }
     })
-    if (!isPageViewActivatable(viewer.getPageView(anchor.pageNumber - 1))) {
+    const activeViewer = viewerRef.current
+    if (!activeViewer || documentRef.current !== originalDocument) {
+      pendingAnchor.current?.fail(
+        new DOMException('PDF navigation superseded', 'AbortError')
+      )
+      pendingAnchor.current = null
+      return Promise.reject(
+        new DOMException('PDF navigation superseded', 'AbortError')
+      )
+    }
+    if (
+      !isPageViewActivatable(activeViewer.getPageView(anchor.pageNumber - 1))
+    ) {
       pendingAnchor.current?.fail(
         new DOMException('PDF navigation superseded', 'AbortError')
       )
       pendingAnchor.current = null
       return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     }
-    viewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: canTargetPdfPage + recheck above
+    activeViewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: targetReady + recheck above
     restoreAnchor()
     return promise
   }
+
+  const navigateToAnchor = (
+    stored: ReaderBookmark,
+    options: { preserveOnFailure?: boolean } | undefined,
+    waitForPage: boolean
+  ): Promise<void> => {
+    cancelLayoutRestore()
+    cancelRestoreWait()
+    const generation = navigationGeneration.current
+    const anchor = normalizeBookmark(stored)
+    if (!anchor) {
+      progressOptions.current.onRestoreError?.(
+        '无法精确恢复阅读位置，原进度已保留'
+      )
+      return Promise.resolve()
+    }
+    const originalDocument = documentRef.current
+    const targetReady = () => {
+      const viewer = viewerRef.current
+      return (
+        documentRef.current === originalDocument &&
+        !!viewer &&
+        canTargetPdfPage(viewer, visiblePagesRef.current, anchor.pageNumber)
+      )
+    }
+    if (!waitForPage) {
+      if (!targetReady())
+        return Promise.reject(new Error('目标页面不可用，原位置已保留'))
+      return beginNavigation(anchor, options, originalDocument)
+    }
+    // A deleted page never becomes activatable; fail fast so the restore
+    // fallback can land on the nearest existing page.
+    const initialViewer = viewerRef.current
+    if (initialViewer && anchor.pageNumber > initialViewer.pagesCount)
+      return Promise.reject(new Error('目标页面不可用，原位置已保留'))
+    // Restore runs before pagesinit/crop settles; wait for the real page
+    // view instead of treating "not visible yet" as unavailable. The wait is
+    // owned by this navigation generation, so a newer request aborts it.
+    const controller = new AbortController()
+    restoreWait.current = { generation, controller }
+    const finishWait = () => {
+      if (restoreWait.current?.controller === controller)
+        restoreWait.current = null
+    }
+    return waitForPageActivation(targetReady, {
+      timeoutMs: 10000,
+      signal: controller.signal
+    }).then(
+      () => {
+        finishWait()
+        if (
+          generation !== navigationGeneration.current ||
+          controller.signal.aborted
+        )
+          throw new DOMException('PDF navigation superseded', 'AbortError')
+        return beginNavigation(anchor, options, originalDocument)
+      },
+      (error) => {
+        finishWait()
+        throw error
+      }
+    )
+  }
+
+  const scrollToAnchor = (
+    stored: ReaderBookmark,
+    options?: { preserveOnFailure?: boolean }
+  ): Promise<void> => navigateToAnchor(stored, options, false)
+
+  const scrollToAnchorForRestore = (
+    stored: ReaderBookmark,
+    options?: { preserveOnFailure?: boolean }
+  ): Promise<void> => navigateToAnchor(stored, options, true)
 
   useEffect(() => {
     const eventBus = eventBusRef.current
@@ -1852,6 +1952,7 @@ export const PdfDocumentViewer = forwardRef<
         )
       },
       scrollToAnchor,
+      scrollToAnchorForRestore,
       scrollToRange: (rangeId) => {
         restoredPosition.current = null
         restoredTextPosition.current = null

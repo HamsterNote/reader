@@ -1375,6 +1375,76 @@ describe('PdfDocumentViewer 接线', () => {
     expect(latestViewer().currentPageNumber).toBe(1)
   })
 
+  it('keeps a public navigation when an older restore was still waiting', async () => {
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    const ref = createRef<PdfDocumentViewerRef>()
+    let loaded!: () => void
+    const pagesReady = new Promise<void>((resolve) => {
+      loaded = resolve
+    })
+    const view = renderViewer(
+      { source, hiddenPages: [1], onPagesLoaded: () => loaded() },
+      ref
+    )
+    await act(async () => {
+      await pagesReady
+    })
+    let restoreError: unknown
+    ref
+      .current!.scrollToAnchorForRestore({
+        pageNumber: 1,
+        verticalPercentage: 50
+      })
+      .catch((error) => {
+        restoreError = error
+      })
+    await act(async () => {})
+    act(() => {
+      ref.current!.scrollToAnchor({ pageNumber: 2, verticalPercentage: 0 })
+    })
+    await act(async () => {})
+    expect((restoreError as DOMException).name).toBe('AbortError')
+    expect(latestViewer().currentPageNumber).toBe(2)
+    // The restore's page becomes visible afterwards; it must not replay.
+    view.rerender(<PdfDocumentViewer source={source} ref={ref} />)
+    await act(async () => {})
+    expect(latestViewer().currentPageNumber).toBe(2)
+  })
+
+  it('aborts a pending restore wait as soon as the source changes', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    let loaded!: () => void
+    const pagesReady = new Promise<void>((resolve) => {
+      loaded = resolve
+    })
+    const view = renderViewer(
+      { hiddenPages: [2], onPagesLoaded: () => loaded() },
+      ref
+    )
+    await act(async () => {
+      await pagesReady
+    })
+    let restoreError: unknown
+    ref
+      .current!.scrollToAnchorForRestore({
+        pageNumber: 2,
+        verticalPercentage: 50
+      })
+      .catch((error) => {
+        restoreError = error
+      })
+    await act(async () => {})
+    view.rerender(
+      <PdfDocumentViewer
+        source={{ data: readFixture('pdf/two-column.pdf') }}
+        hiddenPages={[2]}
+        ref={ref}
+      />
+    )
+    await act(async () => {})
+    expect((restoreError as DOMException).name).toBe('AbortError')
+  })
+
   it('allows in-range restoration immediately in the pagesloaded callback', async () => {
     const source = { data: readFixture('pdf/two-column.pdf') }
     const ref = createRef<PdfDocumentViewerRef>()
