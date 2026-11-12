@@ -39,6 +39,7 @@ import { groupHiddenPages, normalizeHiddenPageNumbers } from './hiddenPages'
 import { PdfHiddenPageGroupControls } from './PdfHiddenPageGroupControls'
 import { PdfHiddenPageRestoreModal } from './PdfHiddenPageRestoreModal'
 import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached'
+import { activatePageIfReady, isPageViewActivatable } from './pageActivation'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
@@ -365,6 +366,9 @@ export const PdfDocumentViewer = forwardRef<
   const restoreTriggerRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => setRestoreGroupStart(null), [source, edgeCropEditing])
   useEffect(() => {
+    pendingPageRef.current = null
+  }, [source])
+  useEffect(() => {
     if (restoreGroupStart !== null || !restoreTriggerRef.current) return
     restoreTriggerRef.current.focus()
     restoreTriggerRef.current = null
@@ -374,6 +378,20 @@ export const PdfDocumentViewer = forwardRef<
   const hiddenGroups = groupHiddenPages(hiddenPages, allowedPages)
   const visiblePagesRef = useRef(readablePages)
   visiblePagesRef.current = readablePages
+  const pendingPageRef = useRef<number | null>(null)
+  const activatePage = (pageNumber: number): boolean => {
+    const viewer = viewerRef.current
+    if (!viewer || !activatePageIfReady(viewer, pageNumber)) {
+      pendingPageRef.current = pageNumber
+      return false
+    }
+    pendingPageRef.current = null
+    return true
+  }
+  const retryPendingPage = () => {
+    const pending = pendingPageRef.current
+    if (pending !== null) activatePage(pending)
+  }
   const navigationOptionsRef = useRef({ pageRange, hiddenPages })
   navigationOptionsRef.current = { pageRange, hiddenPages }
   const ocrTexts = usePdfOcr(ocrDocument, renderedPages, readablePages, props)
@@ -505,6 +523,10 @@ export const PdfDocumentViewer = forwardRef<
       restoredTextPosition.current = null
       const viewer = viewerRef.current
       if (!viewer) return
+      if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1))) {
+        pendingPageRef.current = pageNumber
+        return
+      }
       viewer.scrollPageIntoView({ pageNumber })
     },
     [cancelLayoutRestore]
@@ -918,8 +940,9 @@ export const PdfDocumentViewer = forwardRef<
       if (visible.includes(event.pageNumber))
         callbacksRef.current.onPageChange?.(event.pageNumber)
       else if (visible.length)
-        viewer.currentPageNumber =
+        activatePage(
           visible.find((page) => page >= event.pageNumber) ?? visible.at(-1)!
+        )
     }
     const handleScaleChanging = (event: { scale: number }) => {
       applyPageCrop()
@@ -1199,14 +1222,16 @@ export const PdfDocumentViewer = forwardRef<
       pendingAnchor.current = null
     }
     if (visible.length && !visible.includes(viewer.currentPageNumber)) {
-      viewer.currentPageNumber =
+      const next =
         visible.find((page) => page >= viewer.currentPageNumber) ??
         visible.at(-1)!
-      scrollIntoViewIfAttached(
-        viewer.getPageView(viewer.currentPageNumber - 1)?.div,
-        { block: 'start' }
-      )
+      if (activatePage(next)) {
+        scrollIntoViewIfAttached(viewer.getPageView(next - 1)?.div, {
+          block: 'start'
+        })
+      }
     }
+    retryPendingPage()
     selectionContextsRef.current.forEach((_, page) => {
       if (!visible.includes(page)) selectionContextsRef.current.delete(page)
     })
