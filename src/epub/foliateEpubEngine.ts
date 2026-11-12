@@ -25,6 +25,7 @@ import { buildLegacyEpubModel, type LegacyEpubModel } from './legacyEpubModel'
 import type { SerializedSelection } from './epubCompatIndex'
 import { restrictPublicationResources } from './publicationSecurity'
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
+import { resolveEpubTextAnchor } from './epubTextAnchor'
 
 export type EpubEngineTocEntry = {
   readonly label: string
@@ -978,9 +979,8 @@ export const createEpubEngine = (
   const restoreLiveAnchor = async (anchor: ReaderTextAnchor) => {
     if (!compat || !view?.renderer || destroyed) return
     const text = compat.pageText(anchor.pageNumber) ?? ''
-    const offset = anchor.offset
-    if (!Number.isInteger(offset) || offset < 0 || offset >= text.length)
-      throw new Error('无法精确恢复阅读位置：源字符已失效')
+    const resolved = resolveEpubTextAnchor(anchor, text)
+    const offset = resolved.offset
     const endpoint = { selectionId: `page-${anchor.pageNumber}`, offset }
     const located = compat.locateRange({
       start: endpoint,
@@ -992,8 +992,8 @@ export const createEpubEngine = (
       // A restored anchor may sit in the middle of a newly sized page. Keep
       // that exact character for subsequent reflows, rather than its earlier page start.
       if (!destroyed && displayedPage === anchor.pageNumber)
-        currentAnchor = { ...anchor, offset }
-      stablePosition = { status: 'ready', position: { ...anchor, offset } }
+        currentAnchor = resolved
+      stablePosition = { status: 'ready', position: resolved }
     } else throw new Error('无法精确恢复阅读位置：源字符不可定位')
   }
 
