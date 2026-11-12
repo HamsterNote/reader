@@ -7,6 +7,10 @@ import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
 import {
+  createFlowTextReadiness,
+  isClampedFlowTargetVisible
+} from '../reading/flowTextReadiness'
+import {
   resolveReaderTheme,
   usePrefersColorScheme
 } from '../Reader/useDefaultBottomBar'
@@ -1118,8 +1122,16 @@ export function IntermediateDocumentTextViewer(
   const [pdfLoadErrors, setPdfLoadErrors] = useState<ReadonlySet<number>>(
     new Set()
   )
+  // Compatibility viewers have no PDF pagination controller; page load
+  // rejections must still be observed by readiness and progress flush.
+  const [flowLoadErrors, setFlowLoadErrors] = useState<ReadonlySet<number>>(
+    new Set()
+  )
   const pdfNavigationRef = useRef<ReturnType<
     typeof usePdfTextPagination
+  > | null>(null)
+  const flowReadinessRef = useRef<ReturnType<
+    typeof createFlowTextReadiness
   > | null>(null)
   const preferredTheme = usePrefersColorScheme()
   const paginationTheme = resolveReaderTheme(darkMode, preferredTheme)
@@ -1382,9 +1394,12 @@ export function IntermediateDocumentTextViewer(
         return position ? { status: 'ready', position } : { status: 'pending' }
       },
       waitForStable: () =>
-        pdfNavigationRef.current?.whenStable() ?? Promise.resolve()
+        isPdf
+          ? (pdfNavigationRef.current?.whenStable() ?? Promise.resolve())
+          : (flowReadinessRef.current?.waitForStable() ??
+            Promise.reject(new Error('Text document is not ready')))
     }),
-    [captureCurrentTextAnchor, captureReadingProgress]
+    [captureCurrentTextAnchor, captureReadingProgress, isPdf]
   )
 
   const cancelRestoreAttempt = useCallback(() => {
@@ -1536,7 +1551,10 @@ export function IntermediateDocumentTextViewer(
       setReadingProgress(requestedProgress)
       restoredProgressPageRef.current = requestedPageNumber
       suppressProgrammaticProgressRef.current = true
-      if (currentPageNumber === requestedPageNumber) {
+      if (
+        currentPageNumber === requestedPageNumber ||
+        isClampedFlowTargetVisible(scrollElement, requestedPageNumber)
+      ) {
         isInitialProgressRestorePendingRef.current = false
         return
       }
@@ -2018,6 +2036,13 @@ export function IntermediateDocumentTextViewer(
             next.delete(pageNumber)
             return next
           })
+        else
+          setFlowLoadErrors((current) => {
+            if (!current.has(pageNumber)) return current
+            const next = new Set(current)
+            next.delete(pageNumber)
+            return next
+          })
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
@@ -2045,6 +2070,7 @@ export function IntermediateDocumentTextViewer(
           setPdfLoadErrors((current) => new Set(current).add(pageNumber))
           return
         }
+        setFlowLoadErrors((current) => new Set(current).add(pageNumber))
         clearUnloadTimer(pageNumber)
         setParagraphsByPageNumber((currentParagraphs) => {
           const nextParagraphs = new Map(currentParagraphs)
@@ -2433,6 +2459,68 @@ export function IntermediateDocumentTextViewer(
   useEffect(() => {
     if (!isPdf) restoreScrollReadingProgress()
   }, [isPdf, restoreScrollReadingProgress])
+
+  // A browser may clamp scrollToIndex without emitting another scroll event
+  // when the final page already fits in the viewport. Recheck after measured
+  // text commits, so restoration completes from geometry rather than a timer.
+  useEffect(() => {
+    if (isPdf || !viewerRootElement) return
+    const frame =
+      viewerRootElement.ownerDocument.defaultView!.requestAnimationFrame(() => {
+        if (isInitialProgressRestorePendingRef.current)
+          restoreInitialReadingProgress(virtualizer)
+      })
+    return () =>
+      viewerRootElement.ownerDocument.defaultView!.cancelAnimationFrame(frame)
+  }, [
+    isPdf,
+    viewerRootElement,
+    textsByPageNumber,
+    restoreInitialReadingProgress,
+    virtualizer
+  ])
+
+  const flowState = useRef(() => ({
+    loaded: false,
+    restoring: true,
+    error: undefined as Error | undefined
+  }))
+  flowState.current = () => {
+    const page = readingProgressPageRef.current ?? pageNumbers[0]
+    return {
+      loaded: page !== undefined && textsByPageNumberRef.current.has(page),
+      restoring: isInitialProgressRestorePendingRef.current,
+      error:
+        page !== undefined &&
+        (pdfLoadErrors.has(page) || flowLoadErrors.has(page))
+          ? new Error(`Text page ${page} failed to load`)
+          : undefined
+    }
+  }
+  const flowCallbacks = useRef(props)
+  flowCallbacks.current = props
+  useEffect(() => {
+    if (isPdf || !viewerRootElement) return
+    let cancelled = false
+    const readiness = createFlowTextReadiness(viewerRootElement, () =>
+      flowState.current()
+    )
+    flowReadinessRef.current = readiness
+    readiness.waitForStable().then(
+      () => {
+        if (!cancelled) flowCallbacks.current.onEngineReady?.()
+      },
+      (error) => {
+        if (!cancelled) flowCallbacks.current.onEngineError?.(error)
+      }
+    )
+    return () => {
+      cancelled = true
+      readiness.dispose()
+      if (flowReadinessRef.current === readiness)
+        flowReadinessRef.current = null
+    }
+  }, [isPdf, viewerRootElement, documentGeneration])
 
   useEffect(() => {
     if (isPdf || textsByPageNumber.size === 0) return
@@ -3299,6 +3387,7 @@ export function IntermediateDocumentTextViewer(
 
   useEffect(() => {
     setPdfLoadErrors(new Set())
+    setFlowLoadErrors(new Set())
     activeDocumentRef.current = runtimeDocument
     activePageNumbersKeyRef.current = pageNumbersKey
     previousPreloadPageNumbersRef.current = new Set()

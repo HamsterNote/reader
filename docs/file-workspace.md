@@ -81,3 +81,9 @@ reload 回调为必选。webview 的 open/restore 引擎失败通过带 `stage: 
 PDF 进度及模式切换兼容检查可运行 `READER_PROGRESS_WIDTH=320 READER_PROGRESS_SCALE=1 node scripts/check-reading-progress.mjs`，在窄栏覆盖安全区、文字/无文字页面、Layout/Text 往返与位置恢复。该命令使用浏览器，完整默认矩阵可省略两个环境变量；不运行原生构建或实机验收。
 
 `yarn typecheck`、`yarn lint`、`yarn test:run`、`yarn build:lib`、`yarn pack:check`，以及在构建后运行 `yarn check:workspace`（直接加载 dist）验证 Web 契约；另在 `yarn build:webview`（纯 Web 资产构建）后运行 `yarn check:session-replacement` 验证打包入口的会话替换。浏览器输出在调用者的 artifacts/reader-workspace-browser。旧宿主继续使用 Reader 单文档 props，不需要采用 Workspace。回滚恢复 reader/painting 依赖和入口即可；源文件、批注、组合与持久位置不转换、不删除。
+
+### 兼容文字文档的 ready 与进度屏障
+
+非 PDF 的 TXT/兼容 EPUB 文字视图使用自己的排版就绪信号，不等待禁用的 PDF 分页器。目标页载入、字体就绪、位置恢复及可见布局均完成后才发 `onEngineReady`，公开 `progressRef.flush()` 等待相同条件；加载失败或清理会拒绝未完成请求。短文档不能把最后一页滚到顶部时，依据真实滚动上限和完整可见的已加载目标页结束恢复，不依赖超时。
+
+`yarn build:lib && yarn check:flow-text-readiness` 在 320px Chromium 中通过公开构建产物执行 TXT→EPUB→TXT，分别覆盖整篇可见和可滚动两种布局，共六条文字 ready/flush 回归，另有兼容布局的浏览器滚动/VirtualPaper 两条页码恢复回归，共八条。`test/flow-text-readiness.test.ts` 覆盖字体/恢复屏障、销毁、错误和滚动夹限。兼容布局视图也在可见页载入、恢复屏障解除和实际页几何稳定后通知 ready/error，公开 flush 等待同一屏障。该修复不更改 WebBase `useReaderDocument` 的分页进度通知时序。
