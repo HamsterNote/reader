@@ -64,6 +64,10 @@ const INPUT_LOADED = new Map<number, unknown>([
 const INPUT_ERRORS = new Set<number>()
 const noop = () => {}
 
+const sequence = () =>
+  (screen.getByRole('group', { name: '翻页' }).parentElement as HTMLElement)
+    .dataset['pdfTextTurnSequence'] ?? ''
+
 function PaginationInputHarness({ width }: { width: number }) {
   const pagination = usePdfTextPagination({
     enabled: true,
@@ -111,18 +115,40 @@ describe('PDF Text actual fragments and navigation', () => {
     // A focus/host relayout changes the readable width mid-press and disables
     // the control before the browser dispatches click.
     view.rerender(<PaginationInputHarness width={280} />)
-    await waitFor(() => {
-      const controls = screen.getByRole('group', { name: '翻页' })
-        .parentElement as HTMLElement
-      expect(controls.dataset['pdfTextTurnSequence']).toBe('1')
-    })
-    // The turn may advance a column before the source page; the queue's
-    // observable contract is that the accepted intent is counted once.
-    expect(
-      screen.getByRole('group', { name: '翻页' }).parentElement?.dataset[
-        'pdfTextTurnSequence'
-      ]
-    ).toBe('1')
+    await waitFor(() =>
+      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
+        'disabled',
+        true
+      )
+    )
+    expect(sequence()).toBe('0')
+    fireEvent.pointerUp(screen.getByLabelText('下一页'))
+    await waitFor(() => expect(sequence()).toBe('1'))
+    // The native click belonging to the same gesture must be suppressed.
+    fireEvent.click(screen.getByLabelText('下一页'))
+    expect(sequence()).toBe('1')
+  })
+
+  it('drops a press cancelled during the repagination', async () => {
+    const view = render(<PaginationInputHarness width={300} />)
+    await waitFor(() =>
+      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
+        'disabled',
+        true
+      )
+    )
+    fireEvent.pointerDown(screen.getByLabelText('下一页'))
+    view.rerender(<PaginationInputHarness width={280} />)
+    fireEvent.pointerCancel(screen.getByLabelText('下一页'))
+    await waitFor(() =>
+      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
+        'disabled',
+        true
+      )
+    )
+    fireEvent.pointerUp(screen.getByLabelText('下一页'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(sequence()).toBe('0')
   })
 
   it('announces engine ready before the ready render can expose enabled controls', async () => {
