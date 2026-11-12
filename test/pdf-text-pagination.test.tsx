@@ -1,4 +1,11 @@
-import { act, render, renderHook, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor
+} from '@testing-library/react'
 import { StrictMode, useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -7,6 +14,7 @@ import {
   pdfTextTurnTarget
 } from '../src/pdf/pdfTextPagination'
 import { usePdfTextPagination } from '../src/pdf/usePdfTextPagination'
+import { PdfTextReadingControls } from '../src/pdf/PdfTextReadingControls'
 
 let root: HTMLDivElement
 let charsPerColumn: number
@@ -47,7 +55,76 @@ const anchor = (offset: number) => ({
   offset
 })
 
+const INPUT_PROGRESS = { currentPageNumber: 1 }
+const INPUT_PAGES = [1, 2]
+const INPUT_LOADED = new Map<number, unknown>([
+  [1, []],
+  [2, []]
+])
+const INPUT_ERRORS = new Set<number>()
+const noop = () => {}
+
+function PaginationInputHarness({ width }: { width: number }) {
+  const pagination = usePdfTextPagination({
+    enabled: true,
+    generation: 0,
+    root,
+    pages: INPUT_PAGES,
+    progress: INPUT_PROGRESS,
+    loaded: INPUT_LOADED,
+    errors: INPUT_ERRORS,
+    width,
+    height: 200,
+    layoutKey: 1,
+    enqueue: noop,
+    onCommit: noop,
+    onTurn: noop
+  })
+  return (
+    <PdfTextReadingControls
+      enabled
+      controlsRef={null}
+      navigation={pagination.navigation}
+      ready={pagination.ready}
+      theme='light'
+      empty={false}
+      failed={false}
+      unlocatable={false}
+      diagnostics={pagination.diagnostics}
+      onRetry={noop}
+      onPrevious={() => pagination.turn(false)}
+      onNext={() => pagination.turn(true)}
+    />
+  )
+}
+
 describe('PDF Text actual fragments and navigation', () => {
+  it('replays a next-page press that a repagination invalidates before click', async () => {
+    const view = render(<PaginationInputHarness width={300} />)
+    await waitFor(() =>
+      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
+        'disabled',
+        true
+      )
+    )
+    fireEvent.pointerDown(screen.getByLabelText('下一页'))
+    // A focus/host relayout changes the readable width mid-press and disables
+    // the control before the browser dispatches click.
+    view.rerender(<PaginationInputHarness width={280} />)
+    await waitFor(() => {
+      const controls = screen.getByRole('group', { name: '翻页' })
+        .parentElement as HTMLElement
+      expect(controls.dataset['pdfTextTurnSequence']).toBe('1')
+    })
+    // The turn may advance a column before the source page; the queue's
+    // observable contract is that the accepted intent is counted once.
+    expect(
+      screen.getByRole('group', { name: '翻页' }).parentElement?.dataset[
+        'pdfTextTurnSequence'
+      ]
+    ).toBe('1')
+  })
+
   it('announces engine ready before the ready render can expose enabled controls', async () => {
     const onReady = vi.fn()
     const observedAtLayout: boolean[] = []
