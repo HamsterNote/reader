@@ -2660,14 +2660,25 @@ export function IntermediateDocumentTextViewer(
           }
         )
       )
-      return canonicalizePdfSelectionRanges(range, viewerRootRef.current).map(
-        (canonicalRange) =>
-          deriveLayoutSelectionRange({
-            range: canonicalRange,
-            textsByPageNumber: textsByPageNumberRef.current,
-            pageSizesByPageNumber: pageSizes,
-            overlayRectType
-          })
+      const pageNumber = parsePublicPageId(range.start.selectionId)
+      const canonicalText =
+        pageNumber === null
+          ? undefined
+          : textsByPageNumberRef.current
+              .get(pageNumber)
+              ?.map((text) => text.content)
+              .join('')
+      return canonicalizePdfSelectionRanges(
+        range,
+        viewerRootRef.current,
+        canonicalText
+      ).map((canonicalRange) =>
+        deriveLayoutSelectionRange({
+          range: canonicalRange,
+          textsByPageNumber: textsByPageNumberRef.current,
+          pageSizesByPageNumber: pageSizes,
+          overlayRectType
+        })
       )
     },
     [isPdf, overlayRectType, runtimeDocument]

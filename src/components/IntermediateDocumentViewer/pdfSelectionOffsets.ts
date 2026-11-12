@@ -19,9 +19,10 @@ type DomAnchoredSegment = {
  * that would also mark unselected text (or silently reject the selection). */
 export function canonicalizePdfSelectionRanges(
   range: ReaderSelectionRange,
-  root: HTMLElement | null
+  root: HTMLElement | null,
+  canonicalText?: string
 ): ReaderSelectionRange[] {
-  const continuous = canonicalizePdfSelectionRange(range, root)
+  const continuous = canonicalizePdfSelectionRange(range, root, canonicalText)
   if (continuous) return [continuous]
   if (!root || range.start.selectionId !== range.end.selectionId) return []
   const segments = getSelectionSegments(range.start.selectionId, root)
@@ -39,7 +40,11 @@ export function canonicalizePdfSelectionRanges(
       end - segment.domStart
     )
     const previous = parts.at(-1)
-    if (previous?.end === sourceStart) {
+    if (
+      previous &&
+      areCanonicalNeighbors(previous.end, sourceStart, canonicalText)
+    ) {
+      previous.text += canonicalText?.slice(previous.end, sourceStart) ?? ''
       previous.end = sourceEnd
       previous.text += text
     } else {
@@ -159,7 +164,8 @@ export function restorePdfTextSelection(
 
 export function canonicalizePdfSelectionRange(
   range: ReaderSelectionRange,
-  root: HTMLElement | null
+  root: HTMLElement | null,
+  canonicalText?: string
 ): ReaderSelectionRange | null {
   if (!root) return range
 
@@ -170,7 +176,8 @@ export function canonicalizePdfSelectionRange(
       !isContinuousCanonicalRange(
         segments,
         range.start.offset,
-        range.end.offset
+        range.end.offset,
+        canonicalText
       )
     ) {
       return null
@@ -199,7 +206,8 @@ function getSelectionSegments(
 function isContinuousCanonicalRange(
   segments: readonly DomAnchoredSegment[],
   domStart: number,
-  domEnd: number
+  domEnd: number,
+  canonicalText?: string
 ): boolean {
   if (domStart > domEnd) return false
   const intersectingSegments = segments.filter(
@@ -208,7 +216,29 @@ function isContinuousCanonicalRange(
   return intersectingSegments.every(
     (segment, index) =>
       index === 0 ||
-      intersectingSegments[index - 1]?.canonicalEnd === segment.canonicalStart
+      areCanonicalNeighbors(
+        intersectingSegments[index - 1]!.canonicalEnd,
+        segment.canonicalStart,
+        canonicalText
+      )
+  )
+}
+
+function areCanonicalNeighbors(
+  end: number,
+  start: number,
+  canonicalText: string | undefined
+): boolean {
+  if (end === start) return true
+  // PDF.js can emit whitespace-only items between independently positioned
+  // runs. Text layout omits those items and inserts display spacing instead.
+  // Bridge only verified source whitespace; reordered or omitted text must
+  // remain separate canonical fragments of the same logical highlight.
+  return (
+    canonicalText !== undefined &&
+    end < start &&
+    start <= canonicalText.length &&
+    /^\s+$/u.test(canonicalText.slice(end, start))
   )
 }
 

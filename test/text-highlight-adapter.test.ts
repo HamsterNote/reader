@@ -381,6 +381,76 @@ describe('Text highlight adapter', () => {
     ).toEqual(ranges.map((range) => range.id))
   })
 
+  it('keeps independently positioned runs together across verified source whitespace', () => {
+    const { root } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="0">abc</span> <span data-selection-start-offset="4">def</span> <span data-selection-start-offset="9">ghi</span>'
+    )
+    const selected = {
+      ...storedRange,
+      text: 'bc def gh',
+      start: { selectionId: 'page-1', offset: 1 },
+      end: { selectionId: 'page-1', offset: 10 }
+    }
+    const saved = canonicalizePdfSelectionRanges(
+      selected,
+      root,
+      'abc def\t ghi'
+    )
+    expect(saved).toEqual([
+      {
+        ...selected,
+        start: { selectionId: 'page-1', offset: 1 },
+        end: { selectionId: 'page-1', offset: 11 }
+      }
+    ])
+    const [restored] = combinePdfTextSelectionGroups(saved, root)
+    expect(
+      canonicalizePdfSelectionRanges(restored!, root, 'abc def\t ghi')
+    ).toEqual(saved)
+    // A missing source character cannot be assumed to be whitespace.
+    expect(
+      canonicalizePdfSelectionRanges(selected, root, 'abcXdefYZghi')
+    ).toHaveLength(3)
+    expect(canonicalizePdfSelectionRanges(selected, root)).toHaveLength(3)
+  })
+
+  it('retains one logical group when positioned runs also have genuine source reordering', () => {
+    const { root } = makeAnchoredViewerRoot(
+      '<span data-selection-start-offset="0">abc</span> <span data-selection-start-offset="4">def</span> <span data-selection-start-offset="10">ghi</span> <span data-selection-start-offset="8">X</span>'
+    )
+    const saved = canonicalizePdfSelectionRanges(
+      {
+        ...storedRange,
+        text: 'abc def ghi',
+        start: { selectionId: 'page-1', offset: 0 },
+        end: { selectionId: 'page-1', offset: 11 }
+      },
+      root,
+      'abc def X ghi'
+    )
+    expect(
+      saved.map(({ text, start, end, selectionGroup }) => ({
+        text,
+        start: start.offset,
+        end: end.offset,
+        selectionGroup
+      }))
+    ).toEqual([
+      {
+        text: 'abc def',
+        start: 0,
+        end: 7,
+        selectionGroup: { id: storedRange.id, index: 0 }
+      },
+      {
+        text: 'ghi',
+        start: 10,
+        end: 13,
+        selectionGroup: { id: storedRange.id, index: 1 }
+      }
+    ])
+  })
+
   it('persists a cross-paragraph group and restores its exact source ranges from either member', () => {
     const { root } = makeAnchoredViewerRoot(
       '<p><span data-selection-start-offset="0">Left</span></p><p><span data-selection-start-offset="12">Right</span></p><p><span data-selection-start-offset="4">omitted!</span></p>'

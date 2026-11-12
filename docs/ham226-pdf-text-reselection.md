@@ -2,18 +2,39 @@
 
 在 WebBase 的实际 ReaderEditorPane、受控 ranges 和侧车持久化路径上复现：源字符顺序与显示顺序相反的 PDF，创建高亮、取消选中、重新选中，再扩大与缩小范围后，旧片段仍留在宿主中。主线受管手柄修复了拖动时的预览生命周期，但没有解决只使用逐范围回调的宿主里的片段清理。
 
-## 新选区入口仍待复现（2026-11-12）
+## 多定位文字组的新选区入口（2026-11-12）
 
-报障人确认“已有高亮重选后拖动”已正常，但报告“新选中文字 → 拖动手柄 → 点击高亮”仍会出现多余高亮，PR 暂不合并。本轮新增检查脚本，没有修改生产逻辑，也没有把检查通过视为新入口已修复。
+报障人的截图提示多组独立定位文字。回归样本现已加入
+`test/fixtures/pdf/positioned-runs.pdf`：两条标题、九组各三字符的正文，
+每组都有独立的 BT/Tm/Tj/ET，共 11 次定位与绘制。短选区跨越四个定位组。
+
+在 f21d590 构建上，选中文字、两端反复扩大和缩小、松手、点击工具栏“高亮”，
+保存为四条范围（断言原始输出 `4 !== 1`）。草稿移动和释放期间没有保存中间态；
+四条范围其实仍共享 selectionGroup，不能把这个复现归因于逐帧创建或逻辑 ID 丢失。
+PDF.js 在各组之间产生空白源项，Text 排版省略这些项并补展示空格；
+canonical 转换把这些源空白误当成不连续选区，逐组发给 WebBase 的 upsert 回调。
+
+修复让转换同时检查真实页文本：只跨过确认为纯空白的正向源间隔，保留一个范围。
+逆序、未知间隔或包含未选中文字的间隔仍拆为同一逻辑高亮的多个 canonical 片段。
+上一轮 onRemoveRange 清理退出分组成员的逻辑保持。没有修改 WebBase 或 Spec。
 
 ```sh
-WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-draft-touch-confirm node scripts/check-webbase-pdf-draft.mjs
-REORDERED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-draft-reordered-touch-confirm node scripts/check-webbase-pdf-draft.mjs
+POSITIONED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-positioned-after node scripts/check-webbase-pdf-draft.mjs
+WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-positioned-normal-regression node scripts/check-webbase-pdf-draft.mjs
+REORDERED=1 WEBBASE_BROWSER_URL='http://127.0.0.1:6229/?demo=1' WEBBASE_TEST_OUTPUT=test-results/webbase-positioned-reordered-regression node scripts/check-webbase-pdf-draft.mjs
 ```
 
-在修复构建上，普通 PDF 和逆序字符 PDF 各 4 组均通过（Chromium 148.0.7778.96）。每组分别以起点或终点开始调整，两端各拖动 3 次，每次往返移动 25 次，包含扩大与缩小。逐帧、逐次释放检查草稿未持久化中间范围、只有一个预览和一对手柄；点击“高亮”后检查只保存最终一条、准确文本及页号/canonical 端点；取消并重选后检查没有新增条目和额外绘制节点。逆序 PDF 最终缩为一个字符，因此预期一条物理片段，而非错误地要求任意不连续源范围都只存一条。
+每份样本四组（Chromium 148.0.7778.96），每组两端各调整三次，每次往返 25 次。
+逐帧、逐次释放检查草稿未持久化中间范围，只有一个预览和一对手柄；
+确认后只保存最终一条，核对文本、页号和 canonical 端点；取消并重选不增加条目。
+多定位样本最终是 `mno pqr stu v`，page-1 的 [38,51)，Text 中四个合法绘制片段。
+还切换到 WebBase 实际使用的 Layout 叠加层，检查只列一条高亮，绘制数量对应四组
+文字与三个源空白的几何；逐组点击选中同一条，切回 Text 再选中后条目与节点不增殖。
+普通长 run 最终为 mnopqrstuv 的 [34,44)；逆序样本最终为 m 的 [35,36)。
 
-普通样本最终文本为 mnopqrstuv，page-1 的 canonical [34,44)；逆序样本最终为 m，canonical [35,36)。原生初始选择通过鼠标建立，触摸拖动使用 Chromium CDP，确认/取消/重选使用触摸 tap；不覆盖 OS 长按建立选区。源字符顺序、PDF 文件和浏览器实现仍是未覆盖的变量，需要原始复现 PDF、设备/浏览器以及准确点击目标来继续定位。当前证据没有证明“草稿逐帧累积”或 WebBase 提交逻辑有缺陷。
+初始选择用鼠标建立，触摸用 Chromium CDP 模拟，未覆盖系统长按建立选区；
+跨模式往返的附加点击用鼠标。等待新持久化写入后 300ms 静默并非队列严格清空的证明。
+尚未取得报障人的原始 PDF，修复的是可重复的多定位组/源空白误拆分路径，仍需人工复核。
 
 ## 构建身份与根因
 
