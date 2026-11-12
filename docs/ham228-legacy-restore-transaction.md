@@ -11,6 +11,8 @@
 | selectionRef.scrollToPosition（含 scale） | 在写坐标/缩放之前 beginPositionChange，并保持保存可用 |
 | 有效 wheel（纵向/横向/缩放）、单指移动、捏合 | 原生 capture 监听中 beginPositionChange；不依赖子组件事件冒泡 |
 | 翻页键、鼠标/笔按下（可能启动拖动滚动条/平移/选文自动滚动） | 同一原生 capture 监听取消；静止手指不取消 |
+| PDF.js 内部链接的 tap / Enter / click | 原生 click capture 取消，覆盖没有 pointerdown 或触摸移动的链接导航 |
+| 选文手柄编辑（可通过 portal 自动滚动正文） | onEditingChange 开始时取消并允许保存，不依赖根 DOM 的原生事件路径 |
 | engineSource、document、渲染模式、retry | 更换 session，阻断旧 token；实际 PDF proxy 替换/清空也取消旧事务 |
 | 卸载 | 使该 session 的在途 token 失效；忽略已退场 PDF 的 onDocumentReady 回调 |
 | 宿主修改缩放、crop、隐藏页/页范围、安全区输入 | 相同 session 中布局输入确实变化才取消；等值回显不取消，新文档使用新配置正常开始恢复 |

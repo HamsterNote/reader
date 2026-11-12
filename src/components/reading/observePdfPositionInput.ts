@@ -29,6 +29,10 @@ export function observePdfPositionInput(root: HTMLElement, moved: () => void) {
   const keydown = (event: KeyboardEvent) => {
     if (paper(event) && readingKeys.has(event.key)) moved()
   }
+  const click = (event: MouseEvent) => {
+    // A tap/Enter on a PDF.js internal link navigates without a drag or wheel.
+    if (paper(event) && (event.target as Element).closest('a')) moved()
+  }
   const pointers = new Map<number, { x: number; y: number }>()
   const pointerdown = (event: PointerEvent) => {
     // Mouse/pen may start scrollbar dragging, panning or selection auto-scroll.
@@ -78,6 +82,7 @@ export function observePdfPositionInput(root: HTMLElement, moved: () => void) {
   const listeners = {
     wheel,
     keydown,
+    click,
     pointerdown,
     pointermove,
     pointerup: clearPointer,

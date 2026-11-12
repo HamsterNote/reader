@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { EngineDocumentViewer } from '../src/components/EngineDocumentViewer'
+import type { EngineSelectionControls } from '../src/components/EngineSelectionControls'
 import type { PageBrowser } from '../src/components/IntermediateDocumentViewer/PageBrowser'
 import type { ReaderReadingPositionHandle } from '../src/components/IntermediateDocumentViewer'
 import type { ReaderSelectionRef } from '../src/types/selection'
@@ -20,7 +21,16 @@ import type {
 const state = vi.hoisted(() => ({
   pdf: null as PdfDocumentViewerProps | null,
   browser: null as ComponentProps<typeof PageBrowser> | null,
+  controls: null as ComponentProps<typeof EngineSelectionControls> | null,
   api: null as PdfDocumentViewerRef | null
+}))
+vi.mock('../src/components/EngineSelectionControls', () => ({
+  EngineSelectionControls: (
+    props: ComponentProps<typeof EngineSelectionControls>
+  ) => {
+    state.controls = props
+    return null
+  }
 }))
 vi.mock('../src/pdf/PdfDocumentViewer', () => ({
   PdfDocumentViewer: forwardRef<PdfDocumentViewerRef, PdfDocumentViewerProps>(
@@ -157,7 +167,7 @@ function touchPointer(paper: HTMLElement, distance: number) {
   )
 }
 
-it.each(['wheel', 'touch', 'pinch', 'pointer-touch'] as const)(
+it.each(['wheel', 'touch', 'pinch', 'pointer-touch', 'pdf-link'] as const)(
   'retains %s reading and saves when legacy metadata completes before controlled echo',
   async (input) => {
     const view = mountWaiting()
@@ -168,7 +178,14 @@ it.each(['wheel', 'touch', 'pinch', 'pointer-touch'] as const)(
     if (input === 'wheel') fireEvent.wheel(paper, { deltaY: 250 })
     else if (input === 'touch') readWithTouch(paper)
     else if (input === 'pointer-touch') touchPointer(paper, 60)
-    else {
+    else if (input === 'pdf-link') {
+      const link = document.createElement('a')
+      link.className = 'internalLink'
+      link.textContent = 'PDF internal destination'
+      paper.append(link)
+      // A tap's click can arrive without a mouse pointerdown or touch move.
+      fireEvent.click(link)
+    } else {
       const a = { identifier: 1, clientX: 30, clientY: 100 }
       const b = { identifier: 2, clientX: 100, clientY: 100 }
       fireEvent.touchStart(paper, { touches: [a, b] })
@@ -204,7 +221,8 @@ it.each([
   'controlled',
   'controlled-same-position',
   'keyboard',
-  'pointer'
+  'pointer',
+  'selection-auto-scroll'
 ] as const)(
   'cancels legacy metadata for the %s position writer',
   async (entry) => {
@@ -258,6 +276,10 @@ it.each([
           break
         case 'pointer':
           fireEvent.pointerDown(paper, { pointerType: 'mouse' })
+          position = fresh
+          break
+        case 'selection-auto-scroll':
+          state.controls!.onEditingChange(true)
           position = fresh
           break
       }

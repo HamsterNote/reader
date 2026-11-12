@@ -2043,6 +2043,12 @@ export function EngineDocumentViewer(props: Props) {
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
           onEditingChange={(value) => {
             if (rangeActionToken !== rangeActionGeneration.current) return
+            // Handles can live in a portal and auto-scroll the PDF, outside
+            // the root's native input capture boundary.
+            if (value && latest.current.engineSource?.format === 'pdf') {
+              beginPositionChange()
+              progressEnabled.current = true
+            }
             editing.current = value
             if (value && epub.current && nativeRange)
               epub.current.setSelectionRange(nativeRange)
