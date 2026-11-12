@@ -14,13 +14,24 @@ export function hasHiddenAncestor(element: HTMLElement): boolean {
   return false
 }
 
-export function isPageViewActivatable(
-  pageView: { readonly div: HTMLElement } | null | undefined
-): pageView is { readonly div: HTMLElement } {
+export function isPageViewActivatable<T extends { readonly div: HTMLElement }>(
+  pageView: T | null | undefined
+): pageView is T {
   if (!pageView) return false
   const div = pageView.div
   if (!div.isConnected) return false
   return !hasHiddenAncestor(div)
+}
+
+/** Public navigation precondition: page is in the current visible set and its
+ * view is attached with no display:none ancestor. */
+export function canTargetPdfPage(
+  viewer: ActivatableViewer | null | undefined,
+  visiblePages: readonly number[],
+  pageNumber: number
+): boolean {
+  if (!viewer || !visiblePages.includes(pageNumber)) return false
+  return isPageViewActivatable(viewer.getPageView(pageNumber - 1))
 }
 
 type ActivatableViewer = {

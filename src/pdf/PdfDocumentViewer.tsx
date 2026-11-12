@@ -39,7 +39,11 @@ import { groupHiddenPages, normalizeHiddenPageNumbers } from './hiddenPages'
 import { PdfHiddenPageGroupControls } from './PdfHiddenPageGroupControls'
 import { PdfHiddenPageRestoreModal } from './PdfHiddenPageRestoreModal'
 import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached'
-import { activatePageIfReady, isPageViewActivatable } from './pageActivation'
+import {
+  activatePageIfReady,
+  canTargetPdfPage,
+  isPageViewActivatable
+} from './pageActivation'
 
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
 import type {
@@ -378,11 +382,14 @@ export const PdfDocumentViewer = forwardRef<
   const hiddenGroups = groupHiddenPages(hiddenPages, allowedPages)
   const visiblePagesRef = useRef(readablePages)
   visiblePagesRef.current = readablePages
-  const pendingPageRef = useRef<number | null>(null)
+  const pendingPageRef = useRef<{
+    pageNumber: number
+    run?: () => void
+  } | null>(null)
   const activatePage = (pageNumber: number): boolean => {
     const viewer = viewerRef.current
     if (!viewer || !activatePageIfReady(viewer, pageNumber)) {
-      pendingPageRef.current = pageNumber
+      pendingPageRef.current = { pageNumber }
       return false
     }
     pendingPageRef.current = null
@@ -390,7 +397,16 @@ export const PdfDocumentViewer = forwardRef<
   }
   const retryPendingPage = () => {
     const pending = pendingPageRef.current
-    if (pending !== null) activatePage(pending)
+    if (!pending) return
+    const viewer = viewerRef.current
+    if (
+      !viewer ||
+      !isPageViewActivatable(viewer.getPageView(pending.pageNumber - 1))
+    )
+      return
+    pendingPageRef.current = null
+    if (pending.run) pending.run()
+    else activatePage(pending.pageNumber)
   }
   const navigationOptionsRef = useRef({ pageRange, hiddenPages })
   navigationOptionsRef.current = { pageRange, hiddenPages }
@@ -524,7 +540,7 @@ export const PdfDocumentViewer = forwardRef<
       const viewer = viewerRef.current
       if (!viewer) return
       if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1))) {
-        pendingPageRef.current = pageNumber
+        pendingPageRef.current = { pageNumber }
         return
       }
       viewer.scrollPageIntoView({ pageNumber })
@@ -591,6 +607,13 @@ export const PdfDocumentViewer = forwardRef<
     const viewer = viewerRef.current
     const pageView = viewer?.getPageView(pageNumber - 1)
     if (container && viewport && viewer && pageView) {
+      if (!isPageViewActivatable(pageView)) {
+        pendingPageRef.current = {
+          pageNumber,
+          run: () => alignTop(top, pageNumber, targetLeft)
+        }
+        return
+      }
       const box = pageView.div.getBoundingClientRect()
       const offset = top - box.top
       const left = container.scrollLeft
@@ -1648,7 +1671,10 @@ export const PdfDocumentViewer = forwardRef<
       return Promise.resolve()
     }
     const viewer = viewerRef.current
-    if (!viewer || !visiblePagesRef.current.includes(anchor.pageNumber))
+    if (
+      !viewer ||
+      !canTargetPdfPage(viewer, visiblePagesRef.current, anchor.pageNumber)
+    )
       return Promise.reject(new Error('目标页面不可用，原位置已保留'))
     pendingAnchor.current?.fail(
       new DOMException('PDF navigation superseded', 'AbortError')
@@ -1692,6 +1718,13 @@ export const PdfDocumentViewer = forwardRef<
         }
       }
     })
+    if (!isPageViewActivatable(viewer.getPageView(anchor.pageNumber - 1))) {
+      pendingAnchor.current?.fail(
+        new DOMException('PDF navigation superseded', 'AbortError')
+      )
+      pendingAnchor.current = null
+      return Promise.reject(new Error('目标页面不可用，原位置已保留'))
+    }
     viewer.scrollPageIntoView({ pageNumber: anchor.pageNumber })
     restoreAnchor()
     return promise
