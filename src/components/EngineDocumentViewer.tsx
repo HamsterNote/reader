@@ -950,6 +950,11 @@ export function EngineDocumentViewer(props: Props) {
   const onPdfReady = useCallback(async (count: number) => {
     const current = latest.current
     const activeSource = current.engineSource
+    pageCountRef.current = count
+    setPageCount(count)
+    // PDF pages are available independently of which navigation wins. Pending
+    // restores still block publication via progressEnabled/captureReadingPosition.
+    restored.current = true
     if (
       current.defaultVirtualPaperTransform &&
       !resolveReadingProgress(
@@ -963,11 +968,6 @@ export function EngineDocumentViewer(props: Props) {
     ) {
       if (!(await prepareLegacyRestore(current))) return
     }
-    pageCountRef.current = count
-    setPageCount(count)
-    // PDF pages are available independently of which navigation wins. Pending
-    // restores still block publication via progressEnabled/captureReadingPosition.
-    restored.current = true
     const restoration = restorePositionRef.current()
     const generation = pdfNavigationGeneration.current
     try {

@@ -487,3 +487,40 @@ it.each([false, true])(
     expect(onProgress).not.toHaveBeenCalled()
   }
 )
+
+it('keeps an explicit page seek publishable when it supersedes pending legacy metadata', async () => {
+  const metadata = deferred()
+  const onProgress = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  render(
+    <EngineDocumentViewer
+      engineSource={source}
+      readingPositionRef={ref}
+      defaultVirtualPaperTransform={{ x: 0, y: -3000, scale: 1 }}
+      onLayoutReadingProgressChange={onProgress}
+    />
+  )
+  const getPage = async () => {
+    await metadata.promise
+    return { getViewport: () => ({ width: 600, height: 2000 }) }
+  }
+  act(() => state.pdf!.onDocumentReady!({ numPages: 3, getPage } as never))
+  let ready!: Promise<unknown>
+  act(() => {
+    ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+  })
+  act(() => {
+    state.browser!.onNavigateToPage(2)
+    textReady = true
+  })
+  await act(async () => {
+    metadata.resolve()
+    await ready
+  })
+  expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).toHaveBeenLastCalledWith({
+    pageNumber: 2,
+    verticalPercentage: 20
+  })
+})
