@@ -740,14 +740,21 @@ export function EngineDocumentViewer(props: Props) {
   const emittedLayoutBookmarks = useRef(new WeakSet<ReaderBookmark>())
   const publishPosition = useCallback(
     (pageNumber: number, captured?: ReadingPosition) => {
-      setPage(pageNumber)
-      if (!restored.current || !progressEnabled.current) return
       const result =
         captured ??
         epub.current?.captureReadingPosition() ??
         pdf.current?.captureReadingPosition()
       const position = result?.status === 'ready' ? result.position : undefined
-      if (!position) return
+      // PDF.js reports the most visible page, while the first visible text
+      // can already belong to the next page across bottom whitespace. Use
+      // the safe reading line for every PDF update, just as persistence does.
+      // During pending layout, retain the last readable page.
+      const indicatorPage =
+        latest.current.engineSource?.format === 'pdf'
+          ? position?.pageNumber
+          : pageNumber
+      if (indicatorPage !== undefined) setPage(indicatorPage)
+      if (!restored.current || !progressEnabled.current || !position) return
       const textAnchor = isTextBookmark(position) ? position : undefined
       latest.current.onTextAnchorChange?.(
         latest.current.engineSource?.format === 'pdf'
