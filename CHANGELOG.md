@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-11-13
+
+### Fixed
+
+- Project historical native EPUB reading offsets after verifying their source text (the real sidecar's 15279 maps to 16459); keep existing 3.0.0 offsets unchanged.
+- Verify native highlight provenance and project both endpoints, including repeated phrases. Reject unverifiable locations without mutating the record. Explicit endpoint edits emit `epubRangeCoordinates: 'reader-compat-v1'` so saved ranges reopen without a second projection.
+- Shrink EPUB decoration margins when the host leaves a very short content viewport, keeping the target paragraph visible after reflow.
+- Navigate once before activating a sidebar highlight in another EPUB chapter, preventing competing iframe loads from blocking position capture and save.
+
 ## [Unreleased]
 
 ### Breaking Changes

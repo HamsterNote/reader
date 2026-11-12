@@ -25,6 +25,8 @@ import { buildLegacyEpubModel, type LegacyEpubModel } from './legacyEpubModel'
 import type { SerializedSelection } from './epubCompatIndex'
 import { restrictPublicationResources } from './publicationSecurity'
 import type { ReaderTextAnchor, ReaderBookmark } from '../types/readerData'
+import { resolveEpubTextAnchor } from './epubTextAnchor'
+import type { LegacyRangeLike } from './epubCompatIndex'
 
 export type EpubEngineTocEntry = {
   readonly label: string
@@ -56,7 +58,7 @@ export type EpubEngineError = {
 }
 
 /** 持久化高亮的最小形状（ReaderSelectionRange 的端点+样式子集）。 */
-export type EpubEngineRange = {
+export type EpubEngineRange = LegacyRangeLike & {
   readonly id: string
   readonly text: string
   readonly start: { readonly selectionId: string; readonly offset: number }
@@ -241,8 +243,25 @@ export const createEpubEngine = (
     }
   }
 
+  // The host may leave less space than Foliate's default two 48px margins.
+  // Shrink decoration before column layout; never let it consume the text area.
+  const fitPageMargins = () => {
+    const renderer = view?.renderer
+    if (!renderer || view?.isFixedLayout) return
+    const extent = Math.min(
+      options.container.clientWidth,
+      options.container.clientHeight
+    )
+    if (extent <= 0) return
+    renderer.setAttribute(
+      'margin',
+      `${Math.min(48, Math.max(0, (extent - 96) / 2))}px`
+    )
+  }
+
   // Freeze the public character anchor while Foliate lays out its stable DOM Range.
   const onReflow = () => {
+    fitPageMargins()
     if (
       destroyed ||
       turning ||
@@ -738,6 +757,7 @@ export const createEpubEngine = (
     renderer.addEventListener('before-reflow', onReflow)
     applyStyles()
     options.container.append(view)
+    fitPageMargins()
     return true
   }
 
@@ -978,9 +998,8 @@ export const createEpubEngine = (
   const restoreLiveAnchor = async (anchor: ReaderTextAnchor) => {
     if (!compat || !view?.renderer || destroyed) return
     const text = compat.pageText(anchor.pageNumber) ?? ''
-    const offset = anchor.offset
-    if (!Number.isInteger(offset) || offset < 0 || offset >= text.length)
-      throw new Error('无法精确恢复阅读位置：源字符已失效')
+    const resolved = resolveEpubTextAnchor(anchor, text)
+    const offset = resolved.offset
     const endpoint = { selectionId: `page-${anchor.pageNumber}`, offset }
     const located = compat.locateRange({
       start: endpoint,
@@ -992,8 +1011,8 @@ export const createEpubEngine = (
       // A restored anchor may sit in the middle of a newly sized page. Keep
       // that exact character for subsequent reflows, rather than its earlier page start.
       if (!destroyed && displayedPage === anchor.pageNumber)
-        currentAnchor = { ...anchor, offset }
-      stablePosition = { status: 'ready', position: { ...anchor, offset } }
+        currentAnchor = resolved
+      stablePosition = { status: 'ready', position: resolved }
     } else throw new Error('无法精确恢复阅读位置：源字符不可定位')
   }
 

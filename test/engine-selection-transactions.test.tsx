@@ -88,6 +88,7 @@ beforeEach(() => {
     setSelectionRange: vi.fn(),
     getSelectionRange: vi.fn(() => native),
     selectRange: vi.fn(async () => native.cloneRange()),
+    goToRange: vi.fn(async () => true),
     updateRangeEndpoint: vi.fn(() => serialized),
     serializeRange: vi.fn(() => serialized),
     captureTextAnchor: vi.fn(),
@@ -109,6 +110,41 @@ const compatibilityIndex = {
   title: 'Shared index',
   pages: [{ id: 'page-1', number: 1, width: 600, height: 800, content: [] }]
 }
+
+it.each([false, true])(
+  'waits for sidebar highlight navigation before selection (dispose=%s)',
+  async (dispose) => {
+    let finish!: (located: boolean) => void
+    const pending = new Promise<boolean>((resolve) => {
+      finish = resolve
+    })
+    vi.mocked(engine.goToRange).mockReturnValue(pending)
+    const view = render(
+      <EngineDocumentViewer
+        engineSource={source}
+        defaultRanges={[original]}
+        selectedTool='text-selection'
+        showPageBrowser
+      />
+    )
+    await waitFor(() => expect(mocks.factory).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole('tab', { name: '高亮' }))
+    fireEvent.click(screen.getByRole('button', { name: '跳转到高亮：Alpha' }))
+    expect(engine.goToRange).toHaveBeenCalledOnce()
+    expect(engine.selectRange).not.toHaveBeenCalled()
+    if (dispose) view.unmount()
+    await act(async () => {
+      finish(true)
+      await pending
+    })
+    expect(engine.goToRange).toHaveBeenCalledOnce()
+    if (dispose) expect(engine.selectRange).not.toHaveBeenCalled()
+    else {
+      expect(engine.selectRange).toHaveBeenCalledWith('H1')
+      expect(engine.setActiveRange).toHaveBeenLastCalledWith('H1')
+    }
+  }
+)
 
 function ControlledDeletionHost({
   response,

@@ -1434,6 +1434,29 @@ export function EngineDocumentViewer(props: Props) {
     else pdf.current?.scrollToRange(id)
   }
 
+  const navigateHighlight = (id: string) => {
+    const engine = epub.current
+    if (!engine) {
+      activate(id)
+      navigateRange(id)
+      return
+    }
+    beginPositionChange()
+    progressEnabled.current = true
+    activate(null)
+    const token = activationGeneration.current
+    // selectRange also navigates to an unloaded chapter. Doing it alongside
+    // goToRange starts two iframe loads and can strand the stable-position wait.
+    engine
+      .goToRange(id)
+      .then((located) => {
+        if (epub.current !== engine || token !== activationGeneration.current)
+          return
+        if (located) activate(id)
+      })
+      .catch(() => undefined)
+  }
+
   useImperativeHandle(
     props.readingPositionRef,
     () => ({
@@ -1992,8 +2015,7 @@ export function EngineDocumentViewer(props: Props) {
           rects={rects}
           selectedRangeId={selected}
           selectedRectId={selectedRect}
-          onSelectRange={activate}
-          onNavigateToRange={navigateRange}
+          onNavigateToRange={navigateHighlight}
           onDeleteRange={removeRange}
           onDeleteRect={props.onRemoveRect}
           onSelectRect={props.onSelectRect}

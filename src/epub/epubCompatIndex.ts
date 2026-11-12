@@ -13,6 +13,12 @@ import {
   type SectionTextIndex
 } from './sectionTextIndex'
 import { legacyPageTextFromChapter } from './legacyText'
+import {
+  EPUB_COMPAT_COORDINATES,
+  nativeTextSource,
+  projectNativeRange,
+  type NativeRangePage
+} from './nativeTextRanges'
 
 export type LegacyEndpoint = {
   readonly selectionId: string
@@ -23,6 +29,9 @@ export type LegacyRangeLike = {
   readonly text: string
   readonly start: LegacyEndpoint
   readonly end: LegacyEndpoint
+  readonly nativeTextSegments?: unknown
+  readonly color?: unknown
+  readonly epubRangeCoordinates?: unknown
 }
 
 export type LocatedRangePart = {
@@ -35,6 +44,7 @@ export type UnlocatableReason =
   | 'text-mismatch'
   | 'degraded-section'
   | 'empty-page'
+  | 'unverified-native-source'
 
 export type RangeLocation =
   | { readonly status: 'located'; readonly parts: readonly LocatedRangePart[] }
@@ -44,6 +54,7 @@ export type SerializedSelection = {
   readonly start: LegacyEndpoint
   readonly end: LegacyEndpoint
   readonly text: string
+  readonly epubRangeCoordinates?: typeof EPUB_COMPAT_COORDINATES
 }
 
 const PAGE_ID_PATTERN = /^page-[1-9]\d*$/
@@ -57,14 +68,17 @@ export class EpubCompatIndex {
   readonly #model: LegacyEpubModel
   readonly #sectionIndexes: (SectionTextIndex | null)[]
   readonly #staticIndexes: (SectionTextIndex | null)[]
+  readonly #nativePages: ReadonlyMap<string, NativeRangePage>
 
   private constructor(
     model: LegacyEpubModel,
-    sectionIndexes: (SectionTextIndex | null)[]
+    sectionIndexes: (SectionTextIndex | null)[],
+    nativePages: ReadonlyMap<string, NativeRangePage>
   ) {
     this.#model = model
     this.#sectionIndexes = sectionIndexes
     this.#staticIndexes = [...sectionIndexes]
+    this.#nativePages = nativePages
   }
 
   /**
@@ -79,11 +93,26 @@ export class EpubCompatIndex {
       new DOMParser().parseFromString(xml, 'application/xhtml+xml')
   ): Promise<EpubCompatIndex> {
     const sectionIndexes: (SectionTextIndex | null)[] = []
+    const nativePages = new Map<string, NativeRangePage>()
+    let nativeSection = model.coverPrepended ? null : 0
     for (const chapter of pkg.chapters) {
       const xml = await pkg.readText(chapter.href)
       if (xml === null) {
         sectionIndexes.push(null)
+        nativeSection = null
         continue
+      }
+      const source = nativeTextSource(xml, legacyPageTextFromChapter(xml))
+      const page = model.pages.find(
+        (page) => page.chapterIndex === sectionIndexes.length
+      )
+      if (!source) nativeSection = null
+      else if (source.text && page && nativeSection !== null) {
+        nativePages.set(page.pageId, {
+          source,
+          sectionIndex: nativeSection++,
+          text: page.text
+        })
       }
       sectionIndexes.push(
         buildSectionTextIndex(
@@ -92,7 +121,7 @@ export class EpubCompatIndex {
         )
       )
     }
-    return new EpubCompatIndex(model, sectionIndexes)
+    return new EpubCompatIndex(model, sectionIndexes, nativePages)
   }
 
   /** 运行时用 foliate 渲染出的活文档替换静态解析的索引。 */
@@ -115,10 +144,12 @@ export class EpubCompatIndex {
     chapterIndex: number,
     end: boolean
   ): SerializedSelection | null {
+    const resolved = this.#resolveCoordinates(original)
+    if (!resolved || this.#verifyTextContract(resolved)) return null
     const local = this.serializeRange(chapterIndex, localRange)
     if (!local) return null
-    const start = end ? original.start : local.start
-    const finish = end ? local.end : original.end
+    const start = end ? resolved.start : { ...resolved.start, ...local.start }
+    const finish = end ? { ...resolved.end, ...local.end } : resolved.end
     const startPage = parsePageNumber(start.selectionId)
     const endPage = parsePageNumber(finish.selectionId)
     if (startPage === null || endPage === null || startPage > endPage)
@@ -130,7 +161,14 @@ export class EpubCompatIndex {
       startPage === endPage
         ? startText.slice(start.offset, finish.offset)
         : startText.slice(start.offset) + endText.slice(0, finish.offset)
-    const next = { start, end: finish, text }
+    const next = {
+      start,
+      end: finish,
+      text,
+      ...(resolved.epubRangeCoordinates === EPUB_COMPAT_COORDINATES
+        ? { epubRangeCoordinates: EPUB_COMPAT_COORDINATES }
+        : {})
+    }
     return text && !this.#verifyTextContract(next) ? next : null
   }
 
@@ -155,6 +193,14 @@ export class EpubCompatIndex {
   }
 
   /** 文本契约校验：返回 null 表示契约成立，否则为失败原因。 */
+  #resolveCoordinates(range: LegacyRangeLike): LegacyRangeLike | null {
+    if (range.epubRangeCoordinates === EPUB_COMPAT_COORDINATES) return range
+    if (range.epubRangeCoordinates !== undefined) return null
+    if (range.nativeTextSegments !== undefined || range.color !== undefined)
+      return projectNativeRange(range, (id) => this.#nativePages.get(id))
+    return range
+  }
+
   #verifyTextContract(range: LegacyRangeLike): UnlocatableReason | null {
     const startPage = parsePageNumber(range.start.selectionId)
     const endPage = parsePageNumber(range.end.selectionId)
@@ -195,6 +241,10 @@ export class EpubCompatIndex {
    * （同页一段、跨页两段）；否则 unlocatable，调用方原样保留数据。
    */
   locateRange(range: LegacyRangeLike): RangeLocation {
+    const resolved = this.#resolveCoordinates(range)
+    if (!resolved)
+      return { status: 'unlocatable', reason: 'unverified-native-source' }
+    range = resolved
     const failure = this.#verifyTextContract(range)
     if (failure) return { status: 'unlocatable', reason: failure }
 

@@ -38,6 +38,9 @@ export type ReaderLinkedSelectionRange = Omit<
   /** Disjoint PDF source ranges created by one selection, in reading order.
    * Persist with the range; absence means an independent annotation. */
   selectionGroup?: { readonly id: string; readonly index: number }
+  /** EPUB endpoint edits use reader offsets even when native extension fields
+   * are retained. Absence keeps legacy source detection; do not infer from text. */
+  epubRangeCoordinates?: 'reader-compat-v1'
   /** Layout 模式可持久化的页面坐标；Text 与 EPUB 可保持为空并按字符锚点实时计算。 */
   rectsBySelectionId: Record<string, ReaderSelectionRect[]>
 }
