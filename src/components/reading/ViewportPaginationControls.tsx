@@ -1,8 +1,26 @@
 import { Button, Popover } from '@hamster-note/components'
-import type { Ref } from 'react'
+import {
+  useEffect,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type Ref
+} from 'react'
 import type { ViewportNavigationState } from './navigation'
 import type { PaginationDiagnostics } from '../../types/paginationDiagnostics'
 
+type Direction = 'next' | 'previous'
+
+/**
+ * One pointer gesture produces at most one page turn.
+ *
+ * Activation happens on release inside the control. If a repagination or an
+ * in-flight turn disables the control between down and up, the completed press
+ * is replayed once when the control is stable; the native click is suppressed
+ * so the same gesture cannot fire twice. Cancel, leaving the control, or
+ * releasing outside drop the intent. A completed press on a control that is
+ * already busy queues one follow-up turn for a rapid second click.
+ */
 export function ViewportPaginationControls({
   navigation,
   ready,
@@ -23,6 +41,120 @@ export function ViewportPaginationControls({
   onPrevious: () => void
   onNext: () => void
 }) {
+  const gesture = useRef<{
+    direction: Direction
+    pointerId: number | undefined
+    element: HTMLButtonElement
+  } | null>(null)
+  const pending = useRef<Direction | null>(null)
+  const suppressClick = useRef<Direction | null>(null)
+  const nextRef = useRef(onNext)
+  nextRef.current = onNext
+  const previousRef = useRef(onPrevious)
+  previousRef.current = onPrevious
+  const disabled: Record<Direction, boolean> = {
+    next: !ready || navigation.busy || !navigation.canNext,
+    previous: !ready || navigation.busy || !navigation.canPrevious
+  }
+  const fire = (direction: Direction) => {
+    if (direction === 'next') nextRef.current()
+    else previousRef.current()
+  }
+  const latest = useRef({ disabled, fire })
+  latest.current = { disabled, fire }
+  // A new document must not replay an intent from the previous one.
+  const generation = useRef(diagnostics?.generation)
+  if (generation.current !== diagnostics?.generation) {
+    generation.current = diagnostics?.generation
+    gesture.current = null
+    pending.current = null
+    suppressClick.current = null
+  }
+  useEffect(() => {
+    const release = (event: PointerEvent) => {
+      const active = gesture.current
+      if (!active) return
+      if (
+        active.pointerId !== undefined &&
+        event.pointerId !== undefined &&
+        active.pointerId !== event.pointerId
+      )
+        return
+      gesture.current = null
+      if (!isInside(active.element, event)) {
+        // Pointer capture still delivers the click to this button; mark the
+        // gesture as cancelled and suppress only that pointer-derived click.
+        pending.current = null
+        suppressClick.current = active.direction
+        return
+      }
+      const state = latest.current
+      if (state.disabled[active.direction]) {
+        // Hold through the reflow and replay once stable.
+        pending.current = active.direction
+        return
+      }
+      suppressClick.current = active.direction
+      state.fire(active.direction)
+    }
+    const cancel = (event: PointerEvent) => {
+      const active = gesture.current
+      if (!active) return
+      if (
+        active.pointerId !== undefined &&
+        event.pointerId !== undefined &&
+        active.pointerId !== event.pointerId
+      )
+        return
+      gesture.current = null
+      pending.current = null
+    }
+    window.addEventListener('pointerup', release, true)
+    window.addEventListener('pointercancel', cancel, true)
+    return () => {
+      window.removeEventListener('pointerup', release, true)
+      window.removeEventListener('pointercancel', cancel, true)
+    }
+  }, [])
+  useEffect(() => {
+    const direction = pending.current
+    if (!direction || disabled[direction]) return
+    pending.current = null
+    suppressClick.current = direction
+    fire(direction)
+    // disabled[].* derives from ready/navigation; fire reads refs.
+  }, [disabled.next, disabled.previous])
+  const onPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    direction: Direction
+  ) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    suppressClick.current = null
+    gesture.current = {
+      direction,
+      pointerId: event.pointerId,
+      element: event.currentTarget
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const dropGesture = () => {
+    gesture.current = null
+    pending.current = null
+  }
+  const onClick = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    direction: Direction
+  ) => {
+    // Only a pointer-derived click (detail > 0) belongs to the gesture being
+    // suppressed. Keyboard Enter/Space and programmatic click() use detail 0
+    // and must always activate.
+    if (suppressClick.current === direction && event.detail > 0) {
+      suppressClick.current = null
+      return
+    }
+    pending.current = null
+    fire(direction)
+  }
   return (
     <div
       ref={controlsRef}
@@ -51,8 +183,10 @@ export function ViewportPaginationControls({
           size='small'
           variant='ghost'
           aria-label='上一页'
-          disabled={!ready || navigation.busy || !navigation.canPrevious}
-          onClick={onPrevious}
+          disabled={disabled.previous}
+          onPointerDown={(event) => onPointerDown(event, 'previous')}
+          onPointerCancel={dropGesture}
+          onClick={(event) => onClick(event, 'previous')}
         >
           ←
         </Button>
@@ -61,12 +195,26 @@ export function ViewportPaginationControls({
           size='small'
           variant='ghost'
           aria-label='下一页'
-          disabled={!ready || navigation.busy || !navigation.canNext}
-          onClick={onNext}
+          disabled={disabled.next}
+          onPointerDown={(event) => onPointerDown(event, 'next')}
+          onPointerCancel={dropGesture}
+          onClick={(event) => onClick(event, 'next')}
         >
           →
         </Button>
       </Popover>
     </div>
+  )
+}
+
+/** jsdom reports a zero-size rect; treat that as inside for unit fixtures. */
+function isInside(element: HTMLElement, event: PointerEvent): boolean {
+  const rect = element.getBoundingClientRect()
+  if (rect.width === 0 && rect.height === 0) return true
+  return (
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom
   )
 }
