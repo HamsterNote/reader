@@ -440,6 +440,22 @@ selectionRef.current?.clear()
 selectionRef.current?.scrollToRange('highlight-1')
 ```
 
+### PDF text pagination diagnostics
+
+PDF 文字模式分页根节点（`.hamster-reader__viewport-pagination`）暴露只读 `data-pdf-text-*` 属性，供宿主在失败注入或 Playwright 失败现场抓取；它们不参与 ready 判定，只反映当前快照：
+
+| 属性 | 含义 |
+| --- | --- |
+| `data-pdf-text-generation` | 当前文档 generation |
+| `data-pdf-text-revision` | 分页状态 revision |
+| `data-pdf-text-ready` | 分页是否 ready（与控件禁用同一来源） |
+| `data-pdf-text-busy` | 翻页事务是否进行中 |
+| `data-pdf-text-gate` | 是否已接管一次翻页、等待稳定 |
+| `data-pdf-text-target-page` | 目标源页 |
+| `data-pdf-text-error` | 当前页加载/恢复错误（存在时） |
+
+宿主无需新增回调；失败时读取这些属性即可判断是否处于「按钮已可点但 ready 通知尚未到达」的同帧。
+
 ## Comments
 
 `Reader` exposes a purely controlled comments API. There is no `defaultComments` prop and no uncontrolled mode: the host owns the comment list and `Reader` never mutates it. The library ships no comment UI; the host owns presentation (panel, editor, badges). The existing `onCommentHighlight` prop is unchanged and remains the popover 评论 entry point for creating a comment from a highlight.

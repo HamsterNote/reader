@@ -1,6 +1,7 @@
 import type { Ref } from 'react'
 import { ViewportPaginationControls } from '../components/reading/ViewportPaginationControls'
 import type { ViewportNavigationState } from '../components/reading/navigation'
+import type { PaginationDiagnostics } from '../types/paginationDiagnostics'
 
 export function PdfTextReadingControls({
   enabled,
@@ -11,6 +12,7 @@ export function PdfTextReadingControls({
   empty,
   failed,
   unlocatable,
+  diagnostics,
   onRetry,
   onPrevious,
   onNext
@@ -23,6 +25,7 @@ export function PdfTextReadingControls({
   empty: boolean
   failed: boolean
   unlocatable: boolean
+  diagnostics?: PaginationDiagnostics
   onRetry: () => void
   onPrevious: () => void
   onNext: () => void
@@ -35,6 +38,7 @@ export function PdfTextReadingControls({
         navigation={navigation}
         ready={ready}
         theme={theme}
+        diagnostics={diagnostics}
         onPrevious={onPrevious}
         onNext={onNext}
       />

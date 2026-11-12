@@ -139,8 +139,27 @@ describe('PDF Text actual fragments and navigation', () => {
       currentPageNumber: 2,
       verticalPercentage: 60
     })
+    expect(result.current.diagnostics).toMatchObject({
+      generation: 0,
+      ready: true,
+      busy: false,
+      gate: false,
+      targetPageNumber: 2
+    })
     act(() => result.current.turn(true))
+    expect(result.current.diagnostics).toMatchObject({
+      ready: false,
+      busy: true,
+      gate: true,
+      targetPageNumber: 3
+    })
     await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.diagnostics).toMatchObject({
+      ready: true,
+      busy: false,
+      gate: false,
+      targetPageNumber: 3
+    })
     expect(result.current.capturePosition()).toEqual({
       pageNumber: 3,
       verticalPercentage: 0
