@@ -410,3 +410,117 @@ it('captures a wheel interaction even when a PDF child stops propagation', async
   act(() => ref.current!.captureAndPublish!())
   expect(onProgress).toHaveBeenLastCalledWith(position)
 })
+
+it.each([false, true])(
+  'restores legacy anchor with newer ratio priority=%s without publishing',
+  async (newer) => {
+    const onProgress = vi.fn()
+    const ratio = { pageNumber: 2, verticalPercentage: 65 }
+    const legacy = Object.freeze({ x: 0, y: -200, scale: 1, anchor: saved })
+    render(
+      <EngineDocumentViewer
+        engineSource={source}
+        defaultVirtualPaperTransform={legacy}
+        layoutReadingProgress={newer ? ratio : undefined}
+        onLayoutReadingProgressChange={onProgress}
+      />
+    )
+    let ready!: Promise<unknown>
+    act(() => {
+      ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+    })
+    expect(state.api!.scrollToAnchor).toHaveBeenCalledWith(
+      newer ? ratio : saved,
+      { preserveOnFailure: false }
+    )
+    await act(async () => {
+      pending[0]!.resolve()
+      await ready
+    })
+    expect(onProgress).not.toHaveBeenCalled()
+    expect(legacy.anchor).toBe(saved)
+  }
+)
+
+it.each([false, true])(
+  'restores raw legacy coordinates with newer ratio priority=%s',
+  async (newer) => {
+    const onProgress = vi.fn()
+    const onReady = vi.fn()
+    const ratio = { pageNumber: 3, verticalPercentage: 20 }
+    render(
+      <EngineDocumentViewer
+        engineSource={source}
+        onEngineReady={onReady}
+        defaultVirtualPaperTransform={{
+          x: -50,
+          y: -(12 + 2000 + 12 + 1300),
+          scale: 1
+        }}
+        layoutReadingProgress={newer ? ratio : undefined}
+        onLayoutReadingProgressChange={onProgress}
+      />
+    )
+    act(() =>
+      state.pdf!.onDocumentReady!({
+        numPages: 3,
+        getPage: async () => ({
+          getViewport: () => ({ width: 600, height: 2000 })
+        })
+      } as never)
+    )
+    let ready!: Promise<unknown>
+    await act(async () => {
+      ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(state.api!.scrollToAnchor).toHaveBeenCalledWith(
+      newer ? ratio : { pageNumber: 2, verticalPercentage: 65 },
+      { preserveOnFailure: false }
+    )
+    await act(async () => {
+      pending[0]!.resolve()
+      await ready
+    })
+    expect(onReady).toHaveBeenCalledOnce()
+    expect(onProgress).not.toHaveBeenCalled()
+  }
+)
+
+it('keeps an explicit page seek publishable when it supersedes pending legacy metadata', async () => {
+  const metadata = deferred()
+  const onProgress = vi.fn()
+  const ref = createRef<ReaderReadingPositionHandle>()
+  render(
+    <EngineDocumentViewer
+      engineSource={source}
+      readingPositionRef={ref}
+      defaultVirtualPaperTransform={{ x: 0, y: -3000, scale: 1 }}
+      onLayoutReadingProgressChange={onProgress}
+    />
+  )
+  const getPage = async () => {
+    await metadata.promise
+    return { getViewport: () => ({ width: 600, height: 2000 }) }
+  }
+  act(() => state.pdf!.onDocumentReady!({ numPages: 3, getPage } as never))
+  let ready!: Promise<unknown>
+  act(() => {
+    ready = Promise.resolve(state.pdf!.onPagesLoaded!(3))
+  })
+  act(() => {
+    state.browser!.onNavigateToPage(2)
+    textReady = true
+  })
+  await act(async () => {
+    metadata.resolve()
+    await ready
+  })
+  expect(state.api!.scrollToAnchor).not.toHaveBeenCalled()
+  act(() => ref.current!.captureAndPublish!())
+  expect(onProgress).toHaveBeenLastCalledWith({
+    pageNumber: 2,
+    verticalPercentage: 20
+  })
+})

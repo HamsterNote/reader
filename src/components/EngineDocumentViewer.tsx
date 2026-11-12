@@ -1,3 +1,4 @@
+import { legacyVirtualPaperProgress } from '../pdf/legacyVirtualPaperProgress'
 import { getSelectionGroup } from './selection/selectionGroups'
 import {
   resolveReadingProgress,
@@ -77,6 +78,8 @@ import { EpubOutline } from './EpubOutline'
 import { getVisiblePageNumbers } from './IntermediateDocumentViewer/pageDisplay'
 import { EngineEpubLayoutLayer } from './EngineEpubLayoutLayer'
 import { RangeMagnifierProvider } from './IntermediateDocumentViewer/RangeMagnifier'
+import { usePositionTransaction } from './reading/usePositionTransaction'
+import { observePdfPositionInput } from './reading/observePdfPositionInput'
 
 type Props = IntermediateDocumentViewerProps & {
   readonly onEngineReady?: () => void
@@ -391,6 +394,41 @@ export function EngineDocumentViewer(props: Props) {
   const activating = useRef(false)
   const restored = useRef(false)
   const progressEnabled = useRef(false)
+  const positionOwner = useMemo(
+    () => ({}),
+    [source, props.document, retry, mode]
+  )
+  const currentPositionOwner = useRef(positionOwner)
+  currentPositionOwner.current = positionOwner
+  const {
+    begin: beginPositionChange,
+    capture: capturePositionToken,
+    isCurrent: isPositionCurrent,
+    isPristine: isPositionPristine
+  } = usePositionTransaction(positionOwner)
+  const viewportKey = JSON.stringify([
+    props.scale,
+    props.nativeLayoutZoom,
+    props.edgeCrop,
+    props.edgeCropEditing,
+    props.hiddenPages,
+    props.pageRange,
+    props.containMarginTop,
+    props.containMarginBottom,
+    props.containMarginX,
+    props.containMarginY
+  ])
+  const previousViewport = useRef({ owner: positionOwner, key: viewportKey })
+  useLayoutEffect(() => {
+    // A host-driven zoom/crop/viewport change also supersedes metadata computed
+    // for the previous reading line. Equal controlled echoes are not changes.
+    if (
+      previousViewport.current.owner === positionOwner &&
+      previousViewport.current.key !== viewportKey
+    )
+      beginPositionChange()
+    previousViewport.current = { owner: positionOwner, key: viewportKey }
+  }, [positionOwner, viewportKey, beginPositionChange])
   useEffect(() => {
     if (!rootElement) return
     // Native capture runs before PDF portal/drag listeners can stop the event.
@@ -406,12 +444,20 @@ export function EngineDocumentViewer(props: Props) {
       capture: true,
       passive: true
     })
+    const stopPositionInput =
+      source?.format === 'pdf'
+        ? observePdfPositionInput(rootElement, () => {
+            beginPositionChange()
+            progressEnabled.current = true
+          })
+        : () => {}
     return () => {
+      stopPositionInput()
       rootElement.removeEventListener('wheel', down, true)
       rootElement.removeEventListener('pointerdown', down, true)
       rootElement.removeEventListener('keydown', keydown, true)
     }
-  }, [rootElement])
+  }, [rootElement, source?.format, beginPositionChange])
   // The file owner also supplies uncontrolled content after a source reset.
   const sharedPresent = sharedHistoryPresent(sharedHistory)
   const ranges = props.ranges ?? sharedPresent?.ranges ?? internalRanges
@@ -722,6 +768,8 @@ export function EngineDocumentViewer(props: Props) {
     }
   }, [emitSelectionCallbacks])
 
+  const pdfDocumentRef = useRef<PDFDocumentProxy | null>(null)
+  const pdfDocumentOwner = useRef(positionOwner)
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const previews = usePdfPreviews(
     pdfDocument,
@@ -801,7 +849,7 @@ export function EngineDocumentViewer(props: Props) {
   }, [])
   const navigate = useCallback(
     (pageNumber: number) => {
-      ++pdfNavigationGeneration.current
+      beginPositionChange()
       progressEnabled.current = true
       cancelSelection()
       if (epub.current) epub.current.goToPage(pageNumber).catch(() => undefined)
@@ -809,7 +857,6 @@ export function EngineDocumentViewer(props: Props) {
     },
     [publishPosition]
   )
-  const pdfNavigationGeneration = useRef(0)
   useEffect(() => {
     if (source?.format === 'pdf') {
       restored.current = false
@@ -817,27 +864,24 @@ export function EngineDocumentViewer(props: Props) {
       emittedLayoutPositions.current.clear()
       emittedLayoutBookmarks.current = new WeakSet()
     }
-    return () => {
-      ++pdfNavigationGeneration.current
-    }
-  }, [source])
+  }, [positionOwner])
   const navigateBookmark = (bookmark: ReaderBookmark, publish = true) => {
     if (epub.current) {
       return epub.current.goToPosition(bookmark)
     }
-    const generation = ++pdfNavigationGeneration.current
+    const token = beginPositionChange()
     progressEnabled.current = false
     return pdf.current
       ?.scrollToAnchor(bookmark, { preserveOnFailure: publish })
       .then(() => {
-        if (generation !== pdfNavigationGeneration.current) return
+        if (!isPositionCurrent(token)) return
         if (publish) {
           progressEnabled.current = true
           publishPosition(bookmark.pageNumber)
         }
       })
       .catch((failure: Error) => {
-        if (generation !== pdfNavigationGeneration.current) return
+        if (!isPositionCurrent(token)) return
         setError(failure.message)
         throw failure
       })
@@ -863,17 +907,54 @@ export function EngineDocumentViewer(props: Props) {
     const actual = capturePdfPosition()
     if (!actual || getBookmarkKey(actual) !== getBookmarkKey(target))
       navigateBookmark(target)?.catch(() => undefined)
+    else beginPositionChange()
   }, [props.layoutReadingProgress, pdfDocument])
+  const legacyProgress = async (current: Props) => {
+    const doc = pdfDocumentRef.current
+    if (
+      current.engineRenderMode === 'text' ||
+      !doc ||
+      !current.defaultVirtualPaperTransform
+    )
+      return undefined
+    const numbers = getVisiblePageNumbers(
+      Array.from({ length: doc.numPages }, (_, i) => i + 1),
+      current.pageRange
+    )
+    // Hidden legacy pages retained their fixed-size shells, so include them
+    // when interpreting y; the existing restore fallback handles visibility.
+    const pages = await Promise.all(
+      numbers.map(async (pageNumber) => {
+        const page = await doc.getPage(pageNumber)
+        const size = page.getViewport({ scale: 1 })
+        return { pageNumber, width: size.width, height: size.height }
+      })
+    )
+    return legacyVirtualPaperProgress(
+      current.defaultVirtualPaperTransform,
+      pages,
+      current.containMarginTop ?? current.containMarginY ?? 0,
+      current.edgeCrop
+    )
+  }
+  const legacyRestore = useRef<{
+    token: ReturnType<typeof capturePositionToken>
+    position: ReaderBookmark | undefined
+  } | null>(null)
   const restorePosition = () => {
     const current = latest.current
-    const progress = resolveReadingProgress(
-      {
-        layoutReadingProgress: current.layoutReadingProgress,
-        virtualPaper: current.defaultVirtualPaperTransform,
-        textReadingProgress: current.textReadingProgress
-      },
-      current.engineRenderMode ?? 'layout'
-    )
+    const progress =
+      resolveReadingProgress(
+        {
+          layoutReadingProgress: current.layoutReadingProgress,
+          virtualPaper: current.defaultVirtualPaperTransform,
+          textReadingProgress: current.textReadingProgress
+        },
+        current.engineRenderMode ?? 'layout'
+      ) ??
+      (legacyRestore.current && isPositionCurrent(legacyRestore.current.token)
+        ? legacyRestore.current?.position
+        : undefined)
     if (!progress) return Promise.resolve()
     const allowed = enginePageNumbers(pageCountRef.current, current)
     const targetPage =
@@ -885,27 +966,62 @@ export function EngineDocumentViewer(props: Props) {
     const target = targetPage === progress.pageNumber ? progress : fallback
     if (target !== progress)
       setRestoreNotice('原阅读页当前不可见，已显示相邻页；原进度已保留')
-    return Promise.resolve(navigateBookmark(target, false)).catch((failure) => {
+    const restoration = navigateBookmark(target, false)
+    const token = capturePositionToken()
+    return Promise.resolve(restoration).catch((failure) => {
+      if (!isPositionCurrent(token)) return
       if (failure instanceof Error && failure.name === 'AbortError') return
       setRestoreNotice('无法精确恢复阅读位置，已显示原页；原进度已保留')
+      // Fallback is part of the same restoration, not a new position request.
       pdf.current?.scrollToPage(fallback.pageNumber)
     })
   }
   const restorePositionRef = useRef(restorePosition)
   restorePositionRef.current = restorePosition
+  const prepareLegacyRestore = async (current: Props) => {
+    if (!isPositionPristine()) return false
+    const token = capturePositionToken()
+    const document = pdfDocumentRef.current
+    const currentRestore = () =>
+      isPositionCurrent(token) && document === pdfDocumentRef.current
+    if (!currentRestore()) return false
+    try {
+      const position = await legacyProgress(current)
+      if (!currentRestore()) return false
+      legacyRestore.current = { token, position }
+    } catch {
+      if (!currentRestore()) return false
+      setRestoreNotice('无法恢复旧坐标，原进度已保留')
+    }
+    return true
+  }
   const onPdfReady = useCallback(async (count: number) => {
-    const activeSource = latest.current.engineSource
+    const current = latest.current
+    const activeSource = current.engineSource
     pageCountRef.current = count
     setPageCount(count)
     // PDF pages are available independently of which navigation wins. Pending
     // restores still block publication via progressEnabled/captureReadingPosition.
     restored.current = true
+    if (
+      current.defaultVirtualPaperTransform &&
+      !resolveReadingProgress(
+        {
+          layoutReadingProgress: current.layoutReadingProgress,
+          virtualPaper: current.defaultVirtualPaperTransform,
+          textReadingProgress: current.textReadingProgress
+        },
+        current.engineRenderMode ?? 'layout'
+      )
+    ) {
+      if (!(await prepareLegacyRestore(current))) return
+    }
     const restoration = restorePositionRef.current()
-    const generation = pdfNavigationGeneration.current
+    const token = capturePositionToken()
     try {
       await restoration
       if (
-        generation !== pdfNavigationGeneration.current ||
+        !isPositionCurrent(token) ||
         activeSource !== latest.current.engineSource
       )
         return
@@ -914,7 +1030,7 @@ export function EngineDocumentViewer(props: Props) {
       // or an explicit navigation enables saves, including replacement seeks.
     } catch (failure) {
       if (
-        generation !== pdfNavigationGeneration.current ||
+        !isPositionCurrent(token) ||
         (failure instanceof Error && failure.name === 'AbortError')
       )
         return
@@ -1303,6 +1419,13 @@ export function EngineDocumentViewer(props: Props) {
     epub.current?.[forward ? 'nextPage' : 'previousPage']()
   }
 
+  const navigateRange = (id: string) => {
+    beginPositionChange()
+    progressEnabled.current = true
+    if (epub.current) epub.current.goToRange(id)
+    else pdf.current?.scrollToRange(id)
+  }
+
   useImperativeHandle(
     props.readingPositionRef,
     () => ({
@@ -1353,17 +1476,14 @@ export function EngineDocumentViewer(props: Props) {
       setActiveSelection(null)
       setDraftRectangle(null)
     },
-    scrollToRange: (id) => {
-      ++pdfNavigationGeneration.current
-      progressEnabled.current = true
-      if (epub.current) epub.current.goToRange(id)
-      else pdf.current?.scrollToRange(id)
-    },
+    scrollToRange: navigateRange,
     scrollToRect: (id) => {
       const rectangle = rects.find((item) => item.id === id)
       if (rectangle?.selectionId) navigate(pageNumberOf(rectangle.selectionId))
     },
     scrollToPosition: (position) => {
+      beginPositionChange()
+      progressEnabled.current = true
       const container = root.current?.querySelector(
         '.hamster-reader__pdf-viewer-container'
       )
@@ -1411,7 +1531,7 @@ export function EngineDocumentViewer(props: Props) {
       progressEnabled.current = false
       setRestoreNotice(null)
     }
-  }, [source, retry])
+  }, [positionOwner])
   const pageRef = useRef(page)
   pageRef.current = page
   const pageCountRef = useRef(pageCount)
@@ -1700,7 +1820,20 @@ export function EngineDocumentViewer(props: Props) {
           <PdfDocumentViewer
             key={retry}
             ref={pdf}
-            onDocumentReady={setPdfDocument}
+            onDocumentReady={(document) => {
+              // A disposed PDF child may report null after its replacement
+              // rendered. It must not invalidate the replacement's session.
+              if (currentPositionOwner.current !== positionOwner) return
+              if (
+                pdfDocumentOwner.current === positionOwner &&
+                pdfDocumentRef.current &&
+                pdfDocumentRef.current !== document
+              )
+                beginPositionChange()
+              pdfDocumentOwner.current = positionOwner
+              pdfDocumentRef.current = document
+              setPdfDocument(document)
+            }}
             readingInsets={{
               top: props.containMarginTop ?? props.containMarginY ?? 0,
               bottom: props.containMarginBottom ?? props.containMarginY ?? 0,
@@ -1852,12 +1985,7 @@ export function EngineDocumentViewer(props: Props) {
           selectedRangeId={selected}
           selectedRectId={selectedRect}
           onSelectRange={activate}
-          onNavigateToRange={(id) => {
-            ++pdfNavigationGeneration.current
-            progressEnabled.current = true
-            if (epub.current) epub.current.goToRange(id)
-            else pdf.current?.scrollToRange(id)
-          }}
+          onNavigateToRange={navigateRange}
           onDeleteRange={removeRange}
           onDeleteRect={props.onRemoveRect}
           onSelectRect={props.onSelectRect}
@@ -1915,6 +2043,12 @@ export function EngineDocumentViewer(props: Props) {
           showEnd={endpointVisible(current, source?.format, epubPage, true)}
           onEditingChange={(value) => {
             if (rangeActionToken !== rangeActionGeneration.current) return
+            // Handles can live in a portal and auto-scroll the PDF, outside
+            // the root's native input capture boundary.
+            if (value && latest.current.engineSource?.format === 'pdf') {
+              beginPositionChange()
+              progressEnabled.current = true
+            }
             editing.current = value
             if (value && epub.current && nativeRange)
               epub.current.setSelectionRange(nativeRange)

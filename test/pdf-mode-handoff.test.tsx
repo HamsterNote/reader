@@ -304,3 +304,13 @@ it('cancels a pending PDF request when the same Reader changes to a non-PDF docu
   expect(changed).not.toHaveBeenCalled()
   expect(screen.queryByRole('status')).toBeNull()
 })
+
+it('passes the legacy VirtualPaper record into the PDF engine without enabling legacy layout', () => {
+  const virtualPaper = { x: -20, y: -3000, scale: 0.5, anchor: anchor(20) }
+  render(
+    <Reader engineSource={source} document={document} data={{ virtualPaper }} />
+  )
+  expect(state.props!.useVirtualPaper).toBe(false)
+  expect(state.props!.defaultVirtualPaperTransform).toBe(virtualPaper)
+  expect(state.props!.layoutReadingProgress).toBeUndefined()
+})
