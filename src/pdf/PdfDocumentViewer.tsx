@@ -2168,7 +2168,17 @@ export const PdfDocumentViewer = forwardRef<
         data-pdf-selection-enabled={
           tool === 'text-selection' && !edgeCropEditing ? 'true' : undefined
         }
-        style={{ position: 'absolute', inset: 0, overflow: 'auto' }}
+        style={
+          {
+            position: 'absolute',
+            inset: 0,
+            overflow: 'auto',
+            // The PDF.js page box must consume the host's effective top/bottom
+            // inset; viewport math alone does not move the real page element.
+            '--pdf-top-inset': `${props.readingInsets?.top ?? 0}px`,
+            '--pdf-bottom-inset': `${props.readingInsets?.bottom ?? 0}px`
+          } as React.CSSProperties
+        }
       >
         <div ref={viewerElementRef} className='pdfViewer' />
         {edgeCropEditing && props.onHiddenPagesRestore && (

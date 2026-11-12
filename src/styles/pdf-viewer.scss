@@ -28,6 +28,12 @@
   align-items: center;
   overflow: clip;
 
+  // Consume the host's effective insets on the real page container. Viewport
+  // math alone leaves the first PDF page flush with the top edge.
+  box-sizing: border-box;
+  padding-top: var(--pdf-top-inset, 0px);
+  padding-bottom: var(--pdf-bottom-inset, 0px);
+
   > .page {
     flex: none;
   }
