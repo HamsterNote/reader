@@ -7,7 +7,7 @@ React reader component package for Hamster Note.
 Install the package and its peer dependencies:
 
 ```bash
-yarn add @hamster-note/reader @hamster-note/painting@0.8.4 @hamster-note/selection@0.3.0 react react-dom
+yarn add @hamster-note/reader @hamster-note/painting@0.9.0 @hamster-note/selection@0.3.0 react react-dom
 ```
 
 ## 使用
@@ -708,4 +708,4 @@ PDF Layout handles can cross and exchange endpoint roles. Holding a handle near 
 
 ### 文件工具栏与同容器切换（3.0.0）
 
-可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting 精确 peer 版本为 0.8.4；开发归档说明与合并/发布顺序见文档。
+可选的文件菜单、内置目录、分栏布局和安全切换 API 见 [文件会话接入文档](docs/file-workspace.md)。painting 精确 peer 版本为 0.9.0；正式包接入与发布顺序见文档。

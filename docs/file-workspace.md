@@ -1,8 +1,8 @@
 # 文件工具栏与 reader 会话（3.0.0）
 
-Reader 直接消费 `@hamster-note/painting/toolbar` 的 `ToolbarShell`、`ToolbarPopover`、`ToolbarFileMenu`。没有复制工具栏或文件列表实现。要求 painting **0.8.4**（精确 peer 依赖）；源码开发使用 `vendor/hamster-note-painting-0.8.4-57a82fb.tgz` 的同版本官方构建包，来自 painting PR #48 / commit 57a82fb。该包尚未发布到 npm。合并顺序为 painting #48 → reader 本 PR；发布顺序为 painting 0.8.4 → reader 3.0.0 → 宿主依赖接线。此 PR 不发布 npm，也不修改 WebBase。
+Reader 直接消费 `@hamster-note/painting/toolbar` 的 `ToolbarShell`、`ToolbarPopover`、`ToolbarFileMenu`。没有复制工具栏或文件列表实现。要求 painting **0.9.0**（精确 peer 依赖）；源码开发同样使用 npm 已发布的 0.9.0，锁文件记录 registry 完整性，不再使用 0.8.4 候选归档。painting #49 相对 #48 只调整版本、锁文件与文档，包含 reader 所用的 `/core`、`/layered`、`/toolbar` 源码与导出保持一致。发布顺序为 painting 0.9.0（已发布）→ reader 3.0.0 → 宿主依赖接线。依赖对齐 PR 本身不发布 npm，也不修改 WebBase。
 
-painting 从传递依赖改为必选 peer，属于安装契约变化，因此 reader 使用 **3.0.0**。宿主需显式安装 `@hamster-note/painting@0.8.4`；Reader 的旧 props 和底栏插槽保持兼容。
+painting 从传递依赖改为必选 peer，属于安装契约变化，因此 reader 使用 **3.0.0**。宿主需显式安装 `@hamster-note/painting@0.9.0`；Reader 的旧 props 和底栏插槽保持兼容。
 
 ## 现有 Reader 的可选输入
 
