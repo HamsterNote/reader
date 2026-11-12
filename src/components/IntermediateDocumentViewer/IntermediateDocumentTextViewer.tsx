@@ -3566,6 +3566,7 @@ export function IntermediateDocumentTextViewer(
             controlsRef={paginationControlsRef}
             navigation={pdfPagination.navigation}
             ready={pdfPagination.ready}
+            diagnostics={pdfPagination.diagnostics}
             unlocatable={pdfPagination.unlocatable}
             theme={paginationTheme}
             empty={!pageNumbers.length}

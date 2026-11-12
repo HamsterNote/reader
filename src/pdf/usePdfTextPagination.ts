@@ -407,10 +407,24 @@ export function usePdfTextPagination(options: {
     }
     stableWaiters.current.clear()
   }, [current.busy, current.ready, current.error, errors, target.pageNumber])
+  let pageError: string | undefined
+  if (current.error) pageError = current.error.message
+  else if (errors.has(target.pageNumber))
+    pageError = '阅读页加载失败，位置恢复未完成'
   return {
     pageNumber: target.pageNumber,
     column: current.column,
     revision: current.revision,
+    /** Read-only observation for host failure capture; never drives readiness. */
+    diagnostics: {
+      generation,
+      revision: current.revision,
+      ready: current.ready,
+      busy: current.busy,
+      gate: gate.current,
+      targetPageNumber: target.pageNumber,
+      error: pageError
+    },
     ready: current.ready,
     unlocatable: current.unlocatable,
     navigation: {
