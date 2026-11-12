@@ -10,7 +10,7 @@
     "prebuild": "node ../scripts/apply-ios-webview-patch.mjs && expo prebuild"
   },
   "dependencies": {
-    "expo": "57.0.32",
+    "expo": "~57.0.33",
     "expo-asset": "~57.0.21",
     "expo-crypto": "~57.0.4",
     "expo-dev-client": "~57.0.21",
