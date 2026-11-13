@@ -4,6 +4,8 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
+    "eas-build-pre-install": "yarn --cwd .. install --frozen-lockfile --non-interactive",
+    "eas-build-post-install": "yarn --cwd .. build:webview && yarn --cwd .. verify:webview && yarn --cwd .. prepare:ios",
     "start": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "node ../scripts/apply-ios-webview-patch.mjs && expo run:ios",

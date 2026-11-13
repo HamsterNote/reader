@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-const require = createRequire(import.meta.url)
+// Resolve the same native dependency as the host, including EAS's app-local install.
+const require = createRequire(new URL('../app/package.json', import.meta.url))
 const patchFile = resolve(
   import.meta.dirname,
   '../patches/react-native-webview-13.16.1-ios-edit-menu.patch'
