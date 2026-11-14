@@ -36,7 +36,8 @@ import {
   nativeLayoutProgressFromGeometry,
   nativeProgressKey,
   readerDataFromNativeSnapshot,
-  withNativeLayoutProgress
+  withNativeLayoutProgress,
+  withNativeOcrTexts
 } from '../../../src/nativePdf/hostProgress'
 import type { ReaderWebViewHandle } from './ReaderWebView'
 import type {
@@ -140,9 +141,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [editOpen, setEditOpen] = useState(false)
     const [draftHiddenPages, setDraftHiddenPages] = useState<number[]>([])
     const [draftCrop, setDraftCrop] = useState<ReaderEdgeCrop>({})
-    const [hiddenPagesUndo, setHiddenPagesUndo] = useState<NativePageEditUndo | null>(
-      null
-    )
+    const [hiddenPagesUndo, setHiddenPagesUndo] =
+      useState<NativePageEditUndo | null>(null)
     const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
     const ocrEnabled =
       ocr === true ||
@@ -155,7 +155,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const save = useRef(Promise.resolve())
     const latest = useRef(record.snapshot)
     const committed = useRef(new Set<string>())
-    const failedTransform = useRef<((snapshot: typeof record.snapshot) => unknown) | undefined>(undefined)
+    const failedTransform = useRef<
+      ((snapshot: typeof record.snapshot) => unknown) | undefined
+    >(undefined)
     const alive = useRef(true)
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
@@ -196,9 +198,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     const post = (body: Record<string, unknown>) =>
       web.current?.postMessage(JSON.stringify({ ...body, identity }))
-    function persist(
-      transform: (snapshot: typeof record.snapshot) => unknown
-    ) {
+    function persist(transform: (snapshot: typeof record.snapshot) => unknown) {
       if (closed.current) return
       failedTransform.current = transform
       // Save at the existing authoritative key, in order; never overwrite failed saves.
@@ -209,7 +209,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           revision: base.revision + 1
         }))
         latest.current = next
-        if (failedTransform.current === transform) failedTransform.current = undefined
+        if (failedTransform.current === transform)
+          failedTransform.current = undefined
       }).catch((error) => {
         if (alive.current)
           setSaveError(error instanceof Error ? error.message : '保存失败')
@@ -449,6 +450,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           : null
         if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
         enqueue({ type: 'text', pages: [canonical], retain: [pageNumber] })
+        persist((snapshot) =>
+          withNativeOcrTexts(snapshot.data, pageNumber, texts)
+        )
         onOcrTextsChange?.(pageNumber, texts)
         ocrCompleted.current.add(key)
       } catch (error) {
@@ -530,7 +534,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (event.type === 'loaded') {
         pageCountRef.current = event.pageCount
         setPageCount(event.pageCount)
-        const data = record.snapshot.data as { readerData?: ReaderData } | null
+        const data = latest.current.data as { readerData?: ReaderData } | null
         const hidden = data?.readerData?.hiddenPages ?? []
         const allowed = visibleOriginalPages(event.pageCount, hidden)
         setAllowedPages(allowed)
@@ -827,7 +831,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                           setDraftHiddenPages((current) =>
                             selected
                               ? current.filter(
-                                  (pageNumber) => !group.pages.includes(pageNumber)
+                                  (pageNumber) =>
+                                    !group.pages.includes(pageNumber)
                                 )
                               : [...new Set([...current, ...group.pages])].sort(
                                   (a, b) => a - b
@@ -836,7 +841,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                         }
                       >
                         <Text>
-                          {selected ? '☑' : '☐'} 第 {group.start}–{group.end} 页（
+                          {selected ? '☑' : '☐'} 第 {group.start}–{group.end}{' '}
+                          页（
                           {group.pages.length} 页）
                         </Text>
                       </Pressable>

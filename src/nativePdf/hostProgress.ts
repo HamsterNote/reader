@@ -2,6 +2,7 @@ import type {
   ReaderPagePositionBookmark,
   ReaderData
 } from '../types/readerData'
+import type { IntermediateText } from '@hamster-note/types'
 import type { PdfGeometry } from './contracts'
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -73,6 +74,24 @@ export function withNativeLayoutProgress(
     readerData: {
       ...record(snapshot.readerData),
       layoutReadingProgress: progress
+    }
+  }
+}
+
+/** Update only the OCR field owned by the native OCR provider. */
+export function withNativeOcrTexts(
+  snapshotData: unknown,
+  pageNumber: number,
+  texts: readonly IntermediateText[]
+): Record<string, unknown> {
+  const snapshot = record(snapshotData)
+  const readerData = record(snapshot.readerData)
+  const existing = record(readerData.ocrTexts)
+  return {
+    ...snapshot,
+    readerData: {
+      ...readerData,
+      ocrTexts: { ...existing, [pageNumber]: texts }
     }
   }
 }

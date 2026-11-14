@@ -4,7 +4,8 @@ import {
   nativeLayoutProgressFromGeometry,
   nativeProgressKey,
   readerDataFromNativeSnapshot,
-  withNativeLayoutProgress
+  withNativeLayoutProgress,
+  withNativeOcrTexts
 } from '../../src/nativePdf/hostProgress'
 
 describe('native host layout progress', () => {
@@ -35,6 +36,30 @@ describe('native host layout progress', () => {
     expect(nativeProgressKey(nativeLayoutProgress(2)!)).toBe('2:0')
   })
 
+  it('patches OCR content without replacing readerData siblings', () => {
+    const snapshot = {
+      readerData: {
+        edgeCrop: { all: { top: 0.05 } },
+        pagePaintings: { 'page-1': { objects: [{ id: 'ink' }] } }
+      },
+      comments: [{ id: 'comment-1', parentId: null }]
+    }
+    const text = [
+      {
+        id: 'ocr-1',
+        content: 'scan',
+        polygon: [
+          [0, 0],
+          [1, 1]
+        ]
+      }
+    ]
+    expect(withNativeOcrTexts(snapshot, 1, text)).toEqual({
+      ...snapshot,
+      readerData: { ...snapshot.readerData, ocrTexts: { 1: text } }
+    })
+  })
+
   it('maps native page geometry to a bounded layout percentage', () => {
     const geometry = {
       pageNumber: 3,
@@ -59,6 +84,6 @@ describe('native host layout progress', () => {
     expect(saved).toEqual({ pageNumber: 3, verticalPercentage: 35 })
     // Native restore uses slot.minY + frame.height * 35%; for this page the
     // slot starts at 0, so it returns the same 350-point page position.
-    expect((saved?.verticalPercentage ?? 0) * 1000 / 100).toBe(350)
+    expect(((saved?.verticalPercentage ?? 0) * 1000) / 100).toBe(350)
   })
 })

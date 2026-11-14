@@ -1,4 +1,5 @@
 import type { EditorDocument } from '@hamster-note/painting/core'
+import type { IntermediateText } from '@hamster-note/types'
 
 import type {
   ReaderSelectionRange,
@@ -70,6 +71,8 @@ export type ReaderData = {
   readonly ranges?: ReaderSelectionRange[]
   readonly rects?: ReaderSelectionRectangle[]
   readonly pagePaintings?: Record<string, EditorDocument>
+  /** Optional OCR canonical content supplied by the existing provider. */
+  readonly ocrTexts?: Record<number, readonly IntermediateText[]>
   readonly virtualPaper?: ReaderVirtualPaperState
   /** Layout 阅读进度：PDF 引擎始终记录安全线页内比例，其他布局仍文字优先；兼容旧文字记录。 */
   readonly layoutReadingProgress?: ReaderBookmark
