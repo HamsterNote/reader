@@ -52,6 +52,7 @@ import {
   nativeOcrSessionKey,
   shouldRequestNativeOcr
 } from '../../../src/nativePdf/ocr'
+import { enqueueRecoverableSave } from '../../../src/nativePdf/persistence'
 
 function isReaderFileUrl(url: string, root: string): boolean {
   try {
@@ -183,22 +184,20 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (closed.current) return
       failedData.current = data
       // Save at the existing authoritative key, in order; never overwrite failed saves.
-      save.current = save.current
-        .then(async () => {
-          const next = {
-            ...latest.current,
-            data,
-            revision: latest.current.revision + 1
-          }
-          await store.saveSnapshot(record.fileId, next)
-          latest.current = next
-          if (failedData.current === data) failedData.current = undefined
-        })
-        .catch((error) => {
-          if (alive.current)
-            setSaveError(error instanceof Error ? error.message : '保存失败')
-          throw error
-        })
+      save.current = enqueueRecoverableSave(save.current, async () => {
+        const next = {
+          ...latest.current,
+          data,
+          revision: latest.current.revision + 1
+        }
+        await store.saveSnapshot(record.fileId, next)
+        latest.current = next
+        if (failedData.current === data) failedData.current = undefined
+      }).catch((error) => {
+        if (alive.current)
+          setSaveError(error instanceof Error ? error.message : '保存失败')
+        throw error
+      })
       save.current.catch(() => undefined)
     }
     function readerDataSnapshot(): ReaderData {
@@ -269,7 +268,6 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     useImperativeHandle(ref, () => ({
       close: async () => {
         if (closed.current) return { status: 'closed' }
-        closed.current = true
         ocrEpoch.current += 1
         ocrRequests.current.clear()
         if (undoTimer.current) clearTimeout(undoTimer.current)
@@ -280,6 +278,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           await save.current
           if (failedData.current !== undefined)
             return { status: 'unconfirmed', reason: '原生高亮尚未保存，请重试' }
+          // The session is closed only after every queued snapshot has been
+          // confirmed. A failed close remains usable so the retry can enqueue
+          // the failed payload and advance the revision.
+          closed.current = true
           post({ type: 'dispose' })
           enqueue({ type: 'close' })
           guard.close()
@@ -642,7 +644,6 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             onPress={() => {
               const data = failedData.current
               if (data !== undefined) {
-                save.current = Promise.resolve()
                 setSaveError(null)
                 persist(data)
               }
