@@ -48,7 +48,7 @@ import {
   prefixOcrTextIds
 } from '../../../src/components/IntermediateDocumentViewer/ocrContent'
 import {
-  canRequestNativeOcrPage,
+  canRetryNativeOcrPage,
   nativeCanonicalPageFromOcr,
   nativeOcrSessionKey,
   shouldRequestNativeOcr
@@ -162,8 +162,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const ocrRequests = useRef(new Map<string, number>())
     const ocrInFlight = useRef(new Set<string>())
     const ocrCompleted = useRef(new Set<string>())
+    const ocrFailed = useRef(new Set<string>())
     const ocrEpoch = useRef(0)
     const nativeError = useRef<{ code: string; message?: string } | null>(null)
+    const ocrError = useRef<{ code: string; message?: string } | null>(null)
     const pageMetrics = useRef(
       new Map<number, { width: number; height: number }>()
     )
@@ -365,6 +367,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       ocrEpoch.current += 1
       ocrRequests.current.clear()
       ocrInFlight.current.clear()
+      ocrFailed.current.clear()
+      ocrError.current = null
       if (!ocrEnabled) {
         ocrCompleted.current.clear()
         enqueue({ type: 'text', pages: [], retain: [] })
@@ -449,6 +453,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         ocrCompleted.current.add(key)
       } catch (error) {
         if (epoch === ocrEpoch.current && !closed.current) {
+          ocrFailed.current.add(key)
+          ocrError.current = {
+            code: 'OCR_FAILED',
+            message: error instanceof Error ? error.message : String(error)
+          }
           setStatus(
             `原生 OCR [${pageNumber}]：${error instanceof Error ? error.message : String(error)}`
           )
@@ -476,10 +485,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           continue
         const key = nativeOcrSessionKey(record.fileId, pageNumber)
         if (
-          !canRequestNativeOcrPage(
+          !canRetryNativeOcrPage(
             key,
             ocrInFlight.current,
-            ocrCompleted.current
+            ocrCompleted.current,
+            ocrFailed.current
           )
         )
           continue
@@ -572,9 +582,13 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           const ocrPage = ocrRequests.current.get(event.requestId)
           if (ocrPage !== undefined) {
             ocrRequests.current.delete(event.requestId)
-            ocrInFlight.current.delete(
-              nativeOcrSessionKey(record.fileId, ocrPage)
-            )
+            const key = nativeOcrSessionKey(record.fileId, ocrPage)
+            ocrInFlight.current.delete(key)
+            ocrFailed.current.add(key)
+            ocrError.current = {
+              code: 'OCR_FAILED',
+              message: event.message ?? `OCR 预览失败：${event.code}`
+            }
             onOcrError?.(
               new Error(event.message ?? `OCR 预览失败：${event.code}`),
               { pageNumber: ocrPage }
@@ -588,9 +602,17 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             `原生 PDF [${event.code}]：${nativePdfErrorMessage(nextError)}`
           )
         }
-      } else if (nativeError.current === null && guard.ready)
+      } else if (
+        nativeError.current === null &&
+        ocrError.current === null &&
+        guard.ready
+      )
         setStatus('PDFKit 已显示；数据恢复完成')
-      else if (nativeError.current === null && event.type === 'displayed')
+      else if (
+        nativeError.current === null &&
+        ocrError.current === null &&
+        event.type === 'displayed'
+      )
         setStatus('PDFKit 已显示；等待恢复完成')
     }
     const injected = `window.__READER_NATIVE_PDF__=${JSON.stringify({ ...identity, publicationUrl, snapshot: record.snapshot.data, progress: record.snapshot.progress }).replace(/</g, '\\u003c')};true;`

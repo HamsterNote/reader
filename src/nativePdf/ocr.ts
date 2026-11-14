@@ -32,6 +32,16 @@ export function canRequestNativeOcrPage(
   return !requested.has(key) && !completed.has(key)
 }
 
+/** Failed pages stay closed for the current document epoch until OCR is toggled. */
+export function canRetryNativeOcrPage(
+  key: string,
+  requested: ReadonlySet<string>,
+  completed: ReadonlySet<string>,
+  failed: ReadonlySet<string>
+): boolean {
+  return canRequestNativeOcrPage(key, requested, completed) && !failed.has(key)
+}
+
 type PolygonPoint = readonly [number, number]
 type OcrTextLike = {
   readonly id?: string

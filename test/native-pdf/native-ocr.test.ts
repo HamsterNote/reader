@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canRequestNativeOcrPage,
+  canRetryNativeOcrPage,
   nativeCanonicalPageFromOcr,
   nativeOcrFailurePreservesData,
   nativeOcrSessionKey,
@@ -60,8 +61,30 @@ describe('native OCR contract', () => {
         ]
       }
     ])
-    expect(page?.boundaries.map(({ offset }) => offset)).toEqual([0, 1, 2, 3, 4])
+    expect(page?.boundaries.map(({ offset }) => offset)).toEqual([
+      0, 1, 2, 3, 4
+    ])
     expect(page?.glyphs[0]).toMatchObject({ start: 0, end: 4 })
+  })
+
+  it('cools down a failed page until the OCR epoch is reset', () => {
+    const requested = new Set<string>()
+    const completed = new Set<string>()
+    const failed = new Set<string>(['book:3'])
+    expect(canRetryNativeOcrPage('book:3', requested, completed, failed)).toBe(
+      false
+    )
+    expect(canRetryNativeOcrPage('book:4', requested, completed, failed)).toBe(
+      true
+    )
+    failed.clear()
+    expect(canRetryNativeOcrPage('book:3', requested, completed, failed)).toBe(
+      true
+    )
+    requested.add('book:3')
+    expect(canRetryNativeOcrPage('book:3', requested, completed, failed)).toBe(
+      false
+    )
   })
 
   it('keeps native password classification ahead of a later WebView failure', () => {

@@ -4,6 +4,12 @@
 
 ## 几何所有权
 
+`scripts/test-native-pdf-geometry.sh` 在 Linux 使用 Swift 容器；在 macOS
+使用 `xcrun --sdk macosx swiftc` 并显式链接 XCTest。不要在 macOS 直接调用裸
+`swiftc`，否则会出现 `no such module 'XCTest'` 或 `cannot find XCTMain`。
+没有 Swift 容器或 Xcode 的环境只能记录为 Linux-only，不能将脚本失败写成
+几何测试通过。
+
 - `ReaderPdfLayout` 只生成 scale-one 的完整页 frame、裁切 slot 和文档尺寸。隐藏页不生成槽位，最后一页后不加间距。
 - 只有文档/裁切布局变化或 reset 才设置 content.frame，并且先用 UIScrollView 回到 1 倍。此时初始化一次未缩放的 contentSize，恢复原缩放后由 UIKit 维护 transform 和 contentSize。代码不再写 content.bounds。
 - 末页留白是 `contentInset.bottom = max(0, viewportHeight - scaledFinalSlotHeight)`，不进入 content.frame/bounds。缩放及视口高度变化只更新 inset；短单页填满视口，但最大滚动 offset 仍是 0。
@@ -39,14 +45,14 @@ Swift 5.9.2 编译生产 `ReaderPdfGeometry.swift`，12 组 XCTest 覆盖 S02/S0
 
 按已有 Mac 视口 402 × 679.33331298828125，预期如下（点数四舍五入）：
 
-| 样本 | zoom | contentSize | contentInset.bottom | 下一页 offset.y | 最大 offset.y |
-| --- | --- | --- | --- | --- | --- |
-| S02，bounds 400×1012 | 0.5 | 200×506 | 429.3333 | 256 | 256 |
-| S02 | 1 | 400×1012 | 179.3333 | 512 | 512 |
-| S02 | 2 | 800×2024 | 0 | 1024 | 1344.6667 |
-| S08，bounds 360×812 | 0.5 | 180×406 | 479.3333 | 206 | 206 |
-| S08 | 1 | 360×812 | 279.3333 | 412 | 412 |
-| S08 | 2 | 720×1624 | 0 | 824 | 944.6667 |
+| 样本                 | zoom | contentSize | contentInset.bottom | 下一页 offset.y | 最大 offset.y |
+| -------------------- | ---- | ----------- | ------------------- | --------------- | ------------- |
+| S02，bounds 400×1012 | 0.5  | 200×506     | 429.3333            | 256             | 256           |
+| S02                  | 1    | 400×1012    | 179.3333            | 512             | 512           |
+| S02                  | 2    | 800×2024    | 0                   | 1024            | 1344.6667     |
+| S08，bounds 360×812  | 0.5  | 180×406     | 479.3333            | 206             | 206           |
+| S08                  | 1    | 360×812     | 279.3333            | 412             | 412           |
+| S08                  | 2    | 720×1624    | 0                   | 824             | 944.6667      |
 
 所有行 content.frame.origin 应为 (0,0)，下一页槽位顶部相对视口 y=0。content.bounds.size 不随 zoom 变化。200% 滑到底时末页底部与视口底部重合，无额外页外尾白；50/100% 仅有表中必要填充。
 
