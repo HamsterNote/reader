@@ -61,6 +61,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [panelOpen, setPanelOpen] = useState(false)
     const [menu, setMenu] = useState<{ left: number; top: number } | null>(null)
     const [size, setSize] = useState({ width: 0, height: 0 })
+    const [allowedPages, setAllowedPages] = useState<number[]>([])
+    const [nativeTop, setNativeTop] = useState(0)
     const [pageCount, setPageCount] = useState(0)
     const [page, setPage] = useState(1)
     const [outline, setOutline] = useState<
@@ -180,6 +182,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         const data = record.snapshot.data as { readerData?: ReaderData } | null
         const hidden = data?.readerData?.hiddenPages ?? []
         const allowed = visibleOriginalPages(event.pageCount, hidden)
+        setAllowedPages(allowed)
         const crop = data?.readerData?.edgeCrop
         const crops = Object.fromEntries(
           allowed.map((n) => [
@@ -231,7 +234,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           </Text>
           <Pressable
             onPress={() =>
-              enqueue({ type: 'navigate', pageNumber: Math.max(1, page - 1) })
+              enqueue({
+                type: 'navigate',
+                pageNumber:
+                  allowedPages[Math.max(0, allowedPages.indexOf(page) - 1)] ??
+                  page
+              })
             }
           >
             <Text>上一页</Text>
@@ -240,7 +248,13 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             onPress={() =>
               enqueue({
                 type: 'navigate',
-                pageNumber: Math.min(pageCount, page + 1)
+                pageNumber:
+                  allowedPages[
+                    Math.min(
+                      allowedPages.length - 1,
+                      allowedPages.indexOf(page) + 1
+                    )
+                  ] ?? page
               })
             }
           >
@@ -250,7 +264,13 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             onPress={() =>
               enqueue({
                 type: 'preview',
-                pageNumber: Math.min(pageCount, page + 1),
+                pageNumber:
+                  allowedPages[
+                    Math.min(
+                      allowedPages.length - 1,
+                      allowedPages.indexOf(page) + 1
+                    )
+                  ] ?? page,
                 width: 160
               })
             }
@@ -319,6 +339,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           </Pressable>
         ) : null}
         <ReaderPdfView
+          onLayout={(event) => setNativeTop(event.nativeEvent.layout.y)}
           command={command}
           configuration={nativeSelectionConfiguration}
           onPdfEvent={(e) => onEvent(e.nativeEvent)}
@@ -402,7 +423,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                     0,
                     Math.min(size.width - width, r.x + r.width / 2 - width / 2)
                   ),
-                  top: Math.max(0, Math.min(size.height - height, r.y - height))
+                  top: Math.max(
+                    0,
+                    Math.min(size.height - height, r.y + nativeTop - height)
+                  )
                 })
                 break
               }
