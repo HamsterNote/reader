@@ -19,7 +19,6 @@ import {
   IntermediateDocument,
   type IntermediateDocumentSerialized,
   type IntermediateImage,
-  type IntermediatePage,
   IntermediatePageMap,
   type IntermediateParagraph,
   type IntermediateText

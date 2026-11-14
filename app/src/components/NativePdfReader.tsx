@@ -394,7 +394,6 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       availability: Readonly<Record<number, 'textLayer' | 'noTextLayer'>>
     ) {
       if (!ocrEnabled) return
-      const epoch = ocrEpoch.current
       for (const pageNumber of pagesToCheck) {
         if (manualOcrPages && !manualOcrPages.includes(pageNumber)) continue
         if (
