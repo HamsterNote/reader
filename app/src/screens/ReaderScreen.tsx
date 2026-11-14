@@ -23,7 +23,7 @@ import { stageReaderDocument } from '../native/webAssets'
 import type {
   ReaderExtraOcr,
   ReaderOcrOptions
-} from '../../../src/components/IntermediateDocumentViewer'
+} from '../../../src/types/readerOcr'
 import type { IntermediateText } from '@hamster-note/types'
 
 type ReaderScreenProps = {

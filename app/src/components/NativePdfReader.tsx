@@ -1,6 +1,6 @@
 import { Image } from 'react-native'
 import type { IntermediateText } from '@hamster-note/types'
-import type { ReaderData } from '../../../src/types/readerData'
+import type { ReaderData, ReaderEdgeCrop } from '../../../src/types/readerData'
 import {
   forwardRef,
   useEffect,
@@ -12,8 +12,10 @@ import {
 import {
   AppState,
   Linking,
+  Modal,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   View
 } from 'react-native'
@@ -40,7 +42,7 @@ import type { ReaderWebViewHandle } from './ReaderWebView'
 import type {
   ReaderExtraOcr,
   ReaderOcrOptions
-} from '../../../src/components/IntermediateDocumentViewer'
+} from '../../../src/types/readerOcr'
 import {
   fetchOcrContent,
   prefixOcrTextIds
@@ -122,6 +124,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [outlineOpen, setOutlineOpen] = useState(false)
     const [preview, setPreview] = useState<string | null>(null)
     const [saveError, setSaveError] = useState<string | null>(null)
+    const [editOpen, setEditOpen] = useState(false)
+    const [draftHiddenPages, setDraftHiddenPages] = useState<number[]>([])
+    const [draftCrop, setDraftCrop] = useState<ReaderEdgeCrop>({})
+    const [hiddenPagesUndo, setHiddenPagesUndo] = useState<ReaderData | null>(
+      null
+    )
     const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
     const ocrEnabled =
       ocr === true ||
@@ -145,6 +153,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       new Map<number, { width: number; height: number }>()
     )
     const previousOcrEnabled = useRef(ocrEnabled)
+    const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     function pump() {
       if (!inFlight.current && queue.current.length) {
         inFlight.current = queue.current.shift()!
@@ -192,12 +201,78 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         })
       save.current.catch(() => undefined)
     }
+    function readerDataSnapshot(): ReaderData {
+      return (
+        readerDataFromNativeSnapshot(
+          latest.current.data,
+          latest.current.progress
+        ) ?? {}
+      )
+    }
+    function layoutForReaderData(data: ReaderData) {
+      const count = pageCountRef.current
+      const allowed = visibleOriginalPages(count, data.hiddenPages ?? [])
+      const crop = data.edgeCrop
+      const crops = Object.fromEntries(
+        allowed.map((n) => [
+          String(n),
+          crop?.pages?.[`page-${n}`] ??
+            crop?.pages?.[String(n)] ??
+            crop?.all ??
+            {}
+        ])
+      )
+      setAllowedPages(allowed)
+      if (count > 0) enqueue({ type: 'layout', pages: allowed, crops })
+    }
+    function beginPageEdit() {
+      const data = readerDataSnapshot()
+      setDraftHiddenPages(
+        (data.hiddenPages ?? []).flatMap((value) => {
+          const pageNumber =
+            typeof value === 'number'
+              ? value
+              : Number(String(value).replace(/^page-/, ''))
+          return Number.isInteger(pageNumber) && pageNumber > 0
+            ? [pageNumber]
+            : []
+        })
+      )
+      setDraftCrop(data.edgeCrop?.all ?? {})
+      setEditOpen(true)
+    }
+    function commitPageEdit() {
+      const previous = readerDataSnapshot()
+      const next: ReaderData = {
+        ...previous,
+        hiddenPages: [...new Set(draftHiddenPages)].sort((a, b) => a - b),
+        edgeCrop: { ...previous.edgeCrop, all: draftCrop }
+      }
+      persist(next)
+      layoutForReaderData(next)
+      setHiddenPagesUndo(previous)
+      if (undoTimer.current) clearTimeout(undoTimer.current)
+      undoTimer.current = setTimeout(() => {
+        undoTimer.current = null
+        setHiddenPagesUndo(null)
+      }, 5000)
+      setEditOpen(false)
+    }
+    function undoPageEdit() {
+      if (!hiddenPagesUndo) return
+      persist(hiddenPagesUndo)
+      layoutForReaderData(hiddenPagesUndo)
+      setHiddenPagesUndo(null)
+      if (undoTimer.current) clearTimeout(undoTimer.current)
+      undoTimer.current = null
+    }
     useImperativeHandle(ref, () => ({
       close: async () => {
         if (closed.current) return { status: 'closed' }
         closed.current = true
         ocrEpoch.current += 1
         ocrRequests.current.clear()
+        if (undoTimer.current) clearTimeout(undoTimer.current)
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
         setMenu(null)
@@ -229,6 +304,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         closed.current = true
         ocrEpoch.current += 1
         ocrRequests.current.clear()
+        if (undoTimer.current) clearTimeout(undoTimer.current)
         subscription.remove()
         post({ type: 'dispose' })
         guard.close()
@@ -472,6 +548,14 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           >
             <Text>OCR {ocrEnabled ? '开' : '关'}</Text>
           </Pressable>
+          <Pressable onPress={beginPageEdit}>
+            <Text>裁切/隐藏页编辑</Text>
+          </Pressable>
+          {hiddenPagesUndo ? (
+            <Pressable onPress={undoPageEdit}>
+              <Text>撤销（5秒）</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={() =>
               enqueue({
@@ -588,6 +672,92 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           onPdfEvent={(e) => onEvent(e.nativeEvent)}
           style={{ flex: 1 }}
         />
+        <Modal visible={editOpen} transparent animationType='fade'>
+          <View
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              padding: 24,
+              backgroundColor: 'rgba(0,0,0,0.35)'
+            }}
+          >
+            <View
+              style={{
+                maxHeight: '85%',
+                padding: 16,
+                gap: 10,
+                borderRadius: 12,
+                backgroundColor: 'white'
+              }}
+            >
+              <Text>裁切与隐藏页</Text>
+              <Text>选择要隐藏的原页（分组编辑）</Text>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <Pressable
+                  onPress={() =>
+                    setDraftHiddenPages(
+                      Array.from({ length: pageCount }, (_, index) => index + 1)
+                    )
+                  }
+                >
+                  <Text>全选</Text>
+                </Pressable>
+                <Pressable onPress={() => setDraftHiddenPages([])}>
+                  <Text>取消选择</Text>
+                </Pressable>
+              </View>
+              <ScrollView style={{ maxHeight: 220 }}>
+                {Array.from({ length: pageCount }, (_, index) => index + 1).map(
+                  (pageNumber) => {
+                    const selected = draftHiddenPages.includes(pageNumber)
+                    return (
+                      <Pressable
+                        key={pageNumber}
+                        onPress={() =>
+                          setDraftHiddenPages((current) =>
+                            selected
+                              ? current.filter((value) => value !== pageNumber)
+                              : [...current, pageNumber]
+                          )
+                        }
+                      >
+                        <Text>
+                          {selected ? '☑' : '☐'} 第 {pageNumber} 页
+                        </Text>
+                      </Pressable>
+                    )
+                  }
+                )}
+              </ScrollView>
+              <Text>全局裁切：{Math.round((draftCrop.top ?? 0) * 100)}%</Text>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <Pressable
+                  onPress={() =>
+                    setDraftCrop({
+                      top: 0.05,
+                      right: 0.05,
+                      bottom: 0.05,
+                      left: 0.05
+                    })
+                  }
+                >
+                  <Text>裁切四边 5%</Text>
+                </Pressable>
+                <Pressable onPress={() => setDraftCrop({})}>
+                  <Text>恢复裁切</Text>
+                </Pressable>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 16 }}>
+                <Pressable onPress={() => setEditOpen(false)}>
+                  <Text>取消</Text>
+                </Pressable>
+                <Pressable onPress={commitPageEdit}>
+                  <Text>确认</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
         <WebView
           ref={web}
           source={{ uri: entryUrl }}

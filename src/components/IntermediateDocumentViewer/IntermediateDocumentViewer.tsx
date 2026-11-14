@@ -76,6 +76,8 @@ import type {
   ReaderSelectionRef,
   ReaderSelectionTool
 } from '../../types/selection'
+import type { ReaderExtraOcr, ReaderOcrOptions } from '../../types/readerOcr'
+export type { ReaderExtraOcr, ReaderOcrOptions } from '../../types/readerOcr'
 import { FLOW_LAYOUT_PAGE_WIDTH, type ReaderPageTool } from '../Page'
 import { hasDrawingObjects, PageDrawingLayer } from '../PageDrawingLayer'
 import { PopoverPortal } from '../PopoverPortal'
@@ -452,16 +454,6 @@ export type ReaderTouchPanMode = 'single-finger' | 'two-finger'
  * OCR 配置对象。`enabled` 为全局开关；
  * `pages` 存在时进入手动模式，仅识别并展示列出的页码（1-based）。
  */
-export type ReaderOcrOptions = {
-  enabled?: boolean
-  pages?: readonly number[]
-}
-
-/** 外挂 OCR：接收页面原尺寸 base64 图片，返回该页的中间态识别结果。 */
-export type ReaderExtraOcr = (
-  imageBase64: string
-) => IntermediatePage | Promise<IntermediatePage>
-
 export type ReaderReadingPositionHandle = {
   readonly captureTextAnchor: () => ReaderTextAnchor | undefined
   readonly captureAndPublish?: () => void
