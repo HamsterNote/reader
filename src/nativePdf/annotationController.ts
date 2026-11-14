@@ -209,3 +209,7 @@ export function createNativeAnnotationControllerStore() {
     }
   }
 }
+
+/** Host-lifetime store: ReaderScreen may remount a file keyed subtree. */
+export const nativeAnnotationControllerStore =
+  createNativeAnnotationControllerStore()

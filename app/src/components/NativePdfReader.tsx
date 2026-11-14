@@ -33,7 +33,7 @@ import type {
   PdfTool
 } from '../../../src/nativePdf/contracts'
 import {
-  createNativeAnnotationControllerStore,
+  nativeAnnotationControllerStore,
   type NativeAnnotationSnapshot
 } from '../../../src/nativePdf/annotationController'
 import {
@@ -52,6 +52,7 @@ import {
 import { restoreReaderSnapshot } from '../../../src/host/readerSnapshot'
 import { NativePdfSession } from '../../../src/nativePdf/session'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
+import { reduceNativeMenu } from '../../../src/nativePdf/menuOwnership'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
 import {
   nativeLayoutProgress,
@@ -136,10 +137,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       [record.fileId]
     )
     const guard = useMemo(() => new NativePdfSession(identity), [identity])
-    const annotationStore = useRef(createNativeAnnotationControllerStore()).current
     const annotations = useMemo(
-      () => annotationStore.get(record.fileId),
-      [annotationStore, record.fileId]
+      () => nativeAnnotationControllerStore.get(record.fileId),
+      [record.fileId]
     )
     const annotationCommits = useRef(0)
     const [tool, setTool] = useState<PdfTool>('none')
@@ -157,6 +157,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [webError, setWebError] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [menu, setMenu] = useState<{ left: number; top: number } | null>(null)
+    const menuOwner = useRef<'native' | 'web' | null>(null)
     const [size, setSize] = useState({ width: 0, height: 0 })
     const [allowedPages, setAllowedPages] = useState<number[]>([])
     const [nativeTop, setNativeTop] = useState(0)
@@ -237,6 +238,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       value: { left: number; top: number } | null,
       source: string
     ) {
+      const reduced = reduceNativeMenu(
+        { owner: menuOwner.current, value: menu },
+        { source, value }
+      )
+      if (reduced.ignored) {
+        if (__DEV__)
+          console.info('reader-pdf-menu-state', { source, value, ignored: 'native-owner' })
+        return
+      }
+      menuOwner.current = reduced.state.owner
       if (__DEV__) console.info('reader-pdf-menu-state', { source, value })
       setMenu(value)
     }

@@ -4,6 +4,7 @@ import {
   createNativeAnnotationControllerStore
 } from '../../src/nativePdf/annotationController'
 import type { ReaderSelectionRange } from '../../src/types/selection'
+import { reduceNativeMenu } from '../../src/nativePdf/menuOwnership'
 
 const range: ReaderSelectionRange = {
   id: 'range-1',
@@ -130,5 +131,23 @@ describe('native annotation business controller', () => {
     expect(a.getSnapshot().pagePaintings).toEqual({})
     expect(b.getSnapshot().pagePaintings).toHaveProperty('page-1')
     expect(b.undo()).toBe(true)
+  })
+
+  it('keeps a native menu when WebView hide and geometry arrive afterward', () => {
+    const native = reduceNativeMenu(
+      { owner: null, value: null },
+      { source: 'native-selection-end', value: { left: 10, top: 198 } }
+    ).state
+    const hidden = reduceNativeMenu(native, {
+      source: 'web-hide-menu',
+      value: null
+    })
+    const geometry = reduceNativeMenu(hidden.state, {
+      source: 'native-geometry',
+      value: null
+    })
+    expect(hidden.ignored).toBe(true)
+    expect(geometry.ignored).toBe(true)
+    expect(geometry.state).toEqual(native)
   })
 })
