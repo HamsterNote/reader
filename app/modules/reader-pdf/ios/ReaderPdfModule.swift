@@ -388,7 +388,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     }
     CATransaction.commit()
   }
-  func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+  override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
     if recognizer === drag {
       let point = recognizer.location(in:content)
       let radius = CGFloat(configuration["hitSize"] ?? 0)/2/max(scroll.zoomScale,0.01)
