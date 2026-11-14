@@ -34,7 +34,17 @@ export type PdfCrop = {
   readonly left?: number
 }
 /** Gesture modes the native surface exposes to the host toolbar. */
-export type PdfTool = 'none' | 'rectangle'
+export type PdfTool = 'none' | 'rectangle' | 'draw'
+/**
+ * One persisted freehand stroke as the native renderer needs it.
+ * `points` stay in page-local scale-one coordinates, so zoom never rescales them.
+ */
+export type PdfStroke = {
+  readonly pageNumber: number
+  readonly points: readonly PdfPoint[]
+  readonly color: string
+  readonly width: number
+}
 export type PdfCapabilities = {
   readonly nativeLayout: boolean
   readonly thumbnails: boolean
@@ -150,6 +160,11 @@ export type PdfCommand = PdfRequest &
         readonly tool: PdfTool
       }
     | {
+        /** Full freehand payload for the current document; replaces what is drawn. */
+        readonly type: 'strokes'
+        readonly strokes: readonly PdfStroke[]
+      }
+    | {
         readonly type: 'selection'
         readonly range: ReaderSelectionRange | null
         readonly showMenu?: boolean
@@ -195,6 +210,15 @@ export type PdfEvent = PdfIdentity &
         /** Page-local px, scale-one visual coordinates. */
         readonly rect: PdfRect
         readonly phase: 'preview' | 'commit' | 'cancel'
+        readonly geometryRevision: number
+      }
+    | {
+        /** One finished freehand stroke; `commit` carries the accepted points. */
+        readonly type: 'stroke'
+        readonly pageNumber: number
+        /** Page-local, scale-one visual coordinates. */
+        readonly points: readonly PdfPoint[]
+        readonly phase: 'commit' | 'cancel'
         readonly geometryRevision: number
       }
     | { readonly type: 'activate'; readonly rangeId: string }

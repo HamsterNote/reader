@@ -40,6 +40,11 @@ import {
   nativeRectCommit,
   readerSnapshotWithAnnotations
 } from '../../../src/nativePdf/drawing'
+import {
+  appendStrokeDocument,
+  paintingPageId,
+  strokesForNative
+} from '../../../src/nativePdf/strokes'
 import { NativePdfSession } from '../../../src/nativePdf/session'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
@@ -242,6 +247,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         ranges: snapshot.ranges,
         rects: snapshot.rects
       })
+      enqueue({
+        type: 'strokes',
+        strokes: strokesForNative(snapshot.pagePaintings)
+      })
     }
     function saveAnnotations(snapshot: NativeAnnotationSnapshot): boolean {
       try {
@@ -295,6 +304,58 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       const snapshot = annotations.getSnapshot()
       mirrorAnnotations(snapshot)
       if (saveAnnotations(snapshot)) setStatus('已撤销上一步标注')
+    }
+    function redoNativeDrawing() {
+      if (closed.current) return
+      if (!annotations.redo()) {
+        setStatus('没有可重做的标注')
+        return
+      }
+      const snapshot = annotations.getSnapshot()
+      mirrorAnnotations(snapshot)
+      if (saveAnnotations(snapshot)) setStatus('已重做上一步标注')
+    }
+    /** Native freehand stroke → existing control layer → V5 snapshot. */
+    function commitNativeStroke(event: Extract<PdfEvent, { type: 'stroke' }>) {
+      if (event.phase !== 'commit') return
+      const commitId = `stroke-${++annotationCommits.current}`
+      const pageId = paintingPageId(event.pageNumber)
+      const document = appendStrokeDocument(
+        annotations.getSnapshot().pagePaintings[pageId],
+        commitId,
+        event.points
+      )
+      if (!document) {
+        setStatus('笔迹未保存：点数不足或文档校验失败')
+        return
+      }
+      const result = annotations.setPainting(commitId, pageId, document)
+      if (result.status !== 'changed') return
+      mirrorAnnotations(result.snapshot)
+      saveAnnotations(result.snapshot)
+    }
+    /** In-progress gestures stay native; only finished ones reach the controller. */
+    function handleDrawEvent(
+      event: Extract<PdfEvent, { type: 'rect' } | { type: 'stroke' }>
+    ) {
+      if (event.phase !== 'commit') return
+      if (event.type === 'rect') commitNativeRect(event)
+      else commitNativeStroke(event)
+    }
+    function clearCurrentPageInk() {
+      if (closed.current) return
+      const pageId = paintingPageId(page)
+      if (!annotations.getSnapshot().pagePaintings[pageId]) {
+        setStatus('当前页没有笔迹')
+        return
+      }
+      const result = annotations.clearPainting(
+        `clear-${++annotationCommits.current}`,
+        pageId
+      )
+      if (result.status !== 'changed') return
+      mirrorAnnotations(result.snapshot)
+      if (saveAnnotations(result.snapshot)) setStatus('已清空当前页笔迹')
     }
     function readerDataSnapshot(): ReaderData {
       return (
@@ -660,8 +721,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
       if (event.type === 'textNeeded')
         requestNativeOcr(event.pages, event.textAvailability ?? {})
-      if (event.type === 'rect' && event.phase === 'commit')
-        commitNativeRect(event)
+      if (event.type === 'rect' || event.type === 'stroke')
+        handleDrawEvent(event)
       if (event.type === 'error') {
         if (event.requestId) {
           const ocrPage = ocrRequests.current.get(event.requestId)
@@ -761,6 +822,28 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             onPress={undoNativeDrawing}
           >
             <Text>撤销标注</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel={tool === 'draw' ? '关闭绘图工具' : '自由绘图'}
+            accessibilityState={{ selected: tool === 'draw' }}
+            onPress={() => selectTool(tool === 'draw' ? 'none' : 'draw')}
+          >
+            <Text>绘图{tool === 'draw' ? '（开）' : ''}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel='重做标注'
+            onPress={redoNativeDrawing}
+          >
+            <Text>重做</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel='清空当前页笔迹'
+            onPress={clearCurrentPageInk}
+          >
+            <Text>清空本页</Text>
           </Pressable>
           {hiddenPagesUndo ? (
             <Pressable onPress={undoPageEdit}>

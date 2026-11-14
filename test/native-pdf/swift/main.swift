@@ -213,6 +213,26 @@ final class ReaderPdfGeometryTests: XCTestCase {
     }
   }
 
+  func testStrokeAnchorSurvivesZoomAndCrop() {
+    let plain = layout()
+    let cropped = layout(cropped: true)
+    let strokeLocal = CGPoint(x: 137.5, y: 262.25)
+    for zoom in zooms {
+      for document in [plain, cropped] {
+        let frame = document.frames[1]!
+        // Ink is stored page-local; only the page frame origin moves it.
+        let contentPoint = CGPoint(x: frame.minX + strokeLocal.x, y: frame.minY + strokeLocal.y)
+        let view = viewport(document, zoom, offset: CGPoint(x: 33, y: 77), origin: CGPoint(x: 11, y: -5))
+        let projected = view.viewportRect(CGRect(origin: contentPoint, size: .zero)).origin
+        let back = view.contentPoint(at: projected)
+        assertPoint(CGPoint(x: back.x - frame.minX, y: back.y - frame.minY), strokeLocal)
+      }
+    }
+    // Cropping changes the frame origin, never the page-local anchor.
+    XCTAssertEqual(cropped.frames[1]!.minX, -20, accuracy: 0.000001)
+    XCTAssertEqual(cropped.frames[1]!.minY, -50, accuracy: 0.000001)
+  }
+
   func testZoomCyclesDoNotAccumulateCenterError() {
     let document = ReaderPdfLayout(pages: [ReaderPdfPageMetrics(number: 1, size: CGSize(width: 3000, height: 6000))])
     var current = viewport(document, 1, offset: CGPoint(x: 600.125, y: 1500.375))
@@ -242,5 +262,6 @@ XCTMain([testCase([
   ("height-only resize", ReaderPdfGeometryTests.testHeightOnlyResizeUpdatesTailAndKeepsReachableCenter),
   ("rotated crop and overlay", ReaderPdfGeometryTests.testRotatedCroppedLayoutAndOverlayRoundTrip),
   ("origin and both scroll axes", ReaderPdfGeometryTests.testProjectionIncludesContentOriginAndBothScrollAxes),
-  ("repeated zoom cycles", ReaderPdfGeometryTests.testZoomCyclesDoNotAccumulateCenterError)
+  ("repeated zoom cycles", ReaderPdfGeometryTests.testZoomCyclesDoNotAccumulateCenterError),
+  ("stroke anchor at 50/100/200% and cropped", ReaderPdfGeometryTests.testStrokeAnchorSurvivesZoomAndCrop)
 ])])
