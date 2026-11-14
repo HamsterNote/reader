@@ -1,20 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-test_dir=$(mktemp -d)
-trap 'rm -rf "$test_dir"' EXIT
-# Parse UIKit integration too; this is syntax checking, not iOS type checking.
-swiftc -frontend -parse app/modules/reader-pdf/ios/ReaderPdfModule.swift
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  sdk_path=$(xcrun --sdk macosx --show-sdk-path)
-  xcode_path=$(xcode-select -p)
-  xcrun --sdk macosx swiftc -warnings-as-errors -sdk "$sdk_path" \
-    -F "$xcode_path/Platforms/MacOSX.platform/Developer/Library/Frameworks" \
-    app/modules/reader-pdf/ios/ReaderPdfGeometry.swift \
-    test/native-pdf/swift/main.swift -framework XCTest \
-    -o "$test_dir/reader-pdf-geometry-tests"
-else
-  swiftc -warnings-as-errors app/modules/reader-pdf/ios/ReaderPdfGeometry.swift \
-    test/native-pdf/swift/main.swift -o "$test_dir/reader-pdf-geometry-tests"
-fi
-"$test_dir/reader-pdf-geometry-tests"
+
+usage() {
+  echo "usage: $0 --run | --typecheck" >&2
+  echo "  --run       compile and execute XCTest geometry cases on Linux/corelibs-xctest" >&2
+  echo "  --typecheck type-check production geometry against Apple's simulator SDK on macOS" >&2
+}
+
+case "${1:-}" in
+  --run)
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      echo "--run is for Linux/corelibs-xctest; use --typecheck on macOS" >&2
+      exit 2
+    fi
+    test_dir=$(mktemp -d)
+    trap 'rm -rf "$test_dir"' EXIT
+    swiftc -warnings-as-errors \
+      app/modules/reader-pdf/ios/ReaderPdfGeometry.swift \
+      test/native-pdf/swift/main.swift \
+      -o "$test_dir/reader-pdf-geometry-tests"
+    "$test_dir/reader-pdf-geometry-tests"
+    ;;
+  --typecheck)
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+      echo "--typecheck requires macOS Xcode simulator SDK" >&2
+      exit 2
+    fi
+    xcrun --sdk iphonesimulator swiftc -warnings-as-errors -typecheck \
+      app/modules/reader-pdf/ios/ReaderPdfGeometry.swift
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
