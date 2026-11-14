@@ -22,5 +22,10 @@
     "react-native": "0.86.3",
     "react-native-webview": "13.16.1",
     "expo-system-ui": "~57.0.4"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
   }
 }

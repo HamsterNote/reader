@@ -42,13 +42,16 @@ export function PopoverPortal({
   containerRef,
   selectionKind,
   visible,
-  relative = false
+  relative = false,
+  selectionBounds
 }: {
   children: ReactNode
   containerRef: RefObject<HTMLElement | null>
   selectionKind: PopoverSelectionKind
   visible: boolean
   relative?: boolean
+  /** Native renderer viewport bounds; null invalidates an old anchor. */
+  selectionBounds?: DOMRect | null
 }) {
   // anchor div 引用——它被渲染在 .hsn-selection-popover 内部，作为定位基准
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -100,14 +103,17 @@ export function PopoverPortal({
       const anchor = anchorRef.current
       if (container && popover && anchor) {
         const anchorRect = anchor.getBoundingClientRect()
-        const selectionBounds =
-          getSelectionBounds(container, selectionKind) ??
-          (anchorRect.left !== 0 || anchorRect.top !== 0 ? anchorRect : null)
+        const fallback =
+          anchorRect.left !== 0 || anchorRect.top !== 0 ? anchorRect : null
+        const measured =
+          getSelectionBounds(container, selectionKind) ?? fallback
+        const bounds =
+          selectionBounds !== undefined ? selectionBounds : measured
 
-        if (selectionBounds) {
+        if (bounds) {
           const nextPosition = calculatePopoverPosition(
             container.getBoundingClientRect(),
-            selectionBounds,
+            bounds,
             popover.getBoundingClientRect(),
             POPOVER_GAP,
             relative
@@ -136,7 +142,7 @@ export function PopoverPortal({
     rafId = requestAnimationFrame(updatePosition)
 
     return () => cancelAnimationFrame(rafId)
-  }, [containerRef, selectionKind, visible, relative])
+  }, [containerRef, selectionKind, visible, relative, selectionBounds])
 
   return (
     <>

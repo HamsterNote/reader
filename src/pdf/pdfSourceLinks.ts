@@ -244,3 +244,16 @@ export function bindPdfSourceLinks(
     container.removeEventListener('click', click, true)
   }
 }
+
+/** Same source-link semantics for adapters without DOM anchors. */
+export function resolvePdfSourceLink(
+  index: SourceLinks,
+  value: string
+): Destination | null {
+  const url = httpUrl(value)
+  if (!url) return null
+  const key = fragmentKey(url.hash)
+  return key === null
+    ? null
+    : (index.destinations.get(`${url.pathname}#${key}`) ?? null)
+}

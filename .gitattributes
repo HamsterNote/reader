@@ -2,3 +2,4 @@
 patches/*.patch whitespace=-blank-at-eol
 # PDF cross-reference records contain required trailing spaces.
 test/browser/eight-pages.pdf binary
+test/fixtures/native-pdf/*.pdf binary
