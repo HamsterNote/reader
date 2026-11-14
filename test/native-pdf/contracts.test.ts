@@ -11,7 +11,8 @@ import type {
   NativePdfAdapter,
   PdfCanonicalPage,
   PdfEvent,
-  PdfIdentity
+  PdfIdentity,
+  NativePdfAnnotationCommit
 } from '../../src/nativePdf/contracts'
 const identity: PdfIdentity = {
   fileId: 'book',
@@ -37,6 +38,22 @@ const page = (n: number): PdfCanonicalPage => ({
   }))
 })
 describe('native PDF contracts', () => {
+  it('keeps native annotation intents host-neutral and JSON serializable', () => {
+    const commit: NativePdfAnnotationCommit = {
+      commitId: 'commit-1',
+      intent: {
+        type: 'highlight',
+        start: { selectionId: 'page-1', offset: 2 },
+        end: { selectionId: 'page-1', offset: 8 },
+        rectsBySelectionId: {
+          'page-1': [{ x: 10, y: 20, width: 40, height: 12 }]
+        },
+        geometryRevision: 3
+      }
+    }
+    expect(JSON.parse(JSON.stringify(commit))).toEqual(commit)
+    expect(JSON.stringify(commit)).not.toMatch(/DOM|WebView|storage|uri/i)
+  })
   it('can be implemented with plain JSON values by a future adapter', () => {
     const adapter: NativePdfAdapter = {
       capabilities: {

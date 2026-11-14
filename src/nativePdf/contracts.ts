@@ -49,6 +49,34 @@ export type PdfGeometry = {
   readonly pageToViewport: PdfMatrix
   readonly geometryRevision: number
 }
+
+/**
+ * Native annotation boundary: native code exchanges source offsets and page
+ * rectangles only. Reader business metadata, comments, storage keys and DOM
+ * nodes stay in the host controller.
+ */
+export type NativePdfAnnotationIntent =
+  | {
+      readonly type: 'highlight'
+      readonly rangeId?: string
+      readonly start: ReaderSelectionEndpoint
+      readonly end: ReaderSelectionEndpoint
+      readonly rectsBySelectionId: Readonly<Record<string, readonly PdfRect[]>>
+      readonly geometryRevision: number
+    }
+  | {
+      readonly type: 'rectangle'
+      readonly rectId?: string
+      readonly pageNumber: number
+      readonly rect: PdfRect
+      readonly phase: 'preview' | 'commit' | 'cancel'
+      readonly geometryRevision: number
+    }
+
+export type NativePdfAnnotationCommit = {
+  readonly commitId: string
+  readonly intent: NativePdfAnnotationIntent
+}
 export type PdfBoundary = {
   readonly offset: number
   readonly textId: string
