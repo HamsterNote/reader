@@ -426,7 +426,9 @@ async function run(browserType, mobile, format, version, attack = false) {
       await page.getByRole('tab', { name: '高亮', exact: true }).click()
       await page.getByTestId(`page-browser-highlight-${added.id}`).click()
       await page.getByRole('button', { name: '关闭页面浏览' }).click()
-      const handle = page.getByRole('button', { name: format === 'pdf' ? '拖动以调整选区终点' : '调整高亮终点' })
+      const handle = page.getByRole('button', {
+        name: format === 'pdf' ? '拖动以调整选区终点' : '调整高亮终点'
+      })
       await handle.waitFor()
       const goal = await frame.evaluate(
         ({ format, added }) => {

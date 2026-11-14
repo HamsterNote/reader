@@ -84,20 +84,18 @@ try {
     )
     await page
       .waitForFunction((surface) => {
+        let selector = '.textLayer [data-selection-start-offset]'
+        if (surface === 'epub') selector = 'p'
+        else if (surface === 'pdf-text')
+          selector = '.hsn-selection-content [data-text-id]'
         const doc =
           surface === 'epub'
             ? document.querySelector('foliate-view')?.renderer?.getContents()[0]
                 ?.doc
             : document
-        return [
-          ...(doc?.querySelectorAll(
-            surface === 'epub'
-              ? 'p'
-              : surface === 'pdf-text'
-                ? '.hsn-selection-content [data-text-id]'
-                : '.textLayer [data-selection-start-offset]'
-          ) ?? [])
-        ].some((e) => e.firstChild?.nodeType === 3 && e.firstChild.length >= 19)
+        return [...(doc?.querySelectorAll(selector) ?? [])].some(
+          (e) => e.firstChild?.nodeType === 3 && e.firstChild.length >= 19
+        )
       }, surface)
       .catch(async (error) => {
         console.error(await page.locator('body').innerText())
@@ -107,19 +105,17 @@ try {
         throw error
       })
     const points = await page.evaluate((surface) => {
+      let selector = '.textLayer [data-selection-start-offset]'
+      if (surface === 'epub') selector = 'p'
+      else if (surface === 'pdf-text')
+        selector = '.hsn-selection-content [data-text-id]'
       const doc =
         surface === 'epub'
           ? document.querySelector('foliate-view').renderer.getContents()[0].doc
           : document
-      const e = [
-        ...doc.querySelectorAll(
-          surface === 'epub'
-            ? 'p'
-            : surface === 'pdf-text'
-              ? '.hsn-selection-content [data-text-id]'
-              : '.textLayer [data-selection-start-offset]'
-        )
-      ].find((e) => e.firstChild?.nodeType === 3 && e.firstChild.length >= 19)
+      const e = [...doc.querySelectorAll(selector)].find(
+        (e) => e.firstChild?.nodeType === 3 && e.firstChild.length >= 19
+      )
       const point = (offset) => {
         const r = doc.createRange()
         r.setStart(e.firstChild, offset)
@@ -134,19 +130,17 @@ try {
       return [point(8), point(18), point(12)]
     }, surface)
     await page.evaluate((surface) => {
+      let selector = '.textLayer [data-selection-start-offset]'
+      if (surface === 'epub') selector = 'p'
+      else if (surface === 'pdf-text')
+        selector = '.hsn-selection-content [data-text-id]'
       const doc =
         surface === 'epub'
           ? document.querySelector('foliate-view').renderer.getContents()[0].doc
           : document
-      const e = [
-        ...doc.querySelectorAll(
-          surface === 'epub'
-            ? 'p'
-            : surface === 'pdf-text'
-              ? '.hsn-selection-content [data-text-id]'
-              : '.textLayer [data-selection-start-offset]'
-        )
-      ].find((e) => e.firstChild?.nodeType === 3 && e.firstChild.length >= 19)
+      const e = [...doc.querySelectorAll(selector)].find(
+        (e) => e.firstChild?.nodeType === 3 && e.firstChild.length >= 19
+      )
       const range = doc.createRange()
       range.setStart(e.firstChild, 8)
       range.setEnd(e.firstChild, 18)
@@ -259,20 +253,16 @@ try {
         touchPoints: []
       })
       await page.waitForFunction((surface) => {
+        let selector = '.textLayer [data-selection-start-offset]'
+        if (surface === 'epub') selector = 'p'
+        else if (surface === 'pdf-text')
+          selector = '.hsn-selection-content [data-text-id]'
         const doc =
           surface === 'epub'
             ? document.querySelector('foliate-view')?.renderer?.getContents()[0]
                 ?.doc
             : document
-        return (
-          doc?.querySelector(
-            surface === 'epub'
-              ? 'p'
-              : surface === 'pdf-text'
-                ? '.hsn-selection-content [data-text-id]'
-                : '.textLayer [data-selection-start-offset]'
-          )?.textContent?.length > 0
-        )
+        return doc?.querySelector(selector)?.textContent?.length > 0
       }, surface)
     }
     assert.equal(

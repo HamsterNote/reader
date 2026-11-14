@@ -241,5 +241,9 @@ export {
   type ReaderSessionReplacement
 } from './bridge/sessionReplacement'
 
-export type { ReaderHighlightGesture, ReaderHighlightDragHandoff, ReaderHighlightDragCancelReason } from './types/highlightDrag'
+export type {
+  ReaderHighlightGesture,
+  ReaderHighlightDragHandoff,
+  ReaderHighlightDragCancelReason
+} from './types/highlightDrag'
 export { HIGHLIGHT_HANDOFF_TIMEOUT_MS } from './types/highlightDrag'

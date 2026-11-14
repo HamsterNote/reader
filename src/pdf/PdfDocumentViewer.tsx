@@ -610,7 +610,6 @@ export const PdfDocumentViewer = forwardRef<
         const document = documentRef.current,
           source = progressOptions.current.source
         let stopLayout = () => {}
-        let timer: ReturnType<typeof setTimeout>
         const finish = () => {
           stopLayout()
           clearTimeout(timer)
@@ -630,7 +629,7 @@ export const PdfDocumentViewer = forwardRef<
           containerRef.current === container &&
           visiblePagesRef.current.includes(pageNumber)
         pendingAnchor.current = pending
-        timer = setTimeout(() => {
+        const timer = setTimeout(() => {
           const current = isCurrent()
           finish()
           if (current)
