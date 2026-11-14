@@ -807,8 +807,17 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         // this bridge native OCR could select internally but never expose the
         // annotation menu.
         const anchor = event.anchor
+        if (__DEV__)
+          console.info('reader-pdf-native-selection-end', {
+            start: event.start,
+            end: event.end,
+            anchor,
+            size,
+            nativeTop,
+            webAlive: web.current !== null
+          })
         setPanelOpen(false)
-        setMenu({
+        const nextMenu = {
           left: Math.max(
             0,
             Math.min(size.width - width, anchor.x + anchor.width / 2 - width / 2)
@@ -817,7 +826,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             0,
             Math.min(size.height - height, anchor.y + nativeTop - height)
           )
-        })
+        }
+        if (__DEV__) console.info('reader-pdf-native-menu', nextMenu)
+        setMenu(nextMenu)
         post({ type: 'nativeSelection', event })
       }
       if (event.type === 'error') {
