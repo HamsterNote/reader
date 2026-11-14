@@ -111,13 +111,12 @@ export function startNativePdfSurface(
   } | null
   let menuListener: ((value: MenuValue) => void) | null = null
   const show = (value: MenuValue): void => {
-    if (import.meta.env.DEV)
-      console.info('web-popover-value', {
-        owner: menuOwner,
-        value: value
-          ? { activeId: value.activeId, start: value.range?.start, end: value.range?.end }
-          : null
-      })
+    console.info('web-popover-value', {
+      owner: menuOwner,
+      value: value
+        ? { activeId: value.activeId, start: value.range?.start, end: value.range?.end, anchor: value.anchor }
+        : null
+    })
     menuListener?.(value)
   }
 
@@ -347,8 +346,17 @@ export function startNativePdfSurface(
       message =
         typeof raw === 'string' ? JSON.parse(raw) : (raw as typeof message)
     } catch {
+      console.info('reader-pdf-web-message', { parsed: false, rawType: typeof raw })
       return
     }
+    console.info('reader-pdf-web-message', {
+      parsed: true,
+      type: message.type,
+      eventType: message.event?.type,
+      phase: message.event?.type === 'selection' ? message.event.phase : undefined,
+      startOffset: message.event?.type === 'selection' ? message.event.start.offset : undefined,
+      endOffset: message.event?.type === 'selection' ? message.event.end.offset : undefined
+    })
     if (disposed || !message.identity || !guard.accepts(message.identity))
       return
     if (message.type === 'dispose') {
@@ -372,8 +380,8 @@ export function startNativePdfSurface(
     if (message.type === 'nativeSelection') {
       const nativeEvent = message.event
       if (!nativeEvent || nativeEvent.type !== 'selection') return
-      menuOwner = 'native'
       if (!guard.receive(nativeEvent)) return
+      menuOwner = 'native'
       selection(nativeEvent).catch(() => fail('MAPPING_NOT_READY'))
       return
     }

@@ -232,8 +232,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       pump()
       return requestId
     }
-    const post = (body: Record<string, unknown>) =>
-      web.current?.postMessage(JSON.stringify({ ...body, identity }))
+    const post = (body: Record<string, unknown>) => {
+      const alive = web.current !== null
+      const event = body.event as
+        | { type?: string; start?: { offset?: number; selectionId?: string }; end?: { offset?: number; selectionId?: string } }
+        | undefined
+      const payload = {
+        type: body.type,
+        eventType: event?.type,
+        page: event?.start?.selectionId ?? event?.end?.selectionId,
+        startOffset: event?.start?.offset,
+        endOffset: event?.end?.offset
+      }
+      const message = JSON.stringify({ ...body, identity })
+      const result = alive ? web.current?.postMessage(message) : undefined
+      console.info('reader-pdf-native-post', { alive, payload, result })
+      return result
+    }
     function setMenuWithSource(
       value: { left: number; top: number } | null,
       source: string
@@ -841,8 +856,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         // this bridge native OCR could select internally but never expose the
         // annotation menu.
         const anchor = event.anchor
-        if (__DEV__)
-          console.info('reader-pdf-native-selection-end', {
+        console.info('reader-pdf-native-selection-end', {
             start: event.start,
             end: event.end,
             anchor,
@@ -852,7 +866,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           })
         setPanelOpen(false)
         const nextMenu = menuFrame(anchor)
-        if (__DEV__) console.info('reader-pdf-native-menu', nextMenu)
+        console.info('reader-pdf-native-menu', nextMenu)
         setMenuWithSource(nextMenu, 'native-selection-end')
         post({ type: 'nativeSelection', event })
       }

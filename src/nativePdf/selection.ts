@@ -35,6 +35,14 @@ export function materializeNativeRange(
   metadata: { id: string; createdAt: number; color: string },
   existing?: ReaderSelectionRange
 ): ReaderSelectionRange {
+  console.info('reader-pdf-materialize-input', {
+    start: a,
+    end: b,
+    pageCount: pages.size,
+    pages: Array.from(pages.keys()),
+    allowed,
+    existingId: existing?.id
+  })
   const [start, end] = compareEndpoints(a, b) <= 0 ? [a, b] : [b, a]
   const first = endpointPage(start),
     last = endpointPage(end)
@@ -44,7 +52,10 @@ export function materializeNativeRange(
     !allowed.includes(first) ||
     !allowed.includes(last)
   )
-    throw new Error('INVALID_TARGET')
+    {
+      console.info('reader-pdf-materialize-failure', { reason: 'invalid-target', first, last })
+      throw new Error('INVALID_TARGET')
+    }
   const selected = allowed.filter((n) => n >= first && n <= last)
   const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] = {}
   let text = ''
@@ -52,18 +63,31 @@ export function materializeNativeRange(
     const p = pages.get(n)
     const from = n === first ? start.offset : 0,
       to = n === last ? end.offset : p?.text.length
+    if (!p) {
+      console.info('reader-pdf-materialize-failure', { reason: 'page-text-missing', page: n })
+      throw new Error('MAPPING_NOT_READY')
+    }
+    if (to === undefined || !Number.isInteger(from) || !Number.isInteger(to)) {
+      console.info('reader-pdf-materialize-failure', { reason: 'metrics-not-ready', page: n, from, to })
+      throw new Error('MAPPING_NOT_READY')
+    }
     if (
-      !p ||
-      to === undefined ||
-      !Number.isInteger(from) ||
-      !Number.isInteger(to) ||
       from < 0 ||
       to < from ||
       to > p.text.length ||
       !p.boundaries.some((v) => v.offset === from) ||
       !p.boundaries.some((v) => v.offset === to)
-    )
+    ) {
+      console.info('reader-pdf-materialize-failure', {
+        reason: 'offset-out-of-range',
+        page: n,
+        from,
+        to,
+        utf16: p.text.length,
+        boundaries: p.boundaries.length
+      })
       throw new Error('MAPPING_NOT_READY')
+    }
     text += p.text.slice(from, to)
     rectsBySelectionId[`page-${n}`] = p.glyphs
       .filter((g) => g.end > from && g.start < to)
@@ -78,8 +102,11 @@ export function materializeNativeRange(
           : { ...g.rect }
       )
   }
-  if (!text.length) throw new Error('MAPPING_NOT_READY')
-  return {
+  if (!text.length) {
+    console.info('reader-pdf-materialize-failure', { reason: 'empty-text' })
+    throw new Error('MAPPING_NOT_READY')
+  }
+  const result = {
     ...existing,
     id: existing?.id ?? metadata.id,
     createdAt: existing?.createdAt ?? metadata.createdAt,
@@ -90,4 +117,12 @@ export function materializeNativeRange(
     overlayRectType: existing?.overlayRectType ?? 'px',
     markerStyle: { ...existing?.markerStyle, backgroundColor: metadata.color }
   }
+  console.info('reader-pdf-materialize-result', {
+    id: result.id,
+    start: result.start,
+    end: result.end,
+    textLength: result.text.length,
+    rectPages: Object.keys(result.rectsBySelectionId)
+  })
+  return result
 }
