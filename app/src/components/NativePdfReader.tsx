@@ -544,7 +544,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       ocrError.current = null
       if (!ocrEnabled) {
         ocrCompleted.current.clear()
-        enqueue({ type: 'text', pages: [], retain: [] })
+        enqueue({ type: 'text', pages: [], retain: [], source: 'ocr-disabled', clear: true })
       }
     }, [ocrEnabled])
     useEffect(() => {
@@ -621,7 +621,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             )
           : null
         if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
-        enqueue({ type: 'text', pages: [canonical], retain: [pageNumber] })
+        enqueue({ type: 'text', pages: [canonical], retain: [pageNumber], source: 'ocr' })
         persist((snapshot) =>
           withNativeOcrTexts(snapshot.data, pageNumber, texts)
         )
@@ -781,7 +781,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               enqueue({
                 type: 'text',
                 pages: [canonical],
-                retain: [geometry.pageNumber]
+                retain: [geometry.pageNumber],
+                source: 'geometry-cache'
               })
               ocrCompleted.current.add(
                 nativeOcrSessionKey(record.fileId, geometry.pageNumber)

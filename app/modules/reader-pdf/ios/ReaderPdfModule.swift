@@ -262,13 +262,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
         navigate(to: y)
       case "text":
         let retain = Set(c["retain"] as? [Int] ?? [])
+        let source = c["source"] as? String ?? "unknown"
+        let clear = c["clear"] as? Bool == true
         for p in c["pages"] as? [[String: Any]] ?? [] {
           guard let n = p["pageNumber"] as? Int, pages.contains(n), let str = p["text"] as? String,
                 let bs = p["boundaries"] as? [[String: Any]], let gs = p["glyphs"] as? [[String: Any]] else {
             NSLog("ReaderPdf text rejected request=\(request) reason=invalid-payload")
             continue
           }
-          NSLog("ReaderPdf text received page=\(n) utf16=\(str.utf16.count) boundariesInput=\(bs.count) glyphsInput=\(gs.count)")
+          NSLog("ReaderPdf text received source=\(source) clear=\(clear) page=\(n) utf16=\(str.utf16.count) boundariesInput=\(bs.count) glyphsInput=\(gs.count)")
           let boundaries = bs.compactMap { b -> CanonicalBoundary? in
             guard let o = b["offset"] as? Int, o >= 0 && o <= str.utf16.count else { return nil }
             return CanonicalBoundary(offset:o,rect:pdfRect(b["rect"]))
@@ -276,6 +278,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
           guard boundaries.count == str.utf16.count + 1 else {
             NSLog("ReaderPdf text rejected page=\(n) reason=MAPPING_NOT_READY utf16=\(str.utf16.count) boundaries=\(boundaries.count)")
             error("MAPPING_NOT_READY",request); continue
+          }
+          if str.isEmpty, !clear, text[n]?.text.isEmpty == false {
+            NSLog("ReaderPdf text ignored source=\(source) page=\(n) reason=empty-would-overwrite existingUtf16=\(text[n]?.text.utf16.count ?? 0)")
+            continue
           }
           if let raw = p["textImage"] as? String, let base64 = raw.split(separator:",",maxSplits:1).last,
              let data = Data(base64Encoded:String(base64)), let image = UIImage(data:data) {
@@ -285,8 +291,9 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
             guard let a = g["start"] as? Int, let b = g["end"] as? Int, let s = g["text"] as? String else { return nil }
             return CanonicalGlyph(start:a,end:b,text:s,rect:pdfRect(g["rect"]))
           })
-          NSLog("ReaderPdf text accepted page=\(n) canonicalReady=1 utf16=\(text[n]?.text.utf16.count ?? 0) boundaries=\(text[n]?.boundaries.count ?? 0) glyphs=\(text[n]?.glyphs.count ?? 0)")
+          NSLog("ReaderPdf text accepted source=\(source) page=\(n) canonicalReady=1 utf16=\(text[n]?.text.utf16.count ?? 0) boundaries=\(text[n]?.boundaries.count ?? 0) glyphs=\(text[n]?.glyphs.count ?? 0)")
         }
+        if clear { text.removeAll() }
         text = text.filter { retain.contains($0.key) || pageViews[$0.key] != nil }
         NSLog("ReaderPdf text retained pages=\(text.keys.sorted()) pageViews=\(pageViews.keys.sorted())")
         updateSelection()

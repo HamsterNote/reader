@@ -145,6 +145,10 @@ export type PdfCommand = PdfRequest &
         readonly type: 'text'
         readonly pages: readonly PdfCanonicalPage[]
         readonly retain: readonly number[]
+        /** Identifies the producer in native diagnostics and overwrite policy. */
+        readonly source: 'ocr' | 'geometry-cache' | 'ocr-disabled'
+        /** Only an explicit OCR toggle-off may clear canonical text. */
+        readonly clear?: boolean
       }
     | {
         readonly type: 'preview'

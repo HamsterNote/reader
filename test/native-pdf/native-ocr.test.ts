@@ -5,6 +5,7 @@ import {
   nativeCanonicalPageFromOcr,
   nativeOcrFailurePreservesData,
   nativeOcrSessionKey,
+  shouldReplaceNativeCanonicalText,
   shouldRequestNativeOcr
 } from '../../src/nativePdf/ocr'
 import {
@@ -108,5 +109,11 @@ describe('native OCR contract', () => {
   it('keeps OCR state isolated by file and page', () => {
     expect(nativeOcrSessionKey('a', 1)).not.toBe(nativeOcrSessionKey('b', 1))
     expect(nativeOcrSessionKey('a', 1)).not.toBe(nativeOcrSessionKey('a', 2))
+  })
+
+  it('does not let an implicit empty text update erase OCR canonical text', () => {
+    expect(shouldReplaceNativeCanonicalText(13, 13, false)).toBe(true)
+    expect(shouldReplaceNativeCanonicalText(13, 0, false)).toBe(false)
+    expect(shouldReplaceNativeCanonicalText(13, 0, true)).toBe(true)
   })
 })

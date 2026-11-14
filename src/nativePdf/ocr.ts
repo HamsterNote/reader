@@ -42,6 +42,15 @@ export function canRetryNativeOcrPage(
   return canRequestNativeOcrPage(key, requested, completed) && !failed.has(key)
 }
 
+/** Native text commands must not erase a usable OCR mapping accidentally. */
+export function shouldReplaceNativeCanonicalText(
+  existingUtf16Length: number,
+  nextUtf16Length: number,
+  clear: boolean
+): boolean {
+  return clear || nextUtf16Length > 0 || existingUtf16Length === 0
+}
+
 type PolygonPoint = readonly [number, number]
 type OcrTextLike = {
   readonly id?: string
