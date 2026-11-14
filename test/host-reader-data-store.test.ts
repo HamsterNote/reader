@@ -294,7 +294,10 @@ describe('ReaderDataStore v2 snapshot key', () => {
     })
 
     const after = storage.values.get(legacyKey) ?? ''
-    expect(createHash('sha256').update(after).digest('hex')).toBe(beforeHash)
+    const afterHash = createHash('sha256').update(after).digest('hex')
+    if (process.env.REPORT_COMPATIBILITY_HASH === '1')
+      console.info(`4.8 legacyBlobSha256 before=${beforeHash} after=${afterHash}`)
+    expect(afterHash).toBe(beforeHash)
     const reopened = await new ReaderDataStore(storage).get(fileId)
     expect(reopened?.snapshot.data).toEqual({
       readerData: { renderMode: 'layout', customFutureField: { keep: true } },
