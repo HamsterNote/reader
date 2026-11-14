@@ -117,9 +117,9 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private var strokes: [[String: Any]] = []
   private var strokeLayers: [CAShapeLayer] = []
   private let inkPreview = CAShapeLayer()
-  private let inkColor = UIColor(red:CGFloat(0xe5)/255,green:CGFloat(0x48)/255,
+  private var inkColor = UIColor(red:CGFloat(0xe5)/255,green:CGFloat(0x48)/255,
                                  blue:CGFloat(0x4d)/255,alpha:1)
-  private let inkWidth: CGFloat = 3
+  private var inkWidth: CGFloat = 3
   private var strokePage: Int?
   private var strokePoints: [CGPoint] = []
   private var drawingPage: Int?
@@ -291,9 +291,14 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
           error("INVALID_TARGET",request); return
         }
         setTool(value)
-      case "strokes":
-        strokes = c["strokes"] as? [[String: Any]] ?? []
+      case "ink":
+        strokes = c["objects"] as? [[String: Any]] ?? []
         updateStrokes()
+      case "inkStyle":
+        if let hex = c["color"] as? String { inkColor = parseColor(hex) }
+        if let width = c["width"] as? Double, width.isFinite, width > 0 { inkWidth = CGFloat(min(64,max(0.5,width))) }
+        inkPreview.strokeColor = inkColor.cgColor
+        updateInkPreview()
       case "selection":
         stopSelection(notify:false)
         if let r = c["range"] as? [String: Any] {
@@ -619,6 +624,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     }
     inkPreview.path = path.cgPath
     inkPreview.lineWidth = inkWidth
+    inkPreview.strokeColor = inkColor.cgColor
     inkPreview.isHidden = false
   }
   private func updateStrokes() {
@@ -632,6 +638,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
                              y:(point["y"] as? Double ?? 0)+f.minY)
         if index == 0 { path.move(to:target) } else { path.addLine(to:target) }
       }
+      if value["closed"] as? Bool == true { path.close() }
       let layer = CAShapeLayer()
       layer.path = path.cgPath; layer.fillColor = UIColor.clear.cgColor
       layer.strokeColor = parseColor(value["color"] as? String ?? "#e5484d").cgColor

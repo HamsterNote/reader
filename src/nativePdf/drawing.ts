@@ -4,10 +4,11 @@
 
 import type { NativeAnnotationSnapshot } from './annotationController'
 import type { NativePdfAnnotationCommit, PdfEvent, PdfRect } from './contracts'
-import {
-  restoreReaderSnapshot,
-  serializeReaderSnapshot
-} from '../host/readerSnapshot'
+
+const record = (value: unknown): Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 
 export type NativeRectEvent = Extract<PdfEvent, { type: 'rect' }>
 
@@ -54,22 +55,22 @@ export function nativeRectCommit(
 }
 
 /**
- * 把控制层快照写回既有 V5 宿主信封：`annotations` 是唯一权威容器，
- * readerData 的其它字段和未知扩展字段原样保留。
+ * 把控制层快照写回既有 V5 `annotations` 容器：只 patch 标注自己拥有的字段，
+ * `readerData`、评论和宿主未知字段原样保留（与 pageEdit 的字段归属一致）。
  */
-export function readerSnapshotWithAnnotations(
+export function withNativeAnnotationData(
   snapshotData: unknown,
-  progressData: unknown,
   annotations: NativeAnnotationSnapshot
 ): Record<string, unknown> {
-  const restored = restoreReaderSnapshot(snapshotData, progressData)
-  return serializeReaderSnapshot({
-    ...restored,
-    data: {
-      ...restored.data,
+  const envelope = record(snapshotData)
+  return {
+    ...envelope,
+    annotations: {
+      ...record(envelope['annotations']),
+      version: 5,
       ranges: [...annotations.ranges],
       rects: [...annotations.rects],
-      pagePaintings: { ...annotations.pagePaintings }
+      paintings: { ...annotations.pagePaintings }
     }
-  })
+  }
 }

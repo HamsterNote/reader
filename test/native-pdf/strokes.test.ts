@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { EditorDocument } from '@hamster-note/painting/core'
 import { createNativeAnnotationController } from '../../src/nativePdf/annotationController'
 import { nativePageLayout } from '../../src/nativePdf/geometry'
+import { readLayeredDocument } from '@hamster-note/painting/core'
 import {
   appendStrokeDocument,
-  paintingPageId,
-  strokesForNative
+  inkObjectsForNative,
+  paintingPageId
 } from '../../src/nativePdf/strokes'
 import type { PdfPoint } from '../../src/nativePdf/contracts'
 
@@ -84,7 +85,7 @@ describe('native freehand strokes', () => {
       controller.getSnapshot().pagePaintings[pageId]?.objects ?? []
     expect(objects.map((object) => object.objectId)).toEqual(ids)
     expect(
-      strokesForNative(controller.getSnapshot().pagePaintings)
+      inkObjectsForNative(controller.getSnapshot().pagePaintings)
     ).toHaveLength(3)
 
     expect(controller.undo()).toBe(true)
@@ -93,7 +94,7 @@ describe('native freehand strokes', () => {
       controller.getSnapshot().pagePaintings[pageId]?.objects ?? []
     expect(remaining.map((object) => object.objectId)).toEqual(['s1'])
     expect(
-      strokesForNative(controller.getSnapshot().pagePaintings)
+      inkObjectsForNative(controller.getSnapshot().pagePaintings)
     ).toHaveLength(1)
 
     expect(controller.redo()).toBe(true)
@@ -178,5 +179,117 @@ describe('native freehand strokes', () => {
         { x: 2, y: 2 }
       ])
     ).toBeNull()
+  })
+})
+
+describe('native shape rendering', () => {
+  const shapeDocument = (
+    shapeType: 'line' | 'rect' | 'ellipse',
+    points: PdfPoint[],
+    transform = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+  ) => {
+    const read = readLayeredDocument({
+      schemaVersion: 3,
+      documentRevision: 1,
+      objects: [
+        {
+          kind: 'shape',
+          objectId: `shape-${shapeType}`,
+          objectRevision: 1,
+          transform,
+          transformRevision: 1,
+          shapeType,
+          points,
+          style: { color: '#1f6feb', width: 2.5, opacity: 1 }
+        }
+      ]
+    })
+    if (!read.ok) throw new Error(`shape rejected: ${read.error.path}`)
+    return { 'page-4': read.value }
+  }
+
+  it('renders line and rect objects as polylines with the stored style', () => {
+    const line = inkObjectsForNative(
+      shapeDocument('line', [
+        { x: 10, y: 20 },
+        { x: 110, y: 70 }
+      ])
+    )
+    expect(line).toHaveLength(1)
+    expect(line[0]).toMatchObject({
+      pageNumber: 4,
+      color: '#1f6feb',
+      width: 2.5,
+      closed: false
+    })
+    expect(line[0]?.points).toEqual([
+      { x: 10, y: 20 },
+      { x: 110, y: 70 }
+    ])
+
+    const rect = inkObjectsForNative(
+      shapeDocument('rect', [
+        { x: 10, y: 20 },
+        { x: 60, y: 80 }
+      ])
+    )
+    expect(rect).toHaveLength(1)
+    expect(rect[0]?.closed).toBe(true)
+    const xs = rect[0]!.points.map((point) => point.x)
+    const ys = rect[0]!.points.map((point) => point.y)
+    expect(Math.min(...xs)).toBe(10)
+    expect(Math.max(...xs)).toBe(60)
+    expect(Math.min(...ys)).toBe(20)
+    expect(Math.max(...ys)).toBe(80)
+  })
+
+  it('samples ellipse objects and keeps every point inside the bounds', () => {
+    const ellipse = inkObjectsForNative(
+      shapeDocument('ellipse', [
+        { x: 0, y: 0 },
+        { x: 200, y: 100 }
+      ])
+    )
+    expect(ellipse).toHaveLength(1)
+    expect(ellipse[0]?.closed).toBe(true)
+    expect(ellipse[0]!.points.length).toBeGreaterThan(16)
+    for (const point of ellipse[0]!.points) {
+      expect(point.x).toBeGreaterThanOrEqual(-0.001)
+      expect(point.x).toBeLessThanOrEqual(200.001)
+      expect(point.y).toBeGreaterThanOrEqual(-0.001)
+      expect(point.y).toBeLessThanOrEqual(100.001)
+    }
+  })
+
+  it('applies the object transform before handing points to native', () => {
+    const moved = inkObjectsForNative(
+      shapeDocument(
+        'line',
+        [
+          { x: 10, y: 20 },
+          { x: 30, y: 40 }
+        ],
+        { a: 2, b: 0, c: 0, d: 1, tx: 5, ty: -10 }
+      )
+    )
+    expect(moved[0]?.points).toEqual([
+      { x: 25, y: 10 },
+      { x: 65, y: 30 }
+    ])
+  })
+
+  it('persists the chosen colour and width into the same painting document', () => {
+    const document = appendStrokeDocument(
+      undefined,
+      'styled',
+      [
+        { x: 1, y: 2 },
+        { x: 3, y: 4 }
+      ],
+      { color: '#2ea043', width: 8, time: 1 }
+    )
+    expect(document).not.toBeNull()
+    const objects = inkObjectsForNative({ 'page-2': document! })
+    expect(objects[0]).toMatchObject({ color: '#2ea043', width: 8 })
   })
 })

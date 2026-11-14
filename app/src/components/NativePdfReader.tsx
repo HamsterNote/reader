@@ -38,13 +38,18 @@ import {
 } from '../../../src/nativePdf/annotationController'
 import {
   nativeRectCommit,
-  readerSnapshotWithAnnotations
+  withNativeAnnotationData
 } from '../../../src/nativePdf/drawing'
 import {
   appendStrokeDocument,
-  paintingPageId,
-  strokesForNative
+  inkObjectsForNative,
+  NATIVE_INK_COLORS,
+  NATIVE_INK_WIDTHS,
+  NATIVE_STROKE_COLOR,
+  NATIVE_STROKE_WIDTH,
+  paintingPageId
 } from '../../../src/nativePdf/strokes'
+import { restoreReaderSnapshot } from '../../../src/host/readerSnapshot'
 import { NativePdfSession } from '../../../src/nativePdf/session'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
@@ -137,6 +142,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     )
     const annotationCommits = useRef(0)
     const [tool, setTool] = useState<PdfTool>('none')
+    const [ink, setInk] = useState({
+      color: NATIVE_STROKE_COLOR,
+      width: NATIVE_STROKE_WIDTH
+    })
     const web = useRef<WebView>(null)
     const [command, setCommand] = useState<PdfCommand | null>(null)
     const queue = useRef<PdfCommand[]>([])
@@ -248,19 +257,14 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         rects: snapshot.rects
       })
       enqueue({
-        type: 'strokes',
-        strokes: strokesForNative(snapshot.pagePaintings)
+        type: 'ink',
+        objects: inkObjectsForNative(snapshot.pagePaintings)
       })
     }
+    /** Only the annotation container is owned here; the patch reads the newest base. */
     function saveAnnotations(snapshot: NativeAnnotationSnapshot): boolean {
       try {
-        persist(
-          readerSnapshotWithAnnotations(
-            latest.current.data,
-            latest.current.progress,
-            snapshot
-          )
-        )
+        persist((base) => withNativeAnnotationData(base.data, snapshot))
         return true
       } catch (error) {
         setStatus(
@@ -270,18 +274,36 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
     }
     function rehydrateAnnotations() {
-      annotations.replaceSnapshot(
-        readerDataFromNativeSnapshot(
+      try {
+        // The V5 container is the authoritative annotation read path.
+        const restored = restoreReaderSnapshot(
           latest.current.data,
           latest.current.progress
-        ) ?? null
-      )
+        )
+        annotations.replaceSnapshot(restored.data)
+      } catch (error) {
+        setStatus(
+          `标注读取失败：${error instanceof Error ? error.message : String(error)}`
+        )
+        return
+      }
       mirrorAnnotations(annotations.getSnapshot())
     }
     function selectTool(next: PdfTool) {
       if (closed.current) return
       setTool(next)
       enqueue({ type: 'tool', tool: next })
+      enqueue({ type: 'inkStyle', color: ink.color, width: ink.width })
+    }
+    /** Brush used for new strokes; the persisted object keeps the same style. */
+    function selectInk(next: { color?: string; width?: number }) {
+      if (closed.current) return
+      const value = {
+        color: next.color ?? ink.color,
+        width: next.width ?? ink.width
+      }
+      setInk(value)
+      enqueue({ type: 'inkStyle', ...value })
     }
     /** Native gesture → existing 4.x annotation controller → V5 snapshot. */
     function commitNativeRect(event: Extract<PdfEvent, { type: 'rect' }>) {
@@ -323,7 +345,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       const document = appendStrokeDocument(
         annotations.getSnapshot().pagePaintings[pageId],
         commitId,
-        event.points
+        event.points,
+        { color: ink.color, width: ink.width }
       )
       if (!document) {
         setStatus('笔迹未保存：点数不足或文档校验失败')
@@ -845,6 +868,34 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           >
             <Text>清空本页</Text>
           </Pressable>
+          {NATIVE_INK_COLORS.map((color) => (
+            <Pressable
+              key={color}
+              accessibilityRole='button'
+              accessibilityLabel={`笔迹颜色 ${color}`}
+              accessibilityState={{ selected: ink.color === color }}
+              onPress={() => selectInk({ color })}
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                backgroundColor: color,
+                borderWidth: ink.color === color ? 3 : 1,
+                borderColor: ink.color === color ? '#1f2328' : '#d0d7de'
+              }}
+            />
+          ))}
+          {NATIVE_INK_WIDTHS.map((width) => (
+            <Pressable
+              key={width}
+              accessibilityRole='button'
+              accessibilityLabel={`笔迹线宽 ${width}`}
+              accessibilityState={{ selected: ink.width === width }}
+              onPress={() => selectInk({ width })}
+            >
+              <Text>{ink.width === width ? `●${width}` : `○${width}`}</Text>
+            </Pressable>
+          ))}
           {hiddenPagesUndo ? (
             <Pressable onPress={undoPageEdit}>
               <Text>撤销（5秒）</Text>

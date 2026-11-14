@@ -36,14 +36,17 @@ export type PdfCrop = {
 /** Gesture modes the native surface exposes to the host toolbar. */
 export type PdfTool = 'none' | 'rectangle' | 'draw'
 /**
- * One persisted freehand stroke as the native renderer needs it.
- * `points` stay in page-local scale-one coordinates, so zoom never rescales them.
+ * One persistable painting object as the native renderer needs it. Every
+ * schema3 object kind reduces to a polyline here, so freehand and shapes share
+ * one drawing path. `points` stay in page-local scale-one coordinates, so zoom
+ * never rescales them.
  */
-export type PdfStroke = {
+export type PdfInkObject = {
   readonly pageNumber: number
   readonly points: readonly PdfPoint[]
   readonly color: string
   readonly width: number
+  readonly closed: boolean
 }
 export type PdfCapabilities = {
   readonly nativeLayout: boolean
@@ -160,9 +163,15 @@ export type PdfCommand = PdfRequest &
         readonly tool: PdfTool
       }
     | {
-        /** Full freehand payload for the current document; replaces what is drawn. */
-        readonly type: 'strokes'
-        readonly strokes: readonly PdfStroke[]
+        /** Every persisted painting object for this document; replaces what is drawn. */
+        readonly type: 'ink'
+        readonly objects: readonly PdfInkObject[]
+      }
+    | {
+        /** Brush used for new strokes and the native preview. */
+        readonly type: 'inkStyle'
+        readonly color: string
+        readonly width: number
       }
     | {
         readonly type: 'selection'

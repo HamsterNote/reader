@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createNativeAnnotationController } from '../../src/nativePdf/annotationController'
 import {
   nativeRectCommit,
-  readerSnapshotWithAnnotations,
   validNativeRect,
+  withNativeAnnotationData,
   type NativeRectEvent
 } from '../../src/nativePdf/drawing'
 import { restoreReaderSnapshot } from '../../src/host/readerSnapshot'
@@ -81,19 +81,20 @@ describe('native rectangle tool', () => {
   it('writes rects through the existing V5 envelope and keeps other fields', () => {
     const controller = createNativeAnnotationController()
     controller.apply(nativeRectCommit(rectEvent(), 'gesture-1')!)
-    const envelope = readerSnapshotWithAnnotations(
+    const envelope = withNativeAnnotationData(
       {
         readerData: {
           hiddenPages: [3],
           layoutReadingProgress: { pageNumber: 2 }
         },
-        unknown: { kept: true }
+        unknown: { kept: true },
+        comments: [{ id: 'comment-1' }]
       },
-      {},
       controller.getSnapshot()
     )
     expect(envelope['unknown']).toEqual({ kept: true })
     expect(envelope['readerData']).toMatchObject({ hiddenPages: [3] })
+    expect(envelope['comments']).toEqual([{ id: 'comment-1' }])
     expect(envelope['annotations']).toMatchObject({ version: 5 })
 
     const restored = restoreReaderSnapshot(envelope)

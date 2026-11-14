@@ -3,17 +3,27 @@
 // 需要的折线。历史、去重与撤销仍归 annotationController，不在这里重建。
 
 import {
+  deriveShapeGeometry,
   IDENTITY_TRANSFORM,
   readLayeredDocument,
   type AcceptedSample,
   type EditorDocument,
   type FreehandObject
 } from '@hamster-note/painting/core'
-import type { PdfPoint, PdfStroke } from './contracts'
+import type { PdfInkObject, PdfPoint } from './contracts'
 
 /** 笔迹默认样式：原生暂时没有取色入口，先固定成与默认高亮区分明显的红色。 */
 export const NATIVE_STROKE_COLOR = '#e5484d'
 export const NATIVE_STROKE_WIDTH = 3
+
+/** Native toolbar palette; every value is written into the same painting document. */
+export const NATIVE_INK_COLORS = [
+  '#e5484d',
+  '#1f6feb',
+  '#2ea043',
+  '#1f2328'
+] as const
+export const NATIVE_INK_WIDTHS = [2, 4, 8] as const
 
 /** 一个点画不出线；单点手势一律丢弃。 */
 export const NATIVE_STROKE_MIN_POINTS = 2
@@ -105,38 +115,178 @@ export function appendStrokeDocument(
   return read.ok ? read.value : null
 }
 
-function transformed(point: PdfPoint, object: FreehandObject): PdfPoint {
-  const t = object.transform
+function transformed(
+  point: PdfPoint,
+  transform: {
+    a: number
+    b: number
+    c: number
+    d: number
+    tx: number
+    ty: number
+  }
+): PdfPoint {
   return {
-    x: t.a * point.x + t.c * point.y + t.tx,
-    y: t.b * point.x + t.d * point.y + t.ty
+    x: transform.a * point.x + transform.c * point.y + transform.tx,
+    y: transform.b * point.x + transform.d * point.y + transform.ty
   }
 }
 
+function bezierPoint(
+  from: PdfPoint,
+  cp1: PdfPoint,
+  cp2: PdfPoint,
+  to: PdfPoint,
+  t: number
+): PdfPoint {
+  const u = 1 - t
+  return {
+    x:
+      u * u * u * from.x +
+      3 * u * u * t * cp1.x +
+      3 * u * t * t * cp2.x +
+      t * t * t * to.x,
+    y:
+      u * u * u * from.y +
+      3 * u * u * t * cp1.y +
+      3 * u * t * t * cp2.y +
+      t * t * t * to.y
+  }
+}
+
+const ELLIPSE_SEGMENTS = 48
+const BEZIER_SEGMENTS = 16
+
+type SubPath = { points: PdfPoint[]; closed: boolean }
+
+function ellipseSubPath(command: {
+  cx: number
+  cy: number
+  rx: number
+  ry: number
+}): SubPath {
+  const points: PdfPoint[] = [{ x: command.cx + command.rx, y: command.cy }]
+  for (let step = 1; step < ELLIPSE_SEGMENTS; step += 1) {
+    const angle = (Math.PI * 2 * step) / ELLIPSE_SEGMENTS
+    points.push({
+      x: command.cx + command.rx * Math.cos(angle),
+      y: command.cy + command.ry * Math.sin(angle)
+    })
+  }
+  return { points, closed: true }
+}
+
+function bezierPoints(
+  from: PdfPoint,
+  command: {
+    cp1x: number
+    cp1y: number
+    cp2x: number
+    cp2y: number
+    x: number
+    y: number
+  }
+): PdfPoint[] {
+  return Array.from({ length: BEZIER_SEGMENTS }, (_, index) =>
+    bezierPoint(
+      from,
+      { x: command.cp1x, y: command.cp1y },
+      { x: command.cp2x, y: command.cp2y },
+      { x: command.x, y: command.y },
+      (index + 1) / BEZIER_SEGMENTS
+    )
+  )
+}
+
 /**
- * 文档 → 原生折线。输出采样自持久化样本本身，坐标仍是页内 scale-one，
- * 与缩放无关：原生只在 `content` 容器里按页面 frame 平移。
+ * Schema3 shape → polylines, using the painting library's own command
+ * derivation so line/rect/ellipse/bezier keep the Web semantics.
  */
-export function strokesForNative(
+export function shapeSubPaths(
+  shape: Extract<EditorDocument['objects'][number], { kind: 'shape' }>
+): SubPath[] {
+  const derived = deriveShapeGeometry(shape)
+  if (!derived) return []
+  const paths: SubPath[] = []
+  let current: SubPath | null = null
+  let cursor: PdfPoint | null = null
+  const open = (points: PdfPoint[], closed: boolean): SubPath => {
+    const path: SubPath = { points: [...points], closed }
+    paths.push(path)
+    return path
+  }
+  for (const command of derived.commands) {
+    if (command.type === 'moveTo') {
+      current = open([{ x: command.x, y: command.y }], false)
+      cursor = { x: command.x, y: command.y }
+    } else if (command.type === 'lineTo') {
+      current ??= open([], false)
+      current.points.push({ x: command.x, y: command.y })
+      cursor = { x: command.x, y: command.y }
+    } else if (command.type === 'bezierCurveTo') {
+      const from = cursor ?? { x: command.cp1x, y: command.cp1y }
+      current ??= open([from], false)
+      current.points.push(...bezierPoints(from, command))
+      cursor = { x: command.x, y: command.y }
+    } else if (command.type === 'ellipse') {
+      current = open(ellipseSubPath(command).points, true)
+      cursor = null
+    } else if (current !== null) {
+      current.closed = true
+    }
+  }
+  return paths.filter((path) => path.points.length >= 2)
+}
+
+function freehandInk(
+  pageNumber: number,
+  object: Extract<EditorDocument['objects'][number], { kind: 'freehand' }>
+): PdfInkObject[] {
+  const points = normalizedStrokePoints(
+    object.samples.map((sample) => transformed(sample, object.transform))
+  )
+  if (points.length < NATIVE_STROKE_MIN_POINTS) return []
+  return [
+    {
+      pageNumber,
+      points,
+      color: object.brushSnapshot.color,
+      width: object.brushSnapshot.nominalSize,
+      closed: false
+    }
+  ]
+}
+
+function shapeInk(
+  pageNumber: number,
+  object: Extract<EditorDocument['objects'][number], { kind: 'shape' }>
+): PdfInkObject[] {
+  return shapeSubPaths(object).map((path) => ({
+    pageNumber,
+    points: path.points.map((point) => transformed(point, object.transform)),
+    color: object.style.color,
+    width: object.style.width,
+    closed: path.closed
+  }))
+}
+
+/**
+ * 文档 → 原生折线。freehand 用持久化样本，形状交给画库派生命令后再拍平；
+ * 坐标始终是页内 scale-one，与缩放无关。
+ */
+export function inkObjectsForNative(
   paintings: Readonly<Record<string, EditorDocument>> | undefined
-): PdfStroke[] {
-  const strokes: PdfStroke[] = []
+): PdfInkObject[] {
+  const objects: PdfInkObject[] = []
   for (const [pageId, document] of Object.entries(paintings ?? {})) {
     const pageNumber = paintingPageNumber(pageId)
     if (pageNumber === undefined) continue
     for (const object of document.objects) {
-      if (object.kind !== 'freehand') continue
-      const points = normalizedStrokePoints(
-        object.samples.map((sample) => transformed(sample, object))
-      )
-      if (points.length < NATIVE_STROKE_MIN_POINTS) continue
-      strokes.push({
-        pageNumber,
-        points,
-        color: object.brushSnapshot.color,
-        width: object.brushSnapshot.nominalSize
-      })
+      if (object.kind === 'freehand')
+        objects.push(...freehandInk(pageNumber, object))
+      else if (object.kind === 'shape')
+        objects.push(...shapeInk(pageNumber, object))
     }
   }
-  return strokes
+  return objects
 }
