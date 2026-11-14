@@ -7,7 +7,9 @@ trap 'rm -rf "$test_dir"' EXIT
 swiftc -frontend -parse app/modules/reader-pdf/ios/ReaderPdfModule.swift
 if [[ "$(uname -s)" == "Darwin" ]]; then
   sdk_path=$(xcrun --sdk macosx --show-sdk-path)
+  xcode_path=$(xcode-select -p)
   xcrun --sdk macosx swiftc -warnings-as-errors -sdk "$sdk_path" \
+    -F "$xcode_path/Platforms/MacOSX.platform/Developer/Library/Frameworks" \
     app/modules/reader-pdf/ios/ReaderPdfGeometry.swift \
     test/native-pdf/swift/main.swift -framework XCTest \
     -o "$test_dir/reader-pdf-geometry-tests"
