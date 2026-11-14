@@ -27,7 +27,10 @@ case "${1:-}" in
       echo "--typecheck requires macOS Xcode simulator SDK" >&2
       exit 2
     fi
-    xcrun --sdk iphonesimulator swiftc -warnings-as-errors -typecheck \
+    sdk_version=$(xcrun --sdk iphonesimulator --show-sdk-version)
+    xcrun --sdk iphonesimulator swiftc \
+      -target "arm64-apple-ios${sdk_version}-simulator" \
+      -warnings-as-errors -typecheck \
       app/modules/reader-pdf/ios/ReaderPdfGeometry.swift
     ;;
   *)
