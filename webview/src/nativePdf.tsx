@@ -7,7 +7,8 @@ import { NativeCanonicalCache } from '../../src/nativePdf/textGeometry'
 import {
   materializeNativeRange,
   endpointPage,
-  mergeNativeSelectionPages
+  mergeNativeSelectionPages,
+  nativeSelectionPagesReady
 } from '../../src/nativePdf/selection'
 import {
   DefaultHighlightPopover,
@@ -83,6 +84,10 @@ export function startNativePdfSurface(
     menuOwner: 'native' | 'web' | null = null
   let retained: number[] = []
   const ocrPages = new Map<number, PdfCanonicalPage>()
+  const pendingActivates = new Map<
+    string,
+    { rangeId: string; pages: number[]; timeout: ReturnType<typeof setTimeout> }
+  >()
   const send = (payload: Record<string, unknown>) =>
     window.ReactNativeWebView?.postMessage(
       JSON.stringify({
@@ -268,6 +273,59 @@ export function startNativePdfSurface(
     )
   }
   root.render(<Menu />)
+  function activateRange(rangeId: string): void {
+    const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
+    if (!existing) {
+      fail('INVALID_TARGET')
+      return
+    }
+    const first = endpointPage(existing.start),
+      last = endpointPage(existing.end)
+    ensure(allowed.filter((n) => n >= first && n <= last))
+      .then(() => {
+        if (disposed || !cache) return
+        mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+        console.info('reader-pdf-activate-canonical', {
+          source: ocrPages.size ? 'ocr-cache' : 'pdf',
+          pages: Array.from(new Set([first, last])).map((pageNumber) => ({
+            page: pageNumber,
+            utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
+          }))
+        })
+        materializeNativeRange(
+          existing.start,
+          existing.end,
+          cache.pages,
+          allowed,
+          {
+            id: existing.id,
+            createdAt: existing.createdAt,
+            color: existing.markerStyle?.backgroundColor ?? '#ffc107'
+          },
+          existing
+        )
+        command({
+          type: 'text',
+          pages: Array.from(cache.pages.values()),
+          retain: Array.from(cache.pages.keys()),
+          source: 'geometry-cache'
+        })
+        range = existing
+        command({ type: 'navigate', pageNumber: first, offset: existing.start.offset })
+        command({ type: 'selection', range, showMenu: true })
+      })
+      .catch(() => fail('MAPPING_NOT_READY'))
+  }
+  function queueActivate(rangeId: string, pages: number[]): void {
+    if (pendingActivates.has(rangeId)) return
+    const timeout = setTimeout(() => {
+      pendingActivates.delete(rangeId)
+      console.info('reader-pdf-activate-wait-timeout', { rangeId, pages })
+      console.info('reader-pdf-activate-pending-dropped', { rangeId, pages })
+    }, 3000)
+    pendingActivates.set(rangeId, { rangeId, pages, timeout })
+    console.info('reader-pdf-activate-pending', { rangeId, pages })
+  }
   async function ensure(
     numbers: number[],
     texture = false
@@ -409,6 +467,7 @@ export function startNativePdfSurface(
     if (message.type === 'ocrText') {
       const page = message.canonicalPage
       if (page && Number.isInteger(page.pageNumber) && page.text.length > 0) {
+        if (ocrPages.get(page.pageNumber)?.text === page.text) return
         ocrPages.set(page.pageNumber, page)
         cache?.pages.set(page.pageNumber, page)
         console.info('reader-pdf-ocr-cache', {
@@ -416,6 +475,17 @@ export function startNativePdfSurface(
           utf16: page.text.length,
           boundaries: page.boundaries.length
         })
+        for (const pending of pendingActivates.values()) {
+          if (pending.pages.every((pageNumber) => ocrPages.has(pageNumber))) {
+            clearTimeout(pending.timeout)
+            pendingActivates.delete(pending.rangeId)
+            console.info('reader-pdf-activate-pending-replay', {
+              rangeId: pending.rangeId,
+              pages: pending.pages
+            })
+            activateRange(pending.rangeId)
+          }
+        }
       }
       return
     }
@@ -435,55 +505,21 @@ export function startNativePdfSurface(
       message.rangeId = message.event.rangeId
     }
     if (message.type === 'activate' || message.type === 'navigateRange') {
-      const existing = snapshot.data.ranges?.find(
-        (r) => r.id === message.rangeId
-      )
+      const rangeId = message.rangeId
+      const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
       if (!existing) {
         fail('INVALID_TARGET')
         return
       }
       const first = endpointPage(existing.start),
         last = endpointPage(existing.end)
-      ensure(allowed.filter((n) => n >= first && n <= last))
-        .then(() => {
-          if (disposed) return
-          if (!cache) throw new Error('MAPPING_NOT_READY')
-          mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
-          console.info('reader-pdf-activate-canonical', {
-            source: ocrPages.size ? 'ocr-cache' : 'pdf',
-            pages: [first, last].map((pageNumber) => ({
-              page: pageNumber,
-              utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
-            }))
-          })
-          // Validate canonical endpoints without altering the saved object.
-          materializeNativeRange(
-            existing.start,
-            existing.end,
-            cache!.pages,
-            allowed,
-            {
-              id: existing.id,
-              createdAt: existing.createdAt,
-              color: existing.markerStyle?.backgroundColor ?? '#ffc107'
-            },
-            existing
-          )
-          command({
-            type: 'text',
-            pages: Array.from(cache!.pages.values()),
-            retain: Array.from(cache!.pages.keys()),
-            source: 'geometry-cache'
-          })
-          range = existing
-          command({
-            type: 'navigate',
-            pageNumber: first,
-            offset: existing.start.offset
-          })
-          command({ type: 'selection', range, showMenu: true })
-        })
-        .catch(() => fail('MAPPING_NOT_READY'))
+      const pages = Array.from(new Set([first, last]))
+      if (cache) mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+      if (!cache || !nativeSelectionPagesReady(cache.pages, pages)) {
+        if (rangeId) queueActivate(rangeId, pages)
+        return
+      }
+      if (rangeId) activateRange(rangeId)
       return
     }
     const event = message.event

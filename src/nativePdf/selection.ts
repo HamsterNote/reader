@@ -28,6 +28,13 @@ export function mergeNativeSelectionPages(
 ): void {
   for (const page of supplied) target.set(page.pageNumber, page)
 }
+
+export function nativeSelectionPagesReady(
+  pages: ReadonlyMap<number, PdfCanonicalPage>,
+  required: readonly number[]
+): boolean {
+  return required.every((pageNumber) => Boolean(pages.get(pageNumber)?.text.length))
+}
 export function compareEndpoints(
   a: ReaderSelectionEndpoint,
   b: ReaderSelectionEndpoint

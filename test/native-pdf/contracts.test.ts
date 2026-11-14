@@ -8,7 +8,8 @@ import {
 } from '../../src/nativePdf/geometry'
 import {
   materializeNativeRange,
-  mergeNativeSelectionPages
+  mergeNativeSelectionPages,
+  nativeSelectionPagesReady
 } from '../../src/nativePdf/selection'
 import type {
   NativePdfAdapter,
@@ -185,7 +186,9 @@ describe('native PDF contracts', () => {
   it('uses canonical pages carried by native selection when the Web cache is empty', () => {
     const supplied = page(1)
     const pages = new Map<number, typeof supplied>()
+    expect(nativeSelectionPagesReady(pages, [1])).toBe(false)
     mergeNativeSelectionPages(pages, [supplied])
+    expect(nativeSelectionPagesReady(pages, [1])).toBe(true)
     const result = materializeNativeRange(
       { selectionId: 'page-1', offset: 0 },
       { selectionId: 'page-1', offset: 4 },
