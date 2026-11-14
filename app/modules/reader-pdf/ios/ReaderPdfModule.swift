@@ -476,8 +476,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     let local = CGPoint(x:p.x-f.minX,y:p.y-f.minY)
     // Only actual line bounds can hit; never add a handle/finger compensation.
     let candidates = mapping.boundaries.filter { $0.rect.minY <= local.y && $0.rect.maxY >= local.y }
-    guard let b = candidates.min(by: { abs($0.rect.minX-local.x) < abs($1.rect.minX-local.x) }) else { return nil }
-    return PdfEndpoint(page:n,offset:b.offset)
+    if let b = candidates.min(by: { abs($0.rect.minX-local.x) < abs($1.rect.minX-local.x) }) {
+      return PdfEndpoint(page:n,offset:b.offset)
+    }
+    // OCR providers may return a box without reliable per-character width.
+    // Keep the canonical glyph as a hit target and resolve its start boundary;
+    // this preserves long-press selection even when boundary rectangles are
+    // degenerate, while the stored canonical text remains the source of truth.
+    guard let glyph = mapping.glyphs.first(where: { $0.rect.minY <= local.y && $0.rect.maxY >= local.y }) else { return nil }
+    return PdfEndpoint(page:n,offset:glyph.start)
   }
   private func updateSelection() {
     let path = UIBezierPath()
