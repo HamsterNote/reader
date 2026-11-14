@@ -149,6 +149,7 @@ export type ReaderInteractiveProps = Pick<
   | 'onSelectionEnd'
   | 'onHighlight'
   | 'onDragHighlight'
+  | 'highlightDragHandoff'
   | 'onRemoveRange'
   | 'onHighlightColorChange'
   | 'highlightColor'
@@ -239,3 +240,10 @@ export {
   parseReaderSessionReplacement,
   type ReaderSessionReplacement
 } from './bridge/sessionReplacement'
+
+export type {
+  ReaderHighlightGesture,
+  ReaderHighlightDragHandoff,
+  ReaderHighlightDragCancelReason
+} from './types/highlightDrag'
+export { HIGHLIGHT_HANDOFF_TIMEOUT_MS } from './types/highlightDrag'

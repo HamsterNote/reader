@@ -890,7 +890,8 @@ export function EngineDocumentViewer(props: Props) {
         if (!isPositionCurrent(token)) return
         // A restore failure falls back to the saved page with a notice; it is
         // not a document-open failure and must not surface the host overlay.
-        if (publish) setError(failure.message)
+        if (publish || failure.name === 'PdfLayoutNotReadyError')
+          setError(failure.message)
         throw failure
       })
   }
@@ -980,6 +981,8 @@ export function EngineDocumentViewer(props: Props) {
       if (!isPositionCurrent(token)) return
       if (failure instanceof Error && failure.name === 'AbortError') return
       setRestoreNotice('无法精确恢复阅读位置，已显示原页；原进度已保留')
+      if (failure instanceof Error && failure.name === 'PdfLayoutNotReadyError')
+        return
       // Fallback is part of the same restoration, not a new position request.
       pdf.current?.scrollToPage(fallback.pageNumber)
     })
@@ -1829,6 +1832,7 @@ export function EngineDocumentViewer(props: Props) {
               : rootElement
           }
           resolveHighlight={resolveHighlight}
+          highlightDragHandoff={props.highlightDragHandoff}
           onDragHighlight={
             props.onDragHighlight
               ? (range) => {

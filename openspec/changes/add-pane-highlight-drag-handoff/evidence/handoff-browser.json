@@ -1,0 +1,215 @@
+{
+  "environment": {
+    "node": "v24.15.0",
+    "browser": "148.0.7778.96",
+    "platform": "linux"
+  },
+  "startedAt": "2026-11-14T10:29:34.573Z",
+  "cases": [
+    {
+      "surface": "pdf-layout",
+      "original": {
+        "start": {
+          "selectionId": "page-1",
+          "offset": 8
+        },
+        "end": {
+          "selectionId": "page-1",
+          "offset": 18
+        },
+        "text": "umn line o",
+        "rectsBySelectionId": {
+          "page-1": [
+            {
+              "x": 13.056207889884847,
+              "y": 10.60991704374057,
+              "width": 11.534880728743193,
+              "height": 3.3323906485671273
+            }
+          ]
+        },
+        "id": "range-6eeef818-7994-47cf-9148-1fdc3d9cac09",
+        "createdAt": 1794652182638,
+        "overlayRectType": "percent",
+        "markerStyle": {
+          "backgroundColor": "rgba(125, 158, 192, 0.35)"
+        }
+      },
+      "events": [
+        {
+          "phase": "start",
+          "pointerId": 2,
+          "pointerType": "touch",
+          "client": {
+            "x": 175.01052856445312,
+            "y": 88.84375
+          },
+          "highlight": {
+            "start": {
+              "selectionId": "page-1",
+              "offset": 8
+            },
+            "end": {
+              "selectionId": "page-1",
+              "offset": 18
+            },
+            "text": "umn line o",
+            "rectsBySelectionId": {
+              "page-1": [
+                {
+                  "x": 13.056207889884847,
+                  "y": 10.60991704374057,
+                  "width": 11.534880728743193,
+                  "height": 3.3323906485671273
+                }
+              ]
+            },
+            "id": "range-6eeef818-7994-47cf-9148-1fdc3d9cac09",
+            "createdAt": 1794652182638,
+            "overlayRectType": "percent",
+            "markerStyle": {
+              "backgroundColor": "rgba(125, 158, 192, 0.35)"
+            }
+          }
+        }
+      ],
+      "legacyCalls": 0,
+      "ghosts": 0,
+      "switches": 20,
+      "passed": true
+    },
+    {
+      "surface": "pdf-text",
+      "original": {
+        "id": "hsn-sel-1794652209396-7gm84k",
+        "text": "umn line o",
+        "start": {
+          "selectionId": "page-1",
+          "offset": 8
+        },
+        "end": {
+          "selectionId": "page-1",
+          "offset": 18
+        },
+        "createdAt": 1794652209396,
+        "overlayRectType": "percent",
+        "rectsBySelectionId": {
+          "page-1": [
+            {
+              "x": 13.05849361419678,
+              "y": 10.442708333333334,
+              "width": 11.533616065979004,
+              "height": 3.6666666666666665
+            }
+          ]
+        },
+        "markerStyle": {
+          "backgroundColor": "rgba(125, 158, 192, 0.35)"
+        },
+        "selectionStyle": {
+          "backgroundColor": "rgba(125, 158, 192, 0.35)"
+        }
+      },
+      "events": [
+        {
+          "phase": "start",
+          "pointerId": 2,
+          "pointerType": "touch",
+          "client": {
+            "x": 92.8671875,
+            "y": 22.5
+          },
+          "highlight": {
+            "id": "hsn-sel-1794652209396-7gm84k",
+            "text": "umn line o",
+            "start": {
+              "selectionId": "page-1",
+              "offset": 8
+            },
+            "end": {
+              "selectionId": "page-1",
+              "offset": 18
+            },
+            "createdAt": 1794652209396,
+            "overlayRectType": "percent",
+            "rectsBySelectionId": {
+              "page-1": [
+                {
+                  "x": 13.05849361419678,
+                  "y": 10.442708333333334,
+                  "width": 11.533616065979004,
+                  "height": 3.6666666666666665
+                }
+              ]
+            },
+            "markerStyle": {
+              "backgroundColor": "rgba(125, 158, 192, 0.35)"
+            },
+            "selectionStyle": {
+              "backgroundColor": "rgba(125, 158, 192, 0.35)"
+            }
+          }
+        }
+      ],
+      "legacyCalls": 0,
+      "ghosts": 0,
+      "switches": 20,
+      "passed": true
+    },
+    {
+      "surface": "epub",
+      "original": {
+        "start": {
+          "selectionId": "page-2",
+          "offset": 8
+        },
+        "end": {
+          "selectionId": "page-2",
+          "offset": 18
+        },
+        "text": "lpha beta ",
+        "id": "range-d2e8c898-1b20-44c5-b3e6-79cd8f5230bf",
+        "createdAt": 1794652224133,
+        "rectsBySelectionId": {},
+        "overlayRectType": "percent",
+        "markerStyle": {
+          "backgroundColor": "rgba(125, 158, 192, 0.35)"
+        }
+      },
+      "events": [
+        {
+          "phase": "start",
+          "pointerId": 2,
+          "pointerType": "touch",
+          "client": {
+            "x": 109.0625,
+            "y": 24.5
+          },
+          "highlight": {
+            "start": {
+              "selectionId": "page-2",
+              "offset": 8
+            },
+            "end": {
+              "selectionId": "page-2",
+              "offset": 18
+            },
+            "text": "lpha beta ",
+            "id": "range-d2e8c898-1b20-44c5-b3e6-79cd8f5230bf",
+            "createdAt": 1794652224133,
+            "rectsBySelectionId": {},
+            "overlayRectType": "percent",
+            "markerStyle": {
+              "backgroundColor": "rgba(125, 158, 192, 0.35)"
+            }
+          }
+        }
+      ],
+      "legacyCalls": 0,
+      "ghosts": 0,
+      "switches": 20,
+      "passed": true
+    }
+  ],
+  "finishedAt": "2026-11-14T10:30:33.457Z"
+}
