@@ -1,5 +1,5 @@
 import { CommentPanel } from '../../demo/CommentPanel'
-import { removeHighlightFromComments } from '../../src/storage/commentStorage'
+import { createNativeCommentController } from '../../src/nativePdf/commentController'
 import { createRoot } from 'react-dom/client'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { PdfDocumentSession } from '../../src/pdf/pdfDocumentSession'
@@ -69,6 +69,7 @@ export function startNativePdfSurface(
     bootstrap.snapshot,
     bootstrap.progress
   )
+  const commentController = createNativeCommentController(snapshot.comments)
   let allowed: number[] = [],
     request = 0,
     range: ReaderSelectionRange | null = null
@@ -118,12 +119,17 @@ export function startNativePdfSurface(
     const id = next?.id ?? removeId
     const ranges = current.filter((r) => r.id !== id)
     if (next) ranges.push(next)
+    const nextComments = removeId
+      ? commentController.removeHighlight(commitId, removeId)
+      : {
+          status: 'changed' as const,
+          comments: commentController.getComments()
+        }
+    if (nextComments.status === 'duplicate') return
     snapshot = {
       ...snapshot,
       data: { ...snapshot.data, ranges },
-      comments: removeId
-        ? removeHighlightFromComments(snapshot.comments, removeId)
-        : snapshot.comments
+      comments: nextComments.comments
     }
     send({
       type: 'ranges',
@@ -216,15 +222,17 @@ export function startNativePdfSurface(
             ranges={snapshot.data.ranges ?? []}
             activeHighlightId={commentId}
             onCommentsChange={(comments) => {
-              snapshot = { ...snapshot, comments }
-              refresh((n) => n + 1)
               const commitId = `${bootstrap.sessionId}-${++request}`
-              if (guard.commit(commitId))
+              const result = commentController.commit(commitId, comments)
+              if (result.status === 'changed' && guard.commit(commitId)) {
+                snapshot = { ...snapshot, comments: result.comments }
+                refresh((n) => n + 1)
                 send({
                   type: 'snapshot',
                   commitId,
                   data: serializeReaderSnapshot(snapshot)
                 })
+              }
             }}
             onJumpToHighlight={(id) =>
               send({ type: 'navigateRange', rangeId: id })
