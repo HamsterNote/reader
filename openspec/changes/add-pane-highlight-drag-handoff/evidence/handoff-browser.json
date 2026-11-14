@@ -4,7 +4,7 @@
     "browser": "148.0.7778.96",
     "platform": "linux"
   },
-  "startedAt": "2026-11-14T09:47:27.409Z",
+  "startedAt": "2026-11-14T10:29:34.573Z",
   "cases": [
     {
       "surface": "pdf-layout",
@@ -28,8 +28,8 @@
             }
           ]
         },
-        "id": "range-b692b2d5-2555-42ec-9dd6-53eb0dad8df3",
-        "createdAt": 1794649649755,
+        "id": "range-6eeef818-7994-47cf-9148-1fdc3d9cac09",
+        "createdAt": 1794652182638,
         "overlayRectType": "percent",
         "markerStyle": {
           "backgroundColor": "rgba(125, 158, 192, 0.35)"
@@ -64,8 +64,8 @@
                 }
               ]
             },
-            "id": "range-b692b2d5-2555-42ec-9dd6-53eb0dad8df3",
-            "createdAt": 1794649649755,
+            "id": "range-6eeef818-7994-47cf-9148-1fdc3d9cac09",
+            "createdAt": 1794652182638,
             "overlayRectType": "percent",
             "markerStyle": {
               "backgroundColor": "rgba(125, 158, 192, 0.35)"
@@ -81,7 +81,7 @@
     {
       "surface": "pdf-text",
       "original": {
-        "id": "hsn-sel-1794649657649-dcyhsq",
+        "id": "hsn-sel-1794652209396-7gm84k",
         "text": "umn line o",
         "start": {
           "selectionId": "page-1",
@@ -91,7 +91,7 @@
           "selectionId": "page-1",
           "offset": 18
         },
-        "createdAt": 1794649657649,
+        "createdAt": 1794652209396,
         "overlayRectType": "percent",
         "rectsBySelectionId": {
           "page-1": [
@@ -120,7 +120,7 @@
             "y": 22.5
           },
           "highlight": {
-            "id": "hsn-sel-1794649657649-dcyhsq",
+            "id": "hsn-sel-1794652209396-7gm84k",
             "text": "umn line o",
             "start": {
               "selectionId": "page-1",
@@ -130,7 +130,7 @@
               "selectionId": "page-1",
               "offset": 18
             },
-            "createdAt": 1794649657649,
+            "createdAt": 1794652209396,
             "overlayRectType": "percent",
             "rectsBySelectionId": {
               "page-1": [
@@ -168,8 +168,8 @@
           "offset": 18
         },
         "text": "lpha beta ",
-        "id": "range-8c0f7690-a8f2-451f-a6aa-77bfb87be09f",
-        "createdAt": 1794649663451,
+        "id": "range-d2e8c898-1b20-44c5-b3e6-79cd8f5230bf",
+        "createdAt": 1794652224133,
         "rectsBySelectionId": {},
         "overlayRectType": "percent",
         "markerStyle": {
@@ -195,8 +195,8 @@
               "offset": 18
             },
             "text": "lpha beta ",
-            "id": "range-8c0f7690-a8f2-451f-a6aa-77bfb87be09f",
-            "createdAt": 1794649663451,
+            "id": "range-d2e8c898-1b20-44c5-b3e6-79cd8f5230bf",
+            "createdAt": 1794652224133,
             "rectsBySelectionId": {},
             "overlayRectType": "percent",
             "markerStyle": {
@@ -211,5 +211,5 @@
       "passed": true
     }
   ],
-  "finishedAt": "2026-11-14T09:47:48.684Z"
+  "finishedAt": "2026-11-14T10:30:33.457Z"
 }

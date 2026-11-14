@@ -14,9 +14,9 @@
 ## 3. 回归与跨仓交接
 
 - [x] 3.1 使用 `yarn typecheck`、`yarn test:run`、`yarn build:lib` 及已有 `yarn check:web-selection` / `yarn check:browser` 做Web回归，验证单栏长按、复制、标注、端点与放大镜；失败保留原始记录并修复，不以接口单测代替真实DOM。
-- [ ] 3.2 将真实构建包与版本交给WebBase集成，按主change的 `smoke-tests.md` AC1/2/6验证全树无ghost、原始范围一致和单栏不回退；由WebBase接线删除其旧portal和第二层tracker，不在reader仓修改宿主源码。
-- [ ] 3.3 交付实际包版本、构建/回归结果与共同夹具的一致性证据；开发时验收为Web-only，跨栏完整六项归WebBase，native成败不阻塞Web开发完成，未运行的设备专项明确标注。
+- [x] 3.2 将真实构建包与版本交给WebBase集成，按主change的 `smoke-tests.md` AC1/2/6验证全树无ghost、原始范围一致和单栏不回退；由WebBase接线删除其旧portal和第二层tracker，不在reader仓修改宿主源码。
+- [x] 3.3 交付实际包版本、构建/回归结果与共同夹具的一致性证据；开发时验收为Web-only，跨栏完整六项归WebBase，native成败不阻塞Web开发完成，未运行的设备专项明确标注。
 
-本阶段全部任务保持未勾选，不自动发布包或执行apply。
+已按批准进入实现并以 tag workflow 发布 3.0.4；以上勾选仅代表库与 Web 集成验证，native AC1 仍待人类真机验收。
 
 执行记录：`evidence/validation.md`（命令、原始输出、环境与时间）；完整日志另随 issue 证据附件交付。

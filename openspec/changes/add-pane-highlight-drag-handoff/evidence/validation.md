@@ -12,8 +12,8 @@
 | 2.2 | 同上 | 250ms 边界、迟到 ACK、接管前 move/end、接管后不双发、源取消不反向终结 host owner |
 | 2.3 | yarn check:highlight-handoff；生命周期单测 | 三种渲染面各 20 次真实文档重开；旧计时器不复活；失焦/替换/卸载清理 |
 | 3.1 | yarn typecheck；yarn test:run；yarn build:lib；yarn pack:check；yarn check:web-selection；READER_BROWSER_CASE=chromium yarn check:browser | 见原始输出 |
-| 3.2 | 等待 WebBase 集成实际 npm 包、移除其 portal/第二层 tracker | 未完成，不以库级 DOM 冒充完整 AC1/2 |
-| 3.3 | 版本 3.0.3；等候 tag workflow 发布结果及 WebBase 集成 | 部分完成；native 未验证 |
+| 3.2 | WebBase PR #91 实际安装 npm 3.0.4；PDF Text 竖屏左右完整 AC1–5、PDF Layout/EPUB 原触点跨栏插入实际通过；三面原 payload 深相等、reader 无 ghost；AC6 最终包实跑见下 | 库集成交付；宿主其余复测见 WebBase 记录，native 未验证 |
+| 3.3 | v3.0.4 tag workflow 成功；npm 官方 registry 原始输出 `3.0.4`；共同夹具 SHA-256 一致 | 库发布完成；native 未验证 |
 
 250ms 为评审批准的初始 bridge/host 接管响应预算：在 500ms 长按确认后另给最多四分之一秒，避免无响应时长时间保持输入抑制。它不是设备实测延迟阈值。具名常量 `HIGHLIGHT_HANDOFF_TIMEOUT_MS`，249ms/250ms 与迟到 accepted 均有用例。
 
@@ -206,3 +206,51 @@ f91e5775e533364c5660185f2ae773868c085d4651e059d8461696efd783c113  ../WebBase/sha
 共同夹具与布局测试类型整理：`corepack yarn typecheck` 通过；`corepack yarn test:run test/highlight-handoff.test.tsx test/pdf-layout-ready.test.ts` 22 用例通过。无生产源码变化，不需再发版本。
 
 3.0.4 实际库浏览器复跑 `corepack yarn check:highlight-handoff` 三面各 20 次重开通过；原始完整结果随 issue 附件 `reader-handoff-304.log` 与 `reader-handoff-304/report.json`。
+
+## 最终 3.0.4 单栏实跑复核（2026-11-14）
+
+生产源码为 `224f697`（v3.0.4），测试/共同夹具为 `bc9d384`；环境同上。
+
+命令：`corepack yarn check:web-selection`；附加环境：`{}`；开始 `2026-11-14T19:21:43.249540+08:00`，结束 `2026-11-14T19:25:05.907550+08:00`，退出码 `0`。完整日志 `reader-selection-304-release.log`。
+
+```text
+    "passed": true
+  },
+  {
+    "label": "epub-text-toc",
+    "passed": true
+  },
+  {
+    "geometryCases": 120,
+    "label": "shared-selection-interaction",
+    "passed": true,
+    "combinations": 36
+  }
+]
+Done in 202.37s.
+```
+
+命令：`corepack yarn check:browser`；附加环境：`{"READER_BROWSER_CASE": "chromium"}`；开始 `2026-11-14T19:25:05.907786+08:00`，结束 `2026-11-14T19:25:48.277622+08:00`，退出码 `0`。完整日志 `reader-browser-304-release.log`。
+
+```text
+chromium-mobile-epub-v3: opening
+chromium-mobile-epub-v3: engine mounted
+chromium-mobile-epub-v4: opening
+chromium-mobile-epub-v4: engine mounted
+chromium-mobile-pdf-v2: opening
+chromium-mobile-pdf-v2: engine mounted
+chromium-mobile-pdf-v3: opening
+chromium-mobile-pdf-v3: engine mounted
+chromium-mobile-pdf-v4: opening
+chromium-mobile-pdf-v4: engine mounted
+chromium-desktop-epub-v4-security: opening
+chromium-desktop-epub-v4-security: engine mounted
+Browser integration: 13/13 passed; artifacts: /home/zhangxiao/multica_workspaces/hamster-arm-d6b65621f809/ham-235-5f86b102bf7a/workdir/ham91-browser
+Done in 42.15s.
+```
+
+最终包上的真实 Chromium 单栏 AC6 仍通过：36 组选择/复制/批注/手柄等交互，120 个几何用例；13/13 桌面/触屏旧快照、选择、保存重开、安全回归。WebKit 和 native 未验证，不并入通过数。宿主 PR：https://github.com/HamsterNote/WebBase/pull/91 。
+
+## WebBase 集成交付
+
+WebBase PR #91 双 manifest 与锁均为 npm 3.0.4，移除旧 reader 3.0.2 产物补丁；旧 portal/第二 tracker 在新能力路径停用，保留旧宿主兼容。2026-11-14 19:23–20:14 +08:00 的普通矩阵：355/356 通过，唯一失败在上下分栏回跳前固定翻页次数不足（准备阶段），由宿主后续复测跟进。竖屏左右 PDF Text 的完整实际路由及 PDF Layout/EPUB 触摸插入通过。没有把该结果记为 native 通过。完整业务 JSON 与 DOM 证据随 HAM-235 结果附件交付。
