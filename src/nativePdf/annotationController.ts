@@ -84,8 +84,9 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       const index = current.ranges.findIndex(
         (range) => range.id === intent.rangeId
       )
-      if (index < 0) return { status: 'rejected', reason: 'MAPPING_NOT_READY' }
       const range = current.ranges[index]
+      if (index < 0 || !range)
+        return { status: 'rejected', reason: 'MAPPING_NOT_READY' }
       const nextRange: ReaderSelectionRange = {
         ...range,
         start: intent.start,
@@ -105,7 +106,11 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
     const index = current.rects.findIndex((item) => item.id === rect.id)
     const rects = [...current.rects]
     if (index < 0) rects.push(rect)
-    else rects[index] = { ...rects[index], rect: intent.rect }
+    else {
+      const existing = rects[index]
+      if (!existing) return { status: 'rejected', reason: 'INVALID_TARGET' }
+      rects[index] = { ...existing, rect: intent.rect }
+    }
     return changed({ ...current, rects })
   }
 

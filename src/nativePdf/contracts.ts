@@ -1,6 +1,7 @@
 import type {
   ReaderSelectionEndpoint,
-  ReaderSelectionRange
+  ReaderSelectionRange,
+  ReaderSelectionRectangle
 } from '../types/selection'
 
 /** Independent channel: never extend the Web bridge v1 union. Runtime only. */
@@ -31,6 +32,21 @@ export type PdfCrop = {
   readonly right?: number
   readonly bottom?: number
   readonly left?: number
+}
+/** Gesture modes the native surface exposes to the host toolbar. */
+export type PdfTool = 'none' | 'rectangle' | 'draw'
+/**
+ * One persistable painting object as the native renderer needs it. Every
+ * schema3 object kind reduces to a polyline here, so freehand and shapes share
+ * one drawing path. `points` stay in page-local scale-one coordinates, so zoom
+ * never rescales them.
+ */
+export type PdfInkObject = {
+  readonly pageNumber: number
+  readonly points: readonly PdfPoint[]
+  readonly color: string
+  readonly width: number
+  readonly closed: boolean
 }
 export type PdfCapabilities = {
   readonly nativeLayout: boolean
@@ -138,6 +154,24 @@ export type PdfCommand = PdfRequest &
     | {
         readonly type: 'annotations'
         readonly ranges: readonly ReaderSelectionRange[]
+        /** Page-local px rectangles; same storage contract as `ranges` rects. */
+        readonly rects?: readonly ReaderSelectionRectangle[]
+      }
+    | {
+        /** Switches the gesture mode. `none` keeps read-only navigation. */
+        readonly type: 'tool'
+        readonly tool: PdfTool
+      }
+    | {
+        /** Every persisted painting object for this document; replaces what is drawn. */
+        readonly type: 'ink'
+        readonly objects: readonly PdfInkObject[]
+      }
+    | {
+        /** Brush used for new strokes and the native preview. */
+        readonly type: 'inkStyle'
+        readonly color: string
+        readonly width: number
       }
     | {
         readonly type: 'selection'
@@ -175,7 +209,27 @@ export type PdfEvent = PdfIdentity &
         readonly geometryRevision: number
         readonly anchor: PdfRect
       }
-    | { readonly type: 'cancelled' }
+    | {
+        readonly type: 'cancelled'
+      }
+    | {
+        /** One-finger rectangle gesture in the rectangle tool. */
+        readonly type: 'rect'
+        readonly pageNumber: number
+        /** Page-local px, scale-one visual coordinates. */
+        readonly rect: PdfRect
+        readonly phase: 'preview' | 'commit' | 'cancel'
+        readonly geometryRevision: number
+      }
+    | {
+        /** One finished freehand stroke; `commit` carries the accepted points. */
+        readonly type: 'stroke'
+        readonly pageNumber: number
+        /** Page-local, scale-one visual coordinates. */
+        readonly points: readonly PdfPoint[]
+        readonly phase: 'commit' | 'cancel'
+        readonly geometryRevision: number
+      }
     | { readonly type: 'activate'; readonly rangeId: string }
     | { readonly type: 'link'; readonly url: string }
     | {

@@ -27,7 +27,29 @@ import type {
   HostDocumentRecord,
   ReaderDataStore
 } from '../../../src/host/readerDataStore'
-import type { PdfCommand, PdfEvent } from '../../../src/nativePdf/contracts'
+import type {
+  PdfCommand,
+  PdfEvent,
+  PdfTool
+} from '../../../src/nativePdf/contracts'
+import {
+  createNativeAnnotationController,
+  type NativeAnnotationSnapshot
+} from '../../../src/nativePdf/annotationController'
+import {
+  nativeRectCommit,
+  withNativeAnnotationData
+} from '../../../src/nativePdf/drawing'
+import {
+  appendStrokeDocument,
+  inkObjectsForNative,
+  NATIVE_INK_COLORS,
+  NATIVE_INK_WIDTHS,
+  NATIVE_STROKE_COLOR,
+  NATIVE_STROKE_WIDTH,
+  paintingPageId
+} from '../../../src/nativePdf/strokes'
+import { restoreReaderSnapshot } from '../../../src/host/readerSnapshot'
 import { NativePdfSession } from '../../../src/nativePdf/session'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
@@ -114,6 +136,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       [record.fileId]
     )
     const guard = useMemo(() => new NativePdfSession(identity), [identity])
+    const annotations = useMemo(
+      () => createNativeAnnotationController(),
+      [identity]
+    )
+    const annotationCommits = useRef(0)
+    const [tool, setTool] = useState<PdfTool>('none')
+    const [ink, setInk] = useState({
+      color: NATIVE_STROKE_COLOR,
+      width: NATIVE_STROKE_WIDTH
+    })
     const web = useRef<WebView>(null)
     const [command, setCommand] = useState<PdfCommand | null>(null)
     const queue = useRef<PdfCommand[]>([])
@@ -218,6 +250,136 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         throw error
       })
       save.current.catch(() => undefined)
+    }
+    function mirrorAnnotations(snapshot: NativeAnnotationSnapshot) {
+      enqueue({
+        type: 'annotations',
+        ranges: snapshot.ranges,
+        rects: snapshot.rects
+      })
+      enqueue({
+        type: 'ink',
+        objects: inkObjectsForNative(snapshot.pagePaintings)
+      })
+    }
+    /** Only the annotation container is owned here; the patch reads the newest base. */
+    function saveAnnotations(snapshot: NativeAnnotationSnapshot): boolean {
+      try {
+        persist((base) => withNativeAnnotationData(base.data, snapshot))
+        return true
+      } catch (error) {
+        setStatus(
+          `标注未保存：${error instanceof Error ? error.message : String(error)}`
+        )
+        return false
+      }
+    }
+    function rehydrateAnnotations() {
+      try {
+        // The V5 container is the authoritative annotation read path.
+        const restored = restoreReaderSnapshot(
+          latest.current.data,
+          latest.current.progress
+        )
+        annotations.replaceSnapshot(restored.data)
+      } catch (error) {
+        setStatus(
+          `标注读取失败：${error instanceof Error ? error.message : String(error)}`
+        )
+        return
+      }
+      mirrorAnnotations(annotations.getSnapshot())
+    }
+    function selectTool(next: PdfTool) {
+      if (closed.current) return
+      setTool(next)
+      enqueue({ type: 'tool', tool: next })
+      enqueue({ type: 'inkStyle', color: ink.color, width: ink.width })
+    }
+    /** Brush used for new strokes; the persisted object keeps the same style. */
+    function selectInk(next: { color?: string; width?: number }) {
+      if (closed.current) return
+      const value = {
+        color: next.color ?? ink.color,
+        width: next.width ?? ink.width
+      }
+      setInk(value)
+      enqueue({ type: 'inkStyle', ...value })
+    }
+    /** Native gesture → existing 4.x annotation controller → V5 snapshot. */
+    function commitNativeRect(event: Extract<PdfEvent, { type: 'rect' }>) {
+      const commit = nativeRectCommit(
+        event,
+        `rect-${++annotationCommits.current}`
+      )
+      if (!commit) return
+      const result = annotations.apply(commit)
+      if (result.status !== 'changed') return
+      mirrorAnnotations(result.snapshot)
+      saveAnnotations(result.snapshot)
+    }
+    function undoNativeDrawing() {
+      if (closed.current) return
+      if (!annotations.undo()) {
+        setStatus('没有可撤销的标注')
+        return
+      }
+      const snapshot = annotations.getSnapshot()
+      mirrorAnnotations(snapshot)
+      if (saveAnnotations(snapshot)) setStatus('已撤销上一步标注')
+    }
+    function redoNativeDrawing() {
+      if (closed.current) return
+      if (!annotations.redo()) {
+        setStatus('没有可重做的标注')
+        return
+      }
+      const snapshot = annotations.getSnapshot()
+      mirrorAnnotations(snapshot)
+      if (saveAnnotations(snapshot)) setStatus('已重做上一步标注')
+    }
+    /** Native freehand stroke → existing control layer → V5 snapshot. */
+    function commitNativeStroke(event: Extract<PdfEvent, { type: 'stroke' }>) {
+      if (event.phase !== 'commit') return
+      const commitId = `stroke-${++annotationCommits.current}`
+      const pageId = paintingPageId(event.pageNumber)
+      const document = appendStrokeDocument(
+        annotations.getSnapshot().pagePaintings[pageId],
+        commitId,
+        event.points,
+        { color: ink.color, width: ink.width }
+      )
+      if (!document) {
+        setStatus('笔迹未保存：点数不足或文档校验失败')
+        return
+      }
+      const result = annotations.setPainting(commitId, pageId, document)
+      if (result.status !== 'changed') return
+      mirrorAnnotations(result.snapshot)
+      saveAnnotations(result.snapshot)
+    }
+    /** In-progress gestures stay native; only finished ones reach the controller. */
+    function handleDrawEvent(
+      event: Extract<PdfEvent, { type: 'rect' } | { type: 'stroke' }>
+    ) {
+      if (event.phase !== 'commit') return
+      if (event.type === 'rect') commitNativeRect(event)
+      else commitNativeStroke(event)
+    }
+    function clearCurrentPageInk() {
+      if (closed.current) return
+      const pageId = paintingPageId(page)
+      if (!annotations.getSnapshot().pagePaintings[pageId]) {
+        setStatus('当前页没有笔迹')
+        return
+      }
+      const result = annotations.clearPainting(
+        `clear-${++annotationCommits.current}`,
+        pageId
+      )
+      if (result.status !== 'changed') return
+      mirrorAnnotations(result.snapshot)
+      if (saveAnnotations(result.snapshot)) setStatus('已清空当前页笔迹')
     }
     function readerDataSnapshot(): ReaderData {
       return (
@@ -567,6 +729,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         )
         enqueue({ type: 'layout', pages: allowed, crops })
         enqueue({ type: 'restoreComplete' })
+        rehydrateAnnotations()
         const saved = readerDataFromNativeSnapshot(
           latest.current.data,
           latest.current.progress
@@ -628,6 +791,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
       if (event.type === 'textNeeded')
         requestNativeOcr(event.pages, event.textAvailability ?? {})
+      if (event.type === 'rect' || event.type === 'stroke')
+        handleDrawEvent(event)
       if (event.type === 'error') {
         if (event.requestId) {
           const ocrPage = ocrRequests.current.get(event.requestId)
@@ -709,6 +874,75 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           <Pressable onPress={beginPageEdit}>
             <Text>裁切/隐藏页编辑</Text>
           </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel={
+              tool === 'rectangle' ? '关闭矩形工具' : '矩形标注'
+            }
+            accessibilityState={{ selected: tool === 'rectangle' }}
+            onPress={() =>
+              selectTool(tool === 'rectangle' ? 'none' : 'rectangle')
+            }
+          >
+            <Text>矩形{tool === 'rectangle' ? '（开）' : ''}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel='撤销标注'
+            onPress={undoNativeDrawing}
+          >
+            <Text>撤销标注</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel={tool === 'draw' ? '关闭绘图工具' : '自由绘图'}
+            accessibilityState={{ selected: tool === 'draw' }}
+            onPress={() => selectTool(tool === 'draw' ? 'none' : 'draw')}
+          >
+            <Text>绘图{tool === 'draw' ? '（开）' : ''}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel='重做标注'
+            onPress={redoNativeDrawing}
+          >
+            <Text>重做</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel='清空当前页笔迹'
+            onPress={clearCurrentPageInk}
+          >
+            <Text>清空本页</Text>
+          </Pressable>
+          {NATIVE_INK_COLORS.map((color) => (
+            <Pressable
+              key={color}
+              accessibilityRole='button'
+              accessibilityLabel={`笔迹颜色 ${color}`}
+              accessibilityState={{ selected: ink.color === color }}
+              onPress={() => selectInk({ color })}
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                backgroundColor: color,
+                borderWidth: ink.color === color ? 3 : 1,
+                borderColor: ink.color === color ? '#1f2328' : '#d0d7de'
+              }}
+            />
+          ))}
+          {NATIVE_INK_WIDTHS.map((width) => (
+            <Pressable
+              key={width}
+              accessibilityRole='button'
+              accessibilityLabel={`笔迹线宽 ${width}`}
+              accessibilityState={{ selected: ink.width === width }}
+              onPress={() => selectInk({ width })}
+            >
+              <Text>{ink.width === width ? `●${width}` : `○${width}`}</Text>
+            </Pressable>
+          ))}
           {hiddenPagesUndo ? (
             <Pressable onPress={undoPageEdit}>
               <Text>撤销（5秒）</Text>
