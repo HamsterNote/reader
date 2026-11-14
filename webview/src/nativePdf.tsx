@@ -390,7 +390,8 @@ export function startNativePdfSurface(
           command({
             type: 'text',
             pages: Array.from(cache!.pages.values()),
-            retain: Array.from(cache!.pages.keys())
+            retain: Array.from(cache!.pages.keys()),
+            source: 'geometry-cache'
           })
           range = existing
           command({
@@ -423,7 +424,13 @@ export function startNativePdfSurface(
       retained = [...event.retain]
       ensure([...event.pages], true)
         .then((pages) => {
-          if (!disposed) command({ type: 'text', pages, retain: retained })
+          if (!disposed && pages.length)
+            command({
+              type: 'text',
+              pages,
+              retain: retained,
+              source: 'geometry-cache'
+            })
         })
         .catch(() => fail('MAPPING_NOT_READY'))
     }

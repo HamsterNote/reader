@@ -233,6 +233,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     const post = (body: Record<string, unknown>) =>
       web.current?.postMessage(JSON.stringify({ ...body, identity }))
+    function setMenuWithSource(
+      value: { left: number; top: number } | null,
+      source: string
+    ) {
+      if (__DEV__) console.info('reader-pdf-menu-state', { source, value })
+      setMenu(value)
+    }
+    function menuFrame(anchor: { x: number; y: number; width: number; height: number }) {
+      const x = anchor.x + anchor.width / 2 - width / 2
+      // anchor is in ReaderPdfView coordinates; nativeTop moves it into the
+      // parent container. Prefer below the selection, then clamp to the host.
+      const y = anchor.y + nativeTop + anchor.height
+      return {
+        left: Math.max(0, Math.min(size.width - width, x)),
+        top: Math.max(0, Math.min(size.height - height, y))
+      }
+    }
     function disposeWebOnce() {
       if (webDisposed.current) return
       webDisposed.current = true
@@ -498,7 +515,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         if (undoTimer.current) clearTimeout(undoTimer.current)
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
-        setMenu(null)
+        setMenuWithSource(null, 'close')
         try {
           await save.current
           if (failedTransform.current !== undefined)
@@ -524,7 +541,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         if (state !== 'active') {
           enqueue({ type: 'cancel' })
           post({ type: 'dismiss' })
-          setMenu(null)
+          setMenuWithSource(null, 'app-state')
         }
       })
       return () => {
@@ -760,7 +777,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           })
       }
       if (event.type === 'geometry') {
-        setMenu(null)
+        setMenuWithSource(null, 'native-geometry')
         if (event.pages[0]) {
           for (const geometry of event.pages)
             pageMetrics.current.set(geometry.pageNumber, {
@@ -823,18 +840,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             webAlive: web.current !== null
           })
         setPanelOpen(false)
-        const nextMenu = {
-          left: Math.max(
-            0,
-            Math.min(size.width - width, anchor.x + anchor.width / 2 - width / 2)
-          ),
-          top: Math.max(
-            0,
-            Math.min(size.height - height, anchor.y + nativeTop - height)
-          )
-        }
+        const nextMenu = menuFrame(anchor)
         if (__DEV__) console.info('reader-pdf-native-menu', nextMenu)
-        setMenu(nextMenu)
+        setMenuWithSource(nextMenu, 'native-selection-end')
         post({ type: 'nativeSelection', event })
       }
       if (event.type === 'error') {
@@ -1266,7 +1274,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                 break
               case 'panel':
                 setPanelOpen(true)
-                setMenu({ left: 0, top: 0 })
+                setMenuWithSource({ left: 0, top: 0 }, 'web-panel')
                 break
               case 'serviceReady':
                 break
@@ -1300,21 +1308,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                   width: number
                   height: number
                 }
-                setMenu({
-                  left: Math.max(
-                    0,
-                    Math.min(size.width - width, r.x + r.width / 2 - width / 2)
-                  ),
-                  top: Math.max(
-                    0,
-                    Math.min(size.height - height, r.y + nativeTop - height)
-                  )
-                })
+                setMenuWithSource(menuFrame(r), 'web-menu')
                 break
               }
               case 'hideMenu':
                 setPanelOpen(false)
-                setMenu(null)
+                setMenuWithSource(null, 'web-hide-menu')
                 break
               case 'failure':
                 if (nativeError.current === null)
