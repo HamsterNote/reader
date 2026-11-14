@@ -196,6 +196,23 @@ describe('native PDF contracts', () => {
     expect(result.text).toBe('hell')
     expect(result.end.offset).toBe(4)
   })
+  it('reuses OCR canonical cache for activate after a document remount', () => {
+    const supplied = page(1)
+    const firstSession = new Map<number, typeof supplied>()
+    const secondSession = new Map<number, typeof supplied>()
+    mergeNativeSelectionPages(firstSession, [supplied])
+    // The host sends the same OCR page again when the file is remounted.
+    mergeNativeSelectionPages(secondSession, [supplied])
+    const result = materializeNativeRange(
+      { selectionId: 'page-1', offset: 1 },
+      { selectionId: 'page-1', offset: 5 },
+      secondSession,
+      [1],
+      { id: 'existing', createdAt: 1, color: '#ff0' }
+    )
+    expect(result.text).toBe('ello')
+    expect(result.id).toBe('existing')
+  })
   it('retains percent rectangle units and existing style fields during endpoint edits', () => {
     const p = page(1),
       pages = new Map([[1, p]])

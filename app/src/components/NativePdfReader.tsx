@@ -669,6 +669,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             )
           : null
         if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
+        post({ type: 'ocrText', canonicalPage: canonical })
         enqueue({ type: 'text', pages: [canonical], retain: [pageNumber], source: 'ocr' })
         persist((snapshot) =>
           withNativeOcrTexts(snapshot.data, pageNumber, texts)
@@ -826,6 +827,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               texts
             )
             if (canonical) {
+              post({ type: 'ocrText', canonicalPage: canonical })
               enqueue({
                 type: 'text',
                 pages: [canonical],

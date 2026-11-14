@@ -82,6 +82,7 @@ export function startNativePdfSurface(
     geometryRevision = -1,
     menuOwner: 'native' | 'web' | null = null
   let retained: number[] = []
+  const ocrPages = new Map<number, PdfCanonicalPage>()
   const send = (payload: Record<string, unknown>) =>
     window.ReactNativeWebView?.postMessage(
       JSON.stringify({
@@ -294,8 +295,18 @@ export function startNativePdfSurface(
       last = Math.max(endpointPage(event.start), endpointPage(event.end))
     const numbers = allowed.filter((n) => n >= first && n <= last)
     if (!cache) throw new Error('MAPPING_NOT_READY')
-    mergeNativeSelectionPages(cache!.pages, suppliedPages)
+    mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+    mergeNativeSelectionPages(
+      cache.pages,
+      suppliedPages.filter((page) => !ocrPages.has(page.pageNumber))
+    )
+    const source = numbers.some((pageNumber) => ocrPages.has(pageNumber))
+      ? 'ocr-cache'
+      : suppliedPages.length
+        ? 'payload'
+        : 'pdf'
     console.info('reader-pdf-native-selection-canonical-compare', {
+      source,
       supplied: suppliedPages.map((page) => ({ page: page.pageNumber, utf16: page.text.length })),
       cached: numbers.map((pageNumber) => ({
         page: pageNumber,
@@ -355,6 +366,7 @@ export function startNativePdfSurface(
       type?: string
       event?: PdfEvent
       canonicalPages?: PdfCanonicalPage[]
+      canonicalPage?: PdfCanonicalPage
       rangeId?: string
       pages?: number[]
       url?: string
@@ -394,6 +406,19 @@ export function startNativePdfSurface(
       show(null)
       return
     }
+    if (message.type === 'ocrText') {
+      const page = message.canonicalPage
+      if (page && Number.isInteger(page.pageNumber) && page.text.length > 0) {
+        ocrPages.set(page.pageNumber, page)
+        cache?.pages.set(page.pageNumber, page)
+        console.info('reader-pdf-ocr-cache', {
+          page: page.pageNumber,
+          utf16: page.text.length,
+          boundaries: page.boundaries.length
+        })
+      }
+      return
+    }
     if (message.type === 'nativeSelection') {
       const nativeEvent = message.event
       if (!nativeEvent || nativeEvent.type !== 'selection') return
@@ -422,6 +447,15 @@ export function startNativePdfSurface(
       ensure(allowed.filter((n) => n >= first && n <= last))
         .then(() => {
           if (disposed) return
+          if (!cache) throw new Error('MAPPING_NOT_READY')
+          mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+          console.info('reader-pdf-activate-canonical', {
+            source: ocrPages.size ? 'ocr-cache' : 'pdf',
+            pages: [first, last].map((pageNumber) => ({
+              page: pageNumber,
+              utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
+            }))
+          })
           // Validate canonical endpoints without altering the saved object.
           materializeNativeRange(
             existing.start,
