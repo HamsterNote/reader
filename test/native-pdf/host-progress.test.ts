@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { IntermediateText } from '@hamster-note/types'
 import {
   nativeLayoutProgress,
   nativeLayoutProgressFromGeometry,
@@ -53,7 +54,7 @@ describe('native host layout progress', () => {
           [1, 1]
         ]
       }
-    ]
+    ] as unknown as IntermediateText[]
     expect(withNativeOcrTexts(snapshot, 1, text)).toEqual({
       ...snapshot,
       readerData: { ...snapshot.readerData, ocrTexts: { 1: text } }

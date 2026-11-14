@@ -119,9 +119,11 @@ describe('host snapshot field rebase', () => {
       },
       revision: 2
     }
-    expect(rebaseSnapshot(current, previous, stale).data.readerData).toEqual({
-      pagePaintings: { 'page-1': { objects: [{ id: 'a' }, { id: 'b' }] } },
-      layoutReadingProgress: { pageNumber: 2, verticalPercentage: 35 }
+    expect(rebaseSnapshot(current, previous, stale).data).toEqual({
+      readerData: {
+        pagePaintings: { 'page-1': { objects: [{ id: 'a' }, { id: 'b' }] } },
+        layoutReadingProgress: { pageNumber: 2, verticalPercentage: 35 }
+      }
     })
   })
 
