@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampNativeScrollOffset,
+  nativeContentHeightWithFinalTail,
+  nativeFinalPageTailPadding,
   nativePageAtOffset,
   nativePageLayout,
   nativePageOffset,
@@ -60,6 +62,33 @@ describe('native PDF page layout geometry', () => {
   it('clamps the last page even with a fractional page height', () => {
     expect(nativePageOffset(3000, 2, 3200.75, 800)).toBe(5601.5)
     expect(nativePageOffset(99999, 2, 3200.75, 800)).toBe(5601.5)
+  })
+
+  it.each([0.5, 1, 2])(
+    'keeps the final page top reachable at zoom %s',
+    (zoom) => {
+      const finalHeight = 500
+      const viewport = 679.3333333333333
+      const contentHeight = 1012
+      const padded = nativeContentHeightWithFinalTail(
+        contentHeight,
+        finalHeight,
+        zoom,
+        viewport
+      )
+      const target = 512 * zoom
+      expect(nativeFinalPageTailPadding(finalHeight, zoom, viewport)).toBe(
+        Math.max(0, viewport / zoom - finalHeight)
+      )
+      expect(
+        clampNativeScrollOffset(target, zoom, padded, viewport)
+      ).toBeCloseTo(target)
+    }
+  )
+
+  it('does not add tail for a page taller than the viewport or zero content', () => {
+    expect(nativeFinalPageTailPadding(800, 1, 600)).toBe(0)
+    expect(nativeContentHeightWithFinalTail(0, 0, 1, 600)).toBe(600)
   })
 
   it('preserves the viewport center when zoom changes', () => {

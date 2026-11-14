@@ -52,6 +52,29 @@ export function nativePageOffset(
   )
 }
 
+/** Extra scale-one tail needed to align a short final page with the viewport top. */
+export function nativeFinalPageTailPadding(
+  finalPageHeight: number,
+  zoomScale: number,
+  viewportHeight: number
+): number {
+  const zoom = Math.max(0.0001, zoomScale)
+  return Math.max(0, viewportHeight / zoom - Math.max(0, finalPageHeight))
+}
+
+export function nativeContentHeightWithFinalTail(
+  contentHeight: number,
+  finalPageHeight: number,
+  zoomScale: number,
+  viewportHeight: number
+): number {
+  return Math.max(
+    0,
+    contentHeight +
+      nativeFinalPageTailPadding(finalPageHeight, zoomScale, viewportHeight)
+  )
+}
+
 export function nativePageAtOffset(
   pages: readonly {
     readonly pageNumber: number

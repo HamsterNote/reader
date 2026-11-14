@@ -278,10 +278,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private func clampedOffset(_ value: CGFloat, zoom: CGFloat) -> CGFloat {
     min(max(0, value), max(0, content.bounds.height * zoom - scroll.bounds.height))
   }
+  // Scale-one tail padding makes a short final slot reachable at the viewport top.
+  private func finalPageTailPadding(_ finalPageHeight: CGFloat) -> CGFloat {
+    max(0, scroll.bounds.height / max(scroll.zoomScale, 0.0001) - max(0, finalPageHeight))
+  }
   private func setZoomKeepingCenter(_ zoom: CGFloat) {
     let oldZoom = max(scroll.zoomScale, 0.0001)
     let center = (scroll.contentOffset.y + scroll.bounds.height / 2) / oldZoom
     scroll.setZoomScale(zoom, animated:false)
+    layoutPages()
     scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: clampedOffset(center * zoom - scroll.bounds.height / 2, zoom: zoom)), animated:false)
     updateVisible()
   }
@@ -298,7 +303,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       frames[n] = CGRect(x:-l*size.width,y:y-t*size.height,width:size.width,height:size.height)
       y += size.height * (1-t-b) + 12; width = max(width,size.width*(1-l-r))
     }
-    let contentSize = CGSize(width:width,height:max(0,y-12))
+    let baseHeight = max(0, y - 12)
+    let finalHeight = pages.last.flatMap { slots[$0]?.height } ?? 0
+    let tail = pages.isEmpty ? 0 : finalPageTailPadding(finalHeight)
+    let contentSize = CGSize(width:width,height:baseHeight + tail)
     content.frame = CGRect(origin: .zero, size: contentSize)
     content.bounds.size = contentSize
     scroll.contentSize = CGSize(width:contentSize.width*scroll.zoomScale,height:contentSize.height*scroll.zoomScale)
@@ -380,6 +388,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   }
   func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
     if let center = zoomAnchorY {
+      layoutPages()
       scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: clampedOffset(center * scale - scrollView.bounds.height / 2, zoom: scale)), animated:false)
     }
     zoomAnchorY = nil
