@@ -5,6 +5,9 @@ import type {
 import type { IntermediateText } from '@hamster-note/types'
 import type { PdfGeometry } from './contracts'
 
+export const MAX_NATIVE_OCR_PAGES = 32
+export const MAX_NATIVE_OCR_BYTES = 512 * 1024
+
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -87,11 +90,22 @@ export function withNativeOcrTexts(
   const snapshot = record(snapshotData)
   const readerData = record(snapshot.readerData)
   const existing = record(readerData.ocrTexts)
+  const next = { ...existing }
+  delete next[String(pageNumber)]
+  next[String(pageNumber)] = texts
+  while (
+    Object.keys(next).length > MAX_NATIVE_OCR_PAGES ||
+    JSON.stringify(next).length > MAX_NATIVE_OCR_BYTES
+  ) {
+    const oldest = Object.keys(next)[0]
+    if (oldest === undefined || oldest === String(pageNumber)) return snapshot
+    delete next[oldest]
+  }
   return {
     ...snapshot,
     readerData: {
       ...readerData,
-      ocrTexts: { ...existing, [pageNumber]: texts }
+      ocrTexts: next
     }
   }
 }

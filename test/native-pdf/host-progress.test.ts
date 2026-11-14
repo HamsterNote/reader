@@ -6,7 +6,9 @@ import {
   nativeProgressKey,
   readerDataFromNativeSnapshot,
   withNativeLayoutProgress,
-  withNativeOcrTexts
+  withNativeOcrTexts,
+  MAX_NATIVE_OCR_BYTES,
+  MAX_NATIVE_OCR_PAGES
 } from '../../src/nativePdf/hostProgress'
 
 describe('native host layout progress', () => {
@@ -59,6 +61,30 @@ describe('native host layout progress', () => {
       ...snapshot,
       readerData: { ...snapshot.readerData, ocrTexts: { 1: text } }
     })
+  })
+
+  it('bounds persisted OCR by page count and serialized size', () => {
+    let snapshot: Record<string, unknown> = { readerData: {} }
+    for (let page = 1; page <= MAX_NATIVE_OCR_PAGES + 4; page++) {
+      snapshot = withNativeOcrTexts(snapshot, page, [
+        {
+          id: `ocr-${page}`,
+          content: 'scan',
+          polygon: [
+            [0, 0],
+            [1, 1]
+          ]
+        } as never
+      ])
+    }
+    const texts = (snapshot.readerData as Record<string, unknown>)
+      .ocrTexts as Record<string, unknown>
+    expect(Object.keys(texts)).toHaveLength(MAX_NATIVE_OCR_PAGES)
+    expect(JSON.stringify(texts).length).toBeLessThanOrEqual(
+      MAX_NATIVE_OCR_BYTES
+    )
+    expect(texts['1']).toBeUndefined()
+    expect(texts[String(MAX_NATIVE_OCR_PAGES + 4)]).toBeDefined()
   })
 
   it('maps native page geometry to a bounded layout percentage', () => {

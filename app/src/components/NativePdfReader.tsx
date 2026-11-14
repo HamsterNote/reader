@@ -164,6 +164,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const ocrRequests = useRef(new Map<string, number>())
     const ocrInFlight = useRef(new Set<string>())
     const ocrCompleted = useRef(new Set<string>())
+    const ocrCached = useRef(new Set<string>())
     const ocrFailed = useRef(new Set<string>())
     const ocrEpoch = useRef(0)
     const nativeError = useRef<{ code: string; message?: string } | null>(null)
@@ -320,6 +321,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         ocrEpoch.current += 1
         ocrRequests.current.clear()
         ocrInFlight.current.clear()
+        ocrCached.current.clear()
         if (undoTimer.current) clearTimeout(undoTimer.current)
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
@@ -368,6 +370,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       ocrEpoch.current += 1
       ocrRequests.current.clear()
       ocrInFlight.current.clear()
+      ocrCached.current.clear()
       ocrFailed.current.clear()
       ocrError.current = null
       if (!ocrEnabled) {
@@ -488,6 +491,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         )
           continue
         const key = nativeOcrSessionKey(record.fileId, pageNumber)
+        if (ocrCached.current.has(key)) continue
         if (
           !canRetryNativeOcrPage(
             key,
@@ -535,6 +539,19 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         pageCountRef.current = event.pageCount
         setPageCount(event.pageCount)
         const data = latest.current.data as { readerData?: ReaderData } | null
+        for (const page of ocrEnabled
+          ? Object.keys(data?.readerData?.ocrTexts ?? {})
+          : []) {
+          const pageNumber = Number(page)
+          if (
+            Number.isInteger(pageNumber) &&
+            pageNumber > 0 &&
+            pageNumber <= event.pageCount
+          )
+            ocrCached.current.add(
+              nativeOcrSessionKey(record.fileId, pageNumber)
+            )
+        }
         const hidden = data?.readerData?.hiddenPages ?? []
         const allowed = visibleOriginalPages(event.pageCount, hidden)
         setAllowedPages(allowed)
@@ -575,6 +592,36 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               width: geometry.width,
               height: geometry.height
             })
+          const cachedTexts = ocrEnabled
+            ? readerDataFromNativeSnapshot(
+                latest.current.data,
+                latest.current.progress
+              )?.ocrTexts
+            : undefined
+          for (const geometry of event.pages) {
+            const texts = cachedTexts?.[geometry.pageNumber]
+            if (!texts) continue
+            const canonical = nativeCanonicalPageFromOcr(
+              geometry.pageNumber,
+              geometry.width,
+              geometry.height,
+              texts
+            )
+            if (canonical) {
+              enqueue({
+                type: 'text',
+                pages: [canonical],
+                retain: [geometry.pageNumber]
+              })
+              ocrCompleted.current.add(
+                nativeOcrSessionKey(record.fileId, geometry.pageNumber)
+              )
+            } else {
+              ocrCached.current.delete(
+                nativeOcrSessionKey(record.fileId, geometry.pageNumber)
+              )
+            }
+          }
           setPage(event.pages[0].pageNumber)
           persistNativeLayoutPage(event.pages[0])
         }
