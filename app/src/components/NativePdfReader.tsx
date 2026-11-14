@@ -55,6 +55,12 @@ import {
 } from '../../../src/nativePdf/ocr'
 import { enqueueRecoverableSave } from '../../../src/nativePdf/persistence'
 import {
+  nativePageEditGroups,
+  restoreNativePageEditFields,
+  type NativePageEditUndo,
+  withNativePageEditData
+} from '../../../src/nativePdf/pageEdit'
+import {
   nativePdfErrorMessage,
   shouldReplaceNativePdfError
 } from '../../../src/nativePdf/errors'
@@ -133,7 +139,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [editOpen, setEditOpen] = useState(false)
     const [draftHiddenPages, setDraftHiddenPages] = useState<number[]>([])
     const [draftCrop, setDraftCrop] = useState<ReaderEdgeCrop>({})
-    const [hiddenPagesUndo, setHiddenPagesUndo] = useState<ReaderData | null>(
+    const [hiddenPagesUndo, setHiddenPagesUndo] = useState<NativePageEditUndo | null>(
       null
     )
     const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
@@ -254,9 +260,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         hiddenPages: [...new Set(draftHiddenPages)].sort((a, b) => a - b),
         edgeCrop: { ...previous.edgeCrop, all: draftCrop }
       }
-      persist(next)
+      persist(withNativePageEditData(latest.current.data, next))
       layoutForReaderData(next)
-      setHiddenPagesUndo(previous)
+      setHiddenPagesUndo({
+        hiddenPages: previous.hiddenPages,
+        edgeCrop: previous.edgeCrop
+      })
       if (undoTimer.current) clearTimeout(undoTimer.current)
       undoTimer.current = setTimeout(() => {
         undoTimer.current = null
@@ -264,10 +273,18 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }, 5000)
       setEditOpen(false)
     }
-    function undoPageEdit() {
-      if (!hiddenPagesUndo) return
-      persist(hiddenPagesUndo)
-      layoutForReaderData(hiddenPagesUndo)
+    async function undoPageEdit() {
+      const undo = hiddenPagesUndo
+      if (!undo) return
+      await save.current.catch(() => undefined)
+      const authoritative = await store.get(record.fileId)
+      const snapshot = authoritative?.snapshot ?? latest.current
+      latest.current = snapshot
+      const current =
+        readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
+      const next = restoreNativePageEditFields(current, undo)
+      persist(withNativePageEditData(snapshot.data, next))
+      layoutForReaderData(next)
       setHiddenPagesUndo(null)
       if (undoTimer.current) clearTimeout(undoTimer.current)
       undoTimer.current = null
@@ -568,6 +585,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       )
     const width = Math.min(size.width || 300, 300),
       height = Math.min(size.height || 160, panelOpen ? size.height : 160)
+    const draftGroups = nativePageEditGroups(draftHiddenPages, pageCount)
     return (
       <View style={{ flex: 1 }} onLayout={(e) => setSize(e.nativeEvent.layout)}>
         <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
@@ -751,26 +769,35 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                 </Pressable>
               </View>
               <ScrollView style={{ maxHeight: 220 }}>
-                {Array.from({ length: pageCount }, (_, index) => index + 1).map(
-                  (pageNumber) => {
-                    const selected = draftHiddenPages.includes(pageNumber)
+                {draftGroups.length === 0 ? (
+                  <Text>当前没有隐藏段</Text>
+                ) : (
+                  draftGroups.map((group) => {
+                    const selected = group.pages.every((pageNumber) =>
+                      draftHiddenPages.includes(pageNumber)
+                    )
                     return (
                       <Pressable
-                        key={pageNumber}
+                        key={`${group.start}-${group.end}`}
                         onPress={() =>
                           setDraftHiddenPages((current) =>
                             selected
-                              ? current.filter((value) => value !== pageNumber)
-                              : [...current, pageNumber]
+                              ? current.filter(
+                                  (pageNumber) => !group.pages.includes(pageNumber)
+                                )
+                              : [...new Set([...current, ...group.pages])].sort(
+                                  (a, b) => a - b
+                                )
                           )
                         }
                       >
                         <Text>
-                          {selected ? '☑' : '☐'} 第 {pageNumber} 页
+                          {selected ? '☑' : '☐'} 第 {group.start}–{group.end} 页（
+                          {group.pages.length} 页）
                         </Text>
                       </Pressable>
                     )
-                  }
+                  })
                 )}
               </ScrollView>
               <Text>全局裁切：{Math.round((draftCrop.top ?? 0) * 100)}%</Text>
