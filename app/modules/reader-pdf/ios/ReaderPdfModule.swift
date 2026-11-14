@@ -120,10 +120,6 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     addSubview(scroll); scroll.addSubview(content)
     scroll.delegate = self; scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 2
     scroll.backgroundColor = .secondarySystemBackground
-    if let tiled = layer as? CATiledLayer {
-      tiled.contentsScale = UIScreen.main.scale
-      tiled.tileSize = CGSize(width: 1024, height: 1024)
-    }
     content.layer.addSublayer(overlay); content.layer.addSublayer(startHandle); content.layer.addSublayer(endHandle)
     addSubview(lens); lens.isHidden = true
     overlay.fillColor = color.withAlphaComponent(0.35).cgColor
@@ -317,6 +313,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       guard let frame = frames[n], let slot = slots[n], let page = doc.page(at:n-1) else { continue }
       let wrapper = UIView(frame:slot); wrapper.clipsToBounds = true; wrapper.isUserInteractionEnabled = false
       let view = ReaderPdfPageView(frame:frame.offsetBy(dx:-slot.minX,dy:-slot.minY)); view.page = page
+      if let tiled = view.layer as? CATiledLayer {
+        tiled.contentsScale = UIScreen.main.scale
+        tiled.tileSize = CGSize(width: 1024, height: 1024)
+      }
       view.zoomScale = scroll.zoomScale
       view.contentScaleFactor = window?.screen.scale ?? UIScreen.main.scale
       view.isUserInteractionEnabled = false
