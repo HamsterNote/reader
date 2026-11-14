@@ -113,13 +113,13 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private var previewCache = NSCache<NSString, UIImage>()
   private lazy var drag = ReaderSelectionPan(target: self, action: #selector(dragSelection(_:)))
   private var closing = false
-  private var layoutWidth: CGFloat = -1
-  private var zoomAnchorY: CGFloat?
+  private var updatingGeometry = false
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     addSubview(scroll); scroll.addSubview(content)
     scroll.delegate = self; scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 2
+    scroll.contentInsetAdjustmentBehavior = .never
     scroll.backgroundColor = .secondarySystemBackground
     content.layer.addSublayer(overlay); content.layer.addSublayer(startHandle); content.layer.addSublayer(endHandle)
     addSubview(lens); lens.isHidden = true
@@ -148,8 +148,18 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     if window == nil { cancelSelection(); previewQueue.cancelAllOperations() }
   }
   override func layoutSubviews() {
-    super.layoutSubviews(); scroll.frame = bounds
-    if document != nil && beforeDrag == nil && layoutWidth != bounds.width { layoutWidth = bounds.width; layoutPages() }
+    super.layoutSubviews()
+    if updatingGeometry { setNeedsLayout(); return }
+    guard scroll.frame != bounds else { return }
+    let previous = viewportGeometry
+    let anchor = previous.contentPoint(at: previous.center)
+    updatingGeometry = true
+    scroll.frame = bounds
+    updateBottomInset()
+    let viewport = viewportGeometry
+    scroll.setContentOffset(viewport.offset(keeping: anchor, at: viewport.center), animated: false)
+    updatingGeometry = false
+    updateVisible()
   }
   private func emit(_ event: [String: Any]) {
     guard !closing else { return }
@@ -211,9 +221,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
           guard let b = text[n]?.boundaries.first(where: { $0.offset == offset }) else { error("MAPPING_NOT_READY",request); return }
           y = frame.minY + b.rect.minY
         }
-        scroll.layoutIfNeeded()
-        let target = clampedOffset(y * scroll.zoomScale, zoom: scroll.zoomScale)
-        scroll.setContentOffset(CGPoint(x:0,y:target), animated:false); updateVisible()
+        navigate(to: y)
       case "text":
         let retain = Set(c["retain"] as? [Int] ?? [])
         for p in c["pages"] as? [[String: Any]] ?? [] {
@@ -261,6 +269,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     return PdfEndpoint(page:n,offset:offset)
   }
   private func reset() {
+    updatingGeometry = true
     sourceEpoch = UUID()
     cancelSelection(); previewQueue.cancelAllOperations(); previewCache.removeAllObjects(); textTextures.removeAllObjects()
     pageViews.values.forEach { $0.superview?.removeFromSuperview() }; pageViews.removeAll()
@@ -268,48 +277,69 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     annotationLayers.forEach { $0.removeFromSuperlayer() }; annotationLayers = []; annotations = []; slots = [:]
     document = nil; pages = []; frames = [:]; text = [:]; crops = [:]; seen = []
     start = nil; end = nil; firstDisplayed = false; restoreComplete = false; revision = 0
-    scroll.setZoomScale(1,animated:false); scroll.contentOffset = .zero
+    scroll.setZoomScale(1,animated:false)
+    setUnzoomedContentSize(.zero)
+    scroll.contentInset = .zero; scroll.contentOffset = .zero
+    updatingGeometry = false
     updateSelection()
   }
   private func visualSize(_ page: PDFPage) -> CGSize {
-    let box = page.bounds(for:.cropBox)
-    return abs(page.rotation % 180) == 90 ? CGSize(width:box.height,height:box.width) : box.size
+    ReaderPdfPageMetrics.visualSize(page.bounds(for: .cropBox).size, rotation: page.rotation)
   }
-  private func clampedOffset(_ value: CGFloat, zoom: CGFloat) -> CGFloat {
-    min(max(0, value), max(0, content.bounds.height * zoom - scroll.bounds.height))
+  private var viewportGeometry: ReaderPdfViewport {
+    ReaderPdfViewport(scale: scroll.zoomScale, contentOrigin: content.convert(CGPoint.zero, to: scroll),
+                      contentSize: scroll.contentSize, size: scroll.bounds.size, offset: scroll.contentOffset,
+                      finalSlot: pages.last.flatMap { slots[$0] })
   }
-  // Scale-one tail padding makes a short final slot reachable at the viewport top.
-  private func finalPageTailPadding(_ finalPageHeight: CGFloat) -> CGFloat {
-    max(0, scroll.bounds.height / max(scroll.zoomScale, 0.0001) - max(0, finalPageHeight))
+  private func contentToViewport(_ rect: CGRect) -> CGRect {
+    viewportGeometry.viewportRect(rect).offsetBy(dx: bounds.minX, dy: bounds.minY)
+  }
+  private func updateBottomInset() {
+    let inset = UIEdgeInsets(top: 0, left: 0, bottom: viewportGeometry.bottomInset, right: 0)
+    if scroll.contentInset != inset { scroll.contentInset = inset }
+  }
+  private func setUnzoomedContentSize(_ size: CGSize) {
+    // UIView.frame is only meaningful with an identity transform. This runs
+    // only for document/crop changes and reset, never for zoom or viewport size.
+    assert(scroll.zoomScale == 1 && content.transform.isIdentity)
+    content.frame = CGRect(origin: .zero, size: size)
+    // Seed UIScrollView at scale one. UIKit owns contentSize during zooming.
+    scroll.contentSize = size
+  }
+  private func navigate(to y: CGFloat) {
+    scroll.layoutIfNeeded()
+    let viewport = viewportGeometry
+    let target = viewport.offset(keeping: CGPoint(x: 0, y: y), at: .zero)
+    scroll.setContentOffset(target, animated: false)
+    updateVisible()
   }
   private func setZoomKeepingCenter(_ zoom: CGFloat) {
-    let oldZoom = max(scroll.zoomScale, 0.0001)
-    let center = (scroll.contentOffset.y + scroll.bounds.height / 2) / oldZoom
+    let previous = viewportGeometry
+    let anchor = previous.contentPoint(at: previous.center)
+    updatingGeometry = true
     scroll.setZoomScale(zoom, animated:false)
-    layoutPages()
-    scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: clampedOffset(center * zoom - scroll.bounds.height / 2, zoom: zoom)), animated:false)
+    updateBottomInset()
+    let viewport = viewportGeometry
+    scroll.setContentOffset(viewport.offset(keeping: anchor, at: viewport.center), animated: false)
+    updatingGeometry = false
     updateVisible()
   }
   private func layoutPages() {
-    guard let doc = document, bounds.width > 0 else { return }
-    // Scale-one visual page coordinates are never replaced by screen coordinates.
-    var y: CGFloat = 0, width: CGFloat = 0
-    frames.removeAll(); slots.removeAll()
-    for n in pages {
-      guard let p = doc.page(at:n-1) else { continue }
-      let size = visualSize(p), crop = crops[String(n)] ?? crops["page-\(n)"] ?? [:]
-      let l = CGFloat(crop["left"] ?? 0), r = CGFloat(crop["right"] ?? 0), t = CGFloat(crop["top"] ?? 0), b = CGFloat(crop["bottom"] ?? 0)
-      slots[n] = CGRect(x:0,y:y,width:size.width*(1-l-r),height:size.height*(1-t-b))
-      frames[n] = CGRect(x:-l*size.width,y:y-t*size.height,width:size.width,height:size.height)
-      y += size.height * (1-t-b) + 12; width = max(width,size.width*(1-l-r))
-    }
-    let baseHeight = max(0, y - 12)
-    let finalHeight = pages.last.flatMap { slots[$0]?.height } ?? 0
-    let tail = pages.isEmpty ? 0 : finalPageTailPadding(finalHeight)
-    let contentSize = CGSize(width:width,height:baseHeight + tail)
-    content.frame = CGRect(origin: .zero, size: contentSize)
-    content.bounds.size = contentSize
-    scroll.contentSize = CGSize(width:contentSize.width*scroll.zoomScale,height:contentSize.height*scroll.zoomScale)
+    guard let doc = document else { return }
+    let previous = viewportGeometry
+    let anchor = previous.contentPoint(at: previous.center)
+    let layout = ReaderPdfLayout(pages: pages.compactMap { n in
+      guard let page = doc.page(at: n-1) else { return nil }
+      return ReaderPdfPageMetrics(number: n, size: visualSize(page), crop: crops[String(n)] ?? crops["page-\(n)"] ?? [:])
+    })
+    updatingGeometry = true
+    frames = layout.frames; slots = layout.slots
+    scroll.setZoomScale(1, animated: false)
+    setUnzoomedContentSize(layout.size)
+    scroll.setZoomScale(previous.scale, animated: false)
+    updateBottomInset()
+    let viewport = viewportGeometry
+    scroll.setContentOffset(viewport.offset(keeping: anchor, at: viewport.center), animated: false)
     for (n,v) in pageViews {
       if let f = frames[n], let slot = slots[n] {
         v.zoomScale = scroll.zoomScale
@@ -317,26 +347,20 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
         v.superview?.frame = slot; v.frame = f.offsetBy(dx:-slot.minX,dy:-slot.minY)
       }
     }
+    updatingGeometry = false
     updateVisible()
   }
   private func visiblePage() -> Int {
-    let center = (scroll.contentOffset.y + scroll.bounds.height / 2) / max(scroll.zoomScale, 0.0001)
-    return pages.min { a, b in
-      guard let left = slots[a], let right = slots[b] else { return false }
-      func distance(_ rect: CGRect) -> CGFloat {
-        if rect.minY...rect.maxY ~= center { return 0 }
-        return min(abs(center - rect.minY), abs(center - rect.maxY))
-      }
-      return distance(left) < distance(right)
-    } ?? pages.first ?? 1
+    viewportGeometry.page(atTopOf: pages.compactMap { n in slots[n].map { (number: n, rect: $0) } }) ?? 1
   }
   private func updateVisible() {
-    guard let doc = document else { return }
+    guard !updatingGeometry, let doc = document else { return }
     let viewport = scroll.convert(scroll.bounds,to:content)
     let visible = pages.filter { slots[$0]?.intersects(viewport) == true }
     var keep = Set(visible)
     for n in visible { if let i = pages.firstIndex(of:n) { if i > 0 { keep.insert(pages[i-1]) }; if i+1 < pages.count { keep.insert(pages[i+1]) } } }
     for n in Array(pageViews.keys) where !keep.contains(n) { pageViews.removeValue(forKey:n)?.superview?.removeFromSuperview() }
+    for view in pageViews.values { view.zoomScale = scroll.zoomScale }
     for n in keep where pageViews[n] == nil {
       guard let frame = frames[n], let slot = slots[n], let page = doc.page(at:n-1) else { continue }
       let wrapper = UIView(frame:slot); wrapper.clipsToBounds = true; wrapper.isUserInteractionEnabled = false
@@ -371,7 +395,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     }
     let geometry: [[String: Any]] = orderedVisible.compactMap { n in
       guard let frame = frames[n], let page = doc.page(at:n-1) else { return nil }
-      let origin = content.convert(frame.origin,to:self), scale = scroll.zoomScale
+      let origin = contentToViewport(frame).origin, scale = scroll.zoomScale
       return ["pageNumber":n,"width":frame.width,"height":frame.height,"rotation":page.rotation,
               "crop":crops[String(n)] ?? crops["page-\(n)"] ?? [:],"pageToViewport":[scale,0,0,scale,origin.x,origin.y],"geometryRevision":revision]
     }
@@ -383,18 +407,23 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { previewQueue.isSuspended = false } }
   func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { previewQueue.isSuspended = false }
   func scrollViewDidScroll(_ scrollView: UIScrollView) { updateVisible() }
-  func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
-    zoomAnchorY = (scrollView.contentOffset.y + scrollView.bounds.height / 2) / max(scrollView.zoomScale, 0.0001)
-  }
   func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-    if let center = zoomAnchorY {
-      layoutPages()
-      scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: clampedOffset(center * scale - scrollView.bounds.height / 2, zoom: scale)), animated:false)
-    }
-    zoomAnchorY = nil
+    guard !updatingGeometry else { return }
+    updatingGeometry = true
+    updateBottomInset()
+    scrollView.setContentOffset(viewportGeometry.clampedOffset(scrollView.contentOffset), animated: false)
+    updatingGeometry = false
     updateVisible()
   }
-  func scrollViewDidZoom(_ scrollView: UIScrollView) { updateVisible() }
+  func scrollViewDidZoom(_ scrollView: UIScrollView) {
+    guard !updatingGeometry else { return }
+    // UIKit preserves the moving pinch focal point. Replacing it with the
+    // pre-pinch viewport center at gesture end causes a visible jump.
+    updatingGeometry = true
+    updateBottomInset()
+    updatingGeometry = false
+    updateVisible()
+  }
   private func activePages() -> Set<Int> {
     guard let s = start, let e = end else { return [] }
     return Set(pages.filter { $0 >= min(s.page,e.page) && $0 <= max(s.page,e.page) })
@@ -512,7 +541,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     let zone: CGFloat = 64
     let distance = p.y < zone ? p.y-zone : p.y > bounds.height-zone ? p.y-(bounds.height-zone) : 0
     let delta = (distance < 0 ? -1.0 : 1.0) * pow(min(1,abs(distance)/zone),2) * 14
-    let y = min(max(0,scroll.contentOffset.y+delta),max(0,scroll.contentSize.height-scroll.bounds.height))
+    let y = viewportGeometry.clampedOffset(CGPoint(x: scroll.contentOffset.x, y: scroll.contentOffset.y+delta)).y
     if y != scroll.contentOffset.y { scroll.contentOffset.y = y; move(p) }
   }
   private func finish(_ point: CGPoint) {
@@ -527,7 +556,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   }
   private func sendSelection(_ phase: String) {
     guard let s = start, let e = end, s != e, let r = boundaryPoint(e) else { return }
-    let anchor = content.convert(r,to:self)
+    let anchor = contentToViewport(r)
     var event: [String: Any] = ["type":"selection","start":s.json,"end":e.json,"phase":phase,"geometryRevision":revision,"anchor":jsonRect(anchor)]
     if let id = activeRangeId { event["rangeId"] = id }
     emit(event)
@@ -543,11 +572,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     lens.layer.cornerRadius = CGFloat(radius); lens.isHidden = false
     lens.textures = pageViews.keys.compactMap { n in
       guard let image = textTextures.object(forKey:NSNumber(value:n)), let f = frames[n] else { return nil }
-      return (image, content.convert(f,to:self))
+      return (image, contentToViewport(f))
     }
     lens.sample = point; lens.magnification = CGFloat(scale); lens.color = color
     lens.markerWidth = CGFloat(configuration["markerWidth"] ?? 0)
-    lens.marker = hit(point).flatMap { boundaryPoint($0) }.map { content.convert($0,to:self) }
+    lens.marker = hit(point).flatMap { boundaryPoint($0) }.map { contentToViewport($0) }
     lens.setNeedsDisplay()
   }
   @objc private func tapPage(_ g: UITapGestureRecognizer) {
@@ -566,7 +595,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     if let action = annotation.action as? PDFActionGoTo {
       guard let targetPage = action.destination.page else { return }
       let target = doc.index(for:targetPage)+1
-      if let f = frames[target] { scroll.setContentOffset(CGPoint(x:0,y:max(0,f.minY*scroll.zoomScale)),animated:false) }
+      if let slot = slots[target] { navigate(to: slot.minY) }
     } else if let action = annotation.action as? PDFActionURL, let url = action.url,
               ["https","http"].contains(url.scheme?.lowercased() ?? "") { emit(["type":"link","url":url.absoluteString]) }
   }
