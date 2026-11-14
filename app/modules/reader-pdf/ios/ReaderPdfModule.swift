@@ -221,7 +221,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
           guard let b = text[n]?.boundaries.first(where: { $0.offset == offset }) else { error("MAPPING_NOT_READY",request); return }
           y = frame.minY + b.rect.minY
         } else if let percentage = c["verticalPercentage"] as? Double, percentage.isFinite {
-          y = slot.minY + slot.height * CGFloat(min(100, max(0, percentage))) / 100
+          // Progress is measured within the complete page frame. Cropped
+          // slots only define the visible layout, so using slot.height here
+          // would reopen a saved position with a different denominator.
+          y = slot.minY + frame.height * CGFloat(min(100, max(0, percentage))) / 100
         }
         navigate(to: y)
       case "text":

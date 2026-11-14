@@ -22,17 +22,32 @@ export function nativeLayoutProgress(
 }
 
 export function nativeLayoutProgressFromGeometry(
-  geometry: Pick<PdfGeometry, 'height' | 'pageToViewport' | 'pageNumber'>,
-  viewportHeight: number
+  geometry: Pick<PdfGeometry, 'height' | 'pageToViewport' | 'pageNumber'> &
+    Partial<Pick<PdfGeometry, 'crop'>>,
+  _viewportHeight: number
 ): ReaderPagePositionBookmark | undefined {
   const scale = Math.abs(geometry.pageToViewport[0])
   const top = geometry.pageToViewport[5]
-  const scrollable = geometry.height * scale - viewportHeight
-  if (!Number.isFinite(scale) || !Number.isFinite(top) || scrollable <= 0)
+  const cropTop =
+    geometry.crop && Number.isFinite(geometry.crop.top)
+      ? geometry.height * (geometry.crop.top ?? 0)
+      : 0
+  if (
+    !Number.isFinite(scale) ||
+    scale <= 0 ||
+    !Number.isFinite(top) ||
+    !Number.isFinite(cropTop) ||
+    !Number.isFinite(geometry.height) ||
+    geometry.height <= 0
+  )
     return nativeLayoutProgress(geometry.pageNumber)
+  // Persist the position inside the complete page frame. The old code used
+  // the scrollable page height, while native restore used the full frame;
+  // that made the same bookmark reopen at a different offset.
+  const pagePosition = Math.max(0, -top / scale - cropTop)
   return nativeLayoutProgress(
     geometry.pageNumber,
-    (Math.max(0, -top) / scrollable) * 100
+    (pagePosition / geometry.height) * 100
   )
 }
 

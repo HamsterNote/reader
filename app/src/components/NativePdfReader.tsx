@@ -323,12 +323,27 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
     }, [ocrEnabled])
     useEffect(() => {
+      let active = true
       closed.current = false
-      enqueue({
-        type: 'open',
-        source: { fileId: record.fileId, localUri: publicationUrl }
-      })
-    }, [publicationUrl, record.fileId])
+      const open = (snapshot: typeof record.snapshot) => {
+        if (!active) return
+        // Text mode can persist progress while this native view is unmounted.
+        // Re-read the authoritative snapshot before opening so switching back
+        // does not restore the stale record prop at 0%.
+        latest.current = snapshot
+        enqueue({
+          type: 'open',
+          source: { fileId: record.fileId, localUri: publicationUrl }
+        })
+      }
+      void store
+        .get(record.fileId)
+        .then((persisted) => open(persisted?.snapshot ?? record.snapshot))
+        .catch(() => open(record.snapshot))
+      return () => {
+        active = false
+      }
+    }, [publicationUrl, record.fileId, record.snapshot, store])
     function persistNativeLayoutPage(
       geometry: Extract<PdfEvent, { type: 'geometry' }>['pages'][number]
     ) {

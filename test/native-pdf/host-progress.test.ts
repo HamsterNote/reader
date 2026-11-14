@@ -43,7 +43,22 @@ describe('native host layout progress', () => {
     }
     expect(nativeLayoutProgressFromGeometry(geometry, 600)).toMatchObject({
       pageNumber: 3,
-      verticalPercentage: 28.57142857142857
+      verticalPercentage: 20
     })
+  })
+
+  it('uses the complete page frame for cropped save and restore', () => {
+    const geometry = {
+      pageNumber: 3,
+      height: 1000,
+      crop: { top: 0.1 },
+      // scale-one frame top is -100 crop points - 350 scrolled points.
+      pageToViewport: [2, 0, 0, 2, 0, -900] as const
+    }
+    const saved = nativeLayoutProgressFromGeometry(geometry, 600)
+    expect(saved).toEqual({ pageNumber: 3, verticalPercentage: 35 })
+    // Native restore uses slot.minY + frame.height * 35%; for this page the
+    // slot starts at 0, so it returns the same 350-point page position.
+    expect((saved?.verticalPercentage ?? 0) * 1000 / 100).toBe(350)
   })
 })
