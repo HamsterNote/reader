@@ -48,11 +48,16 @@ import {
   prefixOcrTextIds
 } from '../../../src/components/IntermediateDocumentViewer/ocrContent'
 import {
+  canRequestNativeOcrPage,
   nativeCanonicalPageFromOcr,
   nativeOcrSessionKey,
   shouldRequestNativeOcr
 } from '../../../src/nativePdf/ocr'
 import { enqueueRecoverableSave } from '../../../src/nativePdf/persistence'
+import {
+  nativePdfErrorMessage,
+  shouldReplaceNativePdfError
+} from '../../../src/nativePdf/errors'
 
 function isReaderFileUrl(url: string, root: string): boolean {
   try {
@@ -148,8 +153,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
     const ocrRequests = useRef(new Map<string, number>())
+    const ocrInFlight = useRef(new Set<string>())
     const ocrCompleted = useRef(new Set<string>())
     const ocrEpoch = useRef(0)
+    const nativeError = useRef<{ code: string; message?: string } | null>(null)
     const pageMetrics = useRef(
       new Map<number, { width: number; height: number }>()
     )
@@ -270,6 +277,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         if (closed.current) return { status: 'closed' }
         ocrEpoch.current += 1
         ocrRequests.current.clear()
+        ocrInFlight.current.clear()
         if (undoTimer.current) clearTimeout(undoTimer.current)
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
@@ -317,6 +325,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       previousOcrEnabled.current = ocrEnabled
       ocrEpoch.current += 1
       ocrRequests.current.clear()
+      ocrInFlight.current.clear()
       if (!ocrEnabled) {
         ocrCompleted.current.clear()
         enqueue({ type: 'text', pages: [], retain: [] })
@@ -325,6 +334,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     useEffect(() => {
       let active = true
       closed.current = false
+      nativeError.current = null
       const open = (snapshot: typeof record.snapshot) => {
         if (!active) return
         // Text mode can persist progress while this native view is unmounted.
@@ -362,6 +372,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       uri: string,
       epoch: number
     ) {
+      const key = nativeOcrSessionKey(record.fileId, pageNumber)
       try {
         const base64 = await FileSystem.readAsStringAsync(uri, {
           encoding: FileSystem.EncodingType.Base64
@@ -396,7 +407,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
         enqueue({ type: 'text', pages: [canonical], retain: [pageNumber] })
         onOcrTextsChange?.(pageNumber, texts)
-        ocrCompleted.current.add(nativeOcrSessionKey(record.fileId, pageNumber))
+        ocrCompleted.current.add(key)
       } catch (error) {
         if (epoch === ocrEpoch.current && !closed.current) {
           setStatus(
@@ -404,6 +415,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           )
           onOcrError?.(error, { pageNumber })
         }
+      } finally {
+        if (epoch === ocrEpoch.current) ocrInFlight.current.delete(key)
       }
     }
     function requestNativeOcr(
@@ -423,8 +436,15 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         )
           continue
         const key = nativeOcrSessionKey(record.fileId, pageNumber)
-        if (ocrCompleted.current.has(key) || ocrRequests.current.has(key))
+        if (
+          !canRequestNativeOcrPage(
+            key,
+            ocrInFlight.current,
+            ocrCompleted.current
+          )
+        )
           continue
+        ocrInFlight.current.add(key)
         const requestId = enqueue({ type: 'preview', pageNumber, width: 160 })
         ocrRequests.current.set(requestId, pageNumber)
       }
@@ -513,16 +533,25 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           const ocrPage = ocrRequests.current.get(event.requestId)
           if (ocrPage !== undefined) {
             ocrRequests.current.delete(event.requestId)
+            ocrInFlight.current.delete(
+              nativeOcrSessionKey(record.fileId, ocrPage)
+            )
             onOcrError?.(
               new Error(event.message ?? `OCR 预览失败：${event.code}`),
               { pageNumber: ocrPage }
             )
           }
         }
-        const detail = event.message ? `：${event.message}` : ''
-        setStatus(`原生 PDF [${event.code}]${detail}`)
-      } else if (guard.ready) setStatus('PDFKit 已显示；数据恢复完成')
-      else if (event.type === 'displayed')
+        const nextError = { code: event.code, message: event.message }
+        if (shouldReplaceNativePdfError(nativeError.current, nextError)) {
+          nativeError.current = nextError
+          setStatus(
+            `原生 PDF [${event.code}]：${nativePdfErrorMessage(nextError)}`
+          )
+        }
+      } else if (nativeError.current === null && guard.ready)
+        setStatus('PDFKit 已显示；数据恢复完成')
+      else if (nativeError.current === null && event.type === 'displayed')
         setStatus('PDFKit 已显示；等待恢复完成')
     }
     const injected = `window.__READER_NATIVE_PDF__=${JSON.stringify({ ...identity, publicationUrl, snapshot: record.snapshot.data, progress: record.snapshot.progress }).replace(/</g, '\\u003c')};true;`
@@ -814,12 +843,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           onError={({ nativeEvent }) => {
             const message = `WebView 加载失败：${nativeEvent.description}（${entryUrl}）`
             setWebError(message)
-            setStatus(message)
+            if (nativeError.current === null) setStatus(message)
           }}
           onHttpError={({ nativeEvent }) => {
             const message = `WebView HTTP ${nativeEvent.statusCode}（${nativeEvent.url}）`
             setWebError(message)
-            setStatus(message)
+            if (nativeError.current === null) setStatus(message)
           }}
           onMessage={(e) => {
             let m: Record<string, unknown>
@@ -884,7 +913,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                 setMenu(null)
                 break
               case 'failure':
-                setStatus(`规范文本：${String(m.code)}`)
+                if (nativeError.current === null)
+                  setStatus(`规范文本：${String(m.code)}`)
                 break
               case 'external':
                 if (typeof m.url === 'string' && /^https?:\/\//i.test(m.url))

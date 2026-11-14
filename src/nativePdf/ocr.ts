@@ -24,6 +24,14 @@ export function nativeOcrSessionKey(
   return `${fileId}:${pageNumber}`
 }
 
+export function canRequestNativeOcrPage(
+  key: string,
+  requested: ReadonlySet<string>,
+  completed: ReadonlySet<string>
+): boolean {
+  return !requested.has(key) && !completed.has(key)
+}
+
 type PolygonPoint = readonly [number, number]
 type OcrTextLike = {
   readonly id?: string
