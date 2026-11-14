@@ -3,6 +3,7 @@ import type { IntermediateText } from '@hamster-note/types'
 import type { ReaderData, ReaderEdgeCrop } from '../../../src/types/readerData'
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -51,6 +52,7 @@ import {
 } from '../../../src/nativePdf/strokes'
 import { restoreReaderSnapshot } from '../../../src/host/readerSnapshot'
 import { NativePdfSession } from '../../../src/nativePdf/session'
+import { NativeCanonicalDelivery } from '../../../src/nativePdf/canonicalDelivery'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { reduceNativeMenu } from '../../../src/nativePdf/menuOwnership'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
@@ -232,23 +234,39 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       pump()
       return requestId
     }
-    const post = (body: Record<string, unknown>) => {
-      const alive = web.current !== null
-      const event = body.event as
-        | { type?: string; start?: { offset?: number; selectionId?: string }; end?: { offset?: number; selectionId?: string } }
-        | undefined
-      const payload = {
-        type: body.type,
-        eventType: event?.type,
-        page: event?.start?.selectionId ?? event?.end?.selectionId,
-        startOffset: event?.start?.offset,
-        endOffset: event?.end?.offset
-      }
-      const message = JSON.stringify({ ...body, identity })
-      const result = alive ? web.current?.postMessage(message) : undefined
-      console.info('reader-pdf-native-post', { alive, payload, result })
-      return result
-    }
+    const post = useCallback(
+      (body: Record<string, unknown>) => {
+        const alive = web.current !== null
+        const event = body.event as
+          | {
+              type?: string
+              start?: { offset?: number; selectionId?: string }
+              end?: { offset?: number; selectionId?: string }
+            }
+          | undefined
+        const payload = {
+          type: body.type,
+          eventType: event?.type,
+          page: event?.start?.selectionId ?? event?.end?.selectionId,
+          startOffset: event?.start?.offset,
+          endOffset: event?.end?.offset
+        }
+        const message = JSON.stringify({ ...body, identity })
+        const result = alive ? web.current?.postMessage(message) : undefined
+        console.info('reader-pdf-native-post', { alive, payload, result })
+        return result
+      },
+      [identity]
+    )
+    const canonicalDelivery = useMemo(
+      () =>
+        new NativeCanonicalDelivery(identity, (canonicalPage) => {
+          if (!web.current || webDisposed.current) return false
+          post({ type: 'ocrText', canonicalPage })
+          return true
+        }),
+      [identity, post]
+    )
     function setMenuWithSource(
       value: { left: number; top: number } | null,
       source: string
@@ -277,6 +295,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
     }
     function disposeWebOnce() {
+      canonicalDelivery.close()
       if (webDisposed.current) return
       webDisposed.current = true
       post({ type: 'dispose' })
@@ -590,6 +609,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       ocrCached.current.clear()
       ocrFailed.current.clear()
       ocrError.current = null
+      canonicalDelivery.clear()
       if (!ocrEnabled) {
         ocrCompleted.current.clear()
         enqueue({ type: 'text', pages: [], retain: [], source: 'ocr-disabled', clear: true })
@@ -669,7 +689,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             )
           : null
         if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
-        post({ type: 'ocrText', canonicalPage: canonical })
+        canonicalDelivery.publish(canonical)
         enqueue({ type: 'text', pages: [canonical], retain: [pageNumber], source: 'ocr' })
         persist((snapshot) =>
           withNativeOcrTexts(snapshot.data, pageNumber, texts)
@@ -827,7 +847,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               texts
             )
             if (canonical) {
-              post({ type: 'ocrText', canonicalPage: canonical })
+              canonicalDelivery.publish(canonical)
               enqueue({
                 type: 'text',
                 pages: [canonical],
@@ -903,6 +923,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           first,
           last
         })
+        for (const canonical of pages) canonicalDelivery.publish(canonical)
         post({ type: 'nativeSelection', event, canonicalPages: pages })
       }
       if (event.type === 'error') {
@@ -1307,6 +1328,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             return allowed
           }}
           onLoadStart={({ nativeEvent }) => {
+            canonicalDelivery.webLoading()
             if (__DEV__)
               console.info('reader-webview-load-start', nativeEvent.url)
           }}
@@ -1329,6 +1351,25 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             }
             if (!guard.accepts(m as unknown as typeof identity)) return
             switch (m.type) {
+              case 'web-ready':
+                console.info('reader-pdf-web-ready', {
+                  sessionId: identity.sessionId
+                })
+                canonicalDelivery.webReady(identity)
+                break
+              case 'canonical-request':
+                if (Array.isArray(m.pages)) {
+                  const pages = m.pages.filter(
+                    (n): n is number =>
+                      typeof n === 'number' && Number.isInteger(n) && n > 0
+                  )
+                  console.info('reader-pdf-canonical-refill', {
+                    sessionId: identity.sessionId,
+                    pages
+                  })
+                  canonicalDelivery.refill(identity, pages)
+                }
+                break
               case 'outline':
                 setOutline(m.items as { title: string; pageNumber: number }[])
                 break

@@ -273,7 +273,7 @@ export function startNativePdfSurface(
     )
   }
   root.render(<Menu />)
-  function activateRange(rangeId: string): void {
+  function activateRange(rangeId: string, replay = false): void {
     const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
     if (!existing) {
       fail('INVALID_TARGET')
@@ -314,7 +314,36 @@ export function startNativePdfSurface(
         command({ type: 'navigate', pageNumber: first, offset: existing.start.offset })
         command({ type: 'selection', range, showMenu: true })
       })
-      .catch(() => fail('MAPPING_NOT_READY'))
+      .catch(() => {
+        if (disposed) return
+        if (replay)
+          console.info('reader-pdf-activate-pending-dropped', {
+            rangeId,
+            reason: 'replay-failed'
+          })
+        fail('MAPPING_NOT_READY')
+      })
+  }
+  function replayPendingActivates(): void {
+    // The receiver can accept OCR before the asynchronous PDF service exists.
+    // Do not consume a pending activation until both dependencies are ready.
+    if (disposed || !cache) return
+    mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+    for (const pending of pendingActivates.values()) {
+      if (!nativeSelectionPagesReady(cache.pages, pending.pages)) continue
+      clearTimeout(pending.timeout)
+      pendingActivates.delete(pending.rangeId)
+      console.info('reader-pdf-activate-pending-replay', {
+        rangeId: pending.rangeId,
+        pages: pending.pages
+      })
+      activateRange(pending.rangeId, true)
+    }
+  }
+  function clearPendingActivates(): void {
+    for (const pending of pendingActivates.values())
+      clearTimeout(pending.timeout)
+    pendingActivates.clear()
   }
   function queueActivate(rangeId: string, pages: number[]): void {
     if (pendingActivates.has(rangeId)) return
@@ -325,6 +354,8 @@ export function startNativePdfSurface(
     }, 3000)
     pendingActivates.set(rangeId, { rangeId, pages, timeout })
     console.info('reader-pdf-activate-pending', { rangeId, pages })
+    // A repair request is sent once per pending activation, never on a timer.
+    send({ type: 'canonical-request', pages })
   }
   async function ensure(
     numbers: number[],
@@ -418,7 +449,7 @@ export function startNativePdfSurface(
     }
   }
   // eslint-disable-next-line sonarjs/cognitive-complexity -- Exhaustive independent native event cases, with stale-session checks before dispatch.
-  listenHostMessages((raw) => {
+  const unlisten = listenHostMessages((raw) => {
     let message: {
       identity?: PdfIdentity
       type?: string
@@ -449,6 +480,9 @@ export function startNativePdfSurface(
     if (message.type === 'dispose') {
       disposed = true
       pendingSelection++
+      clearPendingActivates()
+      ocrPages.clear()
+      unlisten()
       guard.close()
       cache?.dispose()
       root.unmount()
@@ -460,6 +494,7 @@ export function startNativePdfSurface(
     }
     if (message.type === 'dismiss') {
       pendingSelection++
+      clearPendingActivates()
       menuOwner = null
       show(null)
       return
@@ -467,25 +502,17 @@ export function startNativePdfSurface(
     if (message.type === 'ocrText') {
       const page = message.canonicalPage
       if (page && Number.isInteger(page.pageNumber) && page.text.length > 0) {
-        if (ocrPages.get(page.pageNumber)?.text === page.text) return
+        const changed =
+          JSON.stringify(ocrPages.get(page.pageNumber)) !== JSON.stringify(page)
         ocrPages.set(page.pageNumber, page)
         cache?.pages.set(page.pageNumber, page)
-        console.info('reader-pdf-ocr-cache', {
-          page: page.pageNumber,
-          utf16: page.text.length,
-          boundaries: page.boundaries.length
-        })
-        for (const pending of pendingActivates.values()) {
-          if (pending.pages.every((pageNumber) => ocrPages.has(pageNumber))) {
-            clearTimeout(pending.timeout)
-            pendingActivates.delete(pending.rangeId)
-            console.info('reader-pdf-activate-pending-replay', {
-              rangeId: pending.rangeId,
-              pages: pending.pages
-            })
-            activateRange(pending.rangeId)
-          }
-        }
+        if (changed)
+          console.info('reader-pdf-ocr-cache', {
+            page: page.pageNumber,
+            utf16: page.text.length,
+            boundaries: page.boundaries.length
+          })
+        replayPendingActivates()
       }
       return
     }
@@ -578,6 +605,9 @@ export function startNativePdfSurface(
       })().catch(() => fail('INVALID_TARGET'))
     }
   })
+  // Receiver readiness is independent of PDF parsing/outline loading. In
+  // particular, onLoadEnd alone does not prove this listener is installed.
+  send({ type: 'web-ready' })
   ;(async () => {
     worker = await createPdfWorkerFromAsset()
     GlobalWorkerOptions.workerPort = worker
@@ -595,6 +625,7 @@ export function startNativePdfSurface(
       session.document.numPages,
       snapshot.data.hiddenPages
     )
+    replayPendingActivates()
     const outline = await session.document.getOutline()
     const entries: { title: string; pageNumber: number }[] = []
     const walk = async (items: NonNullable<typeof outline>) => {
