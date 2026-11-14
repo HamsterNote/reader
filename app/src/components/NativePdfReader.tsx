@@ -793,6 +793,26 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         requestNativeOcr(event.pages, event.textAvailability ?? {})
       if (event.type === 'rect' || event.type === 'stroke')
         handleDrawEvent(event)
+      if (event.type === 'selection' && event.phase === 'end') {
+        // The native surface owns the gesture and emits the canonical
+        // endpoints.  The WebView remains the existing popover/annotation
+        // surface, so make it visible from the native anchor as well; without
+        // this bridge native OCR could select internally but never expose the
+        // annotation menu.
+        const anchor = event.anchor
+        setPanelOpen(false)
+        setMenu({
+          left: Math.max(
+            0,
+            Math.min(size.width - width, anchor.x + anchor.width / 2 - width / 2)
+          ),
+          top: Math.max(
+            0,
+            Math.min(size.height - height, anchor.y + nativeTop - height)
+          )
+        })
+        post({ type: 'nativeSelection', event })
+      }
       if (event.type === 'error') {
         if (event.requestId) {
           const ocrPage = ocrRequests.current.get(event.requestId)
