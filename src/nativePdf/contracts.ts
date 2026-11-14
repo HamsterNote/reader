@@ -154,6 +154,7 @@ export type PdfEvent = PdfIdentity &
         readonly type: 'error'
         readonly code: PdfErrorCode
         readonly requestId?: string
+        readonly message?: string
       }
   )
 export interface NativePdfAdapter {

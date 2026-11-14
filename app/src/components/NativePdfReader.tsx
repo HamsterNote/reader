@@ -58,6 +58,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const inFlight = useRef<PdfCommand | null>(null)
     const counter = useRef(0)
     const [status, setStatus] = useState('正在加载原生 PDF…')
+    const [webError, setWebError] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [menu, setMenu] = useState<{ left: number; top: number } | null>(null)
     const [size, setSize] = useState({ width: 0, height: 0 })
@@ -156,6 +157,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         guard.close()
       }
     }, [guard])
+    useEffect(() => {
+      enqueue({
+        type: 'open',
+        source: { fileId: record.fileId, localUri: publicationUrl }
+      })
+    }, [publicationUrl, record.fileId])
     function diagnostic(event: PdfEvent) {
       if (
         __DEV__ &&
@@ -200,7 +207,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         setMenu(null)
         if (event.pages[0]) setPage(event.pages[0].pageNumber)
       }
-      if (event.type === 'error') setStatus(`原生 PDF：${event.code}`)
+      if (event.type === 'error')
+        setStatus(
+          `原生 PDF [${event.code}]${event.message ? `：${event.message}` : ''}`
+        )
       else if (guard.ready) setStatus('PDFKit 已显示；数据恢复完成')
       else if (event.type === 'displayed')
         setStatus('PDFKit 已显示；等待恢复完成')
@@ -368,6 +378,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           onShouldStartLoadWithRequest={(request) =>
             request.url === entryUrl || request.url === 'about:blank'
           }
+          onError={({ nativeEvent }) => {
+            const message = `WebView 加载失败：${nativeEvent.description}（${entryUrl}）`
+            setWebError(message)
+            setStatus(message)
+          }}
+          onHttpError={({ nativeEvent }) => {
+            const message = `WebView HTTP ${nativeEvent.statusCode}（${nativeEvent.url}）`
+            setWebError(message)
+            setStatus(message)
+          }}
           onMessage={(e) => {
             let m: Record<string, unknown>
             try {
@@ -385,10 +405,6 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                 setMenu({ left: 0, top: 0 })
                 break
               case 'serviceReady':
-                enqueue({
-                  type: 'open',
-                  source: { fileId: record.fileId, localUri: publicationUrl }
-                })
                 break
               case 'command': {
                 const c = m.command as PdfCommand
@@ -444,6 +460,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             }
           }}
         />
+        {webError ? (
+          <Text role='alert' style={{ color: '#a33' }}>
+            {webError}
+          </Text>
+        ) : null}
       </View>
     )
   }

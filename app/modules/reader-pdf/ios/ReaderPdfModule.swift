@@ -144,9 +144,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     guard !closing else { return }
     onPdfEvent(identity.merging(event) { _, new in new })
   }
-  private func error(_ code: String, _ request: String? = nil) {
+  private func error(_ code: String, _ request: String? = nil, _ message: String? = nil) {
     var event: [String: Any] = ["type": "error", "code": code]
-    if let request = request { event["requestId"] = request }; emit(event)
+    if let request = request { event["requestId"] = request }
+    if let message = message { event["message"] = message }
+    emit(event)
   }
   func receive(_ c: [String: Any]) {
     guard let type = c["type"] as? String, let request = c["requestId"] as? String else { return }
@@ -155,16 +157,20 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       closing = false
       for key in ["fileId", "paneId", "sessionId", "generation"] { identity[key] = c[key] }
       guard let source = c["source"] as? [String: String], source["fileId"] == identity["fileId"] as? String,
-            let uri = source["localUri"], let url = URL(string: uri), url.isFileURL else { error("PERMISSION",request); return }
+            let uri = source["localUri"], let url = URL(string: uri), url.isFileURL else { error("PERMISSION",request,"source localUri 无效"); return }
       // Only app-owned documents/caches; no arbitrary file or executable action.
       let roots = [FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
                    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first].compactMap { $0?.resolvingSymlinksInPath().path }
       let path = url.resolvingSymlinksInPath().path
-      guard roots.contains(where: { path.hasPrefix($0 + "/") }) else { error("PERMISSION",request); return }
-      guard FileManager.default.isReadableFile(atPath: path) else { error("PERMISSION",request); return }
-      guard let doc = PDFDocument(url: url) else { error("CORRUPT",request); return }
-      guard !doc.isLocked else { error("PASSWORD_REQUIRED",request); return }
-      guard doc.pageCount > 0 else { error("CORRUPT",request); return }
+      let exists = FileManager.default.fileExists(atPath: path)
+      let readable = FileManager.default.isReadableFile(atPath: path)
+      NSLog("ReaderPdf open sessionDirectory=%@ pdfPath=%@ exists=%@ readable=%@", (path as NSString).deletingLastPathComponent, path, String(exists), String(readable))
+      guard roots.contains(where: { path.hasPrefix($0 + "/") }) else { error("PERMISSION",request,"path 不在应用容器内：\(path)"); return }
+      guard readable else { error("PERMISSION",request,"PDF 不可读：\(path)"); return }
+      guard let doc = PDFDocument(url: url) else { NSLog("ReaderPdf document=nil path=%@", path); error("CORRUPT",request,"PDFKit document=nil，路径：\(path)"); return }
+      NSLog("ReaderPdf document opened path=%@ locked=%@ pageCount=%ld", path, String(doc.isLocked), doc.pageCount)
+      guard !doc.isLocked else { error("PASSWORD_REQUIRED",request,"PDF 已加密：\(path)"); return }
+      guard doc.pageCount > 0 else { error("CORRUPT",request,"PDF 页数为 0：\(path)"); return }
       document = doc; pages = Array(1...doc.pageCount)
       seen.insert(request); emit(["type":"loaded", "pageCount":doc.pageCount]); layoutPages()
     } else {
