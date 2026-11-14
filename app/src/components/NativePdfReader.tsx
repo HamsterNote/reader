@@ -33,7 +33,7 @@ import type {
   PdfTool
 } from '../../../src/nativePdf/contracts'
 import {
-  createNativeAnnotationController,
+  createNativeAnnotationControllerStore,
   type NativeAnnotationSnapshot
 } from '../../../src/nativePdf/annotationController'
 import {
@@ -136,9 +136,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       [record.fileId]
     )
     const guard = useMemo(() => new NativePdfSession(identity), [identity])
+    const annotationStore = useRef(createNativeAnnotationControllerStore()).current
     const annotations = useMemo(
-      () => createNativeAnnotationController(),
-      [identity]
+      () => annotationStore.get(record.fileId),
+      [annotationStore, record.fileId]
     )
     const annotationCommits = useRef(0)
     const [tool, setTool] = useState<PdfTool>('none')
@@ -287,7 +288,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           latest.current.data,
           latest.current.progress
         )
-        annotations.replaceSnapshot(restored.data)
+        annotations.replaceSnapshot(restored.data, { preserveHistory: true })
       } catch (error) {
         setStatus(
           `标注读取失败：${error instanceof Error ? error.message : String(error)}`
@@ -347,7 +348,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     /** Native freehand stroke → existing control layer → V5 snapshot. */
     function commitNativeStroke(event: Extract<PdfEvent, { type: 'stroke' }>) {
       if (event.phase !== 'commit') return
-      const commitId = `stroke-${++annotationCommits.current}`
+      // The counter is session-local; include a timestamp and UUID so a
+      // reopened file cannot submit a commitId already present in its V5
+      // painting document. The painting validator intentionally rejects
+      // duplicate object/commit IDs.
+      const commitId = `stroke-${Date.now()}-${randomUUID()}-${++annotationCommits.current}`
       const pageId = paintingPageId(event.pageNumber)
       const document = appendStrokeDocument(
         annotations.getSnapshot().pagePaintings[pageId],

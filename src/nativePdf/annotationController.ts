@@ -117,8 +117,12 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
   return {
     getSnapshot: (): NativeAnnotationSnapshot => current,
     /** Controlled rehydration never creates a user history entry. */
-    replaceSnapshot: (value: ReaderData | null | undefined): void => {
+    replaceSnapshot: (
+      value: ReaderData | null | undefined,
+      options: { preserveHistory?: boolean } = {}
+    ): void => {
       current = initialSnapshot(value)
+      if (options.preserveHistory) return
       past.length = 0
       future.length = 0
       commits.clear()
@@ -187,6 +191,21 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       past.push(current)
       current = next
       return true
+    }
+  }
+}
+
+/** Keeps undo/redo history in separate buckets while a reader switches files. */
+export function createNativeAnnotationControllerStore() {
+  const buckets = new Map<string, ReturnType<typeof createNativeAnnotationController>>()
+  return {
+    get: (storageId: string, initial?: ReaderData | null) => {
+      let controller = buckets.get(storageId)
+      if (!controller) {
+        controller = createNativeAnnotationController(initial)
+        buckets.set(storageId, controller)
+      }
+      return controller
     }
   }
 }

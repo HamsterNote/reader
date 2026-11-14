@@ -180,6 +180,24 @@ describe('native freehand strokes', () => {
       ])
     ).toBeNull()
   })
+
+  it('reports whether a reopened document accepts a new stroke id', () => {
+    const first = appendStrokeDocument(undefined, 'stroke-1', [
+      { x: 1, y: 1 },
+      { x: 2, y: 2 }
+    ])
+    expect(first).not.toBeNull()
+    const reopened = appendStrokeDocument(first, 'stroke-1', [
+      { x: 3, y: 3 },
+      { x: 4, y: 4 }
+    ])
+    expect(reopened).toBeNull()
+    const accepted = appendStrokeDocument(first, 'stroke-2', [
+      { x: 3, y: 3 },
+      { x: 4, y: 4 }
+    ])
+    expect(accepted?.objects).toHaveLength(2)
+  })
 })
 
 describe('native shape rendering', () => {

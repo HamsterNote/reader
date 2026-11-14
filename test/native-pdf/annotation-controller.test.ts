@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { createNativeAnnotationController } from '../../src/nativePdf/annotationController'
+import {
+  createNativeAnnotationController,
+  createNativeAnnotationControllerStore
+} from '../../src/nativePdf/annotationController'
 import type { ReaderSelectionRange } from '../../src/types/selection'
 
 const range: ReaderSelectionRange = {
@@ -115,5 +118,17 @@ describe('native annotation business controller', () => {
       rects: [],
       pagePaintings: {}
     })
+  })
+
+  it('keeps undo history isolated by storage id', () => {
+    const store = createNativeAnnotationControllerStore()
+    const a = store.get('file-a')
+    const b = store.get('file-b')
+    a.setPainting('a-paint', 'page-1', {} as never)
+    b.setPainting('b-paint', 'page-1', {} as never)
+    expect(a.undo()).toBe(true)
+    expect(a.getSnapshot().pagePaintings).toEqual({})
+    expect(b.getSnapshot().pagePaintings).toHaveProperty('page-1')
+    expect(b.undo()).toBe(true)
   })
 })
