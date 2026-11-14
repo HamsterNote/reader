@@ -3,6 +3,7 @@
 // 纯 TypeScript，原生层注入基于 expo-file-system 的 HostStorage。
 
 import type { BridgeHostSnapshot } from '../bridge/hostSession'
+import { rebaseSnapshot } from './rebaseSnapshot'
 import { assertSafeFileId, type HostDocumentFormat } from './fileIdentity'
 
 export type HostStorage = {
@@ -416,6 +417,49 @@ export class ReaderDataStore {
         )
       }
       await this.commitSnapshot(fileId, snapshot)
+    })
+  }
+
+  /** Atomically read the latest snapshot, patch it, and commit the next revision. */
+  updateSnapshot(
+    fileId: string,
+    patch: (snapshot: BridgeHostSnapshot) => BridgeHostSnapshot
+  ): Promise<BridgeHostSnapshot> {
+    return this.runForFile(fileId, async () => {
+      assertSafeFileId(fileId)
+      await this.loadIndex()
+      if (!this.cache.has(fileId)) throw new Error(`文档不存在：${fileId}`)
+      const stored = await this.readStoredSnapshot(fileId)
+      if (stored.status === 'corrupt') {
+        throw new Error(
+          `该文件的标注数据已损坏，已保留原数据：${stored.reason}`
+        )
+      }
+      const current = stored.status === 'ok' ? stored.snapshot : this.cache.get(fileId)!.snapshot
+      const next = patch(current)
+      await this.commitSnapshot(fileId, next)
+      return next
+    })
+  }
+
+  /** Persist a stale session write without clobbering fields saved meanwhile. */
+  saveRebasedSnapshot(
+    fileId: string,
+    previous: BridgeHostSnapshot,
+    next: BridgeHostSnapshot
+  ): Promise<void> {
+    return this.runForFile(fileId, async () => {
+      assertSafeFileId(fileId)
+      await this.loadIndex()
+      if (!this.cache.has(fileId)) throw new Error(`文档不存在：${fileId}`)
+      const stored = await this.readStoredSnapshot(fileId)
+      if (stored.status === 'corrupt') {
+        throw new Error(
+          `该文件的标注数据已损坏，已保留原数据：${stored.reason}`
+        )
+      }
+      const current = stored.status === 'ok' ? stored.snapshot : this.cache.get(fileId)!.snapshot
+      await this.commitSnapshot(fileId, rebaseSnapshot(current, previous, next))
     })
   }
 

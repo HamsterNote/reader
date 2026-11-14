@@ -16,6 +16,22 @@ export function withNativePageEditData(
   return { ...record(snapshotData), readerData }
 }
 
+/** Web popover commits own annotation fields; never import its stale readerData. */
+export function mergeNativeExternalData(
+  currentData: unknown,
+  incomingData: unknown
+): Record<string, unknown> {
+  const current = record(currentData)
+  const incoming = record(incomingData)
+  return {
+    ...current,
+    ...incoming,
+    ...(Object.prototype.hasOwnProperty.call(current, 'readerData')
+      ? { readerData: current.readerData }
+      : {})
+  }
+}
+
 /** Restore only fields owned by the page editor onto the newest ReaderData. */
 export function restoreNativePageEditFields(
   current: ReaderData,

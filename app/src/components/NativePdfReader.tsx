@@ -56,6 +56,7 @@ import {
 import { enqueueRecoverableSave } from '../../../src/nativePdf/persistence'
 import {
   nativePageEditGroups,
+  mergeNativeExternalData,
   restoreNativePageEditFields,
   type NativePageEditUndo,
   withNativePageEditData
@@ -154,7 +155,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const save = useRef(Promise.resolve())
     const latest = useRef(record.snapshot)
     const committed = useRef(new Set<string>())
-    const failedData = useRef<unknown>(undefined)
+    const failedTransform = useRef<((snapshot: typeof record.snapshot) => unknown) | undefined>(undefined)
     const alive = useRef(true)
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
@@ -193,19 +194,20 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     const post = (body: Record<string, unknown>) =>
       web.current?.postMessage(JSON.stringify({ ...body, identity }))
-    function persist(data: unknown) {
+    function persist(
+      transform: (snapshot: typeof record.snapshot) => unknown
+    ) {
       if (closed.current) return
-      failedData.current = data
+      failedTransform.current = transform
       // Save at the existing authoritative key, in order; never overwrite failed saves.
       save.current = enqueueRecoverableSave(save.current, async () => {
-        const next = {
-          ...latest.current,
-          data,
-          revision: latest.current.revision + 1
-        }
-        await store.saveSnapshot(record.fileId, next)
+        const next = await store.updateSnapshot(record.fileId, (base) => ({
+          ...base,
+          data: transform(base),
+          revision: base.revision + 1
+        }))
         latest.current = next
-        if (failedData.current === data) failedData.current = undefined
+        if (failedTransform.current === transform) failedTransform.current = undefined
       }).catch((error) => {
         if (alive.current)
           setSaveError(error instanceof Error ? error.message : '保存失败')
@@ -260,7 +262,17 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         hiddenPages: [...new Set(draftHiddenPages)].sort((a, b) => a - b),
         edgeCrop: { ...previous.edgeCrop, all: draftCrop }
       }
-      persist(withNativePageEditData(latest.current.data, next))
+      persist((snapshot) => {
+        const current =
+          readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
+        return withNativePageEditData(
+          snapshot.data,
+          restoreNativePageEditFields(current, {
+            hiddenPages: next.hiddenPages,
+            edgeCrop: next.edgeCrop
+          })
+        )
+      })
       layoutForReaderData(next)
       setHiddenPagesUndo({
         hiddenPages: previous.hiddenPages,
@@ -283,7 +295,17 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       const current =
         readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
       const next = restoreNativePageEditFields(current, undo)
-      persist(withNativePageEditData(snapshot.data, next))
+      persist((currentSnapshot) => {
+        const currentData =
+          readerDataFromNativeSnapshot(
+            currentSnapshot.data,
+            currentSnapshot.progress
+          ) ?? {}
+        return withNativePageEditData(
+          currentSnapshot.data,
+          restoreNativePageEditFields(currentData, undo)
+        )
+      })
       layoutForReaderData(next)
       setHiddenPagesUndo(null)
       if (undoTimer.current) clearTimeout(undoTimer.current)
@@ -301,7 +323,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         setMenu(null)
         try {
           await save.current
-          if (failedData.current !== undefined)
+          if (failedTransform.current !== undefined)
             return { status: 'unconfirmed', reason: '原生高亮尚未保存，请重试' }
           // The session is closed only after every queued snapshot has been
           // confirmed. A failed close remains usable so the retry can enqueue
@@ -382,7 +404,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       const key = nativeProgressKey(progress)
       if (lastNativeProgress.current === key) return
       lastNativeProgress.current = key
-      persist(withNativeLayoutProgress(latest.current.data, progress))
+      persist((snapshot) => withNativeLayoutProgress(snapshot.data, progress))
     }
     async function runNativeOcr(
       pageNumber: number,
@@ -704,10 +726,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         {saveError ? (
           <Pressable
             onPress={() => {
-              const data = failedData.current
-              if (data !== undefined) {
+              const transform = failedTransform.current
+              if (transform !== undefined) {
                 setSaveError(null)
-                persist(data)
+                persist(transform)
               }
             }}
           >
@@ -909,7 +931,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                   !committed.current.has(m.commitId)
                 ) {
                   committed.current.add(m.commitId)
-                  persist(m.data)
+                  persist((snapshot) =>
+                    mergeNativeExternalData(snapshot.data, m.data)
+                  )
                 }
                 break
               case 'navigateRange':

@@ -32,7 +32,10 @@ export type ReaderHostSessionOptions = {
   readonly sourceToken: string
   readonly descriptor: HostDocumentDescriptor
   readonly confirmedSnapshot: BridgeHostSnapshot | null
-  readonly persist: (snapshot: BridgeHostSnapshot) => Promise<void>
+  readonly persist: (
+    snapshot: BridgeHostSnapshot,
+    previous?: BridgeHostSnapshot
+  ) => Promise<void>
   readonly sendToWeb: (message: BridgeMessage) => void
 }
 
