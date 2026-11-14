@@ -27,7 +27,19 @@ import type {
   HostDocumentRecord,
   ReaderDataStore
 } from '../../../src/host/readerDataStore'
-import type { PdfCommand, PdfEvent } from '../../../src/nativePdf/contracts'
+import type {
+  PdfCommand,
+  PdfEvent,
+  PdfTool
+} from '../../../src/nativePdf/contracts'
+import {
+  createNativeAnnotationController,
+  type NativeAnnotationSnapshot
+} from '../../../src/nativePdf/annotationController'
+import {
+  nativeRectCommit,
+  readerSnapshotWithAnnotations
+} from '../../../src/nativePdf/drawing'
 import { NativePdfSession } from '../../../src/nativePdf/session'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
@@ -114,6 +126,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       [record.fileId]
     )
     const guard = useMemo(() => new NativePdfSession(identity), [identity])
+    const annotations = useMemo(
+      () => createNativeAnnotationController(),
+      [identity]
+    )
+    const annotationCommits = useRef(0)
+    const [tool, setTool] = useState<PdfTool>('none')
     const web = useRef<WebView>(null)
     const [command, setCommand] = useState<PdfCommand | null>(null)
     const queue = useRef<PdfCommand[]>([])
@@ -217,6 +235,66 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         throw error
       })
       save.current.catch(() => undefined)
+    }
+    function mirrorAnnotations(snapshot: NativeAnnotationSnapshot) {
+      enqueue({
+        type: 'annotations',
+        ranges: snapshot.ranges,
+        rects: snapshot.rects
+      })
+    }
+    function saveAnnotations(snapshot: NativeAnnotationSnapshot): boolean {
+      try {
+        persist(
+          readerSnapshotWithAnnotations(
+            latest.current.data,
+            latest.current.progress,
+            snapshot
+          )
+        )
+        return true
+      } catch (error) {
+        setStatus(
+          `标注未保存：${error instanceof Error ? error.message : String(error)}`
+        )
+        return false
+      }
+    }
+    function rehydrateAnnotations() {
+      annotations.replaceSnapshot(
+        readerDataFromNativeSnapshot(
+          latest.current.data,
+          latest.current.progress
+        ) ?? null
+      )
+      mirrorAnnotations(annotations.getSnapshot())
+    }
+    function selectTool(next: PdfTool) {
+      if (closed.current) return
+      setTool(next)
+      enqueue({ type: 'tool', tool: next })
+    }
+    /** Native gesture → existing 4.x annotation controller → V5 snapshot. */
+    function commitNativeRect(event: Extract<PdfEvent, { type: 'rect' }>) {
+      const commit = nativeRectCommit(
+        event,
+        `rect-${++annotationCommits.current}`
+      )
+      if (!commit) return
+      const result = annotations.apply(commit)
+      if (result.status !== 'changed') return
+      mirrorAnnotations(result.snapshot)
+      saveAnnotations(result.snapshot)
+    }
+    function undoNativeDrawing() {
+      if (closed.current) return
+      if (!annotations.undo()) {
+        setStatus('没有可撤销的标注')
+        return
+      }
+      const snapshot = annotations.getSnapshot()
+      mirrorAnnotations(snapshot)
+      if (saveAnnotations(snapshot)) setStatus('已撤销上一步标注')
     }
     function readerDataSnapshot(): ReaderData {
       return (
@@ -550,6 +628,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         )
         enqueue({ type: 'layout', pages: allowed, crops })
         enqueue({ type: 'restoreComplete' })
+        rehydrateAnnotations()
         const saved = readerDataFromNativeSnapshot(
           latest.current.data,
           latest.current.progress
@@ -581,6 +660,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
       if (event.type === 'textNeeded')
         requestNativeOcr(event.pages, event.textAvailability ?? {})
+      if (event.type === 'rect' && event.phase === 'commit')
+        commitNativeRect(event)
       if (event.type === 'error') {
         if (event.requestId) {
           const ocrPage = ocrRequests.current.get(event.requestId)
@@ -661,6 +742,25 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           </Pressable>
           <Pressable onPress={beginPageEdit}>
             <Text>裁切/隐藏页编辑</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel={
+              tool === 'rectangle' ? '关闭矩形工具' : '矩形标注'
+            }
+            accessibilityState={{ selected: tool === 'rectangle' }}
+            onPress={() =>
+              selectTool(tool === 'rectangle' ? 'none' : 'rectangle')
+            }
+          >
+            <Text>矩形{tool === 'rectangle' ? '（开）' : ''}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityLabel='撤销标注'
+            onPress={undoNativeDrawing}
+          >
+            <Text>撤销标注</Text>
           </Pressable>
           {hiddenPagesUndo ? (
             <Pressable onPress={undoPageEdit}>

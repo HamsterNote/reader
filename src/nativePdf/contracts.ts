@@ -1,6 +1,7 @@
 import type {
   ReaderSelectionEndpoint,
-  ReaderSelectionRange
+  ReaderSelectionRange,
+  ReaderSelectionRectangle
 } from '../types/selection'
 
 /** Independent channel: never extend the Web bridge v1 union. Runtime only. */
@@ -32,6 +33,8 @@ export type PdfCrop = {
   readonly bottom?: number
   readonly left?: number
 }
+/** Gesture modes the native surface exposes to the host toolbar. */
+export type PdfTool = 'none' | 'rectangle'
 export type PdfCapabilities = {
   readonly nativeLayout: boolean
   readonly thumbnails: boolean
@@ -138,6 +141,13 @@ export type PdfCommand = PdfRequest &
     | {
         readonly type: 'annotations'
         readonly ranges: readonly ReaderSelectionRange[]
+        /** Page-local px rectangles; same storage contract as `ranges` rects. */
+        readonly rects?: readonly ReaderSelectionRectangle[]
+      }
+    | {
+        /** Switches the gesture mode. `none` keeps read-only navigation. */
+        readonly type: 'tool'
+        readonly tool: PdfTool
       }
     | {
         readonly type: 'selection'
@@ -175,7 +185,18 @@ export type PdfEvent = PdfIdentity &
         readonly geometryRevision: number
         readonly anchor: PdfRect
       }
-    | { readonly type: 'cancelled' }
+    | {
+        readonly type: 'cancelled'
+      }
+    | {
+        /** One-finger rectangle gesture in the rectangle tool. */
+        readonly type: 'rect'
+        readonly pageNumber: number
+        /** Page-local px, scale-one visual coordinates. */
+        readonly rect: PdfRect
+        readonly phase: 'preview' | 'commit' | 'cancel'
+        readonly geometryRevision: number
+      }
     | { readonly type: 'activate'; readonly rangeId: string }
     | { readonly type: 'link'; readonly url: string }
     | {

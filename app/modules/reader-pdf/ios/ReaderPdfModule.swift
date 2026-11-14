@@ -109,9 +109,16 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private var activeTouch = false
   private var timer: CADisplayLink?
   private var color = UIColor.systemYellow
+  private var tool = "none"
+  private let rectOverlay = CAShapeLayer()
+  private let rectPreview = CAShapeLayer()
+  private var rects: [[String: Any]] = []
+  private var drawingPage: Int?
+  private var drawingOrigin: CGPoint?
   private var previewQueue = OperationQueue()
   private var previewCache = NSCache<NSString, UIImage>()
   private lazy var drag = ReaderSelectionPan(target: self, action: #selector(dragSelection(_:)))
+  private lazy var rectPan = UIPanGestureRecognizer(target: self, action: #selector(drawRectangle(_:)))
   private var closing = false
   private var updatingGeometry = false
 
@@ -121,6 +128,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     scroll.delegate = self; scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 2
     scroll.contentInsetAdjustmentBehavior = .never
     scroll.backgroundColor = .secondarySystemBackground
+    rectOverlay.fillColor = color.withAlphaComponent(0.15).cgColor
+    rectOverlay.strokeColor = color.cgColor; rectOverlay.lineWidth = 1
+    rectPreview.fillColor = color.withAlphaComponent(0.2).cgColor
+    rectPreview.strokeColor = color.cgColor; rectPreview.lineWidth = 1; rectPreview.isHidden = true
+    content.layer.addSublayer(rectOverlay); content.layer.addSublayer(rectPreview)
     content.layer.addSublayer(overlay); content.layer.addSublayer(startHandle); content.layer.addSublayer(endHandle)
     addSubview(lens); lens.isHidden = true
     overlay.fillColor = color.withAlphaComponent(0.35).cgColor
@@ -131,6 +143,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     drag.onAdditionalTouch = { [weak self] in self?.cancelSelection() }
     scroll.panGestureRecognizer.require(toFail:drag)
     drag.maximumNumberOfTouches = 1; drag.delegate = self; addGestureRecognizer(drag)
+    rectPan.minimumNumberOfTouches = 1; rectPan.maximumNumberOfTouches = 1
+    rectPan.delegate = self; addGestureRecognizer(rectPan)
+    // Single-finger drawing owns the touch only while the rectangle tool is on;
+    // two-finger scroll/zoom still reaches UIScrollView unchanged.
+    scroll.panGestureRecognizer.require(toFail: rectPan)
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapPage(_:))); addGestureRecognizer(tap)
     previewQueue.maxConcurrentOperationCount = 2; previewQueue.qualityOfService = .utility
     textTextures.countLimit = 5; textTextures.totalCostLimit = 16 * 1024 * 1024
@@ -249,7 +266,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
         text = text.filter { retain.contains($0.key) || pageViews[$0.key] != nil }
         updateSelection()
       case "annotations":
-        annotations = c["ranges"] as? [[String: Any]] ?? []; updateAnnotations()
+        annotations = c["ranges"] as? [[String: Any]] ?? []
+        // Missing key keeps the current rectangles: older senders only mirror ranges.
+        if let values = c["rects"] as? [[String: Any]] { rects = values }
+        updateAnnotations(); updateRects()
+      case "tool":
+        guard let value = c["tool"] as? String, ["none", "rectangle"].contains(value) else {
+          error("INVALID_TARGET",request); return
+        }
+        setTool(value)
       case "selection":
         stopSelection(notify:false)
         if let r = c["range"] as? [String: Any] {
@@ -280,6 +305,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     pageViews.values.forEach { $0.superview?.removeFromSuperview() }; pageViews.removeAll()
     for url in ownedPreviews { try? FileManager.default.removeItem(at:url) }; ownedPreviews.removeAll(); previewOrder.removeAll()
     annotationLayers.forEach { $0.removeFromSuperlayer() }; annotationLayers = []; annotations = []; slots = [:]
+    cancelRectangle(); rects = []; rectOverlay.path = nil
     document = nil; pages = []; frames = [:]; text = [:]; crops = [:]; seen = []
     start = nil; end = nil; firstDisplayed = false; restoreComplete = false; revision = 0
     scroll.setZoomScale(1,animated:false)
@@ -412,7 +438,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       return ["pageNumber":n,"width":frame.width,"height":frame.height,"rotation":page.rotation,
               "crop":crops[String(n)] ?? crops["page-\(n)"] ?? [:],"pageToViewport":[scale,0,0,scale,origin.x,origin.y],"geometryRevision":revision]
     }
-    emit(["type":"geometry","pages":geometry,"geometryRevision":revision]); updateSelection(); updateAnnotations()
+    emit(["type":"geometry","pages":geometry,"geometryRevision":revision]); updateSelection(); updateAnnotations(); updateRects()
   }
   private func emitReady() { if firstDisplayed && restoreComplete { emit(["type":"ready","pageNumber":visiblePage()]) } }
   func viewForZooming(in scrollView: UIScrollView) -> UIView? { content }
@@ -466,6 +492,72 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       content.layer.insertSublayer(layer,below:overlay); annotationLayers.append(layer)
     }
   }
+  private func setTool(_ value: String) {
+    tool = value
+    cancelRectangle()
+    if value != "none" { cancelSelection() }
+  }
+  private func cancelRectangle() {
+    drawingPage = nil; drawingOrigin = nil
+    rectPreview.path = nil; rectPreview.isHidden = true
+    scroll.isScrollEnabled = true
+  }
+  private func pageLocal(_ point: CGPoint, page n: Int) -> CGPoint? {
+    guard let f = frames[n] else { return nil }
+    return CGPoint(x: min(max(0,point.x-f.minX),f.width), y: min(max(0,point.y-f.minY),f.height))
+  }
+  private func rectBetween(_ a: CGPoint, _ b: CGPoint) -> CGRect {
+    CGRect(x:min(a.x,b.x), y:min(a.y,b.y), width:abs(b.x-a.x), height:abs(b.y-a.y))
+  }
+  private func emitRect(_ phase: String, page n: Int, rect: CGRect) {
+    emit(["type":"rect","pageNumber":n,"rect":jsonRect(rect),"phase":phase,"geometryRevision":revision])
+  }
+  /** One-finger rectangle gesture. Never touches layout, zoom or navigation code. */
+  @objc private func drawRectangle(_ g: UIPanGestureRecognizer) {
+    if g.numberOfTouches > 1 { cancelRectangle(); return }
+    guard tool == "rectangle" else { return }
+    let point = g.location(in:content)
+    if g.state == .began {
+      guard let n = pages.first(where: { slots[$0]?.contains(point) == true }),
+            let local = pageLocal(point, page: n), let f = frames[n] else { return }
+      drawingPage = n; drawingOrigin = local
+      cancelSelection(); scroll.isScrollEnabled = false
+      rectPreview.path = UIBezierPath(rect:local.offsetBy(dx:f.minX,dy:f.minY)).cgPath
+      rectPreview.isHidden = false
+      return
+    }
+    guard let n = drawingPage, let origin = drawingOrigin, let local = pageLocal(point, page: n), let f = frames[n] else {
+      cancelRectangle(); return
+    }
+    let rect = rectBetween(origin, local)
+    switch g.state {
+    case .changed:
+      rectPreview.path = UIBezierPath(rect:rect.offsetBy(dx:f.minX,dy:f.minY)).cgPath
+      rectPreview.isHidden = false
+      emitRect("preview", page:n, rect:rect)
+    case .ended:
+      // Persisted rects are page-local scale-one px; the host validates again.
+      if rect.width >= 2, rect.height >= 2 { emitRect("commit", page:n, rect:rect) }
+      else { emitRect("cancel", page:n, rect:rect) }
+      cancelRectangle()
+    default:
+      emitRect("cancel", page:n, rect:rect); cancelRectangle()
+    }
+  }
+  private func updateRects() {
+    let path = UIBezierPath()
+    for value in rects {
+      guard let n = value["pageNumber"] as? Int ?? (value["selectionId"] as? String).flatMap({ Int($0.dropFirst(5)) }),
+            let f = frames[n], let slot = slots[n] else { continue }
+      var r = pdfRect(value["rect"])
+      if value["overlayRectType"] as? String == "percent" {
+        r = CGRect(x:r.minX*f.width/100,y:r.minY*f.height/100,width:r.width*f.width/100,height:r.height*f.height/100)
+      }
+      let clipped = r.offsetBy(dx:f.minX,dy:f.minY).intersection(slot)
+      if !clipped.isNull { path.append(UIBezierPath(rect:clipped)) }
+    }
+    rectOverlay.path = path.cgPath
+  }
   private func boundaryPoint(_ e: PdfEndpoint) -> CGRect? {
     guard let f = frames[e.page], let b = text[e.page]?.boundaries.first(where: { $0.offset == e.offset }) else { return nil }
     return b.rect.offsetBy(dx:f.minX,dy:f.minY)
@@ -511,6 +603,9 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     CATransaction.commit()
   }
   override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    // The rectangle tool owns single-finger input; read-only mode keeps every
+    // existing gesture unchanged.
+    if tool == "rectangle" || recognizer === rectPan { return recognizer === rectPan }
     if recognizer === drag {
       let point = recognizer.location(in:content)
       let radius = CGFloat(configuration["hitSize"] ?? 0)/2/max(scroll.zoomScale,0.01)
