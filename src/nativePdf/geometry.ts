@@ -1,4 +1,61 @@
 import type { PdfCrop, PdfMatrix, PdfPoint } from './contracts'
+
+export type NativePageBox = {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+  readonly rotation: number
+}
+
+export type NativePageLayout = {
+  readonly visualWidth: number
+  readonly visualHeight: number
+  readonly frame: {
+    readonly x: number
+    readonly y: number
+    readonly width: number
+    readonly height: number
+  }
+  readonly slot: {
+    readonly x: number
+    readonly y: number
+    readonly width: number
+    readonly height: number
+  }
+}
+
+export function nativePageLayout(
+  box: NativePageBox,
+  crop: PdfCrop = {},
+  y = 0
+): NativePageLayout {
+  const width = Math.max(0, box.width)
+  const height = Math.max(0, box.height)
+  const rotated = Math.abs(((box.rotation % 360) + 360) % 360) % 180 === 90
+  const visualWidth = rotated ? height : width
+  const visualHeight = rotated ? width : height
+  const left = crop.left ?? 0
+  const right = crop.right ?? 0
+  const top = crop.top ?? 0
+  const bottom = crop.bottom ?? 0
+  return {
+    visualWidth,
+    visualHeight,
+    frame: {
+      x: left === 0 ? 0 : -left * visualWidth,
+      y: y - top * visualHeight,
+      width: visualWidth,
+      height: visualHeight
+    },
+    slot: {
+      x: 0,
+      y,
+      width: visualWidth * (1 - left - right),
+      height: visualHeight * (1 - top - bottom)
+    }
+  }
+}
 export function transformPoint(m: PdfMatrix, p: PdfPoint): PdfPoint {
   return {
     x: m[0] * p.x + m[2] * p.y + m[4],

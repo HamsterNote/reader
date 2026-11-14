@@ -50,14 +50,22 @@ func jsonRect(_ r: CGRect) -> [String: Double] { ["x": r.minX, "y": r.minY, "wid
 final class ReaderPdfPageView: UIView {
   var page: PDFPage?
   var painted: (() -> Void)?
+  var zoomScale: CGFloat = 1
+  private var drawCount = 0
   override class var layerClass: AnyClass { CATiledLayer.self }
   override func draw(_ rect: CGRect) {
-    guard let context = UIGraphicsGetCurrentContext(), let page = page else { return }
+    drawCount += 1
+    NSLog("ReaderPdf draw count=%ld bounds=%@ scale=%@ zoom=%@ rect=%@", drawCount, NSStringFromCGRect(bounds), String(contentScaleFactor), String(zoomScale), NSStringFromCGRect(rect))
+    guard let context = UIGraphicsGetCurrentContext(), let page = page else {
+      NSLog("ReaderPdf draw skipped context=%@ page=%@", String(UIGraphicsGetCurrentContext() != nil), String(page != nil))
+      return
+    }
     context.setFillColor(UIColor.white.cgColor); context.fill(bounds)
     context.saveGState()
     context.translateBy(x: 0, y: bounds.height)
     context.scaleBy(x: 1, y: -1)
-    context.concatenate(page.transform(for: .cropBox))
+    // PDFPage.draw handles crop box origin and intrinsic rotation. Applying
+    // page.transform(for:) here as well moves rotated/off-origin pages twice.
     page.draw(with: .cropBox, to: context)
     context.restoreGState()
     DispatchQueue.main.async { [weak self] in self?.painted?() }
@@ -277,10 +285,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       y += size.height * (1-t-b) + 12; width = max(width,size.width*(1-l-r))
     }
     let contentSize = CGSize(width:width,height:max(0,y-12))
+    content.frame = CGRect(origin: .zero, size: contentSize)
     content.bounds.size = contentSize
     scroll.contentSize = CGSize(width:contentSize.width*scroll.zoomScale,height:contentSize.height*scroll.zoomScale)
     for (n,v) in pageViews {
-      if let f = frames[n], let slot = slots[n] { v.superview?.frame = slot; v.frame = f.offsetBy(dx:-slot.minX,dy:-slot.minY) }
+      if let f = frames[n], let slot = slots[n] {
+        v.zoomScale = scroll.zoomScale
+        v.contentScaleFactor = window?.screen.scale ?? UIScreen.main.scale
+        v.superview?.frame = slot; v.frame = f.offsetBy(dx:-slot.minX,dy:-slot.minY)
+      }
     }
     updateVisible()
   }
@@ -297,7 +310,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     for n in keep where pageViews[n] == nil {
       guard let frame = frames[n], let slot = slots[n], let page = doc.page(at:n-1) else { continue }
       let wrapper = UIView(frame:slot); wrapper.clipsToBounds = true; wrapper.isUserInteractionEnabled = false
-      let view = ReaderPdfPageView(frame:frame.offsetBy(dx:-slot.minX,dy:-slot.minY)); view.page = page; view.isUserInteractionEnabled = false
+      let view = ReaderPdfPageView(frame:frame.offsetBy(dx:-slot.minX,dy:-slot.minY)); view.page = page
+      view.zoomScale = scroll.zoomScale
+      view.contentScaleFactor = window?.screen.scale ?? UIScreen.main.scale
+      view.isUserInteractionEnabled = false
       let generation = sourceEpoch
       view.painted = { [weak self, weak view] in
         guard let self = self, view?.superview != nil, generation == self.sourceEpoch,

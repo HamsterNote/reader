@@ -29,6 +29,16 @@ import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
 import type { ReaderWebViewHandle } from './ReaderWebView'
 
+function isReaderFileUrl(url: string, root: string): boolean {
+  try {
+    const candidate = decodeURI(url)
+    const base = decodeURI(root).replace(/\/$/, '')
+    return candidate.startsWith(`${base}/`)
+  } catch {
+    return url.startsWith(root)
+  }
+}
+
 type Props = {
   record: HostDocumentRecord
   store: ReaderDataStore
@@ -170,6 +180,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       )
         console.info('reader-pdf', guard.diagnostic())
     }
+    // This handler is the single native event reducer; keep its ordering explicit.
+    // eslint-disable-next-line sonarjs/cognitive-complexity
     function onEvent(event: PdfEvent) {
       if (!guard.receive(event)) return
       post({ type: 'nativeEvent', event })
@@ -207,11 +219,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         setMenu(null)
         if (event.pages[0]) setPage(event.pages[0].pageNumber)
       }
-      if (event.type === 'error')
-        setStatus(
-          `原生 PDF [${event.code}]${event.message ? `：${event.message}` : ''}`
-        )
-      else if (guard.ready) setStatus('PDFKit 已显示；数据恢复完成')
+      if (event.type === 'error') {
+        const detail = event.message ? `：${event.message}` : ''
+        setStatus(`原生 PDF [${event.code}]${detail}`)
+      } else if (guard.ready) setStatus('PDFKit 已显示；数据恢复完成')
       else if (event.type === 'displayed')
         setStatus('PDFKit 已显示；等待恢复完成')
     }
@@ -376,7 +387,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           mixedContentMode='never'
           javaScriptCanOpenWindowsAutomatically={false}
           onShouldStartLoadWithRequest={(request) =>
-            request.url === entryUrl || request.url === 'about:blank'
+            request.url === 'about:blank' ||
+            isReaderFileUrl(request.url, baseUrl)
           }
           onError={({ nativeEvent }) => {
             const message = `WebView 加载失败：${nativeEvent.description}（${entryUrl}）`
