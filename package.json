@@ -1,6 +1,6 @@
 {
   "name": "@hamster-note/reader",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "",
   "type": "module",
   "main": "dist/index.js",
@@ -61,7 +61,8 @@
     "check:pagination-input": "node scripts/check-pagination-input-browser.mjs",
     "check:native-epub-anchor": "node scripts/check-native-epub-anchor.mjs",
     "check:native-epub-highlights": "node scripts/check-native-epub-highlights.mjs",
-    "check:pdf-inset": "node scripts/check-pdf-page-inset.mjs"
+    "check:pdf-inset": "node scripts/check-pdf-page-inset.mjs",
+    "check:highlight-handoff": "node scripts/check-highlight-handoff.mjs"
   },
   "dependencies": {
     "@hamster-note/components": "0.2.1-beta.3",

@@ -1829,6 +1829,7 @@ export function EngineDocumentViewer(props: Props) {
               : rootElement
           }
           resolveHighlight={resolveHighlight}
+          highlightDragHandoff={props.highlightDragHandoff}
           onDragHighlight={
             props.onDragHighlight
               ? (range) => {

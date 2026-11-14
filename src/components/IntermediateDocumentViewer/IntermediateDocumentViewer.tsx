@@ -1,3 +1,4 @@
+import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
 import { createFlowTextReadiness } from '../reading/flowTextReadiness'
 import { pagePercentage, intersects } from '../../viewportPosition'
 import { createPaintingSettings } from '../../painting/paintingSettings'
@@ -642,6 +643,7 @@ export type IntermediateDocumentViewerProps = {
   /** 执行高亮操作时额外触发（在 onSelect 之后） */
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
+  highlightDragHandoff?: ReaderHighlightDragHandoff
   onDragHighlight?: (highlight: ReaderSelectionRange) => void
   /** 已确认高亮的 Overlay 颜色（CSS color），默认半透明黄 */
   highlightColor?: string
@@ -1710,6 +1712,7 @@ type ViewerContentProps = PageResources & {
   onCommentHighlight:
     | ((highlight: ReaderSelectionRange) => Promise<ReaderSelectionRange>)
     | undefined
+  highlightDragHandoff?: ReaderHighlightDragHandoff
   onDragHighlight: ((highlight: ReaderSelectionRange) => void) | undefined
   autoHighlight: boolean | undefined
   overlayRectType: ReaderSelectionOverlayRectType
@@ -3414,6 +3417,7 @@ function ViewerContent({
   highlightPopover,
   rectPopover,
   onCommentHighlight,
+  highlightDragHandoff,
   onDragHighlight,
   autoHighlight,
   overlayRectType,
@@ -4009,6 +4013,7 @@ function ViewerContent({
   } = useReaderHighlightDrag({
     viewerRootElement,
     resolveHighlight: resolveHighlightDragTarget,
+    highlightDragHandoff,
     onDragHighlight
   })
 
@@ -4466,6 +4471,7 @@ export function IntermediateDocumentViewer({
   onSelectionStart: onSelectionStartProp,
   onSelectionEnd: onSelectionEndProp,
   onHighlight,
+  highlightDragHandoff,
   onDragHighlight,
   highlightColor,
   selectionColor,
@@ -8521,6 +8527,7 @@ export function IntermediateDocumentViewer({
       highlightPopover={highlightPopover}
       rectPopover={resolvedRectPopover}
       onCommentHighlight={onCommentHighlight}
+      highlightDragHandoff={highlightDragHandoff}
       onDragHighlight={onDragHighlight}
       autoHighlight={autoHighlight}
       overlayRectType={overlayRectType}

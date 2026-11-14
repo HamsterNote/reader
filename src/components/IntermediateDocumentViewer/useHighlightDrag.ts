@@ -1,3 +1,5 @@
+import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
+import { useHighlightHandoff } from './useHighlightHandoff'
 import {
   Drag,
   DragOperationType,
@@ -37,7 +39,7 @@ type HighlightDragOptions = {
 const HIGHLIGHT_DRAG_MOVE_TOLERANCE = 4
 const HIGHLIGHT_TOUCH_LONG_PRESS_MS = 500
 
-export function useHighlightDrag({
+function useLegacyHighlightDrag({
   viewerRootElement,
   resolveHighlight,
   onDragHighlight
@@ -281,4 +283,25 @@ export function useHighlightDrag({
     handleHighlightPointerUp,
     handleHighlightPointerCancel
   }
+}
+
+/** Capability negotiation keeps the legacy single-argument callback compatible. */
+export function useHighlightDrag(
+  options: HighlightDragOptions & {
+    highlightDragHandoff?: ReaderHighlightDragHandoff
+  }
+) {
+  const enabled =
+    options.highlightDragHandoff?.contract === 'pane-highlight-drag-v1'
+  const legacy = useLegacyHighlightDrag({
+    ...options,
+    viewerRootElement: enabled ? null : options.viewerRootElement,
+    onDragHighlight: enabled ? undefined : options.onDragHighlight
+  })
+  const handoff = useHighlightHandoff({
+    viewerRootElement: enabled ? options.viewerRootElement : null,
+    resolveHighlight: options.resolveHighlight,
+    handoff: enabled ? options.highlightDragHandoff : undefined
+  })
+  return enabled ? handoff : legacy
 }

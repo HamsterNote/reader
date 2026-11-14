@@ -1,3 +1,4 @@
+import type { ReaderHighlightDragHandoff } from '../types/highlightDrag'
 import { useEffect } from 'react'
 import { useHighlightDrag } from './IntermediateDocumentViewer/useHighlightDrag'
 import type { ReaderSelectionRange } from '../types/selection'
@@ -6,6 +7,7 @@ import type { ReaderSelectionRange } from '../types/selection'
 export function EngineHighlightInteractions({
   element,
   resolveHighlight,
+  highlightDragHandoff,
   onDragHighlight
 }: {
   readonly element: HTMLElement | null
@@ -13,11 +15,13 @@ export function EngineHighlightInteractions({
     x: number,
     y: number
   ) => ReaderSelectionRange | null
+  readonly highlightDragHandoff?: ReaderHighlightDragHandoff
   readonly onDragHighlight: ((range: ReaderSelectionRange) => void) | undefined
 }) {
   const drag = useHighlightDrag({
     viewerRootElement: element,
     resolveHighlight,
+    highlightDragHandoff,
     onDragHighlight
   })
   useEffect(() => {
