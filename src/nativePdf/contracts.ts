@@ -117,6 +117,7 @@ export type PdfCommand = PdfRequest &
         readonly type: 'navigate'
         readonly pageNumber: number
         readonly offset?: number
+        readonly verticalPercentage?: number
       }
     | { readonly type: 'scale'; readonly value: number }
     | {

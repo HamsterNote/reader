@@ -27,6 +27,13 @@ import type { PdfCommand, PdfEvent } from '../../../src/nativePdf/contracts'
 import { NativePdfSession } from '../../../src/nativePdf/session'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { visibleOriginalPages } from '../../../src/nativePdf/geometry'
+import {
+  nativeLayoutProgress,
+  nativeLayoutProgressFromGeometry,
+  nativeProgressKey,
+  readerDataFromNativeSnapshot,
+  withNativeLayoutProgress
+} from '../../../src/nativePdf/hostProgress'
 import type { ReaderWebViewHandle } from './ReaderWebView'
 
 function isReaderFileUrl(url: string, root: string): boolean {
@@ -74,6 +81,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [size, setSize] = useState({ width: 0, height: 0 })
     const [allowedPages, setAllowedPages] = useState<number[]>([])
     const [nativeTop, setNativeTop] = useState(0)
+    const [nativeViewportHeight, setNativeViewportHeight] = useState(0)
     const [pageCount, setPageCount] = useState(0)
     const [page, setPage] = useState(1)
     const [outline, setOutline] = useState<
@@ -89,6 +97,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const committed = useRef(new Set<string>())
     const failedData = useRef<unknown>(undefined)
     const alive = useRef(true)
+    const closed = useRef(false)
+    const lastNativeProgress = useRef<string | null>(null)
     function pump() {
       if (!inFlight.current && queue.current.length) {
         inFlight.current = queue.current.shift()!
@@ -113,6 +123,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const post = (body: Record<string, unknown>) =>
       web.current?.postMessage(JSON.stringify({ ...body, identity }))
     function persist(data: unknown) {
+      if (closed.current) return
       failedData.current = data
       // Save at the existing authoritative key, in order; never overwrite failed saves.
       save.current = save.current
@@ -135,6 +146,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     useImperativeHandle(ref, () => ({
       close: async () => {
+        if (closed.current) return { status: 'closed' }
+        closed.current = true
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
         setMenu(null)
@@ -153,6 +166,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }))
     useEffect(() => {
       alive.current = true
+      closed.current = false
       const subscription = AppState.addEventListener('change', (state) => {
         if (state !== 'active') {
           enqueue({ type: 'cancel' })
@@ -162,17 +176,32 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       })
       return () => {
         alive.current = false
+        closed.current = true
         subscription.remove()
         post({ type: 'dispose' })
         guard.close()
       }
     }, [guard])
     useEffect(() => {
+      closed.current = false
       enqueue({
         type: 'open',
         source: { fileId: record.fileId, localUri: publicationUrl }
       })
     }, [publicationUrl, record.fileId])
+    function persistNativeLayoutPage(
+      geometry: Extract<PdfEvent, { type: 'geometry' }>['pages'][number]
+    ) {
+      if (!guard.ready) return
+      const progress =
+        nativeLayoutProgressFromGeometry(geometry, nativeViewportHeight) ??
+        nativeLayoutProgress(geometry.pageNumber)
+      if (!progress) return
+      const key = nativeProgressKey(progress)
+      if (lastNativeProgress.current === key) return
+      lastNativeProgress.current = key
+      persist(withNativeLayoutProgress(latest.current.data, progress))
+    }
     function diagnostic(event: PdfEvent) {
       if (
         __DEV__ &&
@@ -214,10 +243,29 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         )
         enqueue({ type: 'layout', pages: allowed, crops })
         enqueue({ type: 'restoreComplete' })
+        const saved = readerDataFromNativeSnapshot(
+          latest.current.data,
+          latest.current.progress
+        )?.layoutReadingProgress
+        if (
+          saved &&
+          'pageNumber' in saved &&
+          allowed.includes(saved.pageNumber)
+        )
+          enqueue({
+            type: 'navigate',
+            pageNumber: saved.pageNumber,
+            ...('verticalPercentage' in saved
+              ? { verticalPercentage: saved.verticalPercentage }
+              : {})
+          })
       }
       if (event.type === 'geometry') {
         setMenu(null)
-        if (event.pages[0]) setPage(event.pages[0].pageNumber)
+        if (event.pages[0]) {
+          setPage(event.pages[0].pageNumber)
+          persistNativeLayoutPage(event.pages[0])
+        }
       }
       if (event.type === 'error') {
         const detail = event.message ? `：${event.message}` : ''
@@ -360,7 +408,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           </Pressable>
         ) : null}
         <ReaderPdfView
-          onLayout={(event) => setNativeTop(event.nativeEvent.layout.y)}
+          onLayout={(event) => {
+            setNativeTop(event.nativeEvent.layout.y)
+            setNativeViewportHeight(event.nativeEvent.layout.height)
+          }}
           command={command}
           configuration={nativeSelectionConfiguration}
           onPdfEvent={(e) => onEvent(e.nativeEvent)}

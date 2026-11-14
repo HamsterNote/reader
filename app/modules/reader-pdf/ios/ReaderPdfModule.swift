@@ -220,6 +220,8 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
         if let offset = c["offset"] as? Int {
           guard let b = text[n]?.boundaries.first(where: { $0.offset == offset }) else { error("MAPPING_NOT_READY",request); return }
           y = frame.minY + b.rect.minY
+        } else if let percentage = c["verticalPercentage"] as? Double, percentage.isFinite {
+          y = slot.minY + slot.height * CGFloat(min(100, max(0, percentage))) / 100
         }
         navigate(to: y)
       case "text":
