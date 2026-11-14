@@ -20,6 +20,14 @@ export const nativeSelectionConfiguration = {
 } as const
 export const endpointPage = (e: ReaderSelectionEndpoint): number =>
   Number(/^page-([1-9]\d*)$/.exec(e.selectionId)?.[1])
+
+/** Overlay host-side canonical pages carried with a native selection. */
+export function mergeNativeSelectionPages(
+  target: Map<number, PdfCanonicalPage>,
+  supplied: readonly PdfCanonicalPage[]
+): void {
+  for (const page of supplied) target.set(page.pageNumber, page)
+}
 export function compareEndpoints(
   a: ReaderSelectionEndpoint,
   b: ReaderSelectionEndpoint

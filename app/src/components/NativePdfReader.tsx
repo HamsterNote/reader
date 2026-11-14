@@ -868,7 +868,40 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         const nextMenu = menuFrame(anchor)
         console.info('reader-pdf-native-menu', nextMenu)
         setMenuWithSource(nextMenu, 'native-selection-end')
-        post({ type: 'nativeSelection', event })
+        const first = Math.min(
+          Number(/^page-(\d+)$/.exec(event.start.selectionId)?.[1]),
+          Number(/^page-(\d+)$/.exec(event.end.selectionId)?.[1])
+        )
+        const last = Math.max(
+          Number(/^page-(\d+)$/.exec(event.start.selectionId)?.[1]),
+          Number(/^page-(\d+)$/.exec(event.end.selectionId)?.[1])
+        )
+        const cachedTexts = ocrEnabled
+          ? readerDataFromNativeSnapshot(
+              latest.current.data,
+              latest.current.progress
+            )?.ocrTexts
+          : undefined
+        const pages = allowedPages
+          .filter((n) => n >= first && n <= last)
+          .flatMap((pageNumber) => {
+            const texts = cachedTexts?.[pageNumber]
+            const metrics = pageMetrics.current.get(pageNumber)
+            if (!texts || !metrics) return []
+            const canonical = nativeCanonicalPageFromOcr(
+              pageNumber,
+              metrics.width,
+              metrics.height,
+              texts
+            )
+            return canonical ? [canonical] : []
+          })
+        console.info('reader-pdf-native-selection-canonical', {
+          pages: pages.map((page) => ({ page: page.pageNumber, utf16: page.text.length })),
+          first,
+          last
+        })
+        post({ type: 'nativeSelection', event, canonicalPages: pages })
       }
       if (event.type === 'error') {
         if (event.requestId) {

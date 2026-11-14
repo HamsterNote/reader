@@ -6,7 +6,10 @@ import {
   validCrop,
   visibleOriginalPages
 } from '../../src/nativePdf/geometry'
-import { materializeNativeRange } from '../../src/nativePdf/selection'
+import {
+  materializeNativeRange,
+  mergeNativeSelectionPages
+} from '../../src/nativePdf/selection'
 import type {
   NativePdfAdapter,
   PdfCanonicalPage,
@@ -178,6 +181,20 @@ describe('native PDF contracts', () => {
     expect(() =>
       materializeNativeRange({ ...a, offset: 999 }, b, pages, allowed, metadata)
     ).toThrow('MAPPING_NOT_READY')
+  })
+  it('uses canonical pages carried by native selection when the Web cache is empty', () => {
+    const supplied = page(1)
+    const pages = new Map<number, typeof supplied>()
+    mergeNativeSelectionPages(pages, [supplied])
+    const result = materializeNativeRange(
+      { selectionId: 'page-1', offset: 0 },
+      { selectionId: 'page-1', offset: 4 },
+      pages,
+      [1],
+      { id: 'native', createdAt: 1, color: '#ff0' }
+    )
+    expect(result.text).toBe('hell')
+    expect(result.end.offset).toBe(4)
   })
   it('retains percent rectangle units and existing style fields during endpoint edits', () => {
     const p = page(1),

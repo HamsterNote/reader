@@ -6,7 +6,8 @@ import { PdfDocumentSession } from '../../src/pdf/pdfDocumentSession'
 import { NativeCanonicalCache } from '../../src/nativePdf/textGeometry'
 import {
   materializeNativeRange,
-  endpointPage
+  endpointPage,
+  mergeNativeSelectionPages
 } from '../../src/nativePdf/selection'
 import {
   DefaultHighlightPopover,
@@ -280,7 +281,10 @@ export function startNativePdfSurface(
     }
     return result
   }
-  const selection = async (event: Extract<PdfEvent, { type: 'selection' }>) => {
+  const selection = async (
+    event: Extract<PdfEvent, { type: 'selection' }>,
+    suppliedPages: readonly PdfCanonicalPage[] = []
+  ) => {
     if (!event.rangeId && draftFinished && event.phase === 'preview') {
       draftFinished = false
       draftId = `native-${crypto.randomUUID()}`
@@ -289,6 +293,18 @@ export function startNativePdfSurface(
     const first = Math.min(endpointPage(event.start), endpointPage(event.end)),
       last = Math.max(endpointPage(event.start), endpointPage(event.end))
     const numbers = allowed.filter((n) => n >= first && n <= last)
+    if (!cache) throw new Error('MAPPING_NOT_READY')
+    mergeNativeSelectionPages(cache!.pages, suppliedPages)
+    console.info('reader-pdf-native-selection-canonical-compare', {
+      supplied: suppliedPages.map((page) => ({ page: page.pageNumber, utf16: page.text.length })),
+      cached: numbers.map((pageNumber) => ({
+        page: pageNumber,
+        utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
+      })),
+      consistent: suppliedPages.every(
+        (page) => cache!.pages.get(page.pageNumber)?.text.length === page.text.length
+      )
+    })
     await ensure(numbers)
     if (
       disposed ||
@@ -338,6 +354,7 @@ export function startNativePdfSurface(
       identity?: PdfIdentity
       type?: string
       event?: PdfEvent
+      canonicalPages?: PdfCanonicalPage[]
       rangeId?: string
       pages?: number[]
       url?: string
@@ -382,7 +399,10 @@ export function startNativePdfSurface(
       if (!nativeEvent || nativeEvent.type !== 'selection') return
       if (!guard.receive(nativeEvent)) return
       menuOwner = 'native'
-      selection(nativeEvent).catch(() => fail('MAPPING_NOT_READY'))
+      const suppliedPages = Array.isArray(message.canonicalPages)
+        ? message.canonicalPages
+        : []
+      selection(nativeEvent, suppliedPages).catch(() => fail('MAPPING_NOT_READY'))
       return
     }
     if (message.event?.type === 'activate') {
