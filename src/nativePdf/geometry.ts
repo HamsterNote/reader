@@ -25,6 +25,50 @@ export type NativePageLayout = {
   }
 }
 
+export function clampNativeScrollOffset(
+  value: number,
+  zoomScale: number,
+  contentHeight: number,
+  viewportHeight: number
+): number {
+  const max = Math.max(
+    0,
+    Math.max(0, contentHeight) * zoomScale - viewportHeight
+  )
+  return Math.min(Math.max(0, value), max)
+}
+
+export function nativePageOffset(
+  pageTop: number,
+  zoomScale: number,
+  contentHeight: number,
+  viewportHeight: number
+): number {
+  return clampNativeScrollOffset(
+    pageTop * zoomScale,
+    zoomScale,
+    contentHeight,
+    viewportHeight
+  )
+}
+
+export function preserveNativeZoomCenter(
+  offset: number,
+  oldZoomScale: number,
+  newZoomScale: number,
+  contentHeight: number,
+  viewportHeight: number
+): number {
+  const oldZoom = Math.max(0.0001, oldZoomScale)
+  const center = (offset + viewportHeight / 2) / oldZoom
+  return clampNativeScrollOffset(
+    center * newZoomScale - viewportHeight / 2,
+    newZoomScale,
+    contentHeight,
+    viewportHeight
+  )
+}
+
 export function nativePageLayout(
   box: NativePageBox,
   crop: PdfCrop = {},

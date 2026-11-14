@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { nativePageLayout } from '../../src/nativePdf/geometry'
+import {
+  clampNativeScrollOffset,
+  nativePageLayout,
+  nativePageOffset,
+  preserveNativeZoomCenter
+} from '../../src/nativePdf/geometry'
 
 describe('native PDF page layout geometry', () => {
   it('keeps zero dimensions finite and empty', () => {
@@ -39,5 +44,25 @@ describe('native PDF page layout geometry', () => {
     expect(layout.slot.y).toBe(500)
     expect(layout.slot.width).toBeCloseTo(225)
     expect(layout.slot.height).toBeCloseTo(240)
+  })
+
+  it.each([0.5, 1, 2])(
+    'maps page tops to a clamped offset at zoom %s',
+    (zoom) => {
+      expect(nativePageOffset(812.25, zoom, 1612.25, 600)).toBe(
+        clampNativeScrollOffset(812.25 * zoom, zoom, 1612.25, 600)
+      )
+      expect(nativePageOffset(0, zoom, 1612.25, 600)).toBe(0)
+    }
+  )
+
+  it('clamps the last page even with a fractional page height', () => {
+    expect(nativePageOffset(3000, 2, 3200.75, 800)).toBe(5601.5)
+    expect(nativePageOffset(99999, 2, 3200.75, 800)).toBe(5601.5)
+  })
+
+  it('preserves the viewport center when zoom changes', () => {
+    expect(preserveNativeZoomCenter(400, 1, 2, 2000, 800)).toBe(1200)
+    expect(preserveNativeZoomCenter(0, 1, 0.5, 2000, 800)).toBe(0)
   })
 })

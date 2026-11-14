@@ -386,10 +386,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           allowUniversalAccessFromFileURLs={false}
           mixedContentMode='never'
           javaScriptCanOpenWindowsAutomatically={false}
-          onShouldStartLoadWithRequest={(request) =>
-            request.url === 'about:blank' ||
-            isReaderFileUrl(request.url, baseUrl)
-          }
+          onShouldStartLoadWithRequest={(request) => {
+            const allowed =
+              request.url === 'about:blank' ||
+              isReaderFileUrl(request.url, baseUrl)
+            if (__DEV__)
+              console.info('reader-webview-navigation', {
+                url: request.url,
+                baseUrl,
+                entryUrl,
+                allowed
+              })
+            return allowed
+          }}
+          onLoadStart={({ nativeEvent }) => {
+            if (__DEV__)
+              console.info('reader-webview-load-start', nativeEvent.url)
+          }}
           onError={({ nativeEvent }) => {
             const message = `WebView 加载失败：${nativeEvent.description}（${entryUrl}）`
             setWebError(message)

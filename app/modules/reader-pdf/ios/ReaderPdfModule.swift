@@ -114,6 +114,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private lazy var drag = ReaderSelectionPan(target: self, action: #selector(dragSelection(_:)))
   private var closing = false
   private var layoutWidth: CGFloat = -1
+  private var zoomAnchorY: CGFloat?
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -202,7 +203,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
         }) else { error("INVALID_TARGET",request); return }
         cancelSelection(); pages = requested; crops = values; layoutPages()
       case "scale":
-        if let scale = c["value"] as? Double, scale.isFinite { scroll.setZoomScale(CGFloat(min(2,max(0.5,scale))), animated:false) }
+        if let scale = c["value"] as? Double, scale.isFinite { setZoomKeepingCenter(CGFloat(min(2,max(0.5,scale)))) }
       case "navigate":
         guard let n = c["pageNumber"] as? Int, let frame = frames[n] else { error("INVALID_TARGET",request); return }
         var y = frame.minY
@@ -210,7 +211,8 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
           guard let b = text[n]?.boundaries.first(where: { $0.offset == offset }) else { error("MAPPING_NOT_READY",request); return }
           y += b.rect.minY
         }
-        let target = min(max(0,y * scroll.zoomScale),max(0,scroll.contentSize.height-scroll.bounds.height))
+        scroll.layoutIfNeeded()
+        let target = clampedOffset(y * scroll.zoomScale, zoom: scroll.zoomScale)
         scroll.setContentOffset(CGPoint(x:0,y:target), animated:false); updateVisible()
       case "text":
         let retain = Set(c["retain"] as? [Int] ?? [])
@@ -272,6 +274,16 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private func visualSize(_ page: PDFPage) -> CGSize {
     let box = page.bounds(for:.cropBox)
     return abs(page.rotation % 180) == 90 ? CGSize(width:box.height,height:box.width) : box.size
+  }
+  private func clampedOffset(_ value: CGFloat, zoom: CGFloat) -> CGFloat {
+    min(max(0, value), max(0, content.bounds.height * zoom - scroll.bounds.height))
+  }
+  private func setZoomKeepingCenter(_ zoom: CGFloat) {
+    let oldZoom = max(scroll.zoomScale, 0.0001)
+    let center = (scroll.contentOffset.y + scroll.bounds.height / 2) / oldZoom
+    scroll.setZoomScale(zoom, animated:false)
+    scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: clampedOffset(center * zoom - scroll.bounds.height / 2, zoom: zoom)), animated:false)
+    updateVisible()
   }
   private func layoutPages() {
     guard let doc = document, bounds.width > 0 else { return }
@@ -335,7 +347,13 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     let missing = retain.filter { text[$0] == nil || (keep.contains($0) && text[$0]?.text.isEmpty == false && textTextures.object(forKey:NSNumber(value:$0)) == nil) }.sorted()
     if !missing.isEmpty { emit(["type":"textNeeded","pages":missing,"retain":retain.sorted()]) }
     revision += 1
-    let geometry: [[String: Any]] = visible.compactMap { n in
+    let current = visiblePage()
+    let orderedVisible = visible.sorted { a, b in
+      if a == current { return true }
+      if b == current { return false }
+      return a < b
+    }
+    let geometry: [[String: Any]] = orderedVisible.compactMap { n in
       guard let frame = frames[n], let page = doc.page(at:n-1) else { return nil }
       let origin = content.convert(frame.origin,to:self), scale = scroll.zoomScale
       return ["pageNumber":n,"width":frame.width,"height":frame.height,"rotation":page.rotation,
@@ -349,6 +367,16 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { previewQueue.isSuspended = false } }
   func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { previewQueue.isSuspended = false }
   func scrollViewDidScroll(_ scrollView: UIScrollView) { updateVisible() }
+  func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+    zoomAnchorY = (scrollView.contentOffset.y + scrollView.bounds.height / 2) / max(scrollView.zoomScale, 0.0001)
+  }
+  func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+    if let center = zoomAnchorY {
+      scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: clampedOffset(center * scale - scrollView.bounds.height / 2, zoom: scale)), animated:false)
+    }
+    zoomAnchorY = nil
+    updateVisible()
+  }
   func scrollViewDidZoom(_ scrollView: UIScrollView) { updateVisible() }
   private func activePages() -> Set<Int> {
     guard let s = start, let e = end else { return [] }
