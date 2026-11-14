@@ -161,6 +161,10 @@ export type PdfEvent = PdfIdentity &
         readonly type: 'textNeeded'
         readonly pages: readonly number[]
         readonly retain: readonly number[]
+        /** Per-page PDF text-layer classification. Missing pages are never emitted. */
+        readonly textAvailability?: Readonly<
+          Record<number, 'textLayer' | 'noTextLayer'>
+        >
       }
     | {
         readonly type: 'selection'

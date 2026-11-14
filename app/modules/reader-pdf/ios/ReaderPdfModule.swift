@@ -387,7 +387,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     text = text.filter { retain.contains($0.key) }
     for n in pages where !keep.contains(n) { textTextures.removeObject(forKey:NSNumber(value:n)) }
     let missing = retain.filter { text[$0] == nil || (keep.contains($0) && text[$0]?.text.isEmpty == false && textTextures.object(forKey:NSNumber(value:$0)) == nil) }.sorted()
-    if !missing.isEmpty { emit(["type":"textNeeded","pages":missing,"retain":retain.sorted()]) }
+    if !missing.isEmpty {
+      // PDFKit exposes an empty string for scanned pages. Keep that distinct
+      // from an invalid page: `missing` is derived only from validated pages.
+      let availability: [String: String] = Dictionary(uniqueKeysWithValues: missing.compactMap { n in
+        guard let page = doc.page(at: n - 1) else { return nil }
+        return (String(n), (page.string?.isEmpty == false) ? "textLayer" : "noTextLayer")
+      })
+      emit(["type":"textNeeded","pages":missing,"retain":retain.sorted(),"textAvailability":availability])
+    }
     revision += 1
     let current = visiblePage()
     let orderedVisible = visible.sorted { a, b in

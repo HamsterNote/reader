@@ -1,4 +1,5 @@
 import { Image } from 'react-native'
+import type { IntermediateText } from '@hamster-note/types'
 import type { ReaderData } from '../../../src/types/readerData'
 import {
   forwardRef,
@@ -18,6 +19,7 @@ import {
 } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { randomUUID } from 'expo-crypto'
+import * as FileSystem from 'expo-file-system/legacy'
 import { ReaderPdfView, readerPdfModule } from '../../modules/reader-pdf'
 import type {
   HostDocumentRecord,
@@ -35,6 +37,19 @@ import {
   withNativeLayoutProgress
 } from '../../../src/nativePdf/hostProgress'
 import type { ReaderWebViewHandle } from './ReaderWebView'
+import type {
+  ReaderExtraOcr,
+  ReaderOcrOptions
+} from '../../../src/components/IntermediateDocumentViewer'
+import {
+  fetchOcrContent,
+  prefixOcrTextIds
+} from '../../../src/components/IntermediateDocumentViewer/ocrContent'
+import {
+  nativeCanonicalPageFromOcr,
+  nativeOcrSessionKey,
+  shouldRequestNativeOcr
+} from '../../../src/nativePdf/ocr'
 
 function isReaderFileUrl(url: string, root: string): boolean {
   try {
@@ -52,11 +67,25 @@ type Props = {
   entryUrl: string
   publicationUrl: string
   baseUrl: string
+  ocr?: boolean | ReaderOcrOptions
+  extraOCR?: ReaderExtraOcr
+  onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  onOcrTextsChange?: (pageNumber: number, texts: IntermediateText[]) => void
 }
 /** Explicit development route until all acceptance gates are passed. */
 export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
   function NativePdfReader(
-    { record, store, entryUrl, publicationUrl, baseUrl },
+    {
+      record,
+      store,
+      entryUrl,
+      publicationUrl,
+      baseUrl,
+      ocr,
+      extraOCR,
+      onOcrError,
+      onOcrTextsChange
+    },
     ref
   ) {
     const identity = useMemo(
@@ -83,6 +112,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [nativeTop, setNativeTop] = useState(0)
     const [nativeViewportHeight, setNativeViewportHeight] = useState(0)
     const [pageCount, setPageCount] = useState(0)
+    const pageCountRef = useRef(0)
     const [page, setPage] = useState(1)
     const [outline, setOutline] = useState<
       { title: string; pageNumber: number }[]
@@ -92,6 +122,15 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [outlineOpen, setOutlineOpen] = useState(false)
     const [preview, setPreview] = useState<string | null>(null)
     const [saveError, setSaveError] = useState<string | null>(null)
+    const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
+    const ocrEnabled =
+      ocr === true ||
+      (typeof ocr === 'object' && ocr !== null && ocr.enabled === true) ||
+      (ocr === undefined && internalOcrEnabled)
+    const manualOcrPages =
+      typeof ocr === 'object' && ocr !== null && Array.isArray(ocr.pages)
+        ? ocr.pages
+        : undefined
     const save = useRef(Promise.resolve())
     const latest = useRef(record.snapshot)
     const committed = useRef(new Set<string>())
@@ -99,6 +138,13 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const alive = useRef(true)
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
+    const ocrRequests = useRef(new Map<string, number>())
+    const ocrCompleted = useRef(new Set<string>())
+    const ocrEpoch = useRef(0)
+    const pageMetrics = useRef(
+      new Map<number, { width: number; height: number }>()
+    )
+    const previousOcrEnabled = useRef(ocrEnabled)
     function pump() {
       if (!inFlight.current && queue.current.length) {
         inFlight.current = queue.current.shift()!
@@ -112,13 +158,15 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             'fileId' | 'paneId' | 'sessionId' | 'generation' | 'requestId'
           >
         | Record<string, unknown>
-    ) {
+    ): string {
+      const requestId = `host-${++counter.current}`
       queue.current.push({
         ...identity,
         ...body,
-        requestId: `host-${++counter.current}`
+        requestId
       } as PdfCommand)
       pump()
+      return requestId
     }
     const post = (body: Record<string, unknown>) =>
       web.current?.postMessage(JSON.stringify({ ...body, identity }))
@@ -148,6 +196,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       close: async () => {
         if (closed.current) return { status: 'closed' }
         closed.current = true
+        ocrEpoch.current += 1
+        ocrRequests.current.clear()
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
         setMenu(null)
@@ -177,11 +227,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       return () => {
         alive.current = false
         closed.current = true
+        ocrEpoch.current += 1
+        ocrRequests.current.clear()
         subscription.remove()
         post({ type: 'dispose' })
         guard.close()
       }
     }, [guard])
+    useEffect(() => {
+      if (previousOcrEnabled.current === ocrEnabled) return
+      previousOcrEnabled.current = ocrEnabled
+      ocrEpoch.current += 1
+      ocrRequests.current.clear()
+      if (!ocrEnabled) {
+        ocrCompleted.current.clear()
+        enqueue({ type: 'text', pages: [], retain: [] })
+      }
+    }, [ocrEnabled])
     useEffect(() => {
       closed.current = false
       enqueue({
@@ -201,6 +263,79 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (lastNativeProgress.current === key) return
       lastNativeProgress.current = key
       persist(withNativeLayoutProgress(latest.current.data, progress))
+    }
+    async function runNativeOcr(
+      pageNumber: number,
+      uri: string,
+      epoch: number
+    ) {
+      try {
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64
+        })
+        if (epoch !== ocrEpoch.current || closed.current) return
+        const content = await fetchOcrContent(
+          `data:image/png;base64,${base64}`,
+          extraOCR
+        )
+        if (epoch !== ocrEpoch.current || closed.current) return
+        const texts = prefixOcrTextIds(
+          content.filter(
+            (value): value is IntermediateText =>
+              typeof value === 'object' &&
+              value !== null &&
+              'content' in value &&
+              typeof value.content === 'string' &&
+              'polygon' in value &&
+              Array.isArray(value.polygon)
+          ),
+          pageNumber
+        )
+        const metrics = pageMetrics.current.get(pageNumber)
+        const canonical = metrics
+          ? nativeCanonicalPageFromOcr(
+              pageNumber,
+              metrics.width,
+              metrics.height,
+              texts
+            )
+          : null
+        if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
+        enqueue({ type: 'text', pages: [canonical], retain: [pageNumber] })
+        onOcrTextsChange?.(pageNumber, texts)
+        ocrCompleted.current.add(nativeOcrSessionKey(record.fileId, pageNumber))
+      } catch (error) {
+        if (epoch === ocrEpoch.current && !closed.current) {
+          setStatus(
+            `原生 OCR [${pageNumber}]：${error instanceof Error ? error.message : String(error)}`
+          )
+          onOcrError?.(error, { pageNumber })
+        }
+      }
+    }
+    function requestNativeOcr(
+      pagesToCheck: readonly number[],
+      availability: Readonly<Record<number, 'textLayer' | 'noTextLayer'>>
+    ) {
+      if (!ocrEnabled) return
+      const epoch = ocrEpoch.current
+      for (const pageNumber of pagesToCheck) {
+        if (manualOcrPages && !manualOcrPages.includes(pageNumber)) continue
+        if (
+          !shouldRequestNativeOcr(
+            true,
+            pageNumber,
+            availability,
+            pageCountRef.current
+          )
+        )
+          continue
+        const key = nativeOcrSessionKey(record.fileId, pageNumber)
+        if (ocrCompleted.current.has(key) || ocrRequests.current.has(key))
+          continue
+        const requestId = enqueue({ type: 'preview', pageNumber, width: 160 })
+        ocrRequests.current.set(requestId, pageNumber)
+      }
     }
     function diagnostic(event: PdfEvent) {
       if (
@@ -224,8 +359,15 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           pump()
         }
       }
-      if (event.type === 'complete' && event.uri) setPreview(event.uri)
+      if (event.type === 'complete' && event.uri) {
+        const ocrPage = ocrRequests.current.get(event.requestId)
+        if (ocrPage !== undefined) {
+          ocrRequests.current.delete(event.requestId)
+          void runNativeOcr(ocrPage, event.uri, ocrEpoch.current)
+        } else setPreview(event.uri)
+      }
       if (event.type === 'loaded') {
+        pageCountRef.current = event.pageCount
         setPageCount(event.pageCount)
         const data = record.snapshot.data as { readerData?: ReaderData } | null
         const hidden = data?.readerData?.hiddenPages ?? []
@@ -263,11 +405,28 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (event.type === 'geometry') {
         setMenu(null)
         if (event.pages[0]) {
+          for (const geometry of event.pages)
+            pageMetrics.current.set(geometry.pageNumber, {
+              width: geometry.width,
+              height: geometry.height
+            })
           setPage(event.pages[0].pageNumber)
           persistNativeLayoutPage(event.pages[0])
         }
       }
+      if (event.type === 'textNeeded')
+        requestNativeOcr(event.pages, event.textAvailability ?? {})
       if (event.type === 'error') {
+        if (event.requestId) {
+          const ocrPage = ocrRequests.current.get(event.requestId)
+          if (ocrPage !== undefined) {
+            ocrRequests.current.delete(event.requestId)
+            onOcrError?.(
+              new Error(event.message ?? `OCR 预览失败：${event.code}`),
+              { pageNumber: ocrPage }
+            )
+          }
+        }
         const detail = event.message ? `：${event.message}` : ''
         setStatus(`原生 PDF [${event.code}]${detail}`)
       } else if (guard.ready) setStatus('PDFKit 已显示；数据恢复完成')
@@ -301,6 +460,18 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           <Text>
             {page}/{pageCount}
           </Text>
+          <Pressable
+            accessibilityRole='button'
+            accessibilityState={{
+              checked: ocrEnabled,
+              disabled: ocr !== undefined
+            }}
+            onPress={() => {
+              if (ocr === undefined) setInternalOcrEnabled((value) => !value)
+            }}
+          >
+            <Text>OCR {ocrEnabled ? '开' : '关'}</Text>
+          </Pressable>
           <Pressable
             onPress={() =>
               enqueue({

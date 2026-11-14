@@ -20,6 +20,11 @@ import {
   type ReaderWebViewHandle
 } from '../components/ReaderWebView'
 import { stageReaderDocument } from '../native/webAssets'
+import type {
+  ReaderExtraOcr,
+  ReaderOcrOptions
+} from '../../../src/components/IntermediateDocumentViewer'
+import type { IntermediateText } from '@hamster-note/types'
 
 type ReaderScreenProps = {
   readonly record: HostDocumentRecord
@@ -28,6 +33,13 @@ type ReaderScreenProps = {
   readonly baseUrl: string
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
+  readonly ocr?: boolean | ReaderOcrOptions
+  readonly extraOCR?: ReaderExtraOcr
+  readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  readonly onOcrTextsChange?: (
+    pageNumber: number,
+    texts: IntermediateText[]
+  ) => void
 }
 
 export function ReaderScreen({
@@ -35,7 +47,11 @@ export function ReaderScreen({
   store,
   baseUrl,
   onBack,
-  onRecordUpdated
+  onRecordUpdated,
+  ocr,
+  extraOCR,
+  onOcrError,
+  onOcrTextsChange
 }: ReaderScreenProps) {
   const [nativePdf, setNativePdf] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -126,6 +142,10 @@ export function ReaderScreen({
         entryUrl={staged.entryUrl}
         baseUrl={staged.baseUrl}
         publicationUrl={staged.publicationUrl}
+        ocr={ocr}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        onOcrTextsChange={onOcrTextsChange}
       />
     )
   } else if (stageError) {
