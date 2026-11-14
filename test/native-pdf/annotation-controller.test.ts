@@ -4,7 +4,10 @@ import {
   createNativeAnnotationControllerStore
 } from '../../src/nativePdf/annotationController'
 import type { ReaderSelectionRange } from '../../src/types/selection'
-import { reduceNativeMenu } from '../../src/nativePdf/menuOwnership'
+import {
+  reduceNativeMenu,
+  shouldPreserveNativeWebMenu
+} from '../../src/nativePdf/menuOwnership'
 
 const range: ReaderSelectionRange = {
   id: 'range-1',
@@ -149,5 +152,8 @@ describe('native annotation business controller', () => {
     expect(hidden.ignored).toBe(true)
     expect(geometry.ignored).toBe(true)
     expect(geometry.state).toEqual(native)
+    expect(shouldPreserveNativeWebMenu('native', 'geometry')).toBe(true)
+    expect(shouldPreserveNativeWebMenu('native', 'cancelled')).toBe(true)
+    expect(shouldPreserveNativeWebMenu(null, 'geometry')).toBe(false)
   })
 })

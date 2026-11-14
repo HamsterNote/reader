@@ -1326,6 +1326,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                 setPanelOpen(false)
                 setMenuWithSource(null, 'web-hide-menu')
                 break
+              case 'nativeSelectionConsumed':
+                setMenuWithSource(null, 'native-selection-consumed')
+                break
               case 'failure':
                 if (nativeError.current === null)
                   setStatus(`规范文本：${String(m.code)}`)

@@ -38,6 +38,7 @@ import {
 } from '../../src/pdf/pdfSourceLinks'
 import { visibleOriginalPages } from '../../src/nativePdf/geometry'
 import { NativePdfSession } from '../../src/nativePdf/session'
+import { shouldPreserveNativeWebMenu } from '../../src/nativePdf/menuOwnership'
 
 type NativeBootstrap = PdfIdentity & {
   publicationUrl: string
@@ -77,7 +78,8 @@ export function startNativePdfSurface(
   let draftId = `native-${crypto.randomUUID()}`
   let pendingSelection = 0,
     disposed = false,
-    geometryRevision = -1
+    geometryRevision = -1,
+    menuOwner: 'native' | 'web' | null = null
   let retained: number[] = []
   const send = (payload: Record<string, unknown>) =>
     window.ReactNativeWebView?.postMessage(
@@ -109,6 +111,13 @@ export function startNativePdfSurface(
   } | null
   let menuListener: ((value: MenuValue) => void) | null = null
   const show = (value: MenuValue): void => {
+    if (import.meta.env.DEV)
+      console.info('web-popover-value', {
+        owner: menuOwner,
+        value: value
+          ? { activeId: value.activeId, start: value.range?.start, end: value.range?.end }
+          : null
+      })
     menuListener?.(value)
   }
 
@@ -142,6 +151,8 @@ export function startNativePdfSurface(
       data: serializeReaderSnapshot(snapshot)
     })
     range = next
+    send({ type: 'nativeSelectionConsumed' })
+    menuOwner = null
     command({ type: 'selection', range: next })
     show(null)
   }
@@ -354,7 +365,16 @@ export function startNativePdfSurface(
     }
     if (message.type === 'dismiss') {
       pendingSelection++
+      menuOwner = null
       show(null)
+      return
+    }
+    if (message.type === 'nativeSelection') {
+      const nativeEvent = message.event
+      if (!nativeEvent || nativeEvent.type !== 'selection') return
+      menuOwner = 'native'
+      if (!guard.receive(nativeEvent)) return
+      selection(nativeEvent).catch(() => fail('MAPPING_NOT_READY'))
       return
     }
     if (message.event?.type === 'activate') {
@@ -408,13 +428,17 @@ export function startNativePdfSurface(
     if (!event || !guard.receive(event)) return
     if ('geometryRevision' in event) geometryRevision = event.geometryRevision
     if (event.type === 'geometry') {
-      show(null)
-      send({ type: 'hideMenu' })
+      if (!shouldPreserveNativeWebMenu(menuOwner, 'geometry')) {
+        show(null)
+        send({ type: 'hideMenu' })
+      }
     }
     if (event.type === 'cancelled') {
       pendingSelection++
-      show(null)
-      send({ type: 'hideMenu' })
+      if (!shouldPreserveNativeWebMenu(menuOwner, 'cancelled')) {
+        show(null)
+        send({ type: 'hideMenu' })
+      }
     }
     if (event.type === 'loaded') {
       allowed = visibleOriginalPages(event.pageCount, snapshot.data.hiddenPages)
