@@ -1,3 +1,4 @@
+import handoffFixture from './fixtures/highlight-handoff.json'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useHighlightDrag } from '../src/components/IntermediateDocumentViewer/useHighlightDrag'
@@ -8,15 +9,10 @@ import {
 import type { ReaderSelectionRange } from '../src/types/selection'
 
 const range: ReaderSelectionRange = {
-  id: 'h-1',
-  text: '重点',
-  createdAt: 1,
-  start: { selectionId: 'page-2', offset: 10 },
-  end: { selectionId: 'page-2', offset: 12 },
-  rectsBySelectionId: { 'page-2': [] },
-  selectionGroup: { id: 'group-1', index: 0 },
+  ...handoffFixture.highlight,
   epubRangeCoordinates: 'reader-compat-v1'
 }
+
 function event(type: string, input: Partial<PointerEvent> = {}) {
   const e = new Event(type, { bubbles: true, cancelable: true })
   Object.assign(e, {
@@ -192,9 +188,10 @@ describe('highlight handoff lifecycle', () => {
   })
 })
 
-
 it('lets the host own crossing a frame boundary and source pointer cancellation after acceptance', () => {
-  const h = setup(); h.down(); h.advance(500)
+  const h = setup()
+  h.down()
+  h.advance(500)
   act(() => h.onGesture.mock.calls[0][1]('accepted'))
   h.send('pointerout', { relatedTarget: null })
   h.send('pointercancel')

@@ -180,3 +180,29 @@ Done in 1.72s.
 ```text
 3.0.3
 ```
+
+## 3.0.4 发布及共同夹具（2026-11-14 18:35–18:47 +08:00）
+
+3.0.4 发布源 commit `224f697`，通过 `v3.0.4` tag 触发 GitHub workflow 成功：
+https://github.com/HamsterNote/reader/actions/runs/43583504402 。没有本地 npm publish。
+发版前 npm 官方 registry 为 `3.0.3`，3.0.4 大于该版本；官方发布后查询原始输出：
+
+```text
+3.0.4
+```
+
+命令：`npm view @hamster-note/reader version --registry=https://registry.npmjs.org --prefer-online`。
+默认 yarn 镜像曾缓存旧 latest，使用官方 registry 强制在线查询。
+
+3.0.4 将 WebBase 原 3.0.2 隐藏 PDF 布局补丁迁回 reader 源码，防止升级丢失布局就绪屏障。实际安装 3.0.4 的 WebBase 隐藏布局/超时/取消/缩放/分栏 6 个浏览器用例已通过；WebBase 没有复制 reader 源码。
+
+共同 JSON 夹具按字节相同：`sha256sum test/fixtures/highlight-handoff.json ../WebBase/shared/highlight-handoff.fixture.json`：
+
+```text
+f91e5775e533364c5660185f2ae773868c085d4651e059d8461696efd783c113  test/fixtures/highlight-handoff.json
+f91e5775e533364c5660185f2ae773868c085d4651e059d8461696efd783c113  ../WebBase/shared/highlight-handoff.fixture.json
+```
+
+共同夹具与布局测试类型整理：`corepack yarn typecheck` 通过；`corepack yarn test:run test/highlight-handoff.test.tsx test/pdf-layout-ready.test.ts` 22 用例通过。无生产源码变化，不需再发版本。
+
+3.0.4 实际库浏览器复跑 `corepack yarn check:highlight-handoff` 三面各 20 次重开通过；原始完整结果随 issue 附件 `reader-handoff-304.log` 与 `reader-handoff-304/report.json`。

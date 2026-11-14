@@ -1,40 +1,44 @@
-// @ts-nocheck
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-// Test the actual installed patch, not a duplicate implementation.
+// Exercise the source helper used by the published PDF viewer.
 import { isPdfLayoutReady, observePdfLayout } from '../src/pdf/pdfLayoutReady'
 
-let frames, observers
+type Box = {
+  isConnected: boolean
+  offsetParent: object | null
+  clientWidth: number
+  clientHeight: number
+  getBoundingClientRect(): { width: number; height: number }
+}
+let frames: Map<number, FrameRequestCallback>, observers: Observer[]
+class Observer implements ResizeObserver {
+  targets = new Set<Element>()
+  constructor(readonly callback: ResizeObserverCallback) {
+    observers.push(this)
+  }
+  observe(target: Element) {
+    this.targets.add(target)
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target)
+  }
+  disconnect() {
+    this.targets.clear()
+  }
+}
+const element = (value: Box) => value as unknown as HTMLElement
 beforeEach(() => {
   frames = new Map()
   observers = []
   let id = 0
-  vi.stubGlobal('requestAnimationFrame', (fn) => {
+  vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => {
     frames.set(++id, fn)
     return id
   })
-  vi.stubGlobal('cancelAnimationFrame', (id) => frames.delete(id))
-  vi.stubGlobal(
-    'ResizeObserver',
-    class {
-      targets = new Set()
-      constructor(callback) {
-        this.callback = callback
-        observers.push(this)
-      }
-      observe(target) {
-        this.targets.add(target)
-      }
-      unobserve(target) {
-        this.targets.delete(target)
-      }
-      disconnect() {
-        this.targets.clear()
-      }
-    }
-  )
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
+  vi.stubGlobal('ResizeObserver', Observer)
 })
 afterEach(() => vi.unstubAllGlobals())
-function box() {
+function box(): Box {
   return {
     isConnected: true,
     offsetParent: {},
@@ -62,15 +66,19 @@ it.each(['detached', 'offsetParent', 'width', 'height', 'page missing'])(
     if (condition === 'height') page.clientHeight = 0
     let target = condition === 'page missing' ? undefined : page
     const ready = vi.fn()
-    const stop = observePdfLayout(container, () => target, ready)
+    const stop = observePdfLayout(
+      element(container),
+      () => (target ? element(target) : undefined),
+      ready
+    )
     flush()
     expect(ready).not.toHaveBeenCalled()
     Object.assign(page, box())
     Object.assign(container, box())
     target = page
     // Zero elapsed-time advancement. Only the resize notification wakes it.
-    observers[0].callback([])
-    observers[0].callback([])
+    observers[0].callback([], observers[0])
+    observers[0].callback([], observers[0])
     expect(frames.size).toBe(1)
     flush()
     expect(ready).toHaveBeenCalledTimes(1)
@@ -82,11 +90,11 @@ it.each(['detached', 'offsetParent', 'width', 'height', 'page missing'])(
 
 it('cancels an already scheduled callback and ignores notifications after cancellation', () => {
   const ready = vi.fn()
-  const stop = observePdfLayout(box(), () => box(), ready)
+  const stop = observePdfLayout(element(box()), () => element(box()), ready)
   const queued = [...frames.values()][0]
   stop()
   queued(0)
-  observers[0].callback([])
+  observers[0].callback([], observers[0])
   flush()
   expect(ready).not.toHaveBeenCalled()
   expect(frames.size).toBe(0)
@@ -95,5 +103,5 @@ it('cancels an already scheduled callback and ignores notifications after cancel
 it('requires both actual layout rectangles and client dimensions', () => {
   const page = box()
   page.getBoundingClientRect = () => ({ width: 0, height: 0 })
-  expect(isPdfLayoutReady(box(), page)).toBe(false)
+  expect(isPdfLayoutReady(element(box()), element(page))).toBe(false)
 })
