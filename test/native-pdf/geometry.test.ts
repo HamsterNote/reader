@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampNativeScrollOffset,
+  nativePageAtOffset,
   nativePageLayout,
   nativePageOffset,
   preserveNativeZoomCenter
@@ -65,4 +66,27 @@ describe('native PDF page layout geometry', () => {
     expect(preserveNativeZoomCenter(400, 1, 2, 2000, 800)).toBe(1200)
     expect(preserveNativeZoomCenter(0, 1, 0.5, 2000, 800)).toBe(0)
   })
+
+  it('selects the page containing the viewport center, including the gap boundary', () => {
+    const pages = [
+      { pageNumber: 1, top: 0, height: 800 },
+      { pageNumber: 2, top: 812, height: 800 }
+    ]
+    expect(nativePageAtOffset(pages, 0, 1, 600)).toBe(1)
+    expect(nativePageAtOffset(pages, 812, 1, 600)).toBe(2)
+    expect(nativePageAtOffset(pages, 400, 1, 800)).toBe(1)
+    expect(nativePageAtOffset(pages, 1212, 1, 800)).toBe(2)
+  })
+
+  it.each([0.5, 1, 2])(
+    'round trips a cropped second page at zoom %s',
+    (zoom) => {
+      const pages = [
+        { pageNumber: 1, top: 0, height: 640 },
+        { pageNumber: 2, top: 652, height: 640 }
+      ]
+      const offset = nativePageOffset(652, zoom, 1292, 500)
+      expect(nativePageAtOffset(pages, offset, zoom, 500)).toBe(2)
+    }
+  )
 })

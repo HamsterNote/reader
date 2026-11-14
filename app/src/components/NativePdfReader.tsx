@@ -380,6 +380,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             opacity: menu ? 1 : 0
           }}
           pointerEvents={menu ? 'auto' : 'none'}
+          originWhitelist={['file://*', 'about:blank']}
           allowingReadAccessToURL={baseUrl}
           allowFileAccess
           allowFileAccessFromFileURLs

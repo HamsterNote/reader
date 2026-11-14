@@ -52,6 +52,30 @@ export function nativePageOffset(
   )
 }
 
+export function nativePageAtOffset(
+  pages: readonly {
+    readonly pageNumber: number
+    readonly top: number
+    readonly height: number
+  }[],
+  offset: number,
+  zoomScale: number,
+  viewportHeight: number
+): number | undefined {
+  if (!pages.length) return undefined
+  const center = (offset + viewportHeight / 2) / Math.max(0.0001, zoomScale)
+  const distance = (page: (typeof pages)[number]): number => {
+    if (center >= page.top && center <= page.top + page.height) return 0
+    return Math.min(
+      Math.abs(center - page.top),
+      Math.abs(center - page.top - page.height)
+    )
+  }
+  return pages.reduce((best, page) =>
+    distance(page) < distance(best) ? page : best
+  ).pageNumber
+}
+
 export function preserveNativeZoomCenter(
   offset: number,
   oldZoomScale: number,

@@ -205,11 +205,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       case "scale":
         if let scale = c["value"] as? Double, scale.isFinite { setZoomKeepingCenter(CGFloat(min(2,max(0.5,scale)))) }
       case "navigate":
-        guard let n = c["pageNumber"] as? Int, let frame = frames[n] else { error("INVALID_TARGET",request); return }
-        var y = frame.minY
+        guard let n = c["pageNumber"] as? Int, let frame = frames[n], let slot = slots[n] else { error("INVALID_TARGET",request); return }
+        var y = slot.minY
         if let offset = c["offset"] as? Int {
           guard let b = text[n]?.boundaries.first(where: { $0.offset == offset }) else { error("MAPPING_NOT_READY",request); return }
-          y += b.rect.minY
+          y = frame.minY + b.rect.minY
         }
         scroll.layoutIfNeeded()
         let target = clampedOffset(y * scroll.zoomScale, zoom: scroll.zoomScale)
@@ -312,7 +312,15 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     updateVisible()
   }
   private func visiblePage() -> Int {
-    pages.first(where: { n in guard let f = frames[n] else { return false }; return f.maxY*scroll.zoomScale >= scroll.contentOffset.y }) ?? pages.first ?? 1
+    let center = (scroll.contentOffset.y + scroll.bounds.height / 2) / max(scroll.zoomScale, 0.0001)
+    return pages.min { a, b in
+      guard let left = slots[a], let right = slots[b] else { return false }
+      func distance(_ rect: CGRect) -> CGFloat {
+        if rect.minY...rect.maxY ~= center { return 0 }
+        return min(abs(center - rect.minY), abs(center - rect.maxY))
+      }
+      return distance(left) < distance(right)
+    } ?? pages.first ?? 1
   }
   private func updateVisible() {
     guard let doc = document else { return }
