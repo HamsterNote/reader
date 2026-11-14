@@ -147,6 +147,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       width: NATIVE_STROKE_WIDTH
     })
     const web = useRef<WebView>(null)
+    const webDisposed = useRef(false)
     const [command, setCommand] = useState<PdfCommand | null>(null)
     const queue = useRef<PdfCommand[]>([])
     const inFlight = useRef<PdfCommand | null>(null)
@@ -231,6 +232,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     const post = (body: Record<string, unknown>) =>
       web.current?.postMessage(JSON.stringify({ ...body, identity }))
+    function disposeWebOnce() {
+      if (webDisposed.current) return
+      webDisposed.current = true
+      post({ type: 'dispose' })
+    }
     function persist(transform: (snapshot: typeof record.snapshot) => unknown) {
       if (closed.current) return
       failedTransform.current = transform
@@ -496,7 +502,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           // confirmed. A failed close remains usable so the retry can enqueue
           // the failed payload and advance the revision.
           closed.current = true
-          post({ type: 'dispose' })
+          disposeWebOnce()
           enqueue({ type: 'close' })
           guard.close()
           return { status: 'closed' }
@@ -508,6 +514,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     useEffect(() => {
       alive.current = true
       closed.current = false
+      webDisposed.current = false
       const subscription = AppState.addEventListener('change', (state) => {
         if (state !== 'active') {
           enqueue({ type: 'cancel' })
@@ -522,7 +529,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         ocrRequests.current.clear()
         if (undoTimer.current) clearTimeout(undoTimer.current)
         subscription.remove()
-        post({ type: 'dispose' })
+        disposeWebOnce()
         guard.close()
       }
     }, [guard])
