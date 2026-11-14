@@ -51,13 +51,15 @@ final class ReaderPdfPageView: UIView {
   var page: PDFPage?
   var painted: (() -> Void)?
   var zoomScale: CGFloat = 1
-  private var drawCount = 0
+  private var pageDrawLogEmitted = false
   override class var layerClass: AnyClass { CATiledLayer.self }
   override func draw(_ rect: CGRect) {
-    drawCount += 1
-    NSLog("ReaderPdf draw count=%ld bounds=%@ scale=%@ zoom=%@ rect=%@", drawCount, NSStringFromCGRect(bounds), String(contentScaleFactor), String(zoomScale), NSStringFromCGRect(rect))
+    if !pageDrawLogEmitted {
+      pageDrawLogEmitted = true
+      NSLog("ReaderPdf draw pageOnce=1 bounds=\(bounds) scale=\(contentScaleFactor) zoom=\(zoomScale) rect=\(rect)")
+    }
     guard let context = UIGraphicsGetCurrentContext(), let page = page else {
-      NSLog("ReaderPdf draw skipped context=%@ page=%@", String(UIGraphicsGetCurrentContext() != nil), String(page != nil))
+      NSLog("ReaderPdf draw skipped context=\(UIGraphicsGetCurrentContext() != nil) page=\(page != nil)")
       return
     }
     context.setFillColor(UIColor.white.cgColor); context.fill(bounds)
@@ -118,6 +120,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     addSubview(scroll); scroll.addSubview(content)
     scroll.delegate = self; scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 2
     scroll.backgroundColor = .secondarySystemBackground
+    if let tiled = layer as? CATiledLayer {
+      tiled.contentsScale = UIScreen.main.scale
+      tiled.tileSize = CGSize(width: 1024, height: 1024)
+    }
     content.layer.addSublayer(overlay); content.layer.addSublayer(startHandle); content.layer.addSublayer(endHandle)
     addSubview(lens); lens.isHidden = true
     overlay.fillColor = color.withAlphaComponent(0.35).cgColor
@@ -172,11 +178,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       let path = url.resolvingSymlinksInPath().path
       let exists = FileManager.default.fileExists(atPath: path)
       let readable = FileManager.default.isReadableFile(atPath: path)
-      NSLog("ReaderPdf open sessionDirectory=%@ pdfPath=%@ exists=%@ readable=%@", (path as NSString).deletingLastPathComponent, path, String(exists), String(readable))
+      NSLog("ReaderPdf open sessionDirectory=\((path as NSString).deletingLastPathComponent) pdfPath=\(path) exists=\(exists) readable=\(readable)")
       guard roots.contains(where: { path.hasPrefix($0 + "/") }) else { error("PERMISSION",request,"path 不在应用容器内：\(path)"); return }
       guard readable else { error("PERMISSION",request,"PDF 不可读：\(path)"); return }
       guard let doc = PDFDocument(url: url) else { NSLog("ReaderPdf document=nil path=%@", path); error("CORRUPT",request,"PDFKit document=nil，路径：\(path)"); return }
-      NSLog("ReaderPdf document opened path=%@ locked=%@ pageCount=%ld", path, String(doc.isLocked), doc.pageCount)
+      NSLog("ReaderPdf document opened path=\(path) locked=\(doc.isLocked) pageCount=\(doc.pageCount)")
       guard !doc.isLocked else { error("PASSWORD_REQUIRED",request,"PDF 已加密：\(path)"); return }
       guard doc.pageCount > 0 else { error("CORRUPT",request,"PDF 页数为 0：\(path)"); return }
       document = doc; pages = Array(1...doc.pageCount)
