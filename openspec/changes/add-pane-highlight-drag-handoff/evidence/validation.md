@@ -118,3 +118,65 @@ Done in 40.09s.
 3.0.2
 ```
 
+
+## 3.0.4 compatibility follow-up
+
+Time: 2026-11-14T10:04:06.532795+00:00
+Environment unchanged: Ubuntu26.04, Node24.15.0, Yarn1.22.22; jsdom PDF geometry is explicitly mocked.
+
+WebBase 3.0.2 carries a bundled PDF hidden-layout patch absent from reader main. Ported its behavior into reader source so upgrading does not lose that fix. Attached/positive layout is required before PDF.js navigation; ResizeObserver/rAF wakes pending navigation; 10s timeout retains scroll and shows a visible error, with no unsafe restore fallback.
+
+### corepack yarn test:run
+
+```text
+
+ ✓ test/reader-ssr.test.tsx (1 test) 29ms
+
+ Test Files  148 passed (148)
+      Tests  1946 passed (1946)
+   Start at  18:01:47
+   Duration  63.58s (transform 8.93s, setup 27.54s, collect 34.68s, tests 114.68s, environment 83.16s, prepare 12.73s)
+
+Done in 64.06s.
+```
+
+### corepack yarn typecheck
+
+```text
+yarn run v1.22.22
+(node:2936493) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.json --noEmit
+Done in 10.01s.
+```
+
+### corepack yarn build:lib
+
+```text
+dist/index-BaAn4MiP.js                 809.90 kB │ gzip: 195.90 kB
+✓ built in 2.58s
+(node:2930422) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ tsc --project tsconfig.build.json
+(node:2930522) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ node scripts/build-styles.mjs
+Done in 13.61s.
+```
+
+### corepack yarn pack:check
+
+```text
+yarn run v1.22.22
+(node:2936538) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+$ node scripts/check-pack.mjs
+Pack check passed with 413 files.
+Done in 1.72s.
+```
+
+### npm view @hamster-note/reader version --registry=https://registry.npmjs.org --prefer-online (before v3.0.4)
+
+```text
+3.0.3
+```

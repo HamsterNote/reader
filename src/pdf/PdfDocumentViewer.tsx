@@ -1,3 +1,4 @@
+import { isPdfLayoutReady, observePdfLayout } from './pdfLayoutReady'
 import { pdfHighlightFill } from './pdfSelectionPaint'
 import { usePdfTouchSelection, pdfCaretAtPoint } from './pdfTouchSelection'
 import { normalizeBookmark, type ReadingPosition } from '../readingProgress'
@@ -41,7 +42,6 @@ import { PdfHiddenPageRestoreModal } from './PdfHiddenPageRestoreModal'
 import { scrollIntoViewIfAttached } from '../components/scrollIntoViewIfAttached'
 import {
   activatePageIfReady,
-  canTargetPdfPage,
   isPageViewActivatable,
   waitForPageActivation
 } from './pageActivation'
@@ -537,6 +537,7 @@ export const PdfDocumentViewer = forwardRef<
     done: () => void
     fail: (error: Error) => void
     preserveOnFailure?: boolean
+    awaitingLayout?: boolean
   } | null>(null)
   // Restore may wait for the target page (initial load/crop). That wait owns
   // navigation like any other request: a newer navigation, a source change or
@@ -581,10 +582,77 @@ export const PdfDocumentViewer = forwardRef<
       cancelLayoutRestore()
       restoredPosition.current = null
       restoredTextPosition.current = null
+      pendingAnchor.current?.fail(
+        new DOMException('PDF navigation superseded', 'AbortError')
+      )
+      pendingAnchor.current = null
+      pendingPageRef.current = null
       const viewer = viewerRef.current
       if (!viewer) return
       if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1))) {
         pendingPageRef.current = { pageNumber }
+        return
+      }
+      if (
+        !isPdfLayoutReady(
+          containerRef.current,
+          viewer.getPageView(pageNumber - 1)?.div
+        )
+      ) {
+        const container = containerRef.current
+        if (!container) {
+          progressOptions.current.onError?.({
+            kind: 'unknown',
+            message: 'PDF 翻页容器尚未挂载，请重试'
+          })
+          return
+        }
+        const document = documentRef.current,
+          source = progressOptions.current.source
+        let stopLayout = () => {}
+        let timer: ReturnType<typeof setTimeout>
+        const finish = () => {
+          stopLayout()
+          clearTimeout(timer)
+          if (pendingAnchor.current === pending) pendingAnchor.current = null
+        }
+        const pending = {
+          anchor: { pageNumber, verticalPercentage: 0 },
+          awaitingLayout: true,
+          done: finish,
+          fail: finish
+        }
+        const isCurrent = () =>
+          pendingAnchor.current === pending &&
+          viewerRef.current === viewer &&
+          documentRef.current === document &&
+          progressOptions.current.source === source &&
+          containerRef.current === container &&
+          visiblePagesRef.current.includes(pageNumber)
+        pendingAnchor.current = pending
+        timer = setTimeout(() => {
+          const current = isCurrent()
+          finish()
+          if (current)
+            progressOptions.current.onError?.({
+              kind: 'unknown',
+              message: 'PDF 翻页布局就绪超时（10 秒），请重试'
+            })
+        }, 10000)
+        stopLayout = observePdfLayout(
+          container,
+          () => viewer.getPageView(pageNumber - 1)?.div,
+          () => {
+            if (!isCurrent()) {
+              finish()
+              return
+            }
+            if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1)))
+              return
+            finish()
+            viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: observed attached positive layout
+          }
+        )
         return
       }
       viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
@@ -759,6 +827,14 @@ export const PdfDocumentViewer = forwardRef<
     if (!pending) return
     const anchor = pending.anchor
     if (!visiblePagesRef.current.includes(anchor.pageNumber)) return
+    if (
+      pending.awaitingLayout ||
+      !isPdfLayoutReady(
+        containerRef.current,
+        viewerRef.current?.getPageView(anchor.pageNumber - 1)?.div
+      )
+    )
+      return
     const box = pageRect(anchor.pageNumber)
     if (!box || box.height <= 0) return
     if ('offset' in anchor) {
@@ -1706,9 +1782,8 @@ export const PdfDocumentViewer = forwardRef<
       : null
   }, [captureModeSwitchPosition])
   /**
-   * Public anchor navigation. Hidden/detached targets reject immediately at
-   * the entry check, before PDF.js is touched; this function never waits for
-   * visibility. Normal requests resolve after the destination rectangle is
+   * Public anchor navigation waits for attached positive layout before touching
+   * PDF.js. Requests resolve after the destination rectangle is
    * applied (not after canvas rendering) and reject on timeout/supersession.
    */
   const beginNavigation = (
@@ -1725,8 +1800,13 @@ export const PdfDocumentViewer = forwardRef<
       top: containerRef.current?.scrollTop ?? 0,
       left: containerRef.current?.scrollLeft ?? 0
     }
+    let stopLayout = () => {}
     const promise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
+        stopLayout()
+        const awaitingLayout =
+          pendingAnchor.current?.anchor === anchor &&
+          pendingAnchor.current.awaitingLayout
         if (pendingAnchor.current?.anchor === anchor)
           pendingAnchor.current = null
         if (documentRef.current === originalDocument && containerRef.current) {
@@ -1734,16 +1814,25 @@ export const PdfDocumentViewer = forwardRef<
           containerRef.current.scrollLeft = original.left
         }
         restoredPosition.current = null
-        reject(new Error('PDF 定位超时，请重试'))
+        const error = new Error(
+          awaitingLayout
+            ? 'PDF 布局就绪超时（10 秒），原位置已保留'
+            : 'PDF 定位超时，请重试'
+        )
+        if (awaitingLayout) error.name = 'PdfLayoutNotReadyError'
+        reject(error)
       }, 10000)
       pendingAnchor.current = {
         anchor,
         preserveOnFailure: options?.preserveOnFailure,
+        awaitingLayout: true,
         done: () => {
+          stopLayout()
           clearTimeout(timeout)
           resolve()
         },
         fail: (error) => {
+          stopLayout()
           clearTimeout(timeout)
           restoredPosition.current = null
           if (
@@ -1767,17 +1856,38 @@ export const PdfDocumentViewer = forwardRef<
         new DOMException('PDF navigation superseded', 'AbortError')
       )
     }
+    const container = containerRef.current
     if (
-      !isPageViewActivatable(activeViewer.getPageView(anchor.pageNumber - 1))
-    ) {
-      pendingAnchor.current?.fail(
-        new DOMException('PDF navigation superseded', 'AbortError')
+      isPdfLayoutReady(
+        container,
+        activeViewer.getPageView(anchor.pageNumber - 1)?.div
       )
-      pendingAnchor.current = null
-      return Promise.reject(new Error('目标页面不可用，原位置已保留'))
+    ) {
+      if (pendingAnchor.current?.anchor === anchor)
+        pendingAnchor.current.awaitingLayout = false
+      activeViewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: attached positive layout
+      restoreAnchor()
+      return promise
     }
-    activeViewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: targetReady + recheck above
-    restoreAnchor()
+    if (container)
+      stopLayout = observePdfLayout(
+        container,
+        () => activeViewer.getPageView(anchor.pageNumber - 1)?.div,
+        () => {
+          const pending = pendingAnchor.current
+          if (
+            pending?.anchor !== anchor ||
+            viewerRef.current !== activeViewer ||
+            documentRef.current !== originalDocument
+          )
+            return
+          if (pending.awaitingLayout) {
+            pending.awaitingLayout = false
+            activeViewer.scrollPageIntoView({ pageNumber: anchor.pageNumber }) // pdf-scroll-guard: observed attached positive layout
+          }
+          restoreAnchorRef.current()
+        }
+      )
     return promise
   }
 
@@ -1802,7 +1912,8 @@ export const PdfDocumentViewer = forwardRef<
       return (
         documentRef.current === originalDocument &&
         !!viewer &&
-        canTargetPdfPage(viewer, visiblePagesRef.current, anchor.pageNumber)
+        visiblePagesRef.current.includes(anchor.pageNumber) &&
+        !!viewer.getPageView(anchor.pageNumber - 1)
       )
     }
     if (!waitForPage) {

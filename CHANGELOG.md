@@ -1,3 +1,7 @@
+## 3.0.4
+
+- Preserve PDF navigation while its container has no layout; wait for measured geometry, retain position and show a visible error on the 10s deadline. Upstreams the existing WebBase 3.0.2 patch before dependency migration.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

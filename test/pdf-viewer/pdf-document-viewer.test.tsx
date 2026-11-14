@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { resizeObserverMock } from '../setup'
 import { mockPaintingCanvas } from '../fixtures/painting'
 import { act, fireEvent, render } from '@testing-library/react'
 import { createRef, StrictMode } from 'react'
@@ -234,6 +235,12 @@ beforeEach(() => {
   })
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200)
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400)
+  vi.spyOn(HTMLElement.prototype, 'offsetParent', 'get').mockImplementation(
+    function (this: HTMLElement) {
+      return this.isConnected ? this.parentElement : null
+    }
+  )
 })
 
 afterEach(() => {
@@ -1349,6 +1356,69 @@ describe('PdfDocumentViewer 接线', () => {
     )
     await act(async () => {})
     expect(restoredPage).toBe(2)
+  })
+
+  it('waits for hidden layout and restores only after an actual geometry notification', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const target = latestViewer().getPageView(1)!.div
+    const offset = vi.spyOn(target, 'offsetParent', 'get').mockReturnValue(null)
+    const scroll = vi.spyOn(latestViewer(), 'scrollPageIntoView')
+    let settled = false
+    const navigation = ref
+      .current!.scrollToAnchor({ pageNumber: 2, verticalPercentage: 50 })
+      .then(() => {
+        settled = true
+      })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    expect(settled).toBe(false)
+    expect(scroll).not.toHaveBeenCalled()
+    offset.mockReturnValue(target.parentElement)
+    await act(async () => {
+      resizeObserverMock.trigger(container)
+      await navigation
+    })
+    expect(scroll).toHaveBeenCalledTimes(2) // page preparation + exact XYZ destination
+    expect(scroll).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageNumber: 2, destArray: expect.any(Array) })
+    )
+    expect(settled).toBe(true)
+  })
+
+  it('reports hidden-layout timeout with original scroll preserved and no PDF.js scroll', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    container.scrollTop = 42
+    vi.spyOn(
+      latestViewer().getPageView(1)!.div,
+      'offsetParent',
+      'get'
+    ).mockReturnValue(null)
+    const scroll = vi.spyOn(latestViewer(), 'scrollPageIntoView')
+    vi.useFakeTimers()
+    try {
+      const navigation = ref
+        .current!.scrollToAnchor({ pageNumber: 2, verticalPercentage: 50 })
+        .catch((error) => error)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
+      expect(await navigation).toMatchObject({ name: 'PdfLayoutNotReadyError' })
+      expect(container.scrollTop).toBe(42)
+      expect(scroll).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('restores a page proportion without waiting for any text layer', async () => {
