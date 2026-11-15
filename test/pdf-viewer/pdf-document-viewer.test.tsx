@@ -808,10 +808,12 @@ describe('PdfDocumentViewer 接线', () => {
 
   it('waits for nonzero layout, cancels a superseded seek and aligns the crop to the safe line', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
     const view = renderViewer(
       {
         readingInsets: { top: 44, bottom: 34, horizontal: 0 },
-        edgeCrop: { all: { top: 0.1, bottom: 0, left: 0, right: 0 } }
+        edgeCrop: { all: { top: 0.1, bottom: 0, left: 0, right: 0 } },
+        onReadingPositionChange
       },
       ref
     )
@@ -823,6 +825,7 @@ describe('PdfDocumentViewer 接线', () => {
     const scroll = vi.spyOn(viewer, 'scrollPageIntoView')
     const measured = container.getBoundingClientRect
     container.getBoundingClientRect = () => new DOMRect()
+    onReadingPositionChange.mockClear()
     vi.useFakeTimers()
     try {
       act(() => ref.current!.scrollToPage(1))
@@ -842,6 +845,93 @@ describe('PdfDocumentViewer 接线', () => {
       ).toBe(true)
       const page = viewer.getPageView(1)!.div.getBoundingClientRect()
       expect(Math.abs(page.top + page.height * 0.1 - 44)).toBeLessThanOrEqual(1)
+      const published = onReadingPositionChange.mock.calls
+        .map(([position]) => position)
+        .filter((position) => position.status === 'ready')
+      expect(published.length).toBeGreaterThan(0)
+      expect(published.every(({ position }) => position.pageNumber === 2)).toBe(
+        true
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('publishes each cached page seek after alignment without waiting for text or scroll events', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    renderViewer(
+      {
+        readingInsets: { top: 44, bottom: 0, horizontal: 0 },
+        onReadingPositionChange
+      },
+      ref
+    )
+    await act(async () => {})
+    for (const pageNumber of [2, 1, 2, 1, 2]) {
+      onReadingPositionChange.mockClear()
+      act(() => ref.current!.scrollToPage(pageNumber))
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        // The mock's first page starts at scrollTop=0 and is boundary-clamped.
+        position: {
+          pageNumber,
+          verticalPercentage: pageNumber === 1 ? (44 / 300) * 100 : 0
+        }
+      })
+    }
+  })
+
+  it('keeps restore notifications suppressed while active seeks retain late layout correction', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer(
+      {
+        readingInsets: { top: 44, bottom: 0, horizontal: 0 },
+        onReadingPositionChange
+      },
+      ref
+    )
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const page = latestViewer().getPageView(1)!.div
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      await act(async () => {
+        await ref.current!.scrollToAnchorForRestore({
+          pageNumber: 2,
+          verticalPercentage: 0
+        })
+        fireEvent.scroll(container)
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(page.getBoundingClientRect().top).toBe(44)
+      expect(onReadingPositionChange).not.toHaveBeenCalled()
+
+      act(() => ref.current!.scrollToPage(2))
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        position: { pageNumber: 2, verticalPercentage: 0 }
+      })
+      // PDF.js may shift already-aligned page boxes after rendering.
+      const rect = page.getBoundingClientRect.bind(page)
+      page.getBoundingClientRect = () => {
+        const box = rect()
+        return new DOMRect(box.left, box.top + 30, box.width, box.height)
+      }
+      onReadingPositionChange.mockClear()
+      await act(async () => {
+        fireEvent.scroll(container)
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(page.getBoundingClientRect().top).toBe(44)
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        position: { pageNumber: 2, verticalPercentage: 0 }
+      })
     } finally {
       vi.useRealTimers()
     }
