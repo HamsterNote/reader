@@ -14,7 +14,7 @@
 
 浏览器几何用DOM边框外沿、原始触点及DOM字符大小作独立oracle。未使用DPR缩放参数、未在边界夹取时缩半径。几何拖柄采用合成pointer；输入矩阵含CDP touch、mouse、pen及取消/释放。未验证真机WebKit首拖或系统手势。
 
-侧栏尺寸夹具模拟所属栏尺寸；真正双实例行为由既有 workspace regression 另测。新补的高亮/书签边界测量使用键盘切换tab：窄栏发现既有阅读进度条可拦截书签tab中心的鼠标点击，本轮没有修改该额外命中问题，不能据几何通过宣称指针点击全通过。
+侧栏尺寸夹具模拟所属栏尺寸；真正双实例行为由既有 workspace regression 另测。高亮/书签边界测量已改为真实指针点击 tab 中心（旧版本用键盘切换以规避下述问题）。窄栏（390px 视口、50vw=195px 栏宽）下，侧栏宽 240px 会伸到右侧阅读进度条（`z-index: 12`，宽 32px）下方，而侧栏 `z-index` 只有 10，书签 tab 中心（188.5, 198）的顶层元素曾是 `DIV.hamster-reader__reading-progress`，点击被进度条吞掉。修复只动层级：`.hamster-reader__page-browser--open` 提到 `z-index: 13`（打开态才生效，关闭态仍 `pointer-events: none`，不新增层级上下文）。修复前该断言在 390/horizontal/44 场景失败，修复后 18 个场景共 36 次点击均命中目标 tab，`aria-selected` 与可见 tabpanel 同步切换。
 
 ## 用例6：已知事实与未覆盖部分
 

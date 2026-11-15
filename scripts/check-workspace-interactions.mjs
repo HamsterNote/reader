@@ -194,10 +194,42 @@ try {
           })
           if (process.env.READER_CHECK === 'sidebar') {
             for (const tab of ['高亮', '书签']) {
-              // Keyboard activation isolates geometry from the existing progress
-              // overlay hit target in very narrow panes; report that limitation.
-              await page.getByRole('tab', { name: tab, exact: true }).focus()
-              await page.keyboard.press('Enter')
+              // 用真实指针点击 tab 中心：窄栏下面板右缘会伸到右侧进度条下方，
+              // 进度条层级更高时点击会命中进度条而不是 tab。
+              const tabButton = page.getByRole('tab', {
+                name: tab,
+                exact: true
+              })
+              const tabBox = await tabButton.boundingBox()
+              const center = {
+                x: tabBox.x + tabBox.width / 2,
+                y: tabBox.y + tabBox.height / 2
+              }
+              const hit = await page.evaluate(
+                ({ x, y, tab }) => {
+                  const element = document.elementFromPoint(x, y)
+                  const owner = element?.closest('[role="tab"]') ?? null
+                  return {
+                    tag: element?.tagName ?? null,
+                    className:
+                      typeof element?.className === 'string'
+                        ? element.className
+                        : null,
+                    isRequestedTab: owner?.textContent === tab
+                  }
+                },
+                { ...center, tab }
+              )
+              assert(
+                hit.isRequestedTab,
+                JSON.stringify({ tab, center, hit, viewport, layout, residual })
+              )
+              await page.mouse.click(center.x, center.y)
+              assert.equal(
+                await tabButton.getAttribute('aria-selected'),
+                'true',
+                JSON.stringify({ tab, center, hit, viewport, layout, residual })
+              )
               const active = page
                 .getByRole('tabpanel')
                 .filter({ visible: true })
@@ -230,6 +262,8 @@ try {
                 viewport,
                 layout,
                 residual,
+                clickedAt: center,
+                hit,
                 frame,
                 items,
                 ...sidebar

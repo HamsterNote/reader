@@ -603,6 +603,9 @@
       visibility 0s linear 220ms;
 
     &--open {
+      // 打开后的侧栏是前景面板：窄栏中它会伸到右侧阅读进度条（z-index 12）
+      // 下方，若不抬高层级，进度条会吞掉书签 tab 等侧栏控件的点击。
+      z-index: 13;
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
