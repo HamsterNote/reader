@@ -155,7 +155,10 @@ export const ReaderWebView = forwardRef<
         fileUrl: publicationUrl
       },
       confirmedSnapshot: record.snapshot,
-      persist: (snapshot) => store.saveSnapshot(record.fileId, snapshot),
+      persist: (snapshot, previous) =>
+        previous
+          ? store.saveRebasedSnapshot(record.fileId, previous, snapshot)
+          : store.saveSnapshot(record.fileId, snapshot),
       sendToWeb: (message) => {
         webRef.current?.postMessage(JSON.stringify(message))
       }

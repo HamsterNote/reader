@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import type {
   HostDocumentRecord,
@@ -275,6 +276,35 @@ describe('ReaderDataStore v2 snapshot key', () => {
     const loaded = await new ReaderDataStore(storage).get(fileId)
     expect(loaded?.snapshotSource).toBe('v2')
     expect(loaded?.snapshot.revision).toBe(6)
+  })
+
+  it('passes unknown optional fields through while keeping the legacy blob hash', async () => {
+    const { store, storage } = await storeWithLegacyRecord()
+    const legacyKey = `${DOC_KEY}${fileId}`
+    const before = storage.values.get(legacyKey) ?? ''
+    const beforeHash = createHash('sha256').update(before).digest('hex')
+
+    await store.saveSnapshot(fileId, {
+      data: {
+        readerData: { renderMode: 'layout', customFutureField: { keep: true } },
+        futureEnvelopeField: ['opaque', 5]
+      },
+      progress: { page: 12 },
+      revision: 6
+    })
+
+    const after = storage.values.get(legacyKey) ?? ''
+    const afterHash = createHash('sha256').update(after).digest('hex')
+    if (process.env.REPORT_COMPATIBILITY_HASH === '1')
+      console.info(
+        `4.8 legacyBlobSha256 before=${beforeHash} after=${afterHash}`
+      )
+    expect(afterHash).toBe(beforeHash)
+    const reopened = await new ReaderDataStore(storage).get(fileId)
+    expect(reopened?.snapshot.data).toEqual({
+      readerData: { renderMode: 'layout', customFutureField: { keep: true } },
+      futureEnvelopeField: ['opaque', 5]
+    })
   })
 
   it('prefers the v2 snapshot and falls back to the legacy record per file', async () => {

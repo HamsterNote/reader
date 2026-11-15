@@ -37,7 +37,10 @@ export type BridgeHostSessionOptions = {
    * 持久化写入；只在消息通过全部校验后调用，每次逻辑写入恰好一次。
    * 返回 Promise 时必须使用 `handleWebMessageAsync`，确保 ack 在落盘后发出。
    */
-  readonly persist: (snapshot: BridgeHostSnapshot) => unknown
+  readonly persist: (
+    snapshot: BridgeHostSnapshot,
+    previous?: BridgeHostSnapshot
+  ) => unknown
   /** 主动消息出口（关闭握手的 command/dispose）；缺省时 close 直接返回失败。 */
   readonly send?: (message: BridgeMessage) => void
 }
@@ -285,7 +288,7 @@ export function createBridgeHostSession(
   ): BridgeMessage[] => {
     let result: unknown
     try {
-      result = options.persist(write.next)
+      result = options.persist(write.next, write.previous)
     } catch (error) {
       return [
         buildError(
@@ -309,7 +312,7 @@ export function createBridgeHostSession(
     write: Exclude<RevisionedWriteResult, { messages: BridgeMessage[] }>
   ): Promise<BridgeMessage[]> => {
     try {
-      await options.persist(write.next)
+      await options.persist(write.next, write.previous)
     } catch (error) {
       // 持久化失败：不确认这次写入，快照保持上一个已确认值。
       snapshot = write.previous

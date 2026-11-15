@@ -1,0 +1,777 @@
+import { CommentPanel } from '../../demo/CommentPanel'
+import { createNativeCommentController } from '../../src/nativePdf/commentController'
+import { createRoot } from 'react-dom/client'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { PdfDocumentSession } from '../../src/pdf/pdfDocumentSession'
+import { NativeCanonicalCache } from '../../src/nativePdf/textGeometry'
+import {
+  materializeNativeRange,
+  endpointPage,
+  mergeNativeSelectionPages,
+  nativeSelectionPagesReady
+} from '../../src/nativePdf/selection'
+import {
+  DefaultHighlightPopover,
+  DefaultSelectionPopover
+} from '../../src/components/DefaultPopover'
+import { PopoverPortal } from '../../src/components/PopoverPortal'
+import type {
+  ReaderSelectionRange,
+  ReaderSelectionRef
+} from '../../src/types/selection'
+import {
+  restoreReaderSnapshot,
+  serializeReaderSnapshot,
+  type ReaderSnapshot
+} from '../../src/host/readerSnapshot'
+import { readPackagedAsset } from './packagedAsset'
+import { createPdfWorkerFromAsset } from './pdfWorker'
+import { packagedPdfOptions } from './pdfAssets'
+import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
+import type {
+  PdfEvent,
+  PdfIdentity,
+  PdfCanonicalPage
+} from '../../src/nativePdf/contracts'
+import { listenHostMessages } from './hostMessageChannel'
+import {
+  indexPdfSourceLinks,
+  resolvePdfSourceLink
+} from '../../src/pdf/pdfSourceLinks'
+import { visibleOriginalPages } from '../../src/nativePdf/geometry'
+import { NativePdfSession } from '../../src/nativePdf/session'
+import { logNativePdfDiagnostic } from '../../src/nativePdf/diagnostics'
+import { shouldPreserveNativeWebMenu } from '../../src/nativePdf/menuOwnership'
+
+type NativeBootstrap = PdfIdentity & {
+  publicationUrl: string
+  snapshot: unknown
+  progress: unknown
+}
+function nativeSelectionCanonicalSource(
+  numbers: readonly number[],
+  ocrPages: ReadonlyMap<number, PdfCanonicalPage>,
+  suppliedPages: readonly PdfCanonicalPage[]
+): 'ocr-cache' | 'payload' | 'pdf' {
+  if (numbers.some((pageNumber) => ocrPages.has(pageNumber))) return 'ocr-cache'
+  if (suppliedPages.length) return 'payload'
+  return 'pdf'
+}
+declare global {
+  interface Window {
+    __READER_NATIVE_PDF__?: NativeBootstrap
+  }
+}
+/** Development harness only. Default ReaderSurface/bridge v1 stays untouched. */
+export function startNativePdfSurface(
+  bootstrap: NativeBootstrap,
+  options: {
+    selectionPopover?: ReactNode
+    highlightPopover?: ReactNode | ((range: ReaderSelectionRange) => ReactNode)
+    onCommentHighlight?: (
+      range: ReaderSelectionRange
+    ) => Promise<ReaderSelectionRange>
+  } = {}
+): void {
+  const root = createRoot(document.getElementById('reader')!)
+  let session: PdfDocumentSession | null = null,
+    cache: NativeCanonicalCache | null = null,
+    worker: Worker | null = null
+  const guard = new NativePdfSession(bootstrap)
+  let snapshot: ReaderSnapshot = restoreReaderSnapshot(
+    bootstrap.snapshot,
+    bootstrap.progress
+  )
+  const commentController = createNativeCommentController(snapshot.comments)
+  let allowed: number[] = [],
+    request = 0,
+    range: ReaderSelectionRange | null = null
+  let draftFinished = false
+  let draftId = `native-${crypto.randomUUID()}`
+  let pendingSelection = 0,
+    disposed = false,
+    geometryRevision = -1,
+    menuOwner: 'native' | 'web' | null = null
+  let retained: number[] = []
+  const ocrPages = new Map<number, PdfCanonicalPage>()
+  const pendingActivates = new Map<
+    string,
+    {
+      rangeId: string
+      pages: number[]
+      started: boolean
+      timeout?: ReturnType<typeof setTimeout>
+    }
+  >()
+  const activationRuns = new Set<string>()
+  const send = (payload: Record<string, unknown>) =>
+    window.ReactNativeWebView?.postMessage(
+      JSON.stringify({
+        ...bootstrap,
+        snapshot: undefined,
+        progress: undefined,
+        publicationUrl: undefined,
+        ...payload
+      })
+    )
+  const command = (body: Record<string, unknown>) =>
+    send({
+      type: 'command',
+      command: {
+        ...bootstrap,
+        snapshot: undefined,
+        progress: undefined,
+        publicationUrl: undefined,
+        ...body,
+        requestId: `web-${++request}`
+      }
+    })
+  const fail = (code: string) => send({ type: 'failure', code })
+  type MenuValue = {
+    range: ReaderSelectionRange | null
+    activeId?: string
+    anchor?: DOMRect
+  } | null
+  let menuListener: ((value: MenuValue) => void) | null = null
+  const show = (value: MenuValue): void => {
+    console.info('web-popover-value', {
+      owner: menuOwner,
+      value: value
+        ? {
+            activeId: value.activeId,
+            start: value.range?.start,
+            end: value.range?.end,
+            anchor: value.anchor
+          }
+        : null
+    })
+    menuListener?.(value)
+  }
+
+  function commit(next: ReaderSelectionRange | null, removeId?: string) {
+    const commitId = `${bootstrap.sessionId}-${++request}`
+    if (!guard.commit(commitId)) return
+    const current = snapshot.data.ranges ?? []
+    const id = next?.id ?? removeId
+    const ranges = current.filter((r) => r.id !== id)
+    if (next) ranges.push(next)
+    const nextComments = removeId
+      ? commentController.removeHighlight(commitId, removeId)
+      : {
+          status: 'changed' as const,
+          comments: commentController.getComments()
+        }
+    if (nextComments.status === 'duplicate') return
+    snapshot = {
+      ...snapshot,
+      data: { ...snapshot.data, ranges },
+      comments: nextComments.comments
+    }
+    send({
+      type: 'ranges',
+      items: ranges.map((r) => ({ id: r.id, text: r.text }))
+    })
+    command({ type: 'annotations', ranges })
+    send({
+      type: 'snapshot',
+      commitId,
+      data: serializeReaderSnapshot(snapshot)
+    })
+    range = next
+    send({ type: 'nativeSelectionConsumed' })
+    menuOwner = null
+    command({ type: 'selection', range: next })
+    show(null)
+  }
+  function Menu() {
+    const [value, setValue] = useState<{
+      range: ReaderSelectionRange | null
+      activeId?: string
+      anchor?: DOMRect
+    } | null>(null)
+    const [color, setColor] = useState('#ffc107')
+    const [commentId, setCommentId] = useState<string | null>(null)
+    const [, refresh] = useState(0)
+    const container = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+      menuListener = setValue
+      return () => {
+        menuListener = null
+      }
+    }, [])
+    const selectionRef = {
+      current: {
+        confirm: () => {
+          if (range) commit(range)
+        }
+      } as ReaderSelectionRef
+    }
+    const context = {
+      selectionRef,
+      highlightColor: color,
+      selectedRangeId: value?.activeId,
+      ranges: snapshot.data.ranges,
+      onHighlightColorChange: (c: string) => {
+        setColor(c)
+        if (range) {
+          range = {
+            ...range,
+            markerStyle: { ...range.markerStyle, backgroundColor: c }
+          }
+          command({ type: 'selection', range })
+        }
+      },
+      onCommentHighlight:
+        options.onCommentHighlight ??
+        (async (r: ReaderSelectionRange) => {
+          setCommentId(r.id)
+          send({ type: 'panel' })
+          return r
+        }),
+      onUpdateRange: (r: ReaderSelectionRange) => commit(r),
+      onRemoveRange: (id: string) => commit(null, id)
+    }
+    // The WebView itself is positioned around this safe menu rectangle by RN.
+    const custom = (
+      window as Window & {
+        __NATIVE_PDF_POPOVER__?: {
+          selection?: ReactNode
+          highlight?: (r: ReaderSelectionRange) => ReactNode
+        }
+      }
+    ).__NATIVE_PDF_POPOVER__
+    let popover: ReactNode = options.selectionPopover ?? custom?.selection ?? (
+      <DefaultSelectionPopover {...context} />
+    )
+    if (value?.activeId && value.range) {
+      const configured =
+        typeof options.highlightPopover === 'function'
+          ? options.highlightPopover(value.range)
+          : options.highlightPopover
+      popover = configured ?? custom?.highlight?.(value.range) ?? (
+        <DefaultHighlightPopover {...context} />
+      )
+    }
+    return (
+      <div ref={container} style={{ position: 'fixed', inset: 0 }}>
+        {commentId ? (
+          <CommentPanel
+            comments={snapshot.comments}
+            ranges={snapshot.data.ranges ?? []}
+            activeHighlightId={commentId}
+            onCommentsChange={(comments) => {
+              const commitId = `${bootstrap.sessionId}-${++request}`
+              const result = commentController.commit(commitId, comments)
+              if (result.status === 'changed' && guard.commit(commitId)) {
+                snapshot = { ...snapshot, comments: result.comments }
+                refresh((n) => n + 1)
+                send({
+                  type: 'snapshot',
+                  commitId,
+                  data: serializeReaderSnapshot(snapshot)
+                })
+              }
+            }}
+            onJumpToHighlight={(id) =>
+              send({ type: 'navigateRange', rangeId: id })
+            }
+            onClose={() => {
+              setCommentId(null)
+              show(null)
+              send({ type: 'hideMenu' })
+            }}
+          />
+        ) : null}
+        <PopoverPortal
+          containerRef={container}
+          selectionKind={value?.activeId ? 'selected' : 'active'}
+          visible={!!value && !commentId}
+          selectionBounds={value?.anchor ?? null}
+        >
+          {popover}
+        </PopoverPortal>
+      </div>
+    )
+  }
+  root.render(<Menu />)
+  function finishActivate(rangeId: string): void {
+    const pending = pendingActivates.get(rangeId)
+    if (pending?.timeout) clearTimeout(pending.timeout)
+    pendingActivates.delete(rangeId)
+  }
+  function armActivateTimeout(rangeId: string): void {
+    const pending = pendingActivates.get(rangeId)
+    if (!pending || pending.timeout) return
+    pending.timeout = setTimeout(() => {
+      if (pendingActivates.get(rangeId) !== pending) return
+      pendingActivates.delete(rangeId)
+      console.info('reader-pdf-activate-wait-timeout', {
+        rangeId,
+        pages: pending.pages
+      })
+      console.info('reader-pdf-activate-pending-dropped', {
+        rangeId,
+        pages: pending.pages
+      })
+    }, 3000)
+  }
+  function activateRange(rangeId: string, replay = false): void {
+    const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
+    if (!existing) {
+      finishActivate(rangeId)
+      fail('INVALID_TARGET')
+      return
+    }
+    if (disposed || !cache || activationRuns.has(rangeId)) return
+    const first = endpointPage(existing.start),
+      last = endpointPage(existing.end)
+    const pages = allowed.filter((n) => n >= first && n <= last)
+    const pending = pendingActivates.get(rangeId)
+    if (pending) {
+      pending.started = true
+      if (pages.length) pending.pages = pages
+    }
+    activationRuns.add(rangeId)
+    // Page-only navigation works before canonical text exists and lets the host
+    // materialize persisted OCR from the target page's geometry.
+    if (allowed.includes(first))
+      command({ type: 'navigate', pageNumber: first })
+    ensure(pages)
+      .then(() => {
+        if (disposed || !cache) return
+        mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+        console.info('reader-pdf-activate-canonical', {
+          source: ocrPages.size ? 'ocr-cache' : 'pdf',
+          pages: pages.map((pageNumber) => ({
+            page: pageNumber,
+            utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
+          }))
+        })
+        if (
+          !nativeSelectionPagesReady(
+            cache.pages,
+            pages,
+            existing.start,
+            existing.end
+          )
+        ) {
+          if (!pendingActivates.has(rangeId)) queueActivate(rangeId, pages)
+          armActivateTimeout(rangeId)
+          return
+        }
+        materializeNativeRange(
+          existing.start,
+          existing.end,
+          cache.pages,
+          allowed,
+          {
+            id: existing.id,
+            createdAt: existing.createdAt,
+            color: existing.markerStyle?.backgroundColor ?? '#ffc107'
+          },
+          existing
+        )
+        const canonicalPages = pages.flatMap((pageNumber) => {
+          const page = cache!.pages.get(pageNumber)
+          return page ? [page] : []
+        })
+        finishActivate(rangeId)
+        command({
+          type: 'text',
+          pages: canonicalPages,
+          retain: pages,
+          source: 'geometry-cache'
+        })
+        range = existing
+        command({
+          type: 'navigate',
+          pageNumber: first,
+          offset: existing.start.offset
+        })
+        command({ type: 'selection', range, showMenu: true })
+      })
+      .catch(() => {
+        if (disposed) return
+        finishActivate(rangeId)
+        if (replay)
+          console.info('reader-pdf-activate-pending-dropped', {
+            rangeId,
+            reason: 'replay-failed'
+          })
+        fail('MAPPING_NOT_READY')
+      })
+      .finally(() => activationRuns.delete(rangeId))
+  }
+  function replayPendingActivates(): void {
+    // The receiver can accept OCR before the asynchronous PDF service exists.
+    // A cold PDF target still needs one extraction pass before it can wait for OCR.
+    if (disposed || !cache) return
+    mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+    for (const pending of [...pendingActivates.values()]) {
+      const existing = snapshot.data.ranges?.find(
+        (candidate) => candidate.id === pending.rangeId
+      )
+      const ready = existing
+        ? nativeSelectionPagesReady(
+            cache.pages,
+            pending.pages,
+            existing.start,
+            existing.end
+          )
+        : false
+      if (pending.started && !ready) continue
+      if (ready)
+        console.info('reader-pdf-activate-pending-replay', {
+          rangeId: pending.rangeId,
+          pages: pending.pages
+        })
+      activateRange(pending.rangeId, ready)
+    }
+  }
+  function clearPendingActivates(): void {
+    for (const pending of pendingActivates.values())
+      if (pending.timeout) clearTimeout(pending.timeout)
+    pendingActivates.clear()
+    activationRuns.clear()
+  }
+  function queueActivate(rangeId: string, pages: number[]): void {
+    if (pendingActivates.has(rangeId)) return
+    pendingActivates.set(rangeId, { rangeId, pages, started: false })
+    console.info('reader-pdf-activate-pending', { rangeId, pages })
+    // A repair request is sent once per pending activation, never on a timer.
+    send({ type: 'canonical-request', pages })
+  }
+  async function ensure(
+    numbers: number[],
+    texture = false
+  ): Promise<PdfCanonicalPage[]> {
+    if (!cache) throw new Error('MAPPING_NOT_READY')
+    cache.retain(Array.from(new Set([...retained, ...numbers])))
+    // Sequential text layout avoids simultaneous measurement DOM work.
+    const result: PdfCanonicalPage[] = []
+    for (const n of numbers) {
+      if (disposed) throw new Error('CANCELLED')
+      result.push(await cache.get(n, texture))
+    }
+    return result
+  }
+  const selection = async (
+    event: Extract<PdfEvent, { type: 'selection' }>,
+    suppliedPages: readonly PdfCanonicalPage[] = []
+  ) => {
+    if (!event.rangeId && draftFinished && event.phase === 'preview') {
+      draftFinished = false
+      draftId = `native-${crypto.randomUUID()}`
+    }
+    const token = ++pendingSelection
+    const first = Math.min(endpointPage(event.start), endpointPage(event.end)),
+      last = Math.max(endpointPage(event.start), endpointPage(event.end))
+    const numbers = allowed.filter((n) => n >= first && n <= last)
+    if (!cache) throw new Error('MAPPING_NOT_READY')
+    mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+    mergeNativeSelectionPages(
+      cache.pages,
+      suppliedPages.filter((page) => !ocrPages.has(page.pageNumber))
+    )
+    const source = nativeSelectionCanonicalSource(
+      numbers,
+      ocrPages,
+      suppliedPages
+    )
+    console.info('reader-pdf-native-selection-canonical-compare', {
+      source,
+      supplied: suppliedPages.map((page) => ({
+        page: page.pageNumber,
+        utf16: page.text.length
+      })),
+      cached: numbers.map((pageNumber) => ({
+        page: pageNumber,
+        utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
+      })),
+      consistent: suppliedPages.every(
+        (page) =>
+          cache!.pages.get(page.pageNumber)?.text.length === page.text.length
+      )
+    })
+    await ensure(numbers)
+    if (
+      disposed ||
+      token !== pendingSelection ||
+      event.geometryRevision < geometryRevision ||
+      !cache
+    )
+      return
+    const existing = event.rangeId
+      ? snapshot.data.ranges?.find((r) => r.id === event.rangeId)
+      : undefined
+    range = materializeNativeRange(
+      event.start,
+      event.end,
+      cache.pages,
+      allowed,
+      {
+        id: existing?.id ?? draftId,
+        createdAt: Date.now(),
+        color:
+          existing?.markerStyle?.backgroundColor ??
+          range?.markerStyle?.backgroundColor ??
+          '#ffc107'
+      },
+      existing
+    )
+    if (event.phase === 'end') {
+      if (
+        existing &&
+        (existing.start.offset !== range.start.offset ||
+          existing.end.offset !== range.end.offset ||
+          existing.start.selectionId !== range.start.selectionId ||
+          existing.end.selectionId !== range.end.selectionId)
+      )
+        commit(range)
+      if (!existing) draftFinished = true
+      const activeId = snapshot.data.ranges?.some((r) => r.id === range!.id)
+        ? range.id
+        : undefined
+      send({ type: 'menu', anchor: event.anchor })
+      show({ range, activeId, anchor: new DOMRect(140, 75, 1, 1) })
+    }
+  }
+  // eslint-disable-next-line sonarjs/cognitive-complexity -- Exhaustive independent native event cases, with stale-session checks before dispatch.
+  const unlisten = listenHostMessages((raw) => {
+    let message: {
+      identity?: PdfIdentity
+      type?: string
+      event?: PdfEvent
+      canonicalPages?: PdfCanonicalPage[]
+      canonicalPage?: PdfCanonicalPage
+      rangeId?: string
+      pages?: number[]
+      url?: string
+    }
+    try {
+      message =
+        typeof raw === 'string' ? JSON.parse(raw) : (raw as typeof message)
+    } catch {
+      logNativePdfDiagnostic('reader-pdf-web-message', {
+        parsed: false,
+        rawType: typeof raw
+      })
+      return
+    }
+    logNativePdfDiagnostic('reader-pdf-web-message', {
+      parsed: true,
+      type: message.type,
+      eventType: message.event?.type,
+      phase:
+        message.event?.type === 'selection' ? message.event.phase : undefined,
+      startOffset:
+        message.event?.type === 'selection'
+          ? message.event.start.offset
+          : undefined,
+      endOffset:
+        message.event?.type === 'selection'
+          ? message.event.end.offset
+          : undefined
+    })
+    if (disposed || !message.identity || !guard.accepts(message.identity))
+      return
+    if (message.type === 'dispose') {
+      disposed = true
+      pendingSelection++
+      clearPendingActivates()
+      ocrPages.clear()
+      unlisten()
+      guard.close()
+      cache?.dispose()
+      root.unmount()
+      session
+        ?.dispose()
+        .finally(() => worker?.terminate())
+        .catch(() => undefined)
+      return
+    }
+    if (message.type === 'dismiss') {
+      pendingSelection++
+      clearPendingActivates()
+      menuOwner = null
+      show(null)
+      return
+    }
+    if (message.type === 'ocrText') {
+      const page = message.canonicalPage
+      if (page && Number.isInteger(page.pageNumber) && page.text.length > 0) {
+        const changed =
+          JSON.stringify(ocrPages.get(page.pageNumber)) !== JSON.stringify(page)
+        ocrPages.set(page.pageNumber, page)
+        cache?.pages.set(page.pageNumber, page)
+        if (changed)
+          console.info('reader-pdf-ocr-cache', {
+            page: page.pageNumber,
+            utf16: page.text.length,
+            boundaries: page.boundaries.length
+          })
+        replayPendingActivates()
+      }
+      return
+    }
+    if (message.type === 'nativeSelection') {
+      const nativeEvent = message.event
+      if (!nativeEvent || nativeEvent.type !== 'selection') return
+      if (!guard.receive(nativeEvent)) return
+      menuOwner = 'native'
+      const suppliedPages = Array.isArray(message.canonicalPages)
+        ? message.canonicalPages
+        : []
+      selection(nativeEvent, suppliedPages).catch(() =>
+        fail('MAPPING_NOT_READY')
+      )
+      return
+    }
+    if (message.event?.type === 'activate') {
+      message.type = 'activate'
+      message.rangeId = message.event.rangeId
+    }
+    if (message.type === 'activate' || message.type === 'navigateRange') {
+      const rangeId = message.rangeId
+      const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
+      if (!existing) {
+        fail('INVALID_TARGET')
+        return
+      }
+      if (
+        !rangeId ||
+        pendingActivates.has(rangeId) ||
+        activationRuns.has(rangeId)
+      )
+        return
+      const first = endpointPage(existing.start),
+        last = endpointPage(existing.end)
+      const selectedPages = allowed.filter((n) => n >= first && n <= last)
+      const pages = selectedPages.length
+        ? selectedPages
+        : Array.from(new Set([first, last]))
+      if (cache)
+        mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+      if (
+        !cache ||
+        !nativeSelectionPagesReady(
+          cache.pages,
+          pages,
+          existing.start,
+          existing.end
+        )
+      )
+        queueActivate(rangeId, pages)
+      activateRange(rangeId)
+      return
+    }
+    const event = message.event
+    if (!event || !guard.receive(event)) return
+    if ('geometryRevision' in event) geometryRevision = event.geometryRevision
+    if (event.type === 'geometry') {
+      if (!shouldPreserveNativeWebMenu(menuOwner, 'geometry')) {
+        show(null)
+        send({ type: 'hideMenu' })
+      }
+    }
+    if (event.type === 'cancelled') {
+      pendingSelection++
+      if (!shouldPreserveNativeWebMenu(menuOwner, 'cancelled')) {
+        show(null)
+        send({ type: 'hideMenu' })
+      }
+    }
+    if (event.type === 'loaded') {
+      allowed = visibleOriginalPages(event.pageCount, snapshot.data.hiddenPages)
+      send({ type: 'metadata', pageCount: event.pageCount })
+    }
+    if (event.type === 'textNeeded') {
+      retained = [...event.retain]
+      ensure([...event.pages], true)
+        .then((pages) => {
+          if (!disposed && pages.length)
+            command({
+              type: 'text',
+              pages,
+              retain: retained,
+              source: 'geometry-cache'
+            })
+        })
+        .catch(() => fail('MAPPING_NOT_READY'))
+    }
+    if (event.type === 'selection')
+      selection(event).catch(() => fail('MAPPING_NOT_READY'))
+    if (event.type === 'link') {
+      ;(async () => {
+        if (!session) return
+        if (new URL(event.url).hostname !== 'undefined') {
+          send({ type: 'external', url: event.url })
+          return
+        }
+        const index = await indexPdfSourceLinks(
+          session.document,
+          () => disposed
+        )
+        const destination = resolvePdfSourceLink(index, event.url)
+        if (disposed) return
+        if (destination && allowed.includes(destination[0] + 1))
+          command({ type: 'navigate', pageNumber: destination[0] + 1 })
+        else if (new URL(event.url).hostname !== 'undefined')
+          send({ type: 'external', url: event.url })
+      })().catch(() => fail('INVALID_TARGET'))
+    }
+  })
+  // Receiver readiness is independent of PDF parsing/outline loading. In
+  // particular, onLoadEnd alone does not prove this listener is installed.
+  send({ type: 'web-ready' })
+  ;(async () => {
+    worker = await createPdfWorkerFromAsset()
+    GlobalWorkerOptions.workerPort = worker
+    session = await PdfDocumentSession.open(
+      { data: await readPackagedAsset(bootstrap.publicationUrl) },
+      { documentOptions: packagedPdfOptions }
+    )
+    if (disposed) {
+      await session.dispose()
+      worker.terminate()
+      return
+    }
+    cache = new NativeCanonicalCache(session.document)
+    allowed = visibleOriginalPages(
+      session.document.numPages,
+      snapshot.data.hiddenPages
+    )
+    replayPendingActivates()
+    const outline = await session.document.getOutline()
+    const entries: { title: string; pageNumber: number }[] = []
+    const walk = async (items: NonNullable<typeof outline>) => {
+      for (const item of items) {
+        const dest =
+          typeof item.dest === 'string'
+            ? await session!.document.getDestination(item.dest)
+            : item.dest
+        if (Array.isArray(dest) && dest[0] !== undefined) {
+          const n =
+            typeof dest[0] === 'number'
+              ? dest[0] + 1
+              : (await session!.document.getPageIndex(dest[0])) + 1
+          if (allowed.includes(n))
+            entries.push({ title: item.title, pageNumber: n })
+        }
+        if (item.items?.length) await walk(item.items)
+      }
+    }
+    if (outline) await walk(outline)
+    if (disposed) return
+    send({ type: 'outline', items: entries })
+    send({
+      type: 'ranges',
+      items: (snapshot.data.ranges ?? []).map((r) => ({
+        id: r.id,
+        text: r.text
+      }))
+    })
+    send({ type: 'serviceReady' })
+    command({ type: 'annotations', ranges: snapshot.data.ranges ?? [] })
+  })().catch(() => fail('CORRUPT'))
+}

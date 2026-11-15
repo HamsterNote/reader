@@ -3628,13 +3628,18 @@ describe('Reader prop forwarding', () => {
     await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
     const [selectionProps] = getAllSelectionProps()
     const popoverView = render(selectionProps?.popover)
-    const colorInput = within(popoverView.container).getByLabelText(
-      'Highlight color'
-    )
-    expect(colorInput).toHaveValue('#ff3366')
+    expect(
+      within(popoverView.container).getByRole('button', {
+        name: 'Highlight color #ff3366'
+      })
+    ).toHaveAttribute('aria-pressed', 'true')
 
     // When: the user changes the rectangle color.
-    fireEvent.change(colorInput, { target: { value: '#00aa88' } })
+    fireEvent.click(
+      within(popoverView.container).getByRole('button', {
+        name: 'Highlight color #00aa88'
+      })
+    )
 
     // Then: Reader updates only the color and preserves the remaining marker style.
     expect(onUpdateRect).toHaveBeenCalledWith({

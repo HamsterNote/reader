@@ -89,6 +89,51 @@ async function writeFiles(
   }
 }
 
+async function copyDirectoryContents(
+  sourceDir: string,
+  targetDir: string
+): Promise<void> {
+  await FileSystem.makeDirectoryAsync(targetDir, { intermediates: true })
+  for (const name of await FileSystem.readDirectoryAsync(sourceDir)) {
+    if (
+      name === '.' ||
+      name === '..' ||
+      name.includes('/') ||
+      name.includes('\\')
+    )
+      throw new Error(`非法资源名称：${name}`)
+    const source = `${sourceDir}${name}`
+    const target = `${targetDir}${name}`
+    const info = await FileSystem.getInfoAsync(source)
+    if (!info.exists) throw new Error(`资源在复制时消失：${source}`)
+    if (info.isDirectory)
+      await copyDirectoryContents(`${source}/`, `${target}/`)
+    else await FileSystem.copyAsync({ from: source, to: target })
+  }
+}
+
+async function assertSessionFiles(
+  target: string,
+  record: HostDocumentRecord
+): Promise<void> {
+  for (const relative of REQUIRED_ENTRIES) {
+    const info = await FileSystem.getInfoAsync(`${target}${relative}`)
+    if (!info.exists || info.isDirectory)
+      throw new Error(`阅读资源落盘不完整：${target}${relative}`)
+  }
+  const publication = await FileSystem.getInfoAsync(
+    `${target}publication.${record.format}`
+  )
+  if (
+    !publication.exists ||
+    publication.isDirectory ||
+    (publication.size ?? 0) <= 0
+  )
+    throw new Error(
+      `文档副本不存在或为空：${target}publication.${record.format}`
+    )
+}
+
 /**
  * 首次启动或资源版本变化时，把应用包内的 webreader.zip 解压到文档目录，
  * 之后 WebView 只从该目录加载（离线、自包含）。返回本地 entry URL。
@@ -125,12 +170,20 @@ export async function stageReaderDocument(
     throw new Error('Invalid reading asset directory')
   const target = `${FileSystem.documentDirectory ?? ''}reader-sessions/${fileId}/${buildId}/`
   const marker = await FileSystem.getInfoAsync(`${target}session-ready`)
-  if (!marker.exists) {
+  let ready = marker.exists
+  if (ready) {
+    try {
+      await assertSessionFiles(target, record)
+    } catch {
+      ready = false
+    }
+  }
+  if (!ready) {
     await FileSystem.deleteAsync(target, { idempotent: true })
     await FileSystem.makeDirectoryAsync(target.slice(0, -buildId.length - 1), {
       intermediates: true
     })
-    await FileSystem.copyAsync({ from: baseUrl, to: target })
+    await copyDirectoryContents(baseUrl, target)
     await FileSystem.writeAsStringAsync(`${target}session-ready`, buildId)
   }
   const publicationUrl = `${target}publication.${record.format}`
@@ -152,6 +205,13 @@ export async function stageReaderDocument(
     await FileSystem.deleteAsync(publicationUrl, { idempotent: true })
     await FileSystem.moveAsync({ from: pending, to: publicationUrl })
   }
+  await assertSessionFiles(target, record)
+  if (typeof __DEV__ !== 'undefined' && __DEV__)
+    console.info('reader-session-ready', {
+      sessionDirectory: target,
+      entryUrl: `${target}index.html`,
+      publicationUrl
+    })
   return { baseUrl: target, entryUrl: `${target}index.html`, publicationUrl }
 }
 

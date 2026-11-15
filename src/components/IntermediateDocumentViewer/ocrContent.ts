@@ -1,5 +1,5 @@
 import type { IntermediateContent, IntermediateText } from '@hamster-note/types'
-import type { ReaderExtraOcr } from './IntermediateDocumentViewer'
+import type { ReaderExtraOcr } from '../../types/readerOcr'
 
 export const prefixOcrTextIds = (
   texts: IntermediateText[],

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WKWebView color input probe</title>
+    <style>
+      body { font: 20px/1.5 system-ui; margin: 32px; }
+      input { width: 96px; height: 64px; font-size: 24px; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <p>Bare input only. No toolbar, React, preventDefault, or application code.</p>
+    <input id="color" type="color" aria-label="Probe color" value="#ffc107" />
+    <pre id="events">ready</pre>
+    <script>
+      const input = document.getElementById('color')
+      const output = document.getElementById('events')
+      const events = []
+      function record(type) {
+        events.push({ type, value: input.value, time: new Date().toISOString() })
+        output.textContent = JSON.stringify(events, null, 2)
+      }
+      input.addEventListener('click', () => record('click'))
+      input.addEventListener('input', () => record('input'))
+      input.addEventListener('change', () => record('change'))
+      window.colorInputProbe = { events }
+    </script>
+  </body>
+</html>

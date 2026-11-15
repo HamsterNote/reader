@@ -1,0 +1,46 @@
+{
+  "test/compat/fixtures/highlights/pdf-two-column.v2.json": {
+    "sha256": "a9e2ae1193ed371e4783529167d531dd7f7d426fee15cd95e399fe1d679a2fb6",
+    "bytes": 1280
+  },
+  "test/compat/fixtures/highlights/pdf-two-column.v3.json": {
+    "sha256": "674e7fd0076db9901593876eb85c6f5cf686e258f0f953bb85194f0178b7fa1e",
+    "bytes": 2115
+  },
+  "test/compat/fixtures/highlights/pdf-two-column.v4.json": {
+    "sha256": "8878bfc754c0fa2876b31e177ed358a68183ad0690e0e3ebd1ddfaade43bb28d",
+    "bytes": 2497
+  },
+  "test/compat/fixtures/pdf/ligature.pdf": {
+    "sha256": "ae9f4121d498446475661a398cc8278cb59865112ffd907e2dbdb051e363a761",
+    "bytes": 1502
+  },
+  "test/compat/fixtures/pdf/rotated.pdf": {
+    "sha256": "ad4ba06660203951484130fe3fddc311091edc7132ec7a1392c6ad5d6c228da1",
+    "bytes": 881
+  },
+  "test/compat/fixtures/pdf/two-column.pdf": {
+    "sha256": "845e77e9f94d81d87dc1384ac641f4b4fa12e5edae45d3c3c1c0619eaa8b110d",
+    "bytes": 1190
+  },
+  "test/fixtures/native-pdf/corrupt.pdf": {
+    "sha256": "f76a46e0634b6dcd72a46eb1177528c6bd703837b1ce3d97da3fd676781e398e",
+    "bytes": 24
+  },
+  "test/fixtures/native-pdf/scan.pdf": {
+    "sha256": "da6f83b5a1f5f9ed930ecde1090199d793501a74fae6707344f41a1be4a60f23",
+    "bytes": 668
+  },
+  "test/fixtures/native-pdf/two-hundred-pages.pdf": {
+    "sha256": "29bc4146372bea70b7e68e60cc32f91e5d1d4063aaa262f8b1296dd47eb7d705",
+    "bytes": 64824
+  },
+  "test/fixtures/pdf/positioned-runs.pdf": {
+    "sha256": "cbaf5d7099af84bb09b76e7794ede89b2e22a9d0fc8e1ff7c9bc6051420bdd6a",
+    "bytes": 956
+  },
+  "test/fixtures/pdf/two-page-positioned-runs.pdf": {
+    "sha256": "82bcfc74c4abf3f6a01667b4c4a3e6ec614725733d24b54b8579b0cbb2814a19",
+    "bytes": 1160
+  }
+}

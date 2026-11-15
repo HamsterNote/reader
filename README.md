@@ -724,6 +724,15 @@ yarn host:android        # 或 macOS 上 yarn host:ios
 
 构建、安全边界、已验证明细与未验证平台见 `docs/expo-host.md`。
 
+## 原生 PDF 几何测试
+
+几何测试脚本按平台分为两个明确模式：Linux 容器使用
+`bash scripts/test-native-pdf-geometry.sh --run`，通过
+swift-corelibs-xctest 编译并执行 XCTest 用例；macOS 使用
+`bash scripts/test-native-pdf-geometry.sh --typecheck`，通过
+`xcrun --sdk iphonesimulator swiftc -typecheck` 校验生产几何代码的 Apple SDK
+类型。两个模式在错误平台都会以退出码 2 结束，不把类型检查结果当作运行时测试结果。
+
 ## 发版规则
 
 - Push a `vX.Y.Z` tag for stable releases.

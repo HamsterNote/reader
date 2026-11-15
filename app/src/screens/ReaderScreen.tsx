@@ -1,3 +1,4 @@
+import { NativePdfReader } from '../components/NativePdfReader'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -19,6 +20,11 @@ import {
   type ReaderWebViewHandle
 } from '../components/ReaderWebView'
 import { stageReaderDocument } from '../native/webAssets'
+import type {
+  ReaderExtraOcr,
+  ReaderOcrOptions
+} from '../../../src/types/readerOcr'
+import type { IntermediateText } from '@hamster-note/types'
 
 type ReaderScreenProps = {
   readonly record: HostDocumentRecord
@@ -27,6 +33,13 @@ type ReaderScreenProps = {
   readonly baseUrl: string
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
+  readonly ocr?: boolean | ReaderOcrOptions
+  readonly extraOCR?: ReaderExtraOcr
+  readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  readonly onOcrTextsChange?: (
+    pageNumber: number,
+    texts: IntermediateText[]
+  ) => void
 }
 
 export function ReaderScreen({
@@ -34,8 +47,13 @@ export function ReaderScreen({
   store,
   baseUrl,
   onBack,
-  onRecordUpdated
+  onRecordUpdated,
+  ocr,
+  extraOCR,
+  onOcrError,
+  onOcrTextsChange
 }: ReaderScreenProps) {
+  const [nativePdf, setNativePdf] = useState(false)
   const [importing, setImporting] = useState(false)
   const readerRef = useRef<ReaderWebViewHandle>(null)
   const closingRef = useRef(false)
@@ -112,10 +130,11 @@ export function ReaderScreen({
     }
   }
 
+  const ReaderComponent = nativePdf ? NativePdfReader : ReaderWebView
   let content = <ActivityIndicator />
   if (staged) {
     content = (
-      <ReaderWebView
+      <ReaderComponent
         key={`${record.fileId}:${record.legacyImport?.importedAt ?? 0}`}
         ref={readerRef}
         record={record}
@@ -123,6 +142,10 @@ export function ReaderScreen({
         entryUrl={staged.entryUrl}
         baseUrl={staged.baseUrl}
         publicationUrl={staged.publicationUrl}
+        ocr={ocr}
+        extraOCR={extraOCR}
+        onOcrError={onOcrError}
+        onOcrTextsChange={onOcrTextsChange}
       />
     )
   } else if (stageError) {
@@ -152,6 +175,19 @@ export function ReaderScreen({
               : ''}
           </Text>
         </View>
+        {__DEV__ && record.format === 'pdf' ? (
+          <Pressable
+            onPress={() => {
+              void (async () => {
+                const result = await readerRef.current?.close()
+                if (!result || result.status === 'closed')
+                  setNativePdf((v) => !v)
+              })()
+            }}
+          >
+            <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
+          </Pressable>
+        ) : null}
         <Pressable onPress={() => void importLegacy()} disabled={importing}>
           {importing ? (
             <ActivityIndicator size='small' color='#8b5e3c' />
