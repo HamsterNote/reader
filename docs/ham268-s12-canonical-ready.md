@@ -34,6 +34,12 @@ yarn host:check
 
 第二轮补充：原生画矩形后做 Web 新增/改色，撤销必须只去矩形；undo 后再做 Web 删除/改色，重做只能恢复矩形，不能复活或回滚 ranges。跨页样本补文字—空白—文字及扫描端点夹空白页，空白页无 OCR 也应能打开编辑菜单；只有端点扫描映射不完整时才允许等待回填。
 
+## P5 跨重开提交 ID
+
+矩形、笔迹和清空笔迹统一生成 `类型-时间戳-UUID-会话内序号` 的 commitId。UUID 承担跨挂载唯一性，序号不再作为全局去重依据；pagePainting 与新笔迹共用同一 commitId，undo/redo 后新操作也不会复用历史 ID。
+
+`test/native-pdf/interleaved-saves.test.tsx` 的真实重挂载回归覆盖：重开后第二矩形 `rects=2/revision=2`、连续三次重开逐次新增、矩形与 Web 高亮/改色交错、undo/redo 后重开再画，以及第二轮新笔迹后再次清空。Mac 必须在重开后再画一个新矩形并核对 `rects=2` 和 revision 递增，不能只检查第一方向的数据恢复。
+
 ## P4 自绘色板与裸页面探针
 
 `391f4dd` 在 iPhone 18 Pro 模拟器 / iOS 27.2 的完整 App 中，单击 `Highlight color` 只保留原 ColorWell，没有系统取色器。公开资料对 iOS WebView 的支持报告并不一致，因此不能据此断言所有 WKWebView 都不支持；本修复只确认该任务的内嵌环境没有可用取色器。`webview/color-input-probe.html` 是不含 React、toolbar 或 `preventDefault` 的裸 `input[type=color]` 页面，Mac 应在同一个 WKWebView 环境单独加载、点击并保存截图/AX 结果；Linux 未执行该探针。

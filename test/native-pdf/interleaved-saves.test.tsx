@@ -15,6 +15,7 @@ import {
   serializeReaderSnapshot
 } from '../../src/host/readerSnapshot'
 import type { PdfCommand, PdfIdentity } from '../../src/nativePdf/contracts'
+import { nativeAnnotationControllerStore } from '../../src/nativePdf/annotationController'
 import type { ReaderSelectionRange } from '../../src/types/selection'
 
 const host = vi.hoisted(() => ({
@@ -130,7 +131,7 @@ async function mount(file: HostDocumentRecord) {
     )
   } as unknown as ReaderDataStore
   const ref = createRef<ReaderWebViewHandle>()
-  render(
+  const view = render(
     <NativePdfReader
       ref={ref}
       record={file}
@@ -161,8 +162,18 @@ async function mount(file: HostDocumentRecord) {
       await act(async () => {
         await ref.current!.close()
       })
-    }
+    },
+    unmount: view.unmount
   }
+}
+
+async function reopen(
+  file: HostDocumentRecord,
+  opened: Awaited<ReturnType<typeof mount>>
+) {
+  await opened.close()
+  act(() => opened.unmount())
+  return mount({ ...file, snapshot: opened.snapshot() })
 }
 
 async function drainCommands(identity: PdfIdentity) {
@@ -192,6 +203,25 @@ function nativeRectangle(identity: PdfIdentity, pageNumber = 2) {
         type: 'rect',
         pageNumber,
         rect: { x: 10, y: 20, width: 40, height: 30 },
+        phase: 'commit',
+        geometryRevision: 1
+      }
+    })
+  )
+}
+
+function nativeStroke(identity: PdfIdentity, pageNumber = 1) {
+  act(() =>
+    host.native.onPdfEvent({
+      nativeEvent: {
+        ...identity,
+        type: 'stroke',
+        pageNumber,
+        points: [
+          { x: 10, y: 20 },
+          { x: 20, y: 30 },
+          { x: 30, y: 40 }
+        ],
         phase: 'commit',
         geometryRevision: 1
       }
@@ -356,6 +386,110 @@ describe('interleaved native and Web annotation saves', () => {
     current = restoreReaderSnapshot(opened.snapshot().data)
     expect(current.data.rects).toHaveLength(1)
     expect(current.data.ranges).toEqual([])
+    expect(opened.snapshot().revision).toBe(4)
+  })
+})
+
+describe('native annotation commit identity across remounts', () => {
+  it('saves a second rectangle after reopening and increments revision', async () => {
+    const file = record('remount-second-rectangle', [])
+    let opened = await mount(file)
+    nativeRectangle(opened.identity, 2)
+    opened = await reopen(file, opened)
+    nativeRectangle(opened.identity, 3)
+    opened = await reopen(file, opened)
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toHaveLength(2)
+    expect(opened.snapshot().revision).toBe(2)
+  })
+
+  it('keeps rectangles added across three consecutive reopens', async () => {
+    const file = record('remount-three-times', [])
+    let opened = await mount(file)
+    for (const pageNumber of [2, 3, 4]) {
+      opened = await reopen(file, opened)
+      nativeRectangle(opened.identity, pageNumber)
+    }
+    opened = await reopen(file, opened)
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toHaveLength(3)
+    expect(opened.snapshot().revision).toBe(3)
+  })
+
+  it('keeps both sides after rectangles and Web edits cross a reopen', async () => {
+    const file = record('remount-web-interleaving', [highlight('saved')])
+    let opened = await mount(file)
+    nativeRectangle(opened.identity, 2)
+    await webSnapshot(opened.identity, file, [
+      highlight('saved', '#ff0000'),
+      highlight('added', '#00ff00')
+    ])
+    opened = await reopen(file, opened)
+    await webSnapshot(opened.identity, file, [
+      highlight('saved', '#0000ff'),
+      highlight('added', '#00ff00')
+    ])
+    nativeRectangle(opened.identity, 3)
+    opened = await reopen(file, opened)
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toHaveLength(2)
+    expect(current.data.ranges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'saved',
+          markerStyle: expect.objectContaining({ backgroundColor: '#0000ff' })
+        }),
+        expect.objectContaining({ id: 'added' })
+      ])
+    )
+    expect(opened.snapshot().revision).toBe(4)
+  })
+
+  it('gives a new rectangle a fresh id after undo and redo', async () => {
+    const file = record('undo-redo-new-rectangle', [])
+    let opened = await mount(file)
+    nativeRectangle(opened.identity, 2)
+    await act(async () => {
+      fireEvent.click(screen.getByText('撤销标注'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('重做'))
+    })
+    opened = await reopen(file, opened)
+    nativeRectangle(opened.identity, 3)
+    opened = await reopen(file, opened)
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toHaveLength(2)
+    expect(opened.snapshot().revision).toBe(4)
+  })
+
+  it('allows a new stroke and a second clear after two remounts', async () => {
+    const file = record('remount-clear-painting', [])
+    let opened = await mount(file)
+    const clearSpy = vi.spyOn(
+      nativeAnnotationControllerStore.get(file.fileId),
+      'clearPainting'
+    )
+    nativeStroke(opened.identity)
+    await act(async () => {
+      fireEvent.click(screen.getByText('清空本页'))
+    })
+    opened = await reopen(file, opened)
+    nativeStroke(opened.identity)
+    await act(async () => {
+      fireEvent.click(screen.getByText('清空本页'))
+    })
+    expect(
+      new Set(clearSpy.mock.calls.map(([commitId]) => commitId)).size
+    ).toBe(2)
+    opened = await reopen(file, opened)
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.pagePaintings).toEqual({})
     expect(opened.snapshot().revision).toBe(4)
   })
 })

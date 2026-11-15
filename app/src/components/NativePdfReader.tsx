@@ -452,12 +452,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       setInk(value)
       enqueue({ type: 'inkStyle', ...value })
     }
+    function nextAnnotationCommitId(kind: 'rect' | 'stroke' | 'clear'): string {
+      return `${kind}-${Date.now()}-${randomUUID()}-${++annotationCommits.current}`
+    }
     /** Native gesture → existing 4.x annotation controller → V5 snapshot. */
     function commitNativeRect(event: Extract<PdfEvent, { type: 'rect' }>) {
-      const commit = nativeRectCommit(
-        event,
-        `rect-${++annotationCommits.current}`
-      )
+      const commit = nativeRectCommit(event, nextAnnotationCommitId('rect'))
       if (!commit) return
       const result = annotations.apply(commit)
       if (result.status !== 'changed') return
@@ -487,11 +487,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     /** Native freehand stroke → existing control layer → V5 snapshot. */
     function commitNativeStroke(event: Extract<PdfEvent, { type: 'stroke' }>) {
       if (event.phase !== 'commit') return
-      // The counter is session-local; include a timestamp and UUID so a
-      // reopened file cannot submit a commitId already present in its V5
-      // painting document. The painting validator intentionally rejects
-      // duplicate object/commit IDs.
-      const commitId = `stroke-${Date.now()}-${randomUUID()}-${++annotationCommits.current}`
+      const commitId = nextAnnotationCommitId('stroke')
       const pageId = paintingPageId(event.pageNumber)
       const document = appendStrokeDocument(
         annotations.getSnapshot().pagePaintings[pageId],
@@ -524,7 +520,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         return
       }
       const result = annotations.clearPainting(
-        `clear-${++annotationCommits.current}`,
+        nextAnnotationCommitId('clear'),
         pageId
       )
       if (result.status !== 'changed') return
