@@ -53,8 +53,6 @@ try {
         await page
           .getByRole('button', { name: '工具菜单', exact: true })
           .click()
-        if (i === 0)
-          console.log('TOOLS', await page.locator('body').innerText())
         await page.getByRole('menuitem', { name: tool, exact: true }).click()
       }
     }
@@ -73,6 +71,15 @@ try {
     assert.equal(after.sameContainer, true)
     assert.equal(after.engineMounts, before.engineMounts)
     assert.equal(after.engineDisposals, before.engineDisposals)
+    assert.deepEqual(
+      after.data.layoutReadingProgress,
+      before.data.layoutReadingProgress
+    )
+    console.log(
+      'PASS tool cycle',
+      key,
+      'cycles=10 navigationDelta=0 containerReplacements=0 engineLoadDelta=0 engineDisposeDelta=0 anchorEqual=true'
+    )
   }
 } finally {
   await browser?.close()

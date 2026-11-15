@@ -90,6 +90,28 @@ beforeEach(() => {
 const source = { format: 'pdf' as const, data: new Uint8Array([1]) }
 const saved = { pageNumber: 1, offset: 20, textId: 'x', text: 'text' }
 
+it('passes the already resolved safe margins to the layout sidebar without adding them again', () => {
+  const view = render(
+    <EngineDocumentViewer
+      engineSource={source}
+      containMarginTop={44}
+      containMarginBottom={110}
+    />
+  )
+  expect(state.browser?.containMarginTop).toBe(44)
+  expect(state.browser?.containMarginBottom).toBe(110)
+  view.rerender(
+    <EngineDocumentViewer
+      engineSource={source}
+      containMarginTop={0}
+      containMarginBottom={0}
+      containMarginY={24}
+    />
+  )
+  expect(state.browser?.containMarginTop).toBe(0)
+  expect(state.browser?.containMarginBottom).toBe(0)
+})
+
 it('keeps the PDF indicator on the safe reading page when engine and text pages disagree', async () => {
   const view = render(<EngineDocumentViewer engineSource={source} />)
   await act(async () => state.pdf!.onPagesLoaded!(3))

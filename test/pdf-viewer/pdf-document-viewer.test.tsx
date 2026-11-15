@@ -832,6 +832,7 @@ describe('PdfDocumentViewer 接线', () => {
       })
       expect(scroll).not.toHaveBeenCalled()
       container.getBoundingClientRect = measured
+      resizeObserverMock.trigger(container)
       await act(async () => {
         await vi.advanceTimersByTimeAsync(32)
       })

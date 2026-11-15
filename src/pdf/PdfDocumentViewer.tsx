@@ -1889,11 +1889,20 @@ export const PdfDocumentViewer = forwardRef<
 
   navigatePageRef.current = (pageNumber) => {
     pendingPageRef.current = null
-    pendingAnchor.current?.fail(new DOMException('PDF navigation superseded', 'AbortError'))
+    pendingAnchor.current?.fail(
+      new DOMException('PDF navigation superseded', 'AbortError')
+    )
     pendingAnchor.current = null
-    navigateToAnchor({ pageNumber, verticalPercentage: 0 }, undefined, true).catch((error: unknown) => {
+    navigateToAnchor(
+      { pageNumber, verticalPercentage: 0 },
+      undefined,
+      true
+    ).catch((error: unknown) => {
       if (error instanceof Error && error.name === 'AbortError') return
-      progressOptions.current.onError?.({ kind: 'unknown', message: error instanceof Error ? error.message : String(error) })
+      progressOptions.current.onError?.({
+        kind: 'unknown',
+        message: error instanceof Error ? error.message : String(error)
+      })
     })
   }
 

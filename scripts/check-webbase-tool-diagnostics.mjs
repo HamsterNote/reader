@@ -14,6 +14,22 @@ const { createServer } = await import(
 const server = await createServer({
   root: host,
   configFile: resolve(host, 'vite.config.ts'),
+  resolve:
+    process.env.READER_PROBE_LOCAL === '1'
+      ? {
+          dedupe: ['react', 'react-dom'],
+          alias: [
+            {
+              find: /^@hamster-note\/reader$/,
+              replacement: resolve('dist/index.js')
+            },
+            {
+              find: /^@hamster-note\/reader\/style\.css$/,
+              replacement: resolve('dist/style.css')
+            }
+          ]
+        }
+      : undefined,
   plugins: [
     {
       name: 'ham276-read-only-counters',
@@ -29,6 +45,10 @@ const server = await createServer({
       probe.path = state.filePath
       probe.loading = state.loading
       const toolbar = usePaneToolbar()`
+            )
+            .replace(
+              'onDataChange={data => {',
+              'onDataChange={data => { (window as any).__readerProbe.data = data;'
             )
             .replace(
               'onEngineReady={() => {',
@@ -51,7 +71,12 @@ const server = await createServer({
       }
     }
   ],
-  server: { host: '127.0.0.1', port: 49576, strictPort: false }
+  server: {
+    host: '127.0.0.1',
+    port: 49576,
+    strictPort: false,
+    fs: { allow: [host, resolve('.')] }
+  }
 })
 let browser
 try {
@@ -96,7 +121,9 @@ try {
           navigations: performance.getEntriesByType('navigation').length,
           sameContainer: window.__readerContainer === c,
           messages: p.messages.map((m) => ({ type: m.type, event: m.event })),
-          data: p.data, sourceId: p.source?.format, pageTop: document.querySelector(
+          data: p.data,
+          sourceId: p.source?.format,
+          pageTop: document.querySelector(
             '.hamster-reader__pdf-viewer-container'
           )?.scrollTop
         }
@@ -104,11 +131,23 @@ try {
     if (file.endsWith('.pdf')) {
       await page.getByRole('slider').focus()
       for (let n = 0; n < 4; n++) await page.keyboard.press('ArrowDown')
-      await page.waitForFunction(() => document.querySelector('.hamster-reader__pdf-viewer-container')?.scrollTop > 300)
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.hamster-reader__pdf-viewer-container')
+            ?.scrollTop > 300
+      )
     } else {
       await page.getByRole('button', { name: '下一页', exact: true }).click()
+      await page.waitForFunction(
+        () => window.__readerProbe.data?.layoutReadingProgress?.textId
+      )
     }
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        )
+    )
     const before = await take()
     const scope = page.getByRole('region', { name: 'WebView 预览' })
     for (let i = 0; i < 10; i++)
@@ -127,9 +166,26 @@ try {
           .click()
       }
     const after = await take()
-    for (const name of ['ready', 'disposals', 'loads', 'sourceChanges', 'timeOrigin', 'navigations']) assert.equal(after[name], before[name], name)
+    for (const name of [
+      'ready',
+      'disposals',
+      'loads',
+      'sourceChanges',
+      'timeOrigin',
+      'navigations'
+    ])
+      assert.equal(after[name], before[name], name)
     assert.equal(after.sameContainer, true)
-    if (file.endsWith('.pdf')) assert(Math.abs(after.pageTop - before.pageTop) <= 1, JSON.stringify({before, after}))
+    if (file.endsWith('.pdf'))
+      assert(
+        Math.abs(after.pageTop - before.pageTop) <= 1,
+        JSON.stringify({ before, after })
+      )
+    else
+      assert.deepEqual(
+        after.data.layoutReadingProgress,
+        before.data.layoutReadingProgress
+      )
     console.log(JSON.stringify({ file, before, after }))
     await writeFile(
       resolve(output, `host-${file.endsWith('.pdf') ? 'pdf' : 'epub'}.json`),
@@ -137,6 +193,7 @@ try {
     )
     await page.evaluate(() => {
       window.__readerProbe.ready = 0
+      window.__readerProbe.data = null
       window.__readerContainer = null
     })
   }

@@ -15,7 +15,7 @@ try {
   await server.listen()
   const base = `http://127.0.0.1:${server.httpServer.address().port}`
   browser = await chromium.launch({ args: ['--no-sandbox'] })
-  if (process.env.READER_CHECK !== 'pdf') {
+  if (!['pdf', 'sidebar', 'race'].includes(process.env.READER_CHECK)) {
     const count = await checkSharedSelectionInteraction({
       browser,
       base,
@@ -111,6 +111,20 @@ try {
               await window.readerRegression.open('pdf', bytes, {
                 containMarginTop: residual,
                 showPageBrowser: true,
+                ranges: Array.from({ length: 12 }, (_, i) => ({
+                  id: `probe-${i + 1}`,
+                  text: `Highlight ${i + 1}`,
+                  createdAt: i,
+                  start: { selectionId: `page-${i + 1}`, offset: 0 },
+                  end: { selectionId: `page-${i + 1}`, offset: 4 },
+                  rectsBySelectionId: {},
+                  overlayRectType: 'percent'
+                })),
+                bookmarks: [1, 12].map((pageNumber) => ({
+                  pageNumber,
+                  verticalPercentage: 0
+                })),
+                onToggleBookmark: () => {},
                 layout: {
                   edge: 'bottom',
                   insets: {
@@ -158,24 +172,115 @@ try {
               sidebar.bottom <= sidebar.safeBottom + 1,
             JSON.stringify(sidebar)
           )
+          const pageItems = []
           for (const n of [1, 12]) {
             const item = page.getByTestId(`page-browser-page-${n}`)
             await item.scrollIntoViewIfNeeded()
             const b = await item.boundingBox()
+            pageItems.push({ page: n, rect: b })
             assert(
               b.y >= sidebar.safeTop - 1 &&
                 b.y + b.height <= sidebar.safeBottom + 1,
               JSON.stringify({ sidebar, b })
             )
           }
-          rows.push({ kind: 'sidebar', viewport, layout, residual, ...sidebar })
+          rows.push({
+            kind: 'sidebar',
+            viewport,
+            layout,
+            residual,
+            items: pageItems,
+            ...sidebar
+          })
+          if (process.env.READER_CHECK === 'sidebar') {
+            for (const tab of ['高亮', '书签']) {
+              // Keyboard activation isolates geometry from the existing progress
+              // overlay hit target in very narrow panes; report that limitation.
+              await page.getByRole('tab', { name: tab, exact: true }).focus()
+              await page.keyboard.press('Enter')
+              const active = page
+                .getByRole('tabpanel')
+                .filter({ visible: true })
+              const frame = await active.boundingBox()
+              assert(
+                frame.y >= sidebar.safeTop - 1 &&
+                  frame.y + frame.height <= sidebar.safeBottom + 1
+              )
+              const items = []
+              for (const n of [1, 12]) {
+                const item =
+                  tab === '高亮'
+                    ? page.getByTestId(`page-browser-highlight-probe-${n}`)
+                    : page.getByRole('button', {
+                        name: `跳转到书签：第 ${n} 页 · 0%`,
+                        exact: true
+                      })
+                await item.scrollIntoViewIfNeeded()
+                const box = await item.boundingBox()
+                items.push({ page: n, rect: box })
+                assert(
+                  box.y >= sidebar.safeTop - 1 &&
+                    box.y + box.height <= sidebar.safeBottom + 1,
+                  JSON.stringify({ tab, box, sidebar })
+                )
+              }
+              rows.push({
+                kind: 'tab',
+                tab,
+                viewport,
+                layout,
+                residual,
+                frame,
+                items,
+                ...sidebar
+              })
+            }
+            continue
+          }
           await page.evaluate(() =>
             window.readerRegression.update({ showPageBrowser: false })
           )
+          if (process.env.READER_CHECK === 'race') {
+            await seek(5)
+            await seek(8)
+            await page.waitForFunction((top) => {
+              const c = document.querySelector(
+                '.hamster-reader__pdf-viewer-container'
+              )
+              const p = c
+                .querySelector('.page[data-page-number="8"]')
+                .getBoundingClientRect()
+              const safe =
+                document
+                  .querySelector('.hamster-reader')
+                  .getBoundingClientRect().top + top
+              return Math.abs(p.top - safe) <= 1
+            }, residual)
+            await page.evaluate(
+              () =>
+                new Promise((resolve) =>
+                  requestAnimationFrame(() => requestAnimationFrame(resolve))
+                )
+            )
+            const result = await measurement(8)
+            assert(
+              Math.abs(result.pageTop - result.safeTop) <= 1,
+              JSON.stringify(result)
+            )
+            rows.push({
+              kind: 'race',
+              requested: [5, 8],
+              viewport,
+              layout,
+              residual,
+              ...result
+            })
+            continue
+          }
           for (const crop of [0, 0.1])
             for (const scale of [0.5, 1, 2]) {
               await page.evaluate(
-                ({ crop, scale }) => {
+                ({ crop }) => {
                   window.interactionCrop = crop
                   window.readerRegression.update({
                     data: {
@@ -329,11 +434,16 @@ try {
     assert.deepEqual(errors, [])
     await page.close()
     await writeFile(
-      resolve(output, 'pdf-geometry.json'),
+      resolve(
+        output,
+        { sidebar: 'sidebar-tabs.json', race: 'rapid-seek.json' }[
+          process.env.READER_CHECK
+        ] ?? 'pdf-geometry.json'
+      ),
       JSON.stringify(rows, null, 2)
     )
     console.log(
-      `PASS PDF sidebar ${rows.filter((r) => r.kind === 'sidebar').length}; progress ${rows.filter((r) => r.kind === 'progress').length}; tolerance <= 1 CSS px`
+      `PASS PDF sidebar ${rows.filter((r) => r.kind === 'sidebar').length}; tabs ${rows.filter((r) => r.kind === 'tab').length}; progress ${rows.filter((r) => r.kind === 'progress').length}; rapid5to8 ${rows.filter((r) => r.kind === 'race').length}; tolerance <= 1 CSS px`
     )
   }
 } finally {
