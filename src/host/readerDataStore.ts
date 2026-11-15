@@ -6,6 +6,8 @@ import type { BridgeHostSnapshot } from '../bridge/hostSession'
 import { rebaseSnapshot } from './rebaseSnapshot'
 import { assertSafeFileId, type HostDocumentFormat } from './fileIdentity'
 
+export type ReaderWriteFence = () => void
+
 export type HostStorage = {
   readonly read: (key: string) => Promise<string | null>
   readonly write: (key: string, value: string) => Promise<void>
@@ -403,8 +405,13 @@ export class ReaderDataStore {
     })
   }
 
-  saveSnapshot(fileId: string, snapshot: BridgeHostSnapshot): Promise<void> {
+  saveSnapshot(
+    fileId: string,
+    snapshot: BridgeHostSnapshot,
+    fence?: ReaderWriteFence
+  ): Promise<void> {
     return this.runForFile(fileId, async () => {
+      fence?.()
       assertSafeFileId(fileId)
       await this.loadIndex()
       if (!this.cache.has(fileId)) {
@@ -423,9 +430,11 @@ export class ReaderDataStore {
   /** Atomically read the latest snapshot, patch it, and commit the next revision. */
   updateSnapshot(
     fileId: string,
-    patch: (snapshot: BridgeHostSnapshot) => BridgeHostSnapshot
+    patch: (snapshot: BridgeHostSnapshot) => BridgeHostSnapshot,
+    fence?: ReaderWriteFence
   ): Promise<BridgeHostSnapshot> {
     return this.runForFile(fileId, async () => {
+      fence?.()
       assertSafeFileId(fileId)
       await this.loadIndex()
       if (!this.cache.has(fileId)) throw new Error(`文档不存在：${fileId}`)
@@ -449,9 +458,11 @@ export class ReaderDataStore {
   saveRebasedSnapshot(
     fileId: string,
     previous: BridgeHostSnapshot,
-    next: BridgeHostSnapshot
+    next: BridgeHostSnapshot,
+    fence?: ReaderWriteFence
   ): Promise<void> {
     return this.runForFile(fileId, async () => {
+      fence?.()
       assertSafeFileId(fileId)
       await this.loadIndex()
       if (!this.cache.has(fileId)) throw new Error(`文档不存在：${fileId}`)
@@ -473,9 +484,11 @@ export class ReaderDataStore {
     fileId: string,
     raw: string,
     sourceFileName: string,
-    importedAt: number
+    importedAt: number,
+    fence?: ReaderWriteFence
   ): Promise<HostDocumentRecord> {
     return this.runExclusive(async () => {
+      fence?.()
       assertSafeFileId(fileId)
       await this.loadIndex()
       const record = this.cache.get(fileId)

@@ -15,6 +15,7 @@ export const READER_BRIDGE_PROTOCOL_VERSION = 1
 export type BridgeMessageType =
   | 'ready'
   | 'document-ready'
+  | 'drain-status'
   | 'open'
   | 'restore'
   | 'command'
@@ -85,6 +86,23 @@ export const BRIDGE_COMMAND_RESUME = 'resume'
 
 export type BridgeCommandPayload = {
   readonly name: typeof BRIDGE_COMMAND_FLUSH | typeof BRIDGE_COMMAND_RESUME
+  /** Optional v1 close diagnostics/checkpoint; old peers may still reply ready. */
+  readonly drainStatus?: boolean
+}
+
+export type BridgeDrainStage =
+  | 'input-quiescence'
+  | 'document-work'
+  | 'stable-progress'
+  | 'host-ack'
+  | 'complete'
+
+export type BridgeDrainStatus = {
+  readonly flushRequestId: string
+  readonly stage: BridgeDrainStage
+  readonly inputFrozen: boolean
+  readonly revision: number | null
+  readonly pending: number
 }
 
 /** open 的 payload：文档描述。文件内容经宿主受控 URL/描述符交付，不走消息体。 */
@@ -99,6 +117,7 @@ export type BridgeOpenPayload = {
 const MESSAGE_TYPES: readonly BridgeMessageType[] = [
   'ready',
   'document-ready',
+  'drain-status',
   'open',
   'restore',
   'command',

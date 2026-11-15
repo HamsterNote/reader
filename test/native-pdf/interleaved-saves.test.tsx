@@ -40,7 +40,13 @@ vi.mock('react-native', () => {
       children?: ReactNode
       onPress?: () => void
     }) => <button onClick={onPress}>{children}</button>,
-    Modal: () => null,
+    Modal: ({
+      visible,
+      children
+    }: {
+      visible: boolean
+      children?: ReactNode
+    }) => (visible ? <div>{children}</div> : null),
     Image: () => null,
     Platform: { OS: 'ios' },
     Linking: { openURL: vi.fn() },
@@ -115,7 +121,27 @@ function record(
   }
 }
 
-async function mount(file: HostDocumentRecord) {
+function withSnapshotData(
+  file: HostDocumentRecord,
+  data: Record<string, unknown>
+): HostDocumentRecord {
+  return {
+    ...file,
+    snapshot: {
+      ...file.snapshot,
+      data: {
+        ...(file.snapshot.data as Record<string, unknown>),
+        ...data
+      }
+    }
+  }
+}
+
+type MountControls = {
+  failNextUpdate?: boolean
+}
+
+async function mount(file: HostDocumentRecord, controls: MountControls = {}) {
   let current = file
   const store = {
     get: vi.fn(async () => current),
@@ -124,18 +150,22 @@ async function mount(file: HostDocumentRecord) {
         _fileId: string,
         patch: (snapshot: BridgeHostSnapshot) => BridgeHostSnapshot
       ) => {
+        if (controls.failNextUpdate) {
+          controls.failNextUpdate = false
+          throw new Error('injected save failure')
+        }
         const next = patch(current.snapshot)
         current = { ...current, snapshot: next }
         return next
       }
     )
-  } as unknown as ReaderDataStore
+  }
   const ref = createRef<ReaderWebViewHandle>()
   const view = render(
     <NativePdfReader
       ref={ref}
       record={file}
-      store={store}
+      store={store as unknown as ReaderDataStore}
       entryUrl={`file:///${file.fileId}/index.html`}
       baseUrl={`file:///${file.fileId}/`}
       publicationUrl={`file:///${file.fileId}/publication.pdf`}
@@ -157,6 +187,7 @@ async function mount(file: HostDocumentRecord) {
   return {
     identity,
     ref,
+    store,
     snapshot: () => current.snapshot,
     close: async () => {
       await act(async () => {
@@ -165,6 +196,45 @@ async function mount(file: HostDocumentRecord) {
     },
     unmount: view.unmount
   }
+}
+
+async function writeHiddenPages(
+  opened: Awaited<ReturnType<typeof mount>>,
+  fileId: string,
+  hiddenPages: number[],
+  withHighlight = false
+) {
+  await act(async () => {
+    await opened.store.updateSnapshot(fileId, (snapshot) => {
+      const restored = restoreReaderSnapshot(snapshot.data, snapshot.progress)
+      return {
+        ...snapshot,
+        data: serializeReaderSnapshot({
+          ...restored,
+          data: {
+            ...restored.data,
+            hiddenPages,
+            ...(withHighlight
+              ? { ranges: [...(restored.data.ranges ?? []), highlight('web')] }
+              : {})
+          }
+        }),
+        revision: snapshot.revision + 1
+      }
+    })
+  })
+}
+
+async function confirmCrop() {
+  await act(async () => {
+    fireEvent.click(screen.getByText('裁切/隐藏页编辑'))
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByText('裁切四边 5%'))
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByText('确认'))
+  })
 }
 
 async function reopen(
@@ -492,4 +562,125 @@ describe('native annotation commit identity across remounts', () => {
     expect(current.data.pagePaintings).toEqual({})
     expect(opened.snapshot().revision).toBe(4)
   })
+})
+
+describe('native page edit handoff regressions', () => {
+  it('preserves Web hidden pages when native crop follows handoff', async () => {
+    const file = withSnapshotData(
+      record('handoff-hidden-then-crop', [highlight('saved')]),
+      {
+        readerData: {
+          hiddenPages: [],
+          edgeCrop: { pages: { 'page-2': { left: 0.2 } } }
+        }
+      }
+    )
+    const opened = await mount(file)
+    await writeHiddenPages(opened, file.fileId, [2])
+
+    await confirmCrop()
+    await act(async () => {})
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.hiddenPages).toEqual([2])
+    expect(current.data.edgeCrop?.all?.top).toBe(0.05)
+    expect(current.data.edgeCrop?.pages?.['page-2']?.left).toBe(0.2)
+    expect(current.data.ranges).toEqual([
+      expect.objectContaining({ id: 'saved' })
+    ])
+    expect(opened.snapshot().revision).toBe(2)
+  })
+
+  it('retry keeps immutable page edit baseline after editor reopen', async () => {
+    const controls: MountControls = { failNextUpdate: true }
+    const file = withSnapshotData(
+      record('retry-after-editor-reopen', [highlight('saved')]),
+      {
+        readerData: {
+          hiddenPages: [],
+          edgeCrop: { pages: { 'page-2': { left: 0.2 } } }
+        },
+        comments: [{ id: 'keep-comment' }]
+      }
+    )
+    const opened = await mount(file, controls)
+    await confirmCrop()
+    await screen.findByText(/injected save failure/)
+    await writeHiddenPages(opened, file.fileId, [2])
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('裁切/隐藏页编辑'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('取消'))
+    })
+    await act(async () => {
+      const retry = screen.getByText(/injected save failure.*重试/)
+      fireEvent.click(retry)
+      fireEvent.click(retry)
+    })
+    await act(async () => {})
+
+    const current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.hiddenPages).toEqual([2])
+    expect(current.data.edgeCrop?.all?.top).toBe(0.05)
+    expect(current.data.edgeCrop?.pages?.['page-2']?.left).toBe(0.2)
+    expect(current.data.ranges).toEqual([
+      expect.objectContaining({ id: 'saved' })
+    ])
+    expect(opened.store.updateSnapshot).toHaveBeenCalledTimes(3)
+    expect(opened.snapshot().revision).toBe(2)
+  })
+
+  it.each(['untouched', 'explicit-clear', 'crop-only-undo'] as const)(
+    'explicit hidden page clearing differs from untouched fields: %s',
+    async (scenario) => {
+      const base = record(`page-edit-${scenario}`, [])
+      const file =
+        scenario === 'explicit-clear'
+          ? withSnapshotData(base, { readerData: { hiddenPages: [2] } })
+          : base
+      const opened = await mount(file)
+      if (scenario === 'explicit-clear') {
+        await act(async () => {
+          fireEvent.click(screen.getByText('裁切/隐藏页编辑'))
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByText('取消选择'))
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByText('确认'))
+        })
+        await act(async () => {})
+        expect(
+          restoreReaderSnapshot(opened.snapshot().data).data.hiddenPages
+        ).toEqual([])
+        return
+      }
+
+      if (scenario === 'untouched') {
+        await writeHiddenPages(opened, file.fileId, [2])
+      }
+      await confirmCrop()
+      await act(async () => {})
+      if (scenario === 'crop-only-undo') {
+        await writeHiddenPages(opened, file.fileId, [2], true)
+        await act(async () => {
+          fireEvent.click(screen.getByText('撤销（5秒）'))
+        })
+        await act(async () => {})
+      }
+
+      const current = restoreReaderSnapshot(opened.snapshot().data)
+      expect(current.data.hiddenPages).toEqual([2])
+      expect(current.data.edgeCrop?.all?.top).toBe(
+        scenario === 'crop-only-undo' ? undefined : 0.05
+      )
+      if (scenario === 'crop-only-undo') {
+        expect(current.data.ranges).toEqual([
+          expect.objectContaining({ id: 'web' })
+        ])
+      }
+    }
+  )
 })

@@ -156,6 +156,7 @@ async function mountFile(fileId: string, activate = true) {
     startNativePdfSurface({
       ...activeIdentity!,
       publicationUrl: `file:///${fileId}.pdf`,
+      canEdit: true,
       progress: file.snapshot.progress,
       snapshot: file.snapshot.data
     })

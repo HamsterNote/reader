@@ -627,6 +627,56 @@ describe('ReaderDataStore failure recovery and per-file queues', () => {
     await blocked
     expect((await store.get(fileId))?.snapshot.revision).toBe(1)
   })
+
+  it('fences every snapshot write at execution after a queued lease expires', async () => {
+    const storage = new GatedStorage()
+    const { store } = await storeWithLegacyRecord(storage)
+    const previous = (await store.get(fileId))!.snapshot
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    storage.gate = { key: `${SNAPSHOT_KEY}${fileId}.pending`, wait: gate }
+    const blocked = store.saveSnapshot(fileId, {
+      data: null,
+      progress: null,
+      revision: 1
+    })
+    const fence = () => {
+      throw new Error('stale lease')
+    }
+    const patched = store.updateSnapshot(
+      fileId,
+      (snapshot) => ({ ...snapshot, revision: snapshot.revision + 1 }),
+      fence
+    )
+    const saved = store.saveSnapshot(
+      fileId,
+      { data: null, progress: null, revision: 2 },
+      fence
+    )
+    const rebased = store.saveRebasedSnapshot(
+      fileId,
+      previous,
+      { data: null, progress: null, revision: 2 },
+      fence
+    )
+    release()
+    await blocked
+    await expect(patched).rejects.toThrow('stale lease')
+    await expect(saved).rejects.toThrow('stale lease')
+    await expect(rebased).rejects.toThrow('stale lease')
+    await expect(
+      store.importLegacyJson(
+        fileId,
+        '{"version":4,"ranges":[],"rects":[],"paintings":{}}',
+        'notes.json',
+        1,
+        fence
+      )
+    ).rejects.toThrow('stale lease')
+    expect((await store.get(fileId))?.snapshot.revision).toBe(1)
+  })
 })
 
 describe('ReaderDataStore delete vs in-flight and stale writes', () => {

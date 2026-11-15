@@ -35,10 +35,18 @@ import type {
   HostDocumentRecord,
   ReaderDataStore
 } from '../../../src/host/readerDataStore'
+import type { PdfIdentity } from '../../../src/nativePdf/contracts'
 import {
   createReaderHostSession,
   type ReaderHostSession
 } from '../../../src/host/readerHostSession'
+
+export type ReaderWebViewHandoff = {
+  readonly identity: PdfIdentity
+  readonly canWrite: (identity: PdfIdentity) => boolean
+  readonly assertWriter: (identity: PdfIdentity) => void
+  readonly onReady: (identity: PdfIdentity) => void
+}
 
 type ReaderWebViewProps = {
   readonly record: HostDocumentRecord
@@ -46,6 +54,9 @@ type ReaderWebViewProps = {
   readonly entryUrl: string
   readonly baseUrl: string
   readonly publicationUrl: string
+  readonly sessionId?: string
+  readonly sourceToken?: string
+  readonly handoff?: ReaderWebViewHandoff
 }
 
 type HostState = 'loading' | 'connected' | 'error'
@@ -86,18 +97,33 @@ function buildBootstrapScript(sessionId: string, sourceToken: string): string {
 
 /** 关闭握手入口：宿主 UI 必须先 await close() 再卸载 WebView。 */
 export type ReaderWebViewHandle = {
-  readonly close: () => Promise<BridgeCloseResult>
+  readonly discardUnconfirmed?: () => Promise<BridgeCloseResult>
+  readonly close: (options?: {
+    readonly handoff?: boolean
+    readonly retry?: boolean
+  }) => Promise<BridgeCloseResult>
 }
 
 export const ReaderWebView = forwardRef<
   ReaderWebViewHandle,
   ReaderWebViewProps
 >(function ReaderWebView(
-  { record, store, entryUrl, baseUrl, publicationUrl },
+  {
+    record,
+    store,
+    entryUrl,
+    baseUrl,
+    publicationUrl,
+    sessionId: providedSessionId,
+    sourceToken: providedSourceToken,
+    handoff
+  },
   ref
 ) {
   const webRef = useRef<WebView>(null)
   const sessionRef = useRef<ReaderHostSession | null>(null)
+  const handoffRef = useRef(handoff)
+  handoffRef.current = handoff
   const openedRef = useRef(false)
   const [generation, setGeneration] = useState(0)
   const [state, setState] = useState<HostState>('loading')
@@ -105,17 +131,23 @@ export const ReaderWebView = forwardRef<
   // Native failures remain visible despite late bridge/load/timeout events.
   // Only an explicit reload clears the diagnostic; never auto-reload edits.
   const [hostError, setHostError] = useState<string | null>(null)
-  const sessionId = useMemo(() => randomUUID(), [])
-  const sourceToken = useMemo(() => randomUUID(), [])
+  const generatedSessionId = useMemo(() => randomUUID(), [])
+  const generatedSourceToken = useMemo(() => randomUUID(), [])
+  const sessionId = providedSessionId ?? generatedSessionId
+  const sourceToken = providedSourceToken ?? generatedSourceToken
 
   // 关闭握手入口：UI 先 await close()，成功后才允许卸载 WebView。
   useImperativeHandle(
     ref,
     () => ({
-      close: async (): Promise<BridgeCloseResult> => {
+      discardUnconfirmed: async () => {
+        await sessionRef.current?.discardUnconfirmed()
+        return { status: 'closed' }
+      },
+      close: async (options): Promise<BridgeCloseResult> => {
         const session = sessionRef.current
         if (session === null) return { status: 'closed' }
-        return session.close()
+        return session.close(undefined, { handoff: options?.handoff === true })
       }
     }),
     []
@@ -155,10 +187,15 @@ export const ReaderWebView = forwardRef<
         fileUrl: publicationUrl
       },
       confirmedSnapshot: record.snapshot,
-      persist: (snapshot, previous) =>
-        previous
-          ? store.saveRebasedSnapshot(record.fileId, previous, snapshot)
-          : store.saveSnapshot(record.fileId, snapshot),
+      persist: (snapshot, previous) => {
+        const fence = () => {
+          const current = handoffRef.current
+          if (current) current.assertWriter(current.identity)
+        }
+        return previous
+          ? store.saveRebasedSnapshot(record.fileId, previous, snapshot, fence)
+          : store.saveSnapshot(record.fileId, snapshot, fence)
+      },
       sendToWeb: (message) => {
         webRef.current?.postMessage(JSON.stringify(message))
       }
@@ -186,13 +223,24 @@ export const ReaderWebView = forwardRef<
   }, [generation])
 
   const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
-    const pending = sessionRef.current?.handleRawMessage(event.nativeEvent.data)
+    const raw = event.nativeEvent.data
+    let ready = false
+    try {
+      ready = (JSON.parse(raw) as { type?: unknown }).type === 'ready'
+    } catch {
+      ready = false
+    }
+    const pending = sessionRef.current?.handleRawMessage(raw)
     if (!pending) return
     const outcome = await pending
     if (outcome.accepted) {
       openedRef.current = true
       setState('connected')
       setStatusText('已连接')
+      if (ready) {
+        const current = handoffRef.current
+        if (current) current.onReady(current.identity)
+      }
     } else {
       setState('error')
       setStatusText(`拒绝消息：${outcome.rejection?.code ?? 'INVALID_MESSAGE'}`)

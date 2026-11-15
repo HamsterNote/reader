@@ -9,6 +9,8 @@ import {
   READER_BRIDGE_PROTOCOL_VERSION,
   type BridgeAckPayload,
   type BridgeCommandPayload,
+  type BridgeDrainStage,
+  type BridgeDrainStatus,
   type BridgeErrorPayload,
   type BridgeMessage,
   type BridgeMessageType,
@@ -48,7 +50,9 @@ export type WebBridgeOptions = {
    * 关闭冲刷前的输入静默：UI 必须冻结输入，并等正在进行的手势完成提交
    * （提交产生的 change 会先入队）。未提供时视为已静默。
    */
-  readonly onQuiesce?: () => Promise<void>
+  readonly onQuiesce?: (
+    report: (stage: BridgeDrainStage) => void
+  ) => Promise<void>
 }
 
 export type WebBridgeClient = {
@@ -119,10 +123,12 @@ export function createWebBridgeClient(
   let closed = false
   let draining = false
   let drainGeneration = 0
+  let quiescedWhileFrozen = false
 
   const setDraining = (value: boolean): void => {
     if (draining === value) return
     draining = value
+    if (!value) quiescedWhileFrozen = false
     options.onDrainingChange?.(value)
   }
   let requestCounter = 0
@@ -174,7 +180,10 @@ export function createWebBridgeClient(
    * 关闭前的输入静默等待：等 UI 冻结输入并结束（提交）当前手势。
    * 超时视为未静默，由调用方发 error 取消关闭，不猜测手势是否结束。
    */
-  const waitForQuiesce = (): Promise<boolean> => {
+  const waitForQuiesce = (
+    report: (stage: BridgeDrainStage) => void
+  ): Promise<boolean> => {
+    if (quiescedWhileFrozen) return Promise.resolve(true)
     const quiesce = options.onQuiesce
     if (quiesce === undefined) return Promise.resolve(true)
     return new Promise<boolean>((resolve) => {
@@ -190,7 +199,7 @@ export function createWebBridgeClient(
         () => finish(false),
         DEFAULT_FLUSH_TIMEOUT_MS
       )
-      quiesce().then(
+      quiesce(report).then(
         () => finish(true),
         () => finish(false)
       )
@@ -330,8 +339,26 @@ export function createWebBridgeClient(
           // 宿主准备关闭：先冻结输入并等当前手势提交（onQuiesce），再冲刷
           // 全部未确认写入；全部 ack 后回 ready，才允许宿主 dispose。
           const token = ++drainGeneration
+          const retry = draining
           setDraining(true)
-          waitForQuiesce().then((quiesced) => {
+          const report = (stage: BridgeDrainStage) => {
+            if (!command.drainStatus || closed || token !== drainGeneration)
+              return
+            post(
+              buildMessage('drain-status', {
+                flushRequestId: message.requestId,
+                stage,
+                inputFrozen: draining,
+                revision,
+                pending:
+                  (inFlight ? 1 : 0) +
+                  (pendingChange ? 1 : 0) +
+                  (pendingProgress ? 1 : 0)
+              } satisfies BridgeDrainStatus)
+            )
+          }
+          report('input-quiescence')
+          waitForQuiesce(report).then((quiesced) => {
             if (closed || token !== drainGeneration) return
             if (!quiesced) {
               post(
@@ -342,10 +369,26 @@ export function createWebBridgeClient(
               )
               return
             }
-            return flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS).then((saved) => {
+            quiescedWhileFrozen = true
+            report('host-ack')
+            const pending = flushPendingNow(DEFAULT_FLUSH_TIMEOUT_MS)
+            // A retry replays the same requestId now, rather than waiting for
+            // its unrelated 3s resend timer to beat the 2s flush barrier.
+            if (retry && inFlight) options.post(inFlight.raw)
+            return pending.then((saved) => {
               if (closed || token !== drainGeneration) return
               if (saved) {
-                post(buildMessage('ready', {}))
+                report('complete')
+                post(
+                  buildMessage(
+                    'ready',
+                    command.drainStatus
+                      ? {
+                          flushRequestId: message.requestId
+                        }
+                      : {}
+                  )
+                )
               } else {
                 post(
                   buildMessage('error', {

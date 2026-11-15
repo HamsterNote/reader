@@ -16,6 +16,7 @@ import {
   READER_BRIDGE_PROTOCOL_VERSION,
   type BridgeAckPayload,
   type BridgeCommandPayload,
+  type BridgeDrainStatus,
   type BridgeErrorCode,
   type BridgeMessage,
   type BridgeRestorePayload
@@ -54,7 +55,14 @@ export type BridgeFlushResult =
   | { readonly status: 'flushed' }
   | Extract<BridgeCloseResult, { status: 'unconfirmed' }>
 
+export type BridgeCloseBehavior = {
+  readonly freezeOnFailure?: boolean
+  readonly fastIfNeverWritable?: boolean
+}
+
 export type BridgeHostSession = {
+  /** Explicit user discard: seal input, finish accepted IO, preserve confirmed snapshot. */
+  readonly discardUnconfirmed: () => Promise<void>
   readonly flush: (timeoutMs?: number) => Promise<BridgeFlushResult>
   /**
    * 处理一条来自 Web 层的原始消息，返回需要发回 Web 层的消息
@@ -76,7 +84,11 @@ export type BridgeHostSession = {
    * 关闭握手：请求 Web 冲刷未确认写入（command flush），等其确认与本地持久化
    * 队列都清空后才下发 dispose 并失效。超时/失败返回 unconfirmed 且会话保持可用。
    */
-  readonly close: (timeoutMs?: number) => Promise<BridgeCloseResult>
+  readonly close: (
+    timeoutMs?: number,
+    destroy?: boolean,
+    behavior?: BridgeCloseBehavior
+  ) => Promise<BridgeCloseResult>
   /** 结束会话；之后所有该会话消息按 STALE_SESSION 拒绝。 */
   readonly dispose: () => void
 }
@@ -116,10 +128,36 @@ export function createBridgeHostSession(
   let closePromise: Promise<BridgeCloseResult> | null = null
   let settleClose: ((result: BridgeCloseResult) => void) | null = null
   let closeTimer: ReturnType<typeof setTimeout> | null = null
+  let fastClosePromise: Promise<BridgeCloseResult> | null = null
+  let closeBehavior: BridgeCloseBehavior = {}
+  let accepting = true
+  let discarding = false
+  let inputFrozen = false
   // 已持久化的 requestId → ack payload，用于重复投递幂等应答。
   const persistedRequestIds = new Map<string, BridgeAckPayload>()
   let outboundCounter = 0
   let asyncQueue: Promise<unknown> = Promise.resolve()
+  let queuedMessages = 0
+  let flushRequestId: string | null = null
+  let drainStage = 'final-flush'
+  let webPending: number | null = null
+
+  const diagnoseDrain = (event: string): void => {
+    console.info('reader-bridge-drain', {
+      sessionId: options.sessionId,
+      flushRequestId,
+      event,
+      barrier: drainStage,
+      webPending,
+      queuedMessages,
+      revision: snapshot.revision,
+      webDrained,
+      inputFrozen
+    })
+  }
+
+  const drainReason = (reason: string): string =>
+    `${reason} [barrier=${drainStage}; webPending=${webPending ?? 'unknown'}; hostQueue=${queuedMessages}; revision=${snapshot.revision}]`
 
   const buildOutbound = <TPayload>(
     type: BridgeMessage['type'],
@@ -164,22 +202,37 @@ export function createBridgeHostSession(
     }
   }
 
-  /** 关闭失败：撤回 flush 请求，让 Web 继续编辑，会话保持可用。 */
+  /** 普通关闭失败会恢复编辑；交接失败保持输入冻结，只允许继续排空。 */
   const abortClose = (reason: string): void => {
     if (!closing) return
+    diagnoseDrain('unconfirmed')
+    const detailedReason = drainReason(reason)
     closing = false
     drainGeneration++
     webDrained = false
+    inputFrozen = closeBehavior.freezeOnFailure === true
     clearCloseTimer()
-    options.send?.(
-      buildOutbound<BridgeCommandPayload>('command', {
-        name: BRIDGE_COMMAND_RESUME
-      })
-    )
+    if (!inputFrozen) {
+      options.send?.(
+        buildOutbound<BridgeCommandPayload>('command', {
+          name: BRIDGE_COMMAND_RESUME
+        })
+      )
+    }
     const resolve = settleClose
     settleClose = null
     closePromise = null
-    resolve?.({ status: 'unconfirmed', reason })
+    resolve?.({ status: 'unconfirmed', reason: detailedReason })
+  }
+
+  const waitForStableQueue = async (): Promise<void> => {
+    let observed: Promise<unknown> = asyncQueue
+    let stable = false
+    while (!stable) {
+      await observed
+      stable = observed === asyncQueue
+      observed = asyncQueue
+    }
   }
 
   /**
@@ -188,18 +241,16 @@ export function createBridgeHostSession(
    */
   const completeClose = async (): Promise<void> => {
     if (!closing || !webDrained) return
+    drainStage = 'host-queue'
+    diagnoseDrain('waiting')
     const generation = drainGeneration
     // ready 之后仍可能有排在后面的 change（同批投递）：队列直到稳定才 dispose。
-    let observed: Promise<unknown> = asyncQueue
-    let stable = false
-    while (!stable) {
-      await observed
-      stable = observed === asyncQueue
-      observed = asyncQueue
-    }
+    await waitForStableQueue()
     if (!closing || generation !== drainGeneration) return
+    diagnoseDrain('confirmed')
     closing = false
     disposed = disposeAfterDrain
+    inputFrozen = disposeAfterDrain
     clearCloseTimer()
     options.send?.(
       disposeAfterDrain
@@ -252,6 +303,18 @@ export function createBridgeHostSession(
       return {
         kind: 'messages',
         messages: [buildOutbound('ack', existingAck)]
+      }
+    }
+    if (inputFrozen && !closing && !discarding) {
+      return {
+        kind: 'messages',
+        messages: [
+          buildError(
+            'STALE_SESSION',
+            'handoff not-ready：旧会话仅允许重试未确认写入',
+            message.requestId
+          )
+        ]
       }
     }
     if (parsedPayload.revision !== snapshot.revision + 1) {
@@ -330,7 +393,8 @@ export function createBridgeHostSession(
   }
 
   const validateEnvelope = (
-    raw: unknown
+    raw: unknown,
+    acceptedBeforeSeal = false
   ):
     | { readonly message: BridgeMessage }
     | { readonly messages: BridgeMessage[] } => {
@@ -351,7 +415,11 @@ export function createBridgeHostSession(
         ]
       }
     }
-    if (disposed || message.sessionId !== options.sessionId) {
+    if (
+      disposed ||
+      (!accepting && !acceptedBeforeSeal) ||
+      message.sessionId !== options.sessionId
+    ) {
       return {
         messages: [buildError('STALE_SESSION', '会话已失效', message.requestId)]
       }
@@ -359,13 +427,55 @@ export function createBridgeHostSession(
     return { message }
   }
 
+  const handleDrainStatus = (message: BridgeMessage): void => {
+    const status = message.payload as Partial<BridgeDrainStatus> | null
+    if (!closing || !status || status.flushRequestId !== flushRequestId) return
+    if (
+      ![
+        'input-quiescence',
+        'document-work',
+        'stable-progress',
+        'host-ack',
+        'complete'
+      ].includes(status.stage ?? '')
+    )
+      return
+    drainStage = status.stage!
+    webPending = typeof status.pending === 'number' ? status.pending : null
+    inputFrozen = status.inputFrozen === true
+    diagnoseDrain('checkpoint')
+    // Connection and an empty host queue alone prove nothing about Web
+    // gestures/progress. Only this attempt's fully ACKed frozen checkpoint
+    // can replace a lost legacy ready notification.
+    if (
+      status.stage === 'complete' &&
+      status.inputFrozen === true &&
+      status.pending === 0 &&
+      status.revision === snapshot.revision
+    ) {
+      webDrained = true
+      void completeClose()
+    }
+  }
+
   const handleValidatedMessage = (
     message: BridgeMessage
   ): BridgeMessage[] | RevisionedWriteResult => {
     switch (message.type) {
+      case 'drain-status':
+        handleDrainStatus(message)
+        return []
       // WebView 首次启动或异常重载都会发 ready；宿主重新下发最后确认快照，
       // restore 完成前 Web 层不得发送 change/progress。
       case 'ready': {
+        const checkpoint = message.payload as {
+          flushRequestId?: unknown
+        } | null
+        if (
+          checkpoint?.flushRequestId !== undefined &&
+          (!closing || checkpoint.flushRequestId !== flushRequestId)
+        )
+          return []
         // 关闭握手中 Web 用 ready 表示“未确认写入已冲干净”，不回 restore。
         if (closing) {
           webDrained = true
@@ -428,13 +538,19 @@ export function createBridgeHostSession(
   }
 
   const handleWebMessageAsync = (raw: unknown): Promise<BridgeMessage[]> => {
+    const acceptedBeforeSeal = accepting
+    queuedMessages++
     const run = async () => {
-      const validated = validateEnvelope(raw)
-      if ('messages' in validated) return validated.messages
-      const result = handleValidatedMessage(validated.message)
-      if (Array.isArray(result)) return result
-      if (result.kind === 'messages') return result.messages
-      return commitPersistedWriteAsync(result)
+      try {
+        const validated = validateEnvelope(raw, acceptedBeforeSeal)
+        if ('messages' in validated) return validated.messages
+        const result = handleValidatedMessage(validated.message)
+        if (Array.isArray(result)) return result
+        if (result.kind === 'messages') return result.messages
+        return await commitPersistedWriteAsync(result)
+      } finally {
+        queuedMessages--
+      }
     }
     const result = asyncQueue.then(run, run)
     // 队列失败不应阻断后续消息；每条消息自身已捕获持久化错误。
@@ -444,15 +560,44 @@ export function createBridgeHostSession(
 
   const close = (
     timeoutMs = 5000,
-    destroy = true
+    destroy = true,
+    behavior: BridgeCloseBehavior = {}
   ): Promise<BridgeCloseResult> => {
     if (disposed) return Promise.resolve({ status: 'closed' })
+    if (fastClosePromise !== null) return fastClosePromise
     if (closePromise !== null) {
-      if (destroy && !disposeAfterDrain)
+      if (destroy && !disposeAfterDrain) {
         return closePromise.then((result) =>
-          result.status === 'closed' ? close(timeoutMs) : result
+          result.status === 'closed'
+            ? close(timeoutMs, destroy, behavior)
+            : result
         )
+      }
       return closePromise
+    }
+    if (
+      behavior.fastIfNeverWritable &&
+      !restoreSent &&
+      persistedRequestIds.size === 0
+    ) {
+      accepting = false
+      const pending = (async () => {
+        await waitForStableQueue()
+        if (!restoreSent && persistedRequestIds.size === 0) {
+          disposed = true
+          inputFrozen = true
+          options.send?.(buildOutbound('dispose', {}))
+          return { status: 'closed' as const }
+        }
+        accepting = true
+        fastClosePromise = null
+        return close(timeoutMs, destroy, {
+          ...behavior,
+          fastIfNeverWritable: false
+        })
+      })()
+      fastClosePromise = pending
+      return pending
     }
     if (options.send === undefined) {
       return Promise.resolve({
@@ -460,26 +605,43 @@ export function createBridgeHostSession(
         reason: '宿主未提供关闭握手通道'
       })
     }
+    closeBehavior = behavior
     drainGeneration++
     closing = true
     disposeAfterDrain = destroy
     webDrained = false
+    webPending = null
+    drainStage = 'final-flush'
     const promise = new Promise<BridgeCloseResult>((resolve) => {
       settleClose = resolve
     })
     closePromise = promise
     closeTimer = setTimeout(() => {
-      abortClose('关闭超时：仍有未确认写入未落盘')
+      abortClose('关闭超时：保存屏障尚未确认')
     }, timeoutMs)
-    options.send(
-      buildOutbound<BridgeCommandPayload>('command', {
-        name: BRIDGE_COMMAND_FLUSH
-      })
-    )
+    const command = buildOutbound<BridgeCommandPayload>('command', {
+      name: BRIDGE_COMMAND_FLUSH,
+      drainStatus: true
+    })
+    flushRequestId = command.requestId
+    diagnoseDrain('requested')
+    options.send(command)
     return promise
   }
 
   return {
+    discardUnconfirmed: async () => {
+      accepting = false
+      discarding = true
+      if (closing) abortClose('用户选择放弃未确认内容')
+      inputFrozen = true
+      // Accepted writes retain their original ordering. Never restore an old
+      // record over the successful disk result, even on explicit discard.
+      await waitForStableQueue()
+      disposed = true
+      options.send?.(buildOutbound('dispose', {}))
+      diagnoseDrain('discarded-unconfirmed')
+    },
     handleWebMessage,
     handleWebMessageAsync,
     getSnapshot: () => snapshot,

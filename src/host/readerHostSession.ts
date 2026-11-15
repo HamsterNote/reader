@@ -40,6 +40,7 @@ export type ReaderHostSessionOptions = {
 }
 
 export type ReaderHostSession = {
+  readonly discardUnconfirmed: () => Promise<void>
   readonly flush: (timeoutMs?: number) => Promise<BridgeFlushResult>
   /** 处理 WebView postMessage 原始字符串；返回是否通过来源/结构校验。 */
   readonly handleRawMessage: (raw: unknown) => Promise<{
@@ -53,7 +54,10 @@ export type ReaderHostSession = {
    * 关闭握手：请求 Web 冲刷未确认写入，等其确认与本地落盘完成后下发 dispose。
    * 返回 `unconfirmed` 时会话仍可用，调用方必须阻止关闭并提示用户重试。
    */
-  readonly close: (timeoutMs?: number) => Promise<BridgeCloseResult>
+  readonly close: (
+    timeoutMs?: number,
+    options?: { readonly handoff?: boolean }
+  ) => Promise<BridgeCloseResult>
 }
 
 export function createReaderHostSession(
@@ -99,6 +103,10 @@ export function createReaderHostSession(
   }
 
   return {
+    discardUnconfirmed: async () => {
+      disposed = true
+      await session.discardUnconfirmed()
+    },
     handleRawMessage: async (raw) => {
       if (disposed) {
         return {
@@ -123,17 +131,26 @@ export function createReaderHostSession(
       }
       // Web 第一次 ready（或重载后的 ready）之前先补发文档描述，
       // 随后状态机返回最后确认快照，顺序固定为 open → restore。
-      if (transport.message.type === 'ready' && !closing) sendOpen()
+      if (
+        transport.message.type === 'ready' &&
+        !closing &&
+        !(transport.message.payload as { flushRequestId?: unknown } | null)
+          ?.flushRequestId
+      )
+        sendOpen()
       const messages = await session.handleWebMessageAsync(transport.message)
       sendAll(messages)
       return { accepted: true }
     },
     getSnapshot: () => session.getSnapshot(),
     flush: (timeoutMs) => session.flush(timeoutMs),
-    close: async (timeoutMs) => {
+    close: async (timeoutMs, closeOptions) => {
       if (disposed) return { status: 'closed' }
       closing = true
-      const result = await session.close(timeoutMs)
+      const result = await session.close(timeoutMs, true, {
+        freezeOnFailure: closeOptions?.handoff === true,
+        fastIfNeverWritable: closeOptions?.handoff === true
+      })
       if (result.status === 'closed') {
         disposed = true
       } else {

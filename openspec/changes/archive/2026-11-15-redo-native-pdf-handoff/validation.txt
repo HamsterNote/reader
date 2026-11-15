@@ -1,0 +1,13 @@
+$ openspec validate --strict --all --no-interactive
+✓ change/add-ios-native-pdf-reading
+✓ spec/epub-web-reader
+✓ spec/expo-reader-host
+✓ spec/pdfjs-web-reader
+  ℹ [INFO] requirements[5]: Requirement text is very long (>500 characters). Consider breaking it down.
+  ℹ [INFO] requirements[9]: Requirement text is very long (>500 characters). Consider breaking it down.
+✓ spec/reader-data-compatibility
+✓ spec/reader-text-selection-interaction
+  ℹ [INFO] requirements[4]: Requirement text is very long (>500 characters). Consider breaking it down.
+Totals: 6 passed, 0 failed (6 items)
+
+exit=0
