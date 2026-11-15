@@ -193,7 +193,7 @@ async function checkGeometryCase(
   const samples = []
   for (const [name, point] of [
     ['lower-half', { x: viewport.width / 2, y: viewport.height * 0.65 }],
-    ...[115, 114, 113, 114, 115].map((dy) => [
+    ...[191, 190, 189, 190, 191].map((dy) => [
       `T+${dy}`,
       { x: viewport.width / 2, y: viewport.top + dy }
     ]),
@@ -213,27 +213,27 @@ async function checkGeometryCase(
         ).padding
       }))
     assert.equal(measured.hidden, false, label)
-    assert.equal(measured.rect.width, 76, label)
-    assert.equal(measured.rect.height, 76, label)
+    assert.equal(measured.rect.width, 152, label)
+    assert.equal(measured.rect.height, 152, label)
     assert.equal(measured.transform, 'none', label)
-    const expected = point.y >= viewport.top + 114 ? 'above' : 'below'
+    const expected = point.y >= viewport.top + 190 ? 'above' : 'below'
     assert.equal(measured.placement, expected, `${label}/${name}`)
     assert(measured.rect.top >= viewport.top - 1, label)
     assert(measured.rect.bottom <= viewport.height - viewport.bottom + 1, label)
     assert(
       Math.abs(
         measured.rect.left -
-          Math.min(Math.max(point.x - 38, 0), viewport.width - 76)
+          Math.min(Math.max(point.x - 76, 0), viewport.width - 152)
       ) <= 1,
       label
     )
     const distance = Math.hypot(
-      measured.rect.x + 38 - point.x,
-      measured.rect.y + 38 - point.y
+      measured.rect.x + 76 - point.x,
+      measured.rect.y + 76 - point.y
     )
-    const gap = Math.abs(measured.rect.y + 38 - point.y) - 38
+    const gap = Math.abs(measured.rect.y + 76 - point.y) - 76
     if (!name.endsWith('edge')) {
-      assert(Math.abs(distance - 76) <= 2, label)
+      assert(Math.abs(distance - 114) <= 2, label)
       assert(Math.abs(gap - 38) <= 1, label)
     }
     samples.push({ name, point, ...measured, distance, gap })

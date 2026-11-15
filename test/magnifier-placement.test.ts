@@ -8,15 +8,15 @@ it.each([
   [375, 667, 20, 34],
   [390, 844, 47, 34]
 ])(
-  'flips at exactly T+114 in %sx%s, including recovery',
+  'flips at exactly T+190 in %sx%s, including recovery',
   (width, height, top, bottom) => {
     const root = new DOMRect(0, top, width, height - top - bottom)
     for (const [dy, placement] of [
-      [115, 'above'],
-      [114, 'above'],
-      [113, 'below'],
-      [114, 'above'],
-      [115, 'above']
+      [191, 'above'],
+      [190, 'above'],
+      [189, 'below'],
+      [190, 'above'],
+      [191, 'above']
     ] as const) {
       const y = top + dy
       const p = resolveMagnifierPosition(
@@ -25,8 +25,8 @@ it.each([
       )
       expect(p.placement).toBe(placement)
       expect(p.top).toBeGreaterThanOrEqual(0)
-      expect(p.top + 76).toBeLessThanOrEqual(root.height)
-      expect(Math.abs(p.top + top + 38 - y)).toBe(76)
+      expect(p.top + 152).toBeLessThanOrEqual(root.height)
+      expect(Math.abs(p.top + top + 76 - y)).toBe(114)
     }
     for (const y of [height / 2, height - bottom]) {
       const p = resolveMagnifierPosition(
@@ -34,7 +34,7 @@ it.each([
         root
       )
       expect(p.placement).toBe('above')
-      expect(y - (p.top + top + 76)).toBe(38)
+      expect(y - (p.top + top + 152)).toBe(38)
     }
   }
 )
@@ -49,10 +49,10 @@ it('clamps only the display and centres each undersized axis', () => {
       { clientX: 1000, clientY: 50 },
       new DOMRect(10, 20, 400, 600)
     ).left
-  ).toBe(324)
+  ).toBe(248)
   expect(resolveMagnifierPosition(point, new DOMRect(10, 20, 50, 60))).toEqual({
-    left: -13,
-    top: -8,
+    left: -51,
+    top: -46,
     placement: 'below'
   })
   expect(point).toEqual({ clientX: -100, clientY: 50 })

@@ -122,6 +122,12 @@ export type PdfViewerError = {
   readonly message: string
 }
 
+type AnchorNavigationOptions = {
+  preserveOnFailure?: boolean
+  waitForPage?: boolean
+  publishProgress?: boolean
+}
+
 export type PdfDocumentViewerProps = PdfOcrOptions & {
   readonly source: PdfDocumentSource | null
   readonly readingInsets?: { top: number; bottom: number; horizontal: number }
@@ -530,7 +536,12 @@ export const PdfDocumentViewer = forwardRef<
     }
     element.style.minWidth = `${widest}px`
   }, [])
-  const restoredPosition = useRef<ReaderBookmark | null>(null)
+  // Both restore and user navigation retain an anchor for late PDF.js layout
+  // corrections. Only restoration suppresses progress publication.
+  const restoredPosition = useRef<{
+    anchor: ReaderBookmark
+    publishProgress: boolean
+  } | null>(null)
   const lastStablePosition = useRef<ReaderBookmark | null>(null)
   const pendingAnchor = useRef<{
     anchor: ReaderBookmark
@@ -576,88 +587,10 @@ export const PdfDocumentViewer = forwardRef<
       callbacksRef.current.onPageChange?.(pageNumber)
     }
   })
-  const scrollToCroppedPage = useCallback(
-    (pageNumber: number) => {
-      cancelRestoreWait()
-      cancelLayoutRestore()
-      restoredPosition.current = null
-      restoredTextPosition.current = null
-      pendingAnchor.current?.fail(
-        new DOMException('PDF navigation superseded', 'AbortError')
-      )
-      pendingAnchor.current = null
-      pendingPageRef.current = null
-      const viewer = viewerRef.current
-      if (!viewer) return
-      if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1))) {
-        pendingPageRef.current = { pageNumber }
-        return
-      }
-      if (
-        !isPdfLayoutReady(
-          containerRef.current,
-          viewer.getPageView(pageNumber - 1)?.div
-        )
-      ) {
-        const container = containerRef.current
-        if (!container) {
-          progressOptions.current.onError?.({
-            kind: 'unknown',
-            message: 'PDF 翻页容器尚未挂载，请重试'
-          })
-          return
-        }
-        const document = documentRef.current,
-          source = progressOptions.current.source
-        let stopLayout = () => {}
-        const finish = () => {
-          stopLayout()
-          clearTimeout(timer)
-          if (pendingAnchor.current === pending) pendingAnchor.current = null
-        }
-        const pending = {
-          anchor: { pageNumber, verticalPercentage: 0 },
-          awaitingLayout: true,
-          done: finish,
-          fail: finish
-        }
-        const isCurrent = () =>
-          pendingAnchor.current === pending &&
-          viewerRef.current === viewer &&
-          documentRef.current === document &&
-          progressOptions.current.source === source &&
-          containerRef.current === container &&
-          visiblePagesRef.current.includes(pageNumber)
-        pendingAnchor.current = pending
-        const timer = setTimeout(() => {
-          const current = isCurrent()
-          finish()
-          if (current)
-            progressOptions.current.onError?.({
-              kind: 'unknown',
-              message: 'PDF 翻页布局就绪超时（10 秒），请重试'
-            })
-        }, 10000)
-        stopLayout = observePdfLayout(
-          container,
-          () => viewer.getPageView(pageNumber - 1)?.div,
-          () => {
-            if (!isCurrent()) {
-              finish()
-              return
-            }
-            if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1)))
-              return
-            finish()
-            viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: observed attached positive layout
-          }
-        )
-        return
-      }
-      viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
-    },
-    [cancelLayoutRestore, cancelRestoreWait]
-  )
+  const navigatePageRef = useRef<(pageNumber: number) => void>(() => {})
+  const scrollToCroppedPage = useCallback((pageNumber: number) => {
+    navigatePageRef.current(pageNumber)
+  }, [])
   // Layout captures at text-item granularity. Retain a restored Text character
   // while the viewport stays at that exact position, including a quick round trip.
   const restoredTextPosition = useRef<{
@@ -1089,8 +1022,9 @@ export const PdfDocumentViewer = forwardRef<
     }
     const handleScaleChanging = (event: { scale: number }) => {
       applyPageCrop()
-      if (!isRestoringLayout())
-        restoredPosition.current ??= lastStablePosition.current
+      const stable = lastStablePosition.current
+      if (!isRestoringLayout() && stable)
+        restoredPosition.current ??= { anchor: stable, publishProgress: false }
       callbacksRef.current.onScaleChange?.(event.scale)
       // viewport 变化后叠加层按持久化坐标重投影。
       bumpGeometry()
@@ -1152,7 +1086,9 @@ export const PdfDocumentViewer = forwardRef<
       bumpGeometry()
     }
     const handleRotation = () => {
-      restoredPosition.current ??= lastStablePosition.current
+      const stable = lastStablePosition.current
+      if (stable)
+        restoredPosition.current ??= { anchor: stable, publishProgress: false }
       bumpGeometry()
     }
     const resize = new ResizeObserver(() => {
@@ -1354,7 +1290,7 @@ export const PdfDocumentViewer = forwardRef<
     const visible = visiblePagesRef.current
     if (
       restoredPosition.current &&
-      !visible.includes(restoredPosition.current.pageNumber)
+      !visible.includes(restoredPosition.current.anchor.pageNumber)
     ) {
       restoredPosition.current = null
       restoredTextPosition.current = null
@@ -1388,7 +1324,7 @@ export const PdfDocumentViewer = forwardRef<
       restoredPosition.current
     )
       pendingAnchor.current = {
-        anchor: restoredPosition.current,
+        anchor: restoredPosition.current.anchor,
         done: () => undefined,
         fail: () => undefined
       }
@@ -1452,7 +1388,7 @@ export const PdfDocumentViewer = forwardRef<
       // Blank/scanned pages use the persisted ratio in the displayed crop box.
       // Keep main's close/rotation reprojection contract for those positions.
       cancelLayoutRestore()
-      restoredPosition.current = stable
+      restoredPosition.current = { anchor: stable, publishProgress: false }
       pendingAnchor.current = {
         anchor: stable,
         done: () => undefined,
@@ -1787,13 +1723,16 @@ export const PdfDocumentViewer = forwardRef<
    */
   const beginNavigation = (
     anchor: ReaderBookmark,
-    options: { preserveOnFailure?: boolean } | undefined,
+    options: AnchorNavigationOptions,
     originalDocument: typeof documentRef.current
   ): Promise<void> => {
     pendingAnchor.current?.fail(
       new DOMException('PDF navigation superseded', 'AbortError')
     )
-    restoredPosition.current = anchor
+    restoredPosition.current = {
+      anchor,
+      publishProgress: options.publishProgress ?? false
+    }
     restoredTextPosition.current = null
     const original = {
       top: containerRef.current?.scrollTop ?? 0,
@@ -1823,12 +1762,22 @@ export const PdfDocumentViewer = forwardRef<
       }, 10000)
       pendingAnchor.current = {
         anchor,
-        preserveOnFailure: options?.preserveOnFailure,
+        preserveOnFailure: options.preserveOnFailure,
         awaitingLayout: true,
         done: () => {
           stopLayout()
           clearTimeout(timeout)
           resolve()
+          // Cached pages may emit no text/render/scroll event after alignment.
+          // Publish only a completed user navigation, never cleanup/supersession.
+          if (
+            options.publishProgress &&
+            restoredPosition.current?.anchor === anchor &&
+            !pendingAnchor.current
+          )
+            progressOptions.current.onReadingPositionChange?.(
+              captureReadingPosition()
+            )
         },
         fail: (error) => {
           stopLayout()
@@ -1892,8 +1841,7 @@ export const PdfDocumentViewer = forwardRef<
 
   const navigateToAnchor = (
     stored: ReaderBookmark,
-    options: { preserveOnFailure?: boolean } | undefined,
-    waitForPage: boolean
+    options: AnchorNavigationOptions
   ): Promise<void> => {
     cancelLayoutRestore()
     cancelRestoreWait()
@@ -1915,11 +1863,12 @@ export const PdfDocumentViewer = forwardRef<
         !!viewer.getPageView(anchor.pageNumber - 1)
       )
     }
-    if (!waitForPage) {
+    if (!options.waitForPage) {
       if (!targetReady())
         return Promise.reject(new Error('目标页面不可用，原位置已保留'))
       return beginNavigation(anchor, options, originalDocument)
     }
+    if (targetReady()) return beginNavigation(anchor, options, originalDocument)
     // A deleted page never becomes activatable; fail fast so the restore
     // fallback can land on the nearest existing page.
     const initialViewer = viewerRef.current
@@ -1957,12 +1906,32 @@ export const PdfDocumentViewer = forwardRef<
   const scrollToAnchor = (
     stored: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
-  ): Promise<void> => navigateToAnchor(stored, options, false)
+  ): Promise<void> =>
+    navigateToAnchor(stored, { ...options, publishProgress: true })
 
   const scrollToAnchorForRestore = (
     stored: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
-  ): Promise<void> => navigateToAnchor(stored, options, true)
+  ): Promise<void> =>
+    navigateToAnchor(stored, { ...options, waitForPage: true })
+
+  navigatePageRef.current = (pageNumber) => {
+    pendingPageRef.current = null
+    pendingAnchor.current?.fail(
+      new DOMException('PDF navigation superseded', 'AbortError')
+    )
+    pendingAnchor.current = null
+    navigateToAnchor(
+      { pageNumber, verticalPercentage: 0 },
+      { waitForPage: true, publishProgress: true }
+    ).catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'AbortError') return
+      progressOptions.current.onError?.({
+        kind: 'unknown',
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }
 
   useEffect(() => {
     const eventBus = eventBusRef.current
@@ -1973,12 +1942,13 @@ export const PdfDocumentViewer = forwardRef<
       // Keep the restored source position until the first reader interaction.
       if (!pendingAnchor.current && restoredPosition.current)
         pendingAnchor.current = {
-          anchor: restoredPosition.current,
+          anchor: restoredPosition.current.anchor,
           done: () => undefined,
           fail: () => undefined
         }
       restoreAnchorRef.current()
-      if (restoredPosition.current) return
+      if (restoredPosition.current && !restoredPosition.current.publishProgress)
+        return
       onTextAnchorChange?.(captureTextAnchor())
       progressOptions.current.onReadingPositionChange?.(
         captureReadingPosition()
@@ -2033,8 +2003,6 @@ export const PdfDocumentViewer = forwardRef<
         if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return
         restoredPosition.current = null
         restoredTextPosition.current = null
-        pendingAnchor.current?.done()
-        pendingAnchor.current = null
         scrollToCroppedPage(pageNumber)
       },
       setScale: (nextScale) => {

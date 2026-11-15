@@ -60,8 +60,8 @@ PDF 预览 / EPUB / PDF 纯文字 MUST 共用本规格的同一份交互描述�
 - **THEN** 依次为上方、下方、上方；靠近底部但上方可放下时仍在上方，翻转前后实际选中的文字不因镜片位置改变
 
 #### Scenario: Predict the safe area flip boundary in both viewports
-- **WHEN** 三面分别在 375×667（模拟 safe area 上 20、下 34 CSS px）及 390×844（模拟上 47、下 34 CSS px）视口内拖动，阅读器覆盖视口，触点横向居中，依次经过安全上边界 T 加 115、114、113 CSS px 并返回
-- **THEN** 依次显示上方、上方、下方，再按相同边界恢复上方；理论切换边界为触点 y = T + 76 + 38，实测误差不超过 1 CSS px；镜片圆形外框不得越过状态栏或刘海占据的安全上边界
+- **WHEN** 三面分别在 375×667（模拟 safe area 上 20、下 34 CSS px）及 390×844（模拟上 47、下 34 CSS px）视口内拖动，阅读器覆盖视口，触点横向居中，依次经过安全上边界 T 加 191、190、189 CSS px 并返回
+- **THEN** 依次显示上方、上方、下方，再按相同边界恢复上方；理论切换边界为触点 y = T + 114 + 76，实测误差不超过 1 CSS px；镜片圆形外框不得越过状态栏或刘海占据的安全上边界
 
 #### Scenario: Recompute after viewport and container changes
 - **WHEN** 阅读器非零偏移、视口缩小或横竖屏变化，或宿主已把阅读器下移到安全区内，用户继续触摸拖动
@@ -101,13 +101,13 @@ PDF 预览 / EPUB / PDF 纯文字 MUST 共用本规格的同一份交互描述�
 
 ### Requirement: Shared text magnifier dimensions and magnification
 
-PDF 预览 / EPUB / PDF 纯文字 MUST 使用同一组共享参数作为文字镜片半径、直径、中心距与放大系数的唯一来源，纯文字面 MUST NOT 保留独立的一份数值。镜片圆形外框半径 SHALL 为 38 CSS px（允许实测 ±1），直径为 76 CSS px；无边缘夹取时镜心至触点距离 SHALL 为 76 CSS px（允许实测 ±2）。三面正文相对于各自当前屏幕正文的放大系数 SHALL 同为 2 倍；内容缩放和 DPR MUST NOT 改变镜片外框的 CSS 尺寸。半径 1cm、中心距 2cm SHALL 采用 1cm ≈ 38 CSS px 的产品换算，不要求设备物理厘米标定。
+PDF 预览 / EPUB / PDF 纯文字 MUST 使用同一组共享参数作为文字镜片半径、直径、中心距与放大系数的唯一来源，纯文字面 MUST NOT 保留独立的一份数值。镜片圆形外框半径 SHALL 为 76 CSS px（允许实测 ±1），直径为 152 CSS px；无边缘夹取时镜心至触点距离 SHALL 为 114 CSS px（允许实测 ±2）。三面正文相对于各自当前屏幕正文的放大系数 SHALL 同为 2 倍；内容缩放和 DPR MUST NOT 改变镜片外框的 CSS 尺寸。半径 2cm、中心距 3cm SHALL 采用 1cm ≈ 38 CSS px 的产品换算，不要求设备物理厘米标定。
 
 无边缘夹取时镜片靠触点一侧的外框至触点 SHALL 留有约 38 CSS px 可见间隙，不遮住触点。外框尺寸包含边框而不包含阴影；各面 MUST NOT 通过额外缩放、边框外扩或专属平移改变上述测量结果。文字取景及插入竖线 SHALL 使用同一尺寸和放大系数，保持字符间隙与竖线对齐；文字手柄以外的矩形快照工具不适用该尺寸变更。
 
 #### Scenario: Measure all three surfaces using one standard
 - **WHEN** 在两个指定视口、DPR 1/2/3、PDF 内容缩放 50%/100%/200% 下，分别对三面的草稿与已有高亮触摸拖动起止手柄，在无边缘夹取处测量最终圆形外框和触点
-- **THEN** 半径为 38±1 CSS px，镜心距触点为 76±2 CSS px，靠触点一侧间隙约 38 CSS px，三面同一标准；检索参数定义与消费链路可证明半径、中心距、倍率来自同一组共享来源，纯文字面没有独立参数副本
+- **THEN** 半径为 76±1 CSS px，镜心距触点为 114±2 CSS px，靠触点一侧间隙约 38 CSS px，三面同一标准；检索参数定义与消费链路可证明半径、中心距、倍率来自同一组共享来源，纯文字面没有独立参数副本
 
 #### Scenario: Compare actual text magnification and insertion alignment
 - **WHEN** 在各面显示已知屏幕字符宽度/行高的正文，将同一字符取入镜片并移动到下一字符间隙

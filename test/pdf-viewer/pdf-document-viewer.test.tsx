@@ -806,6 +806,166 @@ describe('PdfDocumentViewer 接线', () => {
     expect(ref.current!.captureTextAnchor()).toEqual(anchor)
   })
 
+  it('waits for nonzero layout, cancels a superseded seek and aligns the crop to the safe line', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer(
+      {
+        readingInsets: { top: 44, bottom: 34, horizontal: 0 },
+        edgeCrop: { all: { top: 0.1, bottom: 0, left: 0, right: 0 } },
+        onReadingPositionChange
+      },
+      ref
+    )
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const viewer = latestViewer()
+    const scroll = vi.spyOn(viewer, 'scrollPageIntoView')
+    const measured = container.getBoundingClientRect
+    container.getBoundingClientRect = () => new DOMRect()
+    onReadingPositionChange.mockClear()
+    vi.useFakeTimers()
+    try {
+      act(() => ref.current!.scrollToPage(1))
+      act(() => ref.current!.scrollToPage(2))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(scroll).not.toHaveBeenCalled()
+      container.getBoundingClientRect = measured
+      resizeObserverMock.trigger(container)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(viewer.currentPageNumber).toBe(2)
+      expect(
+        scroll.mock.calls.every(([request]) => request.pageNumber === 2)
+      ).toBe(true)
+      const page = viewer.getPageView(1)!.div.getBoundingClientRect()
+      expect(Math.abs(page.top + page.height * 0.1 - 44)).toBeLessThanOrEqual(1)
+      const published = onReadingPositionChange.mock.calls
+        .map(([position]) => position)
+        .filter((position) => position.status === 'ready')
+      expect(published.length).toBeGreaterThan(0)
+      expect(published.every(({ position }) => position.pageNumber === 2)).toBe(
+        true
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('publishes each cached page seek after alignment without waiting for text or scroll events', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    renderViewer(
+      {
+        readingInsets: { top: 44, bottom: 0, horizontal: 0 },
+        onReadingPositionChange
+      },
+      ref
+    )
+    await act(async () => {})
+    for (const pageNumber of [2, 1, 2, 1, 2]) {
+      onReadingPositionChange.mockClear()
+      act(() => ref.current!.scrollToPage(pageNumber))
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        // The mock's first page starts at scrollTop=0 and is boundary-clamped.
+        position: {
+          pageNumber,
+          verticalPercentage: pageNumber === 1 ? (44 / 300) * 100 : 0
+        }
+      })
+    }
+  })
+
+  it('keeps restore notifications suppressed while active seeks retain late layout correction', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer(
+      {
+        readingInsets: { top: 44, bottom: 0, horizontal: 0 },
+        onReadingPositionChange
+      },
+      ref
+    )
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const page = latestViewer().getPageView(1)!.div
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      await act(async () => {
+        await ref.current!.scrollToAnchorForRestore({
+          pageNumber: 2,
+          verticalPercentage: 0
+        })
+        fireEvent.scroll(container)
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(page.getBoundingClientRect().top).toBe(44)
+      expect(onReadingPositionChange).not.toHaveBeenCalled()
+
+      act(() => ref.current!.scrollToPage(2))
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        position: { pageNumber: 2, verticalPercentage: 0 }
+      })
+      // PDF.js may shift already-aligned page boxes after rendering.
+      const rect = page.getBoundingClientRect.bind(page)
+      page.getBoundingClientRect = () => {
+        const box = rect()
+        return new DOMRect(box.left, box.top + 30, box.width, box.height)
+      }
+      onReadingPositionChange.mockClear()
+      await act(async () => {
+        fireEvent.scroll(container)
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(page.getBoundingClientRect().top).toBe(44)
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        position: { pageNumber: 2, verticalPercentage: 0 }
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves scroll and reports a layout timeout without touching PDF.js', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const scroll = vi.spyOn(latestViewer(), 'scrollPageIntoView')
+    container.scrollTop = 80
+    container.getBoundingClientRect = () => new DOMRect()
+    vi.useFakeTimers()
+    try {
+      const result = ref
+        .current!.scrollToAnchorForRestore({
+          pageNumber: 2,
+          verticalPercentage: 0
+        })
+        .catch((error) => error)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
+      expect(await result).toMatchObject({ name: 'PdfLayoutNotReadyError' })
+      expect(container.scrollTop).toBe(80)
+      expect(scroll).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('times out when a character rectangle never becomes measurable', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     const view = renderViewer({}, ref)
@@ -1205,18 +1365,20 @@ describe('PdfDocumentViewer 接线', () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)
     await act(async () => {})
-    let pending!: Promise<void>
+    let pending!: Promise<unknown>
     act(() => {
-      pending = ref.current!.scrollToAnchor({
-        pageNumber: 1,
-        textId: 'page-1-item-0',
-        text: 'column',
-        offset: 5
-      })
+      pending = ref
+        .current!.scrollToAnchor({
+          pageNumber: 1,
+          textId: 'page-1-item-0',
+          text: 'column',
+          offset: 5
+        })
+        .catch((error) => error)
       ref.current!.scrollToPage(2)
     })
     await act(async () => {
-      await pending
+      expect(await pending).toMatchObject({ name: 'AbortError' })
     })
     expect(latestViewer().currentPageNumber).toBe(2)
     expect(ref.current!.captureTextAnchor()).toBeNull()

@@ -372,7 +372,7 @@ PDF Layout 与 PDF Text 的文字手柄及放大镜 MUST 遵循 `reader-text-sel
 
 ### Requirement: PDF Text magnifier insertion caret
 
-PDF Text 文字手柄拖动的镜片及插入竖线 MUST 遵循 `reader-text-selection-interaction`，与 PDF 预览 / EPUB 共用同一份尺寸、倍率、中心距、safe area 放置和仅触摸显示规则，MUST NOT 继续使用独立布局锚点、旧间距或纠偏命中协议覆盖共享规范。镜内 MUST 在当前有效字符间隙显示 2 CSS px 竖线，高度随放大后的文字行高变化，颜色及离散跳变遵循共享规范。镜内取景 SHALL 使用当前物理触点 clientX/clientY，经必要坐标换算后采样；镜片显示避让不得混入取景或真实文字命中。标记 MUST 经过与文字取景相同的缩放、偏移和裁剪换算，不得直接复用主视图的 fixed/absolute 坐标。放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
+PDF Text 文字手柄拖动的镜片及插入竖线 MUST 遵循 `reader-text-selection-interaction`，与 PDF 预览 / EPUB 共用半径 76、直径 152、中心距 114 CSS px、倍率 2 及 T+190 翻转阈值、safe area 放置和仅触摸显示规则，MUST NOT 继续使用独立布局锚点、旧间距或纠偏命中协议覆盖共享规范。镜内 MUST 在当前有效字符间隙显示 2 CSS px 竖线，高度随放大后的文字行高变化，颜色及离散跳变遵循共享规范。镜内取景 SHALL 使用当前物理触点 clientX/clientY，经必要坐标换算后采样；镜片显示避让不得混入取景或真实文字命中。标记 MUST 经过与文字取景相同的缩放、偏移和裁剪换算，不得直接复用主视图的 fixed/absolute 坐标。放大镜开关、pointercancel、失焦、模式/文档切换及卸载 MUST 清理标记和监听，且不得同时显示 selection 库的另一份放大镜。
 
 #### Scenario: Sample the physical pointer without moving the lens
 - **WHEN** 使用触摸从 PDF Text 起/止手柄的中心或热区边缘拖动，选择层同时转发其他坐标事件，或触点移至视口边缘
