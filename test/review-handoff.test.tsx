@@ -21,6 +21,7 @@ import { createDrainPair } from './helpers/bridge-drain'
 import { startNativePdfSurface } from '../webview/src/nativePdf'
 import { nativeCanonicalPageFromOcr } from '../src/nativePdf/ocr'
 import { ReaderScreen } from '../app/src/screens/ReaderScreen'
+import * as pdfRouting from '../src/nativePdf/routing'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
 import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
 import type {
@@ -433,6 +434,8 @@ function alertButton(text: string) {
 }
 
 beforeEach(() => {
+  // This suite exercises the retained manual Web -> native comparison path.
+  vi.spyOn(pdfRouting, 'usesNativePdfLayout').mockReturnValue(false)
   host.commands = []
   host.web = {} as WebViewProps
   host.outerProps = null
@@ -806,6 +809,7 @@ describe('ReaderScreen native handoff regressions', () => {
   })
 
   it('isolates stale writer callbacks when the file identity changes', async () => {
+    host.webClose.mockResolvedValue({ status: 'closed' })
     const first = makeRecord('file-a')
     const second = makeRecord('file-b')
     const firstFixture = createTransactionStore(first)

@@ -63,6 +63,7 @@ import {
   nativeProgressKey,
   readerDataFromNativeSnapshot,
   withNativeLayoutProgress,
+  withNativeRenderMode,
   withNativeOcrTexts
 } from '../../../src/nativePdf/hostProgress'
 import type { ReaderWebViewHandle } from './ReaderWebView'
@@ -113,6 +114,13 @@ function resolveNativeIdentity(
   generated: PdfIdentity
 ): PdfIdentity {
   return handoff?.identity ?? generated
+}
+
+function nativeAnnotationScope(
+  handoff: NativePdfHandoff | undefined,
+  store: ReaderDataStore
+) {
+  return handoff ? store : undefined
 }
 
 function nativeEditingReady(
@@ -251,7 +259,11 @@ function handleNativePdfControlMessage(
   } = context
   switch (m.type) {
     case 'web-ready':
-      console.info('reader-pdf-web-ready', { sessionId: identity.sessionId })
+      logNativePdfDiagnostic('reader-pdf-web-ready', {
+        ...identity,
+        role: 'canonical-popover-service',
+        renderer: 'pdfkit'
+      })
       canonicalDelivery.webReady(identity)
       context.syncWebEditing()
       return true
@@ -531,12 +543,14 @@ type Props = {
   publicationUrl: string
   baseUrl: string
   handoff?: NativePdfHandoff
+  isActivePane?: boolean
+  persistLayoutMode?: boolean
   ocr?: boolean | ReaderOcrOptions
   extraOCR?: ReaderExtraOcr
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
   onOcrTextsChange?: (pageNumber: number, texts: IntermediateText[]) => void
 }
-/** Explicit development route until all acceptance gates are passed. */
+/** iOS local PDF Layout, with Web retained for canonical text and popovers. */
 export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
   function NativePdfReader(
     {
@@ -546,6 +560,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       publicationUrl,
       baseUrl,
       handoff,
+      isActivePane = true,
+      persistLayoutMode = false,
       ocr,
       extraOCR,
       onOcrError,
@@ -559,9 +575,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     )
     const identity = resolveNativeIdentity(handoff, generatedIdentity)
     const guard = useMemo(() => new NativePdfSession(identity), [identity])
+    const annotationScope = nativeAnnotationScope(handoff, store)
     const annotations = useMemo(
-      () => nativeAnnotationControllerStore.get(record.fileId),
-      [record.fileId]
+      () =>
+        nativeAnnotationControllerStore.get(
+          record.fileId,
+          undefined,
+          annotationScope,
+          identity.paneId
+        ),
+      [record.fileId, annotationScope, identity.paneId]
     )
     const annotationCommits = useRef(0)
     const [tool, setTool] = useState<PdfTool>('none')
@@ -625,6 +648,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const alive = useRef(true)
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
+    const activePane = useRef(isActivePane)
+    activePane.current = isActivePane
+    useEffect(() => {
+      lastNativeProgress.current = null
+    }, [isActivePane])
+    const layoutModeWritten = useRef(false)
     const ocrRequests = useRef(new Map<string, number>())
     const ocrInFlight = useRef(new Set<string>())
     const ocrCompleted = useRef(new Set<string>())
@@ -841,6 +870,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       options: {
         pageEdit?: NativePageEditOperation
         undoPageEdit?: NativePageEditUndo
+        positionOnly?: boolean
       } = {}
     ): boolean {
       if (!canSubmit()) return rejectNotReady()
@@ -853,6 +883,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             record.fileId,
             (base) => {
               handoffRef.current?.assertWriter(identity)
+              // Focus may change while this waits behind another pane's write.
+              if (options.positionOnly && !activePane.current) return base
               if (options.pageEdit || options.undoPageEdit) {
                 const current =
                   readerDataFromNativeSnapshot(base.data, base.progress) ?? {}
@@ -1129,6 +1161,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       persist((snapshot) => snapshot.data, { undoPageEdit: undo })
     }
     useImperativeHandle(ref, () => ({
+      setRenderMode: (mode) =>
+        persist((snapshot) => withNativeRenderMode(snapshot.data, mode)),
       close: async (options?: { retry?: boolean }) => {
         if (closed.current) return { status: 'closed' }
         if (options?.retry) saveQueue.retry()?.catch(() => undefined)
@@ -1245,10 +1279,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       recoveryRetry,
       identity
     ])
+    useEffect(() => {
+      if (!persistLayoutMode || !snapshotReady || layoutModeWritten.current)
+        return
+      if (persist((snapshot) => withNativeRenderMode(snapshot.data, 'layout')))
+        layoutModeWritten.current = true
+    }, [persistLayoutMode, snapshotReady])
     function persistNativeLayoutPage(
       geometry: Extract<PdfEvent, { type: 'geometry' }>['pages'][number]
     ) {
-      if (!guard.ready || !canSubmit()) return
+      if (!isActivePane || !guard.ready || !canSubmit()) return
       const progress =
         nativeLayoutProgressFromGeometry(geometry, nativeViewportHeight) ??
         nativeLayoutProgress(geometry.pageNumber)
@@ -1256,7 +1296,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       const key = nativeProgressKey(progress)
       if (lastNativeProgress.current === key) return
       lastNativeProgress.current = key
-      persist((snapshot) => withNativeLayoutProgress(snapshot.data, progress))
+      persist((snapshot) => withNativeLayoutProgress(snapshot.data, progress), {
+        positionOnly: true
+      })
     }
     const ocrRuntime: NativeOcrRuntime = {
       fileId: record.fileId,

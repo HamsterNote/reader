@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -32,6 +33,12 @@ import type { IntermediateText } from '@hamster-note/types'
 import type { PdfIdentity } from '../../../src/nativePdf/contracts'
 import { PdfHandoffCoordinator } from '../../../src/nativePdf/handoff'
 import type { BridgeCloseResult } from '../../../src/bridge/hostSession'
+import { logNativePdfDiagnostic } from '../../../src/nativePdf/diagnostics'
+import { readerDataFromNativeSnapshot } from '../../../src/nativePdf/hostProgress'
+import {
+  isLocalIosPdf,
+  usesNativePdfLayout
+} from '../../../src/nativePdf/routing'
 
 type ReaderScreenProps = {
   readonly record: HostDocumentRecord
@@ -40,6 +47,9 @@ type ReaderScreenProps = {
   readonly baseUrl: string
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
+  /** Configured split hosts supply their stable pane key; standalone screens generate one. */
+  readonly paneId?: string
+  readonly isActivePane?: boolean
   readonly ocr?: boolean | ReaderOcrOptions
   readonly extraOCR?: ReaderExtraOcr
   readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -49,10 +59,18 @@ type ReaderScreenProps = {
   ) => void
 }
 
-function identityFor(fileId: string, generation: number): PdfIdentity {
+type ReaderScreenSessionProps = ReaderScreenProps & {
+  readonly closeRef: React.RefObject<(() => void) | null>
+}
+
+function identityFor(
+  fileId: string,
+  paneId: string,
+  generation: number
+): PdfIdentity {
   return {
     fileId,
-    paneId: 'development',
+    paneId,
     sessionId: randomUUID(),
     generation
   }
@@ -83,6 +101,8 @@ type ReaderContentContext = {
   readonly nativeIdentity: PdfIdentity
   readonly nativeHandoff: NativePdfHandoff
   readonly store: ReaderDataStore
+  readonly isActivePane: boolean
+  readonly persistLayoutMode: boolean
   readonly ocr?: boolean | ReaderOcrOptions
   readonly extraOCR?: ReaderExtraOcr
   readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -109,6 +129,8 @@ function renderReaderContent(context: ReaderContentContext) {
     nativeIdentity,
     nativeHandoff,
     store,
+    isActivePane,
+    persistLayoutMode,
     ocr,
     extraOCR,
     onOcrError,
@@ -162,6 +184,8 @@ function renderReaderContent(context: ReaderContentContext) {
             ref={nativeRef}
             record={record}
             handoff={nativeHandoff}
+            isActivePane={isActivePane}
+            persistLayoutMode={persistLayoutMode}
             {...shared}
           />
         </View>
@@ -177,17 +201,24 @@ function ReaderScreenSession({
   baseUrl,
   onBack,
   onRecordUpdated,
+  closeRef,
+  paneId = 'standalone',
+  isActivePane = true,
   ocr,
   extraOCR,
   onOcrError,
   onOcrTextsChange
-}: ReaderScreenProps) {
-  const [nativePdf, setNativePdf] = useState(false)
-  const [webMounted, setWebMounted] = useState(true)
+}: ReaderScreenSessionProps) {
+  const [initialNative] = useState(() =>
+    usesNativePdfLayout(Platform.OS, record)
+  )
+  const [nativePdf, setNativePdf] = useState(initialNative)
+  const [webMounted, setWebMounted] = useState(!initialNative)
   const [webRecord, setWebRecord] = useState(record)
   const [importing, setImporting] = useState(false)
   const [, setHandoffVersion] = useState(0)
   const [nativeRefreshToken, setNativeRefreshToken] = useState(0)
+  const [persistLayoutMode, setPersistLayoutMode] = useState(false)
   const webRef = useRef<ReaderWebViewHandle>(null)
   const nativeRef = useRef<ReaderWebViewHandle>(null)
   const webCloseInFlight = useRef<PdfIdentity | null>(null)
@@ -200,9 +231,17 @@ function ReaderScreenSession({
   > | null>(null)
   const [stageError, setStageError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
-  const [initialWeb] = useState(() => identityFor(record.fileId, 0))
-  const [coordinator] = useState(() => new PdfHandoffCoordinator(initialWeb))
-  const [nativeIdentity] = useState(() => identityFor(record.fileId, 1))
+  const [initialWeb] = useState(() => identityFor(record.fileId, paneId, 0))
+  const [nativeIdentity, setNativeIdentity] = useState(() =>
+    identityFor(record.fileId, paneId, 1)
+  )
+  const [coordinator] = useState(
+    () =>
+      new PdfHandoffCoordinator(
+        initialWeb,
+        initialNative ? nativeIdentity : undefined
+      )
+  )
   const coordinatorRef = useRef(coordinator)
   coordinatorRef.current = coordinator
   const mounted = useRef(true)
@@ -218,6 +257,13 @@ function ReaderScreenSession({
     sourceTokens.current.set(webIdentity.sessionId, randomUUID())
   }
   const sourceToken = sourceTokens.current.get(webIdentity.sessionId)!
+  useEffect(() => {
+    logNativePdfDiagnostic('reader-pdf-route', {
+      ...(nativePdf ? nativeIdentity : webIdentity),
+      renderer: nativePdf ? 'pdfkit' : 'web',
+      outerWebMounted: webMounted
+    })
+  }, [nativePdf, nativeIdentity, webIdentity, webMounted])
 
   useEffect(() => {
     let active = true
@@ -323,6 +369,7 @@ function ReaderScreenSession({
               return
             const nextWeb = identityFor(
               record.fileId,
+              paneId,
               scope.snapshot.web.generation + 1
             )
             if (!scope.requestWeb(nextWeb)) return
@@ -402,10 +449,13 @@ function ReaderScreenSession({
     scope: PdfHandoffCoordinator,
     retrySave = false
   ): Promise<void> {
-    const identity = nativeIdentity
+    const identity = scope.snapshot.native
+    if (!identity) return
     if (nativeCloseInFlight.current !== null) return
     nativeCloseInFlight.current = identity
-    const result = await nativeRef.current?.close({ retry: retrySave })
+    const result = (await nativeRef.current?.close({ retry: retrySave })) ?? {
+      status: 'closed'
+    }
     if (!mounted.current || coordinatorRef.current !== scope) return
     const previous = scope.snapshot
     if (result?.status === 'closed') scope.nativeDrained(identity)
@@ -424,7 +474,19 @@ function ReaderScreenSession({
 
   function requestNative(): void {
     const scope = coordinator
-    if (!scope.requestNative(nativeIdentity)) return
+    const nextNative = identityFor(
+      record.fileId,
+      paneId,
+      nativeIdentity.generation + 1
+    )
+    if (!scope.requestNative(nextNative)) return
+    setNativeIdentity(nextNative)
+    setPersistLayoutMode(
+      readerDataFromNativeSnapshot(
+        webRecord.snapshot.data,
+        webRecord.snapshot.progress
+      )?.renderMode === 'text'
+    )
     setNativePdf(true)
     setWebMounted(true)
     sync(scope)
@@ -437,7 +499,7 @@ function ReaderScreenSession({
     const nextWeb =
       current.target === 'web' && current.nextWeb
         ? current.nextWeb
-        : identityFor(record.fileId, current.web.generation + 1)
+        : identityFor(record.fileId, paneId, current.web.generation + 1)
     const retry = current.phase === 'NATIVE_DRAIN_FAILED'
     if (!scope.requestWeb(nextWeb)) return
     sync(scope)
@@ -445,6 +507,10 @@ function ReaderScreenSession({
     else if (scope.snapshot.phase === 'NATIVE_DRAINING') {
       void startNativeClose(scope, retry)
     }
+  }
+
+  function requestText(): void {
+    if (nativeRef.current?.setRenderMode?.('text')) requestWeb()
   }
 
   function closeReader(): void {
@@ -456,6 +522,13 @@ function ReaderScreenSession({
     else if (scope.snapshot.phase === 'NATIVE_DRAINING') {
       void startNativeClose(scope, retry)
     }
+  }
+  closeRef.current = () => {
+    if (coordinator.snapshot.phase === 'CLOSED') {
+      // A host can reuse the container after a completed library return.
+      backNotified.current = false
+      notifyBack(coordinator)
+    } else closeReader()
   }
 
   useEffect(() => {
@@ -541,6 +614,8 @@ function ReaderScreenSession({
     nativeIdentity,
     nativeHandoff,
     store,
+    isActivePane,
+    persistLayoutMode,
     ocr,
     extraOCR,
     onOcrError,
@@ -563,7 +638,12 @@ function ReaderScreenSession({
               : ''}
           </Text>
         </View>
-        {__DEV__ && record.format === 'pdf' ? (
+        {isLocalIosPdf(Platform.OS, record) ? (
+          <Pressable onPress={nativePdf ? requestText : requestNative}>
+            <Text>{nativePdf ? 'Text' : 'Layout'}</Text>
+          </Pressable>
+        ) : null}
+        {__DEV__ && isLocalIosPdf(Platform.OS, record) ? (
           <Pressable onPress={nativePdf ? requestWeb : requestNative}>
             <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
           </Pressable>
@@ -589,7 +669,50 @@ function ReaderScreenSession({
 }
 
 export function ReaderScreen(props: ReaderScreenProps) {
-  return <ReaderScreenSession key={props.record.fileId} {...props} />
+  const [generatedPaneId] = useState(() => `pane-${randomUUID()}`)
+  const [active, setActive] = useState(props)
+  const [replacement, setReplacement] = useState(0)
+  const retained = useRef(props)
+  const closeRef = useRef<(() => void) | null>(null)
+  const switchRequested = useRef(false)
+  const requested = useRef(props)
+  requested.current = props
+  const replacing =
+    active.record.fileId !== props.record.fileId ||
+    active.store !== props.store ||
+    active.paneId !== props.paneId
+  // A configured file switch uses the same save barrier as returning to the
+  // library. Failed saves keep the old session mounted, including retry UI.
+  useEffect(() => {
+    if (replacing) {
+      switchRequested.current = true
+      closeRef.current?.()
+    }
+  }, [replacing, props.record.fileId, props.store, props.paneId])
+  if (!replacing) retained.current = props
+  const current = replacing ? retained.current : props
+  const paneId = current.paneId ?? generatedPaneId
+  return (
+    <ReaderScreenSession
+      key={JSON.stringify([paneId, current.record.fileId, replacement])}
+      {...current}
+      paneId={paneId}
+      closeRef={closeRef}
+      onBack={() => {
+        const next = requested.current
+        if (
+          switchRequested.current ||
+          next.record.fileId !== current.record.fileId ||
+          next.store !== current.store ||
+          next.paneId !== current.paneId
+        ) {
+          switchRequested.current = false
+          setActive(next)
+          setReplacement((value) => value + 1)
+        } else next.onBack()
+      }}
+    />
+  )
 }
 
 const styles = StyleSheet.create({

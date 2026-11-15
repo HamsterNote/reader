@@ -46,6 +46,8 @@ export class NativePdfSession {
   diagnostic(commitId?: string) {
     return {
       renderer: 'native-pdf',
+      fileId: this.identity.fileId,
+      paneId: this.identity.paneId,
       sessionId: this.identity.sessionId,
       generation: this.identity.generation,
       geometryRevision: this.revision,

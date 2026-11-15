@@ -81,6 +81,18 @@ export function withNativeLayoutProgress(
   }
 }
 
+/** User-selected mode uses the existing shared optional field. */
+export function withNativeRenderMode(
+  snapshotData: unknown,
+  renderMode: 'layout' | 'text'
+): Record<string, unknown> {
+  const snapshot = record(snapshotData)
+  return {
+    ...snapshot,
+    readerData: { ...record(snapshot.readerData), renderMode }
+  }
+}
+
 /** Update only the OCR field owned by the native OCR provider. */
 export function withNativeOcrTexts(
   snapshotData: unknown,

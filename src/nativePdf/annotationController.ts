@@ -221,12 +221,28 @@ export function createNativeAnnotationControllerStore() {
     string,
     ReturnType<typeof createNativeAnnotationController>
   >()
+  const scopedBuckets = new WeakMap<
+    object,
+    Map<string, ReturnType<typeof createNativeAnnotationController>>
+  >()
   return {
-    get: (storageId: string, initial?: ReaderData | null) => {
-      let controller = buckets.get(storageId)
+    get: (
+      storageId: string,
+      initial?: ReaderData | null,
+      scope?: object,
+      paneId?: string
+    ) => {
+      let target = buckets
+      let key = storageId
+      if (scope) {
+        if (!scopedBuckets.has(scope)) scopedBuckets.set(scope, new Map())
+        target = scopedBuckets.get(scope)!
+        key = JSON.stringify([paneId, storageId])
+      }
+      let controller = target.get(key)
       if (!controller) {
         controller = createNativeAnnotationController(initial)
-        buckets.set(storageId, controller)
+        target.set(key, controller)
       }
       return controller
     }
