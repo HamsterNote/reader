@@ -81,11 +81,16 @@ import {
   shouldRequestNativeOcr,
   type NativeOcrPageAvailability
 } from '../../../src/nativePdf/ocr'
-import { enqueueRecoverableSave } from '../../../src/nativePdf/persistence'
+import { NativeOperationQueue } from '../../../src/nativePdf/persistence'
 import {
+  applyNativePageEditOperation,
+  createNativePageEditOperation,
+  createNativePageEditUndo,
+  nativeHiddenPageNumbers,
   nativePageEditGroups,
   mergeNativeExternalData,
   restoreNativePageEditFields,
+  type NativePageEditOperation,
   type NativePageEditUndo,
   withNativePageEditData
 } from '../../../src/nativePdf/pageEdit'
@@ -93,6 +98,31 @@ import {
   nativePdfErrorMessage,
   shouldReplaceNativePdfError
 } from '../../../src/nativePdf/errors'
+
+function nativeIdentityFor(fileId: string): PdfIdentity {
+  return {
+    fileId,
+    paneId: 'development',
+    sessionId: randomUUID(),
+    generation: 1
+  }
+}
+
+function resolveNativeIdentity(
+  handoff: NativePdfHandoff | undefined,
+  generated: PdfIdentity
+): PdfIdentity {
+  return handoff?.identity ?? generated
+}
+
+function nativeEditingReady(
+  snapshotReady: boolean,
+  handoff: NativePdfHandoff | undefined,
+  identity: PdfIdentity,
+  closed: boolean
+): boolean {
+  return snapshotReady && (handoff?.canWrite(identity) ?? true) && !closed
+}
 
 function isReaderFileUrl(url: string, root: string): boolean {
   try {
@@ -162,19 +192,6 @@ function syncNativeWebAnnotations(
       `标注同步失败：${error instanceof Error ? error.message : String(error)}`
     )
     return false
-  }
-}
-
-async function loadNativeSnapshot(
-  store: ReaderDataStore,
-  record: HostDocumentRecord,
-  open: (snapshot: HostDocumentRecord['snapshot']) => void
-): Promise<void> {
-  try {
-    const persisted = await store.get(record.fileId)
-    open(persisted?.snapshot ?? record.snapshot)
-  } catch {
-    open(record.snapshot)
   }
 }
 
@@ -463,12 +480,33 @@ function requestNativeOcrPages(
   }
 }
 
+export type NativePdfHandoff = {
+  readonly identity: PdfIdentity
+  readonly refreshToken: number
+  readonly canWrite: (identity: PdfIdentity) => boolean
+  readonly assertWriter: (identity: PdfIdentity) => void
+  readonly leaseEpoch: () => number
+  readonly onAuthoritativeSnapshot: (
+    identity: PdfIdentity,
+    snapshot: HostDocumentRecord['snapshot']
+  ) => boolean
+  readonly onOperationConfirmed: () => void
+}
+
+type NativeSaveResult = {
+  readonly snapshot: HostDocumentRecord['snapshot']
+  readonly layout?: ReaderData
+  readonly pageEditUndo?: NativePageEditUndo
+  readonly clearPageEditUndo?: boolean
+}
+
 type Props = {
   record: HostDocumentRecord
   store: ReaderDataStore
   entryUrl: string
   publicationUrl: string
   baseUrl: string
+  handoff?: NativePdfHandoff
   ocr?: boolean | ReaderOcrOptions
   extraOCR?: ReaderExtraOcr
   onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -483,6 +521,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       entryUrl,
       publicationUrl,
       baseUrl,
+      handoff,
       ocr,
       extraOCR,
       onOcrError,
@@ -490,15 +529,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     },
     ref
   ) {
-    const identity = useMemo(
-      () => ({
-        fileId: record.fileId,
-        paneId: 'development',
-        sessionId: randomUUID(),
-        generation: 1
-      }),
+    const generatedIdentity = useMemo(
+      () => nativeIdentityFor(record.fileId),
       [record.fileId]
     )
+    const identity = resolveNativeIdentity(handoff, generatedIdentity)
     const guard = useMemo(() => new NativePdfSession(identity), [identity])
     const annotations = useMemo(
       () => nativeAnnotationControllerStore.get(record.fileId),
@@ -536,9 +571,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [outlineOpen, setOutlineOpen] = useState(false)
     const [preview, setPreview] = useState<string | null>(null)
     const [saveError, setSaveError] = useState<string | null>(null)
+    const [snapshotReady, setSnapshotReady] = useState(false)
+    const [authoritativeFailed, setAuthoritativeFailed] = useState(false)
+    const [recoveryRetry, setRecoveryRetry] = useState(0)
     const [editOpen, setEditOpen] = useState(false)
     const [draftHiddenPages, setDraftHiddenPages] = useState<number[]>([])
     const [draftCrop, setDraftCrop] = useState<ReaderEdgeCrop>({})
+    const pageEditBase = useRef<Pick<
+      ReaderData,
+      'hiddenPages' | 'edgeCrop'
+    > | null>(null)
     const [hiddenPagesUndo, setHiddenPagesUndo] =
       useState<NativePageEditUndo | null>(null)
     const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
@@ -550,12 +592,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       typeof ocr === 'object' && ocr !== null && Array.isArray(ocr.pages)
         ? ocr.pages
         : undefined
-    const save = useRef(Promise.resolve())
     const latest = useRef(record.snapshot)
+    const handoffRef = useRef(handoff)
+    handoffRef.current = handoff
+    const authoritativeReady = useRef(false)
     const committed = useRef(new Set<string>())
-    const failedTransform = useRef<
-      ((snapshot: typeof record.snapshot) => unknown) | undefined
-    >(undefined)
     const alive = useRef(true)
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
@@ -572,6 +613,20 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     )
     const previousOcrEnabled = useRef(ocrEnabled)
     const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const saveQueueRef = useRef<NativeOperationQueue<NativeSaveResult> | null>(
+      null
+    )
+    if (saveQueueRef.current === null) {
+      saveQueueRef.current = new NativeOperationQueue<NativeSaveResult>({
+        onConfirmed: (_operation, result) => confirmNativeSave(result),
+        onFailed: (_operation, error) => {
+          if (alive.current) {
+            setSaveError(error instanceof Error ? error.message : '保存失败')
+          }
+        }
+      })
+    }
+    const saveQueue = saveQueueRef.current
     function pump() {
       if (!inFlight.current && queue.current.length) {
         inFlight.current = queue.current.shift()!
@@ -691,25 +746,97 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       webDisposed.current = true
       post({ type: 'dispose' })
     }
-    function persist(transform: (snapshot: typeof record.snapshot) => unknown) {
-      if (closed.current) return
-      failedTransform.current = transform
-      // Save at the existing authoritative key, in order; never overwrite failed saves.
-      save.current = enqueueRecoverableSave(save.current, async () => {
-        const next = await store.updateSnapshot(record.fileId, (base) => ({
-          ...base,
-          data: transform(base),
-          revision: base.revision + 1
-        }))
-        latest.current = next
-        if (failedTransform.current === transform)
-          failedTransform.current = undefined
-      }).catch((error) => {
-        if (alive.current)
-          setSaveError(error instanceof Error ? error.message : '保存失败')
-        throw error
-      })
-      save.current.catch(() => undefined)
+    function setAuthoritativeReady(ready: boolean) {
+      authoritativeReady.current = ready
+      setSnapshotReady(ready)
+    }
+    function canSubmit(): boolean {
+      if (closed.current || !authoritativeReady.current) return false
+      return handoffRef.current?.canWrite(identity) ?? true
+    }
+    function rejectNotReady(): false {
+      setStatus('权威数据或写权尚未就绪（not-ready）')
+      return false
+    }
+    function confirmNativeSave(result: NativeSaveResult) {
+      latest.current = result.snapshot
+      if (alive.current) {
+        setSaveError(null)
+        if (result.layout) layoutForReaderData(result.layout)
+        if (result.clearPageEditUndo) {
+          setHiddenPagesUndo(null)
+          if (undoTimer.current) clearTimeout(undoTimer.current)
+          undoTimer.current = null
+        }
+        if (result.pageEditUndo) {
+          setHiddenPagesUndo(result.pageEditUndo)
+          if (undoTimer.current) clearTimeout(undoTimer.current)
+          undoTimer.current = setTimeout(() => {
+            undoTimer.current = null
+            setHiddenPagesUndo(null)
+          }, 5000)
+        }
+        handoffRef.current?.onOperationConfirmed()
+      }
+    }
+    function persist(
+      transform: (snapshot: typeof record.snapshot) => unknown,
+      options: {
+        pageEdit?: NativePageEditOperation
+        undoPageEdit?: NativePageEditUndo
+      } = {}
+    ): boolean {
+      if (!canSubmit()) return rejectNotReady()
+      saveQueue.add(
+        options.pageEdit?.operationId ?? `save-${randomUUID()}`,
+        async () => {
+          let layout: ReaderData | undefined
+          let pageEditUndo: NativePageEditUndo | undefined
+          const next = await store.updateSnapshot(
+            record.fileId,
+            (base) => {
+              handoffRef.current?.assertWriter(identity)
+              if (options.pageEdit || options.undoPageEdit) {
+                const current =
+                  readerDataFromNativeSnapshot(base.data, base.progress) ?? {}
+                if (options.pageEdit) {
+                  pageEditUndo = createNativePageEditUndo(
+                    current,
+                    options.pageEdit
+                  )
+                  layout = applyNativePageEditOperation(
+                    current,
+                    options.pageEdit
+                  )
+                } else if (options.undoPageEdit) {
+                  layout = restoreNativePageEditFields(
+                    current,
+                    options.undoPageEdit
+                  )
+                }
+                return {
+                  ...base,
+                  data: withNativePageEditData(base.data, layout ?? current),
+                  revision: base.revision + 1
+                }
+              }
+              return {
+                ...base,
+                data: transform(base),
+                revision: base.revision + 1
+              }
+            },
+            () => handoffRef.current?.assertWriter(identity)
+          )
+          return {
+            snapshot: next,
+            layout,
+            pageEditUndo,
+            clearPageEditUndo: options.undoPageEdit !== undefined
+          }
+        }
+      )
+      return true
     }
     function mirrorAnnotations(snapshot: NativeAnnotationSnapshot) {
       enqueue({
@@ -724,15 +851,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     /** Only the annotation container is owned here; the patch reads the newest base. */
     function saveAnnotations(snapshot: NativeAnnotationSnapshot): boolean {
-      try {
-        persist((base) => withNativeAnnotationData(base.data, snapshot))
-        return true
-      } catch (error) {
-        setStatus(
-          `标注未保存：${error instanceof Error ? error.message : String(error)}`
-        )
-        return false
-      }
+      return persist((base) => withNativeAnnotationData(base.data, snapshot))
     }
     function rehydrateAnnotations() {
       try {
@@ -759,6 +878,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       )
     }
     function saveWebSnapshot(message: Record<string, unknown>) {
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       const commitId = message.commitId
       if (typeof commitId !== 'string' || committed.current.has(commitId))
         return
@@ -769,14 +892,20 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       )
     }
     function selectTool(next: PdfTool) {
-      if (closed.current) return
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       setTool(next)
       enqueue({ type: 'tool', tool: next })
       enqueue({ type: 'inkStyle', color: ink.color, width: ink.width })
     }
     /** Brush used for new strokes; the persisted object keeps the same style. */
     function selectInk(next: { color?: string; width?: number }) {
-      if (closed.current) return
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       const value = {
         color: next.color ?? ink.color,
         width: next.width ?? ink.width
@@ -797,7 +926,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       saveAnnotations(result.snapshot)
     }
     function undoNativeDrawing() {
-      if (closed.current) return
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       if (!annotations.undo()) {
         setStatus('没有可撤销的标注')
         return
@@ -807,7 +939,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (saveAnnotations(snapshot)) setStatus('已撤销上一步标注')
     }
     function redoNativeDrawing() {
-      if (closed.current) return
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       if (!annotations.redo()) {
         setStatus('没有可重做的标注')
         return
@@ -841,11 +976,18 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       event: Extract<PdfEvent, { type: 'rect' } | { type: 'stroke' }>
     ) {
       if (event.phase !== 'commit') return
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       if (event.type === 'rect') commitNativeRect(event)
       else commitNativeStroke(event)
     }
     function clearCurrentPageInk() {
-      if (closed.current) return
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       const pageId = paintingPageId(page)
       if (!annotations.getSnapshot().pagePaintings[pageId]) {
         setStatus('当前页没有笔迹')
@@ -884,80 +1026,55 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (count > 0) enqueue({ type: 'layout', pages: allowed, crops })
     }
     function beginPageEdit() {
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
       const data = readerDataSnapshot()
-      setDraftHiddenPages(
-        (data.hiddenPages ?? []).flatMap((value) => {
-          const pageNumber =
-            typeof value === 'number'
-              ? value
-              : Number(String(value).replace(/^page-/, ''))
-          return Number.isInteger(pageNumber) && pageNumber > 0
-            ? [pageNumber]
-            : []
-        })
-      )
-      setDraftCrop(data.edgeCrop?.all ?? {})
+      pageEditBase.current = {
+        hiddenPages: data.hiddenPages ? [...data.hiddenPages] : undefined,
+        edgeCrop: data.edgeCrop
+      }
+      setDraftHiddenPages(nativeHiddenPageNumbers(data.hiddenPages))
+      setDraftCrop({ ...(data.edgeCrop?.all ?? {}) })
       setEditOpen(true)
     }
     function commitPageEdit() {
-      const previous = readerDataSnapshot()
-      const next: ReaderData = {
-        ...previous,
-        hiddenPages: [...new Set(draftHiddenPages)].sort((a, b) => a - b),
-        edgeCrop: { ...previous.edgeCrop, all: draftCrop }
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
       }
-      persist((snapshot) => {
-        const current =
-          readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
-        return withNativePageEditData(
-          snapshot.data,
-          restoreNativePageEditFields(current, {
-            hiddenPages: next.hiddenPages,
-            edgeCrop: next.edgeCrop
-          })
-        )
+      const previous = pageEditBase.current ?? readerDataSnapshot()
+      const operation = createNativePageEditOperation({
+        operationId: `page-${Date.now()}-${randomUUID()}`,
+        identity,
+        leaseEpoch: handoffRef.current?.leaseEpoch() ?? 0,
+        baseRevision: latest.current.revision,
+        base: previous,
+        draftHiddenPages,
+        draftCrop
       })
-      layoutForReaderData(next)
-      setHiddenPagesUndo({
-        hiddenPages: previous.hiddenPages,
-        edgeCrop: previous.edgeCrop
-      })
-      if (undoTimer.current) clearTimeout(undoTimer.current)
-      undoTimer.current = setTimeout(() => {
-        undoTimer.current = null
-        setHiddenPagesUndo(null)
-      }, 5000)
-      setEditOpen(false)
+      if (!operation.dirty.hiddenPages && !operation.dirty.cropAll) {
+        setEditOpen(false)
+        return
+      }
+      if (persist((snapshot) => snapshot.data, { pageEdit: operation })) {
+        setEditOpen(false)
+      }
     }
-    async function undoPageEdit() {
+    function undoPageEdit() {
       const undo = hiddenPagesUndo
       if (!undo) return
-      await save.current.catch(() => undefined)
-      const authoritative = await store.get(record.fileId)
-      const snapshot = authoritative?.snapshot ?? latest.current
-      latest.current = snapshot
-      const current =
-        readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
-      const next = restoreNativePageEditFields(current, undo)
-      persist((currentSnapshot) => {
-        const currentData =
-          readerDataFromNativeSnapshot(
-            currentSnapshot.data,
-            currentSnapshot.progress
-          ) ?? {}
-        return withNativePageEditData(
-          currentSnapshot.data,
-          restoreNativePageEditFields(currentData, undo)
-        )
-      })
-      layoutForReaderData(next)
-      setHiddenPagesUndo(null)
-      if (undoTimer.current) clearTimeout(undoTimer.current)
-      undoTimer.current = null
+      if (!canSubmit()) {
+        rejectNotReady()
+        return
+      }
+      persist((snapshot) => snapshot.data, { undoPageEdit: undo })
     }
     useImperativeHandle(ref, () => ({
-      close: async () => {
+      close: async (options?: { retry?: boolean }) => {
         if (closed.current) return { status: 'closed' }
+        if (options?.retry) saveQueue.retry()?.catch(() => undefined)
         ocrEpoch.current += 1
         ocrRequests.current.clear()
         ocrInFlight.current.clear()
@@ -967,12 +1084,9 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         post({ type: 'dismiss' })
         setMenuWithSource(null, 'close')
         try {
-          await save.current
-          if (failedTransform.current !== undefined)
-            return { status: 'unconfirmed', reason: '原生高亮尚未保存，请重试' }
-          // The session is closed only after every queued snapshot has been
-          // confirmed. A failed close remains usable so the retry can enqueue
-          // the failed payload and advance the revision.
+          await saveQueue.drain()
+          if (saveQueue.pending !== 0)
+            return { status: 'unconfirmed', reason: '原生编辑尚未保存，请重试' }
           closed.current = true
           disposeWebOnce()
           enqueue({ type: 'close' })
@@ -1027,29 +1141,57 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
     }, [ocrEnabled])
     useEffect(() => {
-      let active = true
       closed.current = false
       nativeError.current = null
-      const open = (snapshot: typeof record.snapshot) => {
-        if (!active) return
-        // Text mode can persist progress while this native view is unmounted.
-        // Re-read the authoritative snapshot before opening so switching back
-        // does not restore the stale record prop at 0%.
-        latest.current = snapshot
-        enqueue({
-          type: 'open',
-          source: { fileId: record.fileId, localUri: publicationUrl }
-        })
+      enqueue({
+        type: 'open',
+        source: { fileId: record.fileId, localUri: publicationUrl }
+      })
+    }, [publicationUrl, record.fileId])
+    useEffect(() => {
+      let active = true
+      setAuthoritativeReady(false)
+      const load = async () => {
+        try {
+          const persisted = await store.get(record.fileId)
+          if (!active) return
+          const snapshot = persisted?.snapshot ?? record.snapshot
+          latest.current = snapshot
+          if (pageCountRef.current > 0) {
+            layoutForReaderData(readerDataSnapshot())
+            rehydrateAnnotations()
+          }
+          const granted = handoffRef.current
+            ? handoffRef.current.onAuthoritativeSnapshot(identity, snapshot)
+            : true
+          setAuthoritativeReady(granted)
+          setAuthoritativeFailed(false)
+          if (!granted) setStatus('PDFKit 可读；等待旧 Web 保存与写权交接')
+        } catch (error) {
+          if (!active) return
+          setAuthoritativeReady(false)
+          setAuthoritativeFailed(true)
+          setStatus(
+            `权威数据读取失败：${error instanceof Error ? error.message : String(error)}`
+          )
+        }
       }
-      loadNativeSnapshot(store, record, open)
+      void load()
       return () => {
         active = false
       }
-    }, [publicationUrl, record.fileId, record.snapshot, store])
+    }, [
+      store,
+      record.fileId,
+      record.snapshot,
+      handoff?.refreshToken,
+      recoveryRetry,
+      identity
+    ])
     function persistNativeLayoutPage(
       geometry: Extract<PdfEvent, { type: 'geometry' }>['pages'][number]
     ) {
-      if (!guard.ready) return
+      if (!guard.ready || !canSubmit()) return
       const progress =
         nativeLayoutProgressFromGeometry(geometry, nativeViewportHeight) ??
         nativeLayoutProgress(geometry.pageNumber)
@@ -1307,15 +1449,16 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       } else if (
         nativeError.current === null &&
         ocrError.current === null &&
-        guard.ready
+        guard.ready &&
+        authoritativeReady.current
       )
         setStatus('PDFKit 已显示；数据恢复完成')
       else if (
         nativeError.current === null &&
         ocrError.current === null &&
-        event.type === 'displayed'
+        (event.type === 'displayed' || guard.ready)
       )
-        setStatus('PDFKit 已显示；等待恢复完成')
+        setStatus('PDFKit 已显示；等待权威数据与写权交接')
     }
     const injected = `window.__READER_NATIVE_PDF__=${JSON.stringify({ ...identity, publicationUrl, snapshot: record.snapshot.data, progress: record.snapshot.progress }).replace(/</g, '\\u003c')};true;`
     if (Platform.OS !== 'ios' || !ReaderPdfView || !readerPdfModule)
@@ -1332,8 +1475,19 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const width = Math.min(size.width || 300, 300),
       height = Math.min(size.height || 160, panelOpen ? size.height : 160)
     const draftGroups = nativePageEditGroups(draftHiddenPages, pageCount)
+    const editingReady = nativeEditingReady(
+      snapshotReady,
+      handoff,
+      identity,
+      closed.current
+    )
     return (
       <View style={{ flex: 1 }} onLayout={(e) => setSize(e.nativeEvent.layout)}>
+        {authoritativeFailed ? (
+          <Pressable onPress={() => setRecoveryRetry((value) => value + 1)}>
+            <Text role='alert'>重试数据恢复</Text>
+          </Pressable>
+        ) : null}
         <NativePdfControls
           status={status}
           rangesOpen={rangesOpen}
@@ -1343,9 +1497,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           page={page}
           pageCount={pageCount}
           ocrEnabled={ocrEnabled}
-          ocrDisabled={ocr !== undefined}
+          ocrDisabled={ocr !== undefined || !editingReady}
+          editingDisabled={!editingReady}
           toggleOcr={() => {
-            if (ocr === undefined) setInternalOcrEnabled((value) => !value)
+            if (ocr === undefined && canSubmit())
+              setInternalOcrEnabled((value) => !value)
           }}
           beginPageEdit={beginPageEdit}
           tool={tool}
@@ -1364,11 +1520,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           outline={outline}
           saveError={saveError}
           retryFailedSave={() => {
-            const transform = failedTransform.current
-            if (transform !== undefined) {
-              setSaveError(null)
-              persist(transform)
-            }
+            saveQueue.retry()?.catch(() => undefined)
           }}
           preview={preview}
           setPreview={setPreview}

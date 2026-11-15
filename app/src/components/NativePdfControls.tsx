@@ -16,6 +16,7 @@ type NativePdfControlsProps = {
   pageCount: number
   ocrEnabled: boolean
   ocrDisabled: boolean
+  editingDisabled: boolean
   toggleOcr: () => void
   beginPageEdit: () => void
   tool: PdfTool
@@ -128,6 +129,7 @@ export function NativePdfControls(props: NativePdfControlsProps) {
     pageCount,
     ocrEnabled,
     ocrDisabled,
+    editingDisabled,
     toggleOcr,
     beginPageEdit,
     tool,
@@ -158,11 +160,12 @@ export function NativePdfControls(props: NativePdfControlsProps) {
         <Pressable
           accessibilityRole='button'
           accessibilityState={{ checked: ocrEnabled, disabled: ocrDisabled }}
+          disabled={ocrDisabled}
           onPress={toggleOcr}
         >
           <Text>OCR {ocrEnabled ? '开' : '关'}</Text>
         </Pressable>
-        <Pressable onPress={beginPageEdit}>
+        <Pressable onPress={beginPageEdit} disabled={editingDisabled}>
           <Text>裁切/隐藏页编辑</Text>
         </Pressable>
         <Pressable
@@ -170,7 +173,11 @@ export function NativePdfControls(props: NativePdfControlsProps) {
           accessibilityLabel={
             tool === 'rectangle' ? '关闭矩形工具' : '矩形标注'
           }
-          accessibilityState={{ selected: tool === 'rectangle' }}
+          accessibilityState={{
+            selected: tool === 'rectangle',
+            disabled: editingDisabled
+          }}
+          disabled={editingDisabled}
           onPress={() =>
             selectTool(tool === 'rectangle' ? 'none' : 'rectangle')
           }
@@ -180,6 +187,7 @@ export function NativePdfControls(props: NativePdfControlsProps) {
         <Pressable
           accessibilityRole='button'
           accessibilityLabel='撤销标注'
+          disabled={editingDisabled}
           onPress={undoNativeDrawing}
         >
           <Text>撤销标注</Text>
@@ -187,7 +195,11 @@ export function NativePdfControls(props: NativePdfControlsProps) {
         <Pressable
           accessibilityRole='button'
           accessibilityLabel={tool === 'draw' ? '关闭绘图工具' : '自由绘图'}
-          accessibilityState={{ selected: tool === 'draw' }}
+          accessibilityState={{
+            selected: tool === 'draw',
+            disabled: editingDisabled
+          }}
+          disabled={editingDisabled}
           onPress={() => selectTool(tool === 'draw' ? 'none' : 'draw')}
         >
           <Text>绘图{tool === 'draw' ? '（开）' : ''}</Text>
@@ -195,6 +207,7 @@ export function NativePdfControls(props: NativePdfControlsProps) {
         <Pressable
           accessibilityRole='button'
           accessibilityLabel='重做标注'
+          disabled={editingDisabled}
           onPress={redoNativeDrawing}
         >
           <Text>重做</Text>
@@ -202,6 +215,7 @@ export function NativePdfControls(props: NativePdfControlsProps) {
         <Pressable
           accessibilityRole='button'
           accessibilityLabel='清空当前页笔迹'
+          disabled={editingDisabled}
           onPress={clearCurrentPageInk}
         >
           <Text>清空本页</Text>
@@ -211,7 +225,11 @@ export function NativePdfControls(props: NativePdfControlsProps) {
             key={color}
             accessibilityRole='button'
             accessibilityLabel={`笔迹颜色 ${color}`}
-            accessibilityState={{ selected: ink.color === color }}
+            accessibilityState={{
+              selected: ink.color === color,
+              disabled: editingDisabled
+            }}
+            disabled={editingDisabled}
             onPress={() => selectInk({ color })}
             style={{
               width: 24,
@@ -228,14 +246,18 @@ export function NativePdfControls(props: NativePdfControlsProps) {
             key={width}
             accessibilityRole='button'
             accessibilityLabel={`笔迹线宽 ${width}`}
-            accessibilityState={{ selected: ink.width === width }}
+            accessibilityState={{
+              selected: ink.width === width,
+              disabled: editingDisabled
+            }}
+            disabled={editingDisabled}
             onPress={() => selectInk({ width })}
           >
             <Text>{ink.width === width ? `●${width}` : `○${width}`}</Text>
           </Pressable>
         ))}
         {hiddenPagesUndo ? (
-          <Pressable onPress={undoPageEdit}>
+          <Pressable onPress={undoPageEdit} disabled={editingDisabled}>
             <Text>撤销（5秒）</Text>
           </Pressable>
         ) : null}

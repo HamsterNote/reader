@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { BridgeHostSnapshot } from '../src/bridge/hostSession'
 import type { BridgeMessage } from '../src/bridge/protocol'
@@ -392,5 +392,68 @@ describe('ReaderHostSession', () => {
       data: { ranges: [1] },
       progress: { page: 2 }
     })
+  })
+
+  it('keeps handoff input frozen after a close timeout and retries the same drain', async () => {
+    const harness = createHarness()
+    await ready(harness)
+    harness.sent.length = 0
+
+    const closing = harness.session.close(5, { handoff: true })
+    await expect(closing).resolves.toEqual({
+      status: 'unconfirmed',
+      reason: '关闭超时：仍有未确认写入未落盘'
+    })
+    expect(
+      harness.sent.some(
+        (message) =>
+          message.type === 'command' &&
+          (message.payload as { name?: string }).name === 'resume'
+      )
+    ).toBe(false)
+
+    await harness.session.handleRawMessage(
+      raw('change', { data: { ranges: [1] }, revision: 1 })
+    )
+    expect(harness.persisted).toHaveLength(0)
+    expect(harness.sent.at(-1)?.payload).toMatchObject({
+      code: 'STALE_SESSION'
+    })
+
+    const retry = harness.session.close(1000, { handoff: true })
+    expect(harness.sent.at(-1)?.payload).toMatchObject({ name: 'flush' })
+    await harness.session.handleRawMessage(
+      raw('ready', {}, { requestId: 'web-retried-flush' })
+    )
+    await expect(retry).resolves.toEqual({ status: 'closed' })
+  })
+
+  it('fast-retires a never-writable session without a flush timeout', async () => {
+    const harness = createHarness()
+    await expect(
+      harness.session.close(1000, { handoff: true })
+    ).resolves.toEqual({ status: 'closed' })
+    expect(harness.sent.map((message) => message.type)).toEqual(['dispose'])
+    expect(harness.persisted).toHaveLength(0)
+  })
+
+  it('falls back to a flush when accepted ready work was already queued', async () => {
+    const harness = createHarness()
+    const accepted = harness.session.handleRawMessage(
+      raw('ready', {}, { requestId: 'queued-ready' })
+    )
+    const closing = harness.session.close(1000, { handoff: true })
+    await accepted
+    await vi.waitFor(() => {
+      expect(harness.sent.map((message) => message.type)).toEqual([
+        'open',
+        'restore',
+        'command'
+      ])
+    })
+    await harness.session.handleRawMessage(
+      raw('ready', {}, { requestId: 'queued-ready-flushed' })
+    )
+    await expect(closing).resolves.toEqual({ status: 'closed' })
   })
 })

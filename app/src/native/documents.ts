@@ -13,7 +13,8 @@ import {
 } from '../../../src/host/fileIdentity'
 import type {
   HostDocumentRecord,
-  ReaderDataStore
+  ReaderDataStore,
+  ReaderWriteFence
 } from '../../../src/host/readerDataStore'
 
 const FILE_ROOT = `${FileSystem.documentDirectory ?? ''}reader-files/`
@@ -111,7 +112,8 @@ export async function pickAndCacheDocument(
  */
 export async function pickLegacyJsonAndImport(
   store: ReaderDataStore,
-  fileId: string
+  fileId: string,
+  fence?: ReaderWriteFence
 ): Promise<HostDocumentRecord | null> {
   const result = await DocumentPicker.getDocumentAsync({
     type: ['application/json', 'text/plain', 'application/octet-stream'],
@@ -127,7 +129,7 @@ export async function pickLegacyJsonAndImport(
   const raw = await FileSystem.readAsStringAsync(asset.uri, {
     encoding: FileSystem.EncodingType.UTF8
   })
-  return store.importLegacyJson(fileId, raw, asset.name, Date.now())
+  return store.importLegacyJson(fileId, raw, asset.name, Date.now(), fence)
 }
 
 export async function removeDocument(

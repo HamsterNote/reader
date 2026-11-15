@@ -121,6 +121,22 @@ function record(
   }
 }
 
+function withSnapshotData(
+  file: HostDocumentRecord,
+  data: Record<string, unknown>
+): HostDocumentRecord {
+  return {
+    ...file,
+    snapshot: {
+      ...file.snapshot,
+      data: {
+        ...(file.snapshot.data as Record<string, unknown>),
+        ...data
+      }
+    }
+  }
+}
+
 type MountControls = {
   failNextUpdate?: boolean
 }
@@ -550,7 +566,15 @@ describe('native annotation commit identity across remounts', () => {
 
 describe('native page edit handoff regressions', () => {
   it('preserves Web hidden pages when native crop follows handoff', async () => {
-    const file = record('handoff-hidden-then-crop', [highlight('saved')])
+    const file = withSnapshotData(
+      record('handoff-hidden-then-crop', [highlight('saved')]),
+      {
+        readerData: {
+          hiddenPages: [],
+          edgeCrop: { pages: { 'page-2': { left: 0.2 } } }
+        }
+      }
+    )
     const opened = await mount(file)
     await writeHiddenPages(opened, file.fileId, [2])
 
@@ -560,7 +584,7 @@ describe('native page edit handoff regressions', () => {
     const current = restoreReaderSnapshot(opened.snapshot().data)
     expect(current.data.hiddenPages).toEqual([2])
     expect(current.data.edgeCrop?.all?.top).toBe(0.05)
-    expect(current.data.edgeCrop?.pages).toEqual({})
+    expect(current.data.edgeCrop?.pages?.['page-2']?.left).toBe(0.2)
     expect(current.data.ranges).toEqual([
       expect.objectContaining({ id: 'saved' })
     ])
@@ -569,15 +593,16 @@ describe('native page edit handoff regressions', () => {
 
   it('retry keeps immutable page edit baseline after editor reopen', async () => {
     const controls: MountControls = { failNextUpdate: true }
-    const file = record('retry-after-editor-reopen', [highlight('saved')])
-    file.snapshot.data = {
-      ...file.snapshot.data,
-      readerData: {
-        hiddenPages: [],
-        edgeCrop: { pages: { 'page-2': { left: 0.2 } } }
-      },
-      comments: [{ id: 'keep-comment' }]
-    }
+    const file = withSnapshotData(
+      record('retry-after-editor-reopen', [highlight('saved')]),
+      {
+        readerData: {
+          hiddenPages: [],
+          edgeCrop: { pages: { 'page-2': { left: 0.2 } } }
+        },
+        comments: [{ id: 'keep-comment' }]
+      }
+    )
     const opened = await mount(file, controls)
     await confirmCrop()
     await screen.findByText(/injected save failure/)
@@ -610,10 +635,13 @@ describe('native page edit handoff regressions', () => {
   it.each(['untouched', 'explicit-clear', 'crop-only-undo'] as const)(
     'explicit hidden page clearing differs from untouched fields: %s',
     async (scenario) => {
-      const file = record(`page-edit-${scenario}`, [])
+      const base = record(`page-edit-${scenario}`, [])
+      const file =
+        scenario === 'explicit-clear'
+          ? withSnapshotData(base, { readerData: { hiddenPages: [2] } })
+          : base
       const opened = await mount(file)
       if (scenario === 'explicit-clear') {
-        await writeHiddenPages(opened, file.fileId, [2])
         await act(async () => {
           fireEvent.click(screen.getByText('裁切/隐藏页编辑'))
         })

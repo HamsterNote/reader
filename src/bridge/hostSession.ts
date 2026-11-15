@@ -54,6 +54,11 @@ export type BridgeFlushResult =
   | { readonly status: 'flushed' }
   | Extract<BridgeCloseResult, { status: 'unconfirmed' }>
 
+export type BridgeCloseBehavior = {
+  readonly freezeOnFailure?: boolean
+  readonly fastIfNeverWritable?: boolean
+}
+
 export type BridgeHostSession = {
   readonly flush: (timeoutMs?: number) => Promise<BridgeFlushResult>
   /**
@@ -76,7 +81,11 @@ export type BridgeHostSession = {
    * 关闭握手：请求 Web 冲刷未确认写入（command flush），等其确认与本地持久化
    * 队列都清空后才下发 dispose 并失效。超时/失败返回 unconfirmed 且会话保持可用。
    */
-  readonly close: (timeoutMs?: number) => Promise<BridgeCloseResult>
+  readonly close: (
+    timeoutMs?: number,
+    destroy?: boolean,
+    behavior?: BridgeCloseBehavior
+  ) => Promise<BridgeCloseResult>
   /** 结束会话；之后所有该会话消息按 STALE_SESSION 拒绝。 */
   readonly dispose: () => void
 }
@@ -116,6 +125,10 @@ export function createBridgeHostSession(
   let closePromise: Promise<BridgeCloseResult> | null = null
   let settleClose: ((result: BridgeCloseResult) => void) | null = null
   let closeTimer: ReturnType<typeof setTimeout> | null = null
+  let fastClosePromise: Promise<BridgeCloseResult> | null = null
+  let closeBehavior: BridgeCloseBehavior = {}
+  let accepting = true
+  let inputFrozen = false
   // 已持久化的 requestId → ack payload，用于重复投递幂等应答。
   const persistedRequestIds = new Map<string, BridgeAckPayload>()
   let outboundCounter = 0
@@ -164,22 +177,35 @@ export function createBridgeHostSession(
     }
   }
 
-  /** 关闭失败：撤回 flush 请求，让 Web 继续编辑，会话保持可用。 */
+  /** 普通关闭失败会恢复编辑；交接失败保持输入冻结，只允许继续排空。 */
   const abortClose = (reason: string): void => {
     if (!closing) return
     closing = false
     drainGeneration++
     webDrained = false
+    inputFrozen = closeBehavior.freezeOnFailure === true
     clearCloseTimer()
-    options.send?.(
-      buildOutbound<BridgeCommandPayload>('command', {
-        name: BRIDGE_COMMAND_RESUME
-      })
-    )
+    if (!inputFrozen) {
+      options.send?.(
+        buildOutbound<BridgeCommandPayload>('command', {
+          name: BRIDGE_COMMAND_RESUME
+        })
+      )
+    }
     const resolve = settleClose
     settleClose = null
     closePromise = null
     resolve?.({ status: 'unconfirmed', reason })
+  }
+
+  const waitForStableQueue = async (): Promise<void> => {
+    let observed: Promise<unknown> = asyncQueue
+    let stable = false
+    while (!stable) {
+      await observed
+      stable = observed === asyncQueue
+      observed = asyncQueue
+    }
   }
 
   /**
@@ -190,13 +216,7 @@ export function createBridgeHostSession(
     if (!closing || !webDrained) return
     const generation = drainGeneration
     // ready 之后仍可能有排在后面的 change（同批投递）：队列直到稳定才 dispose。
-    let observed: Promise<unknown> = asyncQueue
-    let stable = false
-    while (!stable) {
-      await observed
-      stable = observed === asyncQueue
-      observed = asyncQueue
-    }
+    await waitForStableQueue()
     if (!closing || generation !== drainGeneration) return
     closing = false
     disposed = disposeAfterDrain
@@ -252,6 +272,18 @@ export function createBridgeHostSession(
       return {
         kind: 'messages',
         messages: [buildOutbound('ack', existingAck)]
+      }
+    }
+    if (inputFrozen && !closing) {
+      return {
+        kind: 'messages',
+        messages: [
+          buildError(
+            'STALE_SESSION',
+            'handoff not-ready：旧会话仅允许重试未确认写入',
+            message.requestId
+          )
+        ]
       }
     }
     if (parsedPayload.revision !== snapshot.revision + 1) {
@@ -330,7 +362,8 @@ export function createBridgeHostSession(
   }
 
   const validateEnvelope = (
-    raw: unknown
+    raw: unknown,
+    acceptedBeforeSeal = false
   ):
     | { readonly message: BridgeMessage }
     | { readonly messages: BridgeMessage[] } => {
@@ -351,7 +384,11 @@ export function createBridgeHostSession(
         ]
       }
     }
-    if (disposed || message.sessionId !== options.sessionId) {
+    if (
+      disposed ||
+      (!accepting && !acceptedBeforeSeal) ||
+      message.sessionId !== options.sessionId
+    ) {
       return {
         messages: [buildError('STALE_SESSION', '会话已失效', message.requestId)]
       }
@@ -428,8 +465,9 @@ export function createBridgeHostSession(
   }
 
   const handleWebMessageAsync = (raw: unknown): Promise<BridgeMessage[]> => {
+    const acceptedBeforeSeal = accepting
     const run = async () => {
-      const validated = validateEnvelope(raw)
+      const validated = validateEnvelope(raw, acceptedBeforeSeal)
       if ('messages' in validated) return validated.messages
       const result = handleValidatedMessage(validated.message)
       if (Array.isArray(result)) return result
@@ -444,15 +482,44 @@ export function createBridgeHostSession(
 
   const close = (
     timeoutMs = 5000,
-    destroy = true
+    destroy = true,
+    behavior: BridgeCloseBehavior = {}
   ): Promise<BridgeCloseResult> => {
     if (disposed) return Promise.resolve({ status: 'closed' })
+    if (fastClosePromise !== null) return fastClosePromise
     if (closePromise !== null) {
-      if (destroy && !disposeAfterDrain)
+      if (destroy && !disposeAfterDrain) {
         return closePromise.then((result) =>
-          result.status === 'closed' ? close(timeoutMs) : result
+          result.status === 'closed'
+            ? close(timeoutMs, destroy, behavior)
+            : result
         )
+      }
       return closePromise
+    }
+    if (
+      behavior.fastIfNeverWritable &&
+      !restoreSent &&
+      persistedRequestIds.size === 0
+    ) {
+      accepting = false
+      const pending = (async () => {
+        await waitForStableQueue()
+        if (!restoreSent && persistedRequestIds.size === 0) {
+          disposed = true
+          inputFrozen = true
+          options.send?.(buildOutbound('dispose', {}))
+          return { status: 'closed' as const }
+        }
+        accepting = true
+        fastClosePromise = null
+        return close(timeoutMs, destroy, {
+          ...behavior,
+          fastIfNeverWritable: false
+        })
+      })()
+      fastClosePromise = pending
+      return pending
     }
     if (options.send === undefined) {
       return Promise.resolve({
@@ -460,6 +527,7 @@ export function createBridgeHostSession(
         reason: '宿主未提供关闭握手通道'
       })
     }
+    closeBehavior = behavior
     drainGeneration++
     closing = true
     disposeAfterDrain = destroy

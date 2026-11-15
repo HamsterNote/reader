@@ -53,7 +53,10 @@ export type ReaderHostSession = {
    * 关闭握手：请求 Web 冲刷未确认写入，等其确认与本地落盘完成后下发 dispose。
    * 返回 `unconfirmed` 时会话仍可用，调用方必须阻止关闭并提示用户重试。
    */
-  readonly close: (timeoutMs?: number) => Promise<BridgeCloseResult>
+  readonly close: (
+    timeoutMs?: number,
+    options?: { readonly handoff?: boolean }
+  ) => Promise<BridgeCloseResult>
 }
 
 export function createReaderHostSession(
@@ -130,10 +133,13 @@ export function createReaderHostSession(
     },
     getSnapshot: () => session.getSnapshot(),
     flush: (timeoutMs) => session.flush(timeoutMs),
-    close: async (timeoutMs) => {
+    close: async (timeoutMs, closeOptions) => {
       if (disposed) return { status: 'closed' }
       closing = true
-      const result = await session.close(timeoutMs)
+      const result = await session.close(timeoutMs, true, {
+        freezeOnFailure: closeOptions?.handoff === true,
+        fastIfNeverWritable: closeOptions?.handoff === true
+      })
       if (result.status === 'closed') {
         disposed = true
       } else {

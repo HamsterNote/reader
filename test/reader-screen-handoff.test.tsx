@@ -51,9 +51,8 @@ const host = vi.hoisted(() => ({
   native: {} as ReaderPdfViewProps,
   commands: [] as PdfCommand[],
   post: vi.fn(),
-  webClose: vi.fn<
-    (props: OuterWebProps | undefined) => Promise<BridgeCloseResult>
-  >(),
+  webClose:
+    vi.fn<(props: OuterWebProps | undefined) => Promise<BridgeCloseResult>>(),
   sequence: 0,
   webError: false,
   nativeMounts: 0,
@@ -394,7 +393,9 @@ describe('ReaderScreen native handoff regressions', () => {
 
       await switchToNative()
       const identity = await loadNative()
-      expect(host.commands.some((command) => command.type === 'open')).toBe(true)
+      expect(host.commands.some((command) => command.type === 'open')).toBe(
+        true
+      )
       expect(screen.getByText('1/200')).toBeInTheDocument()
       expect(fixture.get).toHaveBeenCalled()
 
@@ -587,9 +588,9 @@ describe('ReaderScreen native handoff regressions', () => {
         '1'
       )
     })
-    expect(restoreReaderSnapshot(fixture.snapshot().data).data.hiddenPages).toEqual([
-      2
-    ])
+    expect(
+      restoreReaderSnapshot(fixture.snapshot().data).data.hiddenPages
+    ).toEqual([2])
     expect(oldBinding?.canWrite(oldBinding.identity)).toBe(false)
   })
 
@@ -602,7 +603,10 @@ describe('ReaderScreen native handoff regressions', () => {
         host.webClose.mockResolvedValue({ status: 'closed' })
       } else if (path === 'failure') {
         host.webClose
-          .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'flush failed' })
+          .mockResolvedValueOnce({
+            status: 'unconfirmed',
+            reason: 'flush failed'
+          })
           .mockResolvedValueOnce({ status: 'closed' })
       } else {
         host.webClose.mockReturnValue(close.promise)
@@ -647,22 +651,22 @@ describe('ReaderScreen native handoff regressions', () => {
         screen.queryByText('WebView 未完成握手（8 秒超时）')
       ).not.toBeInTheDocument()
       expect(oldProps?.handoff?.canWrite(oldProps.handoff.identity)).toBe(false)
-      expect(host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)).toBe(
-        false
-      )
+      expect(
+        host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)
+      ).toBe(false)
       await act(async () => {
         oldProps?.handoff?.onReady?.(oldProps.handoff.identity)
       })
-      expect(host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)).toBe(
-        false
-      )
+      expect(
+        host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)
+      ).toBe(false)
       await act(async () => {
         const current = host.outerProps
         current?.handoff?.onReady?.(current.handoff.identity)
       })
-      expect(host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)).toBe(
-        true
-      )
+      expect(
+        host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)
+      ).toBe(true)
     }
   )
 
@@ -675,10 +679,13 @@ describe('ReaderScreen native handoff regressions', () => {
     })
     const { onBack } = await mountScreen(fixture.store)
     const oldWeb = host.outerProps
-    await switchToNative()
+    const switchButton = screen.getByText('原生 PDF 验证')
     await act(async () => {
-      fireEvent.click(screen.getByText('原生 PDF 验证'))
+      fireEvent.click(switchButton)
+      fireEvent.click(switchButton)
+      await Promise.resolve()
     })
+    expect(host.native.onPdfEvent).toBeTypeOf('function')
     expect(host.webClose).toHaveBeenCalledTimes(1)
     expect(host.nativeMounts).toBe(1)
     await loadNative()
@@ -724,5 +731,43 @@ describe('ReaderScreen native handoff regressions', () => {
     })
     await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1))
     expect(host.webClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('isolates stale writer callbacks when the file identity changes', async () => {
+    const first = makeRecord('file-a')
+    const second = makeRecord('file-b')
+    const firstFixture = createTransactionStore(first)
+    const secondFixture = createTransactionStore(second)
+    const onBack = vi.fn()
+    const props = {
+      entryUrl: 'file:///unused/index.html',
+      baseUrl: 'file:///unused/',
+      onBack,
+      onRecordUpdated: vi.fn()
+    }
+    const view = render(
+      <ReaderScreen record={first} store={firstFixture.store} {...props} />
+    )
+    await screen.findByTestId('web-reader')
+    const old = host.outerProps
+
+    await act(async () => {
+      view.rerender(
+        <ReaderScreen record={second} store={secondFixture.store} {...props} />
+      )
+    })
+    await screen.findByText('file-b.pdf')
+    expect(host.outerProps?.handoff?.identity.fileId).toBe('file-b')
+    await act(async () => {
+      old?.handoff?.onReady?.(old.handoff.identity)
+    })
+    expect(old?.handoff?.canWrite(old.handoff.identity)).toBe(false)
+    expect(() => old?.handoff?.assertWriter(old.handoff.identity)).toThrow(
+      /stale|lease/
+    )
+    const current = host.outerProps
+    expect(current?.handoff?.canWrite(current.handoff.identity)).toBe(true)
+    expect(firstFixture.updateSnapshot).not.toHaveBeenCalled()
+    expect(secondFixture.updateSnapshot).not.toHaveBeenCalled()
   })
 })
