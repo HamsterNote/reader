@@ -11,6 +11,7 @@ import {
 } from 'react-native'
 
 import { pickLegacyJsonAndImport } from '../native/documents'
+import type { BridgeCloseResult } from '../../../src/bridge/hostSession'
 import type {
   HostDocumentRecord,
   ReaderDataStore
@@ -54,8 +55,12 @@ export function ReaderScreen({
   onOcrTextsChange
 }: ReaderScreenProps) {
   const [nativePdf, setNativePdf] = useState(false)
+  const nativePdfRef = useRef(false)
+  const modeEpochRef = useRef(0)
+  const [webMounted, setWebMounted] = useState(true)
   const [importing, setImporting] = useState(false)
-  const readerRef = useRef<ReaderWebViewHandle>(null)
+  const webReaderRef = useRef<ReaderWebViewHandle>(null)
+  const nativeReaderRef = useRef<ReaderWebViewHandle>(null)
   const closingRef = useRef(false)
   const [staged, setStaged] = useState<Awaited<
     ReturnType<typeof stageReaderDocument>
@@ -83,12 +88,19 @@ export function ReaderScreen({
     if (closingRef.current) return
     closingRef.current = true
     try {
-      const result = await readerRef.current?.close()
-      if (result !== undefined && result.status !== 'closed') {
-        // 未确认写入：阻止关闭，保留会话与磁盘原件，提示重试。
+      const readers = nativePdfRef.current
+        ? [nativeReaderRef.current, webReaderRef.current]
+        : [webReaderRef.current]
+      const results = await Promise.all(
+        readers.map((reader) => reader?.close())
+      )
+      const failed = results.find(
+        (result) => result !== undefined && result.status !== 'closed'
+      )
+      if (failed) {
         Alert.alert(
           '数据尚未保存',
-          `${result.reason}。已停留在当前页面，请稍后重试。`
+          `${failed.reason}。已停留在当前页面，请稍后重试。`
         )
         return
       }
@@ -108,6 +120,36 @@ export function ReaderScreen({
     )
     return () => subscription.remove()
   }, [closeReader])
+
+  const retireWebForNative = async (epoch: number): Promise<void> => {
+    let result: BridgeCloseResult | undefined
+    try {
+      result = await webReaderRef.current?.close()
+    } catch (error) {
+      result = {
+        status: 'unconfirmed',
+        reason: error instanceof Error ? error.message : String(error)
+      }
+    }
+    if (modeEpochRef.current !== epoch || !nativePdfRef.current) return
+    if (result === undefined || result.status === 'closed') {
+      setWebMounted(false)
+      return
+    }
+    Alert.alert(
+      '旧 Web 数据尚未保存',
+      '原生阅读已打开；旧 Web 会话仍保留以便重试，不会丢弃未确认写入。',
+      [
+        {
+          text: '重试保存',
+          onPress: () => {
+            void retireWebForNative(epoch)
+          }
+        },
+        { text: '取消', style: 'cancel' }
+      ]
+    )
+  }
 
   const importLegacy = async (): Promise<void> => {
     setImporting(true)
@@ -130,23 +172,41 @@ export function ReaderScreen({
     }
   }
 
-  const ReaderComponent = nativePdf ? NativePdfReader : ReaderWebView
   let content = <ActivityIndicator />
   if (staged) {
     content = (
-      <ReaderComponent
-        key={`${record.fileId}:${record.legacyImport?.importedAt ?? 0}`}
-        ref={readerRef}
-        record={record}
-        store={store}
-        entryUrl={staged.entryUrl}
-        baseUrl={staged.baseUrl}
-        publicationUrl={staged.publicationUrl}
-        ocr={ocr}
-        extraOCR={extraOCR}
-        onOcrError={onOcrError}
-        onOcrTextsChange={onOcrTextsChange}
-      />
+      <>
+        {webMounted ? (
+          <View style={nativePdf ? styles.inactiveReader : styles.activeReader}>
+            <ReaderWebView
+              key={`${record.fileId}:${record.legacyImport?.importedAt ?? 0}`}
+              ref={webReaderRef}
+              record={record}
+              store={store}
+              entryUrl={staged.entryUrl}
+              baseUrl={staged.baseUrl}
+              publicationUrl={staged.publicationUrl}
+            />
+          </View>
+        ) : null}
+        {nativePdf ? (
+          <View style={styles.activeReader}>
+            <NativePdfReader
+              key={`${record.fileId}:${record.legacyImport?.importedAt ?? 0}`}
+              ref={nativeReaderRef}
+              record={record}
+              store={store}
+              entryUrl={staged.entryUrl}
+              baseUrl={staged.baseUrl}
+              publicationUrl={staged.publicationUrl}
+              ocr={ocr}
+              extraOCR={extraOCR}
+              onOcrError={onOcrError}
+              onOcrTextsChange={onOcrTextsChange}
+            />
+          </View>
+        ) : null}
+      </>
     )
   } else if (stageError) {
     content = (
@@ -178,11 +238,29 @@ export function ReaderScreen({
         {__DEV__ && record.format === 'pdf' ? (
           <Pressable
             onPress={() => {
-              void (async () => {
-                const result = await readerRef.current?.close()
-                if (!result || result.status === 'closed')
-                  setNativePdf((v) => !v)
-              })()
+              if (nativePdfRef.current) {
+                void (async () => {
+                  const epoch = ++modeEpochRef.current
+                  const result = await nativeReaderRef.current?.close()
+                  if (modeEpochRef.current !== epoch || !nativePdfRef.current)
+                    return
+                  if (!result || result.status === 'closed') {
+                    setWebMounted(true)
+                    nativePdfRef.current = false
+                    setNativePdf(false)
+                  } else {
+                    Alert.alert(
+                      '数据尚未保存',
+                      `${result.reason}。原生页面保持打开，请重试。`
+                    )
+                  }
+                })()
+                return
+              }
+              const epoch = ++modeEpochRef.current
+              nativePdfRef.current = true
+              setNativePdf(true)
+              void retireWebForNative(epoch)
             }}
           >
             <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
@@ -203,6 +281,8 @@ export function ReaderScreen({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
+  activeReader: { flex: 1 },
+  inactiveReader: { display: 'none' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

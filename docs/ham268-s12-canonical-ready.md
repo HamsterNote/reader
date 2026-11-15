@@ -34,6 +34,12 @@ yarn host:check
 
 第二轮补充：原生画矩形后做 Web 新增/改色，撤销必须只去矩形；undo 后再做 Web 删除/改色，重做只能恢复矩形，不能复活或回滚 ranges。跨页样本补文字—空白—文字及扫描端点夹空白页，空白页无 OCR 也应能打开编辑菜单；只有端点扫描映射不完整时才允许等待回填。
 
+## P6 原生入口与旧 Web 关闭解耦
+
+旧入口在 `ReaderScreen` 等待 `readerRef.close()` 成功后才切换组件。`hostSession.close()` 的默认关闭窗口是 5000ms；`ReaderWebView` 的 `HANDSHAKE_TIMEOUT_MS` 是 8000ms，从每个 WebView generation 挂载开始计时。它们与文档加载/首页提取/资源解压串在旧模式的进入路径上。设备记录点击到首错约 21 秒，但没有逐项计时，不能补造分解值；同 fixture 的 Linux 参考为：16.23MB 资源包解压 333–416ms，200 页打开首次 61.9ms（后续 4–5ms），首页文本提取首次 22.6ms（后续 4–5ms）。
+
+现在点击「原生 PDF 验证」立即挂载原生，旧 Web 只隐藏而不立即卸载，后台完成 close 后才移除。未确认写入时旧会话继续保留，可点「重试保存」，不阻断原生阅读；切回 pdfjs 仍等待原生 close，并用 epoch 忽略上一轮迟到的卸载结果。`test/reader-screen-native-switch.test.tsx` 覆盖 200 页入口、延迟关闭超时、未确认重试、快速往返及迟到 close 竞态。Mac 应从全新 200 页样本只点一次进入原生，再执行冷远页与文字—空白—文字跨页，不能把入口握手超时误判为 canonical 激活失败。
+
 ## P5 跨重开提交 ID
 
 矩形、笔迹和清空笔迹统一生成 `类型-时间戳-UUID-会话内序号` 的 commitId。UUID 承担跨挂载唯一性，序号不再作为全局去重依据；pagePainting 与新笔迹共用同一 commitId，undo/redo 后新操作也不会复用历史 ID。
