@@ -15,6 +15,8 @@ type ReaderProps = {
   readonly record: HostDocumentRecord
   readonly paneId?: string
   readonly isActivePane?: boolean
+  readonly ocr?: boolean | { readonly enabled?: boolean }
+  readonly debugCensusToken?: number
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
 }
@@ -38,6 +40,7 @@ const host = vi.hoisted(() => {
     urlListeners: [] as ((event: { url: string }) => void)[],
     importPath: vi.fn(),
     pick: vi.fn(),
+    readSeed: vi.fn(),
     packaged: {
       entryUrl: 'file:///session/index.html',
       baseUrl: 'file:///session/'
@@ -56,6 +59,9 @@ vi.mock('../app/src/native/documents', () => ({
   pickAndCacheDocument: host.pick,
   removeDocument: vi.fn(),
   importDocumentFromPath: host.importPath
+}))
+vi.mock('../app/src/debug/readOcrSeed', () => ({
+  readOcrSeed: host.readSeed
 }))
 vi.mock('../app/src/components/AppErrorBoundary', () => ({
   AppErrorBoundary: ({ children }: { children?: React.ReactNode }) => (
@@ -159,6 +165,7 @@ beforeEach(async () => {
   host.alert.mockClear()
   host.importPath.mockReset()
   host.pick.mockReset()
+  host.readSeed.mockReset()
   host.initialUrl = null
   host.urlListeners = []
   clearEnv()
@@ -263,6 +270,70 @@ describe('demo host debug entrance (HAM-278)', () => {
     )
     expect(await screen.findByText('open:a.pdf')).toBeInTheDocument()
     expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+  })
+
+  it('seeds cached OCR text for the scanned S12 sample and enables OCR', async () => {
+    process.env.EXPO_PUBLIC_HAM278_ROUTE = `hamsterreader://open?fileId=${a.fileId}&seed=${encodeURIComponent('/var/mobile/reader/sample.ocr.json')}`
+    host.readSeed.mockResolvedValue({
+      version: 1,
+      ranges: [],
+      pages: new Map([
+        [
+          1,
+          [
+            {
+              id: 'scanned-p1-l1',
+              content: 'HAM-278 SCANNED SAMPLE',
+              polygon: [
+                [0.1, 0.1],
+                [0.9, 0.1],
+                [0.9, 0.2],
+                [0.1, 0.2]
+              ]
+            }
+          ]
+        ]
+      ])
+    })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    expect(host.readSeed).toHaveBeenCalledWith(
+      '/var/mobile/reader/sample.ocr.json'
+    )
+    expect(host.latest.get('left')?.ocr).toEqual({ enabled: true })
+    const stored = await new ReaderDataStore(host.storage).get(a.fileId)
+    const readerData = (stored?.snapshot.data as Record<string, unknown>)[
+      'readerData'
+    ] as Record<string, unknown>
+    expect(Object.keys(readerData['ocrTexts'] as object)).toEqual(['1'])
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-debug-ocr-seed',
+      expect.objectContaining({ fileId: a.fileId, pages: [1], texts: 1 })
+    )
+  })
+
+  it('reports a bad OCR seed instead of opening the sample without text', async () => {
+    process.env.EXPO_PUBLIC_HAM278_ROUTE = `hamsterreader://open?fileId=${a.fileId}&seed=/var/mobile/reader/missing.ocr.json`
+    host.readSeed.mockRejectedValue(new Error('OCR 种子不存在'))
+    render(<App />)
+    await waitFor(() =>
+      expect(host.alert).toHaveBeenCalledWith(
+        'OCR 种子加载失败',
+        'OCR 种子不存在'
+      )
+    )
+    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+  })
+
+  it('requests a page render census from the debug bar', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    expect(host.latest.get('left')?.debugCensusToken).toBe(0)
+    fireEvent.click(screen.getByText('渲染计数'))
+    await waitFor(() =>
+      expect(host.latest.get('left')?.debugCensusToken).toBe(1)
+    )
   })
 
   it('keeps the debug entrance and split controls out of release builds', async () => {

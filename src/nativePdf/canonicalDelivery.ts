@@ -22,6 +22,11 @@ export class NativeCanonicalDelivery {
     if (this.ready) this.deliver(page)
   }
 
+  /** web-ready 之前 publish 的页面先缓存，握手后统一重放。 */
+  get isReady(): boolean {
+    return this.ready
+  }
+
   webReady(identity: PdfIdentity): void {
     if (!this.session.accepts(identity)) return
     this.ready = true

@@ -22,7 +22,7 @@
 
 ```sh
 yarn install --frozen-lockfile
-yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/host-debug-route.test.ts test/host-debug-entry.test.tsx test/host-native-documents.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
+yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/host-debug-route.test.ts test/host-debug-entry.test.tsx test/host-debug-ocr-seed.test.ts test/host-native-documents.test.ts test/pdf-page-render-census.test.ts test/native-pdf-save-diagnostics.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
 yarn test:run --maxWorkers=2 --minWorkers=1
 yarn typecheck
 yarn typecheck:host
@@ -85,6 +85,81 @@ EXPO_PUBLIC_HAM278_OPEN_PDF=/absolute/on-device/book.pdf yarn host:start --lan
 **3. 配置换源**：阅读中调试栏点「换源」，从书库选另一个文件。宿主替换配置记录后由 `ReaderScreen` 先关闭旧会话并等待保存（与返回书库同一屏障），保存失败保留旧会话与重试入口，成功才重开新文件。
 
 调试栏、深链接、环境变量与分栏状态都由 `__DEV__` 控制；release 构建只走单栏与原有书库入口。
+
+## 取证诊断（组 1 / 组 4 / 组 5）
+
+三项都只加日志与测试入口，不改渲染、保存屏障或默认入口语义。所有日志经 `logNativePdfDiagnostic` 输出，`__DEV__` 之外静默。
+
+### 组 1：PDF.js 页面画布渲染计数
+
+计数器在 `src/pdf/pdfRenderingQueue.ts` 的 `renderView` 包装里自增（`src/pdf/pageRenderCensus.ts`），也就是 PDF.js 真正提交页面画布渲染的那个点；跳过的不可读页面不计。
+
+读法（Metro / 设备 console）：
+
+```text
+reader-pdf-page-render-census { reason: 'service-ready', pageCanvasRenders: 0, pages: [],
+  pdfViewerMounted: false, pdfViewerCanvasNodes: 0,
+  pdfjsDocumentPages: 1, pdfjsTextPages: 0, webReady: true,
+  fileId, paneId, sessionId, generation }
+reader-pdf-page-render-census-request { renderer: 'pdfkit', outerWebMounted: false, token: 1 }
+```
+
+- 自动一次：canonical 服务在 `service-ready` 时上报（此时 pdfjs 文档已加载完成）。
+- 随时再采：调试栏「渲染计数」按钮 → `reader-pdf-page-render-census-request` + `reader-pdf-page-render-census { reason: 'requested' }`。
+- 判据：`pageCanvasRenders: 0` **且** `pdfViewerMounted: false` / `pdfViewerCanvasNodes: 0`，同时 `pdfjsDocumentPages > 0`（pdfjs 确实加载了这份 PDF，只是没有绘制页画布）。DOM 侧可交叉核对 `document.querySelectorAll('.pdfViewer canvas').length`。
+- 用「Web 对照」切到 Web 渲染时，同一个计数会大于 0 —— 这证明计数器是活的，原生下的 0 不是「没采集」。
+
+### 组 4：保存屏障时序
+
+换源、返回书库、Text/Layout 切换都会走同一条屏障，日志按时间顺序：
+
+```text
+reader-pdf-handoff-barrier-start  { direction: 'native'|'web', phase, fileId, paneId, sessionId, generation, retrySave|discard }
+reader-pdf-save-barrier-start     { fileId, paneId, sessionId, pendingSaves, pendingCommands, retry }
+reader-pdf-save-queue             { event: 'queued'|'started'|'confirmed'|'failed'|'drain-start'|'drain-end',
+                                    operationId, pending, waitMs?, elapsedMs?, ok? }
+reader-pdf-save-barrier-end       { fileId, paneId, sessionId, pendingSaves, waitedMs, result: 'drained'|'pending-left'|'failed' }
+reader-store-write-queue          { fileId, event: 'queued'|'started', queueDepth, waitedMs }   # 仅同一 fileId 有排队时
+reader-pdf-handoff-barrier-end    { direction, status, waitedMs, reason?, fileId, paneId, sessionId, generation }
+```
+
+判据：`save-barrier-end.result='drained'` 且 `pendingSaves=0` 出现在 `handoff-barrier-end.status='closed'` **之前**；新旧 `sessionId` 不同。`save-queue` 的 `drain-start`/`drain-end` 包住所有 `confirmed`，`waitedMs` 就是真实等待时间。`drain-end.ok=false` 表示保存失败、旧会话被保留（此时不会出现新文档的 `documentOpened`）。
+
+### 组 5：扫描版 PDF 的 OCR 握手
+
+样本随仓库：`test/fixtures/ham278-scanned-sample.pdf`（2 页，每页一张 JPEG，无 `/Font`、无文本对象，pdfjs 提取 0 条文字）+ 同名 `.ocr.json`（OCR 文字种子，含一条跨页范围 `scanned-range-p1-p2`）。
+
+重新生成（需要仓库已有的 playwright Chromium）：
+
+```sh
+node scripts/make-scanned-sample.mjs
+```
+
+设备上跑：
+
+```sh
+CONTAINER=$(xcrun simctl get_app_container booted com.hamsternote.reader data)
+cp test/fixtures/ham278-scanned-sample.pdf "$CONTAINER/Documents/"
+cp test/fixtures/ham278-scanned-sample.ocr.json "$CONTAINER/Documents/"
+xcrun simctl openurl booted "hamsterreader://open?path=file://$CONTAINER/Documents/ham278-scanned-sample.pdf&seed=file://$CONTAINER/Documents/ham278-scanned-sample.ocr.json"
+```
+
+也可以 `EXPO_PUBLIC_HAM278_OPEN_PDF=... EXPO_PUBLIC_HAM278_OCR_SEED=... yarn host:start --lan`。`seed` 会把 OCR 文字写进快照 `readerData.ocrTexts` 并自动开启该文档的 OCR；种子无效时弹「OCR 种子加载失败」，不会用空白文字打开。
+
+时间线读法（同一次打开）：
+
+```text
+reader-debug-ocr-seed             { fileId, pages: [1,2], texts, ranges: 1 }
+reader-pdf-canonical-publish      { page: 1, source: 'geometry-cache', utf16, bufferedBeforeWebReady: true }
+reader-pdf-canonical-publish      { page: 2, ..., bufferedBeforeWebReady: true }
+reader-pdf-surface                { event: 'ocr-cache', page, beforeWebReady: true, cachedOcrPages }
+reader-pdf-surface                { event: 'web-ready', cachedOcrPages: 2, pendingActivates }
+reader-pdf-surface                { event: 'activate-start', rangeId, pages: [1,2], source: 'ocr-cache', webReady: true }
+reader-pdf-materialize-input      { ... }           # materializeNativeRange 原生侧入口
+reader-pdf-surface                { event: 'activate-end', rangeId, materialized: true, elapsedMs, utf16 }
+```
+
+判据：`bufferedBeforeWebReady: true` 与 `beforeWebReady: true` 出现在 `web-ready` 之前（说明 OCR/canonical 先到、缓存后重放）；随后 `activate-start` → `activate-end{materialized:true}` 构成完整 activate/materialize 链。激活方式：在原生高亮列表里点 `scanned-range-p1-p2`（不需要长按手势），它会跨页 1→2 激活。
 
 ## 验收记录
 

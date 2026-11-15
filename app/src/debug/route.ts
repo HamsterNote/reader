@@ -17,6 +17,8 @@ export type DebugRoute = {
   readonly source: DebugEntrySource
   readonly target: DebugTarget
   readonly layout: DebugLayout
+  /** 扫描版样本的 OCR 文字种子（设备绝对路径）；S12 专项用。 */
+  readonly ocrSeed?: string
   /** 原始输入，用于日志回溯；不参与业务判断。 */
   readonly raw: string
 }
@@ -26,6 +28,7 @@ export type DebugEnv = {
   readonly EXPO_PUBLIC_HAM278_OPEN_FILE_ID?: string
   readonly EXPO_PUBLIC_HAM278_OPEN_PDF?: string
   readonly EXPO_PUBLIC_HAM278_LAYOUT?: string
+  readonly EXPO_PUBLIC_HAM278_OCR_SEED?: string
 }
 
 const DEBUG_URL_PREFIX = 'hamsterreader://'
@@ -104,10 +107,12 @@ export function parseDebugUrl(
     params.get('path')?.trim()
   )
   if (!target) return null
+  const ocrSeed = params.get('seed')?.trim()
   return {
     source,
     target,
     layout: layoutFrom(params.get('layout')),
+    ...(ocrSeed ? { ocrSeed } : {}),
     raw
   }
 }
@@ -126,10 +131,12 @@ export function debugRouteFromEnv(env: DebugEnv): DebugRoute | null {
   const path = env.EXPO_PUBLIC_HAM278_OPEN_PDF?.trim()
   const target = targetFrom(fileId, path)
   if (!target) return null
+  const ocrSeed = env.EXPO_PUBLIC_HAM278_OCR_SEED?.trim()
   return {
     source: 'env',
     target,
     layout: layoutFrom(env.EXPO_PUBLIC_HAM278_LAYOUT),
+    ...(ocrSeed ? { ocrSeed } : {}),
     raw: target.value
   }
 }
@@ -142,6 +149,7 @@ export function debugRouteLog(route: DebugRoute): Record<string, unknown> {
     target: route.target.kind,
     ...(route.target.kind === 'fileId'
       ? { fileId: route.target.value }
-      : { path: route.target.value })
+      : { path: route.target.value }),
+    ...(route.ocrSeed ? { ocrSeed: route.ocrSeed } : {})
   }
 }

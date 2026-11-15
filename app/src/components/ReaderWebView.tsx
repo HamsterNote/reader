@@ -99,6 +99,8 @@ function buildBootstrapScript(sessionId: string, sourceToken: string): string {
 export type ReaderWebViewHandle = {
   readonly setRenderMode?: (mode: 'layout' | 'text') => boolean
   readonly discardUnconfirmed?: () => Promise<BridgeCloseResult>
+  /** 设备取证：向当前 Web 侧请求一次 PDF.js 页面画布渲染计数。 */
+  readonly requestPageRenderCensus?: () => void
   readonly close: (options?: {
     readonly handoff?: boolean
     readonly retry?: boolean

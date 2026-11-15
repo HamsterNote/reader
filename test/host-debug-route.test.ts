@@ -119,6 +119,25 @@ describe('debug route parsing (HAM-278 device entrance)', () => {
     expect(debugRouteFromEnv({})).toBeNull()
   })
 
+  it('carries the optional scanned-sample OCR seed', () => {
+    const route = parseDebugUrl(
+      `hamsterreader://open?path=${encodeURIComponent('/var/mobile/reader/sample.pdf')}&seed=${encodeURIComponent('/var/mobile/reader/sample.ocr.json')}`
+    )
+    expect(route?.ocrSeed).toBe('/var/mobile/reader/sample.ocr.json')
+    expect(debugRouteLog(route!)).toMatchObject({
+      ocrSeed: '/var/mobile/reader/sample.ocr.json'
+    })
+    expect(
+      debugRouteFromEnv({
+        EXPO_PUBLIC_HAM278_OPEN_PDF: '/var/mobile/reader/sample.pdf',
+        EXPO_PUBLIC_HAM278_OCR_SEED: '/var/mobile/reader/sample.ocr.json'
+      })?.ocrSeed
+    ).toBe('/var/mobile/reader/sample.ocr.json')
+    expect(
+      parseDebugUrl('hamsterreader://open?fileId=x')?.ocrSeed
+    ).toBeUndefined()
+  })
+
   it('logs only identity and target fields', () => {
     const path = '/var/mobile/reader/book.pdf'
     const route = parseDebugUrl(

@@ -18,6 +18,8 @@ type DebugEntryBarProps = {
   readonly onActivatePane: (pane: PaneId) => void
   readonly onToggleSourcePicker: () => void
   readonly onReplaceSource: (document: HostDocumentSummary) => void
+  /** HAM-278 组 1：采集一次 PDF.js 页面画布渲染计数。 */
+  readonly onRequestCensus: () => void
   readonly onClose: () => void
 }
 
@@ -31,6 +33,7 @@ export function DebugEntryBar({
   onActivatePane,
   onToggleSourcePicker,
   onReplaceSource,
+  onRequestCensus,
   onClose
 }: DebugEntryBarProps) {
   return (
@@ -52,6 +55,9 @@ export function DebugEntryBar({
       ) : null}
       <Pressable onPress={onToggleSourcePicker} accessibilityRole='button'>
         <Text style={styles.action}>换源</Text>
+      </Pressable>
+      <Pressable onPress={onRequestCensus} accessibilityRole='button'>
+        <Text style={styles.action}>渲染计数</Text>
       </Pressable>
       <Text style={styles.hint} numberOfLines={1}>
         调试入口

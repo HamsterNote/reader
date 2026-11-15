@@ -50,6 +50,8 @@ type ReaderScreenProps = {
   /** Configured split hosts supply their stable pane key; standalone screens generate one. */
   readonly paneId?: string
   readonly isActivePane?: boolean
+  /** 设备取证：递增该值触发一次 PDF.js 页面画布渲染计数采集。 */
+  readonly debugCensusToken?: number
   readonly ocr?: boolean | ReaderOcrOptions
   readonly extraOCR?: ReaderExtraOcr
   readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -83,6 +85,28 @@ function sameIdentity(left: PdfIdentity, right: PdfIdentity): boolean {
     left.sessionId === right.sessionId &&
     left.generation === right.generation
   )
+}
+
+/** 关闭 Web 会话（含放弃未确认内容）；任何异常都归为 unconfirmed。 */
+async function closeWebSession(
+  ref: React.RefObject<ReaderWebViewHandle | null>,
+  discard: boolean
+): Promise<BridgeCloseResult> {
+  try {
+    if (discard)
+      return (
+        (await ref.current?.discardUnconfirmed?.()) ?? {
+          status: 'unconfirmed',
+          reason: '当前会话未提供放弃未确认内容的出口'
+        }
+      )
+    return (await ref.current?.close({ handoff: true })) ?? { status: 'closed' }
+  } catch (error) {
+    return {
+      status: 'unconfirmed',
+      reason: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 type ReaderContentContext = {
@@ -204,6 +228,7 @@ function ReaderScreenSession({
   closeRef,
   paneId = 'standalone',
   isActivePane = true,
+  debugCensusToken,
   ocr,
   extraOCR,
   onOcrError,
@@ -264,6 +289,21 @@ function ReaderScreenSession({
       outerWebMounted: webMounted
     })
   }, [nativePdf, nativeIdentity, webIdentity, webMounted])
+
+  // 设备取证：宿主显式请求时向当前 Web 侧采集一次页面画布渲染计数。
+  const lastCensusToken = useRef(debugCensusToken)
+  useEffect(() => {
+    if (debugCensusToken === undefined) return
+    if (lastCensusToken.current === debugCensusToken) return
+    lastCensusToken.current = debugCensusToken
+    logNativePdfDiagnostic('reader-pdf-page-render-census-request', {
+      ...(nativePdf ? nativeIdentity : webIdentity),
+      renderer: nativePdf ? 'pdfkit' : 'web',
+      outerWebMounted: webMounted,
+      token: debugCensusToken
+    })
+    if (nativePdf) nativeRef.current?.requestPageRenderCensus?.()
+  }, [debugCensusToken, nativePdf, nativeIdentity, webIdentity, webMounted])
 
   useEffect(() => {
     let active = true
@@ -388,22 +428,22 @@ function ReaderScreenSession({
     const identity = scope.snapshot.web
     if (webCloseInFlight.current !== null) return
     webCloseInFlight.current = identity
-    let result: BridgeCloseResult
-    try {
-      result = discard
-        ? ((await webRef.current?.discardUnconfirmed?.()) ?? {
-            status: 'unconfirmed',
-            reason: '当前会话未提供放弃未确认内容的出口'
-          })
-        : ((await webRef.current?.close({ handoff: true })) ?? {
-            status: 'closed'
-          })
-    } catch (error) {
-      result = {
-        status: 'unconfirmed',
-        reason: error instanceof Error ? error.message : String(error)
-      }
-    }
+    const startedAt = Date.now()
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-start', {
+      ...identity,
+      direction: 'web',
+      phase: scope.snapshot.phase,
+      discard
+    })
+    const result = await closeWebSession(webRef, discard)
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-end', {
+      ...identity,
+      direction: 'web',
+      status: result.status,
+      waitedMs: Date.now() - startedAt,
+      discard,
+      ...(result.status === 'unconfirmed' ? { reason: result.reason } : {})
+    })
     if (!mounted.current || coordinatorRef.current !== scope) return
     const previousEpoch = scope.snapshot.epoch
     if (result.status === 'closed') scope.webDrained(identity)
@@ -453,9 +493,23 @@ function ReaderScreenSession({
     if (!identity) return
     if (nativeCloseInFlight.current !== null) return
     nativeCloseInFlight.current = identity
+    const startedAt = Date.now()
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-start', {
+      ...identity,
+      direction: 'native',
+      phase: scope.snapshot.phase,
+      retrySave
+    })
     const result = (await nativeRef.current?.close({ retry: retrySave })) ?? {
       status: 'closed'
     }
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-end', {
+      ...identity,
+      direction: 'native',
+      status: result?.status ?? 'closed',
+      waitedMs: Date.now() - startedAt,
+      ...(result?.status === 'unconfirmed' ? { reason: result.reason } : {})
+    })
     if (!mounted.current || coordinatorRef.current !== scope) return
     const previous = scope.snapshot
     if (result?.status === 'closed') scope.nativeDrained(identity)

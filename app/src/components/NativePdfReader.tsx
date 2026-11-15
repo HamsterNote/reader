@@ -242,6 +242,29 @@ type NativePdfMessageContext = {
   setStatus: (status: string) => void
 }
 
+/** 把 Web 侧诊断消息转成宿主日志：页面画布计数单独一条。 */
+function logSurfaceDiagnostic(
+  m: Record<string, unknown>,
+  identity: PdfIdentity
+): void {
+  const event = typeof m.event === 'string' ? m.event : 'unknown'
+  const payload =
+    typeof m.payload === 'object' && m.payload !== null
+      ? (m.payload as Record<string, unknown>)
+      : {}
+  if (event === 'page-render-census')
+    logNativePdfDiagnostic('reader-pdf-page-render-census', {
+      ...identity,
+      ...payload
+    })
+  else
+    logNativePdfDiagnostic('reader-pdf-surface', {
+      ...identity,
+      event,
+      ...payload
+    })
+}
+
 function handleNativePdfControlMessage(
   m: Record<string, unknown>,
   context: NativePdfMessageContext
@@ -289,6 +312,10 @@ function handleNativePdfControlMessage(
       return true
     case 'serviceReady':
       return true
+    case 'diagnostic': {
+      logSurfaceDiagnostic(m, identity)
+      return true
+    }
     case 'command': {
       const command = m.command as PdfCommand
       if (!context.guard.accepts(command)) return true
@@ -677,6 +704,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           if (alive.current) {
             setSaveError(error instanceof Error ? error.message : '保存失败')
           }
+        },
+        onDiagnostic: (diagnostic) => {
+          logNativePdfDiagnostic('reader-pdf-save-queue', {
+            ...identity,
+            ...diagnostic
+          })
         }
       })
     }
@@ -1163,6 +1196,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     useImperativeHandle(ref, () => ({
       setRenderMode: (mode) =>
         persist((snapshot) => withNativeRenderMode(snapshot.data, mode)),
+      requestPageRenderCensus: () => {
+        if (!web.current || webDisposed.current) return
+        post({ type: 'census-request' })
+      },
       close: async (options?: { retry?: boolean }) => {
         if (closed.current) return { status: 'closed' }
         if (options?.retry) saveQueue.retry()?.catch(() => undefined)
@@ -1174,8 +1211,22 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         enqueue({ type: 'cancel' })
         post({ type: 'dismiss' })
         setMenuWithSource(null, 'close')
+        // 屏障前后：关闭会话前必须先等到队列里所有写入拿到确认。
+        const drainStartedAt = Date.now()
+        logNativePdfDiagnostic('reader-pdf-save-barrier-start', {
+          ...identity,
+          pendingSaves: saveQueue.pending,
+          pendingCommands: queue.current.length,
+          retry: options?.retry === true
+        })
         try {
           await saveQueue.drain()
+          logNativePdfDiagnostic('reader-pdf-save-barrier-end', {
+            ...identity,
+            pendingSaves: saveQueue.pending,
+            waitedMs: Date.now() - drainStartedAt,
+            result: saveQueue.pending === 0 ? 'drained' : 'pending-left'
+          })
           if (saveQueue.pending !== 0)
             return { status: 'unconfirmed', reason: '原生编辑尚未保存，请重试' }
           closed.current = true
@@ -1184,6 +1235,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           guard.close()
           return { status: 'closed' }
         } catch {
+          logNativePdfDiagnostic('reader-pdf-save-barrier-end', {
+            ...identity,
+            pendingSaves: saveQueue.pending,
+            waitedMs: Date.now() - drainStartedAt,
+            result: 'failed'
+          })
           return { status: 'unconfirmed', reason: '原生高亮保存失败，请重试' }
         }
       }
@@ -1447,6 +1504,15 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               texts
             )
             if (canonical) {
+              // S12：web-ready 之前 publish 的页面会被缓存并在握手后重放，
+              // 这条日志是「OCR/canonical 先于 web-ready」的宿主侧证据。
+              logNativePdfDiagnostic('reader-pdf-canonical-publish', {
+                ...identity,
+                page: geometry.pageNumber,
+                source: 'geometry-cache',
+                utf16: canonical.text.length,
+                bufferedBeforeWebReady: !canonicalDelivery.isReady
+              })
               canonicalDelivery.publish(canonical)
               enqueue({
                 type: 'text',

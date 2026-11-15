@@ -32,6 +32,8 @@ import {
   type PaneRecords
 } from './src/debug/panes'
 import { resolveDebugTarget } from './src/debug/resolveTarget'
+import { mergeOcrTexts } from './src/debug/ocrSeed'
+import { readOcrSeed } from './src/debug/readOcrSeed'
 import {
   debugRouteFromEnv,
   debugRouteLog,
@@ -68,6 +70,8 @@ function AppContent() {
   const [split, setSplit] = useState(false)
   const [activePane, setActivePane] = useState<PaneId>('left')
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
+  const [censusToken, setCensusToken] = useState(0)
+  const [ocrFileIds, setOcrFileIds] = useState<ReadonlySet<string>>(new Set())
   const [packaged, setPackaged] = useState<PackagedWebReader | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -185,9 +189,42 @@ function AppContent() {
         Alert.alert('调试入口失败', outcome.reason)
         return
       }
+      let record = outcome.record
+      if (route.ocrSeed) {
+        // S12：把扫描样本的 OCR 文字种子写入快照，宿主打开时会先 publish，
+        // 由 NativeCanonicalDelivery 在 web-ready 之前缓存、握手时重放。
+        try {
+          const seed = await readOcrSeed(route.ocrSeed)
+          const merged = mergeOcrTexts(record.snapshot.data, seed)
+          await store.updateSnapshot(record.fileId, (snapshot) => ({
+            ...snapshot,
+            data: merged.data,
+            revision: snapshot.revision + 1
+          }))
+          record = (await store.get(record.fileId)) ?? record
+          setOcrFileIds((current) => new Set(current).add(record.fileId))
+          logNativePdfDiagnostic('reader-debug-ocr-seed', {
+            fileId: record.fileId,
+            seedPath: route.ocrSeed,
+            pages: merged.pages,
+            texts: merged.texts,
+            ranges: merged.ranges
+          })
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          logNativePdfDiagnostic('reader-debug-ocr-seed', {
+            fileId: record.fileId,
+            seedPath: route.ocrSeed,
+            ok: false,
+            reason
+          })
+          Alert.alert('OCR 种子加载失败', reason)
+          return
+        }
+      }
       setSplit(route.layout === 'split')
       setPanes((state) =>
-        mirrorActivePane(setPaneRecord(state, 'left', outcome.record), 'left')
+        mirrorActivePane(setPaneRecord(state, 'left', record), 'left')
       )
       setActivePane('left')
       void refresh()
@@ -206,7 +243,8 @@ function AppContent() {
         EXPO_PUBLIC_HAM278_OPEN_FILE_ID:
           process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID,
         EXPO_PUBLIC_HAM278_OPEN_PDF: process.env.EXPO_PUBLIC_HAM278_OPEN_PDF,
-        EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT
+        EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT,
+        EXPO_PUBLIC_HAM278_OCR_SEED: process.env.EXPO_PUBLIC_HAM278_OCR_SEED
       })
       if (envRoute) {
         await openDebugRoute(envRoute)
@@ -326,6 +364,7 @@ function AppContent() {
             onActivatePane={setActivePane}
             onToggleSourcePicker={() => setSourcePickerOpen((value) => !value)}
             onReplaceSource={replaceSource}
+            onRequestCensus={() => setCensusToken((value) => value + 1)}
             onClose={closeAll}
           />
         ) : null}
@@ -343,6 +382,10 @@ function AppContent() {
                 baseUrl={packaged.baseUrl}
                 paneId={pane}
                 isActivePane={split ? pane === focusPane : true}
+                debugCensusToken={censusToken}
+                ocr={
+                  ocrFileIds.has(record.fileId) ? { enabled: true } : undefined
+                }
                 onBack={() => closePane(pane)}
                 onRecordUpdated={(updated) => {
                   setPanes((state) => setPaneRecord(state, pane, updated))
