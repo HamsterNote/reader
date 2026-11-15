@@ -13,6 +13,7 @@ import type { PdfIdentity } from '../../src/nativePdf/contracts'
 const host = vi.hoisted(() => ({
   web: {} as WebViewProps,
   native: {} as ReaderPdfViewProps,
+  commands: [] as ReaderPdfViewProps['command'][],
   post: vi.fn(),
   sequence: 0
 }))
@@ -46,6 +47,11 @@ vi.mock('../../app/modules/reader-pdf', () => ({
   readerPdfModule: {},
   ReaderPdfView: (props: ReaderPdfViewProps) => {
     host.native = props
+    if (
+      props.command &&
+      host.commands.at(-1)?.requestId !== props.command.requestId
+    )
+      host.commands.push(props.command)
     return null
   }
 }))
@@ -161,8 +167,27 @@ function delivered() {
     .map(([raw]) => JSON.parse(raw as string))
     .filter((m) => m.type === 'ocrText')
 }
+async function drainCommands(identity: PdfIdentity) {
+  const completed = new Set<string>()
+  for (let index = 0; index < 30; index++) {
+    const command = host.native.command
+    if (!command || completed.has(command.requestId)) return
+    completed.add(command.requestId)
+    await act(async () => {
+      host.native.onPdfEvent({
+        nativeEvent: {
+          ...identity,
+          type: 'complete',
+          requestId: command.requestId
+        }
+      })
+    })
+  }
+  throw new Error('native command queue did not drain')
+}
 
 beforeEach(() => {
+  host.commands = []
   host.post.mockClear()
   vi.stubGlobal('__DEV__', false)
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
@@ -249,5 +274,28 @@ describe('NativePdfReader canonical delivery callback wiring', () => {
       ['A', 'PAGE A']
     ])
     expect(reopened.identity.sessionId).not.toBe(a.identity.sessionId)
+  })
+
+  it('navigates across cold persisted OCR pages and constructs their canonical mappings', async () => {
+    const { identity } = await mount(record('cold-cross-page'))
+    message(identity, 'web-ready')
+    message(identity, 'canonical-request', [1, 2])
+    await drainCommands(identity)
+
+    expect(
+      host.commands
+        .filter((command) => command?.type === 'navigate')
+        .map((command) =>
+          command?.type === 'navigate' ? command.pageNumber : undefined
+        )
+    ).toEqual([2, 1])
+
+    geometry(identity, 2)
+    geometry(identity, 1)
+    expect(delivered().map((m) => m.canonicalPage.pageNumber)).toEqual([2, 1])
+    expect(delivered().map((m) => m.canonicalPage.text)).toEqual([
+      'OCR QA SAMPLE SECOND',
+      'OCR QA SAMPLE'
+    ])
   })
 })

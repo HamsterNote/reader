@@ -16,18 +16,34 @@ export function withNativePageEditData(
   return { ...record(snapshotData), readerData }
 }
 
-/** Web popover commits own annotation fields; never import its stale readerData. */
+/** Web popover commits own ranges/comments; native drawings and readerData stay authoritative. */
 export function mergeNativeExternalData(
   currentData: unknown,
   incomingData: unknown
 ): Record<string, unknown> {
   const current = record(currentData)
   const incoming = record(incomingData)
+  const currentAnnotations = record(current['annotations'])
+  const incomingAnnotations = record(incoming['annotations'])
+  const owns = (value: Record<string, unknown>, key: string) =>
+    Object.prototype.hasOwnProperty.call(value, key)
   return {
     ...current,
     ...incoming,
-    ...(Object.prototype.hasOwnProperty.call(current, 'readerData')
-      ? { readerData: current.readerData }
+    ...(owns(current, 'readerData') ? { readerData: current.readerData } : {}),
+    ...(owns(incoming, 'annotations')
+      ? {
+          annotations: {
+            ...currentAnnotations,
+            ...incomingAnnotations,
+            ...(owns(currentAnnotations, 'rects')
+              ? { rects: currentAnnotations.rects }
+              : {}),
+            ...(owns(currentAnnotations, 'paintings')
+              ? { paintings: currentAnnotations.paintings }
+              : {})
+          }
+        }
       : {})
   }
 }

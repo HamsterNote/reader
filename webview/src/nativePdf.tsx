@@ -40,6 +40,7 @@ import {
 } from '../../src/pdf/pdfSourceLinks'
 import { visibleOriginalPages } from '../../src/nativePdf/geometry'
 import { NativePdfSession } from '../../src/nativePdf/session'
+import { logNativePdfDiagnostic } from '../../src/nativePdf/diagnostics'
 import { shouldPreserveNativeWebMenu } from '../../src/nativePdf/menuOwnership'
 
 type NativeBootstrap = PdfIdentity & {
@@ -86,8 +87,14 @@ export function startNativePdfSurface(
   const ocrPages = new Map<number, PdfCanonicalPage>()
   const pendingActivates = new Map<
     string,
-    { rangeId: string; pages: number[]; timeout: ReturnType<typeof setTimeout> }
+    {
+      rangeId: string
+      pages: number[]
+      started: boolean
+      timeout?: ReturnType<typeof setTimeout>
+    }
   >()
+  const activationRuns = new Set<string>()
   const send = (payload: Record<string, unknown>) =>
     window.ReactNativeWebView?.postMessage(
       JSON.stringify({
@@ -121,7 +128,12 @@ export function startNativePdfSurface(
     console.info('web-popover-value', {
       owner: menuOwner,
       value: value
-        ? { activeId: value.activeId, start: value.range?.start, end: value.range?.end, anchor: value.anchor }
+        ? {
+            activeId: value.activeId,
+            start: value.range?.start,
+            end: value.range?.end,
+            anchor: value.anchor
+          }
         : null
     })
     menuListener?.(value)
@@ -273,25 +285,64 @@ export function startNativePdfSurface(
     )
   }
   root.render(<Menu />)
+  function finishActivate(rangeId: string): void {
+    const pending = pendingActivates.get(rangeId)
+    if (pending?.timeout) clearTimeout(pending.timeout)
+    pendingActivates.delete(rangeId)
+  }
+  function armActivateTimeout(rangeId: string): void {
+    const pending = pendingActivates.get(rangeId)
+    if (!pending || pending.timeout) return
+    pending.timeout = setTimeout(() => {
+      if (pendingActivates.get(rangeId) !== pending) return
+      pendingActivates.delete(rangeId)
+      console.info('reader-pdf-activate-wait-timeout', {
+        rangeId,
+        pages: pending.pages
+      })
+      console.info('reader-pdf-activate-pending-dropped', {
+        rangeId,
+        pages: pending.pages
+      })
+    }, 3000)
+  }
   function activateRange(rangeId: string, replay = false): void {
     const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
     if (!existing) {
+      finishActivate(rangeId)
       fail('INVALID_TARGET')
       return
     }
+    if (disposed || !cache || activationRuns.has(rangeId)) return
     const first = endpointPage(existing.start),
       last = endpointPage(existing.end)
-    ensure(allowed.filter((n) => n >= first && n <= last))
+    const pages = allowed.filter((n) => n >= first && n <= last)
+    const pending = pendingActivates.get(rangeId)
+    if (pending) {
+      pending.started = true
+      if (pages.length) pending.pages = pages
+    }
+    activationRuns.add(rangeId)
+    // Page-only navigation works before canonical text exists and lets the host
+    // materialize persisted OCR from the target page's geometry.
+    if (allowed.includes(first))
+      command({ type: 'navigate', pageNumber: first })
+    ensure(pages)
       .then(() => {
         if (disposed || !cache) return
         mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
         console.info('reader-pdf-activate-canonical', {
           source: ocrPages.size ? 'ocr-cache' : 'pdf',
-          pages: Array.from(new Set([first, last])).map((pageNumber) => ({
+          pages: pages.map((pageNumber) => ({
             page: pageNumber,
             utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
           }))
         })
+        if (!nativeSelectionPagesReady(cache.pages, pages)) {
+          if (!pendingActivates.has(rangeId)) queueActivate(rangeId, pages)
+          armActivateTimeout(rangeId)
+          return
+        }
         materializeNativeRange(
           existing.start,
           existing.end,
@@ -304,18 +355,28 @@ export function startNativePdfSurface(
           },
           existing
         )
+        const canonicalPages = pages.flatMap((pageNumber) => {
+          const page = cache!.pages.get(pageNumber)
+          return page ? [page] : []
+        })
+        finishActivate(rangeId)
         command({
           type: 'text',
-          pages: Array.from(cache.pages.values()),
-          retain: Array.from(cache.pages.keys()),
+          pages: canonicalPages,
+          retain: pages,
           source: 'geometry-cache'
         })
         range = existing
-        command({ type: 'navigate', pageNumber: first, offset: existing.start.offset })
+        command({
+          type: 'navigate',
+          pageNumber: first,
+          offset: existing.start.offset
+        })
         command({ type: 'selection', range, showMenu: true })
       })
       .catch(() => {
         if (disposed) return
+        finishActivate(rangeId)
         if (replay)
           console.info('reader-pdf-activate-pending-dropped', {
             rangeId,
@@ -323,36 +384,33 @@ export function startNativePdfSurface(
           })
         fail('MAPPING_NOT_READY')
       })
+      .finally(() => activationRuns.delete(rangeId))
   }
   function replayPendingActivates(): void {
     // The receiver can accept OCR before the asynchronous PDF service exists.
-    // Do not consume a pending activation until both dependencies are ready.
+    // A cold PDF target still needs one extraction pass before it can wait for OCR.
     if (disposed || !cache) return
     mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
-    for (const pending of pendingActivates.values()) {
-      if (!nativeSelectionPagesReady(cache.pages, pending.pages)) continue
-      clearTimeout(pending.timeout)
-      pendingActivates.delete(pending.rangeId)
-      console.info('reader-pdf-activate-pending-replay', {
-        rangeId: pending.rangeId,
-        pages: pending.pages
-      })
-      activateRange(pending.rangeId, true)
+    for (const pending of [...pendingActivates.values()]) {
+      const ready = nativeSelectionPagesReady(cache.pages, pending.pages)
+      if (pending.started && !ready) continue
+      if (ready)
+        console.info('reader-pdf-activate-pending-replay', {
+          rangeId: pending.rangeId,
+          pages: pending.pages
+        })
+      activateRange(pending.rangeId, ready)
     }
   }
   function clearPendingActivates(): void {
     for (const pending of pendingActivates.values())
-      clearTimeout(pending.timeout)
+      if (pending.timeout) clearTimeout(pending.timeout)
     pendingActivates.clear()
+    activationRuns.clear()
   }
   function queueActivate(rangeId: string, pages: number[]): void {
     if (pendingActivates.has(rangeId)) return
-    const timeout = setTimeout(() => {
-      pendingActivates.delete(rangeId)
-      console.info('reader-pdf-activate-wait-timeout', { rangeId, pages })
-      console.info('reader-pdf-activate-pending-dropped', { rangeId, pages })
-    }, 3000)
-    pendingActivates.set(rangeId, { rangeId, pages, timeout })
+    pendingActivates.set(rangeId, { rangeId, pages, started: false })
     console.info('reader-pdf-activate-pending', { rangeId, pages })
     // A repair request is sent once per pending activation, never on a timer.
     send({ type: 'canonical-request', pages })
@@ -396,13 +454,17 @@ export function startNativePdfSurface(
         : 'pdf'
     console.info('reader-pdf-native-selection-canonical-compare', {
       source,
-      supplied: suppliedPages.map((page) => ({ page: page.pageNumber, utf16: page.text.length })),
+      supplied: suppliedPages.map((page) => ({
+        page: page.pageNumber,
+        utf16: page.text.length
+      })),
       cached: numbers.map((pageNumber) => ({
         page: pageNumber,
         utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
       })),
       consistent: suppliedPages.every(
-        (page) => cache!.pages.get(page.pageNumber)?.text.length === page.text.length
+        (page) =>
+          cache!.pages.get(page.pageNumber)?.text.length === page.text.length
       )
     })
     await ensure(numbers)
@@ -464,16 +526,26 @@ export function startNativePdfSurface(
       message =
         typeof raw === 'string' ? JSON.parse(raw) : (raw as typeof message)
     } catch {
-      console.info('reader-pdf-web-message', { parsed: false, rawType: typeof raw })
+      logNativePdfDiagnostic('reader-pdf-web-message', {
+        parsed: false,
+        rawType: typeof raw
+      })
       return
     }
-    console.info('reader-pdf-web-message', {
+    logNativePdfDiagnostic('reader-pdf-web-message', {
       parsed: true,
       type: message.type,
       eventType: message.event?.type,
-      phase: message.event?.type === 'selection' ? message.event.phase : undefined,
-      startOffset: message.event?.type === 'selection' ? message.event.start.offset : undefined,
-      endOffset: message.event?.type === 'selection' ? message.event.end.offset : undefined
+      phase:
+        message.event?.type === 'selection' ? message.event.phase : undefined,
+      startOffset:
+        message.event?.type === 'selection'
+          ? message.event.start.offset
+          : undefined,
+      endOffset:
+        message.event?.type === 'selection'
+          ? message.event.end.offset
+          : undefined
     })
     if (disposed || !message.identity || !guard.accepts(message.identity))
       return
@@ -524,7 +596,9 @@ export function startNativePdfSurface(
       const suppliedPages = Array.isArray(message.canonicalPages)
         ? message.canonicalPages
         : []
-      selection(nativeEvent, suppliedPages).catch(() => fail('MAPPING_NOT_READY'))
+      selection(nativeEvent, suppliedPages).catch(() =>
+        fail('MAPPING_NOT_READY')
+      )
       return
     }
     if (message.event?.type === 'activate') {
@@ -538,15 +612,23 @@ export function startNativePdfSurface(
         fail('INVALID_TARGET')
         return
       }
+      if (
+        !rangeId ||
+        pendingActivates.has(rangeId) ||
+        activationRuns.has(rangeId)
+      )
+        return
       const first = endpointPage(existing.start),
         last = endpointPage(existing.end)
-      const pages = Array.from(new Set([first, last]))
-      if (cache) mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
-      if (!cache || !nativeSelectionPagesReady(cache.pages, pages)) {
-        if (rangeId) queueActivate(rangeId, pages)
-        return
-      }
-      if (rangeId) activateRange(rangeId)
+      const selectedPages = allowed.filter((n) => n >= first && n <= last)
+      const pages = selectedPages.length
+        ? selectedPages
+        : Array.from(new Set([first, last]))
+      if (cache)
+        mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
+      if (!cache || !nativeSelectionPagesReady(cache.pages, pages))
+        queueActivate(rangeId, pages)
+      activateRange(rangeId)
       return
     }
     const event = message.event

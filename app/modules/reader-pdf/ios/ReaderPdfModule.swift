@@ -2,6 +2,17 @@ import ExpoModulesCore
 import PDFKit
 import UIKit
 
+enum ReaderPdfDiagnostics {
+  static var enabled = false
+  static func log(_ message: @autoclosure () -> String) {
+    #if DEBUG
+    NSLog("%@", message())
+    #else
+    if enabled { NSLog("%@", message()) }
+    #endif
+  }
+}
+
 public class ReaderPdfModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ReaderPdf")
@@ -57,10 +68,10 @@ final class ReaderPdfPageView: UIView {
   override func draw(_ rect: CGRect) {
     if !pageDrawLogEmitted {
       pageDrawLogEmitted = true
-      NSLog("ReaderPdf draw pageOnce=1 bounds=\(bounds) scale=\(contentScaleFactor) zoom=\(zoomScale) rect=\(rect)")
+      ReaderPdfDiagnostics.log("ReaderPdf draw pageOnce=1 bounds=\(bounds) scale=\(contentScaleFactor) zoom=\(zoomScale) rect=\(rect)")
     }
     guard let context = UIGraphicsGetCurrentContext(), let page = page else {
-      NSLog("ReaderPdf draw skipped context=\(UIGraphicsGetCurrentContext() != nil) page=\(page != nil)")
+      ReaderPdfDiagnostics.log("ReaderPdf draw skipped context=\(UIGraphicsGetCurrentContext() != nil) page=\(page != nil)")
       return
     }
     context.setFillColor(UIColor.white.cgColor); context.fill(bounds)
@@ -218,13 +229,17 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       let path = url.resolvingSymlinksInPath().path
       let exists = FileManager.default.fileExists(atPath: path)
       let readable = FileManager.default.isReadableFile(atPath: path)
-      NSLog("ReaderPdf open sessionDirectory=\((path as NSString).deletingLastPathComponent) pdfPath=\(path) exists=\(exists) readable=\(readable)")
-      guard roots.contains(where: { path.hasPrefix($0 + "/") }) else { error("PERMISSION",request,"path 不在应用容器内：\(path)"); return }
-      guard readable else { error("PERMISSION",request,"PDF 不可读：\(path)"); return }
-      guard let doc = PDFDocument(url: url) else { NSLog("ReaderPdf document=nil path=%@", path); error("CORRUPT",request,"PDFKit document=nil，路径：\(path)"); return }
-      NSLog("ReaderPdf document opened path=\(path) locked=\(doc.isLocked) pageCount=\(doc.pageCount)")
-      guard !doc.isLocked else { error("PASSWORD_REQUIRED",request,"PDF 已加密：\(path)"); return }
-      guard doc.pageCount > 0 else { error("CORRUPT",request,"PDF 页数为 0：\(path)"); return }
+      ReaderPdfDiagnostics.log("ReaderPdf open exists=\(exists) readable=\(readable)")
+      guard roots.contains(where: { path.hasPrefix($0 + "/") }) else { error("PERMISSION",request,"PDF 路径不在应用容器内"); return }
+      guard readable else { error("PERMISSION",request,"PDF 不可读"); return }
+      guard let doc = PDFDocument(url: url) else {
+        ReaderPdfDiagnostics.log("ReaderPdf document error=CORRUPT documentOpened=false pageCount=0 locked=false exists=\(exists) readable=\(readable)")
+        error("CORRUPT",request,"PDFKit document=nil"); return
+      }
+      let openError = doc.isLocked ? "PASSWORD_REQUIRED" : (doc.pageCount > 0 ? "NONE" : "CORRUPT")
+      ReaderPdfDiagnostics.log("ReaderPdf document error=\(openError) documentOpened=true pageCount=\(doc.pageCount) locked=\(doc.isLocked) exists=\(exists) readable=\(readable)")
+      guard !doc.isLocked else { error("PASSWORD_REQUIRED",request,"PDF 已加密"); return }
+      guard doc.pageCount > 0 else { error("CORRUPT",request,"PDF 页数为 0"); return }
       document = doc; pages = Array(1...doc.pageCount)
       seen.insert(request); emit(["type":"loaded", "pageCount":doc.pageCount]); layoutPages()
     } else {
@@ -267,20 +282,20 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
         for p in c["pages"] as? [[String: Any]] ?? [] {
           guard let n = p["pageNumber"] as? Int, pages.contains(n), let str = p["text"] as? String,
                 let bs = p["boundaries"] as? [[String: Any]], let gs = p["glyphs"] as? [[String: Any]] else {
-            NSLog("ReaderPdf text rejected request=\(request) reason=invalid-payload")
+            ReaderPdfDiagnostics.log("ReaderPdf text rejected request=\(request) reason=invalid-payload")
             continue
           }
-          NSLog("ReaderPdf text received source=\(source) clear=\(clear) page=\(n) utf16=\(str.utf16.count) boundariesInput=\(bs.count) glyphsInput=\(gs.count)")
+          ReaderPdfDiagnostics.log("ReaderPdf text received source=\(source) clear=\(clear) page=\(n) utf16=\(str.utf16.count) boundariesInput=\(bs.count) glyphsInput=\(gs.count)")
           let boundaries = bs.compactMap { b -> CanonicalBoundary? in
             guard let o = b["offset"] as? Int, o >= 0 && o <= str.utf16.count else { return nil }
             return CanonicalBoundary(offset:o,rect:pdfRect(b["rect"]))
           }
           guard boundaries.count == str.utf16.count + 1 else {
-            NSLog("ReaderPdf text rejected page=\(n) reason=MAPPING_NOT_READY utf16=\(str.utf16.count) boundaries=\(boundaries.count)")
+            ReaderPdfDiagnostics.log("ReaderPdf text rejected page=\(n) reason=MAPPING_NOT_READY utf16=\(str.utf16.count) boundaries=\(boundaries.count)")
             error("MAPPING_NOT_READY",request); continue
           }
           if str.isEmpty, !clear, text[n]?.text.isEmpty == false {
-            NSLog("ReaderPdf text ignored source=\(source) page=\(n) reason=empty-would-overwrite existingUtf16=\(text[n]?.text.utf16.count ?? 0)")
+            ReaderPdfDiagnostics.log("ReaderPdf text ignored source=\(source) page=\(n) reason=empty-would-overwrite existingUtf16=\(text[n]?.text.utf16.count ?? 0)")
             continue
           }
           if let raw = p["textImage"] as? String, let base64 = raw.split(separator:",",maxSplits:1).last,
@@ -291,11 +306,11 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
             guard let a = g["start"] as? Int, let b = g["end"] as? Int, let s = g["text"] as? String else { return nil }
             return CanonicalGlyph(start:a,end:b,text:s,rect:pdfRect(g["rect"]))
           })
-          NSLog("ReaderPdf text accepted source=\(source) page=\(n) canonicalReady=1 utf16=\(text[n]?.text.utf16.count ?? 0) boundaries=\(text[n]?.boundaries.count ?? 0) glyphs=\(text[n]?.glyphs.count ?? 0)")
+          ReaderPdfDiagnostics.log("ReaderPdf text accepted source=\(source) page=\(n) canonicalReady=1 utf16=\(text[n]?.text.utf16.count ?? 0) boundaries=\(text[n]?.boundaries.count ?? 0) glyphs=\(text[n]?.glyphs.count ?? 0)")
         }
         if clear { text.removeAll() }
         text = text.filter { retain.contains($0.key) || pageViews[$0.key] != nil }
-        NSLog("ReaderPdf text retained pages=\(text.keys.sorted()) pageViews=\(pageViews.keys.sorted())")
+        ReaderPdfDiagnostics.log("ReaderPdf text retained pages=\(text.keys.sorted()) pageViews=\(pageViews.keys.sorted())")
         updateSelection()
       case "annotations":
         annotations = c["ranges"] as? [[String: Any]] ?? []
@@ -688,19 +703,19 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
   private func hit(_ point: CGPoint) -> PdfEndpoint? {
     let p = convert(point,to:content)
     guard let n = pages.first(where: { slots[$0]?.contains(p) == true }) else {
-      NSLog("ReaderPdf hit miss reason=outside-slot selfPoint=\(point) contentPoint=\(p)")
+      ReaderPdfDiagnostics.log("ReaderPdf hit miss reason=outside-slot selfPoint=\(point) contentPoint=\(p)")
       return nil
     }
     guard let f = frames[n], let mapping = text[n] else {
-      NSLog("ReaderPdf hit miss page=\(n) reason=canonical-not-ready textPages=\(text.keys.sorted())")
+      ReaderPdfDiagnostics.log("ReaderPdf hit miss page=\(n) reason=canonical-not-ready textPages=\(text.keys.sorted())")
       return nil
     }
     let local = CGPoint(x:p.x-f.minX,y:p.y-f.minY)
-    NSLog("ReaderPdf hit page=\(n) local=\(local) canonicalReady=1 utf16=\(mapping.text.utf16.count) boundaries=\(mapping.boundaries.count) glyphs=\(mapping.glyphs.count)")
+    ReaderPdfDiagnostics.log("ReaderPdf hit page=\(n) local=\(local) canonicalReady=1 utf16=\(mapping.text.utf16.count) boundaries=\(mapping.boundaries.count) glyphs=\(mapping.glyphs.count)")
     // Only actual line bounds can hit; never add a handle/finger compensation.
     let candidates = mapping.boundaries.filter { $0.rect.minY <= local.y && $0.rect.maxY >= local.y }
     if let b = candidates.min(by: { abs($0.rect.minX-local.x) < abs($1.rect.minX-local.x) }) {
-      NSLog("ReaderPdf hit boundary page=\(n) offset=\(b.offset)")
+      ReaderPdfDiagnostics.log("ReaderPdf hit boundary page=\(n) offset=\(b.offset)")
       return PdfEndpoint(page:n,offset:b.offset)
     }
     // OCR providers may return a box without reliable per-character width.
@@ -708,10 +723,10 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     // this preserves long-press selection even when boundary rectangles are
     // degenerate, while the stored canonical text remains the source of truth.
     guard let glyph = mapping.glyphs.first(where: { $0.rect.minY <= local.y && $0.rect.maxY >= local.y }) else {
-      NSLog("ReaderPdf hit miss page=\(n) reason=no-boundary-or-glyph local=\(local)")
+      ReaderPdfDiagnostics.log("ReaderPdf hit miss page=\(n) reason=no-boundary-or-glyph local=\(local)")
       return nil
     }
-    NSLog("ReaderPdf hit glyph page=\(n) offset=\(glyph.start)")
+    ReaderPdfDiagnostics.log("ReaderPdf hit glyph page=\(n) offset=\(glyph.start)")
     return PdfEndpoint(page:n,offset:glyph.start)
   }
   private func updateSelection() {
@@ -758,7 +773,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
     if g.numberOfTouches > 1 { cancelSelection(); return }
     if g.state == .began {
       let point = g.location(in:self)
-      NSLog("ReaderPdf longPress began point=\(point) contentPoint=\(convert(point,to:content))")
+      ReaderPdfDiagnostics.log("ReaderPdf longPress began point=\(point) contentPoint=\(convert(point,to:content))")
     }
     if g.state == .began, let e = hit(g.location(in:self)), let p = text[e.page], !p.text.isEmpty {
       beforeDrag = (start,end); beforeRangeId = activeRangeId; activeRangeId = nil
@@ -772,7 +787,7 @@ final class ReaderPdfView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDe
       activeTouch = (g as? ReaderSelectionHold)?.inputType == .direct
       pointer = g.location(in:self); updateSelection(); sendSelection("preview")
     } else if g.state == .began {
-      NSLog("ReaderPdf longPress no-selection canonicalPages=\(text.keys.sorted())")
+      ReaderPdfDiagnostics.log("ReaderPdf longPress no-selection canonicalPages=\(text.keys.sorted())")
     } else if g.state == .changed { move(g.location(in:self)) }
     else if g.state == .ended { finish(g.location(in:self)) }
     else if g.state == .cancelled || g.state == .failed { cancelSelection() }

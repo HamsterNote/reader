@@ -52,6 +52,7 @@ import {
 } from '../../../src/nativePdf/strokes'
 import { restoreReaderSnapshot } from '../../../src/host/readerSnapshot'
 import { NativePdfSession } from '../../../src/nativePdf/session'
+import { logNativePdfDiagnostic } from '../../../src/nativePdf/diagnostics'
 import { NativeCanonicalDelivery } from '../../../src/nativePdf/canonicalDelivery'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
 import { reduceNativeMenu } from '../../../src/nativePdf/menuOwnership'
@@ -253,7 +254,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         }
         const message = JSON.stringify({ ...body, identity })
         const result = alive ? web.current?.postMessage(message) : undefined
-        console.info('reader-pdf-native-post', { alive, payload, result })
+        logNativePdfDiagnostic('reader-pdf-native-post', {
+          alive,
+          payload,
+          result
+        })
         return result
       },
       [identity]
@@ -267,6 +272,38 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         }),
       [identity, post]
     )
+    function refillCanonical(
+      sender: typeof identity,
+      requested: readonly number[]
+    ) {
+      canonicalDelivery.refill(sender, requested)
+      const cachedTexts = readerDataFromNativeSnapshot(
+        latest.current.data,
+        latest.current.progress
+      )?.ocrTexts
+      const needsGeometry: number[] = []
+      for (const pageNumber of new Set(requested)) {
+        if (!Number.isInteger(pageNumber) || pageNumber < 1) continue
+        const texts = cachedTexts?.[pageNumber]
+        if (!texts) continue
+        const metrics = pageMetrics.current.get(pageNumber)
+        if (!metrics) {
+          needsGeometry.push(pageNumber)
+          continue
+        }
+        const canonical = nativeCanonicalPageFromOcr(
+          pageNumber,
+          metrics.width,
+          metrics.height,
+          texts
+        )
+        if (canonical) canonicalDelivery.publish(canonical)
+      }
+      // Navigating in reverse leaves the highlight's first page visible last.
+      // Each geometry event then constructs that page's persisted OCR mapping.
+      for (const pageNumber of needsGeometry.sort((a, b) => b - a))
+        enqueue({ type: 'navigate', pageNumber })
+    }
     function setMenuWithSource(
       value: { left: number; top: number } | null,
       source: string
@@ -277,14 +314,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       )
       if (reduced.ignored) {
         if (__DEV__)
-          console.info('reader-pdf-menu-state', { source, value, ignored: 'native-owner' })
+          console.info('reader-pdf-menu-state', {
+            source,
+            value,
+            ignored: 'native-owner'
+          })
         return
       }
       menuOwner.current = reduced.state.owner
       if (__DEV__) console.info('reader-pdf-menu-state', { source, value })
       setMenu(value)
     }
-    function menuFrame(anchor: { x: number; y: number; width: number; height: number }) {
+    function menuFrame(anchor: {
+      x: number
+      y: number
+      width: number
+      height: number
+    }) {
       const x = anchor.x + anchor.width / 2 - width / 2
       // anchor is in ReaderPdfView coordinates; nativeTop moves it into the
       // parent container. Prefer below the selection, then clamp to the host.
@@ -358,6 +404,37 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         return
       }
       mirrorAnnotations(annotations.getSnapshot())
+    }
+    function syncWebAnnotations(data: unknown): boolean {
+      try {
+        const restored = restoreReaderSnapshot(data)
+        const current = annotations.getSnapshot()
+        annotations.replaceSnapshot(
+          {
+            ranges: restored.data.ranges ?? [],
+            rects: [...current.rects],
+            pagePaintings: current.pagePaintings
+          },
+          { preserveHistory: true }
+        )
+        mirrorAnnotations(annotations.getSnapshot())
+        return true
+      } catch (error) {
+        setStatus(
+          `标注同步失败：${error instanceof Error ? error.message : String(error)}`
+        )
+        return false
+      }
+    }
+    function saveWebSnapshot(message: Record<string, unknown>) {
+      const commitId = message.commitId
+      if (typeof commitId !== 'string' || committed.current.has(commitId))
+        return
+      if (!syncWebAnnotations(message.data)) return
+      committed.current.add(commitId)
+      persist((snapshot) =>
+        mergeNativeExternalData(snapshot.data, message.data)
+      )
     }
     function selectTool(next: PdfTool) {
       if (closed.current) return
@@ -612,7 +689,13 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       canonicalDelivery.clear()
       if (!ocrEnabled) {
         ocrCompleted.current.clear()
-        enqueue({ type: 'text', pages: [], retain: [], source: 'ocr-disabled', clear: true })
+        enqueue({
+          type: 'text',
+          pages: [],
+          retain: [],
+          source: 'ocr-disabled',
+          clear: true
+        })
       }
     }, [ocrEnabled])
     useEffect(() => {
@@ -690,7 +773,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           : null
         if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
         canonicalDelivery.publish(canonical)
-        enqueue({ type: 'text', pages: [canonical], retain: [pageNumber], source: 'ocr' })
+        enqueue({
+          type: 'text',
+          pages: [canonical],
+          retain: [pageNumber],
+          source: 'ocr'
+        })
         persist((snapshot) =>
           withNativeOcrTexts(snapshot.data, pageNumber, texts)
         )
@@ -879,13 +967,13 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         // annotation menu.
         const anchor = event.anchor
         console.info('reader-pdf-native-selection-end', {
-            start: event.start,
-            end: event.end,
-            anchor,
-            size,
-            nativeTop,
-            webAlive: web.current !== null
-          })
+          start: event.start,
+          end: event.end,
+          anchor,
+          size,
+          nativeTop,
+          webAlive: web.current !== null
+        })
         setPanelOpen(false)
         const nextMenu = menuFrame(anchor)
         console.info('reader-pdf-native-menu', nextMenu)
@@ -919,7 +1007,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             return canonical ? [canonical] : []
           })
         console.info('reader-pdf-native-selection-canonical', {
-          pages: pages.map((page) => ({ page: page.pageNumber, utf16: page.text.length })),
+          pages: pages.map((page) => ({
+            page: page.pageNumber,
+            utf16: page.text.length
+          })),
           first,
           last
         })
@@ -1367,7 +1458,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                     sessionId: identity.sessionId,
                     pages
                   })
-                  canonicalDelivery.refill(identity, pages)
+                  refillCanonical(identity, pages)
                 }
                 break
               case 'outline':
@@ -1388,15 +1479,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                 setRanges(m.items as { id: string; text: string }[])
                 break
               case 'snapshot':
-                if (
-                  typeof m.commitId === 'string' &&
-                  !committed.current.has(m.commitId)
-                ) {
-                  committed.current.add(m.commitId)
-                  persist((snapshot) =>
-                    mergeNativeExternalData(snapshot.data, m.data)
-                  )
-                }
+                saveWebSnapshot(m)
                 break
               case 'navigateRange':
                 post({ type: 'navigateRange', rangeId: m.rangeId })

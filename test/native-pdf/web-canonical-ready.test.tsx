@@ -9,7 +9,12 @@ import type {
   PdfIdentity
 } from '../../src/nativePdf/contracts'
 
-const pdf = vi.hoisted(() => ({ open: vi.fn(), terminate: vi.fn() }))
+const pdf = vi.hoisted(() => ({
+  open: vi.fn(),
+  terminate: vi.fn(),
+  get: vi.fn(),
+  text: vi.fn<(pageNumber: number) => string>()
+}))
 vi.mock('../../src/pdf/pdfDocumentSession', () => ({
   PdfDocumentSession: { open: pdf.open }
 }))
@@ -31,15 +36,31 @@ vi.mock('../../src/nativePdf/textGeometry', () => ({
         if (!numbers.includes(n)) this.pages.delete(n)
     }
     async get(pageNumber: number) {
-      if (!this.pages.has(pageNumber))
+      pdf.get(pageNumber)
+      if (!this.pages.has(pageNumber)) {
+        const text = pdf.text(pageNumber) ?? ''
         this.pages.set(pageNumber, {
           pageNumber,
-          text: '',
+          text,
           width: 400,
           height: 500,
-          boundaries: [],
-          glyphs: []
+          boundaries: Array.from({ length: text.length + 1 }, (_, offset) => ({
+            offset,
+            textId: `text-${pageNumber}`,
+            rect: { x: offset * 10, y: 50, width: 10, height: 20 }
+          })),
+          glyphs: text.length
+            ? [
+                {
+                  start: 0,
+                  end: text.length,
+                  text,
+                  rect: { x: 0, y: 50, width: text.length * 10, height: 20 }
+                }
+              ]
+            : []
         })
+      }
       return this.pages.get(pageNumber)!
     }
     dispose() {
@@ -104,7 +125,10 @@ function receive(body: Record<string, unknown>, sender = identity) {
     })
   )
 }
-async function start(sender = identity) {
+async function start(
+  sender = identity,
+  ranges: readonly (typeof range)[] = [range]
+) {
   activeIdentity = sender
   await act(async () => {
     startNativePdfSurface({
@@ -112,15 +136,15 @@ async function start(sender = identity) {
       publicationUrl: 'file:///scan.pdf',
       progress: null,
       snapshot: {
-        annotations: { version: 5, ranges: [range], rects: [], paintings: {} }
+        annotations: { version: 5, ranges, rects: [], paintings: {} }
       }
     })
   })
 }
-async function openPdf() {
+async function openPdf(numPages = 1) {
   await act(async () =>
     resolveOpen({
-      document: { numPages: 1, getOutline: async () => null },
+      document: { numPages, getOutline: async () => null },
       dispose: async () => undefined
     })
   )
@@ -160,6 +184,9 @@ beforeEach(() => {
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
   messages = []
   onSend = () => undefined
+  pdf.get.mockClear()
+  pdf.text.mockReset()
+  pdf.text.mockReturnValue('')
   pdf.open.mockReturnValue(
     new Promise((resolve) => {
       resolveOpen = resolve
@@ -292,6 +319,116 @@ describe('Web canonical receiver readiness and pending activation', () => {
     await act(async () => vi.advanceTimersByTimeAsync(3001))
     await send({ type: 'ocrText', canonicalPage: canonical })
     expect(activations()).toHaveLength(0)
+    expect(console.info).not.toHaveBeenCalledWith(
+      'reader-pdf-activate-wait-timeout',
+      expect.anything()
+    )
+  })
+})
+
+describe('cold far-page and cross-page activation', () => {
+  it('extracts and navigates to a cold text PDF target without waiting for OCR', async () => {
+    const farRange = {
+      ...range,
+      start: { selectionId: 'page-8', offset: 4 },
+      end: { selectionId: 'page-8', offset: 6 }
+    }
+    pdf.text.mockImplementation((pageNumber) => `PAGE ${pageNumber} TEXT`)
+    await start(identity, [farRange])
+    await openPdf(12)
+    pdf.get.mockClear()
+
+    await send({ type: 'activate', rangeId: 'saved' })
+    await act(async () => {})
+
+    expect(pdf.get).toHaveBeenCalledWith(8)
+    expect(
+      messages.some(
+        (message) =>
+          message.command?.type === 'navigate' &&
+          message.command.pageNumber === 8 &&
+          message.command.offset === 4
+      )
+    ).toBe(true)
+    expect(activations()).toHaveLength(1)
+    await act(async () => vi.advanceTimersByTimeAsync(3001))
+    expect(console.info).not.toHaveBeenCalledWith(
+      'reader-pdf-activate-wait-timeout',
+      expect.anything()
+    )
+  })
+
+  it('extracts every page in a cold cross-page text highlight', async () => {
+    const crossPageRange = {
+      ...range,
+      start: { selectionId: 'page-7', offset: 4 },
+      end: { selectionId: 'page-9', offset: 6 }
+    }
+    pdf.text.mockImplementation((pageNumber) => `PAGE ${pageNumber} TEXT`)
+    await start(identity, [crossPageRange])
+    await openPdf(12)
+    pdf.get.mockClear()
+
+    await send({ type: 'activate', rangeId: 'saved' })
+    await act(async () => {})
+
+    expect(pdf.get.mock.calls.map(([pageNumber]) => pageNumber)).toEqual([
+      7, 8, 9
+    ])
+    expect(activations()).toHaveLength(1)
+    await act(async () => vi.advanceTimersByTimeAsync(3001))
+    expect(console.info).not.toHaveBeenCalledWith(
+      'reader-pdf-activate-wait-timeout',
+      expect.anything()
+    )
+  })
+
+  it('navigates first and replays a cold cross-page scanned highlight from persisted OCR', async () => {
+    const crossPageRange = {
+      ...range,
+      start: { selectionId: 'page-7', offset: 4 },
+      end: { selectionId: 'page-9', offset: 6 }
+    }
+    await start(identity, [crossPageRange])
+    await openPdf(12)
+    pdf.get.mockClear()
+
+    await send({ type: 'activate', rangeId: 'saved' })
+    await act(async () => {})
+
+    expect(pdf.get.mock.calls.map(([pageNumber]) => pageNumber)).toEqual([
+      7, 8, 9
+    ])
+    expect(refillRequests()).toEqual([
+      expect.objectContaining({ pages: [7, 8, 9] })
+    ])
+    expect(
+      messages.some(
+        (message) =>
+          message.command?.type === 'navigate' &&
+          message.command.pageNumber === 7
+      )
+    ).toBe(true)
+
+    for (const pageNumber of [7, 8, 9]) {
+      await send({
+        type: 'ocrText',
+        canonicalPage: nativeCanonicalPageFromOcr(pageNumber, 400, 500, [
+          {
+            id: `ocr-${pageNumber}`,
+            content: 'OCR QA SAMPLE',
+            polygon: [
+              [0.1, 0.1],
+              [0.9, 0.2]
+            ]
+          }
+        ])!
+      })
+    }
+    await act(async () => {})
+
+    expect(activations()).toHaveLength(1)
+    await act(async () => vi.advanceTimersByTimeAsync(3001))
     expect(console.info).not.toHaveBeenCalledWith(
       'reader-pdf-activate-wait-timeout',
       expect.anything()
