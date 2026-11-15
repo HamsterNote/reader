@@ -24,6 +24,14 @@ export type PickedDocument = {
   readonly record: HostDocumentRecord
 }
 
+type DocumentAsset = {
+  readonly uri: string
+  readonly fileName: string
+  readonly size: number
+  readonly modifiedAt: number
+  readonly mimeType?: string | null
+}
+
 async function ensureFileRoot(): Promise<void> {
   const info = await FileSystem.getInfoAsync(FILE_ROOT)
   if (!info.exists) {
@@ -36,29 +44,17 @@ async function digest(value: string): Promise<string> {
 }
 
 /**
- * 选择 EPUB/PDF，复制到应用受控缓存，并按稳定 fileId 建立/复用记录。
- * 同一文件再次打开时保留既有快照，不因重新选择而清空标注。
+ * 把外部文件复制进应用缓存并建立/复用记录；选择器与调试入口共用，
+ * 保证两者对同一文件算出同一个 fileId。
  */
-export async function pickAndCacheDocument(
-  store: ReaderDataStore
-): Promise<PickedDocument | null> {
-  const result = await DocumentPicker.getDocumentAsync({
-    type: ['application/epub+zip', 'application/pdf'],
-    copyToCacheDirectory: true,
-    multiple: false
-  })
-  if (result.canceled) return null
-  const asset = result.assets[0]
-  if (!asset) return null
-
-  const format = detectDocumentFormat(asset.name, asset.mimeType)
+async function registerDocumentAsset(
+  store: ReaderDataStore,
+  asset: DocumentAsset
+): Promise<HostDocumentRecord> {
+  const format = detectDocumentFormat(asset.fileName, asset.mimeType)
   if (!format) {
     throw new Error('仅支持 EPUB 与 PDF 文件')
   }
-  const size = asset.size ?? 0
-  // 使用选择器给出的原始修改时间；缓存副本的 mtime 每次复制都会变化，
-  // 用它生成 ID 会导致重启后无法恢复同一文件的标注。
-  const modifiedAt = asset.lastModified
   // 原生流式 MD5：同名同尺寸同时间但内容不同的两个文件必须得到不同 ID，
   // 否则会共用缓存副本与标注数据（读到先选的那份文件）。
   const contentInfo = await FileSystem.getInfoAsync(asset.uri, { md5: true })
@@ -66,7 +62,12 @@ export async function pickAndCacheDocument(
     throw new Error('无法读取所选文件内容')
   }
   const fileId = await createDocumentFileId(
-    { fileName: asset.name, size, modifiedAt, contentDigest: contentInfo.md5 },
+    {
+      fileName: asset.fileName,
+      size: asset.size,
+      modifiedAt: asset.modifiedAt,
+      contentDigest: contentInfo.md5
+    },
     digest
   )
 
@@ -91,10 +92,10 @@ export async function pickAndCacheDocument(
   const importedAt = existing?.importedAt ?? Date.now()
   const record: HostDocumentRecord = {
     fileId,
-    fileName: asset.name,
+    fileName: asset.fileName,
     format,
-    size,
-    modifiedAt,
+    size: asset.size,
+    modifiedAt: asset.modifiedAt,
     cachedUri: documentCachePath(fileId, format),
     importedAt,
     snapshot: existing?.snapshot ?? { data: null, progress: null, revision: 0 },
@@ -103,7 +104,87 @@ export async function pickAndCacheDocument(
   await store.upsert(record)
   // 返回权威记录（含 snapshotSource/snapshotError），而不是手工拼的对象。
   const persisted = await store.get(fileId)
-  return { record: persisted ?? record }
+  return persisted ?? record
+}
+
+/**
+ * 选择 EPUB/PDF，复制到应用受控缓存，并按稳定 fileId 建立/复用记录。
+ * 同一文件再次打开时保留既有快照，不因重新选择而清空标注。
+ */
+export async function pickAndCacheDocument(
+  store: ReaderDataStore
+): Promise<PickedDocument | null> {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: ['application/epub+zip', 'application/pdf'],
+    copyToCacheDirectory: true,
+    multiple: false
+  })
+  if (result.canceled) return null
+  const asset = result.assets[0]
+  if (!asset) return null
+  return {
+    record: await registerDocumentAsset(store, {
+      uri: asset.uri,
+      fileName: asset.name,
+      size: asset.size ?? 0,
+      // 使用选择器给出的原始修改时间；缓存副本的 mtime 每次复制都会变化，
+      // 用它生成 ID 会导致重启后无法恢复同一文件的标注。
+      modifiedAt: asset.lastModified,
+      mimeType: asset.mimeType
+    })
+  }
+}
+
+function toFileUri(pathOrUri: string): string {
+  const value = pathOrUri.trim()
+  if (/^[a-z][a-z\d+.-]*:/i.test(value)) return value
+  if (!value.startsWith('/')) {
+    throw new Error(`调试入口需要绝对路径：${pathOrUri}`)
+  }
+  return `file://${value}`
+}
+
+function fileNameFromUri(uri: string): string {
+  const name = uri.split('/').pop() ?? ''
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return name
+  }
+}
+
+/**
+ * expo-file-system 的 modificationTime 以秒返回，选择器给的是毫秒；
+ * 统一到毫秒，避免同一文件经调试入口与选择器得到不同 fileId。
+ */
+function modifiedAtMillis(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 0
+  return value < 1e11 ? value * 1000 : value
+}
+
+/**
+ * 调试入口：不经系统选择器，直接按绝对路径 / file:// URI 导入设备上的文件。
+ * 仅由 __DEV__ 的深链接与环境变量调用，release 不暴露。
+ */
+export async function importDocumentFromPath(
+  store: ReaderDataStore,
+  pathOrUri: string
+): Promise<HostDocumentRecord> {
+  const uri = toFileUri(pathOrUri)
+  const info = await FileSystem.getInfoAsync(uri)
+  if (!info.exists) {
+    throw new Error(`调试入口指定的文件不存在：${pathOrUri}`)
+  }
+  if (info.isDirectory) {
+    throw new Error(`调试入口需要文件而不是目录：${pathOrUri}`)
+  }
+  return registerDocumentAsset(store, {
+    uri,
+    fileName: fileNameFromUri(uri),
+    size: info.size ?? 0,
+    modifiedAt: modifiedAtMillis(info.modificationTime),
+    mimeType: null
+  })
 }
 
 /**

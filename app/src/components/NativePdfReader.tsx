@@ -1341,6 +1341,15 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         ['loaded', 'displayed', 'restored', 'ready'].includes(event.type)
       )
         console.info('reader-pdf', guard.diagnostic())
+      // 设备取证同样需要 JS 侧的结构化 documentOpened（Swift 日志在设备
+      // 控制台），便于一条时间线里核对 route → opened → pageCount。
+      if (event.type === 'loaded')
+        logNativePdfDiagnostic('reader-pdf-document-opened', {
+          renderer: 'pdfkit',
+          documentOpened: true,
+          pageCount: event.pageCount,
+          ...identity
+        })
     }
     // This handler is the single native event reducer; keep its ordering explicit.
     // eslint-disable-next-line sonarjs/cognitive-complexity
