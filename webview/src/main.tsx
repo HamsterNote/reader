@@ -11,12 +11,15 @@ import { listenHostMessages } from './hostMessageChannel'
 import { readPackagedAsset } from './packagedAsset'
 import { createPdfWorkerFromAsset } from './pdfWorker'
 import { packagedPdfOptions } from './pdfAssets'
+import { createPdfMetadataExperiment } from './pdfMetadataExperiment'
+import type { PdfMetadataExperimentConfig } from './pdfMetadataExperimentConfig'
 import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
 import {
   attachPdfLoadDiagnostics,
   createPdfLoadDiagnostics,
-  pdfLoadDiagnosticMessage
+  pdfLoadDiagnosticMessage,
+  type PdfLoadDiagnostics
 } from '../../src/pdf/pdfLoadDiagnostics'
 import {
   restoreReaderSnapshot,
@@ -30,6 +33,9 @@ import type {
 import type { ReaderEngineSource } from '../../src/types/engineSource'
 import '../../src/styles/index.scss'
 import './reader.css'
+
+declare const __READER_PDF_METADATA_EXPERIMENT__: PdfMetadataExperimentConfig
+declare const __READER_PDF_METADATA_EXPERIMENT_ENABLED__: boolean
 
 if (window.__READER_NATIVE_PDF__) {
   startNativePdfSurface(window.__READER_NATIVE_PDF__)
@@ -110,8 +116,14 @@ if (window.__READER_NATIVE_PDF__) {
   let worker: Worker | null = null
   let work: Promise<void> = Promise.resolve()
   const engineDisposals: Promise<void>[] = []
+  let metadataExperiment:
+    | ReturnType<typeof createPdfMetadataExperiment>
+    | undefined
+  let metadataDiagnosticsDraining = false
 
   async function release() {
+    metadataExperiment?.cancel()
+    metadataExperiment = undefined
     flushSync(() => root.render(null))
     const previous = opened
     const previousWorker = worker
@@ -144,6 +156,64 @@ if (window.__READER_NATIVE_PDF__) {
     if (!saved) throw new Error('标注迁移未确认，已保留旧数据，请重试')
   }
 
+  function startMetadataExperiment(
+    diagnostics: PdfLoadDiagnostics | undefined
+  ) {
+    if (!__READER_PDF_METADATA_EXPERIMENT_ENABLED__ || !diagnostics)
+      return undefined
+    const experiment = createPdfMetadataExperiment(
+      __READER_PDF_METADATA_EXPERIMENT__,
+      diagnostics
+    )
+    metadataExperiment = experiment
+    if (metadataDiagnosticsDraining) experiment.cancel()
+    return experiment
+  }
+
+  async function finishMetadataOnly(
+    diagnostics: PdfLoadDiagnostics | undefined,
+    token: number
+  ) {
+    diagnostics?.event('metadata-only-releasing')
+    await release()
+    diagnostics?.event('metadata-only-released')
+    if (token === generation)
+      root.render(
+        <div role='status'>
+          元数据实验已结束，资源已释放；重新打开文档可开始下一轮。
+        </div>
+      )
+  }
+
+  async function reportDisplayFailure(
+    error: unknown,
+    experiment: typeof metadataExperiment,
+    diagnostics: PdfLoadDiagnostics | undefined,
+    token: number
+  ) {
+    if (experiment?.signal.aborted) {
+      diagnostics?.event('metadata-experiment-cancelled')
+      await release().catch(() => undefined)
+      if (token === generation)
+        root.render(<div role='status'>元数据实验已取消。</div>)
+      return
+    }
+    diagnostics?.event('display-error')
+    await release().catch(() => undefined)
+    if (token !== generation) return
+    bridge?.reportEngineFailure(
+      error instanceof Error ? error : new Error(String(error))
+    )
+    root.render(
+      <div role='alert'>
+        <p>{error instanceof Error ? error.message : String(error)}</p>
+        <button type='button' onClick={scheduleDisplay}>
+          重试
+        </button>
+      </div>
+    )
+  }
+
   async function display(
     token: number,
     document: BridgeOpenPayload['document'],
@@ -164,9 +234,12 @@ if (window.__READER_NATIVE_PDF__) {
           })
         : undefined
     diagnostics?.event('display-start')
+    let experiment: typeof metadataExperiment
     try {
       await release()
       if (token !== generation) return
+      experiment = startMetadataExperiment(diagnostics)
+      experiment?.signal.throwIfAborted()
       diagnostics?.event('file-read-start')
       // Native stages exactly this publication beside the packaged entry, within WKWebView's read root.
       const data = new Uint8Array(await readPackagedAsset(document.fileUrl))
@@ -189,10 +262,20 @@ if (window.__READER_NATIVE_PDF__) {
         documentOptions: packagedPdfOptions
       }
       attachPdfLoadDiagnostics(source, diagnostics)
-      const documentHandle = await openReaderDocument(source, document.fileId)
+      const documentHandle = experiment
+        ? await openReaderDocument(
+            source,
+            document.fileId,
+            experiment.openOptions
+          )
+        : await openReaderDocument(source, document.fileId)
       opened = documentHandle
       if (token !== generation) {
         await release()
+        return
+      }
+      if (experiment?.metadataOnly) {
+        await finishMetadataOnly(diagnostics, token)
         return
       }
       const initial = restoreReaderSnapshot(restored.data, restored.progress)
@@ -220,25 +303,13 @@ if (window.__READER_NATIVE_PDF__) {
         </ReaderRootErrorBoundary>
       )
     } catch (error) {
-      diagnostics?.event('display-error')
-      await release().catch(() => undefined)
-      if (token !== generation) return
-      bridge?.reportEngineFailure(
-        error instanceof Error ? error : new Error(String(error))
-      )
-      root.render(
-        <div role='alert'>
-          <p>{error instanceof Error ? error.message : String(error)}</p>
-          <button type='button' onClick={scheduleDisplay}>
-            重试
-          </button>
-        </div>
-      )
+      await reportDisplayFailure(error, experiment, diagnostics, token)
     }
   }
 
   function scheduleDisplay() {
     if (!descriptor || !snapshot) return
+    metadataExperiment?.cancel()
     const token = ++generation
     const document = descriptor.document
     const restored = snapshot
@@ -247,6 +318,7 @@ if (window.__READER_NATIVE_PDF__) {
   }
 
   function makeBridge(sessionId: string) {
+    metadataDiagnosticsDraining = false
     return host && post
       ? createWebBridgeClient({
           sessionId,
@@ -261,16 +333,21 @@ if (window.__READER_NATIVE_PDF__) {
             scheduleDisplay()
           },
           onDispose: () => {
+            metadataExperiment?.cancel()
             generation++
             setClosingShield(false)
             // 宿主已确认未确认写入全部落盘（见 command flush 握手），直接释放引擎。
             work = work.then(release).catch(() => undefined)
           },
           onDrainingChange: (draining) => {
+            metadataDiagnosticsDraining = draining
+            if (draining) metadataExperiment?.cancel()
             // 关闭冲刷期间冻结输入；恢复（resume）时解除。
             setClosingShield(draining)
           },
           onQuiesce: async (report) => {
+            metadataDiagnosticsDraining = true
+            metadataExperiment?.cancel()
             await waitForInputQuiesce()
             report('document-work')
             await work
@@ -303,6 +380,7 @@ if (window.__READER_NATIVE_PDF__) {
           sourceToken: host.sourceToken
         })
       if (replacement && !replacedSessions.has(replacement.sessionId)) {
+        metadataExperiment?.cancel()
         // Host only sends this after the old close/ACK barrier. Old messages are
         // rejected by the fresh client; document rendering remains serialized.
         generation++

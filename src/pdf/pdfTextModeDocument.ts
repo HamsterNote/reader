@@ -14,6 +14,7 @@ import {
 import type {
   PageViewport,
   PDFDocumentProxy,
+  PDFPageProxy,
   TextContent,
   TextItem
 } from './pdfjsRuntime'
@@ -176,14 +177,17 @@ export type PdfTextModeDocument = {
  */
 export async function createPdfTextModeDocument(
   document: PDFDocumentProxy,
-  documentId: string
+  documentId: string,
+  diagnosticLoadPages?: (document: PDFDocumentProxy) => Promise<PDFPageProxy[]>
 ): Promise<PdfTextModeDocument> {
   const canonicalByPage = new Map<number, CanonicalPageText>()
-  const pdfPages = await Promise.all(
-    Array.from({ length: document.numPages }, (_, index) =>
-      document.getPage(index + 1)
-    )
-  )
+  const pdfPages = diagnosticLoadPages
+    ? await diagnosticLoadPages(document)
+    : await Promise.all(
+        Array.from({ length: document.numPages }, (_, index) =>
+          document.getPage(index + 1)
+        )
+      )
 
   const infoList = pdfPages.map((pdfPage, index) => {
     const pageNumber = index + 1

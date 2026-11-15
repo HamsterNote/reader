@@ -6,11 +6,23 @@ import { PdfDocumentSession } from '../pdf/pdfDocumentSession'
 import { createPdfTextModeDocument } from '../pdf/pdfTextModeDocument'
 import { getPdfLoadDiagnostics } from '../pdf/pdfLoadDiagnostics'
 import type { ReaderEngineSource } from '../types/engineSource'
+import type { PDFDocumentProxy, PDFPageProxy } from '../pdf/pdfjsRuntime'
+
+/** Experimental WebView controls. Normal consumers omit this argument. */
+export type ReaderDocumentDiagnostics = {
+  readonly signal?: AbortSignal
+  readonly loadPdfPages?: (
+    document: PDFDocumentProxy
+  ) => Promise<PDFPageProxy[]>
+  readonly afterPdfOpen?: () => Promise<void>
+  readonly afterPdfMetadata?: () => Promise<void>
+}
 
 /** Metadata/index facade only. EPUB display is Foliate; PDF display is PDFViewer. */
 export async function openReaderDocument(
   source: ReaderEngineSource,
-  id: string
+  id: string,
+  controls?: ReaderDocumentDiagnostics
 ) {
   if (source.format === 'epub') {
     const pkg = await openEpubPackage(source.data)
@@ -63,17 +75,30 @@ export async function openReaderDocument(
   diagnostics?.event('pdf-open-start')
   const session = await PdfDocumentSession.open(
     { data: source.data.slice() },
-    { documentOptions: source.documentOptions }
+    {
+      documentOptions: source.documentOptions,
+      ...(controls?.signal ? { signal: controls.signal } : {})
+    }
   )
   diagnostics?.event('pdf-open-complete', {
     pageCount: session.document.numPages
   })
   try {
+    if (controls?.afterPdfOpen) await controls.afterPdfOpen()
+    controls?.signal?.throwIfAborted()
     diagnostics?.event('metadata-start')
-    const facade = await createPdfTextModeDocument(session.document, id)
+    const facade = controls?.loadPdfPages
+      ? await createPdfTextModeDocument(
+          session.document,
+          id,
+          controls.loadPdfPages
+        )
+      : await createPdfTextModeDocument(session.document, id)
     diagnostics?.event('metadata-complete', {
       pageCount: session.document.numPages
     })
+    if (controls?.afterPdfMetadata) await controls.afterPdfMetadata()
+    controls?.signal?.throwIfAborted()
     return { document: facade.document, dispose: () => session.dispose() }
   } catch (error) {
     await session.dispose()
