@@ -38,7 +38,9 @@ yarn host:check
 
 旧入口在 `ReaderScreen` 等待 `readerRef.close()` 成功后才切换组件。`hostSession.close()` 的默认关闭窗口是 5000ms；`ReaderWebView` 的 `HANDSHAKE_TIMEOUT_MS` 是 8000ms，从每个 WebView generation 挂载开始计时。它们与文档加载/首页提取/资源解压串在旧模式的进入路径上。设备记录点击到首错约 21 秒，但没有逐项计时，不能补造分解值；同 fixture 的 Linux 参考为：16.23MB 资源包解压 333–416ms，200 页打开首次 61.9ms（后续 4–5ms），首页文本提取首次 22.6ms（后续 4–5ms）。
 
-现在点击「原生 PDF 验证」立即挂载原生，旧 Web 只隐藏而不立即卸载，后台完成 close 后才移除。未确认写入时旧会话继续保留，可点「重试保存」，不阻断原生阅读；切回 pdfjs 仍等待原生 close，并用 epoch 忽略上一轮迟到的卸载结果。`test/reader-screen-native-switch.test.tsx` 覆盖 200 页入口、延迟关闭超时、未确认重试、快速往返及迟到 close 竞态。Mac 应从全新 200 页样本只点一次进入原生，再执行冷远页与文字—空白—文字跨页，不能把入口握手超时误判为 canonical 激活失败。
+现在点击「原生 PDF 验证」立即挂载原生，但原生 store 的全部读写先经过同一个 handoff gate：旧 Web close 完成前，只有旧会话能完成写入，原生不会用旧基线开启新的保存。关闭确认后 gate 放行，原生读到包含迟到高亮的最新快照。`currentSession + epoch` 标识唯一活动会话，切回和返回共用操作队列；切回 pdfjs 在旧 close 完成后创建新的 generation，不复活已 dispose 的 Web 会话，返回书库也会关闭当前原生会话。未确认写入时可重试，也可取消进入返回 Web，均不丢弃旧会话。
+
+`test/reader-screen-native-switch.test.tsx` 覆盖 200 页入口、延迟关闭超时、未确认重试、快速往返、迟到 close、切回后 Web 存活及返回前关闭新原生；`test/reader-screen-handoff.test.tsx` 用真实 NativePdfReader 和 serializer 验证旧 Web 高亮晚落盘后，原生矩形保存不会清空它。Mac 应从全新 200 页样本只点一次进入原生，再执行冷远页与文字—空白—文字跨页，不能把入口握手超时误判为 canonical 激活失败。
 
 ## P5 跨重开提交 ID
 

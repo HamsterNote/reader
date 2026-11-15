@@ -1,5 +1,10 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { forwardRef, useImperativeHandle, type ReactNode } from 'react'
+import {
+  forwardRef,
+  useImperativeHandle,
+  useState,
+  type ReactNode
+} from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Alert } from 'react-native'
 import { ReaderScreen } from '../app/src/screens/ReaderScreen'
@@ -19,8 +24,21 @@ vi.mock('../app/src/native/webAssets', () => ({
 }))
 vi.mock('../app/src/components/ReaderWebView', () => ({
   ReaderWebView: forwardRef(function MockReaderWebView(_props, ref) {
-    useImperativeHandle(ref, () => ({ close: host.webClose }), [])
-    return <div data-testid='web-reader' />
+    const [closed, setClosed] = useState(false)
+    useImperativeHandle(
+      ref,
+      () => ({
+        close: async () => {
+          const result = await host.webClose()
+          if (result.status === 'closed') setClosed(true)
+          return result
+        }
+      }),
+      []
+    )
+    return (
+      <div data-testid='web-reader'>{closed ? 'web-disposed' : 'web-live'}</div>
+    )
   })
 }))
 vi.mock('../app/src/components/NativePdfReader', () => ({
@@ -64,14 +82,14 @@ const record: HostDocumentRecord = {
   snapshot: { revision: 0, data: null, progress: null }
 }
 
-async function mountScreen() {
+async function mountScreen(onBack = vi.fn()) {
   render(
     <ReaderScreen
       record={record}
       store={{} as never}
       entryUrl='file:///session/index.html'
       baseUrl='file:///session/'
-      onBack={vi.fn()}
+      onBack={onBack}
       onRecordUpdated={vi.fn()}
     />
   )
@@ -215,5 +233,44 @@ describe('ReaderScreen mode close races', () => {
     expect(screen.getByTestId('web-reader')).toBeInTheDocument()
     expect(screen.queryByTestId('native-reader')).not.toBeInTheDocument()
     expect(Alert.alert).not.toHaveBeenCalled()
+  })
+})
+
+describe('irreversible Web close races', () => {
+  it('returns to a live Web session after the retiring close completes', async () => {
+    const close = deferred<BridgeCloseResult>()
+    host.webClose.mockReturnValue(close.promise)
+    await mountScreen()
+    await act(async () => {
+      fireEvent.click(screen.getByText('原生 PDF 验证'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('Web 对照'))
+    })
+    await act(async () => {
+      close.resolve({ status: 'closed' })
+      await close.promise
+    })
+    expect(screen.getByTestId('web-reader')).toHaveTextContent('web-live')
+  })
+
+  it('closes a native session mounted while library return is awaiting Web', async () => {
+    const close = deferred<BridgeCloseResult>()
+    host.webClose.mockReturnValue(close.promise)
+    const onBack = vi.fn()
+    await mountScreen(onBack)
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('原生 PDF 验证'))
+    })
+    expect(screen.getByTestId('native-reader')).toBeInTheDocument()
+    await act(async () => {
+      close.resolve({ status: 'closed' })
+      await close.promise
+    })
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(host.nativeClose).toHaveBeenCalled()
   })
 })
