@@ -211,6 +211,10 @@ type NativePdfMessageContext = {
   canonicalDelivery: NativeCanonicalDelivery
   refillCanonical: (sender: PdfIdentity, requested: readonly number[]) => void
   enqueue: (command: PdfCommand) => void
+  canSubmit: () => boolean
+  syncWebEditing: () => void
+  rejectWebEdit: () => void
+  isWebEditRejected: () => boolean
   setOutline: (items: { title: string; pageNumber: number }[]) => void
   setPanelOpen: (open: boolean) => void
   setMenuWithSource: (
@@ -249,6 +253,7 @@ function handleNativePdfControlMessage(
     case 'web-ready':
       console.info('reader-pdf-web-ready', { sessionId: identity.sessionId })
       canonicalDelivery.webReady(identity)
+      context.syncWebEditing()
       return true
     case 'canonical-request':
       if (Array.isArray(m.pages)) {
@@ -274,11 +279,30 @@ function handleNativePdfControlMessage(
       return true
     case 'command': {
       const command = m.command as PdfCommand
-      if (context.guard.accepts(command)) enqueue(command)
+      if (!context.guard.accepts(command)) return true
+      if (command.type === 'selection' && context.isWebEditRejected())
+        return true
+      if (
+        !['navigate', 'scale', 'preview', 'text', 'selection'].includes(
+          command.type
+        ) &&
+        !context.canSubmit()
+      ) {
+        context.rejectWebEdit()
+        return true
+      }
+      enqueue(command)
       return true
     }
     case 'ranges':
+      if (!context.canSubmit()) {
+        context.rejectWebEdit()
+        return true
+      }
       setRanges(m.items as { id: string; text: string }[])
+      return true
+    case 'edit-rejected':
+      context.rejectWebEdit()
       return true
     case 'snapshot':
       saveWebSnapshot(m)
@@ -596,6 +620,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const handoffRef = useRef(handoff)
     handoffRef.current = handoff
     const authoritativeReady = useRef(false)
+    const webEditRejected = useRef(false)
     const committed = useRef(new Set<string>())
     const alive = useRef(true)
     const closed = useRef(false)
@@ -758,6 +783,38 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       setStatus('权威数据或写权尚未就绪（not-ready）')
       return false
     }
+    function syncWebEditing() {
+      post({
+        type: 'editing-state',
+        canEdit: canSubmit(),
+        snapshot: latest.current.data,
+        progress: latest.current.progress
+      })
+      const restored = restoreReaderSnapshot(
+        latest.current.data,
+        latest.current.progress
+      )
+      setRanges(
+        (restored.data.ranges ?? []).map(({ id, text }) => ({ id, text }))
+      )
+    }
+    function rejectWebEdit() {
+      if (webEditRejected.current) return
+      webEditRejected.current = true
+      syncWebEditing()
+      rehydrateAnnotations()
+      enqueue({ type: 'selection', range: null })
+      setMenuWithSource(null, 'native-edit-rejected')
+      setPanelOpen(false)
+      setStatus(
+        '编辑未保存：权威数据或写权尚未就绪，已恢复已确认内容，请稍后重试'
+      )
+    }
+    const webEditingReady = canSubmit()
+    useEffect(() => {
+      webEditRejected.current = false
+      syncWebEditing()
+    }, [webEditingReady, snapshotReady])
     function confirmNativeSave(result: NativeSaveResult) {
       latest.current = result.snapshot
       if (alive.current) {
@@ -879,7 +936,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     function saveWebSnapshot(message: Record<string, unknown>) {
       if (!canSubmit()) {
-        rejectNotReady()
+        rejectWebEdit()
         return
       }
       const commitId = message.commitId
@@ -1364,6 +1421,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (event.type === 'rect' || event.type === 'stroke')
         handleDrawEvent(event)
       if (event.type === 'selection' && event.phase === 'end') {
+        webEditRejected.current = false
         // The native surface owns the gesture and emits the canonical
         // endpoints.  The WebView remains the existing popover/annotation
         // surface, so make it visible from the native anchor as well; without
@@ -1447,6 +1505,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           )
         }
       } else if (
+        !webEditRejected.current &&
         nativeError.current === null &&
         ocrError.current === null &&
         guard.ready &&
@@ -1454,13 +1513,14 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       )
         setStatus('PDFKit 已显示；数据恢复完成')
       else if (
+        !webEditRejected.current &&
         nativeError.current === null &&
         ocrError.current === null &&
         (event.type === 'displayed' || guard.ready)
       )
         setStatus('PDFKit 已显示；等待权威数据与写权交接')
     }
-    const injected = `window.__READER_NATIVE_PDF__=${JSON.stringify({ ...identity, publicationUrl, snapshot: record.snapshot.data, progress: record.snapshot.progress }).replace(/</g, '\\u003c')};true;`
+    const injected = `window.__READER_NATIVE_PDF__=${JSON.stringify({ ...identity, publicationUrl, snapshot: record.snapshot.data, progress: record.snapshot.progress, canEdit: false }).replace(/</g, '\\u003c')};true;`
     if (Platform.OS !== 'ios' || !ReaderPdfView || !readerPdfModule)
       return (
         <Text role='alert'>
@@ -1691,6 +1751,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               canonicalDelivery,
               refillCanonical,
               enqueue,
+              canSubmit,
+              syncWebEditing,
+              rejectWebEdit,
+              isWebEditRejected: () => webEditRejected.current,
               setOutline,
               setPanelOpen,
               setMenuWithSource,

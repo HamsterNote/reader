@@ -47,6 +47,7 @@ type NativeBootstrap = PdfIdentity & {
   publicationUrl: string
   snapshot: unknown
   progress: unknown
+  canEdit?: boolean
 }
 function nativeSelectionCanonicalSource(
   numbers: readonly number[],
@@ -83,6 +84,8 @@ export function startNativePdfSurface(
     bootstrap.progress
   )
   const commentController = createNativeCommentController(snapshot.comments)
+  let canEdit = bootstrap.canEdit === true
+  let resetEditingUI: (() => void) | undefined
   let allowed: number[] = [],
     request = 0,
     range: ReaderSelectionRange | null = null
@@ -149,6 +152,7 @@ export function startNativePdfSurface(
   }
 
   function commit(next: ReaderSelectionRange | null, removeId?: string) {
+    if (!requireEditing()) return
     const commitId = `${bootstrap.sessionId}-${++request}`
     if (!guard.commit(commitId)) return
     const current = snapshot.data.ranges ?? []
@@ -183,6 +187,11 @@ export function startNativePdfSurface(
     command({ type: 'selection', range: next })
     show(null)
   }
+  function requireEditing(): boolean {
+    if (canEdit) return true
+    send({ type: 'edit-rejected' })
+    return false
+  }
   function Menu() {
     const [value, setValue] = useState<{
       range: ReaderSelectionRange | null
@@ -193,10 +202,17 @@ export function startNativePdfSurface(
     const [commentId, setCommentId] = useState<string | null>(null)
     const [, refresh] = useState(0)
     const container = useRef<HTMLDivElement>(null)
+    function resetMenu() {
+      setValue(null)
+      setCommentId(null)
+      refresh((n) => n + 1)
+    }
     useEffect(() => {
       menuListener = setValue
+      resetEditingUI = resetMenu
       return () => {
         menuListener = null
+        resetEditingUI = undefined
       }
     }, [])
     const selectionRef = {
@@ -212,6 +228,7 @@ export function startNativePdfSurface(
       selectedRangeId: value?.activeId,
       ranges: snapshot.data.ranges,
       onHighlightColorChange: (c: string) => {
+        if (!requireEditing()) return
         setColor(c)
         if (range) {
           range = {
@@ -224,6 +241,7 @@ export function startNativePdfSurface(
       onCommentHighlight:
         options.onCommentHighlight ??
         (async (r: ReaderSelectionRange) => {
+          if (!requireEditing()) return r
           setCommentId(r.id)
           send({ type: 'panel' })
           return r
@@ -260,6 +278,7 @@ export function startNativePdfSurface(
             ranges={snapshot.data.ranges ?? []}
             activeHighlightId={commentId}
             onCommentsChange={(comments) => {
+              if (!requireEditing()) return
               const commitId = `${bootstrap.sessionId}-${++request}`
               const result = commentController.commit(commitId, comments)
               if (result.status === 'changed' && guard.commit(commitId)) {
@@ -288,7 +307,15 @@ export function startNativePdfSurface(
           visible={!!value && !commentId}
           selectionBounds={value?.anchor ?? null}
         >
-          {popover}
+          <fieldset
+            disabled={!canEdit}
+            style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+          >
+            {!canEdit ? (
+              <p role='status'>只读：等待权威数据与写权就绪</p>
+            ) : null}
+            {popover}
+          </fieldset>
         </PopoverPortal>
       </div>
     )
@@ -547,6 +574,9 @@ export function startNativePdfSurface(
       rangeId?: string
       pages?: number[]
       url?: string
+      canEdit?: boolean
+      snapshot?: unknown
+      progress?: unknown
     }
     try {
       message =
@@ -575,6 +605,17 @@ export function startNativePdfSurface(
     })
     if (disposed || !message.identity || !guard.accepts(message.identity))
       return
+    if (message.type === 'editing-state') {
+      canEdit = message.canEdit === true
+      snapshot = restoreReaderSnapshot(message.snapshot, message.progress)
+      commentController.replace(snapshot.comments)
+      pendingSelection++
+      range = null
+      draftFinished = false
+      menuOwner = null
+      resetEditingUI?.()
+      return
+    }
     if (message.type === 'dispose') {
       disposed = true
       pendingSelection++
@@ -764,14 +805,6 @@ export function startNativePdfSurface(
     if (outline) await walk(outline)
     if (disposed) return
     send({ type: 'outline', items: entries })
-    send({
-      type: 'ranges',
-      items: (snapshot.data.ranges ?? []).map((r) => ({
-        id: r.id,
-        text: r.text
-      }))
-    })
     send({ type: 'serviceReady' })
-    command({ type: 'annotations', ranges: snapshot.data.ranges ?? [] })
   })().catch(() => fail('CORRUPT'))
 }

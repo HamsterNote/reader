@@ -359,11 +359,11 @@ function ReaderScreenSession({
     nativeCloseInFlight.current = identity
     const result = await nativeRef.current?.close({ retry: retrySave })
     if (!mounted.current || coordinatorRef.current !== scope) return
-    const previousEpoch = scope.snapshot.epoch
+    const previous = scope.snapshot
     if (result?.status === 'closed') scope.nativeDrained(identity)
     else scope.nativeDrainFailed(identity)
     nativeCloseInFlight.current = null
-    if (scope.snapshot.epoch === previousEpoch) return
+    if (scope.snapshot === previous) return
     sync(scope)
     if (scope.snapshot.phase === 'NATIVE_DRAIN_FAILED') {
       showNativeDrainError(scope)
