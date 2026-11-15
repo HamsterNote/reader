@@ -93,6 +93,18 @@ import {
   shouldReplaceNativePdfError
 } from '../../../src/nativePdf/errors'
 
+function hiddenPageNumbers(values: ReaderData['hiddenPages']): number[] {
+  return (values ?? [])
+    .flatMap((value) => {
+      const pageNumber =
+        typeof value === 'number'
+          ? value
+          : Number(String(value).replace(/^page-/, ''))
+      return Number.isInteger(pageNumber) && pageNumber > 0 ? [pageNumber] : []
+    })
+    .sort((a, b) => a - b)
+}
+
 function isReaderFileUrl(url: string, root: string): boolean {
   try {
     const candidate = decodeURI(url)
@@ -181,6 +193,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const [draftCrop, setDraftCrop] = useState<ReaderEdgeCrop>({})
     const [hiddenPagesUndo, setHiddenPagesUndo] =
       useState<NativePageEditUndo | null>(null)
+    const pageEditBase = useRef<Pick<
+      ReaderData,
+      'hiddenPages' | 'edgeCrop'
+    > | null>(null)
     const [internalOcrEnabled, setInternalOcrEnabled] = useState(false)
     const ocrEnabled =
       ocr === true ||
@@ -193,9 +209,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const save = useRef(Promise.resolve())
     const latest = useRef(record.snapshot)
     const committed = useRef(new Set<string>())
-    const failedTransform = useRef<
-      ((snapshot: typeof record.snapshot) => unknown) | undefined
-    >(undefined)
+    const failedTransform = useRef<(() => void) | undefined>(undefined)
     const alive = useRef(true)
     const closed = useRef(false)
     const lastNativeProgress = useRef<string | null>(null)
@@ -346,18 +360,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       webDisposed.current = true
       post({ type: 'dispose' })
     }
-    function persist(transform: (snapshot: typeof record.snapshot) => unknown) {
+    function persist(
+      transform: (snapshot: typeof record.snapshot) => unknown,
+      prepare?: () => Promise<void>
+    ) {
       if (closed.current) return
-      failedTransform.current = transform
+      const retry = () => persist(transform, prepare)
+      failedTransform.current = retry
       // Save at the existing authoritative key, in order; never overwrite failed saves.
       save.current = enqueueRecoverableSave(save.current, async () => {
+        await prepare?.()
         const next = await store.updateSnapshot(record.fileId, (base) => ({
           ...base,
           data: transform(base),
           revision: base.revision + 1
         }))
         latest.current = next
-        if (failedTransform.current === transform)
+        if (failedTransform.current === retry)
           failedTransform.current = undefined
       }).catch((error) => {
         if (alive.current)
@@ -553,49 +572,65 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     function beginPageEdit() {
       const data = readerDataSnapshot()
-      setDraftHiddenPages(
-        (data.hiddenPages ?? []).flatMap((value) => {
-          const pageNumber =
-            typeof value === 'number'
-              ? value
-              : Number(String(value).replace(/^page-/, ''))
-          return Number.isInteger(pageNumber) && pageNumber > 0
-            ? [pageNumber]
-            : []
-        })
-      )
+      pageEditBase.current = {
+        hiddenPages: data.hiddenPages,
+        edgeCrop: data.edgeCrop
+      }
+      setDraftHiddenPages(hiddenPageNumbers(data.hiddenPages))
       setDraftCrop(data.edgeCrop?.all ?? {})
       setEditOpen(true)
     }
     function commitPageEdit() {
-      const previous = readerDataSnapshot()
-      const next: ReaderData = {
-        ...previous,
-        hiddenPages: [...new Set(draftHiddenPages)].sort((a, b) => a - b),
-        edgeCrop: { ...previous.edgeCrop, all: draftCrop }
-      }
-      persist((snapshot) => {
-        const current =
-          readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
-        return withNativePageEditData(
-          snapshot.data,
-          restoreNativePageEditFields(current, {
-            hiddenPages: next.hiddenPages,
-            edgeCrop: next.edgeCrop
+      let next: ReaderData | undefined
+      persist(
+        (snapshot) => {
+          if (!next) throw new Error('页面编辑尚未准备好')
+          const current =
+            readerDataFromNativeSnapshot(snapshot.data, snapshot.progress) ?? {}
+          return withNativePageEditData(
+            snapshot.data,
+            restoreNativePageEditFields(current, {
+              hiddenPages: next.hiddenPages,
+              edgeCrop: next.edgeCrop
+            })
+          )
+        },
+        async () => {
+          const authoritative = await store.get(record.fileId)
+          if (authoritative) latest.current = authoritative.snapshot
+          const previous = readerDataSnapshot()
+          const draftPages = [...new Set(draftHiddenPages)].sort(
+            (a, b) => a - b
+          )
+          const base = pageEditBase.current
+          const preserveHidden =
+            base !== null &&
+            JSON.stringify(hiddenPageNumbers(base.hiddenPages)) ===
+              JSON.stringify(draftPages)
+          const preserveCrop =
+            base !== null &&
+            JSON.stringify(base.edgeCrop?.all ?? {}) ===
+              JSON.stringify(draftCrop)
+          next = {
+            ...previous,
+            hiddenPages: preserveHidden ? previous.hiddenPages : draftPages,
+            edgeCrop: preserveCrop
+              ? previous.edgeCrop
+              : { ...previous.edgeCrop, all: draftCrop }
+          }
+          layoutForReaderData(next)
+          setHiddenPagesUndo({
+            hiddenPages: previous.hiddenPages,
+            edgeCrop: previous.edgeCrop
           })
-        )
-      })
-      layoutForReaderData(next)
-      setHiddenPagesUndo({
-        hiddenPages: previous.hiddenPages,
-        edgeCrop: previous.edgeCrop
-      })
-      if (undoTimer.current) clearTimeout(undoTimer.current)
-      undoTimer.current = setTimeout(() => {
-        undoTimer.current = null
-        setHiddenPagesUndo(null)
-      }, 5000)
-      setEditOpen(false)
+          if (undoTimer.current) clearTimeout(undoTimer.current)
+          undoTimer.current = setTimeout(() => {
+            undoTimer.current = null
+            setHiddenPagesUndo(null)
+          }, 5000)
+          setEditOpen(false)
+        }
+      )
     }
     async function undoPageEdit() {
       const undo = hiddenPagesUndo
@@ -1253,10 +1288,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         {saveError ? (
           <Pressable
             onPress={() => {
-              const transform = failedTransform.current
-              if (transform !== undefined) {
+              const retry = failedTransform.current
+              if (retry !== undefined) {
                 setSaveError(null)
-                persist(transform)
+                retry()
               }
             }}
           >

@@ -125,14 +125,23 @@ export function ReaderScreen({
     currentSessionRef.current.kind === kind &&
     currentSessionRef.current.epoch === epoch
 
-  const cancelNativeEntry = (epoch: number): void => {
+  const cancelNativeEntry = async (epoch: number): Promise<void> => {
     if (!isCurrent('native', epoch)) return
+    handoffRef.current?.release()
+    const result = await nativeReaderRef.current?.close()
+    if (!isCurrent('native', epoch)) return
+    if (result !== undefined && result.status !== 'closed') {
+      Alert.alert(
+        '原生数据尚未保存',
+        `${result.reason}。已停留在原生页面，请重试保存。`
+      )
+      return
+    }
     currentSessionRef.current = {
       kind: 'web',
       epoch: ++modeEpochRef.current
     }
     setNativePdf(false)
-    handoffRef.current?.release()
   }
 
   const retireWebForNative = async (epoch: number): Promise<void> => {

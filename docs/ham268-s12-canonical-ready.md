@@ -40,6 +40,8 @@ yarn host:check
 
 现在点击「原生 PDF 验证」立即挂载原生，但原生 store 的全部读写先经过同一个 handoff gate：旧 Web close 完成前，只有旧会话能完成写入，原生不会用旧基线开启新的保存。关闭确认后 gate 放行，原生读到包含迟到高亮的最新快照。`currentSession + epoch` 标识唯一活动会话，切回和返回共用操作队列；切回 pdfjs 在旧 close 完成后创建新的 generation，不复活已 dispose 的 Web 会话，返回书库也会关闭当前原生会话。未确认写入时可重试，也可取消进入返回 Web，均不丢弃旧会话。
 
+裁切等用户意图进入 `save.current` 的 prepare 阶段：先在权威快照上重建，只有实际变化的 hiddenPages/edgeCrop 字段才覆盖，未改字段保留最新值。取消 handoff 时先放行保存并等待原生 close；写盘失败则保留原生页面和重试提示，不先卸载再补救。`test/review-7f7-cancel.test.tsx` 的两条评审复现分别验证「只改裁切仍保留迟到的隐藏页」及「取消时写盘失败仍留原生承接」。
+
 `test/reader-screen-native-switch.test.tsx` 覆盖 200 页入口、延迟关闭超时、未确认重试、快速往返、迟到 close、切回后 Web 存活及返回前关闭新原生；`test/reader-screen-handoff.test.tsx` 用真实 NativePdfReader 和 serializer 验证旧 Web 高亮晚落盘后，原生矩形保存不会清空它。Mac 应从全新 200 页样本只点一次进入原生，再执行冷远页与文字—空白—文字跨页，不能把入口握手超时误判为 canonical 激活失败。
 
 ## P5 跨重开提交 ID
