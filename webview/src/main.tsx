@@ -14,6 +14,11 @@ import { packagedPdfOptions } from './pdfAssets'
 import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
 import {
+  attachPdfLoadDiagnostics,
+  createPdfLoadDiagnostics,
+  pdfLoadDiagnosticMessage
+} from '../../src/pdf/pdfLoadDiagnostics'
+import {
   restoreReaderSnapshot,
   serializeReaderSnapshot,
   type ReaderSnapshot
@@ -144,14 +149,33 @@ if (window.__READER_NATIVE_PDF__) {
     document: BridgeOpenPayload['document'],
     restored: BridgeRestorePayload
   ) {
+    const diagnosticSession = activeSessionId
+    const diagnostics =
+      document.format === 'pdf'
+        ? createPdfLoadDiagnostics((line) => {
+            if (post && host)
+              post(
+                pdfLoadDiagnosticMessage(
+                  line,
+                  diagnosticSession,
+                  host.sourceToken
+                )
+              )
+          })
+        : undefined
+    diagnostics?.event('display-start')
     try {
       await release()
       if (token !== generation) return
+      diagnostics?.event('file-read-start')
       // Native stages exactly this publication beside the packaged entry, within WKWebView's read root.
       const data = new Uint8Array(await readPackagedAsset(document.fileUrl))
+      diagnostics?.event('file-read-complete', { byteLength: data.byteLength })
       if (token !== generation) return
       if (document.format === 'pdf') {
+        diagnostics?.event('worker-start')
         const nextWorker = await createPdfWorkerFromAsset()
+        diagnostics?.event('worker-ready')
         if (token !== generation) {
           nextWorker.terminate()
           return
@@ -164,6 +188,7 @@ if (window.__READER_NATIVE_PDF__) {
         data,
         documentOptions: packagedPdfOptions
       }
+      attachPdfLoadDiagnostics(source, diagnostics)
       const documentHandle = await openReaderDocument(source, document.fileId)
       opened = documentHandle
       if (token !== generation) {
@@ -195,6 +220,7 @@ if (window.__READER_NATIVE_PDF__) {
         </ReaderRootErrorBoundary>
       )
     } catch (error) {
+      diagnostics?.event('display-error')
       await release().catch(() => undefined)
       if (token !== generation) return
       bridge?.reportEngineFailure(

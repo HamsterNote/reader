@@ -51,6 +51,10 @@ import {
   PdfDocumentViewer,
   type PdfDocumentViewerRef
 } from '../pdf/PdfDocumentViewer'
+import {
+  attachPdfLoadDiagnostics,
+  getPdfLoadDiagnostics
+} from '../pdf/pdfLoadDiagnostics'
 import type { IntermediateDocumentViewerProps } from './IntermediateDocumentViewer'
 import { engineSelectionSegments } from './selection/engineSelectionSegments'
 import type { IntermediateText } from '@hamster-note/types'
@@ -1552,10 +1556,12 @@ export function EngineDocumentViewer(props: Props) {
     getAnnotationHistoryState: () => historyRef.current.getStatus()
   }
   useImperativeHandle(props.selectionRef, () => commands)
-  const pdfSource = useMemo(
-    () => (source ? { data: source.data.slice() } : null),
-    [source, retry]
-  )
+  const pdfSource = useMemo(() => {
+    if (!source) return null
+    const copied = { data: source.data.slice() }
+    attachPdfLoadDiagnostics(copied, getPdfLoadDiagnostics(source))
+    return copied
+  }, [source, retry])
   useEffect(() => {
     if (source?.format === 'pdf') {
       restored.current = false

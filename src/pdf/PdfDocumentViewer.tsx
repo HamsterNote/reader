@@ -1,4 +1,8 @@
 import { pdfHighlightFill } from './pdfSelectionPaint'
+import {
+  getPdfLoadDiagnostics,
+  type PdfLoadDiagnostics
+} from './pdfLoadDiagnostics'
 import { usePdfTouchSelection, pdfCaretAtPoint } from './pdfTouchSelection'
 import { normalizeBookmark, type ReadingPosition } from '../readingProgress'
 import {
@@ -379,6 +383,9 @@ export const PdfDocumentViewer = forwardRef<
   const linkServiceRef = useRef<PDFLinkService | null>(null)
   const sessionManagerRef = useRef(new PdfSessionManager())
   const documentRef = useRef<PDFDocumentProxy | null>(null)
+  const loadDiagnostics = useRef<
+    ReturnType<PdfLoadDiagnostics['viewer']> | undefined
+  >(undefined)
   const failedTextPages = useRef(new Set<number>())
   const progressOptions = useRef(props)
   progressOptions.current = props
@@ -1013,6 +1020,7 @@ export const PdfDocumentViewer = forwardRef<
         )
     }
     const handleScaleChanging = (event: { scale: number }) => {
+      loadDiagnostics.current?.('scalechanging', { scale: event.scale })
       applyPageCrop()
       if (!isRestoringLayout())
         restoredPosition.current ??= lastStablePosition.current
@@ -1024,6 +1032,10 @@ export const PdfDocumentViewer = forwardRef<
       callbacksRef.current.onPagesLoaded?.(viewer.pagesCount)
     }
     const handlePagesInit = () => {
+      loadDiagnostics.current?.('pagesinit', {
+        pageCount: viewer.pagesCount,
+        scale: viewer.currentScale
+      })
       // pdf.js 默认 currentScaleValue='auto'（自适应宽度），且 setDocument
       // 内部在 pagesinit 之后还会按 _currentScaleValue 重设一次缩放；
       // 必须写 currentScaleValue 才能固定契约默认 scale=1（或受控值）。
@@ -1043,7 +1055,17 @@ export const PdfDocumentViewer = forwardRef<
       fitCroppedWidth()
       applyPageCrop()
     }
-    const handlePageRendered = (event: { pageNumber: number }) => {
+    const handlePageRendered = (event: {
+      pageNumber: number
+      error?: unknown
+      cssTransform?: boolean
+    }) => {
+      loadDiagnostics.current?.('pagerendered', {
+        pageNumber: event.pageNumber,
+        scale: viewer.currentScale,
+        failed: Boolean(event.error),
+        cssTransform: event.cssTransform === true
+      })
       if (!visiblePagesRef.current.includes(event.pageNumber)) return
       const document = documentRef.current
       restoreAnchorRef.current()
@@ -1076,6 +1098,12 @@ export const PdfDocumentViewer = forwardRef<
       restoreAnchorRef.current()
       bumpGeometry()
     }
+    const handlePageRender = (event: { pageNumber: number }) => {
+      loadDiagnostics.current?.('pagerender', {
+        pageNumber: event.pageNumber,
+        scale: viewer.currentScale
+      })
+    }
     const handleRotation = () => {
       restoredPosition.current ??= lastStablePosition.current
       bumpGeometry()
@@ -1092,6 +1120,7 @@ export const PdfDocumentViewer = forwardRef<
     eventBus.on('scalechanging', handleScaleChanging)
     eventBus.on('pagesloaded', handlePagesLoaded)
     eventBus.on('pagesinit', handlePagesInit)
+    eventBus.on('pagerender', handlePageRender)
     eventBus.on('pagerendered', handlePageRendered)
     eventBus.on('rotationchanging', handleRotation)
 
@@ -1101,6 +1130,7 @@ export const PdfDocumentViewer = forwardRef<
       eventBus.off('scalechanging', handleScaleChanging)
       eventBus.off('pagesloaded', handlePagesLoaded)
       eventBus.off('pagesinit', handlePagesInit)
+      eventBus.off('pagerender', handlePageRender)
       eventBus.off('pagerendered', handlePageRendered)
       eventBus.off('rotationchanging', handleRotation)
       textLayerObserver.disconnect()
@@ -1154,6 +1184,8 @@ export const PdfDocumentViewer = forwardRef<
 
     let cancelled = false
     let removeSourceLinks: (() => void) | undefined
+    const diagnostics = getPdfLoadDiagnostics(source)?.viewer()
+    diagnostics?.('viewer-open-start')
     props.onDocumentReady?.(null)
     setStatus('loading')
     setOcrDocument(null)
@@ -1169,10 +1201,14 @@ export const PdfDocumentViewer = forwardRef<
       })
       .then(({ session }) => {
         if (cancelled) return
+        diagnostics?.('viewer-open-complete', {
+          pageCount: session.document.numPages
+        })
         documentRef.current = session.document
         props.onDocumentReady?.(session.document)
         setOcrDocument(session.document)
         setStatus('ready')
+        loadDiagnostics.current = diagnostics
         viewerRef.current?.setDocument(session.document)
         linkServiceRef.current?.setDocument(session.document)
         if (containerRef.current && linkServiceRef.current) {
@@ -1185,6 +1221,7 @@ export const PdfDocumentViewer = forwardRef<
       })
       .catch((error: unknown) => {
         if (cancelled) return
+        diagnostics?.('viewer-open-error')
         const kind =
           error instanceof Error && 'kind' in error
             ? (Reflect.get(error, 'kind') as PdfOpenErrorKind)
@@ -1199,6 +1236,8 @@ export const PdfDocumentViewer = forwardRef<
       })
 
     return () => {
+      diagnostics?.('viewer-detach')
+      loadDiagnostics.current = undefined
       cancelled = true
       cancelRestoreWait()
       removeSourceLinks?.()

@@ -26,6 +26,7 @@ import {
 } from 'react-native-webview'
 
 import { READER_BRIDGE_PROTOCOL_VERSION } from '../../../src/bridge/protocol'
+import { readPdfLoadDiagnosticMessage } from '../../../src/pdf/pdfLoadDiagnostics'
 import type { BridgeCloseResult } from '../../../src/bridge/hostSession'
 import {
   decideReaderNavigation,
@@ -95,6 +96,14 @@ function buildBootstrapScript(sessionId: string, sourceToken: string): string {
   `
 }
 
+function logPdfLoadDiagnostic(label: string, line: string): void {
+  try {
+    console.info(label, line)
+  } catch {
+    /* Diagnostics must not change native bridge or termination handling. */
+  }
+}
+
 /** 关闭握手入口：宿主 UI 必须先 await close() 再卸载 WebView。 */
 export type ReaderWebViewHandle = {
   readonly discardUnconfirmed?: () => Promise<BridgeCloseResult>
@@ -125,6 +134,7 @@ export const ReaderWebView = forwardRef<
   const handoffRef = useRef(handoff)
   handoffRef.current = handoff
   const openedRef = useRef(false)
+  const lastPdfLoadDiagnostic = useRef<string | null>(null)
   const [generation, setGeneration] = useState(0)
   const [state, setState] = useState<HostState>('loading')
   const [statusText, setStatusText] = useState('正在加载阅读资源…')
@@ -222,30 +232,45 @@ export const ReaderWebView = forwardRef<
     }
   }, [generation])
 
-  const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
-    const raw = event.nativeEvent.data
-    let ready = false
-    try {
-      ready = (JSON.parse(raw) as { type?: unknown }).type === 'ready'
-    } catch {
-      ready = false
-    }
-    const pending = sessionRef.current?.handleRawMessage(raw)
-    if (!pending) return
-    const outcome = await pending
-    if (outcome.accepted) {
-      openedRef.current = true
-      setState('connected')
-      setStatusText('已连接')
-      if (ready) {
-        const current = handoffRef.current
-        if (current) current.onReady(current.identity)
+  const handleMessage = useCallback(
+    async (event: WebViewMessageEvent) => {
+      const raw = event.nativeEvent.data
+      const diagnostic = readPdfLoadDiagnosticMessage(
+        raw,
+        sessionId,
+        sourceToken
+      )
+      if (diagnostic !== null) {
+        lastPdfLoadDiagnostic.current = diagnostic
+        logPdfLoadDiagnostic('reader-pdf-load-native', diagnostic)
+        return
       }
-    } else {
-      setState('error')
-      setStatusText(`拒绝消息：${outcome.rejection?.code ?? 'INVALID_MESSAGE'}`)
-    }
-  }, [])
+      let ready = false
+      try {
+        ready = (JSON.parse(raw) as { type?: unknown }).type === 'ready'
+      } catch {
+        ready = false
+      }
+      const pending = sessionRef.current?.handleRawMessage(raw)
+      if (!pending) return
+      const outcome = await pending
+      if (outcome.accepted) {
+        openedRef.current = true
+        setState('connected')
+        setStatusText('已连接')
+        if (ready) {
+          const current = handoffRef.current
+          if (current) current.onReady(current.identity)
+        }
+      } else {
+        setState('error')
+        setStatusText(
+          `拒绝消息：${outcome.rejection?.code ?? 'INVALID_MESSAGE'}`
+        )
+      }
+    },
+    [sessionId, sourceToken]
+  )
 
   const handleNavigation = useCallback(
     (request: ReaderNavigationContext & { readonly url: string }): boolean => {
@@ -263,6 +288,7 @@ export const ReaderWebView = forwardRef<
   )
 
   const retry = (): void => {
+    lastPdfLoadDiagnostic.current = null
     setHostError(null)
     setGeneration((current) => current + 1)
     setState('loading')
@@ -325,6 +351,15 @@ export const ReaderWebView = forwardRef<
               )
             }}
             onContentProcessDidTerminate={() => {
+              if (lastPdfLoadDiagnostic.current !== null) {
+                logPdfLoadDiagnostic(
+                  'reader-pdf-load-native-terminated',
+                  JSON.stringify({
+                    timestamp: new Date().toISOString(),
+                    lastEvent: lastPdfLoadDiagnostic.current
+                  })
+                )
+              }
               reportHostError(
                 'onContentProcessDidTerminate',
                 'iOS WebView 内容进程已终止（系统未提供原因）'

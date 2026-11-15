@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppErrorBoundary } from '../app/src/components/AppErrorBoundary'
 import { ReaderWebView } from '../app/src/components/ReaderWebView'
 import { ReaderRootErrorBoundary } from '../webview/src/ReaderRootErrorBoundary'
+import { pdfLoadDiagnosticMessage } from '../src/pdf/pdfLoadDiagnostics'
 import { ReaderDataStore } from '../src/host/readerDataStore'
 import type { HostDocumentRecord } from '../src/host/readerDataStore'
 
@@ -175,6 +176,57 @@ const navigation = {
 }
 
 describe('WebView host diagnostics', () => {
+  it('still reports process termination when the diagnostic console sink throws', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {
+      throw new Error('console disconnected')
+    })
+    renderHost()
+    await act(async () => {
+      await native.props.onMessage?.(
+        event({
+          ...navigation,
+          data: pdfLoadDiagnosticMessage(
+            'reader-pdf-load {}',
+            'test-id',
+            'test-id'
+          )
+        })
+      )
+    })
+    act(() => native.props.onContentProcessDidTerminate?.(event(navigation)))
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'onContentProcessDidTerminate'
+    )
+    expect(native.handleRawMessage).not.toHaveBeenCalled()
+  })
+
+  it('mirrors PDF stages outside the persistence bridge and retains the last event on termination only until reload', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    renderHost()
+    const line =
+      'reader-pdf-load {"runId":"open-1","stage":"metadata-complete"}'
+    await act(async () => {
+      await native.props.onMessage?.(
+        event({
+          ...navigation,
+          data: pdfLoadDiagnosticMessage(line, 'test-id', 'test-id')
+        })
+      )
+    })
+    expect(native.handleRawMessage).not.toHaveBeenCalled()
+    expect(screen.getByText('正在加载阅读资源…')).toBeVisible()
+    expect(info).toHaveBeenCalledWith('reader-pdf-load-native', line)
+    act(() => native.props.onContentProcessDidTerminate?.(event(navigation)))
+    expect(info).toHaveBeenCalledWith(
+      'reader-pdf-load-native-terminated',
+      expect.stringContaining(line.replaceAll('"', '\\"'))
+    )
+    fireEvent.click(screen.getByText('重载 WebView'))
+    info.mockClear()
+    act(() => native.props.onContentProcessDidTerminate?.(event(navigation)))
+    expect(info).not.toHaveBeenCalled()
+  })
+
   it.each([
     [
       'onError',

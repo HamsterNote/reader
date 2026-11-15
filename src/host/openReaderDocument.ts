@@ -4,6 +4,7 @@ import { buildLegacyEpubModel } from '../epub/legacyEpubModel'
 import { configurePdfJsWorker } from '../pdf/pdfjsRuntime'
 import { PdfDocumentSession } from '../pdf/pdfDocumentSession'
 import { createPdfTextModeDocument } from '../pdf/pdfTextModeDocument'
+import { getPdfLoadDiagnostics } from '../pdf/pdfLoadDiagnostics'
 import type { ReaderEngineSource } from '../types/engineSource'
 
 /** Metadata/index facade only. EPUB display is Foliate; PDF display is PDFViewer. */
@@ -58,12 +59,21 @@ export async function openReaderDocument(
     }
   }
   if (source.workerSrc) configurePdfJsWorker(source.workerSrc)
+  const diagnostics = getPdfLoadDiagnostics(source)
+  diagnostics?.event('pdf-open-start')
   const session = await PdfDocumentSession.open(
     { data: source.data.slice() },
     { documentOptions: source.documentOptions }
   )
+  diagnostics?.event('pdf-open-complete', {
+    pageCount: session.document.numPages
+  })
   try {
+    diagnostics?.event('metadata-start')
     const facade = await createPdfTextModeDocument(session.document, id)
+    diagnostics?.event('metadata-complete', {
+      pageCount: session.document.numPages
+    })
     return { document: facade.document, dispose: () => session.dispose() }
   } catch (error) {
     await session.dispose()

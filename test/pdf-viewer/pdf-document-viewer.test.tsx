@@ -20,6 +20,10 @@ import { PDFDocument } from 'pdf-lib'
 import { ImageParser } from '@hamster-note/image-parser'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { parseHighlights } from '../../demo/highlightStorage'
+import {
+  attachPdfLoadDiagnostics,
+  createPdfLoadDiagnostics
+} from '../../src/pdf/pdfLoadDiagnostics'
 
 vi.mock('@hamster-note/image-parser', () => ({
   ImageParser: { encode: vi.fn() }
@@ -456,6 +460,53 @@ it.each(['bookmark', 'highlight', 'zoomed bookmark'] as const)(
 )
 
 describe('PdfDocumentViewer 接线', () => {
+  it('logs actual viewer events, including failed/offscreen render completions, and detaches listeners', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const lines: string[] = []
+    const source = { data: readFixture('pdf/two-column.pdf') }
+    attachPdfLoadDiagnostics(
+      source,
+      createPdfLoadDiagnostics((line) => lines.push(line))
+    )
+    const view = renderViewer({ source }, createRef<PdfDocumentViewerRef>())
+    await act(async () => {})
+    const entries = () =>
+      lines.map((line) => JSON.parse(line.slice('reader-pdf-load '.length)))
+    expect(entries().map((entry) => entry.stage)).toEqual([
+      'viewer-open-start',
+      'viewer-open-complete',
+      'pagesinit'
+    ])
+    const viewer = latestViewer()
+    act(() => {
+      viewer.eventBus.dispatch('pagerender', { pageNumber: 999 })
+      viewer.eventBus.dispatch('pagerendered', {
+        pageNumber: 999,
+        error: new Error('canvas failure')
+      })
+      viewer.eventBus.dispatch('scalechanging', { scale: 2 })
+      viewer.eventBus.dispatch('pagerendered', {
+        pageNumber: 999,
+        cssTransform: true
+      })
+    })
+    expect(
+      entries().filter((entry) => entry.stage === 'pagerendered')
+    ).toMatchObject([
+      { pageNumber: 999, failed: true, cssTransform: false, renderCount: 1 },
+      { pageNumber: 999, failed: false, cssTransform: true, renderCount: 2 }
+    ])
+    expect(
+      entries().find((entry) => entry.stage === 'scalechanging')
+    ).toMatchObject({ scale: 2 })
+    view.unmount()
+    expect(entries().at(-1).stage).toBe('viewer-detach')
+    const count = lines.length
+    viewer.eventBus.dispatch('pagerender', { pageNumber: 1 })
+    viewer.eventBus.dispatch('pagerendered', { pageNumber: 1 })
+    expect(lines).toHaveLength(count)
+  })
+
   it('explicit touch updates and copy keep native Selection empty after reactivation', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     const view = renderViewer({}, ref)

@@ -8,6 +8,11 @@ import {
 import type { ReaderReadingPositionHandle } from '../src/components/IntermediateDocumentViewer'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { EngineDocumentViewer } from '../src/components/EngineDocumentViewer'
+import {
+  attachPdfLoadDiagnostics,
+  createPdfLoadDiagnostics,
+  getPdfLoadDiagnostics
+} from '../src/pdf/pdfLoadDiagnostics'
 import type {
   PdfDocumentViewerProps,
   PdfDocumentViewerRef
@@ -89,6 +94,19 @@ beforeEach(() => {
 })
 const source = { format: 'pdf' as const, data: new Uint8Array([1]) }
 const saved = { pageNumber: 1, offset: 20, textId: 'x', text: 'text' }
+
+it('carries the opt-in diagnostic context across the existing viewer byte copy', () => {
+  const input = { format: 'pdf' as const, data: new Uint8Array([1]) }
+  const diagnostics = createPdfLoadDiagnostics()
+  attachPdfLoadDiagnostics(input, diagnostics)
+  render(<EngineDocumentViewer engineSource={input} />)
+  expect(state.pdf!.source).not.toBe(input)
+  expect(getPdfLoadDiagnostics(state.pdf!.source!)).toBe(diagnostics)
+  expect('data' in state.pdf!.source! && state.pdf!.source.data).not.toBe(
+    input.data
+  )
+  expect(input.data).toEqual(new Uint8Array([1]))
+})
 
 it('keeps the PDF indicator on the safe reading page when engine and text pages disagree', async () => {
   const view = render(<EngineDocumentViewer engineSource={source} />)
