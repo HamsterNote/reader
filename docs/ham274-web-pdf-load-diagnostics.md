@@ -100,3 +100,21 @@ yarn verify:webview
 VITE_READER_PDF_METADATA_DIAGNOSTICS=0 VITE_READER_PDF_METADATA_ONLY=0 VITE_READER_PDF_METADATA_BATCH_SIZE=0 yarn build:webview
 yarn verify:webview
 ```
+
+## 宿主 Metro 打包边界
+
+React Native 的 Metro 会遍历动态 import。`NativePdfReader` 不可通过共享 OCR 工具引入浏览器的 ImageParser/PaddleOCR/OpenCV；其中 OpenCV 的 Node `fs` 引用会阻塞 iOS Release 打包，错误提示生成时还可能表现为 `Maximum call stack size exceeded`。
+
+`ocrContent.native.ts` 由 Metro 的平台解析选择，只调用已配置的 `extraOCR` provider；原始 data URL、provider 返回的内容和异常都直接保留。未配置 provider 时明确抛错，经现有 `performNativeOcr` 的 `OCR_FAILED` / `onOcrError` 路径处理，不伪造空成功、不清除已确认标注。原生契约不新增默认识别服务；需使用原生 OCR 时必须注入 provider。Web 的 `ocrContent.ts` 继续保留 ImageParser 默认识别，两端共享纯函数 `ocrTextIds.ts`，页级 textId 和透明文字框语义不变。
+
+在 repo 根目录可先独立检查宿主 JS 打包，无需设备或签名：
+
+```bash
+mkdir -p artifacts/host-js
+cd app
+node ../node_modules/expo/bin/cli export:embed --platform ios --dev false --entry-file index.ts --bundle-output ../artifacts/host-js/main.jsbundle --sourcemap-output ../artifacts/host-js/main.jsbundle.map --assets-dest ../artifacts/host-js/assets --max-workers 2
+```
+
+成功后检查 sourcemap 的 `sources`：应含 `ocrContent.native.ts` / `ocrTextIds.ts`，不含浏览器 `ocrContent.ts`、ImageParser、PaddleOCR 或 OpenCV。不要用 `fs` 空 shim、排除整段 OCR 或清空识别结果掩盖打包错误。
+
+这一步只验证 Metro 模块图及 Release JS 资源导出；可安装 IPA、签名和设备行为仍由 Mac 操作员验证。源 SHA 变化后，每组宿主包必须与 WebView 资源来自同一新 SHA，并再次核对四组 buildId；不能把这份 JS bundle 或 `webreader.zip` 当成已完成的宿主包。
