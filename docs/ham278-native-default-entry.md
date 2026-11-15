@@ -22,7 +22,7 @@ Expo 演示 App 本身当前是单栏。仓内 Web 工作区的单双栏实现�
 
 ```sh
 yarn install --frozen-lockfile
-yarn test:run test/reader-screen-handoff.test.tsx test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
+yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
 yarn test:run --maxWorkers=2 --minWorkers=1
 yarn typecheck
 yarn typecheck:host
@@ -55,7 +55,7 @@ S12 设备复跑：canonical 握手 → 自绘色板改色后重开 → A/B 两�
 
 ## 验收记录
 
-Linux 自动化：全量 168 个文件 / 2109 个用例通过（只限制 worker 并发数）；定向 36 个用例通过。`typecheck`、`typecheck:host`、`host:check`、`lint` 和 OpenSpec strict validate 均通过。
+Linux 自动化：全量 168 个文件 / 2109 个用例通过（只限制 worker 并发数）；定向 56 个用例通过，含 release 保存失败后的恢复入口检查。`typecheck`、`typecheck:host`、`host:check`、`lint` 和 OpenSpec strict validate 均通过。
 
 在 `app` 下运行 `npx expo export --platform ios --max-workers 2 --output-dir ../../evidence/ios-export` 已通过生产 JS/Hermes 打包，不能据此声称 Swift 编译或真机运行已通过。
 

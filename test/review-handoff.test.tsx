@@ -704,7 +704,7 @@ describe('ReaderScreen native handoff regressions', () => {
         })
       } else if (path === 'failure') {
         await act(async () => {
-          alertButton('返回 Web 对照').onPress?.()
+          alertButton('返回原阅读模式').onPress?.()
         })
       } else {
         await act(async () => {
@@ -1315,7 +1315,7 @@ describe('device Web close regressions with real bridge peers', () => {
     expect(host.webDiscard).not.toHaveBeenCalled()
     expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
     await act(async () => alertButton('放弃未确认内容…').onPress?.())
-    await act(async () => alertButton('放弃并返回 Web').onPress?.())
+    await act(async () => alertButton('放弃并返回原阅读模式').onPress?.())
     await waitFor(() =>
       expect(screen.getByTestId('web-reader')).toHaveAttribute(
         'data-generation',
@@ -1345,7 +1345,7 @@ describe('device Web close regressions with real bridge peers', () => {
     await switchToNative()
     await loadNative()
     await act(async () => alertButton('放弃未确认内容…').onPress?.())
-    const staleConfirm = alertButton('放弃并返回 Web')
+    const staleConfirm = alertButton('放弃并返回原阅读模式')
     await act(async () => alertButton('重试旧 Web 保存').onPress?.())
     await waitForNativeReady()
     await act(async () => staleConfirm.onPress?.())

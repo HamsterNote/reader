@@ -342,7 +342,7 @@ function ReaderScreenSession({
             }
           }
         },
-        { text: '返回 Web 对照', onPress: () => requestWeb() },
+        { text: '返回原阅读模式', onPress: () => requestWeb() },
         {
           text: '放弃未确认内容…',
           style: 'destructive',
@@ -358,11 +358,11 @@ function ReaderScreenSession({
       return
     Alert.alert(
       '放弃未确认内容？',
-      '将保留已落盘的数据；未确认的修改和最终阅读进度可能丢失。已接收的写盘操作完成后返回 Web 对照。',
+      '将保留已落盘的数据；未确认的修改和最终阅读进度可能丢失。已接收的写盘操作完成后返回原阅读模式。',
       [
         { text: '继续保留并重试', style: 'cancel' },
         {
-          text: '放弃并返回 Web',
+          text: '放弃并返回原阅读模式',
           style: 'destructive',
           onPress: () => {
             if (coordinatorRef.current !== scope || scope.snapshot !== failed)

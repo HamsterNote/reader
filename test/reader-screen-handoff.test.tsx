@@ -461,9 +461,20 @@ describe('iOS native default entry (S01/S11/S13)', () => {
       const web = host.outerProps!
       web.handoff!.onReady!(web.handoff!.identity)
     })
-    host.webClose.mockResolvedValue({ status: 'closed' })
+    host.webClose
+      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'flush failed' })
+      .mockResolvedValueOnce({ status: 'closed' })
     await act(async () => {
       fireEvent.click(screen.getByText('Layout'))
+    })
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    expect(alertButton('返回原阅读模式')).toBeDefined()
+    const failureAlert = JSON.stringify(
+      vi.mocked(Alert.alert).mock.calls.at(-1)
+    )
+    expect(failureAlert).not.toMatch(/Web 对照|原生 PDF 验证/)
+    await act(async () => {
+      alertButton('重试旧 Web 保存').onPress?.()
     })
     await screen.findByTestId('native-pdf-view')
     await loadNative()
@@ -1123,7 +1134,7 @@ describe('ReaderScreen native handoff regressions', () => {
         })
       } else if (path === 'failure') {
         await act(async () => {
-          alertButton('返回 Web 对照').onPress?.()
+          alertButton('返回原阅读模式').onPress?.()
         })
       } else {
         await act(async () => {
