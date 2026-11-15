@@ -1,3 +1,4 @@
+import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
 import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
 import { RangeMagnifierProvider } from './RangeMagnifier'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
@@ -1010,6 +1011,7 @@ export type IntermediateDocumentTextViewerProps = {
   /** 高亮确认回调；文本模式状态机接入后由 highlight/autoHighlight 触发。 */
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
+  highlightDragHandoff?: ReaderHighlightDragHandoff
   onDragHighlight?: (highlight: ReaderSelectionRange) => void
   /** linked selection 高亮颜色；文本模式状态机接入后传给 Selection 包装层。 */
   highlightColor?: string
@@ -1101,6 +1103,7 @@ export function IntermediateDocumentTextViewer(
     onSelectionStart,
     onSelectionEnd,
     onHighlight,
+    highlightDragHandoff,
     onDragHighlight,
     highlightColor,
     selectionColor,
@@ -3275,6 +3278,7 @@ export function IntermediateDocumentTextViewer(
   } = useHighlightDrag({
     viewerRootElement,
     resolveHighlight: resolveHighlightDragTarget,
+    highlightDragHandoff,
     onDragHighlight
   })
 

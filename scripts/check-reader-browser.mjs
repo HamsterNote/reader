@@ -331,13 +331,30 @@ async function run(browserType, mobile, format, version, attack = false) {
     result.initialWrites = await page.evaluate(() => window.__hostWrites)
     assert.equal(
       await page.evaluate(() => window.__hostWrites.length),
-      0,
-      'initialization wrote over the snapshot'
+      1,
+      'legacy snapshot must migrate exactly once before editing'
     )
     const original = await page.evaluate(() =>
       localStorage.getItem('host-snapshot')
     )
-    assert.equal(original, null)
+    const migrated = JSON.parse(original).data.annotations
+    assert.equal(migrated.version, 5)
+    assert.equal(result.initialWrites[0].type, 'change')
+    assert.equal(migrated.ranges.length, highlights.ranges.length)
+    for (const old of highlights.ranges) {
+      const restored = migrated.ranges.find((range) => range.id === old.id)
+      assert(restored)
+      for (const field of ['id', 'text', 'createdAt', 'start', 'end'])
+        assert.deepEqual(restored[field], old[field])
+    }
+    assert.deepEqual(
+      migrated.rects.map((rect) => rect.id),
+      (highlights.rects ?? []).map((rect) => rect.id)
+    )
+    assert.deepEqual(
+      Object.keys(migrated.paintings),
+      Object.keys(highlights.paintings ?? {})
+    )
     // Use a real browser Range in the real Foliate/PDF.js text layer.
     await frame.evaluate((format) => {
       const target =
@@ -366,7 +383,8 @@ async function run(browserType, mobile, format, version, attack = false) {
     await page.waitForFunction(
       (count) =>
         window.__hostWrites.some(
-          (message) => message.payload.data?.highlights?.ranges.length === count
+          (message) =>
+            message.payload.data?.annotations?.ranges.length === count
         ),
       highlights.ranges.length + 1
     )
@@ -378,22 +396,19 @@ async function run(browserType, mobile, format, version, attack = false) {
     let saved = await page.evaluate(() =>
       JSON.parse(localStorage.getItem('host-snapshot'))
     )
-    for (const oldRange of highlights.ranges)
+    for (const oldRange of migrated.ranges)
       assert.deepEqual(
-        saved.data.highlights.ranges.find((range) => range.id === oldRange.id),
+        saved.data.annotations.ranges.find((range) => range.id === oldRange.id),
         oldRange
       )
-    assert.deepEqual(saved.data.highlights.rects, highlights.rects ?? [])
-    assert.deepEqual(
-      saved.data.highlights.paintings,
-      highlights.paintings ?? {}
-    )
+    assert.deepEqual(saved.data.annotations.rects, migrated.rects)
+    assert.deepEqual(saved.data.annotations.paintings, migrated.paintings)
     assert.deepEqual(saved.data.comments, initial.comments)
     assert.deepEqual(
       saved.data.readerData.bookmarks,
       initial.readerData.bookmarks
     )
-    const added = saved.data.highlights.ranges.at(-1)
+    const added = saved.data.annotations.ranges.at(-1)
     assert.match(added.start.selectionId, /^page-[1-9]\d*$/)
     assert.match(added.end.selectionId, /^page-[1-9]\d*$/)
     assert(added.createdAt > 0 && added.id && added.text)
@@ -411,23 +426,38 @@ async function run(browserType, mobile, format, version, attack = false) {
       await page.getByRole('tab', { name: '高亮', exact: true }).click()
       await page.getByTestId(`page-browser-highlight-${added.id}`).click()
       await page.getByRole('button', { name: '关闭页面浏览' }).click()
-      const handle = page.getByRole('button', { name: '调整高亮终点' })
-      await handle.waitFor()
-      const goal = await frame.evaluate(() => {
-        const selection = getSelection()
-        const selected = selection.getRangeAt(0)
-        const node = selected.endContainer
-        const offset = Math.min(selected.endOffset + 1, node.textContent.length)
-        const range = document.createRange()
-        range.setStart(node, offset)
-        range.collapse(true)
-        const box = range.getBoundingClientRect()
-        const frame = window.frameElement?.getBoundingClientRect()
-        return {
-          x: box.x + (frame?.x ?? 0),
-          y: box.y + box.height / 2 + (frame?.y ?? 0)
-        }
+      const handle = page.getByRole('button', {
+        name: format === 'pdf' ? '拖动以调整选区终点' : '调整高亮终点'
       })
+      await handle.waitFor()
+      const goal = await frame.evaluate(
+        ({ format, added }) => {
+          const elements = document.querySelectorAll(
+            format === 'epub' ? 'p' : '.textLayer [data-selection-start-offset]'
+          )
+          const target = [...elements].find(
+            (e) =>
+              e.firstChild?.nodeType === 3 &&
+              e.firstChild.textContent.includes(added.text)
+          )
+          if (!target) throw new Error('Saved text is not mounted')
+          const node = target.firstChild
+          const offset = Math.min(
+            node.textContent.indexOf(added.text) + added.text.length + 1,
+            node.textContent.length - 1
+          )
+          const range = document.createRange()
+          range.setStart(node, offset)
+          range.setEnd(node, offset + 1)
+          const box = range.getBoundingClientRect(),
+            frame = window.frameElement?.getBoundingClientRect()
+          return {
+            x: box.x + box.width / 2 + (frame?.x ?? 0),
+            y: box.y + box.height / 2 + (frame?.y ?? 0)
+          }
+        },
+        { format, added }
+      )
       const handleBox = await handle.boundingBox()
       await page.mouse.move(handleBox.x + 7, handleBox.y + 7)
       await page.mouse.down()
@@ -437,15 +467,15 @@ async function run(browserType, mobile, format, version, attack = false) {
         ({ id, offset }) =>
           JSON.parse(
             localStorage.getItem('host-snapshot')
-          ).data.highlights.ranges.find((range) => range.id === id).end.offset >
-          offset,
+          ).data.annotations.ranges.find((range) => range.id === id).end
+            .offset > offset,
         { id: added.id, offset: added.end.offset }
       )
       const edited = await page.evaluate(
         (id) =>
           JSON.parse(
             localStorage.getItem('host-snapshot')
-          ).data.highlights.ranges.find((range) => range.id === id),
+          ).data.annotations.ranges.find((range) => range.id === id),
         added.id
       )
       assert.equal(edited.createdAt, added.createdAt)
@@ -464,14 +494,14 @@ async function run(browserType, mobile, format, version, attack = false) {
         await page.getByRole('button', { name: '高亮', exact: true }).click()
         await page.waitForFunction(
           (count) =>
-            JSON.parse(localStorage.getItem('host-snapshot')).data.highlights
+            JSON.parse(localStorage.getItem('host-snapshot')).data.annotations
               .rects.length === count,
           highlights.rects.length + 1
         )
         const before = await page.evaluate(() =>
           JSON.parse(
             localStorage.getItem('host-snapshot')
-          ).data.highlights.rects.at(-1)
+          ).data.annotations.rects.at(-1)
         )
         const corner = page.getByRole('button', { name: '调整矩形下右角' })
         const box = await corner.boundingBox()
@@ -483,7 +513,7 @@ async function run(browserType, mobile, format, version, attack = false) {
           (original) =>
             JSON.parse(
               localStorage.getItem('host-snapshot')
-            ).data.highlights.rects.at(-1).rect.width !== original.rect.width,
+            ).data.annotations.rects.at(-1).rect.width !== original.rect.width,
           before
         )
         await page.getByTestId('tool-bottom-bar-undo').click()
@@ -492,7 +522,7 @@ async function run(browserType, mobile, format, version, attack = false) {
             JSON.stringify(
               JSON.parse(
                 localStorage.getItem('host-snapshot')
-              ).data.highlights.rects.at(-1)
+              ).data.annotations.rects.at(-1)
             ) === JSON.stringify(original),
           before
         )
@@ -501,7 +531,7 @@ async function run(browserType, mobile, format, version, attack = false) {
           (original) =>
             JSON.parse(
               localStorage.getItem('host-snapshot')
-            ).data.highlights.rects.at(-1).rect.width !== original.rect.width,
+            ).data.annotations.rects.at(-1).rect.width !== original.rect.width,
           before
         )
         result.rectanglePointerEditAndHistory = true
@@ -536,9 +566,9 @@ async function run(browserType, mobile, format, version, attack = false) {
       )
     assert.deepEqual(
       await page.evaluate(
-        () => JSON.parse(localStorage.getItem('host-snapshot')).data.highlights
+        () => JSON.parse(localStorage.getItem('host-snapshot')).data.annotations
       ),
-      saved.data.highlights
+      saved.data.annotations
     )
     if (format === 'pdf')
       result.highlightInk = await checkPdfHighlightInk(page, added.id, label)

@@ -1,3 +1,4 @@
+import type { ReaderHighlightDragHandoff } from '../types/highlightDrag'
 import type {
   PaneToolbarLayout,
   ToolbarFileNavigationProps
@@ -325,6 +326,7 @@ export type ReaderProps = ToolbarFileNavigationProps & {
   onSelectionEnd?: (mousePos: ReaderMousePosition, selection: Selection) => void
   onHighlight?: (range: ReaderSelectionRange) => void
   /** 鼠标拖动高亮或触摸长按高亮进入拖动状态时触发，每次手势仅触发一次。 */
+  highlightDragHandoff?: ReaderHighlightDragHandoff
   onDragHighlight?: (highlight: ReaderSelectionRange) => void
   /** 删除指定 range 的回调（供默认 highlightPopover 的删除按钮使用） */
   onRemoveRange?: (id: string) => void
@@ -816,6 +818,7 @@ export function Reader({
   onSelectionStart,
   onSelectionEnd,
   onHighlight,
+  highlightDragHandoff,
   onDragHighlight,
   onRemoveRange,
   onHighlightColorChange,
@@ -2189,6 +2192,17 @@ export function Reader({
   ]
     .filter(Boolean)
     .join(' ')
+  // New object ends any pending/owned gesture when the document, mode or tool changes.
+  const sessionHighlightDragHandoff = useMemo(
+    () => (highlightDragHandoff ? { ...highlightDragHandoff } : undefined),
+    [
+      highlightDragHandoff,
+      document,
+      engineSource,
+      resolvedRenderMode,
+      resolvedSelectedTool
+    ]
+  )
   const readerThemeStyle: CSSProperties & {
     '--hamster-reader-theme-color': string
   } = {
@@ -2277,6 +2291,7 @@ export function Reader({
             onSelectionStart={onSelectionStart}
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
+            highlightDragHandoff={sessionHighlightDragHandoff}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
             selectionColor={resolvedSelectionColor}
@@ -2424,6 +2439,7 @@ export function Reader({
             onSelectionStart={onSelectionStart}
             onSelectionEnd={onSelectionEnd}
             onHighlight={onHighlight}
+            highlightDragHandoff={sessionHighlightDragHandoff}
             onDragHighlight={onDragHighlight}
             highlightColor={resolvedHighlightColor}
             selectionColor={resolvedSelectionColor}
