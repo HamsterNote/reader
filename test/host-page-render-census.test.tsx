@@ -122,6 +122,29 @@ describe('Web reader page render census round trip (HAM-278 group 1)', () => {
     )
   })
 
+  it('keeps the session replacement credential out of census diagnostics', async () => {
+    render(
+      <ReaderWebView
+        record={record}
+        store={{} as never}
+        entryUrl='file:///session/index.html'
+        baseUrl='file:///session/'
+        publicationUrl='file:///session/publication.pdf'
+        sessionId='census-session'
+        sourceToken='private-session-credential'
+      />
+    )
+    await message(JSON.parse(pageRenderCensusReply('req-private')))
+    const call = vi
+      .mocked(console.info)
+      .mock.calls.find(([name]) => name === 'reader-pdf-page-render-census')
+    expect(call).toBeDefined()
+    expect(call?.[1]).not.toHaveProperty('sourceToken')
+    expect(JSON.stringify(call?.[1])).not.toContain(
+      'private-session-credential'
+    )
+  })
+
   it('still forwards ordinary bridge messages to the host session', async () => {
     const ref = createRef<ReaderWebViewHandle>()
     render(

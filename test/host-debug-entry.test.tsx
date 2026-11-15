@@ -7,6 +7,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { forwardRef, useImperativeHandle, useState } from 'react'
 import type { HostDocumentRecord } from '../src/host/readerDataStore'
 import { ReaderDataStore } from '../src/host/readerDataStore'
 import { App } from '../app/App'
@@ -20,6 +21,13 @@ type ReaderProps = {
   readonly debugHoldSaveToken?: number
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
+}
+
+type ReaderHandle = {
+  readonly close: () => Promise<
+    | { readonly status: 'closed' }
+    | { readonly status: 'unconfirmed'; readonly reason: string }
+  >
 }
 
 const host = vi.hoisted(() => {
@@ -36,6 +44,7 @@ const host = vi.hoisted(() => {
       }
     },
     latest: new Map<string, ReaderProps>(),
+    close: vi.fn<(paneId: string) => ReturnType<ReaderHandle['close']>>(),
     alert: vi.fn(),
     initialUrl: null as string | null,
     urlListeners: [] as ((event: { url: string }) => void)[],
@@ -70,15 +79,30 @@ vi.mock('../app/src/components/AppErrorBoundary', () => ({
   )
 }))
 vi.mock('../app/src/screens/ReaderScreen', () => ({
-  ReaderScreen: (props: ReaderProps) => {
-    if (props.paneId) host.latest.set(props.paneId, props)
-    return (
-      <div data-testid={`reader-${props.paneId}`}>
-        <span>{props.record.fileName}</span>
-        <button onClick={props.onBack}>返回{props.paneId}</button>
-      </div>
-    )
-  }
+  ReaderScreen: forwardRef<ReaderHandle, ReaderProps>(
+    function MockReaderScreen(props, ref) {
+      const [closeFailed, setCloseFailed] = useState(false)
+      const close = async () => {
+        const result = await host.close(props.paneId ?? 'standalone')
+        if (result.status === 'closed') props.onBack()
+        else setCloseFailed(true)
+        return result
+      }
+      useImperativeHandle(ref, () => ({ close }))
+      if (props.paneId) host.latest.set(props.paneId, props)
+      return (
+        <div data-testid={`reader-${props.paneId}`}>
+          <span>{props.record.fileName}</span>
+          <button onClick={props.onBack}>返回{props.paneId}</button>
+          {closeFailed ? (
+            <button onClick={() => void close()}>
+              重试保存:{props.paneId}
+            </button>
+          ) : null}
+        </div>
+      )
+    }
+  )
 }))
 vi.mock('../app/src/screens/LibraryScreen', () => ({
   LibraryScreen: (props: {
@@ -163,6 +187,8 @@ function clearEnv(): void {
 beforeEach(async () => {
   host.values.clear()
   host.latest.clear()
+  host.close.mockReset()
+  host.close.mockResolvedValue({ status: 'closed' })
   host.alert.mockClear()
   host.importPath.mockReset()
   host.pick.mockReset()
@@ -340,6 +366,85 @@ describe('demo host debug entrance (HAM-278)', () => {
     await waitFor(() =>
       expect(host.latest.get('left')?.debugHoldSaveToken).toBe(1)
     )
+  })
+
+  it('keeps the pane mounted when debug library return hits a save failure, then retries', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    host.close
+      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'disk full' })
+      .mockResolvedValueOnce({ status: 'closed' })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+
+    fireEvent.click(screen.getByText('返回书库'))
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('left'))
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('重试保存:left'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+    )
+    expect(screen.getByText('open:a.pdf')).toBeInTheDocument()
+  })
+
+  it('keeps both panes until every library-return close is confirmed', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    let rightAttempts = 0
+    host.close.mockImplementation(async (paneId) => {
+      if (paneId === 'right' && ++rightAttempts === 1)
+        return { status: 'unconfirmed', reason: 'disk full' }
+      return { status: 'closed' }
+    })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+
+    fireEvent.click(screen.getByText('返回书库'))
+    await waitFor(() => {
+      expect(host.close).toHaveBeenCalledWith('left')
+      expect(host.close).toHaveBeenCalledWith('right')
+    })
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
+    expect(host.alert).toHaveBeenCalledWith(
+      '阅读数据尚未保存',
+      expect.any(String),
+      expect.any(Array)
+    )
+
+    fireEvent.click(screen.getByText('重试保存:right'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('open:a.pdf')).toBeInTheDocument()
+  })
+
+  it('drains the inactive pane before collapsing split view and retains it on failure', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    host.close
+      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'disk full' })
+      .mockResolvedValueOnce({ status: 'closed' })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+    expect(host.latest.get('right')?.isActivePane).toBe(false)
+
+    fireEvent.click(screen.getByText('单栏'))
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('right'))
+    expect(host.close).not.toHaveBeenCalledWith('left')
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('重试保存:right'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(host.latest.get('left')?.isActivePane).toBe(true)
   })
 
   it('keeps the debug entrance and split controls out of release builds', async () => {

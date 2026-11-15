@@ -2,7 +2,13 @@ import {
   NativePdfReader,
   type NativePdfHandoff
 } from '../components/NativePdfReader'
-import { useEffect, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState
+} from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -63,8 +69,20 @@ type ReaderScreenProps = {
   ) => void
 }
 
+export type ReaderScreenHandle = {
+  readonly close: () => Promise<BridgeCloseResult>
+}
+
+type ReaderCloseRequest = {
+  external: boolean
+  readonly promise: Promise<BridgeCloseResult>
+  readonly resolve: (result: BridgeCloseResult) => void
+}
+
 type ReaderScreenSessionProps = ReaderScreenProps & {
-  readonly closeRef: React.RefObject<(() => void) | null>
+  readonly closeRef: React.RefObject<
+    ((external?: boolean) => Promise<BridgeCloseResult>) | null
+  >
 }
 
 function identityFor(
@@ -251,6 +269,7 @@ function ReaderScreenSession({
   const nativeRef = useRef<ReaderWebViewHandle>(null)
   const webCloseInFlight = useRef<PdfIdentity | null>(null)
   const nativeCloseInFlight = useRef<PdfIdentity | null>(null)
+  const closeRequest = useRef<ReaderCloseRequest | null>(null)
   const backNotified = useRef(false)
   const onBackRef = useRef(onBack)
   onBackRef.current = onBack
@@ -352,13 +371,18 @@ function ReaderScreenSession({
       setHandoffVersion((value) => value + 1)
   }
 
+  function settleClose(result: BridgeCloseResult): void {
+    const request = closeRequest.current
+    if (!request) return
+    closeRequest.current = null
+    request.resolve(result)
+  }
+
   function notifyBack(scope: PdfHandoffCoordinator): void {
-    if (
-      !mounted.current ||
-      coordinatorRef.current !== scope ||
-      backNotified.current
-    )
-      return
+    if (!mounted.current || coordinatorRef.current !== scope) return
+    const external = closeRequest.current?.external === true
+    settleClose({ status: 'closed' })
+    if (external || backNotified.current) return
     backNotified.current = true
     onBackRef.current()
   }
@@ -479,7 +503,8 @@ function ReaderScreenSession({
     webCloseInFlight.current = null
     sync(scope)
     if (result.status === 'unconfirmed') {
-      showWebDrainError(scope, result)
+      if (closeRequest.current?.external) settleClose(result)
+      else showWebDrainError(scope, result)
       return
     }
     setWebMounted(false)
@@ -542,7 +567,9 @@ function ReaderScreenSession({
     if (scope.snapshot === previous) return
     sync(scope)
     if (scope.snapshot.phase === 'NATIVE_DRAIN_FAILED') {
-      showNativeDrainError(scope)
+      if (closeRequest.current?.external && result.status === 'unconfirmed')
+        settleClose(result)
+      else showNativeDrainError(scope)
       return
     }
     setNativePdf(false)
@@ -591,29 +618,40 @@ function ReaderScreenSession({
     if (nativeRef.current?.setRenderMode?.('text')) requestWeb()
   }
 
-  function closeReader(): void {
+  function closeReader(external = false): Promise<BridgeCloseResult> {
+    const existing = closeRequest.current
+    if (existing) {
+      if (external) existing.external = true
+      return existing.promise
+    }
+    let resolve!: (result: BridgeCloseResult) => void
+    const promise = new Promise<BridgeCloseResult>((done) => {
+      resolve = done
+    })
+    closeRequest.current = { external, promise, resolve }
     const scope = coordinator
+    if (scope.snapshot.phase === 'CLOSED') {
+      // A host can reuse the container after a completed library return.
+      if (!external) backNotified.current = false
+      notifyBack(scope)
+      return promise
+    }
     const retry = scope.snapshot.phase === 'NATIVE_DRAIN_FAILED'
-    if (!scope.requestClosed()) return
+    scope.requestClosed()
     sync(scope)
     if (scope.snapshot.phase === 'WEB_DRAINING') void startWebClose(scope)
     else if (scope.snapshot.phase === 'NATIVE_DRAINING') {
       void startNativeClose(scope, retry)
     }
+    return promise
   }
-  closeRef.current = () => {
-    if (coordinator.snapshot.phase === 'CLOSED') {
-      // A host can reuse the container after a completed library return.
-      backNotified.current = false
-      notifyBack(coordinator)
-    } else closeReader()
-  }
+  closeRef.current = (external = false) => closeReader(external)
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
       'hardwareBackPress',
       () => {
-        closeReader()
+        void closeReader()
         return true
       }
     )
@@ -702,7 +740,7 @@ function ReaderScreenSession({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={closeReader} hitSlop={12}>
+        <Pressable onPress={() => void closeReader()} hitSlop={12}>
           <Text style={styles.back}>返回</Text>
         </Pressable>
         <View style={styles.headerMain}>
@@ -746,52 +784,65 @@ function ReaderScreenSession({
   )
 }
 
-export function ReaderScreen(props: ReaderScreenProps) {
-  const [generatedPaneId] = useState(() => `pane-${randomUUID()}`)
-  const [active, setActive] = useState(props)
-  const [replacement, setReplacement] = useState(0)
-  const retained = useRef(props)
-  const closeRef = useRef<(() => void) | null>(null)
-  const switchRequested = useRef(false)
-  const requested = useRef(props)
-  requested.current = props
-  const replacing =
-    active.record.fileId !== props.record.fileId ||
-    active.store !== props.store ||
-    active.paneId !== props.paneId
-  // A configured file switch uses the same save barrier as returning to the
-  // library. Failed saves keep the old session mounted, including retry UI.
-  useEffect(() => {
-    if (replacing) {
-      switchRequested.current = true
-      closeRef.current?.()
-    }
-  }, [replacing, props.record.fileId, props.store, props.paneId])
-  if (!replacing) retained.current = props
-  const current = replacing ? retained.current : props
-  const paneId = current.paneId ?? generatedPaneId
-  return (
-    <ReaderScreenSession
-      key={JSON.stringify([paneId, current.record.fileId, replacement])}
-      {...current}
-      paneId={paneId}
-      closeRef={closeRef}
-      onBack={() => {
-        const next = requested.current
-        if (
-          switchRequested.current ||
-          next.record.fileId !== current.record.fileId ||
-          next.store !== current.store ||
-          next.paneId !== current.paneId
-        ) {
-          switchRequested.current = false
-          setActive(next)
-          setReplacement((value) => value + 1)
-        } else next.onBack()
-      }}
-    />
-  )
-}
+export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
+  function ReaderScreen(props, ref) {
+    const [generatedPaneId] = useState(() => `pane-${randomUUID()}`)
+    const [active, setActive] = useState(props)
+    const [replacement, setReplacement] = useState(0)
+    const retained = useRef(props)
+    const closeRef = useRef<
+      ((external?: boolean) => Promise<BridgeCloseResult>) | null
+    >(null)
+    const switchRequested = useRef(false)
+    const requested = useRef(props)
+    requested.current = props
+    useImperativeHandle(
+      ref,
+      () => ({
+        close: () =>
+          closeRef.current?.(true) ??
+          Promise.resolve<BridgeCloseResult>({ status: 'closed' })
+      }),
+      []
+    )
+    const replacing =
+      active.record.fileId !== props.record.fileId ||
+      active.store !== props.store ||
+      active.paneId !== props.paneId
+    // A configured file switch uses the same save barrier as returning to the
+    // library. Failed saves keep the old session mounted, including retry UI.
+    useEffect(() => {
+      if (replacing) {
+        switchRequested.current = true
+        closeRef.current?.()
+      }
+    }, [replacing, props.record.fileId, props.store, props.paneId])
+    if (!replacing) retained.current = props
+    const current = replacing ? retained.current : props
+    const paneId = current.paneId ?? generatedPaneId
+    return (
+      <ReaderScreenSession
+        key={JSON.stringify([paneId, current.record.fileId, replacement])}
+        {...current}
+        paneId={paneId}
+        closeRef={closeRef}
+        onBack={() => {
+          const next = requested.current
+          if (
+            switchRequested.current ||
+            next.record.fileId !== current.record.fileId ||
+            next.store !== current.store ||
+            next.paneId !== current.paneId
+          ) {
+            switchRequested.current = false
+            setActive(next)
+            setReplacement((value) => value + 1)
+          } else next.onBack()
+        }}
+      />
+    )
+  }
+)
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },

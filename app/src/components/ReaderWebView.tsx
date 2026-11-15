@@ -245,7 +245,6 @@ export const ReaderWebView = forwardRef<
           renderer: 'web',
           outerWebMounted: true,
           sessionId,
-          sourceToken,
           ...census
         })
         return
@@ -274,7 +273,7 @@ export const ReaderWebView = forwardRef<
         )
       }
     },
-    [sessionId, sourceToken]
+    [sessionId]
   )
 
   const handleNavigation = useCallback(

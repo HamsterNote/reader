@@ -203,6 +203,10 @@ export function startNativePdfSurface(
     send({
       type: 'snapshot',
       commitId,
+      annotationOperation: {
+        type: next ? 'upsert' : 'delete',
+        rangeId: id
+      },
       data: serializeReaderSnapshot(snapshot)
     })
     range = next

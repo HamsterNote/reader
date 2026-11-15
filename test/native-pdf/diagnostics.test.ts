@@ -21,6 +21,23 @@ describe('native PDF diagnostics', () => {
     expect(info).toHaveBeenCalledWith('reader-pdf-message', { page: 1 })
   })
 
+  it('omits session credentials from top-level, nested and array payloads', () => {
+    vi.stubGlobal('__DEV__', true)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    logNativePdfDiagnostic('reader-pdf-message', {
+      sourceToken: 'not-for-log',
+      nested: { authorization: 'not-for-log', page: 1 },
+      items: [{ sessionToken: 'not-for-log', ok: true }],
+      token: 3
+    })
+    expect(info).toHaveBeenCalledWith('reader-pdf-message', {
+      nested: { page: 1 },
+      items: [{ ok: true }],
+      token: 3
+    })
+    expect(JSON.stringify(info.mock.calls[0])).not.toContain('not-for-log')
+  })
+
   it('keeps complete file paths out of open and corrupt-document diagnostics', () => {
     const source = readFileSync(
       resolve(

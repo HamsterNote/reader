@@ -47,8 +47,17 @@ import {
   type PackagedWebReader
 } from './src/native/webAssets'
 import { LibraryScreen } from './src/screens/LibraryScreen'
-import { ReaderScreen } from './src/screens/ReaderScreen'
+import {
+  ReaderScreen,
+  type ReaderScreenHandle
+} from './src/screens/ReaderScreen'
 import { AppErrorBoundary } from './src/components/AppErrorBoundary'
+
+type HostCloseAction = {
+  readonly mode: 'all' | 'collapse'
+  readonly targets: readonly PaneId[]
+  running: boolean
+}
 
 export function App() {
   return (
@@ -64,6 +73,10 @@ function AppContent() {
     storeRef.current = new Store(createFileSystemStorage())
   }
   const store = storeRef.current
+  const leftReader = useRef<ReaderScreenHandle>(null)
+  const rightReader = useRef<ReaderScreenHandle>(null)
+  const readerRefs = { left: leftReader, right: rightReader }
+  const hostClose = useRef<HostCloseAction | null>(null)
   const [documents, setDocuments] = useState<HostDocumentSummary[]>([])
   const [busy, setBusy] = useState(false)
   const [panes, setPanes] = useState<PaneRecords>(EMPTY_PANES)
@@ -171,10 +184,66 @@ function AppContent() {
     void refresh()
   }
 
-  const closeAll = (): void => {
-    setPanes(EMPTY_PANES)
-    setSourcePickerOpen(false)
+  const runHostClose = async (action: HostCloseAction): Promise<void> => {
+    if (action.running) return
+    action.running = true
+    const results = await Promise.all(
+      action.targets.map(
+        (pane) =>
+          readerRefs[pane].current?.close() ??
+          Promise.resolve({ status: 'closed' as const })
+      )
+    )
+    action.running = false
+    if (hostClose.current !== action) return
+    if (results.some((result) => result.status !== 'closed')) {
+      Alert.alert(
+        '阅读数据尚未保存',
+        '原栏与分栏状态已保留。请重试，全部保存确认后才会关闭。',
+        [{ text: '重试', onPress: () => void runHostClose(action) }]
+      )
+      return
+    }
+    hostClose.current = null
+    if (action.mode === 'all') {
+      setPanes(EMPTY_PANES)
+      setSourcePickerOpen(false)
+    } else {
+      setPanes((state) =>
+        action.targets.reduce(
+          (next, pane) => clearPaneRecord(next, pane),
+          state
+        )
+      )
+      setSplit(false)
+    }
     void refresh()
+  }
+
+  const closeAll = (): void => {
+    const pending = hostClose.current
+    if (pending) {
+      void runHostClose(pending)
+      return
+    }
+    const action: HostCloseAction = {
+      mode: 'all',
+      targets: (['left', 'right'] as const).filter(
+        (pane) => panes[pane] !== null
+      ),
+      running: false
+    }
+    hostClose.current = action
+    void runHostClose(action)
+  }
+
+  const handleReaderBack = (pane: PaneId): void => {
+    const pending = hostClose.current
+    if (pending) {
+      void runHostClose(pending)
+      return
+    }
+    closePane(pane)
   }
 
   /** 调试入口（仅 __DEV__）：深链接 / 环境变量直接指定 PDF，不依赖 HID 点击。 */
@@ -272,7 +341,19 @@ function AppContent() {
 
   const toggleSplit = (): void => {
     if (split) {
-      setSplit(false)
+      if (hostClose.current) return
+      const target = otherPane(focusPane)
+      if (!panes[target]) {
+        setSplit(false)
+        return
+      }
+      const action: HostCloseAction = {
+        mode: 'collapse',
+        targets: [target],
+        running: false
+      }
+      hostClose.current = action
+      void runHostClose(action)
       return
     }
     setPanes((state) => mirrorActivePane(state, focusPane))
@@ -378,6 +459,7 @@ function AppContent() {
               accessibilityLabel={`${pane}-pane`}
             >
               <ReaderScreen
+                ref={readerRefs[pane]}
                 record={record}
                 store={store}
                 entryUrl={packaged.entryUrl}
@@ -389,7 +471,7 @@ function AppContent() {
                 ocr={
                   ocrFileIds.has(record.fileId) ? { enabled: true } : undefined
                 }
-                onBack={() => closePane(pane)}
+                onBack={() => handleReaderBack(pane)}
                 onRecordUpdated={(updated) => {
                   setPanes((state) => setPaneRecord(state, pane, updated))
                   void refresh()
