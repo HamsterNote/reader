@@ -2147,8 +2147,10 @@ describe('demo parser flow', () => {
       expect(popover.getByText('高亮')).toBeInTheDocument()
       expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
 
-      const colorInput = popover.container.querySelector('input[type="color"]')
-      expect(colorInput).toBeInTheDocument()
+      expect(
+        popover.getByRole('group', { name: 'Highlight color' })
+      ).toBeInTheDocument()
+      expect(popover.container.querySelector('input[type="color"]')).toBeNull()
     })
 
     it('renders highlightPopover with 删除 and 背景颜色设置', async () => {
@@ -2189,8 +2191,10 @@ describe('demo parser flow', () => {
       // When: 宿主使用 Reader 提供的原始高亮数据渲染 Popover。
       const popover = renderHighlightPopover(findDocumentReaderProps(), range)
 
-      // Then: 颜色输入优先显示该高亮自身颜色，而不是全局颜色。
-      expect(popover.getByLabelText('Highlight color')).toHaveValue('#ff3366')
+      // Then: 当前色块优先显示该高亮自身颜色，而不是全局颜色。
+      expect(
+        popover.getByRole('button', { name: 'Highlight color #ff3366' })
+      ).toHaveAttribute('aria-pressed', 'true')
     })
 
     it('forwards independent top and bottom margins from the settings', async () => {
@@ -2298,7 +2302,7 @@ describe('demo parser flow', () => {
       expect(confirmSpy).toHaveBeenCalledTimes(1)
     })
 
-    it('changes the highlightColor prop when color input is changed', async () => {
+    it('changes the highlightColor prop when a color swatch is clicked', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Color Document')
       )
@@ -2311,11 +2315,9 @@ describe('demo parser flow', () => {
       const popover = render(
         uploadReaderProps?.selectionPopover as React.ReactElement
       )
-      const colorInput = popover.container.querySelector(
-        'input[type="color"]'
-      ) as HTMLInputElement
-
-      fireEvent.change(colorInput, { target: { value: '#ff0000' } })
+      fireEvent.click(
+        popover.getByRole('button', { name: 'Highlight color #ff0000' })
+      )
 
       await waitFor(() => {
         uploadReaderProps = findDocumentReaderProps()
@@ -2323,7 +2325,7 @@ describe('demo parser flow', () => {
       })
     })
 
-    it('updates the selected range markerStyle when highlightPopover color input is changed', async () => {
+    it('updates the selected range markerStyle when highlightPopover a color swatch is clicked', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Highlight Color Document')
       )
@@ -2352,11 +2354,9 @@ describe('demo parser flow', () => {
       })
 
       const popover = renderHighlightPopover(uploadReaderProps, range)
-      const colorInput = popover.container.querySelector(
-        'input[type="color"]'
-      ) as HTMLInputElement
-
-      fireEvent.change(colorInput, { target: { value: '#ff0000' } })
+      fireEvent.click(
+        popover.getByRole('button', { name: 'Highlight color #ff0000' })
+      )
 
       await waitFor(() => {
         uploadReaderProps = findDocumentReaderProps()

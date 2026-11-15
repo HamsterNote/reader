@@ -104,6 +104,16 @@ async function activate(id = 'H1') {
   await act(async () => options.onHighlightActivate?.(id, { x: 0, y: 0 }))
   await screen.findByRole('toolbar', { name: '高亮操作' })
 }
+function changeHighlightColor(color: string) {
+  fireEvent.click(
+    screen.getByRole('button', { name: `Highlight color ${color}` })
+  )
+}
+function expectHighlightColor(color: string) {
+  expect(
+    screen.getByRole('button', { name: `Highlight color ${color}` })
+  ).toHaveAttribute('aria-pressed', 'true')
+}
 
 const compatibilityIndex = {
   id: 'shared-index',
@@ -226,9 +236,7 @@ describe('Reader with the native viewer and a controlled host', () => {
       const view = await act(async () => render(<Host file={source} />))
       await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
       await activate()
-      fireEvent.change(screen.getByLabelText('Highlight color'), {
-        target: { value: '#00ff00' }
-      })
+      changeHighlightColor('#00ff00')
       expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
       act(() => expect(ref.current?.undo()).toBe(true))
       expect(ref.current?.getAnnotationHistoryState().futureCount).toBe(1)
@@ -249,9 +257,7 @@ describe('Reader with the native viewer and a controlled host', () => {
       expect(onHistory).toHaveBeenCalledTimes(calls)
       // B has the same public ID but gets its own baseline and editable history.
       await activate()
-      fireEvent.change(screen.getByLabelText('Highlight color'), {
-        target: { value: '#0000ff' }
-      })
+      changeHighlightColor('#0000ff')
       act(() => expect(ref.current?.undo()).toBe(true))
       expect(onHistory.mock.lastCall?.[0].ranges).toEqual([original])
       expect(ref.current?.canUndo()).toBe(false)
@@ -276,9 +282,7 @@ describe('Reader with the native viewer and a controlled host', () => {
       )
       await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
       await activate()
-      fireEvent.change(screen.getByLabelText('Highlight color'), {
-        target: { value: '#00ff00' }
-      })
+      changeHighlightColor('#00ff00')
       expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
       const edited = {
         ...original,
@@ -333,9 +337,7 @@ describe('Reader with the native viewer and a controlled host', () => {
     )
     await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
     await activate()
-    fireEvent.change(screen.getByLabelText('Highlight color'), {
-      target: { value: '#00ff00' }
-    })
+    changeHighlightColor('#00ff00')
     expect(ref.current?.canUndo()).toBe(true)
     view.rerender(
       <Reader
@@ -346,13 +348,11 @@ describe('Reader with the native viewer and a controlled host', () => {
     await waitFor(() => expect(mocks.factory).toHaveBeenCalledTimes(2))
     expect(ref.current?.canUndo()).toBe(false)
     await activate()
-    expect(screen.getByLabelText('Highlight color')).toHaveValue('#ff0000')
-    fireEvent.change(screen.getByLabelText('Highlight color'), {
-      target: { value: '#0000ff' }
-    })
+    expectHighlightColor('#ff0000')
+    changeHighlightColor('#0000ff')
     act(() => expect(ref.current?.undo()).toBe(true))
     await activate()
-    expect(screen.getByLabelText('Highlight color')).toHaveValue('#ff0000')
+    expectHighlightColor('#ff0000')
     expect(ref.current?.canUndo()).toBe(false)
   })
 })
@@ -374,9 +374,7 @@ describe('engine selection transactions', () => {
       />
     )
     await activate('H2')
-    fireEvent.change(screen.getByLabelText('Highlight color'), {
-      target: { value: '#00ff00' }
-    })
+    changeHighlightColor('#00ff00')
     expect(onUpdate).toHaveBeenCalledTimes(1)
     expect(onUpdate.mock.calls[0][0]).toEqual({
       ...second,
@@ -387,11 +385,11 @@ describe('engine selection transactions', () => {
     act(() => {
       ref.current?.undo()
     })
-    expect(screen.getByLabelText('Highlight color')).toHaveValue('#ff0000')
+    expectHighlightColor('#ff0000')
     act(() => {
       ref.current?.redo()
     })
-    expect(screen.getByLabelText('Highlight color')).toHaveValue('#00ff00')
+    expectHighlightColor('#00ff00')
   })
   it('turns a different native selection into a draft despite delayed controlled selection echo', async () => {
     const onUpdate = vi.fn(),
@@ -420,9 +418,7 @@ describe('engine selection transactions', () => {
       text: 'beta'
     }
     act(() => options.onSelection?.(serialized))
-    fireEvent.change(screen.getByLabelText('Highlight color'), {
-      target: { value: '#00ff00' }
-    })
+    changeHighlightColor('#00ff00')
     expect(onUpdate).not.toHaveBeenCalled()
     act(() => {
       ref.current?.confirm()
@@ -550,9 +546,7 @@ describe('engine selection transactions', () => {
     expect(onUpdate).not.toHaveBeenCalled()
     expect(onRemove).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('toolbar', { name: '高亮操作' })).toBeVisible()
-    fireEvent.change(screen.getByLabelText('Highlight color'), {
-      target: { value: '#00ff00' }
-    })
+    changeHighlightColor('#00ff00')
     expect(onUpdate).toHaveBeenCalledExactlyOnceWith({
       ...original,
       markerStyle: { ...original.markerStyle, backgroundColor: '#00ff00' }

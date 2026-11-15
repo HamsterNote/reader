@@ -5,6 +5,7 @@ import type {
   ReaderSelectionRectangle,
   ReaderSelectionRef
 } from '../types/selection'
+import { DEFAULT_BOTTOM_BAR_COLORS } from './Reader/defaultBottomBarConfig'
 
 /**
  * 默认 Popover 组件
@@ -160,8 +161,16 @@ function MobileSafeHighlightButton({
  * 1. 调用 onHighlightColorChange 更新全局高亮色（影响后续新建的高亮）
  * 2. 如果当前有选中的 range，通过 onUpdateRange 更新该 range 的 markerStyle
  */
-// Toolbar highlight colors include alpha, while <input type=color> needs hex.
-function colorInputValue(color: string | undefined): string | undefined {
+const HIGHLIGHT_COLORS = [
+  '#ffc107',
+  '#ff0000',
+  '#00ff00',
+  '#0000ff',
+  '#00aa88',
+  ...DEFAULT_BOTTOM_BAR_COLORS.map(({ color }) => color)
+]
+
+function normalizedHexColor(color: string | undefined): string | undefined {
   if (color?.startsWith('#')) return color
   const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(color ?? '')
   return rgb
@@ -175,6 +184,48 @@ function colorInputValue(color: string | undefined): string | undefined {
     : undefined
 }
 
+function HighlightColorPalette({
+  value,
+  onChange
+}: {
+  readonly value: string
+  readonly onChange: (color: string) => void
+}) {
+  const colors = HIGHLIGHT_COLORS.some(
+    (color) => color.toLowerCase() === value.toLowerCase()
+  )
+    ? HIGHLIGHT_COLORS
+    : [value, ...HIGHLIGHT_COLORS]
+  return (
+    <div className='hamster-reader-popover-color'>
+      <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
+      <div
+        className='hamster-reader-popover-color-palette'
+        role='group'
+        aria-label='Highlight color'
+      >
+        {colors.map((color) => (
+          <button
+            key={color}
+            type='button'
+            className='hamster-reader-popover-color-swatch'
+            aria-label={`Highlight color ${color}`}
+            aria-pressed={color.toLowerCase() === value.toLowerCase()}
+            title={color}
+            onClick={() => onChange(color)}
+          >
+            <span
+              className='hamster-reader-popover-color-swatch-value'
+              style={{ backgroundColor: color }}
+              aria-hidden='true'
+            />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function HighlightColorPicker({
   highlightColor,
   onHighlightColorChange,
@@ -185,37 +236,29 @@ function HighlightColorPicker({
   const selectedRange = ranges?.find((range) => range.id === selectedRangeId)
   const rangeColor = selectedRange?.markerStyle?.backgroundColor
   const colorValue =
-    colorInputValue(rangeColor) ?? colorInputValue(highlightColor) ?? '#ffc107'
+    normalizedHexColor(rangeColor) ??
+    normalizedHexColor(highlightColor) ??
+    '#ffc107'
 
   return (
-    <label className='hamster-reader-popover-color'>
-      <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
-      <input
-        type='color'
-        aria-label='Highlight color'
-        className='hamster-reader-popover-color-input'
-        value={colorValue}
-        onChange={(e) => {
-          const newColor = e.target.value
-          // 1. 更新全局高亮色
-          onHighlightColorChange?.(newColor)
-
-          // 2. 同步更新当前选中 range 的 markerStyle，使颜色立即生效
-          if (selectedRangeId && ranges && onUpdateRange) {
-            const selectedRange = ranges.find((r) => r.id === selectedRangeId)
-            if (selectedRange) {
-              onUpdateRange({
-                ...selectedRange,
-                markerStyle: {
-                  ...selectedRange.markerStyle,
-                  backgroundColor: newColor
-                }
-              })
-            }
+    <HighlightColorPalette
+      value={colorValue}
+      onChange={(newColor) => {
+        onHighlightColorChange?.(newColor)
+        if (selectedRangeId && ranges && onUpdateRange) {
+          const selectedRange = ranges.find((r) => r.id === selectedRangeId)
+          if (selectedRange) {
+            onUpdateRange({
+              ...selectedRange,
+              markerStyle: {
+                ...selectedRange.markerStyle,
+                backgroundColor: newColor
+              }
+            })
           }
-        }}
-      />
-    </label>
+        }
+      }}
+    />
   )
 }
 
@@ -360,8 +403,8 @@ export function DefaultRectanglePopover({
 
   const rectangleColor = rectangle?.markerStyle?.backgroundColor
   const colorValue =
-    colorInputValue(rectangleColor) ??
-    colorInputValue(highlightColor) ??
+    normalizedHexColor(rectangleColor) ??
+    normalizedHexColor(highlightColor) ??
     '#ffc107'
 
   return (
@@ -389,28 +432,19 @@ export function DefaultRectanglePopover({
         删除
       </button>
       {rectangle && (
-        <label className='hamster-reader-popover-color'>
-          <span className='hamster-reader-popover-color-label'>
-            背景颜色设置
-          </span>
-          <input
-            type='color'
-            aria-label='Highlight color'
-            className='hamster-reader-popover-color-input'
-            value={colorValue}
-            onChange={(event) => {
-              const newColor = event.target.value
-              onHighlightColorChange?.(newColor)
-              onUpdateRect?.({
-                ...rectangle,
-                markerStyle: {
-                  ...rectangle.markerStyle,
-                  backgroundColor: newColor
-                }
-              })
-            }}
-          />
-        </label>
+        <HighlightColorPalette
+          value={colorValue}
+          onChange={(newColor) => {
+            onHighlightColorChange?.(newColor)
+            onUpdateRect?.({
+              ...rectangle,
+              markerStyle: {
+                ...rectangle.markerStyle,
+                backgroundColor: newColor
+              }
+            })
+          }}
+        />
       )}
     </div>
   )

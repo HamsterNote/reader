@@ -30,4 +30,12 @@ yarn host:check
 
 本轮另补两条交替保存：原生画矩形 → Web 新增/修改高亮 → 重开，以及 Web 修改高亮 → 原生画矩形 → 重开；两次都必须同时保留最新高亮和矩形。再从第一页点击未访问远页及跨页高亮，允许先出现页级导航和 OCR refill，最终必须到目标 offset 并显示编辑菜单，全程不得出现 `activate-wait-timeout`。
 
+## P4 自绘色板与裸页面探针
+
+`391f4dd` 在 iPhone 18 Pro 模拟器 / iOS 27.2 的完整 App 中，单击 `Highlight color` 只保留原 ColorWell，没有系统取色器。公开资料对 iOS WebView 的支持报告并不一致，因此不能据此断言所有 WKWebView 都不支持；本修复只确认该任务的内嵌环境没有可用取色器。`webview/color-input-probe.html` 是不含 React、toolbar 或 `preventDefault` 的裸 `input[type=color]` 页面，Mac 应在同一个 WKWebView 环境单独加载、点击并保存截图/AX 结果；Linux 未执行该探针。
+
+正式 popover 已改为 4 列自绘色块，不再依赖系统取色器。色块是原生 button，组名为 `Highlight color`，每块通过 `Highlight color #rrggbb` 访问，支持 Tab/Enter 和当前色 `aria-pressed`。预设包含默认色、既有常见色及 pdfjs 底栏的六个柔和色；历史自定义色作为额外当前色保留。toolbar 的 `mousedown.preventDefault()` 保留，回归验证后续 click 与键盘提交仍会进入原 `onUpdateRange` 链路。
+
+`test/default-popover-color.test.tsx` 覆盖色块可访问性、当前/自定义色、toolbar mousedown 和键盘提交；`test/native-pdf/color-persistence.test.tsx` 覆盖改色 revision 递增与重开、A/B 两轮往返后再次编辑、删除重开 ranges=0。Mac 先记录裸探针，再按 `Highlight color #00ff00` 点击色块，核对磁盘 revision 和新颜色，完成 A/B 与删除步骤。
+
 Linux 测试证明 JS 两侧的真实接线和时序处理；WKWebView 的跨进程投递、真机菜单位置及持久化操作仍需 Mac 完成上述检查。
