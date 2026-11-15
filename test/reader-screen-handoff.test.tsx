@@ -1,0 +1,728 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useState,
+  type ReactNode
+} from 'react'
+import type { WebViewProps } from 'react-native-webview'
+import { Alert } from 'react-native'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ReaderScreen } from '../app/src/screens/ReaderScreen'
+import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
+import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
+import type {
+  BridgeCloseResult,
+  BridgeHostSnapshot
+} from '../src/bridge/hostSession'
+import type {
+  HostDocumentRecord,
+  ReaderDataStore
+} from '../src/host/readerDataStore'
+import {
+  restoreReaderSnapshot,
+  serializeReaderSnapshot
+} from '../src/host/readerSnapshot'
+import type { PdfCommand, PdfIdentity } from '../src/nativePdf/contracts'
+
+type TestBinding = {
+  readonly identity: PdfIdentity
+  readonly canWrite: (identity: PdfIdentity) => boolean
+  readonly assertWriter: (identity: PdfIdentity) => void
+  readonly onReady?: (identity: PdfIdentity) => void
+}
+
+type OuterWebProps = {
+  readonly handoff?: TestBinding
+  readonly sessionId?: string
+}
+
+const host = vi.hoisted(() => ({
+  web: {} as WebViewProps,
+  outerProps: null as OuterWebProps | null,
+  native: {} as ReaderPdfViewProps,
+  commands: [] as PdfCommand[],
+  post: vi.fn(),
+  webClose: vi.fn<
+    (props: OuterWebProps | undefined) => Promise<BridgeCloseResult>
+  >(),
+  sequence: 0,
+  webError: false,
+  nativeMounts: 0,
+  nativeUnmounts: 0
+}))
+
+vi.mock('../app/src/native/webAssets', () => ({
+  stageReaderDocument: vi.fn(async () => ({
+    baseUrl: 'file:///session/',
+    entryUrl: 'file:///session/index.html',
+    publicationUrl: 'file:///session/publication.pdf'
+  }))
+}))
+vi.mock('../app/src/components/ReaderWebView', () => ({
+  ReaderWebView: forwardRef<ReaderWebViewHandle, OuterWebProps>(
+    function MockReaderWebView(props, ref) {
+      const [closed, setClosed] = useState(false)
+      host.outerProps = props
+      useImperativeHandle(ref, () => ({
+        close: async () => {
+          const result = await host.webClose(props)
+          if (result.status === 'closed') setClosed(true)
+          return result
+        }
+      }))
+      const generation = props.handoff?.identity.generation ?? 0
+      let content = 'web-live'
+      if (host.webError && generation === 0) {
+        content = 'WebView 未完成握手（8 秒超时）'
+      }
+      if (closed) content = 'web-disposed'
+      return (
+        <div
+          data-testid='web-reader'
+          data-generation={generation}
+          data-session={props.sessionId ?? 'initial-session'}
+        >
+          {content}
+        </div>
+      )
+    }
+  )
+}))
+vi.mock('react-native', () => {
+  const Container = ({ children }: { children?: ReactNode }) => (
+    <div>{children}</div>
+  )
+  return {
+    ActivityIndicator: () => <div>loading</div>,
+    Alert: { alert: vi.fn() },
+    BackHandler: { addEventListener: () => ({ remove: vi.fn() }) },
+    View: Container,
+    Text: Container,
+    ScrollView: Container,
+    Pressable: ({
+      children,
+      onPress,
+      disabled
+    }: {
+      children?: ReactNode
+      onPress?: () => void
+      disabled?: boolean
+    }) => (
+      <button onClick={onPress} disabled={disabled}>
+        {children}
+      </button>
+    ),
+    StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
+    Modal: ({
+      visible,
+      children
+    }: {
+      visible: boolean
+      children?: ReactNode
+    }) => (visible ? <div>{children}</div> : null),
+    Image: () => null,
+    Platform: { OS: 'ios' },
+    Linking: { openURL: vi.fn() },
+    AppState: { addEventListener: () => ({ remove: vi.fn() }) }
+  }
+})
+vi.mock('react-native-webview', async () => {
+  const { forwardRef: forward, useImperativeHandle: imperative } =
+    await import('react')
+  return {
+    WebView: forward(function TestWebView(props: WebViewProps, ref) {
+      host.web = props
+      imperative(ref, () => ({ postMessage: host.post }), [])
+      return null
+    })
+  }
+})
+vi.mock('../app/modules/reader-pdf', () => ({
+  readerPdfModule: {},
+  ReaderPdfView: (props: ReaderPdfViewProps) => {
+    host.native = props
+    useEffect(() => {
+      host.nativeMounts += 1
+      return () => {
+        host.nativeUnmounts += 1
+      }
+    }, [])
+    const command = props.command as PdfCommand | null | undefined
+    if (command && host.commands.at(-1)?.requestId !== command.requestId) {
+      host.commands.push(command)
+    }
+    return <div data-testid='native-pdf-view' />
+  }
+}))
+vi.mock('../app/src/native/documents', () => ({
+  pickLegacyJsonAndImport: vi.fn()
+}))
+vi.mock('expo-crypto', () => ({
+  randomUUID: () => `handoff-${++host.sequence}`
+}))
+vi.mock('expo-file-system/legacy', () => ({
+  EncodingType: { Base64: 'base64' }
+}))
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
+function makeRecord(fileId = 'handoff-document'): HostDocumentRecord {
+  return {
+    fileId,
+    fileName: `${fileId}.pdf`,
+    format: 'pdf',
+    size: 57_618,
+    modifiedAt: 0,
+    importedAt: 0,
+    cachedUri: `${fileId}.pdf`,
+    snapshot: {
+      revision: 0,
+      progress: null,
+      data: {
+        readerData: {
+          hiddenPages: [],
+          edgeCrop: { pages: { 'page-2': { left: 0.2 } } }
+        },
+        annotations: { version: 5, ranges: [], rects: [], paintings: {} },
+        comments: [{ id: 'keep-comment' }],
+        envelopeSentinel: { keep: true }
+      }
+    }
+  }
+}
+
+type StoreControls = {
+  getGate?: ReturnType<typeof deferred<void>>
+  failGetOnCall?: number
+  failNextUpdate?: boolean
+  holdNextUpdate?: ReturnType<typeof deferred<void>>
+}
+
+function createTransactionStore(
+  initial: HostDocumentRecord,
+  controls: StoreControls = {}
+) {
+  let current = initial
+  let queue: Promise<unknown> = Promise.resolve()
+  const owners: string[] = []
+  const store = {
+    get: vi.fn(async (_fileId: string) => {
+      if (controls.getGate) await controls.getGate.promise
+      await queue
+      if (store.get.mock.calls.length === controls.failGetOnCall) {
+        throw new Error('authoritative read failed')
+      }
+      return current
+    }),
+    updateSnapshot: vi.fn(
+      (
+        _fileId: string,
+        patch: (snapshot: BridgeHostSnapshot) => BridgeHostSnapshot,
+        fence?: () => void
+      ) => {
+        const run = async () => {
+          fence?.()
+          const next = patch(current.snapshot)
+          if (controls.holdNextUpdate) {
+            const hold = controls.holdNextUpdate
+            controls.holdNextUpdate = undefined
+            await hold.promise
+          }
+          if (controls.failNextUpdate) {
+            controls.failNextUpdate = false
+            throw new Error('disk full')
+          }
+          current = { ...current, snapshot: next }
+          owners.push('native')
+          return next
+        }
+        const result = queue.then(run, run)
+        queue = result.catch(() => undefined)
+        return result
+      }
+    )
+  }
+  return {
+    store: store as unknown as ReaderDataStore,
+    updateSnapshot: store.updateSnapshot,
+    get: store.get,
+    snapshot: () => current.snapshot,
+    owners
+  }
+}
+
+async function mountScreen(
+  store: ReaderDataStore,
+  record = makeRecord(),
+  onBack = vi.fn()
+) {
+  render(
+    <ReaderScreen
+      record={record}
+      store={store}
+      entryUrl='file:///unused/index.html'
+      baseUrl='file:///unused/'
+      onBack={onBack}
+      onRecordUpdated={vi.fn()}
+    />
+  )
+  await screen.findByTestId('web-reader')
+  return { onBack, record }
+}
+
+async function switchToNative() {
+  await act(async () => {
+    fireEvent.click(screen.getByText('原生 PDF 验证'))
+    await Promise.resolve()
+  })
+  expect(host.native.onPdfEvent).toBeTypeOf('function')
+}
+
+function nativeIdentity(): PdfIdentity {
+  const script = host.web.injectedJavaScriptBeforeContentLoaded
+  expect(script).toBeTypeOf('string')
+  return JSON.parse(
+    script!.slice('window.__READER_NATIVE_PDF__='.length, -';true;'.length)
+  ) as PdfIdentity
+}
+
+async function drainCommands(identity: PdfIdentity) {
+  const completed = new Set<string>()
+  for (let index = 0; index < 40; index++) {
+    const command = host.native.command as PdfCommand | null
+    if (!command || completed.has(command.requestId)) return
+    completed.add(command.requestId)
+    await act(async () => {
+      host.native.onPdfEvent({
+        nativeEvent: {
+          ...identity,
+          type: 'complete',
+          requestId: command.requestId
+        }
+      })
+    })
+  }
+  throw new Error('native command queue did not drain')
+}
+
+async function loadNative(pageCount = 200): Promise<PdfIdentity> {
+  const identity = nativeIdentity()
+  await act(async () => {
+    host.native.onPdfEvent({
+      nativeEvent: { ...identity, type: 'loaded', pageCount }
+    })
+  })
+  await drainCommands(identity)
+  return identity
+}
+
+async function waitForNativeReady() {
+  await waitFor(() => {
+    expect(
+      screen.getByText('裁切/隐藏页编辑').closest('button')
+    ).not.toBeDisabled()
+  })
+}
+
+async function submitCrop() {
+  await act(async () => {
+    fireEvent.click(screen.getByText('裁切/隐藏页编辑'))
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByText('裁切四边 5%'))
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByText('确认'))
+  })
+}
+
+function alertButton(text: string) {
+  const calls = vi.mocked(Alert.alert).mock.calls
+  for (let index = calls.length - 1; index >= 0; index--) {
+    const button = calls[index]?.[2]?.find((entry) => entry.text === text)
+    if (button) return button
+  }
+  throw new Error(`missing alert button: ${text}`)
+}
+
+beforeEach(() => {
+  host.commands = []
+  host.web = {} as WebViewProps
+  host.outerProps = null
+  host.native = {} as ReaderPdfViewProps
+  host.post.mockClear()
+  host.webClose.mockReset()
+  host.sequence = 0
+  host.webError = false
+  host.nativeMounts = 0
+  host.nativeUnmounts = 0
+  vi.stubGlobal('__DEV__', true)
+  vi.spyOn(console, 'info').mockImplementation(() => undefined)
+})
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+describe('ReaderScreen native handoff regressions', () => {
+  it.each(['delayed', 'absent'])(
+    'opens native for delayed or absent Web handshake: %s',
+    async () => {
+      const close = deferred<BridgeCloseResult>()
+      const get = deferred<void>()
+      host.webClose.mockReturnValue(close.promise)
+      const fixture = createTransactionStore(makeRecord(), { getGate: get })
+      await mountScreen(fixture.store)
+
+      await switchToNative()
+      const identity = await loadNative()
+      expect(host.commands.some((command) => command.type === 'open')).toBe(true)
+      expect(screen.getByText('1/200')).toBeInTheDocument()
+      expect(fixture.get).toHaveBeenCalled()
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('下一页'))
+      })
+      await waitFor(() => {
+        expect(host.native.command).toMatchObject({
+          type: 'navigate',
+          pageNumber: 2
+        })
+      })
+      expect(fixture.updateSnapshot).not.toHaveBeenCalled()
+      expect(identity.fileId).toBe('handoff-document')
+      close.reject(new Error('test cleanup'))
+      get.reject(new Error('test cleanup'))
+    }
+  )
+
+  it('rejects edits until authoritative snapshot and lease are ready', async () => {
+    const close = deferred<BridgeCloseResult>()
+    const get = deferred<void>()
+    host.webClose.mockReturnValue(close.promise)
+    const fixture = createTransactionStore(makeRecord(), { getGate: get })
+    await mountScreen(fixture.store)
+    await switchToNative()
+    const identity = await loadNative()
+
+    await act(async () => {
+      host.native.onPdfEvent({
+        nativeEvent: {
+          ...identity,
+          type: 'rect',
+          pageNumber: 2,
+          rect: { x: 10, y: 20, width: 40, height: 30 },
+          phase: 'commit',
+          geometryRevision: 1
+        }
+      })
+      await host.web.onMessage?.({
+        nativeEvent: {
+          data: JSON.stringify({
+            ...identity,
+            type: 'snapshot',
+            commitId: 'premature-web-edit',
+            data: makeRecord().snapshot.data
+          })
+        }
+      } as Parameters<NonNullable<WebViewProps['onMessage']>>[0])
+    })
+    expect(fixture.updateSnapshot).not.toHaveBeenCalled()
+    expect(screen.getByText('裁切/隐藏页编辑').closest('button')).toBeDisabled()
+
+    await act(async () => {
+      get.resolve()
+      await get.promise
+    })
+    expect(fixture.updateSnapshot).not.toHaveBeenCalled()
+    expect(screen.getByText('裁切/隐藏页编辑').closest('button')).toBeDisabled()
+
+    await act(async () => {
+      await fixture.store.updateSnapshot('handoff-document', (snapshot) => ({
+        ...snapshot,
+        data: {
+          ...(snapshot.data as Record<string, unknown>),
+          readerData: { hiddenPages: [2] }
+        },
+        revision: snapshot.revision + 1
+      }))
+      close.resolve({ status: 'closed' })
+      await close.promise
+    })
+    await waitForNativeReady()
+    await submitCrop()
+    await waitFor(() => {
+      const restored = restoreReaderSnapshot(fixture.snapshot().data)
+      expect(restored.data.hiddenPages).toEqual([2])
+      expect(restored.data.edgeCrop?.all?.top).toBe(0.05)
+    })
+  })
+
+  it('rejects edits until authoritative snapshot and lease are ready after a read failure', async () => {
+    host.webClose.mockResolvedValue({ status: 'closed' })
+    const fixture = createTransactionStore(makeRecord(), { failGetOnCall: 2 })
+    await mountScreen(fixture.store)
+    await switchToNative()
+    const identity = await loadNative()
+    await screen.findByText(/权威数据读取失败/)
+
+    await act(async () => {
+      host.native.onPdfEvent({
+        nativeEvent: {
+          ...identity,
+          type: 'rect',
+          pageNumber: 2,
+          rect: { x: 10, y: 20, width: 40, height: 30 },
+          phase: 'commit',
+          geometryRevision: 1
+        }
+      })
+    })
+    expect(fixture.updateSnapshot).not.toHaveBeenCalled()
+    await act(async () => {
+      fireEvent.click(screen.getByText('重试数据恢复'))
+    })
+    await waitForNativeReady()
+  })
+
+  it('keeps native mounted when cancel save fails and recovers by retry', async () => {
+    host.webClose.mockResolvedValue({ status: 'closed' })
+    const hold = deferred<void>()
+    const fixture = createTransactionStore(makeRecord(), {
+      holdNextUpdate: hold,
+      failNextUpdate: true
+    })
+    const { onBack } = await mountScreen(fixture.store)
+    await switchToNative()
+    await loadNative()
+    await waitForNativeReady()
+    await submitCrop()
+    await waitFor(() => expect(fixture.updateSnapshot).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Web 对照'))
+    })
+    await act(async () => {
+      hold.resolve()
+      await hold.promise
+    })
+    await screen.findByText(/disk full/)
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+    expect(onBack).not.toHaveBeenCalled()
+    expect(host.outerProps?.handoff?.identity.generation ?? 0).toBe(0)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/disk full.*重试/))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('web-reader')).toHaveAttribute(
+        'data-generation',
+        '1'
+      )
+    })
+    expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
+    expect(
+      restoreReaderSnapshot(fixture.snapshot().data).data.edgeCrop?.all?.top
+    ).toBe(0.05)
+  })
+
+  it('does not discard old Web writes when cancelling pending handoff', async () => {
+    const first = deferred<BridgeCloseResult>()
+    host.webClose
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ status: 'closed' })
+    const fixture = createTransactionStore(makeRecord())
+    await mountScreen(fixture.store)
+    const oldBinding = host.outerProps?.handoff
+    await switchToNative()
+    await loadNative()
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Web 对照'))
+    })
+    expect(host.webClose).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+    await act(async () => {
+      first.resolve({ status: 'unconfirmed', reason: 'old Web write pending' })
+      await first.promise
+    })
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+    expect(host.outerProps?.handoff?.identity.generation ?? 0).toBe(0)
+
+    await act(async () => {
+      await fixture.store.updateSnapshot('handoff-document', (snapshot) => ({
+        ...snapshot,
+        data: serializeReaderSnapshot({
+          ...restoreReaderSnapshot(snapshot.data),
+          data: {
+            ...restoreReaderSnapshot(snapshot.data).data,
+            hiddenPages: [2]
+          }
+        }),
+        revision: snapshot.revision + 1
+      }))
+      alertButton('重试旧 Web 保存').onPress?.()
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('web-reader')).toHaveAttribute(
+        'data-generation',
+        '1'
+      )
+    })
+    expect(restoreReaderSnapshot(fixture.snapshot().data).data.hiddenPages).toEqual([
+      2
+    ])
+    expect(oldBinding?.canWrite(oldBinding.identity)).toBe(false)
+  })
+
+  it.each(['normal', 'failure', 'cancel'])(
+    'returns to a fresh Web generation on every return path: %s',
+    async (path) => {
+      host.webError = true
+      const close = deferred<BridgeCloseResult>()
+      if (path === 'normal') {
+        host.webClose.mockResolvedValue({ status: 'closed' })
+      } else if (path === 'failure') {
+        host.webClose
+          .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'flush failed' })
+          .mockResolvedValueOnce({ status: 'closed' })
+      } else {
+        host.webClose.mockReturnValue(close.promise)
+      }
+      const fixture = createTransactionStore(makeRecord())
+      await mountScreen(fixture.store)
+      const oldProps = host.outerProps
+      const oldGeneration = oldProps?.handoff?.identity.generation
+      expect(
+        screen.getByText('WebView 未完成握手（8 秒超时）')
+      ).toBeInTheDocument()
+      host.webError = false
+      await switchToNative()
+      await loadNative()
+
+      if (path === 'normal') {
+        await waitForNativeReady()
+        await act(async () => {
+          fireEvent.click(screen.getByText('Web 对照'))
+        })
+      } else if (path === 'failure') {
+        await act(async () => {
+          alertButton('返回 Web 对照').onPress?.()
+        })
+      } else {
+        await act(async () => {
+          fireEvent.click(screen.getByText('Web 对照'))
+          close.resolve({ status: 'closed' })
+          await close.promise
+        })
+      }
+
+      await waitFor(() => {
+        expect(screen.getByTestId('web-reader')).toHaveAttribute(
+          'data-generation',
+          String((oldGeneration ?? 0) + 1)
+        )
+      })
+      expect(host.outerProps?.sessionId).not.toBe(oldProps?.sessionId)
+      expect(screen.getByTestId('web-reader')).toHaveTextContent('web-live')
+      expect(
+        screen.queryByText('WebView 未完成握手（8 秒超时）')
+      ).not.toBeInTheDocument()
+      expect(oldProps?.handoff?.canWrite(oldProps.handoff.identity)).toBe(false)
+      expect(host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)).toBe(
+        false
+      )
+      await act(async () => {
+        oldProps?.handoff?.onReady?.(oldProps.handoff.identity)
+      })
+      expect(host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)).toBe(
+        false
+      )
+      await act(async () => {
+        const current = host.outerProps
+        current?.handoff?.onReady?.(current.handoff.identity)
+      })
+      expect(host.outerProps?.handoff?.canWrite(host.outerProps.handoff.identity)).toBe(
+        true
+      )
+    }
+  )
+
+  it('fences queued stale writes and repeated switch requests', async () => {
+    const close = deferred<BridgeCloseResult>()
+    host.webClose.mockReturnValue(close.promise)
+    const hold = deferred<void>()
+    const fixture = createTransactionStore(makeRecord(), {
+      holdNextUpdate: hold
+    })
+    const { onBack } = await mountScreen(fixture.store)
+    const oldWeb = host.outerProps
+    await switchToNative()
+    await act(async () => {
+      fireEvent.click(screen.getByText('原生 PDF 验证'))
+    })
+    expect(host.webClose).toHaveBeenCalledTimes(1)
+    expect(host.nativeMounts).toBe(1)
+    await loadNative()
+    await act(async () => {
+      close.resolve({ status: 'closed' })
+      await close.promise
+    })
+    await waitForNativeReady()
+    const oldNative = host.web.injectedJavaScriptBeforeContentLoaded
+    expect(oldNative).toContain('handoff-')
+
+    await submitCrop()
+    await waitFor(() => expect(fixture.updateSnapshot).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      fireEvent.click(screen.getByText('Web 对照'))
+      fireEvent.click(screen.getByText('Web 对照'))
+    })
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+    await act(async () => {
+      hold.resolve()
+      await hold.promise
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('web-reader')).toHaveAttribute(
+        'data-generation',
+        '1'
+      )
+    })
+    expect(fixture.updateSnapshot).toHaveBeenCalledTimes(1)
+    expect(oldWeb?.handoff?.canWrite(oldWeb.handoff.identity)).toBe(false)
+    expect(() =>
+      oldWeb?.handoff?.assertWriter(oldWeb.handoff.identity)
+    ).toThrow(/not-ready|stale|lease/)
+
+    host.webClose.mockResolvedValue({ status: 'closed' })
+    const currentWeb = host.outerProps
+    await act(async () => {
+      currentWeb?.handoff?.onReady?.(currentWeb.handoff.identity)
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1))
+    expect(host.webClose).toHaveBeenCalledTimes(2)
+  })
+})

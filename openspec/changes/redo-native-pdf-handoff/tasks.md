@@ -2,9 +2,9 @@
 
 ## 1. 固定交接回归基线
 
-- [ ] 1.1 在 `test/reader-screen-handoff.test.tsx` 建立真实 ReaderScreen/NativePdfReader、可控旧 Web close、平台视图与真实事务存储夹具；运行 design 冒烟表验收 2 的两条精确命令，保留修复前阻断读取/提交门禁失败的原始输出，确保每个筛选至少执行一个用例。
-- [ ] 1.2 扩展 `test/native-pdf/interleaved-saves.test.tsx`，新增 design 中验收 3/4 的三个精确用例名；通过可控权威 fixture 重放 hidden=[] 的裁切-only 操作失败后，重新打开/取消编辑器再重试，保留 `[2]` 被清空断言的红色输出；fixture 不在完整交接路径制造双写。
-- [ ] 1.3 新增 design 中验收 5/6 与重复切换/迟到写入的五条精确用例；逐条执行 `yarn vitest run test/reader-screen-handoff.test.tsx -t '<表中原名>'` 并保存原始失败输出，验证实际保持挂载/重试、Web generation 和 owner 轨迹，不能只断言按钮显示。
+- [x] 1.1 在 `test/reader-screen-handoff.test.tsx` 建立真实 ReaderScreen/NativePdfReader、可控旧 Web close、平台视图与真实事务存储夹具；运行 design 冒烟表验收 2 的两条精确命令，保留修复前阻断读取/提交门禁失败的原始输出，确保每个筛选至少执行一个用例。
+- [x] 1.2 扩展 `test/native-pdf/interleaved-saves.test.tsx`，新增 design 中验收 3/4 的三个精确用例名；通过可控权威 fixture 重放 hidden=[] 的裁切-only 操作失败后，重新打开/取消编辑器再重试，保留 `[2]` 被清空断言的红色输出；fixture 不在完整交接路径制造双写。
+- [x] 1.3 新增 design 中验收 5/6 与重复切换/迟到写入的五条精确用例；逐条执行 `yarn vitest run test/reader-screen-handoff.test.tsx -t '<表中原名>'` 并保存原始失败输出，验证实际保持挂载/重试、Web generation 和 owner 轨迹，不能只断言按钮显示。
 
 ## 2. 操作意图与重试的数据保全
 
