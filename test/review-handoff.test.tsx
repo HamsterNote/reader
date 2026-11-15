@@ -11,11 +11,13 @@ import {
   useEffect,
   useImperativeHandle,
   useState,
+  type CSSProperties,
   type ReactNode
 } from 'react'
 import type { WebViewProps } from 'react-native-webview'
 import { Alert } from 'react-native'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDrainPair } from './helpers/bridge-drain'
 import { startNativePdfSurface } from '../webview/src/nativePdf'
 import { nativeCanonicalPageFromOcr } from '../src/nativePdf/ocr'
 import { ReaderScreen } from '../app/src/screens/ReaderScreen'
@@ -59,6 +61,7 @@ const host = vi.hoisted(() => ({
   post: vi.fn(),
   webClose:
     vi.fn<(props: OuterWebProps | undefined) => Promise<BridgeCloseResult>>(),
+  webDiscard: vi.fn<() => Promise<BridgeCloseResult>>(),
   sequence: 0,
   webError: false,
   nativeMounts: 0,
@@ -78,6 +81,11 @@ vi.mock('../app/src/components/ReaderWebView', () => ({
       const [closed, setClosed] = useState(false)
       host.outerProps = props
       useImperativeHandle(ref, () => ({
+        discardUnconfirmed: async () => {
+          const result = await host.webDiscard()
+          if (result.status === 'closed') setClosed(true)
+          return result
+        },
         close: async () => {
           const result = await host.webClose(props)
           if (result.status === 'closed') setClosed(true)
@@ -103,9 +111,13 @@ vi.mock('../app/src/components/ReaderWebView', () => ({
   )
 }))
 vi.mock('react-native', () => {
-  const Container = ({ children }: { children?: ReactNode }) => (
-    <div>{children}</div>
-  )
+  const Container = ({
+    children,
+    style
+  }: {
+    children?: ReactNode
+    style?: CSSProperties
+  }) => <div style={style}>{children}</div>
   return {
     ActivityIndicator: () => <div>loading</div>,
     Alert: { alert: vi.fn() },
@@ -182,7 +194,7 @@ const pdf = vi.hoisted(() => ({ terminate: vi.fn() }))
 vi.mock('../src/pdf/pdfDocumentSession', () => ({
   PdfDocumentSession: {
     open: async () => ({
-      document: { numPages: 1, getOutline: async () => null },
+      document: { numPages: 200, getOutline: async () => null },
       dispose: async () => undefined
     })
   }
@@ -427,6 +439,7 @@ beforeEach(() => {
   host.native = {} as ReaderPdfViewProps
   host.post.mockClear()
   host.webClose.mockReset()
+  host.webDiscard.mockReset()
   host.sequence = 0
   host.webError = false
   host.nativeMounts = 0
@@ -938,6 +951,7 @@ describe('independent review: read-only popover', () => {
 // Runs the real Web Popover and its optimistic commit across the RN boundary.
 // Messages are queued like postMessage, so rejection arrives after commit().
 describe('real Popover handoff feedback', () => {
+  const peers: ReturnType<typeof createDrainPair>[] = []
   const canonical = nativeCanonicalPageFromOcr(1, 400, 500, [
     {
       id: 'ocr-1',
@@ -1020,7 +1034,142 @@ describe('real Popover handoff feedback', () => {
     )
     await screen.findByRole('button', { name: rangeId ? '删除' : '高亮' })
   }
-  afterEach(closeSurface)
+  afterEach(async () => {
+    await closeSurface()
+    peers.splice(0).forEach((peer) => peer.dispose())
+  })
+
+  it.each(['far-color-to-web', 'cross-delete-to-library'])(
+    'completes the full device recovery path: %s',
+    async (path) => {
+      const far = path === 'far-color-to-web'
+      const first = far ? 100 : 1
+      const last = far ? 100 : 3
+      const range = {
+        id: 'device-range',
+        createdAt: 1,
+        text: 'OCR',
+        start: { selectionId: `page-${first}`, offset: 0 },
+        end: { selectionId: `page-${last}`, offset: 3 },
+        markerStyle: { backgroundColor: '#ffc107' },
+        overlayRectType: 'px',
+        rectsBySelectionId: Object.fromEntries(
+          [...new Set([first, last])].map((page) => [
+            `page-${page}`,
+            [{ x: 0, y: 50, width: 30, height: 20 }]
+          ])
+        )
+      }
+      const original = makeRecord()
+      const record = {
+        ...original,
+        snapshot: {
+          ...original.snapshot,
+          data: {
+            ...(original.snapshot.data as object),
+            annotations: {
+              version: 5,
+              ranges: [range],
+              rects: [],
+              paintings: {}
+            }
+          }
+        }
+      }
+      const fixture = createTransactionStore(record)
+      const { onBack } = await mountScreen(fixture.store, record)
+      const webIdentity = host.outerProps!.handoff!.identity
+      const peer = createDrainPair({
+        sessionId: webIdentity.sessionId,
+        snapshot: fixture.snapshot(),
+        quiesce: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          if (
+            screen.getByTestId('web-reader').closest('[style*="display: none"]')
+          )
+            throw new Error('zero viewport before editing')
+        }
+      })
+      peers.push(peer)
+      peer.web.start()
+      await waitFor(() => expect(peer.web.getRevision()).not.toBeNull())
+      host.webClose.mockImplementation(() =>
+        peer.host.close(100, { handoff: true })
+      )
+      await switchToNative()
+      const identity = await loadNative(far ? 200 : 3)
+      await waitForNativeReady()
+      await openSurface(fixture.snapshot(), identity)
+      await act(async () =>
+        receive({
+          type: 'nativeSelection',
+          canonicalPages: [...new Set([first, last])]
+            .map((pageNumber) => ({
+              ...canonical,
+              pageNumber
+            }))
+            .concat(
+              far
+                ? []
+                : [
+                    {
+                      ...canonical,
+                      pageNumber: 2,
+                      text: '',
+                      glyphs: [],
+                      boundaries: [canonical.boundaries[0]]
+                    }
+                  ]
+            ),
+          event: {
+            ...identity,
+            rangeId: range.id,
+            type: 'selection',
+            phase: 'end',
+            start: range.start,
+            end: range.end,
+            anchor: { x: 0, y: 50, width: 30, height: 20 },
+            geometryRevision: 1
+          }
+        })
+      )
+      const button = await screen.findByRole('button', {
+        name: far ? 'Highlight color #00ff00' : '删除'
+      })
+      expect(button).toBeEnabled()
+      await act(async () => fireEvent.click(button))
+      await flushWebMessages()
+      await drainCommands(identity)
+      await waitFor(() => {
+        const ranges = restoreReaderSnapshot(fixture.snapshot().data).data
+          .ranges
+        if (far)
+          expect(ranges?.[0].markerStyle?.backgroundColor).toBe('#00ff00')
+        else expect(ranges).toEqual([])
+      })
+      await act(async () =>
+        fireEvent.click(screen.getByText(far ? 'Web 对照' : '返回'))
+      )
+      if (far) {
+        await waitFor(() =>
+          expect(screen.getByTestId('web-reader')).toHaveAttribute(
+            'data-generation',
+            '1'
+          )
+        )
+        expect(onBack).not.toHaveBeenCalled()
+      } else {
+        await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1))
+        expect(
+          restoreReaderSnapshot(
+            (await fixture.store.get(record.fileId))!.snapshot.data
+          ).data.ranges
+        ).toEqual([])
+      }
+      expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
+      expect(Alert.alert).not.toHaveBeenCalled()
+    }
+  )
 
   it('rolls back a rejected real Popover highlight and reopens without it; saves after lease grant', async () => {
     const close = deferred<BridgeCloseResult>()
@@ -1113,5 +1262,201 @@ describe('real Popover handoff feedback', () => {
     await openSurface(saved, identity)
     await selectText(restoreReaderSnapshot(saved.data).data.ranges![0].id)
     expect(screen.getByRole('button', { name: '删除' })).toBeEnabled()
+  })
+})
+
+describe('device Web close regressions with real bridge peers', () => {
+  const peers: ReturnType<typeof createDrainPair>[] = []
+  afterEach(() => peers.splice(0).forEach((p) => p.dispose()))
+  it('requires explicit confirmation to discard, then restores saved data in a fresh Web', async () => {
+    const fixture = createTransactionStore(makeRecord())
+    const { onBack } = await mountScreen(fixture.store)
+    const identity = host.outerProps!.handoff!.identity
+    const peer = createDrainPair({
+      sessionId: identity.sessionId,
+      snapshot: fixture.snapshot(),
+      quiesce: async () => {
+        throw new Error('progress did not stabilize')
+      },
+      persist: (snapshot) =>
+        fixture.store
+          .updateSnapshot('handoff-document', () => snapshot)
+          .then(() => undefined)
+    })
+    peers.push(peer)
+    peer.web.start()
+    await waitFor(() => expect(peer.web.getRevision()).not.toBeNull())
+    peer.web.sendChange({ readerData: { hiddenPages: [2] } })
+    await waitFor(() => expect(peer.web.getPendingCount()).toBe(0))
+    host.webClose.mockImplementation(() =>
+      peer.host.close(30, { handoff: true })
+    )
+    host.webDiscard.mockImplementation(async () => {
+      await peer.host.discardUnconfirmed()
+      return { status: 'closed' }
+    })
+    await switchToNative()
+    await loadNative()
+    await act(async () => {
+      await host.webClose.mock.results[0].value
+    })
+    await act(async () => alertButton('放弃未确认内容…').onPress?.())
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '放弃未确认内容？',
+      expect.stringContaining('可能丢失'),
+      expect.anything()
+    )
+    // Cancel keeps the native view and all unconfirmed content in place.
+    await act(async () => alertButton('继续保留并重试').onPress?.())
+    expect(host.webDiscard).not.toHaveBeenCalled()
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+    await act(async () => alertButton('放弃未确认内容…').onPress?.())
+    await act(async () => alertButton('放弃并返回 Web').onPress?.())
+    await waitFor(() =>
+      expect(screen.getByTestId('web-reader')).toHaveAttribute(
+        'data-generation',
+        '1'
+      )
+    )
+    expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
+    expect(host.webDiscard).toHaveBeenCalledTimes(1)
+    expect(onBack).not.toHaveBeenCalled()
+    expect(
+      restoreReaderSnapshot(fixture.snapshot().data).data.hiddenPages
+    ).toEqual([2])
+    expect(host.outerProps!.handoff!.identity.sessionId).not.toBe(
+      identity.sessionId
+    )
+  })
+
+  it('ignores a discard confirmation from a failure that has since recovered', async () => {
+    host.webClose
+      .mockResolvedValueOnce({
+        status: 'unconfirmed',
+        reason: 'missing progress'
+      })
+      .mockResolvedValueOnce({ status: 'closed' })
+    const fixture = createTransactionStore(makeRecord())
+    await mountScreen(fixture.store)
+    await switchToNative()
+    await loadNative()
+    await act(async () => alertButton('放弃未确认内容…').onPress?.())
+    const staleConfirm = alertButton('放弃并返回 Web')
+    await act(async () => alertButton('重试旧 Web 保存').onPress?.())
+    await waitForNativeReady()
+    await act(async () => staleConfirm.onPress?.())
+    expect(host.webDiscard).not.toHaveBeenCalled()
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+  })
+
+  it('finishes the second B to A round trip with the draining Web viewport retained', async () => {
+    const records = [makeRecord('A'), makeRecord('B')]
+    const fixtures = records.map((r) => createTransactionStore(r))
+    const onBack = vi.fn()
+    const props = {
+      entryUrl: 'file:///unused/index.html',
+      baseUrl: 'file:///unused/',
+      onBack,
+      onRecordUpdated: vi.fn()
+    }
+    const view = render(
+      <ReaderScreen record={records[0]} store={fixtures[0].store} {...props} />
+    )
+    for (const [turn, index] of [0, 1, 0, 1, 0].entries()) {
+      await act(async () =>
+        view.rerender(
+          <ReaderScreen
+            record={records[index]}
+            store={fixtures[index].store}
+            {...props}
+          />
+        )
+      )
+      await screen.findByTestId('web-reader')
+      const identity = host.outerProps!.handoff!.identity
+      const peer = createDrainPair({
+        sessionId: identity.sessionId,
+        snapshot: fixtures[index].snapshot(),
+        quiesce: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          // WebKit cannot finish geometry/animation-frame readiness in a zero viewport.
+          if (
+            screen.getByTestId('web-reader').closest('[style*="display: none"]')
+          )
+            throw new Error('zero Web viewport during stable progress')
+        }
+      })
+      peers.push(peer)
+      peer.web.start()
+      await waitFor(() => expect(peer.web.getRevision()).not.toBeNull())
+      host.webClose.mockImplementation(() =>
+        peer.host.close(30, { handoff: true })
+      )
+      await switchToNative()
+      await loadNative()
+      await waitForNativeReady()
+      expect(Alert.alert).not.toHaveBeenCalledWith(
+        '旧 Web 数据尚未保存',
+        expect.anything(),
+        expect.anything()
+      )
+      await act(async () => fireEvent.click(screen.getByText('返回')))
+      await waitFor(() => expect(onBack).toHaveBeenCalledTimes(turn + 1))
+    }
+  })
+
+  it('retains native and onBack=0 for a real Web disk failure, then retries and leaves', async () => {
+    const fixture = createTransactionStore(makeRecord())
+    const { onBack } = await mountScreen(fixture.store)
+    let fail = true
+    const identity = host.outerProps!.handoff!.identity
+    const peer = createDrainPair({
+      sessionId: identity.sessionId,
+      snapshot: fixture.snapshot(),
+      persist: async (snapshot) => {
+        if (fail) throw new Error('disk full')
+        await fixture.store.updateSnapshot('handoff-document', () => snapshot)
+      }
+    })
+    peers.push(peer)
+    peer.web.start()
+    await waitFor(() => expect(peer.web.getRevision()).not.toBeNull())
+    await act(async () => {
+      peer.web.sendChange({ readerData: { hiddenPages: [2] } })
+    })
+    host.webClose.mockImplementation(() =>
+      peer.host.close(30, { handoff: true })
+    )
+    await switchToNative()
+    await loadNative()
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '旧 Web 数据尚未保存',
+        expect.anything(),
+        expect.anything()
+      )
+    )
+    await act(async () => fireEvent.click(screen.getByText('返回')))
+    await waitFor(() => expect(host.webClose.mock.calls.length).toBe(2))
+    expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
+    expect(onBack).not.toHaveBeenCalled()
+    await act(async () => {
+      await host.webClose.mock.results[1].value
+    })
+    fail = false
+    await waitFor(() =>
+      expect(
+        peer.hostMessages.filter((m) => m.type === 'command')
+      ).toHaveLength(2)
+    )
+    await act(async () => {
+      alertButton('重试旧 Web 保存').onPress?.()
+    })
+    await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1))
+    expect(
+      restoreReaderSnapshot(
+        (await fixture.store.get('handoff-document'))!.snapshot.data
+      ).data.hiddenPages
+    ).toEqual([2])
   })
 })

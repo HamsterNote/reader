@@ -136,9 +136,14 @@ function renderReaderContent(context: ReaderContentContext) {
     onOcrTextsChange
   }
   return (
-    <>
+    <View style={styles.reader}>
       {webMounted ? (
-        <View style={nativePdf ? styles.hidden : styles.reader}>
+        <View
+          style={styles.reader}
+          pointerEvents={nativePdf ? 'none' : 'auto'}
+          accessibilityElementsHidden={nativePdf}
+          importantForAccessibility={nativePdf ? 'no-hide-descendants' : 'auto'}
+        >
           <ReaderWebView
             key={`${webIdentity.sessionId}:${webIdentity.generation}`}
             ref={webRef}
@@ -151,16 +156,18 @@ function renderReaderContent(context: ReaderContentContext) {
         </View>
       ) : null}
       {nativePdf ? (
-        <NativePdfReader
-          key={nativeIdentity.sessionId}
-          ref={nativeRef}
-          record={record}
-          handoff={nativeHandoff}
-          {...shared}
-        />
+        <View style={webMounted ? styles.nativeOverlay : styles.reader}>
+          <NativePdfReader
+            key={nativeIdentity.sessionId}
+            ref={nativeRef}
+            record={record}
+            handoff={nativeHandoff}
+            {...shared}
+          />
+        </View>
       ) : null}
       {!nativePdf && !webMounted ? <ActivityIndicator /> : null}
-    </>
+    </View>
   )
 }
 
@@ -289,20 +296,61 @@ function ReaderScreenSession({
             }
           }
         },
-        { text: '返回 Web 对照', onPress: () => requestWeb() }
+        { text: '返回 Web 对照', onPress: () => requestWeb() },
+        {
+          text: '放弃未确认内容…',
+          style: 'destructive',
+          onPress: () => confirmDiscardWeb(scope)
+        }
       ]
     )
   }
 
-  async function startWebClose(scope: PdfHandoffCoordinator): Promise<void> {
+  function confirmDiscardWeb(scope: PdfHandoffCoordinator): void {
+    const failed = scope.snapshot
+    if (coordinatorRef.current !== scope || failed.phase !== 'WEB_DRAIN_FAILED')
+      return
+    Alert.alert(
+      '放弃未确认内容？',
+      '将保留已落盘的数据；未确认的修改和最终阅读进度可能丢失。已接收的写盘操作完成后返回 Web 对照。',
+      [
+        { text: '继续保留并重试', style: 'cancel' },
+        {
+          text: '放弃并返回 Web',
+          style: 'destructive',
+          onPress: () => {
+            if (coordinatorRef.current !== scope || scope.snapshot !== failed)
+              return
+            const nextWeb = identityFor(
+              record.fileId,
+              scope.snapshot.web.generation + 1
+            )
+            if (!scope.requestWeb(nextWeb)) return
+            sync(scope)
+            void startWebClose(scope, true)
+          }
+        }
+      ]
+    )
+  }
+
+  async function startWebClose(
+    scope: PdfHandoffCoordinator,
+    discard = false
+  ): Promise<void> {
     const identity = scope.snapshot.web
     if (webCloseInFlight.current !== null) return
     webCloseInFlight.current = identity
     let result: BridgeCloseResult
     try {
-      result = (await webRef.current?.close({ handoff: true })) ?? {
-        status: 'closed'
-      }
+      result = discard
+        ? ((await webRef.current?.discardUnconfirmed?.()) ?? {
+            status: 'unconfirmed',
+            reason: '当前会话未提供放弃未确认内容的出口'
+          })
+        : ((await webRef.current?.close({ handoff: true })) ?? {
+            status: 'closed'
+          })
     } catch (error) {
       result = {
         status: 'unconfirmed',
@@ -547,7 +595,16 @@ export function ReaderScreen(props: ReaderScreenProps) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
   reader: { flex: 1 },
-  hidden: { display: 'none' },
+  // Keep the draining WKWebView laid out: stable-progress needs a nonzero
+  // viewport and animation frames. The opaque native layer covers its input.
+  nativeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#f5f3ee'
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

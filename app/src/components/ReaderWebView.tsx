@@ -97,6 +97,7 @@ function buildBootstrapScript(sessionId: string, sourceToken: string): string {
 
 /** 关闭握手入口：宿主 UI 必须先 await close() 再卸载 WebView。 */
 export type ReaderWebViewHandle = {
+  readonly discardUnconfirmed?: () => Promise<BridgeCloseResult>
   readonly close: (options?: {
     readonly handoff?: boolean
     readonly retry?: boolean
@@ -139,6 +140,10 @@ export const ReaderWebView = forwardRef<
   useImperativeHandle(
     ref,
     () => ({
+      discardUnconfirmed: async () => {
+        await sessionRef.current?.discardUnconfirmed()
+        return { status: 'closed' }
+      },
       close: async (options): Promise<BridgeCloseResult> => {
         const session = sessionRef.current
         if (session === null) return { status: 'closed' }

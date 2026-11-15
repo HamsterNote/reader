@@ -354,7 +354,7 @@ describe('ReaderHostSession', () => {
     const closing = harness.session.close(5)
     await expect(closing).resolves.toEqual({
       status: 'unconfirmed',
-      reason: '关闭超时：仍有未确认写入未落盘'
+      reason: expect.stringContaining('barrier=final-flush')
     })
     // 撤回 close：通知 Web 恢复编辑，会话仍可接收写入。
     expect(harness.sent.at(-1)).toMatchObject({
@@ -402,7 +402,7 @@ describe('ReaderHostSession', () => {
     const closing = harness.session.close(5, { handoff: true })
     await expect(closing).resolves.toEqual({
       status: 'unconfirmed',
-      reason: '关闭超时：仍有未确认写入未落盘'
+      reason: expect.stringContaining('barrier=final-flush')
     })
     expect(
       harness.sent.some(

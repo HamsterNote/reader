@@ -244,9 +244,11 @@ if (window.__READER_NATIVE_PDF__) {
             // 关闭冲刷期间冻结输入；恢复（resume）时解除。
             setClosingShield(draining)
           },
-          onQuiesce: async () => {
+          onQuiesce: async (report) => {
             await waitForInputQuiesce()
+            report('document-work')
             await work
+            report('stable-progress')
             await readerProgress.current?.flush()
           },
           onError: (error) => {
