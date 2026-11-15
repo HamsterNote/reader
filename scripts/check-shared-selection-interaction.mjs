@@ -263,7 +263,7 @@ export async function checkSharedSelectionInteraction({
                       .querySelector('.hamster-reader')
                       .getBoundingClientRect().left
                   ),
-                  anchor: point.x + (parseFloat(marker.style.left) - 38) / 2,
+                  anchor: point.x + (parseFloat(marker.style.left) - 76) / 2,
                   markerHidden: marker.hidden,
                   color: marker.style.backgroundColor,
                   text: text.textContent,
@@ -275,9 +275,9 @@ export async function checkSharedSelectionInteraction({
                   distance: point.y - (rect.y + rect.height / 2)
                 }
               }, target)
-              assert.equal(tracking.size, 76, label)
+              assert.equal(tracking.size, 152, label)
               assert.equal(tracking.transform, 'none', label)
-              assert(Math.abs(Math.abs(tracking.distance) - 76) < 1, label)
+              assert(Math.abs(Math.abs(tracking.distance) - 114) < 1, label)
               assert.equal(tracking.markerHidden, false, label)
               assert.equal(
                 tracking.color,
@@ -309,7 +309,7 @@ export async function checkSharedSelectionInteraction({
                           '.hamster-reader__range-magnifier-marker'
                         ).style.left
                       ) -
-                        38) /
+                        76) /
                         2,
                     mutations: window.lensMutations
                   }),
@@ -323,8 +323,8 @@ export async function checkSharedSelectionInteraction({
                   Math.abs(
                     current.left -
                       tracking.left -
-                      (Math.max(target.x + dx - 38, tracking.minimumLeft) -
-                        Math.max(target.x - 38, tracking.minimumLeft))
+                      (Math.max(target.x + dx - 76, tracking.minimumLeft) -
+                        Math.max(target.x - 76, tracking.minimumLeft))
                   ) < 0.1,
                   `${label}: finger tracking ${JSON.stringify({ current, tracking, target, dx })}`
                 )

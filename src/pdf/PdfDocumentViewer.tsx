@@ -576,88 +576,10 @@ export const PdfDocumentViewer = forwardRef<
       callbacksRef.current.onPageChange?.(pageNumber)
     }
   })
-  const scrollToCroppedPage = useCallback(
-    (pageNumber: number) => {
-      cancelRestoreWait()
-      cancelLayoutRestore()
-      restoredPosition.current = null
-      restoredTextPosition.current = null
-      pendingAnchor.current?.fail(
-        new DOMException('PDF navigation superseded', 'AbortError')
-      )
-      pendingAnchor.current = null
-      pendingPageRef.current = null
-      const viewer = viewerRef.current
-      if (!viewer) return
-      if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1))) {
-        pendingPageRef.current = { pageNumber }
-        return
-      }
-      if (
-        !isPdfLayoutReady(
-          containerRef.current,
-          viewer.getPageView(pageNumber - 1)?.div
-        )
-      ) {
-        const container = containerRef.current
-        if (!container) {
-          progressOptions.current.onError?.({
-            kind: 'unknown',
-            message: 'PDF 翻页容器尚未挂载，请重试'
-          })
-          return
-        }
-        const document = documentRef.current,
-          source = progressOptions.current.source
-        let stopLayout = () => {}
-        const finish = () => {
-          stopLayout()
-          clearTimeout(timer)
-          if (pendingAnchor.current === pending) pendingAnchor.current = null
-        }
-        const pending = {
-          anchor: { pageNumber, verticalPercentage: 0 },
-          awaitingLayout: true,
-          done: finish,
-          fail: finish
-        }
-        const isCurrent = () =>
-          pendingAnchor.current === pending &&
-          viewerRef.current === viewer &&
-          documentRef.current === document &&
-          progressOptions.current.source === source &&
-          containerRef.current === container &&
-          visiblePagesRef.current.includes(pageNumber)
-        pendingAnchor.current = pending
-        const timer = setTimeout(() => {
-          const current = isCurrent()
-          finish()
-          if (current)
-            progressOptions.current.onError?.({
-              kind: 'unknown',
-              message: 'PDF 翻页布局就绪超时（10 秒），请重试'
-            })
-        }, 10000)
-        stopLayout = observePdfLayout(
-          container,
-          () => viewer.getPageView(pageNumber - 1)?.div,
-          () => {
-            if (!isCurrent()) {
-              finish()
-              return
-            }
-            if (!isPageViewActivatable(viewer.getPageView(pageNumber - 1)))
-              return
-            finish()
-            viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: observed attached positive layout
-          }
-        )
-        return
-      }
-      viewer.scrollPageIntoView({ pageNumber }) // pdf-scroll-guard: isPageViewActivatable above, rejected pages pending
-    },
-    [cancelLayoutRestore, cancelRestoreWait]
-  )
+  const navigatePageRef = useRef<(pageNumber: number) => void>(() => {})
+  const scrollToCroppedPage = useCallback((pageNumber: number) => {
+    navigatePageRef.current(pageNumber)
+  }, [])
   // Layout captures at text-item granularity. Retain a restored Text character
   // while the viewport stays at that exact position, including a quick round trip.
   const restoredTextPosition = useRef<{
@@ -1920,6 +1842,7 @@ export const PdfDocumentViewer = forwardRef<
         return Promise.reject(new Error('目标页面不可用，原位置已保留'))
       return beginNavigation(anchor, options, originalDocument)
     }
+    if (targetReady()) return beginNavigation(anchor, options, originalDocument)
     // A deleted page never becomes activatable; fail fast so the restore
     // fallback can land on the nearest existing page.
     const initialViewer = viewerRef.current
@@ -1963,6 +1886,16 @@ export const PdfDocumentViewer = forwardRef<
     stored: ReaderBookmark,
     options?: { preserveOnFailure?: boolean }
   ): Promise<void> => navigateToAnchor(stored, options, true)
+
+  navigatePageRef.current = (pageNumber) => {
+    pendingPageRef.current = null
+    pendingAnchor.current?.fail(new DOMException('PDF navigation superseded', 'AbortError'))
+    pendingAnchor.current = null
+    navigateToAnchor({ pageNumber, verticalPercentage: 0 }, undefined, true).catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'AbortError') return
+      progressOptions.current.onError?.({ kind: 'unknown', message: error instanceof Error ? error.message : String(error) })
+    })
+  }
 
   useEffect(() => {
     const eventBus = eventBusRef.current
@@ -2033,8 +1966,6 @@ export const PdfDocumentViewer = forwardRef<
         if (!viewer || !visiblePagesRef.current.includes(pageNumber)) return
         restoredPosition.current = null
         restoredTextPosition.current = null
-        pendingAnchor.current?.done()
-        pendingAnchor.current = null
         scrollToCroppedPage(pageNumber)
       },
       setScale: (nextScale) => {

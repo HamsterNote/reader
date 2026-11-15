@@ -2000,6 +2000,10 @@ export function EngineDocumentViewer(props: Props) {
           </div>
         )}
         <PageBrowser
+          containMarginTop={props.containMarginTop ?? props.containMarginY}
+          containMarginBottom={
+            props.containMarginBottom ?? props.containMarginY
+          }
           outline={renderEngineOutline(book, pageNumbers, (href) => {
             progressEnabled.current = true
             cancelSelection()

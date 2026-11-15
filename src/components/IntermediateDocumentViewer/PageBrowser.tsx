@@ -292,7 +292,14 @@ function PageBrowserPagesPanel({
               >
                 <span
                   className='hamster-reader__page-browser-preview'
-                  style={{ aspectRatio }}
+                  style={
+                    {
+                      aspectRatio,
+                      '--page-browser-aspect': pageSize
+                        ? pageSize.width / pageSize.height
+                        : 0.75
+                    } as CSSProperties
+                  }
                 >
                   {baseImage ? (
                     <img
@@ -619,15 +626,17 @@ export function PageBrowser({
   const containerStyle = {
     '--hamster-reader-theme-color': themeColor ?? '#2563eb',
     paddingTop:
-      typeof containMarginTop === 'number' ? `${containMarginTop}px` : undefined
-  } as CSSProperties
-
-  const listStyle: CSSProperties = {
+      typeof containMarginTop === 'number'
+        ? `${containMarginTop}px`
+        : undefined,
     paddingBottom:
       typeof containMarginBottom === 'number'
         ? `${containMarginBottom}px`
         : undefined
-  }
+  } as CSSProperties
+
+  // Reserve the occluded area outside the scrolling frame, for every tab.
+  const listStyle: CSSProperties = {}
 
   // 点击高亮项：先选中再滚动定位
   const handleHighlightClick = (rangeId: string) => {

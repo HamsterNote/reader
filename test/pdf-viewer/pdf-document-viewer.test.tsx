@@ -806,6 +806,75 @@ describe('PdfDocumentViewer 接线', () => {
     expect(ref.current!.captureTextAnchor()).toEqual(anchor)
   })
 
+  it('waits for nonzero layout, cancels a superseded seek and aligns the crop to the safe line', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer(
+      {
+        readingInsets: { top: 44, bottom: 34, horizontal: 0 },
+        edgeCrop: { all: { top: 0.1, bottom: 0, left: 0, right: 0 } }
+      },
+      ref
+    )
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const viewer = latestViewer()
+    const scroll = vi.spyOn(viewer, 'scrollPageIntoView')
+    const measured = container.getBoundingClientRect
+    container.getBoundingClientRect = () => new DOMRect()
+    vi.useFakeTimers()
+    try {
+      act(() => ref.current!.scrollToPage(1))
+      act(() => ref.current!.scrollToPage(2))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(scroll).not.toHaveBeenCalled()
+      container.getBoundingClientRect = measured
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(viewer.currentPageNumber).toBe(2)
+      expect(
+        scroll.mock.calls.every(([request]) => request.pageNumber === 2)
+      ).toBe(true)
+      const page = viewer.getPageView(1)!.div.getBoundingClientRect()
+      expect(Math.abs(page.top + page.height * 0.1 - 44)).toBeLessThanOrEqual(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves scroll and reports a layout timeout without touching PDF.js', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const view = renderViewer({}, ref)
+    await act(async () => {})
+    const container = view.container.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const scroll = vi.spyOn(latestViewer(), 'scrollPageIntoView')
+    container.scrollTop = 80
+    container.getBoundingClientRect = () => new DOMRect()
+    vi.useFakeTimers()
+    try {
+      const result = ref
+        .current!.scrollToAnchorForRestore({
+          pageNumber: 2,
+          verticalPercentage: 0
+        })
+        .catch((error) => error)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000)
+      })
+      expect(await result).toMatchObject({ name: 'PdfLayoutNotReadyError' })
+      expect(container.scrollTop).toBe(80)
+      expect(scroll).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('times out when a character rectangle never becomes measurable', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     const view = renderViewer({}, ref)
@@ -1205,18 +1274,20 @@ describe('PdfDocumentViewer 接线', () => {
     const ref = createRef<PdfDocumentViewerRef>()
     renderViewer({}, ref)
     await act(async () => {})
-    let pending!: Promise<void>
+    let pending!: Promise<unknown>
     act(() => {
-      pending = ref.current!.scrollToAnchor({
-        pageNumber: 1,
-        textId: 'page-1-item-0',
-        text: 'column',
-        offset: 5
-      })
+      pending = ref
+        .current!.scrollToAnchor({
+          pageNumber: 1,
+          textId: 'page-1-item-0',
+          text: 'column',
+          offset: 5
+        })
+        .catch((error) => error)
       ref.current!.scrollToPage(2)
     })
     await act(async () => {
-      await pending
+      expect(await pending).toMatchObject({ name: 'AbortError' })
     })
     expect(latestViewer().currentPageNumber).toBe(2)
     expect(ref.current!.captureTextAnchor()).toBeNull()

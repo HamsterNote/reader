@@ -725,6 +725,7 @@
   }
 
   &__page-browser-list {
+    container-type: size;
     flex: 1 1 0;
     min-height: 0;
     padding: 16px;
@@ -933,9 +934,17 @@
   }
 
   &__page-browser-preview {
+    // Short split panes must fit a complete thumbnail and its page label.
+    // cqh refers to the scroll frame content box, excluding its padding.
+    max-width: 100%;
+    margin-inline: auto;
+    box-sizing: border-box;
+    width: min(
+      100%,
+      calc(max(32px, 100cqh - 28px) * var(--page-browser-aspect, 0.75))
+    );
     position: relative;
     display: block;
-    width: 100%;
     overflow: hidden;
     background: #ffffff;
     border: 1px solid #d1d5db;
