@@ -60,7 +60,7 @@
 
 逐项：
 
-- 5.4：书库 / 重开 / 已配置文件入口与单双栏 `paneId` / `isActivePane` 隔离、native 与 Web 路径共享文件身份、保存屏障、加载失败与保存拒绝均已实现并有自动化用例。设备侧 A/B 往返、两栏同文件与不同目录同名文件、加载失败和保存拒绝见 `82316e0` 证据；换源时「待确认写入」被 drain 包住的时序见 `18041c8` 组 4（drain 8826 ms，旧 session `dfbf87cf…` → 新 `93523e0c…`）。
+- 5.4：书库 / 重开 / 已配置文件入口与单双栏 `paneId` / `isActivePane` 隔离、native 与 Web 路径共享文件身份、保存屏障、加载失败与保存拒绝均已实现并有自动化用例。设备侧证据为 A/B 往返、两栏同文件与不同目录同名文件（`82316e0` 组 2 / 3），以及换源时「待确认写入」被 drain 包住的时序（`18041c8` 组 4，drain 8826 ms，旧 session `dfbf87cf…` → 新 `93523e0c…`）。加载失败与保存拒绝由自动化用例覆盖，未取得设备证据，见 `test/reader-screen-handoff.test.tsx` 的 `reports staging failure without showing the old book or falling back and retries the same native route`、`keeps a failed save mounted during a configured file switch, then retries into the new native session`、`keeps native mounted when cancel save fails and recovers by retry`。
 - 6.4：iOS ReaderScreen 本地 PDF Layout 已默认走仓内 PDFKit；`18041c8` 组 1 设备日志为 `renderer=pdfkit, outerWebMounted=false`、`documentOpened=true,pageCount=2`，Text / Web / Android / EPUB 与旧 Web 对照入口保留。
 
 保留项（不标通过）：真实 Apple Vision / `extraOCR` 识别质量未覆盖（S12 使用仓库样本的 OCR 文字种子，验证的是握手前缓存重放与 activate 链，不是识别质量）；原生文字长按手势受模拟器 HID `invalidated` 限制未取得设备证据，属 tasks 3.2，不在本任务范围；旧 `yarn check:browser` 的 26 项失败在基线 `ac8b34e` 同样存在，未标为通过。
