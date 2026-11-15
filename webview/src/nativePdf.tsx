@@ -338,7 +338,14 @@ export function startNativePdfSurface(
             utf16: cache!.pages.get(pageNumber)?.text.length ?? 0
           }))
         })
-        if (!nativeSelectionPagesReady(cache.pages, pages)) {
+        if (
+          !nativeSelectionPagesReady(
+            cache.pages,
+            pages,
+            existing.start,
+            existing.end
+          )
+        ) {
           if (!pendingActivates.has(rangeId)) queueActivate(rangeId, pages)
           armActivateTimeout(rangeId)
           return
@@ -392,7 +399,17 @@ export function startNativePdfSurface(
     if (disposed || !cache) return
     mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
     for (const pending of [...pendingActivates.values()]) {
-      const ready = nativeSelectionPagesReady(cache.pages, pending.pages)
+      const existing = snapshot.data.ranges?.find(
+        (candidate) => candidate.id === pending.rangeId
+      )
+      const ready = existing
+        ? nativeSelectionPagesReady(
+            cache.pages,
+            pending.pages,
+            existing.start,
+            existing.end
+          )
+        : false
       if (pending.started && !ready) continue
       if (ready)
         console.info('reader-pdf-activate-pending-replay', {
@@ -626,7 +643,15 @@ export function startNativePdfSurface(
         : Array.from(new Set([first, last]))
       if (cache)
         mergeNativeSelectionPages(cache.pages, Array.from(ocrPages.values()))
-      if (!cache || !nativeSelectionPagesReady(cache.pages, pages))
+      if (
+        !cache ||
+        !nativeSelectionPagesReady(
+          cache.pages,
+          pages,
+          existing.start,
+          existing.end
+        )
+      )
         queueActivate(rangeId, pages)
       activateRange(rangeId)
       return

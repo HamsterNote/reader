@@ -15,6 +15,11 @@ export type NativeAnnotationSnapshot = {
   readonly pagePaintings: Record<string, EditorDocument>
 }
 
+type NativeAnnotationHistoryEntry = {
+  readonly snapshot: NativeAnnotationSnapshot
+  readonly restoreRanges: boolean
+}
+
 export type AnnotationControllerResult =
   | { readonly status: 'changed'; readonly snapshot: NativeAnnotationSnapshot }
   | {
@@ -58,17 +63,29 @@ function rectForIntent(
 
 export function createNativeAnnotationController(initial?: ReaderData | null) {
   let current = initialSnapshot(initial)
-  const past: NativeAnnotationSnapshot[] = []
-  const future: NativeAnnotationSnapshot[] = []
+  const past: NativeAnnotationHistoryEntry[] = []
+  const future: NativeAnnotationHistoryEntry[] = []
   const commits = new Set<string>()
 
   const changed = (
-    next: NativeAnnotationSnapshot
+    next: NativeAnnotationSnapshot,
+    restoreRanges = false
   ): AnnotationControllerResult => {
-    past.push(current)
+    past.push({ snapshot: current, restoreRanges })
     current = next
     future.length = 0
     return { status: 'changed', snapshot: current }
+  }
+
+  const restoreHistory = (
+    entry: NativeAnnotationHistoryEntry
+  ): NativeAnnotationSnapshot => {
+    if (entry.restoreRanges) return entry.snapshot
+    return {
+      ...current,
+      rects: entry.snapshot.rects,
+      pagePaintings: entry.snapshot.pagePaintings
+    }
   }
 
   const applyIntent = (
@@ -100,7 +117,7 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       }
       const ranges = [...current.ranges]
       ranges[index] = nextRange
-      return changed({ ...current, ranges })
+      return changed({ ...current, ranges }, true)
     }
     const rect = rectForIntent(intent)
     const index = current.rects.findIndex((item) => item.id === rect.id)
@@ -151,7 +168,7 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       if (ranges.length === current.ranges.length)
         return { status: 'rejected', reason: 'INVALID_TARGET' }
       commits.add(commitId)
-      return changed({ ...current, ranges })
+      return changed({ ...current, ranges }, true)
     },
     deleteRectangle: (
       commitId: string,
@@ -181,15 +198,18 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
     undo: (): boolean => {
       const previous = past.pop()
       if (!previous) return false
-      future.push(current)
-      current = previous
+      future.push({
+        snapshot: current,
+        restoreRanges: previous.restoreRanges
+      })
+      current = restoreHistory(previous)
       return true
     },
     redo: (): boolean => {
       const next = future.pop()
       if (!next) return false
-      past.push(current)
-      current = next
+      past.push({ snapshot: current, restoreRanges: next.restoreRanges })
+      current = restoreHistory(next)
       return true
     }
   }
@@ -197,7 +217,10 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
 
 /** Keeps undo/redo history in separate buckets while a reader switches files. */
 export function createNativeAnnotationControllerStore() {
-  const buckets = new Map<string, ReturnType<typeof createNativeAnnotationController>>()
+  const buckets = new Map<
+    string,
+    ReturnType<typeof createNativeAnnotationController>
+  >()
   return {
     get: (storageId: string, initial?: ReaderData | null) => {
       let controller = buckets.get(storageId)

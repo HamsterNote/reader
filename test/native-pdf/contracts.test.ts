@@ -245,3 +245,44 @@ describe('native PDF contracts', () => {
     expect(edited.markerStyle).toMatchObject({ borderRadius: 5 })
   })
 })
+
+describe('canonical mapping readiness', () => {
+  it('accepts a complete blank page but rejects bad endpoints and incomplete mappings', () => {
+    const blank: PdfCanonicalPage = {
+      pageNumber: 8,
+      width: 400,
+      height: 500,
+      text: '',
+      boundaries: [
+        {
+          offset: 0,
+          textId: 'blank',
+          rect: { x: 0, y: 0, width: 0, height: 0 }
+        }
+      ],
+      glyphs: []
+    }
+    const pages = new Map([
+      [7, page(7)],
+      [8, blank],
+      [9, page(9)]
+    ])
+    const start = { selectionId: 'page-7', offset: 4 }
+    const end = { selectionId: 'page-9', offset: 6 }
+    expect(nativeSelectionPagesReady(pages, [7, 8, 9], start, end)).toBe(true)
+    expect(
+      nativeSelectionPagesReady(
+        pages,
+        [7, 8, 9],
+        { selectionId: 'page-7', offset: 99 },
+        end
+      )
+    ).toBe(false)
+
+    pages.set(8, { ...blank, boundaries: [] })
+    expect(nativeSelectionPagesReady(pages, [7, 8, 9], start, end)).toBe(false)
+    pages.set(8, blank)
+    pages.set(7, { ...page(7), glyphs: [] })
+    expect(nativeSelectionPagesReady(pages, [7, 8, 9], start, end)).toBe(false)
+  })
+})

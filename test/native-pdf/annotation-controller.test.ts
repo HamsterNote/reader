@@ -157,3 +157,49 @@ describe('native annotation business controller', () => {
     expect(shouldPreserveNativeWebMenu(null, 'geometry')).toBe(false)
   })
 })
+
+describe('native drawing history ownership', () => {
+  it('restores only drawing fields across external range updates during undo and redo', () => {
+    const controller = createNativeAnnotationController({ ranges: [range] })
+    controller.apply({
+      commitId: 'drawing-undo-ranges',
+      intent: {
+        type: 'rectangle',
+        pageNumber: 1,
+        rect: { x: 1, y: 2, width: 3, height: 4 },
+        phase: 'commit',
+        geometryRevision: 1
+      }
+    })
+    const added = {
+      ...range,
+      id: 'added',
+      markerStyle: { backgroundColor: '#ff0000' }
+    }
+    controller.replaceSnapshot(
+      {
+        ranges: [range, added],
+        rects: [...controller.getSnapshot().rects],
+        pagePaintings: controller.getSnapshot().pagePaintings
+      },
+      { preserveHistory: true }
+    )
+
+    expect(controller.undo()).toBe(true)
+    expect(controller.getSnapshot().rects).toEqual([])
+    expect(controller.getSnapshot().ranges).toEqual([range, added])
+
+    const latest = { ...added, markerStyle: { backgroundColor: '#0000ff' } }
+    controller.replaceSnapshot(
+      {
+        ranges: [latest],
+        rects: [],
+        pagePaintings: {}
+      },
+      { preserveHistory: true }
+    )
+    expect(controller.redo()).toBe(true)
+    expect(controller.getSnapshot().rects).toHaveLength(1)
+    expect(controller.getSnapshot().ranges).toEqual([latest])
+  })
+})

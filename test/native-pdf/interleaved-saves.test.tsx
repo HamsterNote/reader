@@ -1,4 +1,4 @@
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createRef, type ReactNode } from 'react'
 import type { WebViewProps } from 'react-native-webview'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +32,13 @@ vi.mock('react-native', () => {
     View: Container,
     Text: Container,
     ScrollView: Container,
-    Pressable: Container,
+    Pressable: ({
+      children,
+      onPress
+    }: {
+      children?: ReactNode
+      onPress?: () => void
+    }) => <button onClick={onPress}>{children}</button>,
     Modal: () => null,
     Image: () => null,
     Platform: { OS: 'ios' },
@@ -287,5 +293,69 @@ describe('interleaved native and Web annotation saves', () => {
           )
       )
     ).toBe(true)
+  })
+
+  it('keeps the latest Web additions, deletion and color across native undo and redo', async () => {
+    const file = record('undo-redo-web-interleaving', [highlight('saved')])
+    const opened = await mount(file)
+    nativeRectangle(opened.identity)
+    await webSnapshot(opened.identity, file, [
+      highlight('saved', '#ff0000'),
+      highlight('added', '#00ff00')
+    ])
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('撤销标注'))
+    })
+    let current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toEqual([])
+    expect(current.data.ranges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'saved',
+          markerStyle: expect.objectContaining({ backgroundColor: '#ff0000' })
+        }),
+        expect.objectContaining({ id: 'added' })
+      ])
+    )
+
+    await webSnapshot(opened.identity, file, [highlight('saved', '#0000ff')])
+    await act(async () => {
+      fireEvent.click(screen.getByText('重做'))
+    })
+    await opened.close()
+
+    current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toHaveLength(1)
+    expect(current.data.ranges).toEqual([
+      expect.objectContaining({
+        id: 'saved',
+        markerStyle: expect.objectContaining({ backgroundColor: '#0000ff' })
+      })
+    ])
+    expect(opened.snapshot().revision).toBe(5)
+  })
+
+  it('does not resurrect a Web-deleted highlight during native undo and redo', async () => {
+    const file = record('undo-redo-web-delete', [highlight('saved')])
+    const opened = await mount(file)
+    nativeRectangle(opened.identity)
+    await webSnapshot(opened.identity, file, [])
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('撤销标注'))
+    })
+    let current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toEqual([])
+    expect(current.data.ranges).toEqual([])
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('重做'))
+    })
+    await opened.close()
+    current = restoreReaderSnapshot(opened.snapshot().data)
+    expect(current.data.rects).toHaveLength(1)
+    expect(current.data.ranges).toEqual([])
+    expect(opened.snapshot().revision).toBe(4)
   })
 })

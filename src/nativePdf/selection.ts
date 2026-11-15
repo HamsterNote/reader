@@ -29,11 +29,48 @@ export function mergeNativeSelectionPages(
   for (const page of supplied) target.set(page.pageNumber, page)
 }
 
+function canonicalMappingComplete(page: PdfCanonicalPage): boolean {
+  if (page.text.length === 0)
+    return (
+      page.glyphs.length === 0 &&
+      page.boundaries.some((boundary) => boundary.offset === 0)
+    )
+  if (page.glyphs.length === 0) return false
+  const offsets = new Set(page.boundaries.map((boundary) => boundary.offset))
+  for (let offset = 0; offset <= page.text.length; offset++)
+    if (!offsets.has(offset)) return false
+  return true
+}
+
+function canonicalEndpointReady(
+  pages: ReadonlyMap<number, PdfCanonicalPage>,
+  endpoint: ReaderSelectionEndpoint
+): boolean {
+  const page = pages.get(endpointPage(endpoint))
+  return Boolean(
+    page &&
+    Number.isInteger(endpoint.offset) &&
+    endpoint.offset >= 0 &&
+    endpoint.offset <= page.text.length &&
+    page.boundaries.some((boundary) => boundary.offset === endpoint.offset)
+  )
+}
+
 export function nativeSelectionPagesReady(
   pages: ReadonlyMap<number, PdfCanonicalPage>,
-  required: readonly number[]
+  required: readonly number[],
+  start?: ReaderSelectionEndpoint,
+  end?: ReaderSelectionEndpoint
 ): boolean {
-  return required.every((pageNumber) => Boolean(pages.get(pageNumber)?.text.length))
+  const mappingsReady = required.every((pageNumber) => {
+    const page = pages.get(pageNumber)
+    return page ? canonicalMappingComplete(page) : false
+  })
+  return (
+    mappingsReady &&
+    (!start || canonicalEndpointReady(pages, start)) &&
+    (!end || canonicalEndpointReady(pages, end))
+  )
 }
 export function compareEndpoints(
   a: ReaderSelectionEndpoint,
@@ -66,11 +103,14 @@ export function materializeNativeRange(
     !Number.isInteger(last) ||
     !allowed.includes(first) ||
     !allowed.includes(last)
-  )
-    {
-      console.info('reader-pdf-materialize-failure', { reason: 'invalid-target', first, last })
-      throw new Error('INVALID_TARGET')
-    }
+  ) {
+    console.info('reader-pdf-materialize-failure', {
+      reason: 'invalid-target',
+      first,
+      last
+    })
+    throw new Error('INVALID_TARGET')
+  }
   const selected = allowed.filter((n) => n >= first && n <= last)
   const rectsBySelectionId: ReaderSelectionRange['rectsBySelectionId'] = {}
   let text = ''
@@ -79,11 +119,19 @@ export function materializeNativeRange(
     const from = n === first ? start.offset : 0,
       to = n === last ? end.offset : p?.text.length
     if (!p) {
-      console.info('reader-pdf-materialize-failure', { reason: 'page-text-missing', page: n })
+      console.info('reader-pdf-materialize-failure', {
+        reason: 'page-text-missing',
+        page: n
+      })
       throw new Error('MAPPING_NOT_READY')
     }
     if (to === undefined || !Number.isInteger(from) || !Number.isInteger(to)) {
-      console.info('reader-pdf-materialize-failure', { reason: 'metrics-not-ready', page: n, from, to })
+      console.info('reader-pdf-materialize-failure', {
+        reason: 'metrics-not-ready',
+        page: n,
+        from,
+        to
+      })
       throw new Error('MAPPING_NOT_READY')
     }
     if (

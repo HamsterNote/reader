@@ -163,16 +163,16 @@ function activations() {
 function refillRequests() {
   return messages.filter((m) => m.type === 'canonical-request')
 }
-async function nativeSelectionEnd() {
+async function nativeSelectionEnd(target: typeof range = range) {
   await send({
     type: 'nativeSelection',
     event: {
       ...identity,
       type: 'selection',
       phase: 'end',
-      rangeId: 'saved',
-      start: range.start,
-      end: range.end,
+      rangeId: target.id,
+      start: target.start,
+      end: target.end,
       anchor: { x: 40, y: 50, width: 320, height: 50 },
       geometryRevision: 1
     }
@@ -285,7 +285,7 @@ describe('Web canonical receiver readiness and pending activation', () => {
     expect(refillRequests()).toHaveLength(1)
   })
 
-  it('drops a failed replay once and does not retry it on later canonical updates', async () => {
+  it('keeps an incomplete replay pending and activates once when complete OCR arrives', async () => {
     await start()
     await openPdf()
     await send({ type: 'activate', rangeId: 'saved' })
@@ -293,17 +293,19 @@ describe('Web canonical receiver readiness and pending activation', () => {
       type: 'ocrText',
       canonicalPage: { ...canonical, boundaries: [] }
     })
-    expect(console.info).toHaveBeenCalledWith(
-      'reader-pdf-activate-pending-dropped',
-      {
-        rangeId: 'saved',
-        reason: 'replay-failed'
-      }
-    )
-    await send({ type: 'ocrText', canonicalPage: canonical })
     expect(activations()).toHaveLength(0)
+    expect(messages.filter((m) => m.type === 'failure')).toHaveLength(0)
+
+    await send({ type: 'ocrText', canonicalPage: canonical })
+    await send({ type: 'ocrText', canonicalPage: canonical })
+    expect(activations()).toHaveLength(1)
     expect(refillRequests()).toHaveLength(1)
-    expect(messages.filter((m) => m.type === 'failure')).toHaveLength(1)
+    expect(messages.filter((m) => m.type === 'failure')).toHaveLength(0)
+    await act(async () => vi.advanceTimersByTimeAsync(3001))
+    expect(console.info).not.toHaveBeenCalledWith(
+      'reader-pdf-activate-wait-timeout',
+      expect.anything()
+    )
   })
 
   it('cancels pending work on dispose and rejects canonical from a different file/session', async () => {
@@ -428,6 +430,76 @@ describe('cold far-page and cross-page activation', () => {
     await act(async () => {})
 
     expect(activations()).toHaveLength(1)
+    await act(async () => vi.advanceTimersByTimeAsync(3001))
+    expect(console.info).not.toHaveBeenCalledWith(
+      'reader-pdf-activate-wait-timeout',
+      expect.anything()
+    )
+  })
+})
+
+describe('blank and mixed cross-page mappings', () => {
+  it('activates a text-highlight across a fully extracted blank intermediate page', async () => {
+    const crossPageRange = {
+      ...range,
+      start: { selectionId: 'page-7', offset: 4 },
+      end: { selectionId: 'page-9', offset: 6 }
+    }
+    pdf.text.mockImplementation((pageNumber) =>
+      pageNumber === 8 ? '' : `PAGE ${pageNumber} TEXT`
+    )
+    await start(identity, [crossPageRange])
+    await openPdf(12)
+
+    await send({ type: 'activate', rangeId: 'saved' })
+    await act(async () => {})
+
+    expect(pdf.get.mock.calls.map(([pageNumber]) => pageNumber)).toEqual([
+      7, 8, 9
+    ])
+    expect(activations()).toHaveLength(1)
+    await nativeSelectionEnd(crossPageRange)
+    expect(screen.getByRole('button', { name: 'edit highlight' })).toBeVisible()
+    await act(async () => vi.advanceTimersByTimeAsync(3001))
+    expect(console.info).not.toHaveBeenCalledWith(
+      'reader-pdf-activate-wait-timeout',
+      expect.anything()
+    )
+  })
+
+  it('accepts a blank intermediate page while only the scanned endpoints wait for OCR', async () => {
+    const crossPageRange = {
+      ...range,
+      start: { selectionId: 'page-7', offset: 4 },
+      end: { selectionId: 'page-9', offset: 6 }
+    }
+    await start(identity, [crossPageRange])
+    await openPdf(12)
+
+    await send({ type: 'activate', rangeId: 'saved' })
+    await act(async () => {})
+    expect(activations()).toHaveLength(0)
+
+    for (const pageNumber of [7, 9]) {
+      await send({
+        type: 'ocrText',
+        canonicalPage: nativeCanonicalPageFromOcr(pageNumber, 400, 500, [
+          {
+            id: `ocr-${pageNumber}`,
+            content: 'OCR QA SAMPLE',
+            polygon: [
+              [0.1, 0.1],
+              [0.9, 0.2]
+            ]
+          }
+        ])!
+      })
+    }
+    await act(async () => {})
+
+    expect(activations()).toHaveLength(1)
+    await nativeSelectionEnd(crossPageRange)
+    expect(screen.getByRole('button', { name: 'edit highlight' })).toBeVisible()
     await act(async () => vi.advanceTimersByTimeAsync(3001))
     expect(console.info).not.toHaveBeenCalledWith(
       'reader-pdf-activate-wait-timeout',
