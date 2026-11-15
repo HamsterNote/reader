@@ -128,7 +128,7 @@ export function ReaderScreen({
   const cancelNativeEntry = async (epoch: number): Promise<void> => {
     if (!isCurrent('native', epoch)) return
     handoffRef.current?.release()
-    const result = await nativeReaderRef.current?.close()
+    const result = await nativeReaderRef.current?.close({ retry: false })
     if (!isCurrent('native', epoch)) return
     if (result !== undefined && result.status !== 'closed') {
       Alert.alert(
@@ -184,10 +184,12 @@ export function ReaderScreen({
   const closeReader = useCallback(async (): Promise<void> => {
     if (closingRef.current) return
     closingRef.current = true
+    if (currentSessionRef.current.kind === 'native')
+      handoffRef.current?.release()
     void queueOperation(async () => {
       try {
         const startingKind = currentSessionRef.current.kind
-        if (startingKind === 'native') await handoffRef.current?.promise
+        if (startingKind === 'native') handoffRef.current?.release()
         const startingHandle =
           startingKind === 'native'
             ? nativeReaderRef.current

@@ -42,6 +42,8 @@ yarn host:check
 
 裁切等用户意图进入 `save.current` 的 prepare 阶段：先在权威快照上重建，只有实际变化的 hiddenPages/edgeCrop 字段才覆盖，未改字段保留最新值。取消 handoff 时先放行保存并等待原生 close；写盘失败则保留原生页面和重试提示，不先卸载再补救。`test/review-7f7-cancel.test.tsx` 的两条评审复现分别验证「只改裁切仍保留迟到的隐藏页」及「取消时写盘失败仍留原生承接」。
 
+切回 pdfjs 创建新的 generation，不复用旧的 8 秒握手 error 页面。返回书库先放行 handoff，再让当前原生完成最终读写和 close，旧 Web 的 unconfirmed/error 不再把已确认原生数据卡在页面里。普通返回允许自动重试一次失败保存，连续失败仍留原生；成功后清除错误提示。回归覆盖旧 error 切回、旧 unconfirmed 返回、一次失败成功及连续失败后再次成功。
+
 `test/reader-screen-native-switch.test.tsx` 覆盖 200 页入口、延迟关闭超时、未确认重试、快速往返、迟到 close、切回后 Web 存活及返回前关闭新原生；`test/reader-screen-handoff.test.tsx` 用真实 NativePdfReader 和 serializer 验证旧 Web 高亮晚落盘后，原生矩形保存不会清空它。Mac 应从全新 200 页样本只点一次进入原生，再执行冷远页与文字—空白—文字跨页，不能把入口握手超时误判为 canonical 激活失败。
 
 ## P5 跨重开提交 ID

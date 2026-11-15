@@ -376,6 +376,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           revision: base.revision + 1
         }))
         latest.current = next
+        if (alive.current) setSaveError(null)
         if (failedTransform.current === retry)
           failedTransform.current = undefined
       }).catch((error) => {
@@ -659,7 +660,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       undoTimer.current = null
     }
     useImperativeHandle(ref, () => ({
-      close: async () => {
+      close: async (options?: { retry?: boolean }) => {
         if (closed.current) return { status: 'closed' }
         ocrEpoch.current += 1
         ocrRequests.current.clear()
@@ -682,7 +683,23 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           guard.close()
           return { status: 'closed' }
         } catch {
-          return { status: 'unconfirmed', reason: '原生高亮保存失败，请重试' }
+          const retry =
+            options?.retry === false ? undefined : failedTransform.current
+          if (retry === undefined)
+            return { status: 'unconfirmed', reason: '原生高亮保存失败，请重试' }
+          retry()
+          try {
+            await save.current
+          } catch {
+            return { status: 'unconfirmed', reason: '原生高亮保存失败，请重试' }
+          }
+          if (failedTransform.current !== undefined)
+            return { status: 'unconfirmed', reason: '原生高亮尚未保存，请重试' }
+          closed.current = true
+          disposeWebOnce()
+          enqueue({ type: 'close' })
+          guard.close()
+          return { status: 'closed' }
         }
       }
     }))

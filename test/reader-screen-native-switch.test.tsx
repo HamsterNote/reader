@@ -13,7 +13,8 @@ import type { HostDocumentRecord } from '../src/host/readerDataStore'
 
 const host = vi.hoisted(() => ({
   webClose: vi.fn<() => Promise<BridgeCloseResult>>(),
-  nativeClose: vi.fn<() => Promise<BridgeCloseResult>>()
+  nativeClose: vi.fn<() => Promise<BridgeCloseResult>>(),
+  webError: false
 }))
 vi.mock('../app/src/native/webAssets', () => ({
   stageReaderDocument: vi.fn(async () => ({
@@ -25,6 +26,7 @@ vi.mock('../app/src/native/webAssets', () => ({
 vi.mock('../app/src/components/ReaderWebView', () => ({
   ReaderWebView: forwardRef(function MockReaderWebView(_props, ref) {
     const [closed, setClosed] = useState(false)
+    const [error] = useState(host.webError)
     useImperativeHandle(
       ref,
       () => ({
@@ -36,9 +38,10 @@ vi.mock('../app/src/components/ReaderWebView', () => ({
       }),
       []
     )
-    return (
-      <div data-testid='web-reader'>{closed ? 'web-disposed' : 'web-live'}</div>
-    )
+    let content = 'web-live'
+    if (error) content = 'WebView 未完成握手（8 秒超时）'
+    if (closed) content = 'web-disposed'
+    return <div data-testid='web-reader'>{content}</div>
   })
 }))
 vi.mock('../app/src/components/NativePdfReader', () => ({
@@ -106,6 +109,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.stubGlobal('__DEV__', true)
+  host.webError = false
   host.webClose.mockReset()
   host.nativeClose.mockReset()
   host.nativeClose.mockResolvedValue({ status: 'closed' })
@@ -272,5 +276,47 @@ describe('irreversible Web close races', () => {
     })
     expect(onBack).toHaveBeenCalledTimes(1)
     expect(host.nativeClose).toHaveBeenCalled()
+  })
+})
+
+describe('stale Web error recovery', () => {
+  it('creates a fresh generation without the old handshake error on return', async () => {
+    host.webError = true
+    host.webClose.mockResolvedValue({ status: 'closed' })
+    await mountScreen()
+    expect(
+      screen.getByText('WebView 未完成握手（8 秒超时）')
+    ).toBeInTheDocument()
+
+    host.webError = false
+    await act(async () => {
+      fireEvent.click(screen.getByText('原生 PDF 验证'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('Web 对照'))
+    })
+    expect(screen.getByTestId('web-reader')).toHaveTextContent('web-live')
+    expect(
+      screen.queryByText('WebView 未完成握手（8 秒超时）')
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not block native library return on a stale Web unconfirmed error', async () => {
+    const onBack = vi.fn()
+    host.webClose.mockResolvedValue({
+      status: 'unconfirmed',
+      reason: '关闭超时：仍有未确认写入未落盘'
+    })
+    await mountScreen(onBack)
+    await act(async () => {
+      fireEvent.click(screen.getByText('原生 PDF 验证'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+
+    expect(host.nativeClose).toHaveBeenCalledTimes(1)
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(host.webClose).toHaveBeenCalledTimes(1)
   })
 })
