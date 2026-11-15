@@ -1,4 +1,3 @@
-import { Image } from 'react-native'
 import type { IntermediateText } from '@hamster-note/types'
 import type { ReaderData, ReaderEdgeCrop } from '../../../src/types/readerData'
 import {
@@ -31,9 +30,11 @@ import type {
 import type {
   PdfCommand,
   PdfEvent,
+  PdfIdentity,
   PdfTool
 } from '../../../src/nativePdf/contracts'
 import {
+  createNativeAnnotationController,
   nativeAnnotationControllerStore,
   type NativeAnnotationSnapshot
 } from '../../../src/nativePdf/annotationController'
@@ -44,14 +45,13 @@ import {
 import {
   appendStrokeDocument,
   inkObjectsForNative,
-  NATIVE_INK_COLORS,
-  NATIVE_INK_WIDTHS,
   NATIVE_STROKE_COLOR,
   NATIVE_STROKE_WIDTH,
   paintingPageId
 } from '../../../src/nativePdf/strokes'
 import { restoreReaderSnapshot } from '../../../src/host/readerSnapshot'
 import { NativePdfSession } from '../../../src/nativePdf/session'
+import { NativePdfControls } from './NativePdfControls'
 import { logNativePdfDiagnostic } from '../../../src/nativePdf/diagnostics'
 import { NativeCanonicalDelivery } from '../../../src/nativePdf/canonicalDelivery'
 import { nativeSelectionConfiguration } from '../../../src/nativePdf/selection'
@@ -78,7 +78,8 @@ import {
   canRetryNativeOcrPage,
   nativeCanonicalPageFromOcr,
   nativeOcrSessionKey,
-  shouldRequestNativeOcr
+  shouldRequestNativeOcr,
+  type NativeOcrPageAvailability
 } from '../../../src/nativePdf/ocr'
 import { enqueueRecoverableSave } from '../../../src/nativePdf/persistence'
 import {
@@ -100,6 +101,365 @@ function isReaderFileUrl(url: string, root: string): boolean {
     return candidate.startsWith(`${base}/`)
   } catch {
     return url.startsWith(root)
+  }
+}
+
+function refillNativeCanonical(
+  delivery: NativeCanonicalDelivery,
+  sender: PdfIdentity,
+  requested: readonly number[],
+  snapshotData: unknown,
+  progressData: unknown,
+  pageMetrics: ReadonlyMap<number, { width: number; height: number }>
+): number[] {
+  delivery.refill(sender, requested)
+  const cachedTexts = readerDataFromNativeSnapshot(
+    snapshotData,
+    progressData
+  )?.ocrTexts
+  const needsGeometry: number[] = []
+  for (const pageNumber of new Set(requested)) {
+    if (!Number.isInteger(pageNumber) || pageNumber < 1) continue
+    const texts = cachedTexts?.[pageNumber]
+    if (!texts) continue
+    const metrics = pageMetrics.get(pageNumber)
+    if (!metrics) {
+      needsGeometry.push(pageNumber)
+      continue
+    }
+    const canonical = nativeCanonicalPageFromOcr(
+      pageNumber,
+      metrics.width,
+      metrics.height,
+      texts
+    )
+    if (canonical) delivery.publish(canonical)
+  }
+  return needsGeometry.sort((a, b) => b - a)
+}
+
+function syncNativeWebAnnotations(
+  data: unknown,
+  annotations: ReturnType<typeof createNativeAnnotationController>,
+  mirrorAnnotations: (snapshot: NativeAnnotationSnapshot) => void,
+  setStatus: (status: string) => void
+): boolean {
+  try {
+    const restored = restoreReaderSnapshot(data)
+    const current = annotations.getSnapshot()
+    annotations.replaceSnapshot(
+      {
+        ranges: restored.data.ranges ?? [],
+        rects: [...current.rects],
+        pagePaintings: current.pagePaintings
+      },
+      { preserveHistory: true }
+    )
+    mirrorAnnotations(annotations.getSnapshot())
+    return true
+  } catch (error) {
+    setStatus(
+      `标注同步失败：${error instanceof Error ? error.message : String(error)}`
+    )
+    return false
+  }
+}
+
+async function loadNativeSnapshot(
+  store: ReaderDataStore,
+  record: HostDocumentRecord,
+  open: (snapshot: HostDocumentRecord['snapshot']) => void
+): Promise<void> {
+  try {
+    const persisted = await store.get(record.fileId)
+    open(persisted?.snapshot ?? record.snapshot)
+  } catch {
+    open(record.snapshot)
+  }
+}
+
+function toggleHiddenPageGroup(
+  current: readonly number[],
+  pages: readonly number[],
+  selected: boolean
+): number[] {
+  if (selected)
+    return current.filter((pageNumber) => !pages.includes(pageNumber))
+  return [...new Set([...current, ...pages])].sort((a, b) => a - b)
+}
+
+type NativePdfMessageContext = {
+  identity: PdfIdentity
+  guard: NativePdfSession
+  canonicalDelivery: NativeCanonicalDelivery
+  refillCanonical: (sender: PdfIdentity, requested: readonly number[]) => void
+  enqueue: (command: PdfCommand) => void
+  setOutline: (items: { title: string; pageNumber: number }[]) => void
+  setPanelOpen: (open: boolean) => void
+  setMenuWithSource: (
+    value: { left: number; top: number } | null,
+    source: string
+  ) => void
+  menuFrame: (anchor: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }) => { left: number; top: number }
+  setRanges: (items: { id: string; text: string }[]) => void
+  saveWebSnapshot: (message: Record<string, unknown>) => void
+  post: (body: Record<string, unknown>) => unknown
+  nativeError: { current: { code: string; message?: string } | null }
+  setStatus: (status: string) => void
+}
+
+function handleNativePdfControlMessage(
+  m: Record<string, unknown>,
+  context: NativePdfMessageContext
+): boolean {
+  const {
+    identity,
+    canonicalDelivery,
+    refillCanonical,
+    enqueue,
+    setOutline,
+    setPanelOpen,
+    setMenuWithSource,
+    setRanges,
+    saveWebSnapshot
+  } = context
+  switch (m.type) {
+    case 'web-ready':
+      console.info('reader-pdf-web-ready', { sessionId: identity.sessionId })
+      canonicalDelivery.webReady(identity)
+      return true
+    case 'canonical-request':
+      if (Array.isArray(m.pages)) {
+        const pages = m.pages.filter(
+          (n): n is number =>
+            typeof n === 'number' && Number.isInteger(n) && n > 0
+        )
+        console.info('reader-pdf-canonical-refill', {
+          sessionId: identity.sessionId,
+          pages
+        })
+        refillCanonical(identity, pages)
+      }
+      return true
+    case 'outline':
+      setOutline(m.items as { title: string; pageNumber: number }[])
+      return true
+    case 'panel':
+      setPanelOpen(true)
+      setMenuWithSource({ left: 0, top: 0 }, 'web-panel')
+      return true
+    case 'serviceReady':
+      return true
+    case 'command': {
+      const command = m.command as PdfCommand
+      if (context.guard.accepts(command)) enqueue(command)
+      return true
+    }
+    case 'ranges':
+      setRanges(m.items as { id: string; text: string }[])
+      return true
+    case 'snapshot':
+      saveWebSnapshot(m)
+      return true
+    default:
+      return false
+  }
+}
+
+function handleNativePdfNavigationMessage(
+  m: Record<string, unknown>,
+  context: NativePdfMessageContext
+): void {
+  const {
+    setPanelOpen,
+    setMenuWithSource,
+    menuFrame,
+    post,
+    nativeError,
+    setStatus
+  } = context
+  switch (m.type) {
+    case 'navigateRange':
+      post({ type: 'navigateRange', rangeId: m.rangeId })
+      break
+    case 'menu': {
+      setPanelOpen(false)
+      const anchor = m.anchor as {
+        x: number
+        y: number
+        width: number
+        height: number
+      }
+      setMenuWithSource(menuFrame(anchor), 'web-menu')
+      break
+    }
+    case 'hideMenu':
+      setPanelOpen(false)
+      setMenuWithSource(null, 'web-hide-menu')
+      break
+    case 'nativeSelectionConsumed':
+      setMenuWithSource(null, 'native-selection-consumed')
+      break
+    case 'failure':
+      if (nativeError.current === null) setStatus(`规范文本：${String(m.code)}`)
+      break
+    case 'external':
+      if (typeof m.url === 'string' && /^https?:\/\//i.test(m.url))
+        Linking.openURL(m.url).catch(() => setStatus('无法打开外链'))
+      break
+  }
+}
+
+function handleNativePdfMessage(
+  m: Record<string, unknown>,
+  context: NativePdfMessageContext
+): void {
+  if (!context.guard.accepts(m as unknown as PdfIdentity)) return
+  if (!handleNativePdfControlMessage(m, context))
+    handleNativePdfNavigationMessage(m, context)
+}
+
+type NativeOcrRuntime = {
+  fileId: string
+  extraOCR?: ReaderExtraOcr
+  pageMetrics: Map<number, { width: number; height: number }>
+  canonicalDelivery: NativeCanonicalDelivery
+  enqueue: (
+    body:
+      | Omit<
+          PdfCommand,
+          'fileId' | 'paneId' | 'sessionId' | 'generation' | 'requestId'
+        >
+      | Record<string, unknown>
+  ) => string
+  persist: (
+    transform: (snapshot: HostDocumentRecord['snapshot']) => unknown
+  ) => void
+  onOcrTextsChange?: (pageNumber: number, texts: IntermediateText[]) => void
+  onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
+  ocrEpoch: { current: number }
+  ocrFailed: Set<string>
+  ocrError: { current: { code: string; message?: string } | null }
+  setStatus: (status: string) => void
+  closed: { current: boolean }
+  ocrInFlight: Set<string>
+  ocrEnabled: boolean
+  manualOcrPages?: readonly number[]
+  pageCountRef: { current: number }
+  ocrCached: Set<string>
+  ocrCompleted: Set<string>
+  ocrRequests: Map<string, number>
+}
+
+async function performNativeOcr(
+  pageNumber: number,
+  uri: string,
+  epoch: number,
+  context: NativeOcrRuntime
+): Promise<void> {
+  const key = nativeOcrSessionKey(context.fileId, pageNumber)
+  try {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64
+    })
+    if (epoch !== context.ocrEpoch.current || context.closed.current) return
+    const content = await fetchOcrContent(
+      `data:image/png;base64,${base64}`,
+      context.extraOCR
+    )
+    if (epoch !== context.ocrEpoch.current || context.closed.current) return
+    const texts = prefixOcrTextIds(
+      content.filter(
+        (value): value is IntermediateText =>
+          typeof value === 'object' &&
+          value !== null &&
+          'content' in value &&
+          typeof value.content === 'string' &&
+          'polygon' in value &&
+          Array.isArray(value.polygon)
+      ),
+      pageNumber
+    )
+    const metrics = context.pageMetrics.get(pageNumber)
+    const canonical = metrics
+      ? nativeCanonicalPageFromOcr(
+          pageNumber,
+          metrics.width,
+          metrics.height,
+          texts
+        )
+      : null
+    if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
+    context.canonicalDelivery.publish(canonical)
+    context.enqueue({
+      type: 'text',
+      pages: [canonical],
+      retain: [pageNumber],
+      source: 'ocr'
+    })
+    context.persist((snapshot) =>
+      withNativeOcrTexts(snapshot.data, pageNumber, texts)
+    )
+    context.onOcrTextsChange?.(pageNumber, texts)
+    context.ocrCompleted.add(key)
+  } catch (error) {
+    if (epoch === context.ocrEpoch.current && !context.closed.current) {
+      context.ocrFailed.add(key)
+      context.ocrError.current = {
+        code: 'OCR_FAILED',
+        message: error instanceof Error ? error.message : String(error)
+      }
+      context.setStatus(
+        `原生 OCR [${pageNumber}]：${error instanceof Error ? error.message : String(error)}`
+      )
+      context.onOcrError?.(error, { pageNumber })
+    }
+  } finally {
+    if (epoch === context.ocrEpoch.current) context.ocrInFlight.delete(key)
+  }
+}
+
+function requestNativeOcrPages(
+  context: NativeOcrRuntime,
+  pagesToCheck: readonly number[],
+  availability: Readonly<Record<number, NativeOcrPageAvailability>>
+): void {
+  if (!context.ocrEnabled) return
+  for (const pageNumber of pagesToCheck) {
+    if (context.manualOcrPages && !context.manualOcrPages.includes(pageNumber))
+      continue
+    if (
+      !shouldRequestNativeOcr(
+        true,
+        pageNumber,
+        availability,
+        context.pageCountRef.current
+      )
+    )
+      continue
+    const key = nativeOcrSessionKey(context.fileId, pageNumber)
+    if (context.ocrCached.has(key)) continue
+    if (
+      !canRetryNativeOcrPage(
+        key,
+        context.ocrInFlight,
+        context.ocrCompleted,
+        context.ocrFailed
+      )
+    )
+      continue
+    context.ocrInFlight.add(key)
+    const requestId = context.enqueue({
+      type: 'preview',
+      pageNumber,
+      width: 160
+    } as PdfCommand)
+    context.ocrRequests.set(requestId, pageNumber)
   }
 }
 
@@ -276,32 +636,17 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       sender: typeof identity,
       requested: readonly number[]
     ) {
-      canonicalDelivery.refill(sender, requested)
-      const cachedTexts = readerDataFromNativeSnapshot(
+      const needsGeometry = refillNativeCanonical(
+        canonicalDelivery,
+        sender,
+        requested,
         latest.current.data,
-        latest.current.progress
-      )?.ocrTexts
-      const needsGeometry: number[] = []
-      for (const pageNumber of new Set(requested)) {
-        if (!Number.isInteger(pageNumber) || pageNumber < 1) continue
-        const texts = cachedTexts?.[pageNumber]
-        if (!texts) continue
-        const metrics = pageMetrics.current.get(pageNumber)
-        if (!metrics) {
-          needsGeometry.push(pageNumber)
-          continue
-        }
-        const canonical = nativeCanonicalPageFromOcr(
-          pageNumber,
-          metrics.width,
-          metrics.height,
-          texts
-        )
-        if (canonical) canonicalDelivery.publish(canonical)
-      }
+        latest.current.progress,
+        pageMetrics.current
+      )
       // Navigating in reverse leaves the highlight's first page visible last.
       // Each geometry event then constructs that page's persisted OCR mapping.
-      for (const pageNumber of needsGeometry.sort((a, b) => b - a))
+      for (const pageNumber of needsGeometry)
         enqueue({ type: 'navigate', pageNumber })
     }
     function setMenuWithSource(
@@ -406,25 +751,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       mirrorAnnotations(annotations.getSnapshot())
     }
     function syncWebAnnotations(data: unknown): boolean {
-      try {
-        const restored = restoreReaderSnapshot(data)
-        const current = annotations.getSnapshot()
-        annotations.replaceSnapshot(
-          {
-            ranges: restored.data.ranges ?? [],
-            rects: [...current.rects],
-            pagePaintings: current.pagePaintings
-          },
-          { preserveHistory: true }
-        )
-        mirrorAnnotations(annotations.getSnapshot())
-        return true
-      } catch (error) {
-        setStatus(
-          `标注同步失败：${error instanceof Error ? error.message : String(error)}`
-        )
-        return false
-      }
+      return syncNativeWebAnnotations(
+        data,
+        annotations,
+        mirrorAnnotations,
+        setStatus
+      )
     }
     function saveWebSnapshot(message: Record<string, unknown>) {
       const commitId = message.commitId
@@ -709,10 +1041,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
           source: { fileId: record.fileId, localUri: publicationUrl }
         })
       }
-      void store
-        .get(record.fileId)
-        .then((persisted) => open(persisted?.snapshot ?? record.snapshot))
-        .catch(() => open(record.snapshot))
+      loadNativeSnapshot(store, record, open)
       return () => {
         active = false
       }
@@ -730,103 +1059,40 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       lastNativeProgress.current = key
       persist((snapshot) => withNativeLayoutProgress(snapshot.data, progress))
     }
+    const ocrRuntime: NativeOcrRuntime = {
+      fileId: record.fileId,
+      extraOCR,
+      pageMetrics: pageMetrics.current,
+      canonicalDelivery,
+      enqueue,
+      persist,
+      onOcrTextsChange,
+      onOcrError,
+      ocrEpoch,
+      ocrFailed: ocrFailed.current,
+      ocrError,
+      setStatus,
+      closed,
+      ocrInFlight: ocrInFlight.current,
+      ocrEnabled,
+      manualOcrPages,
+      pageCountRef,
+      ocrCached: ocrCached.current,
+      ocrCompleted: ocrCompleted.current,
+      ocrRequests: ocrRequests.current
+    }
     async function runNativeOcr(
       pageNumber: number,
       uri: string,
       epoch: number
     ) {
-      const key = nativeOcrSessionKey(record.fileId, pageNumber)
-      try {
-        const base64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64
-        })
-        if (epoch !== ocrEpoch.current || closed.current) return
-        const content = await fetchOcrContent(
-          `data:image/png;base64,${base64}`,
-          extraOCR
-        )
-        if (epoch !== ocrEpoch.current || closed.current) return
-        const texts = prefixOcrTextIds(
-          content.filter(
-            (value): value is IntermediateText =>
-              typeof value === 'object' &&
-              value !== null &&
-              'content' in value &&
-              typeof value.content === 'string' &&
-              'polygon' in value &&
-              Array.isArray(value.polygon)
-          ),
-          pageNumber
-        )
-        const metrics = pageMetrics.current.get(pageNumber)
-        const canonical = metrics
-          ? nativeCanonicalPageFromOcr(
-              pageNumber,
-              metrics.width,
-              metrics.height,
-              texts
-            )
-          : null
-        if (!canonical) throw new Error(`OCR 未返回第 ${pageNumber} 页文字`)
-        canonicalDelivery.publish(canonical)
-        enqueue({
-          type: 'text',
-          pages: [canonical],
-          retain: [pageNumber],
-          source: 'ocr'
-        })
-        persist((snapshot) =>
-          withNativeOcrTexts(snapshot.data, pageNumber, texts)
-        )
-        onOcrTextsChange?.(pageNumber, texts)
-        ocrCompleted.current.add(key)
-      } catch (error) {
-        if (epoch === ocrEpoch.current && !closed.current) {
-          ocrFailed.current.add(key)
-          ocrError.current = {
-            code: 'OCR_FAILED',
-            message: error instanceof Error ? error.message : String(error)
-          }
-          setStatus(
-            `原生 OCR [${pageNumber}]：${error instanceof Error ? error.message : String(error)}`
-          )
-          onOcrError?.(error, { pageNumber })
-        }
-      } finally {
-        if (epoch === ocrEpoch.current) ocrInFlight.current.delete(key)
-      }
+      return performNativeOcr(pageNumber, uri, epoch, ocrRuntime)
     }
     function requestNativeOcr(
       pagesToCheck: readonly number[],
       availability: Readonly<Record<number, 'textLayer' | 'noTextLayer'>>
     ) {
-      if (!ocrEnabled) return
-      for (const pageNumber of pagesToCheck) {
-        if (manualOcrPages && !manualOcrPages.includes(pageNumber)) continue
-        if (
-          !shouldRequestNativeOcr(
-            true,
-            pageNumber,
-            availability,
-            pageCountRef.current
-          )
-        )
-          continue
-        const key = nativeOcrSessionKey(record.fileId, pageNumber)
-        if (ocrCached.current.has(key)) continue
-        if (
-          !canRetryNativeOcrPage(
-            key,
-            ocrInFlight.current,
-            ocrCompleted.current,
-            ocrFailed.current
-          )
-        )
-          continue
-        ocrInFlight.current.add(key)
-        const requestId = enqueue({ type: 'preview', pageNumber, width: 160 })
-        ocrRequests.current.set(requestId, pageNumber)
-      }
+      requestNativeOcrPages(ocrRuntime, pagesToCheck, availability)
     }
     function diagnostic(event: PdfEvent) {
       if (
@@ -1068,211 +1334,45 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const draftGroups = nativePageEditGroups(draftHiddenPages, pageCount)
     return (
       <View style={{ flex: 1 }} onLayout={(e) => setSize(e.nativeEvent.layout)}>
-        <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
-          <Text>{status}</Text>
-          <Pressable onPress={() => setRangesOpen((v) => !v)}>
-            <Text>高亮列表</Text>
-          </Pressable>
-          <Pressable onPress={() => setOutlineOpen((v) => !v)}>
-            <Text>目录</Text>
-          </Pressable>
-          <Text>
-            {page}/{pageCount}
-          </Text>
-          <Pressable
-            accessibilityRole='button'
-            accessibilityState={{
-              checked: ocrEnabled,
-              disabled: ocr !== undefined
-            }}
-            onPress={() => {
-              if (ocr === undefined) setInternalOcrEnabled((value) => !value)
-            }}
-          >
-            <Text>OCR {ocrEnabled ? '开' : '关'}</Text>
-          </Pressable>
-          <Pressable onPress={beginPageEdit}>
-            <Text>裁切/隐藏页编辑</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole='button'
-            accessibilityLabel={
-              tool === 'rectangle' ? '关闭矩形工具' : '矩形标注'
+        <NativePdfControls
+          status={status}
+          rangesOpen={rangesOpen}
+          setRangesOpen={setRangesOpen}
+          outlineOpen={outlineOpen}
+          setOutlineOpen={setOutlineOpen}
+          page={page}
+          pageCount={pageCount}
+          ocrEnabled={ocrEnabled}
+          ocrDisabled={ocr !== undefined}
+          toggleOcr={() => {
+            if (ocr === undefined) setInternalOcrEnabled((value) => !value)
+          }}
+          beginPageEdit={beginPageEdit}
+          tool={tool}
+          selectTool={selectTool}
+          undoNativeDrawing={undoNativeDrawing}
+          redoNativeDrawing={redoNativeDrawing}
+          clearCurrentPageInk={clearCurrentPageInk}
+          ink={ink}
+          selectInk={selectInk}
+          hiddenPagesUndo={hiddenPagesUndo}
+          undoPageEdit={undoPageEdit}
+          allowedPages={allowedPages}
+          enqueue={enqueue}
+          ranges={ranges}
+          post={post}
+          outline={outline}
+          saveError={saveError}
+          retryFailedSave={() => {
+            const transform = failedTransform.current
+            if (transform !== undefined) {
+              setSaveError(null)
+              persist(transform)
             }
-            accessibilityState={{ selected: tool === 'rectangle' }}
-            onPress={() =>
-              selectTool(tool === 'rectangle' ? 'none' : 'rectangle')
-            }
-          >
-            <Text>矩形{tool === 'rectangle' ? '（开）' : ''}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole='button'
-            accessibilityLabel='撤销标注'
-            onPress={undoNativeDrawing}
-          >
-            <Text>撤销标注</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole='button'
-            accessibilityLabel={tool === 'draw' ? '关闭绘图工具' : '自由绘图'}
-            accessibilityState={{ selected: tool === 'draw' }}
-            onPress={() => selectTool(tool === 'draw' ? 'none' : 'draw')}
-          >
-            <Text>绘图{tool === 'draw' ? '（开）' : ''}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole='button'
-            accessibilityLabel='重做标注'
-            onPress={redoNativeDrawing}
-          >
-            <Text>重做</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole='button'
-            accessibilityLabel='清空当前页笔迹'
-            onPress={clearCurrentPageInk}
-          >
-            <Text>清空本页</Text>
-          </Pressable>
-          {NATIVE_INK_COLORS.map((color) => (
-            <Pressable
-              key={color}
-              accessibilityRole='button'
-              accessibilityLabel={`笔迹颜色 ${color}`}
-              accessibilityState={{ selected: ink.color === color }}
-              onPress={() => selectInk({ color })}
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: 12,
-                backgroundColor: color,
-                borderWidth: ink.color === color ? 3 : 1,
-                borderColor: ink.color === color ? '#1f2328' : '#d0d7de'
-              }}
-            />
-          ))}
-          {NATIVE_INK_WIDTHS.map((width) => (
-            <Pressable
-              key={width}
-              accessibilityRole='button'
-              accessibilityLabel={`笔迹线宽 ${width}`}
-              accessibilityState={{ selected: ink.width === width }}
-              onPress={() => selectInk({ width })}
-            >
-              <Text>{ink.width === width ? `●${width}` : `○${width}`}</Text>
-            </Pressable>
-          ))}
-          {hiddenPagesUndo ? (
-            <Pressable onPress={undoPageEdit}>
-              <Text>撤销（5秒）</Text>
-            </Pressable>
-          ) : null}
-          <Pressable
-            onPress={() =>
-              enqueue({
-                type: 'navigate',
-                pageNumber:
-                  allowedPages[Math.max(0, allowedPages.indexOf(page) - 1)] ??
-                  page
-              })
-            }
-          >
-            <Text>上一页</Text>
-          </Pressable>
-          <Pressable
-            onPress={() =>
-              enqueue({
-                type: 'navigate',
-                pageNumber:
-                  allowedPages[
-                    Math.min(
-                      allowedPages.length - 1,
-                      allowedPages.indexOf(page) + 1
-                    )
-                  ] ?? page
-              })
-            }
-          >
-            <Text>下一页</Text>
-          </Pressable>
-          <Pressable
-            onPress={() =>
-              enqueue({
-                type: 'preview',
-                pageNumber:
-                  allowedPages[
-                    Math.min(
-                      allowedPages.length - 1,
-                      allowedPages.indexOf(page) + 1
-                    )
-                  ] ?? page,
-                width: 160
-              })
-            }
-          >
-            <Text>预览下一页</Text>
-          </Pressable>
-          <Pressable onPress={() => enqueue({ type: 'scale', value: 2 })}>
-            <Text>200%</Text>
-          </Pressable>
-          <Pressable onPress={() => enqueue({ type: 'scale', value: 1 })}>
-            <Text>100%</Text>
-          </Pressable>
-        </View>
-        {rangesOpen ? (
-          <View style={{ maxHeight: 180 }}>
-            {ranges.map((r) => (
-              <Pressable
-                key={r.id}
-                onPress={() => {
-                  post({ type: 'activate', rangeId: r.id })
-                  setRangesOpen(false)
-                }}
-              >
-                <Text numberOfLines={1}>{r.text}</Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
-        {outlineOpen ? (
-          <View style={{ maxHeight: 180 }}>
-            {outline.map((item, i) => (
-              <Pressable
-                key={i}
-                onPress={() => {
-                  enqueue({ type: 'navigate', pageNumber: item.pageNumber })
-                  setOutlineOpen(false)
-                }}
-              >
-                <Text>{item.title}</Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
-        {saveError ? (
-          <Pressable
-            onPress={() => {
-              const transform = failedTransform.current
-              if (transform !== undefined) {
-                setSaveError(null)
-                persist(transform)
-              }
-            }}
-          >
-            <Text role='alert'>{saveError}（点此重试）</Text>
-          </Pressable>
-        ) : null}
-        {preview ? (
-          <Pressable onPress={() => setPreview(null)}>
-            <Image
-              source={{ uri: preview }}
-              style={{ width: 100, height: 140 }}
-              resizeMode='contain'
-            />
-            <Text>关闭预览</Text>
-          </Pressable>
-        ) : null}
+          }}
+          preview={preview}
+          setPreview={setPreview}
+        />
         <ReaderPdfView
           onLayout={(event) => {
             setNativeTop(event.nativeEvent.layout.y)
@@ -1330,14 +1430,11 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
                         key={`${group.start}-${group.end}`}
                         onPress={() =>
                           setDraftHiddenPages((current) =>
-                            selected
-                              ? current.filter(
-                                  (pageNumber) =>
-                                    !group.pages.includes(pageNumber)
-                                )
-                              : [...new Set([...current, ...group.pages])].sort(
-                                  (a, b) => a - b
-                                )
+                            toggleHiddenPageGroup(
+                              current,
+                              group.pages,
+                              selected
+                            )
                           )
                         }
                       >
@@ -1436,77 +1533,22 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             } catch {
               return
             }
-            if (!guard.accepts(m as unknown as typeof identity)) return
-            switch (m.type) {
-              case 'web-ready':
-                console.info('reader-pdf-web-ready', {
-                  sessionId: identity.sessionId
-                })
-                canonicalDelivery.webReady(identity)
-                break
-              case 'canonical-request':
-                if (Array.isArray(m.pages)) {
-                  const pages = m.pages.filter(
-                    (n): n is number =>
-                      typeof n === 'number' && Number.isInteger(n) && n > 0
-                  )
-                  console.info('reader-pdf-canonical-refill', {
-                    sessionId: identity.sessionId,
-                    pages
-                  })
-                  refillCanonical(identity, pages)
-                }
-                break
-              case 'outline':
-                setOutline(m.items as { title: string; pageNumber: number }[])
-                break
-              case 'panel':
-                setPanelOpen(true)
-                setMenuWithSource({ left: 0, top: 0 }, 'web-panel')
-                break
-              case 'serviceReady':
-                break
-              case 'command': {
-                const c = m.command as PdfCommand
-                if (guard.accepts(c)) enqueue(c)
-                break
-              }
-              case 'ranges':
-                setRanges(m.items as { id: string; text: string }[])
-                break
-              case 'snapshot':
-                saveWebSnapshot(m)
-                break
-              case 'navigateRange':
-                post({ type: 'navigateRange', rangeId: m.rangeId })
-                break
-              case 'menu': {
-                setPanelOpen(false)
-                const r = m.anchor as {
-                  x: number
-                  y: number
-                  width: number
-                  height: number
-                }
-                setMenuWithSource(menuFrame(r), 'web-menu')
-                break
-              }
-              case 'hideMenu':
-                setPanelOpen(false)
-                setMenuWithSource(null, 'web-hide-menu')
-                break
-              case 'nativeSelectionConsumed':
-                setMenuWithSource(null, 'native-selection-consumed')
-                break
-              case 'failure':
-                if (nativeError.current === null)
-                  setStatus(`规范文本：${String(m.code)}`)
-                break
-              case 'external':
-                if (typeof m.url === 'string' && /^https?:\/\//i.test(m.url))
-                  Linking.openURL(m.url).catch(() => setStatus('无法打开外链'))
-                break
-            }
+            handleNativePdfMessage(m, {
+              identity,
+              guard,
+              canonicalDelivery,
+              refillCanonical,
+              enqueue,
+              setOutline,
+              setPanelOpen,
+              setMenuWithSource,
+              menuFrame,
+              setRanges,
+              saveWebSnapshot,
+              post,
+              nativeError,
+              setStatus
+            })
           }}
         />
         {webError ? (

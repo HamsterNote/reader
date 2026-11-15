@@ -48,6 +48,15 @@ type NativeBootstrap = PdfIdentity & {
   snapshot: unknown
   progress: unknown
 }
+function nativeSelectionCanonicalSource(
+  numbers: readonly number[],
+  ocrPages: ReadonlyMap<number, PdfCanonicalPage>,
+  suppliedPages: readonly PdfCanonicalPage[]
+): 'ocr-cache' | 'payload' | 'pdf' {
+  if (numbers.some((pageNumber) => ocrPages.has(pageNumber))) return 'ocr-cache'
+  if (suppliedPages.length) return 'payload'
+  return 'pdf'
+}
 declare global {
   interface Window {
     __READER_NATIVE_PDF__?: NativeBootstrap
@@ -464,11 +473,11 @@ export function startNativePdfSurface(
       cache.pages,
       suppliedPages.filter((page) => !ocrPages.has(page.pageNumber))
     )
-    const source = numbers.some((pageNumber) => ocrPages.has(pageNumber))
-      ? 'ocr-cache'
-      : suppliedPages.length
-        ? 'payload'
-        : 'pdf'
+    const source = nativeSelectionCanonicalSource(
+      numbers,
+      ocrPages,
+      suppliedPages
+    )
     console.info('reader-pdf-native-selection-canonical-compare', {
       source,
       supplied: suppliedPages.map((page) => ({

@@ -51,7 +51,11 @@ describe('native page editor snapshot contract', () => {
       200
     )
     expect(groups).toEqual([
-      { start: 2, end: 199, pages: Array.from({ length: 198 }, (_, i) => i + 2) }
+      {
+        start: 2,
+        end: 199,
+        pages: Array.from({ length: 198 }, (_, i) => i + 2)
+      }
     ])
   })
 })

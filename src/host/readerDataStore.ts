@@ -435,7 +435,10 @@ export class ReaderDataStore {
           `该文件的标注数据已损坏，已保留原数据：${stored.reason}`
         )
       }
-      const current = stored.status === 'ok' ? stored.snapshot : this.cache.get(fileId)!.snapshot
+      const current =
+        stored.status === 'ok'
+          ? stored.snapshot
+          : this.cache.get(fileId)!.snapshot
       const next = patch(current)
       await this.commitSnapshot(fileId, next)
       return next
@@ -458,7 +461,10 @@ export class ReaderDataStore {
           `该文件的标注数据已损坏，已保留原数据：${stored.reason}`
         )
       }
-      const current = stored.status === 'ok' ? stored.snapshot : this.cache.get(fileId)!.snapshot
+      const current =
+        stored.status === 'ok'
+          ? stored.snapshot
+          : this.cache.get(fileId)!.snapshot
       await this.commitSnapshot(fileId, rebaseSnapshot(current, previous, next))
     })
   }
