@@ -17,6 +17,7 @@ type ReaderProps = {
   readonly isActivePane?: boolean
   readonly ocr?: boolean | { readonly enabled?: boolean }
   readonly debugCensusToken?: number
+  readonly debugHoldSaveToken?: number
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
 }
@@ -333,6 +334,11 @@ describe('demo host debug entrance (HAM-278)', () => {
     fireEvent.click(screen.getByText('渲染计数'))
     await waitFor(() =>
       expect(host.latest.get('left')?.debugCensusToken).toBe(1)
+    )
+    expect(host.latest.get('left')?.debugHoldSaveToken).toBe(0)
+    fireEvent.click(screen.getByText('待写保持'))
+    await waitFor(() =>
+      expect(host.latest.get('left')?.debugHoldSaveToken).toBe(1)
     )
   })
 

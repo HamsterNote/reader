@@ -22,7 +22,7 @@
 
 ```sh
 yarn install --frozen-lockfile
-yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/host-debug-route.test.ts test/host-debug-entry.test.tsx test/host-debug-ocr-seed.test.ts test/host-native-documents.test.ts test/pdf-page-render-census.test.ts test/native-pdf-save-diagnostics.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
+yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/host-debug-route.test.ts test/host-debug-entry.test.tsx test/host-debug-ocr-seed.test.ts test/host-page-render-census.test.tsx test/host-native-documents.test.ts test/pdf-page-render-census.test.ts test/native-pdf-save-diagnostics.test.ts test/native-pdf/held-save.test.tsx test/native-pdf/canonical-delivery.test.tsx test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
 yarn test:run --maxWorkers=2 --minWorkers=1
 yarn typecheck
 yarn typecheck:host
@@ -92,22 +92,26 @@ EXPO_PUBLIC_HAM278_OPEN_PDF=/absolute/on-device/book.pdf yarn host:start --lan
 
 ### 组 1：PDF.js 页面画布渲染计数
 
-计数器在 `src/pdf/pdfRenderingQueue.ts` 的 `renderView` 包装里自增（`src/pdf/pageRenderCensus.ts`），也就是 PDF.js 真正提交页面画布渲染的那个点；跳过的不可读页面不计。
+计数器在 `src/pdf/pdfRenderingQueue.ts` 的 `instrumentPdfRenderCensus` 里自增（`src/pdf/pageRenderCensus.ts`），只在 `renderView` 真的返回 `true`（确实提交渲染）时 +1；跳过的不可读页面不计。这个包装对 Web 阅读器的 PDFViewer 始终生效，不依赖是否设置了裁切。
 
-读法（Metro / 设备 console）：
+宿主 → Web 是同一条诊断通道：调试栏「渲染计数」→ `ReaderScreen` 记 `reader-pdf-page-render-census-request`，原生模式发给 PDFKit 服务，Web 对照模式发给 Web 页面；Web 页面用自己的真实渲染计数回包，宿主统一记 `reader-pdf-page-render-census`。
 
 ```text
-reader-pdf-page-render-census { reason: 'service-ready', pageCanvasRenders: 0, pages: [],
-  pdfViewerMounted: false, pdfViewerCanvasNodes: 0,
-  pdfjsDocumentPages: 1, pdfjsTextPages: 0, webReady: true,
-  fileId, paneId, sessionId, generation }
-reader-pdf-page-render-census-request { renderer: 'pdfkit', outerWebMounted: false, token: 1 }
+# 原生（期望 0）
+reader-pdf-page-render-census { renderer: 'pdfkit', reason: 'service-ready'|'requested',
+  pageCanvasRenders: 0, pages: [], pdfViewerMounted: false, pdfViewerCanvasNodes: 0,
+  pdfjsDocumentPages: 1, pdfjsTextPages: 0, webReady: true, fileId, paneId, sessionId, generation }
+
+# Web 对照（期望正数，证明计数器有效）
+reader-pdf-page-render-census-request { renderer: 'web', outerWebMounted: true, ... }
+reader-pdf-page-render-census { renderer: 'web', outerWebMounted: true, sessionId,
+  pageCanvasRenders: 2, pages: [1, 2], pdfViewerMounted: true, pdfViewerCanvasNodes: 2,
+  requestId }
 ```
 
-- 自动一次：canonical 服务在 `service-ready` 时上报（此时 pdfjs 文档已加载完成）。
-- 随时再采：调试栏「渲染计数」按钮 → `reader-pdf-page-render-census-request` + `reader-pdf-page-render-census { reason: 'requested' }`。
-- 判据：`pageCanvasRenders: 0` **且** `pdfViewerMounted: false` / `pdfViewerCanvasNodes: 0`，同时 `pdfjsDocumentPages > 0`（pdfjs 确实加载了这份 PDF，只是没有绘制页画布）。DOM 侧可交叉核对 `document.querySelectorAll('.pdfViewer canvas').length`。
-- 用「Web 对照」切到 Web 渲染时，同一个计数会大于 0 —— 这证明计数器是活的，原生下的 0 不是「没采集」。
+- 自动一条：canonical 服务 `service-ready` 时上报（此时 pdfjs 文档已加载完成）。
+- 手动：调试栏「渲染计数」。原生与 Web 两侧用同一个按钮、同一个字段名，只靠 `renderer` 区分。
+- 判据：原生 `pageCanvasRenders = 0` 且 `pdfViewerMounted = false`、`pdfViewerCanvasNodes = 0`、`pdfjsDocumentPages > 0`；随后切「Web 对照」再点一次，`renderer: 'web'` 的记录出现且 `pageCanvasRenders > 0`。两条在一起才证明「原生 0 是测出来的、不是没采集」。
 
 ### 组 4：保存屏障时序
 
@@ -124,6 +128,23 @@ reader-pdf-handoff-barrier-end    { direction, status, waitedMs, reason?, fileId
 ```
 
 判据：`save-barrier-end.result='drained'` 且 `pendingSaves=0` 出现在 `handoff-barrier-end.status='closed'` **之前**；新旧 `sessionId` 不同。`save-queue` 的 `drain-start`/`drain-end` 包住所有 `confirmed`，`waitedMs` 就是真实等待时间。`drain-end.ok=false` 表示保存失败、旧会话被保留（此时不会出现新文档的 `documentOpened`）。
+
+**可控的「待确认写入」**：不靠快速翻页。调试栏点「待写保持」→ `reader-pdf-debug-held-save-request`，原生阅读器立即入队一次写盘，但先压住 10 秒再真正落盘：
+
+```text
+reader-pdf-debug-held-save-request { renderer: 'pdfkit', holdMs: 10000, accepted: true, token }
+reader-pdf-debug-held-save-queued  { operationId, holdMs: 10000, pendingSaves: 1 }
+reader-pdf-debug-held-save-window  { operationId, holdMs, pendingSaves: 1 }      # 窗口开始，此时换源
+reader-pdf-save-barrier-start      { pendingSaves: 1, ... }                      # 换源触发屏障
+reader-pdf-save-queue              { event: 'drain-start', pending: 1 }
+reader-pdf-save-queue              { event: 'confirmed', ... }                   # 被 drain 包住
+reader-pdf-save-queue              { event: 'drain-end', ok: true, elapsedMs: ~10000 }
+reader-pdf-save-barrier-end        { result: 'drained', pendingSaves: 0, waitedMs: ~10000 }
+reader-pdf-debug-held-save-committed { operationId, revision }
+reader-pdf-handoff-barrier-end     { status: 'closed' }
+```
+
+操作顺序：点「待写保持」→ 10 秒内点「换源」→ 选另一个文件。若 10 秒内没换源，这次写盘会自己完成，日志里就是一次普通保存（`save-queue confirmed`），不影响数据。
 
 ### 组 5：扫描版 PDF 的 OCR 握手
 
@@ -152,18 +173,30 @@ xcrun simctl openurl booted "hamsterreader://open?path=file://$CONTAINER/Documen
 reader-debug-ocr-seed             { fileId, pages: [1,2], texts, ranges: 1 }
 reader-pdf-canonical-publish      { page: 1, source: 'geometry-cache', utf16, bufferedBeforeWebReady: true }
 reader-pdf-canonical-publish      { page: 2, ..., bufferedBeforeWebReady: true }
-reader-pdf-surface                { event: 'ocr-cache', page, beforeWebReady: true, cachedOcrPages }
-reader-pdf-surface                { event: 'web-ready', cachedOcrPages: 2, pendingActivates }
+reader-pdf-web-ready              { role: 'canonical-popover-service', bufferedBeforeReady: [1,2], ... }
+reader-pdf-surface                { event: 'web-ready', cachedOcrPages: 0, pendingActivates }
+reader-pdf-surface                { event: 'ocr-cache', page: 1, delivery: 'buffered-replay',
+                                    bufferedBeforeWebReady: true, surfaceReadyAtDelivery: true, cachedOcrPages: 1 }
+reader-pdf-surface                { event: 'ocr-cache', page: 2, delivery: 'buffered-replay', ... }
 reader-pdf-surface                { event: 'activate-start', rangeId, pages: [1,2], source: 'ocr-cache', webReady: true }
 reader-pdf-materialize-input      { ... }           # materializeNativeRange 原生侧入口
 reader-pdf-surface                { event: 'activate-end', rangeId, materialized: true, elapsedMs, utf16 }
 ```
 
-判据：`bufferedBeforeWebReady: true` 与 `beforeWebReady: true` 出现在 `web-ready` 之前（说明 OCR/canonical 先到、缓存后重放）；随后 `activate-start` → `activate-end{materialized:true}` 构成完整 activate/materialize 链。激活方式：在原生高亮列表里点 `scanned-range-p1-p2`（不需要长按手势），它会跨页 1→2 激活。
+**判定口径（统一定义，不要按字面猜）**
+
+- 「先于 web-ready」指的是**宿主在收到 web-ready 之前就把 OCR 文字缓存进 `NativeCanonicalDelivery`**，并且在握手时把这一批一次性重放出去；不是说 WKWebView 在发出自己的 ready 之前就收到了消息 —— 那时页面的消息监听还没安装，任何宿主消息都会丢，重放本来就发生在 ready 之后。
+- 因此判据看两处，二者都要有：
+  1. `reader-pdf-canonical-publish` 的 `bufferedBeforeWebReady: true`（宿主侧，发生在 `reader-pdf-web-ready` 之前）；
+  2. `reader-pdf-surface` 的 `ocr-cache` 带 `delivery: 'buffered-replay'` 且 `bufferedBeforeWebReady: true`（这一批是握手时重放过来的）。
+- `bufferedBeforeWebReady` 由宿主按投递来源标在消息里（`replay` 字段），不是由 Web 侧按到达时间推算；握手后实时到达的页面是 `delivery: 'live'` / `bufferedBeforeWebReady: false`，所以该字段不会恒为 true。
+- `reader-pdf-surface { event: 'web-ready', cachedOcrPages: 0 }` 是正常的：重放动作由 web-ready 触发，此刻还没有页面进来；紧随其后的 `ocr-cache` 才是重放结果。不要用 `cachedOcrPages` 在 web-ready 这一瞬间的值判断缓存是否存在，要看 `reader-pdf-web-ready` 的 `bufferedBeforeReady`。
+
+激活方式：在原生高亮列表里点 `scanned-range-p1-p2`（不需要长按手势），它会跨页 1→2 激活。`activate-start` → `activate-end{materialized:true}` 构成完整 activate/materialize 链。
 
 ## 验收记录
 
-Linux 自动化：全量 168 个文件 / 2109 个用例通过（只限制 worker 并发数）；定向 56 个用例通过，含 release 保存失败后的恢复入口检查。`typecheck`、`typecheck:host`、`host:check`、`lint` 和 OpenSpec strict validate 均通过。
+Linux 自动化：全量 175 个文件 / 2155 个用例通过（只限制 worker 并发数）；定向工具链（`test/reader-screen-handoff`、`test/host-page-render-census`、`test/pdf-page-render-census`、`test/native-pdf/held-save`、`test/native-pdf/canonical-delivery` 等）全部通过。`typecheck`、`typecheck:host`、`host:check`、`lint` 均通过。
 
 在 `app` 下运行 `npx expo export --platform ios --max-workers 2 --output-dir ../../evidence/ios-export` 已通过生产 JS/Hermes 打包，不能据此声称 Swift 编译或真机运行已通过。
 

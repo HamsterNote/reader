@@ -12,6 +12,10 @@ import { readPackagedAsset } from './packagedAsset'
 import { createPdfWorkerFromAsset } from './pdfWorker'
 import { packagedPdfOptions } from './pdfAssets'
 import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
+import {
+  PAGE_RENDER_CENSUS_REQUEST,
+  pageRenderCensusReply
+} from '../../src/pdf/pageRenderCensus'
 import { openReaderDocument } from '../../src/host/openReaderDocument'
 import {
   restoreReaderSnapshot,
@@ -38,6 +42,32 @@ if (window.__READER_NATIVE_PDF__) {
   // 关闭前等待未确认写入的时间上限；超时仍释放，但不声称已保存。
   const FLUSH_PENDING_TIMEOUT_MS = 2000
   const CLOSING_SHIELD_ID = 'reader-closing-shield'
+
+  /**
+   * HAM-278 组 1：宿主请求页面画布渲染计数时，用本页面内真实 render 计数
+   * 回包。这不是桥协议消息，必须在 handleMessage 之前拦截。
+   */
+  function respondToPageRenderCensusRequest(message: unknown): boolean {
+    let parsed: unknown
+    try {
+      parsed = typeof message === 'string' ? JSON.parse(message) : message
+    } catch {
+      return false
+    }
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      (parsed as { type?: unknown }).type !== PAGE_RENDER_CENSUS_REQUEST
+    )
+      return false
+    const requestId = (parsed as { requestId?: unknown }).requestId
+    post?.(
+      pageRenderCensusReply(
+        typeof requestId === 'string' ? requestId : undefined
+      )
+    )
+    return true
+  }
 
   /**
    * 关闭冲刷期间冻结输入：盖一层透明遮罩，阻止新的手势/点击。
@@ -270,6 +300,9 @@ if (window.__READER_NATIVE_PDF__) {
   const replacedSessions = new Set([activeSessionId])
   if (bridge) {
     listenHostMessages((message) => {
+      // HAM-278 组 1：census 请求不走桥协议，先在本层回应，避免被当成
+      // 非法桥消息拒绝（Web 对照需要拿到正计数才能自证计数器有效）。
+      if (respondToPageRenderCensusRequest(message)) return
       const replacement =
         host &&
         parseReaderSessionReplacement(message, {

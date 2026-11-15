@@ -20,6 +20,8 @@ type DebugEntryBarProps = {
   readonly onReplaceSource: (document: HostDocumentSummary) => void
   /** HAM-278 组 1：采集一次 PDF.js 页面画布渲染计数。 */
   readonly onRequestCensus: () => void
+  /** HAM-278 组 4：制造一次可控的「待确认写入」（10 秒窗口）。 */
+  readonly onHoldSave: () => void
   readonly onClose: () => void
 }
 
@@ -34,6 +36,7 @@ export function DebugEntryBar({
   onToggleSourcePicker,
   onReplaceSource,
   onRequestCensus,
+  onHoldSave,
   onClose
 }: DebugEntryBarProps) {
   return (
@@ -58,6 +61,9 @@ export function DebugEntryBar({
       </Pressable>
       <Pressable onPress={onRequestCensus} accessibilityRole='button'>
         <Text style={styles.action}>渲染计数</Text>
+      </Pressable>
+      <Pressable onPress={onHoldSave} accessibilityRole='button'>
+        <Text style={styles.action}>待写保持</Text>
       </Pressable>
       <Text style={styles.hint} numberOfLines={1}>
         调试入口

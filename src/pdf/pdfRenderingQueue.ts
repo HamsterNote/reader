@@ -59,8 +59,19 @@ export function restrictPdfRenderingQueue(
       queue.pdfViewer?.forceRendering(null)
       return false
     }
-    // 这里就是 PDF.js 页面画布的渲染提交点：计数用于设备取证，不影响行为。
-    recordPageCanvasRender((view as PageView).id)
     return renderView(view)
+  }
+}
+
+/**
+ * HAM-278 组 1：统计 PDF.js 页面画布真正渲染的次数。
+ * 在 `renderView` 之后计数，只有返回 true（确实提交渲染）才 +1；不改变行为。
+ */
+export function instrumentPdfRenderCensus(queue: PDFRenderingQueue): void {
+  const renderView = queue.renderView.bind(queue)
+  queue.renderView = (view) => {
+    const rendered = renderView(view)
+    if (rendered) recordPageCanvasRender((view as PageView).id)
+    return rendered
   }
 }

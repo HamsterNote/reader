@@ -68,7 +68,8 @@ const host = vi.hoisted(() => ({
   nativeUnmounts: 0,
   nativeAvailable: true,
   platform: 'ios',
-  views: new Map<string, ReaderPdfViewProps>()
+  views: new Map<string, ReaderPdfViewProps>(),
+  census: [] as ('web' | 'native')[]
 }))
 
 vi.mock('../app/src/native/webAssets', () => ({
@@ -88,6 +89,9 @@ vi.mock('../app/src/components/ReaderWebView', () => ({
           const result = await host.webClose(props)
           if (result.status === 'closed') setClosed(true)
           return result
+        },
+        requestPageRenderCensus: () => {
+          host.census.push('web')
         }
       }))
       const generation = props.handoff?.identity.generation ?? 0
@@ -394,6 +398,7 @@ beforeEach(() => {
   host.nativeAvailable = true
   host.platform = 'ios'
   host.views.clear()
+  host.census = []
   vi.stubGlobal('__DEV__', true)
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
 })
@@ -671,6 +676,45 @@ describe('iOS native default entry (S01/S11/S13)', () => {
     })
     expect(fixture.updateSnapshot).not.toHaveBeenCalled()
     expect(screen.queryByTestId('web-reader')).not.toBeInTheDocument()
+  })
+
+  it('routes the census request to the native service and to the Web comparison reader', async () => {
+    const fixture = createTransactionStore(makeRecord())
+    const current = makeRecord()
+    const view = render(
+      <ReaderScreen record={current} store={fixture.store} {...directProps} />
+    )
+    await screen.findByTestId('native-pdf-view')
+    view.rerender(
+      <ReaderScreen
+        record={current}
+        store={fixture.store}
+        {...directProps}
+        debugCensusToken={1}
+      />
+    )
+    await waitFor(() =>
+      expect(
+        host.post.mock.calls.some(
+          ([raw]) => JSON.parse(raw as string).type === 'census-request'
+        )
+      ).toBe(true)
+    )
+
+    host.webClose.mockResolvedValue({ status: 'closed' })
+    await act(async () => {
+      fireEvent.click(screen.getByText('Web 对照'))
+    })
+    await screen.findByTestId('web-reader')
+    view.rerender(
+      <ReaderScreen
+        record={current}
+        store={fixture.store}
+        {...directProps}
+        debugCensusToken={2}
+      />
+    )
+    await waitFor(() => expect(host.census).toEqual(['web']))
   })
 
   it('keeps a failed save mounted during a configured file switch, then retries into the new native session', async () => {

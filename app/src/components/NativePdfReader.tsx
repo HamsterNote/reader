@@ -285,7 +285,8 @@ function handleNativePdfControlMessage(
       logNativePdfDiagnostic('reader-pdf-web-ready', {
         ...identity,
         role: 'canonical-popover-service',
-        renderer: 'pdfkit'
+        renderer: 'pdfkit',
+        bufferedBeforeReady: canonicalDelivery.bufferedPages
       })
       canonicalDelivery.webReady(identity)
       context.syncWebEditing()
@@ -767,9 +768,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     )
     const canonicalDelivery = useMemo(
       () =>
-        new NativeCanonicalDelivery(identity, (canonicalPage) => {
+        new NativeCanonicalDelivery(identity, (canonicalPage, meta) => {
           if (!web.current || webDisposed.current) return false
-          post({ type: 'ocrText', canonicalPage })
+          // replay 由宿主按「握手前缓存 / 之后实时」决定，Web 侧不再自行猜测。
+          post({ type: 'ocrText', canonicalPage, replay: meta.replay })
           return true
         }),
       [identity, post]
@@ -1193,6 +1195,41 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
       persist((snapshot) => snapshot.data, { undoPageEdit: undo })
     }
+    /** HAM-278 组 4：入队一次延迟写盘，制造可控的「待确认写入」窗口。 */
+    function debugHoldSave(holdMs: number): boolean {
+      if (webDisposed.current || closed.current) return false
+      const operationId = `debug-held-${randomUUID()}`
+      const execute = async (): Promise<NativeSaveResult> => {
+        logNativePdfDiagnostic('reader-pdf-debug-held-save-window', {
+          ...identity,
+          operationId,
+          holdMs,
+          pendingSaves: saveQueue.pending
+        })
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, holdMs)
+        })
+        const next = await store.updateSnapshot(
+          record.fileId,
+          (base) => ({ ...base, revision: base.revision + 1 }),
+          () => handoffRef.current?.assertWriter(identity)
+        )
+        logNativePdfDiagnostic('reader-pdf-debug-held-save-committed', {
+          ...identity,
+          operationId,
+          revision: next.revision
+        })
+        return { snapshot: next }
+      }
+      saveQueue.add(operationId, execute)
+      logNativePdfDiagnostic('reader-pdf-debug-held-save-queued', {
+        ...identity,
+        operationId,
+        holdMs,
+        pendingSaves: saveQueue.pending
+      })
+      return true
+    }
     useImperativeHandle(ref, () => ({
       setRenderMode: (mode) =>
         persist((snapshot) => withNativeRenderMode(snapshot.data, mode)),
@@ -1200,6 +1237,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         if (!web.current || webDisposed.current) return
         post({ type: 'census-request' })
       },
+      debugHoldNextSave: (holdMs: number) => debugHoldSave(holdMs),
       close: async (options?: { retry?: boolean }) => {
         if (closed.current) return { status: 'closed' }
         if (options?.retry) saveQueue.retry()?.catch(() => undefined)

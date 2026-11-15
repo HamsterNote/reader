@@ -619,6 +619,7 @@ export function startNativePdfSurface(
       event?: PdfEvent
       canonicalPages?: PdfCanonicalPage[]
       canonicalPage?: PdfCanonicalPage
+      replay?: boolean
       rangeId?: string
       pages?: number[]
       url?: string
@@ -693,12 +694,16 @@ export function startNativePdfSurface(
           JSON.stringify(ocrPages.get(page.pageNumber)) !== JSON.stringify(page)
         ocrPages.set(page.pageNumber, page)
         cache?.pages.set(page.pageNumber, page)
+        // replay 由宿主标注：这批文字是宿主在 web-ready 之前缓存、握手后重放的，
+        // 而不是本页在握手前就收到了消息（那时监听还不存在）。
+        const replay = message.replay === true
         surfaceDiagnostic('ocr-cache', {
           page: page.pageNumber,
           utf16: page.text.length,
           boundaries: page.boundaries.length,
-          // web-ready 之前收到的 OCR 会先缓存，握手后重放。
-          beforeWebReady: !webReadySent,
+          delivery: replay ? 'buffered-replay' : 'live',
+          bufferedBeforeWebReady: replay,
+          surfaceReadyAtDelivery: webReadySent,
           cachedOcrPages: ocrPages.size
         })
         if (changed)

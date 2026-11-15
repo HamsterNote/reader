@@ -1,5 +1,8 @@
 import { PDFViewer } from './pdfViewerLib'
-import { restrictPdfRenderingQueue } from './pdfRenderingQueue'
+import {
+  instrumentPdfRenderCensus,
+  restrictPdfRenderingQueue
+} from './pdfRenderingQueue'
 import type { ReaderPageEdgeCrop } from '../types/readerData'
 import {
   getPageCropGeometry,
@@ -101,8 +104,12 @@ export class CroppedPdfViewer extends PDFViewer {
     private readonly cropLayout?: CropLayout
   ) {
     super(options)
-    if (cropLayout && this.renderingQueue)
-      restrictPdfRenderingQueue(this.renderingQueue, cropLayout.pages)
+    if (this.renderingQueue) {
+      if (cropLayout)
+        restrictPdfRenderingQueue(this.renderingQueue, cropLayout.pages)
+      // 无论是否裁切都计数：Web 对照的渲染计数必须能拿到正数。
+      instrumentPdfRenderCensus(this.renderingQueue)
+    }
   }
 
   override _getVisiblePages() {

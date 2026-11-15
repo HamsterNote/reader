@@ -52,6 +52,8 @@ type ReaderScreenProps = {
   readonly isActivePane?: boolean
   /** 设备取证：递增该值触发一次 PDF.js 页面画布渲染计数采集。 */
   readonly debugCensusToken?: number
+  /** 设备取证：递增该值制造一次可控的「待确认写入」。 */
+  readonly debugHoldSaveToken?: number
   readonly ocr?: boolean | ReaderOcrOptions
   readonly extraOCR?: ReaderExtraOcr
   readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -229,6 +231,7 @@ function ReaderScreenSession({
   paneId = 'standalone',
   isActivePane = true,
   debugCensusToken,
+  debugHoldSaveToken,
   ocr,
   extraOCR,
   onOcrError,
@@ -302,8 +305,29 @@ function ReaderScreenSession({
       outerWebMounted: webMounted,
       token: debugCensusToken
     })
+    // 同一机制两侧都发：原生向 PDFKit 服务请求，Web 对照向页面内真实 render 计数请求。
     if (nativePdf) nativeRef.current?.requestPageRenderCensus?.()
+    else webRef.current?.requestPageRenderCensus?.()
   }, [debugCensusToken, nativePdf, nativeIdentity, webIdentity, webMounted])
+
+  // 设备取证：制造可控的「待确认写入」窗口，供换源时观察 drain 包住 confirmed。
+  const lastHoldToken = useRef(debugHoldSaveToken)
+  useEffect(() => {
+    if (debugHoldSaveToken === undefined) return
+    if (lastHoldToken.current === debugHoldSaveToken) return
+    lastHoldToken.current = debugHoldSaveToken
+    const holdMs = 10000
+    const accepted = nativePdf
+      ? (nativeRef.current?.debugHoldNextSave?.(holdMs) ?? false)
+      : false
+    logNativePdfDiagnostic('reader-pdf-debug-held-save-request', {
+      ...(nativePdf ? nativeIdentity : webIdentity),
+      renderer: nativePdf ? 'pdfkit' : 'web',
+      holdMs,
+      accepted,
+      token: debugHoldSaveToken
+    })
+  }, [debugHoldSaveToken, nativePdf, nativeIdentity, webIdentity])
 
   useEffect(() => {
     let active = true

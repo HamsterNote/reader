@@ -71,6 +71,7 @@ function AppContent() {
   const [activePane, setActivePane] = useState<PaneId>('left')
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
   const [censusToken, setCensusToken] = useState(0)
+  const [holdSaveToken, setHoldSaveToken] = useState(0)
   const [ocrFileIds, setOcrFileIds] = useState<ReadonlySet<string>>(new Set())
   const [packaged, setPackaged] = useState<PackagedWebReader | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -365,6 +366,7 @@ function AppContent() {
             onToggleSourcePicker={() => setSourcePickerOpen((value) => !value)}
             onReplaceSource={replaceSource}
             onRequestCensus={() => setCensusToken((value) => value + 1)}
+            onHoldSave={() => setHoldSaveToken((value) => value + 1)}
             onClose={closeAll}
           />
         ) : null}
@@ -383,6 +385,7 @@ function AppContent() {
                 paneId={pane}
                 isActivePane={split ? pane === focusPane : true}
                 debugCensusToken={censusToken}
+                debugHoldSaveToken={holdSaveToken}
                 ocr={
                   ocrFileIds.has(record.fileId) ? { enabled: true } : undefined
                 }

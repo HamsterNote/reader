@@ -1,6 +1,11 @@
 import type { PdfCanonicalPage, PdfIdentity } from './contracts'
 import { NativePdfSession } from './session'
 
+/** 一次投递的来源：握手前的缓存重放，还是 webReady 之后的实时投递。 */
+export type CanonicalDeliveryMeta = {
+  readonly replay: boolean
+}
+
 /** Canonical state belongs to one file session, not to a WebView ref's lifetime. */
 export class NativeCanonicalDelivery {
   private readonly session: NativePdfSession
@@ -11,7 +16,10 @@ export class NativeCanonicalDelivery {
 
   constructor(
     identity: PdfIdentity,
-    private readonly send: (page: PdfCanonicalPage) => boolean
+    private readonly send: (
+      page: PdfCanonicalPage,
+      meta: CanonicalDeliveryMeta
+    ) => boolean
   ) {
     this.session = new NativePdfSession(identity)
   }
@@ -27,10 +35,16 @@ export class NativeCanonicalDelivery {
     return this.ready
   }
 
+  /** 当前缓存的页面号（升序），用于握手日志证明重放内容。 */
+  get bufferedPages(): number[] {
+    return [...this.pages.keys()].sort((left, right) => left - right)
+  }
+
   webReady(identity: PdfIdentity): void {
     if (!this.session.accepts(identity)) return
     this.ready = true
-    for (const page of this.pages.values()) this.deliver(page)
+    // 这批页面是在握手前缓存的，标记 replay，供设备侧区分「重放」与「实时」。
+    for (const page of this.pages.values()) this.deliver(page, false, true)
   }
 
   /** One explicit repair request can resend even a previously delivered page. */
@@ -59,10 +73,10 @@ export class NativeCanonicalDelivery {
     this.clear()
   }
 
-  private deliver(page: PdfCanonicalPage, force = false): void {
+  private deliver(page: PdfCanonicalPage, force = false, replay = false): void {
     // Text equality alone is insufficient: a mapping can have new boundaries.
     const encoded = JSON.stringify(page)
     if (!force && this.sent.get(page.pageNumber) === encoded) return
-    if (this.send(page)) this.sent.set(page.pageNumber, encoded)
+    if (this.send(page, { replay })) this.sent.set(page.pageNumber, encoded)
   }
 }
