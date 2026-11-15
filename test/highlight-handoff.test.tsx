@@ -132,6 +132,92 @@ describe('highlight handoff lifecycle', () => {
     h.advance(500)
     expect(h.onGesture).toHaveBeenCalledTimes(2)
   })
+  describe.each(['pointercancel', 'pointerup'])(
+    'host ownership after source %s',
+    (type) => {
+      it.each(['replace', 'unmount'])(
+        'still cancels the host session on source %s',
+        (cleanup) => {
+          const h = setup()
+          h.down()
+          h.advance(500)
+          const acknowledge = h.onGesture.mock.calls[0][1]
+          act(() => acknowledge('accepted'))
+          h.send(type)
+          expect(h.result.current.activePointerType).toBeNull()
+          expect(h.result.current.suppressNativeSelection).toBe(false)
+          expect(h.onGesture.mock.calls.map(([e]) => e.phase)).toEqual([
+            'start'
+          ])
+
+          if (cleanup === 'replace')
+            h.rerender({ element: document.createElement('div') })
+          else h.unmount()
+          expect(h.onGesture.mock.calls.map(([e]) => e.phase)).toEqual([
+            'start',
+            'cancel'
+          ])
+          expect(h.onGesture.mock.calls[1][0]).toEqual({
+            phase: 'cancel',
+            pointerId: 7,
+            reason: 'source-replaced'
+          })
+          act(() => {
+            acknowledge('accepted')
+            acknowledge('ended')
+          })
+          h.advance(1000)
+          h.unmount()
+          expect(h.onGesture).toHaveBeenCalledTimes(2)
+        }
+      )
+      it('releases the session on host ended and ignores its late acknowledgements', () => {
+        const h = setup()
+        h.down()
+        h.advance(500)
+        const acknowledge = h.onGesture.mock.calls[0][1]
+        act(() => acknowledge('accepted'))
+        h.send(type)
+        act(() => acknowledge('ended'))
+        h.rerender({ element: document.createElement('div') })
+        expect(h.onGesture).toHaveBeenCalledTimes(1)
+
+        h.down()
+        h.advance(500)
+        const nextAcknowledge = h.onGesture.mock.calls[1][1]
+        act(() => {
+          nextAcknowledge('accepted')
+          acknowledge('ended')
+          acknowledge('rejected')
+        })
+        h.unmount()
+        expect(h.onGesture.mock.calls.map(([e]) => e.phase)).toEqual([
+          'start',
+          'start',
+          'cancel'
+        ])
+      })
+    }
+  )
+  it('still cancels on blur after native takeover cancels the source stream', () => {
+    const h = setup()
+    h.down()
+    h.advance(500)
+    act(() => h.onGesture.mock.calls[0][1]('accepted'))
+    h.send('pointercancel')
+    act(() => window.dispatchEvent(new Event('blur')))
+    expect(h.onGesture.mock.calls.map(([e]) => e.phase)).toEqual([
+      'start',
+      'cancel'
+    ])
+    expect(h.onGesture.mock.calls[1][0]).toEqual({
+      phase: 'cancel',
+      pointerId: 7,
+      reason: 'blur'
+    })
+    h.unmount()
+    expect(h.onGesture).toHaveBeenCalledTimes(2)
+  })
   it.each(['pointerup', 'pointercancel', 'pointermove'])(
     'cancels early %s',
     (type) => {
@@ -195,6 +281,13 @@ it('lets the host own crossing a frame boundary and source pointer cancellation 
   act(() => h.onGesture.mock.calls[0][1]('accepted'))
   h.send('pointerout', { relatedTarget: null })
   h.send('pointercancel')
+  h.send('pointercancel')
+  h.send('pointermove', { clientX: 300 })
   expect(h.onGesture).toHaveBeenCalledTimes(1)
+  expect(h.result.current.activePointerType).toBeNull()
   expect(h.result.current.suppressNativeSelection).toBe(false)
+  const touch = new Event('touchstart', { bubbles: true, cancelable: true })
+  Object.assign(touch, { touches: [{}] })
+  act(() => h.root.dispatchEvent(touch))
+  expect(touch.defaultPrevented).toBe(false)
 })

@@ -21,6 +21,7 @@ type Candidate = {
   highlight: ReaderSelectionRange
   handoff: ReaderHighlightDragHandoff
   state: 'pending' | 'waiting' | 'owned'
+  sourceActive: boolean
   timer?: ReturnType<typeof setTimeout>
 }
 
@@ -41,12 +42,16 @@ export function useHighlightHandoff({
     'touch' | 'mouse' | null
   >(null)
   const [suppressNativeSelection, setSuppressNativeSelection] = useState(false)
-  const clear = useCallback(() => {
-    if (current.current?.timer) clearTimeout(current.current.timer)
-    current.current = null
+  const releaseSourceInput = useCallback(() => {
+    if (current.current) current.current.sourceActive = false
     setActivePointerType(null)
     setSuppressNativeSelection(false)
   }, [])
+  const clear = useCallback(() => {
+    if (current.current?.timer) clearTimeout(current.current.timer)
+    releaseSourceInput()
+    current.current = null
+  }, [releaseSourceInput])
   const cancel = useCallback(
     (reason: ReaderHighlightDragCancelReason) => {
       const candidate = current.current
@@ -136,7 +141,8 @@ export function useHighlightHandoff({
       if (!candidate || candidate.pointerId !== event.pointerId) return false
       const triggered = candidate.state !== 'pending'
       if (triggered) consumedUps.current.add(native)
-      clear()
+      if (candidate.state === 'owned') releaseSourceInput()
+      else clear()
       if (candidate.state === 'waiting') {
         candidate.handoff.onGesture(
           {
@@ -149,17 +155,17 @@ export function useHighlightHandoff({
       }
       return triggered
     },
-    [clear]
+    [clear, releaseSourceInput]
   )
   const handleHighlightPointerCancel = useCallback(
     (event: Input) => {
       if (current.current?.pointerId !== event.pointerId) return
-      // Native takeover can cancel the source WebView pointer stream.
-      // Its owner decides whether the actual gesture was cancelled.
-      if (current.current.state === 'owned') clear()
+      // Native takeover can end the source stream before the host gesture ends.
+      // Keep its identity so source replacement can still cancel the host.
+      if (current.current.state === 'owned') releaseSourceInput()
       else cancel('pointer-cancel')
     },
-    [cancel, clear]
+    [cancel, releaseSourceInput]
   )
   const handleHighlightPointerDown = useCallback(
     (event: Input) => {
@@ -184,7 +190,8 @@ export function useHighlightHandoff({
         y: event.clientY,
         highlight,
         handoff,
-        state: 'pending'
+        state: 'pending',
+        sourceActive: true
       }
       current.current = candidate
       if (candidate.pointerType === 'touch')
@@ -214,7 +221,8 @@ export function useHighlightHandoff({
     }
     const touch = (event: TouchEvent) => {
       if (event.touches.length > 1) cancel('pointer-cancel')
-      else if (current.current && event.cancelable) event.preventDefault()
+      else if (current.current?.sourceActive && event.cancelable)
+        event.preventDefault()
     }
     doc.addEventListener('pointerout', exit, true)
     doc.addEventListener('pointerdown', down, true)
