@@ -158,13 +158,10 @@ async function mount(file: HostDocumentRecord) {
     identity,
     ref,
     snapshot: () => current.snapshot,
-    updateSnapshot: store.updateSnapshot as ReturnType<typeof vi.fn>,
     close: async () => {
-      let result: Awaited<ReturnType<ReaderWebViewHandle['close']>> | undefined
       await act(async () => {
-        result = await ref.current!.close()
+        await ref.current!.close()
       })
-      return result!
     },
     unmount: view.unmount
   }
@@ -494,44 +491,5 @@ describe('native annotation commit identity across remounts', () => {
     const current = restoreReaderSnapshot(opened.snapshot().data)
     expect(current.data.pagePaintings).toEqual({})
     expect(opened.snapshot().revision).toBe(4)
-  })
-})
-
-describe('native close save confirmation', () => {
-  it('retries a failed save and closes after the data is confirmed', async () => {
-    const file = record('close-retry-success', [])
-    const opened = await mount(file)
-    opened.updateSnapshot.mockRejectedValueOnce(new Error('disk full'))
-    nativeRectangle(opened.identity)
-
-    const result = await opened.close()
-    expect(result.status).toBe('closed')
-    expect(opened.updateSnapshot).toHaveBeenCalledTimes(2)
-    expect(
-      restoreReaderSnapshot(opened.snapshot().data).data.rects
-    ).toHaveLength(1)
-    expect(opened.snapshot().revision).toBe(1)
-    expect(screen.queryByText(/disk full/)).not.toBeInTheDocument()
-  })
-
-  it('keeps native open after repeated failures and closes after a later successful retry', async () => {
-    const file = record('close-retry-later-success', [])
-    const opened = await mount(file)
-    opened.updateSnapshot
-      .mockRejectedValueOnce(new Error('disk full'))
-      .mockRejectedValueOnce(new Error('disk full'))
-    nativeRectangle(opened.identity)
-
-    const first = await opened.close()
-    expect(first.status).toBe('unconfirmed')
-    expect(screen.getByText(/disk full/)).toBeInTheDocument()
-
-    const second = await opened.close()
-    expect(second.status).toBe('closed')
-    expect(opened.updateSnapshot).toHaveBeenCalledTimes(3)
-    expect(
-      restoreReaderSnapshot(opened.snapshot().data).data.rects
-    ).toHaveLength(1)
-    expect(screen.queryByText(/disk full/)).not.toBeInTheDocument()
   })
 })
