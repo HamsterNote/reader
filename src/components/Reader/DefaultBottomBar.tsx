@@ -41,6 +41,7 @@ import {
 } from './useDefaultBottomBar'
 
 export type DefaultBottomBarProps = ToolbarFileNavigationProps & {
+  readonly showFileSwitcher: boolean
   readonly layout?: PaneToolbarLayout
   readonly onOutlineToggle?: () => void
   readonly outlineOpen?: boolean
@@ -132,16 +133,18 @@ export function DefaultBottomBar(props: DefaultBottomBarProps) {
         historyStatus={props.historyStatus}
         selectionRef={props.selectionRef}
       />
-      <ToolbarFileMenu
-        onOpen={menus.closeMenus}
-        files={props.files}
-        currentFileKey={props.currentFileKey}
-        paneId={props.paneId}
-        busy={props.busy}
-        onSelectFile={props.onSelectFile}
-        onRequestRemove={props.onRequestRemove}
-        layout={props.layout}
-      />
+      {props.showFileSwitcher && (
+        <ToolbarFileMenu
+          onOpen={menus.closeMenus}
+          files={props.files}
+          currentFileKey={props.currentFileKey}
+          paneId={props.paneId}
+          busy={props.busy}
+          onSelectFile={props.onSelectFile}
+          onRequestRemove={props.onRequestRemove}
+          layout={props.layout}
+        />
+      )}
       <button
         type='button'
         aria-label='目录'

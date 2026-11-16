@@ -1079,30 +1079,180 @@ describe('Reader public API', () => {
     )
   })
 
-  it('allows the default bottom bar to be replaced or disabled', () => {
-    // Given / When: 一个 Reader 提供自定义底栏，另一个显式传入 null。
-    const { rerender } = render(
-      <Reader
-        document={makeDocument({ pages: [makePage(1)] })}
-        bottomBar={<div data-testid='custom-bottom-bar'>Custom controls</div>}
-      />
+  describe('showFileSwitcher', () => {
+    const files = [
+      {
+        key: 'a',
+        displayName: 'A.pdf',
+        storageId: 'local',
+        path: '/A.pdf',
+        resolvedFormat: 'pdf'
+      },
+      {
+        key: 'b',
+        displayName: 'B.pdf',
+        storageId: 'local',
+        path: '/B.pdf',
+        resolvedFormat: 'pdf'
+      }
+    ]
+    const states = [
+      { name: 'omitted', props: {}, visible: true },
+      { name: 'true', props: { showFileSwitcher: true }, visible: true },
+      { name: 'false', props: { showFileSwitcher: false }, visible: false }
+    ]
+
+    it.each(states)(
+      '$name: controls only the file menu and preserves the other controls',
+      async ({ props, visible }) => {
+        const onSelectFile = vi.fn(async () => ({ status: 'success' as const }))
+        const onRequestRemove = vi.fn(async () => ({
+          status: 'success' as const
+        }))
+        await act(async () =>
+          render(
+            <Reader
+              document={makeDocument({ pages: [makePage(1)] })}
+              files={files}
+              currentFileKey='a'
+              paneId='pane-a'
+              onSelectFile={onSelectFile}
+              onRequestRemove={onRequestRemove}
+              isEpub
+              fontScale={1.5}
+              useVirtualPaper={false}
+              {...props}
+            />
+          )
+        )
+
+        const toolbar = screen.getByTestId('tool-bottom-bar')
+        for (const control of [
+          'undo',
+          'redo',
+          'layout-zoom',
+          'font-scale',
+          'render-mode',
+          'rect-selection',
+          'drawing'
+        ]) {
+          expect(
+            within(toolbar).getByTestId(`tool-bottom-bar-${control}`)
+          ).toBeInTheDocument()
+        }
+        const redo = within(toolbar).getByRole('button', { name: '恢复' })
+        const outline = within(toolbar).getByRole('button', { name: '目录' })
+        const trigger = within(toolbar).queryByRole('button', { name: '文件' })
+
+        if (visible) {
+          expect(trigger).toBeInTheDocument()
+          expect(redo.nextElementSibling).toBe(trigger!.parentElement)
+          expect(trigger!.parentElement!.nextElementSibling).toBe(outline)
+          fireEvent.click(trigger!)
+          expect(
+            screen.getByRole('menuitemradio', { name: /A\.pdf/ })
+          ).toHaveAttribute('aria-checked', 'true')
+          fireEvent.click(screen.getByRole('menuitemradio', { name: /B\.pdf/ }))
+          await waitFor(() =>
+            expect(trigger).toHaveAttribute('aria-expanded', 'false')
+          )
+          expect(onSelectFile).toHaveBeenCalledWith({
+            fileKey: 'b',
+            paneId: 'pane-a',
+            requestId: expect.any(String)
+          })
+          fireEvent.click(trigger!)
+          fireEvent.click(screen.getByRole('menuitem', { name: /移除 B\.pdf/ }))
+          await waitFor(() =>
+            expect(trigger).toHaveAttribute('aria-expanded', 'false')
+          )
+          expect(onRequestRemove).toHaveBeenCalledWith({
+            fileKey: 'b',
+            paneId: 'pane-a',
+            requestId: expect.any(String)
+          })
+        } else {
+          expect(trigger).not.toBeInTheDocument()
+          expect(toolbar.querySelector('.hn-toolbar-files')).toBeNull()
+          expect(redo.nextElementSibling).toBe(outline)
+          expect(onSelectFile).not.toHaveBeenCalled()
+          expect(onRequestRemove).not.toHaveBeenCalled()
+        }
+
+        await act(async () =>
+          fireEvent.click(screen.getByTestId('tool-bottom-bar-drawing'))
+        )
+        await waitFor(() =>
+          expect(capturedViewerProps.selectedTool).toBe('drawing')
+        )
+      }
     )
 
-    // Then: 自定义节点替代默认底栏。
-    expect(screen.getByTestId('custom-bottom-bar')).toBeInTheDocument()
-    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+    it('unmounts an open menu and preserves toolbar nodes across visibility changes', async () => {
+      const props = {
+        document: makeDocument({ pages: [makePage(1)] }),
+        files,
+        currentFileKey: 'a',
+        paneId: 'pane-a'
+      }
+      const { rerender } = await act(async () => render(<Reader {...props} />))
+      const toolbar = screen.getByTestId('tool-bottom-bar')
+      const trigger = screen.getByRole('button', { name: '文件' })
+      const remainingControls = Array.from(toolbar.children).filter(
+        (child) => child !== trigger.parentElement
+      )
+      fireEvent.click(trigger)
+      expect(screen.getByRole('menu', { name: '文件列表' })).toBeInTheDocument()
 
-    rerender(
-      <Reader
-        document={makeDocument({ pages: [makePage(1)] })}
-        bottomBar={null}
-      />
-    )
+      rerender(<Reader {...props} showFileSwitcher={false} />)
+      expect(screen.queryByRole('button', { name: '文件' })).toBeNull()
+      expect(screen.queryByRole('menu', { name: '文件列表' })).toBeNull()
+      expect(screen.getByTestId('tool-bottom-bar')).toBe(toolbar)
+      expect(Array.from(toolbar.children)).toEqual(remainingControls)
 
-    // Then: null 明确关闭底栏。
-    expect(screen.queryByTestId('custom-bottom-bar')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+      rerender(<Reader {...props} showFileSwitcher busy />)
+      expect(screen.getByRole('button', { name: '文件' })).toBeDisabled()
+      rerender(<Reader {...props} showFileSwitcher />)
+      expect(screen.getByRole('button', { name: '文件' })).toBeEnabled()
+      fireEvent.click(screen.getByRole('button', { name: '文件' }))
+      expect(
+        screen.getByRole('menuitemradio', { name: /A\.pdf/ })
+      ).toHaveAttribute('aria-checked', 'true')
+      expect(
+        screen.getByRole('menuitemradio', { name: /B\.pdf/ })
+      ).toBeInTheDocument()
+    })
   })
+
+  it.each([undefined, true, false])(
+    'allows a custom or null bottom bar with showFileSwitcher=%s',
+    (showFileSwitcher) => {
+      // Given / When: 一个 Reader 提供自定义底栏，另一个显式传入 null。
+      const { rerender } = render(
+        <Reader
+          document={makeDocument({ pages: [makePage(1)] })}
+          showFileSwitcher={showFileSwitcher}
+          bottomBar={<div data-testid='custom-bottom-bar'>Custom controls</div>}
+        />
+      )
+
+      // Then: 自定义节点替代默认底栏。
+      expect(screen.getByTestId('custom-bottom-bar')).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+
+      rerender(
+        <Reader
+          document={makeDocument({ pages: [makePage(1)] })}
+          showFileSwitcher={showFileSwitcher}
+          bottomBar={null}
+        />
+      )
+
+      // Then: null 明确关闭底栏。
+      expect(screen.queryByTestId('custom-bottom-bar')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tool-bottom-bar')).not.toBeInTheDocument()
+    }
+  )
 
   it('provides toolbar semantics and restores menu focus on Escape', async () => {
     // Given: 窄屏 Reader 使用折叠工具菜单。

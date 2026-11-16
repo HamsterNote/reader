@@ -446,6 +446,8 @@ export type ReaderProps = ToolbarFileNavigationProps & {
    * Reader 仅自动避让内置底部栏；自定义悬浮栏的遮挡应由宿主计入 containMarginBottom。
    */
   bottomBar?: ReactNode
+  /** 是否挂载内置底栏的文件菜单，默认 true；不影响自定义 bottomBar 或文件导航数据。 */
+  showFileSwitcher?: boolean
   /** 边缘裁切编辑状态变化回调；未受控时 Reader 同时更新内部状态。 */
   onEdgeCropEditingChange?: (editing: boolean) => void
 }
@@ -883,6 +885,7 @@ export function Reader({
   onPageLoadStatusChange,
   popoverRelative,
   bottomBar,
+  showFileSwitcher = true,
   progressRef,
   layout,
   files,
@@ -2665,6 +2668,7 @@ export function Reader({
               hasDocumentPages &&
               (bottomBar === undefined ? (
                 <DefaultBottomBar
+                  showFileSwitcher={showFileSwitcher}
                   files={files}
                   currentFileKey={currentFileKey}
                   paneId={paneId}
