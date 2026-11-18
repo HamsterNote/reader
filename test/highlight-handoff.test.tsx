@@ -291,3 +291,29 @@ it('lets the host own crossing a frame boundary and source pointer cancellation 
   act(() => h.root.dispatchEvent(touch))
   expect(touch.defaultPrevented).toBe(false)
 })
+
+it('clears only the native selection on host request and preserves the dragged range', () => {
+  const h = setup()
+  h.down()
+  h.advance(500)
+  const acknowledge = h.onGesture.mock.calls[0][1]
+  act(() => acknowledge('accepted'))
+  const text = document.createElement('span')
+  text.textContent = 'selected text'
+  h.root.append(text)
+  const selected = document.createRange()
+  selected.selectNodeContents(text)
+  const selection = document.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(selected)
+  const before = JSON.stringify(range)
+  act(() => acknowledge('clear-selection'))
+  expect(selection.rangeCount).toBe(0)
+  expect(h.result.current.activePointerType).toBe('touch')
+  expect(JSON.stringify(range)).toBe(before)
+  expect(h.onGesture.mock.calls[0][0]).toMatchObject({
+    phase: 'start',
+    highlight: range
+  })
+  act(() => acknowledge('ended'))
+})
