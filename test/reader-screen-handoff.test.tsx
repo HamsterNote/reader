@@ -81,6 +81,7 @@ const host = vi.hoisted(() => {
     views: new Map<string, ReaderPdfViewProps>(),
     webViews: new Map<string, WebViewProps>(),
     census: [] as ('web' | 'native')[],
+    urlListeners: [] as ((event: { url: string }) => void)[],
     values,
     writeControls,
     storage: {
@@ -202,7 +203,19 @@ vi.mock('react-native', () => {
     Linking: {
       openURL: vi.fn(),
       getInitialURL: async () => null,
-      addEventListener: () => ({ remove: vi.fn() })
+      addEventListener: (
+        _type: string,
+        listener: (event: { url: string }) => void
+      ) => {
+        host.urlListeners.push(listener)
+        return {
+          remove: () => {
+            host.urlListeners = host.urlListeners.filter(
+              (candidate) => candidate !== listener
+            )
+          }
+        }
+      }
     },
     AppState: { addEventListener: () => ({ remove: vi.fn() }) }
   }
@@ -235,6 +248,7 @@ vi.mock('../app/modules/reader-pdf', () => ({
       host.nativeMounts += 1
       return () => {
         host.nativeUnmounts += 1
+        console.info('reader-test-native-unmount')
       }
     }, [])
     const command = props.command as PdfCommand | null | undefined
@@ -489,6 +503,13 @@ beforeEach(() => {
   host.values.clear()
   host.writeControls.failNext = false
   host.census = []
+  host.urlListeners = []
+  vi.mocked(Alert.alert).mockClear()
+  delete process.env.EXPO_PUBLIC_HAM278_ROUTE
+  delete process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID
+  delete process.env.EXPO_PUBLIC_HAM278_OPEN_PDF
+  delete process.env.EXPO_PUBLIC_HAM278_LAYOUT
+  delete process.env.EXPO_PUBLIC_HAM278_OCR_SEED
   vi.stubGlobal('__DEV__', true)
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
 })
@@ -550,7 +571,10 @@ async function emitWebRanges(
   record: HostDocumentRecord,
   ranges: readonly ReaderSelectionRange[],
   commitId: string,
-  annotationOperation: { type: 'upsert' | 'delete'; rangeId: string }
+  annotationOperation: {
+    type: 'create' | 'update' | 'upsert' | 'delete'
+    rangeId: string
+  }
 ) {
   const restored = restoreReaderSnapshot(
     record.snapshot.data,
@@ -1155,6 +1179,179 @@ describe('iOS native default entry (S01/S11/S13)', () => {
     ])
   })
 
+  it('does not resurrect a highlight deleted by the other pane while a recolor is queued', async () => {
+    const initial = makeRecord()
+    const original = makeRange('shared-range', '#ffc107')
+    const record: HostDocumentRecord = {
+      ...initial,
+      snapshot: {
+        ...initial.snapshot,
+        data: {
+          ...(initial.snapshot.data as Record<string, unknown>),
+          annotations: {
+            version: 5,
+            ranges: [original],
+            rects: [],
+            paintings: {}
+          }
+        }
+      }
+    }
+    const heldRectangle = deferred<void>()
+    const fixture = createTransactionStore(record, {
+      holdNextUpdate: heldRectangle
+    })
+    render(
+      <ReaderScreen
+        record={record}
+        store={fixture.store}
+        {...directProps}
+        paneId='left'
+      />
+    )
+    await screen.findByTestId('native-pdf-view')
+    const leftId = await loadNative()
+    render(
+      <ReaderScreen
+        record={record}
+        store={fixture.store}
+        {...directProps}
+        paneId='right'
+      />
+    )
+    await waitFor(() => expect(host.nativeMounts).toBe(2))
+    const rightId = await loadNative()
+    await waitFor(() => {
+      for (const element of screen.getAllByText('裁切/隐藏页编辑'))
+        expect(element.closest('button')).not.toBeDisabled()
+    })
+
+    await emitFor(leftId, {
+      ...leftId,
+      type: 'rect',
+      pageNumber: 1,
+      rect: { x: 1, y: 1, width: 20, height: 20 },
+      phase: 'commit',
+      geometryRevision: 1
+    })
+    await emitWebRanges(rightId, record, [], 'right-delete-shared', {
+      type: 'delete',
+      rangeId: original.id
+    })
+    await emitWebRanges(
+      leftId,
+      record,
+      [makeRange(original.id, '#ff0000')],
+      'left-stale-recolor',
+      { type: 'update', rangeId: original.id }
+    )
+    await act(async () => {
+      heldRectangle.resolve()
+      await heldRectangle.promise
+    })
+    await waitFor(() => expect(fixture.snapshot().revision).toBe(3))
+
+    expect(restoreReaderSnapshot(fixture.snapshot().data).data.ranges).toEqual(
+      []
+    )
+    expect(
+      await screen.findByText(/部分标注未保存：目标已在另一栏删除或重建/)
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the other pane object and applies the last confirmed recolor to a shared object', async () => {
+    const initial = makeRecord()
+    const shared = makeRange('shared-range', '#ffc107')
+    const keeper = makeRange('keeper-range', '#ffc107')
+    const record: HostDocumentRecord = {
+      ...initial,
+      snapshot: {
+        ...initial.snapshot,
+        data: {
+          ...(initial.snapshot.data as Record<string, unknown>),
+          annotations: {
+            version: 5,
+            ranges: [shared, keeper],
+            rects: [],
+            paintings: {}
+          }
+        }
+      }
+    }
+    const heldRectangle = deferred<void>()
+    const fixture = createTransactionStore(record, {
+      holdNextUpdate: heldRectangle
+    })
+    render(
+      <ReaderScreen
+        record={record}
+        store={fixture.store}
+        {...directProps}
+        paneId='left'
+      />
+    )
+    await screen.findByTestId('native-pdf-view')
+    const leftId = await loadNative()
+    render(
+      <ReaderScreen
+        record={record}
+        store={fixture.store}
+        {...directProps}
+        paneId='right'
+      />
+    )
+    await waitFor(() => expect(host.nativeMounts).toBe(2))
+    const rightId = await loadNative()
+    await waitFor(() => {
+      for (const element of screen.getAllByText('裁切/隐藏页编辑'))
+        expect(element.closest('button')).not.toBeDisabled()
+    })
+
+    await emitFor(leftId, {
+      ...leftId,
+      type: 'rect',
+      pageNumber: 1,
+      rect: { x: 1, y: 1, width: 20, height: 20 },
+      phase: 'commit',
+      geometryRevision: 1
+    })
+    await emitWebRanges(
+      rightId,
+      record,
+      [makeRange(shared.id, '#00ff00'), keeper],
+      'right-recolor-shared',
+      { type: 'update', rangeId: shared.id }
+    )
+    await emitWebRanges(
+      leftId,
+      record,
+      [makeRange(shared.id, '#ff0000'), keeper],
+      'left-recolor-shared',
+      { type: 'update', rangeId: shared.id }
+    )
+    await act(async () => {
+      heldRectangle.resolve()
+      await heldRectangle.promise
+    })
+    await waitFor(() => expect(fixture.snapshot().revision).toBe(3))
+
+    const data = restoreReaderSnapshot(fixture.snapshot().data).data
+    expect(data.ranges).toHaveLength(2)
+    expect(data.ranges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: shared.id,
+          markerStyle: expect.objectContaining({ backgroundColor: '#ff0000' })
+        }),
+        expect.objectContaining({
+          id: keeper.id,
+          markerStyle: expect.objectContaining({ backgroundColor: '#ffc107' })
+        })
+      ])
+    )
+    expect(data.rects).toHaveLength(1)
+  })
+
   it('merges same-page strokes and undo by painting object across panes', async () => {
     const record = makeRecord()
     const fixture = createTransactionStore(record)
@@ -1422,6 +1619,85 @@ describe('real App host close barriers', () => {
       expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
     )
     expect(screen.getByText('仓鼠阅读')).toBeInTheDocument()
+    const saved = await new ReaderDataStore(host.storage).get(record.fileId)
+    expect(
+      restoreReaderSnapshot(saved?.snapshot.data).data.edgeCrop?.all?.top
+    ).toBe(0.05)
+  })
+
+  it('drains a failed right-pane save across a deep link and unmounts only after closed', async () => {
+    const record = makeRecord('f_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+    await new ReaderDataStore(host.storage).upsert(record)
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = record.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    render(<App />)
+    await waitFor(() =>
+      expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(2)
+    )
+    await loadNative()
+    await loadNative()
+    await waitFor(() => {
+      for (const element of screen.getAllByText('裁切/隐藏页编辑'))
+        expect(element.closest('button')).not.toBeDisabled()
+    })
+
+    host.writeControls.failNext = true
+    await act(async () => {
+      fireEvent.click(screen.getAllByText('裁切/隐藏页编辑')[1]!)
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('裁切四边 5%'))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText('确认'))
+    })
+    await screen.findByText(/disk full/)
+    await waitFor(() => expect(host.urlListeners).toHaveLength(1))
+    vi.mocked(console.info).mockClear()
+
+    await act(async () => {
+      host.urlListeners[0]!({
+        url: `hamsterreader://open?fileId=${record.fileId}&layout=single`
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '阅读数据尚未保存',
+        expect.any(String),
+        expect.any(Array)
+      )
+    )
+    expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(2)
+    expect(host.nativeUnmounts).toBe(0)
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-pdf-handoff-barrier-start',
+      expect.objectContaining({ paneId: 'right' })
+    )
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-pdf-handoff-barrier-end',
+      expect.objectContaining({ paneId: 'right', status: 'unconfirmed' })
+    )
+
+    await act(async () => {
+      alertButton('重试').onPress?.()
+    })
+    await waitFor(() =>
+      expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(1)
+    )
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-pdf-handoff-barrier-end',
+      expect.objectContaining({ paneId: 'right', status: 'closed' })
+    )
+    const events = vi.mocked(console.info).mock.calls.map((call) => call[0])
+    const lastBarrierEnd = events.lastIndexOf('reader-pdf-handoff-barrier-end')
+    const nativeUnmount = events.indexOf('reader-test-native-unmount')
+    expect(
+      events.indexOf('reader-pdf-handoff-barrier-start')
+    ).toBeGreaterThanOrEqual(0)
+    expect(lastBarrierEnd).toBeGreaterThan(0)
+    expect(nativeUnmount).toBeGreaterThan(lastBarrierEnd)
+
     const saved = await new ReaderDataStore(host.storage).get(record.fileId)
     expect(
       restoreReaderSnapshot(saved?.snapshot.data).data.edgeCrop?.all?.top

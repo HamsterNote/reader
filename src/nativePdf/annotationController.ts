@@ -192,7 +192,9 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       if (!previous) return false
       current = applyNativeAnnotationPatch(
         current,
-        diffNativeAnnotationSnapshots(previous.after, previous.before)
+        diffNativeAnnotationSnapshots(previous.after, previous.before, {
+          history: 'undo'
+        })
       )
       future.push(previous)
       return true
@@ -202,7 +204,9 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       if (!next) return false
       current = applyNativeAnnotationPatch(
         current,
-        diffNativeAnnotationSnapshots(next.before, next.after)
+        diffNativeAnnotationSnapshots(next.before, next.after, {
+          history: 'redo'
+        })
       )
       past.push(next)
       return true

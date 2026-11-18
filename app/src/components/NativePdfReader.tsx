@@ -41,7 +41,8 @@ import {
 import { nativeRectCommit } from '../../../src/nativePdf/drawing'
 import {
   diffNativeAnnotationSnapshots,
-  withNativeAnnotationPatch
+  withNativeAnnotationPatchDetailed,
+  type NativeAnnotationConflict
 } from '../../../src/nativePdf/annotationPatch'
 import {
   publishNativeAnnotationSync,
@@ -182,7 +183,7 @@ function refillNativeCanonical(
 }
 
 type NativeWebRangeOperation = {
-  readonly type: 'upsert' | 'delete'
+  readonly type: 'create' | 'update' | 'upsert' | 'delete'
   readonly rangeId: string
 }
 
@@ -192,7 +193,10 @@ function parseNativeWebRangeOperation(
   if (typeof value !== 'object' || value === null) return undefined
   const operation = value as Record<string, unknown>
   if (
-    (operation.type === 'upsert' || operation.type === 'delete') &&
+    (operation.type === 'create' ||
+      operation.type === 'update' ||
+      operation.type === 'upsert' ||
+      operation.type === 'delete') &&
     typeof operation.rangeId === 'string' &&
     operation.rangeId.length > 0
   ) {
@@ -614,6 +618,7 @@ type NativeSaveResult = {
   readonly pageEditUndo?: NativePageEditUndo
   readonly clearPageEditUndo?: boolean
   readonly syncAnnotations?: boolean
+  readonly annotationConflicts?: readonly NativeAnnotationConflict[]
 }
 
 type Props = {
@@ -939,6 +944,18 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       rehydrateAnnotations()
       syncWebEditing()
     }
+    function showAnnotationConflicts(
+      conflicts: readonly NativeAnnotationConflict[] | undefined
+    ) {
+      if (!conflicts?.length) return
+      setStatus(
+        '部分标注未保存：目标已在另一栏删除或重建，过期修改已跳过，请核对后重试'
+      )
+      logNativePdfDiagnostic('reader-pdf-annotation-conflict', {
+        ...identity,
+        conflicts
+      })
+    }
     function confirmNativeSave(result: NativeSaveResult) {
       latest.current = result.snapshot
       if (result.syncAnnotations && annotationScope) {
@@ -965,12 +982,18 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             setHiddenPagesUndo(null)
           }, 5000)
         }
+        showAnnotationConflicts(result.annotationConflicts)
         refreshAnnotationsAfterSave(result)
         handoffRef.current?.onOperationConfirmed()
       }
     }
     function persist(
-      transform: (snapshot: typeof record.snapshot) => unknown,
+      transform: (
+        snapshot: typeof record.snapshot,
+        reportAnnotationConflicts: (
+          conflicts: readonly NativeAnnotationConflict[]
+        ) => void
+      ) => unknown,
       options: {
         pageEdit?: NativePageEditOperation
         undoPageEdit?: NativePageEditUndo
@@ -984,6 +1007,12 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
         async () => {
           let layout: ReaderData | undefined
           let pageEditUndo: NativePageEditUndo | undefined
+          let annotationConflicts: readonly NativeAnnotationConflict[] = []
+          const captureAnnotationConflicts = (
+            conflicts: readonly NativeAnnotationConflict[]
+          ) => {
+            annotationConflicts = conflicts
+          }
           const next = await store.updateSnapshot(
             record.fileId,
             (base) => {
@@ -1016,7 +1045,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
               }
               return {
                 ...base,
-                data: transform(base),
+                data: transform(base, captureAnnotationConflicts),
                 revision: base.revision + 1
               }
             },
@@ -1027,7 +1056,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             layout,
             pageEditUndo,
             clearPageEditUndo: options.undoPageEdit !== undefined,
-            syncAnnotations: options.annotations === true
+            syncAnnotations: options.annotations === true,
+            annotationConflicts
           }
         }
       )
@@ -1046,12 +1076,18 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     }
     function saveAnnotations(
       before: NativeAnnotationSnapshot,
-      after: NativeAnnotationSnapshot
+      after: NativeAnnotationSnapshot,
+      history: 'edit' | 'undo' | 'redo' = 'edit'
     ): boolean {
-      const patch = diffNativeAnnotationSnapshots(before, after)
-      return persist((base) => withNativeAnnotationPatch(base.data, patch), {
-        annotations: true
-      })
+      const patch = diffNativeAnnotationSnapshots(before, after, { history })
+      return persist(
+        (base, reportAnnotationConflicts) => {
+          const result = withNativeAnnotationPatchDetailed(base.data, patch)
+          reportAnnotationConflicts(result.conflicts)
+          return result.data
+        },
+        { annotations: true }
+      )
     }
     function rehydrateAnnotations() {
       try {
@@ -1096,17 +1132,28 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       if (!syncWebAnnotations(message.data, operation)) return
       const patch = diffNativeAnnotationSnapshots(
         before,
-        annotations.getSnapshot()
+        annotations.getSnapshot(),
+        operation?.type === 'create' || operation?.type === 'update'
+          ? {
+              rangeUpsert: {
+                rangeId: operation.rangeId,
+                operation: operation.type
+              }
+            }
+          : {}
       )
       committed.current.add(commitId)
       persist(
-        (snapshot) =>
-          withNativeAnnotationPatch(
+        (snapshot, reportAnnotationConflicts) => {
+          const result = withNativeAnnotationPatchDetailed(
             mergeNativeExternalData(snapshot.data, message.data, {
               preserveRanges: true
             }),
             patch
-          ),
+          )
+          reportAnnotationConflicts(result.conflicts)
+          return result.data
+        },
         { annotations: true }
       )
     }
@@ -1186,7 +1233,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
       const snapshot = annotations.getSnapshot()
       mirrorAnnotations(snapshot)
-      if (saveAnnotations(before, snapshot)) setStatus('已撤销上一步标注')
+      if (saveAnnotations(before, snapshot, 'undo'))
+        setStatus('已撤销上一步标注')
     }
     function redoNativeDrawing() {
       if (!canSubmit()) {
@@ -1200,7 +1248,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       }
       const snapshot = annotations.getSnapshot()
       mirrorAnnotations(snapshot)
-      if (saveAnnotations(before, snapshot)) setStatus('已重做上一步标注')
+      if (saveAnnotations(before, snapshot, 'redo'))
+        setStatus('已重做上一步标注')
     }
     /** Native freehand stroke → existing control layer → V5 snapshot. */
     function commitNativeStroke(event: Extract<PdfEvent, { type: 'stroke' }>) {

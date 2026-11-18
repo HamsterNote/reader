@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -200,8 +201,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('demo host single-reader debug controls (HAM-278)', () => {
-  it('opens one ReaderScreen from the library with a stable active pane', async () => {
+describe('demo host split and deep-link debug controls (HAM-290)', () => {
+  it('opens one ReaderScreen from the library and exposes the dev split entry', async () => {
     render(<App />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
@@ -210,15 +211,57 @@ describe('demo host single-reader debug controls (HAM-278)', () => {
     expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
     expect(host.latest.get('left')?.paneId).toBe('left')
     expect(host.latest.get('left')?.isActivePane).toBe(true)
-    expect(screen.queryByText('分栏')).not.toBeInTheDocument()
+    expect(screen.getByText('分栏')).toBeInTheDocument()
+  })
+
+  it('opens the requested PDF from the launch environment without a picker', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
+    expect(host.pick).not.toHaveBeenCalled()
+    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-debug-route',
+      expect.objectContaining({
+        source: 'env',
+        target: 'fileId',
+        fileId: a.fileId,
+        layout: 'single',
+        ok: true
+      })
+    )
+  })
+
+  it('mounts two same-file panes with stable paneIds and one active pane', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
+    expect(host.latest.get('right')?.record.fileId).toBe(a.fileId)
+    expect(host.latest.get('left')?.isActivePane).toBe(true)
+    expect(host.latest.get('right')?.isActivePane).toBe(false)
+
+    fireEvent.click(screen.getByText('活动：左栏'))
+    await waitFor(() =>
+      expect(host.latest.get('right')?.isActivePane).toBe(true)
+    )
+    expect(host.latest.get('left')?.isActivePane).toBe(false)
+
+    fireEvent.click(screen.getByText('单栏'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('reader-right')).toHaveTextContent('a.pdf')
+    expect(host.latest.get('right')?.isActivePane).toBe(true)
   })
 
   it('replaces the configured record while reading so the save barrier runs', async () => {
     render(<App />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
-    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
-
     fireEvent.click(screen.getByText('换源'))
     fireEvent.click(screen.getByText('b.pdf'))
     await waitFor(() =>
@@ -228,16 +271,14 @@ describe('demo host single-reader debug controls (HAM-278)', () => {
     expect(screen.getByTestId('reader-left')).toHaveTextContent('b.pdf')
   })
 
-  it('requests page census and held saves from the single-reader debug bar', async () => {
+  it('requests page census and held saves from the debug bar', async () => {
     render(<App />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
-    expect(host.latest.get('left')?.debugCensusToken).toBe(0)
     fireEvent.click(screen.getByText('渲染计数'))
     await waitFor(() =>
       expect(host.latest.get('left')?.debugCensusToken).toBe(1)
     )
-    expect(host.latest.get('left')?.debugHoldSaveToken).toBe(0)
     fireEvent.click(screen.getByText('待写保持'))
     await waitFor(() =>
       expect(host.latest.get('left')?.debugHoldSaveToken).toBe(1)
@@ -251,11 +292,9 @@ describe('demo host single-reader debug controls (HAM-278)', () => {
     render(<App />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
-
     fireEvent.click(screen.getByText('返回书库'))
     await waitFor(() => expect(host.close).toHaveBeenCalledWith('left'))
     expect(screen.getByTestId('reader-left')).toBeInTheDocument()
-    expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByText('重试保存:left'))
     await waitFor(() =>
@@ -264,26 +303,146 @@ describe('demo host single-reader debug controls (HAM-278)', () => {
     expect(screen.getByText('open:a.pdf')).toBeInTheDocument()
   })
 
-  it('does not activate retired deep links or launch environment routes', async () => {
+  it('keeps both panes until every library-return close is confirmed', async () => {
     process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
     process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
-    host.initialUrl = `hamsterreader://open?fileId=${a.fileId}&layout=split`
+    let rightAttempts = 0
+    host.close.mockImplementation(async (paneId) => {
+      if (paneId === 'right' && ++rightAttempts === 1)
+        return { status: 'unconfirmed', reason: 'disk full' }
+      return { status: 'closed' }
+    })
     render(<App />)
-    expect(await screen.findByText('open:a.pdf')).toBeInTheDocument()
-    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
-    expect(host.urlListeners).toHaveLength(0)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+
+    fireEvent.click(screen.getByText('返回书库'))
+    await waitFor(() => {
+      expect(host.close).toHaveBeenCalledWith('left')
+      expect(host.close).toHaveBeenCalledWith('right')
+    })
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('重试保存:right'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('open:a.pdf')).toBeInTheDocument()
   })
 
-  it('keeps debug controls out of release and still mounts only one reader', async () => {
+  it('drains the inactive pane before collapsing and retains it on failure', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    host.close
+      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'disk full' })
+      .mockResolvedValue({ status: 'closed' })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+
+    fireEvent.click(screen.getByText('单栏'))
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('right'))
+    expect(host.close).not.toHaveBeenCalledWith('left')
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('重试保存:right'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(host.latest.get('left')?.isActivePane).toBe(true)
+  })
+
+  it('keeps both panes after a failed single-pane deep link and retries the same close', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    let rightAttempts = 0
+    host.close.mockImplementation(async (paneId) => {
+      if (paneId === 'right' && ++rightAttempts === 1)
+        return { status: 'unconfirmed', reason: 'disk full' }
+      return { status: 'closed' }
+    })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+    await waitFor(() => expect(host.urlListeners).toHaveLength(1))
+
+    await act(async () => {
+      host.urlListeners[0]!({
+        url: `hamsterreader://open?fileId=${a.fileId}&layout=single`
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
+    expect(host.close).toHaveBeenCalledWith('right')
+
+    const retry = host.alert.mock.calls.at(-1)?.[2]?.[0]?.onPress
+    expect(retry).toBeTypeOf('function')
+    await act(async () => {
+      retry?.()
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(rightAttempts).toBe(2)
+  })
+
+  it('queues a deep link behind an in-progress host close', async () => {
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    let releaseRight!: () => void
+    const rightGate = new Promise<void>((resolve) => {
+      releaseRight = resolve
+    })
+    let rightAttempts = 0
+    host.close.mockImplementation(async (paneId) => {
+      if (paneId === 'right' && ++rightAttempts === 1) await rightGate
+      return { status: 'closed' }
+    })
+    render(<App />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+
+    fireEvent.click(screen.getByText('返回书库'))
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('right'))
+    await act(async () => {
+      host.urlListeners[0]!({
+        url: `hamsterreader://open?fileId=${a.fileId}&layout=single`
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
+
+    await act(async () => {
+      releaseRight()
+      await rightGate
+    })
+    await screen.findByTestId('reader-left')
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    )
+    expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
+  })
+
+  it('keeps debug controls and launch routes out of release', async () => {
     vi.stubGlobal('__DEV__', false)
+    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
     render(<App />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
     expect(screen.getAllByTestId('reader-left')).toHaveLength(1)
+    expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
     expect(screen.queryByText('分栏')).not.toBeInTheDocument()
     expect(screen.queryByText('换源')).not.toBeInTheDocument()
     expect(screen.queryByText('返回书库')).not.toBeInTheDocument()
     expect(host.latest.size).toBe(1)
+    expect(host.urlListeners).toHaveLength(0)
   })
 })
