@@ -160,15 +160,12 @@ export async function preparePackagedWebReader(): Promise<PackagedWebReader> {
 }
 
 /** WKWebView can read only this document and its packaged engine assets. */
-export async function stageReaderDocument(
+async function stageReaderSession(
   baseUrl: string,
-  record: HostDocumentRecord
+  record: HostDocumentRecord,
+  target: string,
+  buildId: string
 ) {
-  const fileId = assertSafeFileId(record.fileId)
-  const buildId = baseUrl.split('/').filter(Boolean).at(-1)
-  if (!buildId || !/^[a-f0-9]{16}$/.test(buildId))
-    throw new Error('Invalid reading asset directory')
-  const target = `${FileSystem.documentDirectory ?? ''}reader-sessions/${fileId}/${buildId}/`
   const marker = await FileSystem.getInfoAsync(`${target}session-ready`)
   let ready = marker.exists
   if (ready) {
@@ -184,7 +181,6 @@ export async function stageReaderDocument(
       intermediates: true
     })
     await copyDirectoryContents(baseUrl, target)
-    await FileSystem.writeAsStringAsync(`${target}session-ready`, buildId)
   }
   const publicationUrl = `${target}publication.${record.format}`
   const publication = await FileSystem.getInfoAsync(publicationUrl)
@@ -197,7 +193,7 @@ export async function stageReaderDocument(
     await FileSystem.copyAsync({
       from: resolveDocumentCacheUri(
         FileSystem.documentDirectory,
-        fileId,
+        record.fileId,
         record.format
       ),
       to: pending
@@ -206,6 +202,8 @@ export async function stageReaderDocument(
     await FileSystem.moveAsync({ from: pending, to: publicationUrl })
   }
   await assertSessionFiles(target, record)
+  if (!ready)
+    await FileSystem.writeAsStringAsync(`${target}session-ready`, buildId)
   if (typeof __DEV__ !== 'undefined' && __DEV__)
     console.info('reader-session-ready', {
       sessionDirectory: target,
@@ -213,6 +211,31 @@ export async function stageReaderDocument(
       publicationUrl
     })
   return { baseUrl: target, entryUrl: `${target}index.html`, publicationUrl }
+}
+
+const stagingSessions = new Map<string, ReturnType<typeof stageReaderSession>>()
+
+export async function stageReaderDocument(
+  baseUrl: string,
+  record: HostDocumentRecord
+) {
+  const fileId = assertSafeFileId(record.fileId)
+  const buildId = baseUrl.split('/').filter(Boolean).at(-1)
+  if (!buildId || !/^[a-f0-9]{16}$/.test(buildId))
+    throw new Error('Invalid reading asset directory')
+  const target = `${FileSystem.documentDirectory ?? ''}reader-sessions/${fileId}/${buildId}/`
+
+  // Both panes use the same directory and pending file. Share the whole staging operation.
+  const existing = stagingSessions.get(target)
+  if (existing) return existing
+
+  const staging = stageReaderSession(baseUrl, record, target, buildId).finally(
+    () => {
+      stagingSessions.delete(target)
+    }
+  )
+  stagingSessions.set(target, staging)
+  return staging
 }
 
 export async function removeStagedDocument(fileId: string): Promise<void> {

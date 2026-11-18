@@ -199,12 +199,18 @@ export function startNativePdfSurface(
       type: 'ranges',
       items: ranges.map((r) => ({ id: r.id, text: r.text }))
     })
+    let operationType: 'create' | 'update' | 'delete' = 'delete'
+    if (next) {
+      operationType = current.some((range) => range.id === id)
+        ? 'update'
+        : 'create'
+    }
     command({ type: 'annotations', ranges })
     send({
       type: 'snapshot',
       commitId,
       annotationOperation: {
-        type: next ? 'upsert' : 'delete',
+        type: operationType,
         rangeId: id
       },
       data: serializeReaderSnapshot(snapshot)
