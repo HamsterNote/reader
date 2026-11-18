@@ -7,6 +7,7 @@ import {
   waitFor
 } from '@testing-library/react'
 import {
+  createRef,
   forwardRef,
   useEffect,
   useImperativeHandle,
@@ -17,7 +18,10 @@ import type { WebViewProps } from 'react-native-webview'
 import { Alert } from 'react-native'
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ReaderScreen } from '../app/src/screens/ReaderScreen'
+import {
+  ReaderScreen,
+  type ReaderScreenHandle
+} from '../app/src/screens/ReaderScreen'
 import { App } from '../app/App'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
 import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
@@ -59,10 +63,7 @@ type OuterWebProps = {
 
 const host = vi.hoisted(() => {
   const values = new Map<string, string>()
-  const writeControls = {
-    failNext: false,
-    gate: null as { readonly promise: Promise<void> } | null
-  }
+  const writeControls = { failNext: false }
   return {
     web: {} as WebViewProps,
     outerProps: null as OuterWebProps | null,
@@ -85,11 +86,6 @@ const host = vi.hoisted(() => {
     storage: {
       read: async (key: string) => values.get(key) ?? null,
       write: async (key: string, value: string) => {
-        const gate = writeControls.gate
-        if (gate) {
-          writeControls.gate = null
-          await gate.promise
-        }
         if (writeControls.failNext) {
           writeControls.failNext = false
           throw new Error('disk full')
@@ -259,8 +255,7 @@ vi.mock('../app/modules/reader-pdf', () => ({
 vi.mock('../app/src/native/documents', () => ({
   pickLegacyJsonAndImport: vi.fn(),
   pickAndCacheDocument: vi.fn(),
-  removeDocument: vi.fn(),
-  importDocumentFromPath: vi.fn()
+  removeDocument: vi.fn()
 }))
 vi.mock('expo-crypto', () => ({
   randomUUID: () => `handoff-${++host.sequence}`
@@ -493,13 +488,7 @@ beforeEach(() => {
   host.webViews.clear()
   host.values.clear()
   host.writeControls.failNext = false
-  host.writeControls.gate = null
   host.census = []
-  delete process.env.EXPO_PUBLIC_HAM278_ROUTE
-  delete process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID
-  delete process.env.EXPO_PUBLIC_HAM278_OPEN_PDF
-  delete process.env.EXPO_PUBLIC_HAM278_LAYOUT
-  delete process.env.EXPO_PUBLIC_HAM278_OCR_SEED
   vi.stubGlobal('__DEV__', true)
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
 })
@@ -1312,12 +1301,100 @@ describe('iOS native default entry (S01/S11/S13)', () => {
   })
 })
 
+describe('ReaderScreen close retry after a failed drain', () => {
+  it('starts a fresh drain when the page header is pressed again after storage recovers', async () => {
+    const fixture = createTransactionStore(makeRecord(), {
+      failNextUpdate: true
+    })
+    const onBack = vi.fn()
+    render(
+      <ReaderScreen
+        record={makeRecord()}
+        store={fixture.store}
+        {...directProps}
+        onBack={onBack}
+      />
+    )
+    await screen.findByTestId('native-pdf-view')
+    await loadNative()
+    await waitForNativeReady()
+    await submitCrop()
+    await screen.findByText(/disk full/)
+    expect(fixture.updateSnapshot).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '原生数据尚未保存',
+        expect.any(String),
+        expect.any(Array)
+      )
+    )
+    expect(onBack).not.toHaveBeenCalled()
+    expect(fixture.snapshot().revision).toBe(0)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await waitFor(() => expect(fixture.updateSnapshot).toHaveBeenCalledTimes(2))
+    expect(fixture.snapshot().revision).toBe(1)
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
+  })
+
+  it('starts a fresh drain for host close after a page-header failure', async () => {
+    const fixture = createTransactionStore(makeRecord(), {
+      failNextUpdate: true
+    })
+    const onBack = vi.fn()
+    const ref = createRef<ReaderScreenHandle>()
+    render(
+      <ReaderScreen
+        ref={ref}
+        record={makeRecord()}
+        store={fixture.store}
+        {...directProps}
+        onBack={onBack}
+      />
+    )
+    await screen.findByTestId('native-pdf-view')
+    await loadNative()
+    await waitForNativeReady()
+    await submitCrop()
+    await screen.findByText(/disk full/)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '原生数据尚未保存',
+        expect.any(String),
+        expect.any(Array)
+      )
+    )
+    expect(fixture.updateSnapshot).toHaveBeenCalledTimes(1)
+
+    const closing = ref.current!.close()
+    await waitFor(() => expect(fixture.updateSnapshot).toHaveBeenCalledTimes(2))
+    await expect(closing).resolves.toEqual({ status: 'closed' })
+    expect(fixture.snapshot().revision).toBe(1)
+    expect(onBack).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
+  })
+})
+
 describe('real App host close barriers', () => {
   it('keeps a real failed native save mounted on debug library return and retries', async () => {
     const record = makeRecord('f_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
     await new ReaderDataStore(host.storage).upsert(record)
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = record.fileId
     render(<App />)
+    const open = await screen.findByText(record.fileName)
+    await act(async () => {
+      fireEvent.click(open)
+    })
     await screen.findByTestId('native-pdf-view')
     await loadNative()
     await waitForNativeReady()
@@ -1350,53 +1427,6 @@ describe('real App host close barriers', () => {
       restoreReaderSnapshot(saved?.snapshot.data).data.edgeCrop?.all?.top
     ).toBe(0.05)
   })
-
-  it('waits for a real inactive-pane write before collapsing split view', async () => {
-    const record = makeRecord('f_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
-    await new ReaderDataStore(host.storage).upsert(record)
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = record.fileId
-    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
-    render(<App />)
-    await screen.findAllByTestId('native-pdf-view')
-    await loadNative()
-    await waitFor(() => expect(host.nativeMounts).toBe(2))
-    await loadNative()
-    await waitFor(() => {
-      for (const element of screen.getAllByText('裁切/隐藏页编辑'))
-        expect(element.closest('button')).not.toBeDisabled()
-    })
-
-    const gate = deferred<void>()
-    host.writeControls.gate = gate
-    await act(async () => {
-      fireEvent.click(screen.getAllByText('裁切/隐藏页编辑')[1]!)
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByText('裁切四边 5%'))
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByText('确认'))
-    })
-    await waitFor(() => expect(host.writeControls.gate).toBeNull())
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('单栏'))
-    })
-    expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(2)
-    expect(screen.queryByText('仓鼠阅读')).not.toBeInTheDocument()
-
-    await act(async () => {
-      gate.resolve()
-      await gate.promise
-    })
-    await waitFor(() =>
-      expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(1)
-    )
-    const saved = await new ReaderDataStore(host.storage).get(record.fileId)
-    expect(
-      restoreReaderSnapshot(saved?.snapshot.data).data.edgeCrop?.all?.top
-    ).toBe(0.05)
-  })
 })
 
 describe('ReaderScreen native handoff regressions', () => {
@@ -1405,6 +1435,32 @@ describe('ReaderScreen native handoff regressions', () => {
   beforeEach(() => {
     vi.spyOn(pdfRouting, 'usesNativePdfLayout').mockReturnValue(false)
   })
+  it('retries a Web drain when the page header is pressed again after failure', async () => {
+    host.webClose
+      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'flush failed' })
+      .mockResolvedValueOnce({ status: 'closed' })
+    const fixture = createTransactionStore(makeRecord())
+    const { onBack } = await mountScreen(fixture.store)
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '旧 Web 数据尚未保存',
+        expect.any(String),
+        expect.any(Array)
+      )
+    )
+    expect(onBack).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('返回'))
+    })
+    await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1))
+    expect(host.webClose).toHaveBeenCalledTimes(2)
+  })
+
   it.each(['delayed', 'absent'])(
     'opens native for delayed or absent Web handshake: %s',
     async () => {

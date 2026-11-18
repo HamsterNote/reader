@@ -135,58 +135,6 @@ export async function pickAndCacheDocument(
   }
 }
 
-function toFileUri(pathOrUri: string): string {
-  const value = pathOrUri.trim()
-  if (/^[a-z][a-z\d+.-]*:/i.test(value)) return value
-  if (!value.startsWith('/')) {
-    throw new Error(`调试入口需要绝对路径：${pathOrUri}`)
-  }
-  return `file://${value}`
-}
-
-function fileNameFromUri(uri: string): string {
-  const name = uri.split('/').pop() ?? ''
-  try {
-    return decodeURIComponent(name)
-  } catch {
-    return name
-  }
-}
-
-/**
- * expo-file-system 的 modificationTime 以秒返回，选择器给的是毫秒；
- * 统一到毫秒，避免同一文件经调试入口与选择器得到不同 fileId。
- */
-function modifiedAtMillis(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) return 0
-  return value < 1e11 ? value * 1000 : value
-}
-
-/**
- * 调试入口：不经系统选择器，直接按绝对路径 / file:// URI 导入设备上的文件。
- * 仅由 __DEV__ 的深链接与环境变量调用，release 不暴露。
- */
-export async function importDocumentFromPath(
-  store: ReaderDataStore,
-  pathOrUri: string
-): Promise<HostDocumentRecord> {
-  const uri = toFileUri(pathOrUri)
-  const info = await FileSystem.getInfoAsync(uri)
-  if (!info.exists) {
-    throw new Error(`调试入口指定的文件不存在：${pathOrUri}`)
-  }
-  if (info.isDirectory) {
-    throw new Error(`调试入口需要文件而不是目录：${pathOrUri}`)
-  }
-  return registerDocumentAsset(store, {
-    uri,
-    fileName: fileNameFromUri(uri),
-    size: info.size ?? 0,
-    modifiedAt: modifiedAtMillis(info.modificationTime),
-    mimeType: null
-  })
-}
-
 /**
  * 选择旧读入器导出的高亮 JSON，导入到当前文件；不改变其他文件的数据。
  * 原 JSON 经过顶层结构校验后由 Web 层现有解析器在 restore 时处理。

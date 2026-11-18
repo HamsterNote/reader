@@ -40,7 +40,7 @@
 - [ ] 5.1 在同一文件控制器下连接原生 Layout 与现有 Web PDF Text，复用 Text字号/按钮分页/源区间与分组编辑；S01/S04/S09验证Text不因拖选滚动/翻页，历史跨页高亮保留，往返不重复标注或清历史。
 - [ ] 5.2 接入安全视口、Layout几何续读/旧文字进度、Text字符锚点及模式互切；S09覆盖35%/48%样例、无字比例、旧virtualPaper、同页翻页与字体/方向变化，安全行对齐误差≤2 CSS px且不回写临时首屏。
 - [ ] 5.3 接通100ms尾防抖/1000ms最长进度提交、最新字段合并、关闭/切模式采集和落盘屏障、后台尽力冲刷；S10注入失败/超时/并发标注，证明失败不卸载/不虚报成功，重试后恢复最新完整快照。
-- [x] 5.4 接通书库/重开/已配置文件入口及单双栏隔离，native与Web路径共享既有文件身份；S13覆盖A/B往返、两栏同文件和不同存储同名文件、加载失败和保存拒绝，校验pane/session及活动栏最近位置规则。
+- [ ] 5.4 接通书库/重开/已配置文件入口及单双栏隔离，native与Web路径共享既有文件身份；S13覆盖A/B往返、两栏同文件和不同存储同名文件、加载失败和保存拒绝，校验pane/session及活动栏最近位置规则。单双栏隔离移至 HAM-290。
 - [ ] 5.5 实现坏文件/权限/加密/原生模块缺失的分类提示和重试，关闭时取消自有渲染/文字/预览任务；S11验证无旧内容残留、迟到写入/菜单或宿主原件删除，Expo Go明确提示dev client。
 
 ## 6. 完整验收与默认入口切换
@@ -55,14 +55,16 @@
 
 验收依据：
 
-- PR [#81](https://github.com/HamsterNote/reader/pull/81)，head `18041c8623c04e5272b15c8d30a56980b389c8f9`（base `main`，`mergeable=CLEAN`，5/5 检查通过）。
-- 设备证据：`18041c8` 的组 1 / 4 / 5（评论 `01a1df35-30e3-7477-952f-dfa0da522743`）；`82316e0` 的组 2 / 3 与 S12 五步（评论 `01a1deee-06ee-7b84-9546-06e33dcc2605` 及附件）。`18041c8` 相对 `82316e0` 只增加诊断与 debug 入口，入口路由、session 生成与保存屏障逻辑未变，故组 2 / 3 与 S12 五步沿用成立。
+- PR [#81](https://github.com/HamsterNote/reader/pull/81)（base `main`）。下列 SHA 是设备证据版本，不是收缩后的 PR head。
+- 组 1 / 4 / 5 的设备证据来自 `18041c8`（评论 `01a1df35-30e3-7477-952f-dfa0da522743`）；组 2 与 S12 五步的设备证据来自 `82316e0`（评论 `01a1deee-06ee-7b84-9546-06e33dcc2605` 及附件）。组 3 双栏不再属于 HAM-278，移至 HAM-290，不作为本任务通过项。
+- 证据 SHA 与收缩后代码的设备可见差异仅为移除双栏、确定性深链接、路径导入和 OCR seed 调试宿主；单栏 PDFKit 渲染、文件身份、持久化结构、canonical 投递及保存交接协议未变，因此组 1 / 2 / 4 / 5 与 S12 五步证据继续有效。后续仅有与外观无关的 `closeRequest` 失败结算修复。
 
 逐项：
 
-- 5.4：书库 / 重开 / 已配置文件入口与单双栏 `paneId` / `isActivePane` 隔离、native 与 Web 路径共享文件身份、保存屏障、加载失败与保存拒绝均已实现并有自动化用例。设备侧证据为 A/B 往返、两栏同文件与不同目录同名文件（`82316e0` 组 2 / 3），以及换源时「待确认写入」被 drain 包住的时序（`18041c8` 组 4，drain 8826 ms，旧 session `dfbf87cf…` → 新 `93523e0c…`）。加载失败与保存拒绝由自动化用例覆盖，未取得设备证据，见 `test/reader-screen-handoff.test.tsx` 的 `reports staging failure without showing the old book or falling back and retries the same native route`、`keeps a failed save mounted during a configured file switch, then retries into the new native session`、`keeps native mounted when cancel save fails and recovers by retry`。
-- 6.4：iOS ReaderScreen 本地 PDF Layout 已默认走仓内 PDFKit；`18041c8` 组 1 设备日志为 `renderer=pdfkit, outerWebMounted=false`、`documentOpened=true,pageCount=2`，Text / Web / Android / EPUB 与旧 Web 对照入口保留。
+- 5.4：书库 / 重开 / 已配置文件入口、native 与 Web 路径共享文件身份、保存屏障、加载失败与保存拒绝仍有实现和自动化用例；组 2 的 A/B 往返及组 4 的换源 drain 设备证据沿用。**单双栏隔离移至 HAM-290，因此本项改回未勾**，不沿用组 3 作为完成依据。加载失败与保存拒绝仍由自动化用例覆盖，未取得设备证据。
+- 6.4：保持已勾。iOS ReaderScreen 本地 PDF Layout 默认走仓内 PDFKit；`18041c8` 组 1 设备日志为 `renderer=pdfkit, outerWebMounted=false`、`documentOpened=true,pageCount=2`，Text / Web / Android / EPUB 与旧 Web 对照入口保留。演示 App 收缩为单个 ReaderScreen 不改变该默认路由。
+- 关闭状态机：native / Web 的非 external 保存失败均以 `unconfirmed` 结算并清除 `closeRequest`；再次页头返回或宿主 close 会从失败态重新 drain。自动化覆盖「保存失败 → 页头返回 → 存储恢复 → 再次返回」与「页头失败后宿主 close()」，断言第二次写盘且 revision 递增；Web 非 external 分支也覆盖重复返回。
 
-保留项（不标通过）：真实 Apple Vision / `extraOCR` 识别质量未覆盖（S12 使用仓库样本的 OCR 文字种子，验证的是握手前缓存重放与 activate 链，不是识别质量）；原生文字长按手势受模拟器 HID `invalidated` 限制未取得设备证据，属 tasks 3.2，不在本任务范围；旧 `yarn check:browser` 的 26 项失败在基线 `ac8b34e` 同样存在，未标为通过。
+保留项（不标通过）：真实 Apple Vision / `extraOCR` 识别质量未覆盖（历史 S12 使用 OCR 文字种子验证握手前缓存重放与 activate 链，不是识别质量；seed 入口已随调试宿主撤下）；原生文字长按手势受模拟器 HID `invalidated` 限制未取得设备证据，属 tasks 3.2，不在本任务范围；旧 `yarn check:browser` 的 26 项失败在基线 `ac8b34e` 同样存在，未标为通过。
 
-归档判断：**本 change 暂不归档，也不执行 sync**。2.x（2.1–2.5）、3.x（3.2–3.7）、4.x（4.1–4.5）、5.x（5.1–5.3、5.5）、6.x（6.1–6.3、6.5）仍有未勾任务，`openspec archive` 会把整个 change 移入归档并合并 spec 增量，等于宣称这些范围已完成；本轮只完成 HAM-278 的 5.4 / 6.4 收尾，条件不满足。等其余任务按各自 issue 完成后重新评估。
+归档判断：**本 change 暂不归档，也不执行 sync**。2.x（2.1–2.5）、3.x（3.2–3.7）、4.x（4.1–4.5）、5.x（5.1–5.5）、6.x（6.1–6.3、6.5）仍有未勾任务，`openspec archive` 会把整个 change 移入归档并合并 spec 增量，等于宣称这些范围已完成；本轮只完成 HAM-278 的 6.4 收尾，5.4 待 HAM-290 完成，条件不满足。等其余任务按各自 issue 完成后重新评估。

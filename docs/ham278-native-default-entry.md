@@ -1,20 +1,16 @@
 # HAM-278: iOS 本地 PDF 默认入口
 
-本次补 `add-ios-native-pdf-reading` 的 5.4 / 6.4 实现。设备截图、S12 操作时间线和最终验收由 Mac 操作员另行补证；本文中的自动化测试不替代 PDFKit 真正显示、触控或 Swift 构建证据。
+本次按 B 方案收缩范围：保留 iOS 本地 PDF Layout 默认进入仓内 PDFKit 的主线交付，撤下双栏宿主、确定性深链接和 OCR seed 调试入口。5.4 的单双栏隔离验收移至 HAM-290；6.4 保持完成。设备截图和操作时间线由 Mac 操作员取证，自动化测试不替代 PDFKit 显示、触控或 Swift 构建证据。
 
-## 路由和身份
+## 路由、身份与保留契约
 
-- `ReaderScreen` 仅对 iOS、本地缓存 PDF、Layout（含未设置模式）直接挂载 `NativePdfReader`。首次没有外层 `ReaderWebView`，也没有需要等待的旧 Web 写入者。权威快照读完才授予编辑写权。
-- 已保存的 PDF Text 仍挂载原 `ReaderWebView`。正常的 Text/Layout 按钮在 release 也可用，通过原有保存队列和交接屏障修改既有 `readerData.renderMode`。Web 重排、字号、分页、选区代码不变。
-- Web 构建、Android、EPUB 不满足原生路由条件，继续原路径。`__DEV__` 的 Web 对照仅在 iOS 本地 PDF 上手动启用；release 无 Web 对照或原生验证按钮。
-- 缺少 `ReaderPdf` 模块或 native view 时显示 `yarn host:ios` / dev client / Expo Go 不支持的提示，不挂载外层 Web，不写入快照。用户明确选择 Text 是正常模式操作。
-- iOS 的 OCR 辅助模块使用 `.ios.ts` 平台解析，只调用已配置的 `extraOCR`；未配置时明确报错。避免 Metro 把浏览器专用 ONNX/OpenCV 打进 RN（其动态 import 和 Node fs 不兼容）。Web/Android 仍解析原 `.ts` 实现，原有 provider/浏览器解析逻辑不变；文字 ID 前缀函数只做等价提取。
-- `fileId` 直接沿用 `HostDocumentRecord.fileId`。导入时由名称、大小、修改时间和内容摘要生成；没有重命名缓存或权威 v2/V5 键。不同目录中同名但内容不同的文件有不同 ID，缓存、持久化和会话不混用。元数据和字节完全相同的副本继续按既有规则视为同一文档，不在这次修改文件身份语义。
-- `paneId` 来自配置宿主传入的稳定栏标识；未提供时，每个 `ReaderScreen` 实例用 `expo-crypto.randomUUID()` 生成 `pane-<uuid>`，在该实例切书期间保持稳定。每次打开、重开和重建引擎均生成独立 `sessionId`；引擎重建同时递增 generation。
-- 原生控制器按 ReaderDataStore 对象、paneId、fileId 分桶。原生事件同时校验 fileId/paneId/sessionId/generation；只允许活动栏写最近位置，磁盘排队期间失焦也不会覆盖活动栏位置。各栏共享同文件业务快照，运行中的视口和撤销历史独立。
-- 配置文件切换先关闭旧会话并等待保存；保存拒绝保留旧会话、重试 UI 和待切目标。成功才挂新文件，旧回调失去写权。
-
-演示 App 默认仍为单栏，单栏时 `ReaderScreen` 固定传 `paneId='left'`。`__DEV__` 的调试栏可以切到分栏：同时挂两个 `ReaderScreen`，分别传 `paneId='left'` / `'right'` 和各自的 `isActivePane`（同一时间只有一栏为 true），两栏可同时打开同一 PDF 或不同 PDF。release 不渲染调试栏，始终单栏。仓内 Web 工作区的单双栏实现保持不变；不要把 Web 双栏截图当原生双栏证据。
+- `ReaderScreen` 仅对 iOS、本地缓存 PDF、Layout（含未设置模式）直接挂载 `NativePdfReader`。首次没有外层 `ReaderWebView`，权威快照读完才授予编辑写权，不静默回退 Web。
+- 已保存的 PDF Text 仍挂载原 `ReaderWebView`。Text/Layout 按钮在 release 也可用，通过既有保存队列和交接屏障修改 `readerData.renderMode`。Web 构建、Android、EPUB 继续原路径；`__DEV__` 的 Web 对照只在 iOS 本地 PDF 手动启用。
+- 缺少 `ReaderPdf` 模块或 native view 时显示 dev client 构建提示，不挂外层 Web，也不写快照。Expo Go 不被伪装成支持原生模块。
+- `fileId` 沿用 `HostDocumentRecord.fileId`，仍由名称、大小、修改时间和内容摘要按既有规则生成。不同目录同名但内容不同的文件不共享缓存或 V5/v2 快照。
+- `ReaderScreen` 的 `paneId` / `isActivePane` 契约保留；原生控制器仍按 ReaderDataStore 对象、paneId、fileId 分桶，事件仍校验 fileId/paneId/sessionId/generation。这些接口及对象级标注补丁留给 HAM-290 修复同对象冲突后恢复双栏使用。
+- 演示 App 现在任何路径都只挂载一个 `ReaderScreen`，固定 `paneId='left'`、`isActivePane=true`。没有 split 状态、分栏按钮、活动栏切换或收起分栏流程。仓内 Web 工作区自身的单双栏实现不因本次收缩改变。
+- 配置文件切换先关闭旧会话并等待保存；保存拒绝保留旧会话、重试 UI 和待切目标，成功才挂新文件。页头返回或宿主关闭失败后，`closeRequest` 以 `unconfirmed` 结算，下一次返回会从失败态重新 drain，不复用卡住的 Promise。
 
 ## 自动化复现
 
@@ -22,17 +18,17 @@
 
 ```sh
 yarn install --frozen-lockfile
-yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/host-debug-route.test.ts test/host-debug-entry.test.tsx test/host-debug-ocr-seed.test.ts test/host-page-render-census.test.tsx test/host-native-documents.test.ts test/pdf-page-render-census.test.ts test/native-pdf-save-diagnostics.test.ts test/native-pdf/held-save.test.tsx test/native-pdf/canonical-delivery.test.tsx test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
-yarn test:run --maxWorkers=2 --minWorkers=1
+yarn test:run test/reader-screen-handoff.test.tsx test/review-handoff.test.tsx test/host-debug-entry.test.tsx test/host-page-render-census.test.tsx test/host-native-documents.test.ts test/pdf-page-render-census.test.ts test/native-pdf-save-diagnostics.test.ts test/native-pdf/held-save.test.tsx test/native-pdf/canonical-delivery.test.tsx test/native-pdf/annotation-controller.test.ts test/native-pdf/ios-ocr-content.test.ts --reporter=verbose
+yarn test:run
 yarn typecheck
 yarn typecheck:host
 yarn host:check
 yarn lint
 ```
 
-缺模块用例 `shows the dev-client requirement when the module is absent, writes nothing and never silently mounts Web` 将实际组件依赖的模块构造为 null，断言提示可见、PDFKit view/外层 Web 均不挂载、没有写盘、仍能返回。不是仅检查源码含 throw。
+缺模块用例 `shows the dev-client requirement when the module is absent, writes nothing and never silently mounts Web` 将实际组件依赖的模块构造为 null，断言提示可见、PDFKit view/外层 Web 均不挂载、没有写盘、仍能返回，不是仅检查源码含 throw。
 
-同一测试文件还覆盖直接打开/重开、A/B/A/B/A、同名不同内容、存储失败后切书重试、加载失败重试、不同 pane 的错误投递、活动栏切换及排队失焦进度、release 模式入口和手动 Web 对照。旧手动交接回归仍明确从 Web 起步，保留慢握手、写权、保存失败和真实 Popover 的覆盖。
+`test/reader-screen-handoff.test.tsx` 保留直接打开/重开、A/B/A/B/A、同名不同内容、存储失败后切书重试、加载失败重试，以及 ReaderScreen 层的 pane 隔离契约。关闭回归覆盖「保存失败 → 页头返回 → 存储恢复 → 再次返回」和「页头失败后宿主 close()」，断言第二次写盘且 revision 递增；Web 非 external 失败分支也覆盖重复返回。`test/host-debug-entry.test.tsx` 另断言旧深链接/环境变量不再启动阅读器，App 任何路径最多挂一个 ReaderScreen。
 
 ## Mac / dev client 验证入口
 
@@ -45,161 +41,75 @@ yarn host:ios
 yarn host:start --lan
 ```
 
-入口：书库 → 选择/导入本地 PDF → 直接打开；无需点击「原生 PDF 验证」。返回书库重开同一 PDF，再 A→B→A→B→A。Text 按钮进入原 Web 重排，Layout 按钮经保存屏障回原生。开发构建的 Web 对照用于同一 V5/v2 快照互读；release 不应出现对照按钮。
+入口只有：书库 → 选择/导入本地 PDF → 直接打开。返回书库重开同一 PDF，再 A→B→A→B→A。Text 按钮进入原 Web 重排，Layout 按钮经保存屏障回原生。开发构建的 Web 对照用于同一 V5/v2 快照互读；release 不出现对照按钮。
 
-记录 SHA、设备/iOS、文件摘要、每次操作时间及截图。首次原生证据应同时具备 `reader-pdf-route` 的 `renderer=pdfkit, outerWebMounted=false`、Swift `documentOpened=true/pageCount` 及实际页面可见。核对 `reader-pdf` 中 fileId/paneId/sessionId/generation，重开 sessionId 应变化；同文件两栏的 paneId/sessionId 应不同。
+**确定性深链接、启动环境变量开书、`layout=single|split`、路径导入和 OCR seed 均已撤下，不能用于当前版本。后续由 HAM-290 在修复同对象删除冲突和布局卸载屏障后恢复。** 不要再执行旧文档中的 `hamsterreader://open`、`EXPO_PUBLIC_HAM278_*` 或 `seed` 命令。
 
-注意：**不能把所有 `reader-pdf-web-ready` 日志都要求为零。** 原生路径仍有用于 canonical 文字提取与自绘 Popover 的内部 Web 服务，此日志现在明确带 `role=canonical-popover-service, renderer=pdfkit` 和会话身份；它不绘制 PDF 页面。应检查外层 Web 阅读器没有挂载，以及 PDF.js 页面画布 render 调用为零。不要通过删除服务日志伪造原生证据。
+记录 SHA、设备/iOS、文件摘要、每次操作时间及截图。首次原生证据应同时具备 `reader-pdf-route` 的 `renderer=pdfkit, outerWebMounted=false`、Swift `documentOpened=true/pageCount` 及实际页面可见。核对 fileId/paneId/sessionId/generation，重开 sessionId 应变化。
 
-S12 设备复跑：canonical 握手 → 自绘色板改色后重开 → A/B 两次往返 → 删除后重开检查 `ranges=0` → 冷远页激活及文字—空白—文字跨页。每步保留原始时间线和快照；Linux 组件用例不视为本轮设备通过。
+注意：不能把所有 `reader-pdf-web-ready` 日志都要求为零。原生路径仍有 canonical 文字提取与自绘 Popover 的内部 Web 服务，此日志带 `role=canonical-popover-service, renderer=pdfkit`；它不绘制 PDF 页面。应检查外层 Web 阅读器未挂载，以及 PDF.js 页面画布 render 调用为零。
 
-## 调试入口（仅 `__DEV__`，release 不暴露）
+S12 设备复跑：canonical 握手 → 自绘色板改色后重开 → A/B 两次往返 → 删除后重开检查 `ranges=0` → 冷远页激活及文字—空白—文字跨页。每步保留原始时间线和快照；Linux 组件用例不视为设备通过。
 
-设备取证不必依赖 HID 点击。三个入口都在 `__DEV__` 下生效，默认入口（书库 → 原生）语义不变。
+## 单栏调试与取证诊断
 
-**1. 确定性打开入口**：深链接或启动环境变量直接指定 PDF。
-
-```sh
-# 深链接（应用已在运行时最可靠；dev client 冷启动可能先停在 launcher）
-xcrun simctl openurl booted "hamsterreader://open?fileId=<fileId>"
-xcrun simctl openurl booted "hamsterreader://open?path=/absolute/on-device/book.pdf"
-xcrun simctl openurl booted "hamsterreader://open?fileId=<fileId>&layout=split"
-# 真机（已安装 dev client）
-xcrun devicectl device process launch --device <udid> com.hamsternote.reader \
-  --terminate-existing "hamsterreader://open?path=/absolute/on-device/book.pdf"
-```
-
-```sh
-# 环境变量（打包时内联，改完需重启 Metro；优先级 ROUTE > FILE_ID > PDF）
-EXPO_PUBLIC_HAM278_ROUTE="hamsterreader://open?fileId=<fileId>&layout=split" yarn host:start --lan
-EXPO_PUBLIC_HAM278_OPEN_FILE_ID=<fileId> EXPO_PUBLIC_HAM278_LAYOUT=split yarn host:start --lan
-EXPO_PUBLIC_HAM278_OPEN_PDF=/absolute/on-device/book.pdf yarn host:start --lan
-```
-
-- `path` 必须是在 App 沙箱内可读的绝对路径；模拟器可先 `xcrun simctl get_app_container booted com.hamsternote.reader data` 拿到容器，再把 PDF 放进 `Documents/`。路径含空格或 `&` 时先做 percent 编码。
-- `path` 导入复用选择器的身份规则（名称 + 大小 + 修改时间 + 内容摘要），同一文件重跑同一条链接得到同一个 `fileId`；失败会弹「调试入口失败」并留在书库，不静默打开别的文件。
-- 结构化日志：`reader-debug-route`（`source` / `layout` / `target` / `fileId|path` / `ok`）、`reader-pdf-route`（`renderer=pdfkit, outerWebMounted=false`）、`reader-pdf-document-opened`（`documentOpened=true` / `pageCount` / `fileId` / `paneId` / `sessionId` / `generation`）。Swift 侧仍有 `ReaderPdf document ... documentOpened=true pageCount=...`。
-
-**2. 双栏宿主**：阅读中调试栏点「分栏」，两个 `ReaderScreen` 分别用 `paneId='left'/'right'`，另一栏镜像当前文档；「活动：左栏/右栏」切换 `isActivePane`。每栏也可各自「换源」指向不同 PDF（例如不同目录的同名文件）。
-
-**3. 配置换源**：阅读中调试栏点「换源」，从书库选另一个文件。宿主替换配置记录后由 `ReaderScreen` 先关闭旧会话并等待保存（与返回书库同一屏障），保存失败保留旧会话与重试入口，成功才重开新文件。
-
-调试栏、深链接、环境变量与分栏状态都由 `__DEV__` 控制；release 构建只走单栏与原有书库入口。
-
-## 取证诊断（组 1 / 组 4 / 组 5）
-
-三项都只加日志与测试入口，不改渲染、保存屏障或默认入口语义。所有日志经 `logNativePdfDiagnostic` 输出，`__DEV__` 之外静默。
+`__DEV__` 调试栏只保留「换源」「渲染计数」「待写保持」「返回书库」，release 不渲染。
 
 ### 组 1：PDF.js 页面画布渲染计数
 
-计数器在 `src/pdf/pdfRenderingQueue.ts` 的 `instrumentPdfRenderCensus` 里自增（`src/pdf/pageRenderCensus.ts`），只在 `renderView` 真的返回 `true`（确实提交渲染）时 +1；跳过的不可读页面不计。这个包装对 Web 阅读器的 PDFViewer 始终生效，不依赖是否设置了裁切。
-
-宿主 → Web 是同一条诊断通道：调试栏「渲染计数」→ `ReaderScreen` 记 `reader-pdf-page-render-census-request`，原生模式发给 PDFKit 服务，Web 对照模式发给 Web 页面；Web 页面用自己的真实渲染计数回包，宿主统一记 `reader-pdf-page-render-census`。
+计数器在 `src/pdf/pdfRenderingQueue.ts` 的 `instrumentPdfRenderCensus` 里自增，只在 `renderView` 确实返回 `true` 时 +1。宿主 → Web 使用同一诊断通道：原生模式发给 PDFKit 服务，Web 对照模式发给 Web 页面；宿主统一记 `reader-pdf-page-render-census`。
 
 ```text
 # 原生（期望 0）
 reader-pdf-page-render-census { renderer: 'pdfkit', reason: 'service-ready'|'requested',
-  pageCanvasRenders: 0, pages: [], pdfViewerMounted: false, pdfViewerCanvasNodes: 0,
-  pdfjsDocumentPages: 1, pdfjsTextPages: 0, webReady: true, fileId, paneId, sessionId, generation }
+  pageCanvasRenders: 0, pdfViewerMounted: false, pdfViewerCanvasNodes: 0,
+  pdfjsDocumentPages: 1, fileId, paneId, sessionId, generation }
 
 # Web 对照（期望正数，证明计数器有效）
-reader-pdf-page-render-census-request { renderer: 'web', outerWebMounted: true, ... }
-reader-pdf-page-render-census { renderer: 'web', outerWebMounted: true, sessionId,
-  pageCanvasRenders: 2, pages: [1, 2], pdfViewerMounted: true, pdfViewerCanvasNodes: 2,
-  requestId }
+reader-pdf-page-render-census { renderer: 'web', outerWebMounted: true,
+  pageCanvasRenders: 2, pages: [1, 2], pdfViewerMounted: true,
+  pdfViewerCanvasNodes: 2, sessionId, requestId }
 ```
 
-- 自动一条：canonical 服务 `service-ready` 时上报（此时 pdfjs 文档已加载完成）。
-- 手动：调试栏「渲染计数」。原生与 Web 两侧用同一个按钮、同一个字段名，只靠 `renderer` 区分。
-- 判据：原生 `pageCanvasRenders = 0` 且 `pdfViewerMounted = false`、`pdfViewerCanvasNodes = 0`、`pdfjsDocumentPages > 0`；随后切「Web 对照」再点一次，`renderer: 'web'` 的记录出现且 `pageCanvasRenders > 0`。两条在一起才证明「原生 0 是测出来的、不是没采集」。
+判据：原生 `pageCanvasRenders=0`、`pdfViewerMounted=false`、`pdfViewerCanvasNodes=0` 且 `pdfjsDocumentPages>0`；切「Web 对照」后同一按钮得到 `renderer:'web'` 且 `pageCanvasRenders>0`。
 
 ### 组 4：保存屏障时序
 
-换源、返回书库、Text/Layout 切换都会走同一条屏障，日志按时间顺序：
+换源、返回书库、Text/Layout 切换都走同一屏障：
 
 ```text
-reader-pdf-handoff-barrier-start  { direction: 'native'|'web', phase, fileId, paneId, sessionId, generation, retrySave|discard }
-reader-pdf-save-barrier-start     { fileId, paneId, sessionId, pendingSaves, pendingCommands, retry }
-reader-pdf-save-queue             { event: 'queued'|'started'|'confirmed'|'failed'|'drain-start'|'drain-end',
-                                    operationId, pending, waitMs?, elapsedMs?, ok? }
-reader-pdf-save-barrier-end       { fileId, paneId, sessionId, pendingSaves, waitedMs, result: 'drained'|'pending-left'|'failed' }
-reader-store-write-queue          { fileId, event: 'queued'|'started', queueDepth, waitedMs }   # 仅同一 fileId 有排队时
-reader-pdf-handoff-barrier-end    { direction, status, waitedMs, reason?, fileId, paneId, sessionId, generation }
+reader-pdf-handoff-barrier-start  { direction, phase, fileId, paneId, sessionId, generation, retrySave|discard }
+reader-pdf-save-barrier-start     { pendingSaves, pendingCommands, retry, ... }
+reader-pdf-save-queue             { event: 'queued'|'started'|'confirmed'|'failed'|'drain-start'|'drain-end', pending, ... }
+reader-pdf-save-barrier-end       { pendingSaves, waitedMs, result, ... }
+reader-pdf-handoff-barrier-end    { direction, status, waitedMs, reason?, ... }
 ```
 
-判据：`save-barrier-end.result='drained'` 且 `pendingSaves=0` 出现在 `handoff-barrier-end.status='closed'` **之前**；新旧 `sessionId` 不同。`save-queue` 的 `drain-start`/`drain-end` 包住所有 `confirmed`，`waitedMs` 就是真实等待时间。`drain-end.ok=false` 表示保存失败、旧会话被保留（此时不会出现新文档的 `documentOpened`）。
+判据：`save-barrier-end.result='drained'` 且 `pendingSaves=0` 出现在 `handoff-barrier-end.status='closed'` 之前；`drain-start` / `drain-end` 包住该次 `confirmed`。失败时旧会话保留并可重试。
 
-**可控的「待确认写入」**：不靠快速翻页。调试栏点「待写保持」→ `reader-pdf-debug-held-save-request`，原生阅读器立即入队一次写盘，但先压住 10 秒再真正落盘：
+「待写保持」用于稳定制造待确认写入：点击后 10 秒内点「换源」并选另一个文件。期望 `drain-start(pending≥1)` → `confirmed` → `drain-end(ok=true, elapsedMs>0)` → `save-barrier-end` → `handoff-barrier-end(closed)`，新旧 sessionId 不同。
+
+### 组 5：OCR 握手实现与历史证据判据
+
+当前实现仍在 web-ready 前把 OCR 页面缓存进 `NativeCanonicalDelivery`，握手时标为 `replay:true` 重放；之后实时页面标为 live。历史设备证据按下面顺序判定：
 
 ```text
-reader-pdf-debug-held-save-request { renderer: 'pdfkit', holdMs: 10000, accepted: true, token }
-reader-pdf-debug-held-save-queued  { operationId, holdMs: 10000, pendingSaves: 1 }
-reader-pdf-debug-held-save-window  { operationId, holdMs, pendingSaves: 1 }      # 窗口开始，此时换源
-reader-pdf-save-barrier-start      { pendingSaves: 1, ... }                      # 换源触发屏障
-reader-pdf-save-queue              { event: 'drain-start', pending: 1 }
-reader-pdf-save-queue              { event: 'confirmed', ... }                   # 被 drain 包住
-reader-pdf-save-queue              { event: 'drain-end', ok: true, elapsedMs: ~10000 }
-reader-pdf-save-barrier-end        { result: 'drained', pendingSaves: 0, waitedMs: ~10000 }
-reader-pdf-debug-held-save-committed { operationId, revision }
-reader-pdf-handoff-barrier-end     { status: 'closed' }
+reader-pdf-canonical-publish      { page, bufferedBeforeWebReady: true, ... }
+reader-pdf-web-ready              { role: 'canonical-popover-service', bufferedBeforeReady: [...] }
+reader-pdf-surface                { event: 'ocr-cache', delivery: 'buffered-replay',
+                                    bufferedBeforeWebReady: true, ... }
+reader-pdf-surface                { event: 'activate-start', rangeId, pages, ... }
+reader-pdf-surface                { event: 'activate-end', materialized: true, ... }
 ```
 
-操作顺序：点「待写保持」→ 10 秒内点「换源」→ 选另一个文件。若 10 秒内没换源，这次写盘会自己完成，日志里就是一次普通保存（`save-queue confirmed`），不影响数据。
+握手后才到的页面必须是 `delivery:'live'`、`bufferedBeforeWebReady:false`，所以该标记不是恒 true。`web-ready` 时 `cachedOcrPages=0` 是重放前的正常状态，不能据此判失败。
 
-### 组 5：扫描版 PDF 的 OCR 握手
+**当前版本不再提供深链接 OCR seed 入口；旧样本生成和 seed 命令已随入口撤下。** 这里只记录实现与既有证据的判据，不把历史设备步骤写成当前可执行入口。真实 Apple Vision / `extraOCR` 识别质量仍未覆盖。
 
-样本随仓库：`test/fixtures/ham278-scanned-sample.pdf`（2 页，每页一张 JPEG，无 `/Font`、无文本对象，pdfjs 提取 0 条文字）+ 同名 `.ocr.json`（OCR 文字种子，含一条跨页范围 `scanned-range-p1-p2`）。
+## 验收记录与范围边界
 
-重新生成（需要仓库已有的 playwright Chromium）：
-
-```sh
-node scripts/make-scanned-sample.mjs
-```
-
-设备上跑：
-
-```sh
-CONTAINER=$(xcrun simctl get_app_container booted com.hamsternote.reader data)
-cp test/fixtures/ham278-scanned-sample.pdf "$CONTAINER/Documents/"
-cp test/fixtures/ham278-scanned-sample.ocr.json "$CONTAINER/Documents/"
-xcrun simctl openurl booted "hamsterreader://open?path=file://$CONTAINER/Documents/ham278-scanned-sample.pdf&seed=file://$CONTAINER/Documents/ham278-scanned-sample.ocr.json"
-```
-
-也可以 `EXPO_PUBLIC_HAM278_OPEN_PDF=... EXPO_PUBLIC_HAM278_OCR_SEED=... yarn host:start --lan`。`seed` 会把 OCR 文字写进快照 `readerData.ocrTexts` 并自动开启该文档的 OCR；种子无效时弹「OCR 种子加载失败」，不会用空白文字打开。
-
-时间线读法（同一次打开）：
-
-```text
-reader-debug-ocr-seed             { fileId, pages: [1,2], texts, ranges: 1 }
-reader-pdf-canonical-publish      { page: 1, source: 'geometry-cache', utf16, bufferedBeforeWebReady: true }
-reader-pdf-canonical-publish      { page: 2, ..., bufferedBeforeWebReady: true }
-reader-pdf-web-ready              { role: 'canonical-popover-service', bufferedBeforeReady: [1,2], ... }
-reader-pdf-surface                { event: 'web-ready', cachedOcrPages: 0, pendingActivates }
-reader-pdf-surface                { event: 'ocr-cache', page: 1, delivery: 'buffered-replay',
-                                    bufferedBeforeWebReady: true, surfaceReadyAtDelivery: true, cachedOcrPages: 1 }
-reader-pdf-surface                { event: 'ocr-cache', page: 2, delivery: 'buffered-replay', ... }
-reader-pdf-surface                { event: 'activate-start', rangeId, pages: [1,2], source: 'ocr-cache', webReady: true }
-reader-pdf-materialize-input      { ... }           # materializeNativeRange 原生侧入口
-reader-pdf-surface                { event: 'activate-end', rangeId, materialized: true, elapsedMs, utf16 }
-```
-
-**判定口径（统一定义，不要按字面猜）**
-
-- 「先于 web-ready」指的是**宿主在收到 web-ready 之前就把 OCR 文字缓存进 `NativeCanonicalDelivery`**，并且在握手时把这一批一次性重放出去；不是说 WKWebView 在发出自己的 ready 之前就收到了消息 —— 那时页面的消息监听还没安装，任何宿主消息都会丢，重放本来就发生在 ready 之后。
-- 因此判据看两处，二者都要有：
-  1. `reader-pdf-canonical-publish` 的 `bufferedBeforeWebReady: true`（宿主侧，发生在 `reader-pdf-web-ready` 之前）；
-  2. `reader-pdf-surface` 的 `ocr-cache` 带 `delivery: 'buffered-replay'` 且 `bufferedBeforeWebReady: true`（这一批是握手时重放过来的）。
-- `bufferedBeforeWebReady` 由宿主按投递来源标在消息里（`replay` 字段），不是由 Web 侧按到达时间推算；握手后实时到达的页面是 `delivery: 'live'` / `bufferedBeforeWebReady: false`，所以该字段不会恒为 true。
-- `reader-pdf-surface { event: 'web-ready', cachedOcrPages: 0 }` 是正常的：重放动作由 web-ready 触发，此刻还没有页面进来；紧随其后的 `ocr-cache` 才是重放结果。不要用 `cachedOcrPages` 在 web-ready 这一瞬间的值判断缓存是否存在，要看 `reader-pdf-web-ready` 的 `bufferedBeforeReady`。
-
-激活方式：在原生高亮列表里点 `scanned-range-p1-p2`（不需要长按手势），它会跨页 1→2 激活。`activate-start` → `activate-end{materialized:true}` 构成完整 activate/materialize 链。
-
-## 验收记录
-
-Linux 自动化：全量 175 个文件 / 2155 个用例通过（只限制 worker 并发数）；定向工具链（`test/reader-screen-handoff`、`test/host-page-render-census`、`test/pdf-page-render-census`、`test/native-pdf/held-save`、`test/native-pdf/canonical-delivery` 等）全部通过。`typecheck`、`typecheck:host`、`host:check`、`lint` 均通过。
-
-在 `app` 下运行 `npx expo export --platform ios --max-workers 2 --output-dir ../../evidence/ios-export` 已通过生产 JS/Hermes 打包，不能据此声称 Swift 编译或真机运行已通过。
-
-额外的旧 `yarn check:browser` 未通过：Chromium 的 EPUB/PDF 已进入实际渲染，但初始化快照迁移触发旧脚本断言；WebKit 浏览器未安装。在基线 `ac8b34e` 原代码上执行同命令，26 项结果与当前完全相同；原始两份日志/报告随附件交付，不将此项标为通过。
-
-本轮原始检查输出随 issue 评论附件交付；设备项补证前，tasks 5.4 / 6.4 保持待验收，不把未执行的设备场景勾为通过。不归档或改勾其他任务。
+- 组 1 / 4 / 5 的设备证据来自 `18041c8`（评论 `01a1df35-30e3-7477-952f-dfa0da522743`）。
+- 组 2 与 S12 五步的设备证据来自 `82316e0`（评论 `01a1deee-06ee-7b84-9546-06e33dcc2605`）。组 3 双栏不再属于 HAM-278，不作为本任务通过项。
+- 上述证据 SHA 与收缩后外观代码的差异仅为移除双栏、深链接、路径导入和 OCR seed 调试宿主，以及关闭失败后的内部状态修复；单栏 PDFKit 渲染、文件身份、持久化数据结构、canonical 投递和保存交接协议未改变，因此组 1/2/4/5 与 S12 证据继续有效。
+- 真实 Apple Vision / `extraOCR` 识别质量未覆盖；原生文字长按手势受模拟器 HID `invalidated` 限制，属 tasks 3.2，不在本任务范围；旧 `yarn check:browser` 的基线失败不标为通过。
+- 本 change 其他大量任务未完成，不归档、不执行 sync。5.4 改回未勾并注明单双栏隔离移至 HAM-290，6.4 保持已勾。

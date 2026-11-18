@@ -1,21 +1,15 @@
 /**
- * HAM-278 设备取证调试栏（仅 __DEV__ 由 App 挂载）。
- * 提供三项能力：单双栏切换、活动栏切换、阅读中替换配置记录（走同一保存屏障）。
+ * HAM-278 单栏设备取证调试栏（仅 __DEV__ 由 App 挂载）。
  * release 不渲染本组件。
  */
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import type { HostDocumentSummary } from '../../../src/host/readerDataStore'
-import type { PaneId } from './panes'
 
 type DebugEntryBarProps = {
-  readonly split: boolean
-  readonly activePane: PaneId
   readonly documents: readonly HostDocumentSummary[]
   readonly currentFileId: string
   readonly sourcePickerOpen: boolean
-  readonly onToggleSplit: () => void
-  readonly onActivatePane: (pane: PaneId) => void
   readonly onToggleSourcePicker: () => void
   readonly onReplaceSource: (document: HostDocumentSummary) => void
   /** HAM-278 组 1：采集一次 PDF.js 页面画布渲染计数。 */
@@ -26,13 +20,9 @@ type DebugEntryBarProps = {
 }
 
 export function DebugEntryBar({
-  split,
-  activePane,
   documents,
   currentFileId,
   sourcePickerOpen,
-  onToggleSplit,
-  onActivatePane,
   onToggleSourcePicker,
   onReplaceSource,
   onRequestCensus,
@@ -41,21 +31,6 @@ export function DebugEntryBar({
 }: DebugEntryBarProps) {
   return (
     <View style={styles.bar}>
-      <Pressable onPress={onToggleSplit} accessibilityRole='button'>
-        <Text style={styles.action}>{split ? '单栏' : '分栏'}</Text>
-      </Pressable>
-      {split ? (
-        <Pressable
-          onPress={() =>
-            onActivatePane(activePane === 'left' ? 'right' : 'left')
-          }
-          accessibilityRole='button'
-        >
-          <Text style={styles.action}>
-            活动：{activePane === 'left' ? '左栏' : '右栏'}
-          </Text>
-        </Pressable>
-      ) : null}
       <Pressable onPress={onToggleSourcePicker} accessibilityRole='button'>
         <Text style={styles.action}>换源</Text>
       </Pressable>

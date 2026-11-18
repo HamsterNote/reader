@@ -5,9 +5,9 @@ import {
   screen,
   waitFor
 } from '@testing-library/react'
+import { forwardRef, useImperativeHandle, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { forwardRef, useImperativeHandle, useState } from 'react'
 import type { HostDocumentRecord } from '../src/host/readerDataStore'
 import { ReaderDataStore } from '../src/host/readerDataStore'
 import { App } from '../app/App'
@@ -16,7 +16,6 @@ type ReaderProps = {
   readonly record: HostDocumentRecord
   readonly paneId?: string
   readonly isActivePane?: boolean
-  readonly ocr?: boolean | { readonly enabled?: boolean }
   readonly debugCensusToken?: number
   readonly debugHoldSaveToken?: number
   readonly onBack: () => void
@@ -48,9 +47,7 @@ const host = vi.hoisted(() => {
     alert: vi.fn(),
     initialUrl: null as string | null,
     urlListeners: [] as ((event: { url: string }) => void)[],
-    importPath: vi.fn(),
     pick: vi.fn(),
-    readSeed: vi.fn(),
     packaged: {
       entryUrl: 'file:///session/index.html',
       baseUrl: 'file:///session/'
@@ -67,11 +64,7 @@ vi.mock('../app/src/native/webAssets', () => ({
 }))
 vi.mock('../app/src/native/documents', () => ({
   pickAndCacheDocument: host.pick,
-  removeDocument: vi.fn(),
-  importDocumentFromPath: host.importPath
-}))
-vi.mock('../app/src/debug/readOcrSeed', () => ({
-  readOcrSeed: host.readSeed
+  removeDocument: vi.fn()
 }))
 vi.mock('../app/src/components/AppErrorBoundary', () => ({
   AppErrorBoundary: ({ children }: { children?: React.ReactNode }) => (
@@ -182,6 +175,7 @@ function clearEnv(): void {
   delete process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID
   delete process.env.EXPO_PUBLIC_HAM278_OPEN_PDF
   delete process.env.EXPO_PUBLIC_HAM278_LAYOUT
+  delete process.env.EXPO_PUBLIC_HAM278_OCR_SEED
 }
 
 beforeEach(async () => {
@@ -190,9 +184,7 @@ beforeEach(async () => {
   host.close.mockReset()
   host.close.mockResolvedValue({ status: 'closed' })
   host.alert.mockClear()
-  host.importPath.mockReset()
   host.pick.mockReset()
-  host.readSeed.mockReset()
   host.initialUrl = null
   host.urlListeners = []
   clearEnv()
@@ -203,56 +195,22 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup()
+  clearEnv()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
-describe('demo host debug entrance (HAM-278)', () => {
-  it('opens the requested PDF from the launch environment without a picker', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+describe('demo host single-reader debug controls (HAM-278)', () => {
+  it('opens one ReaderScreen from the library with a stable active pane', async () => {
     render(<App />)
+    fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
-    expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
-    expect(host.pick).not.toHaveBeenCalled()
+    expect(screen.getAllByTestId('reader-left')).toHaveLength(1)
+    expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
     expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
     expect(host.latest.get('left')?.paneId).toBe('left')
     expect(host.latest.get('left')?.isActivePane).toBe(true)
-    expect(console.info).toHaveBeenCalledWith(
-      'reader-debug-route',
-      expect.objectContaining({
-        source: 'env',
-        target: 'fileId',
-        fileId: a.fileId,
-        layout: 'single',
-        ok: true
-      })
-    )
-  })
-
-  it('mounts two panes with stable paneIds and a single active pane', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
-    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
-    render(<App />)
-    await screen.findByTestId('reader-left')
-    await screen.findByTestId('reader-right')
-    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
-    expect(host.latest.get('right')?.record.fileId).toBe(a.fileId)
-    expect(host.latest.get('left')?.isActivePane).toBe(true)
-    expect(host.latest.get('right')?.isActivePane).toBe(false)
-
-    fireEvent.click(screen.getByText('活动：左栏'))
-    await waitFor(() =>
-      expect(host.latest.get('right')?.isActivePane).toBe(true)
-    )
-    expect(host.latest.get('left')?.isActivePane).toBe(false)
-
-    fireEvent.click(screen.getByText('单栏'))
-    // 单栏视图保留当前活动栏，另一栏卸载。
-    await waitFor(() =>
-      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
-    )
-    expect(screen.getByTestId('reader-right')).toHaveTextContent('a.pdf')
-    expect(host.latest.get('right')?.isActivePane).toBe(true)
+    expect(screen.queryByText('分栏')).not.toBeInTheDocument()
   })
 
   it('replaces the configured record while reading so the save barrier runs', async () => {
@@ -266,95 +224,13 @@ describe('demo host debug entrance (HAM-278)', () => {
     await waitFor(() =>
       expect(host.latest.get('left')?.record.fileId).toBe(b.fileId)
     )
-    // 同一个 ReaderScreen 实例收到新记录，由它关闭旧会话并等待保存。
+    expect(screen.getAllByTestId('reader-left')).toHaveLength(1)
     expect(screen.getByTestId('reader-left')).toHaveTextContent('b.pdf')
   })
 
-  it('opens a device path through a runtime deep link', async () => {
-    host.importPath.mockResolvedValue(a)
+  it('requests page census and held saves from the single-reader debug bar', async () => {
     render(<App />)
-    await screen.findByText('open:a.pdf')
-    expect(host.urlListeners).toHaveLength(1)
-    host.urlListeners[0]!({
-      url: `hamsterreader://open?path=${encodeURIComponent('/var/mobile/reader/a.pdf')}`
-    })
-    await screen.findByTestId('reader-left')
-    expect(host.importPath).toHaveBeenCalledWith(
-      expect.anything(),
-      '/var/mobile/reader/a.pdf'
-    )
-    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
-  })
-
-  it('reports a failed debug route instead of silently opening something else', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID =
-      'f_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
-    render(<App />)
-    await waitFor(() => expect(host.alert).toHaveBeenCalled())
-    expect(host.alert).toHaveBeenCalledWith(
-      '调试入口失败',
-      '书库中没有 fileId=f_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee 的记录'
-    )
-    expect(await screen.findByText('open:a.pdf')).toBeInTheDocument()
-    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
-  })
-
-  it('seeds cached OCR text for the scanned S12 sample and enables OCR', async () => {
-    process.env.EXPO_PUBLIC_HAM278_ROUTE = `hamsterreader://open?fileId=${a.fileId}&seed=${encodeURIComponent('/var/mobile/reader/sample.ocr.json')}`
-    host.readSeed.mockResolvedValue({
-      version: 1,
-      ranges: [],
-      pages: new Map([
-        [
-          1,
-          [
-            {
-              id: 'scanned-p1-l1',
-              content: 'HAM-278 SCANNED SAMPLE',
-              polygon: [
-                [0.1, 0.1],
-                [0.9, 0.1],
-                [0.9, 0.2],
-                [0.1, 0.2]
-              ]
-            }
-          ]
-        ]
-      ])
-    })
-    render(<App />)
-    await screen.findByTestId('reader-left')
-    expect(host.readSeed).toHaveBeenCalledWith(
-      '/var/mobile/reader/sample.ocr.json'
-    )
-    expect(host.latest.get('left')?.ocr).toEqual({ enabled: true })
-    const stored = await new ReaderDataStore(host.storage).get(a.fileId)
-    const readerData = (stored?.snapshot.data as Record<string, unknown>)[
-      'readerData'
-    ] as Record<string, unknown>
-    expect(Object.keys(readerData['ocrTexts'] as object)).toEqual(['1'])
-    expect(console.info).toHaveBeenCalledWith(
-      'reader-debug-ocr-seed',
-      expect.objectContaining({ fileId: a.fileId, pages: [1], texts: 1 })
-    )
-  })
-
-  it('reports a bad OCR seed instead of opening the sample without text', async () => {
-    process.env.EXPO_PUBLIC_HAM278_ROUTE = `hamsterreader://open?fileId=${a.fileId}&seed=/var/mobile/reader/missing.ocr.json`
-    host.readSeed.mockRejectedValue(new Error('OCR 种子不存在'))
-    render(<App />)
-    await waitFor(() =>
-      expect(host.alert).toHaveBeenCalledWith(
-        'OCR 种子加载失败',
-        'OCR 种子不存在'
-      )
-    )
-    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
-  })
-
-  it('requests a page render census from the debug bar', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
-    render(<App />)
+    fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
     expect(host.latest.get('left')?.debugCensusToken).toBe(0)
     fireEvent.click(screen.getByText('渲染计数'))
@@ -368,12 +244,12 @@ describe('demo host debug entrance (HAM-278)', () => {
     )
   })
 
-  it('keeps the pane mounted when debug library return hits a save failure, then retries', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
+  it('keeps the reader mounted when debug library return fails, then retries', async () => {
     host.close
       .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'disk full' })
       .mockResolvedValueOnce({ status: 'closed' })
     render(<App />)
+    fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
 
     fireEvent.click(screen.getByText('返回书库'))
@@ -388,75 +264,26 @@ describe('demo host debug entrance (HAM-278)', () => {
     expect(screen.getByText('open:a.pdf')).toBeInTheDocument()
   })
 
-  it('keeps both panes until every library-return close is confirmed', async () => {
+  it('does not activate retired deep links or launch environment routes', async () => {
     process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
     process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
-    let rightAttempts = 0
-    host.close.mockImplementation(async (paneId) => {
-      if (paneId === 'right' && ++rightAttempts === 1)
-        return { status: 'unconfirmed', reason: 'disk full' }
-      return { status: 'closed' }
-    })
+    host.initialUrl = `hamsterreader://open?fileId=${a.fileId}&layout=split`
     render(<App />)
-    await screen.findByTestId('reader-left')
-    await screen.findByTestId('reader-right')
-
-    fireEvent.click(screen.getByText('返回书库'))
-    await waitFor(() => {
-      expect(host.close).toHaveBeenCalledWith('left')
-      expect(host.close).toHaveBeenCalledWith('right')
-    })
-    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
-    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
-    expect(host.alert).toHaveBeenCalledWith(
-      '阅读数据尚未保存',
-      expect.any(String),
-      expect.any(Array)
-    )
-
-    fireEvent.click(screen.getByText('重试保存:right'))
-    await waitFor(() => {
-      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
-    })
-    expect(screen.getByText('open:a.pdf')).toBeInTheDocument()
+    expect(await screen.findByText('open:a.pdf')).toBeInTheDocument()
+    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    expect(host.urlListeners).toHaveLength(0)
   })
 
-  it('drains the inactive pane before collapsing split view and retains it on failure', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
-    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
-    host.close
-      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'disk full' })
-      .mockResolvedValueOnce({ status: 'closed' })
-    render(<App />)
-    await screen.findByTestId('reader-left')
-    await screen.findByTestId('reader-right')
-    expect(host.latest.get('right')?.isActivePane).toBe(false)
-
-    fireEvent.click(screen.getByText('单栏'))
-    await waitFor(() => expect(host.close).toHaveBeenCalledWith('right'))
-    expect(host.close).not.toHaveBeenCalledWith('left')
-    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
-    expect(screen.getByTestId('reader-right')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByText('重试保存:right'))
-    await waitFor(() =>
-      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
-    )
-    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
-    expect(host.latest.get('left')?.isActivePane).toBe(true)
-  })
-
-  it('keeps the debug entrance and split controls out of release builds', async () => {
+  it('keeps debug controls out of release and still mounts only one reader', async () => {
     vi.stubGlobal('__DEV__', false)
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
     render(<App />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
+    expect(screen.getAllByTestId('reader-left')).toHaveLength(1)
     expect(screen.queryByText('分栏')).not.toBeInTheDocument()
     expect(screen.queryByText('换源')).not.toBeInTheDocument()
-    expect(screen.getByTestId('reader-left')).toHaveTextContent('a.pdf')
+    expect(screen.queryByText('返回书库')).not.toBeInTheDocument()
     expect(host.latest.size).toBe(1)
-    expect(host.importPath).not.toHaveBeenCalled()
   })
 })

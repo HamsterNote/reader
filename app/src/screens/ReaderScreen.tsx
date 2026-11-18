@@ -503,8 +503,9 @@ function ReaderScreenSession({
     webCloseInFlight.current = null
     sync(scope)
     if (result.status === 'unconfirmed') {
-      if (closeRequest.current?.external) settleClose(result)
-      else showWebDrainError(scope, result)
+      const external = closeRequest.current?.external === true
+      settleClose(result)
+      if (!external) showWebDrainError(scope, result)
       return
     }
     setWebMounted(false)
@@ -567,9 +568,9 @@ function ReaderScreenSession({
     if (scope.snapshot === previous) return
     sync(scope)
     if (scope.snapshot.phase === 'NATIVE_DRAIN_FAILED') {
-      if (closeRequest.current?.external && result.status === 'unconfirmed')
-        settleClose(result)
-      else showNativeDrainError(scope)
+      const external = closeRequest.current?.external === true
+      settleClose(result)
+      if (!external) showNativeDrainError(scope)
       return
     }
     setNativePdf(false)

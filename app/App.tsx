@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  Linking,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -17,29 +16,7 @@ import type {
   ReaderDataStore
 } from '../src/host/readerDataStore'
 import { ReaderDataStore as Store } from '../src/host/readerDataStore'
-import { logNativePdfDiagnostic } from '../src/nativePdf/diagnostics'
 import { DebugEntryBar } from './src/debug/DebugEntryBar'
-import {
-  clearPaneRecord,
-  EMPTY_PANES,
-  hasAnyPane,
-  mirrorActivePane,
-  otherPane,
-  resolveActivePane,
-  setPaneRecord,
-  withoutRecord,
-  type PaneId,
-  type PaneRecords
-} from './src/debug/panes'
-import { resolveDebugTarget } from './src/debug/resolveTarget'
-import { mergeOcrTexts } from './src/debug/ocrSeed'
-import { readOcrSeed } from './src/debug/readOcrSeed'
-import {
-  debugRouteFromEnv,
-  debugRouteLog,
-  parseDebugUrl,
-  type DebugRoute
-} from './src/debug/route'
 import { pickAndCacheDocument, removeDocument } from './src/native/documents'
 import { createFileSystemStorage } from './src/native/storage'
 import {
@@ -52,12 +29,6 @@ import {
   type ReaderScreenHandle
 } from './src/screens/ReaderScreen'
 import { AppErrorBoundary } from './src/components/AppErrorBoundary'
-
-type HostCloseAction = {
-  readonly mode: 'all' | 'collapse'
-  readonly targets: readonly PaneId[]
-  running: boolean
-}
 
 export function App() {
   return (
@@ -73,19 +44,14 @@ function AppContent() {
     storeRef.current = new Store(createFileSystemStorage())
   }
   const store = storeRef.current
-  const leftReader = useRef<ReaderScreenHandle>(null)
-  const rightReader = useRef<ReaderScreenHandle>(null)
-  const readerRefs = { left: leftReader, right: rightReader }
-  const hostClose = useRef<HostCloseAction | null>(null)
+  const readerRef = useRef<ReaderScreenHandle>(null)
+  const closeInFlight = useRef<Promise<void> | null>(null)
   const [documents, setDocuments] = useState<HostDocumentSummary[]>([])
   const [busy, setBusy] = useState(false)
-  const [panes, setPanes] = useState<PaneRecords>(EMPTY_PANES)
-  const [split, setSplit] = useState(false)
-  const [activePane, setActivePane] = useState<PaneId>('left')
+  const [record, setRecord] = useState<HostDocumentRecord | null>(null)
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
   const [censusToken, setCensusToken] = useState(0)
   const [holdSaveToken, setHoldSaveToken] = useState(0)
-  const [ocrFileIds, setOcrFileIds] = useState<ReadonlySet<string>>(new Set())
   const [packaged, setPackaged] = useState<PackagedWebReader | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -111,14 +77,9 @@ function AppContent() {
     void prepare()
   }, [prepare])
 
-  const focusPane = resolveActivePane(panes, activePane)
-
-  const openRecord = useCallback(
-    (record: HostDocumentRecord): void => {
-      setPanes((state) => setPaneRecord(state, focusPane, record))
-    },
-    [focusPane]
-  )
+  const openRecord = useCallback((next: HostDocumentRecord): void => {
+    setRecord(next)
+  }, [])
 
   const pick = async (): Promise<void> => {
     setBusy(true)
@@ -140,13 +101,13 @@ function AppContent() {
   const open = async (summary: HostDocumentSummary): Promise<void> => {
     setBusy(true)
     try {
-      const record = await store.get(summary.fileId)
-      if (!record) {
+      const next = await store.get(summary.fileId)
+      if (!next) {
         Alert.alert('文件记录不存在', '请重新选择该文件。')
         await refresh()
         return
       }
-      openRecord(record)
+      openRecord(next)
     } finally {
       setBusy(false)
     }
@@ -155,9 +116,9 @@ function AppContent() {
   const deleteDocument = async (
     summary: HostDocumentSummary
   ): Promise<void> => {
-    const record = await store.get(summary.fileId)
-    if (record) await removeDocument(store, record)
-    setPanes((state) => withoutRecord(state, summary.fileId))
+    const current = await store.get(summary.fileId)
+    if (current) await removeDocument(store, current)
+    setRecord((value) => (value?.fileId === summary.fileId ? null : value))
     await refresh()
   }
 
@@ -176,201 +137,47 @@ function AppContent() {
     )
   }
 
-  const closePane = (pane: PaneId): void => {
-    const next = clearPaneRecord(panes, pane)
-    setPanes(next)
-    const other = otherPane(pane)
-    if (split && !next[pane] && next[other]) setActivePane(other)
+  const returnToLibrary = (): void => {
+    setRecord(null)
+    setSourcePickerOpen(false)
     void refresh()
   }
 
-  const runHostClose = async (action: HostCloseAction): Promise<void> => {
-    if (action.running) return
-    action.running = true
-    const results = await Promise.all(
-      action.targets.map(
-        (pane) =>
-          readerRefs[pane].current?.close() ??
-          Promise.resolve({ status: 'closed' as const })
-      )
-    )
-    action.running = false
-    if (hostClose.current !== action) return
-    if (results.some((result) => result.status !== 'closed')) {
+  const closeAll = async (): Promise<void> => {
+    if (closeInFlight.current) return closeInFlight.current
+    const operation = (async () => {
+      const result = (await readerRef.current?.close()) ?? {
+        status: 'closed' as const
+      }
+      if (result.status === 'closed') {
+        returnToLibrary()
+        return
+      }
       Alert.alert(
         '阅读数据尚未保存',
-        '原栏与分栏状态已保留。请重试，全部保存确认后才会关闭。',
-        [{ text: '重试', onPress: () => void runHostClose(action) }]
+        '当前页面已保留。请重试，保存确认后才会关闭。',
+        [{ text: '重试', onPress: () => void closeAll() }]
       )
-      return
-    }
-    hostClose.current = null
-    if (action.mode === 'all') {
-      setPanes(EMPTY_PANES)
-      setSourcePickerOpen(false)
-    } else {
-      setPanes((state) =>
-        action.targets.reduce(
-          (next, pane) => clearPaneRecord(next, pane),
-          state
-        )
-      )
-      setSplit(false)
-    }
-    void refresh()
-  }
-
-  const closeAll = (): void => {
-    const pending = hostClose.current
-    if (pending) {
-      void runHostClose(pending)
-      return
-    }
-    const action: HostCloseAction = {
-      mode: 'all',
-      targets: (['left', 'right'] as const).filter(
-        (pane) => panes[pane] !== null
-      ),
-      running: false
-    }
-    hostClose.current = action
-    void runHostClose(action)
-  }
-
-  const handleReaderBack = (pane: PaneId): void => {
-    const pending = hostClose.current
-    if (pending) {
-      void runHostClose(pending)
-      return
-    }
-    closePane(pane)
-  }
-
-  /** 调试入口（仅 __DEV__）：深链接 / 环境变量直接指定 PDF，不依赖 HID 点击。 */
-  const openDebugRoute = useCallback(
-    async (route: DebugRoute): Promise<void> => {
-      const outcome = await resolveDebugTarget(store, route.target)
-      logNativePdfDiagnostic('reader-debug-route', {
-        ...debugRouteLog(route),
-        ok: outcome.status === 'opened',
-        ...(outcome.status === 'failed' ? { reason: outcome.reason } : {})
-      })
-      if (outcome.status === 'failed') {
-        Alert.alert('调试入口失败', outcome.reason)
-        return
-      }
-      let record = outcome.record
-      if (route.ocrSeed) {
-        // S12：把扫描样本的 OCR 文字种子写入快照，宿主打开时会先 publish，
-        // 由 NativeCanonicalDelivery 在 web-ready 之前缓存、握手时重放。
-        try {
-          const seed = await readOcrSeed(route.ocrSeed)
-          const merged = mergeOcrTexts(record.snapshot.data, seed)
-          await store.updateSnapshot(record.fileId, (snapshot) => ({
-            ...snapshot,
-            data: merged.data,
-            revision: snapshot.revision + 1
-          }))
-          record = (await store.get(record.fileId)) ?? record
-          setOcrFileIds((current) => new Set(current).add(record.fileId))
-          logNativePdfDiagnostic('reader-debug-ocr-seed', {
-            fileId: record.fileId,
-            seedPath: route.ocrSeed,
-            pages: merged.pages,
-            texts: merged.texts,
-            ranges: merged.ranges
-          })
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error)
-          logNativePdfDiagnostic('reader-debug-ocr-seed', {
-            fileId: record.fileId,
-            seedPath: route.ocrSeed,
-            ok: false,
-            reason
-          })
-          Alert.alert('OCR 种子加载失败', reason)
-          return
-        }
-      }
-      setSplit(route.layout === 'split')
-      setPanes((state) =>
-        mirrorActivePane(setPaneRecord(state, 'left', record), 'left')
-      )
-      setActivePane('left')
-      void refresh()
-    },
-    [store, refresh]
-  )
-
-  const debugHandled = useRef(false)
-  useEffect(() => {
-    if (!__DEV__) return
-    void (async () => {
-      if (debugHandled.current) return
-      debugHandled.current = true
-      const envRoute = debugRouteFromEnv({
-        EXPO_PUBLIC_HAM278_ROUTE: process.env.EXPO_PUBLIC_HAM278_ROUTE,
-        EXPO_PUBLIC_HAM278_OPEN_FILE_ID:
-          process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID,
-        EXPO_PUBLIC_HAM278_OPEN_PDF: process.env.EXPO_PUBLIC_HAM278_OPEN_PDF,
-        EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT,
-        EXPO_PUBLIC_HAM278_OCR_SEED: process.env.EXPO_PUBLIC_HAM278_OCR_SEED
-      })
-      if (envRoute) {
-        await openDebugRoute(envRoute)
-        return
-      }
-      const initial = await Linking.getInitialURL().catch(() => null)
-      const parsed = initial ? parseDebugUrl(initial) : null
-      if (parsed) await openDebugRoute(parsed)
     })()
-  }, [openDebugRoute])
-
-  useEffect(() => {
-    if (!__DEV__) return
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      const parsed = parseDebugUrl(url)
-      logNativePdfDiagnostic('reader-debug-route-link', {
-        url,
-        accepted: parsed !== null
-      })
-      if (parsed) void openDebugRoute(parsed)
-    })
-    return () => subscription.remove()
-  }, [openDebugRoute])
-
-  const toggleSplit = (): void => {
-    if (split) {
-      if (hostClose.current) return
-      const target = otherPane(focusPane)
-      if (!panes[target]) {
-        setSplit(false)
-        return
-      }
-      const action: HostCloseAction = {
-        mode: 'collapse',
-        targets: [target],
-        running: false
-      }
-      hostClose.current = action
-      void runHostClose(action)
-      return
+    closeInFlight.current = operation
+    try {
+      await operation
+    } finally {
+      closeInFlight.current = null
     }
-    setPanes((state) => mirrorActivePane(state, focusPane))
-    setSplit(true)
   }
 
   const replaceSource = (summary: HostDocumentSummary): void => {
     setSourcePickerOpen(false)
     void (async () => {
-      const record = await store.get(summary.fileId)
-      if (!record) {
+      const next = await store.get(summary.fileId)
+      if (!next) {
         Alert.alert('文件记录不存在', '请重新选择该文件。')
         await refresh()
         return
       }
       // 换掉配置记录后 ReaderScreen 会先关闭旧会话并等待保存，成功才重开。
-      setPanes((state) => setPaneRecord(state, focusPane, record))
+      setRecord(next)
     })()
   }
 
@@ -407,7 +214,7 @@ function AppContent() {
     )
   }
 
-  if (!hasAnyPane(panes)) {
+  if (record === null) {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style='dark' />
@@ -422,63 +229,39 @@ function AppContent() {
     )
   }
 
-  const openPanes = (['left', 'right'] as const)
-    .map((pane) => ({ pane, record: panes[pane] }))
-    .filter(
-      (entry): entry is { pane: PaneId; record: HostDocumentRecord } =>
-        entry.record !== null
-    )
-  const visiblePanes = split
-    ? openPanes
-    : openPanes.filter((entry) => entry.pane === focusPane)
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style='dark' />
       <View style={styles.workspace}>
         {__DEV__ ? (
           <DebugEntryBar
-            split={split}
-            activePane={focusPane}
             documents={documents}
-            currentFileId={panes[focusPane]?.fileId ?? ''}
+            currentFileId={record.fileId}
             sourcePickerOpen={sourcePickerOpen}
-            onToggleSplit={toggleSplit}
-            onActivatePane={setActivePane}
             onToggleSourcePicker={() => setSourcePickerOpen((value) => !value)}
             onReplaceSource={replaceSource}
             onRequestCensus={() => setCensusToken((value) => value + 1)}
             onHoldSave={() => setHoldSaveToken((value) => value + 1)}
-            onClose={closeAll}
+            onClose={() => void closeAll()}
           />
         ) : null}
-        <View style={styles.panes}>
-          {visiblePanes.map(({ pane, record }) => (
-            <View
-              key={pane}
-              style={[styles.pane, split && styles.paneBorder]}
-              accessibilityLabel={`${pane}-pane`}
-            >
-              <ReaderScreen
-                ref={readerRefs[pane]}
-                record={record}
-                store={store}
-                entryUrl={packaged.entryUrl}
-                baseUrl={packaged.baseUrl}
-                paneId={pane}
-                isActivePane={split ? pane === focusPane : true}
-                debugCensusToken={censusToken}
-                debugHoldSaveToken={holdSaveToken}
-                ocr={
-                  ocrFileIds.has(record.fileId) ? { enabled: true } : undefined
-                }
-                onBack={() => handleReaderBack(pane)}
-                onRecordUpdated={(updated) => {
-                  setPanes((state) => setPaneRecord(state, pane, updated))
-                  void refresh()
-                }}
-              />
-            </View>
-          ))}
+        <View style={styles.reader}>
+          <ReaderScreen
+            ref={readerRef}
+            record={record}
+            store={store}
+            entryUrl={packaged.entryUrl}
+            baseUrl={packaged.baseUrl}
+            paneId='left'
+            isActivePane
+            debugCensusToken={censusToken}
+            debugHoldSaveToken={holdSaveToken}
+            onBack={returnToLibrary}
+            onRecordUpdated={(updated) => {
+              setRecord(updated)
+              void refresh()
+            }}
+          />
         </View>
       </View>
     </SafeAreaView>
@@ -488,12 +271,7 @@ function AppContent() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
   workspace: { flex: 1 },
-  panes: { flex: 1, flexDirection: 'row' },
-  pane: { flex: 1 },
-  paneBorder: {
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: '#ddd6ca'
-  },
+  reader: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   hint: { color: '#6d675f', fontSize: 13, textAlign: 'center', lineHeight: 19 },
   errorPanel: {
