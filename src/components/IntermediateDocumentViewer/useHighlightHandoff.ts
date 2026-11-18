@@ -20,6 +20,7 @@ type Candidate = {
   y: number
   highlight: ReaderSelectionRange
   handoff: ReaderHighlightDragHandoff
+  selectionDocument: Document
   state: 'pending' | 'waiting' | 'owned'
   sourceActive: boolean
   timer?: ReturnType<typeof setTimeout>
@@ -70,7 +71,7 @@ export function useHighlightHandoff({
       if (current.current !== candidate || candidate.state !== 'pending') return
       clearTimeout(candidate.timer)
       candidate.state = 'waiting'
-      viewerRootElement?.ownerDocument.getSelection()?.removeAllRanges()
+      candidate.selectionDocument.getSelection()?.removeAllRanges()
       setActivePointerType(candidate.pointerType)
       candidate.timer = setTimeout(
         () => cancel('handoff-timeout'),
@@ -87,7 +88,9 @@ export function useHighlightHandoff({
           },
           (status) => {
             if (current.current !== candidate) return
-            if (status === 'accepted' && candidate.state === 'waiting') {
+            if (status === 'clear-selection') {
+              candidate.selectionDocument.getSelection()?.removeAllRanges()
+            } else if (status === 'accepted' && candidate.state === 'waiting') {
               clearTimeout(candidate.timer)
               candidate.state = 'owned'
             } else if (status === 'rejected') cancel('host-rejected')
@@ -190,6 +193,9 @@ export function useHighlightHandoff({
         y: event.clientY,
         highlight,
         handoff,
+        selectionDocument:
+          (event.target as { ownerDocument?: Document } | null)
+            ?.ownerDocument ?? viewerRootElement.ownerDocument,
         state: 'pending',
         sourceActive: true
       }

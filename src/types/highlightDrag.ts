@@ -38,6 +38,8 @@ export interface ReaderHighlightDragHandoff {
    */
   readonly onGesture: (
     gesture: ReaderHighlightGesture,
-    acknowledge: (status: 'accepted' | 'rejected' | 'ended') => void
+    acknowledge: (
+      status: 'accepted' | 'rejected' | 'ended' | 'clear-selection'
+    ) => void
   ) => void
 }
