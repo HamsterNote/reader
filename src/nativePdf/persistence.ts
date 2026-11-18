@@ -25,6 +25,29 @@ type OperationState<T> = {
   status: 'pending' | 'saving' | 'failed' | 'confirmed'
   error?: unknown
   running?: Promise<void>
+  queuedAt: number
+}
+
+/**
+ * 写盘队列诊断事件（HAM-278 组 4）：证明关闭旧会话前确实等到了保存完成。
+ * 只含操作 id、待写数量与耗时，不含快照内容。
+ */
+export type NativeSaveQueueDiagnostic = {
+  readonly event:
+    | 'queued'
+    | 'started'
+    | 'confirmed'
+    | 'failed'
+    | 'drain-start'
+    | 'drain-end'
+  readonly operationId: string
+  readonly pending: number
+  /** 从入队到真正开始写盘的等待毫秒数（started）。 */
+  readonly waitMs?: number
+  /** 本次写盘或整段 drain 的耗时（confirmed/failed/drain-end）。 */
+  readonly elapsedMs?: number
+  readonly attempt?: number
+  readonly ok?: boolean
 }
 
 export class NativeOperationQueue<T> {
@@ -41,17 +64,28 @@ export class NativeOperationQueue<T> {
         operation: NativeSaveOperation<T>,
         error: unknown
       ) => void
+      readonly onDiagnostic?: (diagnostic: NativeSaveQueueDiagnostic) => void
     }
   ) {}
+
+  private emit(diagnostic: NativeSaveQueueDiagnostic): void {
+    this.callbacks.onDiagnostic?.(diagnostic)
+  }
 
   add(operationId: string, execute: () => Promise<T>): NativeSaveOperation<T> {
     const operation: OperationState<T> = {
       operationId,
       execute,
       attempt: 0,
-      status: 'pending'
+      status: 'pending',
+      queuedAt: Date.now()
     }
     this.operations.push(operation)
+    this.emit({
+      event: 'queued',
+      operationId,
+      pending: this.operations.length
+    })
     this.pump()
     return operation
   }
@@ -73,10 +107,30 @@ export class NativeOperationQueue<T> {
   }
 
   async drain(): Promise<void> {
-    while (this.operations.length > 0) {
-      const head = this.operations[0]!
-      if (head.status === 'failed') throw head.error
-      await this.pump()
+    const startedAt = Date.now()
+    this.emit({
+      event: 'drain-start',
+      operationId: '',
+      pending: this.operations.length
+    })
+    let ok = true
+    try {
+      while (this.operations.length > 0) {
+        const head = this.operations[0]!
+        if (head.status === 'failed') throw head.error
+        await this.pump()
+      }
+    } catch (error) {
+      ok = false
+      throw error
+    } finally {
+      this.emit({
+        event: 'drain-end',
+        operationId: '',
+        pending: this.operations.length,
+        elapsedMs: Date.now() - startedAt,
+        ok
+      })
     }
   }
 
@@ -90,6 +144,14 @@ export class NativeOperationQueue<T> {
     this.active = head
     head.attempt += 1
     head.status = 'saving'
+    const startedAt = Date.now()
+    this.emit({
+      event: 'started',
+      operationId: head.operationId,
+      pending: this.operations.length,
+      waitMs: startedAt - head.queuedAt,
+      attempt: head.attempt
+    })
     const running = head.execute().then(
       (result) => {
         head.status = 'confirmed'
@@ -97,6 +159,12 @@ export class NativeOperationQueue<T> {
         this.operations.shift()
         this.active = null
         head.running = undefined
+        this.emit({
+          event: 'confirmed',
+          operationId: head.operationId,
+          pending: this.operations.length,
+          elapsedMs: Date.now() - startedAt
+        })
         this.callbacks.onConfirmed(head, result)
         if (this.operations.length > 0) this.pump()
       },
@@ -105,6 +173,12 @@ export class NativeOperationQueue<T> {
         head.error = error
         this.active = null
         head.running = undefined
+        this.emit({
+          event: 'failed',
+          operationId: head.operationId,
+          pending: this.operations.length,
+          elapsedMs: Date.now() - startedAt
+        })
         this.callbacks.onFailed(head, error)
         throw error
       }

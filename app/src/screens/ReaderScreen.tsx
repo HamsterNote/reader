@@ -2,11 +2,18 @@ import {
   NativePdfReader,
   type NativePdfHandoff
 } from '../components/NativePdfReader'
-import { useEffect, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState
+} from 'react'
 import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -32,6 +39,12 @@ import type { IntermediateText } from '@hamster-note/types'
 import type { PdfIdentity } from '../../../src/nativePdf/contracts'
 import { PdfHandoffCoordinator } from '../../../src/nativePdf/handoff'
 import type { BridgeCloseResult } from '../../../src/bridge/hostSession'
+import { logNativePdfDiagnostic } from '../../../src/nativePdf/diagnostics'
+import { readerDataFromNativeSnapshot } from '../../../src/nativePdf/hostProgress'
+import {
+  isLocalIosPdf,
+  usesNativePdfLayout
+} from '../../../src/nativePdf/routing'
 
 type ReaderScreenProps = {
   readonly record: HostDocumentRecord
@@ -40,6 +53,13 @@ type ReaderScreenProps = {
   readonly baseUrl: string
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
+  /** Configured split hosts supply their stable pane key; standalone screens generate one. */
+  readonly paneId?: string
+  readonly isActivePane?: boolean
+  /** 设备取证：递增该值触发一次 PDF.js 页面画布渲染计数采集。 */
+  readonly debugCensusToken?: number
+  /** 设备取证：递增该值制造一次可控的「待确认写入」。 */
+  readonly debugHoldSaveToken?: number
   readonly ocr?: boolean | ReaderOcrOptions
   readonly extraOCR?: ReaderExtraOcr
   readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -49,10 +69,30 @@ type ReaderScreenProps = {
   ) => void
 }
 
-function identityFor(fileId: string, generation: number): PdfIdentity {
+export type ReaderScreenHandle = {
+  readonly close: () => Promise<BridgeCloseResult>
+}
+
+type ReaderCloseRequest = {
+  external: boolean
+  readonly promise: Promise<BridgeCloseResult>
+  readonly resolve: (result: BridgeCloseResult) => void
+}
+
+type ReaderScreenSessionProps = ReaderScreenProps & {
+  readonly closeRef: React.RefObject<
+    ((external?: boolean) => Promise<BridgeCloseResult>) | null
+  >
+}
+
+function identityFor(
+  fileId: string,
+  paneId: string,
+  generation: number
+): PdfIdentity {
   return {
     fileId,
-    paneId: 'development',
+    paneId,
     sessionId: randomUUID(),
     generation
   }
@@ -65,6 +105,28 @@ function sameIdentity(left: PdfIdentity, right: PdfIdentity): boolean {
     left.sessionId === right.sessionId &&
     left.generation === right.generation
   )
+}
+
+/** 关闭 Web 会话（含放弃未确认内容）；任何异常都归为 unconfirmed。 */
+async function closeWebSession(
+  ref: React.RefObject<ReaderWebViewHandle | null>,
+  discard: boolean
+): Promise<BridgeCloseResult> {
+  try {
+    if (discard)
+      return (
+        (await ref.current?.discardUnconfirmed?.()) ?? {
+          status: 'unconfirmed',
+          reason: '当前会话未提供放弃未确认内容的出口'
+        }
+      )
+    return (await ref.current?.close({ handoff: true })) ?? { status: 'closed' }
+  } catch (error) {
+    return {
+      status: 'unconfirmed',
+      reason: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 type ReaderContentContext = {
@@ -83,6 +145,8 @@ type ReaderContentContext = {
   readonly nativeIdentity: PdfIdentity
   readonly nativeHandoff: NativePdfHandoff
   readonly store: ReaderDataStore
+  readonly isActivePane: boolean
+  readonly persistLayoutMode: boolean
   readonly ocr?: boolean | ReaderOcrOptions
   readonly extraOCR?: ReaderExtraOcr
   readonly onOcrError?: (error: unknown, detail: { pageNumber: number }) => void
@@ -109,6 +173,8 @@ function renderReaderContent(context: ReaderContentContext) {
     nativeIdentity,
     nativeHandoff,
     store,
+    isActivePane,
+    persistLayoutMode,
     ocr,
     extraOCR,
     onOcrError,
@@ -162,6 +228,8 @@ function renderReaderContent(context: ReaderContentContext) {
             ref={nativeRef}
             record={record}
             handoff={nativeHandoff}
+            isActivePane={isActivePane}
+            persistLayoutMode={persistLayoutMode}
             {...shared}
           />
         </View>
@@ -177,21 +245,31 @@ function ReaderScreenSession({
   baseUrl,
   onBack,
   onRecordUpdated,
+  closeRef,
+  paneId = 'standalone',
+  isActivePane = true,
+  debugCensusToken,
+  debugHoldSaveToken,
   ocr,
   extraOCR,
   onOcrError,
   onOcrTextsChange
-}: ReaderScreenProps) {
-  const [nativePdf, setNativePdf] = useState(false)
-  const [webMounted, setWebMounted] = useState(true)
+}: ReaderScreenSessionProps) {
+  const [initialNative] = useState(() =>
+    usesNativePdfLayout(Platform.OS, record)
+  )
+  const [nativePdf, setNativePdf] = useState(initialNative)
+  const [webMounted, setWebMounted] = useState(!initialNative)
   const [webRecord, setWebRecord] = useState(record)
   const [importing, setImporting] = useState(false)
   const [, setHandoffVersion] = useState(0)
   const [nativeRefreshToken, setNativeRefreshToken] = useState(0)
+  const [persistLayoutMode, setPersistLayoutMode] = useState(false)
   const webRef = useRef<ReaderWebViewHandle>(null)
   const nativeRef = useRef<ReaderWebViewHandle>(null)
   const webCloseInFlight = useRef<PdfIdentity | null>(null)
   const nativeCloseInFlight = useRef<PdfIdentity | null>(null)
+  const closeRequest = useRef<ReaderCloseRequest | null>(null)
   const backNotified = useRef(false)
   const onBackRef = useRef(onBack)
   onBackRef.current = onBack
@@ -200,9 +278,17 @@ function ReaderScreenSession({
   > | null>(null)
   const [stageError, setStageError] = useState<string | null>(null)
   const [retry, setRetry] = useState(0)
-  const [initialWeb] = useState(() => identityFor(record.fileId, 0))
-  const [coordinator] = useState(() => new PdfHandoffCoordinator(initialWeb))
-  const [nativeIdentity] = useState(() => identityFor(record.fileId, 1))
+  const [initialWeb] = useState(() => identityFor(record.fileId, paneId, 0))
+  const [nativeIdentity, setNativeIdentity] = useState(() =>
+    identityFor(record.fileId, paneId, 1)
+  )
+  const [coordinator] = useState(
+    () =>
+      new PdfHandoffCoordinator(
+        initialWeb,
+        initialNative ? nativeIdentity : undefined
+      )
+  )
   const coordinatorRef = useRef(coordinator)
   coordinatorRef.current = coordinator
   const mounted = useRef(true)
@@ -218,6 +304,49 @@ function ReaderScreenSession({
     sourceTokens.current.set(webIdentity.sessionId, randomUUID())
   }
   const sourceToken = sourceTokens.current.get(webIdentity.sessionId)!
+  useEffect(() => {
+    logNativePdfDiagnostic('reader-pdf-route', {
+      ...(nativePdf ? nativeIdentity : webIdentity),
+      renderer: nativePdf ? 'pdfkit' : 'web',
+      outerWebMounted: webMounted
+    })
+  }, [nativePdf, nativeIdentity, webIdentity, webMounted])
+
+  // 设备取证：宿主显式请求时向当前 Web 侧采集一次页面画布渲染计数。
+  const lastCensusToken = useRef(debugCensusToken)
+  useEffect(() => {
+    if (debugCensusToken === undefined) return
+    if (lastCensusToken.current === debugCensusToken) return
+    lastCensusToken.current = debugCensusToken
+    logNativePdfDiagnostic('reader-pdf-page-render-census-request', {
+      ...(nativePdf ? nativeIdentity : webIdentity),
+      renderer: nativePdf ? 'pdfkit' : 'web',
+      outerWebMounted: webMounted,
+      token: debugCensusToken
+    })
+    // 同一机制两侧都发：原生向 PDFKit 服务请求，Web 对照向页面内真实 render 计数请求。
+    if (nativePdf) nativeRef.current?.requestPageRenderCensus?.()
+    else webRef.current?.requestPageRenderCensus?.()
+  }, [debugCensusToken, nativePdf, nativeIdentity, webIdentity, webMounted])
+
+  // 设备取证：制造可控的「待确认写入」窗口，供换源时观察 drain 包住 confirmed。
+  const lastHoldToken = useRef(debugHoldSaveToken)
+  useEffect(() => {
+    if (debugHoldSaveToken === undefined) return
+    if (lastHoldToken.current === debugHoldSaveToken) return
+    lastHoldToken.current = debugHoldSaveToken
+    const holdMs = 10000
+    const accepted = nativePdf
+      ? (nativeRef.current?.debugHoldNextSave?.(holdMs) ?? false)
+      : false
+    logNativePdfDiagnostic('reader-pdf-debug-held-save-request', {
+      ...(nativePdf ? nativeIdentity : webIdentity),
+      renderer: nativePdf ? 'pdfkit' : 'web',
+      holdMs,
+      accepted,
+      token: debugHoldSaveToken
+    })
+  }, [debugHoldSaveToken, nativePdf, nativeIdentity, webIdentity])
 
   useEffect(() => {
     let active = true
@@ -242,13 +371,18 @@ function ReaderScreenSession({
       setHandoffVersion((value) => value + 1)
   }
 
+  function settleClose(result: BridgeCloseResult): void {
+    const request = closeRequest.current
+    if (!request) return
+    closeRequest.current = null
+    request.resolve(result)
+  }
+
   function notifyBack(scope: PdfHandoffCoordinator): void {
-    if (
-      !mounted.current ||
-      coordinatorRef.current !== scope ||
-      backNotified.current
-    )
-      return
+    if (!mounted.current || coordinatorRef.current !== scope) return
+    const external = closeRequest.current?.external === true
+    settleClose({ status: 'closed' })
+    if (external || backNotified.current) return
     backNotified.current = true
     onBackRef.current()
   }
@@ -296,7 +430,7 @@ function ReaderScreenSession({
             }
           }
         },
-        { text: '返回 Web 对照', onPress: () => requestWeb() },
+        { text: '返回原阅读模式', onPress: () => requestWeb() },
         {
           text: '放弃未确认内容…',
           style: 'destructive',
@@ -312,17 +446,18 @@ function ReaderScreenSession({
       return
     Alert.alert(
       '放弃未确认内容？',
-      '将保留已落盘的数据；未确认的修改和最终阅读进度可能丢失。已接收的写盘操作完成后返回 Web 对照。',
+      '将保留已落盘的数据；未确认的修改和最终阅读进度可能丢失。已接收的写盘操作完成后返回原阅读模式。',
       [
         { text: '继续保留并重试', style: 'cancel' },
         {
-          text: '放弃并返回 Web',
+          text: '放弃并返回原阅读模式',
           style: 'destructive',
           onPress: () => {
             if (coordinatorRef.current !== scope || scope.snapshot !== failed)
               return
             const nextWeb = identityFor(
               record.fileId,
+              paneId,
               scope.snapshot.web.generation + 1
             )
             if (!scope.requestWeb(nextWeb)) return
@@ -341,22 +476,22 @@ function ReaderScreenSession({
     const identity = scope.snapshot.web
     if (webCloseInFlight.current !== null) return
     webCloseInFlight.current = identity
-    let result: BridgeCloseResult
-    try {
-      result = discard
-        ? ((await webRef.current?.discardUnconfirmed?.()) ?? {
-            status: 'unconfirmed',
-            reason: '当前会话未提供放弃未确认内容的出口'
-          })
-        : ((await webRef.current?.close({ handoff: true })) ?? {
-            status: 'closed'
-          })
-    } catch (error) {
-      result = {
-        status: 'unconfirmed',
-        reason: error instanceof Error ? error.message : String(error)
-      }
-    }
+    const startedAt = Date.now()
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-start', {
+      ...identity,
+      direction: 'web',
+      phase: scope.snapshot.phase,
+      discard
+    })
+    const result = await closeWebSession(webRef, discard)
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-end', {
+      ...identity,
+      direction: 'web',
+      status: result.status,
+      waitedMs: Date.now() - startedAt,
+      discard,
+      ...(result.status === 'unconfirmed' ? { reason: result.reason } : {})
+    })
     if (!mounted.current || coordinatorRef.current !== scope) return
     const previousEpoch = scope.snapshot.epoch
     if (result.status === 'closed') scope.webDrained(identity)
@@ -368,7 +503,9 @@ function ReaderScreenSession({
     webCloseInFlight.current = null
     sync(scope)
     if (result.status === 'unconfirmed') {
-      showWebDrainError(scope, result)
+      const external = closeRequest.current?.external === true
+      settleClose(result)
+      if (!external) showWebDrainError(scope, result)
       return
     }
     setWebMounted(false)
@@ -402,10 +539,27 @@ function ReaderScreenSession({
     scope: PdfHandoffCoordinator,
     retrySave = false
   ): Promise<void> {
-    const identity = nativeIdentity
+    const identity = scope.snapshot.native
+    if (!identity) return
     if (nativeCloseInFlight.current !== null) return
     nativeCloseInFlight.current = identity
-    const result = await nativeRef.current?.close({ retry: retrySave })
+    const startedAt = Date.now()
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-start', {
+      ...identity,
+      direction: 'native',
+      phase: scope.snapshot.phase,
+      retrySave
+    })
+    const result = (await nativeRef.current?.close({ retry: retrySave })) ?? {
+      status: 'closed'
+    }
+    logNativePdfDiagnostic('reader-pdf-handoff-barrier-end', {
+      ...identity,
+      direction: 'native',
+      status: result?.status ?? 'closed',
+      waitedMs: Date.now() - startedAt,
+      ...(result?.status === 'unconfirmed' ? { reason: result.reason } : {})
+    })
     if (!mounted.current || coordinatorRef.current !== scope) return
     const previous = scope.snapshot
     if (result?.status === 'closed') scope.nativeDrained(identity)
@@ -414,7 +568,9 @@ function ReaderScreenSession({
     if (scope.snapshot === previous) return
     sync(scope)
     if (scope.snapshot.phase === 'NATIVE_DRAIN_FAILED') {
-      showNativeDrainError(scope)
+      const external = closeRequest.current?.external === true
+      settleClose(result)
+      if (!external) showNativeDrainError(scope)
       return
     }
     setNativePdf(false)
@@ -424,7 +580,19 @@ function ReaderScreenSession({
 
   function requestNative(): void {
     const scope = coordinator
-    if (!scope.requestNative(nativeIdentity)) return
+    const nextNative = identityFor(
+      record.fileId,
+      paneId,
+      nativeIdentity.generation + 1
+    )
+    if (!scope.requestNative(nextNative)) return
+    setNativeIdentity(nextNative)
+    setPersistLayoutMode(
+      readerDataFromNativeSnapshot(
+        webRecord.snapshot.data,
+        webRecord.snapshot.progress
+      )?.renderMode === 'text'
+    )
     setNativePdf(true)
     setWebMounted(true)
     sync(scope)
@@ -437,7 +605,7 @@ function ReaderScreenSession({
     const nextWeb =
       current.target === 'web' && current.nextWeb
         ? current.nextWeb
-        : identityFor(record.fileId, current.web.generation + 1)
+        : identityFor(record.fileId, paneId, current.web.generation + 1)
     const retry = current.phase === 'NATIVE_DRAIN_FAILED'
     if (!scope.requestWeb(nextWeb)) return
     sync(scope)
@@ -447,22 +615,44 @@ function ReaderScreenSession({
     }
   }
 
-  function closeReader(): void {
+  function requestText(): void {
+    if (nativeRef.current?.setRenderMode?.('text')) requestWeb()
+  }
+
+  function closeReader(external = false): Promise<BridgeCloseResult> {
+    const existing = closeRequest.current
+    if (existing) {
+      if (external) existing.external = true
+      return existing.promise
+    }
+    let resolve!: (result: BridgeCloseResult) => void
+    const promise = new Promise<BridgeCloseResult>((done) => {
+      resolve = done
+    })
+    closeRequest.current = { external, promise, resolve }
     const scope = coordinator
+    if (scope.snapshot.phase === 'CLOSED') {
+      // A host can reuse the container after a completed library return.
+      if (!external) backNotified.current = false
+      notifyBack(scope)
+      return promise
+    }
     const retry = scope.snapshot.phase === 'NATIVE_DRAIN_FAILED'
-    if (!scope.requestClosed()) return
+    scope.requestClosed()
     sync(scope)
     if (scope.snapshot.phase === 'WEB_DRAINING') void startWebClose(scope)
     else if (scope.snapshot.phase === 'NATIVE_DRAINING') {
       void startNativeClose(scope, retry)
     }
+    return promise
   }
+  closeRef.current = (external = false) => closeReader(external)
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
       'hardwareBackPress',
       () => {
-        closeReader()
+        void closeReader()
         return true
       }
     )
@@ -541,6 +731,8 @@ function ReaderScreenSession({
     nativeIdentity,
     nativeHandoff,
     store,
+    isActivePane,
+    persistLayoutMode,
     ocr,
     extraOCR,
     onOcrError,
@@ -549,7 +741,7 @@ function ReaderScreenSession({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={closeReader} hitSlop={12}>
+        <Pressable onPress={() => void closeReader()} hitSlop={12}>
           <Text style={styles.back}>返回</Text>
         </Pressable>
         <View style={styles.headerMain}>
@@ -563,7 +755,12 @@ function ReaderScreenSession({
               : ''}
           </Text>
         </View>
-        {__DEV__ && record.format === 'pdf' ? (
+        {isLocalIosPdf(Platform.OS, record) ? (
+          <Pressable onPress={nativePdf ? requestText : requestNative}>
+            <Text>{nativePdf ? 'Text' : 'Layout'}</Text>
+          </Pressable>
+        ) : null}
+        {__DEV__ && isLocalIosPdf(Platform.OS, record) ? (
           <Pressable onPress={nativePdf ? requestWeb : requestNative}>
             <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
           </Pressable>
@@ -588,9 +785,65 @@ function ReaderScreenSession({
   )
 }
 
-export function ReaderScreen(props: ReaderScreenProps) {
-  return <ReaderScreenSession key={props.record.fileId} {...props} />
-}
+export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
+  function ReaderScreen(props, ref) {
+    const [generatedPaneId] = useState(() => `pane-${randomUUID()}`)
+    const [active, setActive] = useState(props)
+    const [replacement, setReplacement] = useState(0)
+    const retained = useRef(props)
+    const closeRef = useRef<
+      ((external?: boolean) => Promise<BridgeCloseResult>) | null
+    >(null)
+    const switchRequested = useRef(false)
+    const requested = useRef(props)
+    requested.current = props
+    useImperativeHandle(
+      ref,
+      () => ({
+        close: () =>
+          closeRef.current?.(true) ??
+          Promise.resolve<BridgeCloseResult>({ status: 'closed' })
+      }),
+      []
+    )
+    const replacing =
+      active.record.fileId !== props.record.fileId ||
+      active.store !== props.store ||
+      active.paneId !== props.paneId
+    // A configured file switch uses the same save barrier as returning to the
+    // library. Failed saves keep the old session mounted, including retry UI.
+    useEffect(() => {
+      if (replacing) {
+        switchRequested.current = true
+        closeRef.current?.()
+      }
+    }, [replacing, props.record.fileId, props.store, props.paneId])
+    if (!replacing) retained.current = props
+    const current = replacing ? retained.current : props
+    const paneId = current.paneId ?? generatedPaneId
+    return (
+      <ReaderScreenSession
+        key={JSON.stringify([paneId, current.record.fileId, replacement])}
+        {...current}
+        paneId={paneId}
+        closeRef={closeRef}
+        onBack={() => {
+          const next = requested.current
+          if (
+            switchRequested.current ||
+            next.record.fileId !== current.record.fileId ||
+            next.store !== current.store ||
+            next.paneId !== current.paneId
+          ) {
+            switchRequested.current = false
+            setActive(next)
+            setReplacement((value) => value + 1)
+          } else next.onBack()
+        }}
+      />
+    )
+  }
+)
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },

@@ -181,10 +181,11 @@ export function withNativePageEditData(
   return { ...record(snapshotData), readerData }
 }
 
-/** Web popover commits own ranges/comments; native drawings and readerData stay authoritative. */
+/** Web popover commits own ranges/comments; preserveRanges lets the caller patch ranges by object. */
 export function mergeNativeExternalData(
   currentData: unknown,
-  incomingData: unknown
+  incomingData: unknown,
+  options: { readonly preserveRanges?: boolean } = {}
 ): Record<string, unknown> {
   const current = record(currentData)
   const incoming = record(incomingData)
@@ -201,6 +202,9 @@ export function mergeNativeExternalData(
           annotations: {
             ...currentAnnotations,
             ...incomingAnnotations,
+            ...(options.preserveRanges
+              ? { ranges: currentAnnotations.ranges ?? [] }
+              : {}),
             ...(owns(currentAnnotations, 'rects')
               ? { rects: currentAnnotations.rects }
               : {}),

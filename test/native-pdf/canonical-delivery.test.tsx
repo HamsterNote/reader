@@ -207,6 +207,8 @@ describe('NativePdfReader canonical delivery callback wiring', () => {
     expect(delivered()).toHaveLength(0)
     message(identity, 'web-ready')
     expect(delivered().map((m) => m.canonicalPage.pageNumber)).toEqual([1, 2])
+    // 握手前缓存的这批页面必须带 replay=true，供设备侧区分重放与实时投递。
+    expect(delivered().map((m) => m.replay)).toEqual([true, true])
     expect(delivered()[0].canonicalPage).toMatchObject({
       text: 'OCR QA SAMPLE',
       boundaries: expect.any(Array)
@@ -222,6 +224,8 @@ describe('NativePdfReader canonical delivery callback wiring', () => {
     expect(delivered()).toHaveLength(0)
     geometry(identity)
     expect(delivered()).toHaveLength(1)
+    // 握手后的实时投递不能标成重放，否则诊断语义会退化成恒 true。
+    expect(delivered()[0].replay).toBe(false)
     geometry(identity, 1, 800)
     expect(delivered()).toHaveLength(2)
     expect(delivered()[1].canonicalPage.width).toBe(800)
@@ -233,6 +237,7 @@ describe('NativePdfReader canonical delivery callback wiring', () => {
     message(identity, 'web-ready')
     message(identity, 'canonical-request', [1, 1, 99])
     expect(delivered()).toHaveLength(2)
+    expect(delivered()[1].replay).toBe(false)
     act(() =>
       host.web.onLoadStart?.({
         nativeEvent: { url: 'file:///refill/index.html' }

@@ -1,5 +1,6 @@
 import type { PDFRenderingQueue } from 'pdfjs-dist/types/web/pdf_rendering_queue'
 import type { PDFPageView } from 'pdfjs-dist/types/web/pdf_page_view'
+import { recordPageCanvasRender } from './pageRenderCensus'
 
 // PDF.js declares the base class's initial id as null, but constructed page
 // views (including detail views) carry their one-based PDF page number.
@@ -59,5 +60,18 @@ export function restrictPdfRenderingQueue(
       return false
     }
     return renderView(view)
+  }
+}
+
+/**
+ * HAM-278 组 1：统计 PDF.js 页面画布真正渲染的次数。
+ * 在 `renderView` 之后计数，只有返回 true（确实提交渲染）才 +1；不改变行为。
+ */
+export function instrumentPdfRenderCensus(queue: PDFRenderingQueue): void {
+  const renderView = queue.renderView.bind(queue)
+  queue.renderView = (view) => {
+    const rendered = renderView(view)
+    if (rendered) recordPageCanvasRender((view as PageView).id)
+    return rendered
   }
 }

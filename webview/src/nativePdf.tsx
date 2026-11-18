@@ -42,6 +42,7 @@ import { visibleOriginalPages } from '../../src/nativePdf/geometry'
 import { NativePdfSession } from '../../src/nativePdf/session'
 import { logNativePdfDiagnostic } from '../../src/nativePdf/diagnostics'
 import { shouldPreserveNativeWebMenu } from '../../src/nativePdf/menuOwnership'
+import { pageRenderCensus } from '../../src/pdf/pageRenderCensus'
 
 type NativeBootstrap = PdfIdentity & {
   publicationUrl: string
@@ -130,6 +131,29 @@ export function startNativePdfSurface(
       }
     })
   const fail = (code: string) => send({ type: 'failure', code })
+  // 结构化诊断通道：只传计数/页面号/耗时，宿主统一打一条 Metro 可见的日志。
+  const surfaceDiagnostic = (
+    event: string,
+    payload: Record<string, unknown>
+  ): void => send({ type: 'diagnostic', event, payload })
+  let webReadySent = false
+  /** HAM-278 组 1：PDF.js 页面画布渲染计数（原生路径应为 0）。 */
+  function reportPageRenderCensus(reason: string): void {
+    const census = pageRenderCensus()
+    const viewer = document.querySelector('.pdfViewer')
+    surfaceDiagnostic('page-render-census', {
+      reason,
+      pageCanvasRenders: census.pageCanvasRenders,
+      pages: census.pages,
+      lastRenderAt: census.lastRenderAt,
+      pdfViewerMounted: viewer !== null,
+      pdfViewerCanvasNodes:
+        document.querySelectorAll('.pdfViewer canvas').length,
+      pdfjsDocumentPages: session?.document.numPages ?? 0,
+      pdfjsTextPages: cache ? cache.pages.size : 0,
+      webReady: webReadySent
+    })
+  }
   type MenuValue = {
     range: ReaderSelectionRange | null
     activeId?: string
@@ -179,6 +203,10 @@ export function startNativePdfSurface(
     send({
       type: 'snapshot',
       commitId,
+      annotationOperation: {
+        type: next ? 'upsert' : 'delete',
+        rangeId: id
+      },
       data: serializeReaderSnapshot(snapshot)
     })
     range = next
@@ -343,6 +371,7 @@ export function startNativePdfSurface(
     }, 3000)
   }
   function activateRange(rangeId: string, replay = false): void {
+    const startedAt = performance.now()
     const existing = snapshot.data.ranges?.find((r) => r.id === rangeId)
     if (!existing) {
       finishActivate(rangeId)
@@ -359,6 +388,13 @@ export function startNativePdfSurface(
       if (pages.length) pending.pages = pages
     }
     activationRuns.add(rangeId)
+    surfaceDiagnostic('activate-start', {
+      rangeId,
+      pages,
+      replay,
+      source: ocrPages.size ? 'ocr-cache' : 'pdf',
+      webReady: webReadySent
+    })
     // Page-only navigation works before canonical text exists and lets the host
     // materialize persisted OCR from the target page's geometry.
     if (allowed.includes(first))
@@ -398,6 +434,15 @@ export function startNativePdfSurface(
           },
           existing
         )
+        surfaceDiagnostic('activate-end', {
+          rangeId,
+          pages,
+          materialized: true,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          utf16: pages.map(
+            (pageNumber) => cache!.pages.get(pageNumber)?.text.length ?? 0
+          )
+        })
         const canonicalPages = pages.flatMap((pageNumber) => {
           const page = cache!.pages.get(pageNumber)
           return page ? [page] : []
@@ -420,6 +465,13 @@ export function startNativePdfSurface(
       .catch(() => {
         if (disposed) return
         finishActivate(rangeId)
+        surfaceDiagnostic('activate-end', {
+          rangeId,
+          pages,
+          materialized: false,
+          reason: 'MAPPING_NOT_READY',
+          elapsedMs: Math.round(performance.now() - startedAt)
+        })
         if (replay)
           console.info('reader-pdf-activate-pending-dropped', {
             rangeId,
@@ -571,6 +623,7 @@ export function startNativePdfSurface(
       event?: PdfEvent
       canonicalPages?: PdfCanonicalPage[]
       canonicalPage?: PdfCanonicalPage
+      replay?: boolean
       rangeId?: string
       pages?: number[]
       url?: string
@@ -645,6 +698,18 @@ export function startNativePdfSurface(
           JSON.stringify(ocrPages.get(page.pageNumber)) !== JSON.stringify(page)
         ocrPages.set(page.pageNumber, page)
         cache?.pages.set(page.pageNumber, page)
+        // replay 由宿主标注：这批文字是宿主在 web-ready 之前缓存、握手后重放的，
+        // 而不是本页在握手前就收到了消息（那时监听还不存在）。
+        const replay = message.replay === true
+        surfaceDiagnostic('ocr-cache', {
+          page: page.pageNumber,
+          utf16: page.text.length,
+          boundaries: page.boundaries.length,
+          delivery: replay ? 'buffered-replay' : 'live',
+          bufferedBeforeWebReady: replay,
+          surfaceReadyAtDelivery: webReadySent,
+          cachedOcrPages: ocrPages.size
+        })
         if (changed)
           console.info('reader-pdf-ocr-cache', {
             page: page.pageNumber,
@@ -653,6 +718,10 @@ export function startNativePdfSurface(
           })
         replayPendingActivates()
       }
+      return
+    }
+    if (message.type === 'census-request') {
+      reportPageRenderCensus('requested')
       return
     }
     if (message.type === 'nativeSelection') {
@@ -765,6 +834,12 @@ export function startNativePdfSurface(
   // Receiver readiness is independent of PDF parsing/outline loading. In
   // particular, onLoadEnd alone does not prove this listener is installed.
   send({ type: 'web-ready' })
+  webReadySent = true
+  surfaceDiagnostic('web-ready', {
+    milliseconds: Math.round(performance.now()),
+    cachedOcrPages: ocrPages.size,
+    pendingActivates: pendingActivates.size
+  })
   ;(async () => {
     worker = await createPdfWorkerFromAsset()
     GlobalWorkerOptions.workerPort = worker
@@ -806,5 +881,7 @@ export function startNativePdfSurface(
     if (disposed) return
     send({ type: 'outline', items: entries })
     send({ type: 'serviceReady' })
+    // pdfjs 文档已加载、文字缓存已就绪；此刻的页面画布计数就是设备结论。
+    reportPageRenderCensus('service-ready')
   })().catch(() => fail('CORRUPT'))
 }

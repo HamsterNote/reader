@@ -8,6 +8,10 @@ import type {
   NativePdfAnnotationCommit,
   NativePdfAnnotationIntent
 } from './contracts'
+import {
+  applyNativeAnnotationPatch,
+  diffNativeAnnotationSnapshots
+} from './annotationPatch'
 
 export type NativeAnnotationSnapshot = {
   readonly ranges: readonly ReaderSelectionRange[]
@@ -16,8 +20,8 @@ export type NativeAnnotationSnapshot = {
 }
 
 type NativeAnnotationHistoryEntry = {
-  readonly snapshot: NativeAnnotationSnapshot
-  readonly restoreRanges: boolean
+  readonly before: NativeAnnotationSnapshot
+  readonly after: NativeAnnotationSnapshot
 }
 
 export type AnnotationControllerResult =
@@ -68,24 +72,12 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
   const commits = new Set<string>()
 
   const changed = (
-    next: NativeAnnotationSnapshot,
-    restoreRanges = false
+    next: NativeAnnotationSnapshot
   ): AnnotationControllerResult => {
-    past.push({ snapshot: current, restoreRanges })
+    past.push({ before: current, after: next })
     current = next
     future.length = 0
     return { status: 'changed', snapshot: current }
-  }
-
-  const restoreHistory = (
-    entry: NativeAnnotationHistoryEntry
-  ): NativeAnnotationSnapshot => {
-    if (entry.restoreRanges) return entry.snapshot
-    return {
-      ...current,
-      rects: entry.snapshot.rects,
-      pagePaintings: entry.snapshot.pagePaintings
-    }
   }
 
   const applyIntent = (
@@ -117,7 +109,7 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       }
       const ranges = [...current.ranges]
       ranges[index] = nextRange
-      return changed({ ...current, ranges }, true)
+      return changed({ ...current, ranges })
     }
     const rect = rectForIntent(intent)
     const index = current.rects.findIndex((item) => item.id === rect.id)
@@ -168,7 +160,7 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
       if (ranges.length === current.ranges.length)
         return { status: 'rejected', reason: 'INVALID_TARGET' }
       commits.add(commitId)
-      return changed({ ...current, ranges }, true)
+      return changed({ ...current, ranges })
     },
     deleteRectangle: (
       commitId: string,
@@ -198,18 +190,21 @@ export function createNativeAnnotationController(initial?: ReaderData | null) {
     undo: (): boolean => {
       const previous = past.pop()
       if (!previous) return false
-      future.push({
-        snapshot: current,
-        restoreRanges: previous.restoreRanges
-      })
-      current = restoreHistory(previous)
+      current = applyNativeAnnotationPatch(
+        current,
+        diffNativeAnnotationSnapshots(previous.after, previous.before)
+      )
+      future.push(previous)
       return true
     },
     redo: (): boolean => {
       const next = future.pop()
       if (!next) return false
-      past.push({ snapshot: current, restoreRanges: next.restoreRanges })
-      current = restoreHistory(next)
+      current = applyNativeAnnotationPatch(
+        current,
+        diffNativeAnnotationSnapshots(next.before, next.after)
+      )
+      past.push(next)
       return true
     }
   }
@@ -221,12 +216,28 @@ export function createNativeAnnotationControllerStore() {
     string,
     ReturnType<typeof createNativeAnnotationController>
   >()
+  const scopedBuckets = new WeakMap<
+    object,
+    Map<string, ReturnType<typeof createNativeAnnotationController>>
+  >()
   return {
-    get: (storageId: string, initial?: ReaderData | null) => {
-      let controller = buckets.get(storageId)
+    get: (
+      storageId: string,
+      initial?: ReaderData | null,
+      scope?: object,
+      paneId?: string
+    ) => {
+      let target = buckets
+      let key = storageId
+      if (scope) {
+        if (!scopedBuckets.has(scope)) scopedBuckets.set(scope, new Map())
+        target = scopedBuckets.get(scope)!
+        key = JSON.stringify([paneId, storageId])
+      }
+      let controller = target.get(key)
       if (!controller) {
         controller = createNativeAnnotationController(initial)
-        buckets.set(storageId, controller)
+        target.set(key, controller)
       }
       return controller
     }

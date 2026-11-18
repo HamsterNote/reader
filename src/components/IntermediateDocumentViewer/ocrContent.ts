@@ -1,15 +1,7 @@
-import type { IntermediateContent, IntermediateText } from '@hamster-note/types'
+import type { IntermediateContent } from '@hamster-note/types'
 import type { ReaderExtraOcr } from '../../types/readerOcr'
 
-export const prefixOcrTextIds = (
-  texts: IntermediateText[],
-  pageNumber: number
-) =>
-  texts.map((text) => ({
-    ...text,
-    id: `ocr-${pageNumber}-${text.id}`,
-    color: 'transparent'
-  }))
+export { prefixOcrTextIds } from './ocrTextIds'
 
 export const fetchOcrContent = async (
   imageSource: string,

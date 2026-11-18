@@ -136,6 +136,22 @@ describe('native annotation business controller', () => {
     expect(b.undo()).toBe(true)
   })
 
+  it('isolates same-file histories by pane and host storage instance', () => {
+    const buckets = createNativeAnnotationControllerStore()
+    const storageA = {},
+      storageB = {}
+    const left = buckets.get('same-file', undefined, storageA, 'left')
+    const right = buckets.get('same-file', undefined, storageA, 'right')
+    const otherStorage = buckets.get('same-file', undefined, storageB, 'left')
+    left.setPainting('left-ink', 'page-1', {} as never)
+    expect(right.undo()).toBe(false)
+    expect(otherStorage.undo()).toBe(false)
+    expect(right.getSnapshot().pagePaintings).toEqual({})
+    expect(otherStorage.getSnapshot().pagePaintings).toEqual({})
+    expect(buckets.get('same-file', undefined, storageA, 'left')).toBe(left)
+    expect(left.undo()).toBe(true)
+  })
+
   it('keeps a native menu when WebView hide and geometry arrive afterward', () => {
     const native = reduceNativeMenu(
       { owner: null, value: null },

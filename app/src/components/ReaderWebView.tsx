@@ -36,6 +36,11 @@ import type {
   ReaderDataStore
 } from '../../../src/host/readerDataStore'
 import type { PdfIdentity } from '../../../src/nativePdf/contracts'
+import { logNativePdfDiagnostic } from '../../../src/nativePdf/diagnostics'
+import {
+  pageRenderCensusRequest,
+  parsePageRenderCensusMessage
+} from '../../../src/pdf/pageRenderCensus'
 import {
   createReaderHostSession,
   type ReaderHostSession
@@ -97,7 +102,12 @@ function buildBootstrapScript(sessionId: string, sourceToken: string): string {
 
 /** 关闭握手入口：宿主 UI 必须先 await close() 再卸载 WebView。 */
 export type ReaderWebViewHandle = {
+  readonly setRenderMode?: (mode: 'layout' | 'text') => boolean
   readonly discardUnconfirmed?: () => Promise<BridgeCloseResult>
+  /** 设备取证：向当前 Web 侧请求一次 PDF.js 页面画布渲染计数。 */
+  readonly requestPageRenderCensus?: () => void
+  /** 设备取证：入队一次延迟写盘，制造可控的「待确认写入」窗口。 */
+  readonly debugHoldNextSave?: (holdMs: number) => boolean
   readonly close: (options?: {
     readonly handoff?: boolean
     readonly retry?: boolean
@@ -143,6 +153,9 @@ export const ReaderWebView = forwardRef<
       discardUnconfirmed: async () => {
         await sessionRef.current?.discardUnconfirmed()
         return { status: 'closed' }
+      },
+      requestPageRenderCensus: () => {
+        webRef.current?.postMessage(pageRenderCensusRequest())
       },
       close: async (options): Promise<BridgeCloseResult> => {
         const session = sessionRef.current
@@ -222,30 +235,46 @@ export const ReaderWebView = forwardRef<
     }
   }, [generation])
 
-  const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
-    const raw = event.nativeEvent.data
-    let ready = false
-    try {
-      ready = (JSON.parse(raw) as { type?: unknown }).type === 'ready'
-    } catch {
-      ready = false
-    }
-    const pending = sessionRef.current?.handleRawMessage(raw)
-    if (!pending) return
-    const outcome = await pending
-    if (outcome.accepted) {
-      openedRef.current = true
-      setState('connected')
-      setStatusText('已连接')
-      if (ready) {
-        const current = handoffRef.current
-        if (current) current.onReady(current.identity)
+  const handleMessage = useCallback(
+    async (event: WebViewMessageEvent) => {
+      const raw = event.nativeEvent.data
+      // HAM-278 组 1：Web 侧回传的页面画布计数，先于桥协议处理，不进会话。
+      const census = parsePageRenderCensusMessage(raw)
+      if (census) {
+        logNativePdfDiagnostic('reader-pdf-page-render-census', {
+          renderer: 'web',
+          outerWebMounted: true,
+          sessionId,
+          ...census
+        })
+        return
       }
-    } else {
-      setState('error')
-      setStatusText(`拒绝消息：${outcome.rejection?.code ?? 'INVALID_MESSAGE'}`)
-    }
-  }, [])
+      let ready = false
+      try {
+        ready = (JSON.parse(raw) as { type?: unknown }).type === 'ready'
+      } catch {
+        ready = false
+      }
+      const pending = sessionRef.current?.handleRawMessage(raw)
+      if (!pending) return
+      const outcome = await pending
+      if (outcome.accepted) {
+        openedRef.current = true
+        setState('connected')
+        setStatusText('已连接')
+        if (ready) {
+          const current = handoffRef.current
+          if (current) current.onReady(current.identity)
+        }
+      } else {
+        setState('error')
+        setStatusText(
+          `拒绝消息：${outcome.rejection?.code ?? 'INVALID_MESSAGE'}`
+        )
+      }
+    },
+    [sessionId]
+  )
 
   const handleNavigation = useCallback(
     (request: ReaderNavigationContext & { readonly url: string }): boolean => {

@@ -16,6 +16,7 @@ import type {
   ReaderDataStore
 } from '../src/host/readerDataStore'
 import { ReaderDataStore as Store } from '../src/host/readerDataStore'
+import { DebugEntryBar } from './src/debug/DebugEntryBar'
 import { pickAndCacheDocument, removeDocument } from './src/native/documents'
 import { createFileSystemStorage } from './src/native/storage'
 import {
@@ -23,7 +24,10 @@ import {
   type PackagedWebReader
 } from './src/native/webAssets'
 import { LibraryScreen } from './src/screens/LibraryScreen'
-import { ReaderScreen } from './src/screens/ReaderScreen'
+import {
+  ReaderScreen,
+  type ReaderScreenHandle
+} from './src/screens/ReaderScreen'
 import { AppErrorBoundary } from './src/components/AppErrorBoundary'
 
 export function App() {
@@ -40,11 +44,14 @@ function AppContent() {
     storeRef.current = new Store(createFileSystemStorage())
   }
   const store = storeRef.current
+  const readerRef = useRef<ReaderScreenHandle>(null)
+  const closeInFlight = useRef<Promise<void> | null>(null)
   const [documents, setDocuments] = useState<HostDocumentSummary[]>([])
   const [busy, setBusy] = useState(false)
-  const [readerRecord, setReaderRecord] = useState<HostDocumentRecord | null>(
-    null
-  )
+  const [record, setRecord] = useState<HostDocumentRecord | null>(null)
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
+  const [censusToken, setCensusToken] = useState(0)
+  const [holdSaveToken, setHoldSaveToken] = useState(0)
   const [packaged, setPackaged] = useState<PackagedWebReader | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -70,13 +77,17 @@ function AppContent() {
     void prepare()
   }, [prepare])
 
+  const openRecord = useCallback((next: HostDocumentRecord): void => {
+    setRecord(next)
+  }, [])
+
   const pick = async (): Promise<void> => {
     setBusy(true)
     try {
       const picked = await pickAndCacheDocument(store)
       if (!picked) return
       await refresh()
-      setReaderRecord(picked.record)
+      openRecord(picked.record)
     } catch (error) {
       Alert.alert(
         '无法打开文件',
@@ -90,16 +101,25 @@ function AppContent() {
   const open = async (summary: HostDocumentSummary): Promise<void> => {
     setBusy(true)
     try {
-      const record = await store.get(summary.fileId)
-      if (!record) {
+      const next = await store.get(summary.fileId)
+      if (!next) {
         Alert.alert('文件记录不存在', '请重新选择该文件。')
         await refresh()
         return
       }
-      setReaderRecord(record)
+      openRecord(next)
     } finally {
       setBusy(false)
     }
+  }
+
+  const deleteDocument = async (
+    summary: HostDocumentSummary
+  ): Promise<void> => {
+    const current = await store.get(summary.fileId)
+    if (current) await removeDocument(store, current)
+    setRecord((value) => (value?.fileId === summary.fileId ? null : value))
+    await refresh()
   }
 
   const remove = (summary: HostDocumentSummary): void => {
@@ -111,16 +131,54 @@ function AppContent() {
         {
           text: '删除',
           style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              const record = await store.get(summary.fileId)
-              if (record) await removeDocument(store, record)
-              await refresh()
-            })()
-          }
+          onPress: () => void deleteDocument(summary)
         }
       ]
     )
+  }
+
+  const returnToLibrary = (): void => {
+    setRecord(null)
+    setSourcePickerOpen(false)
+    void refresh()
+  }
+
+  const closeAll = async (): Promise<void> => {
+    if (closeInFlight.current) return closeInFlight.current
+    const operation = (async () => {
+      const result = (await readerRef.current?.close()) ?? {
+        status: 'closed' as const
+      }
+      if (result.status === 'closed') {
+        returnToLibrary()
+        return
+      }
+      Alert.alert(
+        '阅读数据尚未保存',
+        '当前页面已保留。请重试，保存确认后才会关闭。',
+        [{ text: '重试', onPress: () => void closeAll() }]
+      )
+    })()
+    closeInFlight.current = operation
+    try {
+      await operation
+    } finally {
+      closeInFlight.current = null
+    }
+  }
+
+  const replaceSource = (summary: HostDocumentSummary): void => {
+    setSourcePickerOpen(false)
+    void (async () => {
+      const next = await store.get(summary.fileId)
+      if (!next) {
+        Alert.alert('文件记录不存在', '请重新选择该文件。')
+        await refresh()
+        return
+      }
+      // 换掉配置记录后 ReaderScreen 会先关闭旧会话并等待保存，成功才重开。
+      setRecord(next)
+    })()
   }
 
   if (loadError !== null) {
@@ -156,25 +214,10 @@ function AppContent() {
     )
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar style='dark' />
-      {readerRecord ? (
-        <ReaderScreen
-          record={readerRecord}
-          store={store}
-          entryUrl={packaged.entryUrl}
-          baseUrl={packaged.baseUrl}
-          onBack={() => {
-            setReaderRecord(null)
-            void refresh()
-          }}
-          onRecordUpdated={(record) => {
-            setReaderRecord(record)
-            void refresh()
-          }}
-        />
-      ) : (
+  if (record === null) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style='dark' />
         <LibraryScreen
           documents={documents}
           busy={busy}
@@ -182,13 +225,53 @@ function AppContent() {
           onOpenDocument={(summary) => void open(summary)}
           onRemoveDocument={remove}
         />
-      )}
+      </SafeAreaView>
+    )
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar style='dark' />
+      <View style={styles.workspace}>
+        {__DEV__ ? (
+          <DebugEntryBar
+            documents={documents}
+            currentFileId={record.fileId}
+            sourcePickerOpen={sourcePickerOpen}
+            onToggleSourcePicker={() => setSourcePickerOpen((value) => !value)}
+            onReplaceSource={replaceSource}
+            onRequestCensus={() => setCensusToken((value) => value + 1)}
+            onHoldSave={() => setHoldSaveToken((value) => value + 1)}
+            onClose={() => void closeAll()}
+          />
+        ) : null}
+        <View style={styles.reader}>
+          <ReaderScreen
+            ref={readerRef}
+            record={record}
+            store={store}
+            entryUrl={packaged.entryUrl}
+            baseUrl={packaged.baseUrl}
+            paneId='left'
+            isActivePane
+            debugCensusToken={censusToken}
+            debugHoldSaveToken={holdSaveToken}
+            onBack={returnToLibrary}
+            onRecordUpdated={(updated) => {
+              setRecord(updated)
+              void refresh()
+            }}
+          />
+        </View>
+      </View>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
+  workspace: { flex: 1 },
+  reader: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   hint: { color: '#6d675f', fontSize: 13, textAlign: 'center', lineHeight: 19 },
   errorPanel: {

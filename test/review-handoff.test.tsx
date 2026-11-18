@@ -21,6 +21,7 @@ import { createDrainPair } from './helpers/bridge-drain'
 import { startNativePdfSurface } from '../webview/src/nativePdf'
 import { nativeCanonicalPageFromOcr } from '../src/nativePdf/ocr'
 import { ReaderScreen } from '../app/src/screens/ReaderScreen'
+import * as pdfRouting from '../src/nativePdf/routing'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
 import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
 import type {
@@ -433,6 +434,8 @@ function alertButton(text: string) {
 }
 
 beforeEach(() => {
+  // This suite exercises the retained manual Web -> native comparison path.
+  vi.spyOn(pdfRouting, 'usesNativePdfLayout').mockReturnValue(false)
   host.commands = []
   host.web = {} as WebViewProps
   host.outerProps = null
@@ -701,7 +704,7 @@ describe('ReaderScreen native handoff regressions', () => {
         })
       } else if (path === 'failure') {
         await act(async () => {
-          alertButton('返回 Web 对照').onPress?.()
+          alertButton('返回原阅读模式').onPress?.()
         })
       } else {
         await act(async () => {
@@ -806,6 +809,7 @@ describe('ReaderScreen native handoff regressions', () => {
   })
 
   it('isolates stale writer callbacks when the file identity changes', async () => {
+    host.webClose.mockResolvedValue({ status: 'closed' })
     const first = makeRecord('file-a')
     const second = makeRecord('file-b')
     const firstFixture = createTransactionStore(first)
@@ -1311,7 +1315,7 @@ describe('device Web close regressions with real bridge peers', () => {
     expect(host.webDiscard).not.toHaveBeenCalled()
     expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
     await act(async () => alertButton('放弃未确认内容…').onPress?.())
-    await act(async () => alertButton('放弃并返回 Web').onPress?.())
+    await act(async () => alertButton('放弃并返回原阅读模式').onPress?.())
     await waitFor(() =>
       expect(screen.getByTestId('web-reader')).toHaveAttribute(
         'data-generation',
@@ -1341,7 +1345,7 @@ describe('device Web close regressions with real bridge peers', () => {
     await switchToNative()
     await loadNative()
     await act(async () => alertButton('放弃未确认内容…').onPress?.())
-    const staleConfirm = alertButton('放弃并返回 Web')
+    const staleConfirm = alertButton('放弃并返回原阅读模式')
     await act(async () => alertButton('重试旧 Web 保存').onPress?.())
     await waitForNativeReady()
     await act(async () => staleConfirm.onPress?.())

@@ -3,6 +3,7 @@
 // 纯 TypeScript，原生层注入基于 expo-file-system 的 HostStorage。
 
 import type { BridgeHostSnapshot } from '../bridge/hostSession'
+import { logNativePdfDiagnostic } from '../nativePdf/diagnostics'
 import { rebaseSnapshot } from './rebaseSnapshot'
 import { assertSafeFileId, type HostDocumentFormat } from './fileIdentity'
 
@@ -179,6 +180,8 @@ export class ReaderDataStore {
   private readonly cache = new Map<string, HostDocumentRecord>()
   /** 每个文件的快照读写队列：A 文件挂起不阻塞 B 文件。 */
   private readonly fileQueues = new Map<string, Promise<unknown>>()
+  /** 每个 fileId 队列的在途任务数，仅用于写盘排队诊断。 */
+  private readonly fileQueueDepth = new Map<string, number>()
   private indexLoaded = false
   private indexLoading: Promise<void> | null = null
   /** 索引/元数据队列：只保护 cache 与 index 键的更新。 */
@@ -199,11 +202,38 @@ export class ReaderDataStore {
 
   /** 见 `runExclusive` 上的锁顺序说明：fileId 队列在外层。 */
   private runForFile<T>(fileId: string, task: () => Promise<T>): Promise<T> {
+    const queuedAt = Date.now()
     const previous = this.fileQueues.get(fileId) ?? Promise.resolve()
-    const result = previous.then(task, task)
+    const queueDepth = this.fileQueueDepth.get(fileId) ?? 0
+    this.fileQueueDepth.set(fileId, queueDepth + 1)
+    // HAM-278 组 4：写盘排队处。只在真的有排队时输出，避免每次读写都刷日志。
+    if (queueDepth > 0) {
+      logNativePdfDiagnostic('reader-store-write-queue', {
+        fileId,
+        event: 'queued',
+        queueDepth,
+        inFlight: queueDepth
+      })
+    }
+    const run = (): Promise<T> => {
+      const waitedMs = Date.now() - queuedAt
+      if (queueDepth > 0) {
+        logNativePdfDiagnostic('reader-store-write-queue', {
+          fileId,
+          event: 'started',
+          queueDepth,
+          waitedMs
+        })
+      }
+      return task()
+    }
+    const result = previous.then(run, run)
     const settled = result.catch(() => undefined)
     this.fileQueues.set(fileId, settled)
     settled.then(() => {
+      const current = this.fileQueueDepth.get(fileId) ?? 0
+      if (current <= 1) this.fileQueueDepth.delete(fileId)
+      else this.fileQueueDepth.set(fileId, current - 1)
       if (this.fileQueues.get(fileId) === settled) {
         this.fileQueues.delete(fileId)
       }

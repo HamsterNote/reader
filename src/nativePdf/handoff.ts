@@ -46,16 +46,18 @@ export class PdfHandoffCoordinator {
   private state: PdfHandoffState
   private readonly transitions: PdfHandoffTransition[] = []
 
-  constructor(web: PdfIdentity) {
+  constructor(web: PdfIdentity, native?: PdfIdentity) {
     this.state = Object.freeze({
       fileId: web.fileId,
       paneId: web.paneId,
-      phase: 'WEB_ACTIVE',
+      // A direct native entry has no Web writer to drain. The authoritative
+      // snapshot must still load before nativeRefreshed grants editing.
+      phase: native ? 'NATIVE_REFRESHING' : 'WEB_ACTIVE',
       target: null,
-      owner: web,
+      owner: native ? null : web,
       epoch: 0,
       web,
-      native: null,
+      native: native ?? null,
       nextWeb: null
     })
     this.record()
