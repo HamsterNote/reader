@@ -9,6 +9,7 @@ HAM-278 保留 iOS 本地 PDF Layout 默认进入仓内 PDFKit 的主线交付�
 - 缺少 `ReaderPdf` 模块或 native view 时显示 dev client 构建提示，不挂外层 Web，也不写快照。Expo Go 不被伪装成支持原生模块。
 - `fileId` 沿用 `HostDocumentRecord.fileId`，仍由名称、大小、修改时间和内容摘要按既有规则生成。不同目录同名但内容不同的文件不共享缓存或 V5/v2 快照；完全相同的副本继续共享文档身份。
 - `ReaderScreen` 使用稳定的 `paneId='left'/'right'` 和独立 `sessionId/generation`。控制器按 ReaderDataStore 对象、paneId、fileId 分桶，事件校验 fileId/paneId/sessionId/generation；只有活动栏保存最近位置。
+- 同一 `fileId` 和 Web 资源版本的并发首开共享一次资源准备。两栏同时等待同一份文档副本校验完成，只做一次复制和 `.pending` 换入。失败后可重新准备，其他文档或资源版本可以并行。
 - 演示 App 默认单栏。`__DEV__` 调试栏可以分栏、切换活动栏、换源、采集渲染计数和制造待写窗口；release 不渲染调试栏，也不注册深链接或读取启动环境变量。
 - 配置文件切换先关闭旧会话并等待保存；保存拒绝保留旧会话和重试入口。页头返回或宿主关闭失败后，下一次返回会从失败态重新 drain，不复用卡住的 Promise。
 
@@ -53,7 +54,7 @@ reader-pdf-handoff-barrier-end    { direction, status: closed|unconfirmed, waite
 
 ```sh
 yarn install --frozen-lockfile
-yarn test:run test/review-ham290.test.ts test/native-pdf/annotation-patch.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/interleaved-saves.test.tsx test/reader-screen-handoff.test.tsx test/host-debug-entry.test.tsx test/host-debug-route.test.ts test/host-native-documents.test.ts --reporter=verbose
+yarn test:run test/review-ham290.test.ts test/native-pdf/annotation-patch.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/interleaved-saves.test.tsx test/reader-screen-handoff.test.tsx test/host-debug-entry.test.tsx test/host-debug-route.test.ts test/host-native-documents.test.ts test/host-document-staging-concurrency.test.ts --reporter=verbose
 yarn test:run
 yarn typecheck
 yarn typecheck:host
@@ -67,6 +68,7 @@ yarn lint
 - `keeps the other pane object and applies the last confirmed recolor to a shared object`：同对象并发改色按确认顺序结算，另一栏 keeper 与左栏矩形均保留。
 - `native annotation object conflict matrix`：覆盖 add/delete/recolor/undo/redo、过期 update、撤销自己的删除和 redo 删除，断言最终对象数量与内容。
 - `test/review-ham290.test.ts`：保留审核员的 3 条复现，并用真实 ReaderDataStore 覆盖无关 range 删除、rect 新增及 undo/redo；逐步回读 revision、ranges、rects 和最终红/蓝笔迹，确认后续已确认 painting 修改不被旧补丁覆盖。
+- `test/host-document-staging-concurrency.test.ts` 在临时目录验证同文件双栏并发首开、失败后重试、不同文件并行，以及修复残缺副本后已有标注和阅读进度仍能从磁盘回读。
 - `drains a failed right-pane save across a deep link and unmounts only after closed`：真实 App + ReaderScreen + ReaderDataStore 注入右栏写盘失败，失败后双栏保留并可重试，检查屏障日志与卸载顺序。
 - `queues a deep link behind an in-progress host close`：深链接不会绕过正在进行的宿主关闭。
 
@@ -103,7 +105,7 @@ EXPO_PUBLIC_HAM278_OPEN_PDF=/absolute/on-device/book.pdf yarn host:start --lan
 
 ### 双栏同文件编辑时间线入口
 
-1. 用同一 `fileId` 以 `layout=split` 打开，确认两栏日志的 fileId 相同，paneId/sessionId 不同。
+1. 选用尚未准备阅读副本的 PDF，以 `layout=split` 首次打开。两栏应无需点「重试」便显示 PDFKit，日志的 fileId 相同，paneId/sessionId 不同。
 2. 左栏新增高亮 R，等待保存确认；右栏确认 R 同步出现。右栏新增另一高亮 K，左栏画一个矩形，等待两栏刷新，确认 R/K/矩形都在。
 3. 点左栏「待写保持」制造 10 秒待确认窗口；窗口内右栏改色 K、左栏改色 R。等待 `drain-end` 后重开，按确认顺序检查最终颜色，K/R/矩形均不得丢失。
 4. 再制造一次左栏待写窗口，右栏删除 R、左栏尝试改色 R。等待队列结算后，R 应保持删除，K 与矩形保留；左栏出现冲突提示并记录 `reader-pdf-annotation-conflict`。
