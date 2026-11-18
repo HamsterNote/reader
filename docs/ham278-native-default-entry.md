@@ -24,6 +24,8 @@ HAM-278 保留 iOS 本地 PDF Layout 默认进入仓内 PDFKit 的主线交付�
 
 冲突只跳过对应对象，同事务中的其他对象修改仍保存。宿主提交本次合并后的快照、显示“目标已在另一栏删除或重建”的提示并记录 `reader-pdf-annotation-conflict`，随后重新水合权威快照；不会把同一个过期操作留在保存队列里无限重试。该规则不新增持久化字段，以补丁操作类型和权威快照中的目标对象状态判定冲突。
 
+生成 painting diff 时直接按 `objectId` 比较 before/after 的原始对象引用，再构造补丁，不能先复制两侧对象再做引用比较。未修改对象不会产生 update，因此无关 range/rect 操作及其 undo/redo 不会携带旧笔迹覆盖后续已确认修改。
+
 ## 布局切换的异步关闭屏障
 
 返回书库、按钮收起分栏以及深链接 `layout=single` 都使用 App 的同一个 `runHostClose`：
@@ -51,7 +53,7 @@ reader-pdf-handoff-barrier-end    { direction, status: closed|unconfirmed, waite
 
 ```sh
 yarn install --frozen-lockfile
-yarn test:run test/native-pdf/annotation-patch.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/interleaved-saves.test.tsx test/reader-screen-handoff.test.tsx test/host-debug-entry.test.tsx test/host-debug-route.test.ts test/host-native-documents.test.ts --reporter=verbose
+yarn test:run test/review-ham290.test.ts test/native-pdf/annotation-patch.test.ts test/native-pdf/annotation-controller.test.ts test/native-pdf/interleaved-saves.test.tsx test/reader-screen-handoff.test.tsx test/host-debug-entry.test.tsx test/host-debug-route.test.ts test/host-native-documents.test.ts --reporter=verbose
 yarn test:run
 yarn typecheck
 yarn typecheck:host
@@ -64,6 +66,7 @@ yarn lint
 - `does not resurrect a highlight deleted by the other pane while a recolor is queued`：左栏矩形保存受阻 → 右栏删除 R → 左栏改色 R → 释放，最终磁盘 `ranges=[]`，并显示冲突提示。
 - `keeps the other pane object and applies the last confirmed recolor to a shared object`：同对象并发改色按确认顺序结算，另一栏 keeper 与左栏矩形均保留。
 - `native annotation object conflict matrix`：覆盖 add/delete/recolor/undo/redo、过期 update、撤销自己的删除和 redo 删除，断言最终对象数量与内容。
+- `test/review-ham290.test.ts`：保留审核员的 3 条复现，并用真实 ReaderDataStore 覆盖无关 range 删除、rect 新增及 undo/redo；逐步回读 revision、ranges、rects 和最终红/蓝笔迹，确认后续已确认 painting 修改不被旧补丁覆盖。
 - `drains a failed right-pane save across a deep link and unmounts only after closed`：真实 App + ReaderScreen + ReaderDataStore 注入右栏写盘失败，失败后双栏保留并可重试，检查屏障日志与卸载顺序。
 - `queues a deep link behind an in-progress host close`：深链接不会绕过正在进行的宿主关闭。
 

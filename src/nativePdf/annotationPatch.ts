@@ -53,28 +53,29 @@ type NativeAnnotationDiffOptions = {
   }
 }
 
-function diffEntities<T extends Identified>(
+function diffEntities<T>(
   before: readonly T[],
   after: readonly T[],
   history: 'edit' | 'undo' | 'redo',
+  idOf: (item: T) => string,
   forceUpsert?: { readonly id: string; readonly operation: 'create' | 'update' }
 ): EntityPatch<T> {
-  const beforeById = new Map(before.map((item) => [item.id, item]))
-  const afterIds = new Set(after.map((item) => item.id))
-  const changed = after.filter((item) => beforeById.get(item.id) !== item)
-  let create = changed.filter((item) => !beforeById.has(item.id))
-  let update = changed.filter((item) => beforeById.has(item.id))
+  const beforeById = new Map(before.map((item) => [idOf(item), item]))
+  const afterIds = new Set(after.map(idOf))
+  const changed = after.filter((item) => beforeById.get(idOf(item)) !== item)
+  let create = changed.filter((item) => !beforeById.has(idOf(item)))
+  let update = changed.filter((item) => beforeById.has(idOf(item)))
   let restore: readonly T[] = []
   if (history === 'undo') {
     restore = create
     create = []
   }
   if (forceUpsert) {
-    const target = changed.find((item) => item.id === forceUpsert.id)
+    const target = changed.find((item) => idOf(item) === forceUpsert.id)
     if (target) {
-      create = create.filter((item) => item.id !== forceUpsert.id)
-      update = update.filter((item) => item.id !== forceUpsert.id)
-      restore = restore.filter((item) => item.id !== forceUpsert.id)
+      create = create.filter((item) => idOf(item) !== forceUpsert.id)
+      update = update.filter((item) => idOf(item) !== forceUpsert.id)
+      restore = restore.filter((item) => idOf(item) !== forceUpsert.id)
       if (forceUpsert.operation === 'create') create = [...create, target]
       else update = [...update, target]
     }
@@ -84,8 +85,8 @@ function diffEntities<T extends Identified>(
     update,
     restore,
     delete: before
-      .filter((item) => !afterIds.has(item.id))
-      .map((item) => item.id)
+      .filter((item) => !afterIds.has(idOf(item)))
+      .map((item) => idOf(item))
   }
 }
 
@@ -126,14 +127,15 @@ function diffPainting(
   const beforeObjects = before?.objects ?? []
   const afterObjects = after?.objects ?? []
   const patch = diffEntities(
-    beforeObjects.map((object) => ({ ...object, id: object.objectId })),
-    afterObjects.map((object) => ({ ...object, id: object.objectId })),
-    history
+    beforeObjects,
+    afterObjects,
+    history,
+    (object) => object.objectId
   )
   const result: PaintingPatch = {
-    create: patch.create.map(({ id: _id, ...object }) => object),
-    update: patch.update.map(({ id: _id, ...object }) => object),
-    restore: patch.restore.map(({ id: _id, ...object }) => object),
+    create: patch.create,
+    update: patch.update,
+    restore: patch.restore,
     delete: patch.delete,
     afterPresent: after !== undefined
   }
@@ -166,11 +168,17 @@ export function diffNativeAnnotationSnapshots(
     if (patch) paintings[pageId] = patch
   }
   return {
-    ranges: diffEntities(before.ranges, after.ranges, history, {
-      id: options.rangeUpsert?.rangeId ?? '',
-      operation: options.rangeUpsert?.operation ?? 'update'
-    }),
-    rects: diffEntities(before.rects, after.rects, history),
+    ranges: diffEntities(
+      before.ranges,
+      after.ranges,
+      history,
+      (item) => item.id,
+      {
+        id: options.rangeUpsert?.rangeId ?? '',
+        operation: options.rangeUpsert?.operation ?? 'update'
+      }
+    ),
+    rects: diffEntities(before.rects, after.rects, history, (item) => item.id),
     paintings
   }
 }
