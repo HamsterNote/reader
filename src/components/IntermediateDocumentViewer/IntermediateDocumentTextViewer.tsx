@@ -3287,6 +3287,63 @@ export function IntermediateDocumentTextViewer(
     onDragHighlight
   })
 
+  const isExistingHighlightNativeStart = useCallback(
+    (target: EventTarget | null, clientX: number, clientY: number) => {
+      if (
+        target instanceof Element &&
+        target.closest(
+          '.hsn-selection-popover, .hsn-selection-handle, button, a, input, textarea, [contenteditable="true"]'
+        )
+      )
+        return false
+      return resolveHighlightDragTarget(clientX, clientY) !== null
+    },
+    [resolveHighlightDragTarget]
+  )
+
+  useEffect(() => {
+    const root = viewerRootElement
+    if (!root) return
+    const suppressTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return
+      const point = event.touches[0]
+      if (
+        !point ||
+        !isExistingHighlightNativeStart(
+          event.target,
+          point.clientX,
+          point.clientY
+        )
+      )
+        return
+      if (event.cancelable) event.preventDefault()
+      event.stopPropagation()
+    }
+    root.addEventListener('touchstart', suppressTouchStart, {
+      capture: true,
+      passive: false
+    })
+    return () =>
+      root.removeEventListener('touchstart', suppressTouchStart, true)
+  }, [isExistingHighlightNativeStart, viewerRootElement])
+
+  const suppressExistingHighlightMouseDown = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (
+        event.button !== 0 ||
+        !isExistingHighlightNativeStart(
+          event.target,
+          event.clientX,
+          event.clientY
+        )
+      )
+        return
+      if (event.cancelable) event.preventDefault()
+      event.stopPropagation()
+    },
+    [isExistingHighlightNativeStart]
+  )
+
   const handleViewerPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       lastActiveRangeRef.current = null
@@ -3710,6 +3767,7 @@ export function IntermediateDocumentTextViewer(
           data-testid='intermediate-document-text-viewer'
           data-title={title}
           style={getTextViewportStyle(props, readingViewport)}
+          onMouseDownCapture={suppressExistingHighlightMouseDown}
           onPointerDownCapture={handleViewerPointerDown}
           onPointerMoveCapture={handleViewerPointerMove}
           onPointerUpCapture={handleViewerPointerUp}
