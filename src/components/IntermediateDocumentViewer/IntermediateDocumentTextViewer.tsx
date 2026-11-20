@@ -1847,6 +1847,12 @@ export function IntermediateDocumentTextViewer(
     [effectiveSelectedRangeId, storedRanges]
   )
   const [managedTextEditing, setManagedTextEditing] = useState(false)
+  const [selectionGesture, setSelectionGesture] = useState<{
+    readonly scope: symbol
+    readonly active: boolean
+  }>(() => ({ scope: selectionScope, active: false }))
+  const selectionGestureActive =
+    selectionGesture.scope === selectionScope && selectionGesture.active
   const resettingPdfTextSelectionRef = useRef(false)
   const [commentingRangeId, setCommentingRangeId] = useState<string | null>(
     null
@@ -3214,16 +3220,18 @@ export function IntermediateDocumentTextViewer(
 
   const handleSelectionStart = useCallback(
     (mousePos: ReaderMousePosition, selection: Selection) => {
+      setSelectionGesture({ scope: selectionScope, active: true })
       onSelectionStart?.(mousePos, selection)
     },
-    [onSelectionStart]
+    [onSelectionStart, selectionScope]
   )
 
   const handleSelectionEnd = useCallback(
     (mousePos: ReaderMousePosition, selection: Selection) => {
+      setSelectionGesture({ scope: selectionScope, active: false })
       onSelectionEnd?.(mousePos, selection)
     },
-    [onSelectionEnd]
+    [onSelectionEnd, selectionScope]
   )
 
   const handleSelectionEndWrap = useCallback(
@@ -3236,11 +3244,8 @@ export function IntermediateDocumentTextViewer(
     [autoHighlight, handleSelectionEnd, highlightSelection]
   )
 
-  const selectionStartHandler = onSelectionStart
-    ? handleSelectionStart
-    : undefined
-  const selectionEndHandler =
-    onSelectionEnd || autoHighlight ? handleSelectionEndWrap : undefined
+  const selectionStartHandler = handleSelectionStart
+  const selectionEndHandler = handleSelectionEndWrap
 
   const resolveHighlightDragTarget = useCallback(
     (clientX: number, clientY: number) => {
@@ -3874,11 +3879,13 @@ export function IntermediateDocumentTextViewer(
           onDraft={handlePageLinkedDataChange}
           onUpdate={handleManagedPdfTextUpdateRange}
         >
-          {managedTextPopover(
-            Boolean(runtimeLinkedData.activeRange),
-            selectionPopover,
-            existingHighlightPopover
-          )}
+          {selectionGestureActive
+            ? null
+            : managedTextPopover(
+                Boolean(runtimeLinkedData.activeRange),
+                selectionPopover,
+                existingHighlightPopover
+              )}
         </PdfTextSelectionControls>
       )}
     </RangeMagnifierProvider>

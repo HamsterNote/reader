@@ -7,6 +7,13 @@ import type {
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import type { ReaderSelectionRef } from '../src/types/selection'
+import type { LinkedSelectionRange } from './mocks/selection'
+import {
+  clearSelectionProps,
+  getAllSelectionProps,
+  simulateLinkedDataChange
+} from './mocks/selection'
 import { mockElementSize, resizeObserverMock } from './setup'
 
 function documentFixture(id: string, count = 100) {
@@ -242,4 +249,101 @@ it('waits for the requested PDF Text page before a close capture can flush progr
     currentPageNumber: 2,
     verticalPercentage: 0
   })
+})
+
+it('defers the PDF selection popover until release and keeps it closed after a handoff clear', async () => {
+  clearSelectionProps()
+  const originalRects = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(10, 10, 80, 20)]
+  })
+  const fixture = documentFixture('popover', 1)
+  const selectionRef = createRef<ReaderSelectionRef>()
+  const onSelectionStart = vi.fn()
+  const onSelectionEnd = vi.fn()
+  const view = render(
+    <IntermediateDocumentTextViewer
+      document={fixture.document}
+      isPdf
+      selectionRef={selectionRef}
+      selectionPopover={<div data-testid='pdf-selection-popover'>高亮</div>}
+      onSelectionStart={onSelectionStart}
+      onSelectionEnd={onSelectionEnd}
+    />
+  )
+  try {
+    sizeRoot()
+    await screen.findByText('popover page 1')
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(1))
+    const runtimeSelectionId = getAllSelectionProps()[0]!.selectionId!
+    const selection = window.getSelection()!
+    let gesture = 0
+    const requireProps = () => {
+      const props = getAllSelectionProps().find(
+        (candidate) => candidate.selectionId === runtimeSelectionId
+      )
+      if (!props?.linkedData) throw new Error('Expected PDF Selection props')
+      return props
+    }
+    const beginSelection = (selectingText: boolean) => {
+      gesture += 1
+      const props = requireProps()
+      const activeRange: LinkedSelectionRange = {
+        id: `draft-${gesture}`,
+        text: 'popover',
+        createdAt: gesture,
+        start: { selectionId: runtimeSelectionId, offset: 0 },
+        end: { selectionId: runtimeSelectionId, offset: 7 },
+        rectsBySelectionId: {
+          [runtimeSelectionId]: [{ x: 10, y: 10, width: 80, height: 20 }]
+        }
+      }
+      act(() => {
+        simulateLinkedDataChange(runtimeSelectionId, {
+          ...props.linkedData!,
+          activeRange,
+          selectingText
+        })
+        props.onSelectionStart?.({ x: 12, y: 16 }, selection)
+      })
+    }
+    const endSelection = () => {
+      const props = requireProps()
+      act(() => {
+        simulateLinkedDataChange(runtimeSelectionId, {
+          ...props.linkedData!,
+          selectingText: false
+        })
+        props.onSelectionEnd?.({ x: 12, y: 16 }, selection)
+      })
+    }
+
+    beginSelection(false)
+    expect(screen.queryByTestId('pdf-selection-popover')).toBeNull()
+    endSelection()
+    expect(screen.getByTestId('pdf-selection-popover')).toBeVisible()
+
+    beginSelection(false)
+    expect(screen.queryByTestId('pdf-selection-popover')).toBeNull()
+    act(() => selectionRef.current!.clear())
+    endSelection()
+    expect(screen.queryByTestId('pdf-selection-popover')).toBeNull()
+
+    beginSelection(true)
+    expect(screen.queryByTestId('pdf-selection-popover')).toBeNull()
+    endSelection()
+    expect(screen.getByTestId('pdf-selection-popover')).toBeVisible()
+    expect(onSelectionStart).toHaveBeenCalledTimes(3)
+    expect(onSelectionEnd).toHaveBeenCalledTimes(3)
+  } finally {
+    view.unmount()
+    clearSelectionProps()
+    if (originalRects) {
+      Object.defineProperty(Range.prototype, 'getClientRects', originalRects)
+    } else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+  }
 })
