@@ -7,11 +7,16 @@ import { createRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
+import type { ReaderHighlightDragHandoff } from '../src/types/highlightDrag'
 import type {
   ReaderSelectionRange,
   ReaderSelectionRef
 } from '../src/types/selection'
-import { clearSelectionProps, getAllSelectionProps } from './mocks/selection'
+import {
+  clearSelectionProps,
+  getAllSelectionProps,
+  simulateLinkedSelectRange
+} from './mocks/selection'
 import {
   mockElementSize,
   resizeObserverMock,
@@ -80,6 +85,7 @@ function mockTextRangeGeometry(): void {
 
 afterEach(() => {
   clearSelectionProps()
+  window.getSelection()?.removeAllRanges()
   vi.restoreAllMocks()
   Reflect.deleteProperty(Range.prototype, 'getClientRects')
 })
@@ -458,6 +464,190 @@ describe('Text Mode highlight drag', () => {
       expect(viewer).not.toHaveClass(
         'hamster-reader__intermediate-document-viewer--suppress-native-selection'
       )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  async function setupExistingHighlightPress() {
+    const highlight = makeHighlight()
+    const onSelectRange = vi.fn()
+    const onGesture = vi.fn<ReaderHighlightDragHandoff['onGesture']>()
+    const handoff: ReaderHighlightDragHandoff = {
+      contract: 'pane-highlight-drag-v1',
+      onGesture
+    }
+    mockTextRangeGeometry()
+    const defaultGetBoundingClientRect =
+      HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: HTMLElement) {
+        return this.classList.contains('hsn-selection-container') ||
+          this.dataset.testid === 'intermediate-text-page-1'
+          ? DOMRect.fromRect({ x: 100, y: 100, width: 400, height: 600 })
+          : defaultGetBoundingClientRect.call(this)
+      }
+    )
+    render(
+      <IntermediateDocumentTextViewer
+        document={makeDocument()}
+        isPdf
+        ranges={[highlight]}
+        overlayRectType='px'
+        onSelectRange={onSelectRange}
+        highlightDragHandoff={handoff}
+        highlightPopover={
+          <div data-testid='existing-highlight-popover'>已有高亮操作</div>
+        }
+      />
+    )
+    const viewer = screen.getByTestId('intermediate-document-text-viewer')
+    setScrollContainerSize(viewer, { width: 800, height: 600 })
+    mockElementSize(viewer, { width: 800, height: 600 })
+    await screen.findByTestId('intermediate-text-page-1')
+    await waitFor(() => {
+      expect(getAllSelectionProps()[0]?.selectionId).toBeDefined()
+    })
+    const runtimeSelectionId = getAllSelectionProps()[0]?.selectionId
+    if (!runtimeSelectionId) throw new Error('Expected runtime selection id')
+    await waitFor(() => {
+      expect(getAllSelectionProps()[0]?.linkedData?.items[0]).toBeDefined()
+    })
+    const selectionContent = viewer.querySelector<HTMLElement>(
+      '.hsn-selection-content'
+    )
+    if (!selectionContent) throw new Error('Expected selection content')
+    return {
+      highlight,
+      onGesture,
+      onSelectRange,
+      runtimeSelectionId,
+      selectionContent,
+      viewer
+    }
+  }
+
+  function interceptNativeSelectionStart(
+    selectionContent: HTMLElement,
+    type: 'mousedown' | 'touchstart'
+  ) {
+    const selectionStart = vi.fn(() => {
+      const range = document.createRange()
+      range.selectNodeContents(selectionContent)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    })
+    selectionContent.addEventListener(type, selectionStart)
+    return selectionStart
+  }
+
+  it.each([
+    { nativeType: 'touchstart', pointerType: 'touch' },
+    { nativeType: 'mousedown', pointerType: 'mouse' }
+  ] as const)(
+    'keeps an existing highlight unselected until a $pointerType tap releases',
+    async ({ nativeType, pointerType }) => {
+      const context = await setupExistingHighlightPress()
+      const selectionStart = interceptNativeSelectionStart(
+        context.selectionContent,
+        nativeType
+      )
+      const point = { clientX: 180, clientY: 250 }
+      if (pointerType === 'touch') {
+        fireEvent.touchStart(context.selectionContent, {
+          touches: [{ identifier: 91, ...point }],
+          changedTouches: [{ identifier: 91, ...point }]
+        })
+      }
+      fireEvent.pointerDown(context.selectionContent, {
+        pointerType,
+        pointerId: 91,
+        isPrimary: true,
+        button: 0,
+        ...point
+      })
+      if (pointerType === 'mouse') {
+        fireEvent.mouseDown(context.selectionContent, { button: 0, ...point })
+      }
+
+      expect(selectionStart).not.toHaveBeenCalled()
+      expect(window.getSelection()?.rangeCount ?? 0).toBe(0)
+      expect(context.onSelectRange).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('existing-highlight-popover')).toBeNull()
+
+      fireEvent.pointerUp(context.selectionContent, {
+        pointerType,
+        pointerId: 91,
+        isPrimary: true,
+        button: 0,
+        ...point
+      })
+      if (pointerType === 'mouse') {
+        act(() =>
+          simulateLinkedSelectRange(
+            context.runtimeSelectionId,
+            context.highlight.id
+          )
+        )
+      }
+
+      expect(context.onSelectRange).toHaveBeenCalledWith(context.highlight.id)
+      expect(screen.getByTestId('existing-highlight-popover')).toBeVisible()
+      expect(window.getSelection()?.rangeCount ?? 0).toBe(0)
+    }
+  )
+
+  it('keeps a dragged existing highlight free of selection and popover through release', async () => {
+    const context = await setupExistingHighlightPress()
+    const selectionStart = interceptNativeSelectionStart(
+      context.selectionContent,
+      'touchstart'
+    )
+    vi.useFakeTimers()
+    try {
+      fireEvent.touchStart(context.selectionContent, {
+        touches: [{ identifier: 92, clientX: 180, clientY: 250 }],
+        changedTouches: [{ identifier: 92, clientX: 180, clientY: 250 }]
+      })
+      fireEvent.pointerDown(context.selectionContent, {
+        pointerType: 'touch',
+        pointerId: 92,
+        isPrimary: true,
+        button: 0,
+        clientX: 180,
+        clientY: 250
+      })
+      expect(selectionStart).not.toHaveBeenCalled()
+      expect(window.getSelection()?.rangeCount ?? 0).toBe(0)
+      expect(screen.queryByTestId('existing-highlight-popover')).toBeNull()
+
+      act(() => vi.advanceTimersByTime(500))
+      expect(context.onGesture.mock.calls[0]?.[0]).toMatchObject({
+        phase: 'start',
+        pointerId: 92
+      })
+      const acknowledge = context.onGesture.mock.calls[0]?.[1]
+      if (!acknowledge) throw new Error('Expected handoff acknowledgement')
+      fireEvent.pointerMove(context.selectionContent, {
+        pointerType: 'touch',
+        pointerId: 92,
+        isPrimary: true,
+        clientX: 210,
+        clientY: 280
+      })
+      act(() => acknowledge('accepted'))
+      fireEvent.pointerUp(context.selectionContent, {
+        pointerType: 'touch',
+        pointerId: 92,
+        isPrimary: true,
+        clientX: 210,
+        clientY: 280
+      })
+
+      expect(context.onSelectRange).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('existing-highlight-popover')).toBeNull()
+      expect(window.getSelection()?.rangeCount ?? 0).toBe(0)
     } finally {
       vi.useRealTimers()
     }
