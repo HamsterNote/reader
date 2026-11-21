@@ -19,7 +19,11 @@ import {
   type HostDocumentRecord
 } from '../src/host/readerDataStore'
 
-const fs = vi.hoisted(() => ({ copyAsync: vi.fn(), moveAsync: vi.fn() }))
+const fs = vi.hoisted(() => ({
+  copyAsync: vi.fn(),
+  deleteAsync: vi.fn(),
+  moveAsync: vi.fn()
+}))
 
 vi.mock('expo-file-system/legacy', () => ({
   documentDirectory: 'file:///documents/',
@@ -33,9 +37,6 @@ vi.mock('expo-file-system/legacy', () => ({
   readDirectoryAsync: async (uri: string) => readdirSync(localPath(uri)),
   makeDirectoryAsync: async (uri: string) => {
     mkdirSync(localPath(uri), { recursive: true })
-  },
-  deleteAsync: async (uri: string) => {
-    rmSync(localPath(uri), { recursive: true, force: true })
   },
   writeAsStringAsync: async (uri: string, value: string) => {
     writeFileSync(localPath(uri), value)
@@ -109,6 +110,9 @@ describe('concurrent native document staging on disk', () => {
     fs.copyAsync.mockImplementation(async ({ from, to }: Relocation) => {
       copyFileSync(localPath(from), localPath(to))
     })
+    fs.deleteAsync.mockImplementation(async (uri: string) => {
+      rmSync(localPath(uri), { recursive: true, force: true })
+    })
     fs.moveAsync.mockImplementation(async (request: Relocation) => {
       moveFile(request)
     })
@@ -176,32 +180,44 @@ describe('concurrent native document staging on disk', () => {
     expect(reopened?.snapshotSource).toBe('v2')
   })
 
-  it('shares a failed move and replaces the incomplete session on retry', async () => {
-    fs.moveAsync.mockRejectedValueOnce(new Error('move interrupted'))
-    const failure = {
-      status: 'rejected',
-      reason: new Error('move interrupted')
-    }
-    await expect(
-      Promise.allSettled([
+  it.each([false, true])(
+    'shares a failed move and retries (cleanup fails: %s)',
+    async (cleanupFails) => {
+      const moveError = new Error('move interrupted')
+      fs.moveAsync.mockImplementationOnce(async () => {
+        if (cleanupFails)
+          fs.deleteAsync.mockRejectedValueOnce(new Error('cleanup interrupted'))
+        throw moveError
+      })
+      const outcomes = await Promise.allSettled([
         stageReaderDocument(base, record),
         stageReaderDocument(base, record)
       ])
-    ).resolves.toEqual([failure, failure])
-    expect(existsSync(localPath(readyMarker))).toBe(false)
-    expect(readFileSync(localPath(pending), 'utf8')).toBe(pdf)
-    expect(existsSync(localPath(publication))).toBe(false)
+      for (const outcome of outcomes) {
+        expect(outcome.status).toBe('rejected')
+        if (outcome.status === 'rejected')
+          expect(outcome.reason).toBe(moveError)
+      }
+      expect(existsSync(localPath(readyMarker))).toBe(false)
+      expect(existsSync(localPath(publication))).toBe(false)
+      expect(existsSync(localPath(pending))).toBe(cleanupFails)
+      if (cleanupFails)
+        expect(readFileSync(localPath(pending), 'utf8')).toBe(pdf)
+      expect(
+        fs.deleteAsync.mock.calls.filter(([uri]) => uri === pending)
+      ).toHaveLength(2)
 
-    await expect(
-      Promise.all([
-        stageReaderDocument(base, record),
-        stageReaderDocument(base, record)
-      ])
-    ).resolves.toEqual([staged, staged])
-    expect(readFileSync(localPath(publication), 'utf8')).toBe(pdf)
-    expect(readFileSync(localPath(readyMarker), 'utf8')).toBe(buildId)
-    expect(existsSync(localPath(pending))).toBe(false)
-  })
+      await expect(
+        Promise.all([
+          stageReaderDocument(base, record),
+          stageReaderDocument(base, record)
+        ])
+      ).resolves.toEqual([staged, staged])
+      expect(readFileSync(localPath(publication), 'utf8')).toBe(pdf)
+      expect(readFileSync(localPath(readyMarker), 'utf8')).toBe(buildId)
+      expect(existsSync(localPath(pending))).toBe(false)
+    }
+  )
 
   it('can stage another file while the first PDF copy is held', async () => {
     const otherId = `f_${'b'.repeat(32)}`
