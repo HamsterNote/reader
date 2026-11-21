@@ -190,16 +190,25 @@ async function stageReaderSession(
   ) {
     const pending = `${publicationUrl}.pending`
     await FileSystem.deleteAsync(pending, { idempotent: true })
-    await FileSystem.copyAsync({
-      from: resolveDocumentCacheUri(
-        FileSystem.documentDirectory,
-        record.fileId,
-        record.format
-      ),
-      to: pending
-    })
-    await FileSystem.deleteAsync(publicationUrl, { idempotent: true })
-    await FileSystem.moveAsync({ from: pending, to: publicationUrl })
+    try {
+      await FileSystem.copyAsync({
+        from: resolveDocumentCacheUri(
+          FileSystem.documentDirectory,
+          record.fileId,
+          record.format
+        ),
+        to: pending
+      })
+      await FileSystem.deleteAsync(publicationUrl, { idempotent: true })
+      await FileSystem.moveAsync({ from: pending, to: publicationUrl })
+    } catch (error) {
+      try {
+        await FileSystem.deleteAsync(pending, { idempotent: true })
+      } catch {
+        // Preserve the staging error if cleanup also fails.
+      }
+      throw error
+    }
   }
   await assertSessionFiles(target, record)
   if (!ready)
