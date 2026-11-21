@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import JSZip from 'jszip'
 import { chromium } from 'playwright'
+import { expect } from 'playwright/test'
 import { createServer } from 'vite'
 import { resolve } from 'node:path'
 import { mkdir } from 'node:fs/promises'
@@ -30,6 +31,72 @@ async function snapshot(page) {
   return page
     .locator('#snapshot')
     .evaluate((node) => JSON.parse(node.textContent))
+}
+
+async function checkPdfSelectionRelease(page, touch) {
+  const span = page
+    .locator('.textLayer span')
+    .filter({ hasText: /\w{4}/ })
+    .first()
+  await expect(span).toBeVisible()
+  const point = await span.evaluate((node) => {
+    const word = node.textContent.match(/\w{4}/)
+    const range = document.createRange()
+    range.setStart(node.firstChild, word.index + 1)
+    range.setEnd(node.firstChild, word.index + 2)
+    const box = range.getBoundingClientRect()
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  })
+  const popover = page.locator('.hsn-selection-popover')
+  if (touch) {
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [point]
+    })
+    await expect(
+      page.locator('[data-range-handle-circle]').first()
+    ).toBeVisible()
+    await expect(popover).toHaveCount(0)
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: []
+    })
+  } else {
+    await page.mouse.move(point.x, point.y)
+    await page.mouse.click(point.x, point.y)
+    await page.mouse.down({ clickCount: 2 })
+    await expect
+      .poll(() => page.evaluate(() => getSelection().toString()))
+      .toMatch(/\w{4}/)
+    await expect(popover).toHaveCount(0)
+    await page.mouse.up({ clickCount: 2 })
+  }
+  await expect(page.getByRole('toolbar', { name: '选区操作' })).toBeVisible()
+  console.log(
+    `PDF Layout ${touch ? 'long press' : 'double click'}: count 0 while pressed, toolbar visible after release`
+  )
+  if (touch) {
+    await page.getByRole('button', { name: '高亮', exact: true }).click()
+    const highlight = page.getByRole('toolbar', { name: '高亮操作' })
+    await expect(highlight).toBeVisible()
+    const { ranges } = await snapshot(page)
+    await page.evaluate((ranges) => {
+      sessionStorage.setItem('selection-harness:ranges', JSON.stringify(ranges))
+    }, ranges)
+    await page.reload()
+    await page
+      .getByLabel('Book', { exact: true })
+      .setInputFiles(resolve('test/compat/fixtures/pdf/two-column.pdf'))
+    const overlay = page.locator(`[data-range-id="${ranges[0].id}"]`).first()
+    await expect(overlay).toBeVisible()
+    const box = await overlay.boundingBox()
+    assert(box)
+    await expect(highlight).toHaveCount(0)
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
+    await expect(highlight).toBeVisible()
+    console.log('PDF Layout existing highlight: toolbar visible after tap')
+  }
 }
 async function selectText(page, format, start, end, reverse = false) {
   const points = await page.evaluate(
@@ -133,20 +200,25 @@ async function dragEndpoint(page, format, cancel = false) {
 }
 // Keep each browser journey sequential so assertions inspect the preceding user action.
 // eslint-disable-next-line sonarjs/cognitive-complexity
-export async function runSelectionChecks(base, output) {
+export async function runSelectionChecks(
+  base,
+  output,
+  { pdfLayoutRelease = false } = {}
+) {
   const browser = await chromium.launch({ headless: true })
   const results = []
   try {
     for (const format of ['epub', 'pdf'])
       for (const controlled of [true, false]) {
         if (
-          process.env.READER_SELECTION_FORMAT &&
-          format !== process.env.READER_SELECTION_FORMAT
+          (pdfLayoutRelease && format !== 'pdf') ||
+          (process.env.READER_SELECTION_FORMAT &&
+            format !== process.env.READER_SELECTION_FORMAT)
         )
           continue
         const page = await browser.newPage({
           viewport: { width: format === 'epub' ? 320 : 900, height: 800 },
-          hasTouch: true
+          hasTouch: !pdfLayoutRelease || controlled
         })
         const errors = []
         page.on('pageerror', (error) => errors.push(error.message))
@@ -176,6 +248,11 @@ export async function runSelectionChecks(base, output) {
               requestAnimationFrame(() => requestAnimationFrame(resolve))
             )
           })
+          if (pdfLayoutRelease) {
+            await checkPdfSelectionRelease(page, controlled)
+            results.push({ format, controlled, passed: true })
+            continue
+          }
           await selectText(
             page,
             format,
@@ -429,7 +506,8 @@ if (process.argv[1] === import.meta.filename) {
   try {
     await runSelectionChecks(
       `http://127.0.0.1:${server.httpServer.address().port}`,
-      output
+      output,
+      { pdfLayoutRelease: process.argv.includes('--pdf-layout-release') }
     )
   } finally {
     await server.close()
