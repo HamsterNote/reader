@@ -1650,6 +1650,7 @@ export function EngineDocumentViewer(props: Props) {
         removeRange(id)
     }
   }
+  const [pdfTouchSelecting, setPdfTouchSelecting] = useState(false)
   const popup = annotationPopup(
     current,
     props.highlightPopover ??
@@ -1764,6 +1765,7 @@ export function EngineDocumentViewer(props: Props) {
             // Clear before the browser starts its next native text gesture;
             // never preventDefault, so a fresh drag selection remains intact.
             if (event.pointerType === 'touch') {
+              setPdfTouchSelecting(true)
               pdfNavigationTouch.current = {
                 pointer: event.pointerId,
                 x: event.clientX,
@@ -1793,11 +1795,13 @@ export function EngineDocumentViewer(props: Props) {
         }}
         onPointerCancel={() => {
           pdfNavigationTouch.current = null
+          setPdfTouchSelecting(false)
         }}
         onPointerUp={(event) => {
           if (source?.format === 'pdf') {
             const gesture = pdfNavigationTouch.current
             pdfNavigationTouch.current = null
+            setPdfTouchSelecting(false)
             if (
               gesture?.pointer === event.pointerId &&
               !gesture.moved &&
@@ -2139,7 +2143,7 @@ export function EngineDocumentViewer(props: Props) {
               )
           }}
         >
-          {popup}
+          {pdfTouchSelecting && !current ? null : popup}
         </EngineSelectionControls>
         <PopoverPortal
           containerRef={root}
