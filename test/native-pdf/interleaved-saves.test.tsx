@@ -375,6 +375,24 @@ describe('interleaved native and Web annotation saves', () => {
 
     expect(screen.getByText('PDFKit 已显示；数据恢复完成')).toBeVisible()
     expect(screen.getByText(warning)).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭标注冲突提示' }))
+    expect(screen.queryByText(warning)).not.toBeInTheDocument()
+
+    const staleFile = { ...file, snapshot: opened.snapshot() }
+    await opened.store.updateSnapshot(file.fileId, (snapshot) => ({
+      ...snapshot,
+      revision: snapshot.revision + 1,
+      data: record(file.fileId, []).snapshot.data
+    }))
+    await webSnapshot(opened.identity, staleFile, [
+      highlight('keeper', '#00ff00')
+    ])
+
+    expect(screen.getByText(warning)).toBeVisible()
+    expect(restoreReaderSnapshot(opened.snapshot().data).data.ranges).toEqual(
+      []
+    )
   })
 
   it('keeps a native rectangle when Web adds and edits highlights before reopen', async () => {
