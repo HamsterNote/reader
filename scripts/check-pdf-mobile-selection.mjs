@@ -209,7 +209,9 @@ export async function checkPdfMobileSelection({ browser, base, output }) {
     assert.equal(await page.locator('.hsn-selection-popover').count(), 0)
     await touch('touchEnd', [])
     await page.getByRole('toolbar', { name: '选区操作' }).waitFor()
-    console.log('HAM342_UNMARKED_LONG_PRESS popoversBeforeRelease=0 toolbarAfterRelease=visible')
+    console.log(
+      'HAM342_UNMARKED_LONG_PRESS popoversBeforeRelease=0 toolbarAfterRelease=visible'
+    )
     await page.getByRole('button', { name: '拖动以调整选区终点' }).waitFor()
     assert.equal(await lastText(), 'beta')
     assert.equal(await page.evaluate(() => getSelection().rangeCount), 0)
