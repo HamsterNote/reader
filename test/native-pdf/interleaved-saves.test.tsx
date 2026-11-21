@@ -339,6 +339,44 @@ afterEach(() => {
 })
 
 describe('interleaved native and Web annotation saves', () => {
+  it('keeps the annotation conflict warning visible after a native status update', async () => {
+    const keeper = highlight('keeper')
+    const file = record('annotation-conflict-warning', [
+      highlight('removed'),
+      keeper
+    ])
+    const opened = await mount(file)
+
+    // Commit the other pane's deletion while this pane still has the old snapshot.
+    await opened.store.updateSnapshot(file.fileId, (snapshot) => ({
+      ...snapshot,
+      revision: snapshot.revision + 1,
+      data: record(file.fileId, [keeper]).snapshot.data
+    }))
+    await webSnapshot(opened.identity, file, [
+      highlight('removed', '#ff0000'),
+      keeper
+    ])
+
+    const warning = /部分标注未保存/
+    expect(screen.getByText(warning)).toBeVisible()
+    expect(restoreReaderSnapshot(opened.snapshot().data).data.ranges).toEqual([
+      keeper
+    ])
+
+    await drainCommands(opened.identity)
+    act(() => {
+      for (const type of ['displayed', 'restored'] as const) {
+        host.native.onPdfEvent({
+          nativeEvent: { ...opened.identity, type, pageNumber: 1 }
+        })
+      }
+    })
+
+    expect(screen.getByText('PDFKit 已显示；数据恢复完成')).toBeVisible()
+    expect(screen.getByText(warning)).toBeVisible()
+  })
+
   it('keeps a native rectangle when Web adds and edits highlights before reopen', async () => {
     const file = record('native-then-web', [highlight('saved')])
     const opened = await mount(file)

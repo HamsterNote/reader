@@ -621,6 +621,36 @@ type NativeSaveResult = {
   readonly annotationConflicts?: readonly NativeAnnotationConflict[]
 }
 
+function AnnotationConflictBanner({
+  visible,
+  onDismiss
+}: {
+  visible: boolean
+  onDismiss: () => void
+}) {
+  if (!visible) return null
+  return (
+    <View
+      style={{
+        backgroundColor: '#fff4ce',
+        paddingHorizontal: 12,
+        paddingVertical: 8
+      }}
+    >
+      <Text role='alert' style={{ color: '#422d08' }}>
+        部分标注未保存：目标已在另一栏删除或重建，过期修改已跳过，请核对后重试
+      </Text>
+      <Pressable
+        accessibilityRole='button'
+        onPress={onDismiss}
+        style={{ alignSelf: 'flex-start', paddingVertical: 8 }}
+      >
+        <Text style={{ color: '#422d08' }}>关闭标注冲突提示</Text>
+      </Pressable>
+    </View>
+  )
+}
+
 type Props = {
   record: HostDocumentRecord
   store: ReaderDataStore
@@ -684,6 +714,8 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
     const inFlight = useRef<PdfCommand | null>(null)
     const counter = useRef(0)
     const [status, setStatus] = useState('正在加载原生 PDF…')
+    const [annotationConflictVisible, setAnnotationConflictVisible] =
+      useState(false)
     const [webError, setWebError] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [menu, setMenu] = useState<{ left: number; top: number } | null>(null)
@@ -948,9 +980,7 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
       conflicts: readonly NativeAnnotationConflict[] | undefined
     ) {
       if (!conflicts?.length) return
-      setStatus(
-        '部分标注未保存：目标已在另一栏删除或重建，过期修改已跳过，请核对后重试'
-      )
+      setAnnotationConflictVisible(true)
       logNativePdfDiagnostic('reader-pdf-annotation-conflict', {
         ...identity,
         conflicts
@@ -1882,6 +1912,10 @@ export const NativePdfReader = forwardRef<ReaderWebViewHandle, Props>(
             <Text role='alert'>重试数据恢复</Text>
           </Pressable>
         ) : null}
+        <AnnotationConflictBanner
+          visible={annotationConflictVisible}
+          onDismiss={() => setAnnotationConflictVisible(false)}
+        />
         <NativePdfControls
           status={status}
           rangesOpen={rangesOpen}
