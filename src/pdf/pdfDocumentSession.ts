@@ -2,15 +2,18 @@
 // 契约依据 contracts/bridge-protocol.md §5：open 失败上报 ENGINE_FAILURE
 // 且不得清空既有数据；dispose 释放全部资源且之后不再产生事件。
 
-import type { PDFDocumentLoadingTask } from 'pdfjs-dist'
+import type { PDFDataRangeTransport, PDFDocumentLoadingTask } from 'pdfjs-dist'
 
 import { getDocument } from './pdfjsRuntime'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
+/** PDF.js has no range-error callback. A host may reject failure to end a pending open. */
+export type PdfRangeTransport = PDFDataRangeTransport & { readonly failure?: Promise<never> }
+
 export type PdfDocumentSource =
   | { readonly data: ArrayBuffer | Uint8Array }
   | { readonly url: string }
-  | { readonly createRange: () => import('pdfjs-dist').PDFDataRangeTransport }
+  | { readonly createRange: () => PdfRangeTransport }
 
 export type PdfOpenErrorKind =
   | 'corrupt'
@@ -109,6 +112,7 @@ export class PdfDocumentSession {
       )
     }
 
+    const range = 'createRange' in source ? source.createRange() : undefined
     const loadingTask = getDocument({
       ...('data' in source
         ? {
@@ -119,7 +123,7 @@ export class PdfDocumentSession {
           }
         : 'url' in source
           ? { url: source.url }
-          : { range: source.createRange() }),
+          : { range }),
       isEvalSupported: false,
       ...documentOptions,
       ...(onPassword ? { onPassword } : {}),
@@ -138,7 +142,9 @@ export class PdfDocumentSession {
     signal?.addEventListener('abort', abortListener, { once: true })
 
     try {
-      const document = await loadingTask.promise
+      const document = await (range?.failure
+        ? Promise.race([loadingTask.promise, range.failure])
+        : loadingTask.promise)
       if (signal?.aborted) {
         // 竞态：加载完成时外部已取消，立即销毁，不把文档交给调用方。
         await loadingTask.destroy()
@@ -150,6 +156,7 @@ export class PdfDocumentSession {
       }
       return new PdfDocumentSession(document, loadingTask)
     } catch (cause) {
+      if (range?.failure) await loadingTask.destroy()
       const kind = classifyPdfOpenError(cause)
       const message =
         cause instanceof Error ? cause.message : 'Failed to open PDF document'

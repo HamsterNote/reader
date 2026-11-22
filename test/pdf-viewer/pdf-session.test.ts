@@ -22,6 +22,20 @@ function readFixture(relativePath: string): Uint8Array {
 }
 
 describe('PdfDocumentSession', () => {
+  it('区间读取失败会结束等待并释放 PDF.js 传输', async () => {
+    const { PDFDataRangeTransport } = await import('pdfjs-dist')
+    class UnavailableRange extends PDFDataRangeTransport {
+      private reject!: (error: Error) => void
+      failure = new Promise<never>((_, reject) => { this.reject = reject })
+      override requestDataRange() { this.reject(new Error('snapshot replaced')) }
+      override abort = vi.fn()
+    }
+    const range = new UnavailableRange(200_000, new Uint8Array(), true)
+    await expect(PdfDocumentSession.open({ createRange: () => range }))
+      .rejects.toMatchObject({ message: 'snapshot replaced' })
+    expect(range.abort).toHaveBeenCalledOnce()
+  })
+
   it('正常打开：页数可读，dispose 后文档销毁且幂等', async () => {
     const session = await PdfDocumentSession.open({
       data: readFixture('pdf/two-column.pdf')

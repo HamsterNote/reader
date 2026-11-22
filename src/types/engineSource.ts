@@ -1,4 +1,5 @@
 import type { IntermediateDocument } from '@hamster-note/types'
+import type { PdfRangeTransport } from '../pdf/pdfDocumentSession'
 
 /** Original sources stay outside persisted ReaderData. Memoize this object per file. */
 export type ReaderEngineSource = {
@@ -11,6 +12,6 @@ export type ReaderEngineSource = {
   | { readonly format: 'pdf'; readonly url: string }
   | {
       readonly format: 'pdf'
-      readonly createRange: () => import('pdfjs-dist').PDFDataRangeTransport
+      readonly createRange: () => PdfRangeTransport
     }
 )
