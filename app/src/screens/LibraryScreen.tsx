@@ -57,7 +57,6 @@ export function LibraryScreen({
   return (
     <View style={styles.container}>
       <View style={styles.intro}>
-        <Text style={styles.heading}>仓鼠阅读</Text>
         <Text style={styles.muted}>
           EPUB / PDF 在本地 WebView 中打开；标注按文件保存在应用内。
         </Text>
@@ -87,7 +86,6 @@ export function LibraryScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 16, paddingTop: 12, gap: 14 },
   intro: { gap: 4 },
-  heading: { fontSize: 26, fontWeight: '700', color: '#1f1d1a' },
   muted: { color: '#6d675f', fontSize: 13 },
   primaryButton: {
     backgroundColor: '#8b5e3c',

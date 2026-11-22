@@ -2,7 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderRtl,
   screen,
   waitFor
 } from '@testing-library/react'
@@ -41,6 +41,7 @@ import type {
   PdfIdentity,
   PdfCanonicalPage
 } from '../src/nativePdf/contracts'
+import { MockNavigationContainer } from './host-navigation-mock'
 
 type TestBinding = {
   readonly identity: PdfIdentity
@@ -68,6 +69,11 @@ const host = vi.hoisted(() => ({
   nativeMounts: 0,
   nativeUnmounts: 0
 }))
+
+vi.mock(
+  '@react-navigation/native',
+  async () => (await import('./host-navigation-mock')).nativeNavigationMock
+)
 
 vi.mock('../app/src/native/webAssets', () => ({
   stageReaderDocument: vi.fn(async () => ({
@@ -337,6 +343,16 @@ function createTransactionStore(
     snapshot: () => current.snapshot,
     owners
   }
+}
+
+function render(ui: React.ReactElement) {
+  return renderRtl(ui, {
+    wrapper: ({ children }: { children: React.ReactNode }) => (
+      <MockNavigationContainer initialRouteName='Reader'>
+        {children}
+      </MockNavigationContainer>
+    )
+  })
 }
 
 async function mountScreen(

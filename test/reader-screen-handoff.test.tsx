@@ -2,7 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderRtl,
   screen,
   waitFor
 } from '@testing-library/react'
@@ -47,6 +47,7 @@ import * as pdfRouting from '../src/nativePdf/routing'
 import { stageReaderDocument } from '../app/src/native/webAssets'
 import { createDocumentFileId } from '../src/host/fileIdentity'
 import type { ReaderSelectionRange } from '../src/types/selection'
+import { MockNavigationContainer } from './host-navigation-mock'
 
 type TestBinding = {
   readonly identity: PdfIdentity
@@ -100,6 +101,14 @@ const host = vi.hoisted(() => {
   }
 })
 
+vi.mock(
+  '@react-navigation/native',
+  async () => (await import('./host-navigation-mock')).nativeNavigationMock
+)
+vi.mock(
+  '@react-navigation/native-stack',
+  async () => (await import('./host-navigation-mock')).nativeStackNavigationMock
+)
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
   createFileSystemStorage: () => host.storage
@@ -524,6 +533,17 @@ const directProps = {
   baseUrl: 'file:///unused/',
   onBack: vi.fn(),
   onRecordUpdated: vi.fn()
+}
+
+function render(ui: React.ReactElement) {
+  if (ui.type === App) return renderRtl(ui)
+  return renderRtl(ui, {
+    wrapper: ({ children }: { children: React.ReactNode }) => (
+      <MockNavigationContainer initialRouteName='Reader'>
+        {children}
+      </MockNavigationContainer>
+    )
+  })
 }
 
 async function emitFor(identity: PdfIdentity, event: PdfEvent) {

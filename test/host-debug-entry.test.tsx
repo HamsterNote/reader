@@ -56,6 +56,14 @@ const host = vi.hoisted(() => {
   }
 })
 
+vi.mock(
+  '@react-navigation/native',
+  async () => (await import('./host-navigation-mock')).nativeNavigationMock
+)
+vi.mock(
+  '@react-navigation/native-stack',
+  async () => (await import('./host-navigation-mock')).nativeStackNavigationMock
+)
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
   createFileSystemStorage: () => host.storage

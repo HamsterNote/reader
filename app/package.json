@@ -10,6 +10,8 @@
     "prebuild": "node ../scripts/apply-ios-webview-patch.mjs && expo prebuild"
   },
   "dependencies": {
+    "@react-navigation/native": "^7.5.2",
+    "@react-navigation/native-stack": "^7.21.1",
     "expo": "~57.0.33",
     "expo-asset": "~57.0.21",
     "expo-crypto": "~57.0.4",
@@ -20,6 +22,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
     "react-native-webview": "13.16.1",
     "expo-system-ui": "~57.0.4"
   },

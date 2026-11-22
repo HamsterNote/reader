@@ -1,11 +1,15 @@
 import { StatusBar } from 'expo-status-bar'
+import { NavigationContainer, useNavigation } from '@react-navigation/native'
+import {
+  createNativeStackNavigator,
+  type NativeStackNavigationProp
+} from '@react-navigation/native-stack'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
   Linking,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View
@@ -57,15 +61,26 @@ type HostCloseAction = {
   running: boolean
 }
 
+type RootStackParamList = {
+  Library: undefined
+  Reader: undefined
+}
+
+const Stack = createNativeStackNavigator<RootStackParamList>()
+
 export function App() {
   return (
     <AppErrorBoundary>
-      <AppContent />
+      <NavigationContainer>
+        <AppContent />
+      </NavigationContainer>
     </AppErrorBoundary>
   )
 }
 
 function AppContent() {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>()
   const storeRef = useRef<ReaderDataStore | null>(null)
   if (storeRef.current === null) {
     storeRef.current = new Store(createFileSystemStorage())
@@ -114,8 +129,9 @@ function AppContent() {
   const openRecord = useCallback(
     (record: HostDocumentRecord): void => {
       setPanes((state) => setPaneRecord(state, focusPane, record))
+      navigation.navigate('Reader')
     },
-    [focusPane]
+    [focusPane, navigation]
   )
 
   const pick = async (): Promise<void> => {
@@ -179,6 +195,7 @@ function AppContent() {
     setPanes(next)
     const other = otherPane(pane)
     if (split && !next[pane] && next[other]) setActivePane(other)
+    if (!hasAnyPane(next)) navigation.popToTop()
     void refresh()
   }
 
@@ -248,6 +265,7 @@ function AppContent() {
       complete: () => {
         setPanes(EMPTY_PANES)
         setSourcePickerOpen(false)
+        navigation.popToTop()
       }
     }
     enqueueHostClose(action)
@@ -285,11 +303,12 @@ function AppContent() {
             mirrorActivePane(setPaneRecord(state, 'left', record), 'left')
           )
           setActivePane('left')
+          navigation.navigate('Reader')
           void refresh()
         }
       })
     },
-    [store, refresh, enqueueHostClose]
+    [store, refresh, enqueueHostClose, navigation]
   )
 
   const debugHandled = useRef(false)
@@ -359,52 +378,9 @@ function AppContent() {
     })()
   }
 
-  if (loadError !== null) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style='dark' />
-        <View style={styles.errorPanel}>
-          <Text style={styles.errorTitle}>阅读资源未就绪</Text>
-          <Text style={styles.errorBody}>{loadError}</Text>
-          <Text style={styles.hint}>
-            先运行 `yarn build:webview` 生成
-            app/assets/webreader.zip，再重新构建 应用。
-          </Text>
-          <Pressable style={styles.button} onPress={() => void prepare()}>
-            <Text style={styles.buttonText}>重试</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    )
-  }
-
-  if (packaged === null || busy) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style='dark' />
-        <View style={styles.center}>
-          <ActivityIndicator color='#8b5e3c' />
-          <Text style={styles.hint}>
-            {packaged === null ? '正在解压阅读资源…' : '正在处理文件…'}
-          </Text>
-        </View>
-      </SafeAreaView>
-    )
-  }
-
-  if (!hasAnyPane(panes)) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style='dark' />
-        <LibraryScreen
-          documents={documents}
-          busy={busy}
-          onPickDocument={() => void pick()}
-          onOpenDocument={(summary) => void open(summary)}
-          onRemoveDocument={remove}
-        />
-      </SafeAreaView>
-    )
+  const updateRecord = (pane: PaneId, updated: HostDocumentRecord): void => {
+    setPanes((state) => setPaneRecord(state, pane, updated))
+    void refresh()
   }
 
   const openPanes = (['left', 'right'] as const)
@@ -417,53 +393,110 @@ function AppContent() {
     ? openPanes
     : openPanes.filter((entry) => entry.pane === focusPane)
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar style='dark' />
-      <View style={styles.workspace}>
-        {__DEV__ ? (
-          <DebugEntryBar
-            split={split}
-            activePane={focusPane}
-            documents={documents}
-            currentFileId={panes[focusPane]?.fileId ?? ''}
-            sourcePickerOpen={sourcePickerOpen}
-            onToggleSplit={toggleSplit}
-            onActivatePane={setActivePane}
-            onToggleSourcePicker={() => setSourcePickerOpen((value) => !value)}
-            onReplaceSource={replaceSource}
-            onRequestCensus={() => setCensusToken((value) => value + 1)}
-            onHoldSave={() => setHoldSaveToken((value) => value + 1)}
-            onClose={closeAll}
-          />
-        ) : null}
-        <View style={styles.panes}>
-          {visiblePanes.map(({ pane, record }) => (
-            <View
-              key={pane}
-              style={[styles.pane, split && styles.paneBorder]}
-              accessibilityLabel={`${pane}-pane`}
-            >
-              <ReaderScreen
-                ref={readerRefs[pane]}
-                record={record}
-                store={store}
-                entryUrl={packaged.entryUrl}
-                baseUrl={packaged.baseUrl}
-                paneId={pane}
-                isActivePane={split ? pane === focusPane : true}
-                debugCensusToken={censusToken}
-                debugHoldSaveToken={holdSaveToken}
-                onBack={() => handleReaderBack(pane)}
-                onRecordUpdated={(updated) => {
-                  setPanes((state) => setPaneRecord(state, pane, updated))
-                  void refresh()
-                }}
+      <Stack.Navigator>
+        <Stack.Screen name='Library' options={{ title: '仓鼠阅读' }}>
+          {() => {
+            if (loadError !== null) {
+              return (
+                <View style={styles.container}>
+                  <View style={styles.errorPanel}>
+                    <Text style={styles.errorTitle}>阅读资源未就绪</Text>
+                    <Text style={styles.errorBody}>{loadError}</Text>
+                    <Text style={styles.hint}>
+                      先运行 `yarn build:webview` 生成
+                      app/assets/webreader.zip，再重新构建 应用。
+                    </Text>
+                    <Pressable
+                      style={styles.button}
+                      onPress={() => void prepare()}
+                    >
+                      <Text style={styles.buttonText}>重试</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )
+            }
+            if (packaged === null || busy) {
+              return (
+                <View style={styles.center}>
+                  <ActivityIndicator color='#8b5e3c' />
+                  <Text style={styles.hint}>
+                    {packaged === null ? '正在解压阅读资源…' : '正在处理文件…'}
+                  </Text>
+                </View>
+              )
+            }
+            return (
+              <LibraryScreen
+                documents={documents}
+                busy={busy}
+                onPickDocument={() => void pick()}
+                onOpenDocument={(summary) => void open(summary)}
+                onRemoveDocument={remove}
               />
-            </View>
-          ))}
-        </View>
-      </View>
-    </SafeAreaView>
+            )
+          }}
+        </Stack.Screen>
+        <Stack.Screen name='Reader' options={{ title: '阅读' }}>
+          {() =>
+            packaged === null ? (
+              <View style={styles.center}>
+                <ActivityIndicator color='#8b5e3c' />
+                <Text style={styles.hint}>正在解压阅读资源…</Text>
+              </View>
+            ) : (
+              <View style={styles.workspace}>
+                {__DEV__ ? (
+                  <DebugEntryBar
+                    split={split}
+                    activePane={focusPane}
+                    documents={documents}
+                    currentFileId={panes[focusPane]?.fileId ?? ''}
+                    sourcePickerOpen={sourcePickerOpen}
+                    onToggleSplit={toggleSplit}
+                    onActivatePane={setActivePane}
+                    onToggleSourcePicker={() =>
+                      setSourcePickerOpen((value) => !value)
+                    }
+                    onReplaceSource={replaceSource}
+                    onRequestCensus={() => setCensusToken((value) => value + 1)}
+                    onHoldSave={() => setHoldSaveToken((value) => value + 1)}
+                    onClose={closeAll}
+                  />
+                ) : null}
+                <View style={styles.panes}>
+                  {visiblePanes.map(({ pane, record }) => (
+                    <View
+                      key={pane}
+                      style={[styles.pane, split && styles.paneBorder]}
+                      accessibilityLabel={`${pane}-pane`}
+                    >
+                      <ReaderScreen
+                        ref={readerRefs[pane]}
+                        record={record}
+                        store={store}
+                        entryUrl={packaged.entryUrl}
+                        baseUrl={packaged.baseUrl}
+                        paneId={pane}
+                        isActivePane={split ? pane === focusPane : true}
+                        debugCensusToken={censusToken}
+                        debugHoldSaveToken={holdSaveToken}
+                        onBack={() => handleReaderBack(pane)}
+                        onRecordUpdated={(updated) =>
+                          updateRecord(pane, updated)
+                        }
+                      />
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )
+          }
+        </Stack.Screen>
+      </Stack.Navigator>
+    </View>
   )
 }
 

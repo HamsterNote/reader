@@ -12,7 +12,6 @@ import {
 import {
   ActivityIndicator,
   Alert,
-  BackHandler,
   Platform,
   Pressable,
   StyleSheet,
@@ -20,6 +19,7 @@ import {
   View
 } from 'react-native'
 import { randomUUID } from 'expo-crypto'
+import { useNavigation } from '@react-navigation/native'
 
 import { pickLegacyJsonAndImport } from '../native/documents'
 import type {
@@ -255,6 +255,7 @@ function ReaderScreenSession({
   onOcrError,
   onOcrTextsChange
 }: ReaderScreenSessionProps) {
+  const navigation = useNavigation()
   const [initialNative] = useState(() =>
     usesNativePdfLayout(Platform.OS, record)
   )
@@ -649,14 +650,12 @@ function ReaderScreenSession({
   closeRef.current = (external = false) => closeReader(external)
 
   useEffect(() => {
-    const subscription = BackHandler.addEventListener(
-      'hardwareBackPress',
-      () => {
-        void closeReader()
-        return true
-      }
-    )
-    return () => subscription.remove()
+    if (!isActivePane) return
+    return navigation.addListener('beforeRemove', (event) => {
+      if (coordinator.snapshot.phase === 'CLOSED') return
+      event.preventDefault()
+      void closeReader()
+    })
   })
 
   const nativeHandoff: NativePdfHandoff = {
@@ -738,51 +737,48 @@ function ReaderScreenSession({
     onOcrError,
     onOcrTextsChange
   })
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Pressable onPress={() => void closeReader()} hitSlop={12}>
-          <Text style={styles.back}>返回</Text>
-        </Pressable>
-        <View style={styles.headerMain}>
-          <Text style={styles.title} numberOfLines={1}>
-            {record.fileName}
-          </Text>
-          <Text style={styles.muted}>
-            {record.format.toUpperCase()}
-            {record.legacyImport
-              ? ` · 旧数据 v${record.legacyImport.version}`
-              : ''}
-          </Text>
+  useEffect(() => {
+    if (!isActivePane) return
+    navigation.setOptions({
+      title: record.fileName,
+      headerRight: () => (
+        <View style={styles.headerActions}>
+          {isLocalIosPdf(Platform.OS, record) ? (
+            <Pressable onPress={nativePdf ? requestText : requestNative}>
+              <Text>{nativePdf ? 'Text' : 'Layout'}</Text>
+            </Pressable>
+          ) : null}
+          {__DEV__ && isLocalIosPdf(Platform.OS, record) ? (
+            <Pressable onPress={nativePdf ? requestWeb : requestNative}>
+              <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={() => void importLegacy()}
+            disabled={
+              importing ||
+              nativePdf ||
+              coordinator.snapshot.phase !== 'WEB_ACTIVE'
+            }
+          >
+            {importing ? (
+              <ActivityIndicator size='small' color='#8b5e3c' />
+            ) : (
+              <Text style={styles.action}>导入旧数据</Text>
+            )}
+          </Pressable>
         </View>
-        {isLocalIosPdf(Platform.OS, record) ? (
-          <Pressable onPress={nativePdf ? requestText : requestNative}>
-            <Text>{nativePdf ? 'Text' : 'Layout'}</Text>
-          </Pressable>
-        ) : null}
-        {__DEV__ && isLocalIosPdf(Platform.OS, record) ? (
-          <Pressable onPress={nativePdf ? requestWeb : requestNative}>
-            <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          onPress={() => void importLegacy()}
-          disabled={
-            importing ||
-            nativePdf ||
-            coordinator.snapshot.phase !== 'WEB_ACTIVE'
-          }
-        >
-          {importing ? (
-            <ActivityIndicator size='small' color='#8b5e3c' />
-          ) : (
-            <Text style={styles.action}>导入旧数据</Text>
-          )}
-        </Pressable>
-      </View>
-      {content}
-    </View>
-  )
+      )
+    })
+  }, [
+    navigation,
+    isActivePane,
+    record,
+    nativePdf,
+    importing,
+    coordinator.snapshot.phase
+  ])
+  return <View style={styles.container}>{content}</View>
 }
 
 export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
@@ -858,18 +854,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: '#f5f3ee'
   },
-  header: {
+  headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd6ca'
+    paddingHorizontal: 8
   },
-  headerMain: { flex: 1 },
-  title: { fontSize: 15, fontWeight: '600', color: '#1f1d1a' },
-  muted: { fontSize: 12, color: '#6d675f' },
-  back: { color: '#8b5e3c', fontSize: 14 },
   action: { color: '#8b5e3c', fontSize: 13 }
 })
