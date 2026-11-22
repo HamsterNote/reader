@@ -577,10 +577,24 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
   })
 
-  it('keeps debug controls and launch routes out of release', async () => {
+  it('opens a library file by ID in release on both initial and subsequent links', async () => {
+    vi.stubGlobal('__DEV__', false)
+    host.params = { fileId: a.fileId }
+    const view = render(<OpenRoute />)
+    await screen.findByTestId('reader-left')
+    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
+    host.params = { fileId: b.fileId }
+    view.rerender(<OpenRoute />)
+    await waitFor(() =>
+      expect(host.latest.get('left')?.record.fileId).toBe(b.fileId)
+    )
+  })
+
+  it('keeps debug/open and environment launches out of release', async () => {
     vi.stubGlobal('__DEV__', false)
     process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
-    render(<App />)
+    host.params = { fileId: a.fileId }
+    render(<DebugOpenRoute />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
     expect(screen.getAllByTestId('reader-left')).toHaveLength(1)

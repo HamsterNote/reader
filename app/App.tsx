@@ -284,7 +284,7 @@ function AppContent({
     closePane(pane)
   }
 
-  /** 调试入口（仅 __DEV__）：深链接 / 环境变量直接指定 PDF，不依赖 HID 点击。 */
+  /** 路由打开书库记录，开发环境还可从文件路径导入。 */
   const openDebugRoute = useCallback(
     async (route: DebugRoute): Promise<void> => {
       const outcome = await resolveDebugTarget(store, route.target)
@@ -294,7 +294,7 @@ function AppContent({
         ...(outcome.status === 'failed' ? { reason: outcome.reason } : {})
       })
       if (outcome.status === 'failed') {
-        Alert.alert('调试入口失败', outcome.reason)
+        Alert.alert('打开文件失败', outcome.reason)
         return
       }
       const record = outcome.record
@@ -316,12 +316,11 @@ function AppContent({
 
   const debugHandled = useRef(false)
   useEffect(() => {
-    if (!__DEV__) return
     if (debugRoute) {
       void openDebugRoute(debugRoute)
       return
     }
-    if (debugHandled.current) return
+    if (!__DEV__ || debugHandled.current) return
     debugHandled.current = true
     const envRoute = debugRouteFromEnv({
       EXPO_PUBLIC_HAM278_ROUTE: process.env.EXPO_PUBLIC_HAM278_ROUTE,
