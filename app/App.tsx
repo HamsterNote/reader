@@ -1,11 +1,11 @@
 import { StatusBar } from 'expo-status-bar'
+import { useNavigation } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
   Linking,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View
@@ -41,13 +41,18 @@ import {
 import { pickAndCacheDocument, removeDocument } from './src/native/documents'
 import { createFileSystemStorage } from './src/native/storage'
 import {
+  resolveReaderHeaderTitle,
+  updateReaderNativeHeader
+} from './src/nativeHeader'
+import {
   preparePackagedWebReader,
   type PackagedWebReader
 } from './src/native/webAssets'
 import { LibraryScreen } from './src/screens/LibraryScreen'
 import {
   ReaderScreen,
-  type ReaderScreenHandle
+  type ReaderScreenHandle,
+  type ReaderScreenHeaderState
 } from './src/screens/ReaderScreen'
 import { AppErrorBoundary } from './src/components/AppErrorBoundary'
 
@@ -66,6 +71,7 @@ export function App() {
 }
 
 function AppContent() {
+  const navigation = useNavigation()
   const storeRef = useRef<ReaderDataStore | null>(null)
   if (storeRef.current === null) {
     storeRef.current = new Store(createFileSystemStorage())
@@ -86,6 +92,16 @@ function AppContent() {
   const [holdSaveToken, setHoldSaveToken] = useState(0)
   const [packaged, setPackaged] = useState<PackagedWebReader | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [headerStates, setHeaderStates] = useState<
+    Partial<Record<PaneId, ReaderScreenHeaderState>>
+  >({})
+  const updateHeaderState = useCallback(
+    (pane: string, state: ReaderScreenHeaderState): void => {
+      if (pane !== 'left' && pane !== 'right') return
+      setHeaderStates((current) => ({ ...current, [pane]: state }))
+    },
+    []
+  )
 
   const refresh = useCallback(async (): Promise<void> => {
     const list = await store.list()
@@ -359,9 +375,28 @@ function AppContent() {
     })()
   }
 
+  const readerOpen = hasAnyPane(panes) && panes[focusPane] !== null
+  const headerTitle = resolveReaderHeaderTitle(
+    readerOpen,
+    split,
+    panes,
+    focusPane,
+    headerStates
+  )
+  useEffect(() => {
+    updateReaderNativeHeader({
+      navigation,
+      readerRefs,
+      focusPane,
+      headerState: headerStates[focusPane],
+      readerOpen,
+      headerTitle
+    })
+  }, [focusPane, headerStates, headerTitle, navigation, readerOpen, readerRefs])
+
   if (loadError !== null) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar style='dark' />
         <View style={styles.errorPanel}>
           <Text style={styles.errorTitle}>阅读资源未就绪</Text>
@@ -374,13 +409,13 @@ function AppContent() {
             <Text style={styles.buttonText}>重试</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
+      </View>
     )
   }
 
   if (packaged === null || busy) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar style='dark' />
         <View style={styles.center}>
           <ActivityIndicator color='#8b5e3c' />
@@ -388,13 +423,13 @@ function AppContent() {
             {packaged === null ? '正在解压阅读资源…' : '正在处理文件…'}
           </Text>
         </View>
-      </SafeAreaView>
+      </View>
     )
   }
 
   if (!hasAnyPane(panes)) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar style='dark' />
         <LibraryScreen
           documents={documents}
@@ -403,7 +438,7 @@ function AppContent() {
           onOpenDocument={(summary) => void open(summary)}
           onRemoveDocument={remove}
         />
-      </SafeAreaView>
+      </View>
     )
   }
 
@@ -417,7 +452,7 @@ function AppContent() {
     ? openPanes
     : openPanes.filter((entry) => entry.pane === focusPane)
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar style='dark' />
       <View style={styles.workspace}>
         {__DEV__ ? (
@@ -454,6 +489,7 @@ function AppContent() {
                 debugCensusToken={censusToken}
                 debugHoldSaveToken={holdSaveToken}
                 onBack={() => handleReaderBack(pane)}
+                onHeaderStateChange={updateHeaderState}
                 onRecordUpdated={(updated) => {
                   setPanes((state) => setPaneRecord(state, pane, updated))
                   void refresh()
@@ -463,7 +499,7 @@ function AppContent() {
           ))}
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   )
 }
 

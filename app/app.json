@@ -14,7 +14,12 @@
       "package": "com.hamsternote.reader",
       "softwareKeyboardLayoutMode": "resize"
     },
-    "plugins": ["expo-document-picker", "./plugins/with-ios-scene.cjs"],
+    "plugins": [
+      "expo-document-picker",
+      "expo-router",
+      "expo-font",
+      "./plugins/with-ios-scene.cjs"
+    ],
     "experiments": {
       "autolinkingModuleResolution": true
     }

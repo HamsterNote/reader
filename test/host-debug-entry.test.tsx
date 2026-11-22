@@ -56,6 +56,8 @@ const host = vi.hoisted(() => {
   }
 })
 
+const navigation = vi.hoisted(() => ({ setOptions: vi.fn() }))
+vi.mock('expo-router', () => ({ useNavigation: () => navigation }))
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
   createFileSystemStorage: () => host.storage
@@ -212,6 +214,32 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     expect(host.latest.get('left')?.paneId).toBe('left')
     expect(host.latest.get('left')?.isActivePane).toBe(true)
     expect(screen.getByText('分栏')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(navigation.setOptions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'a.pdf',
+          headerBackVisible: false,
+          headerLeft: undefined,
+          unstable_headerLeftItems: expect.any(Function)
+        })
+      )
+    )
+    const options = navigation.setOptions.mock.lastCall?.[0] as {
+      unstable_headerLeftItems: () => {
+        label: string
+        icon: { type: string; name: string }
+        onPress: () => void
+      }[]
+    }
+    const leftItems = options.unstable_headerLeftItems()
+    expect(leftItems).toHaveLength(1)
+    expect(leftItems[0]).toMatchObject({
+      label: '返回',
+      icon: { type: 'sfSymbol', name: 'chevron.left' }
+    })
+    await act(async () => leftItems[0]!.onPress())
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('left'))
+    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
   })
 
   it('opens the requested PDF from the launch environment without a picker', async () => {

@@ -9,8 +9,10 @@ import {
 import {
   createRef,
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
+  useRef,
   useState,
   type ReactNode
 } from 'react'
@@ -19,8 +21,10 @@ import { Alert } from 'react-native'
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ReaderScreen,
-  type ReaderScreenHandle
+  ReaderScreen as ReaderScreenContent,
+  type ReaderScreenHandle,
+  type ReaderScreenHeaderState,
+  type ReaderScreenProps
 } from '../app/src/screens/ReaderScreen'
 import { App } from '../app/App'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
@@ -61,6 +65,62 @@ type OuterWebProps = {
   readonly sessionId?: string
 }
 
+const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
+  function ReaderScreenHarness(props, ref) {
+    const handle = useRef<ReaderScreenHandle>(null)
+    const [header, setHeader] = useState<ReaderScreenHeaderState>({
+      title: props.record.fileName,
+      canToggleLayout: true,
+      nativePdf: false,
+      importing: false,
+      canImportLegacy: true
+    })
+    const updateHeader = useCallback(
+      (_paneId: string, state: ReaderScreenHeaderState) => setHeader(state),
+      []
+    )
+    useImperativeHandle(
+      ref,
+      () => ({
+        close: (external = true) =>
+          handle.current?.close(external) ??
+          Promise.resolve<BridgeCloseResult>({ status: 'closed' }),
+        toggleLayout: () => handle.current?.toggleLayout(),
+        toggleDebugRenderer: () => handle.current?.toggleDebugRenderer(),
+        importLegacy: () => handle.current?.importLegacy() ?? Promise.resolve()
+      }),
+      []
+    )
+    return (
+      <>
+        <ReaderScreenContent
+          {...props}
+          ref={handle}
+          onHeaderStateChange={updateHeader}
+        />
+        <span>{header.title}</span>
+        <button onClick={() => handle.current?.close(false)}>返回</button>
+        {header.canToggleLayout ? (
+          <button onClick={() => handle.current?.toggleLayout()}>
+            {header.nativePdf ? 'Text' : 'Layout'}
+          </button>
+        ) : null}
+        {__DEV__ && header.canToggleLayout ? (
+          <button onClick={() => handle.current?.toggleDebugRenderer()}>
+            {header.nativePdf ? 'Web 对照' : '原生 PDF 验证'}
+          </button>
+        ) : null}
+        <button
+          disabled={!header.canImportLegacy}
+          onClick={() => handle.current?.importLegacy()}
+        >
+          导入旧数据
+        </button>
+      </>
+    )
+  }
+)
+
 const host = vi.hoisted(() => {
   const values = new Map<string, string>()
   const writeControls = { failNext: false }
@@ -100,6 +160,8 @@ const host = vi.hoisted(() => {
   }
 })
 
+const navigation = vi.hoisted(() => ({ setOptions: vi.fn() }))
+vi.mock('expo-router', () => ({ useNavigation: () => navigation }))
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
   createFileSystemStorage: () => host.storage
@@ -1610,7 +1672,9 @@ describe('real App host close barriers', () => {
       )
     )
     expect(screen.getByTestId('native-pdf-view')).toBeInTheDocument()
-    expect(screen.queryByText('仓鼠阅读')).not.toBeInTheDocument()
+    expect(navigation.setOptions.mock.lastCall?.[0]).toMatchObject({
+      title: record.fileName
+    })
 
     await act(async () => {
       alertButton('重试').onPress?.()
@@ -1618,7 +1682,9 @@ describe('real App host close barriers', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('native-pdf-view')).not.toBeInTheDocument()
     )
-    expect(screen.getByText('仓鼠阅读')).toBeInTheDocument()
+    expect(navigation.setOptions.mock.lastCall?.[0]).toMatchObject({
+      title: '仓鼠阅读'
+    })
     const saved = await new ReaderDataStore(host.storage).get(record.fileId)
     expect(
       restoreReaderSnapshot(saved?.snapshot.data).data.edgeCrop?.all?.top

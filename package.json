@@ -81,13 +81,14 @@
     "use-undo": "^1.2.0"
   },
   "peerDependencies": {
+    "@hamster-note/painting": "^0.8.4 || ^0.9.0",
     "@hamster-note/selection": "0.3.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "@hamster-note/painting": "^0.8.4 || ^0.9.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@hamster-note/painting": "0.9.0",
     "@hamster-note/selection": "0.3.0",
     "@system-ui-js/development-base": "^0.1.2",
     "@testing-library/dom": "^10.0.0",
@@ -110,10 +111,14 @@
     "eslint-plugin-sonarjs": "^4.0.3",
     "expo": "~57.0.33",
     "expo-asset": "~57.0.21",
+    "expo-constants": "~57.0.24",
     "expo-crypto": "~57.0.4",
     "expo-dev-client": "~57.0.21",
     "expo-document-picker": "~57.0.3",
     "expo-file-system": "~57.0.7",
+    "expo-font": "~57.0.4",
+    "expo-linking": "~57.0.14",
+    "expo-router": "~57.0.31",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.4",
     "fflate": "0.8.2",
@@ -126,13 +131,18 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "^0.21.2",
     "react-native-webview": "13.16.1",
+    "react-native-worklets": "0.10.1",
     "sass": "^1.0.0",
     "typescript": "^5.0.2",
     "typescript-eslint": "^8.50.0",
     "vite": "^7.0.0",
-    "vitest": "^3.0.0",
-    "@hamster-note/painting": "0.9.0"
+    "vitest": "^3.0.0"
   },
   "publishConfig": {
     "access": "public",
