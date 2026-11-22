@@ -1,7 +1,7 @@
 const READ_TIMEOUT_MS = 8000
 
 /** WKWebView 的 file:// 读取没有 HTTP 状态码；用 XHR load + 非空字节判断成功。 */
-export async function readPackagedAsset(path: string): Promise<ArrayBuffer> {
+export function packagedAssetUrl(path: string): URL {
   const root = new URL('.', location.href)
   const url = new URL(path, root)
   const pathname = decodeURIComponent(url.pathname)
@@ -15,6 +15,11 @@ export async function readPackagedAsset(path: string): Promise<ArrayBuffer> {
     throw new Error(`资源路径超出阅读目录：${path}`)
   }
 
+  return url
+}
+
+export async function readPackagedAsset(path: string): Promise<ArrayBuffer> {
+  const url = packagedAssetUrl(path)
   if (url.protocol !== 'file:') {
     const response = await fetch(url.href)
     if (!response.ok) throw new Error(`${path} HTTP ${response.status}`)

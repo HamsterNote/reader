@@ -24,7 +24,8 @@ function Harness() {
   )
   const [color, setColor] = useState('#ffc107')
   const [magnifier, setMagnifier] = useState(true)
-  const [source, setSource] = useState<ReaderEngineSource>()
+  const [source, setSource] =
+    useState<Extract<ReaderEngineSource, { data: Uint8Array }>>()
   const [ranges, setRanges] = useState<ReaderSelectionRange[]>([])
   const [initialRanges, setInitialRanges] = useState<ReaderSelectionRange[]>([])
   const [fontScale, setFontScale] = useState<1 | 1.5>(1)

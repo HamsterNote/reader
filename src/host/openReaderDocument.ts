@@ -6,6 +6,34 @@ import { PdfDocumentSession } from '../pdf/pdfDocumentSession'
 import { createPdfTextModeDocument } from '../pdf/pdfTextModeDocument'
 import type { ReaderEngineSource } from '../types/engineSource'
 
+/** The layout engine owns its own PDF session. Open the text index on demand. */
+export async function prepareReaderDocument(
+  source: ReaderEngineSource,
+  id: string
+) {
+  if (source.format === 'epub')
+    return { source, ...(await openReaderDocument(source, id)) }
+  let opened: ReturnType<typeof openReaderDocument> | undefined
+  let closed = false
+  const loadTextDocument = async () => {
+    if (closed) throw new Error('PDF document closed')
+    opened ??= openReaderDocument(source, id).catch((error) => {
+      opened = undefined
+      throw error
+    })
+    return (await opened).document
+  }
+  return {
+    source: { ...source, loadTextDocument },
+    document: IntermediateDocument.parse({ id, title: id, pages: [] }),
+    dispose: async () => {
+      closed = true
+      const handle = await opened?.catch(() => undefined)
+      await handle?.dispose()
+    }
+  }
+}
+
 /** Metadata/index facade only. EPUB display is Foliate; PDF display is PDFViewer. */
 export async function openReaderDocument(
   source: ReaderEngineSource,
@@ -58,10 +86,9 @@ export async function openReaderDocument(
     }
   }
   if (source.workerSrc) configurePdfJsWorker(source.workerSrc)
-  const session = await PdfDocumentSession.open(
-    { data: source.data.slice() },
-    { documentOptions: source.documentOptions }
-  )
+  const session = await PdfDocumentSession.open(source, {
+    documentOptions: source.documentOptions
+  })
   try {
     const facade = await createPdfTextModeDocument(session.document, id)
     return { document: facade.document, dispose: () => session.dispose() }

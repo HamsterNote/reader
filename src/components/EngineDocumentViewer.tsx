@@ -1632,7 +1632,7 @@ export function EngineDocumentViewer(props: Props) {
   }
   useImperativeHandle(props.selectionRef, () => commands)
   const pdfSource = useMemo(
-    () => (source ? { data: source.data.slice() } : null),
+    () => (source?.format === 'pdf' ? { ...source } : null),
     [source, retry]
   )
   useEffect(() => {

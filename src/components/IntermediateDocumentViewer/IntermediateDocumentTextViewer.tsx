@@ -1056,6 +1056,50 @@ export type IntermediateDocumentTextViewerProps = {
 export function IntermediateDocumentTextViewer(
   props: IntermediateDocumentTextViewerProps
 ) {
+  const load = props.pdfSource?.loadTextDocument
+  return load ? (
+    <DeferredPdfTextViewer {...props} load={load} />
+  ) : (
+    <TextViewer {...props} />
+  )
+}
+
+function DeferredPdfTextViewer(
+  props: IntermediateDocumentTextViewerProps & {
+    load: () => Promise<IntermediateDocument>
+  }
+) {
+  const { load, onEngineError } = props
+  const onError = useRef(onEngineError)
+  onError.current = onEngineError
+  const [result, setResult] = useState<{
+    load: typeof load
+    document?: IntermediateDocument
+    error?: Error
+  }>()
+  useEffect(() => {
+    let active = true
+    load().then(
+      (document) => {
+        if (active) setResult({ load, document })
+      },
+      (cause) => {
+        if (!active) return
+        const error = cause instanceof Error ? cause : new Error(String(cause))
+        setResult({ load, error })
+        onError.current?.(error)
+      }
+    )
+    return () => {
+      active = false
+    }
+  }, [load])
+  if (result?.load !== load) return <div role='status'>正在加载文字…</div>
+  if (result.error) return <div role='alert'>{result.error.message}</div>
+  return <TextViewer {...props} document={result.document} />
+}
+
+function TextViewer(props: IntermediateDocumentTextViewerProps) {
   const {
     document,
     isEpub = false,

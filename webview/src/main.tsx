@@ -8,7 +8,7 @@ import { ReaderSurface } from './ReaderSurface'
 import { ReaderRootErrorBoundary } from './ReaderRootErrorBoundary'
 import { createWebBridgeClient } from './bridgeClient'
 import { listenHostMessages } from './hostMessageChannel'
-import { readPackagedAsset } from './packagedAsset'
+import { packagedAssetUrl, readPackagedAsset } from './packagedAsset'
 import { createPdfWorkerFromAsset } from './pdfWorker'
 import { packagedPdfOptions } from './pdfAssets'
 import { GlobalWorkerOptions } from '../../src/pdf/pdfjsRuntime'
@@ -16,7 +16,7 @@ import {
   PAGE_RENDER_CENSUS_REQUEST,
   pageRenderCensusReply
 } from '../../src/pdf/pageRenderCensus'
-import { openReaderDocument } from '../../src/host/openReaderDocument'
+import { prepareReaderDocument } from '../../src/host/openReaderDocument'
 import {
   restoreReaderSnapshot,
   serializeReaderSnapshot,
@@ -29,6 +29,28 @@ import type {
 import type { ReaderEngineSource } from '../../src/types/engineSource'
 import '../../src/styles/index.scss'
 import './reader.css'
+
+async function packagedDocumentSource(
+  document: BridgeOpenPayload['document']
+): Promise<ReaderEngineSource> {
+  const url = packagedAssetUrl(document.fileUrl)
+  if (document.format === 'pdf' && /^https?:$/.test(url.protocol)) {
+    return {
+      format: 'pdf',
+      url: url.href,
+      documentOptions: {
+        ...packagedPdfOptions,
+        disableAutoFetch: true,
+        disableStream: true
+      }
+    }
+  }
+  return {
+    format: document.format,
+    data: new Uint8Array(await readPackagedAsset(document.fileUrl)),
+    documentOptions: packagedPdfOptions
+  }
+}
 
 if (window.__READER_NATIVE_PDF__) {
   startNativePdfSurface(window.__READER_NATIVE_PDF__)
@@ -131,7 +153,7 @@ if (window.__READER_NATIVE_PDF__) {
   let generation = 0
   let descriptor: BridgeOpenPayload | null = null
   let snapshot: BridgeRestorePayload | null = null
-  let opened: Awaited<ReturnType<typeof openReaderDocument>> | null = null
+  let opened: Awaited<ReturnType<typeof prepareReaderDocument>> | null = null
   let worker: Worker | null = null
   let work: Promise<void> = Promise.resolve()
   const engineDisposals: Promise<void>[] = []
@@ -178,7 +200,7 @@ if (window.__READER_NATIVE_PDF__) {
       await release()
       if (token !== generation) return
       // Native stages exactly this publication beside the packaged entry, within WKWebView's read root.
-      const data = new Uint8Array(await readPackagedAsset(document.fileUrl))
+      const source = await packagedDocumentSource(document)
       if (token !== generation) return
       if (document.format === 'pdf') {
         const nextWorker = await createPdfWorkerFromAsset()
@@ -189,12 +211,10 @@ if (window.__READER_NATIVE_PDF__) {
         worker = nextWorker
         GlobalWorkerOptions.workerPort = nextWorker
       }
-      const source: ReaderEngineSource = {
-        format: document.format,
-        data,
-        documentOptions: packagedPdfOptions
-      }
-      const documentHandle = await openReaderDocument(source, document.fileId)
+      const documentHandle = await prepareReaderDocument(
+        source,
+        document.fileId
+      )
       opened = documentHandle
       if (token !== generation) {
         await release()
@@ -215,7 +235,7 @@ if (window.__READER_NATIVE_PDF__) {
             }}
             onEngineDisposal={(completion) => engineDisposals.push(completion)}
             progressRef={readerProgress}
-            source={source}
+            source={documentHandle.source}
             document={documentHandle.document}
             initial={initial}
             onChange={(data) => {
