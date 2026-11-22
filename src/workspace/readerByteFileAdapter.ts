@@ -21,12 +21,13 @@ export function createReaderByteFileAdapter(options: {
         workerSrc: options.workerSrc,
         documentOptions: options.documentOptions
       }
-      const { openReaderDocument } = await import('../host/openReaderDocument')
-      const opened = await openReaderDocument(source, file.key)
+      const { prepareReaderDocument } =
+        await import('../host/openReaderDocument')
+      const opened = await prepareReaderDocument(source, file.key)
       return {
         props: {
           document: opened.document,
-          engineSource: source,
+          engineSource: opened.source,
           useVirtualPaper: false,
           isPdf: options.format === 'pdf',
           isEpub: options.format === 'epub'

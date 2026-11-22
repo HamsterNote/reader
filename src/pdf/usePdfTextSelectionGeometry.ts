@@ -72,7 +72,7 @@ export function usePdfTextSelectionGeometry(
       if (!state.session) {
         if (state.source.workerSrc) configurePdfJsWorker(state.source.workerSrc)
         state.session = PdfDocumentSession.open(
-          { data: state.source.data.slice() },
+          state.source,
           { documentOptions: state.source.documentOptions }
         ).catch((error) => {
           state.session = undefined

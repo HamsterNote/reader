@@ -10,6 +10,7 @@ import type { PDFDocumentProxy } from './pdfjsRuntime'
 export type PdfDocumentSource =
   | { readonly data: ArrayBuffer | Uint8Array }
   | { readonly url: string }
+  | { readonly createRange: () => import('pdfjs-dist').PDFDataRangeTransport }
 
 export type PdfOpenErrorKind =
   | 'corrupt'
@@ -116,7 +117,9 @@ export class PdfDocumentSession {
                 ? source.data.slice()
                 : new Uint8Array(source.data.slice(0))
           }
-        : { url: source.url }),
+        : 'url' in source
+          ? { url: source.url }
+          : { range: source.createRange() }),
       isEvalSupported: false,
       ...documentOptions,
       ...(onPassword ? { onPassword } : {}),

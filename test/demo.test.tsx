@@ -1034,9 +1034,13 @@ describe('demo parser flow', () => {
       const source = findDocumentReaderProps()?.engineSource
       if (caseData.label === 'EPUB' || caseData.label === 'PDF') {
         expect(source?.format).toBe(caseData.label.toLowerCase())
-        expect(source?.data.byteLength).toBe(uploadedFile.size)
+        expect(source && 'data' in source && source.data.byteLength).toBe(
+          uploadedFile.size
+        )
         if (caseData.label === 'EPUB')
-          expect(source?.data).toEqual(new Uint8Array([112, 100, 102]))
+          expect(source && 'data' in source && source.data).toEqual(
+            new Uint8Array([112, 100, 102])
+          )
       } else {
         expect(source).toBeUndefined()
       }

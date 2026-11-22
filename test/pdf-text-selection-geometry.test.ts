@@ -51,7 +51,7 @@ describe('PDF text selection source geometry', () => {
     expect(PdfDocumentSession.open).toHaveBeenCalledTimes(1)
     const supplied = vi.mocked(PdfDocumentSession.open).mock.calls[0][0]
     expect('data' in supplied && supplied.data).toEqual(source.data)
-    expect('data' in supplied && supplied.data).not.toBe(source.data)
+    expect('data' in supplied && supplied.data).toBe(source.data)
     expect(registerPdfTextSelectionGeometry).toHaveBeenCalledTimes(2)
     expect(
       vi.mocked(registerPdfTextSelectionGeometry).mock.calls[0][0]
