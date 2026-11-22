@@ -395,10 +395,9 @@ async function pdfAnnotationEditing(file, original = false) {
     await dragText(page, original ? 'Modernizing JavaScript' : 0, sheet)
     await page.getByRole('button', { name: '高亮', exact: true }).click()
     await page.getByRole('button', { name: '删除', exact: true }).waitFor()
-    assert.equal(
-      await page.getByLabel('Highlight color', { exact: true }).inputValue(),
-      '#7d9ec0'
-    )
+    await page
+      .getByRole('button', { name: 'Highlight color #7d9ec0', pressed: true })
+      .waitFor()
     const text = sheet.locator('.hamster-reader__pdf-highlight-rect').first()
     const textBox = await text.boundingBox()
     const blank = { x: textBox.x + 650, y: textBox.y + 180 }
@@ -434,10 +433,9 @@ async function pdfAnnotationEditing(file, original = false) {
     await page.getByRole('button', { name: '高亮', exact: true }).click()
     const rectangle = sheet.locator('[data-rect-id]').first()
     await rectangle.locator('.hamster-reader__engine-handle').first().waitFor()
-    assert.equal(
-      await page.getByLabel('Highlight color', { exact: true }).inputValue(),
-      '#cf9cab'
-    )
+    await page
+      .getByRole('button', { name: 'Highlight color #cf9cab', pressed: true })
+      .waitFor()
     await dismiss(blank.x, blank.y)
     const rectStyle = await rectangle.evaluate((element) => {
       const style = getComputedStyle(element)
@@ -473,10 +471,9 @@ async function pdfAnnotationEditing(file, original = false) {
       .locator('.hamster-reader__engine-handle')
       .first()
       .waitFor({ state: 'hidden' })
-    assert.equal(
-      await page.getByLabel('Highlight color', { exact: true }).inputValue(),
-      '#7d9ec0'
-    )
+    await page
+      .getByRole('button', { name: 'Highlight color #7d9ec0', pressed: true })
+      .waitFor()
     assert.equal(await popup.count(), 1)
     await dismiss(blank.x, blank.y)
 
