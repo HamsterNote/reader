@@ -30,6 +30,28 @@ import type { ReaderEngineSource } from '../../src/types/engineSource'
 import '../../src/styles/index.scss'
 import './reader.css'
 
+async function packagedDocumentSource(
+  document: BridgeOpenPayload['document']
+): Promise<ReaderEngineSource> {
+  const url = packagedAssetUrl(document.fileUrl)
+  if (document.format === 'pdf' && /^https?:$/.test(url.protocol)) {
+    return {
+      format: 'pdf',
+      url: url.href,
+      documentOptions: {
+        ...packagedPdfOptions,
+        disableAutoFetch: true,
+        disableStream: true
+      }
+    }
+  }
+  return {
+    format: document.format,
+    data: new Uint8Array(await readPackagedAsset(document.fileUrl)),
+    documentOptions: packagedPdfOptions
+  }
+}
+
 if (window.__READER_NATIVE_PDF__) {
   startNativePdfSurface(window.__READER_NATIVE_PDF__)
 } else {
@@ -178,23 +200,7 @@ if (window.__READER_NATIVE_PDF__) {
       await release()
       if (token !== generation) return
       // Native stages exactly this publication beside the packaged entry, within WKWebView's read root.
-      const url = packagedAssetUrl(document.fileUrl)
-      const source: ReaderEngineSource =
-        document.format === 'pdf' && /^https?:$/.test(url.protocol)
-          ? {
-              format: 'pdf',
-              url: url.href,
-              documentOptions: {
-                ...packagedPdfOptions,
-                disableAutoFetch: true,
-                disableStream: true
-              }
-            }
-          : {
-              format: document.format,
-              data: new Uint8Array(await readPackagedAsset(document.fileUrl)),
-              documentOptions: packagedPdfOptions
-            }
+      const source = await packagedDocumentSource(document)
       if (token !== generation) return
       if (document.format === 'pdf') {
         const nextWorker = await createPdfWorkerFromAsset()

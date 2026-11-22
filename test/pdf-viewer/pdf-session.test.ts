@@ -26,13 +26,18 @@ describe('PdfDocumentSession', () => {
     const { PDFDataRangeTransport } = await import('pdfjs-dist')
     class UnavailableRange extends PDFDataRangeTransport {
       private reject!: (error: Error) => void
-      failure = new Promise<never>((_, reject) => { this.reject = reject })
-      override requestDataRange() { this.reject(new Error('snapshot replaced')) }
+      failure = new Promise<never>((_, reject) => {
+        this.reject = reject
+      })
+      override requestDataRange() {
+        this.reject(new Error('snapshot replaced'))
+      }
       override abort = vi.fn()
     }
     const range = new UnavailableRange(200_000, new Uint8Array(), true)
-    await expect(PdfDocumentSession.open({ createRange: () => range }))
-      .rejects.toMatchObject({ message: 'snapshot replaced' })
+    await expect(
+      PdfDocumentSession.open({ createRange: () => range })
+    ).rejects.toMatchObject({ message: 'snapshot replaced' })
     expect(range.abort).toHaveBeenCalledOnce()
   })
 

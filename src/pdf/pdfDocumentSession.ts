@@ -8,12 +8,28 @@ import { getDocument } from './pdfjsRuntime'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 /** PDF.js has no range-error callback. A host may reject failure to end a pending open. */
-export type PdfRangeTransport = PDFDataRangeTransport & { readonly failure?: Promise<never> }
+export type PdfRangeTransport = PDFDataRangeTransport & {
+  readonly failure?: Promise<never>
+}
 
 export type PdfDocumentSource =
   | { readonly data: ArrayBuffer | Uint8Array }
   | { readonly url: string }
   | { readonly createRange: () => PdfRangeTransport }
+
+function pdfDocumentInput(source: PdfDocumentSource) {
+  if ('data' in source) {
+    const bytes = source.data
+    return {
+      data:
+        bytes instanceof Uint8Array
+          ? bytes.slice()
+          : new Uint8Array(bytes.slice(0))
+    }
+  }
+  if ('url' in source) return { url: source.url }
+  return { range: source.createRange() }
+}
 
 export type PdfOpenErrorKind =
   | 'corrupt'
@@ -112,18 +128,10 @@ export class PdfDocumentSession {
       )
     }
 
-    const range = 'createRange' in source ? source.createRange() : undefined
+    const input = pdfDocumentInput(source)
+    const range = input.range
     const loadingTask = getDocument({
-      ...('data' in source
-        ? {
-            data:
-              source.data instanceof Uint8Array
-                ? source.data.slice()
-                : new Uint8Array(source.data.slice(0))
-          }
-        : 'url' in source
-          ? { url: source.url }
-          : { range }),
+      ...input,
       isEvalSupported: false,
       ...documentOptions,
       ...(onPassword ? { onPassword } : {}),
