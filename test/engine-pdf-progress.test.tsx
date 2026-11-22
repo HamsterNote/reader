@@ -101,39 +101,51 @@ beforeEach(() => {
 const source = { format: 'pdf' as const, data: new Uint8Array([1]) }
 const saved = { pageNumber: 1, offset: 20, textId: 'x', text: 'text' }
 
-it('keeps the Layout selection popover detached while its pointer is down', async () => {
-  const view = render(
-    <EngineDocumentViewer
-      engineSource={source}
-      selectionPopover={<span>Selection toolbar</span>}
-    />
-  )
-  const text = view.getByText('Layout text')
-  const range = document.createRange()
-  range.selectNodeContents(text)
-  vi.spyOn(state.api!, 'getSelectionRange').mockReturnValue(range)
-  vi.spyOn(state.api!, 'serializeSelection').mockReturnValue({
-    text: 'Layout text',
-    start: { selectionId: 'page-1', offset: 0 },
-    end: { selectionId: 'page-1', offset: 11 },
-    rectsBySelectionId: {}
-  })
-  const pointer = (type: string, id: number) =>
-    Object.assign(new MouseEvent(type, { bubbles: true }), { pointerId: id })
-  await act(async () => {
-    text.dispatchEvent(pointer('pointerdown', 1))
-    state.pdf?.onTextSelectionChange?.('Layout text', null)
-  })
-  expect(view.queryByText('Selection toolbar')).toBeNull()
-  await act(async () => {
-    window.dispatchEvent(pointer('pointerup', 2))
-  })
-  expect(view.queryByText('Selection toolbar')).toBeNull()
-  await act(async () => {
-    window.dispatchEvent(pointer('pointerup', 1))
-  })
-  expect(view.getByText('Selection toolbar')).toBeVisible()
-})
+it.each([
+  { type: 'pointerup', first: 31 },
+  { type: 'pointerup', first: 32 },
+  { type: 'pointercancel', first: 31 },
+  { type: 'pointercancel', first: 32 }
+])(
+  'keeps the Layout selection popover detached until every touch ends: $type $first',
+  async ({ type, first }) => {
+    const view = render(
+      <EngineDocumentViewer
+        engineSource={source}
+        selectionPopover={<span>Selection toolbar</span>}
+      />
+    )
+    const text = view.getByText('Layout text')
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    vi.spyOn(state.api!, 'getSelectionRange').mockReturnValue(range)
+    vi.spyOn(state.api!, 'serializeSelection').mockReturnValue({
+      text: 'Layout text',
+      start: { selectionId: 'page-1', offset: 0 },
+      end: { selectionId: 'page-1', offset: 11 },
+      rectsBySelectionId: {}
+    })
+    const pointer = (type: string, id: number) =>
+      Object.assign(new MouseEvent(type, { bubbles: true }), {
+        pointerId: id,
+        pointerType: 'touch'
+      })
+    await act(async () => {
+      text.dispatchEvent(pointer('pointerdown', 31))
+      state.pdf?.onTextSelectionChange?.('Layout text', null)
+      text.dispatchEvent(pointer('pointerdown', 32))
+    })
+    expect(view.queryByText('Selection toolbar')).toBeNull()
+    await act(async () => {
+      window.dispatchEvent(pointer(type, first))
+    })
+    expect(view.queryByText('Selection toolbar')).toBeNull()
+    await act(async () => {
+      window.dispatchEvent(pointer(type, first === 31 ? 32 : 31))
+    })
+    expect(view.getByText('Selection toolbar')).toBeVisible()
+  }
+)
 
 it('passes the already resolved safe margins to the layout sidebar without adding them again', () => {
   const view = render(

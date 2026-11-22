@@ -247,9 +247,11 @@ function annotationPopup<T>(
   item: T | undefined,
   popover: ReactNode | ((item: T) => ReactNode),
   fallback: ReactNode,
-  suppressed = false
+  suppressed = false,
+  fallbackSuppressed = suppressed
 ) {
-  if (suppressed) return null
+  if (item && suppressed) return null
+  if (!item && fallbackSuppressed) return null
   if (!item) return fallback
   return typeof popover === 'function' ? popover(item) : popover
 }
@@ -306,30 +308,48 @@ function usePdfSelectionPress(
   pdfTouch: boolean,
   positionOwner: object
 ) {
-  const [pressedSelectionOwner, setPressedSelectionOwner] = useState<
-    object | null
-  >(null)
+  const [pressedSelection, setPressedSelection] = useState<{
+    owner: object
+    touch: boolean
+  } | null>(null)
   useEffect(() => {
     const view = rootElement?.ownerDocument.defaultView
     if (!rootElement || !view || !pdfTouch) return
-    let pointer: number | null = null
+    const touchPointers = new Set<number>()
+    let mousePointer: number | null = null
+    const update = () => {
+      if (touchPointers.size > 0) {
+        setPressedSelection({ owner: positionOwner, touch: true })
+        return
+      }
+      if (mousePointer !== null) {
+        setPressedSelection({ owner: positionOwner, touch: false })
+        return
+      }
+      setPressedSelection(null)
+    }
     const start = (event: PointerEvent) => {
       if (
-        pointer !== null ||
         event.button !== 0 ||
         !(event.target instanceof Element) ||
         !event.target.closest('.textLayer')
       )
         return
-      pointer = event.pointerId
-      setPressedSelectionOwner(positionOwner)
+      if (event.pointerType === 'touch') touchPointers.add(event.pointerId)
+      else if (event.pointerType === 'mouse') mousePointer = event.pointerId
+      else return
+      update()
     }
     const clear = () => {
-      pointer = null
-      setPressedSelectionOwner(null)
+      touchPointers.clear()
+      mousePointer = null
+      setPressedSelection(null)
     }
     const finish = (event: PointerEvent) => {
-      if (pointer === event.pointerId) clear()
+      const finishedTouch = touchPointers.delete(event.pointerId)
+      const finishedMouse = mousePointer === event.pointerId
+      if (finishedMouse) mousePointer = null
+      if (finishedTouch || finishedMouse) update()
     }
     rootElement.addEventListener('pointerdown', start, true)
     view.addEventListener('pointerup', finish, true)
@@ -343,7 +363,11 @@ function usePdfSelectionPress(
       clear()
     }
   }, [rootElement, pdfTouch, positionOwner])
-  return pressedSelectionOwner === positionOwner
+  return {
+    selectionPressed: pressedSelection?.owner === positionOwner,
+    touchSelectionPressed:
+      pressedSelection?.owner === positionOwner && pressedSelection.touch
+  }
 }
 
 export function EngineDocumentViewer(props: Props) {
@@ -447,7 +471,7 @@ export function EngineDocumentViewer(props: Props) {
   )
   const currentPositionOwner = useRef(positionOwner)
   currentPositionOwner.current = positionOwner
-  const selectionPressed = usePdfSelectionPress(
+  const { selectionPressed, touchSelectionPressed } = usePdfSelectionPress(
     rootElement,
     pdfTouch,
     positionOwner
@@ -1707,6 +1731,7 @@ export function EngineDocumentViewer(props: Props) {
     props.highlightPopover ??
       (() => <DefaultHighlightPopover {...menuContext} />),
     props.selectionPopover ?? <DefaultSelectionPopover {...menuContext} />,
+    touchSelectionPressed,
     selectionPressed
   )
   const resolveHighlight = useCallback(

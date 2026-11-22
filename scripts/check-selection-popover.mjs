@@ -92,10 +92,45 @@ async function checkPdfSelectionRelease(page, touch) {
     await expect(overlay).toBeVisible()
     const box = await overlay.boundingBox()
     assert(box)
+    const highlightPoint = {
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2
+    }
     await expect(highlight).toHaveCount(0)
-    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
+    await page.mouse.click(highlightPoint.x, highlightPoint.y)
     await expect(highlight).toBeVisible()
-    console.log('PDF Layout existing highlight: toolbar visible after tap')
+    const mousePointer = {
+      pointerId: 41,
+      pointerType: 'mouse',
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+      clientX: highlightPoint.x,
+      clientY: highlightPoint.y
+    }
+    await span.dispatchEvent('pointerdown', mousePointer)
+    await expect(highlight).toHaveCount(1)
+    await span.dispatchEvent('pointerup', mousePointer)
+    await expect(highlight).toHaveCount(1)
+    console.log(
+      'PDF Layout existing highlight mouse press: count 1 before, during and after press'
+    )
+    await page.mouse.click(800, 700)
+    await expect(highlight).toHaveCount(0)
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [highlightPoint]
+    })
+    await expect(highlight).toHaveCount(0)
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: []
+    })
+    await expect(highlight).toBeVisible()
+    console.log(
+      'PDF Layout existing highlight touch press: count 0 while pressed, toolbar visible after release'
+    )
   }
 }
 async function selectText(page, format, start, end, reverse = false) {
