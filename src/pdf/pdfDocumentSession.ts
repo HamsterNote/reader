@@ -9,7 +9,7 @@ import {
 } from 'pdfjs-dist'
 
 import { getDocument } from './pdfjsRuntime'
-import { stopPdfRange } from './pdfRangeCleanup'
+import { stopPdfRange, trackRangePages } from './pdfRangeCleanup'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 /** A fallible range source uses a dedicated worker from PDF.js workerSrc so it can terminate blocked reads. */
@@ -115,6 +115,7 @@ function cancelled() {
 class PdfSessionLifetime {
   task?: PDFDocumentLoadingTask
   worker?: PDFWorker
+  stopPages?: (reason: unknown) => void
   closing?: Promise<void>
   private rejectOpen!: (reason: unknown) => void
   readonly interrupted = new Promise<never>((_, reject) => {
@@ -143,6 +144,7 @@ class PdfSessionLifetime {
       this.rejectOpen(reason)
       this.closing = Promise.resolve().then(async () => {
         try {
+          this.stopPages?.(reason)
           if (this.range)
             stopPdfRange(this.range, this.task, this.worker, reason)
         } finally {
@@ -188,6 +190,7 @@ export class PdfDocumentSession {
       lifetime.task = task
       const document = await Promise.race([task.promise, lifetime.interrupted])
       if (lifetime.closing) await lifetime.interrupted
+      if (lifetime.worker) lifetime.stopPages = trackRangePages(document)
       return new PdfDocumentSession(document, lifetime)
     } catch (cause) {
       await lifetime.close(cause)

@@ -1,6 +1,8 @@
 import type {
   PDFDataRangeTransport,
+  PDFDocumentProxy,
   PDFDocumentLoadingTask,
+  PDFPageProxy,
   PDFWorker
 } from 'pdfjs-dist'
 
@@ -27,6 +29,43 @@ type WorkerTransport = {
   downloadInfoCapability: {
     promise: Promise<unknown>
     reject(reason: unknown): void
+  }
+}
+
+type PendingRead = { reject(reason: unknown): void }
+type PageIntent = {
+  opListReadCapability?: PendingRead
+  displayReadyCapability?: PendingRead
+  renderTasks?: Set<{ capability?: PendingRead }>
+}
+
+export function trackRangePages(document: PDFDocumentProxy) {
+  // WorkerTransport's page cache is private. Track only pages delivered by
+  // getPage, without requesting any extra pages or content.
+  const pages = new Set<PDFPageProxy>()
+  const getPage = document.getPage.bind(document)
+  let stopped: { reason: unknown } | undefined
+  document.getPage = async (number) => {
+    const page = await getPage(number)
+    if (stopped) throw stopped.reason
+    pages.add(page)
+    return page
+  }
+  return (reason: unknown) => {
+    stopped = { reason }
+    for (const page of pages) {
+      // _pumpOperatorList can mark a partial list complete on stream error;
+      // after destroy it skips the rejection entirely. Settle the page first.
+      const intents: Map<string, PageIntent> = page._intentStates
+      for (const intent of intents.values()) {
+        intent.opListReadCapability?.reject(reason)
+        intent.displayReadyCapability?.reject(reason)
+        for (const task of intent.renderTasks ?? [])
+          task.capability?.reject(reason)
+      }
+      page.getOperatorList = () => Promise.reject(reason)
+    }
+    pages.clear()
   }
 }
 

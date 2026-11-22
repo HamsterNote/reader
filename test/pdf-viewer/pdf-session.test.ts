@@ -7,7 +7,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
-import { PDFDocument, PDFString } from 'pdf-lib'
+import {
+  pdfWithIsolatedContents,
+  readBrokenOperatorList
+} from './range-failure'
 import { PDFDataRangeTransport } from 'pdfjs-dist'
 import * as pdfjsRuntime from '../../src/pdf/pdfjsRuntime'
 
@@ -38,18 +41,20 @@ class TestRange extends PDFDataRangeTransport {
   }
 }
 
-async function pdfWithIsolatedContents() {
-  const doc = await PDFDocument.create()
-  const page = doc.addPage()
-  // Keep the content stream outside both the initial bytes and the xref range.
-  const padding = PDFString.of(' '.repeat(3 * 65536))
-  doc.context.register(padding)
-  page.drawText('Range read')
-  doc.context.register(padding)
-  return doc.save({ useObjectStreams: false })
-}
-
 describe('PdfDocumentSession', () => {
+  it.each([
+    { mode: 'standalone', concurrent: false, errors: 2 },
+    { mode: 'concurrent', concurrent: true, errors: 4 }
+  ])(
+    'rejects the $mode operator list on page two with the range error',
+    async ({ concurrent, errors }) => {
+      expect(await readBrokenOperatorList(concurrent)).toEqual({
+        originalErrors: errors,
+        aborts: 1,
+        disposed: true
+      })
+    }
+  )
   it('rejects a pending text read and finishes disposal on the first post-open range failure', async () => {
     const range = new TestRange(await pdfWithIsolatedContents())
     const session = await PdfDocumentSession.open(
@@ -58,7 +63,7 @@ describe('PdfDocumentSession', () => {
         documentOptions: { disableStream: true, disableAutoFetch: true }
       }
     )
-    const page = await session.document.getPage(1)
+    const page = await session.document.getPage(2)
     const error = new Error('snapshot replaced after open')
     range.requestDataRange.mockImplementation(() => range.fail(error))
     const other = await PdfDocumentSession.open({
