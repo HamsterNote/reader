@@ -2,12 +2,17 @@
 // 契约依据 contracts/bridge-protocol.md §5：open 失败上报 ENGINE_FAILURE
 // 且不得清空既有数据；dispose 释放全部资源且之后不再产生事件。
 
-import type { PDFDataRangeTransport, PDFDocumentLoadingTask } from 'pdfjs-dist'
+import {
+  PDFWorker,
+  type PDFDataRangeTransport,
+  type PDFDocumentLoadingTask
+} from 'pdfjs-dist'
 
 import { getDocument } from './pdfjsRuntime'
+import { stopPdfRange } from './pdfRangeCleanup'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
-/** PDF.js has no range-error callback. A host may reject failure to end a pending open. */
+/** A fallible range source uses a dedicated worker from PDF.js workerSrc so it can terminate blocked reads. */
 export type PdfRangeTransport = PDFDataRangeTransport & {
   readonly failure?: Promise<never>
 }
@@ -103,15 +108,56 @@ export type OpenPdfDocumentOptions = {
   readonly documentOptions?: Readonly<Record<string, unknown>>
 }
 
-/**
- * 单次 PDF 打开会话。dispose 后 document 不再可用；重复 dispose 幂等。
- */
-export class PdfDocumentSession {
-  private disposed = false
+function cancelled() {
+  return new PdfDocumentOpenError('cancelled', 'PDF open cancelled', undefined)
+}
 
+class PdfSessionLifetime {
+  task?: PDFDocumentLoadingTask
+  worker?: PDFWorker
+  closing?: Promise<void>
+  private rejectOpen!: (reason: unknown) => void
+  readonly interrupted = new Promise<never>((_, reject) => {
+    this.rejectOpen = reject
+  })
+
+  constructor(
+    private readonly range: PdfRangeTransport | undefined,
+    private readonly signal?: AbortSignal
+  ) {
+    // getDocument may throw before open can race the two promises.
+    this.interrupted.catch(() => {})
+    range?.failure?.catch(this.onFailure)
+    signal?.addEventListener('abort', this.onAbort, { once: true })
+  }
+
+  private readonly onAbort = () => this.onFailure(cancelled())
+  private readonly onFailure = (reason: unknown) => {
+    // Event-initiated cleanup is also observable by the next dispose().
+    this.close(reason).catch(() => {})
+  }
+
+  close(reason: unknown): Promise<void> {
+    if (!this.closing) {
+      this.signal?.removeEventListener('abort', this.onAbort)
+      this.rejectOpen(reason)
+      this.closing = Promise.resolve().then(async () => {
+        try {
+          if (this.range)
+            stopPdfRange(this.range, this.task, this.worker, reason)
+        } finally {
+          await this.task?.destroy()
+        }
+      })
+    }
+    return this.closing
+  }
+}
+
+export class PdfDocumentSession {
   private constructor(
     readonly document: PDFDocumentProxy,
-    private readonly loadingTask: PDFDocumentLoadingTask
+    private readonly lifetime: PdfSessionLifetime
   ) {}
 
   static async open(
@@ -119,70 +165,45 @@ export class PdfDocumentSession {
     options: OpenPdfDocumentOptions = {}
   ): Promise<PdfDocumentSession> {
     const { signal, onProgress, onPassword, documentOptions } = options
-
-    if (signal?.aborted) {
-      throw new PdfDocumentOpenError(
-        'cancelled',
-        'PDF open cancelled',
-        undefined
-      )
-    }
-
+    if (signal?.aborted) throw cancelled()
     const input = pdfDocumentInput(source)
-    const range = input.range
-    const loadingTask = getDocument({
-      ...input,
-      isEvalSupported: false,
-      ...documentOptions,
-      ...(onPassword ? { onPassword } : {}),
-      ...(onProgress
-        ? {
-            onProgress: (progress: { loaded: number; total?: number }) =>
-              onProgress(progress.loaded, progress.total)
-          }
-        : {})
-    })
-
-    const abortListener = () => {
-      // eslint-disable-next-line sonarjs/void-use -- abort 监听器同步返回，销毁在后台完成
-      void loadingTask.destroy()
-    }
-    signal?.addEventListener('abort', abortListener, { once: true })
-
+    const lifetime = new PdfSessionLifetime(input.range, signal)
     try {
-      const document = await (range?.failure
-        ? Promise.race([loadingTask.promise, range.failure])
-        : loadingTask.promise)
-      if (signal?.aborted) {
-        // 竞态：加载完成时外部已取消，立即销毁，不把文档交给调用方。
-        await loadingTask.destroy()
-        throw new PdfDocumentOpenError(
-          'cancelled',
-          'PDF open cancelled',
-          undefined
-        )
-      }
-      return new PdfDocumentSession(document, loadingTask)
+      // A host factory can cancel synchronously while creating its transport.
+      if (signal?.aborted) throw cancelled()
+      if (input.range?.failure) lifetime.worker = new PDFWorker()
+      const task = getDocument({
+        ...input,
+        isEvalSupported: false,
+        ...documentOptions,
+        ...(lifetime.worker ? { worker: lifetime.worker } : {}),
+        ...(onPassword ? { onPassword } : {}),
+        ...(onProgress
+          ? {
+              onProgress: (progress: { loaded: number; total?: number }) =>
+                onProgress(progress.loaded, progress.total)
+            }
+          : {})
+      })
+      lifetime.task = task
+      const document = await Promise.race([task.promise, lifetime.interrupted])
+      if (lifetime.closing) await lifetime.interrupted
+      return new PdfDocumentSession(document, lifetime)
     } catch (cause) {
-      if (range?.failure) await loadingTask.destroy()
+      await lifetime.close(cause)
       const kind = classifyPdfOpenError(cause)
       const message =
         cause instanceof Error ? cause.message : 'Failed to open PDF document'
       throw new PdfDocumentOpenError(kind, message, cause)
-    } finally {
-      signal?.removeEventListener('abort', abortListener)
     }
   }
 
-  /** 取消进行中的渲染并销毁 worker/文档。幂等。 */
-  async dispose(): Promise<void> {
-    if (this.disposed) return
-    this.disposed = true
-    await this.loadingTask.destroy()
+  get isDisposed(): boolean {
+    return !!this.lifetime.closing
   }
 
-  get isDisposed(): boolean {
-    return this.disposed
+  dispose(): Promise<void> {
+    return this.lifetime.close(cancelled())
   }
 }
 

@@ -7,6 +7,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
+import { PDFDocument, PDFString } from 'pdf-lib'
+import { PDFDataRangeTransport } from 'pdfjs-dist'
+import * as pdfjsRuntime from '../../src/pdf/pdfjsRuntime'
 
 import {
   PdfDocumentOpenError,
@@ -21,7 +24,107 @@ function readFixture(relativePath: string): Uint8Array {
   return new Uint8Array(readFileSync(join(FIXTURE_ROOT, relativePath)))
 }
 
+class TestRange extends PDFDataRangeTransport {
+  fail!: (reason: Error) => void
+  readonly failure = new Promise<never>((_, reject) => {
+    this.fail = reject
+  })
+  override abort = vi.fn()
+  override requestDataRange = vi.fn((begin: number, end: number) => {
+    queueMicrotask(() => this.onDataRange(begin, this.bytes.slice(begin, end)))
+  })
+  constructor(private readonly bytes: Uint8Array) {
+    super(bytes.length, bytes.slice(0, 128), true)
+  }
+}
+
+async function pdfWithIsolatedContents() {
+  const doc = await PDFDocument.create()
+  const page = doc.addPage()
+  // Keep the content stream outside both the initial bytes and the xref range.
+  const padding = PDFString.of(' '.repeat(3 * 65536))
+  doc.context.register(padding)
+  page.drawText('Range read')
+  doc.context.register(padding)
+  return doc.save({ useObjectStreams: false })
+}
+
 describe('PdfDocumentSession', () => {
+  it('rejects a pending text read and finishes disposal on the first post-open range failure', async () => {
+    const range = new TestRange(await pdfWithIsolatedContents())
+    const session = await PdfDocumentSession.open(
+      { createRange: () => range },
+      {
+        documentOptions: { disableStream: true, disableAutoFetch: true }
+      }
+    )
+    const page = await session.document.getPage(1)
+    const error = new Error('snapshot replaced after open')
+    range.requestDataRange.mockImplementation(() => range.fail(error))
+    const other = await PdfDocumentSession.open({
+      data: readFixture('pdf/rotated.pdf')
+    })
+    try {
+      const reads = [
+        page.getTextContent(),
+        page.getTextContent(),
+        session.document.getDownloadInfo()
+      ]
+      for (const read of await Promise.allSettled(reads)) {
+        expect(read).toEqual({ status: 'rejected', reason: error })
+      }
+      expect(session.isDisposed).toBe(true)
+      const closing = session.dispose()
+      expect(session.dispose()).toBe(closing)
+      await closing
+      expect(range.abort).toHaveBeenCalledOnce()
+      expect((await other.document.getPage(1)).pageNumber).toBe(1)
+    } finally {
+      await other.dispose()
+      await session.dispose()
+    }
+  })
+
+  it('aborts a pre-rejected range before PDF.js takes ownership', async () => {
+    const range = new TestRange(readFixture('pdf/two-column.pdf'))
+    const error = new Error('already failed')
+    range.fail(error)
+    await expect(
+      PdfDocumentSession.open({ createRange: () => range })
+    ).rejects.toMatchObject({ cause: error })
+    expect(range.requestDataRange).not.toHaveBeenCalled()
+    expect(range.abort).toHaveBeenCalledOnce()
+  })
+
+  it('shares cleanup when range failure races external cancellation', async () => {
+    const range = new TestRange(readFixture('pdf/two-column.pdf'))
+    const controller = new AbortController()
+    range.requestDataRange.mockImplementation(() => {
+      range.fail(new Error('snapshot replaced'))
+      controller.abort()
+    })
+    const getDocument = pdfjsRuntime.getDocument
+    const load = vi
+      .spyOn(pdfjsRuntime, 'getDocument')
+      .mockImplementation((input) => {
+        const task = getDocument(input)
+        vi.spyOn(task, 'destroy')
+        return task
+      })
+    try {
+      await expect(
+        PdfDocumentSession.open(
+          { createRange: () => range },
+          { signal: controller.signal }
+        )
+      ).rejects.toBeInstanceOf(PdfDocumentOpenError)
+      expect(range.abort).toHaveBeenCalledOnce()
+      expect(load.mock.results[0].value.destroy).toHaveBeenCalledOnce()
+    } finally {
+      load.mockRestore()
+    }
+  })
+
   it('区间读取失败会结束等待并释放 PDF.js 传输', async () => {
     const { PDFDataRangeTransport } = await import('pdfjs-dist')
     class UnavailableRange extends PDFDataRangeTransport {
