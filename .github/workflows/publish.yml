@@ -37,7 +37,9 @@ jobs:
             exit 1
           fi
 
-          if [[ "$PKG_VERSION" =~ -dev ]]; then
+          if [[ "$PKG_VERSION" == *-ham373.* ]]; then
+            PUBLISH_TAG=ham373
+          elif [[ "$PKG_VERSION" =~ -dev ]]; then
             PUBLISH_TAG=dev
             echo "Version type: Dev Pre-release"
           elif [[ "$PKG_VERSION" =~ -beta ]]; then
