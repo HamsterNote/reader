@@ -67,7 +67,6 @@ function ReaderScreen(props: ReaderScreenProps) {
     title: props.record.fileName,
     canToggleLayout: true,
     nativePdf: false,
-    importing: false,
     canImportLegacy: true
   })
   const updateHeader = useCallback(

@@ -50,7 +50,6 @@ export type ReaderScreenHeaderState = {
   readonly title: string
   readonly canToggleLayout: boolean
   readonly nativePdf: boolean
-  readonly importing: boolean
   readonly canImportLegacy: boolean
 }
 
@@ -752,7 +751,6 @@ function ReaderScreenSession({
       title: record.fileName,
       canToggleLayout,
       nativePdf,
-      importing,
       canImportLegacy: !importing && !nativePdf && handoffPhase === 'WEB_ACTIVE'
     })
   }, [
@@ -788,7 +786,29 @@ function ReaderScreenSession({
     onOcrError,
     onOcrTextsChange
   })
-  return <View style={styles.container}>{content}</View>
+  return (
+    <View style={styles.container}>
+      <View style={styles.documentMeta}>
+        <Text style={styles.documentMetaText}>
+          {record.format.toUpperCase()}
+          {record.legacyImport
+            ? ` · 旧数据 v${record.legacyImport.version}`
+            : ''}
+        </Text>
+        {importing ? (
+          <View style={styles.importProgress}>
+            <ActivityIndicator
+              size='small'
+              color='#8b5e3c'
+              accessibilityLabel='正在导入旧数据'
+            />
+            <Text style={styles.documentMetaText}>正在导入旧数据…</Text>
+          </View>
+        ) : null}
+      </View>
+      {content}
+    </View>
+  )
 }
 
 export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
@@ -859,6 +879,16 @@ export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
+  documentMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 6
+  },
+  documentMetaText: { fontSize: 12, color: '#6d675f' },
+  importProgress: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   reader: { flex: 1 },
   // Keep the draining WKWebView laid out: stable-progress needs a nonzero
   // viewport and animation frames. The opaque native layer covers its input.

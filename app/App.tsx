@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -35,7 +34,6 @@ import { resolveDebugTarget } from './src/debug/resolveTarget'
 import {
   debugRouteFromEnv,
   debugRouteLog,
-  parseDebugUrl,
   type DebugRoute
 } from './src/debug/route'
 import { pickAndCacheDocument, removeDocument } from './src/native/documents'
@@ -62,15 +60,23 @@ type HostCloseAction = {
   running: boolean
 }
 
-export function App() {
+export function App({
+  debugRoute
+}: {
+  readonly debugRoute?: DebugRoute | null
+}) {
   return (
     <AppErrorBoundary>
-      <AppContent />
+      <AppContent debugRoute={debugRoute} />
     </AppErrorBoundary>
   )
 }
 
-function AppContent() {
+function AppContent({
+  debugRoute
+}: {
+  readonly debugRoute?: DebugRoute | null
+}) {
   const navigation = useNavigation()
   const storeRef = useRef<ReaderDataStore | null>(null)
   if (storeRef.current === null) {
@@ -311,38 +317,21 @@ function AppContent() {
   const debugHandled = useRef(false)
   useEffect(() => {
     if (!__DEV__) return
-    void (async () => {
-      if (debugHandled.current) return
-      debugHandled.current = true
-      const envRoute = debugRouteFromEnv({
-        EXPO_PUBLIC_HAM278_ROUTE: process.env.EXPO_PUBLIC_HAM278_ROUTE,
-        EXPO_PUBLIC_HAM278_OPEN_FILE_ID:
-          process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID,
-        EXPO_PUBLIC_HAM278_OPEN_PDF: process.env.EXPO_PUBLIC_HAM278_OPEN_PDF,
-        EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT
-      })
-      if (envRoute) {
-        await openDebugRoute(envRoute)
-        return
-      }
-      const initial = await Linking.getInitialURL().catch(() => null)
-      const parsed = initial ? parseDebugUrl(initial) : null
-      if (parsed) await openDebugRoute(parsed)
-    })()
-  }, [openDebugRoute])
-
-  useEffect(() => {
-    if (!__DEV__) return
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      const parsed = parseDebugUrl(url)
-      logNativePdfDiagnostic('reader-debug-route-link', {
-        url,
-        accepted: parsed !== null
-      })
-      if (parsed) void openDebugRoute(parsed)
+    if (debugRoute) {
+      void openDebugRoute(debugRoute)
+      return
+    }
+    if (debugHandled.current) return
+    debugHandled.current = true
+    const envRoute = debugRouteFromEnv({
+      EXPO_PUBLIC_HAM278_ROUTE: process.env.EXPO_PUBLIC_HAM278_ROUTE,
+      EXPO_PUBLIC_HAM278_OPEN_FILE_ID:
+        process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID,
+      EXPO_PUBLIC_HAM278_OPEN_PDF: process.env.EXPO_PUBLIC_HAM278_OPEN_PDF,
+      EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT
     })
-    return () => subscription.remove()
-  }, [openDebugRoute])
+    if (envRoute) void openDebugRoute(envRoute)
+  }, [openDebugRoute, debugRoute])
 
   const toggleSplit = (): void => {
     const target = otherPane(focusPane)

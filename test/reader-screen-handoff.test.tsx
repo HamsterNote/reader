@@ -27,6 +27,7 @@ import {
   type ReaderScreenProps
 } from '../app/src/screens/ReaderScreen'
 import { App } from '../app/App'
+import OpenRoute from '../app/app/open'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
 import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
 import type {
@@ -49,6 +50,7 @@ import type {
 } from '../src/nativePdf/contracts'
 import * as pdfRouting from '../src/nativePdf/routing'
 import { stageReaderDocument } from '../app/src/native/webAssets'
+import { pickLegacyJsonAndImport } from '../app/src/native/documents'
 import { createDocumentFileId } from '../src/host/fileIdentity'
 import type { ReaderSelectionRange } from '../src/types/selection'
 
@@ -72,7 +74,6 @@ const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
       title: props.record.fileName,
       canToggleLayout: true,
       nativePdf: false,
-      importing: false,
       canImportLegacy: true
     })
     const updateHeader = useCallback(
@@ -138,6 +139,7 @@ const host = vi.hoisted(() => {
     nativeUnmounts: 0,
     nativeAvailable: true,
     platform: 'ios',
+    params: {} as Record<string, string>,
     views: new Map<string, ReaderPdfViewProps>(),
     webViews: new Map<string, WebViewProps>(),
     census: [] as ('web' | 'native')[],
@@ -161,7 +163,10 @@ const host = vi.hoisted(() => {
 })
 
 const navigation = vi.hoisted(() => ({ setOptions: vi.fn() }))
-vi.mock('expo-router', () => ({ useNavigation: () => navigation }))
+vi.mock('expo-router', () => ({
+  useNavigation: () => navigation,
+  useLocalSearchParams: () => host.params
+}))
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
   createFileSystemStorage: () => host.storage
@@ -440,18 +445,19 @@ async function mountScreen(
   record = makeRecord(),
   onBack = vi.fn()
 ) {
-  render(
+  const onRecordUpdated = vi.fn()
+  const view = render(
     <ReaderScreen
       record={record}
       store={store}
       entryUrl='file:///unused/index.html'
       baseUrl='file:///unused/'
       onBack={onBack}
-      onRecordUpdated={vi.fn()}
+      onRecordUpdated={onRecordUpdated}
     />
   )
   await screen.findByTestId('web-reader')
-  return { onBack, record }
+  return { view, onBack, onRecordUpdated, record }
 }
 
 async function switchToNative() {
@@ -566,7 +572,9 @@ beforeEach(() => {
   host.writeControls.failNext = false
   host.census = []
   host.urlListeners = []
+  host.params = {}
   vi.mocked(Alert.alert).mockClear()
+  vi.mocked(pickLegacyJsonAndImport).mockReset()
   delete process.env.EXPO_PUBLIC_HAM278_ROUTE
   delete process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID
   delete process.env.EXPO_PUBLIC_HAM278_OPEN_PDF
@@ -1694,9 +1702,8 @@ describe('real App host close barriers', () => {
   it('drains a failed right-pane save across a deep link and unmounts only after closed', async () => {
     const record = makeRecord('f_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
     await new ReaderDataStore(host.storage).upsert(record)
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = record.fileId
-    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
-    render(<App />)
+    host.params = { fileId: record.fileId, layout: 'split' }
+    const view = render(<OpenRoute />)
     await waitFor(() =>
       expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(2)
     )
@@ -1718,13 +1725,12 @@ describe('real App host close barriers', () => {
       fireEvent.click(screen.getByText('确认'))
     })
     await screen.findByText(/disk full/)
-    await waitFor(() => expect(host.urlListeners).toHaveLength(1))
+    expect(host.urlListeners).toHaveLength(0)
     vi.mocked(console.info).mockClear()
 
+    host.params = { fileId: record.fileId, layout: 'single' }
     await act(async () => {
-      host.urlListeners[0]!({
-        url: `hamsterreader://open?fileId=${record.fileId}&layout=single`
-      })
+      view.rerender(<OpenRoute />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     await waitFor(() =>
@@ -1801,6 +1807,47 @@ describe('ReaderScreen native handoff regressions', () => {
     })
     await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1))
     expect(host.webClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows format and import progress, then keeps the imported version after reopening', async () => {
+    const fixture = createTransactionStore(makeRecord())
+    const imported: HostDocumentRecord = {
+      ...makeRecord(),
+      legacyImport: {
+        version: 7,
+        sourceFileName: 'legacy.json',
+        importedAt: 123
+      }
+    }
+    const pendingImport = deferred<HostDocumentRecord>()
+    vi.mocked(pickLegacyJsonAndImport).mockReturnValue(pendingImport.promise)
+    const { view, onRecordUpdated, onBack } = await mountScreen(fixture.store)
+    expect(screen.getByText('PDF')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('导入旧数据'))
+    await screen.findByText('正在导入旧数据…')
+    await act(async () => {
+      pendingImport.resolve(imported)
+      await pendingImport.promise
+    })
+    await waitFor(() => expect(onRecordUpdated).toHaveBeenCalledWith(imported))
+
+    const reopened = (
+      <ReaderScreen
+        record={imported}
+        store={fixture.store}
+        entryUrl='file:///unused/index.html'
+        baseUrl='file:///unused/'
+        onBack={onBack}
+        onRecordUpdated={onRecordUpdated}
+      />
+    )
+    view.rerender(reopened)
+    expect(screen.getByText('PDF · 旧数据 v7')).toBeInTheDocument()
+
+    view.unmount()
+    render(reopened)
+    expect(screen.getByText('PDF · 旧数据 v7')).toBeInTheDocument()
   })
 
   it.each(['delayed', 'absent'])(

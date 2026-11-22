@@ -14,7 +14,8 @@ type Navigation = {
   setOptions(options: {
     title: string
     headerBackVisible?: boolean
-    headerLeft?: undefined
+    headerLargeTitleEnabled?: boolean
+    headerLeft?: (() => ReactElement) | undefined
     unstable_headerLeftItems?: () => NativeStackHeaderItem[]
     unstable_headerRightItems?: () => NativeStackHeaderItem[]
     headerRight?: () => ReactElement
@@ -67,6 +68,24 @@ function createRightItems(
     onPress: () => readerRefs[focusPane].current?.importLegacy()
   })
   return items
+}
+
+function AndroidBackButton({
+  focusPane,
+  readerRefs
+}: {
+  readonly focusPane: PaneId
+  readonly readerRefs: ReaderRefs
+}) {
+  return (
+    <Pressable
+      accessibilityRole='button'
+      accessibilityLabel='返回'
+      onPress={() => readerRefs[focusPane].current?.close(false)}
+    >
+      <Text style={styles.nativeHeaderAction}>返回</Text>
+    </Pressable>
+  )
 }
 
 function AndroidHeaderActions({
@@ -127,18 +146,25 @@ export function updateReaderNativeHeader({
   navigation.setOptions({
     title: headerTitle,
     headerBackVisible: readerOpen ? false : undefined,
-    headerLeft: undefined,
-    unstable_headerLeftItems: readerOpen
-      ? (): NativeStackHeaderItem[] => [
-          {
-            type: 'button',
-            label: '返回',
-            accessibilityLabel: '返回',
-            icon: { type: 'sfSymbol', name: 'chevron.left' },
-            onPress: () => readerRefs[focusPane].current?.close(false)
-          }
-        ]
-      : undefined,
+    headerLargeTitleEnabled: !readerOpen,
+    headerLeft:
+      Platform.OS !== 'ios' && readerOpen
+        ? () => (
+            <AndroidBackButton focusPane={focusPane} readerRefs={readerRefs} />
+          )
+        : undefined,
+    unstable_headerLeftItems:
+      Platform.OS === 'ios' && readerOpen
+        ? (): NativeStackHeaderItem[] => [
+            {
+              type: 'button',
+              label: '返回',
+              accessibilityLabel: '返回',
+              icon: { type: 'sfSymbol', name: 'chevron.left' },
+              onPress: () => readerRefs[focusPane].current?.close(false)
+            }
+          ]
+        : undefined,
     unstable_headerRightItems:
       Platform.OS === 'ios' && readerOpen ? () => rightItems : undefined,
     headerRight:
