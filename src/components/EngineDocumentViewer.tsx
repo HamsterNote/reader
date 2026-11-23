@@ -75,6 +75,7 @@ import { EngineSelectionControls } from './EngineSelectionControls'
 import { EngineHighlightInteractions } from './EngineHighlightInteractions'
 import { PopoverPortal } from './PopoverPortal'
 import { EpubOutline } from './EpubOutline'
+import { PdfOutline } from '../pdf/PdfOutline'
 import { getVisiblePageNumbers } from './IntermediateDocumentViewer/pageDisplay'
 import { EngineEpubLayoutLayer } from './EngineEpubLayoutLayer'
 import { RangeMagnifierProvider } from './IntermediateDocumentViewer/RangeMagnifier'
@@ -111,6 +112,49 @@ function renderEngineOutline(
       onNavigate={onNavigate}
     />
   )
+}
+
+function renderPageBrowserOutline({
+  source,
+  mode,
+  book,
+  pageNumbers,
+  pdfDocument,
+  pdfDocumentOwner,
+  positionOwner,
+  onEpubNavigate,
+  onPdfNavigate
+}: {
+  readonly source: ReaderEngineSource | undefined
+  readonly mode: ReaderRenderMode
+  readonly book: EpubEngineBookInfo | null
+  readonly pageNumbers: readonly number[]
+  readonly pdfDocument: PDFDocumentProxy | null
+  readonly pdfDocumentOwner: object
+  readonly positionOwner: object
+  readonly onEpubNavigate: (href: string) => void
+  readonly onPdfNavigate: (pageNumber: number) => void
+}): ((isActive: boolean) => ReactNode) | undefined {
+  if (source?.format === 'epub') {
+    return () => renderEngineOutline(book, pageNumbers, onEpubNavigate)
+  }
+  if (source?.format === 'pdf' && mode === 'layout') {
+    const currentDocument =
+      pdfDocumentOwner === positionOwner ? pdfDocument : null
+    return (isActive) => (
+      <PdfOutline
+        document={currentDocument}
+        isActive={isActive}
+        pageNumbers={pageNumbers}
+        onNavigate={onPdfNavigate}
+      />
+    )
+  }
+  return undefined
+}
+
+function goToEpubOutline(engine: EpubEngine | null, href: string) {
+  engine?.goToTocHref(href).catch(() => undefined)
 }
 
 type ActiveSelection =
@@ -2082,11 +2126,22 @@ export function EngineDocumentViewer(props: Props) {
           containMarginBottom={
             props.containMarginBottom ?? props.containMarginY
           }
-          outline={renderEngineOutline(book, pageNumbers, (href) => {
-            progressEnabled.current = true
-            cancelSelection()
-            epub.current?.goToTocHref(href).catch(() => undefined)
+          outline={renderPageBrowserOutline({
+            source,
+            mode,
+            book,
+            pageNumbers,
+            pdfDocument,
+            pdfDocumentOwner: pdfDocumentOwner.current,
+            positionOwner,
+            onEpubNavigate: (href) => {
+              progressEnabled.current = true
+              cancelSelection()
+              goToEpubOutline(epub.current, href)
+            },
+            onPdfNavigate: navigate
           })}
+          resetKey={positionOwner}
           isOpen={props.showPageBrowser ?? false}
           pageNumbers={pageNumbers}
           pageSizesByPageNumber={previews.sizes}

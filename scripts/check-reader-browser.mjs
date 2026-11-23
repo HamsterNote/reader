@@ -5,6 +5,7 @@ import { resolve, extname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium, webkit } from 'playwright'
 import JSZip from 'jszip'
+import { runReaderOutlineCases } from './check-reader-outline.mjs'
 
 const repo = resolve(import.meta.dirname, '..')
 const output = resolve(
@@ -28,7 +29,10 @@ const server = createServer(async (request, response) => {
     )
     const fixture = {
       '/publication.epub': 'epub/duplicate-text.epub',
-      '/publication.pdf': 'pdf/two-column.pdf'
+      '/publication.pdf': 'pdf/two-column.pdf',
+      '/nested-outline.epub': 'epub/nested-outline.epub',
+      '/embedded-outline.pdf': 'pdf/embedded-outline.pdf',
+      '/body-only-outline.pdf': 'pdf/body-only-outline.pdf'
     }[path]
     const assetPath = path === '/' ? '/index.html' : path
     const file = fixture
@@ -48,13 +52,16 @@ let base
 if (offline) {
   const staged = resolve(output, 'reader')
   await cp(resolve(repo, 'webview-dist'), staged, { recursive: true })
-  for (const [format, fixture] of [
-    ['epub', 'epub/duplicate-text.epub'],
-    ['pdf', 'pdf/two-column.pdf']
+  for (const [filename, fixture] of [
+    ['publication.epub', 'epub/duplicate-text.epub'],
+    ['publication.pdf', 'pdf/two-column.pdf'],
+    ['nested-outline.epub', 'epub/nested-outline.epub'],
+    ['embedded-outline.pdf', 'pdf/embedded-outline.pdf'],
+    ['body-only-outline.pdf', 'pdf/body-only-outline.pdf']
   ])
     await copyFile(
       resolve(repo, 'test/compat/fixtures', fixture),
-      resolve(staged, `publication.${format}`)
+      resolve(staged, filename)
     )
   base = pathToFileURL(resolve(staged, 'index.html')).href
 } else {
@@ -605,6 +612,7 @@ try {
     }
     if (!offline) await run(browserType, false, 'epub', 4, true)
   }
+  await runReaderOutlineCases({ browserType: chromium, base, output, report })
 } finally {
   if (server.listening) await new Promise((done) => server.close(done))
   await writeFile(

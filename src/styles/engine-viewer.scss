@@ -78,27 +78,6 @@
   padding: 0;
   border: 0;
 }
-.hamster-reader__epub-outline {
-  flex: 0 1 auto;
-  max-height: 35%;
-  overflow: auto;
-  padding: 8px 12px;
-  border-bottom: 1px solid #ddd;
-  font-size: 13px;
-  ul {
-    list-style: none;
-    padding-left: 12px;
-  }
-  button {
-    border: 0;
-    background: transparent;
-    text-align: left;
-    color: inherit;
-    padding: 6px 0;
-    cursor: pointer;
-  }
-}
-
 .hamster-reader__engine-viewer[data-engine='epub'] {
   overflow: hidden;
   overscroll-behavior: none;
