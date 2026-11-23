@@ -167,8 +167,11 @@ function PageBrowserTabs({
     'highlights',
     'bookmarks'
   ]
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const currentIndex = tabs.indexOf(activeTab)
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentTab: PageBrowserTab
+  ) => {
+    const currentIndex = tabs.indexOf(currentTab)
     const nextIndex = (() => {
       switch (event.key) {
         case 'ArrowRight':
@@ -204,11 +207,12 @@ function PageBrowserTabs({
           key={tab}
           type='button'
           role='tab'
+          data-tab={tab}
           aria-selected={activeTab === tab}
           className={getTabClassName(activeTab === tab)}
           tabIndex={isOpen && activeTab === tab ? 0 : -1}
           onClick={() => onSelectTab(tab)}
-          onKeyDown={handleKeyDown}
+          onKeyDown={(event) => handleKeyDown(event, tab)}
         >
           {tabLabels[tab]}
         </button>
@@ -480,7 +484,16 @@ export function PageBrowser({
   }, [isOpen])
 
   useEffect(() => {
+    const tablist =
+      navRef.current?.querySelector<HTMLElement>('[role="tablist"]')
+    const shouldMoveFocus =
+      tablist?.contains(tablist.ownerDocument.activeElement) ?? false
     setActiveTab(defaultTab)
+    if (shouldMoveFocus) {
+      tablist
+        ?.querySelector<HTMLButtonElement>(`[data-tab="${defaultTab}"]`)
+        ?.focus()
+    }
   }, [defaultTab, resetKey])
 
   useEffect(() => {

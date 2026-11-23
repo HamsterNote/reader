@@ -313,4 +313,41 @@ describe('PdfOutline', () => {
     })
     expect(onNavigate).not.toHaveBeenCalled()
   })
+
+  it('keeps immediate navigation B when named navigation A resolves later', async () => {
+    const pendingDestination = deferred<unknown[]>()
+    const page3 = { num: 3, gen: 0 }
+    const getDestination = vi.fn(() => pendingDestination.promise)
+    const getPageIndex = vi.fn(async (ref: { num: number }) => ref.num - 1)
+    const document = makeDocument({
+      getOutline: vi.fn().mockResolvedValue([
+        { title: 'Named A', dest: 'named-a', items: [] },
+        { title: 'Immediate B', dest: [3], items: [] }
+      ]),
+      getDestination,
+      getPageIndex
+    })
+    const onNavigate = vi.fn()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        pageNumbers={[1, 2, 3, 4]}
+        onNavigate={onNavigate}
+      />
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Named A' }))
+    expect(getDestination).toHaveBeenCalledWith('named-a')
+    fireEvent.click(screen.getByRole('button', { name: 'Immediate B' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(4))
+    expect(onNavigate.mock.calls).toEqual([[4]])
+
+    await act(async () => {
+      pendingDestination.resolve([page3])
+      await pendingDestination.promise
+    })
+    await waitFor(() => expect(getPageIndex).toHaveBeenCalledWith(page3))
+    expect(onNavigate.mock.calls).toEqual([[4]])
+  })
 })

@@ -75,18 +75,39 @@ ${items}
 </html>`
 }
 
+async function generateEpub(zip) {
+  const bytes = await zip.generateAsync({ type: 'uint8array' })
+  if (bytes.byteLength < 30) {
+    throw new Error('EPUB fixture is too short to contain a ZIP local header')
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (view.getUint32(0, true) !== 0x04034b50) {
+    throw new Error('EPUB fixture does not start with a ZIP local file header')
+  }
+  const fileNameLength = view.getUint16(26, true)
+  const firstEntryName = new TextDecoder().decode(
+    bytes.subarray(30, 30 + fileNameLength)
+  )
+  if (firstEntryName !== 'mimetype' || view.getUint16(8, true) !== 0) {
+    throw new Error(
+      `EPUB fixture must start with an uncompressed mimetype entry; got ${firstEntryName}`
+    )
+  }
+  return bytes
+}
+
 async function buildEpub({ title, manifestExtra = '', spineItems, files }) {
   const zip = new JSZip()
   const zipOptions = { date: FIXED_DATE }
 
-  // JSZip 自动补的目录条目默认用当前时间；显式创建并固定日期保证可复现。
-  zip.file('META-INF/', null, { ...zipOptions, dir: true })
-  zip.file('OPS/', null, { ...zipOptions, dir: true })
-  zip.file('OPS/images/', null, { ...zipOptions, dir: true })
   zip.file('mimetype', 'application/epub+zip', {
     ...zipOptions,
     compression: 'STORE'
   })
+  // JSZip 自动补的目录条目默认用当前时间；显式创建并固定日期保证可复现。
+  zip.file('META-INF/', null, { ...zipOptions, dir: true })
+  zip.file('OPS/', null, { ...zipOptions, dir: true })
+  zip.file('OPS/images/', null, { ...zipOptions, dir: true })
   zip.file('META-INF/container.xml', epubContainerXml(), zipOptions)
 
   const manifestItems =
@@ -136,7 +157,7 @@ ${spineRefs}
     })
   }
 
-  return zip.generateAsync({ type: 'uint8array' })
+  return generateEpub(zip)
 }
 
 // 样本 E1：封面在 spine 首位，正文含外链图（应被忽略）、重复引用同一章插图，
@@ -269,7 +290,7 @@ async function buildEpubNestedOutline() {
     ),
     { date: FIXED_DATE }
   )
-  return zip.generateAsync({ type: 'uint8array' })
+  return generateEpub(zip)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { usePositionTransaction } from '../components/reading/usePositionTransaction'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 const PDF_OUTLINE_TIMEOUT_MS = 10_000
@@ -146,6 +147,8 @@ export function PdfOutline({
   )
   const latest = useRef({ document, pageNumbers, onNavigate })
   latest.current = { document, pageNumbers, onNavigate }
+  const { begin: beginNavigation, isCurrent: isNavigationCurrent } =
+    usePositionTransaction(document)
   const [retry, setRetry] = useState(0)
   const [state, setState] = useState<OutlineState | null>(null)
 
@@ -185,8 +188,10 @@ export function PdfOutline({
   const navigate = async (item: PdfOutlineItem) => {
     const owner = document
     if (!owner || !item.destination || item.external) return
+    const transaction = beginNavigation()
     const pageNumber = await resolveOutlinePage(owner, item.destination)
     if (
+      !isNavigationCurrent(transaction) ||
       pageNumber === null ||
       latest.current.document !== owner ||
       !latest.current.pageNumbers.includes(pageNumber)
