@@ -133,9 +133,16 @@ async function checkPdfSelectionRelease(page, touch) {
     )
   }
 }
-async function selectText(page, format, start, end, reverse = false) {
+async function selectText(
+  page,
+  format,
+  start,
+  end,
+  reverse = false,
+  yRatio = 0.5
+) {
   const points = await page.evaluate(
-    ({ format, start, end }) => {
+    ({ format, start, end, yRatio }) => {
       const doc =
         format === 'epub'
           ? document.querySelector('foliate-view').renderer.getContents()[0].doc
@@ -158,22 +165,44 @@ async function selectText(page, format, start, end, reverse = false) {
         range.setStart(texts[index], character)
         range.collapse(true)
         const box = range.getBoundingClientRect()
-        return { x: box.x + offset.x, y: box.y + offset.y + box.height / 2 }
+        return {
+          x: box.x + offset.x,
+          y: box.y + offset.y + box.height * yRatio
+        }
       }
       return [point(start), point(end)]
     },
-    { format, start, end }
+    { format, start, end, yRatio }
   )
   if (reverse) points.reverse()
+  if (reverse && format === 'pdf') {
+    const hit = await page.evaluate((point) => {
+      const element = document.elementFromPoint(point.x, point.y)
+      const caret = document.caretRangeFromPoint?.(point.x, point.y)
+      return {
+        point,
+        hitTag: element?.tagName,
+        textLayerText: element?.closest('.textLayer span')?.textContent,
+        caretText: caret?.startContainer.textContent,
+        caretOffset: caret?.startOffset
+      }
+    }, points[0])
+    assert(
+      hit.textLayerText && hit.caretText === hit.textLayerText,
+      `PDF direct drag must start on target text ${JSON.stringify(hit)}`
+    )
+    console.log(`PDF direct drag target ${JSON.stringify(hit)}`)
+  }
   await page.mouse.move(points[0].x, points[0].y)
   await page.mouse.down()
   await page.mouse.move(points[1].x, points[1].y, { steps: 12 })
   await page.mouse.up()
 }
-async function assertCompactPalette(page) {
-  const toolbar = page.getByRole('toolbar', { name: '选区操作' })
+async function assertCompactPalette(page, toolbarName = '选区操作') {
+  const toolbar = page.getByRole('toolbar', { name: toolbarName })
   await expect(toolbar).toBeVisible()
-  const highlight = page.getByRole('button', { name: '高亮', exact: true })
+  const actionName = toolbarName === '选区操作' ? '高亮' : '删除'
+  const action = toolbar.getByRole('button', { name: actionName, exact: true })
   const palette = toolbar.getByRole('group', { name: 'Highlight color' })
   const swatches = palette.getByRole('button')
   await expect(swatches).toHaveCount(7)
@@ -184,33 +213,38 @@ async function assertCompactPalette(page) {
     ),
     ['#7d9ec0', '#8eba8e', '#d1b88a', '#cf9cab', '#a99fc4', '#2a2a2a']
   )
-  const [highlightBox, swatchBox] = await Promise.all([
-    highlight.boundingBox(),
-    swatches.first().boundingBox()
+  const [actionBox, swatchBoxes] = await Promise.all([
+    action.boundingBox(),
+    swatches.evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const box = node.getBoundingClientRect()
+        return { y: box.y, height: box.height }
+      })
+    )
   ])
-  assert(highlightBox && swatchBox)
-  assert(
-    Math.abs(
-      highlightBox.y +
-        highlightBox.height / 2 -
-        (swatchBox.y + swatchBox.height / 2)
-    ) <= 1,
-    'highlight button and color swatches must share one horizontal row'
-  )
+  assert(actionBox)
+  const actionCenterY = actionBox.y + actionBox.height / 2
+  swatchBoxes.forEach((box, index) => {
+    assert(
+      Math.abs(actionCenterY - (box.y + box.height / 2)) <= 1,
+      `${toolbarName}: ${actionName} and swatch ${index + 1} must share one horizontal row`
+    )
+  })
   await palette.evaluate((node) => {
-    window.__customColorPickerOpened = false
+    window.__customColorInputClickForwarded = false
     node.querySelector('input[type=color]').addEventListener(
       'click',
       () => {
-        window.__customColorPickerOpened = true
+        window.__customColorInputClickForwarded = true
       },
       { once: true }
     )
   })
   await swatches.last().click()
   assert.equal(
-    await page.evaluate(() => window.__customColorPickerOpened),
-    true
+    await page.evaluate(() => window.__customColorInputClickForwarded),
+    true,
+    `${toolbarName}: custom color button must forward the click to its input`
   )
 }
 async function setColorInput(locator, color) {
@@ -288,9 +322,13 @@ async function capturePopoverThemes(browser, base, output) {
         (await snapshot(page)).ranges[0].markerStyle.backgroundColor,
         '#123456'
       )
+      await assertCompactPalette(page, '高亮操作')
       await expect(
         page.getByRole('button', { name: '自由选色' })
       ).toHaveAttribute('data-color', '#123456')
+      console.log(
+        `Custom color (${darkMode ? 'dark' : 'light'}): click forwarding + simulated input saved on highlight`
+      )
       assert.deepEqual(errors, [])
     } finally {
       await page.close()
@@ -452,13 +490,13 @@ export async function runSelectionChecks(
             )
           }
           // Fresh selection must become a draft, including delayed controlled IDs.
-          await page.mouse.click(200, 500)
           await selectText(
             page,
             format,
             format === 'epub' ? [1, 13] : [1, 1],
-            format === 'epub' ? [1, 19] : [1, 6],
-            true
+            format === 'epub' ? [1, 19] : [1, 10],
+            true,
+            format === 'pdf' ? 0.1 : 0.5
           )
           await page.getByRole('toolbar', { name: '选区操作' }).waitFor()
           await setColor(page, '#0000ff')

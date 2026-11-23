@@ -131,57 +131,66 @@ try {
           }, targetLine)
           // Position real menu text over this exact character, including a child
           // which explicitly opts into hit testing. Keep the menu usable throughout.
-          const obstruction = await page.evaluate(async (target) => {
-            const menu = document.querySelector(
-              '.hamster-reader__engine-popover'
-            )
-            const walker = document.createTreeWalker(menu, NodeFilter.SHOW_TEXT)
-            let node
-            while (walker.nextNode()) {
-              if (walker.currentNode.textContent.includes('删除')) {
-                node = walker.currentNode
-                break
+          const obstruction = await page.evaluate(
+            async ({ target, saved }) => {
+              const menu = document.querySelector(
+                '.hamster-reader__engine-popover'
+              )
+              const buttonText = saved ? '删除' : '高亮'
+              const walker = document.createTreeWalker(
+                menu,
+                NodeFilter.SHOW_TEXT
+              )
+              let node
+              while (walker.nextNode()) {
+                if (walker.currentNode.textContent.trim() === buttonText) {
+                  node = walker.currentNode
+                  break
+                }
               }
-            }
-            const text = document.createRange()
-            text.setStart(node, 0)
-            text.setEnd(node, 1)
-            const box = text.getBoundingClientRect()
-            const style = getComputedStyle(menu)
-            const placement = document.createElement('style')
-            placement.id = 'cross-line-menu-placement'
-            placement.textContent = `.hamster-reader__engine-popover {
+              if (!node) throw new Error(`Missing ${buttonText} button text`)
+              const text = document.createRange()
+              text.setStart(node, 0)
+              text.setEnd(node, 1)
+              const box = text.getBoundingClientRect()
+              const style = getComputedStyle(menu)
+              const placement = document.createElement('style')
+              placement.id = 'cross-line-menu-placement'
+              placement.textContent = `.hamster-reader__engine-popover {
               left: ${parseFloat(style.left) + target.x - box.left - box.width / 2}px !important;
               top: ${parseFloat(style.top) + target.y - box.top - box.height / 2}px !important;
             }`
-            document.head.append(placement)
-            menu.style.setProperty('pointer-events', 'auto', 'important')
-            node.parentElement.style.setProperty(
-              'pointer-events',
-              'auto',
-              'important'
-            )
-            // WebKit updates composited hit regions after the placement frame.
-            await new Promise((done) =>
-              requestAnimationFrame(() => requestAnimationFrame(done))
-            )
-            const hit = document.elementFromPoint(target.x, target.y)
-            const caretNode =
-              document.caretPositionFromPoint?.(target.x, target.y)
-                ?.offsetNode ??
-              document.caretRangeFromPoint?.(target.x, target.y)?.startContainer
-            return {
-              rawCaretInMenu: menu.contains(caretNode),
-              rawCaretText: caretNode?.textContent,
-              text: hit?.textContent,
-              hitMenu: menu.contains(hit),
-              position: getComputedStyle(menu).position,
-              styles: [
-                menu.getAttribute('style'),
-                node.parentElement.getAttribute('style')
-              ]
-            }
-          }, target)
+              document.head.append(placement)
+              menu.style.setProperty('pointer-events', 'auto', 'important')
+              node.parentElement.style.setProperty(
+                'pointer-events',
+                'auto',
+                'important'
+              )
+              // WebKit updates composited hit regions after the placement frame.
+              await new Promise((done) =>
+                requestAnimationFrame(() => requestAnimationFrame(done))
+              )
+              const hit = document.elementFromPoint(target.x, target.y)
+              const caretNode =
+                document.caretPositionFromPoint?.(target.x, target.y)
+                  ?.offsetNode ??
+                document.caretRangeFromPoint?.(target.x, target.y)
+                  ?.startContainer
+              return {
+                rawCaretInMenu: menu.contains(caretNode),
+                rawCaretText: caretNode?.textContent,
+                text: hit?.textContent,
+                hitMenu: menu.contains(hit),
+                position: getComputedStyle(menu).position,
+                styles: [
+                  menu.getAttribute('style'),
+                  node.parentElement.getAttribute('style')
+                ]
+              }
+            },
+            { target, saved }
+          )
           assert(
             obstruction.rawCaretInMenu,
             `${label}: native caret query hits menu text ${JSON.stringify(obstruction)}`
@@ -229,7 +238,7 @@ try {
             const menu = document.querySelector(
               '.hamster-reader__engine-popover'
             )
-            const button = menu.querySelector('button')
+            const button = [...menu.querySelectorAll('button')].at(-1)
             const box = button.getBoundingClientRect()
             const buttonHit = document.elementFromPoint(
               box.x + box.width / 2,
@@ -248,6 +257,9 @@ try {
               menuRestored.button === 'auto' &&
               menuRestored.buttonHit,
             `${label}: restores menu hit testing immediately ${JSON.stringify(menuRestored)}`
+          )
+          await page.evaluate(() =>
+            document.getElementById('cross-line-menu-placement').remove()
           )
           if (action === 'confirm') await confirm.tap()
           await dispatch(action === 'cancel' ? 'pointercancel' : 'pointerup')
@@ -293,9 +305,6 @@ try {
               next
             )
           } else if (action !== 'confirm') await confirm.tap()
-          await page.evaluate(() =>
-            document.getElementById('cross-line-menu-placement').remove()
-          )
           const viewport = await page
             .locator('.hamster-reader__pdf-text-viewport')
             .boundingBox()
