@@ -4,7 +4,8 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react'
 import { forwardRef, useImperativeHandle, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HostDocumentRecord } from '../src/host/readerDataStore'
 import { ReaderDataStore } from '../src/host/readerDataStore'
 import { App } from '../app/App'
+import Index from '../app/app/index'
+import DebugOpenRoute from '../app/app/debug/open'
 
 type ReaderProps = {
   readonly record: HostDocumentRecord
@@ -24,6 +27,7 @@ type ReaderProps = {
 }
 
 type ReaderHandle = {
+  readonly fileId: string
   readonly close: () => Promise<
     | { readonly status: 'closed' }
     | { readonly status: 'unconfirmed'; readonly reason: string }
@@ -48,6 +52,8 @@ const host = vi.hoisted(() => {
     alert: vi.fn(),
     initialUrl: null as string | null,
     urlListeners: [] as ((event: { url: string }) => void)[],
+    params: {} as Record<string, string>,
+    platform: 'ios',
     pick: vi.fn(),
     packaged: {
       entryUrl: 'file:///session/index.html',
@@ -56,6 +62,18 @@ const host = vi.hoisted(() => {
   }
 })
 
+const navigation = vi.hoisted(() => ({
+  setOptions: vi.fn(),
+  dismissTo: vi.fn()
+}))
+vi.mock('expo-router', () => ({
+  router: navigation,
+  useNavigation: () => navigation,
+  useLocalSearchParams: () => host.params
+}))
+vi.mock('expo-router/react-navigation', () => ({
+  useRoute: () => ({ params: host.params })
+}))
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
   createFileSystemStorage: () => host.storage
@@ -82,7 +100,7 @@ vi.mock('../app/src/screens/ReaderScreen', () => ({
         else setCloseFailed(true)
         return result
       }
-      useImperativeHandle(ref, () => ({ close }))
+      useImperativeHandle(ref, () => ({ fileId: props.record.fileId, close }))
       if (props.paneId) host.latest.set(props.paneId, props)
       return (
         <div data-testid={`reader-${props.paneId}`}>
@@ -144,7 +162,11 @@ vi.mock('react-native', async () => {
     Text: Container,
     View: Container,
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
-    Platform: { OS: 'ios' }
+    Platform: {
+      get OS() {
+        return host.platform
+      }
+    }
   }
 })
 
@@ -171,6 +193,23 @@ async function seed(): Promise<void> {
   await store.upsert(b)
 }
 
+async function pressAndroidBack(): Promise<void> {
+  await waitFor(() =>
+    expect(navigation.setOptions.mock.lastCall?.[0]?.headerLeft).toBeTypeOf(
+      'function'
+    )
+  )
+  const options = navigation.setOptions.mock.lastCall?.[0] as {
+    headerLeft?: () => React.ReactElement
+    unstable_headerLeftItems?: unknown
+  }
+  expect(options.unstable_headerLeftItems).toBeUndefined()
+  const header = render(options.headerLeft!())
+  await act(async () => {
+    fireEvent.click(within(header.container).getByText('返回'))
+  })
+}
+
 function clearEnv(): void {
   delete process.env.EXPO_PUBLIC_HAM278_ROUTE
   delete process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID
@@ -188,6 +227,9 @@ beforeEach(async () => {
   host.pick.mockReset()
   host.initialUrl = null
   host.urlListeners = []
+  host.params = {}
+  host.platform = 'ios'
+  navigation.setOptions.mockReset()
   clearEnv()
   vi.stubGlobal('__DEV__', true)
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
@@ -212,6 +254,97 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     expect(host.latest.get('left')?.paneId).toBe('left')
     expect(host.latest.get('left')?.isActivePane).toBe(true)
     expect(screen.getByText('分栏')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(navigation.setOptions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'a.pdf',
+          headerBackVisible: false,
+          headerLeft: undefined,
+          unstable_headerLeftItems: expect.any(Function)
+        })
+      )
+    )
+    const options = navigation.setOptions.mock.lastCall?.[0] as {
+      unstable_headerLeftItems: () => {
+        label: string
+        icon: { type: string; name: string }
+        onPress: () => void
+      }[]
+    }
+    const leftItems = options.unstable_headerLeftItems()
+    expect(leftItems).toHaveLength(1)
+    expect(leftItems[0]).toMatchObject({
+      label: '返回',
+      icon: { type: 'sfSymbol', name: 'chevron.left' }
+    })
+    await act(async () => leftItems[0]!.onPress())
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('left'))
+    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+  })
+
+  it('enables the system large title only while the library is visible', async () => {
+    render(<App />)
+    await screen.findByText('open:a.pdf')
+    expect(navigation.setOptions.mock.lastCall?.[0]).toMatchObject({
+      title: '仓鼠阅读',
+      headerLargeTitleEnabled: true
+    })
+
+    fireEvent.click(screen.getByText('open:a.pdf'))
+    await screen.findByTestId('reader-left')
+    expect(navigation.setOptions.mock.lastCall?.[0]).toMatchObject({
+      title: 'a.pdf',
+      headerLargeTitleEnabled: false
+    })
+  })
+
+  it('closes a single reader through the Android header back action', async () => {
+    host.platform = 'android'
+    render(<App />)
+    fireEvent.click(await screen.findByText('open:a.pdf'))
+    await screen.findByTestId('reader-left')
+
+    await pressAndroidBack()
+    await waitFor(() => expect(host.close).toHaveBeenCalledWith('left'))
+    expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+  })
+
+  it('closes only the active split pane through the Android header back action', async () => {
+    host.platform = 'android'
+    host.params = { fileId: a.fileId, layout: 'split' }
+    render(<Index />)
+    await screen.findByTestId('reader-left')
+    await screen.findByTestId('reader-right')
+    fireEvent.click(screen.getByText('活动：左栏'))
+    await waitFor(() =>
+      expect(host.latest.get('right')?.isActivePane).toBe(true)
+    )
+
+    await pressAndroidBack()
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-right')).not.toBeInTheDocument()
+    )
+    expect(host.close).toHaveBeenCalledWith('right')
+    expect(host.close).not.toHaveBeenCalledWith('left')
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+  })
+
+  it('keeps an Android reader mounted after a failed close and retries back', async () => {
+    host.platform = 'android'
+    host.close
+      .mockResolvedValueOnce({ status: 'unconfirmed', reason: 'disk full' })
+      .mockResolvedValueOnce({ status: 'closed' })
+    render(<App />)
+    fireEvent.click(await screen.findByText('open:a.pdf'))
+    await screen.findByTestId('reader-left')
+
+    await pressAndroidBack()
+    expect(screen.getByTestId('reader-left')).toBeInTheDocument()
+    await pressAndroidBack()
+    await waitFor(() =>
+      expect(screen.queryByTestId('reader-left')).not.toBeInTheDocument()
+    )
+    expect(host.close).toHaveBeenCalledTimes(2)
   })
 
   it('opens the requested PDF from the launch environment without a picker', async () => {
@@ -228,6 +361,23 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
         target: 'fileId',
         fileId: a.fileId,
         layout: 'single',
+        ok: true
+      })
+    )
+  })
+
+  it('opens the target delivered to the index', async () => {
+    host.params = { fileId: a.fileId, layout: 'single' }
+    render(<Index />)
+
+    await screen.findByTestId('reader-left')
+    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
+    expect(host.urlListeners).toHaveLength(0)
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-debug-route',
+      expect.objectContaining({
+        source: 'deeplink',
+        fileId: a.fileId,
         ok: true
       })
     )
@@ -365,15 +515,15 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
         return { status: 'unconfirmed', reason: 'disk full' }
       return { status: 'closed' }
     })
-    render(<App />)
+    host.params = { fileId: a.fileId, layout: 'split' }
+    const view = render(<Index />)
     await screen.findByTestId('reader-left')
     await screen.findByTestId('reader-right')
-    await waitFor(() => expect(host.urlListeners).toHaveLength(1))
+    expect(host.urlListeners).toHaveLength(0)
 
+    host.params = { fileId: a.fileId, layout: 'single' }
     await act(async () => {
-      host.urlListeners[0]!({
-        url: `hamsterreader://open?fileId=${a.fileId}&layout=single`
-      })
+      view.rerender(<Index />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(screen.getByTestId('reader-left')).toBeInTheDocument()
@@ -394,8 +544,7 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
   })
 
   it('queues a deep link behind an in-progress host close', async () => {
-    process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
-    process.env.EXPO_PUBLIC_HAM278_LAYOUT = 'split'
+    host.params = { fileId: a.fileId, layout: 'split' }
     let releaseRight!: () => void
     const rightGate = new Promise<void>((resolve) => {
       releaseRight = resolve
@@ -405,16 +554,15 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
       if (paneId === 'right' && ++rightAttempts === 1) await rightGate
       return { status: 'closed' }
     })
-    render(<App />)
+    const view = render(<Index />)
     await screen.findByTestId('reader-left')
     await screen.findByTestId('reader-right')
 
     fireEvent.click(screen.getByText('返回书库'))
     await waitFor(() => expect(host.close).toHaveBeenCalledWith('right'))
+    host.params = { fileId: a.fileId, layout: 'single' }
     await act(async () => {
-      host.urlListeners[0]!({
-        url: `hamsterreader://open?fileId=${a.fileId}&layout=single`
-      })
+      view.rerender(<Index />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(screen.getByTestId('reader-left')).toBeInTheDocument()
@@ -431,10 +579,30 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     expect(screen.queryByText('open:a.pdf')).not.toBeInTheDocument()
   })
 
-  it('keeps debug controls and launch routes out of release', async () => {
+  it('opens a library file by ID in release on both initial and subsequent links', async () => {
+    vi.stubGlobal('__DEV__', false)
+    host.params = { fileId: a.fileId }
+    const view = render(<Index />)
+    await screen.findByTestId('reader-left')
+    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
+    host.params = { fileId: b.fileId }
+    view.rerender(<Index />)
+    await waitFor(() =>
+      expect(host.latest.get('left')?.record.fileId).toBe(b.fileId)
+    )
+  })
+
+  it('keeps debug/open and environment launches out of release', async () => {
     vi.stubGlobal('__DEV__', false)
     process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
-    render(<App />)
+    host.params = { fileId: a.fileId }
+    render(<DebugOpenRoute />)
+    expect(navigation.dismissTo).toHaveBeenCalledWith({
+      pathname: '/',
+      params: {}
+    })
+    host.params = {}
+    render(<Index />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
     expect(screen.getAllByTestId('reader-left')).toHaveLength(1)

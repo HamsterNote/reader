@@ -14,6 +14,7 @@ import {
 } from '../app/src/debug/panes'
 import {
   debugRouteFromEnv,
+  debugRouteFromParams,
   debugRouteLog,
   parseDebugUrl
 } from '../app/src/debug/route'
@@ -51,6 +52,22 @@ describe('debug route parsing (HAM-290 device entrance)', () => {
       },
       layout: 'single',
       raw
+    })
+  })
+
+  it('maps Router query params onto the same debug route', () => {
+    expect(
+      debugRouteFromParams({
+        fileId: ['f_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+        layout: 'split'
+      })
+    ).toMatchObject({
+      source: 'deeplink',
+      target: {
+        kind: 'fileId',
+        value: 'f_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      },
+      layout: 'split'
     })
   })
 

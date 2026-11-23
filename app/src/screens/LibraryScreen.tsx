@@ -55,39 +55,40 @@ export function LibraryScreen({
   )
 
   return (
-    <View style={styles.container}>
-      <View style={styles.intro}>
-        <Text style={styles.heading}>仓鼠阅读</Text>
-        <Text style={styles.muted}>
-          EPUB / PDF 在本地 WebView 中打开；标注按文件保存在应用内。
-        </Text>
-      </View>
-      <Pressable
-        style={[styles.primaryButton, busy && styles.disabled]}
-        onPress={onPickDocument}
-        disabled={busy}
-      >
-        <Text style={styles.primaryButtonText}>
-          {busy ? '处理中…' : '打开 EPUB / PDF'}
-        </Text>
-      </Pressable>
-      <FlatList
-        data={documents}
-        keyExtractor={(item) => item.fileId}
-        renderItem={renderItem}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <Text style={styles.empty}>还没有打开过的文件。</Text>
-        }
-      />
-    </View>
+    <FlatList
+      style={styles.container}
+      contentInsetAdjustmentBehavior='automatic'
+      alwaysBounceVertical
+      data={documents}
+      keyExtractor={(item) => item.fileId}
+      renderItem={renderItem}
+      contentContainerStyle={styles.list}
+      ListHeaderComponent={
+        <View style={styles.header}>
+          <Text style={styles.muted}>
+            EPUB / PDF 在本地 WebView 中打开；标注按文件保存在应用内。
+          </Text>
+          <Pressable
+            style={[styles.primaryButton, busy && styles.disabled]}
+            onPress={onPickDocument}
+            disabled={busy}
+          >
+            <Text style={styles.primaryButtonText}>
+              {busy ? '处理中…' : '打开 EPUB / PDF'}
+            </Text>
+          </Pressable>
+        </View>
+      }
+      ListEmptyComponent={
+        <Text style={styles.empty}>还没有打开过的文件。</Text>
+      }
+    />
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingHorizontal: 16, paddingTop: 12, gap: 14 },
-  intro: { gap: 4 },
-  heading: { fontSize: 26, fontWeight: '700', color: '#1f1d1a' },
+  container: { flex: 1 },
+  header: { gap: 14 },
   muted: { color: '#6d675f', fontSize: 13 },
   primaryButton: {
     backgroundColor: '#8b5e3c',
@@ -97,7 +98,7 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.6 },
   primaryButtonText: { color: '#fffdf8', fontWeight: '600' },
-  list: { gap: 10, paddingBottom: 32 },
+  list: { gap: 10, paddingHorizontal: 16, paddingBottom: 32 },
   card: {
     flexDirection: 'row',
     alignItems: 'center',

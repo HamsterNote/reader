@@ -82,6 +82,31 @@ function layoutFrom(value: string | undefined): DebugLayout {
   return value?.trim().toLowerCase() === 'split' ? 'split' : 'single'
 }
 
+export type DebugRouteParams = {
+  readonly fileId?: string | string[]
+  readonly path?: string | string[]
+  readonly layout?: string | string[]
+}
+
+export function firstParam(
+  value: string | string[] | undefined
+): string | undefined {
+  return (Array.isArray(value) ? value[0] : value)?.trim()
+}
+
+export function debugRouteFromParams(
+  params: DebugRouteParams
+): DebugRoute | null {
+  const target = targetFrom(firstParam(params.fileId), firstParam(params.path))
+  if (!target) return null
+  return {
+    source: 'deeplink',
+    target,
+    layout: layoutFrom(firstParam(params.layout)),
+    raw: target.value
+  }
+}
+
 export function parseDebugUrl(
   raw: string,
   source: DebugEntrySource = 'deeplink'

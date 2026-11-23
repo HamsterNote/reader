@@ -8,8 +8,10 @@ import {
 } from '@testing-library/react'
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode
@@ -20,7 +22,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDrainPair } from './helpers/bridge-drain'
 import { startNativePdfSurface } from '../webview/src/nativePdf'
 import { nativeCanonicalPageFromOcr } from '../src/nativePdf/ocr'
-import { ReaderScreen } from '../app/src/screens/ReaderScreen'
+import {
+  ReaderScreen as ReaderScreenContent,
+  type ReaderScreenHandle,
+  type ReaderScreenHeaderState,
+  type ReaderScreenProps
+} from '../app/src/screens/ReaderScreen'
 import * as pdfRouting from '../src/nativePdf/routing'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
 import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
@@ -52,6 +59,47 @@ type TestBinding = {
 type OuterWebProps = {
   readonly handoff?: TestBinding
   readonly sessionId?: string
+}
+
+function ReaderScreen(props: ReaderScreenProps) {
+  const handle = useRef<ReaderScreenHandle>(null)
+  const [header, setHeader] = useState<ReaderScreenHeaderState>({
+    title: props.record.fileName,
+    canToggleLayout: true,
+    nativePdf: false,
+    canImportLegacy: true
+  })
+  const updateHeader = useCallback(
+    (_paneId: string, state: ReaderScreenHeaderState) => setHeader(state),
+    []
+  )
+  return (
+    <>
+      <ReaderScreenContent
+        {...props}
+        ref={handle}
+        onHeaderStateChange={updateHeader}
+      />
+      <span>{header.title}</span>
+      <button onClick={() => handle.current?.close(false)}>返回</button>
+      {header.canToggleLayout ? (
+        <button onClick={() => handle.current?.toggleLayout()}>
+          {header.nativePdf ? 'Text' : 'Layout'}
+        </button>
+      ) : null}
+      {__DEV__ && header.canToggleLayout ? (
+        <button onClick={() => handle.current?.toggleDebugRenderer()}>
+          {header.nativePdf ? 'Web 对照' : '原生 PDF 验证'}
+        </button>
+      ) : null}
+      <button
+        disabled={!header.canImportLegacy}
+        onClick={() => handle.current?.importLegacy()}
+      >
+        导入旧数据
+      </button>
+    </>
+  )
 }
 
 const host = vi.hoisted(() => ({

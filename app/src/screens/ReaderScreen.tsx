@@ -46,13 +46,30 @@ import {
   usesNativePdfLayout
 } from '../../../src/nativePdf/routing'
 
-type ReaderScreenProps = {
+export type ReaderScreenHeaderState = {
+  readonly title: string
+  readonly canToggleLayout: boolean
+  readonly nativePdf: boolean
+  readonly canImportLegacy: boolean
+}
+
+type ReaderScreenActions = {
+  readonly toggleLayout: () => void
+  readonly toggleDebugRenderer: () => void
+  readonly importLegacy: () => Promise<void>
+}
+
+export type ReaderScreenProps = {
   readonly record: HostDocumentRecord
   readonly store: ReaderDataStore
   readonly entryUrl: string
   readonly baseUrl: string
   readonly onBack: () => void
   readonly onRecordUpdated: (record: HostDocumentRecord) => void
+  readonly onHeaderStateChange?: (
+    paneId: string,
+    state: ReaderScreenHeaderState
+  ) => void
   /** Configured split hosts supply their stable pane key; standalone screens generate one. */
   readonly paneId?: string
   readonly isActivePane?: boolean
@@ -69,8 +86,9 @@ type ReaderScreenProps = {
   ) => void
 }
 
-export type ReaderScreenHandle = {
-  readonly close: () => Promise<BridgeCloseResult>
+export type ReaderScreenHandle = ReaderScreenActions & {
+  readonly fileId: string
+  readonly close: (external?: boolean) => Promise<BridgeCloseResult>
 }
 
 type ReaderCloseRequest = {
@@ -83,6 +101,7 @@ type ReaderScreenSessionProps = ReaderScreenProps & {
   readonly closeRef: React.RefObject<
     ((external?: boolean) => Promise<BridgeCloseResult>) | null
   >
+  readonly actionsRef: React.RefObject<ReaderScreenActions | null>
 }
 
 function identityFor(
@@ -245,7 +264,9 @@ function ReaderScreenSession({
   baseUrl,
   onBack,
   onRecordUpdated,
+  onHeaderStateChange,
   closeRef,
+  actionsRef,
   paneId = 'standalone',
   isActivePane = true,
   debugCensusToken,
@@ -715,6 +736,34 @@ function ReaderScreenSession({
     }
   }
 
+  const canToggleLayout = isLocalIosPdf(Platform.OS, record)
+  const handoffPhase = coordinator.snapshot.phase
+  actionsRef.current = {
+    toggleLayout: () => {
+      if (canToggleLayout) (nativePdf ? requestText : requestNative)()
+    },
+    toggleDebugRenderer: () => {
+      if (canToggleLayout) (nativePdf ? requestWeb : requestNative)()
+    },
+    importLegacy
+  }
+  useEffect(() => {
+    onHeaderStateChange?.(paneId, {
+      title: record.fileName,
+      canToggleLayout,
+      nativePdf,
+      canImportLegacy: !importing && !nativePdf && handoffPhase === 'WEB_ACTIVE'
+    })
+  }, [
+    canToggleLayout,
+    handoffPhase,
+    importing,
+    nativePdf,
+    onHeaderStateChange,
+    paneId,
+    record.fileName
+  ])
+
   const content = renderReaderContent({
     staged,
     stageError,
@@ -740,45 +789,23 @@ function ReaderScreenSession({
   })
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Pressable onPress={() => void closeReader()} hitSlop={12}>
-          <Text style={styles.back}>返回</Text>
-        </Pressable>
-        <View style={styles.headerMain}>
-          <Text style={styles.title} numberOfLines={1}>
-            {record.fileName}
-          </Text>
-          <Text style={styles.muted}>
-            {record.format.toUpperCase()}
-            {record.legacyImport
-              ? ` · 旧数据 v${record.legacyImport.version}`
-              : ''}
-          </Text>
-        </View>
-        {isLocalIosPdf(Platform.OS, record) ? (
-          <Pressable onPress={nativePdf ? requestText : requestNative}>
-            <Text>{nativePdf ? 'Text' : 'Layout'}</Text>
-          </Pressable>
+      <View style={styles.documentMeta}>
+        <Text style={styles.documentMetaText}>
+          {record.format.toUpperCase()}
+          {record.legacyImport
+            ? ` · 旧数据 v${record.legacyImport.version}`
+            : ''}
+        </Text>
+        {importing ? (
+          <View style={styles.importProgress}>
+            <ActivityIndicator
+              size='small'
+              color='#8b5e3c'
+              accessibilityLabel='正在导入旧数据'
+            />
+            <Text style={styles.documentMetaText}>正在导入旧数据…</Text>
+          </View>
         ) : null}
-        {__DEV__ && isLocalIosPdf(Platform.OS, record) ? (
-          <Pressable onPress={nativePdf ? requestWeb : requestNative}>
-            <Text>{nativePdf ? 'Web 对照' : '原生 PDF 验证'}</Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          onPress={() => void importLegacy()}
-          disabled={
-            importing ||
-            nativePdf ||
-            coordinator.snapshot.phase !== 'WEB_ACTIVE'
-          }
-        >
-          {importing ? (
-            <ActivityIndicator size='small' color='#8b5e3c' />
-          ) : (
-            <Text style={styles.action}>导入旧数据</Text>
-          )}
-        </Pressable>
       </View>
       {content}
     </View>
@@ -794,15 +821,23 @@ export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
     const closeRef = useRef<
       ((external?: boolean) => Promise<BridgeCloseResult>) | null
     >(null)
+    const actionsRef = useRef<ReaderScreenActions | null>(null)
     const switchRequested = useRef(false)
     const requested = useRef(props)
     requested.current = props
     useImperativeHandle(
       ref,
       () => ({
-        close: () =>
-          closeRef.current?.(true) ??
-          Promise.resolve<BridgeCloseResult>({ status: 'closed' })
+        get fileId() {
+          return retained.current.record.fileId
+        },
+        close: (external = true) =>
+          closeRef.current?.(external) ??
+          Promise.resolve<BridgeCloseResult>({ status: 'closed' }),
+        toggleLayout: () => actionsRef.current?.toggleLayout(),
+        toggleDebugRenderer: () => actionsRef.current?.toggleDebugRenderer(),
+        importLegacy: () =>
+          actionsRef.current?.importLegacy() ?? Promise.resolve()
       }),
       []
     )
@@ -827,6 +862,7 @@ export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
         {...current}
         paneId={paneId}
         closeRef={closeRef}
+        actionsRef={actionsRef}
         onBack={() => {
           const next = requested.current
           if (
@@ -847,6 +883,16 @@ export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f3ee' },
+  documentMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 6
+  },
+  documentMetaText: { fontSize: 12, color: '#6d675f' },
+  importProgress: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   reader: { flex: 1 },
   // Keep the draining WKWebView laid out: stable-progress needs a nonzero
   // viewport and animation frames. The opaque native layer covers its input.
@@ -857,19 +903,5 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: '#f5f3ee'
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd6ca'
-  },
-  headerMain: { flex: 1 },
-  title: { fontSize: 15, fontWeight: '600', color: '#1f1d1a' },
-  muted: { fontSize: 12, color: '#6d675f' },
-  back: { color: '#8b5e3c', fontSize: 14 },
-  action: { color: '#8b5e3c', fontSize: 13 }
+  }
 })

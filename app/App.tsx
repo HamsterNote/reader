@@ -1,11 +1,10 @@
 import { StatusBar } from 'expo-status-bar'
+import { useNavigation } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  Linking,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View
@@ -35,11 +34,14 @@ import { resolveDebugTarget } from './src/debug/resolveTarget'
 import {
   debugRouteFromEnv,
   debugRouteLog,
-  parseDebugUrl,
   type DebugRoute
 } from './src/debug/route'
 import { pickAndCacheDocument, removeDocument } from './src/native/documents'
 import { createFileSystemStorage } from './src/native/storage'
+import {
+  resolveReaderHeaderTitle,
+  updateReaderNativeHeader
+} from './src/nativeHeader'
 import {
   preparePackagedWebReader,
   type PackagedWebReader
@@ -47,25 +49,35 @@ import {
 import { LibraryScreen } from './src/screens/LibraryScreen'
 import {
   ReaderScreen,
-  type ReaderScreenHandle
+  type ReaderScreenHandle,
+  type ReaderScreenHeaderState
 } from './src/screens/ReaderScreen'
 import { AppErrorBoundary } from './src/components/AppErrorBoundary'
 
 type HostCloseAction = {
-  readonly targets: readonly PaneId[]
+  readonly shouldClose: (pane: PaneId, fileId: string) => boolean
   readonly complete: () => void
   running: boolean
 }
 
-export function App() {
+export function App({
+  debugRoute
+}: {
+  readonly debugRoute?: DebugRoute | null
+}) {
   return (
     <AppErrorBoundary>
-      <AppContent />
+      <AppContent debugRoute={debugRoute} />
     </AppErrorBoundary>
   )
 }
 
-function AppContent() {
+function AppContent({
+  debugRoute
+}: {
+  readonly debugRoute?: DebugRoute | null
+}) {
+  const navigation = useNavigation()
   const storeRef = useRef<ReaderDataStore | null>(null)
   if (storeRef.current === null) {
     storeRef.current = new Store(createFileSystemStorage())
@@ -86,6 +98,16 @@ function AppContent() {
   const [holdSaveToken, setHoldSaveToken] = useState(0)
   const [packaged, setPackaged] = useState<PackagedWebReader | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [headerStates, setHeaderStates] = useState<
+    Partial<Record<PaneId, ReaderScreenHeaderState>>
+  >({})
+  const updateHeaderState = useCallback(
+    (pane: string, state: ReaderScreenHeaderState): void => {
+      if (pane !== 'left' && pane !== 'right') return
+      setHeaderStates((current) => ({ ...current, [pane]: state }))
+    },
+    []
+  )
 
   const refresh = useCallback(async (): Promise<void> => {
     const list = await store.list()
@@ -187,13 +209,12 @@ function AppContent() {
       if (action.running) return
       action.running = true
       const results = await Promise.all(
-        action.targets.map(async (pane) => {
+        (['left', 'right'] as const).map(async (pane) => {
+          const reader = readerRefs[pane].current
+          if (!reader || !action.shouldClose(pane, reader.fileId))
+            return { status: 'closed' as const }
           try {
-            return (
-              (await readerRefs[pane].current?.close()) ?? {
-                status: 'closed' as const
-              }
-            )
+            return await reader.close()
           } catch {
             return { status: 'unconfirmed' as const, reason: '关闭保存失败' }
           }
@@ -241,9 +262,7 @@ function AppContent() {
       return
     }
     const action: HostCloseAction = {
-      targets: (['left', 'right'] as const).filter(
-        (pane) => panes[pane] !== null
-      ),
+      shouldClose: () => true,
       running: false,
       complete: () => {
         setPanes(EMPTY_PANES)
@@ -262,7 +281,7 @@ function AppContent() {
     closePane(pane)
   }
 
-  /** 调试入口（仅 __DEV__）：深链接 / 环境变量直接指定 PDF，不依赖 HID 点击。 */
+  /** 路由打开书库记录，开发环境还可从文件路径导入。 */
   const openDebugRoute = useCallback(
     async (route: DebugRoute): Promise<void> => {
       const outcome = await resolveDebugTarget(store, route.target)
@@ -272,18 +291,22 @@ function AppContent() {
         ...(outcome.status === 'failed' ? { reason: outcome.reason } : {})
       })
       if (outcome.status === 'failed') {
-        Alert.alert('调试入口失败', outcome.reason)
+        Alert.alert('打开文件失败', outcome.reason)
         return
       }
       const record = outcome.record
       enqueueHostClose({
-        targets: route.layout === 'single' ? ['right'] : [],
+        shouldClose: (pane, fileId) =>
+          pane === 'left'
+            ? fileId !== record.fileId
+            : route.layout === 'single',
         running: false,
         complete: () => {
           setSplit(route.layout === 'split')
-          setPanes((state) =>
-            mirrorActivePane(setPaneRecord(state, 'left', record), 'left')
-          )
+          setPanes((state) => ({
+            left: record,
+            right: route.layout === 'split' ? (state.right ?? record) : null
+          }))
           setActivePane('left')
           void refresh()
         }
@@ -294,44 +317,26 @@ function AppContent() {
 
   const debugHandled = useRef(false)
   useEffect(() => {
-    if (!__DEV__) return
-    void (async () => {
-      if (debugHandled.current) return
-      debugHandled.current = true
-      const envRoute = debugRouteFromEnv({
-        EXPO_PUBLIC_HAM278_ROUTE: process.env.EXPO_PUBLIC_HAM278_ROUTE,
-        EXPO_PUBLIC_HAM278_OPEN_FILE_ID:
-          process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID,
-        EXPO_PUBLIC_HAM278_OPEN_PDF: process.env.EXPO_PUBLIC_HAM278_OPEN_PDF,
-        EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT
-      })
-      if (envRoute) {
-        await openDebugRoute(envRoute)
-        return
-      }
-      const initial = await Linking.getInitialURL().catch(() => null)
-      const parsed = initial ? parseDebugUrl(initial) : null
-      if (parsed) await openDebugRoute(parsed)
-    })()
-  }, [openDebugRoute])
-
-  useEffect(() => {
-    if (!__DEV__) return
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      const parsed = parseDebugUrl(url)
-      logNativePdfDiagnostic('reader-debug-route-link', {
-        url,
-        accepted: parsed !== null
-      })
-      if (parsed) void openDebugRoute(parsed)
+    if (debugRoute) {
+      void openDebugRoute(debugRoute)
+      return
+    }
+    if (!__DEV__ || debugHandled.current) return
+    debugHandled.current = true
+    const envRoute = debugRouteFromEnv({
+      EXPO_PUBLIC_HAM278_ROUTE: process.env.EXPO_PUBLIC_HAM278_ROUTE,
+      EXPO_PUBLIC_HAM278_OPEN_FILE_ID:
+        process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID,
+      EXPO_PUBLIC_HAM278_OPEN_PDF: process.env.EXPO_PUBLIC_HAM278_OPEN_PDF,
+      EXPO_PUBLIC_HAM278_LAYOUT: process.env.EXPO_PUBLIC_HAM278_LAYOUT
     })
-    return () => subscription.remove()
-  }, [openDebugRoute])
+    if (envRoute) void openDebugRoute(envRoute)
+  }, [openDebugRoute, debugRoute])
 
   const toggleSplit = (): void => {
     const target = otherPane(focusPane)
     enqueueHostClose({
-      targets: split && panes[target] ? [target] : [],
+      shouldClose: (pane) => split && pane === target,
       running: false,
       complete: () => {
         if (split) {
@@ -359,9 +364,28 @@ function AppContent() {
     })()
   }
 
+  const readerOpen = hasAnyPane(panes) && panes[focusPane] !== null
+  const headerTitle = resolveReaderHeaderTitle(
+    readerOpen,
+    split,
+    panes,
+    focusPane,
+    headerStates
+  )
+  useEffect(() => {
+    updateReaderNativeHeader({
+      navigation,
+      readerRefs,
+      focusPane,
+      headerState: headerStates[focusPane],
+      readerOpen,
+      headerTitle
+    })
+  }, [focusPane, headerStates, headerTitle, navigation, readerOpen, readerRefs])
+
   if (loadError !== null) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar style='dark' />
         <View style={styles.errorPanel}>
           <Text style={styles.errorTitle}>阅读资源未就绪</Text>
@@ -374,13 +398,13 @@ function AppContent() {
             <Text style={styles.buttonText}>重试</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
+      </View>
     )
   }
 
   if (packaged === null || busy) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar style='dark' />
         <View style={styles.center}>
           <ActivityIndicator color='#8b5e3c' />
@@ -388,13 +412,13 @@ function AppContent() {
             {packaged === null ? '正在解压阅读资源…' : '正在处理文件…'}
           </Text>
         </View>
-      </SafeAreaView>
+      </View>
     )
   }
 
   if (!hasAnyPane(panes)) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         <StatusBar style='dark' />
         <LibraryScreen
           documents={documents}
@@ -403,7 +427,7 @@ function AppContent() {
           onOpenDocument={(summary) => void open(summary)}
           onRemoveDocument={remove}
         />
-      </SafeAreaView>
+      </View>
     )
   }
 
@@ -417,7 +441,7 @@ function AppContent() {
     ? openPanes
     : openPanes.filter((entry) => entry.pane === focusPane)
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar style='dark' />
       <View style={styles.workspace}>
         {__DEV__ ? (
@@ -454,6 +478,7 @@ function AppContent() {
                 debugCensusToken={censusToken}
                 debugHoldSaveToken={holdSaveToken}
                 onBack={() => handleReaderBack(pane)}
+                onHeaderStateChange={updateHeaderState}
                 onRecordUpdated={(updated) => {
                   setPanes((state) => setPaneRecord(state, pane, updated))
                   void refresh()
@@ -463,7 +488,7 @@ function AppContent() {
           ))}
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   )
 }
 
