@@ -68,7 +68,12 @@ export function calculatePopoverPosition(
   // Treat that band as unavailable so an above-the-selection popover flips down.
   const effectiveTop = container.top + topInset
   const maxWidth = Math.max(0, container.width - gap * 2)
-  const maxHeight = Math.max(0, container.height - gap * 2)
+  const containerHeight = Math.max(0, container.height - gap * 2)
+  // Keep the popover inside the band the host chrome leaves visible; only fall
+  // back to the full container when the inset leaves no usable band at all.
+  const bandHeight = Math.max(0, container.bottom - effectiveTop - gap * 2)
+  const maxHeight =
+    bandHeight > 0 ? Math.min(containerHeight, bandHeight) : containerHeight
   const popoverWidth = Math.min(popover.width, maxWidth)
   const popoverHeight = Math.min(popover.height, maxHeight)
   const minimumLeft = container.left + gap - containerLeft

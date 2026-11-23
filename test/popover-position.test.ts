@@ -157,6 +157,31 @@ describe('popover position', () => {
     expect(position.left).toBeCloseTo(90)
   })
 
+  it('constrains the popover to the safe band when the inset leaves one', () => {
+    // Given: a 100px inset over a 140px container leaves a 24px safe band.
+    const container = rect(0, 0, 400, 140)
+    const selection = rect(100, 103, 80, 22)
+
+    // When: a 40px-tall popover is positioned.
+    const position = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 40),
+      8,
+      false,
+      100
+    )
+
+    // Then: it is sized to the band and never re-enters the host bar.
+    const effectiveTop = container.top + 100
+    expect(position.top).toBe(108)
+    expect(position.maxHeight).toBe(24)
+    expect(position.top).toBeGreaterThanOrEqual(effectiveTop)
+    expect(position.top + position.maxHeight).toBeLessThanOrEqual(
+      container.bottom
+    )
+  })
+
   it('keeps the placement unchanged when the selection is below the inset', () => {
     // Given: a selection well inside the container and away from the host chrome.
     const container = rect(0, 0, 800, 600)
@@ -177,9 +202,12 @@ describe('popover position', () => {
       65
     )
 
-    // Then: both placements are identical.
-    expect(withInset).toEqual(withoutInset)
+    // Then: both placements put the popover in the same spot; the inset only
+    // shrinks the allowed height to the visible band.
+    expect(withoutInset).toMatchObject({ left: 90, top: 154 })
     expect(withInset).toMatchObject({ left: 90, top: 154 })
+    expect(withoutInset.maxHeight).toBe(container.height - 16)
+    expect(withInset.maxHeight).toBe(container.height - 65 - 16)
   })
 
   it('keeps the popover inside the container when the inset exceeds its height', () => {
