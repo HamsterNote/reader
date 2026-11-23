@@ -170,8 +170,51 @@ async function selectText(page, format, start, end, reverse = false) {
   await page.mouse.move(points[1].x, points[1].y, { steps: 12 })
   await page.mouse.up()
 }
-async function setColor(page, color) {
-  await page.getByLabel('Highlight color').evaluate((input, color) => {
+async function assertCompactPalette(page) {
+  const toolbar = page.getByRole('toolbar', { name: '选区操作' })
+  await expect(toolbar).toBeVisible()
+  const highlight = page.getByRole('button', { name: '高亮', exact: true })
+  const palette = toolbar.getByRole('group', { name: 'Highlight color' })
+  const swatches = palette.getByRole('button')
+  await expect(swatches).toHaveCount(7)
+  await expect(swatches.last()).toHaveAttribute('aria-label', '自由选色')
+  assert.deepEqual(
+    await swatches.evaluateAll((nodes) =>
+      nodes.slice(0, 6).map((node) => node.dataset.color)
+    ),
+    ['#7d9ec0', '#8eba8e', '#d1b88a', '#cf9cab', '#a99fc4', '#2a2a2a']
+  )
+  const [highlightBox, swatchBox] = await Promise.all([
+    highlight.boundingBox(),
+    swatches.first().boundingBox()
+  ])
+  assert(highlightBox && swatchBox)
+  assert(
+    Math.abs(
+      highlightBox.y +
+        highlightBox.height / 2 -
+        (swatchBox.y + swatchBox.height / 2)
+    ) <= 1,
+    'highlight button and color swatches must share one horizontal row'
+  )
+  await palette.evaluate((node) => {
+    window.__customColorPickerOpened = false
+    node.querySelector('input[type=color]').addEventListener(
+      'click',
+      () => {
+        window.__customColorPickerOpened = true
+      },
+      { once: true }
+    )
+  })
+  await swatches.last().click()
+  assert.equal(
+    await page.evaluate(() => window.__customColorPickerOpened),
+    true
+  )
+}
+async function setColorInput(locator, color) {
+  await locator.evaluate((input, color) => {
     const setter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       'value'
@@ -180,6 +223,79 @@ async function setColor(page, color) {
     input.dispatchEvent(new Event('input', { bubbles: true }))
     input.dispatchEvent(new Event('change', { bubbles: true }))
   }, color)
+}
+async function setColor(page, color) {
+  await setColorInput(
+    page.getByRole('textbox', { name: 'Highlight color' }),
+    color
+  )
+}
+async function setCustomColor(page, color) {
+  await setColorInput(page.getByLabel('自定义高亮颜色'), color)
+}
+async function capturePopoverThemes(browser, base, output) {
+  for (const darkMode of [false, true]) {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 800 }
+    })
+    const errors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    try {
+      await page.goto(
+        `${base}/demo/selection-harness.html${darkMode ? '?dark' : ''}`
+      )
+      await page.getByLabel('Book', { exact: true }).setInputFiles({
+        name: 'selection.epub',
+        mimeType: 'application/epub+zip',
+        buffer: await selectionFixture()
+      })
+      await page.waitForFunction(() => {
+        const button = document.querySelector('[aria-label=下一页]')
+        return button && !button.disabled
+      })
+      await page.evaluate(async () => {
+        await document.fonts.ready
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        )
+      })
+      await selectText(page, 'epub', [0, 1], [1, 10])
+      await assertCompactPalette(page)
+      await setCustomColor(page, '#123456')
+      await expect(
+        page.getByRole('textbox', { name: 'Highlight color' })
+      ).toHaveValue('#123456')
+      await expect(
+        page.getByRole('button', { name: '自由选色' })
+      ).toHaveAttribute('aria-pressed', 'true')
+      const toolbar = page.getByRole('toolbar', { name: '选区操作' })
+      await expect(toolbar).toHaveClass(
+        darkMode
+          ? /hamster-reader-popover--dark/
+          : /hamster-reader-popover--light/
+      )
+      await page.screenshot({
+        path: resolve(
+          output,
+          `selection-popover-${darkMode ? 'dark' : 'light'}.png`
+        )
+      })
+      await page.getByRole('button', { name: '高亮', exact: true }).click()
+      await expect(
+        page.getByRole('toolbar', { name: '高亮操作' })
+      ).toBeVisible()
+      assert.equal(
+        (await snapshot(page)).ranges[0].markerStyle.backgroundColor,
+        '#123456'
+      )
+      await expect(
+        page.getByRole('button', { name: '自由选色' })
+      ).toHaveAttribute('data-color', '#123456')
+      assert.deepEqual(errors, [])
+    } finally {
+      await page.close()
+    }
+  }
 }
 async function assertInside(page) {
   await page.waitForFunction(() => {
@@ -220,7 +336,9 @@ async function dragEndpoint(page, format, cancel = false) {
       }
     return { x: box.x + frame.x, y: box.y + frame.y + box.height / 2 }
   }, format)
-  const handle = page.getByRole('button', { name: '调整高亮终点' })
+  const handle = page.getByRole('button', {
+    name: /^(?:调整高亮终点|拖动以调整选区终点)$/
+  })
   const box = await handle.boundingBox()
   await page.mouse.move(box.x + 7, box.y + 7)
   await page.mouse.down()
@@ -294,7 +412,12 @@ export async function runSelectionChecks(
             [0, 1],
             format === 'epub' ? [1, 10] : [0, 5]
           )
-          await page.getByRole('toolbar', { name: '选区操作' }).waitFor()
+          await expect(
+            page.getByRole('toolbar', { name: '选区操作' })
+          ).toBeVisible()
+          if (format === 'epub' && controlled) {
+            await assertCompactPalette(page)
+          }
           await assertInside(page)
           await setColor(page, '#00ff00')
           // Pointerdown confirmation followed by a synthesized click on the replaced button.
@@ -316,7 +439,10 @@ export async function runSelectionChecks(
           )
           assert.equal(data.ranges.length, 1)
           const first = data.ranges[0]
-          assert.equal(first.markerStyle.backgroundColor, '#00ff00')
+          assert.equal(
+            first.markerStyle.backgroundColor,
+            format === 'pdf' ? 'rgba(0, 255, 0, 0.35)' : '#00ff00'
+          )
           if (format === 'epub') {
             assert.deepEqual(first.start, { selectionId: 'page-1', offset: 1 })
             assert.deepEqual(first.end, { selectionId: 'page-1', offset: 57 })
@@ -326,6 +452,7 @@ export async function runSelectionChecks(
             )
           }
           // Fresh selection must become a draft, including delayed controlled IDs.
+          await page.mouse.click(200, 500)
           await selectText(
             page,
             format,
@@ -391,7 +518,7 @@ export async function runSelectionChecks(
           )
           await page.getByRole('button', { name: 'Undo', exact: true }).click()
           assert.deepEqual((await snapshot(page)).ranges[1], second)
-          await setColor(page, '#ff0000')
+          await setCustomColor(page, '#ff0000')
           data = await snapshot(page)
           assert.deepEqual(data.ranges[0], first)
           assert.deepEqual(data.ranges[1], {
@@ -523,6 +650,7 @@ export async function runSelectionChecks(
           await page.close()
         }
       }
+    await capturePopoverThemes(browser, base, output)
     console.log(JSON.stringify({ selection: results }, null, 2))
     assert(
       results.every((result) => result.passed),
@@ -535,7 +663,9 @@ export async function runSelectionChecks(
 }
 if (process.argv[1] === import.meta.filename) {
   const server = await createServer({ server: { host: '127.0.0.1', port: 0 } })
-  const output = resolve('../ham138-browser')
+  const output = resolve(
+    process.env.READER_SELECTION_OUTPUT ?? '../ham138-browser'
+  )
   await mkdir(output, { recursive: true })
   await server.listen()
   try {

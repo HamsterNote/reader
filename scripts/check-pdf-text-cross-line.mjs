@@ -138,7 +138,7 @@ try {
             const walker = document.createTreeWalker(menu, NodeFilter.SHOW_TEXT)
             let node
             while (walker.nextNode()) {
-              if (walker.currentNode.textContent.includes('背景颜色设置')) {
+              if (walker.currentNode.textContent.includes('删除')) {
                 node = walker.currentNode
                 break
               }

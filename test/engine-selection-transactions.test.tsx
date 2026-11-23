@@ -57,7 +57,7 @@ const original: ReaderSelectionRange = {
   end: { selectionId: 'page-1', offset: 5 },
   text: 'Alpha',
   rectsBySelectionId: {},
-  markerStyle: { backgroundColor: '#ff0000', color: '#112233' }
+  markerStyle: { backgroundColor: '#d1b88a', color: '#112233' }
 }
 const second: ReaderSelectionRange = { ...original, id: 'H2' }
 
@@ -236,7 +236,7 @@ describe('Reader with the native viewer and a controlled host', () => {
       const view = await act(async () => render(<Host file={source} />))
       await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
       await activate()
-      changeHighlightColor('#00ff00')
+      changeHighlightColor('#8eba8e')
       expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
       act(() => expect(ref.current?.undo()).toBe(true))
       expect(ref.current?.getAnnotationHistoryState().futureCount).toBe(1)
@@ -257,7 +257,7 @@ describe('Reader with the native viewer and a controlled host', () => {
       expect(onHistory).toHaveBeenCalledTimes(calls)
       // B has the same public ID but gets its own baseline and editable history.
       await activate()
-      changeHighlightColor('#0000ff')
+      changeHighlightColor('#7d9ec0')
       act(() => expect(ref.current?.undo()).toBe(true))
       expect(onHistory.mock.lastCall?.[0].ranges).toEqual([original])
       expect(ref.current?.canUndo()).toBe(false)
@@ -282,11 +282,11 @@ describe('Reader with the native viewer and a controlled host', () => {
       )
       await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
       await activate()
-      changeHighlightColor('#00ff00')
+      changeHighlightColor('#8eba8e')
       expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
       const edited = {
         ...original,
-        markerStyle: { ...original.markerStyle, backgroundColor: '#00ff00' }
+        markerStyle: { ...original.markerStyle, backgroundColor: '#8eba8e' }
       }
       fireEvent.click(screen.getByRole('button', { name: '删除' }))
       expect(onRemove).toHaveBeenCalledExactlyOnceWith('H1')
@@ -337,7 +337,7 @@ describe('Reader with the native viewer and a controlled host', () => {
     )
     await waitFor(() => expect(mocks.factory).toHaveBeenCalled())
     await activate()
-    changeHighlightColor('#00ff00')
+    changeHighlightColor('#8eba8e')
     expect(ref.current?.canUndo()).toBe(true)
     view.rerender(
       <Reader
@@ -348,11 +348,11 @@ describe('Reader with the native viewer and a controlled host', () => {
     await waitFor(() => expect(mocks.factory).toHaveBeenCalledTimes(2))
     expect(ref.current?.canUndo()).toBe(false)
     await activate()
-    expectHighlightColor('#ff0000')
-    changeHighlightColor('#0000ff')
+    expectHighlightColor('#d1b88a')
+    changeHighlightColor('#7d9ec0')
     act(() => expect(ref.current?.undo()).toBe(true))
     await activate()
-    expectHighlightColor('#ff0000')
+    expectHighlightColor('#d1b88a')
     expect(ref.current?.canUndo()).toBe(false)
   })
 })
@@ -374,22 +374,22 @@ describe('engine selection transactions', () => {
       />
     )
     await activate('H2')
-    changeHighlightColor('#00ff00')
+    changeHighlightColor('#8eba8e')
     expect(onUpdate).toHaveBeenCalledTimes(1)
     expect(onUpdate.mock.calls[0][0]).toEqual({
       ...second,
-      markerStyle: { ...second.markerStyle, backgroundColor: '#00ff00' }
+      markerStyle: { ...second.markerStyle, backgroundColor: '#8eba8e' }
     })
-    expect(onColor).toHaveBeenCalledWith('#00ff00')
+    expect(onColor).toHaveBeenCalledWith('#8eba8e')
     expect(ref.current?.canUndo()).toBe(true)
     act(() => {
       ref.current?.undo()
     })
-    expectHighlightColor('#ff0000')
+    expectHighlightColor('#d1b88a')
     act(() => {
       ref.current?.redo()
     })
-    expectHighlightColor('#00ff00')
+    expectHighlightColor('#8eba8e')
   })
   it('turns a different native selection into a draft despite delayed controlled selection echo', async () => {
     const onUpdate = vi.fn(),
@@ -418,7 +418,7 @@ describe('engine selection transactions', () => {
       text: 'beta'
     }
     act(() => options.onSelection?.(serialized))
-    changeHighlightColor('#00ff00')
+    changeHighlightColor('#8eba8e')
     expect(onUpdate).not.toHaveBeenCalled()
     act(() => {
       ref.current?.confirm()
@@ -426,7 +426,7 @@ describe('engine selection transactions', () => {
     })
     expect(onSelect).toHaveBeenCalledTimes(1)
     expect(onSelect.mock.calls[0][0].text).toBe('beta')
-    expect(original.markerStyle?.backgroundColor).toBe('#ff0000')
+    expect(original.markerStyle?.backgroundColor).toBe('#d1b88a')
   })
   it.each([false, true])(
     'deletes an entire ID and rejects captured edit/color callbacks (controlled=%s)',
@@ -546,10 +546,10 @@ describe('engine selection transactions', () => {
     expect(onUpdate).not.toHaveBeenCalled()
     expect(onRemove).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('toolbar', { name: '高亮操作' })).toBeVisible()
-    changeHighlightColor('#00ff00')
+    changeHighlightColor('#8eba8e')
     expect(onUpdate).toHaveBeenCalledExactlyOnceWith({
       ...original,
-      markerStyle: { ...original.markerStyle, backgroundColor: '#00ff00' }
+      markerStyle: { ...original.markerStyle, backgroundColor: '#8eba8e' }
     })
     fireEvent.click(screen.getByRole('button', { name: '删除' }))
     expect(onRemove.mock.calls).toEqual([['H1'], ['H1']])

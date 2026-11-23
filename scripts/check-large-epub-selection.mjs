@@ -11,14 +11,16 @@ const snapshot = (page) =>
   page.locator('#snapshot').evaluate((node) => JSON.parse(node.textContent))
 
 async function setColor(page, color) {
-  await page.getByLabel('Highlight color').evaluate((input, color) => {
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value'
-    ).set.call(input, color)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-  }, color)
+  await page
+    .getByRole('textbox', { name: 'Highlight color' })
+    .evaluate((input, color) => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value'
+      ).set.call(input, color)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    }, color)
 }
 
 async function openBody(page, file) {

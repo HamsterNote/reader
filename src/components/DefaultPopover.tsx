@@ -161,15 +161,6 @@ function MobileSafeHighlightButton({
  * 1. 调用 onHighlightColorChange 更新全局高亮色（影响后续新建的高亮）
  * 2. 如果当前有选中的 range，通过 onUpdateRange 更新该 range 的 markerStyle
  */
-const HIGHLIGHT_COLORS = [
-  '#ffc107',
-  '#ff0000',
-  '#00ff00',
-  '#0000ff',
-  '#00aa88',
-  ...DEFAULT_BOTTOM_BAR_COLORS.map(({ color }) => color)
-]
-
 function normalizedHexColor(color: string | undefined): string | undefined {
   if (color?.startsWith('#')) return color
   const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(color ?? '')
@@ -191,36 +182,52 @@ function HighlightColorPalette({
   readonly value: string
   readonly onChange: (color: string) => void
 }) {
-  const colors = HIGHLIGHT_COLORS.some(
-    (color) => color.toLowerCase() === value.toLowerCase()
+  const customInputRef = useRef<HTMLInputElement>(null)
+  const isCustomColor = !DEFAULT_BOTTOM_BAR_COLORS.some(
+    ({ color }) => color.toLowerCase() === value.toLowerCase()
   )
-    ? HIGHLIGHT_COLORS
-    : [value, ...HIGHLIGHT_COLORS]
+
   return (
     <div className='hamster-reader-popover-color'>
-      <span className='hamster-reader-popover-color-label'>背景颜色设置</span>
       <div
         className='hamster-reader-popover-color-palette'
         role='group'
         aria-label='Highlight color'
       >
-        {colors.map((color) => (
+        {DEFAULT_BOTTOM_BAR_COLORS.map(({ name, color }) => (
           <button
-            key={color}
+            key={name}
             type='button'
             className='hamster-reader-popover-color-swatch'
             aria-label={`Highlight color ${color}`}
             aria-pressed={color.toLowerCase() === value.toLowerCase()}
+            data-color={color}
             title={color}
+            style={{ backgroundColor: color }}
             onClick={() => onChange(color)}
-          >
-            <span
-              className='hamster-reader-popover-color-swatch-value'
-              style={{ backgroundColor: color }}
-              aria-hidden='true'
-            />
-          </button>
+          />
         ))}
+        <button
+          type='button'
+          className='hamster-reader-popover-color-swatch hamster-reader-popover-color-swatch--custom'
+          aria-label='自由选色'
+          aria-pressed={isCustomColor}
+          data-color={value}
+          title={isCustomColor ? `自由选色，当前 ${value}` : '自由选色'}
+          style={isCustomColor ? { background: value } : undefined}
+          onClick={() => customInputRef.current?.click()}
+        >
+          <span aria-hidden='true'>+</span>
+        </button>
+        <input
+          ref={customInputRef}
+          className='hamster-reader-popover-color-input'
+          type='color'
+          aria-label='自定义高亮颜色'
+          value={value}
+          tabIndex={-1}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        />
       </div>
     </div>
   )

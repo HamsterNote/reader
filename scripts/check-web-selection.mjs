@@ -391,6 +391,14 @@ async function pdfAnnotationEditing(file, original = false) {
       .locator('.textLayer [data-selection-start-offset]')
       .first()
       .waitFor()
+    assert.equal(
+      await page.locator('.hamster-reader__bottom-bar-color').count(),
+      6
+    )
+    assert.equal(
+      await page.getByRole('button', { name: '自由选色', exact: true }).count(),
+      0
+    )
     await page.getByTestId('tool-bottom-bar-color-blue').click()
     await dragText(page, original ? 'Modernizing JavaScript' : 0, sheet)
     await page.getByRole('button', { name: '高亮', exact: true }).click()
