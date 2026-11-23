@@ -112,6 +112,7 @@ it('hands off A over saved 35% and stale target progress, then returns using the
       textReadingProgress: { currentPageNumber: 1, anchor: anchor(48) }
     })
   )
+  act(() => state.textProps?.onToggleChrome?.())
   const ref = state.props!.readingPositionRef
   act(() => {
     if (typeof ref === 'function')
@@ -204,8 +205,10 @@ for (const entrance of ['prop', 'data'] as const) {
           expect(screen.getByRole('status').textContent).toContain('重试')
         state.handoff = anchor(72)
         state.failure = false
-        if (status === 'failed')
+        if (status === 'failed') {
+          if (sourceMode === 'text') act(() => state.textProps?.onToggleChrome?.())
           fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
+        }
         await act(async () => {
           await new Promise<void>((resolve) =>
             requestAnimationFrame(() => resolve())

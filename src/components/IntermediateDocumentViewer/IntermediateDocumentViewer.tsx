@@ -467,6 +467,8 @@ export type ReaderReadingPositionHandle = {
 }
 
 export type IntermediateDocumentViewerProps = {
+  chromeVisible?: boolean
+  onToggleChrome?: () => void
   readonly onEngineReady?: () => void
   readonly onEngineError?: (error: Error) => void
   document?: IntermediateDocument | IntermediateDocumentSerialized | null

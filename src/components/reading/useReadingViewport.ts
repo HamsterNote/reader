@@ -12,7 +12,7 @@ export function useReadingViewport({
   horizontalInset = 0
 }: {
   root: HTMLElement | null
-  controlsRef: RefObject<HTMLDivElement | null>
+  controlsRef?: RefObject<HTMLDivElement | null>
   enabled: boolean
   bottomInset?: number
   topInset?: number
@@ -38,7 +38,7 @@ export function useReadingViewport({
       const measured = readingViewport(
         box,
         { bottomInset, topInset, horizontalInset },
-        controlsRef.current?.getBoundingClientRect()
+        controlsRef?.current?.getBoundingClientRect()
       )
       if (!measured) {
         setSize((current) =>
@@ -67,7 +67,7 @@ export function useReadingViewport({
     }
     const observer = new ResizeObserver(schedule)
     observer.observe(root)
-    if (controlsRef.current) observer.observe(controlsRef.current)
+    if (controlsRef?.current) observer.observe(controlsRef.current)
     measure()
     return () => {
       observer.disconnect()

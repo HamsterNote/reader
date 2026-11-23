@@ -1,6 +1,5 @@
 import {
   act,
-  fireEvent,
   render,
   renderHook,
   screen,
@@ -14,6 +13,9 @@ import {
   pdfTextTurnTarget
 } from '../src/pdf/pdfTextPagination'
 import { usePdfTextPagination } from '../src/pdf/usePdfTextPagination'
+import { useRef } from 'react'
+import { readingPointer } from './reading-gesture'
+import { trackReadingPress } from '../src/components/reading/tapZones'
 import { PdfTextReadingControls } from '../src/pdf/PdfTextReadingControls'
 
 let root: HTMLDivElement
@@ -65,7 +67,7 @@ const INPUT_ERRORS = new Set<number>()
 const noop = () => {}
 
 const sequence = () =>
-  (screen.getByRole('group', { name: '翻页' }).parentElement as HTMLElement)
+  screen.getByTestId('reading-page-indicator')
     .dataset['pdfTextTurnSequence'] ?? ''
 
 function PaginationInputHarness({ width }: { width: number }) {
@@ -84,69 +86,59 @@ function PaginationInputHarness({ width }: { width: number }) {
     onCommit: noop,
     onTurn: noop
   })
-  return (
-    <PdfTextReadingControls
-      enabled
-      controlsRef={null}
-      navigation={pagination.navigation}
-      ready={pagination.ready}
-      theme='light'
-      empty={false}
-      failed={false}
-      unlocatable={false}
-      diagnostics={pagination.diagnostics}
-      onRetry={noop}
-      onPrevious={() => pagination.turn(false)}
-      onNext={() => pagination.turn(true)}
-    />
-  )
+  const latest = useRef(pagination)
+  latest.current = pagination
+  useLayoutEffect(() => {
+    const press = trackReadingPress(root, {
+      bounds: () => root.getBoundingClientRect(),
+      swipe: action => latest.current.turn(action === 'next')
+    })
+    const click = (event: MouseEvent) => {
+      const action = press.consume(event)
+      if (action === 'next') latest.current.turn(true)
+    }
+    root.addEventListener('click', click)
+    return () => { root.removeEventListener('click', click); press.dispose() }
+  }, [])
+  return <PdfTextReadingControls enabled page={pagination.pageNumber} total={2}
+    navigation={pagination.navigation} ready={pagination.ready} empty={false}
+    failed={false} unlocatable={false} diagnostics={pagination.diagnostics} onRetry={noop} />
 }
 
 describe('PDF Text actual fragments and navigation', () => {
   it('replays a next-page press that a repagination invalidates before click', async () => {
     const view = render(<PaginationInputHarness width={300} />)
     await waitFor(() =>
-      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
-        'disabled',
-        true
-      )
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
     )
-    fireEvent.pointerDown(screen.getByLabelText('下一页'))
+    readingPointer(root, 'pointerdown')
     // A focus/host relayout changes the readable width mid-press and disables
     // the control before the browser dispatches click.
     view.rerender(<PaginationInputHarness width={280} />)
     await waitFor(() =>
-      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
-        'disabled',
-        true
-      )
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
     )
     expect(sequence()).toBe('0')
-    fireEvent.pointerUp(screen.getByLabelText('下一页'))
+    readingPointer(root, 'pointerup')
+    readingPointer(root, 'click')
     await waitFor(() => expect(sequence()).toBe('1'))
     // The native click belonging to the same gesture must be suppressed.
-    fireEvent.click(screen.getByLabelText('下一页'))
+    readingPointer(root, 'click')
     expect(sequence()).toBe('1')
   })
 
   it('drops a press cancelled during the repagination', async () => {
     const view = render(<PaginationInputHarness width={300} />)
     await waitFor(() =>
-      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
-        'disabled',
-        true
-      )
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
     )
-    fireEvent.pointerDown(screen.getByLabelText('下一页'))
+    readingPointer(root, 'pointerdown')
     view.rerender(<PaginationInputHarness width={280} />)
-    fireEvent.pointerCancel(screen.getByLabelText('下一页'))
+    readingPointer(root, 'pointercancel')
     await waitFor(() =>
-      expect(screen.getByLabelText('下一页')).not.toHaveProperty(
-        'disabled',
-        true
-      )
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
     )
-    fireEvent.pointerUp(screen.getByLabelText('下一页'))
+    readingPointer(root, 'pointerup')
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(sequence()).toBe('0')
   })

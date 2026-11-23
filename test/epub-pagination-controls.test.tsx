@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
+import { tapNext } from './reading-gesture'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -73,6 +74,7 @@ beforeEach(() => {
     return engine
   })
 })
+const paper = () => document.querySelector<HTMLElement>('.hamster-reader__epub-container')!
 const enable = () =>
   act(() =>
     options.onNavigationState?.({
@@ -137,8 +139,8 @@ describe('EPUB pagination controls and progress', () => {
             container.querySelector('.hamster-reader__epub-cover')
           ).toBeInTheDocument()
         )
-        expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
-        expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+        expect(paper()).toHaveAttribute('data-can-previous', 'false')
+        expect(paper()).toHaveAttribute('data-can-next', 'true')
         expect(engine.captureTextAnchor()).toBeUndefined()
 
         const iframe = document.createElement('iframe')
@@ -214,8 +216,8 @@ describe('EPUB pagination controls and progress', () => {
           offset: serialized.start.offset,
           text: 'chapter'
         })
-        expect(screen.getByRole('button', { name: '上一页' })).toBeEnabled()
-        expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
+        expect(paper()).toHaveAttribute('data-can-previous', 'true')
+        expect(paper()).toHaveAttribute('data-can-next', 'false')
         if (entry === 'selectRange')
           expect(engine.getSelectionRange()?.toString()).toBe('chapter')
         expect(doc.getSelection()?.rangeCount).toBe(0)
@@ -239,15 +241,16 @@ describe('EPUB pagination controls and progress', () => {
           onTextReadingProgressChange={text}
         />
       )
-      const next = screen.getByRole('button', { name: '下一页' })
-      expect(next).toBeDisabled()
+      const next = paper()
+      vi.spyOn(next, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 200))
+      expect(next).toHaveAttribute('data-can-next', 'false')
       await act(async () => {
         await engine.ready
       })
       enable()
-      expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
-      await userEvent.click(next)
-      await userEvent.click(next)
+      expect(paper()).toHaveAttribute('data-can-previous', 'false')
+      tapNext(next)
+      tapNext(next)
       const callback = mode === 'layout' ? layout : text
       expect(callback).toHaveBeenCalledTimes(2)
       const expected = {
@@ -268,21 +271,24 @@ describe('EPUB pagination controls and progress', () => {
           busy: false
         })
       )
-      expect(next).toBeDisabled()
-      expect(screen.getByRole('button', { name: '上一页' })).toBeEnabled()
+      expect(next).toHaveAttribute('data-can-next', 'false')
+      expect(paper()).toHaveAttribute('data-can-previous', 'true')
     }
   )
 
-  it('supports Enter/Space and blocks clicks while busy', async () => {
+  it('keeps removed controls out of focus order and blocks taps while busy', async () => {
     render(<EngineDocumentViewer engineSource={source} />)
     await act(async () => {
       await engine.ready
     })
     enable()
-    const next = screen.getByRole('button', { name: '下一页' })
-    next.focus()
-    expect(next).toHaveFocus()
+    const next = paper()
+      vi.spyOn(next, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 200))
+    expect(screen.queryByRole('group', { name: '翻页' })).toBeNull()
     await userEvent.keyboard('{Enter} ')
+    expect(engine.nextPage).not.toHaveBeenCalled()
+    tapNext(next)
+    tapNext(next)
     expect(engine.nextPage).toHaveBeenCalledTimes(2)
     act(() =>
       options.onNavigationState?.({
@@ -291,9 +297,9 @@ describe('EPUB pagination controls and progress', () => {
         busy: true
       })
     )
-    fireEvent.click(next)
+    tapNext(next)
     expect(engine.nextPage).toHaveBeenCalledTimes(2)
-    expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
+    expect(paper()).toHaveAttribute('data-can-previous', 'false')
   })
 
   it('does not publish initialization or stale callbacks after a file switch', async () => {

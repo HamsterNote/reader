@@ -79,6 +79,8 @@ export interface FoliateRelocateDetail {
 }
 
 export interface FoliateRenderer {
+  readonly page?: number
+  readonly pages?: number
   setAttribute(name: string, value: string): void
   open(book: FoliateBook): void
   destroy(): void

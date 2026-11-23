@@ -625,10 +625,7 @@ export function PageBrowser({
   // 顶部留白作用在侧栏容器上，使 tab 与 list 一起下移。
   const containerStyle = {
     '--hamster-reader-theme-color': themeColor ?? '#2563eb',
-    paddingTop:
-      typeof containMarginTop === 'number'
-        ? `${containMarginTop}px`
-        : undefined,
+    paddingTop: `max(${containMarginTop ?? 0}px, var(--reader-overlay-header, 0px))`,
     paddingBottom:
       typeof containMarginBottom === 'number'
         ? `${containMarginBottom}px`

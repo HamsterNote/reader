@@ -1,3 +1,4 @@
+import { tapPaper, chrome, overlayGeometry } from './reading-gestures.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -159,9 +160,7 @@ async function boot(page) {
 }
 async function ready(page) {
   await page.waitForFunction(() => {
-    const next = document.querySelector('[aria-label="下一页"]')
-    const previous = document.querySelector('[aria-label="上一页"]')
-    return next && previous && !(next.disabled && previous.disabled)
+    return document.querySelector('[data-testid="reading-page-indicator"]')?.dataset.pdfTextReady === 'true'
   })
 }
 async function state(page) {
@@ -187,12 +186,21 @@ async function state(page) {
 }
 async function turn(page, name, clicks = 1) {
   const writes = await page.evaluate(() => window.__hostWrites.length)
-  const button = page.getByRole('button', { name, exact: true })
-  if (clicks === 1) await button.click()
-  else
-    await button.evaluate((element, clicks) => {
-      for (let i = 0; i < clicks; i++) element.click()
-    }, clicks)
+  await chrome(page, false)
+  const paper = page.locator('.hamster-reader__intermediate-text-spacer')
+  const point = await paper.evaluate((el, forward) => {
+    const box = el.getBoundingClientRect()
+    const x = Math.floor(box.left + box.width * (forward ? 0.85 : 0.15))
+    const rects = [...el.querySelectorAll('[data-text-id]')].flatMap(span => {
+      const range = document.createRange()
+      range.selectNodeContents(span)
+      return [...range.getClientRects()].filter(r => r.left <= x && x < r.right)
+    })
+    for (let y = Math.ceil(box.top + box.height / 3); y < box.top + box.height * 2 / 3; y++)
+      if (!rects.some(r => r.top - 1 <= y && y <= r.bottom + 1)) return { x, y }
+    throw new Error('No gap between highlighted lines')
+  }, name === '下一页')
+  await page.mouse.click(point.x, point.y, { clickCount: clicks })
   await ready(page)
   await page.waitForFunction(
     (count) => window.__hostWrites.length > count,
@@ -204,24 +212,7 @@ async function turn(page, name, clicks = 1) {
       document.querySelector('.hamster-reader__pdf-text-empty')
   )
 }
-async function clearance(page) {
-  return page.evaluate(() => {
-    const rect = (selector) => {
-      const box = document.querySelector(selector).getBoundingClientRect()
-      return {
-        left: box.left,
-        right: box.right,
-        top: box.top,
-        bottom: box.bottom
-      }
-    }
-    return {
-      paper: rect('.hamster-reader__intermediate-text-spacer'),
-      toolbar: rect('[data-testid="tool-bottom-bar"]'),
-      controls: rect('.hamster-reader__viewport-pagination')
-    }
-  })
-}
+const clearance = overlayGeometry
 async function assertAnchorVisible(page, offset) {
   const geometry = await page.evaluate((offset) => {
     const viewport = document
@@ -303,6 +294,7 @@ async function checkTxtScroll() {
 
 try {
   for (const type of [chromium, webkit]) {
+    if (process.env.READER_BROWSER_CASE && type.name() !== process.env.READER_BROWSER_CASE) continue
     const result = { label: type.name(), passed: false, evidence: [] }
     report.cases.push(result)
     let browser
@@ -317,16 +309,27 @@ try {
       page.on('pageerror', (error) => errors.push(error.message))
       await boot(page)
       const first = await state(page)
+      const geometry = () => page.locator('.hsn-selection-content').first().evaluate(content => {
+        const range = document.createRange()
+        range.selectNodeContents(content)
+        return { rects: Array.from(range.getClientRects()).slice(0, 8).map(r => r.toJSON()),
+          column: getComputedStyle(content).columnWidth, scrollWidth: content.scrollWidth,
+          box: content.getBoundingClientRect().toJSON(),
+          indicator: document.querySelector('[data-testid="reading-page-indicator"]').outerHTML }
+      })
+      result.initialGeometry = await geometry()
       assert.equal(first.source, sourceText)
       assert(
-        await page
-          .getByRole('button', { name: '上一页', exact: true })
-          .isDisabled()
+        await page.getByTestId('reading-page-indicator').getAttribute('data-can-previous') === 'false'
       )
       await turn(page, '下一页', 2)
       const second = await state(page)
       assert.equal(second.transform, 'translateX(-984px)')
       result.fastClicksOneScreen = true
+      if (await page.evaluate(() => !getSelection().isCollapsed)) {
+        await tapPaper(page, 0.5, 0.15)
+        assert.equal((await state(page)).transform, second.transform)
+      }
       await turn(page, '下一页')
       const third = await state(page)
       assert.equal(third.page, 1)
@@ -347,6 +350,7 @@ try {
         getSelection().removeAllRanges()
         getSelection().addRange(range)
         document.dispatchEvent(new Event('selectionchange'))
+        span.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
       }, third.progress.anchor.offset)
       await page.getByRole('button', { name: '高亮', exact: true }).click()
       await page.waitForFunction(
@@ -372,7 +376,8 @@ try {
       assert.equal(highlight.end.offset, third.progress.anchor.offset + 114)
       result.highlight = highlight
       await page.mouse.click(900, 300)
-      await page.getByRole('button', { name: '页面与标注' }).click()
+      await chrome(page, true)
+      await page.getByRole('button', { name: '目录', exact: true }).click()
       await page.getByRole('tab', { name: '高亮', exact: true }).click()
       await page.getByTestId(`page-browser-highlight-${highlight.id}`).click()
       await page.getByRole('button', { name: '关闭页面浏览' }).focus()
@@ -432,6 +437,7 @@ try {
       await page.reload()
       await ready(page)
       assert.equal((await state(page)).transform, third.transform)
+      await chrome(page, true)
       await page.getByRole('button', { name: '切换到布局渲染模式' }).click()
       await page.locator('.pdfViewer').waitFor()
       assert.equal(
@@ -442,6 +448,7 @@ try {
       await ready(page)
       assert.equal((await state(page)).transform, third.transform)
       result.modeBridge = true
+      await chrome(page, true)
       for (const label of ['中', '特大', '大']) {
         await page.getByTestId('tool-bottom-bar-font-scale').click()
         await page.getByRole('menuitem', { name: label, exact: true }).click()
@@ -468,7 +475,7 @@ try {
       ]) {
         await page.setViewportSize(viewport)
         await page.waitForFunction(
-          () => !document.querySelector('[aria-label="下一页"]').disabled
+          () => document.querySelector('[data-can-next="true"]')
         )
         // Wait for the ResizeObserver + pagination frame, without relying on a timer.
         await page.evaluate(
@@ -481,7 +488,7 @@ try {
         )
         const boxes = await clearance(page)
         assert(
-          boxes.paper.bottom <= Math.min(boxes.toolbar.top, boxes.controls.top),
+          boxes.toolbar.y < boxes.paper.y + boxes.paper.height,
           JSON.stringify(boxes)
         )
         const value = await state(page)
@@ -585,9 +592,8 @@ try {
       assert.equal((await state(page)).scroll, 0)
       assert.equal(await page.evaluate(() => window.scrollY), 0)
       result.paperInputsBlocked = true
-      // Both keyboard activation paths use the same one-screen navigation.
-      await page.getByRole('button', { name: '上一页', exact: true }).focus()
-      await page.keyboard.press('Enter')
+      assert.equal(await page.getByRole('group', { name: '翻页' }).count(), 0)
+      await turn(page, '上一页')
       await ready(page)
       await page.waitForFunction(
         (transform) =>
@@ -595,8 +601,7 @@ try {
           transform,
         before.transform
       )
-      await page.getByRole('button', { name: '下一页', exact: true }).focus()
-      await page.keyboard.press('Space')
+      await turn(page, '下一页')
       await ready(page)
       await page.waitForFunction(
         (transform) =>
@@ -604,8 +609,9 @@ try {
           transform,
         before.transform
       )
-      result.keyboardTurns = true
-      await page.getByRole('button', { name: '页面与标注' }).click()
+      result.tapRoundTrip = true
+      await chrome(page, true)
+      await page.getByRole('button', { name: '目录', exact: true }).click()
       await page.getByRole('tab', { name: '书签', exact: true }).click()
       const list = page.locator('.hamster-reader__bookmark-list')
       const listBox = await list.boundingBox()
@@ -657,9 +663,7 @@ try {
       assert.equal((await state(page)).transform, 'translateX(0px)')
       result.sourcePageSeek = true
       while (
-        await page
-          .getByRole('button', { name: '上一页', exact: true })
-          .isEnabled()
+        await page.getByTestId('reading-page-indicator').getAttribute('data-can-previous') === 'true'
       )
         await turn(page, '上一页')
       const seen = new Set()
@@ -723,14 +727,13 @@ try {
       await turn(page, '下一页')
       assert.equal((await state(page)).page, 3)
       assert(
-        await page
-          .getByRole('button', { name: '下一页', exact: true })
-          .isDisabled()
+        await page.getByTestId('reading-page-indicator').getAttribute('data-can-next') === 'false'
       )
       await turn(page, '上一页')
       await turn(page, '上一页')
       assert.equal((await state(page)).transform, lastOfFirst.transform)
-      await page.getByRole('button', { name: '页面与标注' }).click()
+      await chrome(page, true)
+      await page.getByRole('button', { name: '目录', exact: true }).click()
       await page.getByRole('tab', { name: '高亮', exact: true }).click()
       await page
         .getByTestId('page-browser-highlight-historic-cross-page')
@@ -777,7 +780,8 @@ try {
       assert(clipped.count > 0 && clipped.inside, JSON.stringify(clipped))
       result.historicCrossPage = true
       await page.mouse.click(900, 590)
-      await page.getByRole('button', { name: '页面与标注' }).click()
+      await chrome(page, true)
+      await page.getByRole('button', { name: '目录', exact: true }).click()
       await page.getByTestId(`page-browser-highlight-${highlight.id}`).click()
       await ready(page)
       await page.getByRole('button', { name: '关闭页面浏览' }).focus()

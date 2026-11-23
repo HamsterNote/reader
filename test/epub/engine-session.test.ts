@@ -720,6 +720,7 @@ it('visits a prepended cover exactly once and returns to the first readable chap
   })
   await engine.goToPage(1)
   expect(engine.navigationState()).toEqual({
+    pageLabel: '1/1',
     canPrevious: false,
     canNext: true,
     busy: false

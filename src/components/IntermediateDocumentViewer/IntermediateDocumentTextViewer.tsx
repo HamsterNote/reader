@@ -5,6 +5,7 @@ import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
 import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeometry'
 import type { ReaderEngineSource } from '../../types/engineSource'
 import { PdfTextReadingControls } from '../../pdf/PdfTextReadingControls'
+import { ReadingMask } from '../reading/ReadingMask'
 import { useReadingViewport } from '../reading/useReadingViewport'
 import { scrollIntoViewIfAttached } from '../scrollIntoViewIfAttached'
 import { usePdfTextPagination } from '../../pdf/usePdfTextPagination'
@@ -12,10 +13,6 @@ import {
   createFlowTextReadiness,
   isClampedFlowTargetVisible
 } from '../reading/flowTextReadiness'
-import {
-  resolveReaderTheme,
-  usePrefersColorScheme
-} from '../Reader/useDefaultBottomBar'
 import type { CSSProperties } from 'react'
 import type {
   LinkedSelectionData,
@@ -899,7 +896,11 @@ function useSelectionHighlight(
  * 文本模式不经过 `VirtualPaper`，因此不接受任何缩放、交互模式、矩形框选或
  * 绘制相关 props；页面浏览侧栏则与布局模式共用书签和文本高亮数据。
  */
+import { readingBounds, trackReadingPress, type ReadingAction } from '../reading/tapZones'
+
 export type IntermediateDocumentTextViewerProps = {
+  chromeVisible?: boolean
+  onToggleChrome?: () => void
   readonly onEngineReady?: () => void
   readonly onEngineError?: (error: Error) => void
   document?: IntermediateDocument | IntermediateDocumentSerialized | null
@@ -1113,7 +1114,6 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
     showPageBrowser = false,
     onPageBrowserClose,
     themeColor,
-    darkMode,
     commentCountByRangeId,
     bookmarks,
     onToggleBookmark,
@@ -1181,8 +1181,6 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   const flowReadinessRef = useRef<ReturnType<
     typeof createFlowTextReadiness
   > | null>(null)
-  const preferredTheme = usePrefersColorScheme()
-  const paginationTheme = resolveReaderTheme(darkMode, preferredTheme)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [viewerRootElement, setViewerRootElement] =
     useState<HTMLDivElement | null>(null)
@@ -3054,6 +3052,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
 
   const handlePageLinkedSelectRange = useCallback(
     (id: string | null) => {
+      if (id) setSelectionGesture({ scope: selectionScope, active: false })
       const currentData = runtimeLinkedDataRef.current
       if (currentData.selectedRangeId !== id) {
         handlePageLinkedDataChange({
@@ -3063,7 +3062,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
       }
       handleLinkedSelectRange(id)
     },
-    [handleLinkedSelectRange, handlePageLinkedDataChange]
+    [handleLinkedSelectRange, handlePageLinkedDataChange, selectionScope]
   )
 
   const handleManagedPdfTextUpdateRange = useCallback(
@@ -3330,6 +3329,39 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
     highlightDragHandoff,
     onDragHighlight
   })
+
+  const onReadingTap = useRef<(zone: ReadingAction) => void>(() => {})
+  const blocked = useRef<(event: MouseEvent) => boolean>(() => false)
+  blocked.current = event => Boolean(viewerRootElement?.ownerDocument.querySelector('.hsn-selection-popover') ||
+    resolveHighlightDragTarget(event.clientX, event.clientY) ||
+    runtimeLinkedDataRef.current.activeRange || props.chromeVisible && props.onToggleChrome)
+  onReadingTap.current = zone => {
+    if (!pdfPagination.ready || pdfPagination.navigation.busy) return
+    if (zone === 'toggle') props.onToggleChrome?.()
+    else if (zone) pdfPagination.turn(zone === 'next')
+  }
+  useEffect(() => {
+    const root = viewerRootElement
+    if (!root || !isPdf) return
+    // Selection and pane activation can rerender between pointerdown and click.
+    const press = trackReadingPress(root, {
+      bounds: () => {
+        const paper = root.querySelector('.hamster-reader__intermediate-text-spacer')
+        return paper && readingBounds(paper)
+      },
+      blocked: event => blocked.current(event),
+      swipe: action => onReadingTap.current(action)
+    })
+    const click = (event: MouseEvent) => {
+      const action = press.consume(event)
+      if (action && !blocked.current(event)) onReadingTap.current(action)
+    }
+    root.addEventListener('click', click)
+    return () => {
+      root.removeEventListener('click', click)
+      press.dispose()
+    }
+  }, [viewerRootElement, isPdf])
 
   const isExistingHighlightNativeStart = useCallback(
     (target: EventTarget | null, clientX: number, clientY: number) => {
@@ -3711,16 +3743,14 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
         {
           <PdfTextReadingControls
             enabled={isPdf}
-            controlsRef={paginationControlsRef}
+            page={pdfPagination.pageNumber}
+            total={runtimeDocument?.pageNumbers.length ?? 0}
             navigation={pdfPagination.navigation}
             ready={pdfPagination.ready}
             diagnostics={pdfPagination.diagnostics}
             unlocatable={pdfPagination.unlocatable}
-            theme={paginationTheme}
             empty={!pageNumbers.length}
             failed={pdfLoadErrors.has(pdfPagination.pageNumber)}
-            onPrevious={() => pdfPagination.turn(false)}
-            onNext={() => pdfPagination.turn(true)}
             onRetry={() => {
               setPdfLoadErrors((current) => {
                 const next = new Set(current)
@@ -3731,6 +3761,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
             }}
           />
         }
+        {isPdf && props.chromeVisible && props.onToggleChrome && <ReadingMask dismiss={props.onToggleChrome} />}
         <PageBrowser
           isOpen={showPageBrowser}
           pageNumbers={pageNumbers}
@@ -3787,6 +3818,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
         <div
           ref={setScrollRootRef}
           role='document'
+          aria-busy={isPdf ? !pdfPagination.ready || pdfPagination.navigation.busy : undefined}
           className={[
             // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
             // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）

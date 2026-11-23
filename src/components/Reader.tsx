@@ -218,6 +218,7 @@ export type ReaderProps = ToolbarFileNavigationProps & {
   onEngineError?: (error: Error) => void
   /** Registers asynchronous engine cleanup with a container's release barrier. */
   onEngineDisposal?: (completion: Promise<void>) => void
+  onReadingChromeVisibilityChange?: (visible: boolean, overlay: boolean) => void
   onPageBrowserOpenChange?: (open: boolean) => void
   /** 重新采集稳定进度并冲刷 Reader 保存队列；宿主仍须等待实际持久化确认。 */
   progressRef?: Ref<ReaderProgressHandle>
@@ -637,14 +638,6 @@ function resolveBottomBarLayoutZoom(
   return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
 }
 
-function hasViewportPagination(
-  format: string | undefined,
-  isPdf: boolean | undefined,
-  mode: string
-) {
-  return format === 'epub' || Boolean(isPdf && mode === 'text')
-}
-
 function toolbarSpace(layout: PaneToolbarLayout | undefined, inset: number) {
   return layout?.edge === 'top'
     ? { top: inset, bottom: 0 }
@@ -656,8 +649,8 @@ function toolbarLayoutStyle(
   return {
     '--reader-pagination-bottom': `${32 + (layout?.insets.bottom ?? 0)}px`,
     '--reader-toolbar-pagination-bottom': layout
-      ? `${80 + layout.insets.bottom}px`
-      : 'calc(80px + env(safe-area-inset-bottom, 0px))'
+      ? `${88 + layout.insets.bottom}px`
+      : 'calc(88px + env(safe-area-inset-bottom, 0px))'
   } as CSSProperties
 }
 
@@ -897,6 +890,7 @@ export function Reader({
   onEngineReady,
   onEngineError,
   onEngineDisposal,
+  onReadingChromeVisibilityChange,
   onPageBrowserOpenChange
 }: ReaderProps) {
   const [internalPageBrowser, setInternalPageBrowser] = useState(false)
@@ -1267,6 +1261,28 @@ export function Reader({
     internalHighlightColor ??
     getTranslucentColor(resolvedDrawingStrokeColor)
   const isPdfDocument = isPdf || engineSource?.format === 'pdf'
+  const tapZonesEnabled =
+    engineSource?.format === 'epub' ||
+    (isPdfDocument && resolvedRenderMode === 'text')
+  const [shownChrome, setShownChrome] = useState<{
+    source: typeof engineSource
+    document: typeof document
+  } | null>(null)
+  const chromeVisible = !tapZonesEnabled || Boolean(shownChrome &&
+    shownChrome.source === engineSource && shownChrome.document === document)
+  useLayoutEffect(() => {
+    setShownChrome(null)
+  }, [tapZonesEnabled, engineSource, document])
+  useLayoutEffect(() => {
+    onReadingChromeVisibilityChange?.(chromeVisible, tapZonesEnabled)
+  }, [chromeVisible, tapZonesEnabled, onReadingChromeVisibilityChange])
+  const toggleChrome = () => {
+    setShownChrome(previous =>
+      previous && previous.source === engineSource && previous.document === document
+        ? null
+        : { source: engineSource, document }
+    )
+  }
   const resolvedHighlightColor = pdfHighlightFill(
     rawHighlightColor,
     isPdfDocument
@@ -1282,11 +1298,11 @@ export function Reader({
     // Reconnect the observer instead of measuring the detached Layout toolbar.
     layoutKey: `${resolvedSelectedTool}:${resolvedRenderMode}:${JSON.stringify(layout)}`,
     edge: layout?.edge,
-    enabled: hasDocumentPages && bottomBar === undefined
+    enabled: !tapZonesEnabled && hasDocumentPages && bottomBar === undefined
   })
-  const occupied = toolbarSpace(layout, bottomBarInset)
+  const occupied = toolbarSpace(layout, tapZonesEnabled ? 0 : bottomBarInset)
   const resolvedVerticalMargins = resolveVerticalMargins(
-    containMarginTop,
+    tapZonesEnabled && layout ? layout.insets.top : containMarginTop,
     containMarginBottom,
     containMarginY,
     occupied.bottom,
@@ -2246,6 +2262,8 @@ export function Reader({
       if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
         return (
           <IntermediateDocumentTextViewer
+            chromeVisible={chromeVisible}
+            onToggleChrome={tapZonesEnabled ? toggleChrome : undefined}
             onEngineReady={onEngineReady}
             onEngineError={onEngineError}
             document={document}
@@ -2358,6 +2376,8 @@ export function Reader({
       return (
         <Suspense fallback={<div role='status'>正在加载文档…</div>}>
           <LayoutViewer
+            chromeVisible={chromeVisible}
+            onToggleChrome={tapZonesEnabled ? toggleChrome : undefined}
             engineSource={engineSource}
             onEngineReady={onEngineReady}
             onEngineError={onEngineError}
@@ -2568,8 +2588,11 @@ export function Reader({
             ref={readerRootRef}
             className={rootClassName}
             data-testid='reader-root'
+            data-reading-header-inset={tapZonesEnabled && chromeVisible ? layout?.headerContentInset : undefined}
             data-pane-toolbar-boundary='true'
-            style={{ ...readerThemeStyle, ...toolbarLayoutStyle(layout) }}
+            style={{ ...readerThemeStyle, ...toolbarLayoutStyle(layout),
+              '--reader-overlay-header': `${tapZonesEnabled && chromeVisible ? layout?.headerContentInset ?? 0 : 0}px`
+            } as CSSProperties}
             aria-busy={resolvedLoadingProgress ? true : undefined}
           >
             {invalidStoredProgress(data, resolvedRenderMode) && (
@@ -2665,6 +2688,7 @@ export function Reader({
               )}
 
             {!resolvedLoadingProgress &&
+              chromeVisible &&
               hasDocumentPages &&
               (bottomBar === undefined ? (
                 <DefaultBottomBar
@@ -2682,11 +2706,6 @@ export function Reader({
                   bottomBarRef={defaultBottomBarRef}
                   renderMode={resolvedRenderMode}
                   isEpub={isEpub || engineSource?.format === 'epub'}
-                  epubPagination={hasViewportPagination(
-                    engineSource?.format,
-                    isPdf,
-                    resolvedRenderMode
-                  )}
                   ocrEnabled={resolvedOcrEnabled}
                   fontScale={fontScale}
                   layoutZoom={resolveBottomBarLayoutZoom(

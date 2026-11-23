@@ -52,9 +52,13 @@ function documentFixture(id: string, count = 100) {
   } as unknown as IntermediateDocument
   return { document, loaders }
 }
+import { tapNext } from './reading-gesture'
+
+const paper = () => document.querySelector<HTMLElement>('.hamster-reader__intermediate-text-spacer')!
 function sizeRoot() {
   const root = screen.getByTestId('intermediate-document-text-viewer')
   mockElementSize(root, { width: 600, height: 400 })
+  mockElementSize(paper(), { width: 300, height: 200 })
   resizeObserverMock.trigger(root)
 }
 
@@ -78,13 +82,13 @@ describe('PDF Text viewer integration', () => {
       expect(screen.getByText('large page 50')).toBeInTheDocument()
     )
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
     )
     expect(
       fixture.loaders.filter((loader) => loader.mock.calls.length)
     ).toHaveLength(2)
     expect(fixture.loaders[0]).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    tapNext(paper())
     await waitFor(() =>
       expect(screen.getByText('large page 52')).toBeInTheDocument()
     )
@@ -141,10 +145,10 @@ describe('PDF Text viewer integration', () => {
     sizeRoot()
     await screen.findByText('第 1 页没有可提取的文字')
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
     )
-    expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-previous', 'false')
+    tapNext(paper())
     await screen.findByText('第 2 页没有可提取的文字')
     fireEvent.click(screen.getByRole('button', { name: '返回 Layout' }))
     expect(onRequestLayout).toHaveBeenCalledOnce()
@@ -154,10 +158,10 @@ describe('PDF Text viewer integration', () => {
         verticalPercentage: 0
       })
     )
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    tapNext(paper())
     await screen.findByText('第 3 页没有可提取的文字')
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'false')
     )
     // The button is disabled both while restoring and at the last page.
     // Wait for the actual position commit rather than that transient UI state.
@@ -229,9 +233,9 @@ it('waits for the requested PDF Text page before a close capture can flush progr
   )
   sizeRoot()
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
   )
-  fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+  tapNext(paper())
   let complete = false
   const stable = ref.current!.waitForStable!().then(() => {
     complete = true
