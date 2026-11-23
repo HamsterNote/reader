@@ -626,3 +626,55 @@ it('moves fixed PDF handles with scroll before the next Range frame', () => {
     paragraph.remove()
   }
 })
+
+it('places the toolbar below the host top inset instead of under it', () => {
+  const root = createRef<HTMLDivElement>()
+  const paragraph = document.createElement('p')
+  paragraph.textContent = 'Alpha beta gamma'
+  document.body.append(paragraph)
+  const text = paragraph.firstChild!
+  const range = document.createRange()
+  range.setStart(text, 0)
+  range.setEnd(text, 5)
+  const previousRects = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(40, 70, 50, 20)]
+  })
+  const controls = (topInset: number) => (
+    <div ref={root}>
+      <EngineSelectionControls
+        range={range}
+        containerRef={root}
+        showHandles={false}
+        topInset={topInset}
+        onUpdate={vi.fn()}
+        onEditingChange={vi.fn()}
+      >
+        <span>Menu</span>
+      </EngineSelectionControls>
+    </div>
+  )
+  const view = render(controls(0))
+  mockElementSize(root.current!, { left: 0, top: 0, width: 400, height: 600 })
+  view.rerender(controls(0))
+  try {
+    const popup = document.querySelector<HTMLElement>(
+      '.hamster-reader__engine-popover'
+    )
+    expect(popup).not.toBeNull()
+    mockElementSize(popup!, { width: 120, height: 38 })
+    expect(popup!.style.top).toBe('20px')
+    view.rerender(controls(65))
+    expect(popup!.style.top).toBe('102px')
+  } finally {
+    view.unmount()
+    if (previousRects)
+      Object.defineProperty(Range.prototype, 'getClientRects', previousRects)
+    else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    paragraph.remove()
+  }
+})

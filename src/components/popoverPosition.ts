@@ -59,24 +59,35 @@ export function calculatePopoverPosition(
   selection: DOMRectReadOnly,
   popover: DOMRectReadOnly,
   gap: number,
-  relative = false
+  relative = false,
+  topInset = 0
 ): PopoverPosition {
   const containerLeft = relative ? container.left : 0
   const containerTop = relative ? container.top : 0
+  // The host may paint chrome (a header bar) over the container's top edge.
+  // Treat that band as unavailable so an above-the-selection popover flips down.
+  const effectiveTop = container.top + topInset
   const maxWidth = Math.max(0, container.width - gap * 2)
-  const maxHeight = Math.max(0, container.height - gap * 2)
+  const containerHeight = Math.max(0, container.height - gap * 2)
+  // Keep the popover inside the band the host chrome leaves visible; only fall
+  // back to the full container when the inset leaves no usable band at all.
+  const bandHeight = Math.max(0, container.bottom - effectiveTop - gap * 2)
+  const maxHeight =
+    bandHeight > 0 ? Math.min(containerHeight, bandHeight) : containerHeight
   const popoverWidth = Math.min(popover.width, maxWidth)
   const popoverHeight = Math.min(popover.height, maxHeight)
   const minimumLeft = container.left + gap - containerLeft
   const maximumLeft = container.right - gap - popoverWidth - containerLeft
-  const minimumTop = container.top + gap - containerTop
+  const minimumTop = effectiveTop + gap - containerTop
   const maximumTop = container.bottom - gap - popoverHeight - containerTop
+  const boundedMinimumTop = container.top + gap - containerTop
   const selectionCenterLeft =
     selection.left + (selection.width - popoverWidth) / 2 - containerLeft
   const topIsVisible =
-    selection.top >= container.top && selection.top <= container.bottom
+    selection.top >= effectiveTop && selection.top <= container.bottom
   const bottomIsVisible =
     selection.bottom >= container.top && selection.bottom <= container.bottom
+  const fitsAbove = selection.top - gap - popoverHeight >= effectiveTop
 
   let preferredLeft = selectionCenterLeft
   let preferredTop = selection.top - gap - popoverHeight - containerTop
@@ -87,11 +98,20 @@ export function calculatePopoverPosition(
       container.left + (container.width - popoverWidth) / 2 - containerLeft
     preferredTop =
       container.top + (container.height - popoverHeight) / 2 - containerTop
+  } else if (topInset > 0 && !fitsAbove && bottomIsVisible) {
+    // The host bar leaves no room above a selection just under it. Flip below
+    // instead of clamping the popover onto the selection line.
+    preferredTop = selection.bottom + gap - containerTop
   }
 
   return {
     left: clampToContainer(preferredLeft, minimumLeft, maximumLeft),
-    top: clampToContainer(preferredTop, minimumTop, maximumTop),
+    // An inset taller than the container leaves no safe band; fall back to the
+    // container's own bounds instead of collapsing to an out-of-bounds midpoint.
+    top:
+      maximumTop >= minimumTop
+        ? clampToContainer(preferredTop, minimumTop, maximumTop)
+        : clampToContainer(preferredTop, boundedMinimumTop, maximumTop),
     maxWidth,
     maxHeight
   }

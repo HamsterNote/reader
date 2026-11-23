@@ -93,6 +93,7 @@ export function EngineSelectionControls({
   managedText = false,
   showPopoverWhileDragging = false,
   popoverRelative = false,
+  topInset = 0,
   color = '#ffc107',
   paintPreview = true,
   onPreview,
@@ -103,6 +104,8 @@ export function EngineSelectionControls({
   readonly managedText?: boolean
   readonly showPopoverWhileDragging?: boolean
   readonly popoverRelative?: boolean
+  /** Host chrome painted over the container top edge; the popover stays below it. */
+  readonly topInset?: number
   readonly color?: string
   readonly paintPreview?: boolean
   readonly onPreview?: (range: Range) => void
@@ -574,7 +577,8 @@ export function EngineSelectionControls({
   const box = containerRef.current?.getBoundingClientRect()
   const left = Math.max(8, box?.left ?? 8)
   const right = Math.min(innerWidth - 8, box?.right ?? innerWidth - 8)
-  const top = Math.max(8, box?.top ?? 8)
+  // Host chrome may cover the container's top edge; keep the popover beneath it.
+  const top = Math.max(8, (box?.top ?? 8) + topInset)
   const bottom = Math.min(innerHeight - 8, box?.bottom ?? innerHeight - 8)
   const visible = (rect: DOMRect) =>
     rect.right > left &&

@@ -108,4 +108,128 @@ describe('popover position', () => {
     // Then: the CSS-constrained width is used, preserving both horizontal gaps.
     expect(position).toMatchObject({ left: 108, top: 152, maxWidth: 104 })
   })
+
+  it('flips below a selection whose top sits inside the top inset', () => {
+    // Given: host chrome covers the top 65px and the first line starts at 60.
+    const container = rect(0, 0, 800, 600)
+    const selection = rect(100, 60, 80, 20)
+
+    const clamped = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      0
+    )
+    const flipped = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      65
+    )
+
+    // Then: without an inset the popover stays above; with one it clears it,
+    // landing one gap below the selection instead of under the host chrome.
+    expect(clamped).toMatchObject({ left: 90, top: 14 })
+    expect(flipped).toMatchObject({ left: 90, top: 88 })
+  })
+
+  it('flips below a selection that starts just under the inset with no room above', () => {
+    // Given: host chrome covers the top 90px and the selection sits just below it.
+    const container = rect(0, 0, 800, 600)
+    const selection = rect(100, 97.6, 80, 25)
+
+    // When: the popover is positioned with the host inset.
+    const position = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 40),
+      8,
+      false,
+      90
+    )
+
+    // Then: it lands one gap below the selection instead of clamping onto it.
+    expect(position.top).toBeCloseTo(130.6)
+    expect(position.left).toBeCloseTo(90)
+  })
+
+  it('constrains the popover to the safe band when the inset leaves one', () => {
+    // Given: a 100px inset over a 140px container leaves a 24px safe band.
+    const container = rect(0, 0, 400, 140)
+    const selection = rect(100, 103, 80, 22)
+
+    // When: a 40px-tall popover is positioned.
+    const position = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 40),
+      8,
+      false,
+      100
+    )
+
+    // Then: it is sized to the band and never re-enters the host bar.
+    const effectiveTop = container.top + 100
+    expect(position.top).toBe(108)
+    expect(position.maxHeight).toBe(24)
+    expect(position.top).toBeGreaterThanOrEqual(effectiveTop)
+    expect(position.top + position.maxHeight).toBeLessThanOrEqual(
+      container.bottom
+    )
+  })
+
+  it('keeps the placement unchanged when the selection is below the inset', () => {
+    // Given: a selection well inside the container and away from the host chrome.
+    const container = rect(0, 0, 800, 600)
+    const selection = rect(100, 200, 80, 20)
+
+    const withoutInset = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8
+    )
+    const withInset = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      65
+    )
+
+    // Then: both placements put the popover in the same spot; the inset only
+    // shrinks the allowed height to the visible band.
+    expect(withoutInset).toMatchObject({ left: 90, top: 154 })
+    expect(withInset).toMatchObject({ left: 90, top: 154 })
+    expect(withoutInset.maxHeight).toBe(container.height - 16)
+    expect(withInset.maxHeight).toBe(container.height - 65 - 16)
+  })
+
+  it('keeps the popover inside the container when the inset exceeds its height', () => {
+    // Given: a 65px inset inside a container only 40px tall.
+    const container = rect(0, 0, 300, 40)
+    const selection = rect(100, 10, 20, 20)
+
+    const position = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      65
+    )
+
+    // Then: no safe band remains, so the popover falls back to the container's
+    // bounds with a constrained height instead of an out-of-bounds midpoint.
+    const popoverHeight = Math.min(38, position.maxHeight)
+    expect(position.top).toBeGreaterThanOrEqual(container.top)
+    expect(position.top + popoverHeight).toBeLessThanOrEqual(container.bottom)
+    expect(position.maxHeight).toBe(container.height - 16)
+    expect(position).toMatchObject({ left: 60, maxWidth: 284 })
+  })
 })
