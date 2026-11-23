@@ -146,7 +146,14 @@ export function PopoverPortal({
     rafId = requestAnimationFrame(updatePosition)
 
     return () => cancelAnimationFrame(rafId)
-  }, [containerRef, selectionKind, visible, relative, topInset, selectionBounds])
+  }, [
+    containerRef,
+    selectionKind,
+    visible,
+    relative,
+    topInset,
+    selectionBounds
+  ])
 
   return (
     <>
