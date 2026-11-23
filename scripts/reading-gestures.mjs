@@ -145,8 +145,13 @@ function assertReadingStable(before, after) {
   for (const key of [
     'text',
     'transform',
+    'frameTransform',
+    'frameScale',
     'viewerScrollTop',
-    'chapterScrollTop',
+    'rendererStart',
+    'rendererScrollLeft',
+    'rendererScrollTop',
+    'rendererScrollProp',
     'page',
     'reading'
   ])
@@ -163,9 +168,8 @@ async function resetAnchor(page) {
 async function anchorSnapshot(page, readState) {
   const reading = await readState(page)
   const snapshot = await page.locator(paperSelector).evaluate((element) => {
-    const chapter = element
-      .querySelector('foliate-view')
-      ?.renderer?.getContents?.()[0]?.doc
+    const renderer = element.querySelector('foliate-view')?.renderer
+    const chapter = renderer?.getContents?.()[0]?.doc
     const frame =
       chapter?.defaultView?.frameElement ?? element.querySelector('iframe')
     const root = chapter?.body ?? frame?.contentDocument?.body ?? element
@@ -173,17 +177,35 @@ async function anchorSnapshot(page, readState) {
     const frameRect = frame?.getBoundingClientRect()
     const offsetX = frameRect?.left ?? 0
     const offsetY = frameRect?.top ?? 0
+    const scaleX =
+      frame && frame.offsetWidth > 0 ? frameRect.width / frame.offsetWidth : 1
+    const scaleY =
+      frame && frame.offsetHeight > 0
+        ? frameRect.height / frame.offsetHeight
+        : 1
     const bounds = element.getBoundingClientRect()
-    const outerRect = (rect) => ({
-      x: rect.x + offsetX,
-      y: rect.y + offsetY,
-      width: rect.width,
-      height: rect.height,
-      top: rect.top + offsetY,
-      right: rect.right + offsetX,
-      bottom: rect.bottom + offsetY,
-      left: rect.left + offsetX
-    })
+    const visibleBounds = frameRect
+      ? {
+          left: Math.max(bounds.left, frameRect.left),
+          right: Math.min(bounds.right, frameRect.right),
+          top: Math.max(bounds.top, frameRect.top),
+          bottom: Math.min(bounds.bottom, frameRect.bottom)
+        }
+      : bounds
+    const outerRect = (rect) => {
+      const left = offsetX + rect.left * scaleX
+      const top = offsetY + rect.top * scaleY
+      return {
+        x: left,
+        y: top,
+        width: rect.width * scaleX,
+        height: rect.height * scaleY,
+        top,
+        right: offsetX + rect.right * scaleX,
+        bottom: offsetY + rect.bottom * scaleY,
+        left
+      }
+    }
     const stored = window.__readingGestureAnchor
     const findInNode = (node) => {
       for (let offset = 0; offset < node.length; offset++) {
@@ -195,10 +217,10 @@ async function anchorSnapshot(page, readState) {
         if (
           rect.width > 0 &&
           rect.height > 0 &&
-          rect.left >= bounds.left - 0.5 &&
-          rect.right <= bounds.right + 0.5 &&
-          rect.top >= bounds.top - 0.5 &&
-          rect.bottom <= bounds.bottom + 0.5
+          rect.left >= visibleBounds.left - 0.5 &&
+          rect.right <= visibleBounds.right + 0.5 &&
+          rect.top >= visibleBounds.top - 0.5 &&
+          rect.bottom <= visibleBounds.bottom + 0.5
         )
           return { node, offset }
       }
@@ -231,11 +253,19 @@ async function anchorSnapshot(page, readState) {
       transform: content
         ? element.ownerDocument.defaultView.getComputedStyle(content).transform
         : 'none',
+      frameTransform: frame
+        ? frame.ownerDocument.defaultView.getComputedStyle(frame).transform
+        : null,
+      frameScale: frame ? { x: scaleX, y: scaleY } : null,
       viewerScrollTop:
         element.ownerDocument.querySelector(
           '[data-testid="intermediate-document-text-viewer"]'
         )?.scrollTop ?? element.scrollTop,
-      chapterScrollTop: chapter?.scrollingElement?.scrollTop ?? 0,
+      rendererStart:
+        renderer && typeof renderer.start === 'number' ? renderer.start : null,
+      rendererScrollLeft: renderer ? renderer.scrollLeft : null,
+      rendererScrollTop: renderer ? renderer.scrollTop : null,
+      rendererScrollProp: renderer?.scrollProp ?? null,
       page: element.ownerDocument.querySelector(
         '[data-testid="reading-page-indicator"]'
       )?.textContent

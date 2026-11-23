@@ -1582,6 +1582,7 @@ export function EngineDocumentViewer(props: Props) {
       // Chapter pointers are forwarded to the host for pane activation. The
       // chapter document itself owns the reading gesture.
       blocked: (event) => event.target === rootElement && !event.isTrusted,
+      selectionRoot: rootElement,
       swipe: (action) => readingTap.current(action)
     })
     const click = (event: MouseEvent) => {

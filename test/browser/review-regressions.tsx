@@ -164,6 +164,51 @@ const api = {
     controlledAnnotations = controlled
     render()
   },
+  async openDualEpub(bytes: number[]) {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    )
+    flushSync(() => root.render(null))
+    await dispose()
+    const entries = await Promise.all(
+      (['left', 'right'] as const).map(async (pane) => {
+        const source = { format: 'epub' as const, data: new Uint8Array(bytes) }
+        const opened = await openReaderDocument(source, `review-dual-${pane}`)
+        return { pane, source, opened }
+      })
+    )
+    dispose = async () => {
+      await Promise.all(entries.map(({ opened }) => opened.dispose()))
+    }
+    flushSync(() =>
+      root.render(
+        <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
+          {entries.map(({ pane, source, opened }) => (
+            <div
+              key={pane}
+              data-epub-pane={pane}
+              style={{ position: 'relative', width: '50vw', height: '100vh' }}
+            >
+              <Reader
+                document={opened.document}
+                engineSource={source}
+                renderMode='layout'
+                data={{
+                  layoutReadingProgress: {
+                    pageNumber: 2,
+                    verticalPercentage: 0
+                  }
+                }}
+                isEpub
+                useVirtualPaper={false}
+                selectedTool='text-selection'
+              />
+            </div>
+          ))}
+        </div>
+      )
+    )
+  },
   pdfCaretTextAtPoint(x: number, y: number, nearest = false) {
     const viewer = document.querySelector<HTMLElement>(
       '.hamster-reader__pdf-viewer-container'
