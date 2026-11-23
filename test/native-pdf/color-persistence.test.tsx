@@ -232,17 +232,17 @@ describe('native PDF color editing persistence', () => {
   it('reopens with the new color and a higher revision, then deletes to zero ranges', async () => {
     seed('color-reopen', '#ffc107')
     await mountFile('color-reopen')
-    await choose('#00ff00')
+    await choose('#8eba8e')
 
     expect(files.get('color-reopen')!.snapshot.revision).toBe(1)
     expect(restored('color-reopen').data.ranges?.[0]).toMatchObject({
-      markerStyle: { backgroundColor: '#00ff00' }
+      markerStyle: { backgroundColor: '#8eba8e' }
     })
     await closeFile()
 
     await mountFile('color-reopen')
     expect(
-      screen.getByRole('button', { name: 'Highlight color #00ff00' })
+      screen.getByRole('button', { name: 'Highlight color #8eba8e' })
     ).toHaveAttribute('aria-pressed', 'true')
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '删除' }))
@@ -258,10 +258,10 @@ describe('native PDF color editing persistence', () => {
 
   it('edits correctly after two A/B round trips without changing B', async () => {
     seed('file-A', '#ffc107')
-    seed('file-B', '#0000ff')
+    seed('file-B', '#a99fc4')
 
     await mountFile('file-A')
-    await choose('#ff0000')
+    await choose('#cf9cab')
     expect(files.get('file-A')!.snapshot.revision).toBe(1)
     await closeFile()
     await mountFile('file-B')
@@ -272,20 +272,20 @@ describe('native PDF color editing persistence', () => {
     await closeFile()
 
     await mountFile('file-A')
-    await choose('#00ff00')
+    await choose('#8eba8e')
     expect(files.get('file-A')!.snapshot.revision).toBe(2)
     expect(restored('file-A').data.ranges?.[0]).toMatchObject({
-      markerStyle: { backgroundColor: '#00ff00' }
+      markerStyle: { backgroundColor: '#8eba8e' }
     })
     expect(files.get('file-B')!.snapshot.revision).toBe(0)
     expect(restored('file-B').data.ranges?.[0]).toMatchObject({
-      markerStyle: { backgroundColor: '#0000ff' }
+      markerStyle: { backgroundColor: '#a99fc4' }
     })
     await closeFile()
 
     await mountFile('file-A')
     expect(
-      screen.getByRole('button', { name: 'Highlight color #00ff00' })
+      screen.getByRole('button', { name: 'Highlight color #8eba8e' })
     ).toHaveAttribute('aria-pressed', 'true')
   })
 })

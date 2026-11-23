@@ -33,6 +33,7 @@ function Harness() {
   const [events, setEvents] = useState<unknown[]>([])
   const selection = useRef<ReaderSelectionRef>(null)
   const controlled = !new URLSearchParams(location.search).has('uncontrolled')
+  const darkMode = new URLSearchParams(location.search).has('dark')
   const record = (type: string, range: ReaderSelectionRange) => {
     setEvents((items) => [...items, { type, range }])
   }
@@ -99,10 +100,13 @@ function Harness() {
         }}
       >
         <Reader
+          key={source ? `${source.format}-${source.data.byteLength}` : 'empty'}
           document={documentModel}
           engineSource={source}
           renderMode={mode}
           highlightColor={color}
+          onHighlightColorChange={setColor}
+          darkMode={darkMode}
           showSelectionMagnifier={magnifier}
           selectedTool='text-selection'
           selectionRef={selection}
