@@ -1,4 +1,9 @@
-import { tapPaper, chrome, overlayGeometry } from './reading-gestures.mjs'
+import {
+  tapPaper,
+  chrome,
+  overlayGeometry,
+  shortDragGeometry
+} from './reading-gestures.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
@@ -183,7 +188,7 @@ async function turn(page, name) {
     writes
   )
 }
-const clearance = overlayGeometry
+const clearance = (page) => overlayGeometry(page, state)
 // eslint-disable-next-line sonarjs/cognitive-complexity -- Sequential browser acceptance scenario.
 async function run(browserType, mobile, fixed = false) {
   const label = `${browserType.name()}-${mobile ? 'touch-320' : 'desktop'}-${fixed ? 'fixed' : 'reflow'}`
@@ -218,7 +223,10 @@ async function run(browserType, mobile, fixed = false) {
       0,
       'restore must not save intermediate progress'
     )
+    result.shortDrag = await shortDragGeometry(page, state)
+    await turn(page, '下一页')
     result.clearance = await clearance(page)
+    await turn(page, '上一页')
     await page.screenshot({ path: resolve(output, `${label}-initial.png`) })
     if (fixed) {
       assert.equal(

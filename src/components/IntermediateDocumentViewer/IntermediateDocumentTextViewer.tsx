@@ -3373,7 +3373,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   blocked.current = (event) =>
     Boolean(
       viewerRootElement?.ownerDocument.querySelector(
-        '.hsn-selection-popover'
+        `.hsn-selection-popover[data-selection-owner="${scopeId}"]`
       ) ||
       resolveHighlightDragTarget(event.clientX, event.clientY) ||
       runtimeLinkedDataRef.current.activeRange ||
@@ -3400,6 +3400,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
         return paper && readingBounds(paper)
       },
       blocked: (event) => blocked.current(event),
+      selectionRoot: root,
       swipe: (action) => onReadingTap.current(action)
     })
     const click = (event: MouseEvent) => {
@@ -4051,6 +4052,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
           data={runtimeLinkedData}
           color={highlightColor ?? '#ffc107'}
           popoverRelative={popoverRelative}
+          selectionOwner={scopeId}
           onEditingChange={(editing) => {
             if (editing) {
               // The dependency keeps its own native draft even after the DOM

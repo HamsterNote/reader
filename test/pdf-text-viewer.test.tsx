@@ -369,3 +369,93 @@ it('defers the PDF selection popover until release and keeps it closed after a h
     } else Reflect.deleteProperty(Range.prototype, 'getClientRects')
   }
 })
+
+it('keeps another pane selection popover from consuming this pane pointer gestures', async () => {
+  clearSelectionProps()
+  const originalRects = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(10, 10, 80, 20)]
+  })
+  const left = documentFixture('left', 2)
+  const right = documentFixture('right', 2)
+  const selectionRef = createRef<ReaderSelectionRef>()
+  const view = render(
+    <>
+      <IntermediateDocumentTextViewer
+        document={left.document}
+        isPdf
+        selectionRef={selectionRef}
+        selectionPopover={
+          <div data-testid='left-selection-popover'>左栏高亮</div>
+        }
+      />
+      <IntermediateDocumentTextViewer document={right.document} isPdf />
+    </>
+  )
+  try {
+    const roots = screen.getAllByTestId('intermediate-document-text-viewer')
+    const papers = document.querySelectorAll<HTMLElement>(
+      '.hamster-reader__intermediate-text-spacer'
+    )
+    roots.forEach((root) => {
+      mockElementSize(root, { width: 600, height: 400 })
+      resizeObserverMock.trigger(root)
+    })
+    papers.forEach((paper) =>
+      mockElementSize(paper, { width: 300, height: 200 })
+    )
+    await screen.findByText('left page 1')
+    await screen.findByText('right page 1')
+    await waitFor(() => expect(getAllSelectionProps()).toHaveLength(2))
+    const props = getAllSelectionProps()[0]!
+    const runtimeSelectionId = props.selectionId!
+    const activeRange: LinkedSelectionRange = {
+      id: 'left-draft',
+      text: 'left',
+      createdAt: 1,
+      start: { selectionId: runtimeSelectionId, offset: 0 },
+      end: { selectionId: runtimeSelectionId, offset: 5 },
+      rectsBySelectionId: {
+        [runtimeSelectionId]: [{ x: 10, y: 10, width: 80, height: 20 }]
+      }
+    }
+    act(() => {
+      simulateLinkedDataChange(runtimeSelectionId, {
+        ...props.linkedData!,
+        activeRange,
+        selectingText: false
+      })
+      props.onSelectionEnd?.({ x: 12, y: 16 }, window.getSelection()!)
+    })
+    expect(screen.getByTestId('left-selection-popover')).toBeVisible()
+    const leftText = screen.getByText('left page 1').firstChild
+    expect(leftText).toBeInstanceOf(Text)
+    const nativeSelection = window.getSelection()!
+    const nativeRange = document.createRange()
+    nativeRange.selectNodeContents(leftText!)
+    nativeSelection.removeAllRanges()
+    nativeSelection.addRange(nativeRange)
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId('reading-page-indicator')[1]
+      ).toHaveAttribute('data-can-next', 'true')
+    )
+
+    tapNext(papers[1]!)
+    await screen.findByText('right page 2')
+    expect(screen.getByTestId('left-selection-popover')).toBeVisible()
+    tapNext(papers[0]!)
+    expect(screen.queryByText('left page 2')).toBeNull()
+  } finally {
+    window.getSelection()?.removeAllRanges()
+    view.unmount()
+    clearSelectionProps()
+    if (originalRects) {
+      Object.defineProperty(Range.prototype, 'getClientRects', originalRects)
+    } else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+  }
+})

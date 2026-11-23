@@ -1,4 +1,9 @@
-import { tapPaper, chrome, overlayGeometry } from './reading-gestures.mjs'
+import {
+  tapPaper,
+  chrome,
+  overlayGeometry,
+  shortDragGeometry
+} from './reading-gestures.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -222,7 +227,7 @@ async function turn(page, name, clicks = 1) {
       document.querySelector('.hamster-reader__pdf-text-empty')
   )
 }
-const clearance = overlayGeometry
+const clearance = (page) => overlayGeometry(page, state)
 async function assertAnchorVisible(page, offset) {
   const geometry = await page.evaluate((offset) => {
     const viewport = document
@@ -322,6 +327,10 @@ try {
       const errors = []
       page.on('pageerror', (error) => errors.push(error.message))
       await boot(page)
+      result.shortDrag = await shortDragGeometry(page, state)
+      await turn(page, '下一页')
+      result.clearance = await clearance(page)
+      await turn(page, '上一页')
       const first = await state(page)
       const geometry = () =>
         page

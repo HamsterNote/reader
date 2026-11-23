@@ -75,10 +75,20 @@ export function trackReadingPress(
     blocked?: (event: MouseEvent) => boolean
     mask?: boolean
     capturePointer?: boolean
+    selectionRoot?: HTMLElement
     swipe: (action: ReadingAction) => void
   }
 ) {
   const doc = target.ownerDocument ?? (target as Document)
+  const selectionActive = () => {
+    const selection = doc.getSelection()
+    if (!selection || selection.isCollapsed) return false
+    return (
+      !options.selectionRoot ||
+      (options.selectionRoot.contains(selection.anchorNode) &&
+        options.selectionRoot.contains(selection.focusNode))
+    )
+  }
   let press: {
     id: number
     x: number
@@ -102,7 +112,7 @@ export function trackReadingPress(
       !event.composedPath().includes(target) ||
       !box ||
       !readingTapZone(box, event.clientX, event.clientY) ||
-      (!options.mask && doc.getSelection()?.isCollapsed === false) ||
+      (!options.mask && selectionActive()) ||
       options.blocked?.(event) ||
       isInteractiveTap(event)
     )
@@ -123,12 +133,17 @@ export function trackReadingPress(
     if (
       press &&
       event.pointerId === press.id &&
-      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6
+      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 0
     )
       press.dragged = true
   }
   const up = (event: PointerEvent) => {
-    move(event)
+    if (
+      press &&
+      event.pointerId === press.id &&
+      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 1
+    )
+      press.dragged = true
     if (!press || event.pointerId !== press.id) return
     if (!readingTapZone(press.box, event.clientX, event.clientY))
       return cancel()
@@ -145,7 +160,7 @@ export function trackReadingPress(
     suppressClick = true
     if (
       action &&
-      (options.mask || doc.getSelection()?.isCollapsed !== false) &&
+      (options.mask || !selectionActive()) &&
       !options.blocked?.(event)
     )
       options.swipe(action)
@@ -175,7 +190,7 @@ export function trackReadingPress(
         event.button === 0 &&
         event.detail === 1 &&
         event.timeStamp - current.time < 500 &&
-        (options.mask || doc.getSelection()?.isCollapsed !== false) &&
+        (options.mask || !selectionActive()) &&
         !isInteractiveTap(event)
         ? readingTapZone(current.box, event.clientX, event.clientY)
         : null

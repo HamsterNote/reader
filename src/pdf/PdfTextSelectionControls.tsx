@@ -122,6 +122,7 @@ export function PdfTextSelectionControls({
   color,
   children,
   popoverRelative,
+  selectionOwner,
   onDraft,
   onUpdate,
   onEditingChange
@@ -131,6 +132,7 @@ export function PdfTextSelectionControls({
   color: string
   children?: ReactNode
   popoverRelative?: boolean
+  selectionOwner?: string
   onEditingChange: (editing: boolean) => void
   onDraft: (data: LinkedSelectionData) => void
   onUpdate: (range: LinkedSelectionRange) => void
@@ -204,6 +206,7 @@ export function PdfTextSelectionControls({
       managedText
       showPopoverWhileDragging
       popoverRelative={popoverRelative}
+      selectionOwner={selectionOwner}
       hitTest={(x, y) => {
         if (!root) return null
         const caret = textCaretAtPoint(root.ownerDocument, x, y)

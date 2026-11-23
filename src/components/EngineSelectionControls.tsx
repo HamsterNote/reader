@@ -93,6 +93,7 @@ export function EngineSelectionControls({
   managedText = false,
   showPopoverWhileDragging = false,
   popoverRelative = false,
+  selectionOwner,
   color = '#ffc107',
   paintPreview = true,
   onPreview,
@@ -103,6 +104,7 @@ export function EngineSelectionControls({
   readonly managedText?: boolean
   readonly showPopoverWhileDragging?: boolean
   readonly popoverRelative?: boolean
+  readonly selectionOwner?: string
   readonly color?: string
   readonly paintPreview?: boolean
   readonly onPreview?: (range: Range) => void
@@ -638,6 +640,7 @@ export function EngineSelectionControls({
             ref={popup}
             className='hsn-selection-popover hamster-reader__engine-popover'
             data-pdf-touch={pdfTouch ? 'true' : undefined}
+            data-selection-owner={selectionOwner}
             style={{
               position: popoverRelative ? 'absolute' : 'fixed',
               left: popoverRelative ? x - (box?.left ?? 0) : x,
