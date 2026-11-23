@@ -2194,15 +2194,16 @@
   --hamster-reader-popover-danger: #fca5a5;
   --hamster-reader-popover-danger-hover: #ef4444;
   --hamster-reader-popover-danger-surface: rgba(239, 68, 68, 0.2);
-  --hamster-reader-popover-swatch-border: rgba(255, 255, 255, 0.2);
 
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   box-sizing: border-box;
-  max-width: min(320px, calc(100vw - 20px));
-  gap: 0.15rem;
-  padding: 0.3rem;
+  width: max-content;
+  max-width: calc(100vw - 20px);
+  gap: 4px;
+  padding: 4px;
+  overflow-x: auto;
   border: 0;
   border-radius: 10px;
   background: var(--hamster-reader-popover-surface);
@@ -2218,7 +2219,6 @@
     --hamster-reader-popover-danger: #dc2626;
     --hamster-reader-popover-danger-hover: #b91c1c;
     --hamster-reader-popover-danger-surface: #fee2e2;
-    --hamster-reader-popover-swatch-border: rgba(15, 23, 42, 0.2);
 
     border: 1px solid var(--hamster-reader-popover-border);
   }
@@ -2237,6 +2237,7 @@
 // Popover 内的按钮（高亮 / 删除）
 .hamster-reader-popover-btn {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   min-width: 30px;
@@ -2269,59 +2270,73 @@
   }
 }
 
-// Popover 内的自绘颜色色板，不依赖系统 color input。
+// Popover 内的预设色板与系统自由取色入口。
 .hamster-reader-popover-color {
   display: flex;
-  flex: 1 1 100%;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  min-height: 36px;
-  padding: 0 0.4rem;
-
-  &-label {
-    color: var(--hamster-reader-popover-text);
-    font-size: 0.8rem;
-    font-weight: 600;
-    user-select: none;
-  }
+  min-height: 30px;
 
   &-palette {
-    display: grid;
-    grid-template-columns: repeat(4, 32px);
-    gap: 4px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
 
   &-swatch {
-    width: 32px;
-    height: 32px;
-    padding: 3px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
+    position: relative;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin: 5px 2px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 50%;
+    appearance: none;
     cursor: pointer;
+    transition:
+      border-color 0.15s ease-out,
+      transform 0.15s ease-out;
 
     &:hover {
-      background: var(--hamster-reader-popover-hover-surface);
+      border-color: var(--hamster-reader-popover-text);
+      transform: scale(1.08);
     }
 
     &:focus-visible {
       outline: 2px solid #93c5fd;
-      outline-offset: 1px;
+      outline-offset: 2px;
     }
 
     &[aria-pressed='true'] {
       border-color: var(--hamster-reader-popover-text);
-      box-shadow: 0 0 0 1px var(--hamster-reader-popover-text);
+    }
+
+    &--custom {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: conic-gradient(
+        #f87171,
+        #fbbf24,
+        #a3e635,
+        #34d399,
+        #60a5fa,
+        #c084fc,
+        #f87171
+      );
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1;
+      text-shadow:
+        0 0 2px #000000,
+        0 0 2px #000000;
     }
   }
 
-  &-swatch-value {
-    display: block;
-    width: 100%;
-    height: 100%;
-    border: 1px solid var(--hamster-reader-popover-swatch-border);
-    border-radius: 3px;
+  &-input {
+    display: none;
   }
 }
 

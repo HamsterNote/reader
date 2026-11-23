@@ -2129,7 +2129,7 @@ describe('demo parser flow', () => {
       })
     })
 
-    it('renders selectionPopover with 高亮 and 背景颜色设置', async () => {
+    it('renders selectionPopover with 高亮 and compact color controls', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Popover Document')
       )
@@ -2149,15 +2149,19 @@ describe('demo parser flow', () => {
         uploadReaderProps?.selectionPopover as React.ReactElement
       )
       expect(popover.getByText('高亮')).toBeInTheDocument()
-      expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
+      expect(popover.queryByText('背景颜色设置')).not.toBeInTheDocument()
 
+      const group = popover.getByRole('group', { name: 'Highlight color' })
+      expect(group).toBeInTheDocument()
+      expect(popover.getByRole('button', { name: '自由选色' })).toBe(
+        group.querySelector('button:last-of-type')
+      )
       expect(
-        popover.getByRole('group', { name: 'Highlight color' })
-      ).toBeInTheDocument()
-      expect(popover.container.querySelector('input[type="color"]')).toBeNull()
+        popover.container.querySelector('input[type="color"]')
+      ).not.toBeNull()
     })
 
-    it('renders highlightPopover with 删除 and 背景颜色设置', async () => {
+    it('renders highlightPopover with 删除 and compact color controls', async () => {
       vi.mocked(PdfParser.encode).mockResolvedValue(
         makeRuntimeDocument('Highlight Popover Document')
       )
@@ -2176,7 +2180,10 @@ describe('demo parser flow', () => {
       const range = makeLinkedRange('popover-range', 'popover highlight')
       const popover = renderHighlightPopover(uploadReaderProps, range)
       expect(popover.getByText('删除')).toBeInTheDocument()
-      expect(popover.getByText('背景颜色设置')).toBeInTheDocument()
+      expect(popover.queryByText('背景颜色设置')).not.toBeInTheDocument()
+      expect(
+        popover.getByRole('button', { name: '自由选色' })
+      ).toBeInTheDocument()
     })
 
     it('uses the existing highlight color in highlightPopover', async () => {
@@ -2196,9 +2203,9 @@ describe('demo parser flow', () => {
       const popover = renderHighlightPopover(findDocumentReaderProps(), range)
 
       // Then: 当前色块优先显示该高亮自身颜色，而不是全局颜色。
-      expect(
-        popover.getByRole('button', { name: 'Highlight color #ff3366' })
-      ).toHaveAttribute('aria-pressed', 'true')
+      const customColor = popover.getByRole('button', { name: '自由选色' })
+      expect(customColor).toHaveAttribute('aria-pressed', 'true')
+      expect(customColor).toHaveAttribute('data-color', '#ff3366')
     })
 
     it('forwards independent top and bottom margins from the settings', async () => {
@@ -2320,12 +2327,12 @@ describe('demo parser flow', () => {
         uploadReaderProps?.selectionPopover as React.ReactElement
       )
       fireEvent.click(
-        popover.getByRole('button', { name: 'Highlight color #ff0000' })
+        popover.getByRole('button', { name: 'Highlight color #cf9cab' })
       )
 
       await waitFor(() => {
         uploadReaderProps = findDocumentReaderProps()
-        expect(uploadReaderProps?.highlightColor).toBe('#ff0000')
+        expect(uploadReaderProps?.highlightColor).toBe('#cf9cab')
       })
     })
 
@@ -2359,14 +2366,14 @@ describe('demo parser flow', () => {
 
       const popover = renderHighlightPopover(uploadReaderProps, range)
       fireEvent.click(
-        popover.getByRole('button', { name: 'Highlight color #ff0000' })
+        popover.getByRole('button', { name: 'Highlight color #cf9cab' })
       )
 
       await waitFor(() => {
         uploadReaderProps = findDocumentReaderProps()
         const ranges = uploadReaderProps?.data?.ranges
         const selectedRange = ranges?.find(
-          (range) => range?.markerStyle?.backgroundColor === '#ff0000'
+          (range) => range?.markerStyle?.backgroundColor === '#cf9cab'
         )
         expect(selectedRange).toBeDefined()
       })

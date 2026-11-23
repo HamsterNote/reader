@@ -1186,7 +1186,7 @@ describe('real Popover handoff feedback', () => {
         })
       )
       const button = await screen.findByRole('button', {
-        name: far ? 'Highlight color #00ff00' : '删除'
+        name: far ? 'Highlight color #8eba8e' : '删除'
       })
       expect(button).toBeEnabled()
       await act(async () => fireEvent.click(button))
@@ -1196,7 +1196,7 @@ describe('real Popover handoff feedback', () => {
         const ranges = restoreReaderSnapshot(fixture.snapshot().data).data
           .ranges
         if (far)
-          expect(ranges?.[0].markerStyle?.backgroundColor).toBe('#00ff00')
+          expect(ranges?.[0].markerStyle?.backgroundColor).toBe('#8eba8e')
         else expect(ranges).toEqual([])
       })
       await act(async () =>
