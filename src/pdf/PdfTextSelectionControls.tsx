@@ -123,6 +123,7 @@ export function PdfTextSelectionControls({
   children,
   popoverRelative,
   selectionOwner,
+  topInset = 0,
   onDraft,
   onUpdate,
   onEditingChange
@@ -133,6 +134,7 @@ export function PdfTextSelectionControls({
   children?: ReactNode
   popoverRelative?: boolean
   selectionOwner?: string
+  topInset?: number
   onEditingChange: (editing: boolean) => void
   onDraft: (data: LinkedSelectionData) => void
   onUpdate: (range: LinkedSelectionRange) => void
@@ -207,6 +209,7 @@ export function PdfTextSelectionControls({
       showPopoverWhileDragging
       popoverRelative={popoverRelative}
       selectionOwner={selectionOwner}
+      topInset={topInset}
       hitTest={(x, y) => {
         if (!root) return null
         const caret = textCaretAtPoint(root.ownerDocument, x, y)

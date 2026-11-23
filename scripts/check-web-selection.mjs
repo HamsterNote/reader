@@ -391,6 +391,14 @@ async function pdfAnnotationEditing(file, original = false) {
       .locator('.textLayer [data-selection-start-offset]')
       .first()
       .waitFor()
+    assert.equal(
+      await page.locator('.hamster-reader__bottom-bar-color').count(),
+      6
+    )
+    assert.equal(
+      await page.getByRole('button', { name: '自由选色', exact: true }).count(),
+      0
+    )
     await page.getByTestId('tool-bottom-bar-color-blue').click()
     await dragText(page, original ? 'Modernizing JavaScript' : 0, sheet)
     await page.getByRole('button', { name: '高亮', exact: true }).click()
@@ -737,10 +745,20 @@ async function tocFixture() {
   )
   const buffer = await zip.generateAsync({ type: 'nodebuffer' })
   await writeFile(resolve(output, 'toc-relative.epub'), buffer)
-  return buffer
+  const emptyZip = await JSZip.loadAsync(buffer)
+  const nav = await emptyZip.file('OPS/nav.xhtml').async('string')
+  emptyZip.file('OPS/nav.xhtml', nav.replace(/<ol>[\s\S]*?<\/ol>/, '<ol></ol>'))
+  const cover = await emptyZip.file('OPS/cover.xhtml').async('string')
+  emptyZip.file(
+    'OPS/cover.xhtml',
+    cover.replace('</body>', '<p>Empty Outline Marker</p></body>')
+  )
+  const emptyBuffer = await emptyZip.generateAsync({ type: 'nodebuffer' })
+  await writeFile(resolve(output, 'toc-empty.epub'), emptyBuffer)
+  return { buffer, emptyBuffer }
 }
 
-async function epubNavigation(buffer) {
+async function epubNavigation({ buffer, emptyBuffer }) {
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1000 }
   })
@@ -763,10 +781,19 @@ async function epubNavigation(buffer) {
     for (const mode of ['layout', 'text']) {
       await page.getByTestId('render-mode-select').selectOption(mode)
       await page.getByTestId('page-browser-toggle').check()
-      const outline = page.locator('.hamster-reader__epub-outline')
-      await outline.waitFor()
-      if (!(await outline.evaluate((details) => details.open)))
-        await outline.locator('summary').click()
+      const defaultTab = mode === 'layout' ? '页面' : '高亮'
+      await page
+        .getByRole('tab', { name: defaultTab, exact: true })
+        .waitFor({ state: 'visible' })
+      assert.equal(
+        await page
+          .getByRole('tab', { name: defaultTab, exact: true })
+          .getAttribute('aria-selected'),
+        'true'
+      )
+      await page.getByRole('tab', { name: '章节目录', exact: true }).click()
+      const outline = page.getByTestId('page-browser-outline-panel')
+      await outline.waitFor({ state: 'visible' })
       await page.getByRole('button', { name: 'Chapter 1', exact: true }).click()
       await page
         .getByRole('button', { name: '关闭页面浏览', exact: true })
@@ -805,6 +832,46 @@ async function epubNavigation(buffer) {
       )
       await page.screenshot({ path: resolve(output, `epub-${mode}-toc.png`) })
       results.push({ label: `epub-${mode}-toc`, passed: true })
+    }
+    await page.locator('input[type=file]').first().setInputFiles({
+      name: 'toc-empty.epub',
+      mimeType: 'application/epub+zip',
+      buffer: emptyBuffer
+    })
+    await page.waitForFunction(() =>
+      document
+        .querySelector('foliate-view')
+        ?.renderer?.getContents()
+        .some(({ doc }) =>
+          doc.body.textContent.includes('Empty Outline Marker')
+        )
+    )
+    for (const mode of ['layout', 'text']) {
+      await page.getByTestId('render-mode-select').selectOption(mode)
+      await page.getByTestId('page-browser-toggle').check()
+      const defaultTab = mode === 'layout' ? '页面' : '高亮'
+      assert.equal(
+        await page
+          .getByRole('tab', { name: defaultTab, exact: true })
+          .getAttribute('aria-selected'),
+        'true'
+      )
+      await page.getByRole('tab', { name: '章节目录', exact: true }).click()
+      await page
+        .getByText('此文档没有章节目录，可使用页面导航。', { exact: true })
+        .waitFor({ state: 'visible' })
+      assert.equal(
+        await page
+          .getByTestId('page-browser-outline-panel')
+          .getByRole('button', { name: 'Chapter 1', exact: true })
+          .count(),
+        0,
+        'an EPUB without chapters must not retain the previous tree'
+      )
+      await page
+        .getByRole('button', { name: '关闭页面浏览', exact: true })
+        .click()
+      results.push({ label: `epub-${mode}-empty-toc`, passed: true })
     }
     assert.deepEqual(errors, [])
     assert.deepEqual(externalRequests, [])

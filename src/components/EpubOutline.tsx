@@ -49,13 +49,10 @@ export function EpubOutline({
   if (!items.length)
     return <p role='status'>此文档没有章节目录，可使用页面导航。</p>
   return (
-    <details className='hamster-reader__epub-outline'>
-      <summary>目录</summary>
-      <OutlineItems
-        items={items}
-        pageNumbers={pageNumbers}
-        onNavigate={onNavigate}
-      />
-    </details>
+    <OutlineItems
+      items={items}
+      pageNumbers={pageNumbers}
+      onNavigate={onNavigate}
+    />
   )
 }

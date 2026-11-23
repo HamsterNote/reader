@@ -1899,6 +1899,7 @@ type IntermediateDocumentPagesProps = PageResources & {
   onPagePaintingChange?: (pageId: string, nextValue: EditorDocument) => void
   readerScale: number
   popoverRelative?: boolean
+  containMarginTop?: number
 }
 
 type PageVisibilityBoundaryProps = {
@@ -1911,6 +1912,7 @@ type PagePopoverOptions = {
   readonly containerRef: React.RefObject<HTMLElement | null>
   readonly visible: boolean
   readonly relative: boolean | undefined
+  readonly topInset: number
   readonly selectionPopover: ReactNode
   readonly highlightPopover: ReactNode
   readonly rectPopover: ReactNode
@@ -1939,6 +1941,7 @@ const getPagePopovers = (
         selectionKind='selected'
         visible={options.visible}
         relative={options.relative}
+        topInset={options.topInset}
       >
         {selectedPopover}
       </PopoverPortal>
@@ -1949,6 +1952,7 @@ const getPagePopovers = (
         selectionKind='active'
         visible={options.visible}
         relative={options.relative}
+        topInset={options.topInset}
       >
         {options.selectionPopover}
       </PopoverPortal>
@@ -2272,7 +2276,8 @@ function IntermediateDocumentPages({
   pagePaintings,
   onPagePaintingChange,
   readerScale,
-  popoverRelative
+  popoverRelative,
+  containMarginTop
 }: IntermediateDocumentPagesProps) {
   // popover 归属计算：仅拥有「选中 range 的 start endpoint」所在页面的 Selection
   // 实例可以渲染 popover，其余页面传入 undefined。
@@ -2357,6 +2362,7 @@ function IntermediateDocumentPages({
             containerRef: popoverContainerRef,
             visible: popoverVisible,
             relative: popoverRelative,
+            topInset: containMarginTop ?? 0,
             selectionPopover,
             highlightPopover,
             rectPopover,
@@ -4253,6 +4259,7 @@ function ViewerContent({
       onPagePaintingChange={onPagePaintingChange}
       readerScale={useVirtualPaper ? committedReaderScale : 1}
       popoverRelative={popoverRelative}
+      containMarginTop={containMarginTop ?? containMarginY ?? 0}
     />
   )
 
