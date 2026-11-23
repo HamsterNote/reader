@@ -12,7 +12,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import JSZip from 'jszip'
-import { PDFDocument, StandardFonts, degrees } from 'pdf-lib'
+import {
+  PDFDocument,
+  PDFName,
+  PDFString,
+  StandardFonts,
+  degrees
+} from 'pdf-lib'
 
 const FIXTURE_ROOT = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
@@ -252,6 +258,20 @@ async function buildEpubDuplicateText() {
   })
 }
 
+async function buildEpubNestedOutline() {
+  const zip = await JSZip.loadAsync(await buildEpubDuplicateText())
+  const nav = await zip.file('OPS/nav.xhtml').async('string')
+  zip.file(
+    'OPS/nav.xhtml',
+    nav.replace(
+      '<li><a href="chapter1.xhtml">Chapter 1</a></li>',
+      '<li><a href="chapter1.xhtml">Chapter 1</a><ol><li><a href="chapter3.xhtml">Nested Chapter Three</a></li></ol></li>'
+    ),
+    { date: FIXED_DATE }
+  )
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
 // ---------------------------------------------------------------------------
 // PDF 样本（pdf-lib 生成 + 手工 Type0 连字样本）
 // ---------------------------------------------------------------------------
@@ -284,7 +304,145 @@ async function buildPdfTwoColumn() {
   return doc.save()
 }
 
-// 样本 P2：单页 /Rotate 90，含一行文本。覆盖：旋转页的坐标与文本提取。
+// 样本 P2：四页，内嵌命名/显式目标、嵌套、隐藏、越界和外链目录项。
+async function buildPdfEmbeddedOutline() {
+  const doc = await PDFDocument.create()
+  doc.setProducer('hamster-reader compat fixtures')
+  doc.setCreator('test/compat/generate-fixtures.mjs')
+  doc.setCreationDate(FIXED_DATE)
+  doc.setModificationDate(FIXED_DATE)
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const markers = [
+    'Outline fixture landing page',
+    'Hidden destination page marker',
+    'Named destination page marker',
+    'Explicit destination page marker'
+  ]
+  const pages = markers.map((marker) => {
+    const page = doc.addPage([400, 300])
+    page.drawText(marker, { x: 20, y: 260, size: 10, font })
+    return page
+  })
+
+  const context = doc.context
+  const root = context.nextRef()
+  const parent = context.nextRef()
+  const named = context.nextRef()
+  const explicit = context.nextRef()
+  const hidden = context.nextRef()
+  const outside = context.nextRef()
+  const external = context.nextRef()
+  const xyz = PDFName.of('XYZ')
+  context.assign(
+    root,
+    context.obj({
+      Type: 'Outlines',
+      First: parent,
+      Last: external,
+      Count: 6
+    })
+  )
+  context.assign(
+    parent,
+    context.obj({
+      Title: PDFString.of('Chapter One'),
+      Parent: root,
+      Next: hidden,
+      First: named,
+      Last: explicit,
+      Count: 2,
+      Dest: [pages[0].ref, xyz, null, null, null]
+    })
+  )
+  context.assign(
+    named,
+    context.obj({
+      Title: PDFString.of('Named Chapter Three'),
+      Parent: parent,
+      Next: explicit,
+      Dest: PDFString.of('chapter-three')
+    })
+  )
+  context.assign(
+    explicit,
+    context.obj({
+      Title: PDFString.of('Explicit Chapter Four'),
+      Parent: parent,
+      Prev: named,
+      Dest: [pages[3].ref, xyz, null, null, null]
+    })
+  )
+  context.assign(
+    hidden,
+    context.obj({
+      Title: PDFString.of('Hidden Chapter Two'),
+      Parent: root,
+      Prev: parent,
+      Next: outside,
+      Dest: [pages[1].ref, xyz, null, null, null]
+    })
+  )
+  context.assign(
+    outside,
+    context.obj({
+      Title: PDFString.of('Out Of Range'),
+      Parent: root,
+      Prev: hidden,
+      Next: external,
+      Dest: [99, xyz, null, null, null]
+    })
+  )
+  context.assign(
+    external,
+    context.obj({
+      Title: PDFString.of('External Chapter'),
+      Parent: root,
+      Prev: outside,
+      A: { S: 'URI', URI: PDFString.of('https://example.com') }
+    })
+  )
+  doc.catalog.set(PDFName.of('Outlines'), root)
+  doc.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'))
+  doc.catalog.set(
+    PDFName.of('Names'),
+    context.obj({
+      Dests: {
+        Names: [
+          PDFString.of('chapter-three'),
+          [pages[2].ref, xyz, null, null, null]
+        ]
+      }
+    })
+  )
+  return doc.save()
+}
+
+// 样本 P3：正文打印目录，但不包含 PDF 内嵌书签树。
+async function buildPdfBodyOnlyOutline() {
+  const doc = await PDFDocument.create()
+  doc.setProducer('hamster-reader compat fixtures')
+  doc.setCreator('test/compat/generate-fixtures.mjs')
+  doc.setCreationDate(FIXED_DATE)
+  doc.setModificationDate(FIXED_DATE)
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  doc
+    .addPage([400, 300])
+    .drawText('Printed contents only: Chapter One ...... 2', {
+      x: 20,
+      y: 260,
+      size: 10,
+      font
+    })
+  doc.addPage([400, 300]).drawText('Body only chapter marker', {
+    x: 20,
+    y: 260,
+    size: 10,
+    font
+  })
+  return doc.save()
+}
+
+// 样本 P4：单页 /Rotate 90，含一行文本。覆盖：旋转页的坐标与文本提取。
 async function buildPdfRotated() {
   const doc = await PDFDocument.create()
   doc.setProducer('hamster-reader compat fixtures')
@@ -301,7 +459,7 @@ async function buildPdfRotated() {
   return doc.save()
 }
 
-// 样本 P3：手工 Type0 字体 + ToUnicode CMap，把单个字形码 0x0001 映射到
+// 样本 P5：手工 Type0 字体 + ToUnicode CMap，把单个字形码 0x0001 映射到
 // U+FB01（fi 连字），0x0002 映射到 'x'。pdf.js 文本层按 ToUnicode 提取，
 // NFKC 规范化后得到 "fi"。覆盖：连字提取与端点偏移。
 function buildPdfLigature() {
@@ -364,9 +522,12 @@ writeFixture('epub/spine-omits-cover.epub', epubNoCover)
 
 const epubDuplicate = await buildEpubDuplicateText()
 writeFixture('epub/duplicate-text.epub', epubDuplicate)
+writeFixture('epub/nested-outline.epub', await buildEpubNestedOutline())
 
 const pdfTwoColumnBytes = await buildPdfTwoColumn()
 writeFixture('pdf/two-column.pdf', pdfTwoColumnBytes)
+writeFixture('pdf/embedded-outline.pdf', await buildPdfEmbeddedOutline())
+writeFixture('pdf/body-only-outline.pdf', await buildPdfBodyOnlyOutline())
 writeFixture('pdf/rotated.pdf', await buildPdfRotated())
 writeFixture('pdf/ligature.pdf', buildPdfLigature())
 

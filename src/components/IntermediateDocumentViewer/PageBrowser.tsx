@@ -18,7 +18,7 @@ import { parsePublicPageId } from './rangeJumpHelpers'
 import { getBookmarkKey } from './textAnchor'
 import { usePageBrowserDrag } from './usePageBrowserDrag'
 
-type PageBrowserTab = 'pages' | 'highlights' | 'bookmarks'
+type PageBrowserTab = 'pages' | 'outline' | 'highlights' | 'bookmarks'
 
 type HighlightItemStyle = CSSProperties & {
   readonly '--hamster-reader-highlight-color': string
@@ -47,7 +47,8 @@ function TrashIcon() {
 type PageSize = { readonly width: number; readonly height: number }
 
 type PageBrowserProps = {
-  readonly outline?: ReactNode
+  readonly outline?: ReactNode | ((isActive: boolean) => ReactNode)
+  readonly resetKey?: unknown
   readonly isOpen: boolean
   readonly pageNumbers: readonly number[]
   readonly pageSizesByPageNumber: ReadonlyMap<number, PageSize>
@@ -142,18 +143,30 @@ type PageBrowserTabsProps = {
   readonly activeTab: PageBrowserTab
   readonly isOpen: boolean
   readonly showPagesTab: boolean
+  readonly showOutlineTab: boolean
   readonly onSelectTab: (tab: PageBrowserTab) => void
+}
+
+const tabLabels: Readonly<Record<PageBrowserTab, string>> = {
+  pages: '页面',
+  outline: '章节目录',
+  highlights: '高亮',
+  bookmarks: '书签'
 }
 
 function PageBrowserTabs({
   activeTab,
   isOpen,
   showPagesTab,
+  showOutlineTab,
   onSelectTab
 }: PageBrowserTabsProps) {
-  const tabs: readonly PageBrowserTab[] = showPagesTab
-    ? ['pages', 'highlights', 'bookmarks']
-    : ['highlights', 'bookmarks']
+  const tabs: readonly PageBrowserTab[] = [
+    ...(showPagesTab ? (['pages'] as const) : []),
+    ...(showOutlineTab ? (['outline'] as const) : []),
+    'highlights',
+    'bookmarks'
+  ]
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const currentIndex = tabs.indexOf(activeTab)
     const nextIndex = (() => {
@@ -180,42 +193,26 @@ function PageBrowserTabs({
   }
 
   return (
-    <div className='hamster-reader__page-browser-tabs' role='tablist'>
-      {showPagesTab ? (
+    <div
+      className={`hamster-reader__page-browser-tabs${
+        showOutlineTab ? ' hamster-reader__page-browser-tabs--with-outline' : ''
+      }`}
+      role='tablist'
+    >
+      {tabs.map((tab) => (
         <button
+          key={tab}
           type='button'
           role='tab'
-          aria-selected={activeTab === 'pages'}
-          className={getTabClassName(activeTab === 'pages')}
-          tabIndex={isOpen && activeTab === 'pages' ? 0 : -1}
-          onClick={() => onSelectTab('pages')}
+          aria-selected={activeTab === tab}
+          className={getTabClassName(activeTab === tab)}
+          tabIndex={isOpen && activeTab === tab ? 0 : -1}
+          onClick={() => onSelectTab(tab)}
           onKeyDown={handleKeyDown}
         >
-          页面
+          {tabLabels[tab]}
         </button>
-      ) : null}
-      <button
-        type='button'
-        role='tab'
-        aria-selected={activeTab === 'highlights'}
-        className={getTabClassName(activeTab === 'highlights')}
-        tabIndex={isOpen && activeTab === 'highlights' ? 0 : -1}
-        onClick={() => onSelectTab('highlights')}
-        onKeyDown={handleKeyDown}
-      >
-        高亮
-      </button>
-      <button
-        type='button'
-        role='tab'
-        aria-selected={activeTab === 'bookmarks'}
-        className={getTabClassName(activeTab === 'bookmarks')}
-        tabIndex={isOpen && activeTab === 'bookmarks' ? 0 : -1}
-        onClick={() => onSelectTab('bookmarks')}
-        onKeyDown={handleKeyDown}
-      >
-        书签
-      </button>
+      ))}
     </div>
   )
 }
@@ -398,6 +395,7 @@ function getRectPreviewGeometry(
 
 export function PageBrowser({
   outline,
+  resetKey,
   isOpen,
   pageNumbers,
   pageSizesByPageNumber,
@@ -435,9 +433,9 @@ export function PageBrowser({
   onTogglePageBookmark,
   onClose
 }: PageBrowserProps) {
-  const [activeTab, setActiveTab] = useState<PageBrowserTab>(() =>
-    showPagesTab ? 'pages' : 'highlights'
-  )
+  const defaultTab = showPagesTab ? 'pages' : 'highlights'
+  const showOutlineTab = outline !== undefined
+  const [activeTab, setActiveTab] = useState<PageBrowserTab>(defaultTab)
   const highlightRanges = ranges ?? []
   const highlightRects = rects ?? []
   const bookmarkedPages = useMemo(() => {
@@ -454,6 +452,8 @@ export function PageBrowser({
     switch (activeTab) {
       case 'pages':
         return pageNumbers.join(',')
+      case 'outline':
+        return ''
       case 'highlights':
         return highlightRects
           .map((rect) => `${rect.id}:${rect.selectionId ?? ''}`)
@@ -480,10 +480,14 @@ export function PageBrowser({
   }, [isOpen])
 
   useEffect(() => {
-    if (!showPagesTab && activeTab === 'pages') {
-      setActiveTab('highlights')
+    setActiveTab(defaultTab)
+  }, [defaultTab, resetKey])
+
+  useEffect(() => {
+    if (activeTab === 'outline' && !showOutlineTab) {
+      setActiveTab(defaultTab)
     }
-  }, [activeTab, showPagesTab])
+  }, [activeTab, defaultTab, showOutlineTab])
 
   const handleDismiss = useCallback(() => {
     setDismissedByGesture(true)
@@ -494,6 +498,7 @@ export function PageBrowser({
     const wasOpen = wasOpenRef.current
     wasOpenRef.current = effectiveOpen
     if (effectiveOpen && !wasOpen) {
+      setActiveTab(defaultTab)
       const activeElement = navRef.current?.ownerDocument.activeElement
       restoreFocusRef.current =
         activeElement instanceof HTMLElement &&
@@ -507,7 +512,7 @@ export function PageBrowser({
       restoreFocusRef.current?.focus()
       restoreFocusRef.current = null
     }
-  }, [effectiveOpen])
+  }, [defaultTab, effectiveOpen])
 
   useEffect(() => {
     if (!effectiveOpen) return
@@ -532,6 +537,8 @@ export function PageBrowser({
       switch (activeTab) {
         case 'pages':
           return pagesScrollRootRef.current
+        case 'outline':
+          return null
         case 'highlights':
           return highlightsScrollRootRef.current
         case 'bookmarks':
@@ -697,13 +704,28 @@ export function PageBrowser({
           <span aria-hidden='true'>×</span>
         </button>
       </div>
-      {outline}
       <PageBrowserTabs
         activeTab={activeTab}
         isOpen={effectiveOpen}
         showPagesTab={showPagesTab}
+        showOutlineTab={showOutlineTab}
         onSelectTab={setActiveTab}
       />
+
+      {showOutlineTab ? (
+        <div
+          className='hamster-reader__page-browser-panel'
+          role='tabpanel'
+          hidden={activeTab !== 'outline'}
+          data-testid='page-browser-outline-panel'
+        >
+          <div className='hamster-reader__page-browser-outline'>
+            {typeof outline === 'function'
+              ? outline(activeTab === 'outline')
+              : outline}
+          </div>
+        </div>
+      ) : null}
 
       {showPagesTab ? (
         <PageBrowserPagesPanel

@@ -593,4 +593,66 @@ describe('PageBrowser', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(browser).toHaveAttribute('aria-hidden', 'false')
   })
+
+  it('keeps outline in the shared tablist and restores the default tab', async () => {
+    const outline = <p>Chapter content</p>
+    const props: React.ComponentProps<typeof PageBrowser> = {
+      isOpen: true,
+      outline,
+      resetKey: 'book-a',
+      pageNumbers: [1, 2],
+      pageSizesByPageNumber: pageSizes,
+      baseImagesByPageNumber: new Map(),
+      onPageVisibilityChange: vi.fn(),
+      onNavigateToPage: vi.fn()
+    }
+    const view = render(<PageBrowser {...props} />)
+    const tablist = screen.getByRole('tablist')
+    const pagesTab = screen.getByRole('tab', { name: '页面' })
+    const outlineTab = screen.getByRole('tab', { name: '章节目录' })
+    expect(
+      Array.from(tablist.querySelectorAll('[role="tab"]')).map(
+        (tab) => tab.textContent
+      )
+    ).toEqual(['页面', '章节目录', '高亮', '书签'])
+    expect(tablist).toContainElement(outlineTab)
+    expect(pagesTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('page-browser-outline-panel')).not.toBeVisible()
+
+    pagesTab.focus()
+    fireEvent.keyDown(pagesTab, { key: 'ArrowRight' })
+    expect(outlineTab).toHaveFocus()
+    expect(outlineTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('page-browser-outline-panel')).toBeVisible()
+    expect(
+      screen.getByText('Chapter content').closest('[role="tabpanel"]')
+    ).toBe(screen.getByTestId('page-browser-outline-panel'))
+
+    view.rerender(<PageBrowser {...props} isOpen={false} />)
+    view.rerender(<PageBrowser {...props} isOpen />)
+    await waitFor(() =>
+      expect(pagesTab).toHaveAttribute('aria-selected', 'true')
+    )
+    fireEvent.click(outlineTab)
+    view.rerender(<PageBrowser {...props} resetKey='book-b' />)
+    await waitFor(() =>
+      expect(pagesTab).toHaveAttribute('aria-selected', 'true')
+    )
+  })
+
+  it('keeps an empty EPUB outline available in text mode', () => {
+    renderPageBrowser({
+      showPagesTab: false,
+      outline: <p role='status'>此文档没有章节目录，可使用页面导航。</p>
+    })
+    expect(screen.getByRole('tab', { name: '高亮' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    fireEvent.click(screen.getByRole('tab', { name: '章节目录' }))
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '此文档没有章节目录，可使用页面导航。'
+    )
+    expect(screen.queryByRole('tab', { name: '页面' })).toBeNull()
+  })
 })

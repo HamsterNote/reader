@@ -676,6 +676,13 @@
     );
   }
 
+  &__page-browser-tabs--with-outline &__page-browser-tab {
+    min-width: 0;
+    padding: 0 4px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
   &__page-browser-tab {
     flex: 1 1 0;
     display: flex;
@@ -713,6 +720,40 @@
 
     &[hidden] {
       display: none;
+    }
+  }
+
+  &__page-browser-outline {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 8px 12px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    font-size: 13px;
+
+    ul {
+      margin: 0;
+      padding-left: 14px;
+      list-style: none;
+    }
+
+    > ul {
+      padding-left: 0;
+    }
+
+    button {
+      width: 100%;
+      padding: 6px 0;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+
+      &:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
     }
   }
 
