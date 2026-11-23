@@ -87,6 +87,7 @@ export type ReaderScreenProps = {
 }
 
 export type ReaderScreenHandle = ReaderScreenActions & {
+  readonly fileId: string
   readonly close: (external?: boolean) => Promise<BridgeCloseResult>
 }
 
@@ -827,6 +828,9 @@ export const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
     useImperativeHandle(
       ref,
       () => ({
+        get fileId() {
+          return retained.current.record.fileId
+        },
         close: (external = true) =>
           closeRef.current?.(external) ??
           Promise.resolve<BridgeCloseResult>({ status: 'closed' }),

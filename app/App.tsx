@@ -55,7 +55,7 @@ import {
 import { AppErrorBoundary } from './src/components/AppErrorBoundary'
 
 type HostCloseAction = {
-  readonly targets: readonly PaneId[]
+  readonly shouldClose: (pane: PaneId, fileId: string) => boolean
   readonly complete: () => void
   running: boolean
 }
@@ -209,13 +209,12 @@ function AppContent({
       if (action.running) return
       action.running = true
       const results = await Promise.all(
-        action.targets.map(async (pane) => {
+        (['left', 'right'] as const).map(async (pane) => {
+          const reader = readerRefs[pane].current
+          if (!reader || !action.shouldClose(pane, reader.fileId))
+            return { status: 'closed' as const }
           try {
-            return (
-              (await readerRefs[pane].current?.close()) ?? {
-                status: 'closed' as const
-              }
-            )
+            return await reader.close()
           } catch {
             return { status: 'unconfirmed' as const, reason: '关闭保存失败' }
           }
@@ -263,9 +262,7 @@ function AppContent({
       return
     }
     const action: HostCloseAction = {
-      targets: (['left', 'right'] as const).filter(
-        (pane) => panes[pane] !== null
-      ),
+      shouldClose: () => true,
       running: false,
       complete: () => {
         setPanes(EMPTY_PANES)
@@ -299,13 +296,17 @@ function AppContent({
       }
       const record = outcome.record
       enqueueHostClose({
-        targets: route.layout === 'single' ? ['right'] : [],
+        shouldClose: (pane, fileId) =>
+          pane === 'left'
+            ? fileId !== record.fileId
+            : route.layout === 'single',
         running: false,
         complete: () => {
           setSplit(route.layout === 'split')
-          setPanes((state) =>
-            mirrorActivePane(setPaneRecord(state, 'left', record), 'left')
-          )
+          setPanes((state) => ({
+            left: record,
+            right: route.layout === 'split' ? (state.right ?? record) : null
+          }))
           setActivePane('left')
           void refresh()
         }
@@ -335,7 +336,7 @@ function AppContent({
   const toggleSplit = (): void => {
     const target = otherPane(focusPane)
     enqueueHostClose({
-      targets: split && panes[target] ? [target] : [],
+      shouldClose: (pane) => split && pane === target,
       running: false,
       complete: () => {
         if (split) {

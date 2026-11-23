@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HostDocumentRecord } from '../src/host/readerDataStore'
 import { ReaderDataStore } from '../src/host/readerDataStore'
 import { App } from '../app/App'
-import OpenRoute from '../app/app/open'
+import Index from '../app/app/index'
 import DebugOpenRoute from '../app/app/debug/open'
 
 type ReaderProps = {
@@ -27,6 +27,7 @@ type ReaderProps = {
 }
 
 type ReaderHandle = {
+  readonly fileId: string
   readonly close: () => Promise<
     | { readonly status: 'closed' }
     | { readonly status: 'unconfirmed'; readonly reason: string }
@@ -61,10 +62,17 @@ const host = vi.hoisted(() => {
   }
 })
 
-const navigation = vi.hoisted(() => ({ setOptions: vi.fn() }))
+const navigation = vi.hoisted(() => ({
+  setOptions: vi.fn(),
+  dismissTo: vi.fn()
+}))
 vi.mock('expo-router', () => ({
+  router: navigation,
   useNavigation: () => navigation,
   useLocalSearchParams: () => host.params
+}))
+vi.mock('expo-router/react-navigation', () => ({
+  useRoute: () => ({ params: host.params })
 }))
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
@@ -92,7 +100,7 @@ vi.mock('../app/src/screens/ReaderScreen', () => ({
         else setCloseFailed(true)
         return result
       }
-      useImperativeHandle(ref, () => ({ close }))
+      useImperativeHandle(ref, () => ({ fileId: props.record.fileId, close }))
       if (props.paneId) host.latest.set(props.paneId, props)
       return (
         <div data-testid={`reader-${props.paneId}`}>
@@ -304,7 +312,7 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
   it('closes only the active split pane through the Android header back action', async () => {
     host.platform = 'android'
     host.params = { fileId: a.fileId, layout: 'split' }
-    render(<OpenRoute />)
+    render(<Index />)
     await screen.findByTestId('reader-left')
     await screen.findByTestId('reader-right')
     fireEvent.click(screen.getByText('活动：左栏'))
@@ -358,28 +366,22 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     )
   })
 
-  it.each([
-    { route: 'open', component: OpenRoute },
-    { route: 'debug/open', component: DebugOpenRoute }
-  ])(
-    'opens $route through the Router on a cold start',
-    async ({ component: Route }) => {
-      host.params = { fileId: a.fileId, layout: 'single' }
-      render(<Route />)
+  it('opens the target delivered to the index', async () => {
+    host.params = { fileId: a.fileId, layout: 'single' }
+    render(<Index />)
 
-      await screen.findByTestId('reader-left')
-      expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
-      expect(host.urlListeners).toHaveLength(0)
-      expect(console.info).toHaveBeenCalledWith(
-        'reader-debug-route',
-        expect.objectContaining({
-          source: 'deeplink',
-          fileId: a.fileId,
-          ok: true
-        })
-      )
-    }
-  )
+    await screen.findByTestId('reader-left')
+    expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
+    expect(host.urlListeners).toHaveLength(0)
+    expect(console.info).toHaveBeenCalledWith(
+      'reader-debug-route',
+      expect.objectContaining({
+        source: 'deeplink',
+        fileId: a.fileId,
+        ok: true
+      })
+    )
+  })
 
   it('mounts two same-file panes with stable paneIds and one active pane', async () => {
     process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
@@ -514,14 +516,14 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
       return { status: 'closed' }
     })
     host.params = { fileId: a.fileId, layout: 'split' }
-    const view = render(<OpenRoute />)
+    const view = render(<Index />)
     await screen.findByTestId('reader-left')
     await screen.findByTestId('reader-right')
     expect(host.urlListeners).toHaveLength(0)
 
     host.params = { fileId: a.fileId, layout: 'single' }
     await act(async () => {
-      view.rerender(<OpenRoute />)
+      view.rerender(<Index />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(screen.getByTestId('reader-left')).toBeInTheDocument()
@@ -552,7 +554,7 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
       if (paneId === 'right' && ++rightAttempts === 1) await rightGate
       return { status: 'closed' }
     })
-    const view = render(<OpenRoute />)
+    const view = render(<Index />)
     await screen.findByTestId('reader-left')
     await screen.findByTestId('reader-right')
 
@@ -560,7 +562,7 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     await waitFor(() => expect(host.close).toHaveBeenCalledWith('right'))
     host.params = { fileId: a.fileId, layout: 'single' }
     await act(async () => {
-      view.rerender(<OpenRoute />)
+      view.rerender(<Index />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(screen.getByTestId('reader-left')).toBeInTheDocument()
@@ -580,11 +582,11 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
   it('opens a library file by ID in release on both initial and subsequent links', async () => {
     vi.stubGlobal('__DEV__', false)
     host.params = { fileId: a.fileId }
-    const view = render(<OpenRoute />)
+    const view = render(<Index />)
     await screen.findByTestId('reader-left')
     expect(host.latest.get('left')?.record.fileId).toBe(a.fileId)
     host.params = { fileId: b.fileId }
-    view.rerender(<OpenRoute />)
+    view.rerender(<Index />)
     await waitFor(() =>
       expect(host.latest.get('left')?.record.fileId).toBe(b.fileId)
     )
@@ -595,6 +597,12 @@ describe('demo host split and deep-link debug controls (HAM-290)', () => {
     process.env.EXPO_PUBLIC_HAM278_OPEN_FILE_ID = a.fileId
     host.params = { fileId: a.fileId }
     render(<DebugOpenRoute />)
+    expect(navigation.dismissTo).toHaveBeenCalledWith({
+      pathname: '/',
+      params: {}
+    })
+    host.params = {}
+    render(<Index />)
     fireEvent.click(await screen.findByText('open:a.pdf'))
     await screen.findByTestId('reader-left')
     expect(screen.getAllByTestId('reader-left')).toHaveLength(1)

@@ -27,7 +27,7 @@ import {
   type ReaderScreenProps
 } from '../app/src/screens/ReaderScreen'
 import { App } from '../app/App'
-import OpenRoute from '../app/app/open'
+import Index from '../app/app/index'
 import type { ReaderWebViewHandle } from '../app/src/components/ReaderWebView'
 import type { ReaderPdfViewProps } from '../app/modules/reader-pdf'
 import type {
@@ -83,6 +83,9 @@ const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
     useImperativeHandle(
       ref,
       () => ({
+        get fileId() {
+          return handle.current?.fileId ?? props.record.fileId
+        },
         close: (external = true) =>
           handle.current?.close(external) ??
           Promise.resolve<BridgeCloseResult>({ status: 'closed' }),
@@ -90,7 +93,7 @@ const ReaderScreen = forwardRef<ReaderScreenHandle, ReaderScreenProps>(
         toggleDebugRenderer: () => handle.current?.toggleDebugRenderer(),
         importLegacy: () => handle.current?.importLegacy() ?? Promise.resolve()
       }),
-      []
+      [props.record.fileId]
     )
     return (
       <>
@@ -164,8 +167,10 @@ const host = vi.hoisted(() => {
 
 const navigation = vi.hoisted(() => ({ setOptions: vi.fn() }))
 vi.mock('expo-router', () => ({
-  useNavigation: () => navigation,
-  useLocalSearchParams: () => host.params
+  useNavigation: () => navigation
+}))
+vi.mock('expo-router/react-navigation', () => ({
+  useRoute: () => ({ params: host.params })
 }))
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }))
 vi.mock('../app/src/native/storage', () => ({
@@ -1703,7 +1708,7 @@ describe('real App host close barriers', () => {
     const record = makeRecord('f_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
     await new ReaderDataStore(host.storage).upsert(record)
     host.params = { fileId: record.fileId, layout: 'split' }
-    const view = render(<OpenRoute />)
+    const view = render(<Index />)
     await waitFor(() =>
       expect(screen.getAllByTestId('native-pdf-view')).toHaveLength(2)
     )
@@ -1730,7 +1735,7 @@ describe('real App host close barriers', () => {
 
     host.params = { fileId: record.fileId, layout: 'single' }
     await act(async () => {
-      view.rerender(<OpenRoute />)
+      view.rerender(<Index />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     await waitFor(() =>
