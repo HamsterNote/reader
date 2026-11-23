@@ -26,10 +26,19 @@ export function PdfTextReadingControls({
   if (!enabled) return null
   return (
     <>
-      <div className="hamster-reader__page-indicator" data-testid="reading-page-indicator"
+      <div
+        className='hamster-reader__page-indicator'
+        data-testid='reading-page-indicator'
         data-pdf-text-ready={diagnostics?.ready}
-        data-can-next={ready && !navigation.busy && !diagnostics?.gate && navigation.canNext}
-        data-can-previous={ready && !navigation.busy && !diagnostics?.gate && navigation.canPrevious}
+        data-can-next={
+          ready && !navigation.busy && !diagnostics?.gate && navigation.canNext
+        }
+        data-can-previous={
+          ready &&
+          !navigation.busy &&
+          !diagnostics?.gate &&
+          navigation.canPrevious
+        }
         data-pdf-text-busy={diagnostics?.busy}
         data-pdf-text-gate={diagnostics?.gate}
         data-pdf-text-target-page={diagnostics?.targetPageNumber}
@@ -38,7 +47,10 @@ export function PdfTextReadingControls({
         data-pdf-text-turn-sequence={diagnostics?.turnSequence}
         data-pdf-text-last-turn-page={diagnostics?.lastTurnPageNumber}
         data-pdf-text-error={diagnostics?.error}
-        hidden={!ready || empty || !total}>{page}/{total}</div>
+        hidden={!ready || empty || !total}
+      >
+        {page}/{total}
+      </div>
       {empty && <div role='status'>没有可阅读的页面</div>}
       {unlocatable && (
         <div role='status' className='hamster-reader__engine-notice'>

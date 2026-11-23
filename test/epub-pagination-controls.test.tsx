@@ -74,7 +74,8 @@ beforeEach(() => {
     return engine
   })
 })
-const paper = () => document.querySelector<HTMLElement>('.hamster-reader__epub-container')!
+const paper = () =>
+  document.querySelector<HTMLElement>('.hamster-reader__epub-container')!
 const enable = () =>
   act(() =>
     options.onNavigationState?.({
@@ -242,7 +243,9 @@ describe('EPUB pagination controls and progress', () => {
         />
       )
       const next = paper()
-      vi.spyOn(next, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 200))
+      vi.spyOn(next, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(0, 0, 300, 200)
+      )
       expect(next).toHaveAttribute('data-can-next', 'false')
       await act(async () => {
         await engine.ready
@@ -283,7 +286,9 @@ describe('EPUB pagination controls and progress', () => {
     })
     enable()
     const next = paper()
-      vi.spyOn(next, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 200))
+    vi.spyOn(next, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 300, 200)
+    )
     expect(screen.queryByRole('group', { name: '翻页' })).toBeNull()
     await userEvent.keyboard('{Enter} ')
     expect(engine.nextPage).not.toHaveBeenCalled()

@@ -54,7 +54,10 @@ function documentFixture(id: string, count = 100) {
 }
 import { tapNext } from './reading-gesture'
 
-const paper = () => document.querySelector<HTMLElement>('.hamster-reader__intermediate-text-spacer')!
+const paper = () =>
+  document.querySelector<HTMLElement>(
+    '.hamster-reader__intermediate-text-spacer'
+  )!
 function sizeRoot() {
   const root = screen.getByTestId('intermediate-document-text-viewer')
   mockElementSize(root, { width: 600, height: 400 })
@@ -82,7 +85,10 @@ describe('PDF Text viewer integration', () => {
       expect(screen.getByText('large page 50')).toBeInTheDocument()
     )
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
     expect(
       fixture.loaders.filter((loader) => loader.mock.calls.length)
@@ -145,9 +151,15 @@ describe('PDF Text viewer integration', () => {
     sizeRoot()
     await screen.findByText('第 1 页没有可提取的文字')
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
-    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-previous', 'false')
+    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+      'data-can-previous',
+      'false'
+    )
     tapNext(paper())
     await screen.findByText('第 2 页没有可提取的文字')
     fireEvent.click(screen.getByRole('button', { name: '返回 Layout' }))
@@ -161,7 +173,10 @@ describe('PDF Text viewer integration', () => {
     tapNext(paper())
     await screen.findByText('第 3 页没有可提取的文字')
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'false')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'false'
+      )
     )
     // The button is disabled both while restoring and at the last page.
     // Wait for the actual position commit rather than that transient UI state.
@@ -233,7 +248,10 @@ it('waits for the requested PDF Text page before a close capture can flush progr
   )
   sizeRoot()
   await waitFor(() =>
-    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+      'data-can-next',
+      'true'
+    )
   )
   tapNext(paper())
   let complete = false

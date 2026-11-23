@@ -10,7 +10,7 @@ export function readingTapZone(
   if (localY < rect.height / 4 || localY >= (rect.height * 3) / 4)
     return 'toggle'
   if (localX < rect.width / 3) return 'previous'
-  return localX >= rect.width * 2 / 3 ? 'next' : 'toggle'
+  return localX >= (rect.width * 2) / 3 ? 'next' : 'toggle'
 }
 
 type Box = Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>
@@ -19,74 +19,135 @@ export function readingBounds(paper: Element): Box {
   const root = paper.closest<HTMLElement>('[data-testid="reader-root"]')
   if (!root) return box
   let { top, left, bottom } = box
-  const toolbar = root.querySelector<HTMLElement>('[data-testid="tool-bottom-bar"]')
+  const toolbar = root.querySelector<HTMLElement>(
+    '[data-testid="tool-bottom-bar"]'
+  )
   if (toolbar) {
     const bar = toolbar.getBoundingClientRect()
     const header = Number(root.dataset.readingHeaderInset ?? 0)
     top = Math.max(top, root.getBoundingClientRect().top + header)
     if (bar.height && bar.top < bottom && bar.bottom > top) {
-      if (bar.top + bar.height / 2 < box.top + box.height / 2) top = Math.max(top, bar.bottom)
+      if (bar.top + bar.height / 2 < box.top + box.height / 2)
+        top = Math.max(top, bar.bottom)
       else bottom = Math.min(bottom, bar.top)
     }
   }
   const sidebar = root.querySelector('.hamster-reader__page-browser--open')
   if (sidebar) left = Math.max(left, sidebar.getBoundingClientRect().right)
-  return { top, left, width: Math.max(0, box.right - left), height: Math.max(0, bottom - top) }
+  return {
+    top,
+    left,
+    width: Math.max(0, box.right - left),
+    height: Math.max(0, bottom - top)
+  }
 }
 export type ReadingAction = NonNullable<ReturnType<typeof readingTapZone>>
 
-export function swipeAction(box: Box, dx: number, dy: number): ReadingAction | null {
+export function swipeAction(
+  box: Box,
+  dx: number,
+  dy: number
+): ReadingAction | null {
   if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= box.width / 3)
     return dx < 0 ? 'next' : 'previous'
-  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) >= box.height / 3) return 'toggle'
+  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) >= box.height / 3)
+    return 'toggle'
   return null
 }
 
 export function isInteractiveTap(event: MouseEvent) {
-  return event.defaultPrevented || event.composedPath().some((target) =>
-    (target as Element).matches?.(
-      'a[href], button, input, textarea, select, label, summary, audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"]), [role="button"], [role="link"], [role="menuitem"], [role="dialog"], [role="toolbar"], .hsn-selection-popover, .hamster-reader__page-browser'
-    )
+  return (
+    event.defaultPrevented ||
+    event
+      .composedPath()
+      .some((target) =>
+        (target as Element).matches?.(
+          'a[href], button, input, textarea, select, label, summary, audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"]), [role="button"], [role="link"], [role="menuitem"], [role="dialog"], [role="toolbar"], .hsn-selection-popover, .hamster-reader__page-browser'
+        )
+      )
   )
 }
 
-export function trackReadingPress(target: HTMLElement | Document, options: {
-  bounds: () => Box | null
-  blocked?: (event: MouseEvent) => boolean
-  mask?: boolean
-  capturePointer?: boolean
-  swipe: (action: ReadingAction) => void
-}) {
+export function trackReadingPress(
+  target: HTMLElement | Document,
+  options: {
+    bounds: () => Box | null
+    blocked?: (event: MouseEvent) => boolean
+    mask?: boolean
+    capturePointer?: boolean
+    swipe: (action: ReadingAction) => void
+  }
+) {
   const doc = target.ownerDocument ?? (target as Document)
-  let press: { id: number; x: number; y: number; time: number; released: boolean; dragged: boolean; box: Box } | null = null
+  let press: {
+    id: number
+    x: number
+    y: number
+    time: number
+    released: boolean
+    dragged: boolean
+    box: Box
+  } | null = null
   let suppressClick = false
-  const cancel = () => { press = null }
+  const cancel = () => {
+    press = null
+  }
   const down = (event: PointerEvent) => {
     cancel()
     suppressClick = false
     const box = options.bounds()
-    if (!event.isPrimary || event.button !== 0 || !event.composedPath().includes(target) ||
-      !box || !readingTapZone(box, event.clientX, event.clientY) ||
-      (!options.mask && doc.getSelection()?.isCollapsed === false) || options.blocked?.(event) || isInteractiveTap(event))
+    if (
+      !event.isPrimary ||
+      event.button !== 0 ||
+      !event.composedPath().includes(target) ||
+      !box ||
+      !readingTapZone(box, event.clientX, event.clientY) ||
+      (!options.mask && doc.getSelection()?.isCollapsed === false) ||
+      options.blocked?.(event) ||
+      isInteractiveTap(event)
+    )
       return
-    press = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp, released: false, dragged: false, box }
+    press = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      time: event.timeStamp,
+      released: false,
+      dragged: false,
+      box
+    }
     if (options.capturePointer && event.isTrusted)
       (event.target as Element).setPointerCapture?.(event.pointerId)
   }
   const move = (event: PointerEvent) => {
-    if (press && event.pointerId === press.id &&
-      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6)
+    if (
+      press &&
+      event.pointerId === press.id &&
+      Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6
+    )
       press.dragged = true
   }
   const up = (event: PointerEvent) => {
     move(event)
     if (!press || event.pointerId !== press.id) return
-    if (!readingTapZone(press.box, event.clientX, event.clientY)) return cancel()
-    if (!press.dragged) { press.released = true; return }
-    const action = swipeAction(press.box, event.clientX - press.x, event.clientY - press.y)
+    if (!readingTapZone(press.box, event.clientX, event.clientY))
+      return cancel()
+    if (!press.dragged) {
+      press.released = true
+      return
+    }
+    const action = swipeAction(
+      press.box,
+      event.clientX - press.x,
+      event.clientY - press.y
+    )
     cancel()
     suppressClick = true
-    if (action && (options.mask || doc.getSelection()?.isCollapsed !== false) && !options.blocked?.(event))
+    if (
+      action &&
+      (options.mask || doc.getSelection()?.isCollapsed !== false) &&
+      !options.blocked?.(event)
+    )
       options.swipe(action)
   }
   const trailingClick = (event: Event) => {
@@ -110,13 +171,18 @@ export function trackReadingPress(target: HTMLElement | Document, options: {
     consume(event: MouseEvent) {
       const current = press
       cancel()
-      return current?.released && event.button === 0 && event.detail === 1 &&
+      return current?.released &&
+        event.button === 0 &&
+        event.detail === 1 &&
         event.timeStamp - current.time < 500 &&
-        (options.mask || doc.getSelection()?.isCollapsed !== false) && !isInteractiveTap(event)
-        ? readingTapZone(current.box, event.clientX, event.clientY) : null
+        (options.mask || doc.getSelection()?.isCollapsed !== false) &&
+        !isInteractiveTap(event)
+        ? readingTapZone(current.box, event.clientX, event.clientY)
+        : null
     },
     dispose() {
-      for (const [type, fn] of listeners) doc.removeEventListener(type, fn, true)
+      for (const [type, fn] of listeners)
+        doc.removeEventListener(type, fn, true)
     }
   }
 }

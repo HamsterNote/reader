@@ -8,7 +8,11 @@ import { usePdfPreviews } from '../pdf/usePdfPreviews'
 import type { PDFDocumentProxy } from '../pdf/pdfjsRuntime'
 import { ReadingMask } from './reading/ReadingMask'
 import { useReadingViewport } from './reading/useReadingViewport'
-import { readingBounds, trackReadingPress, type ReadingAction } from './reading/tapZones'
+import {
+  readingBounds,
+  trackReadingPress,
+  type ReadingAction
+} from './reading/tapZones'
 import {
   type ReactNode,
   type CSSProperties,
@@ -1245,7 +1249,7 @@ export function EngineDocumentViewer(props: Props) {
         queueHandoff()
       },
       onHighlightActivate: activate,
-      onReadingAction: action => readingTap.current(action),
+      onReadingAction: (action) => readingTap.current(action),
       onDocumentLoad: (doc, pageNumber) => {
         setEpubDocument(doc)
         setEpubPage(pageNumber)
@@ -1339,7 +1343,8 @@ export function EngineDocumentViewer(props: Props) {
           progressEnabled.current = true
         }
         const followLink = (event: Event) => {
-          if ((event.target as Element | null)?.closest?.('a[href]')) interacted()
+          if ((event.target as Element | null)?.closest?.('a[href]'))
+            interacted()
         }
         doc.addEventListener('click', followLink, true)
         doc.addEventListener('wheel', interacted, { passive: true })
@@ -1501,16 +1506,24 @@ export function EngineDocumentViewer(props: Props) {
   }, [source?.format, rootElement])
 
   const turnEpub = (forward: boolean) => {
-    if (!epubReady || navigation.busy ||
-      !(forward ? navigation.canNext : navigation.canPrevious)) return
+    if (
+      !epubReady ||
+      navigation.busy ||
+      !(forward ? navigation.canNext : navigation.canPrevious)
+    )
+      return
     setError(null)
     progressEnabled.current = true
     cancelSelection()
     epub.current?.[forward ? 'nextPage' : 'previousPage']()
   }
 
-  readingTap.current = zone => {
-    if (!epubReady || navigation.busy || (props.chromeVisible && props.onToggleChrome))
+  readingTap.current = (zone) => {
+    if (
+      !epubReady ||
+      navigation.busy ||
+      (props.chromeVisible && props.onToggleChrome)
+    )
       return
     if (props.selectedTool === 'rect-selection') return
     if (zone === 'toggle') props.onToggleChrome?.()
@@ -1524,8 +1537,8 @@ export function EngineDocumentViewer(props: Props) {
       capturePointer: true,
       // Chapter pointers are forwarded to the host for pane activation. The
       // chapter document itself owns the reading gesture.
-      blocked: event => event.target === rootElement && !event.isTrusted,
-      swipe: action => readingTap.current(action)
+      blocked: (event) => event.target === rootElement && !event.isTrusted,
+      swipe: (action) => readingTap.current(action)
     })
     const click = (event: MouseEvent) => {
       const action = press.consume(event)
@@ -1958,7 +1971,9 @@ export function EngineDocumentViewer(props: Props) {
             ref={epubContainer}
             className='hamster-reader__epub-container'
             data-can-next={epubReady && !navigation.busy && navigation.canNext}
-            data-can-previous={epubReady && !navigation.busy && navigation.canPrevious}
+            data-can-previous={
+              epubReady && !navigation.busy && navigation.canPrevious
+            }
             aria-busy={!epubReady || navigation.busy}
             style={{
               display: emptyPageDisplay(pageCount, pageNumbers)
@@ -2081,11 +2096,18 @@ export function EngineDocumentViewer(props: Props) {
             onSelectRect={selectRect}
           />
         )}
-        {source?.format === 'epub' && props.chromeVisible && props.onToggleChrome && (
-          <ReadingMask dismiss={props.onToggleChrome} />
-        )}
+        {source?.format === 'epub' &&
+          props.chromeVisible &&
+          props.onToggleChrome && (
+            <ReadingMask dismiss={props.onToggleChrome} />
+          )}
         {source?.format === 'epub' && epubReady && navigation.pageLabel && (
-          <span className="hamster-reader__page-indicator" data-testid="reading-page-indicator">{navigation.pageLabel}</span>
+          <span
+            className='hamster-reader__page-indicator'
+            data-testid='reading-page-indicator'
+          >
+            {navigation.pageLabel}
+          </span>
         )}
         {unlocatable.length > 0 && (
           <div role='status' className='hamster-reader__engine-notice'>

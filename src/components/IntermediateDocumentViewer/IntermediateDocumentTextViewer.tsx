@@ -896,7 +896,11 @@ function useSelectionHighlight(
  * 文本模式不经过 `VirtualPaper`，因此不接受任何缩放、交互模式、矩形框选或
  * 绘制相关 props；页面浏览侧栏则与布局模式共用书签和文本高亮数据。
  */
-import { readingBounds, trackReadingPress, type ReadingAction } from '../reading/tapZones'
+import {
+  readingBounds,
+  trackReadingPress,
+  type ReadingAction
+} from '../reading/tapZones'
 
 export type IntermediateDocumentTextViewerProps = {
   chromeVisible?: boolean
@@ -1100,6 +1104,40 @@ function DeferredPdfTextViewer(
   return <TextViewer {...props} document={result.document} />
 }
 
+function chromeBlocksReadingInput(
+  visible: boolean | undefined,
+  toggle: (() => void) | undefined
+) {
+  return Boolean(visible && toggle)
+}
+
+function shouldTrackReadingPress(
+  root: HTMLDivElement | null,
+  isPdf: boolean
+): root is HTMLDivElement {
+  return root !== null && isPdf
+}
+
+function shouldApplyReadingAction(
+  action: ReadingAction | null,
+  blocked: boolean
+): action is ReadingAction {
+  return Boolean(action && !blocked)
+}
+
+function runPdfReadingAction(
+  zone: ReadingAction,
+  ready: boolean,
+  busy: boolean,
+  toggleChrome: (() => void) | undefined,
+  turn: (next: boolean) => void
+) {
+  if (!ready || busy) return
+  if (zone === 'toggle') toggleChrome?.()
+  else turn(zone === 'next')
+}
+
+// eslint-disable-next-line sonarjs/cognitive-complexity -- Keep the viewer's session assembly cohesive; behavior is covered by focused tests.
 function TextViewer(props: IntermediateDocumentTextViewerProps) {
   const {
     document,
@@ -3332,29 +3370,43 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
 
   const onReadingTap = useRef<(zone: ReadingAction) => void>(() => {})
   const blocked = useRef<(event: MouseEvent) => boolean>(() => false)
-  blocked.current = event => Boolean(viewerRootElement?.ownerDocument.querySelector('.hsn-selection-popover') ||
-    resolveHighlightDragTarget(event.clientX, event.clientY) ||
-    runtimeLinkedDataRef.current.activeRange || props.chromeVisible && props.onToggleChrome)
-  onReadingTap.current = zone => {
-    if (!pdfPagination.ready || pdfPagination.navigation.busy) return
-    if (zone === 'toggle') props.onToggleChrome?.()
-    else if (zone) pdfPagination.turn(zone === 'next')
+  blocked.current = (event) =>
+    Boolean(
+      viewerRootElement?.ownerDocument.querySelector(
+        '.hsn-selection-popover'
+      ) ||
+      resolveHighlightDragTarget(event.clientX, event.clientY) ||
+      runtimeLinkedDataRef.current.activeRange ||
+      chromeBlocksReadingInput(props.chromeVisible, props.onToggleChrome)
+    )
+  onReadingTap.current = (zone) => {
+    runPdfReadingAction(
+      zone,
+      pdfPagination.ready,
+      pdfPagination.navigation.busy,
+      props.onToggleChrome,
+      (next) => pdfPagination.turn(next)
+    )
   }
   useEffect(() => {
     const root = viewerRootElement
-    if (!root || !isPdf) return
+    if (!shouldTrackReadingPress(root, isPdf)) return
     // Selection and pane activation can rerender between pointerdown and click.
     const press = trackReadingPress(root, {
       bounds: () => {
-        const paper = root.querySelector('.hamster-reader__intermediate-text-spacer')
+        const paper = root.querySelector(
+          '.hamster-reader__intermediate-text-spacer'
+        )
         return paper && readingBounds(paper)
       },
-      blocked: event => blocked.current(event),
-      swipe: action => onReadingTap.current(action)
+      blocked: (event) => blocked.current(event),
+      swipe: (action) => onReadingTap.current(action)
     })
     const click = (event: MouseEvent) => {
       const action = press.consume(event)
-      if (action && !blocked.current(event)) onReadingTap.current(action)
+      if (shouldApplyReadingAction(action, blocked.current(event))) {
+        onReadingTap.current(action)
+      }
     }
     root.addEventListener('click', click)
     return () => {
@@ -3761,7 +3813,9 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
             }}
           />
         }
-        {isPdf && props.chromeVisible && props.onToggleChrome && <ReadingMask dismiss={props.onToggleChrome} />}
+        {isPdf && props.chromeVisible && props.onToggleChrome && (
+          <ReadingMask dismiss={props.onToggleChrome} />
+        )}
         <PageBrowser
           isOpen={showPageBrowser}
           pageNumbers={pageNumbers}
@@ -3818,7 +3872,11 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
         <div
           ref={setScrollRootRef}
           role='document'
-          aria-busy={isPdf ? !pdfPagination.ready || pdfPagination.navigation.busy : undefined}
+          aria-busy={
+            isPdf
+              ? !pdfPagination.ready || pdfPagination.navigation.busy
+              : undefined
+          }
           className={[
             // 文本模式 viewer 根：scoped class 提供原生滚动 + block 布局
             // （SCSS 中后于 layout 模式定义，覆盖 display:flex / overflow:hidden）

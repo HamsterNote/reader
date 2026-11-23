@@ -206,7 +206,8 @@ for (const entrance of ['prop', 'data'] as const) {
         state.handoff = anchor(72)
         state.failure = false
         if (status === 'failed') {
-          if (sourceMode === 'text') act(() => state.textProps?.onToggleChrome?.())
+          if (sourceMode === 'text')
+            act(() => state.textProps?.onToggleChrome?.())
           fireEvent.click(screen.getByTestId('tool-bottom-bar-render-mode'))
         }
         await act(async () => {

@@ -9,7 +9,11 @@ import type { ViewportNavigationState } from '../components/reading/navigation'
 // 集成接线（Reader 路由、底栏、存储）属于 HAM-91，本模块不改动。
 
 import { buttonOnlyInput } from '../components/reading/buttonOnlyInput'
-import { readingBounds, trackReadingPress, type ReadingAction } from '../components/reading/tapZones'
+import {
+  readingBounds,
+  trackReadingPress,
+  type ReadingAction
+} from '../components/reading/tapZones'
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js'
 import '../../vendor/foliate-js/view.js'
 import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
@@ -75,7 +79,9 @@ export type ShowRangesReport = {
   }[]
 }
 
-export type EpubNavigationState = ViewportNavigationState & { readonly pageLabel?: string }
+export type EpubNavigationState = ViewportNavigationState & {
+  readonly pageLabel?: string
+}
 
 export type EpubEngineOptions = {
   readonly onReadingAction?: (action: ReadingAction) => void
@@ -225,8 +231,9 @@ export const createEpubEngine = (
     const renderer = view?.renderer
     const count = (renderer?.pages ?? 0) - 2
     const current = renderer?.page ?? 0
-    const pageLabel = virtualCover || view?.isFixedLayout ? '1/1'
-      : current >= 1 && current <= count ? `${current}/${count}` : undefined
+    let pageLabel: string | undefined
+    if (virtualCover || view?.isFixedLayout) pageLabel = '1/1'
+    else if (current >= 1 && current <= count) pageLabel = `${current}/${count}`
     return {
       ...(pageLabel && opened && { pageLabel }),
       canPrevious:
@@ -464,14 +471,28 @@ export const createEpubEngine = (
         const sy = frame.height / element.clientHeight
         if (!sx || !sy) return null
         const box = readingBounds(options.container)
-        return { left: (box.left - frame.left) / sx, top: (box.top - frame.top) / sy,
-          width: box.width / sx, height: box.height / sy }
+        return {
+          left: (box.left - frame.left) / sx,
+          top: (box.top - frame.top) / sy,
+          width: box.width / sx,
+          height: box.height / sy
+        }
       },
-      blocked: event => Boolean(activeRangeId || managedSelection ||
-        view?.renderer?.getContents().find(entry => entry.index === sectionIndex)?.overlayer?.hitTest({
-          x: event.clientX, y: event.clientY
-        })?.[0]),
-      swipe: action => { if (readingFlow === 'paginated') options.onReadingAction?.(action) }
+      blocked: (event) =>
+        Boolean(
+          activeRangeId ||
+          managedSelection ||
+          view?.renderer
+            ?.getContents()
+            .find((entry) => entry.index === sectionIndex)
+            ?.overlayer?.hitTest({
+              x: event.clientX,
+              y: event.clientY
+            })?.[0]
+        ),
+      swipe: (action) => {
+        if (readingFlow === 'paginated') options.onReadingAction?.(action)
+      }
     })
 
     const onSelectionChange = () => {
@@ -509,8 +530,7 @@ export const createEpubEngine = (
         })
         return
       }
-      if (isTap && readingFlow === 'paginated')
-        options.onReadingAction?.(isTap)
+      if (isTap && readingFlow === 'paginated') options.onReadingAction?.(isTap)
     }
     const removeInput = buttonOnlyInput(doc)
     inputCleanups.set(doc, () => {

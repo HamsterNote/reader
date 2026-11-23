@@ -226,8 +226,7 @@ export function usePdfTextPagination(options: {
     const valid = () =>
       !cancelled && scope.current === generation && serial.current === token
     if (!targetLoaded) {
-      if (!targetFailed)
-        values.current.enqueue(target.pageNumber)
+      if (!targetFailed) values.current.enqueue(target.pageNumber)
       return
     }
     const content = root.querySelector<HTMLElement>('.hsn-selection-content')

@@ -22,5 +22,11 @@ export function ReadingMask({ dismiss }: { dismiss: () => void }) {
       mask.removeEventListener('click', click)
     }
   }, [])
-  return <div ref={ref} className="hamster-reader__reading-mask" data-testid="reading-mask" />
+  return (
+    <div
+      ref={ref}
+      className='hamster-reader__reading-mask'
+      data-testid='reading-mask'
+    />
+  )
 }

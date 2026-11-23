@@ -83,7 +83,10 @@ export {
   type ReaderProgressHandle,
   type ReaderRenderMode
 } from './components/Reader'
-export { useAnnotationHistory, type AnnotationHistoryController } from './components/Reader/useAnnotationHistory'
+export {
+  useAnnotationHistory,
+  type AnnotationHistoryController
+} from './components/Reader/useAnnotationHistory'
 export type {
   ReaderComment,
   ReaderCommentChangeDetail,

@@ -160,7 +160,10 @@ async function boot(page) {
 }
 async function ready(page) {
   await page.waitForFunction(() => {
-    return document.querySelector('[data-testid="reading-page-indicator"]')?.dataset.pdfTextReady === 'true'
+    return (
+      document.querySelector('[data-testid="reading-page-indicator"]')?.dataset
+        .pdfTextReady === 'true'
+    )
   })
 }
 async function state(page) {
@@ -191,13 +194,20 @@ async function turn(page, name, clicks = 1) {
   const point = await paper.evaluate((el, forward) => {
     const box = el.getBoundingClientRect()
     const x = Math.floor(box.left + box.width * (forward ? 0.85 : 0.15))
-    const rects = [...el.querySelectorAll('[data-text-id]')].flatMap(span => {
+    const rects = [...el.querySelectorAll('[data-text-id]')].flatMap((span) => {
       const range = document.createRange()
       range.selectNodeContents(span)
-      return [...range.getClientRects()].filter(r => r.left <= x && x < r.right)
+      return [...range.getClientRects()].filter(
+        (r) => r.left <= x && x < r.right
+      )
     })
-    for (let y = Math.ceil(box.top + box.height / 3); y < box.top + box.height * 2 / 3; y++)
-      if (!rects.some(r => r.top - 1 <= y && y <= r.bottom + 1)) return { x, y }
+    for (
+      let y = Math.ceil(box.top + box.height / 3);
+      y < box.top + (box.height * 2) / 3;
+      y++
+    )
+      if (!rects.some((r) => r.top - 1 <= y && y <= r.bottom + 1))
+        return { x, y }
     throw new Error('No gap between highlighted lines')
   }, name === '下一页')
   await page.mouse.click(point.x, point.y, { clickCount: clicks })
@@ -294,7 +304,11 @@ async function checkTxtScroll() {
 
 try {
   for (const type of [chromium, webkit]) {
-    if (process.env.READER_BROWSER_CASE && type.name() !== process.env.READER_BROWSER_CASE) continue
+    if (
+      process.env.READER_BROWSER_CASE &&
+      type.name() !== process.env.READER_BROWSER_CASE
+    )
+      continue
     const result = { label: type.name(), passed: false, evidence: [] }
     report.cases.push(result)
     let browser
@@ -309,18 +323,31 @@ try {
       page.on('pageerror', (error) => errors.push(error.message))
       await boot(page)
       const first = await state(page)
-      const geometry = () => page.locator('.hsn-selection-content').first().evaluate(content => {
-        const range = document.createRange()
-        range.selectNodeContents(content)
-        return { rects: Array.from(range.getClientRects()).slice(0, 8).map(r => r.toJSON()),
-          column: getComputedStyle(content).columnWidth, scrollWidth: content.scrollWidth,
-          box: content.getBoundingClientRect().toJSON(),
-          indicator: document.querySelector('[data-testid="reading-page-indicator"]').outerHTML }
-      })
+      const geometry = () =>
+        page
+          .locator('.hsn-selection-content')
+          .first()
+          .evaluate((content) => {
+            const range = document.createRange()
+            range.selectNodeContents(content)
+            return {
+              rects: Array.from(range.getClientRects())
+                .slice(0, 8)
+                .map((r) => r.toJSON()),
+              column: getComputedStyle(content).columnWidth,
+              scrollWidth: content.scrollWidth,
+              box: content.getBoundingClientRect().toJSON(),
+              indicator: document.querySelector(
+                '[data-testid="reading-page-indicator"]'
+              ).outerHTML
+            }
+          })
       result.initialGeometry = await geometry()
       assert.equal(first.source, sourceText)
       assert(
-        await page.getByTestId('reading-page-indicator').getAttribute('data-can-previous') === 'false'
+        (await page
+          .getByTestId('reading-page-indicator')
+          .getAttribute('data-can-previous')) === 'false'
       )
       await turn(page, '下一页', 2)
       const second = await state(page)
@@ -474,8 +501,8 @@ try {
         { width: 960, height: 700 }
       ]) {
         await page.setViewportSize(viewport)
-        await page.waitForFunction(
-          () => document.querySelector('[data-can-next="true"]')
+        await page.waitForFunction(() =>
+          document.querySelector('[data-can-next="true"]')
         )
         // Wait for the ResizeObserver + pagination frame, without relying on a timer.
         await page.evaluate(
@@ -663,7 +690,9 @@ try {
       assert.equal((await state(page)).transform, 'translateX(0px)')
       result.sourcePageSeek = true
       while (
-        await page.getByTestId('reading-page-indicator').getAttribute('data-can-previous') === 'true'
+        (await page
+          .getByTestId('reading-page-indicator')
+          .getAttribute('data-can-previous')) === 'true'
       )
         await turn(page, '上一页')
       const seen = new Set()
@@ -727,7 +756,9 @@ try {
       await turn(page, '下一页')
       assert.equal((await state(page)).page, 3)
       assert(
-        await page.getByTestId('reading-page-indicator').getAttribute('data-can-next') === 'false'
+        (await page
+          .getByTestId('reading-page-indicator')
+          .getAttribute('data-can-next')) === 'false'
       )
       await turn(page, '上一页')
       await turn(page, '上一页')

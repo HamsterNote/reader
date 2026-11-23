@@ -67,8 +67,8 @@ const INPUT_ERRORS = new Set<number>()
 const noop = () => {}
 
 const sequence = () =>
-  screen.getByTestId('reading-page-indicator')
-    .dataset['pdfTextTurnSequence'] ?? ''
+  screen.getByTestId('reading-page-indicator').dataset['pdfTextTurnSequence'] ??
+  ''
 
 function PaginationInputHarness({ width }: { width: number }) {
   const pagination = usePdfTextPagination({
@@ -91,32 +91,52 @@ function PaginationInputHarness({ width }: { width: number }) {
   useLayoutEffect(() => {
     const press = trackReadingPress(root, {
       bounds: () => root.getBoundingClientRect(),
-      swipe: action => latest.current.turn(action === 'next')
+      swipe: (action) => latest.current.turn(action === 'next')
     })
     const click = (event: MouseEvent) => {
       const action = press.consume(event)
       if (action === 'next') latest.current.turn(true)
     }
     root.addEventListener('click', click)
-    return () => { root.removeEventListener('click', click); press.dispose() }
+    return () => {
+      root.removeEventListener('click', click)
+      press.dispose()
+    }
   }, [])
-  return <PdfTextReadingControls enabled page={pagination.pageNumber} total={2}
-    navigation={pagination.navigation} ready={pagination.ready} empty={false}
-    failed={false} unlocatable={false} diagnostics={pagination.diagnostics} onRetry={noop} />
+  return (
+    <PdfTextReadingControls
+      enabled
+      page={pagination.pageNumber}
+      total={2}
+      navigation={pagination.navigation}
+      ready={pagination.ready}
+      empty={false}
+      failed={false}
+      unlocatable={false}
+      diagnostics={pagination.diagnostics}
+      onRetry={noop}
+    />
+  )
 }
 
 describe('PDF Text actual fragments and navigation', () => {
   it('replays a next-page press that a repagination invalidates before click', async () => {
     const view = render(<PaginationInputHarness width={300} />)
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
     readingPointer(root, 'pointerdown')
     // A focus/host relayout changes the readable width mid-press and disables
     // the control before the browser dispatches click.
     view.rerender(<PaginationInputHarness width={280} />)
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
     expect(sequence()).toBe('0')
     readingPointer(root, 'pointerup')
@@ -130,13 +150,19 @@ describe('PDF Text actual fragments and navigation', () => {
   it('drops a press cancelled during the repagination', async () => {
     const view = render(<PaginationInputHarness width={300} />)
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
     readingPointer(root, 'pointerdown')
     view.rerender(<PaginationInputHarness width={280} />)
     readingPointer(root, 'pointercancel')
     await waitFor(() =>
-      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute('data-can-next', 'true')
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
     readingPointer(root, 'pointerup')
     await new Promise((resolve) => setTimeout(resolve, 50))

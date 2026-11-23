@@ -17,8 +17,12 @@ describe('reading tap zones', () => {
     expect(readingTapZone(viewport, x, y)).toBe(zone)
   })
   it.each([
-    [-99, 0, null], [-100, 0, 'next'], [100, 0, 'previous'],
-    [0, 99, null], [0, 100, 'toggle'], [0, -100, 'toggle'],
+    [-99, 0, null],
+    [-100, 0, 'next'],
+    [100, 0, 'previous'],
+    [0, 99, null],
+    [0, 100, 'toggle'],
+    [0, -100, 'toggle'],
     [120, 120, null]
   ] as const)('classifies displacement %d, %d', (dx, dy, expected) => {
     expect(swipeAction({ ...viewport, height: 300 }, dx, dy)).toBe(expected)

@@ -147,7 +147,9 @@ async function boot(page, fixed) {
   await page.goto(base)
   await page.getByTestId('reading-page-indicator').waitFor()
   await page.waitForFunction(
-    () => document.querySelector('.hamster-reader__epub-container')?.dataset.canNext === 'true'
+    () =>
+      document.querySelector('.hamster-reader__epub-container')?.dataset
+        .canNext === 'true'
   )
 }
 const state = (page) =>
@@ -170,7 +172,11 @@ async function turn(page, name) {
   const writes = await page.evaluate(() => window.__hostWrites.length)
   await tapPaper(page, name === '下一页' ? 0.87 : 0.13, 0.5)
   await page.waitForFunction(() => {
-    return document.querySelector('.hamster-reader__epub-container')?.getAttribute('aria-busy') === 'false'
+    return (
+      document
+        .querySelector('.hamster-reader__epub-container')
+        ?.getAttribute('aria-busy') === 'false'
+    )
   })
   await page.waitForFunction(
     (count) => window.__hostWrites.length > count,
@@ -253,7 +259,8 @@ async function run(browserType, mobile, fixed = false) {
       await page.reload()
       await page.waitForFunction(
         () =>
-          document.querySelector('.hamster-reader__epub-container')?.dataset.canNext === 'true'
+          document.querySelector('.hamster-reader__epub-container')?.dataset
+            .canNext === 'true'
       )
       assert.equal(
         (await state(page)).page,
@@ -334,7 +341,9 @@ async function run(browserType, mobile, fixed = false) {
         mobile ? { width: 740, height: 480 } : { width: 440, height: 780 }
       )
       await page.waitForFunction(
-        () => document.querySelector('.hamster-reader__epub-container')?.dataset.canNext === 'true'
+        () =>
+          document.querySelector('.hamster-reader__epub-container')?.dataset
+            .canNext === 'true'
       )
       await page.waitForTimeout(200)
       assert.equal(
@@ -376,7 +385,9 @@ async function run(browserType, mobile, fixed = false) {
       await page.getByRole('menuitem', { name: '特大' }).click()
       await page.waitForTimeout(300)
       await page.waitForFunction(
-        () => document.querySelector('.hamster-reader__epub-container')?.dataset.canNext === 'true'
+        () =>
+          document.querySelector('.hamster-reader__epub-container')?.dataset
+            .canNext === 'true'
       )
       await clearance(page)
       if (await page.getByTestId('tool-bottom-bar-drawing').count())
@@ -401,10 +412,8 @@ async function run(browserType, mobile, fixed = false) {
         await page.mouse.up()
         await page.waitForFunction(() => {
           const saved = JSON.parse(localStorage.getItem('pagination-snapshot'))
-          return (
-            saved?.data?.highlights?.paintings?.['page-2']?.objects?.some(
-              (object) => object.kind === 'freehand'
-            )
+          return saved?.data?.highlights?.paintings?.['page-2']?.objects?.some(
+            (object) => object.kind === 'freehand'
           )
         })
         result.drawingSaved = true
@@ -463,7 +472,9 @@ async function run(browserType, mobile, fixed = false) {
       assert.equal((await state(page)).index, 3)
       let guard = 0
       while (
-        await page.locator('.hamster-reader__epub-container').getAttribute('data-can-next') === 'true'
+        (await page
+          .locator('.hamster-reader__epub-container')
+          .getAttribute('data-can-next')) === 'true'
       ) {
         assert(guard++ < 80, 'book navigation must terminate')
         await turn(page, '下一页')
