@@ -2138,6 +2138,7 @@ export function EngineDocumentViewer(props: Props) {
         <EngineSelectionControls
           range={props.showPageBrowser ? null : nativeRange}
           containerRef={root}
+          topInset={props.containMarginTop ?? props.containMarginY ?? 0}
           showHandles={
             source?.format !== 'epub' || epubInteractiveRange === nativeRange
           }
@@ -2222,6 +2223,7 @@ export function EngineDocumentViewer(props: Props) {
         <PopoverPortal
           containerRef={root}
           selectionKind='selected'
+          topInset={props.containMarginTop ?? props.containMarginY ?? 0}
           visible={
             !props.showPageBrowser &&
             activeSelection?.kind === 'rectangle' &&

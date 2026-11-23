@@ -108,4 +108,81 @@ describe('popover position', () => {
     // Then: the CSS-constrained width is used, preserving both horizontal gaps.
     expect(position).toMatchObject({ left: 108, top: 152, maxWidth: 104 })
   })
+
+  it('flips below a selection whose top sits inside the top inset', () => {
+    // Given: host chrome covers the top 65px and the first line starts at 60.
+    const container = rect(0, 0, 800, 600)
+    const selection = rect(100, 60, 80, 20)
+
+    const clamped = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      0
+    )
+    const flipped = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      65
+    )
+
+    // Then: without an inset the popover stays above; with one it clears it,
+    // landing one gap below the selection instead of under the host chrome.
+    expect(clamped).toMatchObject({ left: 90, top: 14 })
+    expect(flipped).toMatchObject({ left: 90, top: 88 })
+  })
+
+  it('keeps the placement unchanged when the selection is below the inset', () => {
+    // Given: a selection well inside the container and away from the host chrome.
+    const container = rect(0, 0, 800, 600)
+    const selection = rect(100, 200, 80, 20)
+
+    const withoutInset = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8
+    )
+    const withInset = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      65
+    )
+
+    // Then: both placements are identical.
+    expect(withInset).toEqual(withoutInset)
+    expect(withInset).toMatchObject({ left: 90, top: 154 })
+  })
+
+  it('falls back to the collapsed midpoint when the inset exceeds the container', () => {
+    // Given: a 65px inset inside a container only 40px tall.
+    const container = rect(0, 0, 300, 40)
+    const selection = rect(100, 10, 20, 20)
+
+    const position = calculatePopoverPosition(
+      container,
+      selection,
+      rect(0, 0, 100, 38),
+      8,
+      false,
+      65
+    )
+
+    // Then: the safe top exceeds the safe bottom, so both axes keep the
+    // existing degenerate midpoint fallback instead of overflowing.
+    expect(position).toMatchObject({
+      left: 60,
+      top: 40.5,
+      maxWidth: 284,
+      maxHeight: 24
+    })
+  })
 })

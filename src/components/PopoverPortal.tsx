@@ -43,6 +43,7 @@ export function PopoverPortal({
   selectionKind,
   visible,
   relative = false,
+  topInset = 0,
   selectionBounds
 }: {
   children: ReactNode
@@ -50,6 +51,8 @@ export function PopoverPortal({
   selectionKind: PopoverSelectionKind
   visible: boolean
   relative?: boolean
+  /** Host chrome painted over the container top edge; keeps the popover clear of it. */
+  topInset?: number
   /** Native renderer viewport bounds; null invalidates an old anchor. */
   selectionBounds?: DOMRect | null
 }) {
@@ -116,7 +119,8 @@ export function PopoverPortal({
             bounds,
             popover.getBoundingClientRect(),
             POPOVER_GAP,
-            relative
+            relative,
+            topInset
           )
           setPosition((previousPosition) => {
             if (
@@ -142,7 +146,7 @@ export function PopoverPortal({
     rafId = requestAnimationFrame(updatePosition)
 
     return () => cancelAnimationFrame(rafId)
-  }, [containerRef, selectionKind, visible, relative, selectionBounds])
+  }, [containerRef, selectionKind, visible, relative, topInset, selectionBounds])
 
   return (
     <>

@@ -3850,6 +3850,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
                   selectionKind='selected'
                   visible={!managedTextEditing}
                   relative={popoverRelative}
+                  topInset={containMarginTop ?? containMarginY ?? 0}
                 >
                   {existingHighlightPopover}
                 </PopoverPortal>
@@ -3860,6 +3861,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
                   selectionKind='active'
                   visible={!managedTextEditing}
                   relative={popoverRelative}
+                  topInset={containMarginTop ?? containMarginY ?? 0}
                 >
                   {selectionPopover}
                 </PopoverPortal>
@@ -3961,6 +3963,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
           data={runtimeLinkedData}
           color={highlightColor ?? '#ffc107'}
           popoverRelative={popoverRelative}
+          topInset={containMarginTop ?? containMarginY ?? 0}
           onEditingChange={(editing) => {
             if (editing) {
               // The dependency keeps its own native draft even after the DOM

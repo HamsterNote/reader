@@ -34,6 +34,12 @@ function Harness() {
   const selection = useRef<ReaderSelectionRef>(null)
   const controlled = !new URLSearchParams(location.search).has('uncontrolled')
   const darkMode = new URLSearchParams(location.search).has('dark')
+  // Optional host chrome simulation: a bar overlays the reader's top edge while
+  // the same height is passed as containMarginTop, like the native/WebView host.
+  const hostInset = Math.max(
+    0,
+    Number(new URLSearchParams(location.search).get('inset')) || 0
+  )
   const record = (type: string, range: ReaderSelectionRange) => {
     setEvents((items) => [...items, { type, range }])
   }
@@ -90,20 +96,40 @@ function Harness() {
       <output id='snapshot'>
         {JSON.stringify({ ranges, selected, events })}
       </output>
+      {hostInset > 0 && (
+        <div
+          aria-hidden='true'
+          data-testid='host-top-bar'
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: hostInset,
+            background: '#d9d9d9',
+            zIndex: 10002
+          }}
+        />
+      )}
       <div
-        style={{
-          position: 'absolute',
-          top: 90,
-          left: 13,
-          right: 13,
-          bottom: 12
-        }}
+        style={
+          hostInset > 0
+            ? { position: 'absolute', inset: 0 }
+            : {
+                position: 'absolute',
+                top: 90,
+                left: 13,
+                right: 13,
+                bottom: 12
+              }
+        }
       >
         <Reader
           key={source ? `${source.format}-${source.data.byteLength}` : 'empty'}
           document={documentModel}
           engineSource={source}
           renderMode={mode}
+          containMarginTop={hostInset || undefined}
           highlightColor={color}
           onHighlightColorChange={setColor}
           darkMode={darkMode}

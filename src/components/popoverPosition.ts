@@ -59,22 +59,26 @@ export function calculatePopoverPosition(
   selection: DOMRectReadOnly,
   popover: DOMRectReadOnly,
   gap: number,
-  relative = false
+  relative = false,
+  topInset = 0
 ): PopoverPosition {
   const containerLeft = relative ? container.left : 0
   const containerTop = relative ? container.top : 0
+  // The host may paint chrome (a header bar) over the container's top edge.
+  // Treat that band as unavailable so an above-the-selection popover flips down.
+  const effectiveTop = container.top + topInset
   const maxWidth = Math.max(0, container.width - gap * 2)
   const maxHeight = Math.max(0, container.height - gap * 2)
   const popoverWidth = Math.min(popover.width, maxWidth)
   const popoverHeight = Math.min(popover.height, maxHeight)
   const minimumLeft = container.left + gap - containerLeft
   const maximumLeft = container.right - gap - popoverWidth - containerLeft
-  const minimumTop = container.top + gap - containerTop
+  const minimumTop = effectiveTop + gap - containerTop
   const maximumTop = container.bottom - gap - popoverHeight - containerTop
   const selectionCenterLeft =
     selection.left + (selection.width - popoverWidth) / 2 - containerLeft
   const topIsVisible =
-    selection.top >= container.top && selection.top <= container.bottom
+    selection.top >= effectiveTop && selection.top <= container.bottom
   const bottomIsVisible =
     selection.bottom >= container.top && selection.bottom <= container.bottom
 
