@@ -1864,12 +1864,18 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
             <PdfOutline
               document={pdfOutlineDocument}
               isActive={isActive}
+              currentPageNumber={readingProgress.currentPageNumber}
               pageNumbers={pageNumbers}
               onNavigate={handleReadingProgressSeekPage}
             />
           )
         : undefined,
-    [handleReadingProgressSeekPage, pageNumbers, pdfOutlineDocument]
+    [
+      handleReadingProgressSeekPage,
+      pageNumbers,
+      pdfOutlineDocument,
+      readingProgress.currentPageNumber
+    ]
   )
   const visiblePageNumbers = useMemo(
     () =>

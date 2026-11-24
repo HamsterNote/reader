@@ -103,6 +103,7 @@ type Props = IntermediateDocumentViewerProps & {
 function renderEngineOutline(
   book: EpubEngineBookInfo | null,
   pageNumbers: readonly number[],
+  currentPageNumber: number,
   onNavigate: (href: string) => void
 ) {
   if (!book) return <p role='status'>此文档没有章节目录，可使用页面导航。</p>
@@ -110,6 +111,7 @@ function renderEngineOutline(
     <EpubOutline
       items={book.toc}
       pageNumbers={pageNumbers}
+      currentPageNumber={currentPageNumber}
       onNavigate={onNavigate}
     />
   )
@@ -120,6 +122,7 @@ function renderPageBrowserOutline({
   mode,
   book,
   pageNumbers,
+  currentPageNumber,
   pdfDocument,
   pdfDocumentOwner,
   positionOwner,
@@ -130,6 +133,7 @@ function renderPageBrowserOutline({
   readonly mode: ReaderRenderMode
   readonly book: EpubEngineBookInfo | null
   readonly pageNumbers: readonly number[]
+  readonly currentPageNumber: number
   readonly pdfDocument: PDFDocumentProxy | null
   readonly pdfDocumentOwner: object
   readonly positionOwner: object
@@ -137,7 +141,8 @@ function renderPageBrowserOutline({
   readonly onPdfNavigate: (pageNumber: number) => void
 }): ((isActive: boolean) => ReactNode) | undefined {
   if (source?.format === 'epub') {
-    return () => renderEngineOutline(book, pageNumbers, onEpubNavigate)
+    return () =>
+      renderEngineOutline(book, pageNumbers, currentPageNumber, onEpubNavigate)
   }
   if (source?.format === 'pdf' && mode === 'layout') {
     const currentDocument =
@@ -146,6 +151,7 @@ function renderPageBrowserOutline({
       <PdfOutline
         document={currentDocument}
         isActive={isActive}
+        currentPageNumber={currentPageNumber}
         pageNumbers={pageNumbers}
         onNavigate={onPdfNavigate}
       />
@@ -2184,6 +2190,7 @@ export function EngineDocumentViewer(props: Props) {
             mode,
             book,
             pageNumbers,
+            currentPageNumber: page,
             pdfDocument,
             pdfDocumentOwner: pdfDocumentOwner.current,
             positionOwner,

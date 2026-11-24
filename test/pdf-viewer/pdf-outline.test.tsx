@@ -203,6 +203,89 @@ describe('PdfOutline', () => {
     expect(getOutline).toHaveBeenCalledTimes(2)
   })
 
+  it('highlights the deepest outline target reached by the current page', async () => {
+    const getOutline = vi.fn().mockResolvedValue([
+      {
+        title: 'Chapter 1',
+        dest: [0],
+        items: [
+          {
+            title: 'Section 1.1',
+            dest: [2],
+            items: [{ title: 'Topic 1.1.1', dest: [4], items: [] }]
+          }
+        ]
+      },
+      { title: 'Chapter 2', dest: [5], items: [] }
+    ])
+    const document = makeDocument({ numPages: 6, getOutline })
+    const onNavigate = vi.fn()
+    const view = render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+
+    const chapter1 = await screen.findByRole('button', { name: 'Chapter 1' })
+    await waitFor(() => expect(chapter1).toHaveAttribute('data-active', 'true'))
+    expect(chapter1.style.color).toBe(
+      'var(--hamster-reader-theme-color, #2563eb)'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Section 1.1' })
+    ).not.toHaveAttribute('data-active')
+
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={3}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Section 1.1' })
+      ).toHaveAttribute('data-active', 'true')
+    )
+
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={6}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Chapter 2' })).toHaveAttribute(
+        'data-active',
+        'true'
+      )
+    )
+    expect(
+      globalThis.document.querySelectorAll('[data-active="true"]')
+    ).toHaveLength(1)
+
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={0}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+    expect(globalThis.document.querySelector('[data-active="true"]')).toBeNull()
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
   it('ignores outline A when document B has already replaced it', async () => {
     const pendingA = deferred<unknown>()
     const a = makeDocument({ getOutline: vi.fn(() => pendingA.promise) })
