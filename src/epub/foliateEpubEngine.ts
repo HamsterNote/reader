@@ -9,6 +9,11 @@ import type { ViewportNavigationState } from '../components/reading/navigation'
 // 集成接线（Reader 路由、底栏、存储）属于 HAM-91，本模块不改动。
 
 import { buttonOnlyInput } from '../components/reading/buttonOnlyInput'
+import {
+  readingBounds,
+  trackReadingPress,
+  type ReadingAction
+} from '../components/reading/tapZones'
 import { Overlayer } from '../../vendor/foliate-js/overlayer.js'
 import '../../vendor/foliate-js/view.js'
 import { getVisiblePageNumbers } from '../components/IntermediateDocumentViewer/pageDisplay'
@@ -74,9 +79,12 @@ export type ShowRangesReport = {
   }[]
 }
 
-export type EpubNavigationState = ViewportNavigationState
+export type EpubNavigationState = ViewportNavigationState & {
+  readonly pageLabel?: string
+}
 
 export type EpubEngineOptions = {
+  readonly onReadingAction?: (action: ReadingAction) => void
   readonly container: HTMLElement
   readonly source: Uint8Array | Blob
   readonly flow?: 'paginated' | 'scrolled'
@@ -157,6 +165,7 @@ export const createEpubEngine = (
     document.createElement('foliate-view') as View
 ): EpubEngine => {
   let destroyed = false
+  let readingFlow = options.flow ?? 'paginated'
   let pkg: EpubPackage | null = null
   let model: LegacyEpubModel | null = null
   let compat: EpubCompatIndex | null = null
@@ -219,7 +228,14 @@ export const createEpubEngine = (
     const pages = readablePages()
     const index = pages.findIndex((page) => page.pageNumber === displayedPage)
     const virtualCover = index >= 0 && pages[index].chapterIndex === null
+    const renderer = view?.renderer
+    const count = (renderer?.pages ?? 0) - 2
+    const current = renderer?.page ?? 0
+    let pageLabel: string | undefined
+    if (virtualCover || view?.isFixedLayout) pageLabel = '1/1'
+    else if (current >= 1 && current <= count) pageLabel = `${current}/${count}`
     return {
+      ...(pageLabel && opened && { pageLabel }),
       canPrevious:
         index >= 0 && (index > 0 || (!virtualCover && !sectionStart())),
       canNext:
@@ -445,6 +461,39 @@ export const createEpubEngine = (
     // paginator 在 'load' 之后才给 #view 赋值（getContents 才含本节），
     // 叠加绘制推迟到紧随的 relocate。
     pendingOverlayDraw.add(sectionIndex)
+    const press = trackReadingPress(doc, {
+      capturePointer: true,
+      bounds: () => {
+        const element = doc.defaultView?.frameElement
+        if (!element) return null
+        const frame = element.getBoundingClientRect()
+        const sx = frame.width / element.clientWidth
+        const sy = frame.height / element.clientHeight
+        if (!sx || !sy) return null
+        const box = readingBounds(options.container)
+        return {
+          left: (box.left - frame.left) / sx,
+          top: (box.top - frame.top) / sy,
+          width: box.width / sx,
+          height: box.height / sy
+        }
+      },
+      blocked: (event) =>
+        Boolean(
+          activeRangeId ||
+          managedSelection ||
+          view?.renderer
+            ?.getContents()
+            .find((entry) => entry.index === sectionIndex)
+            ?.overlayer?.hitTest({
+              x: event.clientX,
+              y: event.clientY
+            })?.[0]
+        ),
+      swipe: (action) => {
+        if (readingFlow === 'paginated') options.onReadingAction?.(action)
+      }
+    })
 
     const onSelectionChange = () => {
       if (destroyed) return
@@ -458,28 +507,36 @@ export const createEpubEngine = (
       options.onSelection?.(serializeCurrentSelection())
     }
     const onClick = (event: Event) => {
+      const mouse = event as MouseEvent
+      const isTap = press.consume(mouse)
       if (destroyed || !doc.getSelection()?.isCollapsed) return
+      // Foliate handles links before the reader's annotation listener.
+      if ((event.target as Element | null)?.closest?.('a[href]')) return
       const renderer = view?.renderer
       const contents = renderer
         ?.getContents()
-        .find((entry) => entry.index === sectionIndex)
+        .find((entry) => entry.doc === doc || entry.index === sectionIndex)
       if (!contents) return
-      const mouse = event as MouseEvent
       const hit = contents.overlayer?.hitTest({
         x: mouse.clientX,
         y: mouse.clientY
       })
       const [key] = hit ?? []
-      if (!key) return
-      const id = key.slice(`epub-range:${sectionIndex}:`.length)
+      const id = key?.slice(`epub-range:${sectionIndex}:`.length)
       if (id && ranges.has(id)) {
         options.onHighlightActivate?.(id, {
           x: mouse.clientX,
           y: mouse.clientY
         })
+        return
       }
+      if (isTap && readingFlow === 'paginated') options.onReadingAction?.(isTap)
     }
-    inputCleanups.set(doc, buttonOnlyInput(doc))
+    const removeInput = buttonOnlyInput(doc)
+    inputCleanups.set(doc, () => {
+      press.dispose()
+      removeInput()
+    })
     const resetManagedSelection = () => {
       managedSelection = null
     }
@@ -751,7 +808,7 @@ export const createEpubEngine = (
       })
       renderer.setAttribute('zoom', 'fit-page')
     }
-    renderer.setAttribute('flow', options.flow ?? 'paginated')
+    renderer.setAttribute('flow', readingFlow)
     renderer.setAttribute('max-column-count', '1')
     renderer.setAttribute('manual-navigation', '')
     renderer.addEventListener('before-reflow', onReflow)
@@ -1137,6 +1194,7 @@ export const createEpubEngine = (
     },
     setFlow: (flow) => {
       if (destroyed) return
+      readingFlow = flow
       view?.renderer?.setAttribute('flow', flow)
     },
     showRanges: (rangeList) => {

@@ -218,6 +218,7 @@ export type ReaderProps = ToolbarFileNavigationProps & {
   onEngineError?: (error: Error) => void
   /** Registers asynchronous engine cleanup with a container's release barrier. */
   onEngineDisposal?: (completion: Promise<void>) => void
+  onReadingChromeVisibilityChange?: (visible: boolean, overlay: boolean) => void
   onPageBrowserOpenChange?: (open: boolean) => void
   /** 重新采集稳定进度并冲刷 Reader 保存队列；宿主仍须等待实际持久化确认。 */
   progressRef?: Ref<ReaderProgressHandle>
@@ -637,14 +638,6 @@ function resolveBottomBarLayoutZoom(
   return renderMode === 'layout' && !useVirtualPaper ? layoutZoom : undefined
 }
 
-function hasViewportPagination(
-  format: string | undefined,
-  isPdf: boolean | undefined,
-  mode: string
-) {
-  return format === 'epub' || Boolean(isPdf && mode === 'text')
-}
-
 function toolbarSpace(layout: PaneToolbarLayout | undefined, inset: number) {
   return layout?.edge === 'top'
     ? { top: inset, bottom: 0 }
@@ -656,8 +649,8 @@ function toolbarLayoutStyle(
   return {
     '--reader-pagination-bottom': `${32 + (layout?.insets.bottom ?? 0)}px`,
     '--reader-toolbar-pagination-bottom': layout
-      ? `${80 + layout.insets.bottom}px`
-      : 'calc(80px + env(safe-area-inset-bottom, 0px))'
+      ? `${88 + layout.insets.bottom}px`
+      : 'calc(88px + env(safe-area-inset-bottom, 0px))'
   } as CSSProperties
 }
 
@@ -749,6 +742,113 @@ function resolvePdfRenderMode(
   }
 }
 
+function resolveRawHighlightColor(
+  highlightColor: string | undefined,
+  internalHighlightColor: string | undefined,
+  drawingStrokeColor: string
+) {
+  return (
+    highlightColor ??
+    internalHighlightColor ??
+    getTranslucentColor(drawingStrokeColor)
+  )
+}
+
+function readerTapZonesEnabled(
+  source: ReaderEngineSource | undefined,
+  isPdfDocument: boolean,
+  renderMode: ReaderRenderMode
+) {
+  return source?.format === 'epub' || (isPdfDocument && renderMode === 'text')
+}
+
+function isPdfReaderDocument(
+  isPdf: boolean | undefined,
+  source: ReaderEngineSource | undefined
+) {
+  return isPdf || source?.format === 'pdf'
+}
+
+function readerBottomBarInsetEnabled(
+  tapZonesEnabled: boolean,
+  hasDocumentPages: boolean,
+  bottomBarMissing: boolean
+) {
+  return !tapZonesEnabled && hasDocumentPages && bottomBarMissing
+}
+
+function readerUsesTextView(
+  renderMode: ReaderRenderMode,
+  source: ReaderEngineSource | undefined
+) {
+  return renderMode === 'text' && source?.format !== 'epub'
+}
+
+function readerHasDocumentPages(
+  source: ReaderEngineSource | undefined,
+  document: ReaderDocumentInput
+) {
+  return source !== undefined || documentHasPages(document)
+}
+
+function readerToolbarSpace(
+  layout: PaneToolbarLayout | undefined,
+  inset: number,
+  tapZonesEnabled: boolean
+) {
+  return toolbarSpace(layout, tapZonesEnabled ? 0 : inset)
+}
+
+function resolveReaderTopMargin(
+  tapZonesEnabled: boolean,
+  layout: PaneToolbarLayout | undefined,
+  fallback: number | undefined
+) {
+  return tapZonesEnabled && layout ? layout.insets.top : fallback
+}
+
+type ReaderChromeSession = {
+  readonly source: ReaderEngineSource | undefined
+  readonly document: ReaderDocumentInput
+}
+
+function sameReaderChromeSession(
+  shown: ReaderChromeSession | null,
+  source: ReaderEngineSource | undefined,
+  document: ReaderDocumentInput
+) {
+  return Boolean(
+    shown && shown.source === source && shown.document === document
+  )
+}
+
+function nextReaderChrome(
+  shown: ReaderChromeSession | null,
+  source: ReaderEngineSource | undefined,
+  document: ReaderDocumentInput
+) {
+  return sameReaderChromeSession(shown, source, document)
+    ? null
+    : { source, document }
+}
+
+function readerChromeVisible(
+  enabled: boolean,
+  shown: ReaderChromeSession | null,
+  source: ReaderEngineSource | undefined,
+  document: ReaderDocumentInput
+) {
+  return !enabled || sameReaderChromeSession(shown, source, document)
+}
+
+function resolveOverlayHeaderInset(
+  enabled: boolean,
+  visible: boolean,
+  inset: number | undefined
+) {
+  return enabled && visible ? inset : undefined
+}
+
 function capturePdfModeSwitch(handle: ReaderReadingPositionHandle | null) {
   const result = handle?.captureModeSwitchResult?.()
   if (result) return result
@@ -765,6 +865,7 @@ function readingPositionMessage(notice: 'pending' | 'failed') {
     : '正在准备阅读位置，请稍候。'
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- Session wiring stays together; focused unit and browser tests cover the behavior.
 export function Reader({
   engineSource,
   document,
@@ -897,6 +998,7 @@ export function Reader({
   onEngineReady,
   onEngineError,
   onEngineDisposal,
+  onReadingChromeVisibilityChange,
   onPageBrowserOpenChange
 }: ReaderProps) {
   const [internalPageBrowser, setInternalPageBrowser] = useState(false)
@@ -1262,19 +1364,50 @@ export function Reader({
     [internalPaintingSettings, resolvedDrawingStrokeColor, resolvedPaintingTool]
   )
   // 未主动选高亮色时跟随当前描边色；Text 底栏也使用该解析结果判定选中态。
-  const rawHighlightColor =
-    highlightColor ??
-    internalHighlightColor ??
-    getTranslucentColor(resolvedDrawingStrokeColor)
-  const isPdfDocument = isPdf || engineSource?.format === 'pdf'
+  const rawHighlightColor = resolveRawHighlightColor(
+    highlightColor,
+    internalHighlightColor,
+    resolvedDrawingStrokeColor
+  )
+  const isPdfDocument = isPdfReaderDocument(isPdf, engineSource)
+  const tapZonesEnabled = readerTapZonesEnabled(
+    engineSource,
+    isPdfDocument,
+    resolvedRenderMode
+  )
+  const [shownChrome, setShownChrome] = useState<{
+    source: typeof engineSource
+    document: typeof document
+  } | null>(null)
+  const chromeVisible = readerChromeVisible(
+    tapZonesEnabled,
+    shownChrome,
+    engineSource,
+    document
+  )
+  useLayoutEffect(() => {
+    setShownChrome(null)
+  }, [tapZonesEnabled, engineSource, document])
+  useLayoutEffect(() => {
+    onReadingChromeVisibilityChange?.(chromeVisible, tapZonesEnabled)
+  }, [chromeVisible, tapZonesEnabled, onReadingChromeVisibilityChange])
+  const toggleChrome = () => {
+    setShownChrome((previous) =>
+      nextReaderChrome(previous, engineSource, document)
+    )
+  }
+  const overlayHeaderInset = resolveOverlayHeaderInset(
+    tapZonesEnabled,
+    chromeVisible,
+    layout?.headerContentInset
+  )
   const resolvedHighlightColor = pdfHighlightFill(
     rawHighlightColor,
     isPdfDocument
   )
   const resolvedSelectionColor =
     whenEnabled(isPdfDocument, resolvedHighlightColor) ?? selectionColor
-  const hasDocumentPages =
-    engineSource !== undefined || documentHasPages(document)
+  const hasDocumentPages = readerHasDocumentPages(engineSource, document)
   const bottomBarInset = useBottomBarInset({
     rootRef: readerRootRef,
     bottomBarRef: defaultBottomBarRef,
@@ -1282,11 +1415,15 @@ export function Reader({
     // Reconnect the observer instead of measuring the detached Layout toolbar.
     layoutKey: `${resolvedSelectedTool}:${resolvedRenderMode}:${JSON.stringify(layout)}`,
     edge: layout?.edge,
-    enabled: hasDocumentPages && bottomBar === undefined
+    enabled: readerBottomBarInsetEnabled(
+      tapZonesEnabled,
+      hasDocumentPages,
+      bottomBar === undefined
+    )
   })
-  const occupied = toolbarSpace(layout, bottomBarInset)
+  const occupied = readerToolbarSpace(layout, bottomBarInset, tapZonesEnabled)
   const resolvedVerticalMargins = resolveVerticalMargins(
-    containMarginTop,
+    resolveReaderTopMargin(tapZonesEnabled, layout, containMarginTop),
     containMarginBottom,
     containMarginY,
     occupied.bottom,
@@ -2241,11 +2378,49 @@ export function Reader({
     !engineSource && !document && uploadedFile && !resolvedLoadingProgress
   const showDocumentContent =
     engineSource !== undefined || document?.title || emptyText
+  const defaultSelectionPopoverNode = selectionPopover ?? (
+    <DefaultSelectionPopover
+      darkMode={darkMode}
+      selectionRef={popoverSelectionRef}
+      highlightColor={resolvedHighlightColor}
+      onHighlightColorChange={handleHighlightColorChange}
+      selectedRangeId={selectedRangeId}
+      ranges={resolvedRanges}
+      onUpdateRange={handleUpdateRange}
+      onRemoveRange={onRemoveRange}
+    />
+  )
+  const defaultHighlightPopoverNode =
+    highlightPopover ??
+    ((highlight) => (
+      <DefaultHighlightPopover
+        darkMode={darkMode}
+        selectionRef={popoverSelectionRef}
+        highlightColor={resolvedHighlightColor}
+        onHighlightColorChange={handleHighlightColorChange}
+        selectedRangeId={highlight.id}
+        ranges={resolvedRanges}
+        onUpdateRange={handleUpdateRange}
+        onRemoveRange={onRemoveRange}
+        onCommentHighlight={whenEnabled(
+          onCommentHighlight !== undefined,
+          handleDefaultCommentHighlight
+        )}
+      />
+    ))
+  const layoutSelectionPopoverNode = engineSource
+    ? selectionPopover
+    : defaultSelectionPopoverNode
+  const layoutHighlightPopoverNode = engineSource
+    ? highlightPopover
+    : defaultHighlightPopoverNode
   const renderDocumentContent = () => {
     if (hasDocumentPages) {
-      if (resolvedRenderMode === 'text' && engineSource?.format !== 'epub') {
+      if (readerUsesTextView(resolvedRenderMode, engineSource)) {
         return (
           <IntermediateDocumentTextViewer
+            chromeVisible={chromeVisible}
+            onToggleChrome={tapZonesEnabled ? toggleChrome : undefined}
             onEngineReady={onEngineReady}
             onEngineError={onEngineError}
             document={document}
@@ -2299,39 +2474,8 @@ export function Reader({
             highlightColor={resolvedHighlightColor}
             selectionColor={resolvedSelectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
-            selectionPopover={
-              selectionPopover ?? (
-                <DefaultSelectionPopover
-                  darkMode={darkMode}
-                  selectionRef={popoverSelectionRef}
-                  highlightColor={resolvedHighlightColor}
-                  onHighlightColorChange={handleHighlightColorChange}
-                  selectedRangeId={selectedRangeId}
-                  ranges={resolvedRanges}
-                  onUpdateRange={handleUpdateRange}
-                  onRemoveRange={onRemoveRange}
-                />
-              )
-            }
-            highlightPopover={
-              highlightPopover ??
-              ((highlight) => (
-                <DefaultHighlightPopover
-                  darkMode={darkMode}
-                  selectionRef={popoverSelectionRef}
-                  highlightColor={resolvedHighlightColor}
-                  onHighlightColorChange={handleHighlightColorChange}
-                  selectedRangeId={highlight.id}
-                  ranges={resolvedRanges}
-                  onUpdateRange={handleUpdateRange}
-                  onRemoveRange={onRemoveRange}
-                  onCommentHighlight={whenEnabled(
-                    onCommentHighlight !== undefined,
-                    handleDefaultCommentHighlight
-                  )}
-                />
-              ))
-            }
+            selectionPopover={defaultSelectionPopoverNode}
+            highlightPopover={defaultHighlightPopoverNode}
             onCommentHighlight={whenEnabled(
               highlightPopover !== undefined,
               onCommentHighlight
@@ -2358,6 +2502,8 @@ export function Reader({
       return (
         <Suspense fallback={<div role='status'>正在加载文档…</div>}>
           <LayoutViewer
+            chromeVisible={chromeVisible}
+            onToggleChrome={tapZonesEnabled ? toggleChrome : undefined}
             engineSource={engineSource}
             onEngineReady={onEngineReady}
             onEngineError={onEngineError}
@@ -2447,43 +2593,8 @@ export function Reader({
             highlightColor={resolvedHighlightColor}
             selectionColor={resolvedSelectionColor}
             showSelectionMagnifier={showSelectionMagnifier}
-            selectionPopover={
-              engineSource
-                ? selectionPopover
-                : (selectionPopover ?? (
-                    <DefaultSelectionPopover
-                      darkMode={darkMode}
-                      selectionRef={popoverSelectionRef}
-                      highlightColor={resolvedHighlightColor}
-                      onHighlightColorChange={handleHighlightColorChange}
-                      selectedRangeId={selectedRangeId}
-                      ranges={resolvedRanges}
-                      onUpdateRange={handleUpdateRange}
-                      onRemoveRange={onRemoveRange}
-                    />
-                  ))
-            }
-            highlightPopover={
-              engineSource
-                ? highlightPopover
-                : (highlightPopover ??
-                  ((highlight) => (
-                    <DefaultHighlightPopover
-                      darkMode={darkMode}
-                      selectionRef={popoverSelectionRef}
-                      highlightColor={resolvedHighlightColor}
-                      onHighlightColorChange={handleHighlightColorChange}
-                      selectedRangeId={highlight.id}
-                      ranges={resolvedRanges}
-                      onUpdateRange={handleUpdateRange}
-                      onRemoveRange={onRemoveRange}
-                      onCommentHighlight={whenEnabled(
-                        onCommentHighlight !== undefined,
-                        handleDefaultCommentHighlight
-                      )}
-                    />
-                  )))
-            }
+            selectionPopover={layoutSelectionPopoverNode}
+            highlightPopover={layoutHighlightPopoverNode}
             onCommentHighlight={whenEnabled(
               highlightPopover !== undefined,
               onCommentHighlight
@@ -2568,8 +2679,15 @@ export function Reader({
             ref={readerRootRef}
             className={rootClassName}
             data-testid='reader-root'
+            data-reading-header-inset={overlayHeaderInset}
             data-pane-toolbar-boundary='true'
-            style={{ ...readerThemeStyle, ...toolbarLayoutStyle(layout) }}
+            style={
+              {
+                ...readerThemeStyle,
+                ...toolbarLayoutStyle(layout),
+                '--reader-overlay-header': `${overlayHeaderInset ?? 0}px`
+              } as CSSProperties
+            }
             aria-busy={resolvedLoadingProgress ? true : undefined}
           >
             {invalidStoredProgress(data, resolvedRenderMode) && (
@@ -2665,6 +2783,7 @@ export function Reader({
               )}
 
             {!resolvedLoadingProgress &&
+              chromeVisible &&
               hasDocumentPages &&
               (bottomBar === undefined ? (
                 <DefaultBottomBar
@@ -2682,11 +2801,6 @@ export function Reader({
                   bottomBarRef={defaultBottomBarRef}
                   renderMode={resolvedRenderMode}
                   isEpub={isEpub || engineSource?.format === 'epub'}
-                  epubPagination={hasViewportPagination(
-                    engineSource?.format,
-                    isPdf,
-                    resolvedRenderMode
-                  )}
                   ocrEnabled={resolvedOcrEnabled}
                   fontScale={fontScale}
                   layoutZoom={resolveBottomBarLayoutZoom(

@@ -52,9 +52,16 @@ function documentFixture(id: string, count = 100) {
   } as unknown as IntermediateDocument
   return { document, loaders }
 }
+import { tapNext } from './reading-gesture'
+
+const paper = () =>
+  document.querySelector<HTMLElement>(
+    '.hamster-reader__intermediate-text-spacer'
+  )!
 function sizeRoot() {
   const root = screen.getByTestId('intermediate-document-text-viewer')
   mockElementSize(root, { width: 600, height: 400 })
+  mockElementSize(paper(), { width: 300, height: 200 })
   resizeObserverMock.trigger(root)
 }
 
@@ -78,13 +85,16 @@ describe('PDF Text viewer integration', () => {
       expect(screen.getByText('large page 50')).toBeInTheDocument()
     )
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
     expect(
       fixture.loaders.filter((loader) => loader.mock.calls.length)
     ).toHaveLength(2)
     expect(fixture.loaders[0]).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    tapNext(paper())
     await waitFor(() =>
       expect(screen.getByText('large page 52')).toBeInTheDocument()
     )
@@ -141,10 +151,16 @@ describe('PDF Text viewer integration', () => {
     sizeRoot()
     await screen.findByText('第 1 页没有可提取的文字')
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'true'
+      )
     )
-    expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+      'data-can-previous',
+      'false'
+    )
+    tapNext(paper())
     await screen.findByText('第 2 页没有可提取的文字')
     fireEvent.click(screen.getByRole('button', { name: '返回 Layout' }))
     expect(onRequestLayout).toHaveBeenCalledOnce()
@@ -154,10 +170,13 @@ describe('PDF Text viewer integration', () => {
         verticalPercentage: 0
       })
     )
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    tapNext(paper())
     await screen.findByText('第 3 页没有可提取的文字')
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
+      expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+        'data-can-next',
+        'false'
+      )
     )
     // The button is disabled both while restoring and at the last page.
     // Wait for the actual position commit rather than that transient UI state.
@@ -229,9 +248,12 @@ it('waits for the requested PDF Text page before a close capture can flush progr
   )
   sizeRoot()
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled()
+    expect(screen.getByTestId('reading-page-indicator')).toHaveAttribute(
+      'data-can-next',
+      'true'
+    )
   )
-  fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+  tapNext(paper())
   let complete = false
   const stable = ref.current!.waitForStable!().then(() => {
     complete = true
@@ -345,5 +367,154 @@ it('defers the PDF selection popover until release and keeps it closed after a h
     if (originalRects) {
       Object.defineProperty(Range.prototype, 'getClientRects', originalRects)
     } else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+  }
+})
+
+async function paneGestureFixture(withLeftPopover: boolean) {
+  clearSelectionProps()
+  const originalRects = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getClientRects'
+  )
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [new DOMRect(10, 10, 80, 20)]
+  })
+  const left = documentFixture('left', 2)
+  const right = documentFixture('right', 2)
+  const leftProgress = vi.fn()
+  const rightProgress = vi.fn()
+  const savedRange: LinkedSelectionRange = {
+    id: 'left-saved',
+    text: 'left page',
+    createdAt: 1,
+    start: { selectionId: 'page-1', offset: 0 },
+    end: { selectionId: 'page-1', offset: 9 },
+    rectsBySelectionId: {}
+  }
+  const view = render(
+    <>
+      <IntermediateDocumentTextViewer
+        document={left.document}
+        isPdf
+        overlayRectType='px'
+        defaultRanges={withLeftPopover ? [savedRange] : []}
+        defaultSelectedRangeId={withLeftPopover ? savedRange.id : null}
+        highlightPopover={
+          withLeftPopover ? (
+            <div data-testid='left-selection-popover'>左栏高亮</div>
+          ) : undefined
+        }
+        onTextReadingProgressChange={leftProgress}
+      />
+      <IntermediateDocumentTextViewer
+        document={right.document}
+        isPdf
+        onTextReadingProgressChange={rightProgress}
+      />
+    </>
+  )
+  const roots = screen.getAllByTestId('intermediate-document-text-viewer')
+  const papers = document.querySelectorAll<HTMLElement>(
+    '.hamster-reader__intermediate-text-spacer'
+  )
+  roots.forEach((root) => {
+    mockElementSize(root, { width: 600, height: 400 })
+    resizeObserverMock.trigger(root)
+  })
+  papers.forEach((paper) => mockElementSize(paper, { width: 300, height: 200 }))
+  await screen.findByText('left page 1')
+  await screen.findByText('right page 1')
+  await waitFor(() => expect(getAllSelectionProps()).toHaveLength(2))
+  await waitFor(() => {
+    const indicators = screen.getAllByTestId('reading-page-indicator')
+    expect(indicators).toHaveLength(2)
+    for (const indicator of indicators)
+      expect(indicator).toHaveAttribute('data-can-next', 'true')
+    for (const root of roots) expect(root).toHaveAttribute('aria-busy', 'false')
+  })
+  if (withLeftPopover) await screen.findByTestId('left-selection-popover')
+  else expect(screen.queryByTestId('left-selection-popover')).toBeNull()
+  leftProgress.mockClear()
+  rightProgress.mockClear()
+  return {
+    leftProgress,
+    rightProgress,
+    papers,
+    cleanup() {
+      window.getSelection()?.removeAllRanges()
+      view.unmount()
+      clearSelectionProps()
+      if (originalRects) {
+        Object.defineProperty(Range.prototype, 'getClientRects', originalRects)
+      } else Reflect.deleteProperty(Range.prototype, 'getClientRects')
+    }
+  }
+}
+
+it('blocks this pane navigation with only its own selection popover open', async () => {
+  const fixture = await paneGestureFixture(true)
+  try {
+    expect(window.getSelection()?.isCollapsed).toBe(true)
+    expect(getAllSelectionProps()[0]?.linkedData?.activeRange).toBeFalsy()
+    tapNext(fixture.papers[0]!)
+    tapNext(fixture.papers[1]!)
+    await screen.findByText('right page 2')
+    await waitFor(() =>
+      expect(fixture.rightProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ currentPageNumber: 2 })
+      )
+    )
+    expect(screen.getByText('left page 1')).toBeVisible()
+    expect(screen.queryByText('left page 2')).toBeNull()
+    expect(fixture.leftProgress).not.toHaveBeenCalled()
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+it('allows this pane navigation with only another pane selection popover open', async () => {
+  const fixture = await paneGestureFixture(true)
+  try {
+    expect(window.getSelection()?.isCollapsed).toBe(true)
+    expect(getAllSelectionProps()[0]?.linkedData?.activeRange).toBeFalsy()
+    tapNext(fixture.papers[1]!)
+    await screen.findByText('right page 2')
+    await waitFor(() =>
+      expect(fixture.rightProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ currentPageNumber: 2 })
+      )
+    )
+    expect(screen.getByText('left page 1')).toBeVisible()
+    expect(fixture.leftProgress).not.toHaveBeenCalled()
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+it('allows this pane navigation with only another pane native selection', async () => {
+  const fixture = await paneGestureFixture(false)
+  try {
+    const leftText = screen.getByText('left page 1').firstChild
+    expect(leftText).toBeInstanceOf(Text)
+    const nativeSelection = window.getSelection()!
+    const nativeRange = document.createRange()
+    nativeRange.selectNodeContents(leftText!)
+    nativeSelection.removeAllRanges()
+    nativeSelection.addRange(nativeRange)
+    expect(nativeSelection.isCollapsed).toBe(false)
+    expect(screen.queryByTestId('left-selection-popover')).toBeNull()
+
+    tapNext(fixture.papers[1]!)
+    await screen.findByText('right page 2')
+    await waitFor(() =>
+      expect(fixture.rightProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ currentPageNumber: 2 })
+      )
+    )
+    expect(screen.getByText('left page 1')).toBeVisible()
+    expect(fixture.leftProgress).not.toHaveBeenCalled()
+  } finally {
+    fixture.cleanup()
   }
 })

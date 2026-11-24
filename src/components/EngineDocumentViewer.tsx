@@ -6,8 +6,13 @@ import {
 } from '../readingProgress'
 import { usePdfPreviews } from '../pdf/usePdfPreviews'
 import type { PDFDocumentProxy } from '../pdf/pdfjsRuntime'
-import { ViewportPaginationControls } from './reading/ViewportPaginationControls'
+import { ReadingMask } from './reading/ReadingMask'
 import { useReadingViewport } from './reading/useReadingViewport'
+import {
+  readingBounds,
+  trackReadingPress,
+  type ReadingAction
+} from './reading/tapZones'
 import {
   type ReactNode,
   type CSSProperties,
@@ -23,10 +28,6 @@ import {
   useState
 } from 'react'
 import { buttonOnlyInput } from './reading/buttonOnlyInput'
-import {
-  resolveReaderTheme,
-  usePrefersColorScheme
-} from './Reader/useDefaultBottomBar'
 import type { ReaderEngineSource } from '../types/engineSource'
 import type { ReaderRenderMode } from '../types/readerOptions'
 import type {
@@ -416,8 +417,6 @@ function usePdfSelectionPress(
 
 export function EngineDocumentViewer(props: Props) {
   const { engineSource: source, engineRenderMode: mode = 'layout' } = props
-  const preferredTheme = usePrefersColorScheme()
-  const theme = resolveReaderTheme(props.engineDarkMode, preferredTheme)
   const [navigation, setNavigation] = useState<EpubNavigationState>({
     canPrevious: false,
     canNext: false,
@@ -435,6 +434,7 @@ export function EngineDocumentViewer(props: Props) {
     setRootElement(element)
   }, [])
   const epubContainer = useRef<HTMLDivElement>(null)
+  const readingTap = useRef<(action: ReadingAction) => void>(() => {})
   const epub = useRef<EpubEngine | null>(null)
   const pdf = useRef<PdfDocumentViewerRef>(null)
   const latest = useRef(props)
@@ -550,7 +550,7 @@ export function EngineDocumentViewer(props: Props) {
     previousViewport.current = { owner: positionOwner, key: viewportKey }
   }, [positionOwner, viewportKey, beginPositionChange])
   useEffect(() => {
-    if (!rootElement) return
+    if (!rootElement || source?.format !== 'pdf') return
     // Native capture runs before PDF portal/drag listeners can stop the event.
     const down = () => {
       progressEnabled.current = true
@@ -1293,6 +1293,7 @@ export function EngineDocumentViewer(props: Props) {
         queueHandoff()
       },
       onHighlightActivate: activate,
+      onReadingAction: (action) => readingTap.current(action),
       onDocumentLoad: (doc, pageNumber) => {
         setEpubDocument(doc)
         setEpubPage(pageNumber)
@@ -1318,7 +1319,6 @@ export function EngineDocumentViewer(props: Props) {
           setEpubInteractiveRange(null)
           ++activationGeneration.current
           activating.current = false
-          progressEnabled.current = true
           const selection = doc.getSelection()
           if (selection)
             latest.current.onSelectionStart?.(
@@ -1386,6 +1386,11 @@ export function EngineDocumentViewer(props: Props) {
         const interacted = () => {
           progressEnabled.current = true
         }
+        const followLink = (event: Event) => {
+          if ((event.target as Element | null)?.closest?.('a[href]'))
+            interacted()
+        }
+        doc.addEventListener('click', followLink, true)
         doc.addEventListener('wheel', interacted, { passive: true })
         doc.addEventListener('keydown', interacted)
         listeners.set(doc, () => {
@@ -1397,6 +1402,7 @@ export function EngineDocumentViewer(props: Props) {
           doc.removeEventListener('touchstart', touchStart)
           doc.removeEventListener('touchend', touchEnd)
           doc.removeEventListener('touchcancel', touchCancel)
+          doc.removeEventListener('click', followLink, true)
           doc.removeEventListener('wheel', interacted)
           doc.removeEventListener('keydown', interacted)
         })
@@ -1544,11 +1550,51 @@ export function EngineDocumentViewer(props: Props) {
   }, [source?.format, rootElement])
 
   const turnEpub = (forward: boolean) => {
+    if (
+      !epubReady ||
+      navigation.busy ||
+      !(forward ? navigation.canNext : navigation.canPrevious)
+    )
+      return
     setError(null)
     progressEnabled.current = true
     cancelSelection()
     epub.current?.[forward ? 'nextPage' : 'previousPage']()
   }
+
+  readingTap.current = (zone) => {
+    if (
+      !epubReady ||
+      navigation.busy ||
+      (props.chromeVisible && props.onToggleChrome)
+    )
+      return
+    if (props.selectedTool === 'rect-selection') return
+    if (zone === 'toggle') props.onToggleChrome?.()
+    else if (zone) turnEpub(zone === 'next')
+  }
+  useEffect(() => {
+    const container = epubContainer.current
+    if (source?.format !== 'epub' || !container || !rootElement) return
+    const press = trackReadingPress(rootElement, {
+      bounds: () => readingBounds(container),
+      capturePointer: true,
+      // Chapter pointers are forwarded to the host for pane activation. The
+      // chapter document itself owns the reading gesture.
+      blocked: (event) => event.target === rootElement && !event.isTrusted,
+      selectionRoot: rootElement,
+      swipe: (action) => readingTap.current(action)
+    })
+    const click = (event: MouseEvent) => {
+      const action = press.consume(event)
+      if (action) readingTap.current(action)
+    }
+    rootElement.addEventListener('click', click)
+    return () => {
+      rootElement.removeEventListener('click', click)
+      press.dispose()
+    }
+  }, [source, rootElement])
 
   const navigateRange = (id: string) => {
     beginPositionChange()
@@ -1969,6 +2015,11 @@ export function EngineDocumentViewer(props: Props) {
           <div
             ref={epubContainer}
             className='hamster-reader__epub-container'
+            data-can-next={epubReady && !navigation.busy && navigation.canNext}
+            data-can-previous={
+              epubReady && !navigation.busy && navigation.canPrevious
+            }
+            aria-busy={!epubReady || navigation.busy}
             style={{
               display: emptyPageDisplay(pageCount, pageNumbers)
             }}
@@ -2090,16 +2141,18 @@ export function EngineDocumentViewer(props: Props) {
             onSelectRect={selectRect}
           />
         )}
-        {source?.format === 'epub' && (
-          <ViewportPaginationControls
-            controlsRef={pagination}
-            className='hamster-reader__epub-pagination'
-            theme={theme}
-            ready={epubReady}
-            navigation={navigation}
-            onPrevious={() => turnEpub(false)}
-            onNext={() => turnEpub(true)}
-          />
+        {source?.format === 'epub' &&
+          props.chromeVisible &&
+          props.onToggleChrome && (
+            <ReadingMask dismiss={props.onToggleChrome} />
+          )}
+        {source?.format === 'epub' && epubReady && navigation.pageLabel && (
+          <span
+            className='hamster-reader__page-indicator'
+            data-testid='reading-page-indicator'
+          >
+            {navigation.pageLabel}
+          </span>
         )}
         {unlocatable.length > 0 && (
           <div role='status' className='hamster-reader__engine-notice'>

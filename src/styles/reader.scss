@@ -2576,3 +2576,21 @@
     visibility: hidden;
   }
 }
+.hamster-reader__reading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  touch-action: none;
+  user-select: none;
+}
+.hamster-reader__page-indicator {
+  position: absolute;
+  right: max(6px, env(safe-area-inset-right, 0px));
+  bottom: max(2px, env(safe-area-inset-bottom, 0px));
+  z-index: 10;
+  color: #777;
+  font: 12px/1.25 sans-serif;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+}

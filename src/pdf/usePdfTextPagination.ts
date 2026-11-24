@@ -214,6 +214,9 @@ export function usePdfTextPagination(options: {
   }, [enabled, progress, navigate])
 
   const target = current.target
+  const targetLoaded = loaded.has(target.pageNumber)
+  const targetContent = loaded.get(target.pageNumber)
+  const targetFailed = errors.has(target.pageNumber)
   useLayoutEffect(() => {
     if (!enabled || !root || !pages.length || state.generation !== generation)
       return
@@ -222,9 +225,8 @@ export function usePdfTextPagination(options: {
     let frame = 0
     const valid = () =>
       !cancelled && scope.current === generation && serial.current === token
-    if (!loaded.has(target.pageNumber)) {
-      if (!errors.has(target.pageNumber))
-        values.current.enqueue(target.pageNumber)
+    if (!targetLoaded) {
+      if (!targetFailed) values.current.enqueue(target.pageNumber)
       return
     }
     const content = root.querySelector<HTMLElement>('.hsn-selection-content')
@@ -347,8 +349,9 @@ export function usePdfTextPagination(options: {
     generation,
     state.generation,
     target,
-    loaded,
-    errors,
+    targetLoaded,
+    targetContent,
+    targetFailed,
     width,
     height,
     layoutKey

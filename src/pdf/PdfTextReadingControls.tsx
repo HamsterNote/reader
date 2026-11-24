@@ -1,47 +1,56 @@
-import type { Ref } from 'react'
-import { ViewportPaginationControls } from '../components/reading/ViewportPaginationControls'
-import type { ViewportNavigationState } from '../components/reading/navigation'
 import type { PaginationDiagnostics } from '../types/paginationDiagnostics'
 
 export function PdfTextReadingControls({
   enabled,
-  controlsRef,
-  navigation,
+  page,
+  total,
   ready,
-  theme,
+  navigation,
   empty,
   failed,
   unlocatable,
   diagnostics,
-  onRetry,
-  onPrevious,
-  onNext
+  onRetry
 }: {
   enabled: boolean
-  controlsRef: Ref<HTMLDivElement>
-  navigation: ViewportNavigationState
+  page: number
+  total: number
   ready: boolean
-  theme: 'light' | 'dark'
+  navigation: { canPrevious: boolean; canNext: boolean; busy: boolean }
   empty: boolean
   failed: boolean
   unlocatable: boolean
   diagnostics?: PaginationDiagnostics
   onRetry: () => void
-  onPrevious: () => void
-  onNext: () => void
 }) {
   if (!enabled) return null
   return (
     <>
-      <ViewportPaginationControls
-        controlsRef={controlsRef}
-        navigation={navigation}
-        ready={ready}
-        theme={theme}
-        diagnostics={diagnostics}
-        onPrevious={onPrevious}
-        onNext={onNext}
-      />
+      <div
+        className='hamster-reader__page-indicator'
+        data-testid='reading-page-indicator'
+        data-pdf-text-ready={diagnostics?.ready}
+        data-can-next={
+          ready && !navigation.busy && !diagnostics?.gate && navigation.canNext
+        }
+        data-can-previous={
+          ready &&
+          !navigation.busy &&
+          !diagnostics?.gate &&
+          navigation.canPrevious
+        }
+        data-pdf-text-busy={diagnostics?.busy}
+        data-pdf-text-gate={diagnostics?.gate}
+        data-pdf-text-target-page={diagnostics?.targetPageNumber}
+        data-pdf-text-generation={diagnostics?.generation}
+        data-pdf-text-revision={diagnostics?.revision}
+        data-pdf-text-turn-sequence={diagnostics?.turnSequence}
+        data-pdf-text-last-turn-page={diagnostics?.lastTurnPageNumber}
+        data-pdf-text-error={diagnostics?.error}
+        hidden={!ready || empty || !total}
+      >
+        {page}/{total}
+      </div>
       {empty && <div role='status'>没有可阅读的页面</div>}
       {unlocatable && (
         <div role='status' className='hamster-reader__engine-notice'>

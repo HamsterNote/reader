@@ -37,7 +37,9 @@ jobs:
             exit 1
           fi
 
-          if [[ "$PKG_VERSION" == *-ham400.* ]]; then
+          if [[ "$PKG_VERSION" == *-ham365.* ]]; then
+            PUBLISH_TAG=ham365
+          elif [[ "$PKG_VERSION" == *-ham400.* ]]; then
             PUBLISH_TAG=ham400
           elif [[ "$PKG_VERSION" == *-ham394.* ]]; then
             PUBLISH_TAG=ham394

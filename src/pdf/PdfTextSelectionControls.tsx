@@ -122,6 +122,7 @@ export function PdfTextSelectionControls({
   color,
   children,
   popoverRelative,
+  selectionOwner,
   topInset = 0,
   onDraft,
   onUpdate,
@@ -132,6 +133,7 @@ export function PdfTextSelectionControls({
   color: string
   children?: ReactNode
   popoverRelative?: boolean
+  selectionOwner?: string
   topInset?: number
   onEditingChange: (editing: boolean) => void
   onDraft: (data: LinkedSelectionData) => void
@@ -206,6 +208,7 @@ export function PdfTextSelectionControls({
       managedText
       showPopoverWhileDragging
       popoverRelative={popoverRelative}
+      selectionOwner={selectionOwner}
       topInset={topInset}
       hitTest={(x, y) => {
         if (!root) return null

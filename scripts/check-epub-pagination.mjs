@@ -1,3 +1,9 @@
+import {
+  tapPaper,
+  chrome,
+  overlayGeometry,
+  shortDragGeometry
+} from './reading-gestures.mjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
@@ -144,9 +150,11 @@ async function boot(page, fixed) {
     { base, fixed }
   )
   await page.goto(base)
-  await page.getByRole('button', { name: '下一页', exact: true }).waitFor()
+  await page.getByTestId('reading-page-indicator').waitFor()
   await page.waitForFunction(
-    () => !document.querySelector('[aria-label="下一页"]').disabled
+    () =>
+      document.querySelector('.hamster-reader__epub-container')?.dataset
+        .canNext === 'true'
   )
 }
 const state = (page) =>
@@ -165,48 +173,22 @@ const state = (page) =>
     }
   })
 async function turn(page, name) {
-  const button = page.getByRole('button', { name, exact: true })
+  await chrome(page, false)
   const writes = await page.evaluate(() => window.__hostWrites.length)
-  await button.click()
+  await tapPaper(page, name === '下一页' ? 0.87 : 0.13, 0.5)
   await page.waitForFunction(() => {
-    const previous = document.querySelector('[aria-label="上一页"]')
-    const next = document.querySelector('[aria-label="下一页"]')
-    return !(previous.disabled && next.disabled)
+    return (
+      document
+        .querySelector('.hamster-reader__epub-container')
+        ?.getAttribute('aria-busy') === 'false'
+    )
   })
   await page.waitForFunction(
     (count) => window.__hostWrites.length > count,
     writes
   )
 }
-async function clearance(page) {
-  const result = await page.evaluate(() => {
-    const box = (selector) => {
-      const r = document.querySelector(selector).getBoundingClientRect()
-      return {
-        left: r.left,
-        right: r.right,
-        top: r.top,
-        bottom: r.bottom,
-        height: r.height
-      }
-    }
-    return {
-      paper: box('.hamster-reader__epub-container'),
-      controls: box('.hamster-reader__epub-pagination'),
-      toolbar: box('[data-testid="tool-bottom-bar"]')
-    }
-  })
-  assert(
-    result.paper.bottom <= Math.min(result.controls.top, result.toolbar.top),
-    JSON.stringify(result)
-  )
-  assert(
-    result.controls.left >= result.toolbar.right ||
-      result.controls.top >= result.toolbar.bottom,
-    JSON.stringify(result)
-  )
-  return result
-}
+const clearance = (page) => overlayGeometry(page, state)
 // eslint-disable-next-line sonarjs/cognitive-complexity -- Sequential browser acceptance scenario.
 async function run(browserType, mobile, fixed = false) {
   const label = `${browserType.name()}-${mobile ? 'touch-320' : 'desktop'}-${fixed ? 'fixed' : 'reflow'}`
@@ -241,7 +223,10 @@ async function run(browserType, mobile, fixed = false) {
       0,
       'restore must not save intermediate progress'
     )
+    result.shortDrag = await shortDragGeometry(page, state)
+    await turn(page, '下一页')
     result.clearance = await clearance(page)
+    await turn(page, '上一页')
     await page.screenshot({ path: resolve(output, `${label}-initial.png`) })
     if (fixed) {
       assert.equal(
@@ -282,7 +267,8 @@ async function run(browserType, mobile, fixed = false) {
       await page.reload()
       await page.waitForFunction(
         () =>
-          document.querySelector('[aria-label="下一页"]')?.disabled === false
+          document.querySelector('.hamster-reader__epub-container')?.dataset
+            .canNext === 'true'
       )
       assert.equal(
         (await state(page)).page,
@@ -363,7 +349,9 @@ async function run(browserType, mobile, fixed = false) {
         mobile ? { width: 740, height: 480 } : { width: 440, height: 780 }
       )
       await page.waitForFunction(
-        () => !document.querySelector('[aria-label="下一页"]').disabled
+        () =>
+          document.querySelector('.hamster-reader__epub-container')?.dataset
+            .canNext === 'true'
       )
       await page.waitForTimeout(200)
       assert.equal(
@@ -400,11 +388,14 @@ async function run(browserType, mobile, fixed = false) {
         snapshotBeforeZero
       )
       // Font menu reflow, then drawing tool expansion must reserve real space.
+      await chrome(page, true)
       await page.getByTestId('tool-bottom-bar-font-scale').click()
       await page.getByRole('menuitem', { name: '特大' }).click()
       await page.waitForTimeout(300)
       await page.waitForFunction(
-        () => !document.querySelector('[aria-label="下一页"]').disabled
+        () =>
+          document.querySelector('.hamster-reader__epub-container')?.dataset
+            .canNext === 'true'
       )
       await clearance(page)
       if (await page.getByTestId('tool-bottom-bar-drawing').count())
@@ -419,6 +410,7 @@ async function run(browserType, mobile, fixed = false) {
       result.drawingClearance = await clearance(page)
       await page.screenshot({ path: resolve(output, `${label}-drawing.png`) })
       if (!mobile) {
+        await chrome(page, false)
         const paper = await page
           .locator('.hamster-reader__epub-container')
           .boundingBox()
@@ -428,14 +420,15 @@ async function run(browserType, mobile, fixed = false) {
         await page.mouse.up()
         await page.waitForFunction(() => {
           const saved = JSON.parse(localStorage.getItem('pagination-snapshot'))
-          return (
-            saved?.data?.highlights?.paintings?.['page-2']?.strokes?.length > 0
+          return saved?.data?.highlights?.paintings?.['page-2']?.objects?.some(
+            (object) => object.kind === 'freehand'
           )
         })
         result.drawingSaved = true
       }
       // Explicit outline navigation tests the whole-book final boundary cheaply.
-      await page.getByRole('button', { name: '页面与标注' }).click()
+      await chrome(page, true)
+      await page.getByRole('button', { name: '目录', exact: true }).click()
       await page.locator('.hamster-reader__epub-outline summary').click()
       await page.getByRole('button', { name: 'Chapter 2', exact: true }).click()
       await page.waitForFunction(
@@ -487,9 +480,9 @@ async function run(browserType, mobile, fixed = false) {
       assert.equal((await state(page)).index, 3)
       let guard = 0
       while (
-        await page
-          .getByRole('button', { name: '下一页', exact: true })
-          .isEnabled()
+        (await page
+          .locator('.hamster-reader__epub-container')
+          .getAttribute('data-can-next')) === 'true'
       ) {
         assert(guard++ < 80, 'book navigation must terminate')
         await turn(page, '下一页')

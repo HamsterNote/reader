@@ -3655,12 +3655,12 @@ describe('Reader prop forwarding', () => {
       )
 
       // Then: the pagination controls and the default bottom bar agree on theme.
-      const pagination = await screen.findByRole('group', { name: '翻页' })
+      expect(screen.queryByRole('group', { name: '翻页' })).toBeNull()
+      expect(screen.queryByTestId('tool-bottom-bar')).toBeNull()
+      act(() => (capturedTextViewerProps.onToggleChrome as () => void)())
       const bottomBar = screen.getByTestId('tool-bottom-bar')
-      expect(pagination).toHaveAttribute('data-theme', expected)
-      expect(pagination.getAttribute('data-theme')).toBe(
-        bottomBar.getAttribute('data-theme')
-      )
+      expect(bottomBar).toHaveAttribute('data-theme', expected)
+      expect(screen.getByTestId('reading-page-indicator')).toBeInTheDocument()
     }
   )
 
@@ -3675,15 +3675,15 @@ describe('Reader prop forwarding', () => {
       render(<Reader document={document} isPdf renderMode='text' />)
 
       // Then: both surfaces track the system preference.
-      const pagination = await screen.findByRole('group', { name: '翻页' })
+      expect(screen.queryByRole('group', { name: '翻页' })).toBeNull()
+      expect(screen.queryByTestId('tool-bottom-bar')).toBeNull()
+      act(() => (capturedTextViewerProps.onToggleChrome as () => void)())
       const bottomBar = screen.getByTestId('tool-bottom-bar')
-      expect(pagination).toHaveAttribute(
+      expect(bottomBar).toHaveAttribute(
         'data-theme',
         systemDark ? 'dark' : 'light'
       )
-      expect(pagination.getAttribute('data-theme')).toBe(
-        bottomBar.getAttribute('data-theme')
-      )
+      expect(screen.getByTestId('reading-page-indicator')).toBeInTheDocument()
     }
   )
 
@@ -5220,24 +5220,29 @@ describe('Reader zoom props', () => {
     )
   })
 
-  it('remeasures the replacement PDF toolbar after switching Layout back to Text', async () => {
+  it('keeps PDF text margins stable and resets chrome when returning from Layout', async () => {
     const { document } = makeLazyDocument(1)
     const view = render(<Reader document={document} isPdf renderMode='text' />)
     const root = screen.getByTestId('reader-root')
     mockElementSize(root, { width: 800, height: 600 })
+    expect(screen.queryByTestId('tool-bottom-bar')).toBeNull()
+    const initialMargin = capturedTextViewerProps.containMarginBottom
+    act(() => (capturedTextViewerProps.onToggleChrome as () => void)())
     const first = screen.getByTestId('tool-bottom-bar').parentElement!
     mockElementSize(first, { width: 320, height: 54, top: 530 })
     await waitFor(() =>
-      expect(capturedTextViewerProps.containMarginBottom).toBe(70)
+      expect(capturedTextViewerProps.containMarginBottom).toBe(initialMargin)
     )
     view.rerender(<Reader document={document} isPdf renderMode='layout' />)
     const layout = screen.getByTestId('tool-bottom-bar').parentElement!
     mockElementSize(layout, { width: 320, height: 54, top: 520 })
     view.rerender(<Reader document={document} isPdf renderMode='text' />)
+    expect(screen.queryByTestId('tool-bottom-bar')).toBeNull()
+    act(() => (capturedTextViewerProps.onToggleChrome as () => void)())
     const replacement = screen.getByTestId('tool-bottom-bar').parentElement!
     mockElementSize(replacement, { width: 320, height: 54, top: 510 })
     await waitFor(() =>
-      expect(capturedTextViewerProps.containMarginBottom).toBe(90)
+      expect(capturedTextViewerProps.containMarginBottom).toBe(initialMargin)
     )
   })
 
