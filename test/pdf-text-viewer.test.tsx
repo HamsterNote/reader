@@ -5,6 +5,7 @@ import type {
   IntermediateText
 } from '@hamster-note/types'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { describe, expect, it, vi } from 'vitest'
 import { IntermediateDocumentTextViewer } from '../src/components/IntermediateDocumentViewer/IntermediateDocumentTextViewer'
 import type { ReaderSelectionRef } from '../src/types/selection'
@@ -517,4 +518,91 @@ it('allows this pane navigation with only another pane native selection', async 
   } finally {
     fixture.cleanup()
   }
+})
+
+function makeOutlineProxy({
+  numPages,
+  getOutline,
+  getDestination,
+  getPageIndex
+}: {
+  numPages: number
+  getOutline: () => Promise<unknown>
+  getDestination?: (name: string) => Promise<unknown>
+  getPageIndex?: (ref: { num: number }) => Promise<number>
+}) {
+  return {
+    numPages,
+    getOutline: vi.fn(getOutline),
+    getDestination: vi.fn(getDestination ?? (async () => null)),
+    getPageIndex: vi.fn(
+      getPageIndex ?? (async (ref: { num: number }) => ref.num - 1)
+    )
+  } as unknown as PDFDocumentProxy
+}
+
+function pdfOutlineSource(proxy: PDFDocumentProxy) {
+  return {
+    format: 'pdf' as const,
+    data: new Uint8Array(),
+    loadPdfDocument: async () => proxy
+  }
+}
+
+describe('PDF text mode outline', () => {
+  it('shows the 目录 tab and jumps to the target text page', async () => {
+    const fixture = documentFixture('outline', 6)
+    const proxy = makeOutlineProxy({
+      numPages: 6,
+      getOutline: async () => [{ title: '第二章', dest: [1], items: [] }]
+    })
+    render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={pdfOutlineSource(proxy)}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    const outlineTab = await screen.findByRole('tab', { name: '目录' })
+    expect(screen.queryByRole('tab', { name: '页面' })).toBeNull()
+    expect(screen.getByRole('tab', { name: '高亮' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    fireEvent.click(outlineTab)
+    fireEvent.click(await screen.findByRole('button', { name: '第二章' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('outline page 2')).toBeInTheDocument()
+    )
+  })
+
+  it('shows the layout-mode empty-outline notice', async () => {
+    const fixture = documentFixture('empty', 3)
+    const proxy = makeOutlineProxy({
+      numPages: 3,
+      getOutline: async () => null
+    })
+    render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={pdfOutlineSource(proxy)}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+
+    expect(
+      await screen.findByText('此 PDF 没有内嵌章节目录，可使用页面导航。')
+    ).toBeInTheDocument()
+  })
 })

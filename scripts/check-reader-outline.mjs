@@ -176,7 +176,7 @@ async function checkEpubOutline(context) {
         'outline must not be an independent block above the tabs'
       )
       const pages = page.getByRole('tab', { name: '页面', exact: true })
-      const outline = page.getByRole('tab', { name: '章节目录', exact: true })
+      const outline = page.getByRole('tab', { name: '目录', exact: true })
       assert(
         await outline.evaluate(
           (tab) => tab.parentElement?.getAttribute('role') === 'tablist'
@@ -256,7 +256,7 @@ async function checkPdfEmbeddedOutline(context) {
     async run(page) {
       await openPageBrowser(page)
       await assertDefaultTab(page, '页面')
-      await page.getByRole('tab', { name: '章节目录', exact: true }).click()
+      await page.getByRole('tab', { name: '目录', exact: true }).click()
       const named = page.getByRole('button', {
         name: 'Named Chapter Three',
         exact: true
@@ -304,7 +304,7 @@ async function checkPdfBodyOnlyOutline(context) {
     async run(page) {
       await openPageBrowser(page)
       await assertDefaultTab(page, '页面')
-      await page.getByRole('tab', { name: '章节目录', exact: true }).click()
+      await page.getByRole('tab', { name: '目录', exact: true }).click()
       await page
         .getByText('此 PDF 没有内嵌章节目录，可使用页面导航。', { exact: true })
         .waitFor({ state: 'visible' })

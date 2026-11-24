@@ -15,16 +15,23 @@ export async function prepareReaderDocument(
     return { source, ...(await openReaderDocument(source, id)) }
   let opened: ReturnType<typeof openReaderDocument> | undefined
   let closed = false
-  const loadTextDocument = async () => {
+  const open = async () => {
     if (closed) throw new Error('PDF document closed')
     opened ??= openReaderDocument(source, id).catch((error) => {
       opened = undefined
       throw error
     })
-    return (await opened).document
+    return opened
+  }
+  const loadTextDocument = async () => (await open()).document
+  const loadPdfDocument = async () => {
+    const handle = await open()
+    return 'pdfDocument' in handle && handle.pdfDocument
+      ? handle.pdfDocument
+      : null
   }
   return {
-    source: { ...source, loadTextDocument },
+    source: { ...source, loadTextDocument, loadPdfDocument },
     document: IntermediateDocument.parse({ id, title: id, pages: [] }),
     dispose: async () => {
       closed = true
@@ -91,7 +98,11 @@ export async function openReaderDocument(
   })
   try {
     const facade = await createPdfTextModeDocument(session.document, id)
-    return { document: facade.document, dispose: () => session.dispose() }
+    return {
+      document: facade.document,
+      pdfDocument: session.document,
+      dispose: () => session.dispose()
+    }
   } catch (error) {
     await session.dispose()
     throw error

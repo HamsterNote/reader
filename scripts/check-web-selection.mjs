@@ -791,7 +791,7 @@ async function epubNavigation({ buffer, emptyBuffer }) {
           .getAttribute('aria-selected'),
         'true'
       )
-      await page.getByRole('tab', { name: '章节目录', exact: true }).click()
+      await page.getByRole('tab', { name: '目录', exact: true }).click()
       const outline = page.getByTestId('page-browser-outline-panel')
       await outline.waitFor({ state: 'visible' })
       await page.getByRole('button', { name: 'Chapter 1', exact: true }).click()
@@ -856,7 +856,7 @@ async function epubNavigation({ buffer, emptyBuffer }) {
           .getAttribute('aria-selected'),
         'true'
       )
-      await page.getByRole('tab', { name: '章节目录', exact: true }).click()
+      await page.getByRole('tab', { name: '目录', exact: true }).click()
       await page
         .getByText('此文档没有章节目录，可使用页面导航。', { exact: true })
         .waitFor({ state: 'visible' })
