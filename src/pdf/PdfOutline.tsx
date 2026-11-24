@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { OutlineTreeNode } from '../components/OutlineTree'
+import { OutlineTree } from '../components/OutlineTree'
 import { usePositionTransaction } from '../components/reading/usePositionTransaction'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
@@ -20,6 +22,18 @@ type OutlineState = {
   readonly document: PDFDocumentProxy
   readonly status: 'loading' | 'ready' | 'error'
   readonly items: readonly PdfOutlineItem[]
+}
+
+type PageCache = {
+  readonly items: readonly PdfOutlineItem[]
+  readonly pageById: Map<string, number>
+  bulk?: Promise<void>
+}
+
+type PageSnapshot = {
+  readonly document: PDFDocumentProxy
+  readonly items: readonly PdfOutlineItem[]
+  readonly pageById: ReadonlyMap<string, number>
 }
 
 function normalizeOutline(
@@ -101,41 +115,81 @@ async function resolveOutlinePage(
   }
 }
 
-function PdfOutlineItems({
-  items,
-  onNavigate
-}: {
-  readonly items: readonly PdfOutlineItem[]
-  readonly onNavigate: (item: PdfOutlineItem) => void
-}) {
-  return (
-    <ul>
-      {items.map((item) => (
-        <li key={item.id} data-outline-item={item.id}>
-          <button
-            type='button'
-            disabled={!item.destination || item.external}
-            onClick={() => onNavigate(item)}
-          >
-            {item.title}
-          </button>
-          {item.items.length > 0 && (
-            <PdfOutlineItems items={item.items} onNavigate={onNavigate} />
-          )}
-        </li>
-      ))}
-    </ul>
+type PdfOutlineTarget = {
+  readonly id: string
+  readonly destination: string | readonly unknown[]
+}
+
+function collectTargets(
+  items: readonly PdfOutlineItem[],
+  out: PdfOutlineTarget[]
+) {
+  for (const item of items) {
+    if (item.destination && !item.external) {
+      out.push({ id: item.id, destination: item.destination })
+    }
+    collectTargets(item.items, out)
+  }
+}
+
+async function resolveOutlinePages(
+  document: PDFDocumentProxy,
+  items: readonly PdfOutlineItem[],
+  pageById: Map<string, number>
+): Promise<void> {
+  const targets: PdfOutlineTarget[] = []
+  collectTargets(items, targets)
+  const entries = await Promise.all(
+    targets.map(
+      async (target) =>
+        [
+          target.id,
+          await resolveOutlinePage(document, target.destination)
+        ] as const
+    )
   )
+  for (const [id, pageNumber] of entries) {
+    if (pageNumber !== null) pageById.set(id, pageNumber)
+  }
+}
+
+function toOutlineNodes(
+  items: readonly PdfOutlineItem[],
+  pageById: ReadonlyMap<string, number> | null
+): readonly OutlineTreeNode[] {
+  return items.map((item) => {
+    const disabled = !item.destination || item.external
+    return {
+      id: item.id,
+      label: item.title,
+      targetPage: disabled ? null : (pageById?.get(item.id) ?? null),
+      disabled,
+      children: toOutlineNodes(item.items, pageById)
+    }
+  })
+}
+
+function indexOutlineItems(
+  items: readonly PdfOutlineItem[],
+  out = new Map<string, PdfOutlineItem>()
+) {
+  for (const item of items) {
+    out.set(item.id, item)
+    indexOutlineItems(item.items, out)
+  }
+  return out
 }
 
 export function PdfOutline({
   document,
   isActive,
+  currentPageNumber,
   pageNumbers,
   onNavigate
 }: {
   readonly document: PDFDocumentProxy | null
   readonly isActive: boolean
+  readonly currentPageNumber?: number | null
   readonly pageNumbers: readonly number[]
   readonly onNavigate: (pageNumber: number) => void
 }) {
@@ -145,12 +199,16 @@ export function PdfOutline({
   const pending = useRef(
     new WeakMap<PDFDocumentProxy, Promise<readonly PdfOutlineItem[]>>()
   )
+  const pageCaches = useRef(new WeakMap<PDFDocumentProxy, PageCache>())
   const latest = useRef({ document, pageNumbers, onNavigate })
   latest.current = { document, pageNumbers, onNavigate }
   const { begin: beginNavigation, isCurrent: isNavigationCurrent } =
     usePositionTransaction(document)
   const [retry, setRetry] = useState(0)
   const [state, setState] = useState<OutlineState | null>(null)
+  const [pageSnapshot, setPageSnapshot] = useState<PageSnapshot | null>(null)
+  const hasCurrentPage =
+    currentPageNumber !== null && currentPageNumber !== undefined
 
   useEffect(() => {
     if (!document || !isActive) return
@@ -185,9 +243,65 @@ export function PdfOutline({
     }
   }, [document, isActive, retry])
 
-  const navigate = async (item: PdfOutlineItem) => {
+  useEffect(() => {
+    if (
+      !document ||
+      !hasCurrentPage ||
+      !state ||
+      state.document !== document ||
+      state.status !== 'ready'
+    ) {
+      return
+    }
+    let current = true
+    let cache = pageCaches.current.get(document)
+    if (!cache || cache.items !== state.items) {
+      cache = { items: state.items, pageById: new Map() }
+      pageCaches.current.set(document, cache)
+    }
+    const entry = cache
+    if (!entry.bulk) {
+      entry.bulk = resolveOutlinePages(
+        document,
+        state.items,
+        entry.pageById
+      ).catch(() => undefined)
+    }
+    entry.bulk.then(() => {
+      if (current) {
+        setPageSnapshot({
+          document,
+          items: state.items,
+          pageById: new Map(entry.pageById)
+        })
+      }
+    })
+    return () => {
+      current = false
+    }
+  }, [document, hasCurrentPage, state])
+
+  const itemById = useMemo(
+    () => (state?.status === 'ready' ? indexOutlineItems(state.items) : null),
+    [state]
+  )
+
+  const nodes = useMemo(() => {
+    if (!state || state.status !== 'ready' || state.document !== document) {
+      return [] as readonly OutlineTreeNode[]
+    }
+    const pageById =
+      pageSnapshot &&
+      pageSnapshot.document === document &&
+      pageSnapshot.items === state.items
+        ? pageSnapshot.pageById
+        : null
+    return toOutlineNodes(state.items, pageById)
+  }, [document, pageSnapshot, state])
+
+  const navigate = async (item: PdfOutlineItem | undefined) => {
     const owner = document
-    if (!owner || !item.destination || item.external) return
+    if (!owner || !item || !item.destination || item.external) return
     const transaction = beginNavigation()
     const pageNumber = await resolveOutlinePage(owner, item.destination)
     if (
@@ -197,6 +311,20 @@ export function PdfOutline({
       !latest.current.pageNumbers.includes(pageNumber)
     ) {
       return
+    }
+    const currentState = state
+    if (currentState?.status === 'ready') {
+      let cache = pageCaches.current.get(owner)
+      if (!cache || cache.items !== currentState.items) {
+        cache = { items: currentState.items, pageById: new Map() }
+        pageCaches.current.set(owner, cache)
+      }
+      cache.pageById.set(item.id, pageNumber)
+      setPageSnapshot({
+        document: owner,
+        items: currentState.items,
+        pageById: new Map(cache.pageById)
+      })
     }
     latest.current.onNavigate(pageNumber)
   }
@@ -219,9 +347,12 @@ export function PdfOutline({
     return <p role='status'>此 PDF 没有内嵌章节目录，可使用页面导航。</p>
   }
   return (
-    <PdfOutlineItems
-      items={state.items}
-      onNavigate={(item) => void navigate(item)}
+    <OutlineTree
+      items={nodes}
+      currentPage={currentPageNumber ?? null}
+      pageNumbers={pageNumbers}
+      documentKey={document}
+      onNavigate={(node) => void navigate(itemById?.get(node.id))}
     />
   )
 }
