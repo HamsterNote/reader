@@ -149,7 +149,7 @@ type PageBrowserTabsProps = {
 
 const tabLabels: Readonly<Record<PageBrowserTab, string>> = {
   pages: '页面',
-  outline: '章节目录',
+  outline: '目录',
   highlights: '高亮',
   bookmarks: '书签'
 }

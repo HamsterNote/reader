@@ -1,5 +1,7 @@
 import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
 import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
+import { PdfOutline } from '../../pdf/PdfOutline'
+import type { PDFDocumentProxy } from '../../pdf/pdfjsRuntime'
 import { RangeMagnifierProvider } from './RangeMagnifier'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
 import { usePdfTextSelectionGeometry } from '../../pdf/usePdfTextSelectionGeometry'
@@ -1216,6 +1218,28 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   const pdfNavigationRef = useRef<ReturnType<
     typeof usePdfTextPagination
   > | null>(null)
+  // Official PDF.js document behind the text-mode index; the outline tab
+  // reuses the same parsing and jump logic as layout mode.
+  const loadPdfOutlineDocument = isPdf
+    ? props.pdfSource?.loadPdfDocument
+    : undefined
+  const [pdfOutlineDocument, setPdfOutlineDocument] =
+    useState<PDFDocumentProxy | null>(null)
+  useEffect(() => {
+    if (!loadPdfOutlineDocument) return
+    let current = true
+    setPdfOutlineDocument(null)
+    loadPdfOutlineDocument()
+      .then((outlineDocument) => {
+        if (current) setPdfOutlineDocument(outlineDocument)
+      })
+      .catch(() => {
+        if (current) setPdfOutlineDocument(null)
+      })
+    return () => {
+      current = false
+    }
+  }, [loadPdfOutlineDocument])
   const flowReadinessRef = useRef<ReturnType<
     typeof createFlowTextReadiness
   > | null>(null)
@@ -1832,6 +1856,20 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
       releaseProgrammaticSuppression,
       virtualizer
     ]
+  )
+  const pdfTextOutline = useMemo(
+    () =>
+      pdfOutlineDocument
+        ? (isActive: boolean) => (
+            <PdfOutline
+              document={pdfOutlineDocument}
+              isActive={isActive}
+              pageNumbers={pageNumbers}
+              onNavigate={handleReadingProgressSeekPage}
+            />
+          )
+        : undefined,
+    [handleReadingProgressSeekPage, pageNumbers, pdfOutlineDocument]
   )
   const visiblePageNumbers = useMemo(
     () =>
@@ -3818,6 +3856,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
           <ReadingMask dismiss={props.onToggleChrome} />
         )}
         <PageBrowser
+          outline={pdfTextOutline}
           isOpen={showPageBrowser}
           pageNumbers={pageNumbers}
           pageSizesByPageNumber={pageSizesByPageNumber}

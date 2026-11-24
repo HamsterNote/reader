@@ -609,12 +609,12 @@ describe('PageBrowser', () => {
     const view = render(<PageBrowser {...props} />)
     const tablist = screen.getByRole('tablist')
     const pagesTab = screen.getByRole('tab', { name: '页面' })
-    const outlineTab = screen.getByRole('tab', { name: '章节目录' })
+    const outlineTab = screen.getByRole('tab', { name: '目录' })
     expect(
       Array.from(tablist.querySelectorAll('[role="tab"]')).map(
         (tab) => tab.textContent
       )
-    ).toEqual(['页面', '章节目录', '高亮', '书签'])
+    ).toEqual(['页面', '目录', '高亮', '书签'])
     expect(tablist).toContainElement(outlineTab)
     expect(pagesTab).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('page-browser-outline-panel')).not.toBeVisible()
@@ -649,7 +649,7 @@ describe('PageBrowser', () => {
       'aria-selected',
       'true'
     )
-    fireEvent.click(screen.getByRole('tab', { name: '章节目录' }))
+    fireEvent.click(screen.getByRole('tab', { name: '目录' }))
     expect(screen.getByRole('status')).toHaveTextContent(
       '此文档没有章节目录，可使用页面导航。'
     )
@@ -669,7 +669,7 @@ describe('PageBrowser', () => {
     }
     const view = render(<PageBrowser {...props} />)
     const pagesTab = screen.getByRole('tab', { name: '页面' })
-    const outlineTab = screen.getByRole('tab', { name: '章节目录' })
+    const outlineTab = screen.getByRole('tab', { name: '目录' })
     pagesTab.focus()
     fireEvent.keyDown(pagesTab, { key: 'ArrowRight' })
     expect(outlineTab).toHaveFocus()
@@ -701,7 +701,7 @@ describe('PageBrowser', () => {
     }
     const view = render(<PageBrowser {...props} />)
     const pagesTab = screen.getByRole('tab', { name: '页面' })
-    const outlineTab = screen.getByRole('tab', { name: '章节目录' })
+    const outlineTab = screen.getByRole('tab', { name: '目录' })
     const highlightsTab = screen.getByRole('tab', { name: '高亮' })
     const bookmarksTab = screen.getByRole('tab', { name: '书签' })
     fireEvent.click(outlineTab)
