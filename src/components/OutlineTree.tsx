@@ -28,10 +28,11 @@ function collectCandidates(
 }
 
 /** 当前项取「目标页不晚于当前页」中目标页最大者；同页时取层级更深、目录顺序更靠后者。
- *  当前页早于所有目标时不返回任何项。 */
+ *  只考虑当前可见页（隐藏页/被过滤页不参与），当前页早于所有目标时不返回任何项。 */
 export function findActiveOutlineNodeId(
   items: readonly OutlineTreeNode[],
-  currentPage: number | null
+  currentPage: number | null,
+  pageNumbers?: readonly number[]
 ): string | null {
   if (currentPage === null) return null
   const candidates: Candidate[] = []
@@ -39,6 +40,7 @@ export function findActiveOutlineNodeId(
   let active: Candidate | null = null
   for (const candidate of candidates) {
     if (candidate.page > currentPage) continue
+    if (pageNumbers && !pageNumbers.includes(candidate.page)) continue
     if (
       active === null ||
       candidate.page > active.page ||
@@ -48,6 +50,31 @@ export function findActiveOutlineNodeId(
     }
   }
   return active?.id ?? null
+}
+
+function findOutlinePath(
+  items: readonly OutlineTreeNode[],
+  id: string
+): readonly OutlineTreeNode[] | null {
+  for (const item of items) {
+    if (item.id === id) return [item]
+    const childPath = findOutlinePath(item.children, id)
+    if (childPath) return [item, ...childPath]
+  }
+  return null
+}
+
+/** 当前项被收起的祖先隐藏时，把位置指示沿路径上移到最近的可见祖先。 */
+function findVisibleOutlineNodeId(
+  items: readonly OutlineTreeNode[],
+  activeId: string | null,
+  collapsed: ReadonlySet<string>
+): string | null {
+  if (activeId === null) return null
+  const path = findOutlinePath(items, activeId)
+  if (!path) return activeId
+  const collapsedAncestor = path.find((node) => collapsed.has(node.id))
+  return collapsedAncestor?.id ?? activeId
 }
 
 const listStyle = { margin: 0, padding: 0, listStyle: 'none' } as const
@@ -132,20 +159,28 @@ function OutlineItems({
 export function OutlineTree({
   items,
   currentPage,
+  pageNumbers,
+  documentKey,
   onNavigate
 }: {
   readonly items: readonly OutlineTreeNode[]
   readonly currentPage: number | null
+  readonly pageNumbers?: readonly number[]
+  readonly documentKey?: unknown
   readonly onNavigate: (node: OutlineTreeNode) => void
 }) {
   const activeId = useMemo(
-    () => findActiveOutlineNodeId(items, currentPage),
-    [items, currentPage]
+    () => findActiveOutlineNodeId(items, currentPage, pageNumbers),
+    [items, currentPage, pageNumbers]
   )
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set()
   )
-  useEffect(() => setCollapsed(new Set()), [items])
+  useEffect(() => setCollapsed(new Set()), [documentKey])
+  const markedId = useMemo(
+    () => findVisibleOutlineNodeId(items, activeId, collapsed),
+    [items, activeId, collapsed]
+  )
   const toggle = (id: string) =>
     setCollapsed((current) => {
       const next = new Set(current)
@@ -157,7 +192,7 @@ export function OutlineTree({
     <OutlineItems
       items={items}
       depth={0}
-      activeId={activeId}
+      activeId={markedId}
       collapsed={collapsed}
       onToggle={toggle}
       onNavigate={onNavigate}

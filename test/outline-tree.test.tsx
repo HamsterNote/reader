@@ -77,6 +77,31 @@ describe('findActiveOutlineNodeId', () => {
     ]
     expect(findActiveOutlineNodeId(shared, 4)).toBe('child')
   })
+
+  it('only considers targets on currently visible pages', () => {
+    const pages: readonly OutlineTreeNode[] = [
+      {
+        id: 'hidden',
+        label: 'Hidden',
+        targetPage: 4,
+        disabled: false,
+        children: []
+      },
+      {
+        id: 'visible',
+        label: 'Visible',
+        targetPage: 5,
+        disabled: false,
+        children: []
+      }
+    ]
+
+    expect(findActiveOutlineNodeId(pages, 5)).toBe('visible')
+    expect(findActiveOutlineNodeId(pages, 5, [1, 5])).toBe('visible')
+    expect(findActiveOutlineNodeId(pages, 5, [1, 4])).toBe('hidden')
+    expect(findActiveOutlineNodeId(pages, 3, [1, 2, 3])).toBeNull()
+    expect(findActiveOutlineNodeId(pages, 5, [1, 2, 3])).toBeNull()
+  })
 })
 
 describe('OutlineTree', () => {
@@ -191,6 +216,146 @@ describe('OutlineTree', () => {
       expect.objectContaining({ id: '0' })
     )
   })
+
+  it('keeps collapse choices when nodes are rebuilt for the same document', async () => {
+    const user = userEvent.setup()
+    const view = render(
+      <OutlineTree
+        items={threeLevels}
+        currentPage={null}
+        documentKey='doc-a'
+        onNavigate={vi.fn()}
+      />
+    )
+    await user.click(screen.getByRole('button', { name: '收起 第一章' }))
+    expect(screen.queryByRole('button', { name: '第一节' })).toBeNull()
+
+    const rebuilt = threeLevels.map((node) => ({ ...node }))
+    view.rerender(
+      <OutlineTree
+        items={rebuilt}
+        currentPage={null}
+        documentKey='doc-a'
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '第一节' })).toBeNull()
+
+    view.rerender(
+      <OutlineTree
+        items={rebuilt}
+        currentPage={3}
+        documentKey='doc-a'
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '第一节' })).toBeNull()
+    expect(
+      screen.getByRole('button', { name: '展开 第一章' })
+    ).toBeInTheDocument()
+  })
+
+  it('resets collapse choices only when the document changes', async () => {
+    const user = userEvent.setup()
+    const view = render(
+      <OutlineTree
+        items={threeLevels}
+        currentPage={null}
+        documentKey='doc-a'
+        onNavigate={vi.fn()}
+      />
+    )
+    await user.click(screen.getByRole('button', { name: '收起 第一章' }))
+    expect(screen.queryByRole('button', { name: '第一节' })).toBeNull()
+
+    view.rerender(
+      <OutlineTree
+        items={threeLevels}
+        currentPage={null}
+        documentKey='doc-b'
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: '第一节' })).toBeInTheDocument()
+  })
+
+  it('marks the nearest visible ancestor while the current item is collapsed', async () => {
+    const user = userEvent.setup()
+    render(
+      <OutlineTree items={threeLevels} currentPage={3} onNavigate={vi.fn()} />
+    )
+    expect(screen.getByRole('button', { name: '小节' })).toHaveAttribute(
+      'data-active',
+      'true'
+    )
+
+    await user.click(screen.getByRole('button', { name: '收起 第一章' }))
+    const ancestor = screen.getByRole('button', { name: '第一章' })
+    expect(ancestor).toHaveAttribute('data-active', 'true')
+    expect(ancestor).toHaveAttribute('aria-current', 'location')
+    expect(
+      globalThis.document.querySelectorAll('[data-active="true"]')
+    ).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: '展开 第一章' }))
+    expect(screen.getByRole('button', { name: '小节' })).toHaveAttribute(
+      'data-active',
+      'true'
+    )
+    expect(screen.getByRole('button', { name: '第一章' })).not.toHaveAttribute(
+      'data-active'
+    )
+  })
+
+  it('ignores highlight candidates on pages that are not currently visible', () => {
+    const pages: readonly OutlineTreeNode[] = [
+      {
+        id: 'visible',
+        label: '可见页章节',
+        targetPage: 1,
+        disabled: false,
+        children: []
+      },
+      {
+        id: 'hidden',
+        label: '隐藏页章节',
+        targetPage: 4,
+        disabled: false,
+        children: []
+      }
+    ]
+    const view = render(
+      <OutlineTree
+        items={pages}
+        currentPage={5}
+        pageNumbers={[1, 5]}
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: '可见页章节' })).toHaveAttribute(
+      'data-active',
+      'true'
+    )
+    expect(
+      screen.getByRole('button', { name: '隐藏页章节' })
+    ).not.toHaveAttribute('data-active')
+
+    view.rerender(
+      <OutlineTree
+        items={pages}
+        currentPage={5}
+        pageNumbers={[1, 4, 5]}
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: '隐藏页章节' })).toHaveAttribute(
+      'data-active',
+      'true'
+    )
+    expect(
+      screen.getByRole('button', { name: '可见页章节' })
+    ).not.toHaveAttribute('data-active')
+  })
 })
 
 const epubToc: readonly EpubEngineTocEntry[] = [
@@ -253,6 +418,54 @@ describe('EpubOutline', () => {
 
     await user.click(screen.getByRole('button', { name: '第二章' }))
     expect(onNavigate).toHaveBeenCalledWith('chapter-2.html')
+  })
+
+  it('keeps collapse choices across page changes and resets for another book', async () => {
+    const user = userEvent.setup()
+    const view = render(
+      <EpubOutline
+        items={epubToc}
+        pageNumbers={[1, 2, 3, 5]}
+        currentPageNumber={2}
+        onNavigate={vi.fn()}
+      />
+    )
+    await user.click(screen.getByRole('button', { name: '收起 第一章' }))
+    expect(screen.queryByRole('button', { name: '第一节' })).toBeNull()
+
+    view.rerender(
+      <EpubOutline
+        items={epubToc}
+        pageNumbers={[1, 2, 3, 5]}
+        currentPageNumber={5}
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '第一节' })).toBeNull()
+
+    view.rerender(
+      <EpubOutline
+        items={[
+          {
+            label: '另一章',
+            href: 'other.html',
+            pageNumber: 1,
+            subitems: [
+              {
+                label: '另一节',
+                href: 'other.html#s1',
+                pageNumber: 2,
+                subitems: []
+              }
+            ]
+          }
+        ]}
+        pageNumbers={[1, 2]}
+        currentPageNumber={1}
+        onNavigate={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: '另一节' })).toBeInTheDocument()
   })
 
   it('leaves everything unhighlighted before the first outline target', () => {

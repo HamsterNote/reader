@@ -60,6 +60,8 @@ export function EpubOutline({
     <OutlineTree
       items={nodes}
       currentPage={currentPageNumber ?? null}
+      pageNumbers={pageNumbers}
+      documentKey={items}
       onNavigate={(node) => {
         const entry = entryById.get(node.id)
         if (entry?.href) onNavigate(entry.href)

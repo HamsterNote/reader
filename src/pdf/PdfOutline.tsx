@@ -24,7 +24,13 @@ type OutlineState = {
   readonly items: readonly PdfOutlineItem[]
 }
 
-type ResolvedPages = {
+type PageCache = {
+  readonly items: readonly PdfOutlineItem[]
+  readonly pageById: Map<string, number>
+  bulk?: Promise<void>
+}
+
+type PageSnapshot = {
   readonly document: PDFDocumentProxy
   readonly items: readonly PdfOutlineItem[]
   readonly pageById: ReadonlyMap<string, number>
@@ -128,8 +134,9 @@ function collectTargets(
 
 async function resolveOutlinePages(
   document: PDFDocumentProxy,
-  items: readonly PdfOutlineItem[]
-): Promise<ReadonlyMap<string, number>> {
+  items: readonly PdfOutlineItem[],
+  pageById: Map<string, number>
+): Promise<void> {
   const targets: PdfOutlineTarget[] = []
   collectTargets(items, targets)
   const entries = await Promise.all(
@@ -141,11 +148,9 @@ async function resolveOutlinePages(
         ] as const
     )
   )
-  const pageById = new Map<string, number>()
   for (const [id, pageNumber] of entries) {
     if (pageNumber !== null) pageById.set(id, pageNumber)
   }
-  return pageById
 }
 
 function toOutlineNodes(
@@ -194,16 +199,14 @@ export function PdfOutline({
   const pending = useRef(
     new WeakMap<PDFDocumentProxy, Promise<readonly PdfOutlineItem[]>>()
   )
-  const resolvedPages = useRef(
-    new WeakMap<PDFDocumentProxy, Promise<ReadonlyMap<string, number>>>()
-  )
+  const pageCaches = useRef(new WeakMap<PDFDocumentProxy, PageCache>())
   const latest = useRef({ document, pageNumbers, onNavigate })
   latest.current = { document, pageNumbers, onNavigate }
   const { begin: beginNavigation, isCurrent: isNavigationCurrent } =
     usePositionTransaction(document)
   const [retry, setRetry] = useState(0)
   const [state, setState] = useState<OutlineState | null>(null)
-  const [resolved, setResolved] = useState<ResolvedPages | null>(null)
+  const [pageSnapshot, setPageSnapshot] = useState<PageSnapshot | null>(null)
   const hasCurrentPage =
     currentPageNumber !== null && currentPageNumber !== undefined
 
@@ -251,19 +254,28 @@ export function PdfOutline({
       return
     }
     let current = true
-    let request = resolvedPages.current.get(document)
-    if (!request) {
-      request = resolveOutlinePages(document, state.items)
-      resolvedPages.current.set(document, request)
+    let cache = pageCaches.current.get(document)
+    if (!cache || cache.items !== state.items) {
+      cache = { items: state.items, pageById: new Map() }
+      pageCaches.current.set(document, cache)
     }
-    request
-      .then((pageById) => {
-        if (current) setResolved({ document, items: state.items, pageById })
-      })
-      .catch(() => {
-        if (current)
-          setResolved({ document, items: state.items, pageById: new Map() })
-      })
+    const entry = cache
+    if (!entry.bulk) {
+      entry.bulk = resolveOutlinePages(
+        document,
+        state.items,
+        entry.pageById
+      ).catch(() => undefined)
+    }
+    entry.bulk.then(() => {
+      if (current) {
+        setPageSnapshot({
+          document,
+          items: state.items,
+          pageById: new Map(entry.pageById)
+        })
+      }
+    })
     return () => {
       current = false
     }
@@ -279,13 +291,13 @@ export function PdfOutline({
       return [] as readonly OutlineTreeNode[]
     }
     const pageById =
-      resolved &&
-      resolved.document === document &&
-      resolved.items === state.items
-        ? resolved.pageById
+      pageSnapshot &&
+      pageSnapshot.document === document &&
+      pageSnapshot.items === state.items
+        ? pageSnapshot.pageById
         : null
     return toOutlineNodes(state.items, pageById)
-  }, [document, resolved, state])
+  }, [document, pageSnapshot, state])
 
   const navigate = async (item: PdfOutlineItem | undefined) => {
     const owner = document
@@ -299,6 +311,20 @@ export function PdfOutline({
       !latest.current.pageNumbers.includes(pageNumber)
     ) {
       return
+    }
+    const currentState = state
+    if (currentState?.status === 'ready') {
+      let cache = pageCaches.current.get(owner)
+      if (!cache || cache.items !== currentState.items) {
+        cache = { items: currentState.items, pageById: new Map() }
+        pageCaches.current.set(owner, cache)
+      }
+      cache.pageById.set(item.id, pageNumber)
+      setPageSnapshot({
+        document: owner,
+        items: currentState.items,
+        pageById: new Map(cache.pageById)
+      })
     }
     latest.current.onNavigate(pageNumber)
   }
@@ -324,6 +350,8 @@ export function PdfOutline({
     <OutlineTree
       items={nodes}
       currentPage={currentPageNumber ?? null}
+      pageNumbers={pageNumbers}
+      documentKey={document}
       onNavigate={(node) => void navigate(itemById?.get(node.id))}
     />
   )
