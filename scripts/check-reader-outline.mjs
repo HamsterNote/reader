@@ -171,10 +171,11 @@ async function checkEpubOutline(context) {
         await page.getByRole('tab', { name: '页面', exact: true }).count(),
         0
       )
-      assert.deepEqual(
-        await page.getByRole('tab').allTextContents(),
-        ['目录', '高亮', '书签']
-      )
+      assert.deepEqual(await page.getByRole('tab').allTextContents(), [
+        '目录',
+        '高亮',
+        '书签'
+      ])
       assert.equal(
         await page
           .locator(
@@ -194,9 +195,7 @@ async function checkEpubOutline(context) {
       await outline.focus()
       await outline.press('ArrowRight')
       assert.equal(await highlights.getAttribute('aria-selected'), 'true')
-      assert(
-        await highlights.evaluate((tab) => tab === document.activeElement)
-      )
+      assert(await highlights.evaluate((tab) => tab === document.activeElement))
       await highlights.press('ArrowLeft')
       assert.equal(await outline.getAttribute('aria-selected'), 'true')
       assert(await outline.evaluate((tab) => tab === document.activeElement))
