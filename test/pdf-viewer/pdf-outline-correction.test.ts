@@ -56,6 +56,53 @@ describe('correctOutlineTitlePages', () => {
     expect(corrections.get('ch1')).toBe(4)
   })
 
+  it('requires a complete title at a word or line boundary', async () => {
+    const { document } = makeTextDocument({
+      2: 'Introductory material',
+      3: '第一章 揭开网络引战的面纱 第 5 页'
+    })
+    const corrections = await correctOutlineTitlePages(document, [
+      { id: 'intro', title: 'Intro', pageNumber: 1 },
+      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
+    ])
+    expect(corrections.get('intro')).toBe(1)
+    expect(corrections.get('ch1')).toBe(2)
+  })
+
+  it('does not match a table-of-contents page that lists the title', async () => {
+    const { document } = makeTextDocument({
+      2: '目录\n第一章 揭开网络引战的面纱\n第二章 日常生活中的引战',
+      3: '第一章 揭开网络引战的面纱'
+    })
+    const corrections = await correctOutlineTitlePages(document, [
+      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
+    ])
+    expect(corrections.get('ch1')).toBe(3)
+  })
+
+  it('rejects a running header followed by body text on the same line', async () => {
+    const { document } = makeTextDocument({
+      2: '第一章 揭开网络引战的面纱 正文从这里开始',
+      3: '第一章 揭开网络引战的面纱'
+    })
+    const corrections = await correctOutlineTitlePages(document, [
+      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
+    ])
+    expect(corrections.get('ch1')).toBe(3)
+  })
+
+  it('keeps the annotated page when the real page is earlier', async () => {
+    const { document, getPage } = makeTextDocument(
+      { 2: '第一章 揭开网络引战的面纱' },
+      6
+    )
+    const corrections = await correctOutlineTitlePages(document, [
+      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 5 }
+    ])
+    expect(corrections.get('ch1')).toBe(5)
+    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5, 6])
+  })
+
   it('limits the forward search window', async () => {
     const matchedPage = 2 + OUTLINE_TITLE_SEARCH_LIMIT + 1
     const { document, getPage } = makeTextDocument(
@@ -67,6 +114,39 @@ describe('correctOutlineTitlePages', () => {
     ])
     expect(corrections.get('ch1')).toBe(2)
     expect(getPage.mock.calls.map(([page]) => page)).not.toContain(matchedPage)
+  })
+
+  it('stops dispatching new page reads after cancellation', async () => {
+    let resolvePage!: (page: {
+      getTextContent: () => Promise<{ items: { str: string }[] }>
+    }) => void
+    const getPage = vi.fn(
+      () =>
+        new Promise<{
+          getTextContent: () => Promise<{ items: { str: string }[] }>
+        }>((resolve) => {
+          resolvePage = resolve
+        })
+    )
+    const controller = new AbortController()
+    const document = {
+      numPages: 100,
+      getPage
+    } as unknown as PDFDocumentProxy
+    const scan = correctOutlineTitlePages(
+      document,
+      [{ id: 'ch1', title: '第一章', pageNumber: 1 }],
+      { signal: controller.signal }
+    )
+    await Promise.resolve()
+    expect(getPage).toHaveBeenCalledTimes(1)
+    controller.abort()
+    resolvePage({
+      getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+    })
+    await scan
+    await Promise.resolve()
+    expect(getPage).toHaveBeenCalledTimes(1)
   })
 
   it('caches page text per document so a second run does not re-extract', async () => {

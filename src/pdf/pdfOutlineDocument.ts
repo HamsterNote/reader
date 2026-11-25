@@ -14,14 +14,16 @@ export type PdfOutlineDocumentHandle = {
  * 这里按同一份 source 自行打开一个会话，由调用方负责销毁。
  */
 export async function openPdfOutlineDocument(
-  source: ReaderEngineSource
+  source: ReaderEngineSource,
+  options: { readonly signal?: AbortSignal } = {}
 ): Promise<PdfOutlineDocumentHandle> {
   if (source.format !== 'pdf') {
     throw new Error('PDF outline requires a PDF source')
   }
   if (source.workerSrc) configurePdfJsWorker(source.workerSrc)
   const session = await PdfDocumentSession.open(source, {
-    documentOptions: source.documentOptions
+    documentOptions: source.documentOptions,
+    signal: options.signal
   })
   return {
     document: session.document,

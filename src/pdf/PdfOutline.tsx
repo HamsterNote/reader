@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineTreeNode } from '../components/OutlineTree'
 import { OutlineTree } from '../components/OutlineTree'
 import { usePositionTransaction } from '../components/reading/usePositionTransaction'
-import { correctOutlineTitlePages } from './pdfOutlineTitleCorrection'
+import {
+  findOutlineTitleMatches,
+  readOutlinePageHeadText
+} from './pdfOutlineTitleCorrection'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 const PDF_OUTLINE_TIMEOUT_MS = 10_000
@@ -28,8 +31,7 @@ type OutlineState = {
 type PageCache = {
   readonly items: readonly PdfOutlineItem[]
   readonly pageById: Map<string, number>
-  bulk?: Promise<void>
-  corrected?: Promise<ReadonlyMap<string, number>>
+  resolved?: Promise<void>
 }
 
 type PageSnapshot = {
@@ -202,6 +204,19 @@ function collectTitleTargets(
   return out
 }
 
+function pageCacheFor(
+  caches: WeakMap<PDFDocumentProxy, PageCache>,
+  document: PDFDocumentProxy,
+  items: readonly PdfOutlineItem[]
+): PageCache {
+  let cache = caches.get(document)
+  if (!cache || cache.items !== items) {
+    cache = { items, pageById: new Map() }
+    caches.set(document, cache)
+  }
+  return cache
+}
+
 export function PdfOutline({
   document,
   isActive,
@@ -276,52 +291,75 @@ export function PdfOutline({
       return
     }
     let current = true
-    let cache = pageCaches.current.get(document)
-    if (!cache || cache.items !== state.items) {
-      cache = { items: state.items, pageById: new Map() }
-      pageCaches.current.set(document, cache)
-    }
-    const entry = cache
-    if (!entry.bulk) {
-      entry.bulk = resolveOutlinePages(
+    const entry = pageCacheFor(pageCaches.current, document, state.items)
+    if (!entry.resolved) {
+      entry.resolved = resolveOutlinePages(
         document,
         state.items,
         entry.pageById
       ).catch(() => undefined)
     }
-    entry.bulk
-      .then(() => {
-        if (!current) return undefined
-        setPageSnapshot({
-          document,
-          items: state.items,
-          pageById: new Map(entry.pageById)
-        })
-        if (!entry.corrected) {
-          entry.corrected = correctOutlineTitlePages(
-            document,
-            collectTitleTargets(state.items, entry.pageById)
-          ).catch(() => new Map())
-        }
-        return entry.corrected
+    entry.resolved.then(() => {
+      if (!current) return
+      setPageSnapshot({
+        document,
+        items: state.items,
+        pageById: new Map(entry.pageById)
       })
-      .then((corrected) => {
-        if (!current || !corrected) return
-        for (const [id, pageNumber] of corrected) {
-          if (pageNumber >= 1 && pageNumber <= document.numPages) {
-            entry.pageById.set(id, pageNumber)
-          }
-        }
-        setPageSnapshot({
-          document,
-          items: state.items,
-          pageById: new Map(entry.pageById)
-        })
-      })
+    })
     return () => {
       current = false
     }
   }, [document, hasCurrentPage, state])
+
+  // 只在目录可见时按当前页做一次页首匹配：不预扫全书，退出目录或换书
+  // 立即取消后续读取；当前页标题命中后，高亮和后续点击都使用真实页。
+  useEffect(() => {
+    const pageNumber = currentPageNumber
+    if (
+      !document ||
+      !isActive ||
+      pageNumber === null ||
+      pageNumber === undefined ||
+      !state ||
+      state.document !== document ||
+      state.status !== 'ready' ||
+      !pageNumbers.includes(pageNumber) ||
+      typeof document.getPage !== 'function'
+    ) {
+      return
+    }
+    const controller = new AbortController()
+    let current = true
+    readOutlinePageHeadText(document, pageNumber, {
+      signal: controller.signal
+    })
+      .then((text) => {
+        if (!current || controller.signal.aborted) return
+        const entry = pageCacheFor(pageCaches.current, document, state.items)
+        const matches = findOutlineTitleMatches(
+          text,
+          collectTitleTargets(state.items, entry.pageById)
+        )
+        let changed = false
+        for (const match of matches) {
+          if (entry.pageById.get(match.id) === pageNumber) continue
+          entry.pageById.set(match.id, pageNumber)
+          changed = true
+        }
+        if (!changed) return
+        setPageSnapshot({
+          document,
+          items: state.items,
+          pageById: new Map(entry.pageById)
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      current = false
+      controller.abort()
+    }
+  }, [currentPageNumber, document, isActive, pageNumbers, pageSnapshot, state])
 
   const itemById = useMemo(
     () => (state?.status === 'ready' ? indexOutlineItems(state.items) : null),
@@ -345,44 +383,21 @@ export function PdfOutline({
     const owner = document
     if (!owner || !item || !item.destination || item.external) return
     const transaction = beginNavigation()
-    const pageNumber = await resolveOutlinePage(owner, item.destination)
-    if (pageNumber === null) return
     const currentState = state
     const readyState =
       currentState?.status === 'ready' && currentState.document === owner
         ? currentState
         : null
     let cache: PageCache | undefined
-    let effectivePage = pageNumber
+    let effectivePage: number | undefined
     if (readyState) {
-      cache = pageCaches.current.get(owner)
-      if (!cache || cache.items !== readyState.items) {
-        cache = { items: readyState.items, pageById: new Map() }
-        pageCaches.current.set(owner, cache)
-      }
-      const entry = cache
-      const correction =
-        entry.corrected ??
-        (entry.corrected = (entry.bulk ?? Promise.resolve())
-          .then(() =>
-            correctOutlineTitlePages(
-              owner,
-              collectTitleTargets(readyState.items, entry.pageById)
-            )
-          )
-          .catch(() => new Map()))
-      const corrected = await withinTimeout(correction).catch(() => null)
-      const correctedPage = corrected?.get(item.id)
-      if (correctedPage !== undefined) {
-        effectivePage = correctedPage
-      } else {
-        const searched = await withinTimeout(
-          correctOutlineTitlePages(owner, [
-            { id: item.id, title: item.title, pageNumber }
-          ])
-        ).catch(() => null)
-        effectivePage = searched?.get(item.id) ?? pageNumber
-      }
+      cache = pageCacheFor(pageCaches.current, owner, readyState.items)
+      effectivePage = cache.pageById.get(item.id)
+    }
+    if (effectivePage === undefined) {
+      const resolved = await resolveOutlinePage(owner, item.destination)
+      if (resolved === null) return
+      effectivePage = resolved
     }
     if (
       !isNavigationCurrent(transaction) ||

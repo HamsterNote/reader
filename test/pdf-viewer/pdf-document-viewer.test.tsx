@@ -973,6 +973,58 @@ describe('PdfDocumentViewer 接线', () => {
     }
   })
 
+  it('reports a settled scroll once when scrollend arrives before the debounce', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer({ onReadingPositionChange }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      container.dispatchEvent(new Event('scrollend'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(onReadingPositionChange).toHaveBeenCalledTimes(1)
+      view.unmount()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200)
+      })
+      expect(onReadingPositionChange).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the pending settle timer when unmounting mid-scroll', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer({ onReadingPositionChange }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      view.unmount()
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(onReadingPositionChange).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not report an unmeasured placeholder page as the current page', async () => {
     const ref = createRef<PdfDocumentViewerRef>()
     const onReadingPositionChange = vi.fn()

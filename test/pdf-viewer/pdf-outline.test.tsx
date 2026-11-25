@@ -656,7 +656,7 @@ describe('PdfOutline', () => {
     expect(onNavigate.mock.calls).toEqual([[4]])
   })
 
-  it('highlights and jumps with the corrected page and caches the text scan', async () => {
+  it('corrects the current page lazily, jumps immediately, then reuses the corrected page', async () => {
     const texts: Record<number, string> = {
       2: '版权信息',
       5: '第一章 揭开网络引战的面纱',
@@ -691,12 +691,14 @@ describe('PdfOutline', () => {
         screen.getByRole('button', { name: '第一章 揭开网络引战的面纱' })
       ).toHaveAttribute('aria-current', 'location')
     )
+    // 冷开只读当前页，不预扫整本。
+    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5])
     fireEvent.click(
       screen.getByRole('button', { name: '第二章 日常生活中的引战' })
     )
-    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(6))
+    // 校正结果尚未覆盖第二章时按标注页立即跳转。
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(3))
 
-    const pageReads = getPage.mock.calls.length
     view.rerender(
       <PdfOutline
         document={document}
@@ -711,6 +713,75 @@ describe('PdfOutline', () => {
         screen.getByRole('button', { name: '第二章 日常生活中的引战' })
       ).toHaveAttribute('aria-current', 'location')
     )
-    expect(getPage).toHaveBeenCalledTimes(pageReads)
+    // 当前页命中后，后续点击使用校正页。
+    fireEvent.click(
+      screen.getByRole('button', { name: '第二章 日常生活中的引战' })
+    )
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(6))
+    expect(getPage.mock.calls.map(([page]) => page).sort()).toEqual([5, 6])
+  })
+
+  it('navigates without waiting for page text correction', async () => {
+    const pendingText = deferred<{ items: { str: string }[] }>()
+    const getPage = vi.fn(() => ({
+      getTextContent: () => pendingText.promise
+    }))
+    const document = makeDocument({
+      numPages: 6,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: '第七章', dest: [1], items: [] }]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+    await screen.findByRole('button', { name: '第七章' })
+    fireEvent.click(screen.getByRole('button', { name: '第七章' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(2))
+    expect(pendingText.resolve).toBeTypeOf('function')
+  })
+
+  it('stops requesting page text when the outline is no longer visible', async () => {
+    const getPage = vi.fn(async () => ({
+      getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+    }))
+    const document = makeDocument({
+      numPages: 10,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: '第一章', dest: [0], items: [] }]),
+      getPage
+    })
+    const view = render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={vi.fn()}
+      />
+    )
+    await screen.findByRole('button', { name: '第一章' })
+    await waitFor(() => expect(getPage).toHaveBeenCalledTimes(1))
+    const reads = getPage.mock.calls.length
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive={false}
+        currentPageNumber={2}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={vi.fn()}
+      />
+    )
+    await act(async () => {})
+    expect(getPage).toHaveBeenCalledTimes(reads)
   })
 })

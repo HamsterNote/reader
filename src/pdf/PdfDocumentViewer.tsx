@@ -1971,7 +1971,10 @@ export const PdfDocumentViewer = forwardRef<
     let settleTimer: ReturnType<typeof setTimeout> | undefined
     // 以滚动停稳后实测的页面位置上报，避免懒加载/占位高度变化时页码抖动。
     const flush = () => {
-      settleTimer = undefined
+      if (settleTimer !== undefined) {
+        clearTimeout(settleTimer)
+        settleTimer = undefined
+      }
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(emit)
     }

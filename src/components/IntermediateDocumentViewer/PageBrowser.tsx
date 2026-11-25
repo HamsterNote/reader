@@ -749,7 +749,7 @@ export function PageBrowser({
         >
           <div className='hamster-reader__page-browser-outline'>
             {typeof outline === 'function'
-              ? outline(activeTab === 'outline')
+              ? outline(activeTab === 'outline' && effectiveOpen)
               : outline}
           </div>
         </div>
