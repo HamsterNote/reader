@@ -7,12 +7,14 @@ function makeDocument({
   numPages = 4,
   getOutline,
   getDestination,
-  getPageIndex
+  getPageIndex,
+  getPage
 }: {
   readonly numPages?: number
   readonly getOutline: ReturnType<typeof vi.fn>
   readonly getDestination?: ReturnType<typeof vi.fn>
   readonly getPageIndex?: ReturnType<typeof vi.fn>
+  readonly getPage?: ReturnType<typeof vi.fn>
 }): PDFDocumentProxy {
   return {
     numPages,
@@ -20,7 +22,8 @@ function makeDocument({
     getDestination: getDestination ?? vi.fn().mockResolvedValue(null),
     getPageIndex:
       getPageIndex ??
-      vi.fn().mockImplementation(async (ref: { num: number }) => ref.num - 1)
+      vi.fn().mockImplementation(async (ref: { num: number }) => ref.num - 1),
+    ...(getPage ? { getPage } : {})
   } as unknown as PDFDocumentProxy
 }
 
@@ -651,5 +654,63 @@ describe('PdfOutline', () => {
     })
     await waitFor(() => expect(getPageIndex).toHaveBeenCalledWith(page3))
     expect(onNavigate.mock.calls).toEqual([[4]])
+  })
+
+  it('highlights and jumps with the corrected page and caches the text scan', async () => {
+    const texts: Record<number, string> = {
+      2: '版权信息',
+      5: '第一章 揭开网络引战的面纱',
+      6: '第二章 日常生活中的引战'
+    }
+    const getPage = vi.fn(async (pageNumber: number) => ({
+      getTextContent: async () => ({
+        items: [{ str: texts[pageNumber] ?? '正文内容' }]
+      })
+    }))
+    const document = makeDocument({
+      numPages: 10,
+      getOutline: vi.fn().mockResolvedValue([
+        { title: '第一章 揭开网络引战的面纱', dest: [1], items: [] },
+        { title: '第二章 日常生活中的引战', dest: [2], items: [] }
+      ]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    const view = render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={5}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '第一章 揭开网络引战的面纱' })
+      ).toHaveAttribute('aria-current', 'location')
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: '第二章 日常生活中的引战' })
+    )
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(6))
+
+    const pageReads = getPage.mock.calls.length
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={6}
+        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        onNavigate={onNavigate}
+      />
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '第二章 日常生活中的引战' })
+      ).toHaveAttribute('aria-current', 'location')
+    )
+    expect(getPage).toHaveBeenCalledTimes(pageReads)
   })
 })

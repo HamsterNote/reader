@@ -278,6 +278,9 @@ const nextHighlightId = (): string => {
 // 未受控时忽略 controllerData 变更，与 IntermediateDocumentViewer 一致。
 function ignoreControllerDataChange() {}
 
+/** 滚动停稳多久后上报阅读位置（scrollend 可用时提前上报）。 */
+const PDF_SCROLL_SETTLE_MS = 120
+
 // 官方类型声明只接受 PDFDocumentProxy，运行时 setDocument(null) 是清空文档的
 // 公开路径（pdf.js viewer.js 内部判空）。
 const setViewerDocument = (
@@ -1965,18 +1968,28 @@ export const PdfDocumentViewer = forwardRef<
         passive: true
       })
     let frame = 0
-    const onScroll = () => {
+    let settleTimer: ReturnType<typeof setTimeout> | undefined
+    // 以滚动停稳后实测的页面位置上报，避免懒加载/占位高度变化时页码抖动。
+    const flush = () => {
+      settleTimer = undefined
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(emit)
     }
+    const onScroll = () => {
+      if (settleTimer !== undefined) clearTimeout(settleTimer)
+      settleTimer = setTimeout(flush, PDF_SCROLL_SETTLE_MS)
+    }
     container?.addEventListener('scroll', onScroll)
+    container?.addEventListener('scrollend', flush)
     eventBus.on('pagechanging', onScroll)
     onScroll()
     return () => {
       eventBus.off('pagechanging', onScroll)
       container?.removeEventListener('scroll', onScroll)
+      container?.removeEventListener('scrollend', flush)
       for (const event of inputEvents)
         container?.removeEventListener(event, releaseRestore, true)
+      if (settleTimer !== undefined) clearTimeout(settleTimer)
       cancelAnimationFrame(frame)
     }
   }, [

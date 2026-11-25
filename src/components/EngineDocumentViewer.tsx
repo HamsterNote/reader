@@ -164,6 +164,17 @@ function goToEpubOutline(engine: EpubEngine | null, href: string) {
   engine?.goToTocHref(href).catch(() => undefined)
 }
 
+/** EPUB 没有页面预览；目录是它的默认侧栏。 */
+function pageBrowserTabOptions(
+  source: ReaderEngineSource | undefined,
+  mode: ReaderRenderMode
+): { showPagesTab: boolean; defaultTab?: 'outline' } {
+  if (source?.format === 'epub') {
+    return { showPagesTab: false, defaultTab: 'outline' }
+  }
+  return { showPagesTab: mode === 'layout' }
+}
+
 type ActiveSelection =
   | { kind: 'text'; range: Range; rangeId: string | null }
   | { kind: 'rectangle'; id: string }
@@ -1743,6 +1754,7 @@ export function EngineDocumentViewer(props: Props) {
   const pageCountRef = useRef(pageCount)
   pageCountRef.current = pageCount
   const pageNumbers = enginePageNumbers(pageCount, props)
+  const tabOptions = pageBrowserTabOptions(source, mode)
   const visiblePageNumbers = useMemo(() => new Set([page]), [page])
   const current = ranges.find(
     (range) =>
@@ -2211,7 +2223,8 @@ export function EngineDocumentViewer(props: Props) {
           onPageVisibilityChange={previews.onVisibility}
           onNavigateToPage={navigate}
           onClose={props.onPageBrowserClose}
-          showPagesTab={mode === 'layout'}
+          showPagesTab={tabOptions.showPagesTab}
+          defaultTab={tabOptions.defaultTab}
           ranges={ranges}
           rects={rects}
           selectedRangeId={selected}

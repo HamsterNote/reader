@@ -17,6 +17,13 @@ import {
 } from './mocks/selection'
 import { mockElementSize, resizeObserverMock } from './setup'
 
+const outlineDocumentMock = vi.hoisted(() => ({
+  open: vi.fn()
+}))
+vi.mock('../src/pdf/pdfOutlineDocument', () => ({
+  openPdfOutlineDocument: outlineDocumentMock.open
+}))
+
 function documentFixture(id: string, count = 100) {
   const loaders = Array.from({ length: count }, (_, index) =>
     vi.fn(async () => [
@@ -604,5 +611,39 @@ describe('PDF text mode outline', () => {
     expect(
       await screen.findByText('此 PDF 没有内嵌章节目录，可使用页面导航。')
     ).toBeInTheDocument()
+  })
+
+  it('opens its own PDF document for 目录 when the host passes no loader', async () => {
+    outlineDocumentMock.open.mockReset()
+    const fixture = documentFixture('fallback', 6)
+    const proxy = makeOutlineProxy({
+      numPages: 6,
+      getOutline: async () => [{ title: '第二章', dest: [1], items: [] }]
+    })
+    const dispose = vi.fn(async () => {})
+    outlineDocumentMock.open.mockResolvedValueOnce({
+      document: proxy,
+      dispose
+    })
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={{ format: 'pdf', data: new Uint8Array() }}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+    fireEvent.click(await screen.findByRole('button', { name: '第二章' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('fallback page 2')).toBeInTheDocument()
+    )
+    expect(outlineDocumentMock.open).toHaveBeenCalledOnce()
+    view.unmount()
+    expect(dispose).toHaveBeenCalledOnce()
   })
 })

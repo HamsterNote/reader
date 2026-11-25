@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineTreeNode } from '../components/OutlineTree'
 import { OutlineTree } from '../components/OutlineTree'
 import { usePositionTransaction } from '../components/reading/usePositionTransaction'
+import { correctOutlineTitlePages } from './pdfOutlineTitleCorrection'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 const PDF_OUTLINE_TIMEOUT_MS = 10_000
@@ -28,6 +29,7 @@ type PageCache = {
   readonly items: readonly PdfOutlineItem[]
   readonly pageById: Map<string, number>
   bulk?: Promise<void>
+  corrected?: Promise<ReadonlyMap<string, number>>
 }
 
 type PageSnapshot = {
@@ -180,6 +182,26 @@ function indexOutlineItems(
   return out
 }
 
+function collectTitleTargets(
+  items: readonly PdfOutlineItem[],
+  pageById: ReadonlyMap<string, number>,
+  out: { id: string; title: string; pageNumber: number }[] = []
+) {
+  for (const item of items) {
+    const pageNumber = pageById.get(item.id)
+    if (
+      pageNumber !== undefined &&
+      item.destination &&
+      !item.external &&
+      item.title
+    ) {
+      out.push({ id: item.id, title: item.title, pageNumber })
+    }
+    collectTitleTargets(item.items, pageById, out)
+  }
+  return out
+}
+
 export function PdfOutline({
   document,
   isActive,
@@ -267,15 +289,35 @@ export function PdfOutline({
         entry.pageById
       ).catch(() => undefined)
     }
-    entry.bulk.then(() => {
-      if (current) {
+    entry.bulk
+      .then(() => {
+        if (!current) return undefined
         setPageSnapshot({
           document,
           items: state.items,
           pageById: new Map(entry.pageById)
         })
-      }
-    })
+        if (!entry.corrected) {
+          entry.corrected = correctOutlineTitlePages(
+            document,
+            collectTitleTargets(state.items, entry.pageById)
+          ).catch(() => new Map())
+        }
+        return entry.corrected
+      })
+      .then((corrected) => {
+        if (!current || !corrected) return
+        for (const [id, pageNumber] of corrected) {
+          if (pageNumber >= 1 && pageNumber <= document.numPages) {
+            entry.pageById.set(id, pageNumber)
+          }
+        }
+        setPageSnapshot({
+          document,
+          items: state.items,
+          pageById: new Map(entry.pageById)
+        })
+      })
     return () => {
       current = false
     }
@@ -304,29 +346,60 @@ export function PdfOutline({
     if (!owner || !item || !item.destination || item.external) return
     const transaction = beginNavigation()
     const pageNumber = await resolveOutlinePage(owner, item.destination)
+    if (pageNumber === null) return
+    const currentState = state
+    const readyState =
+      currentState?.status === 'ready' && currentState.document === owner
+        ? currentState
+        : null
+    let cache: PageCache | undefined
+    let effectivePage = pageNumber
+    if (readyState) {
+      cache = pageCaches.current.get(owner)
+      if (!cache || cache.items !== readyState.items) {
+        cache = { items: readyState.items, pageById: new Map() }
+        pageCaches.current.set(owner, cache)
+      }
+      const entry = cache
+      const correction =
+        entry.corrected ??
+        (entry.corrected = (entry.bulk ?? Promise.resolve())
+          .then(() =>
+            correctOutlineTitlePages(
+              owner,
+              collectTitleTargets(readyState.items, entry.pageById)
+            )
+          )
+          .catch(() => new Map()))
+      const corrected = await withinTimeout(correction).catch(() => null)
+      const correctedPage = corrected?.get(item.id)
+      if (correctedPage !== undefined) {
+        effectivePage = correctedPage
+      } else {
+        const searched = await withinTimeout(
+          correctOutlineTitlePages(owner, [
+            { id: item.id, title: item.title, pageNumber }
+          ])
+        ).catch(() => null)
+        effectivePage = searched?.get(item.id) ?? pageNumber
+      }
+    }
     if (
       !isNavigationCurrent(transaction) ||
-      pageNumber === null ||
       latest.current.document !== owner ||
-      !latest.current.pageNumbers.includes(pageNumber)
+      !latest.current.pageNumbers.includes(effectivePage)
     ) {
       return
     }
-    const currentState = state
-    if (currentState?.status === 'ready') {
-      let cache = pageCaches.current.get(owner)
-      if (!cache || cache.items !== currentState.items) {
-        cache = { items: currentState.items, pageById: new Map() }
-        pageCaches.current.set(owner, cache)
-      }
-      cache.pageById.set(item.id, pageNumber)
+    if (readyState && cache) {
+      cache.pageById.set(item.id, effectivePage)
       setPageSnapshot({
         document: owner,
-        items: currentState.items,
+        items: readyState.items,
         pageById: new Map(cache.pageById)
       })
     }
-    latest.current.onNavigate(pageNumber)
+    latest.current.onNavigate(effectivePage)
   }
 
   if (!document) return <p role='status'>正在等待 PDF 文档…</p>

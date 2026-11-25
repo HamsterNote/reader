@@ -1,6 +1,10 @@
 import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
 import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
 import { PdfOutline } from '../../pdf/PdfOutline'
+import {
+  openPdfOutlineDocument,
+  type PdfOutlineDocumentHandle
+} from '../../pdf/pdfOutlineDocument'
 import type { PDFDocumentProxy } from '../../pdf/pdfjsRuntime'
 import { RangeMagnifierProvider } from './RangeMagnifier'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
@@ -1223,13 +1227,28 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   const loadPdfOutlineDocument = isPdf
     ? props.pdfSource?.loadPdfDocument
     : undefined
+  const pdfOutlineSource = isPdf ? props.pdfSource : undefined
   const [pdfOutlineDocument, setPdfOutlineDocument] =
     useState<PDFDocumentProxy | null>(null)
   useEffect(() => {
-    if (!loadPdfOutlineDocument) return
+    if (!pdfOutlineSource) {
+      setPdfOutlineDocument(null)
+      return
+    }
     let current = true
+    let owned: PdfOutlineDocumentHandle | null = null
     setPdfOutlineDocument(null)
-    loadPdfOutlineDocument()
+    const request = loadPdfOutlineDocument
+      ? loadPdfOutlineDocument()
+      : openPdfOutlineDocument(pdfOutlineSource).then((handle) => {
+          if (!current) {
+            handle.dispose().catch(() => undefined)
+            return null
+          }
+          owned = handle
+          return handle.document
+        })
+    request
       .then((outlineDocument) => {
         if (current) setPdfOutlineDocument(outlineDocument)
       })
@@ -1238,8 +1257,13 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
       })
     return () => {
       current = false
+      if (owned) {
+        const handle = owned
+        owned = null
+        handle.dispose().catch(() => undefined)
+      }
     }
-  }, [loadPdfOutlineDocument])
+  }, [loadPdfOutlineDocument, pdfOutlineSource])
   const flowReadinessRef = useRef<ReturnType<
     typeof createFlowTextReadiness
   > | null>(null)
