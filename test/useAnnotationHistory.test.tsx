@@ -172,6 +172,40 @@ describe('useAnnotationHistory', () => {
     expect(onChange).toHaveBeenCalledTimes(checkpointCallCount)
   })
 
+  it('replays external additions onto retained snapshots so undo keeps them', () => {
+    const { result } = renderHistory()
+
+    act(() => {
+      result.current.setCheckpoint(firstValue, 'highlight')
+    })
+    const external = makeValue(
+      [makeRange('r1', 'one'), makeRange('r2', 'external')],
+      'r1'
+    )
+    act(() => {
+      result.current.syncSilent(external)
+    })
+    expect(result.current.getPresent()).toEqual(external)
+
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(result.current.getPresent().ranges.map((range) => range.id)).toEqual(
+      ['r2']
+    )
+
+    act(() => {
+      expect(result.current.redo()).toMatchObject({ applied: true })
+    })
+    expect(result.current.getPresent().ranges.map((range) => range.id)).toEqual(
+      ['r1', 'r2']
+    )
+    expect(result.current.getStatus()).toMatchObject({
+      pastCount: 1,
+      futureCount: 0
+    })
+  })
+
   it('clears undo and redo stacks on reset', () => {
     const { result } = renderHistory()
 

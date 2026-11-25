@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { createRef, useState, type ComponentProps } from 'react'
+import { createRef, useEffect, useState, type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { Reader } from '../src/components/Reader'
 import type { EngineSelectionControls } from '../src/components/EngineSelectionControls'
@@ -77,17 +77,29 @@ const initial: ReaderData = {
 
 // ReaderSurface 的真实回传方式：宿主把受控标注快照写回 data，再作为受控 props 传回。
 // normalize 模拟宿主持久化后回传时的字段规范化（键顺序、默认值）。
+type ExternalData = { current: ((next: ReaderData) => void) | null }
 function ControlledDataHost({
   selectionRef,
   onChange,
-  normalize = (ranges) => ranges
+  normalize = (ranges) => ranges,
+  initialData = initial,
+  external
 }: {
   selectionRef: React.RefObject<ReaderSelectionRef | null>
   onChange: (next: ReaderData) => void
   normalize?: (ranges: ReaderSelectionRange[]) => ReaderSelectionRange[]
+  initialData?: ReaderData
+  external?: ExternalData
 }) {
-  const [data, setData] = useState<ReaderData>(initial)
+  const [data, setData] = useState<ReaderData>(initialData)
   const [rangeId, setRangeId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!external) return
+    external.current = setData
+    return () => {
+      external.current = null
+    }
+  }, [external])
   const write = (next: ReaderData) => {
     const normalized: ReaderData = {
       ...next,
@@ -280,5 +292,59 @@ describe('PDF controlled data history', () => {
       pastCount: 2,
       futureCount: 0
     })
+  })
+
+  it('keeps externally added annotations across undo and redo', async () => {
+    const ref = createRef<ReaderSelectionRef>()
+    const start: ReaderData = {
+      ranges: [original],
+      rects: [],
+      pagePaintings: {}
+    }
+    let latest: ReaderData = start
+    const external: ExternalData = { current: null }
+    render(
+      <ControlledDataHost
+        selectionRef={ref}
+        initialData={start}
+        external={external}
+        onChange={(next) => {
+          latest = next
+        }}
+      />
+    )
+    await waitFor(() => expect(mocks.pdf).not.toBeNull())
+    await activate('H1')
+    await screen.findByRole('toolbar', { name: '高亮操作' })
+    changeColor('#8eba8e')
+    expect(rangesOf(latest)).toEqual([['H1', '#8eba8e']])
+    expect(ref.current?.getAnnotationHistoryState().pastCount).toBe(1)
+
+    const externalRange: ReaderSelectionRange = {
+      ...original,
+      id: 'H3',
+      createdAt: 3,
+      text: 'Gamma',
+      start: { selectionId: 'page-1', offset: 6 },
+      end: { selectionId: 'page-1', offset: 11 }
+    }
+    act(() =>
+      external.current?.({
+        ...latest,
+        ranges: [...(latest.ranges ?? []), externalRange]
+      })
+    )
+
+    act(() => expect(ref.current?.undo()).toBe(true))
+    expect(rangesOf(latest)).toEqual([
+      ['H1', '#d1b88a'],
+      ['H3', '#d1b88a']
+    ])
+
+    act(() => expect(ref.current?.redo()).toBe(true))
+    expect(rangesOf(latest)).toEqual([
+      ['H1', '#8eba8e'],
+      ['H3', '#d1b88a']
+    ])
   })
 })

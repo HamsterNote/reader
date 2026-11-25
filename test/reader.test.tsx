@@ -4768,6 +4768,9 @@ describe('Reader annotation history', () => {
       />
     )
     expect(capturedViewerProps.pagePaintings).toEqual({})
+    expect(
+      requireReaderSelectionRef(ref).getAnnotationHistoryState()
+    ).toMatchObject({ pastCount: 0, futureCount: 0 })
     expect(requireReaderSelectionRef(ref).canUndo()).toBe(false)
   })
 
@@ -5028,6 +5031,16 @@ describe('Reader annotation history', () => {
     })
     expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(true)
 
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+    expect(
+      requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+    ).toMatchObject({
+      pastCount: 0,
+      futureCount: 1
+    })
+
     rerender(
       <Reader
         document={document}
@@ -5038,6 +5051,9 @@ describe('Reader annotation history', () => {
     )
 
     await waitFor(() => {
+      expect(
+        requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+      ).toMatchObject({ pastCount: 0, futureCount: 0 })
       expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(false)
       expect(requireReaderSelectionRef(selectionRef).canRedo()).toBe(false)
     })

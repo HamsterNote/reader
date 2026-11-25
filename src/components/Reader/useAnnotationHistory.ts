@@ -71,6 +71,7 @@ type History = {
 
 export { paintingContentKey } from '../../painting/paintingContent'
 import { paintingContentKey } from '../../painting/paintingContent'
+import type { ReaderPagePaintingMap } from '../Page'
 const sameContent = (
   a: ReaderAnnotationHistoryValue,
   b: ReaderAnnotationHistoryValue
@@ -79,6 +80,90 @@ const sameContent = (
   JSON.stringify(a.rects) === JSON.stringify(b.rects) &&
   paintingContentKey(a.pagePaintings) === paintingContentKey(b.pagePaintings)
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+const sameValue = (a: unknown, b: unknown) =>
+  JSON.stringify(a) === JSON.stringify(b)
+/** Replays an external snapshot's changes onto a retained history snapshot. */
+function mergeIdentified<T extends { readonly id: string }>(
+  target: readonly T[],
+  previous: readonly T[],
+  next: readonly T[]
+): T[] {
+  const previousById = new Map(previous.map((item) => [item.id, item]))
+  const nextById = new Map(next.map((item) => [item.id, item]))
+  const merged = new Map<string, T>()
+  target.forEach((item) => {
+    const previousItem = previousById.get(item.id)
+    const nextItem = nextById.get(item.id)
+    if (!nextItem && previousItem) return
+    if (
+      nextItem &&
+      previousItem &&
+      !sameValue(previousItem, nextItem) &&
+      sameValue(item, previousItem)
+    ) {
+      merged.set(item.id, copy(nextItem))
+      return
+    }
+    merged.set(item.id, item)
+  })
+  nextById.forEach((item, id) => {
+    if (!previousById.has(id) && !merged.has(id)) merged.set(id, copy(item))
+  })
+  const ordered: T[] = []
+  const seen = new Set<string>()
+  ;[...next, ...target].forEach((item) => {
+    const mergedItem = merged.get(item.id)
+    if (!mergedItem || seen.has(item.id)) return
+    ordered.push(mergedItem)
+    seen.add(item.id)
+  })
+  return ordered
+}
+function mergePagePaintings(
+  target: ReaderPagePaintingMap,
+  previous: ReaderPagePaintingMap,
+  next: ReaderPagePaintingMap
+): ReaderPagePaintingMap {
+  const merged: ReaderPagePaintingMap = {}
+  const pageIds = new Set([...Object.keys(target), ...Object.keys(next)])
+  pageIds.forEach((pageId) => {
+    const targetDoc = target[pageId]
+    const previousDoc = previous[pageId]
+    const nextDoc = next[pageId]
+    if (!nextDoc) {
+      if (!previousDoc && targetDoc) merged[pageId] = targetDoc
+      return
+    }
+    if (!previousDoc) {
+      merged[pageId] = targetDoc ?? copy(nextDoc)
+      return
+    }
+    const externalChanged =
+      paintingContentKey({ [pageId]: previousDoc }) !==
+      paintingContentKey({ [pageId]: nextDoc })
+    merged[pageId] =
+      externalChanged && (!targetDoc || sameValue(targetDoc, previousDoc))
+        ? copy(nextDoc)
+        : (targetDoc ?? copy(nextDoc))
+  })
+  return merged
+}
+function mergeExternalChanges(
+  target: ReaderAnnotationHistoryValue,
+  previous: ReaderAnnotationHistoryValue,
+  next: ReaderAnnotationHistoryValue
+): ReaderAnnotationHistoryValue {
+  return {
+    ...target,
+    ranges: mergeIdentified(target.ranges, previous.ranges, next.ranges),
+    rects: mergeIdentified(target.rects, previous.rects, next.rects),
+    pagePaintings: mergePagePaintings(
+      target.pagePaintings ?? {},
+      previous.pagePaintings ?? {},
+      next.pagePaintings ?? {}
+    )
+  }
+}
 function snapshot(
   next: ReaderAnnotationHistoryValue,
   previous?: ReaderAnnotationHistoryValue
@@ -148,6 +233,25 @@ export function useAnnotationHistory(
       render()
       if (source) notify(value, source)
     }
+    /**
+     * External snapshots replace the present value without adding checkpoints.
+     * Their changes are also replayed onto retained snapshots so undo/redo do
+     * not discard annotations another host added in the meantime.
+     */
+    const syncExternal = (next: ReaderAnnotationHistoryValue) => {
+      if (!latest.current.enabled) return
+      const current = state.current
+      const value = snapshot(next, current.present)
+      if (JSON.stringify(value) === JSON.stringify(current.present)) return
+      const merge = (target: ReaderAnnotationHistoryValue) =>
+        mergeExternalChanges(target, current.present, value)
+      state.current = {
+        past: current.past.map(merge),
+        present: value,
+        future: current.future.map(merge)
+      }
+      render()
+    }
     const applyTargetSilently = (
       source: AnnotationHistoryApplySource
     ): AnnotationHistoryApplyTargetResult => {
@@ -203,7 +307,7 @@ export function useAnnotationHistory(
         render()
         notify(value, source)
       },
-      syncSilent: (next) => sync(next),
+      syncSilent: (next) => syncExternal(next),
       syncPresent: sync,
       reset: (next, source) => {
         state.current = { past: [], present: snapshot(next), future: [] }
