@@ -661,7 +661,9 @@ describe('PdfOutline', () => {
 
   it('corrects the current page lazily, jumps immediately, then reuses the corrected page', async () => {
     const texts: Record<number, string> = {
+      1: '版权信息',
       2: '版权信息',
+      4: '序言',
       5: '第一章 揭开网络引战的面纱',
       6: '第二章 日常生活中的引战'
     }
@@ -673,6 +675,7 @@ describe('PdfOutline', () => {
     const document = makeDocument({
       numPages: 10,
       getOutline: vi.fn().mockResolvedValue([
+        { title: '序言', dest: [0], items: [] },
         { title: '第一章 揭开网络引战的面纱', dest: [1], items: [] },
         { title: '第二章 日常生活中的引战', dest: [2], items: [] }
       ]),
@@ -694,8 +697,10 @@ describe('PdfOutline', () => {
         screen.getByRole('button', { name: '第一章 揭开网络引战的面纱' })
       ).toHaveAttribute('aria-current', 'location')
     )
-    // 当前页命中标题后，再读一次标注页作为“标注页本身无标题”的证据。
-    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5, 2])
+    // 当前页命中标题后，继续向回读到第二个连续标题才构成强证据。
+    expect(getPage.mock.calls.map(([page]) => page).slice(0, 4)).toEqual([
+      5, 2, 4, 1
+    ])
     fireEvent.click(
       screen.getByRole('button', { name: '第二章 日常生活中的引战' })
     )
@@ -721,9 +726,9 @@ describe('PdfOutline', () => {
       screen.getByRole('button', { name: '第二章 日常生活中的引战' })
     )
     await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(6))
-    expect(getPage.mock.calls.map(([page]) => page).sort()).toEqual([
-      2, 3, 5, 6
-    ])
+    expect(getPage.mock.calls.map(([page]) => page)).toEqual(
+      expect.arrayContaining([2, 3, 5, 6])
+    )
   })
 
   it('navigates without waiting for page text correction', async () => {
@@ -830,11 +835,12 @@ describe('PdfOutline', () => {
       />
     )
 
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: '第七章 维特效应' })
-      ).toHaveAttribute('data-active', 'true')
-    )
+    // 标注页可读但页首无标题只是弱证据：不校正，也不高亮未验证候选。
+    await waitFor(() => expect(getPage).toHaveBeenCalledWith(37))
+    await act(async () => {})
+    expect(
+      screen.getByRole('button', { name: '第七章 维特效应' })
+    ).not.toHaveAttribute('data-active')
     expect(screen.getByRole('button', { name: '致谢' })).not.toHaveAttribute(
       'data-active'
     )
@@ -991,10 +997,128 @@ describe('PdfOutline', () => {
     expect(onNavigate).not.toHaveBeenCalledWith(7)
   })
 
+  it('keeps the annotated page when reading it fails before a repeated header', async () => {
+    const getPage = vi.fn(async (pageNumber: number) => {
+      if (pageNumber === 3) throw new Error('page text rejected')
+      return {
+        getTextContent: async () => ({
+          items: [
+            {
+              str: pageNumber === 6 ? 'Intro\n这一页只是重复页眉' : '正文内容'
+            }
+          ]
+        })
+      }
+    })
+    const document = makeDocument({
+      numPages: 10,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: 'Intro', dest: [2], items: [] }]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={6}
+        pageNumbers={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}
+        onNavigate={onNavigate}
+      />
+    )
+    const intro = await screen.findByRole('button', { name: 'Intro' })
+    await waitFor(() => expect(getPage).toHaveBeenCalledWith(3))
+    await act(async () => {})
+    fireEvent.click(intro)
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(3))
+    expect(onNavigate).not.toHaveBeenCalledWith(6)
+  })
+
+  it('does not carry corrections across documents in one outline instance', async () => {
+    const pageNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    const firstTexts: Record<number, string> = {
+      5: 'A Prologue',
+      6: 'A Intro'
+    }
+    const firstDocument = makeDocument({
+      numPages: 10,
+      getOutline: vi.fn().mockResolvedValue([
+        { title: 'A Intro', dest: [2], items: [] },
+        { title: 'A Prologue', dest: [0], items: [] }
+      ]),
+      getPage: vi.fn(async (pageNumber: number) => ({
+        getTextContent: async () => ({
+          items: [{ str: firstTexts[pageNumber] ?? '正文内容' }]
+        })
+      }))
+    })
+    const secondDocument = makeDocument({
+      numPages: 10,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: 'B Intro', dest: [8], items: [] }]),
+      getPage: vi.fn(async (_pageNumber: number) => ({
+        getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+      }))
+    })
+    const onNavigate = vi.fn()
+    const view = render(
+      <PdfOutline
+        document={firstDocument}
+        isActive
+        currentPageNumber={6}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    await screen.findByRole('button', { name: 'A Intro' })
+    await waitFor(() => expect(firstDocument.getPage).toHaveBeenCalledWith(5))
+    await act(async () => {})
+    view.rerender(
+      <PdfOutline
+        document={firstDocument}
+        isActive
+        currentPageNumber={4}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'A Intro' })
+      ).not.toHaveAttribute('data-active')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'A Intro' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(6))
+
+    view.rerender(
+      <PdfOutline
+        document={secondDocument}
+        isActive
+        currentPageNumber={8}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    const secondIntro = await screen.findByRole('button', { name: 'B Intro' })
+    await waitFor(() => expect(secondDocument.getPage).toHaveBeenCalledWith(8))
+    await act(async () => {})
+    expect(secondIntro).not.toHaveAttribute('data-active')
+    fireEvent.click(secondIntro)
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(9))
+    expect(onNavigate.mock.calls).toEqual([[6], [9]])
+  })
+
   it('restores collapsed branches and corrected pages from a session state', async () => {
+    const firstTexts: Record<number, string> = {
+      4: 'Prologue',
+      5: 'Chapter'
+    }
     const firstDocument = makeDocument({
       numPages: 6,
       getOutline: vi.fn().mockResolvedValue([
+        { title: 'Prologue', dest: [0], items: [] },
         {
           title: 'Parent',
           dest: [0],
@@ -1003,12 +1127,13 @@ describe('PdfOutline', () => {
       ]),
       getPage: vi.fn(async (pageNumber: number) => ({
         getTextContent: async () => ({
-          items: [{ str: pageNumber === 5 ? 'Chapter' : '正文内容' }]
+          items: [{ str: firstTexts[pageNumber] ?? '正文内容' }]
         })
       }))
     })
     const session = createPdfOutlineSessionState()
     const pageNumbers = [1, 2, 3, 4, 5, 6]
+    const firstNavigate = vi.fn()
     const firstView = render(
       <PdfOutline
         document={firstDocument}
@@ -1016,7 +1141,7 @@ describe('PdfOutline', () => {
         currentPageNumber={5}
         pageNumbers={pageNumbers}
         sessionState={session}
-        onNavigate={vi.fn()}
+        onNavigate={firstNavigate}
       />
     )
     await waitFor(() =>
@@ -1025,6 +1150,9 @@ describe('PdfOutline', () => {
         'true'
       )
     )
+    await waitFor(() => expect(firstDocument.getPage).toHaveBeenCalledWith(4))
+    fireEvent.click(screen.getByRole('button', { name: 'Chapter' }))
+    await waitFor(() => expect(firstNavigate).toHaveBeenLastCalledWith(5))
     fireEvent.click(screen.getByRole('button', { name: '收起 Parent' }))
     expect(screen.queryByRole('button', { name: 'Chapter' })).toBeNull()
     firstView.unmount()
@@ -1032,6 +1160,7 @@ describe('PdfOutline', () => {
     const secondDocument = makeDocument({
       numPages: 6,
       getOutline: vi.fn().mockResolvedValue([
+        { title: 'Prologue', dest: [0], items: [] },
         {
           title: 'Parent',
           dest: [0],

@@ -300,11 +300,19 @@ export function PdfOutline({
     new WeakMap<PDFDocumentProxy, Promise<readonly PdfOutlineItem[]>>()
   )
   const pageCaches = useRef(new WeakMap<PDFDocumentProxy, PageCache>())
-  const internalSession = useRef<PdfOutlineSessionState | null>(null)
-  if (internalSession.current === null) {
-    internalSession.current = createPdfOutlineSessionState()
-  }
-  const session = sessionState ?? internalSession.current
+  const internalSessions = useRef(
+    new WeakMap<PDFDocumentProxy, PdfOutlineSessionState>()
+  )
+  const session = useMemo(() => {
+    if (sessionState) return sessionState
+    if (!document) return createPdfOutlineSessionState()
+    let internal = internalSessions.current.get(document)
+    if (!internal) {
+      internal = createPdfOutlineSessionState()
+      internalSessions.current.set(document, internal)
+    }
+    return internal
+  }, [document, sessionState])
   const latest = useRef({ document, pageNumbers, onNavigate })
   latest.current = { document, pageNumbers, onNavigate }
   const { begin: beginNavigation, isCurrent: isNavigationCurrent } =
@@ -441,6 +449,18 @@ export function PdfOutline({
           match.pageNumber < annotatedPage ||
           cache.correctedById.has(match.id)
         ) {
+          return
+        }
+        if (match.confidence === 'weak') {
+          // 标注页可读但页首无标题只是弱信号：不校正、不写会话，
+          // 仅暂停未经验证条目的高亮，等后续位置给出更强证据。
+          if (match.pageNumber !== annotatedPage && !cache.mismatchDetected) {
+            cache.mismatchDetected = true
+            session.mismatchDetected = true
+            setPageSnapshot(
+              snapshotFromCache(document, state.items, cache, true)
+            )
+          }
           return
         }
         cache.correctedById.set(match.id, match.pageNumber)

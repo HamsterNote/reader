@@ -40,6 +40,8 @@ export type TrustedOutlinePageMatch = {
   readonly annotatedPage: number
   readonly pageNumber: number
   readonly standalone: boolean
+  /** weak 只表示标注页可读但页首无标题；不能据此校正页码或写入会话校正。 */
+  readonly confidence: 'strong' | 'weak'
 }
 
 type PageHeadCacheEntry = {
@@ -302,23 +304,27 @@ function bestPageMatch(matches: readonly PageMatch[]): PageMatch {
 
 function toTrustedMatch(
   match: PageMatch,
-  pageNumber: number
+  pageNumber: number,
+  confidence: TrustedOutlinePageMatch['confidence'] = 'strong'
 ): TrustedOutlinePageMatch {
   return {
     id: match.target.id,
     title: match.target.title,
     annotatedPage: match.target.pageNumber,
     pageNumber,
-    standalone: match.standalone
+    standalone: match.standalone,
+    confidence
   }
 }
 
-async function annotatedPageHasTitle(
+type AnnotatedTitleState = 'matched' | 'no-match' | 'unknown'
+
+async function annotatedPageTitleState(
   document: PDFDocumentProxy,
   targets: readonly OutlineTitleCorrectionTarget[],
   pageNumber: number,
   options: OutlineTitleScanOptions
-): Promise<boolean> {
+): Promise<AnnotatedTitleState> {
   try {
     const text = await readOutlinePageHeadText(document, pageNumber, options)
     return targets.some(
@@ -326,8 +332,10 @@ async function annotatedPageHasTitle(
         isSearchableTarget(target) &&
         pageStartsWithOutlineTitle(text, target.title)
     )
+      ? 'matched'
+      : 'no-match'
   } catch {
-    return false
+    return 'unknown'
   }
 }
 
@@ -342,6 +350,8 @@ async function probeOutlinePage(
   document: PDFDocumentProxy,
   targets: readonly OutlineTitleCorrectionTarget[],
   pageNumber: number,
+  currentPageNumber: number,
+  windowStartPage: number,
   nearest: TrustedOutlinePageMatch | null,
   seenTitles: ReadonlySet<string>,
   options: OutlineTitleScanOptions
@@ -361,21 +371,52 @@ async function probeOutlinePage(
   )
   const best = bestPageMatch(matches)
   const candidate = toTrustedMatch(best, pageNumber)
-  const nextNearest = nearest ?? candidate
   if (best.target.pageNumber === pageNumber || !best.standalone) {
-    return { failed: false, titles, result: candidate, nearest: nextNearest }
+    return {
+      failed: false,
+      titles,
+      result: candidate,
+      nearest: nearest ?? candidate
+    }
   }
-  const annotatedHasTitle = await annotatedPageHasTitle(
+  const annotatedState = await annotatedPageTitleState(
     document,
     targets,
     best.target.pageNumber,
     options
   )
+  // 标注页读取失败时不能把这次候选当作依据，也不让它成为后续证据的落点；
+  // 后续读取仍可重试。
+  if (annotatedState === 'unknown') {
+    return { failed: false, titles, result: null, nearest }
+  }
+  const nextNearest = nearest ?? candidate
   const evidence = new Set([...seenTitles, ...titles])
-  let result: TrustedOutlinePageMatch | null = null
-  if (!annotatedHasTitle) result = candidate
-  else if (evidence.size >= 2) result = nextNearest
-  return { failed: false, titles, result, nearest: nextNearest }
+  if (evidence.size >= 2) {
+    return {
+      failed: false,
+      titles,
+      result: { ...nextNearest, confidence: 'strong' },
+      nearest: nextNearest
+    }
+  }
+  if (annotatedState !== 'no-match') {
+    return { failed: false, titles, result: null, nearest: nextNearest }
+  }
+  // 标注页在局部窗口之外、而当前页本身就是标题页时，位置本身构成额外
+  // 证据；窗口内仍可能是同名页眉，因此只返回 weak。
+  const currentPageIsTitlePage =
+    pageNumber === currentPageNumber && best.target.pageNumber < windowStartPage
+  return {
+    failed: false,
+    titles,
+    result: toTrustedMatch(
+      best,
+      pageNumber,
+      currentPageIsTitlePage ? 'strong' : 'weak'
+    ),
+    nearest: nextNearest
+  }
 }
 
 /**
@@ -383,8 +424,10 @@ async function probeOutlinePage(
  * 页，返回离当前页最近的、页首命中目录标题的页。
  *
  * 方向约束：校正页不得早于标注页。独占标题行但页号与标注页不同时，需要
- * 额外证据才接受——标注页本身没有任何标题，或窗口内出现多个不同章节标题；
- * 否则保留标注页（宁可回到标注页，也不接受一个可能是重复页眉的候选）。
+ * 窗口内出现多个不同章节标题才接受；标注页可读但没有标题通常只作为 weak
+ * 信号返回，调用方不得据此改判——只有当前页本身就是标题页、且标注页位于
+ * 窗口外时，位置才是额外证据。标注页读取失败则返回 null，保留标注页并允许
+ * 后续重试。
  */
 export async function findTrustedOutlinePage(
   document: PDFDocumentProxy,
@@ -412,6 +455,7 @@ export async function findTrustedOutlinePage(
   const lastPage = Math.max(1, currentPageNumber - windowPages + 1)
   const seenTitles = new Set<string>()
   let nearest: TrustedOutlinePageMatch | null = null
+  let weak: TrustedOutlinePageMatch | null = null
 
   for (
     let pageNumber = currentPageNumber;
@@ -423,6 +467,8 @@ export async function findTrustedOutlinePage(
       document,
       targets,
       pageNumber,
+      currentPageNumber,
+      lastPage,
       nearest,
       seenTitles,
       options
@@ -430,7 +476,8 @@ export async function findTrustedOutlinePage(
     if (probe.failed) return null
     for (const title of probe.titles) seenTitles.add(title)
     nearest = probe.nearest
-    if (probe.result) return probe.result
+    if (probe.result?.confidence === 'strong') return probe.result
+    if (probe.result) weak ??= probe.result
   }
-  return seenTitles.size >= 2 ? nearest : null
+  return weak
 }

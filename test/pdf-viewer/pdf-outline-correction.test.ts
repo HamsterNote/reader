@@ -281,7 +281,25 @@ describe('findTrustedOutlinePage', () => {
     })
   })
 
-  it('accepts a later heading when the annotated page has no title at all', async () => {
+  it('trusts the current title page when the annotated page is outside the window', async () => {
+    const { document } = makeTextDocument({
+      3: '正文中没有章节标题',
+      12: 'Intro\n正文'
+    })
+    const match = await findTrustedOutlinePage(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 3 }],
+      12
+    )
+    expect(match).toMatchObject({
+      id: 'intro',
+      annotatedPage: 3,
+      pageNumber: 12,
+      confidence: 'strong'
+    })
+  })
+
+  it('returns weak evidence when only the annotated page title is missing', async () => {
     const { document } = makeTextDocument({
       5: '正文中没有章节标题',
       7: 'Intro\n正文'
@@ -291,6 +309,67 @@ describe('findTrustedOutlinePage', () => {
       [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
       7
     )
-    expect(match).toMatchObject({ id: 'intro', pageNumber: 7 })
+    expect(match).toMatchObject({
+      id: 'intro',
+      pageNumber: 7,
+      confidence: 'weak'
+    })
+  })
+
+  it('keeps the annotated page when reading it is rejected', async () => {
+    let failAnnotatedPage = true
+    const getPage = vi.fn(async (pageNumber: number) => {
+      if (pageNumber === 3 && failAnnotatedPage) {
+        throw new Error('page text rejected')
+      }
+      return {
+        getTextContent: async () => ({
+          items: [{ str: pageNumber === 6 ? 'Intro' : '正文内容' }]
+        })
+      }
+    })
+    const document = {
+      numPages: 10,
+      getPage
+    } as unknown as PDFDocumentProxy
+    const targets = [{ id: 'intro', title: 'Intro', pageNumber: 3 }]
+
+    expect(await findTrustedOutlinePage(document, targets, 6)).toBeNull()
+
+    failAnnotatedPage = false
+    expect(await findTrustedOutlinePage(document, targets, 6)).toMatchObject({
+      id: 'intro',
+      annotatedPage: 3,
+      pageNumber: 6,
+      confidence: 'weak'
+    })
+  })
+
+  it('keeps the annotated page when reading it times out', async () => {
+    vi.useFakeTimers()
+    try {
+      const getPage = vi.fn(async (pageNumber: number) => ({
+        getTextContent:
+          pageNumber === 3
+            ? () => new Promise<never>(() => undefined)
+            : async () => ({
+                items: [{ str: pageNumber === 6 ? 'Intro' : '正文内容' }]
+              })
+      }))
+      const document = {
+        numPages: 10,
+        getPage
+      } as unknown as PDFDocumentProxy
+      const scan = findTrustedOutlinePage(
+        document,
+        [{ id: 'intro', title: 'Intro', pageNumber: 3 }],
+        6
+      )
+      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.runAllTimersAsync()
+      await expect(scan).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
